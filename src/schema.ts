@@ -1,0 +1,297 @@
+import { z } from "zod";
+
+/**
+ * CORPUS SCHEMA
+ * =============
+ * One entry = one exceptional UI example.
+ *
+ * Design principles for this schema (read before adding fields):
+ *
+ * 1. Images are NOT the source of truth for redistribution-safety.
+ *    `image.visibility` controls whether the raster is shippable in the
+ *    open-source corpus at all. Default to "private" (local-only, your
+ *    own research copy) unless you captured it yourself from a project
+ *    you have rights to, or it's a low-res thumbnail you're comfortable
+ *    defending as fair use. See /docs/SOURCING.md.
+ *
+ * 2. The written `critique` field is the actual IP you're creating.
+ *    Tags and hex codes are cheap to scrape; a specific, accurate
+ *    explanation of *why* something works is not. Treat this as the
+ *    most important field in the record, not metadata-on-the-side.
+ *
+ * 3. Keep tags as small closed-ish vocabularies (see TAG_VOCAB below)
+ *    rather than free text, so search/filter stays useful at 200 or
+ *    20,000 entries. Add new tags deliberately, not per-entry.
+ */
+
+export const Category = z.enum([
+  "dashboard",
+  "landing-page",
+  "pricing",
+  "onboarding",
+  "auth",
+  "settings",
+  "empty-state",
+  "navigation",
+  "data-table",
+  "forms",
+  "mobile-nav",
+  "notifications",
+  "search",
+  "checkout",
+  "profile",
+  "marketing-hero",
+  "editor-canvas",
+  "chat-interface",
+]);
+
+export const StyleTag = z.enum([
+  "minimal",
+  "dense-data",
+  "editorial",
+  "brutalist",
+  "playful",
+  "monochrome",
+  "high-contrast",
+  "soft-neumorphic",
+  "glassmorphic",
+  "retro",
+  "technical-mono",
+  "warm-tactile",
+  "luxury-quiet",
+  "bold-color",
+]);
+
+export const SpacingDensity = z.enum(["compact", "moderate", "spacious"]);
+export const CornerStyle = z.enum(["sharp", "slight-round", "pill", "mixed"]);
+
+/**
+ * Primary pattern classification — ONE per entry, distinguishing full-page
+ * patterns from component patterns. Complements `categories` (which stays a
+ * 1-4 multi-tag classifier). `patternType` is what makes "find me 10 great
+ * empty states" queryable as a primary axis, not just a tag.
+ *
+ * Intentional overlap with `Category`: an entry can be tagged
+ * categories: ["dashboard","data-table"] while patternType: "data-table".
+ */
+export const PatternType = z.enum([
+  // full-page patterns
+  "dashboard",
+  "landing-page",
+  "pricing",
+  "onboarding",
+  "auth",
+  "settings",
+  "search",
+  "checkout",
+  "profile",
+  "marketing-hero",
+  // component patterns
+  "data-table",
+  "empty-state",
+  "navigation",
+  "forms",
+  "mobile-nav",
+  "notifications",
+  "editor-canvas",
+  "chat-interface",
+  "command-palette",
+  "modal",
+]);
+
+/**
+ * Structured anti-patterns — the corpus's biggest differentiator from raw
+ * screenshot libraries (Mobbin has 621k screenshots, zero anti-patterns).
+ * Replaces the old free-text `whatToAvoidHere` array.
+ *
+ * `antiPatterns` is required (min 1): what common mistake does this design
+ * deliberately avoid? The other two default to [] since not every entry has them.
+ */
+export const AntiPatterns = z.object({
+  antiPatterns: z.array(z.string().min(10)).min(1), // common mistakes this design avoids
+  whereThisFails: z.array(z.string().min(10)).default([]), // contexts where copying hurts
+  accessibilityRisks: z.array(z.string().min(10)).default([]), // specific a11y concerns
+});
+
+/**
+ * Structured layout — a machine-readable wireframe an agent can consume to
+ * reproduce the page's STRUCTURE (not its attributes). This is the field the
+ * corpus was missing: the Origin dashboards describe their three-column form in
+ * prose ("persistent left nav + wide content column + right rail"), but without
+ * this field that instruction is buried in critique text.
+ *
+ * Optional: an entry can be excellent without a documented wireframe (e.g. a
+ * pricing page whose value is typographic, not structural). Only populate when
+ * the layout itself is the teachable thing.
+ */
+export const LayoutRegion = z.object({
+  role: z.enum([
+    "primary-nav",    // persistent left navigation
+    "icon-nav",       // narrow icon-only rail
+    "summary-strip",  // metric row above the canvas
+    "main-canvas",    // the primary content area
+    "detail-rail",    // right-hand stacked supporting content
+    "form-panel",     // a form column (two-column layouts)
+    "visual-panel",   // hero image/visual column (two-column layouts)
+    "overlay-card",   // centered modal content on a dimmed bg
+  ]),
+  width: z.enum(["fixed-narrow", "flex", "fixed-wide"]).optional(),
+});
+
+export const LayoutStructure = z.object({
+  // High-level page form — the "what kind of layout" axis.
+  form: z.enum([
+    "single-column",   // centered content, no rails (pricing, empty state)
+    "two-column",      // form + visual panel (onboarding)
+    "three-column",    // left nav + main canvas + right rail (dashboards)
+    "modal-overlay",   // centered card on dimmed bg
+  ]),
+  // Ordered regions, left→right / top→bottom. The machine-readable wireframe.
+  regions: z.array(LayoutRegion).min(1),
+});
+
+export const ImageVisibility = z.enum([
+  "private", // local-only, never published in the open-source repo
+  "public-thumb", // low-res thumbnail, ok to redistribute, links to source
+  "public-own", // full image, you captured/created it and hold rights
+]);
+
+const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD");
+const CorpusImagePath = z
+  .string()
+  .regex(/^(images-private|images-public)\/[^/].+$/, "Expected corpus-relative path under images-private/ or images-public/")
+  .refine((p) => !p.includes(".."), "Image paths must not contain '..'");
+
+export const ImageRef = z.object({
+  visibility: ImageVisibility,
+  // Path is always local-relative; private/public split is by directory,
+  // see corpus/images-private vs corpus/images-public.
+  path: CorpusImagePath.nullable(), // null if no raster stored at all (link-only entry)
+  width: z.number().int().positive().nullable(),
+  height: z.number().int().positive().nullable(),
+}).superRefine((image, ctx) => {
+  if (image.visibility === "private") {
+    if (image.path && !image.path.startsWith("images-private/")) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["path"],
+        message: "Private images must live under images-private/",
+      });
+    }
+    return;
+  }
+
+  if (!image.path) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["path"],
+      message: "Public images must include a redistributable image path",
+    });
+  } else if (!image.path.startsWith("images-public/")) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["path"],
+      message: "Public images must live under images-public/",
+    });
+  }
+
+  if (!image.width || !image.height) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["width"],
+      message: "Public images must include width and height",
+    });
+  }
+});
+
+export const SourceAttribution = z.object({
+  productName: z.string(), // e.g. "Linear"
+  url: z.string().url().nullable(), // link to the live product/page, not a rehosted copy
+  capturedAt: IsoDate, // ISO date, when you captured/noted this
+  capturedBy: z.enum(["self", "automated-collection"]),
+  lastVerified: IsoDate.optional(), // when you last confirmed the source still matches — staleness tracking
+});
+
+export const TypePairing = z.object({
+  display: z.string().nullable(), // e.g. "Söhne" — heading/display font if identifiable
+  body: z.string().nullable(), // body font if identifiable
+  notes: z.string().optional(), // e.g. "tight letter-spacing on all-caps labels"
+});
+
+/**
+ * Labeled color roles — evolves the bare `dominantColors` hex list into an
+ * actionable token set an agent can paste into `:root`. "Here are 6 hex values"
+ * isn't usable; "canvas/surface/ink/muted/accent" is. Optional, alongside the
+ * legacy dominantColors (kept for backward compat) — populate when the role
+ * mapping is confident; cannot be safely auto-inferred from unordered hex lists.
+ */
+const HexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+export const ColorRoles = z.object({
+  canvas:  HexColor,                       // app background
+  surface: HexColor,                       // cards/panels
+  ink:     HexColor,                       // primary text
+  muted:   HexColor.nullable(),            // secondary text (nullable — some palettes have no distinct muted)
+  accent:  HexColor,                       // single brand/interactive color
+});
+
+export const VisualAttributes = z.object({
+  dominantColors: z.array(HexColor).min(1).max(6),
+  accentColor: HexColor.nullable(),
+  colorRoles: ColorRoles.optional(),       // labeled token set (prove-then-expand axis)
+  typePairing: TypePairing,
+  spacingDensity: SpacingDensity,
+  cornerStyle: CornerStyle,
+  usesShadows: z.boolean(),
+  usesBorders: z.boolean(),
+});
+
+export const CorpusEntry = z.object({
+  id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Expected stable kebab-case slug"), // stable slug, e.g. "linear-issue-board-2026"
+  title: z.string(), // human label, e.g. "Linear — Issue board, grouped view"
+  patternType: PatternType, // primary pattern (one) — complements the multi-tag categories
+  categories: z.array(Category).min(1).max(4),
+  styleTags: z.array(StyleTag).min(1).max(4),
+
+  source: SourceAttribution,
+  image: ImageRef,
+
+  visual: VisualAttributes,
+
+  // The actual value-add: why this is here, in your own words.
+  critique: z.string().min(80), // enforce: this can't be a one-liner
+  whatToSteal: z.array(z.string().min(10)).min(1), // concrete, copyable techniques
+  antiPatterns: AntiPatterns, // structured: mistakes avoided + where it fails + a11y risks
+  layout: LayoutStructure.optional(), // machine-readable wireframe (optional — see LayoutStructure docs)
+
+  /**
+   * Voice — microcopy as a first-class dimension. "Good afternoon, Sam" vs
+   * "Dashboard" is a design decision as much as font choice. Optional; populate
+   * when the writing itself is notable (empty states, onboarding, error copy).
+   */
+  voice: z.object({
+    tone: z.string(),                         // "restrained, confident, slightly dry"
+    examples: z.array(z.string().min(4)).min(1), // real copy from the screen, verbatim
+    avoid: z.array(z.string().min(4)).default([]), // "no exclamation enthusiasm on financial data"
+  }).optional(),
+
+  /**
+   * Quality tier — exceptional (default) vs cautionary. A cautionary entry is a
+   * genuinely bad example with a critique of WHY it fails — Mobbin can't do this
+   * (no editorial stance). Same shape as any entry; low qualityScore + critique
+   * reframed as "what goes wrong." Search ranks by qualityScore so cautionary
+   * entries sink by default and surface only when explicitly asked.
+   */
+  qualityTier: z.enum(["exceptional", "cautionary"]).default("exceptional"),
+
+  qualityScore: z.number().min(1).max(5), // your own rating, for ranking in search
+  addedAt: IsoDate, // ISO date
+});
+
+export type CorpusEntryT = z.infer<typeof CorpusEntry>;
+
+export const Corpus = z.object({
+  version: z.literal(2),
+  entries: z.array(CorpusEntry),
+});
+
+export type CorpusT = z.infer<typeof Corpus>;

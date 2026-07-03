@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.log
+.env
+.env.local
+
+# Test artifacts (Playwright screenshots, smoke output)
+output/
+
+# Never publish privately-sourced raster images
+corpus/images-private/*
+!corpus/images-private/.gitkeep
+
+# Derived — regenerate with `npm run build-index`
+corpus/embeddings.json

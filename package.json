@@ -1,0 +1,49 @@
+{
+  "name": "clean-ui-mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing a curated corpus of exceptional UI examples for AI-assisted design.",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "clean-ui-mcp": "dist/server.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsc && node dist/server.js",
+    "ui": "tsc && node dist/scripts/ui-server.js",
+    "validate-corpus": "tsc && node dist/scripts/validate-corpus.js",
+    "tag-image": "tsc && node dist/scripts/tag-image.js",
+    "add-entry": "tsc && node dist/scripts/add-entry.js",
+    "capture": "tsc && node dist/scripts/capture.js",
+    "workflow": "tsc && node dist/scripts/capture.js $CAPTURE_ARGS && node dist/scripts/add-entry.js",
+    "test": "vitest run",
+    "build-index": "tsc && node dist/scripts/build-index.js",
+    "bulk-import": "tsc && node dist/scripts/bulk-import.js",
+    "review-draft": "tsc && node dist/scripts/review-draft.js",
+    "commit-draft": "tsc && node dist/scripts/commit-draft.js",
+    "migrate": "tsc && node dist/scripts/migrate-v1-to-v2.js",
+    "migrate-layout": "tsc && node dist/scripts/migrate-layout-field.js"
+  },
+  "keywords": [
+    "mcp",
+    "design",
+    "ui",
+    "inspiration"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "dotenv": "^17.4.2",
+    "image-size": "^2.0.2",
+    "puppeteer-core": "^24.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "playwright": "^1.61.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  }
+}

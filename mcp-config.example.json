@@ -1,0 +1,9 @@
+{
+  "_comment": "Example config. Copy the relevant block into your MCP client's config file (e.g. Claude Desktop's claude_desktop_config.json, or .mcp.json for Claude Code) and adjust the path.",
+  "mcpServers": {
+    "clean-ui": {
+      "command": "node",
+      "args": ["/absolute/path/to/clean-ui-mcp/dist/server.js"]
+    }
+  }
+}

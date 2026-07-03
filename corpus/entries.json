@@ -1,0 +1,592 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "linear-issue-board-grouped",
+      "title": "Linear — Issue board, grouped-by-status view",
+      "patternType": "dashboard",
+      "categories": [
+        "dashboard",
+        "data-table"
+      ],
+      "styleTags": [
+        "minimal",
+        "dense-data",
+        "monochrome",
+        "technical-mono"
+      ],
+      "source": {
+        "productName": "Linear",
+        "url": "https://linear.app",
+        "capturedAt": "2026-05-10",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": null,
+        "width": null,
+        "height": null
+      },
+      "visual": {
+        "dominantColors": [
+          "#08090a",
+          "#1c1c1f",
+          "#8a8f98"
+        ],
+        "accentColor": "#5e6ad2",
+        "typePairing": {
+          "display": "Inter",
+          "body": "Inter",
+          "notes": "Single typeface for everything; hierarchy comes from weight and size steps, not font switching. Labels are small-caps-adjacent at 11px with wide letter-spacing."
+        },
+        "spacingDensity": "compact",
+        "cornerStyle": "slight-round",
+        "usesShadows": false,
+        "usesBorders": true
+      },
+      "critique": "Linear gets density right by using ONE typeface and controlling hierarchy entirely through size, weight, and color-on-dark rather than decoration. Borders are 1px and barely-there (low contrast against background), doing structural work without visual noise. There's no drop shadow anywhere on this screen — depth comes from background-color steps (3 shades of near-black) instead. This is the opposite of the 'card with shadow' default; cards are just slightly lighter rectangles with a hairline border.",
+      "whatToSteal": [
+        "Use 2-3 background shades of the same hue for depth instead of box-shadow",
+        "Single typeface, 4-5 weight/size steps max, for an entire dense interface",
+        "Hairline borders at low contrast (not pure white/black) read as structure, not decoration",
+        "Status color-coding via small dots/pills, never full-row background tint"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "Extremely low contrast on metadata text — borderline accessibility issue if copied literally"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 5,
+      "addedAt": "2026-05-10"
+    },
+    {
+      "id": "stripe-pricing-page-2025",
+      "title": "Stripe — Pricing page, plan comparison",
+      "patternType": "pricing",
+      "categories": [
+        "pricing",
+        "marketing-hero"
+      ],
+      "styleTags": [
+        "editorial",
+        "minimal",
+        "bold-color"
+      ],
+      "source": {
+        "productName": "Stripe",
+        "url": "https://stripe.com/pricing",
+        "capturedAt": "2026-04-22",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": null,
+        "width": null,
+        "height": null
+      },
+      "visual": {
+        "dominantColors": [
+          "#ffffff",
+          "#0a2540",
+          "#425466"
+        ],
+        "accentColor": "#635bff",
+        "typePairing": {
+          "display": "custom serif (brand-specific)",
+          "body": "system sans",
+          "notes": "Serif used ONLY for the largest hero numbers/headlines; every supporting line is plain sans. The contrast between the two is the whole hierarchy."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": false,
+        "usesBorders": true
+      },
+      "critique": "The serif/sans pairing is doing almost all the brand-differentiation work here — it's the single highest-leverage typography decision on the page. Everything else (color, spacing, components) is fairly restrained and would look generic without that one deliberate font contrast. Pricing tiers use a plain bordered table, no gradients, no 'most popular' ribbon decoration — the recommended plan is marked by a 2px border color change only.",
+      "whatToSteal": [
+        "Pick exactly one place to use an unusual/custom display font (numbers, hero headline) and keep everything else plain — contrast, not coverage",
+        "Mark a 'recommended' option with border-color change alone, skip the ribbon/badge cliche",
+        "Generous whitespace around pricing tables reads as confidence, not emptiness"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "Avoids the \"Most Popular\" ribbon/badge cliché — the recommended plan is marked by a 2px border-color change alone.",
+          "Avoids gradient backgrounds on pricing cards; depth comes from whitespace and a single serif/sans type contrast."
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 5,
+      "addedAt": "2026-04-22"
+    },
+    {
+      "id": "arc-browser-empty-state-sidebar",
+      "title": "Arc Browser — Empty sidebar / first-run state",
+      "patternType": "empty-state",
+      "categories": [
+        "empty-state",
+        "onboarding",
+        "navigation"
+      ],
+      "styleTags": [
+        "playful",
+        "warm-tactile",
+        "bold-color"
+      ],
+      "source": {
+        "productName": "Arc",
+        "url": "https://arc.net",
+        "capturedAt": "2026-03-02",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": null,
+        "width": null,
+        "height": null
+      },
+      "visual": {
+        "dominantColors": [
+          "#fdf6ec",
+          "#2b2b2b"
+        ],
+        "accentColor": "#ff5d5d",
+        "typePairing": {
+          "display": "rounded grotesk",
+          "body": "rounded grotesk",
+          "notes": "Same rounded typeface throughout; warmth comes from the letterforms, not from color alone."
+        },
+        "spacingDensity": "moderate",
+        "cornerStyle": "pill",
+        "usesShadows": true,
+        "usesBorders": false
+      },
+      "critique": "Most empty states default to a centered gray illustration and muted copy ('Nothing here yet'). This one uses an actual personality-driven illustration and a specific, slightly funny line of copy instead of generic placeholder text. The soft shadow + pill shapes + warm off-white background combine to feel tactile rather than clinical — this is the rare example of soft-UI done with restraint instead of looking like default Figma community kit output.",
+      "whatToSteal": [
+        "Write one specific, slightly funny sentence instead of generic 'no items yet' copy for empty states",
+        "Off-white (not pure white) background + one warm accent reads as 'considered' cheaply",
+        "Pill-shaped buttons only read as playful if paired with a rounded typeface — the two have to match"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "Heavy reliance on illustration assets — not reproducible without an illustrator or strong AI-image pipeline"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-03-02"
+    },
+    {
+      "id": "sample",
+      "title": "Origin",
+      "patternType": "dashboard",
+      "categories": [
+        "dashboard",
+        "navigation",
+        "data-table"
+      ],
+      "styleTags": [
+        "minimal",
+        "dense-data",
+        "high-contrast"
+      ],
+      "source": {
+        "productName": "Origin",
+        "url": "https://medium.com/@youssef0mzaiti/the-5-best-platforms-to-design-your-websites-ux-ui-9aad271cd14b",
+        "capturedAt": "2026-07-01",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/sample-5.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#FFFFFF",
+          "#F6F6F6",
+          "#E9E9E9",
+          "#111827",
+          "#0B5ED7",
+          "#6B7280"
+        ],
+        "accentColor": "#0B5ED7",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Hierarchy is built with a large numeric display (e.g., net worth) and smaller, spaced uppercase section labels. Navigation and card headers use medium-weight text, while secondary details use muted gray to de-emphasize."
+        },
+        "spacingDensity": "moderate",
+        "cornerStyle": "slight-round",
+        "usesShadows": false,
+        "usesBorders": true
+      },
+      "critique": "The layout uses a strong grid: persistent left navigation plus a wide content column with large chart cards and a right rail of stacked promotional/recap cards. Cards are largely white with subtle gray dividers and rounded corners, and interactive emphasis comes from the blue accent and outlined controls rather than heavy shadows. The UI feels information-dense due to frequent micro-labels (uppercase section text, small metadata) and compact card interiors.",
+      "whatToSteal": [
+        "Use a three-column dashboard grid (left nav + main cards + right rail) with consistent card padding and subtle divider lines inside cards.",
+        "Represent primary status/values with very large numerals, then add a single colored delta line (blue/green) directly beneath for quick scanning.",
+        "Create chart-card visual structure with minimal framing: light gray background, light grid/dashed lines, and a single bold series stroke in the brand blue.",
+        "Use outlined pill buttons for secondary actions (e.g., “Forecast”) and small rounded icon buttons for tools (ellipsis/star), keeping shadows off for a cleaner, flatter look."
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "Avoids heavy card shadows for separation — uses subtle background-color steps and hairline dividers instead.",
+          "Avoids full-row background tinting for status; keeps the data grid scannable with neutral surfaces."
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "three-column",
+        "regions": [
+          {
+            "role": "summary-strip"
+          },
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          },
+          {
+            "role": "detail-rail",
+            "width": "fixed-wide"
+          }
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-01"
+    },
+    {
+      "id": "origin-origin",
+      "title": "Origin",
+      "patternType": "onboarding",
+      "categories": [
+        "onboarding",
+        "landing-page",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal",
+        "soft-neumorphic",
+        "warm-tactile"
+      ],
+      "source": {
+        "productName": "Origin",
+        "url": null,
+        "capturedAt": "2026-07-01",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/sample-10.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#F5F5F7",
+          "#FFFFFF",
+          "#1F2937",
+          "#C7CCD3",
+          "#2B7BC0",
+          "#0B4C73"
+        ],
+        "accentColor": "#0B4C73",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Large, high-contrast serif headline establishes the primary hierarchy. Smaller sans-serif labels and helper text use lighter weight and muted gray for secondary emphasis within stacked form fields."
+        },
+        "spacingDensity": "moderate",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "Two-column layout pairs a form card with a large photographic hero panel, creating clear narrative separation. Form controls rely on light gray borders and generous whitespace, while a dark “Continue” button provides the only strong focal contrast. The headline uses a serif style distinct from the rest of the UI, which improves scanability but increases style contrast.",
+      "whatToSteal": [
+        "Use a two-column onboarding layout: fixed-width form panel on a light background next to a full-height image card with matching corner radius.",
+        "Implement input fields as white rounded rectangles with subtle 1px light-gray borders and consistent internal padding; align icons inside the same row as the input value.",
+        "Create hierarchy with a large serif display headline and a smaller sans-serif body/label system in muted grays.",
+        "Add a single high-salience CTA button in near-black with slight rounding, placed after the form stack and aligned to the form column."
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "Avoids a centered single-column form stack that wastes the hero panel — pairs the form with a full-height image card to create narrative separation.",
+          "Avoids generic \"Sign up\" copy in the primary CTA."
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "form-panel",
+            "width": "flex"
+          },
+          {
+            "role": "visual-panel",
+            "width": "fixed-wide"
+          }
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-01"
+    },
+    {
+      "id": "origin-origin-2",
+      "title": "Origin",
+      "patternType": "dashboard",
+      "categories": [
+        "dashboard",
+        "navigation",
+        "data-table"
+      ],
+      "styleTags": [
+        "minimal",
+        "dense-data",
+        "soft-neumorphic"
+      ],
+      "source": {
+        "productName": "Origin",
+        "url": null,
+        "capturedAt": "2026-07-01",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/origin-web-screens-2-png.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#f7f7f6",
+          "#ffffff",
+          "#e7e7e5",
+          "#cfcfcb",
+          "#1f2937",
+          "#059669"
+        ],
+        "accentColor": "#06b6d4",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Hierarchy is created with a large page title (“Spending”) and a smaller, spaced section label (“TRANSACTIONS”) in uppercase. Table headers use muted gray and lighter weight, while numeric amounts (including green/red signs) create strong visual emphasis."
+        },
+        "spacingDensity": "moderate",
+        "cornerStyle": "slight-round",
+        "usesShadows": false,
+        "usesBorders": true
+      },
+      "critique": "The layout cleanly separates persistent navigation from the main content, and the transactions table uses consistent row spacing with pill-like category chips. Structural separators rely on subtle lines rather than shadows, keeping the UI visually quiet while still readable. The top search and action icons are right-aligned with rounded controls that visually balance the dense data grid.",
+      "whatToSteal": [
+        "Use pill-shaped category/status chips inside table cells (icon + label + dropdown caret) to reduce column width without losing meaning.",
+        "Create a “summary strip” above the table with four equal-width metrics separated by thin vertical dividers for quick scanning.",
+        "Implement a right-aligned search control with an X clear icon and compact icon-only action buttons, sized consistently with table filters.",
+        "Rely on subtle hairline dividers (instead of heavy shadows) for table structure to keep the interface calm and scalable."
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "Avoids heavy borders between table rows — relies on consistent row spacing and hairline dividers to keep the transactions list calm.",
+          "Avoids multi-color status chips; uses a restrained palette so category pills read as structure, not decoration."
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "three-column",
+        "regions": [
+          {
+            "role": "summary-strip"
+          },
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          },
+          {
+            "role": "detail-rail",
+            "width": "fixed-wide"
+          }
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-01"
+    },
+    {
+      "id": "origin-origin-3",
+      "title": "Origin",
+      "patternType": "dashboard",
+      "categories": [
+        "dashboard",
+        "navigation",
+        "data-table"
+      ],
+      "styleTags": [
+        "minimal",
+        "dense-data",
+        "technical-mono"
+      ],
+      "source": {
+        "productName": "Origin",
+        "url": null,
+        "capturedAt": "2026-07-01",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/origin-web-screens-8-png.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#f7f8fa",
+          "#ffffff",
+          "#e9edf2",
+          "#d9dde5",
+          "#0f172a",
+          "#6b7280"
+        ],
+        "accentColor": "#3b82f6",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Hierarchy is created with large, high-contrast numeric headings for key metrics (e.g., net worth) and smaller muted labels for context. Uppercase section labels and light-weight body text differentiate chart/insight regions without heavy styling."
+        },
+        "spacingDensity": "moderate",
+        "cornerStyle": "slight-round",
+        "usesShadows": false,
+        "usesBorders": true
+      },
+      "critique": "A data-dense forecast dashboard balances a left icon sidebar with a wide, card-based main canvas and an overlay tooltip explaining the chart. Interactive controls use clear pill-like chips and a single strong primary CTA while most chart structure relies on light grid lines and subtle dividers rather than heavy borders/shadows.",
+      "whatToSteal": [
+        "Use a right-side callout tooltip/card anchored to chart regions with concise title, icon, and stacked dividers; keep it visually distinct via white surface and slight rounding.",
+        "Create metric hierarchy with oversized currency numbers and lighter labels above them, aligned in a two-column layout for current vs future.",
+        "Drive chart readability with very light dashed gridlines and thin axis labels, using colored series (blue/red) rather than bold chart chrome.",
+        "Use pill-like filter chips for quick metric switching (Net Worth / Cash Flow / Success %) with consistent padding and muted borders."
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "Avoids bold chart chrome (thick axes, heavy gridlines) — uses very light dashed gridlines so the data series carries the visual weight.",
+          "Avoids cluttering the chart canvas with inline labels; anchors explanations to a right-side callout tooltip instead."
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "three-column",
+        "regions": [
+          {
+            "role": "summary-strip"
+          },
+          {
+            "role": "icon-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          },
+          {
+            "role": "detail-rail",
+            "width": "fixed-wide"
+          }
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-01"
+    },
+    {
+      "id": "origin-origin-4",
+      "title": "Origin",
+      "patternType": "dashboard",
+      "categories": [
+        "dashboard",
+        "data-table",
+        "chat-interface"
+      ],
+      "styleTags": [
+        "minimal",
+        "soft-neumorphic",
+        "glassmorphic"
+      ],
+      "source": {
+        "productName": "Origin",
+        "url": null,
+        "capturedAt": "2026-07-02",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/origin-web-screens-0-png.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#ffffff",
+          "#f3f4f6",
+          "#e5e7eb",
+          "#111827",
+          "#6b7280",
+          "#2f7d32"
+        ],
+        "accentColor": "#6b8f1f",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Hierarchy is created with a smaller upper label (“AI ADVISOR”), a bold section heading (“The case for gold”), and body paragraphs in a regular sans-serif. UI text uses muted gray for secondary info, while headings and chart labels use darker tones for focus."
+        },
+        "spacingDensity": "moderate",
+        "cornerStyle": "slight-round",
+        "usesShadows": false,
+        "usesBorders": true
+      },
+      "critique": "A centered modal-like card dominates with generous padding and rounded corners, while the rest of the app is dimmed. The interface mixes chat-style messaging with an article layout and an embedded “Markets at a glance” chart inside a bordered, low-contrast card. Green and pink bar/chart fills add color emphasis against a mostly white, gray surface.",
+      "whatToSteal": [
+        "Use a centered, large rounded container on top of a dimmed background to focus attention (modal + dim overlay).",
+        "Combine chat/assistant UI with article content by stacking: small assistant label, question bubble, then rich text sections and a framed chart block.",
+        "Create structure with subtle bordered panels (no heavy shadows) and muted grays for secondary text.",
+        "For charts, use light gray gridlines and saturated, limited series colors (e.g., green and pale pink) to keep readability on white."
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "Avoids a flat, edge-to-edge chat interface — frames the assistant exchange inside a centered, generously padded card on a dimmed background to signal focus.",
+          "Avoids generic \"AI is thinking\" placeholder copy."
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "modal-overlay",
+        "regions": [
+          {
+            "role": "overlay-card",
+            "width": "flex"
+          }
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-02"
+    }
+  ]
+}

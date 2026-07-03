@@ -210,16 +210,21 @@ function explainCaptureError(error: unknown): string {
 
 function explainTagError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  if (/401|invalid_api_key|Incorrect API key/i.test(message)) return "OpenAI rejected the API key. Check OPENAI_API_KEY and restart the app.";
-  if (/429|rate_limit|quota/i.test(message)) return "OpenAI rate limit or quota was reached. Try again later or use another key.";
-  if (/model|not found|unsupported/i.test(message)) return "OpenAI model was rejected. Set OPENAI_AUTO_TAG_MODEL to a supported vision model and restart the app.";
-  if (/non-JSON/i.test(message)) return "OpenAI returned an unusable draft. Try Auto-fill again, or use a clearer screenshot.";
+  if (/401|invalid_api_key|Incorrect API key/i.test(message)) return "The vision provider rejected the API key. Check your .env keys and restart the app.";
+  if (/429|rate_limit|quota/i.test(message)) return "Vision provider rate limit or quota was reached. Try again later or use another key.";
+  if (/model|not found|unsupported/i.test(message)) return "The vision model was rejected. Check the model name in .env and restart the app.";
+  if (/non-JSON/i.test(message)) return "The vision provider returned an unusable draft. Try Auto-fill again, or use a clearer screenshot.";
   return message || "Auto-fill failed";
 }
 
 export function publicConfigStatus(status: EnvStatus = getEnvStatus()) {
+  const anyVisionKey = status.openaiKeyConfigured || status.anthropicKeyConfigured || status.geminiKeyConfigured;
   return {
     openaiKeyConfigured: status.openaiKeyConfigured,
+    anthropicKeyConfigured: status.anthropicKeyConfigured,
+    geminiKeyConfigured: status.geminiKeyConfigured,
+    visionKeyConfigured: anyVisionKey,
+    autoTagProvider: status.autoTagProvider,
     voyageKeyConfigured: status.voyageKeyConfigured,
     openaiAutoTagModel: status.openaiAutoTagModel,
     cleanUiPort: status.cleanUiPort,
@@ -487,8 +492,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       return;
     }
 
-    if (!process.env.OPENAI_API_KEY) {
-      sendJson(res, 400, { error: "OPENAI_API_KEY is not set. Add it to .env, then restart npm run ui." });
+    if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY && !process.env.GEMINI_API_KEY) {
+      sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
       return;
     }
 

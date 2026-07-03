@@ -13,7 +13,10 @@ export interface EnvStatus {
   envPath: string;
   envFileLoaded: boolean;
   openaiKeyConfigured: boolean;
+  anthropicKeyConfigured: boolean;
+  geminiKeyConfigured: boolean;
   voyageKeyConfigured: boolean;
+  autoTagProvider: string;
   openaiAutoTagModel: string;
   cleanUiPort: number;
 }
@@ -27,7 +30,10 @@ export function getEnvStatus(envPath = DEFAULT_ENV_PATH): EnvStatus {
     envPath,
     envFileLoaded: existsSync(envPath),
     openaiKeyConfigured: present(process.env.OPENAI_API_KEY),
+    anthropicKeyConfigured: present(process.env.ANTHROPIC_API_KEY),
+    geminiKeyConfigured: present(process.env.GEMINI_API_KEY),
     voyageKeyConfigured: present(process.env.VOYAGE_API_KEY),
+    autoTagProvider: process.env.AUTO_TAG_PROVIDER || "openai",
     openaiAutoTagModel: process.env.OPENAI_AUTO_TAG_MODEL || DEFAULT_OPENAI_AUTO_TAG_MODEL,
     cleanUiPort: Number(process.env.CLEAN_UI_PORT ?? DEFAULT_CLEAN_UI_PORT),
   };

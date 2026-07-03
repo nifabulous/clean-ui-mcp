@@ -55,6 +55,10 @@ describe("curator app browser smoke", () => {
       if (url.pathname === "/api/config") {
         return json(res, 200, {
           openaiKeyConfigured: openaiConfigured,
+          anthropicKeyConfigured: false,
+          geminiKeyConfigured: false,
+          visionKeyConfigured: openaiConfigured,
+          autoTagProvider: "openai",
           voyageKeyConfigured: false,
           openaiAutoTagModel: "gpt-5.4-nano",
           cleanUiPort: 3131,
@@ -166,13 +170,13 @@ describe("curator app browser smoke", () => {
     await page.close();
   });
 
-  it("explains .env setup when the OpenAI key is missing", async () => {
+  it("explains .env setup when the vision key is missing", async () => {
     openaiConfigured = false;
     const page = await browser.newPage();
     await page.goto(baseUrl);
     await page.locator("#newBtn").click();
 
-    expect(await page.getByText("Auto-fill needs OPENAI_API_KEY in .env.").isVisible()).toBe(true);
+    expect(await page.getByText("Auto-fill needs a vision provider key").isVisible()).toBe(true);
     expect(await page.getByRole("button", { name: "Auto-fill" }).isDisabled()).toBe(true);
 
     await page.close();

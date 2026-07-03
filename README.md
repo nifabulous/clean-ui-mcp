@@ -39,7 +39,7 @@ clean-ui-mcp/
 │   ├── corpus.ts              # load/search/similar — pure data layer, no MCP
 │   ├── server.ts              # MCP server: 6 tools, wires to corpus.ts
 │   ├── embeddings.ts          # Voyage AI client + cosine + index I/O
-│   ├── tagger.ts              # OpenAI vision auto-tagger (drafts critique/steal/layout)
+│   ├── tagger.ts              # multi-provider vision auto-tagger (OpenAI/Claude/Gemini)
 │   └── scripts/
 │       ├── validate-corpus.ts # standalone validator, good for CI/pre-commit
 │       ├── migrate-v1-to-v2.ts       # one-shot schema migration (patternType + antiPatterns)
@@ -59,8 +59,13 @@ npm run build
 npm test
 ```
 
-Put local keys in `.env`; never paste them into committed files. For Auto-fill,
-set `OPENAI_API_KEY` in `.env`. For semantic indexing, set `VOYAGE_API_KEY`.
+Put local keys in `.env`; never paste them into committed files.
+
+**Vision providers (Auto-fill):** any one of OpenAI, Anthropic Claude, or Google
+Gemini. Set `AUTO_TAG_PROVIDER` (default `openai`) and the corresponding key. If
+the preferred key is missing, auto-falls back to whichever key is present.
+
+**Semantic search:** set `VOYAGE_API_KEY` (falls back to keyword search without it).
 
 ## The corpus schema (v2)
 
@@ -107,20 +112,29 @@ Four views:
   critique, steal items, and anti-patterns; visual attributes + layout wireframe
   in the right rail.
 - **New sample** — image-first entry creation: capture a screenshot from a URL or
-  upload one, then Auto-fill (OpenAI vision drafts the structured fields), review,
+  upload one, then Auto-fill (vision AI drafts the structured fields), review,
   and save. The validator gates save in real time.
 - **Bulk import** — drop many screenshots at once; each becomes a staged draft;
   Auto-fill all, review the queue, commit ready entries. Mirrors the terminal
   `bulk-import` flow in the browser.
 - **Coverage** — category/style coverage stats and orphaned-image cleanup.
 
-Auto-fill requires `OPENAI_API_KEY` in `.env`. By default it uses `gpt-5.4-nano`
-with high-detail image input so drafts can reference specific in-card components;
-override with `OPENAI_AUTO_TAG_MODEL`. Restart `npm run ui` after changing `.env`.
+Auto-fill supports three vision providers — set `AUTO_TAG_PROVIDER` and the
+matching key in `.env`:
+
+| Provider | `AUTO_TAG_PROVIDER` | Key env var | Default model | Model env var |
+|---|---|---|---|---|
+| OpenAI (default) | `openai` | `OPENAI_API_KEY` | `gpt-5.4-nano` | `OPENAI_AUTO_TAG_MODEL` |
+| Anthropic Claude | `claude` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | `CLAUDE_AUTO_TAG_MODEL` |
+| Google Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash` | `GEMINI_AUTO_TAG_MODEL` |
+
+If the selected provider's key is missing, Auto-fill auto-falls back to whichever
+key is present. The two-pass tagger (deterministic color extraction via
+node-vibrant + observation-grounded critique) works identically across all three.
 
 ```bash
 cp .env.example .env
-# edit .env and add OPENAI_API_KEY
+# edit .env — add one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY
 npm run ui
 ```
 

@@ -167,7 +167,46 @@ Rules that apply to every field you write:
 Return ONLY valid JSON, no markdown fences, no extra keys beyond what's requested.`;
 
 const OPENAI_RESPONSES_API = "https://api.openai.com/v1/responses";
+const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
+const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+
 const OPENAI_AUTO_TAG_MODEL = process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano";
+const CLAUDE_AUTO_TAG_MODEL = process.env.CLAUDE_AUTO_TAG_MODEL ?? "claude-haiku-4-5";
+const GEMINI_AUTO_TAG_MODEL = process.env.GEMINI_AUTO_TAG_MODEL ?? "gemini-2.5-flash";
+
+const MAX_OUTPUT_TOKENS = 4200;
+
+/** Resolve which provider to use, with auto-fallback if the preferred key is missing. */
+function resolveProvider(): "openai" | "claude" | "gemini" {
+  const preferred = (process.env.AUTO_TAG_PROVIDER ?? "openai").toLowerCase() as "openai" | "claude" | "gemini";
+  const has = { openai: !!process.env.OPENAI_API_KEY, claude: !!process.env.ANTHROPIC_API_KEY, gemini: !!process.env.GEMINI_API_KEY };
+  if (has[preferred]) return preferred;
+  // Auto-fallback to whichever key is present.
+  for (const p of ["openai", "claude", "gemini"] as const) {
+    if (has[p]) {
+      console.error(`[tagger] AUTO_TAG_PROVIDER="${preferred}" but no key set — falling back to ${p}.`);
+      return p;
+    }
+  }
+  return preferred; // no keys at all — the builder will throw with a clear message
+}
+
+/** Check if ANY vision provider key is configured. */
+export function hasVisionKey(): boolean {
+  return !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY);
+}
+
+/** Human-readable provider name for UI display. */
+export function activeProviderName(): string {
+  const p = resolveProvider();
+  return { openai: "OpenAI", claude: "Claude", gemini: "Gemini" }[p];
+}
+
+/** Active model name for UI display. */
+export function activeModelName(): string {
+  const p = resolveProvider();
+  return { openai: OPENAI_AUTO_TAG_MODEL, claude: CLAUDE_AUTO_TAG_MODEL, gemini: GEMINI_AUTO_TAG_MODEL }[p];
+}
 
 // ─── PASS 1: extraction prompt (facts + geometry) ────────────────────────────
 
@@ -385,9 +424,9 @@ function validateNoBannedPhrases(obj: Record<string, unknown>): string[] {
   return errors;
 }
 
-// ─── model call helpers ──────────────────────────────────────────────────────
+// ─── model call helpers (multi-provider) ─────────────────────────────────────
 
-async function callModel(
+async function callOpenAI(
   prompt: string,
   imagePath: string | null,
   retryFeedback?: string,
@@ -400,11 +439,7 @@ async function callModel(
     const ext = extname(imagePath).toLowerCase();
     const mimeType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
     const imageData = readFileSync(imagePath).toString("base64");
-    userContent.push({
-      type: "input_image",
-      image_url: `data:${mimeType};base64,${imageData}`,
-      detail: "high",
-    });
+    userContent.push({ type: "input_image", image_url: `data:${mimeType};base64,${imageData}`, detail: "high" });
   }
 
   const response = await fetch(OPENAI_RESPONSES_API, {
@@ -412,38 +447,127 @@ async function callModel(
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: OPENAI_AUTO_TAG_MODEL,
-      max_output_tokens: 4200,
+      max_output_tokens: MAX_OUTPUT_TOKENS,
       input: [
         { role: "system", content: [{ type: "input_text", text: SYSTEM }] },
         { role: "user", content: retryFeedback ? [...userContent, { type: "input_text", text: retryFeedback }] : userContent },
       ],
-      // No verbosity constraint — it was fighting the depth guidance.
     }),
   });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`OpenAI API error ${response.status}: ${body}`);
-  }
+  if (!response.ok) throw new Error(`OpenAI API error ${response.status}: ${await response.text()}`);
 
   const data = await response.json() as {
     output_text?: string;
     output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
   };
-
   return data.output_text
     ?? data.output?.flatMap((item) => item.content ?? [])
-      .filter((content) => content.type === "output_text" || content.type === "text")
-      .map((content) => content.text ?? "")
-      .join("")
+      .filter((c) => c.type === "output_text" || c.type === "text")
+      .map((c) => c.text ?? "").join("")
     ?? "";
+}
+
+async function callClaude(
+  prompt: string,
+  imagePath: string | null,
+  retryFeedback?: string,
+): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+
+  // Claude content blocks: image uses raw base64 (no data-URI prefix).
+  const content: Array<Record<string, unknown>> = [];
+  if (imagePath) {
+    const ext = extname(imagePath).toLowerCase();
+    const mediaType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
+    const imageData = readFileSync(imagePath).toString("base64");
+    content.push({ type: "image", source: { type: "base64", media_type: mediaType, data: imageData } });
+  }
+  content.push({ type: "text", text: prompt });
+  if (retryFeedback) content.push({ type: "text", text: retryFeedback });
+
+  const response = await fetch(ANTHROPIC_API, {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: CLAUDE_AUTO_TAG_MODEL,
+      max_tokens: MAX_OUTPUT_TOKENS,
+      system: SYSTEM,
+      messages: [{ role: "user", content }],
+    }),
+  });
+
+  if (!response.ok) throw new Error(`Claude API error ${response.status}: ${await response.text()}`);
+
+  const data = await response.json() as { content?: Array<{ type?: string; text?: string }> };
+  return (data.content ?? [])
+    .filter((b) => b.type === "text")
+    .map((b) => b.text ?? "").join("");
+}
+
+async function callGemini(
+  prompt: string,
+  imagePath: string | null,
+  retryFeedback?: string,
+): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not set");
+
+  // Gemini parts: inlineData uses raw base64 (no prefix), camelCase.
+  const parts: Array<Record<string, unknown>> = [];
+  if (imagePath) {
+    const ext = extname(imagePath).toLowerCase();
+    const mimeType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
+    const imageData = readFileSync(imagePath).toString("base64");
+    parts.push({ inlineData: { mimeType, data: imageData } });
+  }
+  parts.push({ text: prompt });
+  if (retryFeedback) parts.push({ text: retryFeedback });
+
+  const endpoint = `${GEMINI_API_BASE}/${GEMINI_AUTO_TAG_MODEL}:generateContent`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: SYSTEM,
+      contents: [{ role: "user", parts }],
+      generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS },
+    }),
+  });
+
+  if (!response.ok) throw new Error(`Gemini API error ${response.status}: ${await response.text()}`);
+
+  const data = await response.json() as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  const parts_out = data.candidates?.[0]?.content?.parts ?? [];
+  return parts_out.filter((p) => typeof p.text === "string").map((p) => p.text ?? "").join("");
+}
+
+/** Route to the active provider. Auto-falls back if the preferred key is missing. */
+async function callModel(
+  prompt: string,
+  imagePath: string | null,
+  retryFeedback?: string,
+): Promise<string> {
+  const provider = resolveProvider();
+  const fullPrompt = prompt; // prompt already contains the per-pass instructions
+  switch (provider) {
+    case "claude":  return callClaude(fullPrompt, imagePath, retryFeedback);
+    case "gemini":  return callGemini(fullPrompt, imagePath, retryFeedback);
+    default:        return callOpenAI(fullPrompt, imagePath, retryFeedback);
+  }
 }
 
 // ─── core two-pass orchestration ─────────────────────────────────────────────
 
 export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
+  if (!hasVisionKey()) throw new Error("No vision provider key set. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY in .env.");
 
   const corpusPath = toCorpusRelativePath(input.imagePath);
   const today = new Date().toISOString().slice(0, 10);
@@ -556,8 +680,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     qualityScore:    critique.qualityTier === "cautionary" ? 2 : 3,
     addedAt:         today,
     _raw: {
-      provider: "openai",
-      model: OPENAI_AUTO_TAG_MODEL,
+      provider: resolveProvider(),
+      model: activeModelName(),
       extraction: extractionParsed,
       critique: critiqueParsed,
       quantizedColors,

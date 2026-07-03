@@ -527,7 +527,7 @@ const state = {
 	  bulkDefaultProduct: "",
 	  bulkEditingIndex: null,
 	  orphans: [],
-	  config: { openaiKeyConfigured: false, envFileLoaded: false, openaiAutoTagModel: "gpt-5.4-nano" },
+	  config: { openaiKeyConfigured: false, anthropicKeyConfigured: false, geminiKeyConfigured: false, visionKeyConfigured: false, autoTagProvider: "openai", envFileLoaded: false, openaiAutoTagModel: "gpt-5.4-nano" },
 	};
 
 const $ = (selector) => document.querySelector(selector);
@@ -536,6 +536,15 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
 })[char]);
 const slugify = (value) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").replace(/-{2,}/g, "-") || "sample";
 const lines = (value) => String(value || "").split("\n").map((line) => line.trim()).filter(Boolean);
+
+// Derive the active provider display name + model from config (mirrors tagger.resolveProvider).
+const providerName = () => {
+  const p = state.config.autoTagProvider || "openai";
+  const has = { openai: state.config.openaiKeyConfigured, claude: state.config.anthropicKeyConfigured, gemini: state.config.geminiKeyConfigured };
+  let active = p;
+  if (!has[p]) { for (const k of ["openai","claude","gemini"]) { if (has[k]) { active = k; break; } } }
+  return { openai: "OpenAI", claude: "Claude", gemini: "Gemini" }[active] || "OpenAI";
+};
 
 async function request(path, options = {}) {
   const response = await fetch(`${API}${path}`, {
@@ -903,9 +912,9 @@ function renderForm() {
   const entry = state.draft;
   const isEditing = state.draftMode === "edit";
   const isLegacyLinkOnly = isEditing && !entry.image.path;
-  const keyStatus = state.config.openaiKeyConfigured
-    ? `<div class="key-status ready">OpenAI key loaded. Auto-fill will use ${esc(state.config.openaiAutoTagModel)}.</div>`
-    : `<div class="key-status missing">Auto-fill needs OPENAI_API_KEY in .env. Add it there, then restart npm run ui.</div>`;
+  const keyStatus = state.config.visionKeyConfigured
+    ? `<div class="key-status ready">${providerName()} key loaded. Auto-fill will use ${esc(state.config.openaiAutoTagModel)}.</div>`
+    : `<div class="key-status missing">Auto-fill needs a vision provider key (OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY) in .env.</div>`;
   const imagePreview = entry.image.path
     ? `<figure class="image-preview"><img src="${API}/image?path=${encodeURIComponent(entry.image.path)}" alt="${esc(entry.title || entry.source.productName || "Captured screenshot")}"><figcaption class="image-ready">Image ready: ${esc(entry.image.path)} (${entry.image.width || "?"} x ${entry.image.height || "?"})</figcaption></figure>`
     : `<div class="image-empty"><i data-lucide="image-off"></i><span>No screenshot yet</span><span class="badge">required for new samples</span></div>`;
@@ -1051,7 +1060,7 @@ function updatePreview() {
   $("#jsonPreview").textContent = JSON.stringify(state.draft, null, 2);
   $("#saveForm").disabled = issues.length > 0;
   const autoFill = $("#autoFill");
-  if (autoFill) autoFill.disabled = !state.config.openaiKeyConfigured || !state.draft.source.productName || !state.draft.image.path;
+  if (autoFill) autoFill.disabled = !state.config.visionKeyConfigured || !state.draft.source.productName || !state.draft.image.path;
   renderIcons();
 }
 
@@ -1253,10 +1262,10 @@ function bulkTally() {
 
 function renderBulk() {
   const t = bulkTally();
-  const keyReady = state.config.openaiKeyConfigured;
+  const keyReady = state.config.visionKeyConfigured;
   const keyStatus = keyReady
-    ? `<div class="key-status ready">OpenAI key loaded. Auto-fill will use ${esc(state.config.openaiAutoTagModel)}.</div>`
-    : `<div class="key-status missing">Auto-fill needs OPENAI_API_KEY in .env. Staging still works; tag later.</div>`;
+    ? `<div class="key-status ready">${providerName()} key loaded. Auto-fill will use ${esc(state.config.openaiAutoTagModel)}.</div>`
+    : `<div class="key-status missing">Auto-fill needs a vision provider key in .env. Staging still works; tag later.</div>`;
   const autoFillBtn = `<button class="btn" id="bulkAutoFill" ${(!t.staged || !keyReady) ? "disabled" : ""}><i data-lucide="wand-sparkles"></i>Auto-fill all (${t.staged})</button>`;
   const commitBtn = `<button class="btn primary" id="bulkCommit" ${(t.tagged === 0) ? "disabled" : ""}><i data-lucide="save"></i>Commit ready (${t.tagged})</button>`;
   const clearBtn = `<button class="btn" id="bulkClear" ${(state.bulkQueue.length === 0) ? "disabled" : ""}><i data-lucide="trash-2"></i>Clear queue</button>`;
@@ -1395,7 +1404,7 @@ async function enqueueFiles(fileList) {
 }
 
 async function autoFillQueue() {
-  if (!state.config.openaiKeyConfigured) { toast("Add OPENAI_API_KEY to .env, then restart npm run ui.", "error"); return; }
+  if (!state.config.visionKeyConfigured) { toast("Add a vision provider key to .env, then restart npm run ui.", "error"); return; }
   const staged = state.bulkQueue
     .map((item, index) => ({ item, index }))
     .filter((x) => x.item._status === "staged");
@@ -1493,8 +1502,8 @@ function bulkEditAt(index) {
 
 async function autoFillDraft() {
   syncDraftFromForm();
-  if (!state.config.openaiKeyConfigured) {
-    toast("Add OPENAI_API_KEY to .env, then restart npm run ui.", "error");
+  if (!state.config.visionKeyConfigured) {
+    toast("Add a vision provider key to .env, then restart npm run ui.", "error");
     return;
   }
   if (!state.draft.source.productName) {

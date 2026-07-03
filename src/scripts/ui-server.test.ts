@@ -106,7 +106,10 @@ describe("ui server entry ids", () => {
       envPath: "/tmp/.env",
       envFileLoaded: true,
       openaiKeyConfigured: true,
+      anthropicKeyConfigured: false,
+      geminiKeyConfigured: false,
       voyageKeyConfigured: false,
+      autoTagProvider: "openai",
       openaiAutoTagModel: "test-model",
       cleanUiPort: 3131,
     });
@@ -114,6 +117,10 @@ describe("ui server entry ids", () => {
     expect(status).toEqual({
       envFileLoaded: true,
       openaiKeyConfigured: true,
+      anthropicKeyConfigured: false,
+      geminiKeyConfigured: false,
+      visionKeyConfigured: true,
+      autoTagProvider: "openai",
       voyageKeyConfigured: false,
       openaiAutoTagModel: "test-model",
       cleanUiPort: 3131,

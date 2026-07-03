@@ -127,4 +127,27 @@ describe("tagImage two-pass request shape", () => {
     expect(calls[0].body.max_output_tokens).toBeGreaterThanOrEqual(2500);
     expect(calls[1].body.max_output_tokens).toBeGreaterThanOrEqual(2500);
   });
+
+  it("routes to the Claude endpoint when AUTO_TAG_PROVIDER=claude", async () => {
+    process.env.AUTO_TAG_PROVIDER = "claude";
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+    const fetchUrls: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      fetchUrls.push(url);
+      // Return the Claude response shape (content[].text), not OpenAI's output_text.
+      const json = JSON.stringify({ patternType: "dashboard", categories: ["dashboard"], styleTags: ["minimal"], draftCritique: "test", draftWhatToSteal: ["x"], draftAntiPatterns: ["y"], qualityTier: "exceptional", typographyNotes: "n", observations: ["a","b","c","d","e"], voiceTone: "", voiceExamples: [], voiceAvoid: [] });
+      return new Response(JSON.stringify({ content: [{ type: "text", text: json }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    try {
+      await tagImage({ imagePath: testImage, productName: "Test", url: null });
+    } catch { /* may fail on parse, we only care about the URL routing */ }
+
+    expect(fetchUrls.some((u) => u.includes("anthropic.com"))).toBe(true);
+    expect(fetchUrls.some((u) => u.includes("openai.com"))).toBe(false);
+
+    delete process.env.AUTO_TAG_PROVIDER;
+    delete process.env.ANTHROPIC_API_KEY;
+  });
 });

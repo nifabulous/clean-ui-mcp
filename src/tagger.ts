@@ -176,19 +176,22 @@ const GEMINI_AUTO_TAG_MODEL = process.env.GEMINI_AUTO_TAG_MODEL ?? "gemini-2.5-f
 
 const MAX_OUTPUT_TOKENS = 4200;
 
-/** Resolve which provider to use, with auto-fallback if the preferred key is missing. */
-function resolveProvider(): "openai" | "claude" | "gemini" {
-  const preferred = (process.env.AUTO_TAG_PROVIDER ?? "openai").toLowerCase() as "openai" | "claude" | "gemini";
+type Provider = "openai" | "claude" | "gemini";
+type TaggerPass = "extraction" | "critique";
+
+/** Resolve which provider to use for a given pass, with auto-fallback. */
+function resolveProvider(pass: TaggerPass): Provider {
+  const envVar = pass === "extraction" ? "AUTO_TAG_PROVIDER_EXTRACTION" : "AUTO_TAG_PROVIDER_CRITIQUE";
+  const preferred = (process.env[envVar] ?? process.env.AUTO_TAG_PROVIDER ?? "openai").toLowerCase() as Provider;
   const has = { openai: !!process.env.OPENAI_API_KEY, claude: !!process.env.ANTHROPIC_API_KEY, gemini: !!process.env.GEMINI_API_KEY };
   if (has[preferred]) return preferred;
-  // Auto-fallback to whichever key is present.
   for (const p of ["openai", "claude", "gemini"] as const) {
     if (has[p]) {
-      console.error(`[tagger] AUTO_TAG_PROVIDER="${preferred}" but no key set — falling back to ${p}.`);
+      console.error(`[tagger] ${envVar}="${preferred}" but no key set — falling back to ${p} for ${pass}.`);
       return p;
     }
   }
-  return preferred; // no keys at all — the builder will throw with a clear message
+  return preferred;
 }
 
 /** Check if ANY vision provider key is configured. */
@@ -196,16 +199,17 @@ export function hasVisionKey(): boolean {
   return !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY);
 }
 
+const PROVIDER_NAMES: Record<Provider, string> = { openai: "OpenAI", claude: "Claude", gemini: "Gemini" };
+const PROVIDER_MODELS: Record<Provider, string> = { openai: OPENAI_AUTO_TAG_MODEL, claude: CLAUDE_AUTO_TAG_MODEL, gemini: GEMINI_AUTO_TAG_MODEL };
+
 /** Human-readable provider name for UI display. */
-export function activeProviderName(): string {
-  const p = resolveProvider();
-  return { openai: "OpenAI", claude: "Claude", gemini: "Gemini" }[p];
+export function activeProviderName(pass?: TaggerPass): string {
+  return PROVIDER_NAMES[resolveProvider(pass ?? "extraction")];
 }
 
 /** Active model name for UI display. */
-export function activeModelName(): string {
-  const p = resolveProvider();
-  return { openai: OPENAI_AUTO_TAG_MODEL, claude: CLAUDE_AUTO_TAG_MODEL, gemini: GEMINI_AUTO_TAG_MODEL }[p];
+export function activeModelName(pass?: TaggerPass): string {
+  return PROVIDER_MODELS[resolveProvider(pass ?? "extraction")];
 }
 
 // ─── PASS 1: extraction prompt (facts + geometry) ────────────────────────────
@@ -551,16 +555,16 @@ async function callGemini(
 
 /** Route to the active provider. Auto-falls back if the preferred key is missing. */
 async function callModel(
+  pass: TaggerPass,
   prompt: string,
   imagePath: string | null,
   retryFeedback?: string,
 ): Promise<string> {
-  const provider = resolveProvider();
-  const fullPrompt = prompt; // prompt already contains the per-pass instructions
+  const provider = resolveProvider(pass);
   switch (provider) {
-    case "claude":  return callClaude(fullPrompt, imagePath, retryFeedback);
-    case "gemini":  return callGemini(fullPrompt, imagePath, retryFeedback);
-    default:        return callOpenAI(fullPrompt, imagePath, retryFeedback);
+    case "claude":  return callClaude(prompt, imagePath, retryFeedback);
+    case "gemini":  return callGemini(prompt, imagePath, retryFeedback);
+    default:        return callOpenAI(prompt, imagePath, retryFeedback);
   }
 }
 
@@ -584,6 +588,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
 
   // ── PASS 1: extraction (facts + geometry, with ground-truth colors) ────────
   const extractionRawText = await callModel(
+    "extraction",
     buildExtractionPrompt(input.productName, input.url, quantizedColors),
     input.imagePath,
   );
@@ -605,6 +610,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   // Pass 2 is text-only — the model reasons from the validated extraction, not
   // by re-looking at pixels. This is the spec's core architecture choice.
   let critiqueRawText = await callModel(
+    "critique",
     buildCritiquePrompt(input.productName, extractionParsed),
     null, // no image — pure reasoning from facts
   );
@@ -622,6 +628,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   if (bannedErrors.length > 0) {
     const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${bannedErrors.join("\n")}`;
     const retryText = await callModel(
+      "critique",
       buildCritiquePrompt(input.productName, extractionParsed),
       null,
       feedback,
@@ -680,8 +687,10 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     qualityScore:    critique.qualityTier === "cautionary" ? 2 : 3,
     addedAt:         today,
     _raw: {
-      provider: resolveProvider(),
-      model: activeModelName(),
+      extractionProvider: resolveProvider("extraction"),
+      critiqueProvider: resolveProvider("critique"),
+      extractionModel: activeModelName("extraction"),
+      critiqueModel: activeModelName("critique"),
       extraction: extractionParsed,
       critique: critiqueParsed,
       quantizedColors,

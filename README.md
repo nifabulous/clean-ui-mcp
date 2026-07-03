@@ -132,6 +132,22 @@ If the selected provider's key is missing, Auto-fill auto-falls back to whicheve
 key is present. The two-pass tagger (deterministic color extraction via
 node-vibrant + observation-grounded critique) works identically across all three.
 
+**Split-provider mode (recommended):** the two passes are separate API calls and
+can use different providers. Extraction (Pass 1) needs vision + speed; critique
+(Pass 2) needs reasoning + writing. The best combination for depth is a fast
+vision model for extraction and a strong reasoning model for critique:
+
+```bash
+# In .env — Gemini Flash extracts facts, Claude Sonnet writes the critique
+AUTO_TAG_PROVIDER_EXTRACTION=gemini
+GEMINI_AUTO_TAG_MODEL=gemini-2.5-flash
+AUTO_TAG_PROVIDER_CRITIQUE=claude
+CLAUDE_AUTO_TAG_MODEL=claude-sonnet-4-5
+```
+
+Each pass auto-falls back independently if its preferred key is missing. If both
+split vars are unset, both fall back to `AUTO_TAG_PROVIDER`.
+
 ```bash
 cp .env.example .env
 # edit .env — add one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY

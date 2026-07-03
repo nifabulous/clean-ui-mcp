@@ -887,6 +887,14 @@ function validateDraft() {
   if (!entry.image.path) issues.push("Capture or upload a screenshot before saving.");
   if (entry.image.visibility !== "private" && (!entry.image.path || !entry.image.width || !entry.image.height)) issues.push("Public images need path, width, and height.");
   if (entry.image.path && !/^(images-private|images-public)\/[^/].+/.test(entry.image.path)) issues.push("Image path must be corpus-relative.");
+  // Draft-hygiene gate (mirrors the centralized findDraftMarkers in schema.ts):
+  // block save if any text field still carries a [DRAFT]/[PLACEHOLDER]/[TODO] marker.
+  const draftTexts = [
+    entry.critique, ...entry.whatToSteal,
+    ...(entry.antiPatterns?.antiPatterns || []), ...(entry.antiPatterns?.whereThisFails || []), ...(entry.antiPatterns?.accessibilityRisks || []),
+    ...(entry.voice ? [entry.voice.tone, ...entry.voice.examples, ...entry.voice.avoid] : []),
+  ];
+  if (draftTexts.some((t) => /\[(?:DRAFT|PLACEHOLDER|TODO\b)/i.test(t))) issues.push("Remove all [DRAFT] / [PLACEHOLDER] / [TODO] markers before saving — rewrite those fields in your own words.");
   return issues;
 }
 
@@ -1152,16 +1160,32 @@ async function captureSourceImage() {
 
 function cleanTaggedDraft(entry, previous) {
   const cleaned = JSON.parse(JSON.stringify(entry));
+  const stripDraft = (s) => s.replace(/^\[DRAFT[^\]]*\]\s*/i, "");
   cleaned.title = cleaned.title.replace(" — (add descriptive subtitle)", "");
-  cleaned.critique = cleaned.critique.replace(/^\[DRAFT — REWRITE\]\s*/i, "");
-  cleaned.whatToSteal = cleaned.whatToSteal.map((item) => item.replace(/^\[DRAFT\]\s*/i, ""));
+  cleaned.critique = stripDraft(cleaned.critique);
+  cleaned.whatToSteal = cleaned.whatToSteal.map(stripDraft);
+  // Also strip [DRAFT] markers from anti-patterns + voice — the tagger adds
+  // them there too, and the centralized hygiene check blocks saves if they linger.
+  if (cleaned.antiPatterns) {
+    cleaned.antiPatterns.antiPatterns = (cleaned.antiPatterns.antiPatterns || []).map(stripDraft);
+    cleaned.antiPatterns.whereThisFails = (cleaned.antiPatterns.whereThisFails || []).map(stripDraft);
+    cleaned.antiPatterns.accessibilityRisks = (cleaned.antiPatterns.accessibilityRisks || []).map(stripDraft);
+  }
+  if (cleaned.voice) {
+    cleaned.voice.tone = stripDraft(cleaned.voice.tone);
+    cleaned.voice.examples = (cleaned.voice.examples || []).map(stripDraft);
+    cleaned.voice.avoid = (cleaned.voice.avoid || []).map(stripDraft);
+  }
   // The server owns id assignment for both new single samples and bulk items.
   // Keep an existing id only when explicitly editing a saved entry (draftMode
   // === "edit" and NOT a bulk-queue edit, which uses bulkEditingIndex).
   const editingSaved = state.draftMode === "edit" && state.bulkEditingIndex === null;
   if (!editingSaved) cleaned.id = "";
   cleaned.image = previous.image;
-  cleaned.qualityScore = previous.qualityScore || 4;
+  // Preserve the user's qualityScore and qualityTier — don't let auto-fill
+  // overwrite them. Cautionary entries should stay low-scored.
+  cleaned.qualityScore = previous.qualityScore || cleaned.qualityScore || 4;
+  if (previous.qualityTier) cleaned.qualityTier = previous.qualityTier;
   cleaned.addedAt = previous.addedAt || today();
   return cleaned;
 }

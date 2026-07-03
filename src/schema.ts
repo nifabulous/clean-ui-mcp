@@ -295,3 +295,47 @@ export const Corpus = z.object({
 });
 
 export type CorpusT = z.infer<typeof Corpus>;
+
+// ─── draft hygiene (single source of truth) ──────────────────────────────────
+
+/**
+ * Regex matching draft/placeholder/todo markers that mean "this field is not
+ * finished." Used by validate-corpus, commit-draft, ui-server, and the browser
+ * save flow so the rule is identical everywhere — no duplicated, slightly-
+ * inconsistent checks.
+ */
+const DRAFT_MARKER_RE = /\[(?:DRAFT|PLACEHOLDER|TODO\b)/i;
+
+/**
+ * Collect every free-text field on an entry that could carry a draft marker.
+ * Returns the texts so callers can report WHICH field is dirty.
+ */
+export function entryTextFields(entry: CorpusEntryT): Array<{ field: string; text: string }> {
+  return [
+    { field: "critique", text: entry.critique },
+    ...entry.whatToSteal.map((t, i) => ({ field: `whatToSteal[${i}]`, text: t })),
+    ...entry.antiPatterns.antiPatterns.map((t, i) => ({ field: `antiPatterns.antiPatterns[${i}]`, text: t })),
+    ...entry.antiPatterns.whereThisFails.map((t, i) => ({ field: `antiPatterns.whereThisFails[${i}]`, text: t })),
+    ...entry.antiPatterns.accessibilityRisks.map((t, i) => ({ field: `antiPatterns.accessibilityRisks[${i}]`, text: t })),
+    ...(entry.voice ? [
+      { field: "voice.tone", text: entry.voice.tone },
+      ...entry.voice.examples.map((t, i) => ({ field: `voice.examples[${i}]`, text: t })),
+      ...entry.voice.avoid.map((t, i) => ({ field: `voice.avoid[${i}]`, text: t })),
+    ] : []),
+  ];
+}
+
+/**
+ * Returns the fields that still carry a draft/placeholder/todo marker, or an
+ * empty array if the entry is clean. One function, one rule, every caller.
+ */
+export function findDraftMarkers(entry: CorpusEntryT): string[] {
+  return entryTextFields(entry)
+    .filter((f) => DRAFT_MARKER_RE.test(f.text))
+    .map((f) => f.field);
+}
+
+/** Convenience boolean — true if the entry is clean and safe to commit. */
+export function hasDraftMarkers(entry: CorpusEntryT): boolean {
+  return findDraftMarkers(entry).length > 0;
+}

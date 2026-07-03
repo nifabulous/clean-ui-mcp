@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { lookup } from "node:dns";
 import { imageSize } from "image-size";
 import { chromium } from "playwright";
-import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, type CorpusEntryT } from "../schema.js";
+import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, toCorpusRelativePath } from "../paths.js";
 import { tagImage } from "../tagger.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
@@ -104,10 +104,19 @@ function entryIssues(error: unknown): string[] {
   return [error instanceof Error ? error.message : String(error)];
 }
 
-function validateEntryPayload(payload: unknown): CorpusEntryT {
+export function validateEntryPayload(payload: unknown): CorpusEntryT {
   const result = CorpusEntry.safeParse(payload);
   if (!result.success) {
     throw Object.assign(new Error("Entry validation failed"), { issues: result.error.issues });
+  }
+  // Draft-hygiene gate: reject entries carrying [DRAFT]/[PLACEHOLDER]/[TODO]
+  // markers anywhere in their text fields. Uses the centralized check so the
+  // rule is identical to validate-corpus and commit-draft.
+  const dirty = findDraftMarkers(result.data);
+  if (dirty.length) {
+    throw Object.assign(new Error("Entry contains draft markers"), {
+      issues: dirty.map((f) => ({ path: [f], message: `remove the [DRAFT]/[PLACEHOLDER]/[TODO] marker from ${f} before saving` })),
+    });
   }
   return result.data;
 }

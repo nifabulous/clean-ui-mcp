@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPrivateAddress, orphanedPrivateImagePaths, prepareNewEntryPayload, publicConfigStatus, sameOrigin, uniqueEntryId } from "./ui-server.js";
+import { isPrivateAddress, orphanedPrivateImagePaths, prepareNewEntryPayload, publicConfigStatus, sameOrigin, uniqueEntryId, validateEntryPayload } from "./ui-server.js";
 import type { IncomingMessage } from "node:http";
 import type { CorpusEntryT } from "../schema.js";
 
@@ -166,5 +166,38 @@ describe("capture SSRF guard", () => {
     expect(isPrivateAddress("1.1.1.1")).toBe(false);
     // 172.32.x is outside the RFC1918 172.16/12 block — public
     expect(isPrivateAddress("172.32.0.1")).toBe(false);
+  });
+});
+
+describe("draft hygiene gate (centralized)", () => {
+  it("rejects an entry with a [DRAFT] marker in critique", () => {
+    expect(() => validateEntryPayload({ ...baseEntry, critique: "[DRAFT — REWRITE] This is a draft critique that is long enough to pass the minimum." })).toThrow("draft markers");
+  });
+
+  it("rejects an entry with a [DRAFT] marker in anti-patterns", () => {
+    const payload = {
+      ...baseEntry,
+      antiPatterns: {
+        ...baseEntry.antiPatterns,
+        antiPatterns: ["[DRAFT] Avoids heavy shadows for depth — uses color steps instead."],
+      },
+    };
+    expect(() => validateEntryPayload(payload)).toThrow("draft markers");
+  });
+
+  it("rejects an entry with a [PLACEHOLDER] marker in whatToSteal", () => {
+    expect(() => validateEntryPayload({ ...baseEntry, whatToSteal: ["[PLACEHOLDER — fill this in]"] })).toThrow("draft markers");
+  });
+
+  it("rejects an entry with a [TODO] marker in voice", () => {
+    const payload = {
+      ...baseEntry,
+      voice: { tone: "[TODO backfill]", examples: ["some copy here"], avoid: [] },
+    };
+    expect(() => validateEntryPayload(payload)).toThrow("draft markers");
+  });
+
+  it("accepts a clean entry with no markers anywhere", () => {
+    expect(() => validateEntryPayload(baseEntry)).not.toThrow();
   });
 });

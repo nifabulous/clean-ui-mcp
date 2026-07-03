@@ -19,7 +19,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { execSync } from "node:child_process";
-import { Corpus, CorpusEntry } from "../schema.js";
+import { Corpus, CorpusEntry, findDraftMarkers } from "../schema.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_ROOT  = resolve(__dirname, "..", "..", "corpus");
@@ -78,12 +78,9 @@ for (const raw of approved) {
     continue;
   }
 
-  if (
-    [result.data.critique, ...result.data.whatToSteal].some((text) =>
-      /\[(?:DRAFT|PLACEHOLDER)/i.test(text)
-    )
-  ) {
-    errors.push(`${result.data.id}: contains [DRAFT] or [PLACEHOLDER] marker`);
+  const dirtyFields = findDraftMarkers(result.data);
+  if (dirtyFields.length) {
+    errors.push(`${result.data.id}: contains draft/placeholder marker in ${dirtyFields.join(", ")}`);
     continue;
   }
 

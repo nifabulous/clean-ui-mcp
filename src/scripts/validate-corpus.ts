@@ -1,4 +1,4 @@
-import { Corpus } from "../schema.js";
+import { Corpus, findDraftMarkers } from "../schema.js";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -32,21 +32,9 @@ for (const e of entries) {
   // [TODO] (migration placeholders in anti-patterns) is a WARNING — visible
   // nudge to backfill, but doesn't block the corpus since the migrator fills
   // them intentionally for entries that had no prior anti-pattern content.
-  const critiqueAndSteal = [e.critique, ...e.whatToSteal];
-  if (critiqueAndSteal.some((text) => /\[(?:DRAFT|PLACEHOLDER)/i.test(text))) {
-    hygieneErrors.push(`${e.id}: contains [DRAFT] or [PLACEHOLDER] marker`);
-  }
-
-  const antiPatternTexts = [
-    ...e.antiPatterns.antiPatterns,
-    ...e.antiPatterns.whereThisFails,
-    ...e.antiPatterns.accessibilityRisks,
-  ];
-  if (antiPatternTexts.some((text) => /\[(?:DRAFT|PLACEHOLDER)/i.test(text))) {
-    hygieneErrors.push(`${e.id}: contains [DRAFT] or [PLACEHOLDER] marker in anti-patterns`);
-  }
-  if (antiPatternTexts.some((text) => /\[TODO/i.test(text))) {
-    hygieneWarnings.push(`${e.id}: contains [TODO] anti-pattern placeholder — backfill before relying on it`);
+  const dirtyFields = findDraftMarkers(e);
+  if (dirtyFields.length) {
+    hygieneErrors.push(`${e.id}: contains draft/placeholder marker in ${dirtyFields.join(", ")}`);
   }
 
   if (e.image.visibility !== "private" && e.image.path) {

@@ -1,10 +1,14 @@
 import "./env.js";
 
 /**
- * tagger.ts
- * ──────────
- * Core vision-tagging logic: send a screenshot to OpenAI, get back
- * structured visual attributes. Importable by any script.
+ * tagger.ts — two-pass auto-tagging pipeline
+ * ───────────────────────────────────────────
+ * Pass 1 (extraction): factual/structural fields. Uses deterministic color
+ *   quantization (node-vibrant) so the model never guesses hex values — it
+ *   maps the extracted swatches to semantic roles.
+ * Pass 2 (critique): judgment fields, fed Pass 1's *validated* output as
+ *   established fact. Forces an observation step before critique to reduce
+ *   generic-first-plausible-answer drift.
  *
  * Env: OPENAI_API_KEY
  * Optional: OPENAI_AUTO_TAG_MODEL (default: gpt-5.4-nano)
@@ -13,6 +17,7 @@ import "./env.js";
 import { readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { toCorpusRelativePath } from "./paths.js";
+import { Vibrant } from "node-vibrant/node";
 
 // ─── vocab (mirrors schema.ts — keep in sync) ─────────────────────────────────
 
@@ -31,8 +36,6 @@ const STYLE_TAGS = [
 const SPACING_DENSITIES = ["compact", "moderate", "spacious"] as const;
 const CORNER_STYLES = ["sharp", "slight-round", "pill", "mixed"] as const;
 
-// Primary pattern — ONE per entry (complements the multi-tag categories).
-// Mirrors PatternType in schema.ts; keep in sync.
 const PATTERN_TYPES = [
   "dashboard","landing-page","pricing","onboarding","auth","settings",
   "search","checkout","profile","marketing-hero",
@@ -40,24 +43,29 @@ const PATTERN_TYPES = [
   "notifications","editor-canvas","chat-interface","command-palette","modal",
 ] as const;
 
-// Layout form + region roles — mirrors LayoutStructure in schema.ts.
 const LAYOUT_FORMS = ["single-column", "two-column", "three-column", "modal-overlay"] as const;
 const LAYOUT_REGION_ROLES = [
   "primary-nav","icon-nav","summary-strip","main-canvas",
   "detail-rail","form-panel","visual-panel","overlay-card",
 ] as const;
 
-// Quality tier — mirrors schema.ts. Default "exceptional"; "cautionary" flags a
-// genuinely bad example worth teaching from.
 const QUALITY_TIERS = ["exceptional", "cautionary"] as const;
+
+// ─── banned phrases — enforced in-prompt AND as a post-hoc code-level gate ───
+
+const BANNED_PHRASES = [
+  "clean layout", "modern design", "user-friendly", "intuitive", "sleek",
+  "minimalist", "good spacing", "nice typography", "visually appealing",
+  "easy to use", "well-organized", "polished look",
+];
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
 export interface TaggerInput {
-  imagePath:   string;   // absolute path to the screenshot
+  imagePath:   string;
   productName: string;
   url?:        string | null;
-  id?:         string;   // optional slug override
+  id?:         string;
 }
 
 export interface TaggerOutput {
@@ -98,10 +106,10 @@ export interface TaggerOutput {
     usesShadows:    boolean;
     usesBorders:    boolean;
   };
-  critique:        string;  // prefixed [DRAFT — REWRITE]
-  whatToSteal:     string[]; // prefixed [DRAFT]
+  critique:        string;
+  whatToSteal:     string[];
   antiPatterns: {
-    antiPatterns:       string[]; // prefixed [DRAFT]
+    antiPatterns:       string[];
     whereThisFails:     string[];
     accessibilityRisks: string[];
   };
@@ -117,62 +125,127 @@ export interface TaggerOutput {
   qualityTier:     string;
   qualityScore:    number;
   addedAt:         string;
-  // Internal: the raw vision response, preserved for debugging / re-processing
   _raw?: Record<string, unknown>;
 }
 
-// ─── prompts ──────────────────────────────────────────────────────────────────
+// ─── deterministic color extraction (node-vibrant) ───────────────────────────
+
+/**
+ * Extract dominant colors via pixel quantization — deterministic, code-level,
+ * not model-guessed. The model receives these as ground truth and maps them to
+ * semantic roles; it never invents hex values.
+ */
+export async function extractQuantizedColors(imagePath: string): Promise<string[]> {
+  const palette = await Vibrant.from(imagePath).getPalette();
+  return Object.values(palette)
+    .filter((s): s is NonNullable<typeof s> => s !== null)
+    .sort((a, b) => b.population - a.population)
+    .slice(0, 6)
+    .map((s) => s.hex.toLowerCase());
+}
+
+// ─── system prompt (shared across both passes) ───────────────────────────────
 
 const SYSTEM = `You are a senior UI/UX designer writing critiques for a curated design corpus.
 The corpus's entire value is in SPECIFIC, ACCURATE design reasoning — not generic descriptions
-any screenshot could earn. A bad critique says "uses a clean layout with good spacing." A good
-critique says "uses 2-3 background shades of the same hue for depth instead of box-shadow, so
-cards read as layered without visual noise." Name the DECISION, the TRADEOFF, and what the
-design REJECTS (the conventional approach it deliberately doesn't use). Be a designer talking
-to another designer about WHY this works, not WHAT it is. Return ONLY valid JSON.`;
+any screenshot could earn. Never use these banned phrases or close paraphrases of them:
+${BANNED_PHRASES.map((p) => `"${p}"`).join(", ")}.
+
+For every notable decision, name three things:
+1. The DECISION (the specific, reproducible choice — a property, a value, a rule)
+2. The EFFECT (why it works — what it does perceptually or functionally)
+3. The REJECTION (the conventional default it deliberately avoids, and why that default is worse here)
+
+Rules that apply to every field you write:
+- If a value was supplied to you as ground truth (from deterministic color extraction), treat it as
+  fact. Do not re-guess, contradict, or "round" it.
+- Two different fields must never restate the same single observation from two angles.
+- Prefer the most specific thing visible on screen over the first plausible-sounding observation.
+- Before returning, re-read your own output against the banned-phrase list. Rewrite any field that
+  contains one, or a close paraphrase of one.
+
+Return ONLY valid JSON, no markdown fences, no extra keys beyond what's requested.`;
 
 const OPENAI_RESPONSES_API = "https://api.openai.com/v1/responses";
 const OPENAI_AUTO_TAG_MODEL = process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano";
 
-function buildPrompt(productName: string, url?: string | null): string {
+// ─── PASS 1: extraction prompt (facts + geometry) ────────────────────────────
+
+function buildExtractionPrompt(
+  productName: string,
+  url: string | null | undefined,
+  quantizedColors: string[],
+): string {
   const source = url ? `${productName} (${url})` : `${productName} (uploaded screenshot; no source URL provided)`;
-  return `Analyse this screenshot of ${source} and return a JSON object with exactly these fields:
+  return `Analyse this screenshot of ${source} and return a JSON object with exactly these fields.
+This is an EXTRACTION pass — factual/structural fields only, no critique yet.
+
+VERIFIED GROUND TRUTH — treat every value below as fact, do not re-derive or contradict it:
+${JSON.stringify({ quantizedColors }, null, 2)}
 
 {
-  "patternType": "",      // ONE from: ${PATTERN_TYPES.join(", ")} — the single primary pattern this exemplifies
-  "categories": [],       // 1-3 from: ${CATEGORIES.join(", ")}
-  "styleTags": [],        // 1-3 from: ${STYLE_TAGS.join(", ")}
-  "dominantColors": [],   // 3-6 hex codes of the most-used background/text/surface colors
-  "accentColor": null,    // single hex of the primary interactive/brand color, or null
-  "displayFont": null,    // name of the heading/display font if you can identify it, else null
-  "bodyFont": null,       // name of the body/UI font if identifiable, else null
-  "typographyNotes": "",  // 1-2 sentences on how typography creates hierarchy here
-  "spacingDensity": "",   // one of: compact, moderate, spacious
-  "cornerStyle": "",      // one of: sharp, slight-round, pill, mixed
-  "usesShadows": false,   // true if box-shadow/drop-shadow is visible and doing structural work
-  "usesBorders": false,   // true if borders/dividers are used for layout structure
-  "colorRoles": null,     // {canvas, surface, ink, muted, accent} hex codes by ROLE — label what each color is FOR, not just list them. muted may be null. Omit entirely if you can't confidently map roles.
-  "draftCritique": "",    // 3-5 sentences of REAL design criticism. For EACH notable decision: name the specific choice (e.g. "2-3 background shades for depth, not shadows"), say WHY it works (the effect it creates), and what conventional approach it rejects ("instead of card shadows that add visual noise"). Do NOT describe what the layout IS ("uses a left sidebar") — describe why the specific execution is better than the default. Bad: "clean layout with good spacing." Good: "Hairline borders at low contrast do structural work without the visual weight of 1px black lines; the eye reads grouping without noticing the borders."
-  "draftWhatToSteal": [], // 3-5 SPECIFIC, copyable techniques. Each must be a concrete decision a developer could reproduce, with the REASONING attached. Bad: "use a left nav with selected state." Good: "Mark the selected nav row with a light-gray pill background (not a colored fill) — color is reserved for actions, neutral gray for state, so the eye doesn't confuse selection with a button." Name what's visible; attach the why.
-  "draftAntiPatterns": [], // 1-3 common UI/UX MISTAKES this design deliberately avoids (e.g. "no drop shadows — depth via background-color steps instead"). This is the corpus's key differentiator — be specific about what's NOT here and why that matters.
-  "layoutForm": "",       // ONE from: ${LAYOUT_FORMS.join(", ")} — the overall page form. Omit if the layout isn't structural (e.g. a single centered hero).
-  "layoutRegions": [],    // ordered list of {role, width} describing the page regions left-to-right / top-to-bottom. role from: ${LAYOUT_REGION_ROLES.join(", ")}. width from: fixed-narrow, flex, fixed-wide. Only include if layoutForm is set.
-  "voiceTone": "",        // 1 short phrase describing the writing voice (e.g. "restrained, confident, slightly dry"). Omit if no copy is visible or notable.
-  "voiceExamples": [],    // 1-2 pieces of real copy visible on screen, verbatim — the words that define the voice. Omit if voiceTone is empty.
-  "voiceAvoid": [],       // what voice this design deliberately does NOT use (e.g. "no exclamation-point enthusiasm"). Omit if voiceTone is empty.
-  "qualityTier": ""       // ONE from: ${QUALITY_TIERS.join(", ")}. "exceptional" = a great example worth emulating. "cautionary" = a genuinely bad example worth teaching what NOT to do. Default exceptional.
+  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
+  "categories": [],        // 1-3 from: ${CATEGORIES.join(", ")}
+  "styleTags": [],         // 1-3 from: ${STYLE_TAGS.join(", ")}
+  "dominantColors": [],    // copy from quantizedColors verbatim — do not invent hex values not in that list
+  "accentColor": null,     // pick the primary interactive/brand color FROM quantizedColors only
+  "displayFont": null,     // name if you're confident; null beats a wrong guess
+  "bodyFont": null,        // name if identifiable; else null
+  "spacingDensity": "",    // one of: compact, moderate, spacious
+  "cornerStyle": "",       // one of: sharp, slight-round, pill, mixed
+  "usesShadows": false,    // true if box-shadow is visible and doing structural work
+  "usesBorders": false,    // true if borders/dividers are used for layout structure
+  "colorRoles": null,      // {canvas, surface, ink, muted, accent} — map dominantColors to semantic
+                           // roles (what each is FOR). This IS a judgment call. Omit if unsure.
+  "layoutForm": "",        // ONE from: ${LAYOUT_FORMS.join(", ")}. Omit if not structural.
+  "layoutRegions": [],     // ordered {role, width}. role from: ${LAYOUT_REGION_ROLES.join(", ")}.
+                           // width from: fixed-narrow, flex, fixed-wide. Only if layoutForm is set.
 }
 
 Rules:
-- Colors: pick the actual dominant hex values visible on screen, not brand colors from memory.
-- colorRoles: map the hex values to semantic roles (what each is FOR). This is more useful than a bare list.
-- Fonts: only name a font if you're confident; null beats a wrong guess.
-- patternType is the single best description of what KIND of screen this is; categories can be broader.
-- voiceTone/examples: only fill these if the COPY itself is notable. A pricing page may have no notable voice — leave empty.
-- qualityTier: only mark "cautionary" if the screenshot shows clear, teachable problems. When in doubt, "exceptional".
-- draftCritique/draftWhatToSteal/draftAntiPatterns are drafts — the human will rewrite them. Be specific anyway.
-- Return ONLY the JSON object. No explanation, no markdown, no extra keys.`;
+- dominantColors and accentColor MUST come from the supplied quantizedColors list. Never invent a hex.
+- If any enum field's correct value isn't listed, choose the closest listed value — never invent.
+- Return ONLY the JSON object. No explanation, no markdown.`;
 }
+
+// ─── PASS 2: critique prompt (judgment + design intent) ──────────────────────
+
+function buildCritiquePrompt(
+  productName: string,
+  extraction: Record<string, unknown>,
+): string {
+  return `Here is the VALIDATED structural extraction for ${productName} (treat every value as
+established fact — do not re-describe or contradict it):
+${JSON.stringify(extraction, null, 2)}
+
+Step 1 — Observe first. Before writing anything else, list exactly 5 specific, concrete visual
+elements you can point to on screen (an icon color, an italic word, a specific spacing value, a
+copy choice, an interaction affordance). Put this list in "observations". Each item must be a
+single, pointable thing — not generic ("the layout").
+
+Step 2 — Critique using ONLY items from your observations list. Return this JSON:
+
+{
+  "observations": [],          // exactly 5 specific, pointable visual elements (required)
+  "typographyNotes": "",       // 1-2 sentences on how the type choices create hierarchy
+  "draftCritique": "",         // 3-5 sentences: for EACH notable decision name DECISION + EFFECT + REJECTION
+  "draftWhatToSteal": [],      // 3-5 specific, copyable techniques with reasoning attached. Each is a string.
+  "draftAntiPatterns": [],     // REQUIRED, at least 1. Must describe a DIFFERENT decision than draftCritique.
+  "voiceTone": "",             // omit entirely if no notable copy is visible
+  "voiceExamples": [],         // real copy visible on screen, verbatim
+  "voiceAvoid": [],            // what voice this design does NOT use
+  "qualityTier": ""            // ONE from: ${QUALITY_TIERS.join(", ")}. Default exceptional. Only mark
+                               // "cautionary" if the screenshot shows clear, teachable problems.
+}
+
+Rules:
+- Every draftCritique/draftWhatToSteal claim must trace back to something in "observations".
+- draftAntiPatterns must not restate draftCritique's decision from the opposite angle.
+- No banned phrases (${BANNED_PHRASES.slice(0, 4).map((p) => `"${p}"`).join(", ")}, ...). Re-check before returning.
+- Return ONLY the JSON object.`;
+}
+
+// ─── sanitizer helpers (unchanged from the single-pass era) ──────────────────
 
 function listFromAllowed(value: unknown, allowed: readonly string[], fallback: string[]): string[] {
   if (!Array.isArray(value)) return fallback;
@@ -254,10 +327,8 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
     }))
     .filter((r) => r.role)
     .slice(0, 6);
-  // Only keep layout if both form and at least one valid region were produced.
   const layout = layoutForm && regions.length ? { form: layoutForm, regions } : undefined;
 
-  // colorRoles: require all of canvas/surface/ink/accent to be valid hex; muted nullable.
   const rawColorRoles = parsed.colorRoles && typeof parsed.colorRoles === "object" ? parsed.colorRoles as Record<string, unknown> : {};
   const roleHex = (k: string) => {
     const v = rawColorRoles[k];
@@ -268,7 +339,6 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
     ? { canvas: crCanvas, surface: crSurface, ink: crInk, muted: roleHex("muted"), accent: crAccent }
     : undefined;
 
-  // voice: require a non-empty tone + at least one example.
   const voiceTone = text(parsed.voiceTone);
   const voiceExamples = textList(parsed.voiceExamples);
   const voice = voiceTone && voiceExamples.length
@@ -302,52 +372,52 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   };
 }
 
-// ─── core call ────────────────────────────────────────────────────────────────
+// ─── banned-phrase code-level gate ───────────────────────────────────────────
 
-export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
+function validateNoBannedPhrases(obj: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  const haystack = JSON.stringify(obj).toLowerCase();
+  for (const phrase of BANNED_PHRASES) {
+    if (haystack.includes(phrase.toLowerCase())) {
+      errors.push(`Contains banned phrase: "${phrase}". Rewrite that field in specific terms.`);
+    }
+  }
+  return errors;
+}
+
+// ─── model call helpers ──────────────────────────────────────────────────────
+
+async function callModel(
+  prompt: string,
+  imagePath: string | null,
+  retryFeedback?: string,
+): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
-  const ext      = extname(input.imagePath).toLowerCase();
-  const mimeType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
-  const imageData = readFileSync(input.imagePath).toString("base64");
-  const corpusPath = toCorpusRelativePath(input.imagePath);
+  const userContent: Array<Record<string, unknown>> = [{ type: "input_text", text: prompt }];
+  if (imagePath) {
+    const ext = extname(imagePath).toLowerCase();
+    const mimeType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
+    const imageData = readFileSync(imagePath).toString("base64");
+    userContent.push({
+      type: "input_image",
+      image_url: `data:${mimeType};base64,${imageData}`,
+      detail: "high",
+    });
+  }
 
   const response = await fetch(OPENAI_RESPONSES_API, {
-    method:  "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type":  "application/json",
-    },
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: OPENAI_AUTO_TAG_MODEL,
-      // Headroom for a full critique + 2-4 specific steal items without
-      // Headroom for deeper critique (3-5 sentences of reasoning) + steal + anti-patterns + layout + voice + colorRoles.
-      // Bumped 3800 → 4200 when critique guidance was deepened to demand specific decision/tradeoff/rejected-alternative.
       max_output_tokens: 4200,
       input: [
-        {
-          role: "system",
-          content: [{ type: "input_text", text: SYSTEM }],
-        },
-        {
-          role: "user",
-          content: [
-            { type: "input_text", text: buildPrompt(input.productName, input.url) },
-            {
-              type: "input_image",
-              image_url: `data:${mimeType};base64,${imageData}`,
-              // "high" lets the model resolve in-card components, small text,
-              // and fine spacing — the detail "what to steal" needs. "low"
-              // downsamples so aggressively that only container shapes remain.
-              detail: "high",
-            },
-          ],
-        },
+        { role: "system", content: [{ type: "input_text", text: SYSTEM }] },
+        { role: "user", content: retryFeedback ? [...userContent, { type: "input_text", text: retryFeedback }] : userContent },
       ],
-      text: {
-        verbosity: "low",
-      },
+      // No verbosity constraint — it was fighting the depth guidance.
     }),
   });
 
@@ -356,44 +426,97 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     throw new Error(`OpenAI API error ${response.status}: ${body}`);
   }
 
-  const apiResponse = await response.json() as {
+  const data = await response.json() as {
     output_text?: string;
-    output?: Array<{
-      type?: string;
-      content?: Array<{
-        type?: string;
-        text?: string;
-      }>;
-    }>;
+    output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
   };
 
-  const rawText = apiResponse.output_text
-    ?? apiResponse.output
-      ?.flatMap((item) => item.content ?? [])
+  return data.output_text
+    ?? data.output?.flatMap((item) => item.content ?? [])
       .filter((content) => content.type === "output_text" || content.type === "text")
       .map((content) => content.text ?? "")
       .join("")
     ?? "";
+}
 
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(rawText.trim());
-  } catch {
-    throw new Error(`OpenAI returned non-JSON:\n${rawText}`);
-  }
+// ─── core two-pass orchestration ─────────────────────────────────────────────
 
-  const sanitized = sanitizeTaggerPayload(parsed);
+export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
-  const today  = new Date().toISOString().slice(0, 10);
+  const corpusPath = toCorpusRelativePath(input.imagePath);
+  const today = new Date().toISOString().slice(0, 10);
   const autoId = input.id
     ?? `${input.productName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}-${today}`;
 
+  // ── Deterministic color extraction (code-level, not model-guessed) ─────────
+  let quantizedColors: string[] = [];
+  try {
+    quantizedColors = await extractQuantizedColors(input.imagePath);
+  } catch (err) {
+    console.error("[tagger] Color extraction failed, falling back to model-guessed colors:", err instanceof Error ? err.message : err);
+  }
+
+  // ── PASS 1: extraction (facts + geometry, with ground-truth colors) ────────
+  const extractionRawText = await callModel(
+    buildExtractionPrompt(input.productName, input.url, quantizedColors),
+    input.imagePath,
+  );
+
+  let extractionParsed: Record<string, unknown>;
+  try {
+    extractionParsed = JSON.parse(extractionRawText.trim());
+  } catch {
+    throw new Error(`Pass 1 (extraction) returned non-JSON:\n${extractionRawText}`);
+  }
+  const extraction = sanitizeTaggerPayload(extractionParsed);
+  // Override dominantColors with the ground-truth quantized set when available,
+  // so even if the model ignored instructions, we get deterministic colors.
+  if (quantizedColors.length) {
+    extraction.dominantColors = quantizedColors;
+  }
+
+  // ── PASS 2: critique (judgment, fed validated extraction as fact) ──────────
+  // Pass 2 is text-only — the model reasons from the validated extraction, not
+  // by re-looking at pixels. This is the spec's core architecture choice.
+  let critiqueRawText = await callModel(
+    buildCritiquePrompt(input.productName, extractionParsed),
+    null, // no image — pure reasoning from facts
+  );
+
+  let critiqueParsed: Record<string, unknown>;
+  try {
+    critiqueParsed = JSON.parse(critiqueRawText.trim());
+  } catch {
+    throw new Error(`Pass 2 (critique) returned non-JSON:\n${critiqueRawText}`);
+  }
+  let critique = sanitizeTaggerPayload(critiqueParsed);
+
+  // ── Banned-phrase gate: retry once with error feedback ─────────────────────
+  const bannedErrors = validateNoBannedPhrases(critiqueParsed);
+  if (bannedErrors.length > 0) {
+    const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${bannedErrors.join("\n")}`;
+    const retryText = await callModel(
+      buildCritiquePrompt(input.productName, extractionParsed),
+      null,
+      feedback,
+    );
+    try {
+      critiqueParsed = JSON.parse(retryText.trim());
+      critique = sanitizeTaggerPayload(critiqueParsed);
+    } catch {
+      // Retry failed to parse — keep the original (flagged) critique; the human will rewrite it.
+    }
+  }
+
+  // ── Merge passes into TaggerOutput ─────────────────────────────────────────
   return {
     id:         autoId,
     title:      `${input.productName} — (add descriptive subtitle)`,
-    patternType: sanitized.patternType,
-    categories: sanitized.categories,
-    styleTags:  sanitized.styleTags,
+    patternType: extraction.patternType,
+    categories: extraction.categories,
+    styleTags:  extraction.styleTags,
     source: {
       productName: input.productName,
       url:         input.url ?? null,
@@ -407,35 +530,37 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       height:     null,
     },
     visual: {
-      dominantColors: sanitized.dominantColors,
-      accentColor:    sanitized.accentColor,
-      colorRoles:     sanitized.colorRoles,
+      dominantColors: extraction.dominantColors,
+      accentColor:    extraction.accentColor,
+      colorRoles:     extraction.colorRoles,
       typePairing: {
-        display: sanitized.displayFont,
-        body:    sanitized.bodyFont,
-        notes:   sanitized.typographyNotes,
+        display: extraction.displayFont,
+        body:    extraction.bodyFont,
+        notes:   critique.typographyNotes || extraction.typographyNotes,
       },
-      spacingDensity: sanitized.spacingDensity,
-      cornerStyle:    sanitized.cornerStyle,
-      usesShadows:    sanitized.usesShadows,
-      usesBorders:    sanitized.usesBorders,
+      spacingDensity: extraction.spacingDensity,
+      cornerStyle:    extraction.cornerStyle,
+      usesShadows:    extraction.usesShadows,
+      usesBorders:    extraction.usesBorders,
     },
-    critique:        `[DRAFT — REWRITE] ${sanitized.draftCritique}`,
-    whatToSteal:     sanitized.draftWhatToSteal.map((t) => `[DRAFT] ${t}`),
+    critique:        `[DRAFT — REWRITE] ${critique.draftCritique}`,
+    whatToSteal:     critique.draftWhatToSteal.map((t) => `[DRAFT] ${t}`),
     antiPatterns: {
-      antiPatterns:       sanitized.draftAntiPatterns.map((t) => `[DRAFT] ${t}`),
+      antiPatterns:       critique.draftAntiPatterns.map((t) => `[DRAFT] ${t}`),
       whereThisFails:     [],
       accessibilityRisks: [],
     },
-    layout:          sanitized.layout,
-    voice:           sanitized.voice,
-    qualityTier:     sanitized.qualityTier,
-    qualityScore:    sanitized.qualityTier === "cautionary" ? 2 : 3,
+    layout:          extraction.layout,
+    voice:           critique.voice,
+    qualityTier:     critique.qualityTier,
+    qualityScore:    critique.qualityTier === "cautionary" ? 2 : 3,
     addedAt:         today,
-    _raw:            {
+    _raw: {
       provider: "openai",
       model: OPENAI_AUTO_TAG_MODEL,
-      parsed,
+      extraction: extractionParsed,
+      critique: critiqueParsed,
+      quantizedColors,
     },
   };
 }

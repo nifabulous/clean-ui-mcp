@@ -32,14 +32,21 @@ describe("corpus search", () => {
 });
 
 describe("findSimilarEntries", () => {
-  it("returns an empty array (not a throw) when the vector index is missing", () => {
-    // No VOYAGE_API_KEY in the test env → no index → graceful empty.
-    // This is the contract: callers surface a helpful message, they don't crash.
+  it("returns ranked results (or empty) without throwing, regardless of index state", () => {
+    // The index may or may not exist depending on whether build-index was run.
+    // The contract: never throw — return results or [] gracefully.
     const results = findSimilarEntries("linear-issue-board-grouped", 5);
-    expect(results).toEqual([]);
+    expect(Array.isArray(results)).toBe(true);
+    // If results exist, they must exclude the source entry and be score-descending.
+    if (results.length > 0) {
+      expect(results.every((r) => r.entry.id !== "linear-issue-board-grouped")).toBe(true);
+      for (let i = 1; i < results.length; i++) {
+        expect(results[i - 1].score).toBeGreaterThanOrEqual(results[i].score);
+      }
+    }
   });
 
-  it("returns empty for any id when no index exists", () => {
+  it("returns empty for an id that's not in the index", () => {
     expect(findSimilarEntries("nonexistent-id", 3)).toEqual([]);
   });
 });

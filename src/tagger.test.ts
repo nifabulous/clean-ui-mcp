@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sanitizeTaggerPayload, tagImage } from "./tagger.js";
+import { sanitizeTaggerPayload, tagImage, extractQuantizedColors } from "./tagger.js";
 import { PRIVATE_IMAGE_DIR } from "./paths.js";
 
 describe("tagger sanitization", () => {
@@ -40,16 +41,38 @@ describe("tagger sanitization", () => {
   });
 });
 
-describe("tagImage request shape", () => {
-  // Regression guard: 'low' detail + 1200-token cap produced shallow, truncated
-  // "what to steal" output. These two values are the quality floor for drafts.
+describe("extractQuantizedColors (node-vibrant)", () => {
+  // Use a real corpus screenshot so node-vibrant has real pixels to work with.
+  // Falls back to a synthetic image if the corpus screenshot isn't present.
+  const realImage = join(PRIVATE_IMAGE_DIR, "sample-5.png");
+  const testDir = join(PRIVATE_IMAGE_DIR, "__quantized-test");
+  const testImage = existsSync(realImage) ? realImage : join(testDir, "shot.png");
+
+  beforeEach(() => {
+    if (!existsSync(realImage)) {
+      mkdirSync(testDir, { recursive: true });
+      writeFileSync(testImage, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFeAJ5fVqRtwAAAABJRU5ErkJggg==", "base64"));
+    }
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("returns hex strings, not throws", async () => {
+    const swatches = await extractQuantizedColors(testImage);
+    expect(swatches.length).toBeGreaterThan(0);
+    expect(swatches.every((s) => /^#[0-9a-fA-F]{6}$/.test(s))).toBe(true);
+  });
+});
+
+describe("tagImage two-pass request shape", () => {
   const originalFetch = globalThis.fetch;
-  const testDir = join(PRIVATE_IMAGE_DIR, "__tagger-test");
+  const testDir = join(PRIVATE_IMAGE_DIR, "__tagger2-test");
   const testImage = join(testDir, "shot.png");
 
   beforeEach(() => {
     mkdirSync(testDir, { recursive: true });
-    // 1x1 PNG — the bytes don't matter; fetch is mocked before they're read.
     writeFileSync(testImage, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFeAJ5fVqRtwAAAABJRU5ErkJggg==", "base64"));
   });
 
@@ -58,30 +81,50 @@ describe("tagImage request shape", () => {
     if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
   });
 
-  it("sends high image detail and a non-truncating output budget", async () => {
-    let capturedBody: { max_output_tokens?: number; input?: Array<{ content?: Array<Record<string, unknown>> }> } | null = null;
-    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
-      output_text: JSON.stringify({
-        categories: ["dashboard"], styleTags: ["minimal"],
-        dominantColors: ["#ffffff"], accentColor: null,
-        displayFont: null, bodyFont: null, typographyNotes: "x",
-        spacingDensity: "moderate", cornerStyle: "slight-round",
-        usesShadows: false, usesBorders: true,
-        draftCritique: "Specific enough critique to pass validation length checks without being padded out.",
-        draftWhatToSteal: ["One concrete technique a developer could copy directly into their own work."],
-      }),
-    }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
-    // Wrap to capture the POST body.
-    const realMock = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      capturedBody = JSON.parse(String(init?.body ?? "{}"));
-      return realMock(input, init);
-    }) as typeof fetch;
+  it("makes two API calls — Pass 1 with image (detail:high), Pass 2 text-only", async () => {
+    const calls: Array<{ body: { max_output_tokens?: number; input?: Array<{ content?: Array<Record<string, unknown>> }> } }> = [];
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      calls.push({ body });
+      callCount++;
+      // Pass 1 returns extraction JSON; Pass 2 returns critique JSON.
+      const response = callCount === 1
+        ? JSON.stringify({
+            patternType: "dashboard", categories: ["dashboard"], styleTags: ["minimal"],
+            dominantColors: ["#ffffff", "#111111"], accentColor: null,
+            displayFont: null, bodyFont: null, spacingDensity: "moderate", cornerStyle: "slight-round",
+            usesShadows: false, usesBorders: true,
+          })
+        : JSON.stringify({
+            observations: ["a", "b", "c", "d", "e"],
+            typographyNotes: "notes",
+            draftCritique: "This design uses hairline borders at low contrast to do structural work without the visual weight of heavier lines, so the eye reads grouping without noticing the borders. It rejects the common default of 1px black borders, which read as frames rather than separators.",
+            draftWhatToSteal: ["Use hairline borders at 10% opacity for structural separation instead of visible frame borders."],
+            draftAntiPatterns: ["Avoids card shadows for depth — uses background-color steps of the same hue so surfaces stay flat."],
+            qualityTier: "exceptional",
+          });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
 
     await tagImage({ imagePath: testImage, productName: "Test", url: null });
 
-    const imageInput = capturedBody?.input?.[1]?.content?.find((c) => c.type === "input_image");
-    expect(capturedBody?.max_output_tokens).toBeGreaterThanOrEqual(2500);
-    expect(imageInput?.detail).toBe("high");
+    // Two calls made
+    expect(calls.length).toBe(2);
+
+    // Pass 1: has image input + detail high
+    const pass1Image = calls[0].body.input?.[1]?.content?.find((c) => c.type === "input_image");
+    expect(pass1Image?.detail).toBe("high");
+
+    // Pass 2: no image input
+    const pass2Image = calls[1].body.input?.[1]?.content?.find((c) => c.type === "input_image");
+    expect(pass2Image).toBeUndefined();
+
+    // Both passes: token budget adequate
+    expect(calls[0].body.max_output_tokens).toBeGreaterThanOrEqual(2500);
+    expect(calls[1].body.max_output_tokens).toBeGreaterThanOrEqual(2500);
   });
 });

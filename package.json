@@ -37,6 +37,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^17.4.2",
     "image-size": "^2.0.2",
+    "node-vibrant": "^4.0.4",
     "puppeteer-core": "^24.0.0",
     "zod": "^4.4.3"
   },

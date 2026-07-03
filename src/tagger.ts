@@ -538,7 +538,7 @@ async function callGemini(
     method: "POST",
     headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
     body: JSON.stringify({
-      systemInstruction: SYSTEM,
+      systemInstruction: { parts: [{ text: SYSTEM }] },
       contents: [{ role: "user", parts }],
       generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS },
     }),
@@ -593,9 +593,12 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     input.imagePath,
   );
 
+  // Some providers (Claude) wrap JSON in markdown fences — strip them before parsing.
+  const stripFences = (s: string) => s.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+
   let extractionParsed: Record<string, unknown>;
   try {
-    extractionParsed = JSON.parse(extractionRawText.trim());
+    extractionParsed = JSON.parse(stripFences(extractionRawText));
   } catch {
     throw new Error(`Pass 1 (extraction) returned non-JSON:\n${extractionRawText}`);
   }
@@ -617,7 +620,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
 
   let critiqueParsed: Record<string, unknown>;
   try {
-    critiqueParsed = JSON.parse(critiqueRawText.trim());
+    critiqueParsed = JSON.parse(stripFences(critiqueRawText));
   } catch {
     throw new Error(`Pass 2 (critique) returned non-JSON:\n${critiqueRawText}`);
   }
@@ -634,7 +637,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       feedback,
     );
     try {
-      critiqueParsed = JSON.parse(retryText.trim());
+      critiqueParsed = JSON.parse(stripFences(retryText));
       critique = sanitizeTaggerPayload(critiqueParsed);
     } catch {
       // Retry failed to parse — keep the original (flagged) critique; the human will rewrite it.

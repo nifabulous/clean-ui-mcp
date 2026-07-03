@@ -78,8 +78,11 @@ describe("tagImage two-pass request shape", () => {
   const testImage = join(testDir, "shot.png");
 
   beforeEach(() => {
-    // CI has no .env — set a dummy key so hasVisionKey() passes and tagImage proceeds.
+    // Force OpenAI routing so the mock's OpenAI-shaped responses work.
+    // Clear any split-provider vars that .env might have set at import time.
     process.env.OPENAI_API_KEY = "test-key";
+    process.env.AUTO_TAG_PROVIDER_EXTRACTION = "openai";
+    process.env.AUTO_TAG_PROVIDER_CRITIQUE = "openai";
     mkdirSync(testDir, { recursive: true });
     writeFileSync(testImage, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFeAJ5fVqRtwAAAABJRU5ErkJggg==", "base64"));
   });
@@ -138,7 +141,11 @@ describe("tagImage two-pass request shape", () => {
   });
 
   it("routes to the Claude endpoint when AUTO_TAG_PROVIDER=claude", async () => {
-    process.env.AUTO_TAG_PROVIDER = "claude";
+    // Override the split-provider vars so both passes route to Claude.
+    const savedExtr = process.env.AUTO_TAG_PROVIDER_EXTRACTION;
+    const savedCrit = process.env.AUTO_TAG_PROVIDER_CRITIQUE;
+    process.env.AUTO_TAG_PROVIDER_EXTRACTION = "claude";
+    process.env.AUTO_TAG_PROVIDER_CRITIQUE = "claude";
     process.env.ANTHROPIC_API_KEY = "sk-ant-test";
     const fetchUrls: string[] = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -156,7 +163,8 @@ describe("tagImage two-pass request shape", () => {
     expect(fetchUrls.some((u) => u.includes("anthropic.com"))).toBe(true);
     expect(fetchUrls.some((u) => u.includes("openai.com"))).toBe(false);
 
-    delete process.env.AUTO_TAG_PROVIDER;
     delete process.env.ANTHROPIC_API_KEY;
+    process.env.AUTO_TAG_PROVIDER_EXTRACTION = savedExtr;
+    process.env.AUTO_TAG_PROVIDER_CRITIQUE = savedCrit;
   });
 });

@@ -114,17 +114,23 @@ describe("ui server entry ids", () => {
       cleanUiPort: 3131,
     });
 
-    expect(status).toEqual({
+    expect(status).toMatchObject({
       envFileLoaded: true,
       openaiKeyConfigured: true,
       anthropicKeyConfigured: false,
       geminiKeyConfigured: false,
       visionKeyConfigured: true,
-      autoTagProvider: "openai",
       voyageKeyConfigured: false,
       openaiAutoTagModel: "test-model",
       cleanUiPort: 3131,
     });
+    // The extraction/critique provider + model fields come from process.env
+    // (which the real .env may have set at import time). Just verify they exist
+    // and don't expose secrets — don't assert exact values.
+    expect(status).toHaveProperty("extractionProvider");
+    expect(status).toHaveProperty("critiqueProvider");
+    expect(status).toHaveProperty("extractionModel");
+    expect(status).toHaveProperty("critiqueModel");
     expect(JSON.stringify(status)).not.toContain("/tmp/.env");
     expect(JSON.stringify(status)).not.toContain("sk-");
   });

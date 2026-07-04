@@ -527,7 +527,7 @@ const state = {
 	  bulkDefaultProduct: "",
 	  bulkEditingIndex: null,
 	  orphans: [],
-	  config: { openaiKeyConfigured: false, anthropicKeyConfigured: false, geminiKeyConfigured: false, visionKeyConfigured: false, autoTagProvider: "openai", envFileLoaded: false, openaiAutoTagModel: "gpt-5.4-nano" },
+	  config: { openaiKeyConfigured: false, anthropicKeyConfigured: false, geminiKeyConfigured: false, visionKeyConfigured: false, autoTagProvider: "openai", extractionProvider: "openai", critiqueProvider: "openai", extractionModel: "", critiqueModel: "", envFileLoaded: false, openaiAutoTagModel: "gpt-5.4-nano" },
 	};
 
 const $ = (selector) => document.querySelector(selector);
@@ -913,7 +913,7 @@ function renderForm() {
   const isEditing = state.draftMode === "edit";
   const isLegacyLinkOnly = isEditing && !entry.image.path;
   const keyStatus = state.config.visionKeyConfigured
-    ? `<div class="key-status ready">${providerName()} key loaded. Auto-fill will use ${esc(state.config.openaiAutoTagModel)}.</div>`
+    ? `<div class="key-status ready">Auto-fill: ${esc(state.config.extractionProvider || "openai")} (${esc(state.config.extractionModel || "?")}) → ${esc(state.config.critiqueProvider || "openai")} (${esc(state.config.critiqueModel || "?")}).</div>`
     : `<div class="key-status missing">Auto-fill needs a vision provider key (OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY) in .env.</div>`;
   const imagePreview = entry.image.path
     ? `<figure class="image-preview"><img src="${API}/image?path=${encodeURIComponent(entry.image.path)}" alt="${esc(entry.title || entry.source.productName || "Captured screenshot")}"><figcaption class="image-ready">Image ready: ${esc(entry.image.path)} (${entry.image.width || "?"} x ${entry.image.height || "?"})</figcaption></figure>`
@@ -1264,7 +1264,7 @@ function renderBulk() {
   const t = bulkTally();
   const keyReady = state.config.visionKeyConfigured;
   const keyStatus = keyReady
-    ? `<div class="key-status ready">${providerName()} key loaded. Auto-fill will use ${esc(state.config.openaiAutoTagModel)}.</div>`
+    ? `<div class="key-status ready">Auto-fill: ${esc(state.config.extractionProvider || "openai")} (${esc(state.config.extractionModel || "?")}) → ${esc(state.config.critiqueProvider || "openai")} (${esc(state.config.critiqueModel || "?")}).</div>`
     : `<div class="key-status missing">Auto-fill needs a vision provider key in .env. Staging still works; tag later.</div>`;
   const autoFillBtn = `<button class="btn" id="bulkAutoFill" ${(!t.staged || !keyReady) ? "disabled" : ""}><i data-lucide="wand-sparkles"></i>Auto-fill all (${t.staged})</button>`;
   const commitBtn = `<button class="btn primary" id="bulkCommit" ${(t.tagged === 0) ? "disabled" : ""}><i data-lucide="save"></i>Commit ready (${t.tagged})</button>`;

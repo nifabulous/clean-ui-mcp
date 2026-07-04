@@ -219,12 +219,25 @@ function explainTagError(error: unknown): string {
 
 export function publicConfigStatus(status: EnvStatus = getEnvStatus()) {
   const anyVisionKey = status.openaiKeyConfigured || status.anthropicKeyConfigured || status.geminiKeyConfigured;
+  // Resolve the effective provider + model for each pass (mirrors tagger.resolveProvider).
+  const extractionProvider = process.env.AUTO_TAG_PROVIDER_EXTRACTION ?? process.env.AUTO_TAG_PROVIDER ?? "openai";
+  const critiqueProvider = process.env.AUTO_TAG_PROVIDER_CRITIQUE ?? process.env.AUTO_TAG_PROVIDER ?? "openai";
+  const extractionModel = extractionProvider === "claude" ? (process.env.CLAUDE_AUTO_TAG_MODEL ?? "claude-haiku-4-5")
+    : extractionProvider === "gemini" ? (process.env.GEMINI_AUTO_TAG_MODEL ?? "gemini-2.5-flash")
+    : (process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano");
+  const critiqueModel = critiqueProvider === "claude" ? (process.env.CLAUDE_AUTO_TAG_MODEL ?? "claude-haiku-4-5")
+    : critiqueProvider === "gemini" ? (process.env.GEMINI_AUTO_TAG_MODEL ?? "gemini-2.5-flash")
+    : (process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano");
   return {
     openaiKeyConfigured: status.openaiKeyConfigured,
     anthropicKeyConfigured: status.anthropicKeyConfigured,
     geminiKeyConfigured: status.geminiKeyConfigured,
     visionKeyConfigured: anyVisionKey,
     autoTagProvider: status.autoTagProvider,
+    extractionProvider,
+    critiqueProvider,
+    extractionModel,
+    critiqueModel,
     voyageKeyConfigured: status.voyageKeyConfigured,
     openaiAutoTagModel: status.openaiAutoTagModel,
     cleanUiPort: status.cleanUiPort,

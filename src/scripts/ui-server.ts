@@ -2,6 +2,7 @@
 import "../env.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { lookup } from "node:dns";
@@ -349,12 +350,14 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse) {
   const data = Buffer.from(match[2], "base64");
   writeFileSync(absolutePath, data);
   const dimensions = imageSize(data);
+  const hash = createHash("sha256").update(data).digest("hex");
 
   sendJson(res, 201, {
     path: toCorpusRelativePath(absolutePath),
     width: dimensions.width ?? null,
     height: dimensions.height ?? null,
     visibility: "private",
+    hash,
   });
 }
 
@@ -465,6 +468,44 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 
   if (req.method === "POST" && url.pathname === "/api/upload-image") {
     await handleUpload(req, res);
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/check-duplicate") {
+    const payload = await readJson(req) as { hash?: string; width?: number; height?: number; path?: string };
+    const hash = payload.hash ?? "";
+    const w = payload.width ?? 0;
+    const h = payload.height ?? 0;
+
+    let exactMatch: string | null = null;
+    let nearMatch: string | null = null;
+
+    // Build a hash map of all corpus entry images for exact matching.
+    for (const entry of entries) {
+      if (!entry.image.path) continue;
+      try {
+        const fullPath = fromCorpusRelativeImagePath(entry.image.path);
+        if (!existsSync(fullPath)) continue;
+        const imgData = readFileSync(fullPath);
+        const entryHash = createHash("sha256").update(imgData).digest("hex");
+
+        if (entryHash === hash) { exactMatch = entry.id; break; }
+
+        // Near-duplicate: same dimensions + same aspect ratio (within 2px tolerance).
+        if (!nearMatch && w > 0 && h > 0 && entry.image.width && entry.image.height) {
+          const dimMatch = Math.abs(entry.image.width - w) <= 2 && Math.abs(entry.image.height - h) <= 2;
+          if (dimMatch) nearMatch = entry.id;
+        }
+      } catch { /* skip unreadable images */ }
+    }
+
+    if (exactMatch) {
+      sendJson(res, 200, { duplicate: true, type: "exact", match: exactMatch });
+    } else if (nearMatch) {
+      sendJson(res, 200, { duplicate: true, type: "near", match: nearMatch });
+    } else {
+      sendJson(res, 200, { duplicate: false, type: null, match: null });
+    }
     return;
   }
 

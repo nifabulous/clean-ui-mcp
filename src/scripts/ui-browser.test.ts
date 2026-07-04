@@ -73,7 +73,11 @@ describe("curator app browser smoke", () => {
         const body = JSON.parse(await readBody(req) || "{}");
         // Echo a unique path per filename so bulk tests can distinguish rows.
         const slug = String(body.slug || body.filename || "upload").replace(/[^a-z0-9-]/gi, "-");
-        return json(res, 201, { path: `images-private/${slug}.png`, width: 1200, height: 800, visibility: "private" });
+        return json(res, 201, { path: `images-private/${slug}.png`, width: 1200, height: 800, visibility: "private", hash: `hash-${slug}` });
+      }
+      if (url.pathname === "/api/check-duplicate" && req.method === "POST") {
+        await readBody(req);
+        return json(res, 200, { duplicate: false, type: null, match: null });
       }
       if (url.pathname === "/api/capture-url" && req.method === "POST") {
         await readBody(req);

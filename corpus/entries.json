@@ -587,6 +587,2666 @@
       "qualityTier": "exceptional",
       "qualityScore": 4,
       "addedAt": "2026-07-02"
+    },
+    {
+      "id": "hume-hume",
+      "title": "Hume",
+      "patternType": "auth",
+      "categories": [
+        "auth",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-2-5.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#7c7c7c",
+          "#558ddb",
+          "#3c3c3c",
+          "#ecdc9c",
+          "#acc4d4",
+          "#173b6d"
+        ],
+        "accentColor": "#558ddb",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Hierarchy emerges from spatial intervals rather than typographic contrast — the headline shares the same weight and size family as input labels, forcing the eye to rely on generous whitespace to distinguish sections. This choice trades immediate scanability for a unified, text-as-texture approach where no single element demands attention through scale."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The cream background (#ecdc9c) on the form panel creates warmth through slight yellow saturation, reducing the clinical harshness of pure white while maintaining sufficient contrast for legibility — this rejects the default assumption that forms require neutral backgrounds, acknowledging that sustained focus benefits from reduced brightness. The unstacked relationship between the blue CTA and the gray 'Sign in instead' link places secondary navigation within thumb reach on mobile while avoiding the common mistake of visually separating it into a footer zone, which often causes users to miss the alternative path. Bordered inputs with subtle rounding communicate editability through the familiar affordance of a defined boundary, rejecting the borderless trend that sacrifices clarity for supposed elegance — users encountering a form for the first time need explicit click targets, not guesswork.",
+      "whatToSteal": [
+        "Cream-toned form backgrounds (#ecdc9c range) for authentication flows — reduces eye strain during credential entry compared to bright white, particularly effective when users are migrating from darker screens or completing forms in varied lighting conditions",
+        "Proximity-based CTA and secondary-action pairing with no divider line — keeps 'Create account' and 'Sign in instead' within a single visual gesture zone, preventing the common failure case where users tunnel-vision on the primary button and never discover the account-exists pathway",
+        "Same-weight headline and label typography with spatial hierarchy — eliminates bold/regular weight toggling that can fragment visual rhythm, useful when the form itself is simple enough that structural spacing provides sufficient wayfinding",
+        "Bordered inputs with #3c3c3c stroke weight instead of underline-only fields — provides unambiguous click/tap targets for users unfamiliar with minimal input conventions, particularly valuable in authentication contexts where form completion errors are costly"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "Using a photographic hero image on the visual panel introduces loading dependencies and cultural specificity (hand gesture, skin tone, device model) that can distract from or misalign with the universal nature of account creation — an abstract illustration or simple gradient field would avoid these interpretation layers while still providing visual balance"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "form-panel",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "visual-panel",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Transactional brevity with no reassurance or brand personality — the copy defaults to pure function labeling",
+        "examples": [
+          "Create an account",
+          "Email address",
+          "Password",
+          "Sign in instead"
+        ],
+        "avoid": [
+          "Encouraging language ('Join us today!', 'Get started in seconds')",
+          "Benefit-driven copy explaining what account creation unlocks",
+          "Playful or branded terminology replacing standard form labels"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-2",
+      "title": "Hume",
+      "patternType": "landing-page",
+      "categories": [
+        "landing-page",
+        "marketing-hero"
+      ],
+      "styleTags": [
+        "warm-tactile",
+        "editorial",
+        "soft-neumorphic"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-0-5.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#c9a7a8",
+          "#fccc9c",
+          "#45403f",
+          "#a04856",
+          "#4272b1",
+          "#243e60"
+        ],
+        "accentColor": "#45403f",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The hierarchy pivots on a typographic surprise: condensed sans-serif establishes institutional credibility through the first three words, then the italic serif 'body' injects personality and breaks the monotone rhythm. This decision—pairing two distinct type classifications within a single phrase—creates a double-take that slows reading velocity exactly where the pun lands."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The small-caps wordmark with compressed tracking (DECISION) eliminates the visual weight hierarchy that title-case introduces, distributing attention evenly across five letters rather than front-loading it on 'H' (EFFECT), rejecting the tall-ascender brand logo convention that creates vertical drama but demands more vertical real estate (REJECTION). The ghost-button navigation trio with stroke-only treatment (DECISION) postpones commitment by keeping options equidistant in visual weight, letting users scan laterally without a pre-selected path (EFFECT), avoiding the selected-state tab pattern that would assume user intent before they've read the proposition (REJECTION). The isolated 'Get started' button anchored bottom-left with full fill (DECISION) breaks the centered-symmetry expectation by placing conversion opportunity at reading terminus rather than geometric center (EFFECT), rejecting the hero-CTA-below-headline stack that competes with the headline for first-fixation priority (REJECTION).",
+      "whatToSteal": [
+        "Use italic serif for the final word in a sans-serif headline when that word carries emotional or double-meaning weight — the type style shift marks linguistic texture that scanning would otherwise flatten, turning typography into punctuation",
+        "Place unfilled stroke buttons horizontally adjacent when options are truly peer-level choices with no recommended path — equal visual weight prevents false hierarchy and acknowledges that the user's context (personal vs business) determines relevance, not your preference",
+        "Position the primary CTA at the visual endpoint of the reading path rather than centered under the headline — this timing respects the persuasion sequence (understand proposition, then commit) instead of demanding action before comprehension",
+        "Apply small-caps with tight tracking to short wordmarks when the name itself is abstract or coined — eliminating case variation removes one dimension of hierarchy, letting letter shapes form a unified glyph-like symbol rather than a word to sound out"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The abstract illustration uses multiple overlapping drop shadows to simulate depth, but the shadows lack consistent light-source direction — three shapes appear to cast shadows at different angles, creating spatial ambiguity that undermines the dimensionality the shadows were meant to establish"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "single-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "flex"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "The copy employs accessible informality through the body-pun construction, using a common wellness phrase ('every body') but splitting it typographically to surface the double meaning without explanatory text — trusting the reader to complete the semantic connection independently.",
+        "examples": [
+          "Financial wellness for every body",
+          "Get started"
+        ],
+        "avoid": [
+          "Technical financial jargon that would require domain expertise",
+          "Imperative urgency language ('Don't miss out', 'Act now') that manufactures scarcity",
+          "Exclusive aspirational framing ('Premium', 'Elite') that segments by status"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-3",
+      "title": "Hume",
+      "patternType": "auth",
+      "categories": [
+        "auth",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal",
+        "high-contrast"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-4-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#568ddc",
+          "#3c3c3c",
+          "#ecdc9c",
+          "#7c7474",
+          "#acc4d4",
+          "#163a6d"
+        ],
+        "accentColor": "#568ddc",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The greeting 'Hello' uses a serif typeface that contrasts sharply against the sans-serif body text throughout the form, establishing immediate hierarchy through font-family divergence rather than weight or size alone. This single serif moment creates a handwritten-greeting metaphor while keeping all functional text (labels, buttons, links) in a uniform sans-serif family for scanning efficiency."
+        },
+        "spacingDensity": "moderate",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The in-field placeholder approach (DECISION) places 'Email' as gray text within the input border rather than as a fixed external label (EFFECT), conserving 24-32px of vertical space and creating a tighter 1:1 relationship between label and field (REJECTION) instead of the stacked label pattern that requires users to perform vertical eye travel and occupies more form real estate—critical when only username entry is needed before authentication. The serif 'Hello' (DECISION) deploys a decorative typeface exclusively for the greeting word (EFFECT), signaling warmth through typographic contrast in a single controlled moment (REJECTION) rather than applying serif styling to body content or mixing families throughout, which would fracture readability and dilute the humanizing effect to background noise. The underlined 'Sign up' link (DECISION) uses text-decoration plus brand color #568ddc instead of button chrome (EFFECT), establishing a clear visual hierarchy where primary action gets solid fill and secondary action gets ghost treatment (REJECTION) over giving both actions equal button weight, which would force users to evaluate competing CTAs of identical visual importance.",
+      "whatToSteal": [
+        "Use one serif word at the entry point of a form (greeting, welcome phrase) while keeping all interactive elements in sans-serif—creates warmth without sacrificing functional readability, because the decorative moment occurs before task execution begins",
+        "Apply border-radius values (8px here) only to interactive elements (buttons, inputs) while keeping the container panels at 0px radius—users can identify clickable targets through shape language alone, eliminating the need for hover states or color shifts to communicate affordance",
+        "Pair a solid-fill primary button with an underlined text link for secondary actions when the secondary path is account creation—the visual weight difference of 'filled shape vs. bare text' maps perfectly to 'sign in now vs. start registration flow' urgency hierarchy",
+        "Place the secondary action ('Sign up') below the primary button but above any tertiary links (password reset, help)—positions account creation as important enough to stay in the main vertical flow but subordinate to the returning-user path"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The photograph on the right panel (#ecdc9c textile texture) provides no functional information about the authentication process or the product's purpose—it consumes 60% of viewport width to deliver purely decorative value, forcing users on smaller screens to scroll or encounter a cramped form layout when aesthetic photography could be replaced with product screenshots, feature highlights, or social proof that reduces uncertainty during account access"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "form-panel",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "visual-panel",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "The copy deploys minimal, conversational fragments ('Hello', 'Sign in', 'Sign up') that assume familiarity rather than explaining steps—this telegraphic approach works only when users already understand the product's identity and authentication flow",
+        "examples": [
+          "Hello",
+          "Sign in",
+          "Sign up"
+        ],
+        "avoid": [
+          "Instructional phrasing like 'Enter your email to continue' or 'New user? Create an account'",
+          "Brand-specific welcome messages or value propositions in the authentication moment",
+          "Explanatory microcopy about password requirements or account benefits"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-4",
+      "title": "Hume",
+      "patternType": "auth",
+      "categories": [
+        "auth",
+        "forms",
+        "onboarding"
+      ],
+      "styleTags": [
+        "minimal",
+        "playful"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-3-5.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#7c7c7c",
+          "#568ddc",
+          "#3c3c3c",
+          "#ecdc94",
+          "#acc4d4",
+          "#163a6d"
+        ],
+        "accentColor": "#568ddc",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The heading hierarchy relies on weight contrast rather than dramatic size scaling — the 'Let's get you signed in' heading appears only marginally larger than the body text below it, establishing primacy through boldness instead of shouting. The helper text 'No account?' and the inline link share the same size, creating a conversational peer relationship rather than a subordinate call-to-action."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The underline-only input styling (DECISION: bottom border at ~2px weight in #568ddc, no visible top/side borders) signals an active state boundary without imprisoning content in a rectangle (EFFECT: reduces form anxiety by making the input feel like handwritten completion rather than bureaucratic data capture) (REJECTION: foregoes the conventional four-sided border that creates visual containment stress and reinforces transactional distance). The illustration-to-form ratio of roughly 2:1 (DECISION: visual panel consumes 65% width, form confined to 35%) inverts conventional auth patterns (EFFECT: repositions authentication as an invitation rather than a gate, with the human illustration as the primary message) (REJECTION: avoids equal-split or form-dominant layouts that treat imagery as decoration rather than the leading emotional signal). The social login buttons using circular geometry (DECISION: circular containers for Facebook/Google icons rather than rectangular pills) create discrete, pausable choices (EFFECT: each OAuth option reads as an independent decision point rather than parallel lanes in a flow) (REJECTION: rejects horizontal pill arrangements that suggest equivalence and encourage rushed pattern-matching over deliberate selection).",
+      "whatToSteal": [
+        "Underline-only input fields with 2px bottom borders — creates completion affordance (writing on a line) rather than data-entry dread (filling boxes), particularly effective when the underline uses the accent color to signal system responsiveness",
+        "Illustration-dominant split where the visual panel occupies 60-70% of screen real estate — repositions the auth gate as an invitation by making the human context (character, scenario, emotion) the primary message and the form the secondary response mechanism",
+        "Sentence-case headings with terminal punctuation ('Let's get you signed in.') — shifts the frame from system command to conversational turn-taking, reducing the power differential between interface and human",
+        "Stacked circular social login buttons rather than horizontal pills — forces sequential consideration of each OAuth path rather than encouraging skimming, particularly valuable when you want deliberate provider selection over speed"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The vertical stack of social login buttons above the email input creates ambiguous priority — users must parse whether OAuth is the recommended path or merely a convenience option, when the spatial hierarchy (social buttons first, larger, more colorful) suggests primacy but the heading's 'get you signed in' lacks OAuth specificity"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "form-panel",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "visual-panel",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "The copy voice is conversational-permissive rather than instructional-imperative, treating authentication as a mutual threshold ('Let's get you signed in') instead of a system requirement ('Sign in to continue'). The questioning frame ('No account?') assumes legitimate optionality rather than funneling toward a predetermined outcome.",
+        "examples": [
+          "Let's get you signed in.",
+          "No account?",
+          "Create one"
+        ],
+        "avoid": [
+          "Imperative verbs without subjects ('Enter email', 'Sign in now')",
+          "System-centric urgency ('You must sign in to continue', 'Access required')",
+          "Exclamatory enthusiasm ('Welcome back!', 'Great to see you!')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-5",
+      "title": "Hume",
+      "patternType": "auth",
+      "categories": [
+        "auth",
+        "onboarding"
+      ],
+      "styleTags": [
+        "minimal",
+        "high-contrast",
+        "playful"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-5-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#aba6ec",
+          "#7c7c7c",
+          "#5383e1",
+          "#354ba2",
+          "#343434",
+          "#acc4d4"
+        ],
+        "accentColor": "#5383e1",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The question-format heading ('What should we call you?') transforms a data-collection moment into a conversational prompt, softening the transactional nature of form input. The placeholder text remains neutral and descriptive, avoiding the heading's warmth, which preserves the question-answer rhythm without redundancy."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": false
+      },
+      "critique": "The purple mascot illustration (#aba6ec matching the heading color) anchors the modal's emotional register before any text appears, signaling that this authentication flow prioritizes approachability over corporate authority—rejecting the typical logo-only approach that treats sign-up as a legal gateway. The disabled button's complete visual withdrawal (desaturated gray with no hover affordance) enforces validation rules through absence rather than error messaging, refusing the pattern of active buttons with downstream error states that punish premature clicks. The conversational heading 'What should we call you?' reframes name collection as relationship-building rather than data harvesting, abandoning the label 'Full Name' or 'Enter your name' that positions the user as a form-filler rather than a participant.",
+      "whatToSteal": [
+        "Color-coordinate the illustrated mascot with the heading text (#aba6ec) to create a visual thread that ties emotional tone to informational content, making the character feel integrated into the UI voice rather than decorative",
+        "Use question-format headings ('What should we call you?') for data inputs to convert compliance moments into conversational exchanges, especially effective when the input is personal (name, preference, identity)",
+        "Remove all visual affordance from disabled primary buttons—no border, no hover state, no color hint—so the button effectively disappears until the validation condition is met, eliminating the gap between 'looks clickable' and 'actually works'",
+        "Apply generous vertical rhythm (24-32px) between an illustration, heading, input, and button to slow the user's scan path, reducing the perception of form-filling as rapid data entry"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The mascot illustration, while tonally cohesive, occupies prime vertical real estate in a narrow modal without serving a functional disambiguation role—it communicates brand personality at the cost of input field prominence, potentially burying the interactive element below the fold on smaller viewports"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "modal-overlay",
+        "regions": [
+          {
+            "role": "overlay-card",
+            "width": "fixed-narrow"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Conversational and inclusive, using second-person address ('you') and casual phrasing to frame authentication as the beginning of a relationship rather than a security checkpoint.",
+        "examples": [
+          "What should we call you?",
+          "Your name"
+        ],
+        "avoid": [
+          "Imperative commands ('Enter your name', 'Provide your full name')",
+          "Formal or legal language ('Please input your legal name', 'Name field required')",
+          "System-centric labels ('User name', 'Account holder name')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-6",
+      "title": "Hume",
+      "patternType": "empty-state",
+      "categories": [
+        "empty-state"
+      ],
+      "styleTags": [
+        "monochrome",
+        "minimal"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-6-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#a4a4a4",
+          "#bcbcbc",
+          "#7f7f7f",
+          "#424242",
+          "#bcbcbc",
+          "#4c4c4c"
+        ],
+        "accentColor": null,
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The interface establishes hierarchy through size differential alone—no weight variation, no color shift—with the primary message at body scale and the action label appearing smaller inside the button. This single-axis hierarchy forces the icon to carry most of the semantic load, since text cannot compete for attention through contrast."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "pill",
+        "usesShadows": false,
+        "usesBorders": false
+      },
+      "critique": "The monochrome icon at #424242 for structure and #a4a4a4 for symbol creates a luminance ratio of roughly 2.5:1, establishing just enough figure-ground separation to read the plus as actionable rather than decorative, rejecting the flat single-value icon that would collapse into ambiguity. The 3:5 proportion between plus symbol and containing circle keeps the symbol from dominating—it reads as invitation rather than command—avoiding the aggressive 1:2 ratio that would make the plus feel like a primary action competing with the button below. The 80-100 pixel vertical intervals between icon/text/button create a breathing rhythm that segments information into three distinct beats (symptom, diagnosis, remedy), rejecting the 24-32 pixel uniform spacing that would flatten the experience into a single undifferentiated message.",
+      "whatToSteal": [
+        "Use a 3:5 symbol-to-container proportion for empty-state icons when you want the icon to suggest possibility without demanding action—the smaller ratio makes the symbol feel like part of the container's story rather than a floating command",
+        "Space empty-state components in 3x-4x intervals (icon to text = X, text to button = X, but larger absolute values) to create a temporal reading sequence that mirrors problem-recognition-solution rather than treating all information as equivalent",
+        "Apply two-tone monochrome to empty-state icons using your ink color for structure and a mid-value gray for the symbol, creating semantic separation without introducing color as a variable—the 2.5:1 luminance ratio is the threshold where symbol reads as distinct but not promotional",
+        "Set empty-state body copy at true body scale (16-18px) rather than scaling up to headline size, forcing the icon to carry semantic weight and preventing the text from competing for 'hero' status in a context where there's nothing heroic to announce"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The button's solid fill at maximum contrast (#424242 on #bcbcbc) creates equal visual weight to the diagnostic text above it, making the action feel as passive as the problem statement—a ghost button or outline treatment would subordinate the action to the message, clarifying that this screen is about absence first and remediation second"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "single-column",
+        "regions": [
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Declarative and state-reporting, treating emptiness as a neutral condition rather than a problem requiring emotional reassurance or motivational prompting",
+        "examples": [
+          "No apps yet",
+          "Create App"
+        ],
+        "avoid": [
+          "Encouraging cheerfulness ('Let's create your first app!')",
+          "Apologetic framing ('You don't have any apps yet')",
+          "Tutorial voice ('Get started by creating an app')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-7",
+      "title": "Hume",
+      "patternType": "auth",
+      "categories": [
+        "auth",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-8-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#bfa4e9",
+          "#7c7c7c",
+          "#3c3c3c",
+          "#d07c74",
+          "#a4d4b4",
+          "#632721"
+        ],
+        "accentColor": "#3c3c3c",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The hierarchy depends on weight differential rather than size variation — the 'Sign up' headline uses bold sans-serif while 'A small way to feel better' employs regular weight at nearly the same size, creating separation through density. The suppressed contrast (gray subtitle instead of black) signals secondary importance without requiring a drastic scale reduction."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The visual panel uses pastel cards with emojis as proof-of-concept rather than stock photography or abstract illustration. EFFECT: The literal depiction of mood states (🥳, 🧘, 😴) demonstrates the app's domain immediately without requiring testimonial copy or feature lists. REJECTION: It avoids the credibility theater of lifestyle photography, which would falsely claim real user documentation when showing a sign-up flow. The Google SSO button positions its brand icon before the text rather than using a centered, icon-only approach. EFFECT: Left-alignment creates a scannable vertical rhythm with the email field and primary CTA below, treating SSO as another form input rather than a special object. REJECTION: Centered icon buttons suggest equal-priority alternatives, which would undermine the visual hierarchy where email input remains the primary path. The form panel receives a fixed-narrow width while the visual panel flexes. EFFECT: Constraining form width to ~320-360px creates optimal line length for input labels and enforces thumb-zone compliance on mobile viewports without responsive breakpoint logic. REJECTION: Full-width forms force desktop users into inefficient horizontal eye travel and break the left-to-right reading gravity that should terminate at the CTA.",
+      "whatToSteal": [
+        "Use mid-gray (#7c7c7c) for subheadlines instead of reducing font size — it maintains readability while signaling hierarchy through luminance contrast rather than scale, preserving typographic rhythm",
+        "Display product value through literal UI previews (the emoji cards showing actual tracked moods) rather than feature descriptions, so sign-up context demonstrates the interaction model users will encounter post-auth",
+        "Apply identical corner radius and border weight to both text inputs and buttons — this creates a unified form language where interactive elements share structural DNA rather than distinguishing by decoration alone",
+        "Position SSO buttons as left-aligned list items with icon+text rather than centered icon-only tiles — this maintains vertical scan flow and treats third-party auth as a form field equivalent rather than a contextually separate choice"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The visual panel displays static preview cards with no interaction affordance or gesture hint — users cannot determine if these are tappable examples, static illustrations, or UI chrome decoration, creating ambiguity about whether the right panel is informational or interactive",
+          "The password input field lacks a visibility toggle icon or strength indicator — users must rely on browser defaults for password management without inline confirmation that their input meets requirements or is being captured correctly"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "form-panel",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "visual-panel",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "The copy uses declarative simplicity with vulnerability signaling through scale ('small way') rather than hyperbolic promises",
+        "examples": [
+          "A small way to feel better",
+          "Sign up",
+          "Continue with Google"
+        ],
+        "avoid": [
+          "Enthusiastic imperatives ('Start your journey!', 'Transform your life!')",
+          "Friction-minimizing reassurance ('No credit card required', 'Free forever')",
+          "Urgency mechanics ('Join 10,000+ users', 'Limited spots available')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-8",
+      "title": "Hume",
+      "patternType": "auth",
+      "categories": [
+        "auth",
+        "onboarding"
+      ],
+      "styleTags": [
+        "high-contrast",
+        "monochrome",
+        "minimal"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-7-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#bcbcbc",
+          "#7c7c7c",
+          "#3c3c3c",
+          "#7f7f7f",
+          "#424242",
+          "#bcbcbc"
+        ],
+        "accentColor": "#3c3c3c",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The heading maintains a conversational tone through medium weight rather than bold emphasis, while the helper text uses a muted gray (#7c7c7c) to create hierarchy through color value rather than size changes. This establishes importance through chromatic recession rather than typographic scale shifts."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "pill",
+        "usesShadows": false,
+        "usesBorders": false
+      },
+      "critique": "The inline country code presentation (+1 as plain text) rejects the conventional dropdown chevron pattern, eliminating the visual noise of an interactive affordance that most users never activate—this creates a cleaner reading line for the majority case while still allowing code changes through tap. The input field's pill corners at maximum radius (full height/2) match the submit button's geometry exactly, establishing a repeated formal vocabulary across passive and active UI states rather than differentiating them through shape—this unifies the visual field but risks diminishing perceived affordance hierarchy. The helper text placement immediately below the question, with no expanded vertical gap, treats explanation as part of the question itself rather than supplementary metadata—this creates a tighter semantic unit but demands that both elements be read as a single block.",
+      "whatToSteal": [
+        "Inline country code as static text (+1) with tap-to-change behavior—reserves the dropdown affordance for the moment it's needed rather than displaying it prophylactically, reducing visual weight on a field 95% of users never modify",
+        "Identical corner radius across input fields and buttons—creates shape rhyming between different interaction types, unifying the formal system through repeated geometry rather than varied affordances",
+        "Helper text positioned as immediate continuation of the question heading—treats explanation as integrated with the prompt rather than separated metadata, forcing them to be consumed as a single reading unit",
+        "Monochromatic gray palette (#bcbcbc to #3c3c3c) with no color accents on interactive elements—relies entirely on spatial position and shape to signal affordance rather than hue-based emphasis, creating a restrained tonal system"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The identical pill-shaped corners on both the input field and submit button eliminate shape-based differentiation between data entry and action commitment—users must rely solely on position and label to distinguish between typing location and submission trigger, removing a redundant visual cue that serves accessibility and rapid scanning"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "single-column",
+        "regions": [
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Conversational explanation that anticipates user concern—the copy directly addresses the why ('to confirm it's really you') rather than issuing a bare command",
+        "examples": [
+          "What's your phone number?",
+          "We'll text you a code to confirm it's really you"
+        ],
+        "avoid": [
+          "Imperative commands without explanation ('Enter phone number')",
+          "Technical jargon ('Two-factor authentication setup')",
+          "Formal institutional phrasing ('Please provide your mobile telephone number')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-9",
+      "title": "Hume",
+      "patternType": "auth",
+      "categories": [
+        "auth",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal",
+        "high-contrast"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-9-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#7c7c7c",
+          "#3c3c3c",
+          "#d07c74",
+          "#ecd4a4",
+          "#a4d4b4",
+          "#632721"
+        ],
+        "accentColor": null,
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The serif logo creates institutional authority while sans-serif form text maintains legibility at smaller sizes. Field labels use 14px with 140% line-height, creating sufficient breathing room without requiring bold weight to establish hierarchy."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The 32-40px inter-field spacing (DECISION) creates a reading rhythm that makes each field feel like a discrete cognitive task (EFFECT), rejecting the compressed 16-24px spacing typical of enterprise forms that treats input-collection as data-entry rather than conversation (REJECTION). The 48px button height against 40px input fields (DECISION) uses progressive disclosure of affordance—larger touch target signals finality (EFFECT)—instead of uniform 40px heights that treat primary actions identically to text inputs (REJECTION). The desaturated photograph with contained warm accents at #d07c74 and #ecd4a4 (DECISION) provides environmental context without chromatic interference (EFFECT), avoiding the saturated lifestyle photography that competes for attention with form validation states (REJECTION).",
+      "whatToSteal": [
+        "Use 2:1 spacing ratio between field groups (32-40px) and label-to-input gaps (8px) to create hierarchical breathing room that guides sequential attention without explicit numbering or progress indicators",
+        "Set primary action buttons 20% taller than input fields (48px vs 40px) to signal modal shift from data-entry to commitment, making the interaction boundary physically obvious through dimensional difference rather than color alone",
+        "Deploy desaturated background imagery with accent colors constrained to under 15% of visible area, allowing brand warmth to register subliminally while keeping validation red or green messages the only high-chroma elements competing for attention",
+        "Pair serif logotype with sans-serif UI text to separate brand identity (aspirational, institutional) from functional guidance (operational, immediate), creating dual-mode reading that prevents brand voice from interfering with task completion"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The fixed 400-450px form column width creates an inflexible breakpoint problem—on tablets (768-1024px), the photograph panel becomes too narrow to maintain compositional integrity, forcing either awkward cropping or a jarring switch to single-column layout that abandons the established spatial relationship"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "form-panel",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "visual-panel",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Conversational imperative with institutional restraint—directive without being transactional",
+        "examples": [
+          "Create account",
+          "Email",
+          "Password"
+        ],
+        "avoid": [
+          "Marketing enthusiasm ('Join our community!', 'Get started today!')",
+          "Legal hedging ('Please enter your email address below')",
+          "False personalization ('We're excited to have you!')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-10",
+      "title": "Hume",
+      "patternType": "onboarding",
+      "categories": [
+        "onboarding",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal",
+        "high-contrast"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-10-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#7c7c7c",
+          "#3c3c3c",
+          "#dac8d4",
+          "#986687",
+          "#4f3546",
+          "#c9afc1"
+        ],
+        "accentColor": "#986687",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The heading uses the accent purple (#986687) to establish dominance without resorting to heavy weight or large scale, while the all-caps instructional label creates a tertiary tier through transformation rather than size reduction. The lighter gray subheading text (#7c7c7c) sits between these poles, forming a three-level hierarchy through color differentiation alone."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": false,
+        "usesBorders": true
+      },
+      "critique": "The single-character input boxes (DECISION) force one letter per field, making the name entry deliberately slow and character-by-character (EFFECT), rejecting the standard single text field that would allow rapid typing but sacrifice the letter-by-letter reveal rhythm (REJECTION). The muted purple heading color #986687 (DECISION) establishes visual priority through hue shift rather than weight increase (EFFECT), avoiding black or high-contrast text that would feel authoritative rather than conversational (REJECTION). The cursor displays as a simple underline in the active field (DECISION) without outline rings or background fills (EFFECT), rejecting the conventional focus indicators that would introduce blue accent colors and break the monochromatic purple-gray palette (REJECTION).",
+      "whatToSteal": [
+        "Single-character input boxes that force letter-by-letter entry — creates a deliberate pacing mechanism that makes users conscious of each character, useful when the act of typing itself should feel considered rather than automatic",
+        "Using accent color (#986687) for the primary question instead of body text color — reserves the darkest values for instructional elements, inverting the typical hierarchy so the question feels like guidance rather than a demand",
+        "All-caps transformation for the instruction label 'ENTER YOUR NAME' — achieves typographic differentiation without requiring a different font weight or family, keeping the type system minimal while still creating clear functional separation",
+        "Underline-only focus indicator that stays within the form field border — maintains the border-based visual language throughout interaction states, avoiding the introduction of new UI patterns (like rings or glows) that would complicate the grammar"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The subheading 'We like to keep things personal' explains the rationale for asking the question, which telegraphs anxiety about the ask — confident onboarding shows the value through experience rather than pre-justifying data collection with reassurance copy"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "single-column",
+        "regions": [
+          {
+            "role": "form-panel",
+            "width": "fixed-narrow"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Conversational explanation that preemptively addresses user hesitation",
+        "examples": [
+          "What should we call you?",
+          "We like to keep things personal",
+          "ENTER YOUR NAME"
+        ],
+        "avoid": [
+          "Direct imperatives without context (e.g., 'Enter name')",
+          "Corporate-formal address (e.g., 'Please provide your full name')",
+          "Unlabeled form fields that assume self-evidence"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-11",
+      "title": "Hume",
+      "patternType": "onboarding",
+      "categories": [
+        "onboarding",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-11-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#6d6d6d",
+          "#848484",
+          "#f4dccc",
+          "#c4acd4",
+          "#d16f2d",
+          "#6d3917"
+        ],
+        "accentColor": null,
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Hierarchy emerges entirely through weight and color contrast rather than size variation. The '1/4' counter and placeholder text share identical point sizes but differ in opacity, making the progression indicator secondary without requiring a smaller font."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": false,
+        "usesBorders": true
+      },
+      "critique": "The placeholder-only labeling (DECISION: no persistent label, just 'First Name' inside the input) relies on native OS behavior to keep the placeholder visible while typing (EFFECT: reduces vertical height requirements by 20-30px per field, critical in a single-question-per-screen flow) while rejecting the conventional always-visible label (REJECTION: persistent labels add cognitive load when the question is already obvious from context and sequence position). The asymmetric button spacing (DECISION: 40-50px clearance below vs. 16-20px above) creates gravitational pull toward the primary action (EFFECT: the eye settles on the button naturally without scanning back up) instead of the default centered spacing that treats vertical space as mere separation. The fraction-based progress (DECISION: '1/4' plain text) provides exact position without requiring users to count abstract shapes (EFFECT: instant comprehension of total scope and current location) rather than the typical dot sequence that forces counting and estimation for steps beyond five.",
+      "whatToSteal": [
+        "Placeholder-as-label in micro-onboarding contexts where (a) one field appears at a time, (b) the question is self-evident from flow position, and (c) mobile keyboards keep placeholders visible during input—saves 20-30px per field while maintaining clarity",
+        "Fraction notation (1/4, 2/4) for progress in short, sequential flows under 7 steps—users instantly grasp 'I'm one-quarter done' without translating dots or bars into meaning, and the denominator sets accurate expectations",
+        "Asymmetric button spacing that adds 2-2.5× more whitespace below the CTA than above it—creates visual weight that draws attention downward to the action while preventing the button from floating ambiguously in centered space",
+        "Single-field-per-screen pagination for first-time data collection—each question becomes a conversation turn rather than a daunting form, and the narrow focus prevents field-switching that mobile keyboards make cumbersome"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The absence of any validation preview or character count leaves users guessing whether 'First Name' expects formal registration format (legal first name) or casual personalization (nickname, preferred name)—a single word below the field like 'How should we address you?' would clarify intent without adding a full label"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "single-column",
+        "regions": [
+          {
+            "role": "form-panel",
+            "width": "fixed-narrow"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "The copy is transactional and assumption-free, using the most literal field name possible without personality or explanation.",
+        "examples": [
+          "First Name"
+        ],
+        "avoid": [
+          "Conversational framing ('What should we call you?')",
+          "Reassuring explanations ('We use this to personalize your experience')",
+          "Casual contractions or friendliness markers"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-12",
+      "title": "Hume",
+      "patternType": "dashboard",
+      "categories": [
+        "dashboard",
+        "navigation"
+      ],
+      "styleTags": [
+        "minimal"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-15-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#503b32",
+          "#807aac",
+          "#d58e61",
+          "#cab9a5",
+          "#bc6b35",
+          "#6f2c14"
+        ],
+        "accentColor": "#807aac",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The vertical icon-then-label pairing forces navigation items into tall, narrow cells that prioritize recognition over speed-scanning. Label text uses a size small enough (appears 10-11px) that it functions as confirmation rather than primary wayfinding, making the icon the true interactive target."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": false
+      },
+      "critique": "The purple accent (#807aac) operates as a middle-value bridge between the dark sidebar and light canvas — it's neither highlight nor shadow, sitting at roughly 50% luminance. This creates enough separation from the brown to be perceptible but avoids the high-contrast 'active state' blue most dashboards default to, which would create visual noise when multiple items need coexistence. The warm shadow treatment (casting in oranges/tans instead of desaturated grays) maintains the brown-to-beige color temperature across all elevation layers; conventional neutral shadows would introduce a cool-warm conflict that breaks the earth-tone constraint. The sidebar's fixed 60-70px width forces icon-only presentation at rest, rejecting the always-visible text labels that consume 180-220px in standard side navs — this trades immediate legibility for spatial economy, banking on icon recognition to carry the cognitive load.",
+      "whatToSteal": [
+        "Use accent colors at mid-luminance (40-60%) rather than maximum saturation when they need to coexist with primary content rather than signal singular focus — allows navigation to register without competing for attention hierarchy",
+        "Match shadow color temperature to the dominant palette rather than defaulting to rgba(0,0,0,0.1) — here, warm tan/orange shadows unify the elevation system with the brown-beige material language instead of introducing a neutral gray that reads as 'different lighting'",
+        "Set nav label text to the exact same color as the main canvas background — creates a perceptual link between the navigation system and the workspace, suggesting the labels 'belong' to the content area rather than the sidebar itself",
+        "Size navigation labels 2-3 steps below body text so they function as confirmation tooltips rather than primary UI — shifts the interaction model from 'read then click' to 'recognize then verify', which works when icon vocabulary is small and consistent"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The 3:1 contrast between purple icons and dark brown background sits near WCAG minimum thresholds — this gambles that users will learn icon positions by spatial memory rather than needing to visually parse them each time. For navigation systems with 8+ items or infrequent users, this constraint fails because rediscovery cost exceeds aesthetic gain."
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-13",
+      "title": "Hume",
+      "patternType": "forms",
+      "categories": [
+        "forms",
+        "navigation"
+      ],
+      "styleTags": [
+        "monochrome",
+        "luxury-quiet",
+        "technical-mono"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-16-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#4c4c4c",
+          "#848484",
+          "#c4c4bc",
+          "#878777",
+          "#46463e",
+          "#c0c0b8"
+        ],
+        "accentColor": "#46463e",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The interface establishes hierarchy through weight and color temperature rather than size variation. Section headings appear in the same point size as body text but use the darker ink value (#4c4c4c) while helper text and labels deploy the muted gray (#848484), creating separation through luminance contrast alone."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The lowercase 'email' in form labels (DECISION) creates grammatical consistency with conversational UI patterns (EFFECT), rejecting the title-case convention that would frame each field as a formal database property (REJECTION). The circular radio outlines using stroke-only rendering (DECISION) provide recognition without introducing fill-state ambiguity before selection (EFFECT), avoiding the solid-then-checked pattern that creates two visual weights for the same control (REJECTION). The navigation's muted gray text (#848484) against the off-white sidebar (DECISION) reduces contrast to 3.5:1, signaling persistent wayfinding rather than immediate action (EFFECT), rejecting high-contrast navigation that competes with form content for attention (REJECTION). The helper text placement flush beneath headings with no rule or spacing increment (DECISION) groups instruction with its target rather than floating as independent UI chrome (EFFECT), avoiding the paragraph-gap pattern that would fragment the reading flow between prompt and action (REJECTION).",
+      "whatToSteal": [
+        "Use lowercase labels in forms when the field maps to natural language input — it primes users to write conversationally rather than fill out administrative templates",
+        "Deploy stroke-only radio buttons before selection to distinguish 'available' from 'chosen' without requiring a second visual vocabulary for the unselected state",
+        "Set navigation text at 3.5:1 contrast when it serves wayfinding (persistent orientation) rather than task initiation — it stays legible while letting form content claim primary attention",
+        "Place helper text directly beneath section headings with no spacing increase or horizontal rule — the proximity groups instruction with action target instead of treating it as tertiary metadata"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The identical gray value (#848484) serves both navigation items and helper text despite serving completely different functional roles — one provides wayfinding across the application, the other provides contextual instruction for a single form section. This collapses two distinct information types into a single luminance channel, forcing users to rely entirely on position to decode meaning."
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "The copy adopts an imperative-instruction register — direct commands without softening language or explanatory preamble.",
+        "examples": [
+          "Choose which emails you'd like to receive",
+          "email",
+          "Notifications",
+          "Billing"
+        ],
+        "avoid": [
+          "Conversational questions ('Which emails would you like to get?')",
+          "Platform jargon ('Configure notification preferences')",
+          "Apologetic politeness ('Please select your email preferences')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-14",
+      "title": "Hume",
+      "patternType": "dashboard",
+      "categories": [
+        "dashboard",
+        "navigation",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal",
+        "monochrome"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-17-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#7c7c7c",
+          "#3c3c3c",
+          "#d8ccd0",
+          "#906e79",
+          "#4b393f",
+          "#c5b3b9"
+        ],
+        "accentColor": "#4b393f",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "All text appears to use a single sans-serif family at varying weights, with hierarchy established purely through size steps (roughly 14px body, 24px headings, 12px labels) and weight contrast rather than family changes. The lack of display font creates uniformity that reinforces the monochrome palette's restraint."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The #d8ccd0 canvas rejection of pure white (#ffffff) establishes immediate atmospheric differentiation — it signals 'constructed environment' rather than 'blank document', making interactive regions feel deliberately placed rather than accidentally occupying negative space, though it sacrifices ~8% luminance contrast for ink legibility. The 32-40px inter-group vertical spacing versus ~16px intra-field padding creates a 2:1 rhythm that segments the form into scannable chunks without requiring divider lines or background fills — this rejects the common equal-spacing approach where every gap feels identical and the eye must work harder to parse grouping. The navigation icon contrast of ~2.2:1 (#7c7c7c on #3c3c3c) prioritizes atmospheric moodiness over WCAG AA compliance (4.5:1) — this works only if iconography is redundant with position memory, but creates friction for first-time users or anyone with moderate vision impairment. The Unicode back arrow '←' instead of an SVG icon asset maintains typographic consistency with surrounding text weight and eliminates the common mismatch where bold text sits next to thin-stroke icons, though it surrenders pixel-level optical refinement.",
+      "whatToSteal": [
+        "Use a 2:1 spacing ratio between form sections (32-40px) versus within-section padding (16px) to create implicit grouping without visible dividers — the eye completes the boundary where space increases, reducing decorative elements while maintaining scannable structure",
+        "Set canvas to a near-neutral with subtle warmth (#d8ccd0 range) instead of pure white to make interactive components feel 'placed on a surface' rather than 'floating in void' — this costs ~8% contrast but gains atmospheric coherence and reduces eye strain in extended sessions",
+        "Employ a single sans-serif family across all weights rather than mixing display and body fonts when the content is utilitarian (forms, dashboards) — this creates visual discipline that matches task focus and eliminates the 'designed to look designed' signal that undermines trust in data tools",
+        "Reserve maximum contrast (#ffffff text on #4b393f) exclusively for primary CTAs while keeping all other interactive elements in mid-range contrast (~2-3:1) — this creates a single visual 'shout' that makes the intended path unmistakable without requiring color variety or size exaggeration"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "Navigation icons at #7c7c7c on #3c3c3c (~2.2:1 contrast) fall below WCAG AA minimums (4.5:1 for text, 3:1 for UI components), creating a barrier for users with low vision or situational impairment (outdoor glare, dim screens) — the aesthetic choice to prioritize tonal subtlety over accessibility compliance assumes all users have perfect vision and controlled viewing conditions, which excludes a measurable percentage of the audience and may violate regulatory requirements in government or enterprise contexts"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Instructional and directive without embellishment — imperatives like 'Enter phone number' and 'Continue' state requirements plainly",
+        "examples": [
+          "Enter phone number",
+          "Continue",
+          "Phone",
+          "Message"
+        ],
+        "avoid": [
+          "Conversational prompts like 'What's your phone number?'",
+          "Encouraging language like 'Almost there!' or 'You're doing great'",
+          "Brand personality injection such as 'Let's get your digits' or playful terminology"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-15",
+      "title": "Hume",
+      "patternType": "forms",
+      "categories": [
+        "dashboard",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal",
+        "monochrome"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-18-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#bcbcbc",
+          "#3c3c3c",
+          "#f4fcf4",
+          "#7c7474",
+          "#36c836",
+          "#1c681c"
+        ],
+        "accentColor": "#36c836",
+        "colorRoles": {
+          "canvas": "#f4fcf4",
+          "surface": "#f4fcf4",
+          "ink": "#3c3c3c",
+          "muted": "#7c7474",
+          "accent": "#36c836"
+        },
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Hierarchy emerges entirely from color contrast rather than size or weight modulation: muted gray (#7c7474) labels sit above darker (#3c3c3c) values within the same point size, forcing the eye to parse meaning through luminance delta alone. This monochrome intensity ladder eliminates the need for bold weights or scale jumps, creating separation without optical noise."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The green accent restriction to toggle states only (DECISION: #36c836 reserved for binary on/off controls, absent from buttons or links) converts hue into a semantic channel where green = active state, not just emphasis (EFFECT), rejecting the common pattern of scattering accent color across multiple component types to 'add visual interest,' which dilutes its communicative power into decoration (REJECTION). The destructive action's neutral ink treatment (DECISION: 'Delete Account' button uses #3c3c3c body text color instead of danger red) forces users to read the label rather than react to color alone (EFFECT), avoiding the reflex-driven pattern of red = danger that trains users to fear color rather than parse intent, making critical actions into visual alarm bells instead of considered choices (REJECTION). The label-to-value contrast pairing (DECISION: #7c7474 for static labels, #3c3c3c for user-supplied content, within identical type sizes) encodes edit-state vs read-state as a luminance relationship (EFFECT), rejecting the size-based hierarchy where labels shrink or float above inputs, which wastes vertical space and creates optical clutter when scanning a long form (REJECTION).",
+      "whatToSteal": [
+        "Reserve your accent hue for a single component class (here: active toggles only). This transforms color from decoration into a functional indicator—users learn 'green = this setting is on' rather than 'green = something the designer wanted to highlight.' Test by removing all accent color instances except one component type; if meaning survives, you've succeeded.",
+        "Encode destructive actions through copy and position instead of danger red. Place 'Delete Account' at the bottom of the page with neutral ink, forcing intentional scrolling and label-reading before execution. This prevents muscle-memory clicks on red buttons and makes high-stakes actions feel deliberately hidden rather than visually screaming.",
+        "Use luminance contrast within a single type size to separate labels from content. Set labels 30-40% lighter than input values (#7c7474 vs #3c3c3c here), eliminating the need for size scaling or bold weights. This creates scannable hierarchy in dense forms without the vertical bloat of floating labels or the noise of mixed type weights.",
+        "Apply a single corner radius value (4-6px) across all interactive elements regardless of their visual treatment (stroke-only buttons, filled inputs, toggle pills). This shared geometric property unifies disparate components into a coherent interaction layer while their fill/stroke differences maintain functional distinctions."
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The 'Profile Picture' field shows a filename ('avatar.jpg') but provides no visual preview or upload affordance, forcing users to mentally map a text string to an image file without confirmation of what's currently set—this pattern assumes users remember filenames rather than recognize images",
+          "The left navigation presents icon-only items without tooltips or hover labels, requiring users to decode abstract glyphs (gear for settings, bell for notifications) through memorization rather than recognition—even the labeled 'Profile' icon doesn't clarify what the others represent",
+          "All input fields display in an identical, pre-filled visual state with no empty-state distinction, making it impossible to tell which fields are defaults vs user-entered values—this collapses the difference between 'not yet configured' and 'explicitly chosen'"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "The copy adopts a flat, technical register that treats destructive actions and routine settings with identical linguistic weight—'Delete Account' sits beside 'Save Changes' without modal softening or consequence explanation.",
+        "examples": [
+          "Delete Account",
+          "Save Changes",
+          "Push Notifications",
+          "Email Notifications"
+        ],
+        "avoid": [
+          "Conversational hedging ('Are you sure you want to...?')",
+          "Friendly reassurance ('Don't worry, you can change this later')",
+          "Explanatory subtext under destructive actions ('This cannot be undone')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-16",
+      "title": "Hume",
+      "patternType": "dashboard",
+      "categories": [
+        "dashboard",
+        "navigation",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal",
+        "monochrome"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-19-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#3c3c3c",
+          "#7c7478",
+          "#bcbcb4",
+          "#868678",
+          "#46463e",
+          "#c0c0b8"
+        ],
+        "accentColor": "#3c3c3c",
+        "colorRoles": {
+          "canvas": "#c0c0b8",
+          "surface": "#bcbcb4",
+          "ink": "#3c3c3c",
+          "muted": "#7c7478",
+          "accent": "#3c3c3c"
+        },
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Scale compression distinguishes permanent UI from transient data: navigation and headers occupy 10-14px while body content claims no size above 13px, preventing any element from declaring hierarchical dominance. The all-caps column headers with expanded tracking sacrifice readability for spatial compression, signaling these labels exist to organize rather than be read repeatedly."
+        },
+        "spacingDensity": "moderate",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The 24px icon spacing in the left rail creates a vertical rhythm of 3:2 against the 16px horizontal padding, establishing a proportional system rather than uniform gutters (DECISION). This ratio makes the navigation feel vertically generous without consuming width, allowing icons to breathe while the rail stays under 64px (EFFECT). It rejects equal padding on all sides, which would either waste horizontal space or cramp vertical scanning (REJECTION). The 1px border weight on the dropdown at #7c7478 sits exactly midway between the ink (#3c3c3c) and surface (#bcbcb4) values, making the control visible without creating figure-ground separation (DECISION). This keeps the filter embedded in the canvas rather than floating above it, maintaining a single depth plane (EFFECT). It avoids the heavier 2px borders or high-contrast strokes that would make the dropdown feel like a separate component rather than an in-place control (REJECTION). The 40px clearance before the first table row exceeds the 44px row height itself, inverting the typical ratio where headers get compressed (DECISION). This makes the data feel introduced rather than immediate, giving the eye a landing zone before processing tabular information (EFFECT). It rejects the tight 8-12px header-to-content gaps common in dense dashboards, which force headers and data into perceptual competition (REJECTION).",
+      "whatToSteal": [
+        "24px vertical spacing between navigation icons with 16px horizontal padding creates a 3:2 rhythm that makes vertical scanning feel open while keeping the rail narrow — apply this ratio when navigation must feel generous without consuming width",
+        "All-caps column headers at 10px with 0.5px letter-spacing compressed into a small size make labels spatial organizers rather than readable text — use when headers serve navigation over communication",
+        "1px borders in a midpoint color (#7c7478 between #3c3c3c ink and #bcbcb4 surface) keep controls visible without creating depth separation — deploy when UI elements should feel embedded in the canvas rather than layered above it",
+        "40px clearance before the first data row (exceeding the 44px row height) inverts typical header compression to give data an introduction zone — steal when tables need a perceptual pause before information density begins"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The 'File' menu text at the top left lacks any visual distinction from body text despite being a primary navigation element, relying solely on position to signal interactivity — this makes discoverability dependent on spatial convention rather than affordance, forcing users to learn rather than recognize navigation"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Telegraphic and administratively neutral, using minimal instructional language and defaulting to noun labels over verbs",
+        "examples": [
+          "File",
+          "Name",
+          "Status",
+          "Last 30 days"
+        ],
+        "avoid": [
+          "Conversational prompts like 'What would you like to do?'",
+          "Onboarding language like 'Get started' or 'Welcome'",
+          "Action-oriented verbs in navigation like 'Manage your files' or 'View messages'"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-17",
+      "title": "Hume",
+      "patternType": "forms",
+      "categories": [
+        "forms",
+        "navigation",
+        "dashboard"
+      ],
+      "styleTags": [
+        "minimal",
+        "monochrome",
+        "luxury-quiet"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-21-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#c4c4c4",
+          "#7c7c7c",
+          "#5c5c5c",
+          "#f4f4fc",
+          "#3636c8",
+          "#1c1c68"
+        ],
+        "accentColor": "#3636c8",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Hierarchy emerges from scale alone—the 'Create user' heading uses size differential without weight or color variation, rejecting the common pattern of pairing larger headings with bolder weights or accent colors. Field labels sit directly above inputs at what appears to be the same weight as body text, forcing users to parse position rather than relying on typographic emphasis to distinguish labels from values."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The #c4c4c4 border on default-state inputs (DECISION) makes unfilled fields visually retreat from attention (EFFECT), rejecting the high-contrast '#000000 or #333333 borders that demand equal attention for every field regardless of completion state (REJECTION)—here, the form guides progressive disclosure of commitment rather than shouting all requirements simultaneously. The icon-only left navigation without text labels (DECISION) demands symbol recognition and rewards repeated use with faster scanning (EFFECT), avoiding the 'icon + label' redundancy that optimizes first-time clarity at the cost of spatial efficiency for return visitors (REJECTION). The equal spacing between all form groups with no dividers or background shading (DECISION) treats Name, Email, and Password as a single continuous data collection rather than staged sections (EFFECT), rejecting the sectioned-form pattern with alternating backgrounds or rule lines that fragment a simple linear task into artificial chapters (REJECTION).",
+      "whatToSteal": [
+        "Default-state input borders at #c4c4c4 luminosity—sufficiently visible for field recognition but subdued enough that unfilled states don't compete with completed ones, creating a visual gradient that tracks form progress without requiring explicit completion indicators",
+        "5:1 visual weight between primary and secondary actions through fill vs. text-only treatment—the 'Create user' button receives full accent color while 'Cancel' remains bare gray text, making the safer path (cancellation) require more intentional target acquisition than the commitment path",
+        "Icon-only navigation that converts spatial memory into recognition speed—placing dashboard, users, settings, and notification symbols in a fixed vertical stack without text labels, optimizing for the second use rather than the first impression",
+        "Uniform vertical rhythm between form groups without visual separators—each label-input pair receives identical spacing, rejecting the sectioning pattern that implies some fields are categorically different when the task is simply sequential data entry"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The 'Create user' heading and the primary button share identical text, creating a redundant announcement-confirmation pattern—the heading declares the task while the button repeats it verbatim, forcing users to read the same two words twice when the button alone would communicate both intent and action"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Transactional brevity—labels and actions use the minimum word count to identify fields ('Name', 'Email', 'Password') and commands ('Create user', 'Cancel') without explanatory cushioning or conversational framing",
+        "examples": [
+          "Create user",
+          "Name",
+          "Email",
+          "Password"
+        ],
+        "avoid": [
+          "Explanatory phrasing like 'Enter your name' or 'Please provide an email address'",
+          "Action-oriented button copy like 'Add New User' or 'Save and Continue'",
+          "Friendly or casual language such as 'Let's get started' or 'All set!'"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-18",
+      "title": "Hume",
+      "patternType": "forms",
+      "categories": [
+        "forms",
+        "navigation"
+      ],
+      "styleTags": [
+        "minimal"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-22-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#c4c4c4",
+          "#7c7c7c",
+          "#5c5c5c",
+          "#7f7f7f",
+          "#424242",
+          "#bcbcbc"
+        ],
+        "accentColor": "#424242",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Labels embedded within input boundaries force users to recall field purpose after typing begins, trading vertical compression for reduced scannability. The uniform weight across all text elements—navigation labels, form inputs, button text—creates hierarchy solely through size and color value shifts rather than weight contrast."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The left-border active state (2px #424242 vertical line) creates navigation feedback through edge contrast rather than background fills, preserving the sidebar's continuous vertical rhythm while avoiding the box-highlighting pattern that fragments spatial flow. Full-width primary buttons eliminate the decision fatigue of button positioning but surrender the rightward flow convention that signals forward progression in multi-step forms—this works because the single-button context removes any directional ambiguity about which action advances the flow. Inline label placement (text inside input boundaries rather than above) recovers 18-24px of vertical space per field but requires users to rely on memory after interaction begins, rejecting the persistent-label pattern that maintains context at the cost of height—acceptable here because the two-field form keeps cognitive load minimal.",
+      "whatToSteal": [
+        "2px solid left border for active navigation states instead of background fills—preserves vertical reading rhythm by marking position through edge rather than area, and the flush-left alignment creates a consistent vertical rule that doubles as both indicator and compositional anchor",
+        "Uniform 40px vertical spacing between navigation icons regardless of label length—establishes a predictable rhythm that lets users build spatial memory of icon positions, and the fixed interval prevents label text from dictating layout hierarchy",
+        "Subtle shadow implementation (0-2px blur, low opacity) applied only at component boundaries—provides depth cues for interactive surfaces without the aggressive z-axis separation that creates floating-card visual noise, keeping focus on content rather than container decoration",
+        "Full-width button treatment in single-action contexts—removes horizontal positioning as a variable, channeling attention to the single forward path while maximizing touch target area for the only available action"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "Placeholder text as the primary labeling strategy forces users to recall field purpose after typing begins, violating persistence—users who return to edit must infer context from their own input rather than from persistent system guidance, creating unnecessary cognitive load that grows with form length and interruption likelihood"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Instructional brevity with imperative verbs, omitting articles and explanatory phrases to compress interaction copy into single-word directives",
+        "examples": [
+          "Next",
+          "First name",
+          "Last name"
+        ],
+        "avoid": [
+          "Conversational prompts ('Let's get started with your name')",
+          "Explanatory help text ('Enter the name as it appears on your ID')",
+          "Friendly filler language ('Please share your', 'We'd love to know')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-19",
+      "title": "Hume",
+      "patternType": "forms",
+      "categories": [
+        "forms",
+        "dashboard",
+        "navigation"
+      ],
+      "styleTags": [
+        "minimal",
+        "soft-neumorphic",
+        "monochrome"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-23-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#fcf8fb",
+          "#646464",
+          "#7c7c7c",
+          "#daccd0",
+          "#b24c99",
+          "#5c274f"
+        ],
+        "accentColor": "#5c274f",
+        "colorRoles": {
+          "canvas": "#fcf8fb",
+          "surface": "#fcf8fb",
+          "ink": "#646464",
+          "muted": "#7c7c7c",
+          "accent": "#5c274f"
+        },
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Weight differentiation establishes primacy: section headers ('Account information', 'Security') use heavier weight to chunk the form, while input labels remain at regular weight to recede until interaction. No size variation across the interface forces reliance on weight and color alone for hierarchy, which succeeds because the vertical rhythm provides adequate breathing room between hierarchical levels."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The inset shadow treatment on input fields (DECISION) reverses the conventional raised-surface paradigm by making interactive zones appear recessed (EFFECT), signaling 'fill this cavity' rather than 'tap this button'—this works because forms are about depositing information, not triggering actions, and the cavity metaphor aligns with that mental model (REJECTION of the iOS-style raised field default that treats every input like a tappable surface). The 320-pixel width constraint on form inputs (DECISION) prevents the elastic expansion that flexible layouts typically allow (EFFECT), maintaining scanline length regardless of viewport width, which preserves reading rhythm and prevents the 'lost in whitespace' phenomenon that occurs when inputs stretch to 60+ characters (REJECTION of the fill-available-width pattern that optimizes for space usage over readability). Purple color assignment to the active navigation state (DECISION) uses a mid-saturation accent (#b24c99) instead of the darker brand color (#5c274f) (EFFECT), creating enough contrast against the light background for immediate state recognition without the visual weight that would make the sidebar compete with form content (REJECTION of the 'use your darkest brand color for selected state' convention that often creates unintended emphasis).",
+      "whatToSteal": [
+        "Inset shadow fields (1-2px inner shadow, rgba(0,0,0,0.08)) that reverse the raised-button metaphor—works specifically for forms where the interaction is 'fill/deposit' rather than 'trigger/activate', creating visceral alignment between visual treatment and interaction intent",
+        "Fixed-width form inputs (320px) that resist parent flex expansion—maintains optimal scanline length (35-45 characters for email/text inputs) regardless of viewport, preventing the readability degradation that occurs when inputs stretch beyond 600px on wide screens",
+        "Weight-only hierarchy in navigation items (medium-weight selected vs regular-weight unselected, same size)—eliminates the need for background fills, borders, or size changes to communicate state, which reduces visual noise in dense navigation lists",
+        "12-pixel horizontal gap between navigation icon and label—tight enough to feel grouped but wide enough that the icon doesn't collide with multi-line labels when translated, avoiding the icon-overlap problem common in localized interfaces"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The vertical alignment of the toggle switch with its label places both on the same baseline, but the visual weight of the toggle (with its shadow treatment and dual-colored states) creates a rightward pull that makes the label feel like it's serving the toggle rather than the toggle serving the setting—inverting the label above the control or increasing left-side weight would restore the correct reading hierarchy",
+          "The monotone gray (#646464) applied uniformly to all body text, input labels, and placeholder text eliminates the distinction between empty and populated fields at a glance—a two-tier gray system (darker for labels, lighter for placeholders) would allow faster form-completion verification without requiring field-by-field focus"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Institutional formality: uses complete noun phrases ('Account information', 'Two-factor authentication') rather than imperative verbs or conversational fragments, signaling administrative precision over user warmth",
+        "examples": [
+          "Account information",
+          "Two-factor authentication",
+          "Security",
+          "Settings"
+        ],
+        "avoid": [
+          "Conversational contractions or casual address ('Let's secure your account', 'You're all set')",
+          "Imperative commands ('Manage settings', 'Update profile')",
+          "Marketing enthusiasm or benefit-driven copy ('Stay protected', 'Keep your data safe')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-20",
+      "title": "Hume",
+      "patternType": "forms",
+      "categories": [
+        "forms",
+        "settings",
+        "navigation"
+      ],
+      "styleTags": [
+        "monochrome",
+        "minimal"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-24-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#606060",
+          "#7c7c7c",
+          "#d8ccce",
+          "#906e74",
+          "#4b393c",
+          "#c5b3b6"
+        ],
+        "accentColor": null,
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The hierarchy operates through weight differentiation rather than size jumps—section headers use medium weight while field labels drop to regular, keeping both at similar point sizes. The serif wordmark establishes brand identity while the sans-serif body maintains readability across dense form content, creating a deliberate contrast between branded and functional zones."
+        },
+        "spacingDensity": "moderate",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The navigation icons employ a single muted brown (#906e74) for both active and inactive states, relying solely on a subtle background tint to signal selection. This creates low cognitive load during scanning because users process position and icon shape before parsing color differences, avoiding the common mistake of high-contrast state indicators that compete for attention with page content. The section headers use vertical whitespace (24px above) as the primary delimiter instead of horizontal rules or background blocks. This decision lets related fields group through proximity while maintaining uninterrupted vertical flow, rejecting the standard practice of boxing each section which fragments the reading path and adds visual noise. The '+ Add Webhook' button forgoes a filled background, instead using only the plus glyph and medium-weight type. This treats the action as an inline element rather than a discrete object, preventing the page from feeling like a collection of competing CTAs and acknowledging that in a settings context, additive actions are supplementary to data entry.",
+      "whatToSteal": [
+        "Using identical point sizes for section headers and field labels, varying only weight (medium vs. regular)—this compresses vertical rhythm while maintaining clear hierarchy, particularly effective in dense form layouts where traditional size-stepped hierarchies create distracting bounce",
+        "Applying 24px top margin above section headers with no bottom margin—sections are defined by what follows them rather than symmetric padding, reducing total page height and keeping the user's eye moving downward through content rather than pausing at artificial boundaries",
+        "Rendering additive actions (+ Add Webhook) without background fills or strong borders—treating them typographically rather than as button objects acknowledges their secondary importance in data-heavy contexts and prevents visual competition with primary form fields",
+        "Employing a warm neutral (#906e74) for navigation icons instead of pure grayscale or brand accent colors—this keeps functional chrome present but recessive, avoiding both the sterility of true gray and the attention-grabbing effect of saturated accent colors that would pull focus from the main canvas"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The webhook URL field label lacks an explanatory suffix or tooltip despite being a technical configuration that likely requires specific formatting—users must either know the expected format or discover it through trial-and-error validation, adding friction to a task that could be resolved with 3-4 words of inline guidance"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "The copy is technical-administrative, using exact terminology ('API Keys', 'Webhooks', 'Organization Name') without explanatory cushioning or conversational connectors.",
+        "examples": [
+          "General Settings",
+          "Webhooks",
+          "API Keys",
+          "Organization Name"
+        ],
+        "avoid": [
+          "Explanatory preambles ('Manage your organization details below')",
+          "Encouraging language ('Let's set up your webhooks!')",
+          "Help-desk tone ('Need help? Contact support')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-21",
+      "title": "Hume",
+      "patternType": "forms",
+      "categories": [
+        "forms"
+      ],
+      "styleTags": [
+        "minimal"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-25-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#7c7c7c",
+          "#656464",
+          "#ece6dc",
+          "#a58859",
+          "#55472e",
+          "#d0c1a9"
+        ],
+        "accentColor": "#55472e",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Labels use #656464 ink at what appears to be 13-14px, while placeholder text drops to #7c7c7c muted gray, creating hierarchy through color shift rather than size change. This keeps vertical rhythm uniform across all field states while preserving scannability through contrast alone."
+        },
+        "spacingDensity": "moderate",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The icon-only left rail (48px width, symbol recognition only) creates maximum horizontal space for form fields, avoiding the label+icon pattern that would demand 180-200px and crush the input area on laptop screens. The fixed bottom 'Save draft' button in #a58859 gold acts as the sole warm accent in an otherwise cool-gray interface, making the persistence action visually distinct from navigation without competing for attention during active input. The uniform 32px inter-field spacing between label and subsequent label rejects variable gaps that would require users to re-calibrate reading rhythm per field type, instead establishing a predictable scanning cadence across text inputs and text areas alike.",
+      "whatToSteal": [
+        "Single-column icon rail at 48px width: eliminates navigation labels to reclaim 130+ horizontal pixels for form content, forcing icon clarity but gaining canvas space where input width directly affects usability",
+        "Placeholder text one step lighter than label (#7c7c7c vs #656464): creates hierarchy within the field without requiring size changes that would break vertical rhythm or demand additional line-height",
+        "Gold accent (#a58859) exclusively on the persistence button: reserves warm color for the one action that prevents data loss, making it emotionally distinct from navigation which uses neutral grays",
+        "Top navigation icon 20% larger than subsequent icons (24px vs 20px): marks the entry point to global navigation without requiring a visual separator or expanded hit target that would break the column's width discipline"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The textarea placeholder 'Write the note here...' uses instructional voice where the field label 'Note' already establishes purpose, consuming vertical space with redundant guidance that adds no specificity about format, length, or content expectations"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "The copy is directive and minimal, using imperative labels ('Product name', 'Category', 'Note') without articles or helper text, assuming the field purpose is self-evident from the noun alone.",
+        "examples": [
+          "Product name",
+          "Category",
+          "Note",
+          "Write the note here..."
+        ],
+        "avoid": [
+          "Conversational prompts like 'What would you like to call this product?'",
+          "Explanatory subtext under labels describing field requirements",
+          "Friendly or casual language such as 'Jot down your thoughts'"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-22",
+      "title": "Hume",
+      "patternType": "dashboard",
+      "categories": [
+        "dashboard",
+        "navigation"
+      ],
+      "styleTags": [
+        "minimal",
+        "soft-neumorphic"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-26-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#96a4f1",
+          "#7283bc",
+          "#c98c9c",
+          "#34c46a",
+          "#444444",
+          "#1b6838"
+        ],
+        "accentColor": "#96a4f1",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Hierarchy emerges from color differentiation rather than size variation—the breadcrumb parent and child use identical point sizes but separate via neutral gray versus periwinkle blue. This approach keeps the vertical rhythm locked while allowing depth perception through chromatic weight, rejecting the conventional scale-based hierarchy that would require additional leading adjustments."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": false
+      },
+      "critique": "The solid-fill navigation icons (#96a4f1) maintain consistent optical density across the entire vertical rail, which prevents the eye from parsing inactive versus active states through fill/stroke toggles—this uniformity keeps the left edge visually quiet but sacrifices the immediate wayfinding cue that outline-to-fill transformations provide. The non-uniform grid spacing (24px vertical, 20px horizontal between cards) creates deliberate tension that prevents the metric cards from feeling like a rigid table layout, though this asymmetry risks appearing unintentional rather than designed, especially when the cards themselves use perfectly uniform 16px corner radii. The percentage labels positioned at 8px outside their donut segments reject the conventional in-segment placement that clutters small circular graphics, but this external positioning requires more canvas real estate and assumes the user will trace the invisible radial connection between label and arc.",
+      "whatToSteal": [
+        "Percentage labels positioned outside donut segments at fixed 8px radial distance—this pulls numerics away from colored fills where legibility suffers, and avoids callout lines that add visual noise. Works when you have canvas space and need to preserve the geometric purity of circular charts.",
+        "Breadcrumb hierarchy through hue shift rather than size change—keeping 'Main Dashboard' and 'Expression' at identical point sizes but differentiating via #444444 versus #7283bc maintains tight vertical rhythm without requiring optical size compensation or leading adjustments.",
+        "Metric cards differentiated by background tint (15% opacity color washes) while maintaining identical corner radius and shadow treatments—this lets you group related data types through color families without fragmenting the layout into visually distinct component styles.",
+        "Solid-fill navigation icons without stroke variants—this keeps the sidebar at uniform visual weight and prevents the active/inactive toggle from creating density shifts that draw attention away from the main canvas content."
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The navigation icons use solid fills in the accent color (#96a4f1) without any state differentiation mechanism visible—if all icons maintain identical fill treatment regardless of active/inactive status, users lose the immediate spatial orientation that conventional sidebar navigation provides through fill/outline toggles or opacity shifts. This uniformity may look cohesive but sacrifices functional wayfinding.",
+          "Donut chart segments use different colors (#96a4f1, #c98c9c, #34c46a) to encode different metrics, but these hues reappear as background tints in the containing cards—this creates a redundant color-to-meaning mapping where the card background and the chart segment both signal the same categorical identity, wasting one of the two color channels that could encode an independent dimension."
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Terse scientific labeling with minimal punctuation—metric names appear as single-word categorical labels ('Attention', 'Relaxation', 'Engagement') without articles or explanatory phrasing, assuming domain literacy.",
+        "examples": [
+          "Expression",
+          "Attention",
+          "Relaxation",
+          "Engagement"
+        ],
+        "avoid": [
+          "Conversational prompts or questions",
+          "Explanatory subheadings or helper text",
+          "Action-oriented imperative phrasing",
+          "Marketing or promotional language"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-23",
+      "title": "Hume",
+      "patternType": "forms",
+      "categories": [
+        "forms",
+        "navigation"
+      ],
+      "styleTags": [
+        "minimal",
+        "warm-tactile"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-27-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#3c3c3c",
+          "#b08470",
+          "#c2b4a6",
+          "#977f67",
+          "#4e4235",
+          "#c9bcb0"
+        ],
+        "accentColor": "#b08470",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "All text renders in a single weight, using size alone to establish hierarchy — 'We are here to help' appears roughly 32px while field labels read around 14px. The refusal to employ bold or semibold weights forces the reader to process scale relationships rather than scanning for typographic emphasis, which slows comprehension but creates tonal consistency."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The decision to fill navigation indicators with #b08470 circles (DECISION) creates a physical 'marker' metaphor rather than highlight strips (EFFECT), which avoids the spreadsheet-like horizontal bars common in admin interfaces that flatten navigation into tabular data (REJECTION). Embedding field labels inside semi-transparent fields with #c9bcb0 backgrounds (DECISION) keeps vertical rhythm tight and the label anchored to its context (EFFECT), rejecting the conventional above-field label that introduces white-space gaps and forces the eye to track vertically across negative space (REJECTION). Rendering the primary action as dark text on white with only a border (DECISION) maintains material consistency with the form fields above it (EFFECT), deliberately avoiding the high-contrast accent button pattern that would introduce a new visual language just for conversion optimization (REJECTION).",
+      "whatToSteal": [
+        "Filled circle navigation indicators (#b08470) instead of background fills or underlines — creates a portable 'marker' that doesn't depend on container dimensions",
+        "In-field label placement with semi-transparent (#c9bcb0) backgrounds — eliminates vertical gaps while maintaining label-input association through shared container boundaries",
+        "Primary button styled as bordered text matching form field treatment — maintains material coherence across interactive elements rather than introducing hierarchy through color saturation",
+        "Single typographic weight across all UI copy with size-only hierarchy — forces intentional scale relationships and prevents the bold-weight reflex for emphasis"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The 'Send message' button refuses color emphasis, which may reduce scannable affordance for users hunting the submission action after filling multiple fields — the visual similarity to input fields means the call-to-action must be discovered through reading rather than recognized through pattern matching"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Conversational directness without formality markers — drops articles and embraces sentence fragments that mirror speech rhythm",
+        "examples": [
+          "We are here to help",
+          "Your name",
+          "Your email",
+          "Your message"
+        ],
+        "avoid": [
+          "Corporate pleasantries ('We'd love to hear from you!')",
+          "Imperative instructions ('Please enter your name')",
+          "Apologetic hedging ('If you have any questions...')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-24",
+      "title": "Hume",
+      "patternType": "dashboard",
+      "categories": [
+        "dashboard",
+        "navigation",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal",
+        "warm-tactile"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-28-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#3c3c3c",
+          "#ae8470",
+          "#c6b4a6",
+          "#9b7c63",
+          "#504033",
+          "#cbbaae"
+        ],
+        "accentColor": "#9b7c63",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The heading hierarchy relies on weight variation within a single neutral size range rather than dramatic scale jumps — 'Evaluations' and the table headers use similar point sizes but different weights to separate navigation context from data labels. This creates a compressed vertical rhythm that prioritizes data density over dramatic section breaks."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The sidebar icon temperature coding (warm browns #9b7c63/#ae8470 for active/primary tools vs. cooler grays for utility functions) establishes categorical boundaries through hue temperature rather than conventional highlight boxes — this allows the navigation to communicate grouping without adding container weight, rejecting the typical selected-state background rectangle that would compete with the already-present dark sidebar fill. The filter chips maintain persistent fill backgrounds (#c6b4a6) in their default state rather than ghost/outline styling — this decision treats filtering as an applied state layer rather than an action to be taken, making the current view's constraints immediately legible without requiring users to parse chip borders or remember which filters they've toggled. The breadcrumb 'Evaluations' link uses a muted brown tone instead of standard link blue — this keeps navigational wayfinding visually subordinate to the data canvas, rejecting the convention that all clickable text must use high-contrast blue which would pull attention away from the table content itself.",
+      "whatToSteal": [
+        "Temperature-based icon grouping in dark sidebars: use warm tertiaries (#9b7c63 range) for content-manipulation tools and reserve cooler grays for account/settings utilities — this creates semantic categories without adding visual containers or hover states",
+        "Persistent fill styling for active filter chips (#c6b4a6 backgrounds) instead of outline-to-fill on toggle — communicates applied state rather than available action, making the current data view's constraints legible at a glance",
+        "Breadcrumb links in muted accent tones (brown family) rather than primary blue — keeps navigational chrome perceptually recessed behind data content, especially valuable in dashboards where the table/canvas is the primary task surface",
+        "Vertical gap isolation (400-500px) between functional icon groups in fixed sidebars — uses whitespace as a categorical separator without requiring divider lines or section headers, preserving the sidebar's minimal footprint"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The dropdown selects retain full container fills (#cbbaae) that visually compete with the filter chips for background weight — when multiple filled controls appear in close proximity (filters + selects within 80px), they flatten into a single beige mass rather than establishing control-type hierarchy. Using outline or underline styling for the selects would differentiate form inputs from state indicators."
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Functional label economy — uses single-word state labels ('Completed', 'Archived') and property names ('Role', 'Department') without articles or helper text",
+        "examples": [
+          "Evaluations",
+          "In progress",
+          "Completed",
+          "Archived"
+        ],
+        "avoid": [
+          "Explanatory phrases like 'Filter by status' or 'Select a role'",
+          "Conversational framing like 'Your evaluations' or 'View completed items'",
+          "Instructional copy such as 'Choose from the options below'"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-25",
+      "title": "Hume",
+      "patternType": "forms",
+      "categories": [
+        "forms",
+        "navigation"
+      ],
+      "styleTags": [
+        "minimal",
+        "high-contrast"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-29-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#3c3c3c",
+          "#c6b6a8",
+          "#b1816e",
+          "#9a7d64",
+          "#504134",
+          "#cabbae"
+        ],
+        "accentColor": "#3c3c3c",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The condensed serif wordmark establishes a technical, archival tone while occupying minimal horizontal space. Navigation text uses generous line-height (approximately 2.5x the font size) to create discrete, scannable targets without requiring divider lines or visual weight."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The solid-fill input fields reject the conventional outlined/stroke-only approach in favor of tactile shape presence — this makes the interactive zones immediately readable as containers rather than requiring users to parse negative space. The authentication status uses a checkmark character followed by plain text instead of the expected pill-shaped badge — this eliminates visual hierarchy competition with the form itself while maintaining state legibility. The navigation column width stays fixed at approximately 180px rather than expanding to fit content — this creates a predictable left margin that frames the form canvas without adjusting when items change, preventing layout shift during interaction. The placeholder text contrast sits at roughly 1.4:1 against its field background instead of meeting WCAG AA targets — this prioritizes atmospheric cohesion over accessibility mandates, though it risks illegibility for users with limited vision. The corner radius appears at 3-4px rather than the more common 6-8px default — this registers as intentional geometry without becoming a dominant stylistic signature, letting the shape recede behind content.",
+      "whatToSteal": [
+        "Use solid background fills for form fields with only 10-15% brightness separation from the page background — creates defined input zones without harsh contrast jumps, particularly effective when the field color shares undertones with the surrounding palette",
+        "Set navigation line-height to 2.5x the text size when vertical space permits — produces scannable vertical rhythm without requiring dividers, rules, or background hovers to separate targets",
+        "Position authentication state at the navigation column bottom as bare text with a symbol prefix — removes competition for attention with primary actions while keeping status continuously visible",
+        "Use a condensed serif for product wordmarks when horizontal space is constrained — delivers formality and technical credibility while occupying 30-40% less width than regular-width alternatives"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The 'Create API key' button uses a dark fill (#3c3c3c) that matches the body text color exactly, eliminating luminance-based hierarchy — users must rely solely on shape and position to identify the primary action, which fails when scanning quickly or when cognitive load is high"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Technical brevity with operational directness — copy reads as system state and parameter labels rather than conversational guidance",
+        "examples": [
+          "Display name for your API key",
+          "Authenticated",
+          "overview",
+          "documentation"
+        ],
+        "avoid": [
+          "Explanatory help text or inline descriptions",
+          "Action-oriented verbs in navigation labels",
+          "Friendly or welcoming phrasing",
+          "Contextual hints about what to do next"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-26",
+      "title": "Hume",
+      "patternType": "dashboard",
+      "categories": [
+        "dashboard",
+        "navigation",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal",
+        "monochrome"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-30-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#ac8670",
+          "#c6b4a9",
+          "#846c58",
+          "#997965",
+          "#4f3f34",
+          "#cab9af"
+        ],
+        "accentColor": null,
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The serif 'Dashboard' heading establishes content primacy by isolating the single most important label from the sans-serif operational UI around it. Metric values use significantly larger point sizes than their labels, creating a clear read-first hierarchy where the numbers themselves — not what they represent — demand immediate attention."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": false,
+        "usesBorders": true
+      },
+      "critique": "DECISION: Percentage deltas (+12.5%, -2.3%, etc.) render in the same neutral brown as all other text, with no green/red color-coding. EFFECT: Forces users to parse the plus/minus symbol rather than relying on color association, which prevents the scan-and-panic reflex that red numbers trigger in financial contexts. REJECTION: Conventional dashboards use green for gains and red for losses, but that creates emotional volatility and encourages reactive decision-making over thoughtful analysis. DECISION: Border strokes (#997965) match the dominant color palette instead of using neutral grays or blacks. EFFECT: Boundaries feel like part of the content's material rather than applied container chrome, which reduces the perception of 'boxes holding things' in favor of unified surface subdivisions. REJECTION: Standard practice uses #e0e0e0 or similar achromatic borders that visually separate themselves from content, but that creates a scaffolding-vs-content duality this design dissolves. DECISION: Navigation icons receive no hover state color shifts, selected state highlighting, or badge accents. EFFECT: Removes gamification pressure and notification anxiety, treating navigation as a stable reference panel rather than a system demanding interaction. REJECTION: Most dashboards use blue highlights, red badges, and state changes to guide attention, but those patterns train users to scan for alerts rather than think about where they want to go.",
+      "whatToSteal": [
+        "Use serif typography for exactly one element — the primary content label — to create typographic hierarchy without needing weight or size extremes; the style contrast alone signals 'this names what you're looking at' versus 'these are controls'",
+        "Match border colors to content palette rather than using neutral grays; this makes divisions feel like natural seams in a continuous surface instead of imposed container scaffolding, which reduces visual fragmentation",
+        "Render positive and negative metrics in identical neutral tones with only the +/- symbol differentiating them; this prevents color-coded emotional reactions and forces deliberate reading, which is valuable when you want analytical rather than reflexive responses to data",
+        "Deploy monochrome iconography with no state changes or color accents in persistent navigation; this establishes the sidebar as stable reference infrastructure rather than an attention-competing notification panel"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The metric cards use identical visual weight and spacing for all four values, providing no indication of which metrics matter most or how they relate to each other — a user seeing '$24,532' and '1,429' and '87.3%' receives no guidance about whether these are comparable, hierarchical, or independent signals"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Utilitarian labeling with no explanatory or promotional language — every text element names a function or displays a value",
+        "examples": [
+          "Dashboard",
+          "Total Revenue",
+          "Active Users",
+          "Conversion Rate"
+        ],
+        "avoid": [
+          "No celebratory language for positive metrics ('Great job!', 'Keep it up')",
+          "No contextual help text or inline definitions",
+          "No calls-to-action or prompts to explore ('See details', 'Learn more')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-27",
+      "title": "Hume",
+      "patternType": "forms",
+      "categories": [
+        "dashboard",
+        "navigation",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal",
+        "high-contrast"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-31-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#df0b13",
+          "#e3868c",
+          "#b48470",
+          "#8c6c58",
+          "#c4acb4",
+          "#7e060a"
+        ],
+        "accentColor": "#df0b13",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Column headers employ reduced weight and saturation to recede below row content, inverting the typical header-emphasis pattern where bold labels anchor scanning. Task names receive the highest weight in each row, creating a left-aligned vertical rhythm that guides the eye down the primary content column before lateral scanning occurs."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The filled red pill for 'High' priority (DECISION: solid #df0b13 background with white interior text) creates immediate perceptual pop-out through both hue saturation and luminance contrast (EFFECT: high-priority items demand attention without requiring the user to decode icon systems or read text first), rejecting outlined badge conventions that treat all priority levels with equal visual weight (REJECTION: outlined treatments force users to read label text before understanding urgency, adding cognitive load to scanning operations). The icon-only sidebar navigation (DECISION: removing text labels entirely from the primary navigation column) reclaims horizontal space for the data table (EFFECT: reduces the chrome-to-content ratio and allows more table columns to remain visible without horizontal scroll), rejecting the icon-plus-label pattern that accommodates discoverability at the cost of persistent screen real estate (REJECTION: labeled navigation aids first-time users but penalizes every subsequent session with wasted space once mental models form). Avatar photographs in the assignee column (DECISION: photographic circular crops at ~32px without border rings) leverage facial recognition as the fastest human pattern-matching system (EFFECT: assignees become identifiable through peripheral vision during table scanning, faster than reading names), rejecting initial-based avatars or name-only columns that require foveal reading and character decoding (REJECTION: text-based assignee representation forces linear reading where parallel visual processing could operate).",
+      "whatToSteal": [
+        "Reserve saturated accent fills exclusively for the highest-urgency state in any set, using outlined or muted variants for all other levels — this creates a two-tier visual system where critical items trigger pre-attentive pop-out while lower-priority items remain accessible through deliberate scanning",
+        "Reduce column header weight and saturation below body content weight, inverting conventional header emphasis — when headers recede, the eye naturally anchors on data rows first, accelerating the transition from interface orientation to task completion",
+        "Remove text labels from icon navigation after establishing initial mental models, converting the persistent navigation chrome into a minimal index — this trades discoverability (a one-time cost) for permanence (a per-session benefit that compounds across user lifetime)",
+        "Use photographic avatars instead of initials or names in dense table views where the same small set of people appears repeatedly — facial recognition operates faster than character decoding and works through peripheral vision during vertical scanning"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "Column headers use insufficient contrast separation from the white background (appearing as mid-gray on white), making it difficult to distinguish structural labels from empty cells during rapid scanning — the reduced-emphasis strategy works for hierarchy but crosses into illegibility, particularly for users with reduced contrast sensitivity or in high ambient light conditions",
+          "The icon-only navigation provides no hover tooltips or progressive disclosure mechanism visible in the static state, creating a memorization requirement — users who forget icon meanings have no in-context recovery path without clicking, which punishes exploration and creates false starts"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Terse, status-oriented labels that assume domain familiarity",
+        "examples": [
+          "High",
+          "Create Task",
+          "Task",
+          "Status"
+        ],
+        "avoid": [
+          "Explanatory phrases like 'Add a new task to your list'",
+          "Onboarding-oriented language such as 'Get started by...'",
+          "Conversational filler like 'Let's create something'",
+          "Help-oriented qualifiers such as 'Select priority level'"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-28",
+      "title": "Hume",
+      "patternType": "editor-canvas",
+      "categories": [
+        "dashboard",
+        "navigation",
+        "forms"
+      ],
+      "styleTags": [
+        "minimal",
+        "monochrome",
+        "luxury-quiet"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-32-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#727170",
+          "#c9b8b6",
+          "#a6857a",
+          "#92706c",
+          "#4c3a38",
+          "#c6b4b2"
+        ],
+        "accentColor": "#92706c",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The navigation employs sentence case rather than title case, creating a conversational rhythm that reduces visual formality. Vertical spacing between nav items is generous enough (approximately 24-32px) that each label becomes its own discrete target zone, eliminating the need for background fills or divider lines to establish boundaries."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "mixed",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The single-pixel icon strokes (#c9b8b6) paired with darker text (#727170) create a deliberate hierarchy where labels dominate and icons recede into supportive roles—this inverts the icon-first pattern common in app navigation where bold icons compete for attention with text, resulting in cluttered visual weight. The drop shadow beneath the nav panel uses physical elevation rather than border strokes to separate regions, producing depth through light physics instead of the flat divider lines that create harsh compartmentalization. The empty state centers a plus icon above instructional text rather than placing them inline, establishing a top-down reading flow that matches natural scanning behavior instead of the left-aligned, horizontal arrangements that force the eye to zigzag.",
+      "whatToSteal": [
+        "Use single-pixel stroke icons in a lighter value than body text to make navigation labels the primary reading target—icons become wayfinding glyphs rather than competing graphic elements",
+        "Apply sentence case to navigation items when the interface prioritizes approachability over enterprise formality—title case reads as institutional, sentence case as conversational",
+        "Position empty state icons above text in a centered vertical stack to create a single-column reading path—inline arrangements split attention and require more cognitive effort to parse relationships",
+        "Replace border dividers with subtle drop shadows (2-3px offset, low opacity) to separate major regions—shadows communicate spatial depth while borders communicate containment, and depth is less restrictive visually"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The empty state lacks actionable context—'Add a property or collection' assumes the user already understands the data model, but first-time visitors may not know what properties or collections are, why they'd add one, or what happens after they do",
+          "The navigation provides no visual indication of hierarchy or grouping—all items receive identical treatment regardless of whether they're related actions or separate workflows, missing an opportunity to chunk information and reduce cognitive load"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Terse and object-oriented, using technical terminology without explanatory scaffolding",
+        "examples": [
+          "Add a property or collection",
+          "Notifications",
+          "Locations",
+          "Conversations"
+        ],
+        "avoid": [
+          "Conversational prompts like 'Let's get started' or 'What would you like to do?'",
+          "Explanatory help text defining terms or providing usage guidance",
+          "Action-oriented verbs in imperative mood like 'Create your first...' or 'Start by...'"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-29",
+      "title": "Hume",
+      "patternType": "forms",
+      "categories": [
+        "forms",
+        "navigation",
+        "settings"
+      ],
+      "styleTags": [
+        "high-contrast",
+        "technical-mono"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-33-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#11c44f",
+          "#9ce2b7",
+          "#b1816e",
+          "#c1b6a6",
+          "#8c6c58",
+          "#0a7a31"
+        ],
+        "accentColor": "#11c44f",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "The interface establishes hierarchy through position and color rather than weight or size variation — all question text appears in the same size and weight, with only the active navigation item receiving the #11c44f treatment. Radio button labels sit flush left with their controls at identical weight to the question above, collapsing the traditional label-control distinction."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "slight-round",
+        "usesShadows": true,
+        "usesBorders": true
+      },
+      "critique": "The numeric navigation step indicators use state-dependent color (#11c44f for active, muted for inactive) as the sole differentiator, rejecting icons, background fills, or size changes that would add visual noise to the progression system — this allows users to track position through a single chromatic signal. The chevron symbols in #9ce2b7 create a 40% saturation drop from the active #11c44f state, establishing a three-tier hierarchy (active/inactive-but-accessible/dormant) without introducing a fourth hue — this keeps the palette constrained while maintaining perceptual distance between states. The form pairs radio buttons with unindented, same-weight labels that sit directly beneath the control rather than inline or right-aligned, rejecting the horizontal association pattern — this creates vertical scanning efficiency when option text varies in length.",
+      "whatToSteal": [
+        "Numeric step indicators that use only chromatic intensity (#11c44f vs muted) to signal active state — eliminates the need for background shapes, size changes, or iconography in progress systems with 6+ steps",
+        "Desaturated navigation affordances (#9ce2b7 chevrons at 40% less saturation than active state) that share hue family with the accent color — creates perceptual relatedness without competing for attention with the primary action signal",
+        "Radio button labels placed as block-level text below the control rather than inline — optimizes for variable-length option text by allowing each choice to consume vertical space proportionally without misaligning subsequent controls",
+        "Fixed 240px navigation width with 16px inter-item spacing that accommodates two-digit numbers, full-word labels, and chevron symbols without wrapping — provides predictable sidebar real estate that never reflows during interaction"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The question text 'Are you currently pregnant?' treats the keyword 'pregnant' with no typographic differentiation — when questions contain domain-specific or legally significant terms, identical styling obscures semantic importance and makes scanning for key concepts impossible",
+          "The transition from question 8 to question 9 in the sidebar shows no visual separation beyond the uniform 16px gap used throughout — final steps or sections that represent submission or summary deserve boundary treatment to signal cognitive shift"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Clinical and transaction-focused, using direct questions with medical terminology ('pregnant') and demographic categories ('Prefer not to answer') without softening phrases or contextual framing.",
+        "examples": [
+          "Are you currently pregnant?",
+          "Prefer not to answer"
+        ],
+        "avoid": [
+          "Conversational hedging ('We'd like to know...')",
+          "Apologetic framing ('If you're comfortable sharing...')",
+          "Explanatory preambles before questions"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
+    },
+    {
+      "id": "hume-hume-30",
+      "title": "Hume",
+      "patternType": "dashboard",
+      "categories": [
+        "dashboard",
+        "navigation"
+      ],
+      "styleTags": [
+        "minimal",
+        "soft-neumorphic",
+        "warm-tactile"
+      ],
+      "source": {
+        "productName": "Hume",
+        "url": null,
+        "capturedAt": "2026-07-04",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": "images-private/hume-ai-web-apr-2026-35-4.png",
+        "width": 1920,
+        "height": 1200
+      },
+      "visual": {
+        "dominantColors": [
+          "#4c3b35",
+          "#d6bea5",
+          "#cd621b",
+          "#9d6d90",
+          "#a2acf4",
+          "#75380f"
+        ],
+        "accentColor": "#a2acf4",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Hierarchy emerges through stark size contrast rather than weight variation — large numeric displays (revenue figures, user counts) dominate their cards while supporting labels remain small and understated. No bold weights or font-family switching appear anywhere, forcing the eye to navigate by scale and spatial grouping alone."
+        },
+        "spacingDensity": "spacious",
+        "cornerStyle": "mixed",
+        "usesShadows": true,
+        "usesBorders": false
+      },
+      "critique": "The single-color active state (#cd621b on the Journal icon) creates selection feedback through hue shift rather than background fill or weight change — this preserves the sidebar's vertical rhythm and prevents the rectangular highlight blocks that would compete with the card-based main canvas. The borderless shadow treatment on metric cards (visible drop shadows with no strokes against #d6bea5) achieves container separation through implied light source rather than graphic division — this avoids the hard-edged grid that would conflict with the soft neumorphic intention signaled by the shadows themselves. The +12% value rendered in #a2acf4 establishes a color-coding system for data polarity without requiring icon ornaments or background badges — this rejects the common pattern of wrapping deltas in colored pills, which would add visual weight and break the numeric-first scanning pattern the cards establish.",
+      "whatToSteal": [
+        "Active navigation state through icon-only color shift (#cd621b vs #4c3b35) while keeping label weight and background unchanged — preserves vertical rhythm and avoids the rectangular highlight blocks that disrupt sidebar unity",
+        "Drop shadows without border strokes on card containers against a warm neutral field (#d6bea5) — separates content zones through implied elevation rather than graphic lines, maintaining the soft tactile quality that borders would undermine",
+        "Percentage deltas color-coded directly as numerals (#a2acf4 for positive movement) without pill backgrounds or icon prefixes — communicates polarity through type color alone, keeping metric cards visually spare and scan-friendly",
+        "Spacious inter-card spacing (24-32px grid gaps) that treats each metric as an isolated scannable object rather than tightly packing information — rejects the dense dashboard pattern where cards touch or nearly touch, improving individual metric legibility at the cost of information density"
+      ],
+      "antiPatterns": {
+        "antiPatterns": [
+          "The navigation labels ('Dashboard', 'Journal', 'Customers') use identical type treatment regardless of selection state, forcing complete reliance on icon color to communicate active page — users scanning text-first will find no typographic cue (no weight change, no size shift, no color difference in the labels themselves) to confirm their location"
+        ],
+        "whereThisFails": [],
+        "accessibilityRisks": []
+      },
+      "layout": {
+        "form": "two-column",
+        "regions": [
+          {
+            "role": "primary-nav",
+            "width": "fixed-narrow"
+          },
+          {
+            "role": "main-canvas",
+            "width": "flex"
+          }
+        ]
+      },
+      "voice": {
+        "tone": "Utilitarian label economy — labels are terse category names ('Revenue', 'Total Users', 'Dashboard', 'Customers') with no conversational softening or explanatory phrasing",
+        "examples": [
+          "Revenue",
+          "Total Users",
+          "Dashboard",
+          "Journal"
+        ],
+        "avoid": [
+          "Friendly explainers ('Here's your revenue', 'Check out your users')",
+          "Metric elaboration ('Monthly Recurring Revenue', 'Active User Count')",
+          "Action-oriented prompts ('View Dashboard', 'Manage Customers')"
+        ]
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-07-04"
     }
   ]
 }

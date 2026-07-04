@@ -295,6 +295,21 @@ export const CorpusEntry = z.object({
    * Optional + defaults to "approved" so existing entries need no migration.
    */
   reviewStatus: z.enum(["draft", "approved"]).optional().default("approved"),
+
+  /**
+   * Provenance — who produced the structured fields, and (optionally) who
+   * reviewed them. Lets you tell which entries were rubber-stamped from the
+   * tagger vs actually reviewed — essential for drift detection and if a second
+   * curator joins. Optional + defaults so existing entries need no migration:
+   *   - "auto"           : tagger produced the fields, no human review yet
+   *   - "auto-reviewed"  : tagger produced, a human reviewed/edited
+   *   - "human"          : a human wrote every field by hand (no tagger)
+   * reviewedBy captures the reviewer's name/handle when set.
+   */
+  provenance: z.object({
+    taggedBy: z.enum(["human", "auto", "auto-reviewed"]),
+    reviewedBy: z.string().optional(),
+  }).optional(),
 });
 
 export type CorpusEntryT = z.infer<typeof CorpusEntry>;

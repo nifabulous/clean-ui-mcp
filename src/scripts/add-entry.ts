@@ -347,6 +347,7 @@ const newEntry: CorpusEntryT = {
   qualityTier: "exceptional",
   qualityScore,
   reviewStatus: "approved", // terminal CLI path — entries land approved; drafts are a UI workflow
+  provenance: { taggedBy: "human" }, // terminal CLI = human-authored fields
   addedAt: today,
 };
 

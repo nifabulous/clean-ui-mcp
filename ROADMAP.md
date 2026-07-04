@@ -34,6 +34,10 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
 - `findSimilarEntries` excludes drafts (a draft shouldn't surface as "similar to")
 - Curator UI: review-state toggle in the form, draft chip in list + detail
 - Properly separates content hygiene ([DRAFT] marker gate) from workflow state
+- `provenance: { taggedBy: human|auto|auto-reviewed, reviewedBy? }` — tracks how
+  fields were produced. Tagger marks `auto`; PUT handler flips to `auto-reviewed`
+  on human edit; CLI marks `human`. corpus-stats surfaces the split. Optional,
+  defaults absent (existing entries show as "unknown" — no migration).
 
 ### MCP tools (12)
 - `search_ui_examples` — vector/keyword search with qualityTier filter
@@ -95,18 +99,6 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
 
 The corpus has crossed the density thresholds several deferred items needed.
 
-### Provenance field
-```ts
-provenance: z.object({
-  taggedBy: z.enum(["human", "auto", "auto-reviewed"]),
-  reviewedBy: z.string().optional(),
-}).optional()
-```
-With 426 entries, you've lost track of which were rubber-stamped from the tagger
-vs actually reviewed. Cheap to add now (backfill all existing as
-`"auto-reviewed"`), expensive to reconstruct later. Especially matters for drift
-detection and if a second curator joins.
-
 ### Anti-pattern quality lint at validation time
 `corpus-stats` has a reporting-only vague-phrase lint. Promote it to a
 validation-time gate (separate from the critique banned-phrase list) so generic
@@ -135,6 +127,14 @@ The bulk-import flow has screenshots, drafts, entries, snapshots, and the dedup
 cache loosely coordinated. Stage a batch with a manifest, then commit the batch
 atomically after validation. Deferred from the recovery cluster — it's a workflow
 redesign that deserves focused attention.
+
+### Split index-2.html into modules
+The curator dashboard is 1931 lines — CSS (~428) + HTML shell + JS (~1400, 45
+functions). Past the point where a single file is navigable. Split into:
+`ui/styles.css`, `ui/app.js` (or smaller ES modules), served as separate files
+by the UI server. Reduces review friction and lets each concern (form, bulk
+import, stats, recovery) be edited independently. Mechanical refactor — no
+behavior change — but needs the UI server to serve static assets.
 
 ### Seed / private corpus split
 The repo mixes shareable seed metadata with local private curation. Make it

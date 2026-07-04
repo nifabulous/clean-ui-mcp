@@ -138,6 +138,7 @@ export interface TaggerOutput {
   qualityTier:     string;
   qualityScore:    number;
   addedAt:         string;
+  provenance?:     { taggedBy: "human" | "auto" | "auto-reviewed"; reviewedBy?: string };
   _raw?: Record<string, unknown>;
 }
 
@@ -826,6 +827,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       qualityTier:     "exceptional",
       qualityScore:    3,
       addedAt:         today,
+      provenance:      { taggedBy: "auto" }, // tagger produced; flips to auto-reviewed when a human edits+approves
       _raw: {
         extractionProvider: resolveProvider("extraction"),
         critiqueProvider: null,
@@ -919,6 +921,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     qualityTier:     critique.qualityTier,
     qualityScore:    critique.qualityTier === "cautionary" ? 2 : 3,
     addedAt:         today,
+    provenance:      { taggedBy: "auto" }, // two-pass tagger output; human review flips to auto-reviewed
     _raw: {
       extractionProvider: resolveProvider("extraction"),
       critiqueProvider: resolveProvider("critique"),

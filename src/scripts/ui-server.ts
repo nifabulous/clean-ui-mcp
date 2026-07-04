@@ -856,6 +856,13 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
           sendJson(res, 400, { error: "Entry id cannot be changed during update" });
           return;
         }
+        // Provenance flip: a human editing an auto-tagged entry upgrades it to
+        // "auto-reviewed" (the tagger produced the draft, a human approved the
+        // edits). Don't downgrade an already-human or already-reviewed entry.
+        const prior = entries[index];
+        if (prior && prior.provenance?.taggedBy === "auto") {
+          entry.provenance = { taggedBy: "auto-reviewed", reviewedBy: entry.provenance?.reviewedBy };
+        }
         entries[index] = entry;
         saveEntries(entries);
         sendJson(res, 200, { entry });

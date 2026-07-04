@@ -180,4 +180,37 @@ describe("corpus schema", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("defaults reviewStatus to 'approved' when omitted", () => {
+    const result = CorpusEntry.safeParse(validEntry);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.reviewStatus).toBe("approved");
+  });
+
+  it("round-trips an explicit reviewStatus: 'draft'", () => {
+    const result = CorpusEntry.safeParse({ ...validEntry, reviewStatus: "draft" });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.reviewStatus).toBe("draft");
+  });
+
+  it("round-trips provenance with all three taggedBy values", () => {
+    for (const taggedBy of ["human", "auto", "auto-reviewed"] as const) {
+      const result = CorpusEntry.safeParse({ ...validEntry, provenance: { taggedBy } });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.provenance?.taggedBy).toBe(taggedBy);
+    }
+  });
+
+  it("accepts provenance.reviewedBy as an optional name", () => {
+    const result = CorpusEntry.safeParse({ ...validEntry, provenance: { taggedBy: "auto-reviewed", reviewedBy: "nifabulous" } });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.provenance?.reviewedBy).toBe("nifabulous");
+  });
+
+  it("treats entries without provenance as valid (backward-compat, no migration)", () => {
+    // Existing entries have no provenance field — they must still validate.
+    const result = CorpusEntry.safeParse(validEntry);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.provenance).toBeUndefined();
+  });
 });

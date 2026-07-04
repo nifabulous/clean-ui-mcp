@@ -42,6 +42,8 @@ interface Entry {
   categories?: string[];
   styleTags?: string[];
   qualityTier?: string;
+  reviewStatus?: string;
+  provenance?: { taggedBy?: string; reviewedBy?: string };
   source?: { productName?: string; lastVerified?: string; capturedAt?: string };
   antiPatterns?: { antiPatterns?: string[] };
   image?: { visibility?: string; path?: string | null; width?: number | null; height?: number | null };
@@ -143,6 +145,13 @@ const withImage = entries.filter((e) => !!e.image?.path).length;
 const critiqueLengths = entries.map((e) => (e.critique ?? "").length).filter((n) => n > 0);
 const avgCritiqueLength = critiqueLengths.length ? Math.round(critiqueLengths.reduce((a, b) => a + b, 0) / critiqueLengths.length) : 0;
 
+// ── provenance split (how much was auto-tagged vs human-authored vs reviewed) ─
+const provenanceCounts = countBy(entries, (e) => {
+  const t = e.provenance?.taggedBy;
+  return t ? [t] : ["unknown"]; // pre-field entries have no provenance
+});
+const draftCount = entries.filter((e) => e.reviewStatus === "draft").length;
+
 const report = {
   totalEntries: entries.length,
   distribution: { patternType: patternTypeCounts, categories: categoryCounts, styleTags: styleTagCounts, qualityTier: qualityTierCounts, product: productCounts },
@@ -157,6 +166,7 @@ const report = {
     imageAvailability: entries.length ? Math.round((withImage / entries.length) * 100) : 0,
     avgCritiqueLength,
   },
+  provenance: { taggedBy: provenanceCounts, drafts: draftCount },
 };
 
 if (asJson) {
@@ -214,6 +224,9 @@ if (asJson) {
   console.log(`  layout:  ${report.quality.layoutCoverage}% have layout.form`);
   console.log(`  images:  ${report.quality.imageAvailability}% have an image path`);
   console.log(`  critique: avg ${report.quality.avgCritiqueLength} chars`);
+  if (report.provenance.drafts) console.log(`  drafts:  ${report.provenance.drafts} hidden from MCP search`);
+  console.log(`\n  provenance (how the fields were produced):`);
+  Object.entries(provenanceCounts).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => console.log(`    ${k.padEnd(24)}${v}`));
   console.log(`\n  top products:`);
   Object.entries(productCounts).sort((a, b) => b[1] - a[1]).slice(0, 10).forEach(([k, v]) => console.log(`    ${k.padEnd(24)}${v}`));
   hr();

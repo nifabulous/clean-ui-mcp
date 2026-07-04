@@ -13,3 +13,8 @@ corpus/images-private/*
 
 # Derived — regenerate with `npm run build-index`
 corpus/embeddings.json
+# Derived — dHash fingerprint cache, rebuilt by the curator UI at runtime
+corpus/.dhash-cache.json
+# Durability — rolling snapshots of entries.json, written on every UI save.
+# Gitignored because they're large, derivable, and purely a local safety net.
+corpus/.snapshots/

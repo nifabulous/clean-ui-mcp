@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { toCorpusRelativePath } from "./paths.js";
 import { Vibrant } from "node-vibrant/node";
+import sharp from "sharp";
 
 // ─── vocab (mirrors schema.ts — keep in sync) ─────────────────────────────────
 
@@ -66,6 +67,18 @@ export interface TaggerInput {
   productName: string;
   url?:        string | null;
   id?:         string;
+  /**
+   * Image fidelity for the vision pass. "high" (default) = best extraction.
+   * "low" = cheapest; the adaptive path re-runs at "high" only when "low"
+   * produced a weak result. Bulk imports pass "low" to cut token cost.
+   */
+  imageDetail?: "low" | "high";
+  /**
+   * Run only Pass 1 (extraction). Critique/steals/antiPatterns come back as
+   * [DRAFT — critique deferred] placeholders; the client runs Pass 2 later via
+   * /api/auto-critique. Halves per-image cost for bulk batches.
+   */
+  extractionOnly?: boolean;
 }
 
 export interface TaggerOutput {
@@ -219,15 +232,26 @@ function buildExtractionPrompt(
   url: string | null | undefined,
   quantizedColors: string[],
 ): string {
-  const source = url ? `${productName} (${url})` : `${productName} (uploaded screenshot; no source URL provided)`;
-  return `Analyse this screenshot of ${source} and return a JSON object with exactly these fields.
+  // When no product name was supplied, ask the model to read it off the page
+  // (wordmark/logo/branding are almost always visible). Empty name must NOT
+  // block import — the upload already happened; gating on a manual field wastes
+  // that work. The model fills `productName` below; we use it in pass 2 + output.
+  const supplied = (productName || "").trim();
+  const lead = supplied
+    ? `Analyse this screenshot of ${url ? `${supplied} (${url})` : `${supplied} (uploaded screenshot; no source URL provided)`}.`
+    : `Analyse this screenshot. No product name was supplied — identify the product from its wordmark / logo / branding and put it in the \`productName\` field. If genuinely unidentifiable, use "Untitled".${url ? ` Source URL for context: ${url}` : ""}`;
+  const nameField = supplied
+    ? ""
+    : `  "productName": "",       // the product name read from the page (wordmark/logo). Required when no name was supplied.\n`;
+  return `${lead}
+Return a JSON object with exactly these fields.
 This is an EXTRACTION pass — factual/structural fields only, no critique yet.
 
 VERIFIED GROUND TRUTH — treat every value below as fact, do not re-derive or contradict it:
 ${JSON.stringify({ quantizedColors }, null, 2)}
 
 {
-  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
+${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
   "categories": [],        // 1-3 from: ${CATEGORIES.join(", ")}
   "styleTags": [],         // 1-3 from: ${STYLE_TAGS.join(", ")}
   "dominantColors": [],    // copy from quantizedColors verbatim — do not invent hex values not in that list
@@ -430,20 +454,45 @@ function validateNoBannedPhrases(obj: Record<string, unknown>): string[] {
 
 // ─── model call helpers (multi-provider) ─────────────────────────────────────
 
+/**
+ * Read an image as base64, honoring the detail level.
+ *
+ * - detail "high": raw bytes (provider downsamples per its own tiling). Most
+ *   accurate, most tokens.
+ * - detail "low": pre-resize to 512px on the long edge via sharp before
+ *   base64. OpenAI's `detail:"low"` does this server-side anyway; for Claude
+ *   and Gemini (no detail knob) this is how "low" actually saves tokens —
+ *   a 1920×1200 PNG drops from ~600KB to ~30KB, roughly 20× fewer bytes.
+ *
+ * Returns { data, mimeType }. mimeType reflects the source (no re-encoding).
+ */
+async function readImageForDetail(
+  imagePath: string,
+  detail: "low" | "high",
+): Promise<{ data: string; mimeType: string }> {
+  const ext = extname(imagePath).toLowerCase();
+  const mimeType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
+  if (detail === "high") {
+    return { data: readFileSync(imagePath).toString("base64"), mimeType };
+  }
+  // low: downscale to 512px long edge, keep format. Sharp handles png/jpeg/webp.
+  const buf = await sharp(imagePath).resize(512, 512, { fit: "inside", withoutEnlargement: true }).toBuffer();
+  return { data: buf.toString("base64"), mimeType };
+}
+
 async function callOpenAI(
   prompt: string,
   imagePath: string | null,
   retryFeedback?: string,
+  detail: "low" | "high" = "high",
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
   const userContent: Array<Record<string, unknown>> = [{ type: "input_text", text: prompt }];
   if (imagePath) {
-    const ext = extname(imagePath).toLowerCase();
-    const mimeType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
-    const imageData = readFileSync(imagePath).toString("base64");
-    userContent.push({ type: "input_image", image_url: `data:${mimeType};base64,${imageData}`, detail: "high" });
+    const { data: imageData, mimeType } = await readImageForDetail(imagePath, detail);
+    userContent.push({ type: "input_image", image_url: `data:${mimeType};base64,${imageData}`, detail });
   }
 
   const response = await fetch(OPENAI_RESPONSES_API, {
@@ -476,16 +525,16 @@ async function callClaude(
   prompt: string,
   imagePath: string | null,
   retryFeedback?: string,
+  detail: "low" | "high" = "high",
 ): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
-  // Claude content blocks: image uses raw base64 (no data-URI prefix).
+  // Claude content blocks: image uses raw base64 (no data-URI prefix). Claude
+  // has no detail knob, so "low" pre-resizes via sharp to cut token count.
   const content: Array<Record<string, unknown>> = [];
   if (imagePath) {
-    const ext = extname(imagePath).toLowerCase();
-    const mediaType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
-    const imageData = readFileSync(imagePath).toString("base64");
+    const { data: imageData, mimeType: mediaType } = await readImageForDetail(imagePath, detail);
     content.push({ type: "image", source: { type: "base64", media_type: mediaType, data: imageData } });
   }
   content.push({ type: "text", text: prompt });
@@ -518,16 +567,16 @@ async function callGemini(
   prompt: string,
   imagePath: string | null,
   retryFeedback?: string,
+  detail: "low" | "high" = "high",
 ): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not set");
 
-  // Gemini parts: inlineData uses raw base64 (no prefix), camelCase.
+  // Gemini parts: inlineData uses raw base64 (no prefix), camelCase. Like
+  // Claude, no detail knob — "low" pre-resizes via sharp to cut token count.
   const parts: Array<Record<string, unknown>> = [];
   if (imagePath) {
-    const ext = extname(imagePath).toLowerCase();
-    const mimeType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
-    const imageData = readFileSync(imagePath).toString("base64");
+    const { data: imageData, mimeType } = await readImageForDetail(imagePath, detail);
     parts.push({ inlineData: { mimeType, data: imageData } });
   }
   parts.push({ text: prompt });
@@ -559,12 +608,13 @@ async function callModel(
   prompt: string,
   imagePath: string | null,
   retryFeedback?: string,
+  detail: "low" | "high" = "high",
 ): Promise<string> {
   const provider = resolveProvider(pass);
   switch (provider) {
-    case "claude":  return callClaude(prompt, imagePath, retryFeedback);
-    case "gemini":  return callGemini(prompt, imagePath, retryFeedback);
-    default:        return callOpenAI(prompt, imagePath, retryFeedback);
+    case "claude":  return callClaude(prompt, imagePath, retryFeedback, detail);
+    case "gemini":  return callGemini(prompt, imagePath, retryFeedback, detail);
+    default:        return callOpenAI(prompt, imagePath, retryFeedback, detail);
   }
 }
 
@@ -575,8 +625,6 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
 
   const corpusPath = toCorpusRelativePath(input.imagePath);
   const today = new Date().toISOString().slice(0, 10);
-  const autoId = input.id
-    ?? `${input.productName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}-${today}`;
 
   // ── Deterministic color extraction (code-level, not model-guessed) ─────────
   let quantizedColors: string[] = [];
@@ -587,21 +635,48 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   }
 
   // ── PASS 1: extraction (facts + geometry, with ground-truth colors) ────────
-  const extractionRawText = await callModel(
-    "extraction",
-    buildExtractionPrompt(input.productName, input.url, quantizedColors),
-    input.imagePath,
-  );
+  // Adaptive detail: bulk imports pass imageDetail:"low" to cut tokens. If the
+  // low-detail result is weak (blank patternType, "Untitled" name, no
+  // categories), re-run at "high" — pays for fidelity only when it's needed.
+  const requestedDetail: "low" | "high" = input.imageDetail === "low" ? "low" : "high";
 
   // Some providers (Claude) wrap JSON in markdown fences — strip them before parsing.
   const stripFences = (s: string) => s.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const parseExtraction = (text: string): Record<string, unknown> => {
+    try { return JSON.parse(stripFences(text)); }
+    catch { throw new Error(`Pass 1 (extraction) returned non-JSON:\n${text}`); }
+  };
 
-  let extractionParsed: Record<string, unknown>;
-  try {
-    extractionParsed = JSON.parse(stripFences(extractionRawText));
-  } catch {
-    throw new Error(`Pass 1 (extraction) returned non-JSON:\n${extractionRawText}`);
+  let extractionRawText = await callModel(
+    "extraction",
+    buildExtractionPrompt(input.productName, input.url, quantizedColors),
+    input.imagePath,
+    undefined,
+    requestedDetail,
+  );
+  let extractionParsed = parseExtraction(extractionRawText);
+
+  // Adaptive re-run: if we asked for low and the model clearly couldn't read the
+  // page, retry once at high. Weak = patternType defaulted AND name came back
+  // Untitled AND no categories. (Colors are deterministic, so they don't count.)
+  if (requestedDetail === "low") {
+    const probe = sanitizeTaggerPayload(extractionParsed);
+    const probeName = (typeof extractionParsed.productName === "string" ? extractionParsed.productName.trim() : "");
+    const weak = (!probe.patternType || probe.patternType === "dashboard")
+      && (!probe.categories.length)
+      && (!probeName || probeName.toLowerCase() === "untitled");
+    if (weak) {
+      extractionRawText = await callModel(
+        "extraction",
+        buildExtractionPrompt(input.productName, input.url, quantizedColors),
+        input.imagePath,
+        undefined,
+        "high",
+      );
+      extractionParsed = parseExtraction(extractionRawText);
+    }
   }
+
   const extraction = sanitizeTaggerPayload(extractionParsed);
   // Override dominantColors with the ground-truth quantized set when available,
   // so even if the model ignored instructions, we get deterministic colors.
@@ -609,12 +684,85 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     extraction.dominantColors = quantizedColors;
   }
 
+  // ── Resolve the effective product name ───────────────────────────────────
+  // If the caller supplied one, use it verbatim. Otherwise take the name the
+  // model read off the page (Pass 1 fills `productName` when none was supplied).
+  // This lets bulk/single import run with no manual name — the upload is the
+  // expensive part; a missing name must not block it.
+  const suppliedName = (input.productName || "").trim();
+  const inferredName = typeof extractionParsed.productName === "string"
+    ? extractionParsed.productName.trim()
+    : "";
+  const effectiveName = suppliedName || inferredName || "Untitled";
+  const autoId = input.id
+    ?? `${effectiveName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}-${today}`;
+
+  // ── extractionOnly: skip Pass 2 entirely. Bulk imports use this to defer the
+  // critique pass (a full text-only model call per image) until the user
+  // explicitly asks for it via /api/auto-critique. Halves per-image cost.
+  // The critique fields come back as [DRAFT — critique deferred] placeholders,
+  // which the validator's draft-marker gate blocks from committing — so a
+  // deferred row can be staged but not saved until critique runs.
+  if (input.extractionOnly) {
+    return {
+      id:         autoId,
+      title:      `${effectiveName} — (add descriptive subtitle)`,
+      patternType: extraction.patternType,
+      categories: extraction.categories,
+      styleTags:  extraction.styleTags,
+      source: {
+        productName: effectiveName,
+        url:         input.url ?? null,
+        capturedAt:  today,
+        capturedBy:  "self",
+      },
+      image: {
+        visibility: "private",
+        path:       corpusPath,
+        width:      null,
+        height:     null,
+      },
+      visual: {
+        dominantColors: extraction.dominantColors,
+        accentColor:    extraction.accentColor,
+        colorRoles:     extraction.colorRoles,
+        typePairing: { display: extraction.displayFont, body: extraction.bodyFont, notes: extraction.typographyNotes || "" },
+        spacingDensity: extraction.spacingDensity,
+        cornerStyle:    extraction.cornerStyle,
+        usesShadows:    extraction.usesShadows,
+        usesBorders:    extraction.usesBorders,
+      },
+      critique:        "[DRAFT — critique deferred] Run 'Generate critique' to draft this.",
+      whatToSteal:     ["[DRAFT — critique deferred]"],
+      antiPatterns: {
+        antiPatterns:       ["[DRAFT — critique deferred]"],
+        whereThisFails:     [],
+        accessibilityRisks: [],
+      },
+      layout:          extraction.layout,
+      voice:           undefined,
+      qualityTier:     "exceptional",
+      qualityScore:    3,
+      addedAt:         today,
+      _raw: {
+        extractionProvider: resolveProvider("extraction"),
+        critiqueProvider: null,
+        extractionModel: activeModelName("extraction"),
+        critiqueModel: null,
+        extraction: extractionParsed,
+        critique: null,
+        quantizedColors,
+        extractionOnly: true,
+      },
+    };
+  }
+
   // ── PASS 2: critique (judgment, fed validated extraction as fact) ──────────
   // Pass 2 is text-only — the model reasons from the validated extraction, not
   // by re-looking at pixels. This is the spec's core architecture choice.
   let critiqueRawText = await callModel(
     "critique",
-    buildCritiquePrompt(input.productName, extractionParsed),
+    buildCritiquePrompt(effectiveName, extractionParsed),
     null, // no image — pure reasoning from facts
   );
 
@@ -632,7 +780,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${bannedErrors.join("\n")}`;
     const retryText = await callModel(
       "critique",
-      buildCritiquePrompt(input.productName, extractionParsed),
+      buildCritiquePrompt(effectiveName, extractionParsed),
       null,
       feedback,
     );
@@ -647,12 +795,12 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   // ── Merge passes into TaggerOutput ─────────────────────────────────────────
   return {
     id:         autoId,
-    title:      `${input.productName} — (add descriptive subtitle)`,
+    title:      `${effectiveName} — (add descriptive subtitle)`,
     patternType: extraction.patternType,
     categories: extraction.categories,
     styleTags:  extraction.styleTags,
     source: {
-      productName: input.productName,
+      productName: effectiveName,
       url:         input.url ?? null,
       capturedAt:  today,
       capturedBy:  "self",
@@ -698,5 +846,61 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       critique: critiqueParsed,
       quantizedColors,
     },
+  };
+}
+
+/**
+ * Deferred Pass 2 (critique only). Used by /api/auto-critique to fill in the
+ * critique/steals/antiPatterns on a row that was staged extraction-only.
+ *
+ * Takes the already-validated extraction object (the `_raw.extraction` from a
+ * prior tagImage call) plus the product name, runs Pass 2 + the banned-phrase
+ * retry, and returns just the critique-shaped fields to merge onto the entry.
+ * No image is re-sent — Pass 2 reasons from facts.
+ */
+export async function generateCritique(
+  productName: string,
+  extractionParsed: Record<string, unknown>,
+): Promise<{
+  critique: string;
+  whatToSteal: string[];
+  antiPatterns: { antiPatterns: string[]; whereThisFails: string[]; accessibilityRisks: string[] };
+  voice?: { tone: string; examples: string[]; avoid: string[] };
+  qualityTier: string;
+  qualityScore: number;
+  typographyNotes: string;
+}> {
+  if (!hasVisionKey()) throw new Error("No vision provider key set. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY in .env.");
+  const stripFences = (s: string) => s.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+
+  let critiqueRawText = await callModel(
+    "critique",
+    buildCritiquePrompt(productName, extractionParsed),
+    null,
+  );
+  let critiqueParsed: Record<string, unknown>;
+  try { critiqueParsed = JSON.parse(stripFences(critiqueRawText)); }
+  catch { throw new Error(`Pass 2 (critique) returned non-JSON:\n${critiqueRawText}`); }
+  let critique = sanitizeTaggerPayload(critiqueParsed);
+
+  const bannedErrors = validateNoBannedPhrases(critiqueParsed);
+  if (bannedErrors.length > 0) {
+    const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${bannedErrors.join("\n")}`;
+    const retryText = await callModel("critique", buildCritiquePrompt(productName, extractionParsed), null, feedback);
+    try { critiqueParsed = JSON.parse(stripFences(retryText)); critique = sanitizeTaggerPayload(critiqueParsed); } catch { /* keep flagged original */ }
+  }
+
+  return {
+    critique: `[DRAFT — REWRITE] ${critique.draftCritique}`,
+    whatToSteal: critique.draftWhatToSteal.map((t) => `[DRAFT] ${t}`),
+    antiPatterns: {
+      antiPatterns: critique.draftAntiPatterns.map((t) => `[DRAFT] ${t}`),
+      whereThisFails: [],
+      accessibilityRisks: [],
+    },
+    voice: critique.voice,
+    qualityTier: critique.qualityTier,
+    qualityScore: critique.qualityTier === "cautionary" ? 2 : 3,
+    typographyNotes: critique.typographyNotes || "",
   };
 }

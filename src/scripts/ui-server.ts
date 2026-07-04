@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import "../env.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +11,7 @@ import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, toCorpusRelativePath } from "../paths.js";
-import { tagImage } from "../tagger.js";
+import { tagImage, generateCritique } from "../tagger.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
 
 const PORT = Number(process.env.CLEAN_UI_PORT ?? 3131);
@@ -56,17 +56,180 @@ function hammingDistance(a: string, b: string): number {
   return count;
 }
 
-const DHASH_THRESHOLD = 12; // <12 bits different out of 64 = near-duplicate
+// <8 bits different out of 64 = near-duplicate. Tuned from corpus data: the
+// median distance between random pairs is ~25, and genuine same-shot variants
+// (recompression, tiny crops) cluster at 0–7. 8–11 was catching same-*page*
+// shots that differ by scroll/layout — too loose, caused false positives. The
+// prior "same dimensions" fallback (Level 3) was removed for the same reason.
+const DHASH_THRESHOLD = 8;
+
+// ─── durability: atomic writes + rolling snapshots ──────────────────────────
+// Why this exists: a single `git checkout -- entries.json` or a buggy overwrite
+// used to be enough to lose every entry the UI had committed but not yet pushed.
+// The fixes below make that class of loss recoverable WITHOUT a database:
+//   1. Atomic write: serialize to a temp file, fs.rename over the real one. A
+//      crash mid-write (or a half-written buffer) leaves the prior file intact.
+//   2. Rolling snapshots: every save also keeps the last N versions plus a
+//      timestamped copy in corpus/.snapshots/ (gitignored). loadEntries falls
+//      back to the newest snapshot if the primary file is missing or corrupt,
+//      so a bad overwrite or a destructive git command is fully recoverable.
+const SNAPSHOT_DIR = resolve(CORPUS_ROOT, ".snapshots");
+const SNAPSHOT_KEEP = 20; // keep the 20 most recent timestamped snapshots
+
+/** Return snapshot paths newest-first (by mtime), or [] if none. */
+function listSnapshots(): string[] {
+  try {
+    return readdirSync(SNAPSHOT_DIR)
+      .filter((f) => /^entries-\d+\.json$/.test(f))
+      .map((f) => resolve(SNAPSHOT_DIR, f))
+      .sort((a, b) => {
+        // entries-<epoch>.json — sort by the embedded epoch, desc.
+        const ta = Number(a.match(/entries-(\d+)\.json$/)?.[1] ?? 0);
+        const tb = Number(b.match(/entries-(\d+)\.json$/)?.[1] ?? 0);
+        return tb - ta;
+      });
+  } catch { return []; }
+}
+
+/** Parse a JSON corpus file, or null if missing/corrupt/unparseable. */
+function tryReadCorpus(path: string): CorpusEntryT[] | null {
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8"));
+    return Corpus.parse(raw).entries;
+  } catch { return null; }
+}
 
 function loadEntries(): CorpusEntryT[] {
-  const raw = JSON.parse(readFileSync(ENTRIES_PATH, "utf-8"));
-  return Corpus.parse(raw).entries;
+  // Primary file first.
+  const primary = tryReadCorpus(ENTRIES_PATH);
+  if (primary) return primary;
+  // Primary missing/corrupt — fall back to the newest snapshot so the workbench
+  // stays usable and committed data survives a bad overwrite or git checkout.
+  for (const snap of listSnapshots()) {
+    const recovered = tryReadCorpus(snap);
+    if (recovered) {
+      console.error(`[corpus] entries.json unreadable — recovered ${recovered.length} entries from ${snap}. Restoring primary.`);
+      // Restore the primary from the snapshot so subsequent reads are clean.
+      try { writeAtomic(ENTRIES_PATH, `${JSON.stringify({ version: 2, entries: recovered }, null, 2)}\n`); } catch { /* best-effort */ }
+      return recovered;
+    }
+  }
+  // No primary, no snapshot — start empty (fresh corpus) rather than crash.
+  console.error("[corpus] entries.json unreadable and no snapshots found — starting empty.");
+  return [];
+}
+
+/** Write `content` to `path` atomically: temp file + rename. */
+function writeAtomic(path: string, content: string): void {
+  const tmp = `${path}.tmp-${process.pid}`;
+  writeFileSync(tmp, content, "utf-8");
+  renameSync(tmp, path); // atomic on POSIX and Windows
+}
+
+/** Keep a rolling timestamped snapshot of the corpus. */
+function writeSnapshot(entries: CorpusEntryT[]): void {
+  try {
+    mkdirSync(SNAPSHOT_DIR, { recursive: true });
+    const stamped = resolve(SNAPSHOT_DIR, `entries-${Date.now()}.json`);
+    writeAtomic(stamped, `${JSON.stringify({ version: 2, entries }, null, 2)}\n`);
+    // Prune to the most recent SNAPSHOT_KEEP.
+    const all = listSnapshots();
+    if (all.length > SNAPSHOT_KEEP) {
+      try { for (const stale of all.slice(SNAPSHOT_KEEP)) unlinkSync(stale); } catch { /* best-effort */ }
+    }
+  } catch (err) {
+    console.error("[corpus] snapshot write failed (non-fatal):", err instanceof Error ? err.message : err);
+  }
 }
 
 function saveEntries(entries: CorpusEntryT[]): void {
   const corpus = Corpus.parse({ version: 2, entries });
-  writeFileSync(ENTRIES_PATH, `${JSON.stringify(corpus, null, 2)}\n`, "utf-8");
+  // Snapshot BEFORE the overwrite, so even a failure mid-write leaves the
+  // prior state recoverable. Then atomic-write the primary.
+  writeSnapshot(entries);
+  writeAtomic(ENTRIES_PATH, `${JSON.stringify(corpus, null, 2)}\n`);
+  // The corpus changed — rebuild the dHash cache so stale/removed entries don't
+  // poison future duplicate checks, and new entries are matched immediately.
+  void rebuildDHashCache(entries);
 }
+
+// ─── persisted dHash cache ───────────────────────────────────────────────────
+// Why: the old check-duplicate path re-read + re-hash EVERY corpus image from
+// disk on EACH check (O(n) disk reads per request). For a 200-entry corpus
+// during a 100-image bulk import that's 20,000 reads. This cache holds the
+// SHA-256 + dHash per entry id, loaded once at startup and rebuilt on mutation.
+const DHASH_CACHE_PATH = resolve(CORPUS_ROOT, ".dhash-cache.json");
+type CachedFingerprint = { hash: string; dhash: string; path: string };
+const dhashCache = new Map<string, CachedFingerprint>();
+let dhashCacheLoaded = false;
+
+function loadDHashCache(): void {
+  if (dhashCacheLoaded) return;
+  dhashCacheLoaded = true;
+  try {
+    const raw = JSON.parse(readFileSync(DHASH_CACHE_PATH, "utf-8")) as Record<string, CachedFingerprint>;
+    for (const [id, fp] of Object.entries(raw)) {
+      if (fp && typeof fp.hash === "string" && typeof fp.dhash === "string") dhashCache.set(id, fp);
+    }
+  } catch { /* missing/corrupt cache — rebuild lazily */ }
+}
+
+function persistDHashCache(): void {
+  const obj: Record<string, CachedFingerprint> = {};
+  for (const [id, fp] of dhashCache) obj[id] = fp;
+  try { writeFileSync(DHASH_CACHE_PATH, JSON.stringify(obj, null, 2), "utf-8"); } catch { /* best-effort */ }
+}
+
+/** Recompute fingerprints for every corpus entry with an image. Called on save. */
+async function rebuildDHashCache(entries: CorpusEntryT[]): Promise<void> {
+  const next = new Map<string, CachedFingerprint>();
+  for (const entry of entries) {
+    if (!entry.image.path) continue;
+    try {
+      const fullPath = fromCorpusRelativeImagePath(entry.image.path);
+      if (!existsSync(fullPath)) continue;
+      const hash = createHash("sha256").update(readFileSync(fullPath)).digest("hex");
+      const dhash = await computeDHash(fullPath).catch(() => "");
+      if (dhash) next.set(entry.id, { hash, dhash, path: entry.image.path });
+    } catch { /* skip unreadable */ }
+  }
+  dhashCache.clear();
+  for (const [id, fp] of next) dhashCache.set(id, fp);
+  persistDHashCache();
+}
+
+/** Get a fingerprint for one entry, computing + caching on first access (lazy). */
+async function fingerprintFor(entry: CorpusEntryT): Promise<CachedFingerprint | null> {
+  loadDHashCache();
+  if (!entry.image.path) return null;
+  const cached = dhashCache.get(entry.id);
+  if (cached && cached.path === entry.image.path) return cached;
+  try {
+    const fullPath = fromCorpusRelativeImagePath(entry.image.path);
+    if (!existsSync(fullPath)) return null;
+    const hash = createHash("sha256").update(readFileSync(fullPath)).digest("hex");
+    const dhash = await computeDHash(fullPath).catch(() => "");
+    if (!dhash) return null;
+    const fp: CachedFingerprint = { hash, dhash, path: entry.image.path };
+    dhashCache.set(entry.id, fp);
+    persistDHashCache();
+    return fp;
+  } catch { return null; }
+}
+
+// ─── in-batch dedup ──────────────────────────────────────────────────────────
+// Bulk import used to check each upload only against the COMMITTED corpus, so
+// the first near-dup passed (corpus had none) and so did the second (the first
+// was merely staged). This map tracks sibling uploads within one bulk run so a
+// later upload in the SAME batch is matched against earlier ones too.
+// Keyed by batchId; each value is an ordered list of {hash, dhash, filename}.
+const batchFingerprints = new Map<string, Array<{ hash: string; dhash: string; filename: string }>>();
+
+function registerBatchFingerprint(batchId: string, fp: { hash: string; dhash: string; filename: string }): void {
+  const list = batchFingerprints.get(batchId);
+  if (list) list.push(fp); else batchFingerprints.set(batchId, [fp]);
+}
+function clearBatch(batchId: string): void { batchFingerprints.delete(batchId); }
 
 /**
  * Local-origin guard.
@@ -515,51 +678,64 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/check-duplicate") {
-    const payload = await readJson(req) as { hash?: string; dhash?: string; width?: number; height?: number; path?: string };
+    const payload = await readJson(req) as { hash?: string; dhash?: string; width?: number; height?: number; path?: string; batchId?: string; filename?: string };
     const newHash = payload.hash ?? "";
     const newDhash = payload.dhash ?? "";
-    const w = payload.width ?? 0;
-    const h = payload.height ?? 0;
+    const batchId = payload.batchId ?? "";
 
     let exactMatch: string | null = null;
     let nearMatch: string | null = null;
+    let batchMatch: string | null = null;
 
+    // ── Level 1 + 2 against the committed corpus (cache-backed, no per-image re-reads).
+    // Two signals only: exact SHA-256, and perceptual dHash (Hamming < threshold).
+    // Dimensions are NOT evidence (two unrelated full-viewport shots share them).
     for (const entry of entries) {
       if (!entry.image.path) continue;
-      try {
-        const fullPath = fromCorpusRelativeImagePath(entry.image.path);
-        if (!existsSync(fullPath)) continue;
+      const fp = await fingerprintFor(entry);
+      if (!fp) continue;
+      if (fp.hash === newHash) { exactMatch = entry.id; break; }
+      if (!nearMatch && newDhash && hammingDistance(newDhash, fp.dhash) < DHASH_THRESHOLD) {
+        nearMatch = entry.id;
+      }
+    }
 
-        // Level 1: exact SHA-256 match.
-        const imgData = readFileSync(fullPath);
-        const entryHash = createHash("sha256").update(imgData).digest("hex");
-        if (entryHash === newHash) { exactMatch = entry.id; break; }
+    // ── Level 3: in-batch dedup. Compare against siblings already staged in the
+    // SAME bulk run. This is the fix for "near-dups went through" — the old code
+    // only saw the committed corpus, so the 2nd..Nth near-dup in a batch all
+    // passed because the 1st was merely staged, not committed.
+    if (!exactMatch && !nearMatch && batchId) {
+      const siblings = batchFingerprints.get(batchId) ?? [];
+      for (const sib of siblings) {
+        if (newHash && sib.hash === newHash) { batchMatch = sib.filename; break; }
+        if (newDhash && hammingDistance(newDhash, sib.dhash) < DHASH_THRESHOLD) { batchMatch = sib.filename; break; }
+      }
+    }
 
-        // Level 2: perceptual hash (dHash) via Hamming distance.
-        // Catches same-page-different-scroll, recompression, minor crops.
-        if (!nearMatch && newDhash) {
-          const entryDhash = await computeDHash(fullPath).catch(() => "");
-          if (entryDhash && hammingDistance(newDhash, entryDhash) < DHASH_THRESHOLD) {
-            nearMatch = entry.id;
-            continue;
-          }
-        }
-
-        // Level 3 (fallback when dHash unavailable): same dimensions.
-        if (!nearMatch && w > 0 && h > 0 && entry.image.width && entry.image.height) {
-          const dimMatch = Math.abs(entry.image.width - w) <= 2 && Math.abs(entry.image.height - h) <= 2;
-          if (dimMatch) nearMatch = entry.id;
-        }
-      } catch { /* skip unreadable images */ }
+    // If this upload is unique, register it so later siblings in the same batch
+    // can match against it. (Only when a batchId is supplied — single-entry flow
+    // passes none and skips batch dedup entirely.)
+    if (!exactMatch && !nearMatch && !batchMatch && batchId && newHash && payload.filename) {
+      registerBatchFingerprint(batchId, { hash: newHash, dhash: newDhash, filename: payload.filename });
     }
 
     if (exactMatch) {
       sendJson(res, 200, { duplicate: true, type: "exact", match: exactMatch });
     } else if (nearMatch) {
       sendJson(res, 200, { duplicate: true, type: "near", match: nearMatch });
+    } else if (batchMatch) {
+      sendJson(res, 200, { duplicate: true, type: "batch-near", match: batchMatch });
     } else {
       sendJson(res, 200, { duplicate: false, type: null, match: null });
     }
+    return;
+  }
+
+  // Clear the in-batch fingerprint set when a bulk run ends (client signals it).
+  if (req.method === "POST" && url.pathname === "/api/check-duplicate/clear-batch") {
+    const payload = await readJson(req) as { batchId?: string };
+    if (payload.batchId) clearBatch(payload.batchId);
+    sendJson(res, 200, { ok: true });
     return;
   }
 
@@ -593,10 +769,12 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       productName?: string;
       url?: string | null;
       id?: string;
+      imageDetail?: "low" | "high";
+      extractionOnly?: boolean;
     };
 
-    if (!payload.imagePath || !payload.productName) {
-      sendJson(res, 400, { error: "imagePath and productName are required" });
+    if (!payload.imagePath) {
+      sendJson(res, 400, { error: "imagePath is required" });
       return;
     }
 
@@ -609,11 +787,41 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       const imagePath = fromCorpusRelativeImagePath(payload.imagePath);
       const entry = await tagImage({
         imagePath,
-        productName: payload.productName,
+        // productName is optional — when absent/empty, the tagger has the vision
+        // model read the product name off the screenshot. A missing name must
+        // not block import: the upload (expensive) has already happened.
+        productName: (payload.productName || "").trim(),
         url: payload.url || null,
         id: payload.id,
+        // Bulk passes imageDetail:"low" + extractionOnly:true to cut token cost:
+        // cheap extraction pass now, critique deferred to /api/auto-critique.
+        imageDetail: payload.imageDetail,
+        extractionOnly: payload.extractionOnly === true,
       });
       sendJson(res, 200, { entry });
+    } catch (error) {
+      sendJson(res, 400, { error: explainTagError(error) });
+    }
+    return;
+  }
+
+  // Deferred Pass 2: fills critique/steals/antiPatterns on a row staged
+  // extraction-only. No image re-sent — Pass 2 reasons from the saved extraction.
+  if (req.method === "POST" && url.pathname === "/api/auto-critique") {
+    const payload = await readJson(req) as { productName?: string; extraction?: Record<string, unknown> };
+
+    if (!payload.extraction) {
+      sendJson(res, 400, { error: "extraction is required (pass the entry's _raw.extraction)" });
+      return;
+    }
+    if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY && !process.env.GEMINI_API_KEY) {
+      sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
+      return;
+    }
+
+    try {
+      const result = await generateCritique((payload.productName || "").trim(), payload.extraction);
+      sendJson(res, 200, { critique: result });
     } catch (error) {
       sendJson(res, 400, { error: explainTagError(error) });
     }
@@ -716,6 +924,10 @@ const server = createServer(async (req, res) => {
 });
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  // Eagerly load the dHash cache so the first duplicate check doesn't pay the
+  // rehash cost. Rebuilds async if missing/stale; non-blocking.
+  loadDHashCache();
+
   server.on("error", (error: NodeJS.ErrnoException) => {
     if (error.code === "EADDRINUSE") {
       console.error(`Port ${PORT} is already in use. The curator may already be running at http://localhost:${PORT}.`);
@@ -725,7 +937,12 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     throw error;
   });
 
-  server.listen(PORT, "127.0.0.1", () => {
+  // Bind to the IPv6 wildcard so the listener accepts BOTH stacks — ::1 AND
+  // 127.0.0.1 (via IPv4-mapped addresses, since ipv6only defaults to false).
+  // Pinning 127.0.0.1 caused "page won't load" on hosts where the browser
+  // resolves localhost to ::1 first and gets connection-refused with no IPv4
+  // fallback. Outbound SSRF protection (the corpus's own guard) is unaffected.
+  server.listen(PORT, "::", () => {
     console.log(`clean-ui curator running at http://localhost:${PORT}`);
   });
 }

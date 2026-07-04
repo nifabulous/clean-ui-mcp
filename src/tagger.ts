@@ -568,6 +568,7 @@ async function callGemini(
   imagePath: string | null,
   retryFeedback?: string,
   detail: "low" | "high" = "high",
+  pass: TaggerPass = "extraction",
 ): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not set");
@@ -582,6 +583,15 @@ async function callGemini(
   parts.push({ text: prompt });
   if (retryFeedback) parts.push({ text: retryFeedback });
 
+  // Gemini 2.5 Flash/Pro are "thinking" models: reasoning tokens draw from the
+  // SAME maxOutputTokens budget as the response. On a structured extraction
+  // (deterministic fields, no judgment) the model routinely spent 1500–2500
+  // tokens "thinking" and truncated the JSON mid-stream → non-JSON → "unusable
+  // draft". Extraction doesn't benefit from chain-of-thought, so disable it
+  // (thinkingBudget: 0). Critique DOES benefit from reasoning, so leave it on.
+  const generationConfig: Record<string, unknown> = { maxOutputTokens: MAX_OUTPUT_TOKENS };
+  if (pass === "extraction") generationConfig.thinkingConfig = { thinkingBudget: 0 };
+
   const endpoint = `${GEMINI_API_BASE}/${GEMINI_AUTO_TAG_MODEL}:generateContent`;
   const response = await fetch(endpoint, {
     method: "POST",
@@ -589,16 +599,27 @@ async function callGemini(
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: SYSTEM }] },
       contents: [{ role: "user", parts }],
-      generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS },
+      generationConfig,
     }),
   });
 
   if (!response.ok) throw new Error(`Gemini API error ${response.status}: ${await response.text()}`);
 
   const data = await response.json() as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>;
+    promptFeedback?: { blockReason?: string };
   };
-  const parts_out = data.candidates?.[0]?.content?.parts ?? [];
+  // Surface safety blocks and truncation explicitly — both produced cryptic
+  // "unusable draft" errors before. A MAX_TOKENS finish means the JSON was cut
+  // mid-stream; SAFETY means the image was blocked. Both are actionable.
+  const candidate = data.candidates?.[0];
+  const blockReason = data.promptFeedback?.blockReason;
+  if (blockReason) throw new Error(`Gemini blocked the request (${blockReason}). Try a different screenshot.`);
+  const finishReason = candidate?.finishReason;
+  if (finishReason && finishReason !== "STOP") {
+    throw new Error(`Gemini stopped early (${finishReason}). ${finishReason === "MAX_TOKENS" ? "Output was truncated before the JSON closed — raise MAX_OUTPUT_TOKENS or simplify the request." : "Try Auto-fill again."}`);
+  }
+  const parts_out = candidate?.content?.parts ?? [];
   return parts_out.filter((p) => typeof p.text === "string").map((p) => p.text ?? "").join("");
 }
 
@@ -613,7 +634,7 @@ async function callModel(
   const provider = resolveProvider(pass);
   switch (provider) {
     case "claude":  return callClaude(prompt, imagePath, retryFeedback, detail);
-    case "gemini":  return callGemini(prompt, imagePath, retryFeedback, detail);
+    case "gemini":  return callGemini(prompt, imagePath, retryFeedback, detail, pass);
     default:        return callOpenAI(prompt, imagePath, retryFeedback, detail);
   }
 }

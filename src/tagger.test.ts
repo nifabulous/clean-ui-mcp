@@ -167,4 +167,65 @@ describe("tagImage two-pass request shape", () => {
     process.env.AUTO_TAG_PROVIDER_EXTRACTION = savedExtr;
     process.env.AUTO_TAG_PROVIDER_CRITIQUE = savedCrit;
   });
+
+  it("disables Gemini thinking on extraction (thinkingBudget:0) but not critique", async () => {
+    // Gemini 2.5 Flash/Pro are thinking models — reasoning tokens draw from the
+    // same maxOutputTokens budget and were truncating the extraction JSON.
+    // Extraction is deterministic and must run with thinking off; critique
+    // keeps it on. This test pins that contract.
+    const savedExtr = process.env.AUTO_TAG_PROVIDER_EXTRACTION;
+    const savedCrit = process.env.AUTO_TAG_PROVIDER_CRITIQUE;
+    process.env.AUTO_TAG_PROVIDER_EXTRACTION = "gemini";
+    process.env.AUTO_TAG_PROVIDER_CRITIQUE = "gemini";
+    process.env.GEMINI_API_KEY = "gem-test";
+    const genConfigs: Array<Record<string, unknown>> = [];
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      genConfigs.push(body.generationConfig ?? {});
+      callCount++;
+      const json = callCount === 1
+        ? JSON.stringify({ patternType: "dashboard", categories: ["dashboard"], styleTags: ["minimal"], dominantColors: ["#ffffff", "#111111"], accentColor: null, displayFont: null, bodyFont: null, spacingDensity: "moderate", cornerStyle: "slight-round", usesShadows: false, usesBorders: true })
+        : JSON.stringify({ observations: ["a","b","c","d","e"], typographyNotes: "n", draftCritique: "x".repeat(120), draftWhatToSteal: ["x".repeat(20)], draftAntiPatterns: ["y".repeat(20)], qualityTier: "exceptional", voiceTone: "", voiceExamples: [], voiceAvoid: [] });
+      // Return the Gemini response shape (candidates[].content.parts[].text), STOP on both.
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: json }] }, finishReason: "STOP" }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    try { await tagImage({ imagePath: testImage, productName: "Test", url: null }); } catch { /* parse details not under test */ }
+
+    // Pass 1 (extraction): thinking disabled. Pass 2 (critique): thinking left on (no thinkingConfig key).
+    expect(genConfigs.length).toBeGreaterThanOrEqual(1);
+    const extractionCfg = genConfigs[0];
+    expect(extractionCfg.thinkingConfig).toEqual({ thinkingBudget: 0 });
+    if (genConfigs.length >= 2) {
+      expect(genConfigs[1].thinkingConfig).toBeUndefined();
+    }
+
+    delete process.env.GEMINI_API_KEY;
+    process.env.AUTO_TAG_PROVIDER_EXTRACTION = savedExtr;
+    process.env.AUTO_TAG_PROVIDER_CRITIQUE = savedCrit;
+  });
+
+  it("surfaces MAX_TOKENS truncation as a clear error instead of a generic 'unusable draft'", async () => {
+    // Regression: when Gemini truncated the JSON mid-stream (MAX_TOKENS), the
+    // parse failed and the user saw a vague "vision provider returned an
+    // unusable draft". The real cause — output cap too low — must be reported
+    // so the user knows to raise MAX_OUTPUT_TOKENS or simplify the request.
+    const savedExtr = process.env.AUTO_TAG_PROVIDER_EXTRACTION;
+    process.env.AUTO_TAG_PROVIDER_EXTRACTION = "gemini";
+    process.env.GEMINI_API_KEY = "gem-test";
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"patternType":"dash' }] }, finishReason: "MAX_TOKENS" }] }), { status: 200, headers: { "content-type": "application/json" } }),
+    ) as unknown as typeof fetch;
+
+    let caught: unknown;
+    try { await tagImage({ imagePath: testImage, productName: "Test", url: null }); }
+    catch (e) { caught = e; }
+
+    const msg = caught instanceof Error ? caught.message : String(caught);
+    expect(msg).toMatch(/MAX_TOKENS|truncat/i);
+
+    delete process.env.GEMINI_API_KEY;
+    process.env.AUTO_TAG_PROVIDER_EXTRACTION = savedExtr;
+  });
 });

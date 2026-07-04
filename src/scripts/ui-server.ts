@@ -415,8 +415,14 @@ function explainCaptureError(error: unknown): string {
 function explainTagError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/401|invalid_api_key|Incorrect API key/i.test(message)) return "The vision provider rejected the API key. Check your .env keys and restart the app.";
-  if (/429|rate_limit|quota/i.test(message)) return "Vision provider rate limit or quota was reached. Try again later or use another key.";
-  if (/model|not found|unsupported/i.test(message)) return "The vision model was rejected. Check the model name in .env and restart the app.";
+  if (/429|rate_limit|quota|RESOURCE_EXHAUSTED/i.test(message)) return "Vision provider rate limit or quota was reached. Try again later or use another key.";
+  // Specific Gemini/OpenAI stop causes — surface these before the broad model
+  // check, since a truncated JSON shows up as non-JSON and got mislabeled as a
+  // generic "unusable draft" (the actual cause was MAX_TOKENS truncation).
+  if (/MAX_TOKENS|truncat/i.test(message)) return "The response was truncated before the JSON finished. The model's output cap is too low for this screenshot — raise MAX_OUTPUT_TOKENS in src/tagger.ts.";
+  if (/SAFETY|blocked the request|blockReason/i.test(message)) return "The vision provider blocked this image (safety filter). Try a different screenshot.";
+  if (/stopped early/i.test(message)) return message; // already user-facing, includes the finishReason
+  if (/models\/.+is not found|model.*not found|not supported|unsupported/i.test(message)) return "The vision model was rejected. Check the model name in .env and restart the app.";
   if (/non-JSON/i.test(message)) return "The vision provider returned an unusable draft. Try Auto-fill again, or use a clearer screenshot.";
   return message || "Auto-fill failed";
 }

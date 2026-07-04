@@ -25,7 +25,10 @@
     "migrate": "tsc && node dist/scripts/migrate-v1-to-v2.js",
     "migrate-layout": "tsc && node dist/scripts/migrate-layout-field.js",
     "corpus-stats": "tsc && node dist/scripts/corpus-stats.js",
-    "query-stats": "tsc && node dist/scripts/query-stats.js"
+    "query-stats": "tsc && node dist/scripts/query-stats.js",
+    "restore-corpus": "tsc && node dist/scripts/restore-corpus.js",
+    "clean-orphans": "tsc && node dist/scripts/clean-orphans.js",
+    "doctor": "tsc && node dist/scripts/doctor.js"
   },
   "keywords": [
     "mcp",

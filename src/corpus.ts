@@ -18,6 +18,15 @@ export function loadCorpus(): CorpusEntryT[] {
   return cached;
 }
 
+/**
+ * Test-only injection point. Overrides the corpus cache so tests can exercise
+ * getEntryById/listCategories/etc. against fixtures instead of the mutable
+ * production entries.json. Never call this from production code.
+ */
+export function setCorpusForTesting(entries: CorpusEntryT[] | null): void {
+  cached = entries;
+}
+
 export interface SearchOptions {
   query?:       string;
   category?:    string;
@@ -222,10 +231,26 @@ export function listStyleTags(): string[] {
   return [...set].sort();
 }
 
-export function indexStatus(): { indexed: number; total: number; hasIndex: boolean } {
+export interface IndexStatus {
+  indexed: number;   // entries that have a vector in the index
+  total: number;     // total corpus entries
+  hasIndex: boolean; // is an embeddings.json present and loadable
+  missing: number;   // entries with no vector (need build-index)
+  stale: number;     // vectors whose id is no longer in the corpus (orphans)
+}
+
+/**
+ * Report index coverage + drift. The index can fall out of sync with the corpus
+ * in two directions: entries added since the last build-index have no vector
+ * (`missing`), and entries removed from the corpus leave orphan vectors behind
+ * (`stale`). Both degrade search quality silently, so surface them explicitly.
+ */
+export function indexStatus(): IndexStatus {
   const entries = loadCorpus();
   const index   = loadIndex();
-  if (!index) return { indexed: 0, total: entries.length, hasIndex: false };
+  if (!index) return { indexed: 0, total: entries.length, hasIndex: false, missing: entries.length, stale: 0 };
+  const entryIds = new Set(entries.map((e) => e.id));
   const indexed = entries.filter((e) => !!index.entries[e.id]).length;
-  return { indexed, total: entries.length, hasIndex: true };
+  const stale = Object.keys(index.entries).filter((id) => !entryIds.has(id)).length;
+  return { indexed, total: entries.length, hasIndex: true, missing: entries.length - indexed, stale };
 }

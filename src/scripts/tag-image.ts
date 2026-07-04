@@ -13,7 +13,7 @@ import "../env.js";
 import { parseArgs } from "node:util";
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
-import { tagImage } from "../tagger.js";
+import { hasVisionKey, tagImage } from "../tagger.js";
 
 const { values } = parseArgs({
   args: process.argv.slice(2),
@@ -35,8 +35,8 @@ Example:
   npm run tag-image -- --image corpus/images-private/linear-board.png \\
     --product "Linear" --url "https://linear.app"
 
-Env required: OPENAI_API_KEY in .env
-Optional: OPENAI_AUTO_TAG_MODEL in .env (default: gpt-5.4-nano)
+Env required: one of OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY in .env
+Optional: provider/model env vars (see README)
 `);
   process.exit(1);
 }
@@ -47,12 +47,12 @@ if (!existsSync(imagePath)) {
   process.exit(1);
 }
 
-if (!process.env.OPENAI_API_KEY) {
-  console.error("OPENAI_API_KEY not set. Add it to .env, then rerun this command.");
+if (!hasVisionKey()) {
+  console.error("No vision provider key set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then rerun this command.");
   process.exit(1);
 }
 
-console.error("Calling OpenAI vision API…");
+console.error("Calling vision provider…");
 
 try {
   const result = await tagImage({

@@ -10,8 +10,8 @@ import "./env.js";
  *   established fact. Forces an observation step before critique to reduce
  *   generic-first-plausible-answer drift.
  *
- * Env: OPENAI_API_KEY
- * Optional: OPENAI_AUTO_TAG_MODEL (default: gpt-5.4-nano)
+ * Env: one of OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY
+ * Optional: provider/model env vars (see README)
  */
 
 import { readFileSync } from "node:fs";

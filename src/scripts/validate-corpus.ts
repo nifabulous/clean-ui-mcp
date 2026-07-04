@@ -6,6 +6,7 @@ import { fromCorpusRelativePath } from "../paths.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(__dirname, "..", "..", "corpus", "entries.json");
+const CONFIG_PATH = join(__dirname, "..", "..", "corpus", ".corpus-config.json");
 
 const raw = readFileSync(CORPUS_PATH, "utf-8");
 const result = Corpus.safeParse(JSON.parse(raw));
@@ -71,6 +72,24 @@ console.log(`✅ Corpus valid — ${entries.length} entries, ${ids.size} unique 
 const privateCount = entries.filter((e) => e.image.visibility === "private").length;
 const publicCount = entries.length - privateCount;
 console.log(`   ${publicCount} with redistributable images, ${privateCount} metadata/critique-only.`);
+
+// ── entry-count drift check ──────────────────────────────────────────────────
+// Each curator encodes their own floor in corpus/.corpus-config.json (gitignored,
+// local-only). If the count drops below it, shout — a bad restore or overwrite
+// is the most common way to silently lose work. Non-fatal (warns, doesn't exit
+// non-zero) so it never blocks CI, but it's impossible to miss.
+if (existsSync(CONFIG_PATH)) {
+  try {
+    const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf-8")) as { expectedMinEntries?: number };
+    if (typeof cfg.expectedMinEntries === "number" && entries.length < cfg.expectedMinEntries) {
+      console.log(``);
+      console.log(`⚠  ENTRY COUNT DROPPED: expected ≥${cfg.expectedMinEntries}, found ${entries.length}.`);
+      console.log(`   This may indicate a bad restore or overwrite. Recover with:`);
+      console.log(`     npm run restore-corpus -- --list   # see available snapshots`);
+      console.log(`     npm run restore-corpus -- --latest # restore the newest`);
+    }
+  } catch { /* config unreadable — skip the check, not worth failing on */ }
+}
 
 if (hygieneWarnings.length > 0) {
   console.log(`\n⚠  ${hygieneWarnings.length} backfill warning(s) — non-blocking:`);

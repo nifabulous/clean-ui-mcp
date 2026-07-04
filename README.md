@@ -479,6 +479,43 @@ clean-ui-mcp/
 | `npm run commit-draft` | Commit approved drafts to the corpus |
 | `npm run migrate` | v1 → v2 schema migration (patternType + antiPatterns) |
 | `npm run migrate-layout` | Populate the layout field for dashboard entries |
+| `npm run doctor` | One-command health check: TS, corpus, snapshots, images, index, env |
+| `npm run restore-corpus` | Recover the corpus from a snapshot (`--list`, `--latest`, `--snapshot <name>`, `--dry-run`) |
+| `npm run clean-orphans` | Delete unreferenced private images (`--dry-run` default, `--confirm` to delete) |
+
+---
+
+## Corpus trust & recovery
+
+The corpus is plain JSON — easy to edit and review, but also easy to overwrite by
+mistake. A durability layer makes that class of loss recoverable:
+
+- **Atomic writes** — every save goes to a temp file then renames over the
+  primary, so a crash mid-write can't corrupt `entries.json`.
+- **Rolling snapshots** — every save also keeps the last 20 timestamped copies in
+  `corpus/.snapshots/` (gitignored). If the primary goes missing or corrupt, the
+  UI auto-recovers from the newest snapshot.
+- **`npm run restore-corpus`** — first-class recovery CLI. `--list` to inspect,
+  `--dry-run` to see the diff (added/removed ids, duplicate ids, validation
+  status), `--latest` or `--snapshot <name>` to restore. A restore snapshots the
+  current state first, so a bad restore is itself recoverable.
+
+**Entry-count drift check:** copy `corpus/.corpus-config.example.json` to
+`corpus/.corpus-config.json` and set `expectedMinEntries` to your floor. If the
+count drops below it, `validate-corpus` and `doctor` shout loudly — the most
+common silent-loss signal.
+
+**Index drift detection:** `indexStatus()` now reports `missing` (entries with no
+vector) and `stale` (vectors for removed entries). The MCP status string,
+`corpus-stats`, and `doctor` all surface this — a stale index no longer reports
+"active" silently.
+
+```bash
+npm run doctor              # full health check (PASS/WARN/FAIL)
+npm run restore-corpus -- --list     # see available snapshots
+npm run restore-corpus -- --latest   # restore the newest
+npm run clean-orphans -- --dry-run   # find unreferenced images
+```
 
 ---
 

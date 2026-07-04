@@ -176,10 +176,14 @@ describe("capture SSRF guard", () => {
     expect(isPrivateAddress("::1")).toBe(true);
     expect(isPrivateAddress("fd00::1")).toBe(true);
     expect(isPrivateAddress("fe80::1")).toBe(true);
+    expect(isPrivateAddress("::ffff:127.0.0.1")).toBe(true);
+    expect(isPrivateAddress("::ffff:10.0.0.1")).toBe(true);
+    expect(isPrivateAddress("::ffff:169.254.169.254")).toBe(true);
 
     // public addresses are not flagged
     expect(isPrivateAddress("8.8.8.8")).toBe(false);
     expect(isPrivateAddress("1.1.1.1")).toBe(false);
+    expect(isPrivateAddress("::ffff:8.8.8.8")).toBe(false);
     // 172.32.x is outside the RFC1918 172.16/12 block — public
     expect(isPrivateAddress("172.32.0.1")).toBe(false);
   });

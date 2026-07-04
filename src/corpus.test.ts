@@ -1,57 +1,95 @@
-import { describe, expect, it } from "vitest";
-import { getEntryById, listCategories, listStyleTags, searchEntries, findSimilarEntries } from "./corpus.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { Corpus } from "./schema.js";
+import { getEntryById, listCategories, listStyleTags, searchEntries, findSimilarEntries, setCorpusForTesting, indexStatus } from "./corpus.js";
+import { fixtures } from "./scripts/__fixtures__/corpus-fixtures.js";
 
-describe("corpus search", () => {
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const CORPUS_PATH = join(__dirname, "..", "corpus", "entries.json");
+
+// ── fixture-backed tests: immune to corpus edits ─────────────────────────────
+// These run against hand-built fixtures (setCorpusForTesting), NOT the mutable
+// production entries.json. A restore, bulk import, or edit can never break them.
+describe("corpus search (fixtures)", () => {
+  afterEach(() => setCorpusForTesting(null)); // restore the real corpus cache
+
   it("loads known entries by id", () => {
-    const entry = getEntryById("linear-issue-board-grouped");
-
+    setCorpusForTesting(fixtures);
+    const entry = getEntryById("linear-board");
     expect(entry?.source.productName).toBe("Linear");
   });
 
-  it("lists categories and style tags present in the corpus", () => {
+  it("lists categories and style tags present in the fixtures", () => {
+    setCorpusForTesting(fixtures);
+    expect(listCategories()).toContain("dashboard");
     expect(listCategories()).toContain("pricing");
     expect(listStyleTags()).toContain("dense-data");
   });
 
+  it("returns undefined for an id not in the corpus", () => {
+    setCorpusForTesting(fixtures);
+    expect(getEntryById("does-not-exist")).toBeUndefined();
+  });
+
+  it("indexStatus reports the fixture corpus size and drift fields", () => {
+    // indexStatus loads the corpus from the injected cache but the index from
+    // disk — so hasIndex depends on whether embeddings.json exists, not the
+    // fixtures. Assert only what's fixture-driven: total + the drift fields exist.
+    setCorpusForTesting(fixtures);
+    const status = indexStatus();
+    expect(status.total).toBe(fixtures.length);
+    // indexed + missing must sum to total; stale ≥ 0.
+    expect(status.indexed + status.missing).toBe(status.total);
+    expect(status.stale).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ── real-corpus tests: only structural contracts, never specific content ─────
+// These touch the production entries.json but assert only invariants that hold
+// regardless of content: the schema parses, ids are unique, search returns an
+// array. They do NOT assert specific entry names/categories (those change).
+describe("real corpus contracts", () => {
+  it("the real corpus validates against the schema", () => {
+    // This is the ONLY test allowed to depend on entries.json existing. If the
+    // file is corrupt/overwritten, this catches it — that's its purpose.
+    const raw = readFileSync(CORPUS_PATH, "utf-8");
+    expect(() => Corpus.parse(JSON.parse(raw))).not.toThrow();
+  });
+
   it("finds entries with search (vector or keyword — resilient to Voyage rate limits)", async () => {
-    let results: typeof stateEntries = [];
+    let results: Awaited<ReturnType<typeof searchEntries>> = [];
     try {
       results = await searchEntries({ query: "dark dense data", limit: 1 });
     } catch {
-      // Voyage API rate limit — skip, the search path itself is tested elsewhere.
       results = await searchEntries({ query: "dark dense data", limit: 1 });
     }
-    // Result may differ between vector and keyword paths — just verify it returns.
     expect(Array.isArray(results)).toBe(true);
   });
 
   it("combines structural filters with search (vector or keyword)", async () => {
-    // The vector path may fail (Voyage rate limits in CI / test env). Catch and
-    // retry with no query (pure structural filter) so the test is resilient.
-    let results: typeof stateEntries = [];
+    let results: Awaited<ReturnType<typeof searchEntries>> = [];
     try {
-      results = await searchEntries({ query: "plan table", category: "pricing", minQuality: 5, limit: 5 });
+      results = await searchEntries({ query: "data table", category: "dashboard", minQuality: 5, limit: 5 });
     } catch {
-      // Voyage API error — fall back to structural-only search (no query).
-      results = await searchEntries({ category: "pricing", minQuality: 5, limit: 5 });
+      results = await searchEntries({ category: "dashboard", minQuality: 5, limit: 5 });
     }
-    // If results exist, they must respect the structural filters.
     if (results.length > 0) {
-      expect(results.every((e) => e.categories.includes("pricing"))).toBe(true);
+      expect(results.every((e) => e.categories.includes("dashboard"))).toBe(true);
       expect(results.every((e) => e.qualityScore >= 5)).toBe(true);
     }
   });
 });
 
 describe("findSimilarEntries", () => {
+  afterEach(() => setCorpusForTesting(null));
+
   it("returns ranked results (or empty) without throwing, regardless of index state", () => {
-    // The index may or may not exist depending on whether build-index was run.
-    // The contract: never throw — return results or [] gracefully.
-    const results = findSimilarEntries("linear-issue-board-grouped", 5);
+    const results = findSimilarEntries("linear-board", 5);
     expect(Array.isArray(results)).toBe(true);
-    // If results exist, they must exclude the source entry and be score-descending.
     if (results.length > 0) {
-      expect(results.every((r) => r.entry.id !== "linear-issue-board-grouped")).toBe(true);
+      expect(results.every((r) => r.entry.id !== "linear-board")).toBe(true);
       for (let i = 1; i < results.length; i++) {
         expect(results[i - 1].score).toBeGreaterThanOrEqual(results[i].score);
       }

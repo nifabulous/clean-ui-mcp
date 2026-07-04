@@ -539,17 +539,19 @@ function renderIcons() {
 }
 
 async function loadAll({ keepSelection = true } = {}) {
-	  const [schema, entries, stats, orphanData, config] = await Promise.all([
+	  const [schema, entries, stats, orphanData, config, health] = await Promise.all([
 	    request("/schema"),
 	    request("/entries"),
 	    request("/stats"),
 	    request("/orphans"),
 	    request("/config"),
+	    request("/health").catch(() => null), // non-critical — stats page degrades without it
 	  ]);
 	  state.schema = schema;
 	  state.entries = entries.entries;
 	  state.orphans = orphanData.orphans || [];
 	  state.config = config;
+	  state.health = health;
   if (!keepSelection || !state.entries.some((entry) => entry.id === state.selectedId)) {
     state.selectedId = state.entries[0]?.id ?? null;
   }
@@ -1712,6 +1714,25 @@ async function autoFillDraft() {
   }
 }
 
+// Recovery surface — shows snapshot count + newest age so the curator knows
+// their work is recoverable. Falls back gracefully if /api/health is absent.
+function recoveryLine() {
+  const h = state.health;
+  if (!h || !h.snapshotCount) {
+    return `<div class="panel-sub" style="margin-top:12px">Recovery: no snapshots yet — your first save creates one.</div>`;
+  }
+  const age = h.newestSnapshotAgeMs != null ? ageLabel(h.newestSnapshotAgeMs) : "unknown";
+  return `<div class="panel-sub" style="margin-top:12px">Recovery: ${h.snapshotCount} snapshot${h.snapshotCount === 1 ? "" : "s"} retained · newest ${age}. Recover with <code>npm run restore-corpus -- --list</code></div>`;
+}
+function ageLabel(ms) {
+  const mins = Math.round(ms / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
 function renderStatsPage() {
   const byCategory = {};
   const byStyle = {};
@@ -1746,6 +1767,7 @@ function renderStatsPage() {
 	            ${state.orphans.length ? `<div class="panel-sub">${state.orphans.slice(0, 6).map(esc).join("<br>")}${state.orphans.length > 6 ? "<br>..." : ""}</div>` : ""}
 	          </div>
 	        </div>
+	        ${recoveryLine()}
 	      </aside>
 	    </div>
 	  `;

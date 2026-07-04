@@ -228,8 +228,9 @@ server.registerTool(
   },
   async () => {
     const status = indexStatus();
+    const drift = status.hasIndex && status.missing > 0 ? ` · ${status.missing} missing${status.stale ? `, ${status.stale} stale` : ""} — run \`npm run build-index\`` : "";
     const mode   = status.hasIndex
-      ? `vector search active (${status.indexed}/${status.total} entries indexed)`
+      ? `vector search active (${status.indexed}/${status.total} entries indexed${drift})`
       : `keyword search only — run \`npm run build-index\` to enable semantic vector search`;
     return {
       content: [{
@@ -283,7 +284,9 @@ server.registerTool(
       const status = indexStatus();
       const reason = !status.hasIndex
         ? "the embedding index hasn't been built. Run `npm run build-index` to enable similarity search."
-        : `this entry (or the others) aren't indexed yet. Run \`npm run build-index\` (index covers ${status.indexed}/${status.total}).`;
+        : status.missing > 0
+          ? `the index is out of date — ${status.indexed}/${status.total} entries indexed (${status.missing} missing). Run \`npm run build-index\`.`
+          : `this entry (or the others) aren't indexed yet (index covers ${status.indexed}/${status.total}).`;
       return {
         content: [{ type: "text", text: `Can't find similar entries — ${reason}` }],
       };

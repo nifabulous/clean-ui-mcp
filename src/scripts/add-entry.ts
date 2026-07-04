@@ -30,7 +30,7 @@ import { imageSize } from "image-size";
 import { CorpusEntry, Category, StyleTag, PatternType, Corpus } from "../schema.js";
 import type { CorpusEntryT } from "../schema.js";
 import { toCorpusRelativePath } from "../paths.js";
-import { tagImage } from "../tagger.js";
+import { hasVisionKey, tagImage } from "../tagger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
@@ -135,8 +135,8 @@ async function askHexList(prompt: string): Promise<string[]> {
 // ─── run vision tagger if image is available ─────────────────────────────────
 
 async function runTagger(imagePath: string, product: string, url: string): Promise<Record<string, unknown> | null> {
-  if (!process.env.OPENAI_API_KEY) {
-    console.log("\n  ⚠  OPENAI_API_KEY not set in .env — skipping auto-tagging.");
+  if (!hasVisionKey()) {
+    console.log("\n  ⚠  No vision provider key set in .env — skipping auto-tagging.");
     return null;
   }
   console.log("\n  🔍 Running vision tagger on image…");

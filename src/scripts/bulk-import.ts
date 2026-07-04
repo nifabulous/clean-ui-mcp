@@ -45,7 +45,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { tagImage, type TaggerOutput } from "../tagger.js";
+import { hasVisionKey, tagImage, type TaggerOutput } from "../tagger.js";
 import { toCorpusRelativePath } from "../paths.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -123,8 +123,8 @@ Filename convention (folder mode, avoids --interactive):
   process.exit(0);
 }
 
-if (!process.env.OPENAI_API_KEY) {
-  console.error("OPENAI_API_KEY not set. Add it to .env, then rerun this command.");
+if (!hasVisionKey()) {
+  console.error("No vision provider key set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then rerun this command.");
   process.exit(1);
 }
 

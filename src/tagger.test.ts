@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sanitizeTaggerPayload, tagImage, extractQuantizedColors } from "./tagger.js";
+import { sanitizeTaggerPayload, tagImage, extractQuantizedColors, hasVisionKey } from "./tagger.js";
 import { PRIVATE_IMAGE_DIR } from "./paths.js";
 
 describe("tagger sanitization", () => {
@@ -68,6 +68,37 @@ describe("extractQuantizedColors (node-vibrant)", () => {
       // The tagger itself catches this and falls back to model-guessed colors.
       expect(err).toBeInstanceOf(Error);
     }
+  });
+});
+
+describe("vision provider key detection", () => {
+  const original = {
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+  };
+
+  afterEach(() => {
+    for (const key of Object.keys(original) as Array<keyof typeof original>) {
+      const value = original[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("accepts any configured vision provider key, not only OpenAI", () => {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+
+    expect(hasVisionKey()).toBe(false);
+
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+    expect(hasVisionKey()).toBe(true);
+
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.GEMINI_API_KEY = "gem-test";
+    expect(hasVisionKey()).toBe(true);
   });
 });
 

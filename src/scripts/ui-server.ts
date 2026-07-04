@@ -13,9 +13,12 @@ import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, C
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, toCorpusRelativePath } from "../paths.js";
 import { tagImage, generateCritique } from "../tagger.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
+import {
+  ENTRIES_PATH, SNAPSHOT_DIR, SNAPSHOT_KEEP,
+  listSnapshots, tryReadCorpus, loadCorpusSafe, writeAtomic, writeSnapshot,
+} from "../persistence.js";
 
 const PORT = Number(process.env.CLEAN_UI_PORT ?? 3131);
-const ENTRIES_PATH = resolve(CORPUS_ROOT, "entries.json");
 const APP_PATH = resolve(PROJECT_ROOT, "index-2.html");
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
 
@@ -64,82 +67,14 @@ function hammingDistance(a: string, b: string): number {
 const DHASH_THRESHOLD = 8;
 
 // ─── durability: atomic writes + rolling snapshots ──────────────────────────
-// Why this exists: a single `git checkout -- entries.json` or a buggy overwrite
-// used to be enough to lose every entry the UI had committed but not yet pushed.
-// The fixes below make that class of loss recoverable WITHOUT a database:
-//   1. Atomic write: serialize to a temp file, fs.rename over the real one. A
-//      crash mid-write (or a half-written buffer) leaves the prior file intact.
-//   2. Rolling snapshots: every save also keeps the last N versions plus a
-//      timestamped copy in corpus/.snapshots/ (gitignored). loadEntries falls
-//      back to the newest snapshot if the primary file is missing or corrupt,
-//      so a bad overwrite or a destructive git command is fully recoverable.
-const SNAPSHOT_DIR = resolve(CORPUS_ROOT, ".snapshots");
-const SNAPSHOT_KEEP = 20; // keep the 20 most recent timestamped snapshots
+// The disk primitives (writeAtomic, writeSnapshot, listSnapshots, tryReadCorpus,
+// loadCorpusSafe) live in ../persistence.ts so CLIs can reuse them without
+// importing this module (which pulls in sharp + playwright). These thin wrappers
+// keep the dHash-cache coupling local to the running UI server.
 
-/** Return snapshot paths newest-first (by mtime), or [] if none. */
-function listSnapshots(): string[] {
-  try {
-    return readdirSync(SNAPSHOT_DIR)
-      .filter((f) => /^entries-\d+\.json$/.test(f))
-      .map((f) => resolve(SNAPSHOT_DIR, f))
-      .sort((a, b) => {
-        // entries-<epoch>.json — sort by the embedded epoch, desc.
-        const ta = Number(a.match(/entries-(\d+)\.json$/)?.[1] ?? 0);
-        const tb = Number(b.match(/entries-(\d+)\.json$/)?.[1] ?? 0);
-        return tb - ta;
-      });
-  } catch { return []; }
-}
-
-/** Parse a JSON corpus file, or null if missing/corrupt/unparseable. */
-function tryReadCorpus(path: string): CorpusEntryT[] | null {
-  try {
-    const raw = JSON.parse(readFileSync(path, "utf-8"));
-    return Corpus.parse(raw).entries;
-  } catch { return null; }
-}
-
+/** Load entries with snapshot fallback (delegates to persistence.loadCorpusSafe). */
 function loadEntries(): CorpusEntryT[] {
-  // Primary file first.
-  const primary = tryReadCorpus(ENTRIES_PATH);
-  if (primary) return primary;
-  // Primary missing/corrupt — fall back to the newest snapshot so the workbench
-  // stays usable and committed data survives a bad overwrite or git checkout.
-  for (const snap of listSnapshots()) {
-    const recovered = tryReadCorpus(snap);
-    if (recovered) {
-      console.error(`[corpus] entries.json unreadable — recovered ${recovered.length} entries from ${snap}. Restoring primary.`);
-      // Restore the primary from the snapshot so subsequent reads are clean.
-      try { writeAtomic(ENTRIES_PATH, `${JSON.stringify({ version: 2, entries: recovered }, null, 2)}\n`); } catch { /* best-effort */ }
-      return recovered;
-    }
-  }
-  // No primary, no snapshot — start empty (fresh corpus) rather than crash.
-  console.error("[corpus] entries.json unreadable and no snapshots found — starting empty.");
-  return [];
-}
-
-/** Write `content` to `path` atomically: temp file + rename. */
-function writeAtomic(path: string, content: string): void {
-  const tmp = `${path}.tmp-${process.pid}`;
-  writeFileSync(tmp, content, "utf-8");
-  renameSync(tmp, path); // atomic on POSIX and Windows
-}
-
-/** Keep a rolling timestamped snapshot of the corpus. */
-function writeSnapshot(entries: CorpusEntryT[]): void {
-  try {
-    mkdirSync(SNAPSHOT_DIR, { recursive: true });
-    const stamped = resolve(SNAPSHOT_DIR, `entries-${Date.now()}.json`);
-    writeAtomic(stamped, `${JSON.stringify({ version: 2, entries }, null, 2)}\n`);
-    // Prune to the most recent SNAPSHOT_KEEP.
-    const all = listSnapshots();
-    if (all.length > SNAPSHOT_KEEP) {
-      try { for (const stale of all.slice(SNAPSHOT_KEEP)) unlinkSync(stale); } catch { /* best-effort */ }
-    }
-  } catch (err) {
-    console.error("[corpus] snapshot write failed (non-fatal):", err instanceof Error ? err.message : err);
-  }
+  return loadCorpusSafe();
 }
 
 function saveEntries(entries: CorpusEntryT[]): void {
@@ -512,14 +447,18 @@ function mimeFor(path: string): string {
  * cross-origin Origin.
  */
 export function isPrivateAddress(ip: string): boolean {
+  const normalized = ip.toLowerCase();
+  const mappedIpv4 = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mappedIpv4) return isPrivateAddress(mappedIpv4[1]);
+
   // IPv4
-  if (/^(10\.|192\.168\.|169\.254\.)/.test(ip)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
-  if (/^127\./.test(ip)) return true;
-  if (/^0\./.test(ip)) return true;
+  if (/^(10\.|192\.168\.|169\.254\.)/.test(normalized)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(normalized)) return true;
+  if (/^127\./.test(normalized)) return true;
+  if (/^0\./.test(normalized)) return true;
   // IPv6
-  if (ip === "::1" || ip === "::") return true;
-  if (ip.startsWith("fe80:") || ip.startsWith("fc") || ip.startsWith("fd")) return true;
+  if (normalized === "::1" || normalized === "::") return true;
+  if (normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
   return false;
 }
 
@@ -687,6 +626,21 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 
   if (req.method === "GET" && url.pathname === "/api/stats") {
     sendJson(res, 200, stats(entries));
+    return;
+  }
+
+  // Corpus recovery surface — exposes snapshot count + newest timestamp so the
+  // curator UI can show "your work is recoverable" without plumbing snapshot
+  // logic into the main endpoints. Read-only; the actual restore is a CLI.
+  if (req.method === "GET" && url.pathname === "/api/health") {
+    const snaps = listSnapshots();
+    const newestEpoch = snaps.length ? Number(snaps[0].match(/entries-(\d+)\.json$/)?.[1] ?? 0) : 0;
+    sendJson(res, 200, {
+      entryCount: entries.length,
+      snapshotCount: snaps.length,
+      newestSnapshotEpoch: newestEpoch || null,
+      newestSnapshotAgeMs: newestEpoch ? Date.now() - newestEpoch : null,
+    });
     return;
   }
 

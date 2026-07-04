@@ -18,3 +18,7 @@ corpus/.dhash-cache.json
 # Durability — rolling snapshots of entries.json, written on every UI save.
 # Gitignored because they're large, derivable, and purely a local safety net.
 corpus/.snapshots/
+
+# Local corpus config — per-curator floor for the entry-count drift check.
+# Copy .corpus-config.example.json to .corpus-config.json and set your floor.
+corpus/.corpus-config.json

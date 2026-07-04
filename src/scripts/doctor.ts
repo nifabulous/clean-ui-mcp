@@ -113,13 +113,20 @@ if (entries) {
 }
 
 // ── 6. Index coverage (drift) ────────────────────────────────────────────────
-const index = indexStatus();
-if (!index.hasIndex) {
-  checks.push({ name: "Search index", status: "WARN", detail: "no index — keyword search only (run `npm run build-index`)" });
-} else if (index.missing > 0 || index.stale > 0) {
-  checks.push({ name: "Search index", status: "WARN", detail: `${index.indexed}/${index.total} indexed · ${index.missing} missing · ${index.stale} stale — run \`npm run build-index\`` });
+// Skip when the corpus is unreadable — indexStatus() reparses entries.json via
+// loadCorpus() and would throw on corruption. The doctor is most needed during
+// exactly that scenario, so it must not crash there.
+if (!entries) {
+  checks.push({ name: "Search index", status: "WARN", detail: "skipped — corpus unreadable; restore first (run `npm run restore-corpus -- --latest`)" });
 } else {
-  checks.push({ name: "Search index", status: "PASS", detail: `${index.indexed}/${index.total} indexed, no drift` });
+  const index = indexStatus();
+  if (!index.hasIndex) {
+    checks.push({ name: "Search index", status: "WARN", detail: "no index — keyword search only (run `npm run build-index`)" });
+  } else if (index.missing > 0 || index.stale > 0) {
+    checks.push({ name: "Search index", status: "WARN", detail: `${index.indexed}/${index.total} indexed · ${index.missing} missing · ${index.stale} stale — run \`npm run build-index\`` });
+  } else {
+    checks.push({ name: "Search index", status: "PASS", detail: `${index.indexed}/${index.total} indexed, no drift` });
+  }
 }
 
 // ── 7. Env / provider status ─────────────────────────────────────────────────

@@ -123,3 +123,43 @@ describe("hueBand", () => {
     expect(hueBand(30)).toBe("orange");
   });
 });
+
+describe("review-status filtering (drafts hidden by default)", () => {
+  // Regression: aggregation tools used to call loadCorpus() directly and include
+  // drafts, so a half-finished entry leaked into anti-pattern consensus, palettes,
+  // technique lists, and the browse summary. The shared filter now mirrors
+  // searchRanked — drafts are excluded unless reviewStatus:"any" is passed.
+  function draftEntry(id: string): CorpusEntryT {
+    return entry({
+      id,
+      reviewStatus: "draft",
+      antiPatterns: { antiPatterns: ["Draft-only mistake that shouldn't surface in consensus."], whereThisFails: [], accessibilityRisks: [] },
+      whatToSteal: ["Draft-only technique that shouldn't surface in steal lists."],
+      visual: { accentColor: null, dominantColors: [], typePairing: { display: null, body: null, notes: "" }, spacingDensity: "moderate", cornerStyle: "slight-round", usesShadows: false, usesBorders: true, colorRoles: { canvas: "#fff", surface: "#f8f8f8", ink: "#111", muted: "#888", accent: "#ff0000" } },
+    });
+  }
+
+  it("aggregateAntiPatterns excludes drafts by default, includes with reviewStatus:'any'", () => {
+    const results = aggregateAntiPatterns([entry({ id: "ok" }), draftEntry("d1")], {});
+    expect(results.every((r) => !r.sources.includes("d1"))).toBe(true);
+    const withAny = aggregateAntiPatterns([entry({ id: "ok" }), draftEntry("d1")], { reviewStatus: "any" });
+    expect(withAny.some((r) => r.sources.includes("d1"))).toBe(true);
+  });
+
+  it("collectPalettes excludes drafts by default", () => {
+    const results = collectPalettes([entry({ id: "ok", visual: { accentColor: null, dominantColors: [], typePairing: { display: null, body: null, notes: "" }, spacingDensity: "moderate", cornerStyle: "slight-round", usesShadows: false, usesBorders: true, colorRoles: { canvas: "#fff", surface: "#f8f8f8", ink: "#111", muted: "#888", accent: "#3b82f6" } } }), draftEntry("d1")], {});
+    expect(results.every((p) => p.id !== "d1")).toBe(true);
+  });
+
+  it("collectTechniques excludes drafts by default", () => {
+    const results = collectTechniques([entry({ id: "ok" }), draftEntry("d1")], {});
+    expect(results.every((t) => t.source.id !== "d1")).toBe(true);
+  });
+
+  it("browseByPattern excludes drafts by default", () => {
+    const results = browseByPattern([entry({ id: "ok" }), draftEntry("d1")]);
+    // The draft contributes to dashboard count if not filtered; verify it's gone.
+    const dash = results.find((r) => r.patternType === "dashboard");
+    expect(dash?.count).toBe(1); // only "ok", not "d1"
+  });
+});

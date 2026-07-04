@@ -15,10 +15,20 @@ export interface FilterOpts {
   patternType?: string;
   category?: string;
   styleTag?: string;
+  /**
+   * Workflow-state filter, mirroring searchRanked. Aggregation tools hide drafts
+   * by default so half-finished entries don't leak into anti-pattern consensus,
+   * palettes, technique lists, or browse summaries. Pass "any" to include them
+   * (e.g. a curation tool that wants to see drafts).
+   */
+  reviewStatus?: "approved" | "draft" | "any";
 }
 
 function filterEntries(entries: CorpusEntryT[], opts: FilterOpts): CorpusEntryT[] {
+  const statusFilter = opts.reviewStatus ?? "approved";
   return entries.filter((e) => {
+    if (statusFilter === "approved" && e.reviewStatus === "draft") return false;
+    if (statusFilter === "draft" && e.reviewStatus !== "draft") return false;
     if (opts.patternType && e.patternType !== opts.patternType) return false;
     if (opts.category && !e.categories.includes(opts.category as never)) return false;
     if (opts.styleTag && !e.styleTags.includes(opts.styleTag as never)) return false;
@@ -165,8 +175,14 @@ export interface BrowseResult {
  * enough density (≥1 entry), report count, top products, and the exemplar
  * (highest-quality entry). Optional styleTag filter scopes which entries count.
  */
-export function browseByPattern(entries: CorpusEntryT[], opts: { styleTag?: string } = {}): BrowseResult[] {
-  const filtered = opts.styleTag ? entries.filter((e) => e.styleTags.includes(opts.styleTag as never)) : entries;
+export function browseByPattern(entries: CorpusEntryT[], opts: { styleTag?: string; reviewStatus?: "approved" | "draft" | "any" } = {}): BrowseResult[] {
+  const statusFilter = opts.reviewStatus ?? "approved";
+  let filtered = entries.filter((e) => {
+    if (statusFilter === "approved" && e.reviewStatus === "draft") return false;
+    if (statusFilter === "draft" && e.reviewStatus !== "draft") return false;
+    return true;
+  });
+  if (opts.styleTag) filtered = filtered.filter((e) => e.styleTags.includes(opts.styleTag as never));
   const byPattern = new Map<string, CorpusEntryT[]>();
   for (const e of filtered) {
     const arr = byPattern.get(e.patternType) ?? [];

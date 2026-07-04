@@ -32,8 +32,13 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
 - `reviewStatus: "draft" | "approved"` schema field (optional, defaults approved)
 - MCP search hides drafts by default; surface with `reviewStatus:"draft"` or `"any"`
 - `findSimilarEntries` excludes drafts (a draft shouldn't surface as "similar to")
+- Aggregation tools (anti-patterns, palettes, techniques, browse) exclude drafts too
 - Curator UI: review-state toggle in the form, draft chip in list + detail
 - Properly separates content hygiene ([DRAFT] marker gate) from workflow state
+- **Decision: approved-by-default.** Tagger output and bulk imports land as
+  approved — solo fast-curation workflow trusts the tagger and reviews inline.
+  reviewStatus is opt-in for entries that need a second look, not a tax on every
+  import. Revisit if a second curator joins or tagger quality drops.
 - `provenance: { taggedBy: human|auto|auto-reviewed, reviewedBy? }` — tracks how
   fields were produced. Tagger marks `auto`; PUT handler flips to `auto-reviewed`
   on human edit; CLI marks `human`. corpus-stats surfaces the split. Optional,

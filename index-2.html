@@ -1597,13 +1597,34 @@ async function commitQueue() {
   if (ready.length === 0) { toast("Nothing ready to commit (auto-fill first)", "error"); return; }
 
   let committed = 0;
+  let duplicateSkipped = 0;
   const tasks = ready.map(({ item, index }) => async () => {
     state.bulkQueue[index]._status = "committing";
     renderBulk();
     // Server assigns a unique id; strip any client-side id first.
     const payload = JSON.parse(JSON.stringify(item));
     payload.id = "";
-    const data = await request("/entries", { method: "POST", body: JSON.stringify(payload) });
+    // Commit is the authoritative dedup gate (POST /entries re-checks against
+    // the live corpus). Read the response directly so a 409 duplicate can be
+    // marked distinctly from a validation error — a duplicate isn't a failure,
+    // it's the gate catching something the upload-time check missed.
+    const response = await fetch(`${API}/entries`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 409 && data.duplicate) {
+      state.bulkQueue[index]._status = "error";
+      state.bulkQueue[index]._error = `Duplicate (${data.type}) of ${data.match} — skipped`;
+      duplicateSkipped += 1;
+      renderBulk();
+      return;
+    }
+    if (!response.ok) {
+      const message = data.issues?.join("\n") || data.error || "Commit failed (validation)";
+      throw new Error(message);
+    }
     state.bulkQueue[index]._status = "committed";
     committed += 1;
     renderBulk();
@@ -1625,7 +1646,11 @@ async function commitQueue() {
   state.bulkQueue = state.bulkQueue.filter((i) => i._status !== "committed");
   await loadAll();
   renderBulk();
-  toast(`Committed ${committed} to corpus`, committed ? "success" : "error");
+  const parts = [`Committed ${committed} to corpus`];
+  if (duplicateSkipped) parts.push(`${duplicateSkipped} duplicate${duplicateSkipped === 1 ? "" : "s"} skipped`);
+  const errs = state.bulkQueue.filter((i) => i._status === "error" && !/Duplicate/.test(i._error || "")).length;
+  if (errs) parts.push(`${errs} error(s)`);
+  toast(parts.join(" · "), committed ? "success" : (duplicateSkipped && !errs ? "success" : "error"));
 }
 
 function bulkRemoveAt(index) {

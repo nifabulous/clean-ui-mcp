@@ -382,6 +382,38 @@ export function prepareNewEntryPayload(payload: unknown, entries: CorpusEntryT[]
   return validateEntryPayload(raw);
 }
 
+/**
+ * Commit-time duplicate gate. The client dedups at UPLOAD time (against the
+ * corpus + batch siblings), but that check can go stale: a sibling committed
+ * between stage and commit, a prior batch left a near-identical shot, or the
+ * batch tracking missed a case. The commit endpoint is the single point where
+ * the corpus actually mutates, so this is the authoritative gate.
+ *
+ * Computes the incoming image's SHA-256 + dHash and compares against every
+ * committed entry. Returns the matched entry id + type, or null if unique.
+ * Uses the same dhash cache + threshold as /api/check-duplicate for consistency.
+ */
+export async function findDuplicateAtCommit(entry: CorpusEntryT, entries: CorpusEntryT[]): Promise<{ match: string; type: "exact" | "near" } | null> {
+  if (!entry.image.path) return null;
+  const fullPath = fromCorpusRelativeImagePath(entry.image.path);
+  if (!existsSync(fullPath)) return null; // can't fingerprint a missing image
+  const incomingHash = createHash("sha256").update(readFileSync(fullPath)).digest("hex");
+  // dHash can fail on unusual/encoded PNGs (sharp's libpng); the exact SHA-256
+  // check must still run, so don't bail when dHash is unavailable — just skip
+  // the near-dup comparison for that image.
+  const incomingDhash = await computeDHash(fullPath).catch(() => "");
+  loadDHashCache();
+  for (const existing of entries) {
+    if (existing.id === entry.id) continue; // self (PUT path)
+    if (!existing.image.path) continue;
+    const fp = await fingerprintFor(existing);
+    if (!fp) continue;
+    if (fp.hash === incomingHash) return { match: existing.id, type: "exact" };
+    if (incomingDhash && fp.dhash && hammingDistance(incomingDhash, fp.dhash) < DHASH_THRESHOLD) return { match: existing.id, type: "near" };
+  }
+  return null;
+}
+
 export function orphanedPrivateImagePaths(files: string[], entries: CorpusEntryT[]): string[] {
   const referenced = new Set(
     entries
@@ -837,6 +869,15 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   if (req.method === "POST" && url.pathname === "/api/entries") {
     try {
       const entry = prepareNewEntryPayload(await readJson(req), entries);
+      // Commit-time dedup gate — the authoritative check. The client dedups at
+      // upload, but the corpus can change between stage and commit, and batch
+      // tracking isn't bulletproof. Reject here with 409 so the client can mark
+      // the row as a duplicate rather than a generic error.
+      const dup = await findDuplicateAtCommit(entry, entries);
+      if (dup) {
+        sendJson(res, 409, { error: `Duplicate image (${dup.type}) of an existing entry: ${dup.match}`, duplicate: true, type: dup.type, match: dup.match });
+        return;
+      }
       saveEntries([...entries, entry]);
       sendJson(res, 201, { entry });
     } catch (error) {

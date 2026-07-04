@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { isPrivateAddress, orphanedPrivateImagePaths, prepareNewEntryPayload, publicConfigStatus, sameOrigin, uniqueEntryId, validateEntryPayload } from "./ui-server.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { findDuplicateAtCommit, isPrivateAddress, orphanedPrivateImagePaths, prepareNewEntryPayload, publicConfigStatus, sameOrigin, uniqueEntryId, validateEntryPayload } from "./ui-server.js";
 import type { IncomingMessage } from "node:http";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { PRIVATE_IMAGE_DIR } from "../paths.js";
 import type { CorpusEntryT } from "../schema.js";
 
 function req(headers: Record<string, string | undefined>): IncomingMessage {
@@ -212,5 +215,62 @@ describe("draft hygiene gate (centralized)", () => {
 
   it("accepts a clean entry with no markers anywhere", () => {
     expect(() => validateEntryPayload(baseEntry)).not.toThrow();
+  });
+});
+
+describe("commit-time duplicate gate", () => {
+  // Regression: the POST /entries endpoint (the corpus mutation point) had no
+  // duplicate check — only the upload-time /api/check-duplicate did. A row that
+  // passed upload-time dedup could still commit a duplicate if a sibling landed
+  // first or a near-identical shot existed from a prior batch. findDuplicateAtCommit
+  // is the authoritative gate, so test it directly with real image bytes.
+  const testDir = join(PRIVATE_IMAGE_DIR, "__dedup-test");
+  // 64x64 solid-blue PNGs that sharp can definitely decode (1x1s fail sharp's
+  // libpng). a and b are byte-identical (exact dup); c is byte-distinct.
+  const pngBlue = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAn0lEQVRoge2SQQkAQRDDqqTqTmxkrYh7hIFCBKSh6cdpoht0A9ArdhfiLtENugHoFbsLcZfoBt0A9IrdhbhLdINuAHrF7kLcJbpBNwC9Ynch7hLdoBuAXrG7EHeJbtANQK/YXYi7RDfoBqBX7C7EXaIbdAPQK3YX4i7RDboB6BW7C3GX6AbdAPSK3YW4S3SDbgB6xe5C3CW6QTcAveIfHrj6oS2wXLsiAAAAAElFTkSuQmCC";
+  const pngDistinct = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFeAJ5fVqRtwAAAABJRU5ErkJggg==";
+
+  function entryAt(path: string, id: string): CorpusEntryT {
+    return { ...baseEntry, id, image: { ...baseEntry.image, path } } as CorpusEntryT;
+  }
+
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, "a.png"), Buffer.from(pngBlue, "base64"));
+    writeFileSync(join(testDir, "b.png"), Buffer.from(pngBlue, "base64")); // byte-identical to a
+    writeFileSync(join(testDir, "c.png"), Buffer.from(pngDistinct, "base64")); // different bytes
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("flags an exact byte-identical image as a duplicate", async () => {
+    const existing = [entryAt("images-private/__dedup-test/a.png", "orig")];
+    const incoming = entryAt("images-private/__dedup-test/b.png", "new");
+    const dup = await findDuplicateAtCommit(incoming, existing);
+    expect(dup).not.toBeNull();
+    expect(dup?.type).toBe("exact");
+    expect(dup?.match).toBe("orig");
+  });
+
+  it("returns null for a genuinely unique image against an empty corpus", async () => {
+    const dup = await findDuplicateAtCommit(
+      entryAt("images-private/__dedup-test/c.png", "new"),
+      [],
+    );
+    expect(dup).toBeNull();
+  });
+
+  it("does not flag the entry against itself on PUT (self-exclusion)", async () => {
+    // The PUT path re-validates an existing entry; its image is already in the
+    // corpus under its own id. findDuplicateAtCommit must skip self, or every
+    // edit of an existing entry would 409.
+    const existing = [entryAt("images-private/__dedup-test/a.png", "same-id")];
+    const dup = await findDuplicateAtCommit(
+      entryAt("images-private/__dedup-test/a.png", "same-id"),
+      existing,
+    );
+    expect(dup).toBeNull();
   });
 });

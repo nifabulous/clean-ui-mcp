@@ -228,4 +228,30 @@ describe("tagImage two-pass request shape", () => {
     delete process.env.GEMINI_API_KEY;
     process.env.AUTO_TAG_PROVIDER_EXTRACTION = savedExtr;
   });
+
+  it("retries transient 503 errors instead of failing immediately", async () => {
+    // Regression: Gemini returns 503 "This model is currently experiencing high
+    // demand" under load, and each one killed a bulk-import row. The provider
+    // calls now retry transient 5xx (502/503/504) + network errors with backoff.
+    // Mock consecutive 503s and confirm the call is retried (callCount > 1),
+    // not treated as fatal on the first attempt.
+    const savedExtr = process.env.AUTO_TAG_PROVIDER_EXTRACTION;
+    process.env.AUTO_TAG_PROVIDER_EXTRACTION = "gemini";
+    process.env.GEMINI_API_KEY = "gem-test";
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async () => {
+      callCount++;
+      // Always 503 — we only assert retries happen, not the eventual success.
+      return new Response(JSON.stringify({ error: { message: "This model is currently experiencing high demand." } }), { status: 503, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    try { await tagImage({ imagePath: testImage, productName: "Test", url: null, extractionOnly: true }); }
+    catch { /* expected — every attempt 503s; we only assert the retry count */ }
+
+    // 1 original + up to MAX_RETRIES (3) = 4 attempts before giving up.
+    expect(callCount).toBe(4);
+
+    delete process.env.GEMINI_API_KEY;
+    process.env.AUTO_TAG_PROVIDER_EXTRACTION = savedExtr;
+  }, 15000); // backoff is real (800+1600+3200ms); needs headroom over the 5s default.
 });

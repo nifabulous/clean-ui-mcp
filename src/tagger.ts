@@ -189,6 +189,67 @@ const GEMINI_AUTO_TAG_MODEL = process.env.GEMINI_AUTO_TAG_MODEL ?? "gemini-2.5-f
 
 const MAX_OUTPUT_TOKENS = 4200;
 
+// Transient provider errors (502/503/504, "overloaded", "high demand", network
+// resets) are common under load — Gemini in particular returns 503 "This model
+// is currently experiencing high demand" during peak hours. Retrying with
+// backoff turns a batch-killing transient into a brief delay. 429s are NOT
+// retried here (they signal a real quota limit; the UI surfaces a clear message
+// and the user should switch keys or wait).
+const MAX_RETRIES = 3;
+const RETRY_BASE_MS = 800;
+
+/**
+ * fetch() wrapper that retries transient failures with exponential backoff.
+ * Retries on: 502/503/504, network errors (ECONNRESET, fetch TypeError), and
+ * provider bodies mentioning "overloaded"/"high demand"/"temporarily".
+ * Does NOT retry 4xx (auth/validation/quota) — those are deterministic.
+ */
+async function fetchWithRetry(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(input, init);
+      // Peek at the body once for the transient check; re-wrap for the caller.
+      if (response.status >= 500 && response.status <= 599 && attempt < MAX_RETRIES) {
+        const text = await response.text().catch(() => "");
+        if (transientServerError(response.status, text)) {
+          await sleep(RETRY_BASE_MS * 2 ** attempt);
+          continue; // re-fetch with a fresh Request body
+        }
+        // Non-transient 5xx or out of retries — return the original error shape.
+        return new Response(text, { status: response.status, headers: response.headers });
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      // Network-level errors (DNS, connection reset, abort) are transient.
+      if (attempt < MAX_RETRIES && isNetworkError(error)) {
+        await sleep(RETRY_BASE_MS * 2 ** attempt);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Provider request failed after retries");
+}
+
+function transientServerError(status: number, body: string): boolean {
+  if (status === 502 || status === 503 || status === 504) return true;
+  return /overloaded|high demand|temporarily|try again|service unavailable/i.test(body);
+}
+
+function isNetworkError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  // fetch() throws TypeError on network failures; Node adds codes for resets.
+  const anyError = error as Error & { code?: string };
+  if (anyError.code && /ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|UND_ERR_SOCKET/.test(anyError.code)) return true;
+  return error instanceof TypeError; // fetch() network failure
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 type Provider = "openai" | "claude" | "gemini";
 type TaggerPass = "extraction" | "critique";
 
@@ -495,7 +556,7 @@ async function callOpenAI(
     userContent.push({ type: "input_image", image_url: `data:${mimeType};base64,${imageData}`, detail });
   }
 
-  const response = await fetch(OPENAI_RESPONSES_API, {
+  const response = await fetchWithRetry(OPENAI_RESPONSES_API, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -540,7 +601,7 @@ async function callClaude(
   content.push({ type: "text", text: prompt });
   if (retryFeedback) content.push({ type: "text", text: retryFeedback });
 
-  const response = await fetch(ANTHROPIC_API, {
+  const response = await fetchWithRetry(ANTHROPIC_API, {
     method: "POST",
     headers: {
       "x-api-key": apiKey,
@@ -593,7 +654,7 @@ async function callGemini(
   if (pass === "extraction") generationConfig.thinkingConfig = { thinkingBudget: 0 };
 
   const endpoint = `${GEMINI_API_BASE}/${GEMINI_AUTO_TAG_MODEL}:generateContent`;
-  const response = await fetch(endpoint, {
+  const response = await fetchWithRetry(endpoint, {
     method: "POST",
     headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
     body: JSON.stringify({

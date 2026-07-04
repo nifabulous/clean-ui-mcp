@@ -7,6 +7,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
+  loadCorpus,
   searchEntries,
   searchRanked,
   getEntryById,
@@ -15,9 +16,10 @@ import {
   indexStatus,
   findSimilarEntries,
 } from "./corpus.js";
-import { Category, StyleTag } from "./schema.js";
+import { Category, StyleTag, PatternType } from "./schema.js";
 import { generateBrief, renderBrief } from "./design-prompt.js";
 import { buildRecommendation, renderRecommendation } from "./recommend.js";
+import { aggregateAntiPatterns, collectPalettes, collectTechniques, browseByPattern, hueBand } from "./aggregations.js";
 import { readFileSync, existsSync } from "node:fs";
 import { fromCorpusRelativeImagePath } from "./paths.js";
 
@@ -443,6 +445,153 @@ server.registerTool(
     }
     const rec = buildRecommendation(results, { productContext, count, category: category as string | undefined, framework: framework ?? "brief" });
     return { content: [{ type: "text", text: renderRecommendation(rec) }] };
+  },
+);
+
+/**
+ * Tool: get_anti_patterns
+ * Surfaces the "what mistakes to avoid" knowledge — the feature Mobbin can't
+ * offer. Aggregates anti-pattern statements across a category, deduped and
+ * ranked by consensus. An agent designing a modal can ask "what should I
+ * avoid?" and get the consensus mistakes across all modal entries.
+ */
+server.registerTool(
+  "get_anti_patterns",
+  {
+    title: "Get anti-patterns to avoid for a UI pattern",
+    description:
+      "Returns the consensus anti-patterns (common UI mistakes to avoid) for a given " +
+      "pattern type, aggregated across all matching corpus entries and ranked by how " +
+      "many entries raise each one. Each anti-pattern lists its source entries so you " +
+      "can trace it back. This is the 'what NOT to do' knowledge that screenshot " +
+      "galleries can't offer — use it alongside search_ui_examples when designing a " +
+      "specific pattern. Omit patternType to get anti-patterns across the whole corpus.",
+    inputSchema: {
+      patternType: PatternType.optional().describe("Scope to a UI pattern (e.g. 'modal', 'dashboard'). Omit for corpus-wide."),
+      category: Category.optional().describe("Further scope to a category"),
+      limit: z.number().min(1).max(20).optional().describe("Max anti-patterns to return (default 10)"),
+    },
+  },
+  async ({ patternType, category, limit }) => {
+    const results = aggregateAntiPatterns(loadCorpus(), { patternType: patternType as string | undefined, category: category as string | undefined }, limit ?? 10);
+    if (!results.length) {
+      const scope = patternType ? ` for patternType '${patternType}'` : "";
+      return { content: [{ type: "text", text: `No anti-patterns found${scope}.` }] };
+    }
+    const lines = [`# Anti-patterns to avoid${patternType ? ` (${patternType})` : ""}\n`];
+    results.forEach((r, i) => {
+      lines.push(`${i + 1}. **${r.text}**`);
+      lines.push(`   _Raised by ${r.count} entr${r.count === 1 ? "y" : "ies"}: ${r.sources.slice(0, 5).map((s) => `\`${s}\``).join(", ")}${r.sources.length > 5 ? `, …+${r.sources.length - 5}` : ""}_\n`);
+    });
+    return { content: [{ type: "text", text: lines.join("\n") }] };
+  },
+);
+
+/**
+ * Tool: get_color_palette
+ * Palette generator from the corpus's colorRoles data. Returns paste-ready
+ * token sets grouped by accent hue band, scoped to a pattern/style.
+ */
+server.registerTool(
+  "get_color_palette",
+  {
+    title: "Get color palettes for a UI pattern or style",
+    description:
+      "Returns paste-ready color token sets (canvas/surface/ink/muted/accent) from " +
+      "corpus entries that have colorRoles, grouped by accent hue band (red, blue, " +
+      "green, etc.). Use this when you want real-world palettes for a specific pattern " +
+      "('calm palettes for a dashboard') rather than generating from scratch. Each " +
+      "palette links back to its source entry. Sorted by accent hue for visual grouping.",
+    inputSchema: {
+      patternType: PatternType.optional().describe("Scope to a UI pattern"),
+      styleTag: StyleTag.optional().describe("Scope to a style (e.g. 'minimal', 'playful')"),
+      limit: z.number().min(1).max(20).optional().describe("Max palettes to return (default 10)"),
+    },
+  },
+  async ({ patternType, styleTag, limit }) => {
+    const results = collectPalettes(loadCorpus(), { patternType: patternType as string | undefined, styleTag: styleTag as string | undefined }, limit ?? 10);
+    if (!results.length) {
+      return { content: [{ type: "text", text: "No entries with colorRoles match those filters. Try a broader patternType or styleTag." }] };
+    }
+    const lines = [`# Color palettes (${results.length})\n`];
+    let lastBand = "";
+    for (const p of results) {
+      const band = hueBand(p.accentHue);
+      if (band !== lastBand) { lines.push(`\n## ${band} accents\n`); lastBand = band; }
+      lines.push(`**${p.product}** (\`${p.id}\`) — ${p.patternType}`);
+      lines.push("```css");
+      lines.push(`  --canvas:${p.tokens.canvas}; --surface:${p.tokens.surface}; --ink:${p.tokens.ink}; --muted:${p.tokens.muted ?? "inherit"}; --accent:${p.tokens.accent};`);
+      lines.push("```\n");
+    }
+    return { content: [{ type: "text", text: lines.join("\n") }] };
+  },
+);
+
+/**
+ * Tool: get_stealable_techniques
+ * Surfaces the 1600+ stealable techniques, browsed by pattern/style and deduped.
+ */
+server.registerTool(
+  "get_stealable_techniques",
+  {
+    title: "Get stealable techniques for a UI pattern",
+    description:
+      "Returns concrete, copyable techniques to borrow from corpus entries, scoped to " +
+      "a pattern type and/or style tag. Deduped by theme so you get variety, not " +
+      "repeats. Each technique cites its source entry. Use this when you want a " +
+      "menu of specific ideas for a pattern ('what can I steal for a dense data " +
+      "table?') rather than a synthesized brief (use generate_design_prompt for that).",
+    inputSchema: {
+      patternType: PatternType.optional().describe("Scope to a UI pattern"),
+      styleTag: StyleTag.optional().describe("Scope to a style"),
+      limit: z.number().min(1).max(30).optional().describe("Max techniques to return (default 15)"),
+    },
+  },
+  async ({ patternType, styleTag, limit }) => {
+    const results = collectTechniques(loadCorpus(), { patternType: patternType as string | undefined, styleTag: styleTag as string | undefined }, limit ?? 15);
+    if (!results.length) {
+      return { content: [{ type: "text", text: "No techniques found for those filters." }] };
+    }
+    const lines = [`# Stealable techniques (${results.length})\n`];
+    results.forEach((t, i) => {
+      lines.push(`${i + 1}. ${t.text}`);
+      lines.push(`   _from **${t.source.product}** (\`${t.source.id}\`)_\n`);
+    });
+    return { content: [{ type: "text", text: lines.join("\n") }] };
+  },
+);
+
+/**
+ * Tool: browse_ui_examples
+ * Discovery tool — what's in the corpus, organized by pattern. search_ui_examples
+ * needs a query; this lets an agent see what's available before searching.
+ */
+server.registerTool(
+  "browse_ui_examples",
+  {
+    title: "Browse the corpus by UI pattern",
+    description:
+      "Summarizes what's in the corpus grouped by patternType — for each pattern, " +
+      "the count, top products represented, and the highest-quality exemplar entry. " +
+      "Use this to discover what's available before searching (search_ui_examples " +
+      "needs a query; this doesn't). Optional styleTag scopes which entries count. " +
+      "Pair with get_ui_example on the exemplar id to inspect a strong representative.",
+    inputSchema: {
+      styleTag: StyleTag.optional().describe("Scope to a style (e.g. 'minimal') to see which patterns have examples in that style"),
+    },
+  },
+  async ({ styleTag }) => {
+    const results = browseByPattern(loadCorpus(), { styleTag: styleTag as string | undefined });
+    if (!results.length) {
+      return { content: [{ type: "text", text: styleTag ? `No entries found with styleTag '${styleTag}'.` : "Corpus is empty." }] };
+    }
+    const lines = [`# Corpus by pattern (${results.length} patterns represented${styleTag ? `, scoped to '${styleTag}'` : ""})\n`];
+    lines.push("| Pattern | Count | Top products | Exemplar |");
+    lines.push("| --- | --- | --- | --- |");
+    for (const r of results) {
+      lines.push(`| ${r.patternType} | ${r.count} | ${r.products.join(", ")} | **${r.exemplar.product}** \`${r.exemplar.id}\` (${r.exemplar.qualityScore}/5) |`);
+    }
+    return { content: [{ type: "text", text: lines.join("\n") }] };
   },
 );
 

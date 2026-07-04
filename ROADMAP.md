@@ -28,7 +28,7 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
   authoritative check at `POST /entries`, not just at upload)
 - Deferred-critique mode (extraction now, critique on demand) halves bulk cost
 
-### MCP tools (8)
+### MCP tools (12)
 - `search_ui_examples` — vector/keyword search with qualityTier filter
 - `get_ui_example` — full detail + image
 - `get_similar_ui_examples` — cosine similarity ranking
@@ -38,6 +38,15 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
   2-5 entries (paste-ready color tokens, typography, layout, voice, anti-patterns)
 - `recommend_ui_direction(productContext)` — the "design advisor": describe what
   you're building, it embeds + searches + synthesizes with product diversity
+- `get_anti_patterns(patternType?)` — consensus mistakes to avoid, the Mobbin-
+  can't-offer feature (534 anti-pattern statements, ranked by how many entries
+  raise each)
+- `get_color_palette(patternType?, styleTag?)` — paste-ready token sets grouped
+  by accent hue band (192 distinct accents → palette generator)
+- `get_stealable_techniques(patternType?, styleTag?)` — 1690 techniques deduped
+  by theme, browsed by pattern/style
+- `browse_ui_examples(styleTag?)` — what's in the corpus by pattern (count,
+  top products, exemplar) — discovery before search
 
 ### Curator dashboard
 - Three-zone shell (left nav + card canvas + right detail rail)

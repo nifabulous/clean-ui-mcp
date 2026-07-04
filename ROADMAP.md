@@ -28,6 +28,13 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
   authoritative check at `POST /entries`, not just at upload)
 - Deferred-critique mode (extraction now, critique on demand) halves bulk cost
 
+### Workflow state
+- `reviewStatus: "draft" | "approved"` schema field (optional, defaults approved)
+- MCP search hides drafts by default; surface with `reviewStatus:"draft"` or `"any"`
+- `findSimilarEntries` excludes drafts (a draft shouldn't surface as "similar to")
+- Curator UI: review-state toggle in the form, draft chip in list + detail
+- Properly separates content hygiene ([DRAFT] marker gate) from workflow state
+
 ### MCP tools (12)
 - `search_ui_examples` — vector/keyword search with qualityTier filter
 - `get_ui_example` — full detail + image
@@ -87,12 +94,6 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
 ## 🟡 Next (high leverage, buildable now)
 
 The corpus has crossed the density thresholds several deferred items needed.
-
-### `reviewStatus: "draft" | "approved"`
-The proper fix for draft-state encoding, replacing the `[DRAFT]` string-marker
-hack. Block MCP search from returning drafts unless explicitly requested. Real
-schema change — additive, optional, backward-compatible. At 426 entries the
-marker approach is friction; with a second curator it becomes a correctness bug.
 
 ### Provenance field
 ```ts

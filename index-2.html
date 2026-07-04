@@ -135,6 +135,9 @@
   .entry-meta { display: flex; gap: 4px; flex-wrap: wrap; }
   .mini-tag { color: var(--faint); font: 500 10px/1.2 var(--mono); }
   .mini-tag::before { content: "#"; opacity: .5; }
+  .mini-tag.draft { color: var(--amber); }
+  .mini-tag.draft::before { content: ""; opacity: 1; }
+  .status-chip.draft { color: var(--amber); border-color: #ead9b0; }
   .list-footer { padding: 12px 16px; color: var(--faint); border-top: 1px solid var(--line); font: 500 11px/1.2 var(--sans); }
 
   /* Main workspace */
@@ -604,6 +607,7 @@ function renderList() {
       <span class="entry-meta">
         ${entry.categories.slice(0, 2).map((cat) => `<span class="mini-tag">${cat}</span>`).join("")}
         ${entry.image.path ? `<span class="mini-tag">image</span>` : `<span class="mini-tag">link-only</span>`}
+        ${entry.reviewStatus === "draft" ? `<span class="mini-tag draft">draft</span>` : ""}
       </span>
     </button>
   `).join("") : `<div class="empty-state"><div><i data-lucide="search-x"></i><p>No entries match those filters yet — this is a small, hand-picked corpus, so try fewer.</p></div></div>`;
@@ -726,6 +730,7 @@ function renderLibrary() {
           ${entry.source.url ? `<a href="${esc(entry.source.url)}" target="_blank" rel="noopener">${esc(entry.source.url)}</a>` : `<span>No source URL</span>`}
           <span>· ${entry.source.capturedAt}</span>
           ${qualityDots(entry.qualityScore)}
+          ${entry.reviewStatus === "draft" ? `<span class="mini-tag draft">draft — hidden from search</span>` : ""}
         </div>
         <div class="tag-row">
           ${entry.categories.map((cat) => `<span class="tag category">${cat}</span>`).join("")}
@@ -844,6 +849,7 @@ function syncDraftFromForm() {
   }
   state.draft.qualityTier = form.qualityTier ? form.qualityTier.value : "exceptional";
   state.draft.qualityScore = Number(form.qualityScore.value);
+  if (form.reviewStatus) state.draft.reviewStatus = form.reviewStatus.value;
   state.draft.addedAt = form.addedAt.value;
 }
 
@@ -956,6 +962,7 @@ function renderForm() {
               <label>Where copying this fails (one per line, optional)<textarea name="whereThisFails" placeholder="Contexts where lifting this technique would hurt">${esc((entry.antiPatterns?.whereThisFails || []).join("\n"))}</textarea></label>
               <label>Accessibility risks (one per line, optional)<textarea name="accessibilityRisks" placeholder="Specific a11y concerns">${esc((entry.antiPatterns?.accessibilityRisks || []).join("\n"))}</textarea></label>
               <label>Quality tier<select name="qualityTier"><option value="exceptional" ${entry.qualityTier !== "cautionary" ? "selected" : ""}>exceptional (great example)</option><option value="cautionary" ${entry.qualityTier === "cautionary" ? "selected" : ""}>cautionary (bad example — teach what NOT to do)</option></select></label>
+              <label>Review state<select name="reviewStatus"><option value="approved" ${(entry.reviewStatus || "approved") !== "draft" ? "selected" : ""}>approved (visible in MCP search)</option><option value="draft" ${entry.reviewStatus === "draft" ? "selected" : ""}>draft (hidden from search — work in progress)</option></select></label>
               <label>Voice — tone (leave blank if copy isn't notable)<input name="voiceTone" value="${esc(entry.voice?.tone || "")}" placeholder="restrained, confident, slightly dry"></label>
               <label>Voice — real copy examples (one per line)<textarea name="voiceExamples" placeholder="Verbatim copy that defines the voice">${esc((entry.voice?.examples || []).join("\n"))}</textarea></label>
               <label>Voice — what to avoid (one per line, optional)<textarea name="voiceAvoid" placeholder="e.g. no exclamation enthusiasm on financial data">${esc((entry.voice?.avoid || []).join("\n"))}</textarea></label>
@@ -1188,6 +1195,8 @@ function cleanTaggedDraft(entry, previous) {
   // overwrite them. Cautionary entries should stay low-scored.
   cleaned.qualityScore = previous.qualityScore || cleaned.qualityScore || 4;
   if (previous.qualityTier) cleaned.qualityTier = previous.qualityTier;
+  // Preserve reviewStatus — auto-fill shouldn't flip a draft to approved.
+  if (previous.reviewStatus) cleaned.reviewStatus = previous.reviewStatus;
   cleaned.addedAt = previous.addedAt || today();
   return cleaned;
 }

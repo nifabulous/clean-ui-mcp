@@ -28,12 +28,14 @@ export function setCorpusForTesting(entries: CorpusEntryT[] | null): void {
 }
 
 export interface SearchOptions {
-  query?:       string;
-  category?:    string;
-  styleTag?:    string;
-  minQuality?:  number;
-  qualityTier?: string;
-  limit?:       number;
+  query?:        string;
+  category?:     string;
+  styleTag?:     string;
+  minQuality?:   number;
+  qualityTier?:  string;
+  /** "approved" (default) hides drafts; "draft" surfaces only drafts; "any" shows both. */
+  reviewStatus?: "draft" | "approved" | "any";
+  limit?:        number;
 }
 
 export interface SearchResult {
@@ -159,6 +161,13 @@ export async function searchRanked(opts: SearchOptions): Promise<SearchResult[]>
     if (opts.styleTag    && !e.styleTags.includes(opts.styleTag as never))   return false;
     if (opts.minQuality  && e.qualityScore < opts.minQuality)                return false;
     if (opts.qualityTier && e.qualityTier !== opts.qualityTier)              return false;
+    // Workflow state: hide drafts unless the caller explicitly asks for them.
+    // "approved" (default/omitted) → only approved; "draft" → only drafts;
+    // "any" → both. This prevents half-finished entries from leaking into
+    // retrieval results.
+    const statusFilter = opts.reviewStatus ?? "approved";
+    if (statusFilter === "approved" && e.reviewStatus === "draft") return false;
+    if (statusFilter === "draft" && e.reviewStatus !== "draft") return false;
     return true;
   });
 
@@ -213,6 +222,7 @@ export function findSimilarEntries(id: string, limit = 5): SimilarResult[] {
 
   for (const e of entries) {
     if (e.id === id) continue; // exclude the source itself
+    if (e.reviewStatus === "draft") continue; // drafts don't surface as similar
     const docVec = index.entries[e.id];
     if (!docVec) continue; // skip unindexed entries rather than scoring them 0
     results.push({ entry: e, score: cosine(sourceVec, docVec) });

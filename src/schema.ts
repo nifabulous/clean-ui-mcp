@@ -285,6 +285,16 @@ export const CorpusEntry = z.object({
 
   qualityScore: z.number().min(1).max(5), // your own rating, for ranking in search
   addedAt: IsoDate, // ISO date
+
+  /**
+   * Workflow state — separates "content hygiene" (the [DRAFT] marker gate, which
+   * blocks save until text is rewritten) from "is this entry finished/approved."
+   * A draft passes the marker gate (text is real) but isn't ready for MCP
+   * retrieval yet — e.g. awaiting a second look, or staged for a batch commit.
+   * MCP search hides drafts by default; surface with reviewStatus:"draft".
+   * Optional + defaults to "approved" so existing entries need no migration.
+   */
+  reviewStatus: z.enum(["draft", "approved"]).optional().default("approved"),
 });
 
 export type CorpusEntryT = z.infer<typeof CorpusEntry>;

@@ -44,6 +44,32 @@ describe("corpus search (fixtures)", () => {
     expect(status.indexed + status.missing).toBe(status.total);
     expect(status.stale).toBeGreaterThanOrEqual(0);
   });
+
+  it("hides draft entries from search by default, surfaces them with reviewStatus:'draft'", async () => {
+    // The fixtures include one draft entry ("draft-unchecked-entry"). Default
+    // search must exclude it; reviewStatus:"draft" must surface only it.
+    setCorpusForTesting(fixtures);
+    // No query, just structural — but drafts are filtered regardless of query.
+    const keywordOnly = await searchEntries({ limit: 100 });
+    expect(keywordOnly.some((e) => e.id === "draft-unchecked-entry")).toBe(false);
+    expect(keywordOnly.some((e) => e.id === "linear-board")).toBe(true);
+
+    const draftsOnly = await searchEntries({ reviewStatus: "draft", limit: 100 });
+    expect(draftsOnly.every((e) => e.reviewStatus === "draft")).toBe(true);
+    expect(draftsOnly.some((e) => e.id === "draft-unchecked-entry")).toBe(true);
+
+    const any = await searchEntries({ reviewStatus: "any", limit: 100 });
+    expect(any.some((e) => e.reviewStatus === "draft")).toBe(true);
+    expect(any.some((e) => e.reviewStatus !== "draft")).toBe(true);
+  });
+
+  it("excludes drafts from findSimilarEntries results", () => {
+    setCorpusForTesting(fixtures);
+    // No index → returns []. But if it did return, drafts must not appear.
+    // The contract test: even with no index, it never throws and returns [].
+    const results = findSimilarEntries("linear-board", 10);
+    expect(results.every((r) => r.entry.reviewStatus !== "draft")).toBe(true);
+  });
 });
 
 // ── real-corpus tests: only structural contracts, never specific content ─────

@@ -64,6 +64,16 @@ export const fixtures: CorpusEntryT[] = [
     qualityTier: "cautionary",
   }),
   entry({
+    id: "draft-unchecked-entry",
+    title: "Draft — not yet reviewed",
+    patternType: "search",
+    categories: ["search"],
+    styleTags: ["minimal"],
+    source: { productName: "WIP", url: null, capturedAt: "2026-07-01", capturedBy: "self" },
+    qualityScore: 3,
+    reviewStatus: "draft", // hidden from MCP search by default
+  }),
+  entry({
     id: "hume-chat",
     title: "Hume — Chat interface",
     patternType: "chat-interface",

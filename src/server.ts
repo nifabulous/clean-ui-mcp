@@ -71,11 +71,15 @@ server.registerTool(
         .enum(["exceptional", "cautionary"])
         .optional()
         .describe("Filter to a quality tier: 'exceptional' (great examples) or 'cautionary' (bad examples worth teaching what NOT to do)"),
+      reviewStatus: z
+        .enum(["approved", "draft", "any"])
+        .optional()
+        .describe("Workflow state: 'approved' (default, finished entries), 'draft' (work-in-progress), or 'any' (both). Drafts are hidden from search by default so half-finished entries don't leak into results."),
       limit: z.number().int().min(1).max(20).optional().describe("Max results, default 5"),
     },
   },
-  async ({ query, category, styleTag, minQuality, qualityTier, limit }) => {
-    const results = await searchEntries({ query, category, styleTag, minQuality, qualityTier, limit });
+  async ({ query, category, styleTag, minQuality, qualityTier, reviewStatus, limit }) => {
+    const results = await searchEntries({ query, category, styleTag, minQuality, qualityTier, reviewStatus: reviewStatus as "draft" | "approved" | "any" | undefined, limit });
 
     // Log for retrieval analytics (query-stats.ts) — never blocks the response.
     logQuery({ query, category, styleTag, qualityTier }, results.map((e) => e.id));

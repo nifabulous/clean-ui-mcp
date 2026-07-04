@@ -346,6 +346,7 @@ const newEntry: CorpusEntryT = {
   },
   qualityTier: "exceptional",
   qualityScore,
+  reviewStatus: "approved", // terminal CLI path — entries land approved; drafts are a UI workflow
   addedAt: today,
 };
 

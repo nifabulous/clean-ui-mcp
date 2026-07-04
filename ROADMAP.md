@@ -86,6 +86,31 @@ and commit them as cautionary entries. This is the feature Mobbin can't touch.
 `settings`. Prioritize by what `query-stats` shows is actually demanded once
 real usage accumulates.
 
+### Anti-pattern quality lint
+`corpus-stats` includes a basic vague-phrase lint, but a dedicated anti-pattern
+quality gate (separate from the critique banned-phrase list) should flag generic
+filler like "avoid clutter," "keep it clean," "be consistent" at validation time,
+not just at reporting time. The list should grow as real offenders are spotted.
+Prevents quality erosion as volume increases and review time per entry drops.
+
+### `qualityScore` vs `qualityTier` definition
+The overlap between `qualityScore` (1-5) and `qualityTier` (exceptional /
+cautionary) is underspecified. Needs a one-sentence definition: for cautionary
+entries, does `qualityScore` mean "how bad it is" or "how instructive it is"?
+Decide and document before scaling past solo curation to avoid inconsistent
+tagging.
+
+### Schema versioning strategy
+Decide now: bump schema version per field addition, or batch into v3? Otherwise
+migration debt accumulates exactly when corpus size makes migrations expensive
+to hand-verify. The v1→v2 migration worked because the corpus was small.
+
+### Draft-hygiene regression test
+`findDraftMarkers()` runs in four places (validate-corpus, commit-draft,
+ui-server, browser). A regression where someone refactors a route and the check
+silently stops firing is invisible. Add a checklist test proving all four call
+sites invoke it — not just a claim in the README.
+
 ---
 
 ## 🔴 Deferred (needs scale or new infrastructure)
@@ -138,6 +163,13 @@ at 200+.
 A `history[]` array with dated snapshots. Low implementation cost (store diffs),
 high curation cost (re-capture the same product over time). Only meaningful at
 scale with a re-capture workflow.
+
+### Multi-curator / reviewer role
+Everything (add-entry, review-draft, commit-draft) assumes one curator. No
+`reviewedBy`/`approvedBy` distinction in the schema. If contributors are ever
+wanted, add a reviewer/approval role before retrofitting becomes expensive.
+`source.capturedBy` exists implicitly but doesn't capture who reviewed or
+approved the final entry.
 
 ### Index staleness detection
 Compare corpus entry ids/hash against `embeddings.json`. Surface "index is stale"

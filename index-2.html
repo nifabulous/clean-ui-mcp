@@ -1375,10 +1375,10 @@ async function enqueueFiles(fileList) {
       method: "POST",
       body: JSON.stringify({ filename: file.name, slug, dataUrl }),
     });
-    // Dedup check: compare hash + dimensions against existing corpus entries.
+    // Dedup check: compare hash + perceptual hash + dimensions against corpus.
     const dupCheck = await request("/check-duplicate", {
       method: "POST",
-      body: JSON.stringify({ hash: uploaded.hash, width: uploaded.width, height: uploaded.height, path: uploaded.path }),
+      body: JSON.stringify({ hash: uploaded.hash, dhash: uploaded.dhash, width: uploaded.width, height: uploaded.height, path: uploaded.path }),
     });
     if (dupCheck.duplicate) {
       throw new Error(`Duplicate (${dupCheck.type}) of "${dupCheck.match}" — skipped`);

@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { lookup } from "node:dns";
+import sharp from "sharp";
 import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, findDraftMarkers, type CorpusEntryT } from "../schema.js";
@@ -17,6 +18,45 @@ const PORT = Number(process.env.CLEAN_UI_PORT ?? 3131);
 const ENTRIES_PATH = resolve(CORPUS_ROOT, "entries.json");
 const APP_PATH = resolve(PROJECT_ROOT, "index-2.html");
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
+
+// ─── perceptual hashing (dHash) for near-duplicate detection ─────────────────
+
+/**
+ * Compute a 64-bit dHash (difference hash) of an image using sharp.
+ * Resizes to 9×8 grayscale, compares adjacent horizontal pixels, produces
+ * a hex string. Two images of the same page (different scroll/compression)
+ * produce hashes that differ by only a few bits.
+ */
+async function computeDHash(imagePath: string): Promise<string> {
+  const data = await sharp(imagePath)
+    .greyscale()
+    .resize(9, 8, { fit: "fill" })
+    .raw()
+    .toBuffer();
+
+  // Compare each pixel with its right neighbor → 64 bits.
+  let hash = 0n;
+  for (let row = 0; row < 8; row++) {
+    for (let col = 0; col < 8; col++) {
+      const left = data[row * 9 + col];
+      const right = data[row * 9 + col + 1];
+      hash = (hash << 1n) | (BigInt(left > right ? 1 : 0));
+    }
+  }
+  return hash.toString(16).padStart(16, "0");
+}
+
+/** Hamming distance between two hex hashes (number of differing bits). */
+function hammingDistance(a: string, b: string): number {
+  const bigA = BigInt("0x" + a);
+  const bigB = BigInt("0x" + b);
+  let xor = bigA ^ bigB;
+  let count = 0;
+  while (xor) { count += Number(xor & 1n); xor >>= 1n; }
+  return count;
+}
+
+const DHASH_THRESHOLD = 12; // <12 bits different out of 64 = near-duplicate
 
 function loadEntries(): CorpusEntryT[] {
   const raw = JSON.parse(readFileSync(ENTRIES_PATH, "utf-8"));
@@ -351,6 +391,8 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse) {
   writeFileSync(absolutePath, data);
   const dimensions = imageSize(data);
   const hash = createHash("sha256").update(data).digest("hex");
+  let dhash = "";
+  try { dhash = await computeDHash(absolutePath); } catch { /* sharp may fail on tiny/invalid images */ }
 
   sendJson(res, 201, {
     path: toCorpusRelativePath(absolutePath),
@@ -358,6 +400,7 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse) {
     height: dimensions.height ?? null,
     visibility: "private",
     hash,
+    dhash,
   });
 }
 
@@ -472,26 +515,37 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/check-duplicate") {
-    const payload = await readJson(req) as { hash?: string; width?: number; height?: number; path?: string };
-    const hash = payload.hash ?? "";
+    const payload = await readJson(req) as { hash?: string; dhash?: string; width?: number; height?: number; path?: string };
+    const newHash = payload.hash ?? "";
+    const newDhash = payload.dhash ?? "";
     const w = payload.width ?? 0;
     const h = payload.height ?? 0;
 
     let exactMatch: string | null = null;
     let nearMatch: string | null = null;
 
-    // Build a hash map of all corpus entry images for exact matching.
     for (const entry of entries) {
       if (!entry.image.path) continue;
       try {
         const fullPath = fromCorpusRelativeImagePath(entry.image.path);
         if (!existsSync(fullPath)) continue;
+
+        // Level 1: exact SHA-256 match.
         const imgData = readFileSync(fullPath);
         const entryHash = createHash("sha256").update(imgData).digest("hex");
+        if (entryHash === newHash) { exactMatch = entry.id; break; }
 
-        if (entryHash === hash) { exactMatch = entry.id; break; }
+        // Level 2: perceptual hash (dHash) via Hamming distance.
+        // Catches same-page-different-scroll, recompression, minor crops.
+        if (!nearMatch && newDhash) {
+          const entryDhash = await computeDHash(fullPath).catch(() => "");
+          if (entryDhash && hammingDistance(newDhash, entryDhash) < DHASH_THRESHOLD) {
+            nearMatch = entry.id;
+            continue;
+          }
+        }
 
-        // Near-duplicate: same dimensions + same aspect ratio (within 2px tolerance).
+        // Level 3 (fallback when dHash unavailable): same dimensions.
         if (!nearMatch && w > 0 && h > 0 && entry.image.width && entry.image.height) {
           const dimMatch = Math.abs(entry.image.width - w) <= 2 && Math.abs(entry.image.height - h) <= 2;
           if (dimMatch) nearMatch = entry.id;

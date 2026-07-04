@@ -74,18 +74,43 @@ export async function embedQuery(text: string): Promise<number[]> {
 
 /** Embed a batch of document strings. Voyages's batch limit is 128 inputs. */
 export async function embedDocuments(texts: string[]): Promise<number[][]> {
-  const BATCH = 128;
+  const BATCH = 64; // 64 (not 128) to stay under Voyage's token-per-request cap on dense entries
   const results: number[][] = [];
   for (let i = 0; i < texts.length; i += BATCH) {
     const batch = texts.slice(i, i + BATCH);
-    const vecs  = await voyageEmbed(batch, "document");
+    const vecs  = await voyageEmbedWithRetry(batch, "document");
     results.push(...vecs);
     if (i + BATCH < texts.length) {
       // Polite pause between batches — Voyage free tier is rate-limited
-      await new Promise((r) => setTimeout(r, 300));
+      await new Promise((r) => setTimeout(r, 400));
     }
   }
   return results;
+}
+
+/** voyageEmbed with retry+backoff on 429/transient errors. Rate limits are the
+ *  expected failure mode on the free tier when embedding hundreds of entries. */
+async function voyageEmbedWithRetry(
+  texts: string[],
+  inputType: "document" | "query",
+  retries = 4,
+): Promise<number[][]> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await voyageEmbed(texts, inputType);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const isRateLimit = /429|rate_limit|RESOURCE_EXHAUSTED|Too Many Requests/i.test(msg);
+      if (attempt < retries && isRateLimit) {
+        const backoff = 2000 * 2 ** attempt; // 2s, 4s, 8s, 16s
+        console.error(`  [voyage] rate limited, retrying in ${backoff / 1000}s (attempt ${attempt + 1}/${retries})…`);
+        await new Promise((r) => setTimeout(r, backoff));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("voyageEmbedWithRetry: unreachable");
 }
 
 // ─── cosine similarity (dot product — Voyage vectors are L2-normalized) ───────

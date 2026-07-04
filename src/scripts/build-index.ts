@@ -71,24 +71,34 @@ if (toEmbed.length === 0) {
 
 console.log(`Embedding ${toEmbed.length} entries (${entries.length - toEmbed.length} already indexed)…`);
 
-// Build document texts
-const texts = toEmbed.map(entryToDocument);
-
-// Embed — logs progress for large batches
-const vectors = await embedDocuments(texts);
-
-if (vectors.length !== toEmbed.length) {
-  console.error(`API returned ${vectors.length} vectors for ${toEmbed.length} inputs — aborting.`);
-  process.exit(1);
-}
-
 // Merge into existing index (or start fresh)
 const index: EmbeddingIndex = existing && !values.force
   ? existing
   : { version: 1, model: "voyage-4", entries: {} };
 
-for (let i = 0; i < toEmbed.length; i++) {
-  index.entries[toEmbed[i].id] = vectors[i];
+// Embed in checkpoints of CHUNK entries each, saving the index after every
+// chunk. A rate-limit failure at entry 300 keeps the first 300 — re-running
+// picks up where it left off (incremental mode skips already-indexed ids).
+// embedDocuments handles per-batch retry/backoff internally; this adds
+// crash-resilience on top.
+const CHUNK = 100;
+let embedded = 0;
+for (let start = 0; start < toEmbed.length; start += CHUNK) {
+  const chunk = toEmbed.slice(start, start + CHUNK);
+  const texts = chunk.map(entryToDocument);
+  const vectors = await embedDocuments(texts);
+  if (vectors.length !== chunk.length) {
+    console.error(`API returned ${vectors.length} vectors for ${chunk.length} inputs — aborting at chunk ${start}.`);
+    console.error(`Index saved with ${Object.keys(index.entries).length} entries so far. Re-run to continue.`);
+    saveIndex(index);
+    process.exit(1);
+  }
+  for (let i = 0; i < chunk.length; i++) {
+    index.entries[chunk[i].id] = vectors[i];
+  }
+  saveIndex(index); // checkpoint
+  embedded += chunk.length;
+  console.log(`  ${embedded}/${toEmbed.length} embedded — index saved (${Object.keys(index.entries).length} total)`);
 }
 
 // Remove stale entries (ids no longer in corpus)

@@ -23,7 +23,9 @@
     "review-draft": "tsc && node dist/scripts/review-draft.js",
     "commit-draft": "tsc && node dist/scripts/commit-draft.js",
     "migrate": "tsc && node dist/scripts/migrate-v1-to-v2.js",
-    "migrate-layout": "tsc && node dist/scripts/migrate-layout-field.js"
+    "migrate-layout": "tsc && node dist/scripts/migrate-layout-field.js",
+    "corpus-stats": "tsc && node dist/scripts/corpus-stats.js",
+    "query-stats": "tsc && node dist/scripts/query-stats.js"
   },
   "keywords": [
     "mcp",

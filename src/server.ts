@@ -2,6 +2,9 @@
 import "./env.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { appendFile } from "node:fs/promises";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
   searchEntries,
@@ -14,6 +17,15 @@ import {
 import { Category, StyleTag } from "./schema.js";
 import { readFileSync, existsSync } from "node:fs";
 import { fromCorpusRelativeImagePath } from "./paths.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const QUERY_LOG_PATH = resolve(__dirname, "..", "corpus", "query-log.jsonl");
+
+/** Append-only query log for retrieval analytics (query-stats.ts). Never throws. */
+async function logQuery(params: { query?: string; category?: string; styleTag?: string; qualityTier?: string }, resultIds: string[]): Promise<void> {
+  const entry = JSON.stringify({ ts: new Date().toISOString(), ...params, resultIds });
+  appendFile(QUERY_LOG_PATH, entry + "\n").catch(() => {});
+}
 
 const server = new McpServer({
   name: "clean-ui-mcp",
@@ -59,6 +71,9 @@ server.registerTool(
   },
   async ({ query, category, styleTag, minQuality, qualityTier, limit }) => {
     const results = await searchEntries({ query, category, styleTag, minQuality, qualityTier, limit });
+
+    // Log for retrieval analytics (query-stats.ts) — never blocks the response.
+    logQuery({ query, category, styleTag, qualityTier }, results.map((e) => e.id));
 
     if (results.length === 0) {
       return {

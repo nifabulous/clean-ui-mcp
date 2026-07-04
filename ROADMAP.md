@@ -202,7 +202,8 @@ These need human judgment, not code:
 - **colorRoles**: 73% → finish the last ~115 in normal curation (no longer a
   roadmap blocker)
 - **patternType coverage**: 17/20 — only `command-palette` is empty now
-- **"Untitled" product name**: 91 entries have product "Untitled" — the tagger
-  couldn't read the wordmark. Worth a backfill pass naming them.
+- **"Untitled" product name**: ✅ backfilled via `npm run migrate-untitled` — all
+  91 mapped from filename stems to canonical product names (Cash App, Aboard,
+  Workable, Juicebox). Reusable if more Untitleds appear.
 - **Cautionary entries**: 41 exist (the Mobbin-can't-touch-this feature) — keep
   growing as you find genuinely instructive bad UIs

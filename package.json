@@ -24,6 +24,7 @@
     "commit-draft": "tsc && node dist/scripts/commit-draft.js",
     "migrate": "tsc && node dist/scripts/migrate-v1-to-v2.js",
     "migrate-layout": "tsc && node dist/scripts/migrate-layout-field.js",
+    "migrate-untitled": "tsc && node dist/scripts/migrate-untitled-products.js",
     "corpus-stats": "tsc && node dist/scripts/corpus-stats.js",
     "query-stats": "tsc && node dist/scripts/query-stats.js",
     "restore-corpus": "tsc && node dist/scripts/restore-corpus.js",

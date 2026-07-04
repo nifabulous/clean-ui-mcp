@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
   searchEntries,
+  searchRanked,
   getEntryById,
   listCategories,
   listStyleTags,
@@ -15,6 +16,8 @@ import {
   findSimilarEntries,
 } from "./corpus.js";
 import { Category, StyleTag } from "./schema.js";
+import { generateBrief, renderBrief } from "./design-prompt.js";
+import { buildRecommendation, renderRecommendation } from "./recommend.js";
 import { readFileSync, existsSync } from "node:fs";
 import { fromCorpusRelativeImagePath } from "./paths.js";
 
@@ -359,6 +362,87 @@ server.registerTool(
     ];
 
     return { content: [{ type: "text", text: [header, divider, ...rows].join("\n") }] };
+  },
+);
+
+/**
+ * Tool: generate_design_prompt
+ * Synthesize a design brief across 2-5 entries by id. Pure deterministic
+ * aggregation over the corpus's curated judgments (colorRoles, typePairing,
+ * voice, anti-patterns) — no LLM call, no hallucination. Returns a markdown
+ * brief by default, or paste-ready JSON tokens with framework:"tokens".
+ */
+server.registerTool(
+  "generate_design_prompt",
+  {
+    title: "Generate a design brief from N examples",
+    description:
+      "Takes 2-5 entry ids and synthesizes a design brief that distills the concrete " +
+      "decisions across them — paste-ready color tokens, typography approach, layout " +
+      "structure, voice register, techniques to borrow, and anti-patterns to avoid. " +
+      "Use this when you want a single actionable direction grounded in specific real " +
+      "examples (e.g. 'build me a pricing page like Stripe + Linear'). Each section " +
+      "traces back to a specific entry you can inspect with get_ui_example. " +
+      "framework:'tokens' returns JSON design tokens instead of markdown.",
+    inputSchema: {
+      ids: z.array(z.string()).min(2).max(5).describe("2-5 entry ids to synthesize across"),
+      framework: z.enum(["brief", "tokens"]).optional().describe("Output shape: 'brief' (markdown, default) or 'tokens' (JSON design tokens)"),
+      context: z.string().optional().describe("What you're building, folded into the direction statement (e.g. 'a pricing page for a fintech')"),
+    },
+  },
+  async ({ ids, framework, context }) => {
+    void logQuery({ query: `generate_design_prompt:${ids.join(",")}` }, ids);
+    const entries = ids.map((id) => getEntryById(id));
+    const missing = ids.filter((_, i) => !entries[i]);
+    if (missing.length) {
+      return { content: [{ type: "text", text: `No entries found for: ${missing.join(", ")}. Use search_ui_examples to find valid ids.` }], isError: true };
+    }
+    const found = entries.filter((e): e is NonNullable<typeof e> => !!e);
+    const brief = generateBrief(found, { ids, framework: framework ?? "brief", context });
+    return { content: [{ type: "text", text: renderBrief(brief) }] };
+  },
+);
+
+/**
+ * Tool: recommend_ui_direction
+ * The "design advisor." Describe what you're building; it embeds the
+ * description, finds the 3-5 most relevant corpus entries (with product
+ * diversity so it doesn't return 3 from the same app), and synthesizes a
+ * direction citing each. Uses generate_design_prompt's synthesis under the hood.
+ */
+server.registerTool(
+  "recommend_ui_direction",
+  {
+    title: "Recommend a UI direction from a product description",
+    description:
+      "Describe what you're building (e.g. 'a calm analytics dashboard for a fintech' " +
+      "or 'a playful onboarding flow for a mobile game'). Embeds the description, " +
+      "finds the 3-5 most relevant corpus entries with product diversity, and " +
+      "synthesizes a design direction citing each one — why it was selected, what " +
+      "it contributes, and the concrete decisions to borrow. Requires the embedding " +
+      "index (npm run build-index). Use this when you don't know which specific " +
+      "entries to look at; use generate_design_prompt when you already have ids.",
+    inputSchema: {
+      productContext: z.string().min(8).describe("What you're building, in natural language (e.g. 'a pricing page for a developer tool with a generous free tier')"),
+      count: z.number().min(1).max(5).optional().describe("How many entries to ground the recommendation in (default 3, max 5)"),
+      category: Category.optional().describe("Scope the search to a specific UI category"),
+      framework: z.enum(["brief", "tokens"]).optional().describe("Output shape: 'brief' (markdown, default) or 'tokens' (JSON)"),
+    },
+  },
+  async ({ productContext, count, category, framework }) => {
+    void logQuery({ query: `recommend_ui_direction:${productContext.slice(0, 80)}`, category }, []);
+    const status = indexStatus();
+    if (!status.hasIndex) {
+      return { content: [{ type: "text", text: "The embedding index hasn't been built. Run `npm run build-index` to enable recommendations." }], isError: true };
+    }
+    // Over-fetch (limit 20) so the diversity picker has a real pool to choose from;
+    // searchEntries would already slice to the final count and starve the picker.
+    const results = await searchRanked({ query: productContext, category: category as string | undefined, limit: 20 });
+    if (!results.length) {
+      return { content: [{ type: "text", text: `No corpus entries matched "${productContext}". Try a different description or broader terms.` }] };
+    }
+    const rec = buildRecommendation(results, { productContext, count, category: category as string | undefined, framework: framework ?? "brief" });
+    return { content: [{ type: "text", text: renderRecommendation(rec) }] };
   },
 );
 

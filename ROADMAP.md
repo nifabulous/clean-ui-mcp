@@ -28,12 +28,16 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
   authoritative check at `POST /entries`, not just at upload)
 - Deferred-critique mode (extraction now, critique on demand) halves bulk cost
 
-### MCP tools (6)
+### MCP tools (8)
 - `search_ui_examples` — vector/keyword search with qualityTier filter
 - `get_ui_example` — full detail + image
 - `get_similar_ui_examples` — cosine similarity ranking
 - `compare_ui_examples` — side-by-side structured comparison
 - `list_categories` / `list_style_tags`
+- `generate_design_prompt(ids, framework?)` — synthesize a design brief across
+  2-5 entries (paste-ready color tokens, typography, layout, voice, anti-patterns)
+- `recommend_ui_direction(productContext)` — the "design advisor": describe what
+  you're building, it embeds + searches + synthesizes with product diversity
 
 ### Curator dashboard
 - Three-zone shell (left nav + card canvas + right detail rail)
@@ -74,19 +78,6 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
 ## 🟡 Next (high leverage, buildable now)
 
 The corpus has crossed the density thresholds several deferred items needed.
-
-### `generate_design_prompt(ids, framework?)`
-**Highest-leverage new MCP tool.** Was deferred "needs 100+ entries" — now at 426
-with 17/20 patternTypes represented. Synthesizes a design brief across N examples
-for a specific context ("build me a pricing page like Stripe + Linear"). Returns a
-structured prompt an LLM or designer can act on. Pure retrieval + synthesis over
-existing data — no new integrations.
-
-### `recommend_ui_direction(productContext)`
-The "design advisor" tool. Takes a product description, embeds it via Voyage,
-runs `searchEntries`, synthesizes a recommendation citing 3-5 corpus entries.
-Needs the complete index (✅ shipped) + a synthesis prompt. Pairs naturally with
-`generate_design_prompt`.
 
 ### `reviewStatus: "draft" | "approved"`
 The proper fix for draft-state encoding, replacing the `[DRAFT]` string-marker

@@ -144,9 +144,14 @@ async function vectorSearch(
 
 // ─── main search entrypoint ───────────────────────────────────────────────────
 
-export async function searchEntries(opts: SearchOptions): Promise<CorpusEntryT[]> {
+/**
+ * Run the search pipeline and return the full ranked result list (entries +
+ * scores + search mode), before slicing. Exposed so callers that need the
+ * scores or want their own selection logic (e.g. recommend_ui_direction's
+ * diversity-aware picker) can get the raw ranking.
+ */
+export async function searchRanked(opts: SearchOptions): Promise<SearchResult[]> {
   const entries = loadCorpus();
-  const limit   = opts.limit ?? 5;
 
   // Structural filters always apply regardless of search mode
   const filtered = entries.filter((e) => {
@@ -172,10 +177,13 @@ export async function searchEntries(opts: SearchOptions): Promise<CorpusEntryT[]
     results = keywordSearch(filtered, opts);
   }
 
-  return results
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map((r) => r.entry);
+  return results.sort((a, b) => b.score - a.score);
+}
+
+/** The primary search entry point — returns entries (no scores), sliced to limit. */
+export async function searchEntries(opts: SearchOptions): Promise<CorpusEntryT[]> {
+  const limit = opts.limit ?? 5;
+  return (await searchRanked(opts)).slice(0, limit).map((r) => r.entry);
 }
 
 // ─── similar-by-entry-id (vector cosine over the existing index) ─────────────

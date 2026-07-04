@@ -11,6 +11,12 @@ output/
 corpus/images-private/*
 !corpus/images-private/.gitkeep
 
+# Local working corpus — your private curation (references gitignored images,
+# product names, critique text). NOT publishable. The repo ships corpus/seed.json
+# as a minimal schema example; entries.json is created locally via the UI/CLI.
+# Snapshots + restore-corpus protect against loss.
+corpus/entries.json
+
 # Derived — regenerate with `npm run build-index`
 corpus/embeddings.json
 # Derived — dHash fingerprint cache, rebuilt by the curator UI at runtime

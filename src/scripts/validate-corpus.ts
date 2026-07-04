@@ -6,9 +6,14 @@ import { fromCorpusRelativePath } from "../paths.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(__dirname, "..", "..", "corpus", "entries.json");
+const SEED_PATH = join(__dirname, "..", "..", "corpus", "seed.json");
 const CONFIG_PATH = join(__dirname, "..", "..", "corpus", ".corpus-config.json");
 
-const raw = readFileSync(CORPUS_PATH, "utf-8");
+// Curator runs this against their working entries.json; CI runs it on a fresh
+// clone where entries.json is gitignored. Fall back to seed so CI validates the
+// schema example instead of crashing on a missing file.
+const corpusPath = existsSync(CORPUS_PATH) ? CORPUS_PATH : SEED_PATH;
+const raw = readFileSync(corpusPath, "utf-8");
 const result = Corpus.safeParse(JSON.parse(raw));
 
 if (!result.success) {

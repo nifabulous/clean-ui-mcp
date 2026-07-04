@@ -18,6 +18,7 @@ import { CORPUS_ROOT } from "../paths.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
+const SEED_PATH = resolve(__dirname, "..", "..", "corpus", "seed.json");
 const PRIVATE_IMAGE_DIR = resolve(CORPUS_ROOT, "images-private");
 const PUBLIC_IMAGE_DIR = resolve(CORPUS_ROOT, "images-public");
 
@@ -95,7 +96,9 @@ function computeGaps(counts: Record<string, number>, fullEnum: readonly string[]
   return { zero, belowThreshold };
 }
 
-const raw = readFileSync(CORPUS_PATH, "utf-8");
+// Fall back to seed.json on a fresh clone (entries.json is gitignored).
+const corpusPath = existsSync(CORPUS_PATH) ? CORPUS_PATH : SEED_PATH;
+const raw = readFileSync(corpusPath, "utf-8");
 const corpus = JSON.parse(raw);
 const entries: Entry[] = corpus.entries;
 

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Corpus, type CorpusEntryT } from "./schema.js";
@@ -6,13 +6,23 @@ import { loadIndex, embedQuery, cosine, entryToDocument, indexExists } from "./e
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(__dirname, "..", "corpus", "entries.json");
+const SEED_PATH = join(__dirname, "..", "corpus", "seed.json");
 
 let cached: CorpusEntryT[] | null = null;
 
-/** Load + validate the corpus once per process. */
+/**
+ * Load + validate the corpus once per process. Falls back to the shipped
+ * corpus/seed.json when entries.json is absent (fresh clone) so the MCP tools
+ * return a real response instead of throwing — entries.json is gitignored
+ * (it references private images + screenshot metadata that aren't publishable).
+ */
 export function loadCorpus(): CorpusEntryT[] {
   if (cached) return cached;
-  const raw = readFileSync(CORPUS_PATH, "utf-8");
+  const raw = existsSync(CORPUS_PATH)
+    ? readFileSync(CORPUS_PATH, "utf-8")
+    : existsSync(SEED_PATH)
+      ? readFileSync(SEED_PATH, "utf-8")
+      : '{"version":2,"entries":[]}';
   const parsed = Corpus.parse(JSON.parse(raw));
   cached = parsed.entries;
   return cached;

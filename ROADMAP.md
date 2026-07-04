@@ -135,11 +135,16 @@ cache loosely coordinated. Stage a batch with a manifest, then commit the batch
 atomically after validation. Deferred from the recovery cluster — it's a workflow
 redesign that deserves focused attention.
 
-### Seed / private corpus split
-The repo mixes shareable seed metadata with local private curation. Make it
-explicit: `corpus/entries.json` for committed/shareable metadata, a gitignored
-private working file for local curation. Reduces accidental overwrites and
-makes tests + the public repo cleaner. Deferred from the recovery cluster.
+### Seed / private corpus split — ✅ shipped (simplest form)
+`corpus/entries.json` is gitignored (it references private screenshots + product
+names + critique — not publishable). The repo ships `corpus/seed.json` as a
+minimal schema example (1 link-only entry). Both loaders (`loadCorpus`,
+`loadCorpusSafe`), `validate-corpus`, and `corpus-stats` fall back to the seed
+when `entries.json` is absent — so CI validates the seed, a fresh clone returns a
+real search response, and the curator's working corpus stays local. Snapshots +
+`restore-corpus` protect against loss. This resolves the deferred split item in
+its simplest form; a richer multi-curator split (reviewed-by, merge) is still
+future work.
 
 ---
 

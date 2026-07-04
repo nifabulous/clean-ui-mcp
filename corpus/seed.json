@@ -1,0 +1,50 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "sample",
+      "title": "Origin — Dashboard shell (seed example)",
+      "patternType": "dashboard",
+      "categories": ["dashboard"],
+      "styleTags": ["minimal"],
+      "source": {
+        "productName": "Origin",
+        "url": "https://origin.com",
+        "capturedAt": "2026-05-10",
+        "capturedBy": "self"
+      },
+      "image": {
+        "visibility": "private",
+        "path": null,
+        "width": null,
+        "height": null
+      },
+      "visual": {
+        "dominantColors": ["#0a0a0a", "#171717", "#fafafa"],
+        "accentColor": "#3b82f6",
+        "typePairing": {
+          "display": null,
+          "body": null,
+          "notes": "Hierarchy through weight and size, not color — restraint over decoration."
+        },
+        "spacingDensity": "moderate",
+        "cornerStyle": "slight-round",
+        "usesShadows": false,
+        "usesBorders": true
+      },
+      "critique": "This dashboard uses a direct visual hierarchy and restrained surfaces to make repeated scanning feel calm. The throughline is restraint: hairline borders do structural work that heavier shadows would, so the eye reads grouping without noticing the borders. It rejects the common default of card shadows for depth, leaning on background-color steps instead.",
+      "whatToSteal": [
+        "Use 1px borders at low opacity for structural separation instead of visible frame borders.",
+        "Reserve the accent hue for a single interactive component class (links, active nav) so it signals affordance, not decoration."
+      ],
+      "antiPatterns": {
+        "antiPatterns": ["Avoids heavy card shadows for depth — uses background-color steps of the same hue so surfaces stay flat and the eye reads layering without optical noise."],
+        "whereThisFails": ["On dense data tables where row separation needs more than a tint step, the flat surfaces blur together."],
+        "accessibilityRisks": []
+      },
+      "qualityTier": "exceptional",
+      "qualityScore": 4,
+      "addedAt": "2026-05-10"
+    }
+  ]
+}

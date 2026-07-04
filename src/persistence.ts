@@ -21,6 +21,7 @@ import type { CorpusEntryT } from "./schema.js";
 import { CORPUS_ROOT } from "./paths.js";
 
 export const ENTRIES_PATH = resolve(CORPUS_ROOT, "entries.json");
+export const SEED_PATH = resolve(CORPUS_ROOT, "seed.json");
 export const SNAPSHOT_DIR = resolve(CORPUS_ROOT, ".snapshots");
 export const SNAPSHOT_KEEP = 20; // keep the 20 most recent timestamped snapshots
 
@@ -64,7 +65,16 @@ export function loadCorpusSafe(): CorpusEntryT[] {
       return recovered;
     }
   }
-  console.error("[corpus] entries.json unreadable and no snapshots found — starting empty.");
+  // No primary, no snapshot — fall back to the shipped seed so a fresh clone is
+  // usable (an agent can call search and get a real response). The seed is a
+  // minimal schema example; the curator's real corpus lives in entries.json,
+  // which is gitignored (it references private images + screenshot metadata).
+  const seed = tryReadCorpus(SEED_PATH);
+  if (seed) {
+    console.error(`[corpus] entries.json not found — using seed.json (${seed.length} entries). Your working corpus is built via the UI/CLI.`);
+    return seed;
+  }
+  console.error("[corpus] entries.json unreadable, no snapshots, no seed — starting empty.");
   return [];
 }
 

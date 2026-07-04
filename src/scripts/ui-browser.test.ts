@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page } from "playwright";
@@ -51,6 +51,17 @@ describe("curator app browser smoke", () => {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end(appHtml);
         return;
+      }
+      // Serve the extracted CSS/JS from ui/ — mirrors the production /static/* route.
+      if (url.pathname.startsWith("/static/")) {
+        const rel = url.pathname.slice("/static/".length);
+        const abs = resolve(__dirname, "../..", "ui", rel);
+        if (existsSync(abs)) {
+          const mime = abs.endsWith(".css") ? "text/css" : abs.endsWith(".js") ? "text/javascript" : "application/octet-stream";
+          res.writeHead(200, { "content-type": `${mime}; charset=utf-8` });
+          res.end(readFileSync(abs));
+          return;
+        }
       }
       if (url.pathname === "/api/schema") return json(res, 200, schema);
       if (url.pathname === "/api/entries" && req.method === "GET") return json(res, 200, { entries: [] });

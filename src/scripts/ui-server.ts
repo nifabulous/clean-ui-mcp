@@ -20,6 +20,7 @@ import {
 
 const PORT = Number(process.env.CLEAN_UI_PORT ?? 3131);
 const APP_PATH = resolve(PROJECT_ROOT, "index-2.html");
+const STATIC_DIR = resolve(PROJECT_ROOT, "ui"); // extracted CSS/JS lives here
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
 
 // ─── perceptual hashing (dHash) for near-duplicate detection ─────────────────
@@ -915,6 +916,24 @@ const server = createServer(async (req, res) => {
     const url = parseUrl(req);
     if (url.pathname.startsWith("/api/")) {
       await handleApi(req, res, url);
+      return;
+    }
+
+    // Static assets — extracted CSS/JS served from ui/. Path-traversal guarded:
+    // resolve under STATIC_DIR, reject anything that escapes it (.., absolute).
+    if (req.method === "GET" && url.pathname.startsWith("/static/")) {
+      const rel = url.pathname.slice("/static/".length);
+      if (rel.includes("..") || rel.startsWith("/")) {
+        sendText(res, 400, "Bad static path");
+        return;
+      }
+      const abs = resolve(STATIC_DIR, rel);
+      if (!abs.startsWith(STATIC_DIR) || !existsSync(abs)) {
+        sendText(res, 404, "Not found");
+        return;
+      }
+      res.writeHead(200, { "content-type": mimeFor(abs), "cache-control": "no-store" });
+      res.end(readFileSync(abs));
       return;
     }
 

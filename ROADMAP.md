@@ -66,6 +66,8 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
 - Real-time validation with centralized draft-hygiene gate
 - SSRF guard, loopback binding, same-origin CORS
 - Recovery surface (`/api/health` + snapshot count on stats page)
+- Split into `ui/styles.css` + `ui/app.js` + slim HTML shell (was 1931 lines,
+  now 57 + 426 + 1450), served via path-traversal-guarded `/static/*` route
 
 ### Corpus trust & recovery
 - `npm run doctor` — one-command PASS/WARN/FAIL health check
@@ -127,14 +129,6 @@ The bulk-import flow has screenshots, drafts, entries, snapshots, and the dedup
 cache loosely coordinated. Stage a batch with a manifest, then commit the batch
 atomically after validation. Deferred from the recovery cluster — it's a workflow
 redesign that deserves focused attention.
-
-### Split index-2.html into modules
-The curator dashboard is 1931 lines — CSS (~428) + HTML shell + JS (~1400, 45
-functions). Past the point where a single file is navigable. Split into:
-`ui/styles.css`, `ui/app.js` (or smaller ES modules), served as separate files
-by the UI server. Reduces review friction and lets each concern (form, bulk
-import, stats, recovery) be edited independently. Mechanical refactor — no
-behavior change — but needs the UI server to serve static assets.
 
 ### Seed / private corpus split
 The repo mixes shareable seed metadata with local private curation. Make it

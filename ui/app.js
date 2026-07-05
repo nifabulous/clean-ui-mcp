@@ -380,7 +380,7 @@ function openDetail(x){
   const fav=isFav(x.id);
   document.getElementById('detailTitle').textContent = x.id;
   const thumb = x.imagePath
-    ? `<img src="${API}/api/image?path=${encodeURIComponent(x.imagePath)}" alt="${esc(x.title)}" style="width:100%;height:100%;object-fit:cover;object-position:top;display:block">`
+    ? `<img src="${API}/api/image?path=${encodeURIComponent(x.imagePath)}" alt="${esc(x.title)}" style="display:block">`
     : previewInner(x);
   const palSwatches=(x.dominant||[]).slice(0,6).map(c=>
     `<div class="swatch" data-hex="${c}" title="Click to copy"><div class="well" style="background:${c}"></div><div class="hex">${c.toUpperCase()}</div></div>`).join('');
@@ -413,7 +413,7 @@ function openDetail(x){
   const platChip = x.platform==='mobile'?'<span class="platform-chip mobile">mobile</span>':x.platform==='tablet'?'<span class="platform-chip tablet">tablet</span>':'';
 
   document.getElementById('detailBody').innerHTML = `
-    <div class="preview-lg" style="margin-bottom:14px">${thumb}</div>
+    <div class="image-stage ${stageShape(x)}" style="margin-bottom:14px">${thumb}</div>
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
       <span class="tier-dot ${x.tier==='exceptional'?'exc':'cau'}"></span>
       <span class="eyebrow" style="margin:0">${x.tier}</span>

@@ -667,8 +667,17 @@ tbody tr:hover .row-actions{opacity:1}
 
 /* Tablet / large phone */
 @media(max-width:900px){
-  .app,.app.detail-open{grid-template-columns:0 1fr}
-  .app.collapsed{grid-template-columns:0 1fr}
+  /* On mobile, the sidebar is position:fixed (off-canvas drawer), the
+     detail-rail is position:fixed (bottom sheet), the resizer is hidden, and
+     the backdrop is position:fixed. That leaves main as the ONLY in-flow grid
+     item — and with a two-column grid (0 1fr) it auto-places into column 1
+     (the 0px track) and renders at zero width. Collapsing to a single 1fr
+     column makes main fill the viewport. The !important overrides the desktop
+     .detail-open rule (which sets four columns). */
+  .app,.app.detail-open,.app.collapsed,.app.collapsed.detail-open{
+    grid-template-columns:1fr!important
+  }
+  .resizer{display:none!important}
   .sidebar{
     position:fixed;left:0;top:0;width:240px;height:100vh;height:100dvh;
     transform:translateX(-100%);transition:transform .25s;
@@ -689,7 +698,13 @@ tbody tr:hover .row-actions{opacity:1}
   .gallery{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
   .statusbar{display:none}
   .bottom-bar{display:flex}
+  .bottom-bar button{min-height:44px;min-width:44px;padding:6px 4px}
   .card{padding:14px}
+  /* entries controls wrap so chips + sort + view-toggle don't overflow on touch */
+  .card-head{flex-wrap:wrap;gap:10px}
+  .chips{gap:6px}
+  .chip{height:36px;padding:0 12px;font-size:12px}     /* finger-friendly tap target */
+  .view-toggle button{height:36px;min-width:40px}
   /* tables scroll horizontally rather than overflow */
   .card:has(table){overflow-x:auto}
   table{min-width:560px}
@@ -717,6 +732,10 @@ tbody tr:hover .row-actions{opacity:1}
   .swatch,.swatch .well{width:30px;height:30px}
   /* compare slots stack */
   #compareSlots{grid-template-columns:1fr!important}
+  /* portrait screenshots: cap so a tall mobile UI fits inside the bottom-sheet
+     detail view without crowding out the metadata below it */
+  .image-stage.is-portrait{max-height:55vh;padding:8px}
+  .image-stage.is-portrait img{max-height:calc(55vh - 16px)}
 }
 
 /* very small phones */

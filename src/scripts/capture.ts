@@ -62,10 +62,26 @@ const PRIVATE_IMAGE_DIR = resolve(__dirname, "..", "..", "corpus", "images-priva
 // ============================================================
 
 type Viewport = { name: string; width: number; height: number };
-const VIEWPORTS: Viewport[] = [
+// All possible viewports the pipeline knows how to capture. The actual set
+// used for a given run is filtered by CAPTURE_VIEWPORTS below — defaults to
+// both desktop and mobile, but a curator who only wants one (e.g. just
+// desktop while building out the web corpus, deferring mobile until later)
+// can set CAPTURE_VIEWPORTS=desktop in .env or the shell environment.
+const ALL_VIEWPORTS: Viewport[] = [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile", width: 390, height: 844 },
 ];
+const VIEWPORTS: Viewport[] = (() => {
+  const wanted = (process.env.CAPTURE_VIEWPORTS ?? "desktop,mobile")
+    .split(",")
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean);
+  const filtered = ALL_VIEWPORTS.filter((v) => wanted.includes(v.name));
+  // If the env named zero recognized viewports (typo, etc.), fall back to all
+  // rather than silently producing zero captures — that's a confusing failure
+  // mode (batch "succeeds" with empty manifest).
+  return filtered.length > 0 ? filtered : ALL_VIEWPORTS;
+})();
 
 /** A scripted interaction that reveals a full-screen-mode pattern (auth,
  *  checkout, modal, empty-state) that doesn't exist until you cause it.
@@ -118,12 +134,14 @@ const MIN_CAPTURE_DIM = 40;
 // Group-member candidates (Pass B) — repeated sibling elements like cards in
 // a grid. The first run on linear.app produced dozens of <40px icon fragments
 // and 12×249 chart-bar slivers because the only filter was a height floor.
-// Tightened to: both axes ≥60px AND longest:shortest side ≤8:1.
-// The 60px floor is between section-mode's minH=80 and the icon-fragment floor
-// — drops small icon grids while keeping real small cards. The 8:1 cap drops
-// thin slivers but (acknowledged trade-off) also drops legit wide bars; the
-// latter are rare as group members and triage can recover anything important.
-const MIN_GROUP_DIM = 60;
+// Tightened to: both axes ≥80px AND longest:shortest side ≤8:1. The 80px
+// floor matches section-mode's minH exactly — keeps group captures consistent
+// with section captures on what counts as "big enough to be a UI unit" and
+// drops the small-card group captures that triage had to filter out by hand.
+// The 8:1 cap drops thin slivers but (acknowledged trade-off) also drops legit
+// wide bars; the latter are rare as group members and triage can recover
+// anything important.
+const MIN_GROUP_DIM = 80;
 const MAX_GROUP_ASPECT = 8;
 const DEDUP_HAMMING_THRESHOLD = 6; // of 64 bits — near-duplicate cutoff
 
@@ -835,4 +853,4 @@ Example:
   }
 }
 
-export { runSingleCapture, runBatchCapture, captureSource, isAllowedByRobots, slug as captureSlug, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT };
+export { runSingleCapture, runBatchCapture, captureSource, isAllowedByRobots, slug as captureSlug, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT, VIEWPORTS };

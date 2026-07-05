@@ -143,6 +143,22 @@ const MIN_CAPTURE_DIM = 40;
 // anything important.
 const MIN_GROUP_DIM = 80;
 const MAX_GROUP_ASPECT = 8;
+// Minimum viewport-height fraction for section captures (Pass A). Closes the
+// asymmetry in the section filter — width already had a fractional floor
+// (vw * 0.5) but height had only a fixed pixel floor (minH=80) plus a
+// fractional cap (vh * 2). Without a fractional height floor, a section only
+// 11% of viewport tall (e.g. a 1392×112 Vercel announcement bar at desktop)
+// passed because it cleared 80px — but a strip that thin isn't a meaningful
+// UI section, and triage was rejecting these by hand.
+//
+// 0.12 empirically validated against the linear.app + vercel.com batch:
+// drops the 6 sub-12% captures (small group fragments + thin announcement
+// bars) while keeping the 3 captures between 12–25% VH that ARE real
+// sections. On a 900px desktop viewport, 0.12 = 108px (above the existing
+// 80px fixed floor, which becomes redundant at desktop but stays useful for
+// mobile where 12% of 844 = 101px). Applied to section captures only;
+// group members already have the 80px floor + 8:1 aspect cap.
+const MIN_VH_FRAC = 0.12;
 const DEDUP_HAMMING_THRESHOLD = 6; // of 64 bits — near-duplicate cutoff
 
 // ============================================================
@@ -379,7 +395,7 @@ async function anchorSectionIds(page: Page): Promise<string[]> {
 type Candidate = { selector: string; area: number; height: number };
 
 const DETECT_SCRIPT = `
-(function(rootSelector, minWidthFrac, minH, maxHFrac) {
+(function(rootSelector, minWidthFrac, minH, maxHFrac, minVFrac) {
   function cssPath(el) {
     if (el.id) return '#' + CSS.escape(el.id);
     const parts = [];
@@ -413,7 +429,14 @@ const DETECT_SCRIPT = `
     return { el, selector: cssPath(el), area: r.width * r.height, height: r.height, top: r.top, left: r.left, width: r.width };
   }
   let candidates = landmarks.map(toCandidate).filter(c =>
-    c.width >= vw * minWidthFrac && c.height >= minH && c.height <= vh * maxHFrac
+    c.width >= vw * minWidthFrac
+    // Section height: must clear both the fixed pixel floor (minH, kept for
+    // backward compat and for unusually short viewports) AND a fraction of the
+    // viewport (minVFrac). The fractional floor is the one that does real work
+    // — see MIN_VH_FRAC's doc comment for the asymmetry this closes.
+    && c.height >= minH
+    && c.height >= vh * minVFrac
+    && c.height <= vh * maxHFrac
   );
   candidates.sort((a, b) => b.area - a.area);
   const kept = [];
@@ -468,7 +491,7 @@ const DETECT_SCRIPT = `
     groups: groups.map(g => g.map(c => ({ selector: c.selector, area: c.area, height: c.height }))),
     oversized,
   };
-})(%ROOT%, %MINW%, %MINH%, %MAXHFRAC%)
+})(%ROOT%, %MINW%, %MINH%, %MAXHFRAC%, %MINVHFRAC%)
 `;
 
 async function detect(page: Page, rootSelector: string) {
@@ -477,6 +500,7 @@ async function detect(page: Page, rootSelector: string) {
     .replace("%MINW%", "0.5")
     .replace("%MINH%", "80")
     .replace("%MAXHFRAC%", "2")
+    .replace("%MINVHFRAC%", String(MIN_VH_FRAC))
     .replace("%MINGROUPDIM%", String(MIN_GROUP_DIM))
     .replace("%MAXGROUPASPECT%", String(MAX_GROUP_ASPECT));
   return page.evaluate(script) as Promise<{
@@ -853,4 +877,4 @@ Example:
   }
 }
 
-export { runSingleCapture, runBatchCapture, captureSource, isAllowedByRobots, slug as captureSlug, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT, VIEWPORTS };
+export { runSingleCapture, runBatchCapture, captureSource, isAllowedByRobots, slug as captureSlug, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT, MIN_VH_FRAC, VIEWPORTS };

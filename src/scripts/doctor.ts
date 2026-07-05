@@ -154,6 +154,22 @@ if (!voyage) {
   checks.push({ name: "Voyage key (vector index)", status: "PASS", detail: "set" });
 }
 
+// ── 8. Capture Chromium (Playwright) ──────────────────────────────────────────
+// Playwright exposes the Chromium executable path lazily — wrap in try/catch
+// because requiring playwright at module load runs its install-time browser
+// download in some setups.
+let chromiumPath: string | null = null;
+try {
+  const chromium = await import("playwright");
+  chromiumPath = (chromium as any).chromium?.executablePath?.() ?? null;
+} catch { /* playwright not installed yet */ }
+
+if (chromiumPath && existsSync(chromiumPath)) {
+  checks.push({ name: "Capture Chromium", status: "PASS", detail: "Playwright Chromium installed — `npm run capture` ready" });
+} else {
+  checks.push({ name: "Capture Chromium", status: "WARN", detail: "Playwright Chromium not found — run `npx playwright install chromium` to enable `npm run capture`" });
+}
+
 // ── report ───────────────────────────────────────────────────────────────────
 const failed = checks.filter((c) => c.status === "FAIL");
 const warned = checks.filter((c) => c.status === "WARN");

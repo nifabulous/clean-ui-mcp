@@ -830,7 +830,7 @@ async function wizardCapture(form){
   draft._busy = 'Capturing screenshot…'; draft._error = null; refreshActivePage();
   try {
     const j = await request('/api/capture-url', { method:'POST', body: JSON.stringify({ url, slug: slug || undefined }) });
-    draft.image.path = j.imagePath;
+    draft.image.path = j.path;
     if(!draft.source.url) draft.source.url = url;
     draft._busy = null;
   } catch(e){ draft._busy = null; draft._error = e.message; }
@@ -846,7 +846,7 @@ function wizardUpload(file){
       const j = await request('/api/upload-image', {
         method:'POST', body: JSON.stringify({ filename:file.name, slug: draft.source.productName || file.name, dataUrl: reader.result })
       });
-      draft.image.path = j.imagePath;
+      draft.image.path = j.path;
       draft._busy = null;
     } catch(e){ draft._busy = null; draft._error = e.message; }
     refreshActivePage();
@@ -918,16 +918,22 @@ async function saveDraft(){
   }
 }
 
+// Tracks the hash the #/add page last seeded a fresh draft for. We reset ONLY
+// on hash arrival — not on every refreshActivePage() re-render. Resetting on
+// every render wiped draft._busy / draft.image.path (and the URL the user had
+// typed) the moment any wizard action triggered a re-render, making every
+// button appear dead. location.hash changes on every genuine navigation to
+// #/add (including back-to-add-after-save), while refreshActivePage() leaves
+// it unchanged.
+let _addSeededForHash = null;
 page('add','Add entry','new corpus entry', function(){
-  // The #/add route is the new-entry entry point. It seeds a blank draft and
-  // renders the capture/upload wizard + the full form once auto-fill produces
-  // structured fields. (Phase 2 replaces the inline wizard render with the
-  // full form renderer shared with #/edit.)
-  // Always reset on #/add entry — this is the new-entry flow. The conditional
-  // guard was a mistake: if the user navigated from editing another entry,
-  // draft._editing carried over and caused save to PUT (edit) instead of POST
-  // (new), producing "Entry not found" on the stale _editing id.
-  if(!draft.image.path && !draft.critique) resetDraft();
+  // The #/add route is the new-entry entry point. Seed a blank draft when the
+  // hash actually changed (genuine navigation), then leave the draft alone
+  // across re-renders so in-flight wizard state survives.
+  if(_addSeededForHash !== location.hash){
+    resetDraft();
+    _addSeededForHash = location.hash;
+  }
   // Force _editing null regardless — #/add is always a new entry, never an edit.
   draft._editing = null;
   const hasImage = !!draft.image.path;

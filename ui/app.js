@@ -923,7 +923,13 @@ page('add','Add entry','new corpus entry', function(){
   // renders the capture/upload wizard + the full form once auto-fill produces
   // structured fields. (Phase 2 replaces the inline wizard render with the
   // full form renderer shared with #/edit.)
-  if(!draft._editing && !draft.image.path && !draft.critique) resetDraft();
+  // Always reset on #/add entry — this is the new-entry flow. The conditional
+  // guard was a mistake: if the user navigated from editing another entry,
+  // draft._editing carried over and caused save to PUT (edit) instead of POST
+  // (new), producing "Entry not found" on the stale _editing id.
+  if(!draft.image.path && !draft.critique) resetDraft();
+  // Force _editing null regardless — #/add is always a new entry, never an edit.
+  draft._editing = null;
   const hasImage = !!draft.image.path;
   const hasFields = !!(draft.critique || draft.patternType);
 

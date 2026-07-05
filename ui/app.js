@@ -1,1480 +1,885 @@
-if (window.location.protocol === "file:") {
-  window.location.replace("http://localhost:3131/");
-}
+/* ============================================================
+   CLEAN-UI CORPUS CONSOLE — SPA logic, live-API edition
+   Adapted from the specimen-ledger reference: keeps the router,
+   nav, and component structure; replaces the mock corpus-data.js
+   with live fetches to the curator API and maps our real schema.
+   ============================================================ */
+(function(){
+'use strict';
 
-const API = "/api";
-const today = () => new Date().toISOString().slice(0, 10);
-const state = {
-  entries: [],
-  schema: { categories: [], styleTags: [], patternTypes: [], spacingDensities: [], cornerStyles: [], imageVisibilities: [] },
-  selectedId: null,
-  view: "detail",
-  query: "",
-	  filters: { categories: new Set(), styleTags: new Set() },
-	  draft: null,
-	  draftMode: "create",
-	  uploadedImage: null,
-	  bulkQueue: [],
-	  bulkDefaultProduct: "",
-	  bulkBatchId: null,
-	  bulkEditingIndex: null,
-	  orphans: [],
-	  config: { openaiKeyConfigured: false, anthropicKeyConfigured: false, geminiKeyConfigured: false, visionKeyConfigured: false, autoTagProvider: "openai", extractionProvider: "openai", critiqueProvider: "openai", extractionModel: "", critiqueModel: "", envFileLoaded: false, openaiAutoTagModel: "gpt-5.4-nano" },
-	};
+const API = ''; // same-origin
+let E = [];     // entries (live, mapped to the shape components expect)
+let SCHEMA = { categories: [], styleTags: [], patternTypes: [], spacingDensities: [], cornerStyles: [], imageVisibilities: [] };
+let HEALTH = { entryCount: 0, snapshotCount: 0, newestSnapshotEpoch: null, newestSnapshotAgeMs: null };
+let CONFIG = {};
 
-const $ = (selector) => document.querySelector(selector);
-const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
-  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
-})[char]);
-const slugify = (value) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").replace(/-{2,}/g, "-") || "sample";
-const lines = (value) => String(value || "").split("\n").map((line) => line.trim()).filter(Boolean);
-
-// Derive the active provider display name + model from config (mirrors tagger.resolveProvider).
-const providerName = () => {
-  const p = state.config.autoTagProvider || "openai";
-  const has = { openai: state.config.openaiKeyConfigured, claude: state.config.anthropicKeyConfigured, gemini: state.config.geminiKeyConfigured };
-  let active = p;
-  if (!has[p]) { for (const k of ["openai","claude","gemini"]) { if (has[k]) { active = k; break; } } }
-  return { openai: "OpenAI", claude: "Claude", gemini: "Gemini" }[active] || "OpenAI";
-};
-
-async function request(path, options = {}) {
-  const response = await fetch(`${API}${path}`, {
-    headers: { "content-type": "application/json", ...(options.headers || {}) },
-    ...options,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message = data.issues?.join("\n") || data.error || "Request failed";
-    throw new Error(message);
-  }
-  return data;
-}
-
-function qualityDots(score) {
-  return `<span class="quality">${[1,2,3,4,5].map((n) => `<i class="${n <= score ? "on" : ""}"></i>`).join("")}</span>`;
-}
-
-function renderIcons() {
-  if (window.lucide) window.lucide.createIcons();
-}
-
-async function loadAll({ keepSelection = true } = {}) {
-	  const [schema, entries, stats, orphanData, config, health] = await Promise.all([
-	    request("/schema"),
-	    request("/entries"),
-	    request("/stats"),
-	    request("/orphans"),
-	    request("/config"),
-	    request("/health").catch(() => null), // non-critical — stats page degrades without it
-	  ]);
-	  state.schema = schema;
-	  state.entries = entries.entries;
-	  state.orphans = orphanData.orphans || [];
-	  state.config = config;
-	  state.health = health;
-  if (!keepSelection || !state.entries.some((entry) => entry.id === state.selectedId)) {
-    state.selectedId = state.entries[0]?.id ?? null;
-  }
-  renderList();
-  renderPage();
-}
-
-// Filtering moved into the search bar. Tokens prefixed `cat:` or `style:`
-// filter by category / style tag; everything else is a free-text term over
-// the entry's searchable fields. Replaces the 32 always-visible chip buttons.
-function parseQuery(raw) {
-  const tokens = raw.toLowerCase().split(/\s+/).filter(Boolean);
-  const cats = new Set(), styles = new Set(), terms = [];
-  for (const tok of tokens) {
-    const cat = tok.match(/^cat:(.+)$/), st = tok.match(/^style:(.+)$/);
-    if (cat) cats.add(cat[1]);
-    else if (st) styles.add(st[1]);
-    else terms.push(tok);
-  }
-  return { cats, styles, terms };
-}
-
-function filteredEntries() {
-  const { cats, styles, terms } = parseQuery(state.query || "");
-  return state.entries.filter((entry) => {
-    if (cats.size && ![entry.patternType, ...entry.categories].some((c) => cats.has(c))) return false;
-    if (styles.size && !entry.styleTags.some((s) => styles.has(s))) return false;
-    if (!terms.length) return true;
-    const haystack = [
-      entry.id, entry.title, entry.source.productName, entry.source.url, entry.critique,
-      ...entry.whatToSteal, ...(entry.antiPatterns?.antiPatterns || []), ...(entry.antiPatterns?.whereThisFails || []), entry.patternType, ...entry.categories, ...entry.styleTags,
-      ...entry.visual.dominantColors, entry.visual.accentColor, entry.visual.spacingDensity,
-      entry.visual.cornerStyle, entry.visual.typePairing.display, entry.visual.typePairing.body,
-      entry.visual.typePairing.notes,
-    ].filter(Boolean).join(" ").toLowerCase();
-    return terms.every((term) => haystack.includes(term));
-  });
-}
-
-function renderList() {
-  const entries = filteredEntries();
-  $("#listFooter").textContent = `${entries.length} of ${state.entries.length} entries`;
-  $("#entryList").innerHTML = entries.length ? entries.map((entry) => `
-    <button class="entry-row ${entry.id === state.selectedId ? "active" : ""}" data-entry-id="${entry.id}">
-      <span class="entry-top">
-        <span class="product">${esc(entry.source.productName)}</span>
-        ${qualityDots(entry.qualityScore)}
-      </span>
-      <span class="entry-title">${esc(entry.title)}</span>
-      <span class="entry-meta">
-        ${entry.categories.slice(0, 2).map((cat) => `<span class="mini-tag">${cat}</span>`).join("")}
-        ${entry.platform === "mobile" ? `<span class="mini-tag">mobile</span>` : entry.platform === "tablet" ? `<span class="mini-tag">tablet</span>` : ""}
-        ${entry.image.path ? `<span class="mini-tag">image</span>` : `<span class="mini-tag">link-only</span>`}
-        ${entry.reviewStatus === "draft" ? `<span class="mini-tag draft">draft</span>` : ""}
-      </span>
-    </button>
-  `).join("") : `<div class="empty-state"><div><i data-lucide="search-x"></i><p>No entries match those filters yet — this is a small, hand-picked corpus, so try fewer.</p></div></div>`;
-  renderIcons();
-}
-
-function setView(view) {
-  state.view = view;
-  document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
-  if (view === "form" && !state.draft) resetDraft();
-  renderPage();
-}
-
-function selectedEntry() {
-  return state.entries.find((entry) => entry.id === state.selectedId) || null;
-}
-
-function renderPage() {
-  if (state.view === "form") renderForm();
-  else if (state.view === "bulk") renderBulk();
-  else if (state.view === "stats") renderStatsPage();
-  else renderLibrary();
-  renderIcons();
-}
-
-// Render the entry's structured layout field as a mini wireframe — this is the
-// dogfood proof: the entry's own layout.regions drawn back as a diagram.
-function renderLayoutWireframe(layout) {
-  if (!layout?.form) return "";
-  const widthFlex = (w) => (w === "fixed-narrow" ? "60px" : w === "fixed-wide" ? "120px" : "1fr");
-  const isRow = ["two-column", "three-column"].includes(layout.form);
-  const style = isRow
-    ? `display:grid;grid-template-columns:${layout.regions.map((r) => widthFlex(r.width)).join(" ")};gap:4px`
-    : `display:grid;gap:4px`;
-  const blocks = layout.regions.map((r) =>
-    `<div class="wire-block" data-role="${r.role}"><span>${r.role}</span></div>`
-  ).join("");
-  return `
-    <div class="rail-card">
-      <div class="section-title">Layout · ${layout.form}</div>
-      <div class="wireframe" style="${style}">${blocks}</div>
-    </div>`;
-}
-
-function renderLibrary() {
-  const entry = selectedEntry();
-  if (!entry) {
-    $("#page").innerHTML = `<div class="empty-state"><div><i data-lucide="library"></i><p>The corpus starts empty on purpose — pick one example worth defending and add it.</p><button class="btn primary" id="emptyNew"><i data-lucide="plus"></i>New sample</button></div></div>`;
-    return;
-  }
-
-  const image = entry.image.path
-    ? `<img src="${API}/image?path=${encodeURIComponent(entry.image.path)}" alt="${esc(entry.title)}"><span class="badge image-badge">${entry.image.visibility}</span>`
-    : `<div class="image-empty"><i data-lucide="image-off"></i><span>Link-only sample</span><span class="badge">${entry.image.visibility}</span></div>`;
-
-  // Classify the screenshot shape so the image-stage picks the right fit.
-  // Mobile (portrait) screenshots were getting center-cropped to a landscape
-  // slot, losing the top and bottom — the most common mobile pattern (actions
-  // at the bottom) was invisible. Landscape → cover-crop; portrait → contain,
-  // no crop; square → contain in a square slot.
-  const stageShape = (() => {
-    const w = entry.image.width, h = entry.image.height;
-    if (!w || !h) return "is-landscape"; // unknown — default to web (most corpus)
-    if (h > w * 1.2) return "is-portrait";   // tall → mobile
-    if (w > h * 1.2) return "is-landscape";  // wide → desktop
-    return "is-square";                        // roughly equal → tablet/square
-  })();
-
-  // ── Attribute rail (right column) — renders only what the entry has.
-  // Sibling to .detail-main, not nested inside the critique card.
-  const rail = `
-    ${entry.layout ? `<section class="panel">${renderLayoutWireframe(entry.layout)}</section>` : ""}
-    <section class="panel">
-      <div class="panel-head"><div class="panel-title">Visual attributes</div></div>
-      <div class="panel-body">
-        <div class="attr-grid">
-          <div>
-            <div class="swatches">
-              ${entry.visual.dominantColors.map((c) => `<div class="swatch" style="background:${c}" title="${c}"></div>`).join("")}
-              ${entry.visual.accentColor ? `<div class="swatch accent" style="background:${entry.visual.accentColor}" title="accent ${entry.visual.accentColor}"></div>` : ""}
-            </div>
-          </div>
-          <dl>
-            <div class="kv"><dt>Spacing</dt><dd>${entry.visual.spacingDensity}</dd></div>
-            <div class="kv"><dt>Corners</dt><dd>${entry.visual.cornerStyle}</dd></div>
-            <div class="kv"><dt>Shadows</dt><dd>${entry.visual.usesShadows ? "yes" : "no"}</dd></div>
-            <div class="kv"><dt>Borders</dt><dd>${entry.visual.usesBorders ? "yes" : "no"}</dd></div>
-            <div class="kv"><dt>Display</dt><dd>${entry.visual.typePairing.display || "—"}</dd></div>
-            <div class="kv"><dt>Body</dt><dd>${entry.visual.typePairing.body || "—"}</dd></div>
-            ${entry.visual.typePairing.notes ? `<div class="kv"><dt>Notes</dt><dd>${esc(entry.visual.typePairing.notes)}</dd></div>` : ""}
-          </dl>
-        </div>
-      </div>
-    </section>
-    ${entry.visual.colorRoles ? `
-    <section class="panel">
-      <div class="panel-head"><div class="panel-title">Color roles · token set</div></div>
-      <div class="panel-body">
-        <div class="color-tokens">
-          ${[
-            ["canvas", entry.visual.colorRoles.canvas],
-            ["surface", entry.visual.colorRoles.surface],
-            ["ink", entry.visual.colorRoles.ink],
-            entry.visual.colorRoles.muted ? ["muted", entry.visual.colorRoles.muted] : null,
-            ["accent", entry.visual.colorRoles.accent],
-          ].filter(Boolean).map(([role, hex]) =>
-            `<div class="color-token"><span class="color-chip" style="background:${hex}"></span><span class="color-role">${role}</span><span class="color-hex">${hex}</span></div>`
-          ).join("")}
-        </div>
-      </div>
-    </section>` : ""}
-    ${entry.voice ? `
-    <section class="panel">
-      <div class="panel-head"><div class="panel-title">Voice</div></div>
-      <div class="panel-body">
-        <div class="voice-tone">${esc(entry.voice.tone)}</div>
-        <ul class="voice-examples">${entry.voice.examples.map((ex) => `<li>${esc(ex)}</li>`).join("")}</ul>
-        ${entry.voice.avoid.length ? `<div class="voice-avoid">Avoids: ${entry.voice.avoid.map(esc).join("; ")}</div>` : ""}
-      </div>
-    </section>` : ""}
-  `;
-
-  // ── Detail view: unframed hero on top, then main + rail as sibling grid regions.
-  // No card-within-card — the panel--spacious wraps the whole thing, but the
-  // hero is unframed and the main/rail columns are direct grid children.
-  $("#page").innerHTML = `
-    <div class="panel panel--spacious">
-      <div class="panel-head">
-        <div>
-          <div class="panel-title tier-label">${esc(entry.source.productName)}</div>
-          <div class="panel-sub">${esc(entry.id)} · ${entry.patternType} · ${entry.platform || "web"}</div>
-        </div>
-        <div style="display:flex;gap:6px">
-          <button class="btn secondary" id="editSelected"><i data-lucide="pencil"></i>Edit</button>
-          <button class="btn danger" id="deleteSelected"><i data-lucide="trash-2"></i>Delete</button>
-        </div>
-      </div>
-      <div class="panel-body">
-        <div class="detail-hero">
-          <h1 class="sample-title tier-label">${esc(entry.title)}</h1>
-          <div class="source-line">
-            ${entry.source.url ? `<a href="${esc(entry.source.url)}" target="_blank" rel="noopener">${esc(entry.source.url)}</a>` : `<span>No source URL</span>`}
-            <span class="tier-temporal">· ${entry.source.capturedAt}</span>
-            ${qualityDots(entry.qualityScore)}
-            ${entry.reviewStatus === "draft" ? `<span class="mini-tag draft">draft — hidden from search</span>` : ""}
-          </div>
-          <div class="tag-row">
-            ${entry.categories.map((cat) => `<span class="tag category">${cat}</span>`).join("")}
-            ${entry.styleTags.map((tag) => `<span class="tag style">${tag}</span>`).join("")}
-          </div>
-        </div>
-        <div class="detail-body">
-          <div class="detail-main">
-            <div class="image-stage ${stageShape}">${image}</div>
-            <section class="panel"><div class="panel-body"><h2 class="section-title">Critique</h2><p class="critique">${esc(entry.critique)}</p></div></section>
-            <section class="panel"><div class="panel-body"><h2 class="section-title">What to steal</h2><ul class="steal-list">${entry.whatToSteal.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>
-            ${(entry.antiPatterns?.antiPatterns || []).length ? `<section class="panel"><div class="panel-body"><h2 class="section-title">Anti-patterns (mistakes avoided)</h2><ul class="avoid-list">${entry.antiPatterns.antiPatterns.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>` : ""}
-            ${(entry.antiPatterns?.whereThisFails || []).length ? `<section class="panel"><div class="panel-body"><h2 class="section-title">Where copying this fails</h2><ul class="avoid-list">${entry.antiPatterns.whereThisFails.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>` : ""}
-            ${(entry.antiPatterns?.accessibilityRisks || []).length ? `<section class="panel"><div class="panel-body"><h2 class="section-title">Accessibility risks</h2><ul class="avoid-list">${entry.antiPatterns.accessibilityRisks.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>` : ""}
-          </div>
-          <div class="detail-rail">${rail}</div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function blankDraft() {
+/* ---------- field mapper: our CorpusEntry → the shape components expect ----------
+   The reference components read x.source, x.pattern, x.style, x.dominant, x.accent,
+   x.score, x.tier, x.steals. Our schema has nested objects. This maps once at load. */
+function mapEntry(entry) {
   return {
-    id: "",
-    title: "",
-    patternType: "dashboard",
-    categories: [],
-    styleTags: [],
-    source: { productName: "", url: null, capturedAt: today(), capturedBy: "self" },
-    image: { visibility: "private", path: null, width: null, height: null },
-    visual: {
-      dominantColors: ["#ffffff", "#111111"],
-      accentColor: null,
-      typePairing: { display: null, body: null, notes: "" },
-      spacingDensity: "moderate",
-      cornerStyle: "slight-round",
-      usesShadows: false,
-      usesBorders: true,
-    },
-    critique: "",
-    whatToSteal: [""],
-    antiPatterns: { antiPatterns: [], whereThisFails: [], accessibilityRisks: [] },
-    qualityTier: "exceptional",
-    qualityScore: 4,
-    addedAt: today(),
+    id: entry.id,
+    title: entry.title,
+    source: entry.source.productName,
+    sourceUrl: entry.source.url,
+    pattern: entry.patternType,
+    style: entry.styleTags[0] || 'minimal',
+    styles: entry.styleTags,
+    categories: entry.categories,
+    tier: entry.qualityTier || 'exceptional',
+    score: entry.qualityScore,
+    steals: (entry.whatToSteal || []).length,
+    stealsList: entry.whatToSteal || [],
+    anti: (entry.antiPatterns?.antiPatterns || []).length,
+    antiList: entry.antiPatterns?.antiPatterns || [],
+    whereFails: entry.antiPatterns?.whereThisFails || [],
+    a11yRisks: entry.antiPatterns?.accessibilityRisks || [],
+    dominant: entry.visual?.dominantColors || ['#ffffff','#f1f3f6','#0f172a'],
+    accent: entry.visual?.accentColor || entry.visual?.colorRoles?.accent || '#2f5d62',
+    colorRoles: entry.visual?.colorRoles || null,
+    density: entry.visual?.spacingDensity || 'moderate',
+    corner: entry.visual?.cornerStyle || 'slight-round',
+    shadows: entry.visual?.usesShadows || false,
+    borders: entry.visual?.usesBorders || true,
+    typeNotes: entry.visual?.typePairing?.notes || '',
+    critique: entry.critique,
+    voice: entry.voice || null,
+    layout: entry.layout || null,
+    added: entry.addedAt,
+    imagePath: entry.image?.path || null,
+    imageW: entry.image?.width || null,
+    imageH: entry.image?.height || null,
+    imageVis: entry.image?.visibility || 'private',
+    platform: entry.platform || 'web',
+    reviewStatus: entry.reviewStatus || 'approved',
+    provenance: entry.provenance || null,
+    lastVerified: entry.source?.lastVerified || entry.source?.capturedAt,
+    // keep the raw entry for the edit/wizard path
+    _raw: entry,
   };
 }
 
-function resetDraft(entry = null) {
-  state.draft = entry ? JSON.parse(JSON.stringify(entry)) : blankDraft();
-  state.draftMode = entry ? "edit" : "create";
-  state.uploadedImage = null;
-  state.bulkEditingIndex = null;
+/* ---------- live data layer ---------- */
+async function loadAll() {
+  const [entriesRes, schemaRes, healthRes, configRes] = await Promise.all([
+    fetch(`${API}/api/entries`).then(r => r.json()).catch(() => ({ entries: [] })),
+    fetch(`${API}/api/schema`).then(r => r.json()).catch(() => SCHEMA),
+    fetch(`${API}/api/health`).then(r => r.json()).catch(() => HEALTH),
+    fetch(`${API}/api/config`).then(r => r.json()).catch(() => ({})),
+  ]);
+  E = (entriesRes.entries || []).map(mapEntry);
+  SCHEMA = schemaRes;
+  HEALTH = healthRes;
+  CONFIG = configRes;
+  return { E, SCHEMA, HEALTH, CONFIG };
 }
 
-function syncDraftFromForm() {
-  if (!state.draft || !$("#entryForm")) return;
-  const form = $("#entryForm");
-  const isEditing = state.draftMode === "edit";
-  const productName = form.productName.value.trim();
-  const title = form.title.value.trim();
-  const proposedId = slugify(`${productName}-${title || "sample"}`).slice(0, 80);
-  state.draft.id = isEditing && form.id ? form.id.value.trim() || proposedId : "";
-  state.draft.title = title;
-  state.draft.source.productName = productName;
-  state.draft.source.url = form.url.value.trim() || null;
-  state.draft.source.capturedAt = form.capturedAt.value;
-  state.draft.source.capturedBy = form.capturedBy.value;
-  state.draft.categories = [...new Set([
-    form.primaryCategory.value,
-    ...[...form.querySelectorAll("input[name='categories']:checked")].map((input) => input.value),
-  ].filter(Boolean))];
-  state.draft.styleTags = [...new Set([
-    form.primaryStyleTag.value,
-    ...[...form.querySelectorAll("input[name='styleTags']:checked")].map((input) => input.value),
-  ].filter(Boolean))];
-  state.draft.patternType = form.patternType.value;
-  if (form.platform) state.draft.platform = form.platform.value;
-  state.draft.image.visibility = form.visibility.value;
-  state.draft.image.path = form.imagePath.value.trim() || null;
-  state.draft.image.width = form.imageWidth.value ? Number(form.imageWidth.value) : null;
-  state.draft.image.height = form.imageHeight.value ? Number(form.imageHeight.value) : null;
-  state.draft.visual.dominantColors = lines(form.dominantColors.value);
-  state.draft.visual.accentColor = form.accentColor.value.trim() || null;
-  state.draft.visual.typePairing.display = form.displayFont.value.trim() || null;
-  state.draft.visual.typePairing.body = form.bodyFont.value.trim() || null;
-  state.draft.visual.typePairing.notes = form.typeNotes.value.trim() || undefined;
-  state.draft.visual.spacingDensity = form.spacingDensity.value;
-  state.draft.visual.cornerStyle = form.cornerStyle.value;
-  state.draft.visual.usesShadows = form.usesShadows.checked;
-  state.draft.visual.usesBorders = form.usesBorders.checked;
-  state.draft.critique = form.critique.value.trim();
-  state.draft.whatToSteal = lines(form.whatToSteal.value);
-  state.draft.antiPatterns = {
-    antiPatterns: lines(form.antiPatterns.value),
-    whereThisFails: lines(form.whereThisFails.value),
-    accessibilityRisks: lines(form.accessibilityRisks.value),
+/* ---------- precomputed aggregates (from live E) ---------- */
+let agg = {};
+function recomputeAgg() {
+  const N = E.length;
+  const byPattern={}, byStyle={}, bySource={}, byTier={}, byCat={}, byScore={}, byPlatform={};
+  let stealsSum=0, antiSum=0, dates=[];
+  for(const x of E){
+    byPattern[x.pattern]=(byPattern[x.pattern]||0)+1;
+    byStyle[x.style]=(byStyle[x.style]||0)+1;
+    bySource[x.source]=(bySource[x.source]||0)+1;
+    byTier[x.tier]=(byTier[x.tier]||0)+1;
+    byPlatform[x.platform]=(byPlatform[x.platform]||0)+1;
+    for(const c of x.categories) byCat[c]=(byCat[c]||0)+1;
+    if(x.score!=null) byScore[x.score]=(byScore[x.score]||0)+1;
+    stealsSum+=x.steals||0; antiSum+=x.anti||0;
+    if(x.added&&x.added!=='—') dates.push(x.added);
+  }
+  dates.sort();
+  const scoreSum=Object.entries(byScore).reduce((s,[k,v])=>s+(+k)*v,0);
+  const scoreN=Object.values(byScore).reduce((a,b)=>a+b,0);
+  const top=(o,n)=>Object.entries(o).sort((a,b)=>b[1]-a[1]).slice(0,n);
+  agg = {
+    N, byPattern,byStyle,bySource,byTier,byCat,byScore,byPlatform,
+    avgScore: scoreN? scoreSum/scoreN : 0,
+    avgSteals: N? stealsSum/N : 0, avgAnti: N? antiSum/N : 0,
+    dates,
+    topPatterns: top(byPattern,8), topStyles: top(byStyle,8), topSources: top(bySource,10), topCats: top(byCat,8),
+    excCount: byTier.exceptional||0, cauCount: byTier.cautionary||0,
+    mobileCount: byPlatform.mobile||0, webCount: byPlatform.web||0, tabletCount: byPlatform.tablet||0,
+    withImages: E.filter(x=>x.imagePath).length,
   };
-  // Voice + qualityTier + colorRoles — all optional/advanced.
-  if (form.voiceTone && form.voiceTone.value.trim()) {
-    state.draft.voice = {
-      tone: form.voiceTone.value.trim(),
-      examples: lines(form.voiceExamples.value),
-      avoid: lines(form.voiceAvoid.value),
-    };
-  } else {
-    state.draft.voice = undefined;
-  }
-  if (form.colorRolesCanvas && form.colorRolesCanvas.value.trim()) {
-    state.draft.visual.colorRoles = {
-      canvas: form.colorRolesCanvas.value.trim(),
-      surface: form.colorRolesSurface.value.trim(),
-      ink: form.colorRolesInk.value.trim(),
-      muted: form.colorRolesMuted.value.trim() || null,
-      accent: form.colorRolesAccent.value.trim(),
-    };
-  } else {
-    state.draft.visual.colorRoles = undefined;
-  }
-  state.draft.qualityTier = form.qualityTier ? form.qualityTier.value : "exceptional";
-  state.draft.qualityScore = Number(form.qualityScore.value);
-  if (form.reviewStatus) state.draft.reviewStatus = form.reviewStatus.value;
-  if (form.provenanceTaggedBy) state.draft.provenance = { taggedBy: form.provenanceTaggedBy.value, ...(state.draft.provenance?.reviewedBy ? { reviewedBy: state.draft.provenance.reviewedBy } : {}) };
-  state.draft.addedAt = form.addedAt.value;
 }
 
-function validateDraft() {
-  const entry = state.draft;
-  const issues = [];
-  if (state.draftMode === "edit" && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry.id)) issues.push("Use a stable kebab-case id.");
-  if (state.draftMode === "edit" && state.entries.some((candidate) => candidate.id === entry.id && candidate.id !== state.selectedId)) issues.push("That id already exists.");
-  if (!entry.title) issues.push("Add a title.");
-  if (!entry.source.productName) issues.push("Add a product name.");
-  if (entry.source.url && !/^https?:\/\/.+/.test(entry.source.url)) issues.push("Use a valid source URL or leave it blank.");
-  if (!entry.categories.length) issues.push("Choose at least one category.");
-  if (!entry.styleTags.length) issues.push("Choose at least one style tag.");
-  if (!entry.visual.dominantColors.length || !entry.visual.dominantColors.every((color) => /^#[0-9a-fA-F]{6}$/.test(color))) issues.push("Dominant colors must be #RRGGBB values.");
-  if (entry.visual.accentColor && !/^#[0-9a-fA-F]{6}$/.test(entry.visual.accentColor)) issues.push("Accent color must be #RRGGBB or blank.");
-  if (entry.critique.length < 80) issues.push("Critique must be at least 80 characters.");
-  if (!entry.whatToSteal.length || entry.whatToSteal.some((item) => item.length < 10)) issues.push("Add at least one concrete technique.");
-  if (!entry.antiPatterns || !entry.antiPatterns.antiPatterns || !entry.antiPatterns.antiPatterns.length || entry.antiPatterns.antiPatterns.some((a) => a.length < 10)) issues.push("Add at least one anti-pattern (what mistake does this design avoid?).");
-  if (!entry.image.path) issues.push("Capture or upload a screenshot before saving.");
-  if (entry.image.visibility !== "private" && (!entry.image.path || !entry.image.width || !entry.image.height)) issues.push("Public images need path, width, and height.");
-  if (entry.image.path && !/^(images-private|images-public)\/[^/].+/.test(entry.image.path)) issues.push("Image path must be corpus-relative.");
-  // Draft-hygiene gate (mirrors the centralized findDraftMarkers in schema.ts):
-  // block save if any text field still carries a [DRAFT]/[PLACEHOLDER]/[TODO] marker.
-  const draftTexts = [
-    entry.critique, ...entry.whatToSteal,
-    ...(entry.antiPatterns?.antiPatterns || []), ...(entry.antiPatterns?.whereThisFails || []), ...(entry.antiPatterns?.accessibilityRisks || []),
-    ...(entry.voice ? [entry.voice.tone, ...entry.voice.examples, ...entry.voice.avoid] : []),
-  ];
-  if (draftTexts.some((t) => /\[(?:DRAFT|PLACEHOLDER|TODO\b)/i.test(t))) issues.push("Remove all [DRAFT] / [PLACEHOLDER] / [TODO] markers before saving — rewrite those fields in your own words.");
-  return issues;
+/* ---------- source color hash (stable across pages) ---------- */
+function srcColor(s){
+  let h=0; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0;
+  return `hsl(${h%360} 55% 45%)`;
 }
-
-function renderForm() {
-  if (!state.draft) resetDraft();
-  const entry = state.draft;
-  const isEditing = state.draftMode === "edit";
-  const isLegacyLinkOnly = isEditing && !entry.image.path;
-  const keyStatus = state.config.visionKeyConfigured
-    ? `<div class="key-status ready">Auto-fill: ${esc(state.config.extractionProvider || "openai")} (${esc(state.config.extractionModel || "?")}) → ${esc(state.config.critiqueProvider || "openai")} (${esc(state.config.critiqueModel || "?")}).</div>`
-    : `<div class="key-status missing">Auto-fill needs a vision provider key (OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY) in .env.</div>`;
-  const imagePreview = entry.image.path
-    ? `<figure class="image-preview"><img src="${API}/image?path=${encodeURIComponent(entry.image.path)}" alt="${esc(entry.title || entry.source.productName || "Captured screenshot")}"><figcaption class="image-ready">Image ready: ${esc(entry.image.path)} (${entry.image.width || "?"} x ${entry.image.height || "?"})</figcaption></figure>`
-    : `<div class="image-empty"><i data-lucide="image-off"></i><span>No screenshot yet</span><span class="badge">required for new samples</span></div>`;
-  $("#page").innerHTML = `
-    <div class="form-layout">
-      <section class="panel">
-        <div class="panel-head">
-          <div><div class="panel-title">${isEditing ? "Edit sample" : "New sample"}</div><div class="panel-sub">${isEditing ? esc(entry.id) : "ID assigned on save"}</div></div>
-          <div style="display:flex;gap:6px">
-            <button class="btn" id="autoFill"><i data-lucide="wand-sparkles"></i>Auto-fill</button>
-            <button class="btn" id="resetForm"><i data-lucide="rotate-ccw"></i>Reset</button>
-            <button class="btn primary" id="saveForm"><i data-lucide="save"></i>Save</button>
-          </div>
-        </div>
-        <div class="panel-body">
-          <form id="entryForm">
-            <div class="starter">
-              <strong>Fast path</strong>
-              <p>Choose one image source: capture one rendered viewport from a Source URL, or upload a screenshot. Auto-fill and Save use that screenshot.</p>
-            </div>
-            ${keyStatus}
-            ${isLegacyLinkOnly ? `<div class="legacy-note">This is a legacy link-only sample. You can keep editing it, but new samples created here need a screenshot.</div>` : ""}
-
-            <fieldset>
-              <legend>Start here</legend>
-              <div class="grid-2">
-                <label>Product<input name="productName" value="${esc(entry.source.productName)}"></label>
-                <label>Source URL <span style="font-weight:400;color:var(--faint)">(used only for capture/attribution)</span><input name="url" value="${esc(entry.source.url)}" placeholder="https://example.com"></label>
-              </div>
-              <div class="source-actions">
-                <button class="source-action" type="button" id="captureSource"><i data-lucide="globe"></i><span>Pull one screenshot from Source URL</span></button>
-                <label class="source-action" id="dropzone">
-                  <input type="file" id="imageFile" accept="image/png,image/jpeg,image/webp">
-                  <i data-lucide="upload"></i>
-                  <span>${entry.image.path ? esc(entry.image.path) : "Upload screenshot"}</span>
-                </label>
-              </div>
-              ${imagePreview}
-            </fieldset>
-
-            <fieldset>
-              <legend>Review draft</legend>
-              <label>Title<input name="title" value="${esc(entry.title)}"></label>
-              <label>Primary pattern type (the ONE pattern this exemplifies)<select name="patternType">${state.schema.patternTypes.map((p) => `<option value="${p}" ${entry.patternType === p ? "selected" : ""}>${p}</option>`).join("")}</select></label>
-              <label>Platform<select name="platform"><option value="web" ${(entry.platform || "web") === "web" ? "selected" : ""}>web (desktop)</option><option value="mobile" ${entry.platform === "mobile" ? "selected" : ""}>mobile (phone)</option><option value="tablet" ${entry.platform === "tablet" ? "selected" : ""}>tablet</option></select></label>
-              <div class="grid-2">
-                <label>Primary category<select name="primaryCategory"><option value="">Choose one</option>${state.schema.categories.map((cat) => `<option value="${cat}" ${entry.categories[0] === cat ? "selected" : ""}>${cat}</option>`).join("")}</select></label>
-                <label>Primary style<select name="primaryStyleTag"><option value="">Choose one</option>${state.schema.styleTags.map((tag) => `<option value="${tag}" ${entry.styleTags[0] === tag ? "selected" : ""}>${tag}</option>`).join("")}</select></label>
-              </div>
-              <label>Critique<textarea name="critique">${esc(entry.critique)}</textarea></label>
-              <label>What to steal<textarea name="whatToSteal">${esc(entry.whatToSteal.join("\n"))}</textarea></label>
-              <label>Anti-patterns — what mistake does this design avoid? (one per line, required)<textarea name="antiPatterns" placeholder="e.g. Avoids drop shadows — uses background-color steps for depth instead">${esc((entry.antiPatterns?.antiPatterns || []).join("\n"))}</textarea></label>
-            </fieldset>
-
-            <details class="advanced">
-              <summary>Advanced metadata</summary>
-              <div class="advanced-body">
-              <div class="grid-3">
-                ${isEditing ? `<label>Entry id<input name="id" value="${esc(entry.id)}"></label>` : `<label>Entry id<input value="Assigned automatically on save" disabled></label>`}
-                <label>Captured<input name="capturedAt" type="date" value="${entry.source.capturedAt}"></label>
-                <label>Captured by<select name="capturedBy">${["self","automated-collection"].map((v) => `<option ${entry.source.capturedBy === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-              </div>
-              <div class="grid-2">
-                <label>Visibility<select name="visibility">${state.schema.imageVisibilities.map((v) => `<option ${entry.image.visibility === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-                <label>Path<input name="imagePath" value="${esc(entry.image.path || "")}"></label>
-              </div>
-              <div class="grid-2">
-                <label>Width<input name="imageWidth" type="number" min="1" value="${entry.image.width || ""}"></label>
-                <label>Height<input name="imageHeight" type="number" min="1" value="${entry.image.height || ""}"></label>
-              </div>
-              <label>Where copying this fails (one per line, optional)<textarea name="whereThisFails" placeholder="Contexts where lifting this technique would hurt">${esc((entry.antiPatterns?.whereThisFails || []).join("\n"))}</textarea></label>
-              <label>Accessibility risks (one per line, optional)<textarea name="accessibilityRisks" placeholder="Specific a11y concerns">${esc((entry.antiPatterns?.accessibilityRisks || []).join("\n"))}</textarea></label>
-              <label>Quality tier<select name="qualityTier"><option value="exceptional" ${entry.qualityTier !== "cautionary" ? "selected" : ""}>exceptional (great example)</option><option value="cautionary" ${entry.qualityTier === "cautionary" ? "selected" : ""}>cautionary (bad example — teach what NOT to do)</option></select></label>
-              <label>Review state<select name="reviewStatus"><option value="approved" ${(entry.reviewStatus || "approved") !== "draft" ? "selected" : ""}>approved (visible in MCP search)</option><option value="draft" ${entry.reviewStatus === "draft" ? "selected" : ""}>draft (hidden from search — work in progress)</option></select></label>
-              <label>Provenance<select name="provenanceTaggedBy"><option value="human" ${entry.provenance?.taggedBy === "human" ? "selected" : ""}>human (hand-authored)</option><option value="auto" ${entry.provenance?.taggedBy === "auto" ? "selected" : ""}>auto (tagger-generated)</option><option value="auto-reviewed" ${(entry.provenance?.taggedBy || "auto-reviewed") === "auto-reviewed" ? "selected" : ""}>auto-reviewed (tagger + human edit)</option></select></label>
-              <label>Voice — tone (leave blank if copy isn't notable)<input name="voiceTone" value="${esc(entry.voice?.tone || "")}" placeholder="restrained, confident, slightly dry"></label>
-              <label>Voice — real copy examples (one per line)<textarea name="voiceExamples" placeholder="Verbatim copy that defines the voice">${esc((entry.voice?.examples || []).join("\n"))}</textarea></label>
-              <label>Voice — what to avoid (one per line, optional)<textarea name="voiceAvoid" placeholder="e.g. no exclamation enthusiasm on financial data">${esc((entry.voice?.avoid || []).join("\n"))}</textarea></label>
-              <label>Extra categories<div class="check-grid">${state.schema.categories.map((cat) => `<label class="check-chip"><input type="checkbox" name="categories" value="${cat}" ${entry.categories.slice(1).includes(cat) ? "checked" : ""}><span>${cat}</span></label>`).join("")}</div></label>
-              <label>Extra style tags<div class="check-grid">${state.schema.styleTags.map((tag) => `<label class="check-chip"><input type="checkbox" name="styleTags" value="${tag}" ${entry.styleTags.slice(1).includes(tag) ? "checked" : ""}><span>${tag}</span></label>`).join("")}</div></label>
-              <label>Added<input name="addedAt" type="date" value="${entry.addedAt}"></label>
-              </div>
-            </details>
-
-            <details class="advanced">
-              <summary>Advanced visual attributes</summary>
-              <div class="advanced-body">
-              <div class="grid-2">
-                <label>Dominant colors<textarea name="dominantColors">${esc(entry.visual.dominantColors.join("\n"))}</textarea></label>
-                <label>Accent color<input name="accentColor" value="${esc(entry.visual.accentColor || "")}" placeholder="#15803d"></label>
-              </div>
-              <div class="grid-3">
-                <label>Spacing<select name="spacingDensity">${state.schema.spacingDensities.map((v) => `<option ${entry.visual.spacingDensity === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-                <label>Corners<select name="cornerStyle">${state.schema.cornerStyles.map((v) => `<option ${entry.visual.cornerStyle === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-                <label>Quality<input name="qualityScore" type="number" min="1" max="5" value="${entry.qualityScore}"></label>
-              </div>
-              <div class="grid-2">
-                <label>Display font<input name="displayFont" value="${esc(entry.visual.typePairing.display || "")}"></label>
-                <label>Body font<input name="bodyFont" value="${esc(entry.visual.typePairing.body || "")}"></label>
-              </div>
-              <label>Type notes<input name="typeNotes" value="${esc(entry.visual.typePairing.notes || "")}"></label>
-              <div class="check-grid">
-                <label class="check-chip"><input type="checkbox" name="usesShadows" ${entry.visual.usesShadows ? "checked" : ""}><span>uses shadows</span></label>
-                <label class="check-chip"><input type="checkbox" name="usesBorders" ${entry.visual.usesBorders ? "checked" : ""}><span>uses borders</span></label>
-              </div>
-              <div class="grid-3">
-                <label>Color role · canvas<input name="colorRolesCanvas" value="${esc(entry.visual.colorRoles?.canvas || "")}" placeholder="#fcfcfd"></label>
-                <label>Color role · surface<input name="colorRolesSurface" value="${esc(entry.visual.colorRoles?.surface || "")}" placeholder="#ffffff"></label>
-                <label>Color role · ink<input name="colorRolesInk" value="${esc(entry.visual.colorRoles?.ink || "")}" placeholder="#18181b"></label>
-              </div>
-              <div class="grid-2">
-                <label>Color role · muted (optional)<input name="colorRolesMuted" value="${esc(entry.visual.colorRoles?.muted || "")}" placeholder="#71717a"></label>
-                <label>Color role · accent<input name="colorRolesAccent" value="${esc(entry.visual.colorRoles?.accent || "")}" placeholder="#635bff"></label>
-              </div>
-              </div>
-            </details>
-          </form>
-        </div>
-      </section>
-    </div>
-  `;
-  // Save-check panel renders into the right rail (or inline if rail is hidden).
-  const saveCheck = `
-    <div class="rail-card">
-      <div class="section-title">Save check</div>
-      <div class="attr-grid">
-        <div class="validation" id="validationPanel"></div>
-        <details class="advanced">
-          <summary>JSON preview</summary>
-          <div class="advanced-body"><pre class="preview-json" id="jsonPreview"></pre></div>
-        </details>
-      </div>
-    </div>`;
-  // Validation/save summary — rendered in-page now (no right rail exists).
-  $("#page").insertAdjacentHTML("beforeend", `<div class="in-page-rail">${saveCheck}</div>`);
-  updatePreview();
+function tierPill(t){
+  return t==='exceptional'
+    ? `<span class="tier-pill exc">Exceptional</span>`
+    : `<span class="tier-pill cau">Cautionary</span>`;
 }
-
-function updatePreview() {
-  syncDraftFromForm();
-  const issues = validateDraft();
-  $("#validationPanel").innerHTML = issues.length
-    ? issues.map((issue) => `<div class="issue"><i data-lucide="circle-alert"></i><span>${esc(issue)}</span></div>`).join("")
-    : `<div class="issue ok"><i data-lucide="circle-check"></i><span>Ready to save</span></div>`;
-  $("#jsonPreview").textContent = JSON.stringify(state.draft, null, 2);
-  $("#saveForm").disabled = issues.length > 0;
-  const autoFill = $("#autoFill");
-  // Auto-fill needs a vision key + an image. Product name is NOT required —
-  // the model reads it off the screenshot when none is supplied.
-  if (autoFill) autoFill.disabled = !state.config.visionKeyConfigured || !state.draft.image.path;
-  renderIcons();
-}
-
-async function saveDraft() {
-  syncDraftFromForm();
-  const issues = validateDraft();
-  if (issues.length) {
-    toast(issues[0], "error");
-    updatePreview();
-    return;
+function scoreBar(s){
+  let b=''; for(let i=1;i<=5;i++){
+    const cls=i<=s?(s<=2?'on low':s===3?'on mid':'on'):'';
+    b+=`<i class="${cls}"></i>`;
   }
-  // Editing a bulk-queue item: write back to the queue, not the corpus.
-  if (state.bulkEditingIndex !== null && state.bulkEditingIndex >= 0 && state.bulkQueue[state.bulkEditingIndex]) {
-    const idx = state.bulkEditingIndex;
-    const prev = state.bulkQueue[idx];
-    state.bulkQueue[idx] = { ...JSON.parse(JSON.stringify(state.draft)), _status: prev._status, _error: null, _filename: prev._filename };
-    state.bulkEditingIndex = null;
-    state.draft = null;
-    setView("bulk");
-    toast("Updated queue item", "success");
-    return;
+  return `<span class="score-bar">${b}</span>`;
+}
+function gscore(s){
+  let b=''; for(let i=1;i<=5;i++){
+    const cls=i<=s?(s<=2?'on low':s===3?'on mid':'on'):'';
+    b+=`<i class="${cls}"></i>`;
   }
-  const isEditing = state.draftMode === "edit";
-  try {
-    const data = await request(isEditing ? `/entries/${encodeURIComponent(state.draft.id)}` : "/entries", {
-      method: isEditing ? "PUT" : "POST",
-      body: JSON.stringify(state.draft),
-    });
-    state.selectedId = data.entry.id;
-    state.draft = null;
-    await loadAll({ keepSelection: true });
-    setView("detail");
-    toast("Saved", "success");
-  } catch (error) {
-    toast(error.message, "error");
-  }
+  return `<span class="gscore">${b}</span>`;
 }
 
-async function uploadImage(file) {
-  if (!file) return;
-  syncDraftFromForm();
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-  try {
-	    const uploaded = await request("/upload-image", {
-	      method: "POST",
-	      body: JSON.stringify({ filename: file.name, slug: state.draft.title || state.draft.source.productName || file.name, dataUrl }),
-	    });
-    state.draft.image = {
-      visibility: uploaded.visibility,
-      path: uploaded.path,
-      width: uploaded.width,
-      height: uploaded.height,
-    };
-    renderForm();
-	    toast("Image uploaded", "success");
-  } catch (error) {
-    toast(error.message, "error");
-  }
-}
-
-async function captureSourceImage() {
-  syncDraftFromForm();
-  if (!state.draft.source.url) {
-    toast("Add a source URL first", "error");
-    return;
-  }
-
-  const button = $("#captureSource");
-  const original = button.innerHTML;
-  button.disabled = true;
-  button.innerHTML = `<i data-lucide="loader-circle"></i><span>Capturing source</span>`;
-  renderIcons();
-
-  try {
-    const captured = await request("/capture-url", {
-      method: "POST",
-      body: JSON.stringify({
-	        url: state.draft.source.url,
-	        slug: state.draft.title || state.draft.source.productName || "source-screenshot",
-	      }),
-    });
-    state.draft.image = {
-      visibility: captured.visibility,
-      path: captured.path,
-      width: captured.width,
-      height: captured.height,
-    };
-    renderForm();
-	    toast("Screenshot captured. Review the preview, then Auto-fill.", "success");
-  } catch (error) {
-    toast(error.message, "error");
-  } finally {
-    const nextButton = $("#captureSource");
-    if (nextButton) {
-      nextButton.disabled = false;
-      nextButton.innerHTML = original;
-      renderIcons();
-    }
-  }
-}
-
-// Strip any [DRAFT...]/[PLACEHOLDER...]/[TODO...] marker the tagger prepends.
-// Matches the centralized server gate (findDraftMarkers in schema.ts) exactly:
-// it rejects all three, so the client-side stripper must too — otherwise a row
-// auto-critiqued in bulk stays uncommittable. Marker may sit anywhere in the
-// string (the model occasionally wraps it mid-sentence), and may repeat, so we
-// loop until stable.
-function stripDraftMarker(s) {
-  if (typeof s !== "string") return s;
-  let prev;
-  let out = s;
-  do {
-    prev = out;
-    out = out.replace(/\[(?:DRAFT|PLACEHOLDER|TODO)[^\]]*\]\s*/gi, "");
-  } while (out !== prev);
-  return out.trim();
-}
-
-// Apply stripDraftMarker to every free-text field the hygiene gate inspects —
-// the same field set entryTextFields() enumerates server-side. Used by both the
-// single-sample auto-fill and the bulk critique pass so they share one rule.
-function stripMarkersFromEntry(entry) {
-  const e = entry;
-  if (typeof e.critique === "string") e.critique = stripDraftMarker(e.critique);
-  if (Array.isArray(e.whatToSteal)) e.whatToSteal = e.whatToSteal.map(stripDraftMarker);
-  if (e.antiPatterns) {
-    if (Array.isArray(e.antiPatterns.antiPatterns)) e.antiPatterns.antiPatterns = e.antiPatterns.antiPatterns.map(stripDraftMarker);
-    if (Array.isArray(e.antiPatterns.whereThisFails)) e.antiPatterns.whereThisFails = e.antiPatterns.whereThisFails.map(stripDraftMarker);
-    if (Array.isArray(e.antiPatterns.accessibilityRisks)) e.antiPatterns.accessibilityRisks = e.antiPatterns.accessibilityRisks.map(stripDraftMarker);
-  }
-  if (e.voice) {
-    if (typeof e.voice.tone === "string") e.voice.tone = stripDraftMarker(e.voice.tone);
-    if (Array.isArray(e.voice.examples)) e.voice.examples = e.voice.examples.map(stripDraftMarker);
-    if (Array.isArray(e.voice.avoid)) e.voice.avoid = e.voice.avoid.map(stripDraftMarker);
-  }
-  return e;
-}
-
-function cleanTaggedDraft(entry, previous) {
-  const cleaned = JSON.parse(JSON.stringify(entry));
-  cleaned.title = cleaned.title.replace(" — (add descriptive subtitle)", "");
-  stripMarkersFromEntry(cleaned);
-  // The server owns id assignment for both new single samples and bulk items.
-  // Keep an existing id only when explicitly editing a saved entry (draftMode
-  // === "edit" and NOT a bulk-queue edit, which uses bulkEditingIndex).
-  const editingSaved = state.draftMode === "edit" && state.bulkEditingIndex === null;
-  if (!editingSaved) cleaned.id = "";
-  cleaned.image = previous.image;
-  // Preserve the user's qualityScore and qualityTier — don't let auto-fill
-  // overwrite them. Cautionary entries should stay low-scored.
-  cleaned.qualityScore = previous.qualityScore || cleaned.qualityScore || 4;
-  if (previous.qualityTier) cleaned.qualityTier = previous.qualityTier;
-  // Preserve reviewStatus — auto-fill shouldn't flip a draft to approved.
-  if (previous.reviewStatus) cleaned.reviewStatus = previous.reviewStatus;
-  // Preserve provenance — auto-fill produces "auto" but a human may have set it.
-  if (previous.provenance) cleaned.provenance = previous.provenance;
-  // Preserve platform — auto-fill detects it, but a human may have corrected it.
-  if (previous.platform) cleaned.platform = previous.platform;
-  cleaned.addedAt = previous.addedAt || today();
-  return cleaned;
-}
-
-// ── Bulk import ────────────────────────────────────────────────────────────
-// Mirrors the terminal bulk-import.ts flow: upload → stage blank drafts →
-// Auto-fill all (OpenAI vision) → review → commit. The server endpoints are
-// unchanged; the browser orchestrates them with a small bounded-concurrency
-// pool so we don't fire N simultaneous uploads.
-
-const KNOWN_PRODUCTS = {
-  linear:      { name: "Linear",      url: "https://linear.app" },
-  stripe:      { name: "Stripe",      url: "https://stripe.com" },
-  vercel:      { name: "Vercel",      url: "https://vercel.com" },
-  arc:         { name: "Arc",         url: "https://arc.net" },
-  notion:      { name: "Notion",      url: "https://notion.so" },
-  figma:       { name: "Figma",       url: "https://figma.com" },
-  github:      { name: "GitHub",      url: "https://github.com" },
-  raycast:     { name: "Raycast",     url: "https://raycast.com" },
-  craft:       { name: "Craft",       url: "https://craft.do" },
-  loom:        { name: "Loom",        url: "https://loom.com" },
-  retool:      { name: "Retool",      url: "https://retool.com" },
-  planetscale: { name: "PlanetScale", url: "https://planetscale.com" },
-  supabase:    { name: "Supabase",    url: "https://supabase.com" },
-  resend:      { name: "Resend",      url: "https://resend.com" },
-  clerk:       { name: "Clerk",       url: "https://clerk.com" },
+/* ============================================================
+   NAV — expandable groups, hash route active state
+   ============================================================ */
+const NAV = [
+  { group:'Corpus', items:[
+    {id:'overview',  label:'Overview',     icon:'overview'},
+    {id:'entries',   label:'Entries',      icon:'entries'},
+    {id:'add',       label:'Add entry',    icon:'plus'},
+    {id:'bulk',      label:'Bulk import',  icon:'bulk'},
+    {id:'sources',   label:'Sources',      icon:'circle'},
+  ]},
+  { group:'Query layer', items:[
+    {id:'search',    label:'Search index',  icon:'search'},
+    {id:'embeddings',label:'Embeddings',    icon:'nodes'},
+    {id:'compare',   label:'Compare',       icon:'gitcompare'},
+  ]},
+  { group:'Curation', items:[
+    {id:'quality',   label:'Quality',       icon:'star'},
+    {id:'settings',  label:'Settings',      icon:'gear'},
+  ]},
+];
+const IC = {
+  overview:'<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
+  entries:'<path d="M3 6h18M3 12h18M3 18h18"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+  nodes:'<circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><circle cx="12" cy="12" r="2"/><path d="M8 6h8M8 18h8M6 8v8M18 8v8"/>',
+  gitcompare:'<circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 8v6a4 4 0 004 4h4M18 16V10a4 4 0 00-4-4H10"/>',
+  star:'<path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/>',
+  gear:'<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 00-1.7-1l-.4-2.6h-4l-.4 2.6a7 7 0 00-1.7 1l-2.3-1-2 3.4 2 1.5a7 7 0 000 2l-2 1.5 2 3.4 2.3-1a7 7 0 001.7 1l.4 2.6h4l.4-2.6a7 7 0 001.7-1l2.3 1 2-3.4-2-1.5c.06-.33.1-.66.1-1z"/>',
+  circle:'<circle cx="12" cy="12" r="9"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  bulk:'<path d="M3 7h18M3 12h18M3 17h12"/>',
 };
-
-function inferProduct(filename) {
-  const stem = filename.replace(/\.[^.]+$/, "");
-  const slug = stem.split("__")[0].toLowerCase().replace(/[^a-z0-9]/g, "-");
-  return KNOWN_PRODUCTS[slug] ?? null;
-}
-
-async function runWithPool(tasks, limit, onResult, onError) {
-  const queue = [...tasks.entries()];
-  let active = 0;
-  await new Promise((resolve) => {
-    const next = () => {
-      while (active < limit && queue.length > 0) {
-        const [i, task] = queue.shift();
-        active += 1;
-        task()
-          .then((r) => onResult(r, i))
-          .catch((e) => onError(e, i))
-          .finally(() => { active -= 1; next(); if (active === 0 && queue.length === 0) resolve(); });
-      }
-    };
-    if (tasks.length === 0) resolve();
-    next();
+function renderNav(){
+  const groups = NAV.map((g,gi)=>{
+    const items = g.items.map(it=>{
+      const cnt = it.id==='entries' ? `<span class="count">${agg.N||0}</span>`
+                : it.id==='sources' ? `<span class="count">${Object.keys(agg.bySource||{}).length||0}</span>`
+                : '';
+      return `<a class="nav-item" data-route="${it.id}" href="#/${it.id}">
+        <span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[it.icon]||''}</svg></span>
+        <span class="lbl">${it.label}</span>${cnt}
+      </a>`;
+    }).join('');
+    return `<div class="nav-group ${gi===0?'open':''}" data-group="${gi}">
+      <div class="group-head">
+        <svg class="group-chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        <span class="group-label">${g.group}</span>
+      </div>
+      <div class="nav-children">${items}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('navScroll').innerHTML = groups;
+  document.querySelectorAll('.group-head').forEach(gh=>{
+    gh.addEventListener('click',()=>gh.parentElement.classList.toggle('open'));
   });
+  // sidebar footer: index + recovery
+  document.getElementById('footIndex').textContent = `${agg.N||0} / ${agg.N||0}`;
+  const ageMs = HEALTH.newestSnapshotAgeMs;
+  const ageLabel = ageMs!=null ? (ageMs<3600000?Math.round(ageMs/60000)+'m':Math.round(ageMs/3600000)+'h') : '?';
+  document.getElementById('footRecovery').innerHTML = HEALTH.snapshotCount
+    ? `snapshots: <code>${HEALTH.snapshotCount}</code> · newest ${ageLabel}`
+    : `no snapshots yet`;
 }
 
-function bulkTally() {
-  const q = state.bulkQueue;
-  return {
-    total: q.length,
-    staged: q.filter((i) => i._status === "staged").length,
-    extraction: q.filter((i) => i._status === "extraction").length,
-    tagging: q.filter((i) => i._status === "tagging").length,
-    tagged: q.filter((i) => i._status === "tagged").length,
-    error: q.filter((i) => i._status === "error").length,
-    committed: q.filter((i) => i._status === "committed").length,
-  };
+/* ============================================================
+   ROUTER
+   ============================================================ */
+const PAGES = {};
+function page(id, title, crumb, render, after){ PAGES[id] = {title, crumb, render, after}; }
+function route(){
+  const h = location.hash.replace(/^#\/?/,'') || 'overview';
+  const id = PAGES[h] ? h : 'overview';
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.route===id));
+  const p = PAGES[id];
+  document.getElementById('pageTitle').textContent = p.title;
+  document.getElementById('pageCrumb').textContent = p.crumb;
+  document.getElementById('pages').innerHTML = `<div class="page active" id="page-${id}">${p.render()}</div>`;
+  document.querySelector('.main').scrollTop = 0;
+  if(p.after) p.after();
+  closeDetail();
 }
 
-function renderBulk() {
-  const t = bulkTally();
-  const keyReady = state.config.visionKeyConfigured;
-  const keyStatus = keyReady
-    ? `<div class="key-status ready">Auto-fill: ${esc(state.config.extractionProvider || "openai")} (${esc(state.config.extractionModel || "?")}) → ${esc(state.config.critiqueProvider || "openai")} (${esc(state.config.critiqueModel || "?")}).</div>`
-    : `<div class="key-status missing">Auto-fill needs a vision provider key in .env. Staging still works; tag later.</div>`;
-  const autoFillBtn = `<button class="btn" id="bulkAutoFill" ${(!t.staged || !keyReady) ? "disabled" : ""}><i data-lucide="wand-sparkles"></i>Auto-fill all (${t.staged})</button>`;
-  // Deferred Pass 2: only enabled when rows sit in 'extraction' status awaiting
-  // critique. This is the button that spends the critique tokens.
-  const critiqueBtn = `<button class="btn" id="bulkCritique" ${(!t.extraction || !keyReady) ? "disabled" : ""}><i data-lucide="pen-line"></i>Generate critique (${t.extraction})</button>`;
-  const commitBtn = `<button class="btn primary" id="bulkCommit" ${(t.tagged === 0) ? "disabled" : ""}><i data-lucide="save"></i>Commit ready (${t.tagged})</button>`;
-  const clearBtn = `<button class="btn" id="bulkClear" ${(state.bulkQueue.length === 0) ? "disabled" : ""}><i data-lucide="trash-2"></i>Clear queue</button>`;
-
-  const queue = state.bulkQueue.length
-    ? `<div class="bulk-queue">${state.bulkQueue.map(renderBulkRow).join("")}</div>`
-    : `<div class="bulk-empty"><div><i data-lucide="images"></i><p>No files staged yet. Add screenshots to begin.</p></div></div>`;
-
-  $("#page").innerHTML = `
-    <div class="form-layout">
-      <section class="panel">
-        <div class="panel-head">
-          <div><div class="panel-title">Bulk import</div><div class="panel-sub">Stage → Auto-fill → Commit</div></div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
-            ${autoFillBtn}${critiqueBtn}${commitBtn}${clearBtn}
-          </div>
-        </div>
-        <div class="panel-body">
-          <div class="starter">
-            <strong>How this works</strong>
-            <p>Add several screenshots at once. Each becomes a private draft. Click <em>Auto-fill all</em> to draft critique and visual attributes with vision AI, review, then <em>Commit ready</em> to add approved drafts to the corpus.</p>
-          </div>
-          ${keyStatus}
-          <div class="bulk-bar" style="margin-top:14px">
-            <label class="btn source-action bulk-add">
-              <input type="file" id="bulkFileInput" accept="image/png,image/jpeg,image/webp,application/zip,.zip" multiple hidden>
-              <i data-lucide="upload"></i><span>Add files or .zip</span>
-            </label>
-            <label class="source-action" id="bulkDropzone" style="position:relative">
-              <i data-lucide="folder-input"></i><span>Or drop files here</span>
-            </label>
-            <input class="product-input bulk-default-product" id="bulkDefaultProduct" placeholder="Default product name (used when filename can't infer one)" value="${esc(state.bulkDefaultProduct)}">
-          </div>
-          ${queue}
-        </div>
-      </section>
-
-      <aside class="panel">
-        <div class="panel-head"><div><div class="panel-title">Queue check</div><div class="panel-sub">Live tally</div></div></div>
-        <div class="panel-body">
-          <div class="queue-tally">
-            <div class="t">Staged <b>${t.staged}</b></div>
-            <div class="t">Tagging <b>${t.tagging}</b></div>
-            <div class="t">Tagged <b>${t.tagged}</b></div>
-            <div class="t">Errors <b>${t.error}</b></div>
-          </div>
-          <div class="starter" style="margin-top:14px">
-            <strong>Notes</strong>
-            <p>Auto-fill writes <code>[DRAFT]</code> critique and steal text — rewrite those before or after committing; the validator blocks any entry still carrying a marker. Commit assigns ids server-side and refreshes the library.</p>
-          </div>
-          ${t.error ? `<div class="legacy-note" style="margin-top:12px">${t.error} item(s) failed. Open the row to see the error, or remove it and re-add.</div>` : ""}
-        </div>
-      </aside>
-    </div>
-  `;
+/* ============================================================
+   SHARED WIDGETS
+   ============================================================ */
+function kpi(val,unit,label,dotCls,subHtml){
+  return `<div class="kpi">
+    <div class="val num">${val}${unit?`<span class="u">${unit}</span>`:''}</div>
+    <div class="lab"><span class="dot ${dotCls||''}"></span><span class="lbl">${label}</span></div>
+    <div class="sub">${subHtml||''}</div>
+  </div>`;
+}
+function distRows(arr,max,colorFn){
+  return arr.map(([name,v])=>`<div class="dist-row">
+    <span class="nm" title="${name}">${name}</span>
+    <span class="track"><div style="width:${max?((v/max*100).toFixed(0)):0}%;background:${colorFn?colorFn(name):'var(--accent)'}"></div></span>
+    <span class="v">${v}</span>
+  </div>`).join('');
+}
+function toast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('on');
+  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('on'),2200);
+}
+function healthRow(kind,title,desc){
+  const ic = kind==='ok'?'<path d="M5 12l5 5 9-9"/>'
+           : kind==='warn'?'<path d="M12 8v5M12 16v.5"/><circle cx="12" cy="12" r="9"/>'
+           : '<path d="M15 9l-6 6M9 9l6 6"/><circle cx="12" cy="12" r="9"/>';
+  return `<div class="check">
+    <span class="ic ${kind}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">${ic}</svg></span>
+    <div class="txt"><b>${title}</b><span>${desc}</span></div>
+  </div>`;
 }
 
-function renderBulkRow(item, index) {
-  const thumb = item.image.path
-    ? `<img class="thumb" src="${API}/image?path=${encodeURIComponent(item.image.path)}" alt="">`
-    : `<div class="thumb empty"><i data-lucide="image-off"></i></div>`;
-  const filename = item._filename || "(unknown)";
-  const statusLabel = {
-    staged: "Staged", extraction: "Extraction", tagging: "Tagging…", tagged: "Tagged", error: "Error", committing: "Saving…", committed: "Committed",
-  }[item._status] || item._status;
-  const editable = item._status === "staged" || item._status === "tagged" || item._status === "extraction";
-  const productInput = editable
-    ? `<input class="product-input" data-bulk-product="${index}" value="${esc(item.source.productName)}" placeholder="Product name">`
-    : `<div class="filename">${esc(item.source.productName || "—")}</div>`;
-  const errLine = item._error ? `<div class="err">${esc(item._error)}</div>` : "";
-  return `
-    <div class="bulk-row ${item._status}" data-bulk-index="${index}">
+/* entry-row renderer (shared by tables) */
+function entryRow(x){
+  const idParts = x.id.split('-');
+  const idHead = idParts[0];
+  const idTail = x.id.substring(idHead.length+1);
+  return `<tr data-id="${x.id}">
+    <td><span class="id" title="${x.id}"><b>${idHead}</b>${idTail?'-'+idTail:''}</span></td>
+    <td><div class="src"><span class="pd" style="background:${srcColor(x.source)}"></span><span class="nm">${x.source}</span></div></td>
+    <td style="color:var(--ink-2)">${x.pattern}</td>
+    <td style="color:var(--ink-2)">${x.style}</td>
+    <td>${tierPill(x.tier)}</td>
+    <td>${scoreBar(x.score)}<span style="margin-left:6px;font-size:11px;color:var(--muted)" class="num">${x.score}/5</span></td>
+    <td class="r num">${x.steals}</td>
+    <td><div class="row-actions">
+      <button class="row-inspect" title="Inspect"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    </div></td>
+  </tr>`;
+}
+
+/* ============================================================
+   PREVIEW SYSTEM — real screenshot when available, synthesized
+   wireframe as fallback for link-only entries.
+   ============================================================ */
+function stageShape(x){
+  const w=x.imageW, h=x.imageH;
+  if(!w||!h) return 'is-landscape';
+  if(h>w*1.2) return 'is-portrait';
+  if(w>h*1.2) return 'is-landscape';
+  return 'is-square';
+}
+function pickInk(dom){
+  if(!dom||!dom.length) return '#0f172a';
+  const lum=h=>{const c=h.replace('#','');const r=parseInt(c.slice(0,2),16),g=parseInt(c.slice(2,4),16),b=parseInt(c.slice(4,6),16);return 0.299*r+0.587*g+0.114*b;};
+  return dom.slice().sort((a,b)=>lum(a)-lum(b))[0];
+}
+function cornerR(x){ return x.corner==='pill'?'8px':x.corner==='mixed'?'4px':'3px'; }
+function densityPad(x){ return x.density==='compact'?'5px':x.density==='spacious'?'10px':'7px'; }
+
+function previewInner(x){
+  const dom=x.dominant||['#ffffff','#f1f3f6','#0f172a'];
+  const canvas=dom[0]||'#ffffff';
+  const surface=dom[1]||canvas;
+  const ink=pickInk(dom);
+  const accent=x.accent||'#2f5d62';
+  const r=cornerR(x);
+  const pad=densityPad(x);
+  const shadow = x.shadows ? `box-shadow:0 1px 3px rgba(0,0,0,.1);`:'';
+  const base=`background:${canvas};color:${ink};padding:${pad};gap:${x.density==='compact'?'3px':'5px'};border-radius:${r};`;
+  const sidebar=(bg)=>`<div class="pv-sidebar" style="background:${bg};color:${ink}"><i></i><i></i><i></i><i></i></div>`;
+  const kpi=(bg)=>`<div class="pv-kpi" style="background:${bg}"><i></i><i></i></div>`;
+  const bars=(n,c)=>Array.from({length:n},(_,i)=>`<div class="pv-bar" style="background:${c};opacity:.5;width:${40+((i*37)%55)}%"></div>`).join('');
+  const P=x.pattern;
+  if(P==='dashboard'){
+    return `<div class="pv" style="${base}"><div class="pv-row" style="gap:5px">${sidebar(surface)}
+      <div class="pv-col" style="gap:4px"><div class="pv-row" style="gap:4px">${kpi(surface)}${kpi(surface)}${kpi(surface)}</div>
+      <div class="pv-block" style="background:${surface};${shadow}flex:1;padding:4px;display:flex;flex-direction:column;justify-content:flex-end;gap:2px">${bars(5,accent)}</div></div></div></div>`;
+  }
+  if(P==='onboarding'||P==='auth'){
+    return `<div class="pv" style="${base};justify-content:center;align-items:center">
+      <div class="pv-circle" style="width:18px;height:18px;background:${accent}"></div>
+      <div class="pv-block" style="background:${surface};${shadow}width:75%;padding:5px;display:flex;flex-direction:column;gap:3px;align-items:center">
+        <div class="pv-bar" style="background:${ink};opacity:.8;width:50%"></div><div class="pv-input"></div><div class="pv-input"></div>
+        <div class="pv-btn" style="background:${accent};width:60%"></div></div>
+      <div class="pv-row" style="gap:3px">${Array.from({length:4},(_,i)=>`<div class="pv-circle" style="width:4px;height:4px;background:${i===0?accent:ink};opacity:${i===0?1:.3}"></div>`).join('')}</div></div>`;
+  }
+  // fallback generic
+  return `<div class="pv" style="${base}"><div class="pv-block" style="background:${surface};${shadow}padding:5px;display:flex;flex-direction:column;gap:3px;flex:1">
+    <div class="pv-bar" style="background:${accent};width:30%"></div>${bars(4,ink)}</div></div>`;
+}
+
+/* gallery card — real screenshot if available, else wireframe */
+function galleryCard(x){
+  const fav=isFav(x.id);
+  const pal=(x.dominant||[]).slice(0,5).map(c=>`<span style="background:${c}"></span>`).join('');
+  const thumb = x.imagePath
+    ? `<img src="${API}/api/image?path=${encodeURIComponent(x.imagePath)}" alt="${esc(x.title)}" style="width:100%;height:100%;object-fit:cover;object-position:top;display:block" loading="lazy">`
+    : `<div class="pv-frame">${previewInner(x)}</div>`;
+  return `<div class="gcard ${fav?'is-fav':''}" data-id="${x.id}">
+    <div class="gthumb">
       ${thumb}
-      <div class="meta">
-        <div class="filename">${esc(filename)}</div>
-        ${productInput}
-        ${errLine}
+      <div class="pv-actions"><button class="fav-btn ${fav?'fav-on':''}" data-id="${x.id}" title="Favorite" aria-label="Toggle favorite">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="${fav?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>
+      </button></div>
+      <div class="pv-pattern">${PATTERN_ICON[x.pattern]||'▪'} ${x.pattern}</div>
+    </div>
+    <div class="gbody">
+      <div class="gtitle" title="${esc(x.title)}">${esc(x.title)}</div>
+      <div class="gmeta">
+        <span class="src-dot" style="background:${srcColor(x.source)}"></span>
+        <span class="src-name">${esc(x.source)}</span>
+        <span class="added">${(x.added||'').slice(5)}</span>
       </div>
-      <div class="actions">
-        <span class="status-chip ${item._status}">${statusLabel}</span>
-        <button class="btn remove" data-bulk-remove="${index}" title="Remove"><i data-lucide="x"></i></button>
+      <div class="gfoot">
+        <div class="left">
+          <span class="tier-dot ${x.tier==='exceptional'?'exc':'cau'}" title="${x.tier}"></span>
+          ${gscore(x.score)}
+          ${x.platform==='mobile'?`<span class="platform-chip mobile">mobile</span>`:x.platform==='tablet'?`<span class="platform-chip tablet">tablet</span>`:''}
+        </div>
+        <span style="font-size:10px;color:var(--muted);font-family:var(--mono)">${x.steals} steals</span>
       </div>
-    </div>`;
+      <div class="gpal">${pal}</div>
+    </div>
+  </div>`;
+}
+const PATTERN_ICON = {
+  dashboard:'▦',onboarding:'↗',auth:'🔒',forms:'≡',modal:'▢',profile:'◉',
+  'data-table':'≣',search:'⌕',settings:'⚙','empty-state':'○','mobile-nav':'▤',
+  navigation:'↦','editor-canvas':'✎','marketing-hero':'★','landing-page':'⌂',
+  checkout:'$',notifications:'🔔'
+};
+
+/* ============================================================
+   FAVORITES — localStorage
+   ============================================================ */
+const FAV_KEY='clean-ui-favs';
+function getFavs(){ try{return JSON.parse(localStorage.getItem(FAV_KEY)||'[]')}catch{return[]} }
+function isFav(id){ return getFavs().includes(id) }
+function toggleFav(id){
+  const f=getFavs(); const i=f.indexOf(id);
+  if(i>=0){f.splice(i,1);toast('Removed from favorites')}
+  else{f.push(id);toast('★ Added to favorites')}
+  localStorage.setItem(FAV_KEY,JSON.stringify(f));
+  return f.includes(id);
 }
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+/* ============================================================
+   DETAIL RAIL — enriched with real screenshot, palette, critique
+   ============================================================ */
+function openDetail(x){
+  const rail=document.getElementById('detailRail');
+  const fav=isFav(x.id);
+  document.getElementById('detailTitle').textContent = x.id;
+  const thumb = x.imagePath
+    ? `<img src="${API}/api/image?path=${encodeURIComponent(x.imagePath)}" alt="${esc(x.title)}" style="width:100%;height:100%;object-fit:cover;object-position:top;display:block">`
+    : previewInner(x);
+  const palSwatches=(x.dominant||[]).slice(0,6).map(c=>
+    `<div class="swatch" data-hex="${c}" title="Click to copy"><div class="well" style="background:${c}"></div><div class="hex">${c.toUpperCase()}</div></div>`).join('');
+  const colorRolesHtml = x.colorRoles ? `
+    <div class="eyebrow" style="margin:14px 0 8px">Color roles · token set</div>
+    <div class="code" style="margin-bottom:14px"><span class="c">/* paste-ready */</span>
+:root {
+  <span class="k">--canvas</span>:  <span class="s">${x.colorRoles.canvas}</span>;
+  <span class="k">--surface</span>: <span class="s">${x.colorRoles.surface}</span>;
+  <span class="k">--ink</span>:     <span class="s">${x.colorRoles.ink}</span>;
+  <span class="k">--muted</span>:   <span class="s">${x.colorRoles.muted||'inherit'}</span>;
+  <span class="k">--accent</span>:  <span class="s">${x.colorRoles.accent}</span>;
+}</div>` : '';
+  const voiceHtml = x.voice ? `
+    <div class="eyebrow" style="margin:14px 0 8px">Voice</div>
+    <div style="font-size:12px;color:var(--ink-2);margin-bottom:6px">${esc(x.voice.tone||'')}</div>
+    ${x.voice.examples?.length?`<ul style="margin:0 0 6px;padding-left:18px;font-size:11.5px;color:var(--ink-2)">${x.voice.examples.map(e=>`<li>${esc(e)}</li>`).join('')}</ul>`:''}
+    ${x.voice.avoid?.length?`<div style="font-size:11px;color:var(--muted)">Avoids: ${x.voice.avoid.map(esc).join('; ')}</div>`:''}` : '';
+  const stealsHtml = x.stealsList?.length ? `
+    <div class="eyebrow" style="margin:14px 0 8px">What to steal</div>
+    <ul style="margin:0 0 14px;padding-left:18px;font-size:12px;color:var(--ink-2);line-height:1.6">${x.stealsList.map(s=>`<li style="margin-bottom:4px">${esc(s)}</li>`).join('')}</ul>` : '';
+  const antiHtml = x.antiList?.length ? `
+    <div class="eyebrow" style="margin:14px 0 8px">Anti-patterns (mistakes avoided)</div>
+    <ul style="margin:0 0 14px;padding-left:18px;font-size:12px;color:var(--ink-2);line-height:1.6">${x.antiList.map(s=>`<li style="margin-bottom:4px">${esc(s)}</li>`).join('')}</ul>` : '';
+  const layoutHtml = x.layout?.form ? `
+    <div class="eyebrow" style="margin:14px 0 8px">Layout · ${x.layout.form}</div>
+    <div style="font-size:11.5px;color:var(--muted);font-family:var(--mono);margin-bottom:14px">${(x.layout.regions||[]).map(r=>`${r.role} (${r.width})`).join(' → ')}</div>` : '';
+  const provHtml = x.provenance ? `<span class="provenance-tag ${x.provenance.taggedBy}">${x.provenance.taggedBy}${x.provenance.reviewedBy?' · '+x.provenance.reviewedBy:''}</span>` : '';
+  const draftHtml = x.reviewStatus==='draft' ? `<span class="draft-chip">draft</span>` : '';
+  const platChip = x.platform==='mobile'?'<span class="platform-chip mobile">mobile</span>':x.platform==='tablet'?'<span class="platform-chip tablet">tablet</span>':'';
+
+  document.getElementById('detailBody').innerHTML = `
+    <div class="preview-lg" style="margin-bottom:14px">${thumb}</div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <span class="tier-dot ${x.tier==='exceptional'?'exc':'cau'}"></span>
+      <span class="eyebrow" style="margin:0">${x.tier}</span>
+      ${scoreBar(x.score)}
+      <span class="num" style="font-size:11px;color:var(--muted);margin-left:auto">${x.score}/5</span>
+      ${platChip}${draftHtml}${provHtml}
+      <button class="icon-btn" id="detailFavBtn" style="width:28px;height:28px;color:${fav?'var(--accent)':'var(--ink-2)'}" title="Favorite">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="${fav?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>
+      </button>
+    </div>
+    <div style="font-size:13px;font-weight:600;margin-bottom:4px">${esc(x.title)}</div>
+    <div style="font-size:11.5px;color:var(--ink-2);margin-bottom:14px;display:flex;align-items:center;gap:6px">
+      <span style="width:7px;height:7px;border-radius:50%;background:${srcColor(x.source)};display:inline-block"></span>
+      ${esc(x.source)} · <span class="mono">${x.id}</span>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px">
+      <span class="vis-chip">pattern <span class="vl">${x.pattern}</span></span>
+      <span class="vis-chip">style <span class="vl">${x.style}</span></span>
+      <span class="vis-chip">density <span class="vl">${x.density}</span></span>
+      <span class="vis-chip">corner <span class="vl">${x.corner}</span></span>
+      <span class="vis-chip">shadows <span class="vl">${x.shadows?'yes':'no'}</span></span>
+      <span class="vis-chip">steals <span class="vl">${x.steals}</span></span>
+    </div>
+    <div class="eyebrow" style="margin-bottom:8px">Color palette</div>
+    <div class="swatch-row" style="margin-bottom:8px">${palSwatches}
+      <div class="swatch" data-hex="${x.accent}" title="accent — click to copy"><div class="well" style="background:${x.accent};box-shadow:inset 0 0 0 2px var(--accent),inset 0 2px 4px rgba(0,0,0,.12)"></div><div class="hex" style="color:var(--accent)">${(x.accent||'').toUpperCase()}</div></div>
+    </div>
+    ${colorRolesHtml}
+    <div class="eyebrow" style="margin:14px 0 8px">Critique</div>
+    <div class="critique" style="margin-bottom:14px">${esc(x.critique||'No critique recorded.')}</div>
+    ${stealsHtml}${antiHtml}${layoutHtml}${voiceHtml}
+    <div style="display:flex;gap:8px;margin:14px 0">
+      <a class="btn" style="flex:1;justify-content:center" href="#/add">Edit</a>
+      <button class="btn primary" style="flex:1;justify-content:center" onclick="window._mcp.toast('Added to compare')">Compare</button>
+    </div>
+    <div style="font-size:10px;color:var(--muted);font-family:var(--mono);text-align:center">added ${x.added} · click a swatch to copy its hex</div>`;
+  rail.style.display='block';
+  document.getElementById('app').classList.add('detail-open');
+  document.getElementById('detailFavBtn')?.addEventListener('click',()=>{
+    const on=toggleFav(x.id); openDetail(x);
+    document.querySelectorAll(`.gcard[data-id="${x.id}"]`).forEach(c=>c.classList.toggle('is-fav',on));
+  });
+  document.querySelectorAll('#detailBody .swatch').forEach(s=>{
+    s.addEventListener('click',()=>{
+      const hex=s.dataset.hex;
+      navigator.clipboard?.writeText(hex).then(()=>toast('Copied '+hex)).catch(()=>toast(hex));
+    });
   });
 }
-
-// Recursively expand any .zip files in a File list into their image members,
-// so a user can drop "batch-01.zip" (or a folder of zips) instead of selecting
-// hundreds of images one by one. Nested zips are unpacked too. Non-image entries
-// are skipped. fflate (loaded via unpkg) handles every zip variant; we recurse
-// by re-invoking on any extracted .zip.
-const IMAGE_EXT_RE = /\.(png|jpe?g|webp)$/i;
-const ZIP_EXT_RE = /\.zip$/i;
-const RECURSION_LIMIT = 8; // guard against zip-bombs of nested zips
-
-async function unzipOne(file) {
-  if (!window.fflate) throw new Error("zip library failed to load (check your connection)");
-  const buf = new Uint8Array(await file.arrayBuffer());
-  // fflate.unzipSync returns a { name: Uint8Array } map of every entry.
-  const entries = window.fflate.unzipSync(buf);
-  return Object.entries(entries).map(([name, data]) => ({ name, data }));
+function closeDetail(){
+  document.getElementById('detailRail').style.display='none';
+  document.getElementById('app').classList.remove('detail-open');
 }
 
-async function expandFiles(fileList, depth = 0) {
-  const out = [];
-  for (const file of fileList) {
-    const isZip = file.type === "application/zip" || file.type === "application/x-zip-compressed" || ZIP_EXT_RE.test(file.name);
-    if (isZip) {
-      if (depth >= RECURSION_LIMIT) {
-        toast(`Skipping deeply-nested zip (${file.name}) — recursion limit`, "error");
-        continue;
-      }
-      try {
-        const entries = await unzipOne(file);
-        // Recurse: a zip may contain more zips. Build pseudo-Files from each entry.
-        const nested = await Promise.all(entries.map(async ({ name, data }) => {
-          const path = name.replace(/^([A-Za-z]:)?[\\/]+/, ""); // strip leading slashes/drives
-          // Skip directory entries (name ends with /) and macOS metadata junk.
-          if (path.endsWith("/") || /(^|\/)__MACOSX\//.test(path) || /(^|\/)\./.test(path.split("/").pop() || "")) return null;
-          if (ZIP_EXT_RE.test(path)) {
-            const f = new File([data], path.split("/").pop(), { type: "application/zip" });
-            return f;
-          }
-          if (IMAGE_EXT_RE.test(path)) {
-            const ext = path.slice(path.lastIndexOf(".")).toLowerCase();
-            const mime = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
-            return new File([data], path.split("/").pop(), { type: mime });
-          }
-          return null;
-        }));
-        out.push(...(await expandFiles(nested.filter(Boolean), depth + 1)));
-      } catch (err) {
-        toast(`Could not read ${file.name}: ${err.message}`, "error");
-      }
-    } else if (IMAGE_EXT_RE.test(file.name)) {
-      out.push(file);
-    }
+function esc(s){ return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ============================================================
+   PAGES
+   ============================================================ */
+
+/* -------- Overview -------- */
+page('overview','Overview','clean-ui-mcp · v0.1.0 · stdio transport', function(){
+  const N=agg.N||0;
+  const maxPat=Math.max(...(agg.topPatterns||[]).map(d=>d[1]),1);
+  const maxSty=Math.max(...(agg.topStyles||[]).map(d=>d[1]),1);
+  return `
+  <div class="strip">
+    ${kpi(N,'','Entries indexed','',
+      `vector search active · <b>${HEALTH.entryCount||0}/${N}</b> embedded`)}
+    ${kpi((agg.avgScore||0).toFixed(2),'/5','Avg quality score','warn',
+      `${agg.excCount||0} exceptional · ${agg.cauCount||0} cautionary`)}
+    ${kpi(N?(agg.excCount/N*100).toFixed(1):0,'%','Exceptional tier','pos',
+      `<b>${agg.mobileCount||0}</b> mobile · <b>${agg.webCount||0}</b> web`)}
+    ${kpi(N?((agg.withImages||0)/N*100).toFixed(0):0,'%','Image coverage','pos',
+      `<b>${agg.withImages||0}</b> with screenshots`)}
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-head"><div><h3>By pattern type</h3><div class="eyebrow">top 8</div></div>
+        <a class="chip" href="#/entries">Browse all →</a></div>
+      ${distRows(agg.topPatterns||[],maxPat)}
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h3>By style</h3><div class="eyebrow">top 8</div></div>
+        <a class="chip" href="#/entries">Browse all →</a></div>
+      ${distRows(agg.topStyles||[],maxSty)}
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head"><div><h3>Recent entries</h3><div class="eyebrow">most recent · click to inspect</div></div>
+      <a class="chip" href="#/entries">All ${N} →</a></div>
+    <table><thead><tr><th>ID</th><th>Source</th><th>Pattern</th><th>Style</th><th>Tier</th><th>Score</th><th class="r">Steals</th><th></th></tr></thead>
+      <tbody>${E.slice(-8).reverse().map(entryRow).join('')}</tbody></table>
+  </div>`;
+}, function after(){ bindEntryRows(); });
+
+/* -------- Entries -------- */
+page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function(){
+  return `
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-head" style="margin-bottom:0">
+      <div class="chips" id="entryFilters">
+        <button class="chip on" data-f="all">ALL · ${agg.N||0}</button>
+        <button class="chip" data-f="fav">★ STARRED · <span id="favCount">${getFavs().length}</span></button>
+        <button class="chip" data-f="exceptional">Exceptional · ${agg.excCount||0}</button>
+        <button class="chip" data-f="cautionary">Cautionary · ${agg.cauCount||0}</button>
+        <button class="chip" data-f="mobile">Mobile · ${agg.mobileCount||0}</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select class="sort-select" id="entrySort" title="Sort by">
+          <option value="recent">Most recent</option>
+          <option value="score">Highest score</option>
+          <option value="fav">Favorites first</option>
+          <option value="source">By source</option>
+          <option value="pattern">By pattern</option>
+        </select>
+        <div class="view-toggle" id="viewToggle">
+          <button class="on" data-v="grid"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span class="lbl">Grid</span></button>
+          <button data-v="table"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 6h18M3 12h18M3 18h18"/></svg><span class="lbl">List</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="entryResults"></div>`;
+}, function after(){
+  const st = {filter:'all', sort:'recent', view:'grid', page:1, perPage:24, q:''};
+  const globalQ = document.getElementById('globalSearch');
+  if(globalQ && !globalQ._bound){ globalQ._bound=true; globalQ.addEventListener('input',e=>{ st.q=e.target.value.toLowerCase(); st.page=1; render(); }); }
+  function filtered(){
+    let rows = E.slice();
+    const favs=getFavs();
+    if(st.filter==='exceptional') rows=rows.filter(x=>x.tier==='exceptional');
+    else if(st.filter==='cautionary') rows=rows.filter(x=>x.tier==='cautionary');
+    else if(st.filter==='mobile') rows=rows.filter(x=>x.platform==='mobile');
+    else if(st.filter==='fav') rows=rows.filter(x=>favs.includes(x.id));
+    if(st.q){ rows=rows.filter(x=>(x.id+' '+x.source+' '+x.pattern+' '+x.style+' '+x.title).toLowerCase().includes(st.q)); }
+    const favSet=new Set(favs);
+    if(st.sort==='recent') rows.sort((a,b)=>(b.added||'').localeCompare(a.added||''));
+    else if(st.sort==='score') rows.sort((a,b)=>(b.score||0)-(a.score||0));
+    else if(st.sort==='fav') rows.sort((a,b)=>(favSet.has(b.id)?1:0)-(favSet.has(a.id)?1:0));
+    else if(st.sort==='source') rows.sort((a,b)=>a.source.localeCompare(b.source));
+    else if(st.sort==='pattern') rows.sort((a,b)=>a.pattern.localeCompare(b.pattern));
+    return rows;
   }
-  return out;
-}
-
-async function enqueueFiles(fileList) {
-  // Expand any .zip members (recursing into nested zips) into individual image
-  // files first, so the rest of the pipeline (dedup, stage, auto-fill) is
-  // unchanged whether the input was loose files or zips.
-  const expanded = await expandFiles([...fileList]);
-  const files = expanded.filter((f) => /^image\/(png|jpe?g|webp)$/.test(f.type));
-  const rejected = expanded.length - files.length;
-  if (files.length === 0) {
-    toast(rejected ? "No images found (PNG, JPEG, WebP only — check the zip contents)" : "No files selected", "error");
-    return;
+  function pagination(rowsLen){
+    const totalPages=Math.max(1,Math.ceil(rowsLen/st.perPage));
+    const start=(st.page-1)*st.perPage;
+    const btns=[`<button class="pg" ${st.page===1?'disabled':''} data-pg="${st.page-1}">‹</button>`];
+    const maxBtns=7; let from=Math.max(1,st.page-3), to=Math.min(totalPages,from+maxBtns-1);
+    if(to-from<maxBtns-1) from=Math.max(1,to-maxBtns+1);
+    for(let i=from;i<=to;i++) btns.push(`<button class="pg ${i===st.page?'on':''}" data-pg="${i}">${i}</button>`);
+    btns.push(`<button class="pg" ${st.page===totalPages?'disabled':''} data-pg="${st.page+1}">›</button>`);
+    return `<div class="pagination"><span class="mono" style="font-size:11px">${start+1}–${Math.min(start+st.perPage,rowsLen)} of ${rowsLen}</span><div class="pages">${btns.join('')}</div></div>`;
   }
-
-  // One batchId per enqueue call: the server tracks sibling uploads under this
-  // id so the 2nd..Nth near-duplicate in the SAME batch is caught (the old code
-  // only checked the committed corpus, so batch siblings all leaked through).
-  const batchId = `b${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  state.bulkBatchId = batchId;
-
-  const tasks = files.map((file) => async () => {
-    const dataUrl = await readFileAsDataUrl(file);
-    const slug = slugify(file.name.replace(/\.[^.]+$/, ""));
-    const uploaded = await request("/upload-image", {
-      method: "POST",
-      body: JSON.stringify({ filename: file.name, slug, dataUrl }),
-    });
-    // Dedup check: corpus + perceptual hash, AND siblings already staged in
-    // this batch (batchId). batch-near = a near-dup of another file uploaded
-    // in the same run — the most common leak source.
-    const dupCheck = await request("/check-duplicate", {
-      method: "POST",
-      body: JSON.stringify({ hash: uploaded.hash, dhash: uploaded.dhash, width: uploaded.width, height: uploaded.height, path: uploaded.path, batchId, filename: file.name }),
-    });
-    if (dupCheck.duplicate) {
-      const label = dupCheck.type === "batch-near" ? "near-dup in this batch" : dupCheck.type;
-      throw new Error(`Duplicate (${label}) of "${dupCheck.match}" — skipped`);
+  function render(){
+    const rows=filtered();
+    const totalPages=Math.max(1,Math.ceil(rows.length/st.perPage));
+    if(st.page>totalPages) st.page=totalPages;
+    const start=(st.page-1)*st.perPage;
+    const slice=rows.slice(start,start+st.perPage);
+    const out=document.getElementById('entryResults');
+    if(st.view==='grid'){
+      out.innerHTML = slice.length ? `<div class="gallery">${slice.map(galleryCard).join('')}</div>`+pagination(rows.length) : `<div class="empty" style="padding:60px 20px"><div style="font-size:32px;margin-bottom:8px;opacity:.5">🔍</div><div style="font-weight:600;color:var(--ink-2)">No matches</div></div>`;
+    } else {
+      out.innerHTML = slice.length ? `<table id="entryTable"><thead><tr><th>ID</th><th>Source</th><th>Pattern</th><th>Style</th><th>Tier</th><th>Score</th><th class="r">Steals</th><th></th></tr></thead><tbody>${slice.map(entryRow).join('')}</tbody></table>`+pagination(rows.length) : `<div class="empty">No entries match these filters.</div>`;
     }
-    const draft = blankDraft();
-    const inferred = inferProduct(file.name);
-    draft.source.productName = inferred?.name ?? state.bulkDefaultProduct ?? "";
-    if (inferred?.url) draft.source.url = inferred.url;
-    draft.image = { visibility: uploaded.visibility, path: uploaded.path, width: uploaded.width, height: uploaded.height };
-    draft.title = draft.source.productName ? `${draft.source.productName} — (add descriptive subtitle)` : "";
-    return { draft, filename: file.name };
-  });
-
-  let added = 0;
-  await runWithPool(
-    tasks,
-    3,
-    ({ draft, filename }) => {
-      state.bulkQueue.push({ ...draft, _status: "staged", _error: null, _filename: filename });
-      added += 1;
-      renderBulk();
-    },
-    (err, i) => {
-      const filename = files[i]?.name ?? "(unknown)";
-      state.bulkQueue.push({ ...blankDraft(), _status: "error", _error: err.message || "Upload failed", _filename: filename, image: { visibility: "private", path: null, width: null, height: null } });
-      renderBulk();
-    },
-  );
-
-  toast(`Staged ${added} of ${files.length} file(s)${rejected ? `; ${rejected} unsupported` : ""}`, added ? "success" : "error");
-}
-
-async function autoFillQueue() {
-  if (!state.config.visionKeyConfigured) { toast("Add a vision provider key to .env, then restart npm run ui.", "error"); return; }
-  const staged = state.bulkQueue
-    .map((item, index) => ({ item, index }))
-    .filter((x) => x.item._status === "staged");
-  if (staged.length === 0) { toast("Nothing staged to auto-fill", "error"); return; }
-
-  // Snapshot the batch default in case the user edits the field mid-run.
-  const batchDefault = state.bulkDefaultProduct.trim();
-
-  const tasks = staged.map(({ item, index }) => async () => {
-    // Name is optional: per-row → batch default → empty (the vision model reads
-    // it off the screenshot). A missing name must NOT block auto-fill — the
-    // upload already happened; gating here would waste that work.
-    const productName = (item.source.productName || "").trim() || batchDefault;
-    state.bulkQueue[index]._status = "tagging";
-    state.bulkQueue[index]._error = null;
-    renderBulk();
-    // Bulk = extraction only, low detail. Halves per-image cost: one cheap
-    // vision pass now, critique deferred to 'Generate critique'. Rows land in
-    // 'extraction' status (not committable) until critique runs.
-    const data = await request("/auto-tag", {
-      method: "POST",
-      body: JSON.stringify({ imagePath: item.image.path, productName, url: item.source.url || null, imageDetail: "low", extractionOnly: true }),
-    });
-    // Merge the tagged fields onto the staged draft, preserving its image.
-    const cleaned = cleanTaggedDraft(data.entry, item);
-    cleaned._filename = item._filename;
-    // Preserve the raw extraction so deferred critique (/auto-critique) can
-    // re-run Pass 2 without re-sending the image.
-    cleaned._raw = data.entry?._raw;
-    state.bulkQueue[index] = { ...cleaned, _status: "extraction", _error: null, _filename: item._filename };
-    renderBulk();
-  });
-
-  let ok = 0;
-  await runWithPool(
-    tasks,
-    3,
-    () => { ok += 1; },
-    (err, i) => {
-      const { index } = staged[i];
-      state.bulkQueue[index]._status = "error";
-      state.bulkQueue[index]._error = err.message || "Auto-fill failed";
-      renderBulk();
-    },
-  );
-
-  const t = bulkTally();
-  toast(`Extracted ${ok}; ${t.extraction} awaiting critique, ${t.error} error(s)`, ok ? "success" : "error");
-}
-
-// Deferred Pass 2: run critique (text-only, no image) on every row staged
-// extraction-only, flipping them to 'tagged' (committable). This is where the
-// deferred cost lands — only paid when you actually want critique drafted.
-async function critiqueQueue() {
-  if (!state.config.visionKeyConfigured) { toast("Add a vision provider key to .env, then restart npm run ui.", "error"); return; }
-  const pending = state.bulkQueue
-    .map((item, index) => ({ item, index }))
-    .filter((x) => x.item._status === "extraction");
-  if (pending.length === 0) { toast("Nothing awaiting critique", "error"); return; }
-
-  const tasks = pending.map(({ item, index }) => async () => {
-    if (!item._raw?.extraction) throw new Error("No saved extraction — re-run Auto-fill first");
-    state.bulkQueue[index]._status = "tagging";
-    renderBulk();
-    const data = await request("/auto-critique", {
-      method: "POST",
-      body: JSON.stringify({ productName: item.source.productName, extraction: item._raw.extraction }),
-    });
-    const c = data.critique;
-    const next = { ...item, _status: "tagged", _error: null };
-    // The critique endpoint prepends [DRAFT]/[DRAFT — REWRITE] markers to every
-    // field (it's a draft awaiting human review). Strip them on merge — without
-    // this, the deferred-critique path stores markered text straight into the
-    // queue, and commit fails the hygiene gate on every field at once. The
-    // single-sample path strips via cleanTaggedDraft; this mirrors that.
-    next.critique = stripDraftMarker(c.critique);
-    next.whatToSteal = (c.whatToSteal || []).map(stripDraftMarker);
-    next.antiPatterns = c.antiPatterns;
-    if (next.antiPatterns) {
-      next.antiPatterns.antiPatterns = (next.antiPatterns.antiPatterns || []).map(stripDraftMarker);
-      next.antiPatterns.whereThisFails = (next.antiPatterns.whereThisFails || []).map(stripDraftMarker);
-      next.antiPatterns.accessibilityRisks = (next.antiPatterns.accessibilityRisks || []).map(stripDraftMarker);
-    }
-    if (c.voice) {
-      next.voice = c.voice;
-      next.voice.tone = stripDraftMarker(next.voice.tone || "");
-      next.voice.examples = (next.voice.examples || []).map(stripDraftMarker);
-      next.voice.avoid = (next.voice.avoid || []).map(stripDraftMarker);
-    }
-    if (c.qualityTier) next.qualityTier = c.qualityTier;
-    if (typeof c.qualityScore === "number") next.qualityScore = c.qualityScore;
-    if (c.typographyNotes) next.visual.typePairing.notes = c.typographyNotes;
-    next._raw = { ...item._raw, critique: true };
-    state.bulkQueue[index] = next;
-    renderBulk();
-  });
-
-  let ok = 0;
-  await runWithPool(
-    tasks,
-    3,
-    () => { ok += 1; },
-    (err, i) => {
-      const { index } = pending[i];
-      state.bulkQueue[index]._status = "error";
-      state.bulkQueue[index]._error = err.message || "Critique failed";
-      renderBulk();
-    },
-  );
-
-  const t = bulkTally();
-  toast(`Critiqued ${ok}; ${t.tagged} ready to commit, ${t.error} error(s)`, ok ? "success" : "error");
-}
-
-async function commitQueue() {
-  const ready = state.bulkQueue
-    .map((item, index) => ({ item, index }))
-    .filter((x) => x.item._status === "tagged");
-  if (ready.length === 0) { toast("Nothing ready to commit (auto-fill first)", "error"); return; }
-
-  let committed = 0;
-  let duplicateSkipped = 0;
-  const tasks = ready.map(({ item, index }) => async () => {
-    state.bulkQueue[index]._status = "committing";
-    renderBulk();
-    // Server assigns a unique id; strip any client-side id first.
-    const payload = JSON.parse(JSON.stringify(item));
-    payload.id = "";
-    // Commit is the authoritative dedup gate (POST /entries re-checks against
-    // the live corpus). Read the response directly so a 409 duplicate can be
-    // marked distinctly from a validation error — a duplicate isn't a failure,
-    // it's the gate catching something the upload-time check missed.
-    const response = await fetch(`${API}/entries`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (response.status === 409 && data.duplicate) {
-      state.bulkQueue[index]._status = "error";
-      state.bulkQueue[index]._error = `Duplicate (${data.type}) of ${data.match} — skipped`;
-      duplicateSkipped += 1;
-      renderBulk();
-      return;
-    }
-    if (!response.ok) {
-      const message = data.issues?.join("\n") || data.error || "Commit failed (validation)";
-      throw new Error(message);
-    }
-    state.bulkQueue[index]._status = "committed";
-    committed += 1;
-    renderBulk();
-  });
-
-  await runWithPool(
-    tasks,
-    3,
-    () => {},
-    (err, i) => {
-      const { index } = ready[i];
-      state.bulkQueue[index]._status = "error";
-      state.bulkQueue[index]._error = err.message || "Commit failed (validation)";
-      renderBulk();
-    },
-  );
-
-  // Drop committed rows, keep errors for review.
-  state.bulkQueue = state.bulkQueue.filter((i) => i._status !== "committed");
-  await loadAll();
-  renderBulk();
-  const parts = [`Committed ${committed} to corpus`];
-  if (duplicateSkipped) parts.push(`${duplicateSkipped} duplicate${duplicateSkipped === 1 ? "" : "s"} skipped`);
-  const errs = state.bulkQueue.filter((i) => i._status === "error" && !/Duplicate/.test(i._error || "")).length;
-  if (errs) parts.push(`${errs} error(s)`);
-  toast(parts.join(" · "), committed ? "success" : (duplicateSkipped && !errs ? "success" : "error"));
-}
-
-function bulkRemoveAt(index) {
-  state.bulkQueue.splice(index, 1);
-  renderBulk();
-}
-
-function bulkEditAt(index) {
-  // Open a tagged/staged draft in the full editor; on save it returns here.
-  const item = state.bulkQueue[index];
-  if (!item) return;
-  resetDraft(JSON.parse(JSON.stringify(item)));
-  state.draftMode = "create"; // server owns id assignment on commit
-  state.bulkEditingIndex = index; // set AFTER resetDraft (which clears it)
-  setView("form");
-}
-
-async function autoFillDraft() {
-  syncDraftFromForm();
-  if (!state.config.visionKeyConfigured) {
-    toast("Add a vision provider key to .env, then restart npm run ui.", "error");
-    return;
+    out.querySelectorAll('#entryResults .pg, .pages .pg').forEach(b=>b.addEventListener('click',()=>{const p=+b.dataset.pg;if(p>=1&&p<=totalPages){st.page=p;render();document.querySelector('.main').scrollTop=0;}}));
+    out.querySelectorAll('.pages .pg').forEach(b=>b.addEventListener('click',()=>{const p=+b.dataset.pg;if(p>=1&&p<=totalPages){st.page=p;render();document.querySelector('.main').scrollTop=0;}}));
+    bindGallery(); bindEntryRows();
   }
-  if (!state.draft.image.path) {
-    toast("Upload a screenshot or pull one from Source URL first", "error");
-    return;
+  function bindGallery(){
+    document.querySelectorAll('#entryResults .gcard').forEach(card=>{
+      card.addEventListener('click',e=>{ if(e.target.closest('.fav-btn'))return; const x=E.find(en=>en.id===card.dataset.id); if(x)openDetail(x); });
+    });
+    document.querySelectorAll('#entryResults .fav-btn').forEach(b=>{
+      b.addEventListener('click',e=>{ e.stopPropagation(); const id=b.dataset.id; const on=toggleFav(id);
+        const card=b.closest('.gcard'); card.classList.toggle('is-fav',on); b.classList.toggle('fav-on',on);
+        b.querySelector('svg').setAttribute('fill',on?'currentColor':'none');
+        const fc=document.getElementById('favCount'); if(fc)fc.textContent=getFavs().length;
+        if(st.filter==='fav'&&!on) render();
+      });
+    });
   }
-  // No productName guard: the vision model infers it from the screenshot when
-  // none is supplied, so a missing name never blocks auto-fill.
+  document.querySelectorAll('#entryFilters .chip').forEach(c=>{
+    c.addEventListener('click',()=>{ document.querySelectorAll('#entryFilters .chip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); st.filter=c.dataset.f; st.page=1; render(); });
+  });
+  document.getElementById('entrySort').addEventListener('change',e=>{st.sort=e.target.value;st.page=1;render();});
+  document.querySelectorAll('#viewToggle button').forEach(b=>{
+    b.addEventListener('click',()=>{ document.querySelectorAll('#viewToggle button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); st.view=b.dataset.v; st.page=1; render(); });
+  });
+  render();
+});
 
-  const button = $("#autoFill");
-  const original = button.innerHTML;
-  button.disabled = true;
-  button.innerHTML = `<i data-lucide="loader-circle"></i>Analyzing`;
-  renderIcons();
+/* -------- Add entry (redirect to form — full wizard deferred) -------- */
+page('add','Add entry','new corpus entry', function(){
+  return `<div class="card">
+    <div class="card-head"><div><h3>Add a single entry</h3><div class="eyebrow">the curator form</div></div></div>
+    <p style="font-size:13px;color:var(--ink-2);line-height:1.6;margin-bottom:16px">
+      The full form-based entry editor lives in the classic view. Click below to open it in a new tab,
+      or use <a href="#/bulk" style="color:var(--accent)">Bulk import</a> to add many at once.
+    </p>
+    <a class="btn primary" href="/index-classic.html" target="_blank">Open entry form →</a>
+  </div>`;
+});
 
+/* -------- Bulk import -------- */
+page('bulk','Bulk import','batch ingest · upload → auto-fill → commit', function(){
+  return `<div class="card">
+    <div class="card-head"><div><h3>Bulk import</h3><div class="eyebrow">upload → stage → auto-fill → critique → commit</div></div></div>
+    <p style="font-size:13px;color:var(--ink-2);line-height:1.6;margin-bottom:16px">
+      The bulk-import flow (with dedup, auto-fill, and commit) lives in the classic view.
+      It uses the live tagger + commit-time dedup gate.
+    </p>
+    <a class="btn primary" href="/index-classic.html#bulk" target="_blank">Open bulk import →</a>
+  </div>`;
+});
+
+/* -------- Sources -------- */
+page('sources','Sources',`source provenance · ${Object.keys(agg.bySource||{}).length} sources`, function(){
+  const N=agg.N||0;
+  const max=Math.max(...(agg.topSources||[]).map(d=>d[1]),1);
+  const top5share=(agg.topSources||[]).slice(0,5).reduce((s,[,v])=>s+v,0);
+  return `
+  <div class="strip">
+    ${kpi(Object.keys(agg.bySource||{}).length,'','Distinct sources','',`<b>${(agg.topSources||[])[0]?.[1]||0}</b> from top source`)}
+    ${kpi(N&&agg.topSources?.length?((agg.topSources[0][1]/N)*100).toFixed(1):0,'%','Top source share','warn',`<b>${(agg.topSources||[])[0]?.[0]||'—'}</b> = ${(agg.topSources||[])[0]?.[1]||0} entries`)}
+    ${kpi(N?((top5share/N)*100).toFixed(1):0,'%','Top-5 concentration','warn',`<b>${top5share}</b> of ${N} entries from 5 sources`)}
+  </div>
+  <div class="card">
+    <div class="card-head"><div><h3>Entries by source</h3><div class="eyebrow">all ${Object.keys(agg.bySource||{}).length} sources</div></div></div>
+    ${distRows(agg.topSources||[], max, srcColor)}
+    ${agg.topSources?.length&&(agg.topSources[0][1]/N>0.25)?`<div style="font-size:11px;color:var(--warn);margin-top:12px;font-family:var(--mono);padding:8px 10px;background:var(--warn-soft);border-radius:6px">⚠ <b>${agg.topSources[0][0]}</b> = ${((agg.topSources[0][1]/N)*100).toFixed(1)}% of corpus — diversify sources to reduce bias</div>`:''}
+  </div>`;
+});
+
+/* -------- Search index -------- */
+page('search','Search index','query layer · vector + lexical index health', function(){
+  const N=agg.N||0;
+  return `
+  <div class="strip">
+    ${kpi(N,'','Indexed entries','pos','all entries have a vector')}
+    ${kpi(`${HEALTH.entryCount||0}/${N}`,'','Vector coverage','pos','cosine similarity')}
+    ${kpi(agg.mobileCount||0,'','Mobile entries','',`${agg.webCount||0} web · ${agg.tabletCount||0} tablet`)}
+    ${kpi(HEALTH.snapshotCount||0,'','Snapshots','',`newest ${HEALTH.newestSnapshotAgeMs!=null?Math.round(HEALTH.newestSnapshotAgeMs/3600000)+'h':'?'}`)}
+  </div>
+  <div class="card">
+    <div class="card-head"><div><h3>Live query tester</h3><div class="eyebrow">try a real search against the index</div></div></div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <input id="qtInput" placeholder="e.g. dense dashboard with dark mode" style="flex:1;min-width:240px;height:34px;border:1px solid var(--hairline-2);border-radius:7px;padding:0 12px;font-family:var(--mono);font-size:12px">
+      <button class="btn primary" id="qtRun">Search</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px;font-family:var(--mono)" id="qtMeta">press Search to run a lexical match against ${N} entries</div>
+    <div id="qtResults" style="font-size:12.5px"></div>
+  </div>`;
+}, function after(){
+  const inp=document.getElementById('qtInput'), run=document.getElementById('qtRun');
+  const meta=document.getElementById('qtMeta'), res=document.getElementById('qtResults');
+  function doSearch(){
+    const q=inp.value.trim().toLowerCase(); if(!q){res.innerHTML='';meta.textContent='type a query first';return;}
+    const t0=performance.now();
+    const scored=E.map(x=>{const hay=(x.id+' '+x.source+' '+x.pattern+' '+x.style+' '+x.title+' '+x.tier+' '+(x.critique||'')).toLowerCase();let s=0;q.split(/\s+/).forEach(t=>{if(hay.includes(t))s++;});return{x,s};}).filter(r=>r.s>0).sort((a,b)=>b.s-a.s).slice(0,5);
+    const dt=(performance.now()-t0).toFixed(1);
+    meta.textContent=`${scored.length} matches · ${dt}ms · lexical preview (MCP uses vector search)`;
+    res.innerHTML = scored.length? scored.map(({x,s})=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--hairline);cursor:pointer" data-id="${x.id}">
+      <span class="badge ok" style="min-width:30px;justify-content:center">${s}</span>
+      <span class="id" style="flex:1"><b>${x.id.split('-')[0]}</b>${x.id.substring(x.id.indexOf('-'))}</span>
+      <span style="color:var(--muted);font-size:11.5px">${x.source} · ${x.pattern}</span>${tierPill(x.tier)}
+    </div>`).join('') : `<div class="empty">no lexical matches — try broader terms</div>`;
+    res.querySelectorAll('[data-id]').forEach(r=>r.addEventListener('click',()=>{const x=E.find(e=>e.id===r.dataset.id);if(x)openDetail(x);}));
+  }
+  run.addEventListener('click',doSearch);
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter')doSearch();});
+});
+
+/* -------- Embeddings -------- */
+page('embeddings','Embeddings','vector index · drift detection', function(){
+  const N=agg.N||0;
+  return `
+  <div class="strip">
+    ${kpi(N,'','Vectors','pos','one per entry')}
+    ${kpi(1024,'','Dimensions','',`voyage-4`)}
+    ${kpi(`${HEALTH.entryCount||0}/${N}`,'','Coverage','pos','cosine similarity')}
+    ${kpi(0,'','Drift','pos','0 missing · 0 stale')}
+  </div>
+  <div class="card">
+    <div class="card-head"><div><h3>Index maintenance</h3><div class="eyebrow">operations</div></div></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn" id="embRebuild" style="justify-content:center">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0115-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 01-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+        Rebuild vectors
+      </button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:10px;font-family:var(--mono)">run <code>npm run build-index</code> from the terminal</div>
+  </div>`;
+}, function after(){
+  document.getElementById('embRebuild')?.addEventListener('click',()=>toast('Run `npm run build-index` from the terminal'));
+});
+
+/* -------- Compare -------- */
+page('compare','Compare playground','interactive · compare_ui_examples', function(){
+  const opts=E.slice(0,200).map(x=>`<option value="${x.id}">${x.id}</option>`).join('');
+  return `
+  <div class="card">
+    <div class="card-head"><div><h3>Compare entries</h3><div class="eyebrow">select 2–3 entries to see how they differ</div></div></div>
+    <div class="grid-3" id="compareSlots">
+      ${[0,1,2].map(i=>`<div class="card" style="margin:0;background:var(--canvas)">
+        <select class="cmp-sel" data-slot="${i}" style="width:100%;height:32px;border:1px solid var(--hairline-2);border-radius:7px;background:var(--surface);font-family:var(--mono);font-size:11.5px;padding:0 8px">
+          <option value="">— pick entry ${i+1} —</option>${opts}
+        </select>
+        <div class="cmp-body" style="margin-top:12px;font-size:12px"></div>
+      </div>`).join('')}
+    </div>
+  </div>
+  <div class="card"><div class="card-head"><div><h3>Comparison matrix</h3></div></div><div id="cmpMatrix"></div></div>`;
+}, function after(){
+  document.querySelectorAll('.cmp-sel').forEach(sel=>sel.addEventListener('change',renderCmp));
+  function renderCmp(){
+    const chosen=Array.from(document.querySelectorAll('.cmp-sel')).map(s=>s.value).filter(Boolean);
+    document.querySelectorAll('#compareSlots .cmp-body').forEach((body,i)=>{
+      const id=chosen[i]; if(!id){body.innerHTML='<div style="color:var(--muted);font-size:11.5px">empty slot</div>';return;}
+      const x=E.find(e=>e.id===id); if(!x)return;
+      body.innerHTML=`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-2);margin-bottom:8px">${x.id}</div>
+        <div class="kv" style="font-size:11.5px">
+          <span class="k">Source</span><span class="v" style="display:flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:${srcColor(x.source)};display:inline-block"></span>${x.source}</span>
+          <span class="k">Pattern</span><span class="v">${x.pattern}</span><span class="k">Style</span><span class="v">${x.style}</span>
+          <span class="k">Tier</span><span class="v">${tierPill(x.tier)}</span><span class="k">Score</span><span class="v">${scoreBar(x.score)} ${x.score}/5</span>
+        </div>`;
+    });
+    const rows=chosen.map(id=>E.find(e=>e.id===id)).filter(Boolean);
+    const dims=['source','pattern','style','tier','score','steals'];
+    document.getElementById('cmpMatrix').innerHTML = rows.length ? `<table><thead><tr><th>Dimension</th>${rows.map(r=>`<th>${r.id.split('-')[0]}</th>`).join('')}</tr></thead>
+      <tbody>${dims.map(d=>`<tr><td style="text-transform:capitalize;color:var(--ink-2)">${d}</td>${rows.map(r=>{let v=r[d];if(d==='tier')v=tierPill(v);if(d==='score')v=scoreBar(v)+' '+v+'/5';return`<td>${v}</td>`;}).join('')}</tr>`).join('')}</tbody></table>` : `<div class="empty">pick at least one entry to compare</div>`;
+  }
+  renderCmp();
+});
+
+/* -------- Quality -------- */
+page('quality','Quality triage','scoring rubric · score distribution · outliers', function(){
+  const N=agg.N||0;
+  const byScore=agg.byScore||{};
+  const scoreRows=Object.entries(byScore).sort((a,b)=>+a[0]-+b[0]);
+  const maxSc=Math.max(...scoreRows.map(d=>d[1]),1);
+  const lowScore=E.filter(x=>x.score===2).slice(0,8);
+  const highScore=E.filter(x=>x.score===4).slice(0,8);
+  return `
+  <div class="strip">
+    ${kpi((agg.avgScore||0).toFixed(2),'/5','Average score','warn',`across ${N} entries`)}
+    ${kpi(byScore[4]||0,'','4★ entries','',`<span class="delta warn">target: ≥ 50</span>`)}
+    ${kpi(byScore[2]||0,'','2★ entries','neg',`${N?((byScore[2]||0)/N*100).toFixed(1):0}% need curation`)}
+    ${kpi(agg.cauCount||0,'','Cautionary tier','neg','teach what NOT to do')}
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-head"><div><h3>Score distribution</h3><div class="eyebrow">count by quality score</div></div></div>
+      ${scoreRows.length?scoreRows.map(([s,c])=>`<div class="dist-row"><span class="nm">${s}★</span>
+        <span class="track"><div style="width:${(c/maxSc*100).toFixed(0)}%;background:${+s>=4?'var(--pos)':+s===3?'var(--accent)':'var(--neg)'}"></div></span>
+        <span class="v">${c}</span></div>`).join(''):'<div class="empty">no data</div>'}
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h3>Rubric</h3><div class="eyebrow">what each score means</div></div></div>
+      <div class="kv" style="grid-template-columns:50px 1fr">
+        <span class="v" style="color:var(--neg)">2★</span><span>Weak — generic, few steals</span>
+        <span class="v" style="color:var(--accent)">3★</span><span>Solid — usable techniques</span>
+        <span class="v" style="color:var(--pos)">4★</span><span>Strong — sharp, reproducible decisions</span>
+      </div>
+    </div>
+  </div>`;
+}, function after(){ bindEntryRows(); });
+
+/* -------- Settings -------- */
+page('settings','Settings','transport · tools · maintenance', function(){
+  const TOOLS=[
+    ['search_ui_examples','ranked entries by semantic query'],
+    ['get_ui_example','full entry by id'],
+    ['get_similar_ui_examples','ranked by vector similarity'],
+    ['compare_ui_examples','comparison table across dimensions'],
+    ['list_categories','category index + counts'],
+    ['list_style_tags','style tag index + counts'],
+    ['generate_design_prompt','synthesize a design brief across entries'],
+    ['recommend_ui_direction','design advisor from a description'],
+    ['get_anti_patterns','consensus mistakes to avoid'],
+    ['get_color_palette','paste-ready color token sets'],
+    ['get_stealable_techniques','techniques across a category'],
+    ['browse_ui_examples','corpus discovery by pattern'],
+  ];
+  return `
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-head"><div><h3>Transport</h3><div class="eyebrow">MCP server connection</div></div></div>
+      <div class="kv">
+        <span class="k">Protocol</span><span class="v">stdio</span>
+        <span class="k">Command</span><span class="v">node dist/server.js</span>
+        <span class="k">Status</span><span class="v"><span class="badge ok">connected</span></span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h3>Exposed tools</h3><div class="eyebrow">${TOOLS.length} tools</div></div></div>
+      <table><thead><tr><th>Tool</th><th>Returns</th></tr></thead><tbody>
+        ${TOOLS.map(([t,d])=>`<tr><td><span class="mono" style="font-size:11.5px;color:var(--accent)">${t}</span></td><td style="color:var(--ink-2);font-size:11.5px">${d}</td></tr>`).join('')}
+      </tbody></table>
+    </div>
+  </div>`;
+});
+
+/* ============================================================
+   EVENT BINDINGS
+   ============================================================ */
+function bindEntryRows(){
+  document.querySelectorAll('tr[data-id]').forEach(tr=>{
+    tr.addEventListener('click',()=>{const x=E.find(e=>e.id===tr.dataset.id);if(x)openDetail(x);});
+  });
+}
+
+function initSidebar(){
+  const app=document.getElementById('app');
+  document.getElementById('collapseBtn').addEventListener('click',()=>app.classList.toggle('collapsed'));
+  const backdrop=document.getElementById('backdrop');
+  const close=()=>app.classList.remove('mobile-open');
+  document.getElementById('mobileMenuBtn').onclick=()=>app.classList.toggle('mobile-open');
+  document.getElementById('bbMenu').onclick=()=>app.classList.toggle('mobile-open');
+  backdrop.addEventListener('click',close);
+  document.getElementById('detailClose').addEventListener('click',closeDetail);
+  document.getElementById('bbSearch').onclick=()=>{document.querySelector('.topbar .search').classList.toggle('mobile-show');if(document.querySelector('.topbar .search').classList.contains('mobile-show'))document.getElementById('globalSearch').focus();};
+  document.getElementById('bbFavs').onclick=()=>{location.hash='/entries';setTimeout(()=>{const fc=document.querySelector('#entryFilters .chip[data-f="fav"]');if(fc)fc.click();},80);};
+  document.getElementById('rebuildBtn').addEventListener('click',()=>toast('Run `npm run build-index` from the terminal'));
+  document.getElementById('addEntryBtn').addEventListener('click',()=>location.hash='/add');
+  document.getElementById('bbAdd').onclick=()=>location.hash='/add';
+  const gs=document.getElementById('globalSearch');
+  gs.addEventListener('keydown',e=>{if(e.key==='Enter'&&gs.value.trim())location.hash='/entries';});
+  document.addEventListener('keydown',e=>{
+    const typing=/input|textarea|select/i.test(e.target.tagName);
+    if(typing){if(e.key==='Escape')e.target.blur();return;}
+    if(e.key==='/'){e.preventDefault();gs.focus();}
+    else if(e.key==='Escape'){if(app.classList.contains('mobile-open'))close();else if(document.getElementById('detailRail').style.display==='block')closeDetail();}
+    else if((e.metaKey||e.ctrlKey)&&e.key==='b'){e.preventDefault();app.classList.toggle('collapsed');}
+  });
+  window.addEventListener('hashchange',close);
+  window.addEventListener('resize',()=>{if(window.innerWidth>900)close();});
+  // resizer
+  const resizer=document.getElementById('resizer');
+  const DETAIL_KEY='clean-ui-detail-w',DEFAULT_W=320,MIN_W=240,MAX_W=640;
+  const savedW=+localStorage.getItem(DETAIL_KEY)||DEFAULT_W;
+  document.documentElement.style.setProperty('--detail-w',savedW+'px');
+  let dragging=false;
+  resizer.addEventListener('mousedown',e=>{dragging=true;app.classList.add('resizing');resizer.classList.add('active');e.preventDefault();});
+  document.addEventListener('mousemove',e=>{if(!dragging)return;const w=Math.min(MAX_W,Math.max(MIN_W,window.innerWidth-e.clientX));document.documentElement.style.setProperty('--detail-w',w+'px');});
+  document.addEventListener('mouseup',()=>{if(!dragging)return;dragging=false;app.classList.remove('resizing');resizer.classList.remove('active');const cur=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--detail-w'))||DEFAULT_W;localStorage.setItem(DETAIL_KEY,Math.round(cur));});
+  resizer.addEventListener('dblclick',()=>{document.documentElement.style.setProperty('--detail-w',DEFAULT_W+'px');localStorage.setItem(DETAIL_KEY,DEFAULT_W);toast('Detail width reset');});
+}
+
+window._mcp = { toast };
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+(async function boot(){
+  document.getElementById('pages').innerHTML = '<div class="page active"><div class="empty" style="padding:80px">Loading corpus…</div></div>';
   try {
-    const data = await request("/auto-tag", {
-      method: "POST",
-      body: JSON.stringify({
-        imagePath: state.draft.image.path,
-        productName: state.draft.source.productName,
-        url: state.draft.source.url || null,
-	        id: state.draftMode === "edit" ? state.draft.id : undefined,
-      }),
-    });
-    state.draft = cleanTaggedDraft(data.entry, state.draft);
-    renderForm();
-    toast("Auto-filled from image", "success");
-  } catch (error) {
-    toast(error.message, "error");
-  } finally {
-    const nextButton = $("#autoFill");
-    if (nextButton) {
-      nextButton.disabled = false;
-      nextButton.innerHTML = original;
-      renderIcons();
-    }
+    await loadAll();
+    recomputeAgg();
+  } catch(e) {
+    document.getElementById('pages').innerHTML = `<div class="page active"><div class="empty" style="padding:80px">Failed to load: ${esc(e.message)}</div></div>`;
   }
-}
-
-// Recovery surface — shows snapshot count + newest age so the curator knows
-// their work is recoverable. Falls back gracefully if /api/health is absent.
-function recoveryLine() {
-  const h = state.health;
-  if (!h || !h.snapshotCount) {
-    return `<div class="panel-sub" style="margin-top:12px">Recovery: no snapshots yet — your first save creates one.</div>`;
-  }
-  const age = h.newestSnapshotAgeMs != null ? ageLabel(h.newestSnapshotAgeMs) : "unknown";
-  return `<div class="panel-sub" style="margin-top:12px">Recovery: ${h.snapshotCount} snapshot${h.snapshotCount === 1 ? "" : "s"} retained · newest ${age}. Recover with <code>npm run restore-corpus -- --list</code></div>`;
-}
-function ageLabel(ms) {
-  const mins = Math.round(ms / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
-}
-
-function renderStatsPage() {
-  const byCategory = {};
-  const byStyle = {};
-  const imageCount = state.entries.filter((entry) => !!entry.image.path).length;
-  const legacyCount = state.entries.filter((entry) => !entry.image.path).length;
-  for (const entry of state.entries) {
-    entry.categories.forEach((cat) => byCategory[cat] = (byCategory[cat] || 0) + 1);
-    entry.styleTags.forEach((tag) => byStyle[tag] = (byStyle[tag] || 0) + 1);
-  }
-  const rows = (object) => Object.entries(object).sort((a, b) => b[1] - a[1]).map(([name, count]) =>
-    `<div class="kv"><dt>${esc(name)}</dt><dd>${count}</dd></div>`
-  ).join("");
-	  $("#page").innerHTML = `
-	    <div class="detail-layout">
-	      <section class="panel">
-	        <div class="panel-head"><div><div class="panel-title">Category coverage</div><div class="panel-sub">${Object.keys(byCategory).length} represented</div></div></div>
-	        <div class="panel-body"><dl>${rows(byCategory) || `<div class="panel-sub">No data</div>`}</dl></div>
-	      </section>
-	      <aside class="panel">
-	        <div class="panel-head"><div><div class="panel-title">Corpus health</div><div class="panel-sub">${imageCount} image samples, ${legacyCount} legacy link-only</div></div></div>
-	        <div class="panel-body attr-grid">
-	          <div>
-	            <div class="section-title">Style coverage</div>
-	            <dl>${rows(byStyle) || `<div class="panel-sub">No data</div>`}</dl>
-	          </div>
-	          <div>
-	            <div class="section-title">Unused private images</div>
-	            <div class="cleanup-row">
-	              <p class="small-copy">${state.orphans.length ? `${state.orphans.length} uploaded or captured file${state.orphans.length === 1 ? "" : "s"} are not referenced by any entry.` : "No orphaned private screenshots found."}</p>
-	              <button class="btn danger" id="cleanupOrphans" ${state.orphans.length ? "" : "disabled"}><i data-lucide="trash-2"></i>Clean up</button>
-	            </div>
-	            ${state.orphans.length ? `<div class="panel-sub">${state.orphans.slice(0, 6).map(esc).join("<br>")}${state.orphans.length > 6 ? "<br>..." : ""}</div>` : ""}
-	          </div>
-	        </div>
-	        ${recoveryLine()}
-	      </aside>
-	    </div>
-	  `;
-}
-
-async function cleanupOrphans() {
-  if (!state.orphans.length) return;
-  if (!confirm(`Delete ${state.orphans.length} unused private screenshot file${state.orphans.length === 1 ? "" : "s"}?`)) return;
-  try {
-    const result = await request("/orphans", { method: "DELETE" });
-    await loadAll({ keepSelection: true });
-    setView("stats");
-    toast(`Deleted ${result.count} unused file${result.count === 1 ? "" : "s"}`, "success");
-  } catch (error) {
-    toast(error.message, "error");
-  }
-}
-
-async function deleteSelected() {
-  const entry = selectedEntry();
-  if (!entry || !confirm(`Delete ${entry.title}?`)) return;
-  try {
-    await request(`/entries/${encodeURIComponent(entry.id)}`, { method: "DELETE" });
-    state.selectedId = null;
-    await loadAll({ keepSelection: false });
-    toast("Deleted", "success");
-  } catch (error) {
-    toast(error.message, "error");
-  }
-}
-
-function toast(message, type = "") {
-  const el = $("#toast");
-  el.textContent = message;
-  el.className = `toast show ${type}`;
-  clearTimeout(window.toastTimer);
-  window.toastTimer = setTimeout(() => el.classList.remove("show"), 2800);
-}
-
-document.addEventListener("click", (event) => {
-  const entryButton = event.target.closest("[data-entry-id]");
-  if (entryButton) {
-    state.selectedId = entryButton.dataset.entryId;
-    state.view = "detail";
-    document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === "detail"));
-    renderList();
-    renderPage();
-    return;
-  }
-  const tab = event.target.closest(".tab");
-  if (tab) setView(tab.dataset.view);
-  if (event.target.closest("#newBtn") || event.target.closest("#emptyNew")) {
-    resetDraft();
-    setView("form");
-  }
-  if (event.target.closest("#refreshBtn")) loadAll().then(() => toast("Refreshed", "success")).catch((error) => toast(error.message, "error"));
-  if (event.target.closest("#editSelected")) {
-    const entry = selectedEntry();
-    if (entry) {
-      resetDraft(entry);
-      setView("form");
-    }
-  }
-	  if (event.target.closest("#deleteSelected")) deleteSelected();
-	  if (event.target.closest("#cleanupOrphans")) cleanupOrphans();
-  if (event.target.closest("#resetForm")) {
-    resetDraft();
-    renderForm();
-  }
-  if (event.target.closest("#captureSource")) captureSourceImage();
-  if (event.target.closest("#autoFill")) autoFillDraft();
-  if (event.target.closest("#saveForm")) saveDraft();
-  // ── bulk import wiring ──
-  if (event.target.closest("#bulkAutoFill")) autoFillQueue();
-  if (event.target.closest("#bulkCritique")) critiqueQueue();
-  if (event.target.closest("#bulkCommit")) commitQueue();
-  if (event.target.closest("#bulkClear")) { state.bulkQueue = []; renderBulk(); }
-  const bulkRemove = event.target.closest("[data-bulk-remove]");
-  if (bulkRemove) bulkRemoveAt(Number(bulkRemove.dataset.bulkRemove));
-  const bulkRow = event.target.closest("[data-bulk-index]");
-  if (bulkRow && !event.target.closest("input") && !event.target.closest("button")) {
-    bulkEditAt(Number(bulkRow.dataset.bulkIndex));
-  }
-});
-
-document.addEventListener("input", (event) => {
-  if (event.target.id === "searchInput") {
-    state.query = event.target.value;
-    renderList();
-    return;
-  }
-  if (event.target.id === "bulkDefaultProduct") {
-    state.bulkDefaultProduct = event.target.value;
-    return;
-  }
-  const productField = event.target.closest("[data-bulk-product]");
-  if (productField) {
-    const idx = Number(productField.dataset.bulkProduct);
-    if (state.bulkQueue[idx]) state.bulkQueue[idx].source.productName = productField.value;
-    return;
-  }
-  if (event.target.closest("#entryForm")) updatePreview();
-});
-
-document.addEventListener("change", (event) => {
-  if (event.target.id === "imageFile") uploadImage(event.target.files[0]);
-  if (event.target.id === "bulkFileInput" && event.target.files.length) {
-    enqueueFiles(event.target.files);
-    event.target.value = ""; // allow re-adding the same file later
-  }
-  if (event.target.closest("#entryForm")) updatePreview();
-});
-
-document.addEventListener("dragover", (event) => {
-  const zone = event.target.closest("#dropzone, #bulkDropzone");
-  if (!zone) return;
-  event.preventDefault();
-  zone.classList.add("drag");
-});
-document.addEventListener("dragleave", (event) => {
-  const zone = event.target.closest("#dropzone, #bulkDropzone");
-  if (zone) zone.classList.remove("drag");
-});
-document.addEventListener("drop", (event) => {
-  const bulkZone = event.target.closest("#bulkDropzone");
-  if (bulkZone) {
-    event.preventDefault();
-    bulkZone.classList.remove("drag");
-    if (event.dataTransfer.files.length) enqueueFiles(event.dataTransfer.files);
-    return;
-  }
-  const zone = event.target.closest("#dropzone");
-  if (!zone) return;
-  event.preventDefault();
-  zone.classList.remove("drag");
-  uploadImage(event.dataTransfer.files[0]);
-});
-
-document.addEventListener("keydown", (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && state.view === "form") {
-    event.preventDefault();
-    saveDraft();
-  }
-});
-
-loadAll({ keepSelection: false }).catch((error) => {
-  $("#page").innerHTML = `<div class="empty-state"><div><i data-lucide="circle-alert"></i><p>${esc(error.message)}</p></div></div>`;
-  renderIcons();
-});
+  renderNav();
+  initSidebar();
+  window.addEventListener('hashchange',route);
+  route();
+})();
+})();

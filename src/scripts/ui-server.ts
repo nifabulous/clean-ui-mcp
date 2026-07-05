@@ -943,6 +943,16 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // Classic workbench — the form + bulk-import flows. The new SPA links here
+    // for those surfaces. Served from index-classic.html (parallel to APP_PATH).
+    if (req.method === "GET" && url.pathname === "/index-classic.html") {
+      const classicPath = resolve(PROJECT_ROOT, "index-classic.html");
+      if (!existsSync(classicPath)) { sendText(res, 404, "classic view not found"); return; }
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end(readFileSync(classicPath, "utf-8"));
+      return;
+    }
+
     sendText(res, 404, "Not found");
   } catch (error) {
     console.error(error);

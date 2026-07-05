@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>clean-ui curator · classic workbench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<script src="https://unpkg.com/fflate@0.8.2/umd/index.js"></script>
+<link rel="stylesheet" href="/static/classic-styles.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <a href="/" class="brand-back" title="Back to ledger">←</a>
+      <span class="brand-name">clean-ui</span>
+      <small>classic workbench · forms &amp; bulk import</small>
+    </div>
+    <div class="search">
+      <i data-lucide="search"></i>
+      <input id="searchInput" type="search" placeholder="Search…  try: cat:dashboard  style:minimal  pricing">
+    </div>
+    <div class="top-actions">
+      <button class="btn" id="refreshBtn"><i data-lucide="refresh-cw"></i>Refresh</button>
+      <button class="btn primary" id="newBtn"><i data-lucide="plus"></i>New sample</button>
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside>
+      <!-- Sidebar is the entry list, full stop. No stat strip, no chip decks —
+           filtering lives in the search bar via cat:/style: prefixes. -->
+      <div class="entry-list" id="entryList"></div>
+      <div class="list-footer" id="listFooter">0 entries</div>
+    </aside>
+
+    <main>
+      <div class="workspace">
+        <nav class="tabs">
+          <button class="tab active" data-view="detail">Library</button>
+          <button class="tab" data-view="form">New sample</button>
+          <button class="tab" data-view="bulk">Bulk import</button>
+          <button class="tab" data-view="stats">Coverage</button>
+        </nav>
+        <div id="page" class="page"></div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/classic-app.js"></script>
+</body>
+</html>

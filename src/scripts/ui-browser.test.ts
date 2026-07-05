@@ -7,7 +7,12 @@ import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const appHtml = readFileSync(resolve(__dirname, "../..", "index-2.html"), "utf-8");
+// The SPA (index-2.html) is the specimen-ledger browser; the form + bulk
+// import flows live in the classic workbench (index-classic.html + classic-*).
+// Both shells are loaded below — classic-flow tests point at /index-classic.html,
+// SPA tests point at /.
+const classicHtml = readFileSync(resolve(__dirname, "../..", "index-classic.html"), "utf-8");
+const spaHtml = readFileSync(resolve(__dirname, "../..", "index-2.html"), "utf-8");
 
 // Hoisted so both describe blocks share the single browser + server launched in
 // the first block's beforeAll. Vitest runs describe blocks in file order.
@@ -47,9 +52,14 @@ describe("curator app browser smoke", () => {
   beforeAll(async () => {
     const server = createServer(async (req, res) => {
       const url = new URL(req.url ?? "/", "http://localhost");
+      if (url.pathname === "/index-classic.html") {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end(classicHtml);
+        return;
+      }
       if (url.pathname === "/" || url.pathname === "/index-2.html") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        res.end(appHtml);
+        res.end(spaHtml);
         return;
       }
       // Serve the extracted CSS/JS from ui/ — mirrors the production /static/* route.
@@ -65,6 +75,7 @@ describe("curator app browser smoke", () => {
       }
       if (url.pathname === "/api/schema") return json(res, 200, schema);
       if (url.pathname === "/api/entries" && req.method === "GET") return json(res, 200, { entries: [] });
+      if (url.pathname === "/api/health") return json(res, 200, { entryCount: 0, snapshotCount: 0, newestSnapshotEpoch: 0, newestSnapshotAgeMs: 0 });
       if (url.pathname === "/api/stats") return json(res, 200, { total: 0, avgQuality: 0, withImages: 0 });
       if (url.pathname === "/api/orphans" && req.method === "GET") return json(res, 200, { orphans: [], count: 0 });
       if (url.pathname === "/api/config") {
@@ -214,7 +225,7 @@ describe("curator app browser smoke", () => {
   it("requires an image before saving a new sample", async () => {
     openaiConfigured = true;
     const page = await browser.newPage();
-    await page.goto(baseUrl);
+    await page.goto(baseUrl + "/index-classic.html");
     await page.getByRole("button", { name: "New sample", exact: true }).first().click();
 
     expect(await page.getByText("Capture or upload a screenshot before saving.").isVisible()).toBe(true);
@@ -227,7 +238,7 @@ describe("curator app browser smoke", () => {
   it("enables auto-fill after upload or URL capture provides an image", async () => {
     openaiConfigured = true;
     const page = await browser.newPage();
-    await page.goto(baseUrl);
+    await page.goto(baseUrl + "/index-classic.html");
     await page.locator("#newBtn").click();
     await page.getByLabel("Product").fill("Origin");
 
@@ -253,7 +264,7 @@ describe("curator app browser smoke", () => {
   it("explains .env setup when the vision key is missing", async () => {
     openaiConfigured = false;
     const page = await browser.newPage();
-    await page.goto(baseUrl);
+    await page.goto(baseUrl + "/index-classic.html");
     await page.locator("#newBtn").click();
 
     expect(await page.getByText("Auto-fill needs a vision provider key").isVisible()).toBe(true);
@@ -276,7 +287,7 @@ describe("bulk import", () => {
   async function newBulkPage(): Promise<Page> {
     if (!browser) throw new Error("browser not initialized");
     const page = await browser.newPage();
-    await page.goto(baseUrl);
+    await page.goto(baseUrl + "/index-classic.html");
     await page.getByRole("button", { name: "Bulk import" }).click();
     await page.waitForSelector("text=Stage → Auto-fill → Commit");
     return page;
@@ -384,16 +395,66 @@ describe("bulk import", () => {
     await page.locator("#bulkFileInput").setInputFiles([
       { name: "sample.png", mimeType: "image/png", buffer: Buffer.from(png1x1, "base64") },
     ]);
-    await page.waitForSelector(".status-chip.staged");
+    await page.waitForSelector(".status-chip.staged", { timeout: 8000 });
     // Auto-fill stays disabled without the key.
     expect(await page.getByRole("button", { name: /Auto-fill all/ }).isDisabled()).toBe(true);
+    await page.close();
+  }, 15000);
+});
+
+// ─── SPA (specimen ledger) smoke ────────────────────────────────────────────
+// The new index-2.html shell is a hash-routed SPA. These tests confirm the
+// shell boots, the overview renders KPIs from /api/entries + /api/health, and
+// hash routes swap the #pages content without a full reload. The classic
+// flows above cover form + bulk; this block covers the new surfaces.
+describe("specimen-ledger SPA", () => {
+  it("boots the overview with a KPI strip + sidebar nav", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/");
+    // The SPA injects a KPI strip into #pages on boot. Wait for the entry-count KPI.
+    await page.waitForSelector("#pages .kpi, #pages [class*='kpi']", { timeout: 5000 });
+    const navItems = await page.locator("#navScroll a, #navScroll [data-nav]").count();
+    expect(navItems).toBeGreaterThan(0);
+    // Detail rail is hidden on boot.
+    const railDisplay = await page.evaluate(() => {
+      const r = document.getElementById("detailRail");
+      return r ? r.style.display : "absent";
+    });
+    expect(railDisplay === "none" || railDisplay === "" || railDisplay === "absent").toBe(true);
+    await page.close();
+  });
+
+  it("hash-routes between pages without a full reload", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/entries");
+    await page.waitForSelector("#pageTitle");
+    const entriesTitle = await page.locator("#pageTitle").textContent();
+    expect(entriesTitle?.toLowerCase()).toContain("entri");
+
+    // Navigate to settings via hash — same document, no network nav.
+    await page.evaluate(() => { location.hash = "/settings"; });
+    await page.waitForFunction(() => /settings/i.test(document.getElementById("pageTitle")?.textContent || ""), null, { timeout: 3000 });
+    const settingsTitle = await page.locator("#pageTitle").textContent();
+    expect(settingsTitle?.toLowerCase()).toContain("setting");
+    await page.close();
+  });
+
+  it("renders the add/bulk routes as links to the classic workbench", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/add");
+    await page.waitForSelector("#pages a[href='/index-classic.html']");
+    const addLink = await page.locator("#pages a[href='/index-classic.html']").first().getAttribute("href");
+    expect(addLink).toBe("/index-classic.html");
+
+    await page.evaluate(() => { location.hash = "/bulk"; });
+    await page.waitForSelector("#pages a[href='/index-classic.html#bulk']");
     await page.close();
   });
 });
 
-// Module-level teardown: runs once after both describe blocks finish, so the
+// Module-level teardown: runs once after all describe blocks finish, so the
 // shared browser/server (launched in the first block's beforeAll) survive for
-// the bulk-import tests that follow it.
+// every test that follows it.
 afterAll(async () => {
   await browser?.close();
   await closeServer?.();

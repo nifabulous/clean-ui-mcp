@@ -3,55 +3,116 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>clean-ui curator</title>
+<title>clean-ui · corpus console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..500&display=swap" rel="stylesheet">
-<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
-<script src="https://unpkg.com/fflate@0.8.2/umd/index.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-<div id="app">
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-name">clean-ui</span>
-      <small>corpus workbench</small>
-    </div>
-    <div class="search">
-      <i data-lucide="search"></i>
-      <input id="searchInput" type="search" placeholder="Search…  try: cat:dashboard  style:minimal  pricing">
-    </div>
-    <div class="top-actions">
-      <button class="btn" id="refreshBtn"><i data-lucide="refresh-cw"></i>Refresh</button>
-      <button class="btn primary" id="newBtn"><i data-lucide="plus"></i>New sample</button>
-    </div>
-  </header>
+<div class="app" id="app">
 
-  <div class="shell">
-    <aside>
-      <!-- Sidebar is the entry list, full stop. No stat strip, no chip decks —
-           filtering lives in the search bar via cat:/style: prefixes. -->
-      <div class="entry-list" id="entryList"></div>
-      <div class="list-footer" id="listFooter">0 entries</div>
-    </aside>
-
-    <main>
-      <div class="workspace">
-        <nav class="tabs">
-          <button class="tab active" data-view="detail">Library</button>
-          <button class="tab" data-view="form">New sample</button>
-          <button class="tab" data-view="bulk">Bulk import</button>
-          <button class="tab" data-view="stats">Coverage</button>
-        </nav>
-        <div id="page" class="page"></div>
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <div class="brand">
+        <div class="brand-mark">§</div>
+        <div class="brand-text">
+          <div class="bt">clean-ui</div>
+          <div class="bs">corpus console</div>
+        </div>
       </div>
-    </main>
-  </div>
+      <button class="collapse-btn" id="collapseBtn" title="Collapse (Cmd+B)" aria-label="Collapse sidebar">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+    </div>
+
+    <div class="nav-scroll" id="navScroll"><!-- nav injected --></div>
+
+    <div class="sidebar-foot">
+      <div class="row"><span><span class="live"></span> stdio transport</span><span>v0.1.0</span></div>
+      <div class="row"><span>index</span><span id="footIndex">— / —</span></div>
+      <div class="recovery" id="footRecovery">snapshots: —</div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+    <div class="topbar">
+      <button class="icon-btn" id="mobileMenuBtn" style="display:none" aria-label="Menu">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <div class="page-titles">
+        <h1 id="pageTitle">Overview</h1>
+        <div class="crumb" id="pageCrumb">clean-ui-mcp · v0.1.0 · stdio transport</div>
+      </div>
+      <div class="actions">
+        <div class="search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input type="text" id="globalSearch" placeholder="search entries…" />
+        </div>
+        <button class="icon-btn" id="rebuildBtn" title="Rebuild index">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0115-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 01-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+        </button>
+        <button class="btn primary" id="addEntryBtn">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+          <span class="lbl">Add entry</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- pages injected here -->
+    <div id="pages"></div>
+
+    <div class="statusbar">
+      <span class="seg"><span class="live"></span> stdio transport</span>
+      <span class="seg" id="footLatency">index latency: —</span>
+      <span class="seg" id="footEmbeddings">embeddings: —</span>
+      <span class="seg" style="margin-left:auto" id="footStatus">clean-ui-mcp@0.1.0</span>
+    </div>
+  </main>
+
+  <!-- resizer gutter between main canvas and detail rail -->
+  <div class="resizer" id="resizer" title="Drag to resize · double-click to reset" role="separator" aria-orientation="vertical" aria-label="Resize detail panel"></div>
+
+  <!-- detail rail (hidden by default, opened from entry rows) -->
+  <aside class="detail-rail" id="detailRail" style="display:none">
+    <div class="dh">
+      <h3 id="detailTitle">Entry</h3>
+      <button class="icon-btn" id="detailClose" style="width:26px;height:26px" aria-label="Close detail">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="detailBody"><div class="detail-empty">Select an entry to inspect.</div></div>
+  </aside>
+
+  <!-- drawer backdrop (mobile) — tap to close -->
+  <div class="backdrop" id="backdrop"></div>
 </div>
+
+<!-- mobile bottom action bar -->
+<nav class="bottom-bar" aria-label="Quick actions">
+  <button id="bbMenu" aria-label="Menu">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+    Menu
+  </button>
+  <button id="bbSearch" aria-label="Search">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    Search
+  </button>
+  <button id="bbFavs" aria-label="Favorites">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>
+    Stars
+  </button>
+  <button id="bbAdd" aria-label="Add entry">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+    Add
+  </button>
+</nav>
 
 <div class="toast" id="toast"></div>
 
+<!-- ============ SPA LOGIC ============ -->
 <script src="/static/app.js"></script>
 </body>
 </html>

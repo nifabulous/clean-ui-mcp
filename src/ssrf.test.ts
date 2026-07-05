@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isPrivateAddress, assertSafeCaptureTarget } from "./ssrf.js";
-import { captureSlug, isAllowedByRobots, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT, VIEWPORTS } from "./scripts/capture.js";
+import { captureSlug, isAllowedByRobots, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT, MIN_VH_FRAC, VIEWPORTS } from "./scripts/capture.js";
 
 // ============================================================
 // SSRF guard — the lint that prevents the capture pipeline from
@@ -267,6 +267,63 @@ describe("group-member size filter (sliver rejection)", () => {
     expect(MIN_GROUP_DIM).toBeLessThanOrEqual(120);
     expect(MAX_GROUP_ASPECT).toBeGreaterThanOrEqual(4);
     expect(MAX_GROUP_ASPECT).toBeLessThanOrEqual(20);
+    // MIN_VH_FRAC: the section-height fractional floor. 0.12 = 12% of viewport.
+    // Tight band — anything below 0.08 lets slivers through, anything above
+    // 0.20 starts dropping real compact sections.
+    expect(MIN_VH_FRAC).toBeGreaterThanOrEqual(0.08);
+    expect(MIN_VH_FRAC).toBeLessThanOrEqual(0.20);
+  });
+});
+
+// ============================================================
+// Section-height filter — the min-VH fractional floor for Pass A.
+// Closes the asymmetry in the section filter: width had a fractional floor
+// (vw * 0.5) but height had only a fixed pixel floor (minH=80). Without a
+// fractional floor, a 1392×112 announcement bar (12% of a 900px desktop
+// viewport) passed because it cleared 80px — but a strip that thin isn't a
+// meaningful UI section.
+//
+// Predicate ported from DETECT_SCRIPT so we can test the math directly.
+// Tested at desktop (vh=900) and mobile (vh=844) since the floor is fractional.
+// ============================================================
+
+describe("section-height filter (MIN_VH_FRAC)", () => {
+  // Predicate mirroring the section filter's height check.
+  // minH is the legacy 80px floor; minVFrac is the new fractional floor.
+  // Both must be cleared (height >= max(minH, vh * minVFrac)).
+  const MIN_H = 80;
+  function sectionHeightPasses(height: number, vh: number, minVFrac: number): boolean {
+    return height >= MIN_H && height >= vh * minVFrac;
+  }
+
+  it("rejects sub-12% sections on a 900px desktop viewport", () => {
+    const vh = 900;
+    // 12% of 900 = 108px. The fractional floor dominates the 80px fixed floor.
+    // Real cases from the linear+vercel batch — sub-12% should drop, ≥12% keep:
+    expect(sectionHeightPasses(97, vh, MIN_VH_FRAC)).toBe(false);   // 10.8% — group fragment
+    expect(sectionHeightPasses(105, vh, MIN_VH_FRAC)).toBe(false);  // 11.7% — under the 108px floor
+    expect(sectionHeightPasses(108, vh, MIN_VH_FRAC)).toBe(true);   // exactly 12% — passes
+    expect(sectionHeightPasses(137, vh, MIN_VH_FRAC)).toBe(true);   // 15% — real section
+    expect(sectionHeightPasses(700, vh, MIN_VH_FRAC)).toBe(true);   // hero-sized
+  });
+
+  it("scales with viewport — same logic, different px threshold on mobile", () => {
+    // The fractional floor's whole point: 12% means a different pixel count
+    // per viewport, but the same "meaningful relative to what the user sees"
+    // semantic. Mobile vh=844 → 12% = 101.28px, so 101 fails and 102 passes.
+    const mobileVh = 844;
+    expect(sectionHeightPasses(100, mobileVh, MIN_VH_FRAC)).toBe(false);  // 11.8% — under
+    expect(sectionHeightPasses(101, mobileVh, MIN_VH_FRAC)).toBe(false);  // 11.97% — still under 101.28
+    expect(sectionHeightPasses(102, mobileVh, MIN_VH_FRAC)).toBe(true);   // 12.1% — passes
+  });
+
+  it("the fixed 80px floor still kicks in for unusually short viewports", () => {
+    // On a tiny viewport (e.g. an old phone landscape at 400px tall), 12% would
+    // be 48px — below the 80px fixed floor. In that regime the fixed floor
+    // dominates and prevents tiny-but-fractional sections from passing.
+    const tinyVh = 400;
+    expect(sectionHeightPasses(50, tinyVh, MIN_VH_FRAC)).toBe(false);   // 50 < 80
+    expect(sectionHeightPasses(80, tinyVh, MIN_VH_FRAC)).toBe(true);    // 80px floor satisfied
   });
 });
 

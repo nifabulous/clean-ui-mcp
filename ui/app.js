@@ -13,6 +13,46 @@ let SCHEMA = { categories: [], styleTags: [], patternTypes: [], spacingDensities
 let HEALTH = { entryCount: 0, snapshotCount: 0, newestSnapshotEpoch: null, newestSnapshotAgeMs: null };
 let CONFIG = {};
 
+// ─── draft state (shared across add/edit/capture-promote flows) ──────────────
+// Replaces the old local addDraft variable. The full form (#/edit), the
+// capture-triage promote action, and the SPA's capture/upload wizard all flow
+// through one draft object so the form renders + validation + save path is
+// identical regardless of how the draft was seeded.
+const blankDraft = () => ({
+  id: '',
+  title: '',
+  patternType: '',
+  platform: '',
+  categories: [],
+  styleTags: [],
+  source: { productName:'', url:'', capturedAt:'', capturedBy:'self', lastVerified:'' },
+  image: { visibility:'private', path:null, width:null, height:null },
+  visual: { dominantColors:[], accentColor:null, colorRoles:{canvas:'',surface:'',ink:'',muted:'',accent:''}, typePairing:{display:'',body:'',notes:''}, spacingDensity:'moderate', cornerStyle:'slight-round', usesShadows:false, usesBorders:true },
+  critique: '',
+  whatToSteal: [],
+  antiPatterns: { antiPatterns:[], whereThisFails:[], accessibilityRisks:[] },
+  voice: { tone:'', examples:[], avoid:[] },
+  layout: null,
+  qualityTier: 'exceptional',
+  qualityScore: 3,
+  reviewStatus: 'approved',
+  provenance: null,
+  // Form-internal state (not saved): the entry being edited (null = new entry),
+  // busy/error messages for the capture/auto-fill wizard, and the active
+  // source tab ('capture' | 'upload').
+  _editing: null,
+  _busy: null,
+  _error: null,
+  _tab: 'capture',
+  _pendingCapture: null, // {batchId, captureId} — set by promoteCapture, cleared on save
+});
+let draft = blankDraft();
+function resetDraft(entry=null){
+  draft = entry ? JSON.parse(JSON.stringify(entry)) : blankDraft();
+  draft._editing = entry ? (entry.id||null) : null;
+  draft._busy = null; draft._error = null; draft._tab = 'capture'; draft._pendingCapture = null;
+}
+
 /* ---------- field mapper: our CorpusEntry → the shape components expect ----------
    The reference components read x.source, x.pattern, x.style, x.dominant, x.accent,
    x.score, x.tier, x.steals. Our schema has nested objects. This maps once at load. */
@@ -340,10 +380,47 @@ function distRows(arr,max,colorFn){
     <span class="v">${v}</span>
   </div>`).join('');
 }
-function toast(msg){
+function toast(msg, type=''){
   const t=document.getElementById('toast');
-  t.textContent=msg; t.classList.add('on');
-  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('on'),2200);
+  t.textContent=msg; t.className='on'+(type?(' '+type):'');
+  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('on'), type==='error'?4000:2200);
+  if(type==='error') console.error('[toast]', msg);
+}
+
+// ─── shared helpers (ported from classic-app.js during unification) ──────────
+// These were duplicated between app.js and classic-app.js; now live here once.
+
+const slugify = (v) => String(v||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').replace(/-{2,}/g,'-') || 'sample';
+const lines = (v) => String(v||'').split('\n').map(l=>l.trim()).filter(Boolean);
+
+// Error-aware JSON fetch. All API calls in the form/bulk/triage flows use this
+// so server-side validation errors surface as thrown Errors with the server's
+// message (issues array or error string) rather than silent failures.
+async function request(path, options={}){
+  const response = await fetch(`${API}${path}`, {
+    headers: { 'content-type':'application/json', ...(options.headers||{}) },
+    ...options,
+  });
+  const data = await response.json().catch(()=>({}));
+  if(!response.ok){
+    const message = (data.issues && data.issues.join('\n')) || data.error || 'Request failed';
+    throw new Error(message);
+  }
+  return data;
+}
+
+// Draft-marker stripping — the tagger prefixes critique/steals/antiPatterns
+// with [DRAFT]/[DRAFT — REWRITE] as a hygiene forcing function. The form's
+// save path strips them before submit (the human review IS the rewrite gate).
+// Loops until stable to catch repeated markers the model sometimes emits.
+function stripDraftMarker(s){
+  if(typeof s !== 'string') return s;
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/\[(?:DRAFT[^\]]*|PLACEHOLDER[^\]]*|TODO[^\]]*)\]\s*/gi, '').trim();
+  } while(s !== prev);
+  return s;
 }
 function healthRow(kind,title,desc){
   const ic = kind==='ok'?'<path d="M5 12l5 5 9-9"/>'
@@ -739,124 +816,123 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
 // classic workbench's form, but lives in the SPA so the navigation context
 // (favorites, search query) is preserved. Draft state is held locally in
 // `addDraft` below — no global state pollution.
-let addDraft = null; // { imagePath, productName, url, entry, busy, error }
+// ─── capture/upload wizard (seeds the shared draft) ──────────────────────────
+// Used by the #/edit route when no entry is being edited (new-entry mode).
+// On successful capture/upload the draft.image.path is set; on successful
+// auto-tag the draft is replaced wholesale with the tagger's structured output
+// (preserving _editing/_busy/_tab/_pendingCapture). The full form then renders
+// from the draft.
 
-function addBlank(){
-  return { imagePath:null, productName:'', url:'', entry:null, busy:null, error:null, tab:'capture' };
-}
-
-async function addDoCapture(form){
+async function wizardCapture(form){
   const url = (form.url.value||'').trim();
   const slug = (form.slug.value||'').trim();
-  if(!url){ addDraft.error = 'URL is required'; render(); return; }
-  addDraft.busy = 'Capturing screenshot…'; addDraft.error = null; render();
+  if(!url){ draft._error = 'URL is required'; render(); return; }
+  draft._busy = 'Capturing screenshot…'; draft._error = null; render();
   try {
-    const r = await fetch(`${API}/api/capture-url`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ url, slug: slug || undefined })
-    });
-    const j = await r.json();
-    if(!r.ok) throw new Error(j.error || 'Capture failed');
-    addDraft.imagePath = j.imagePath;
-    addDraft.productName = ''; addDraft.url = url;
-    addDraft.busy = null;
-  } catch(e){
-    addDraft.busy = null; addDraft.error = e.message;
-  }
+    const j = await request('/api/capture-url', { method:'POST', body: JSON.stringify({ url, slug: slug || undefined }) });
+    draft.image.path = j.imagePath;
+    if(!draft.source.url) draft.source.url = url;
+    draft._busy = null;
+  } catch(e){ draft._busy = null; draft._error = e.message; }
   render();
 }
 
-function addHandleUpload(file){
+function wizardUpload(file){
   if(!file) return;
-  addDraft.busy = 'Uploading…'; addDraft.error = null; render();
+  draft._busy = 'Uploading…'; draft._error = null; render();
   const reader = new FileReader();
   reader.onload = async () => {
     try {
-      const r = await fetch(`${API}/api/upload-image`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ filename:file.name, slug:addDraft.productName || file.name, dataUrl:reader.result })
+      const j = await request('/api/upload-image', {
+        method:'POST', body: JSON.stringify({ filename:file.name, slug: draft.source.productName || file.name, dataUrl: reader.result })
       });
-      const j = await r.json();
-      if(!r.ok) throw new Error(j.error || 'Upload failed');
-      addDraft.imagePath = j.imagePath;
-      addDraft.busy = null;
-    } catch(e){
-      addDraft.busy = null; addDraft.error = e.message;
-    }
+      draft.image.path = j.imagePath;
+      draft._busy = null;
+    } catch(e){ draft._busy = null; draft._error = e.message; }
     render();
   };
-  reader.onerror = () => { addDraft.busy = null; addDraft.error = 'Could not read file'; render(); };
+  reader.onerror = () => { draft._busy = null; draft._error = 'Could not read file'; render(); };
   reader.readAsDataURL(file);
 }
 
-async function addDoAutoTag(){
-  if(!addDraft.imagePath){ addDraft.error = 'Capture or upload an image first'; render(); return; }
-  addDraft.busy = 'Auto-filling fields…'; addDraft.error = null; render();
+async function wizardAutoTag(){
+  if(!draft.image.path){ draft._error = 'Capture or upload an image first'; render(); return; }
+  draft._busy = 'Auto-filling fields…'; draft._error = null; render();
   try {
-    const r = await fetch(`${API}/api/auto-tag`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ imagePath:addDraft.imagePath, productName:addDraft.productName, url:addDraft.url })
+    const j = await request('/api/auto-tag', {
+      method:'POST', body: JSON.stringify({ imagePath: draft.image.path, productName: draft.source.productName, url: draft.source.url })
     });
-    const j = await r.json();
-    if(!r.ok) throw new Error(j.error || 'Auto-fill failed');
-    addDraft.entry = j.entry;
-    addDraft.busy = null;
-  } catch(e){
-    addDraft.busy = null; addDraft.error = e.message;
-  }
+    // Merge the tagger's structured output into the draft, preserving the
+    // form-internal fields (_editing, _busy, _tab, _pendingCapture) and the
+    // image path the wizard already set.
+    const preserved = { _editing: draft._editing, _busy: null, _tab: draft._tab, _pendingCapture: draft._pendingCapture };
+    draft = { ...j.entry, image: { ...j.entry.image, path: draft.image.path }, ...preserved };
+  } catch(e){ draft._error = e.message; }
   render();
 }
 
-async function addDoSave(form){
-  if(!addDraft.entry){ addDraft.error = 'Run Auto-fill first'; render(); return; }
-  // Strip leading [DRAFT …] / [DRAFT] markers the tagger inserts as a hygiene
-  // forcing function — the validator blocks commits carrying them, and the
-  // SPA review step is the human review that justifies stripping them here.
-  const strip = s => (typeof s==='string' ? s.replace(/\[(?:DRAFT[^\]]*|PLACEHOLDER[^\]]*|TODO[^\]]*)\]\s*/gi,'').trim() : s);
-  const e = addDraft.entry;
-  const payload = {
-    ...e,
-    id: (form.id.value||'').trim() || undefined,
-    title: (form.title.value||'').trim() || e.title,
-    qualityScore: Number(form.qualityScore.value)||e.qualityScore||3,
-    source: { ...e.source, productName:(form.productName.value||'').trim() || e.source.productName },
-    critique: strip(form.critique.value) || strip(e.critique),
-    whatToSteal: (e.whatToSteal||[]).map(strip),
-    antiPatterns: { ...(e.antiPatterns||{}), antiPatterns:((e.antiPatterns?.antiPatterns)||[]).map(strip) },
-    reviewStatus: 'approved',
-    provenance: { taggedBy:'auto-reviewed', ...(e.provenance||{}) },
-  };
-  addDraft.busy = 'Saving…'; addDraft.error = null; render();
+// Save the draft to the corpus. PUT if editing an existing entry, POST if new.
+// Strips [DRAFT] markers from all text fields (the form review IS the rewrite
+// gate), flips provenance.taggedBy to 'auto-reviewed' on the tagger's output,
+// and clears any pending capture-triage state on success.
+async function saveDraft(){
+  // Strip markers from all text fields before submit.
+  draft.critique = stripDraftMarker(draft.critique);
+  draft.whatToSteal = (draft.whatToSteal||[]).map(stripDraftMarker);
+  if(draft.antiPatterns){
+    draft.antiPatterns.antiPatterns = (draft.antiPatterns.antiPatterns||[]).map(stripDraftMarker);
+    draft.antiPatterns.whereThisFails = (draft.antiPatterns.whereThisFails||[]).map(stripDraftMarker);
+    draft.antiPatterns.accessibilityRisks = (draft.antiPatterns.accessibilityRisks||[]).map(stripDraftMarker);
+  }
+  if(draft.voice){
+    draft.voice.tone = stripDraftMarker(draft.voice.tone);
+    draft.voice.examples = (draft.voice.examples||[]).map(stripDraftMarker);
+    draft.voice.avoid = (draft.voice.avoid||[]).map(stripDraftMarker);
+  }
+  draft.reviewStatus = 'approved';
+  if(draft.provenance && draft.provenance.taggedBy === 'auto') draft.provenance.taggedBy = 'auto-reviewed';
+
+  const isEdit = !!draft._editing;
+  const body = JSON.parse(JSON.stringify(draft));
+  delete body._editing; delete body._busy; delete body._error; delete body._tab; delete body._pendingCapture;
+
   try {
-    const r = await fetch(`${API}/api/entries`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const j = await r.json();
-    if(!r.ok) throw new Error(j.issues?.join('; ') || j.error || 'Save failed');
-    // Saved — reload corpus and bounce to the new entry's detail.
-    await loadAll();
-    recomputeAgg();
-    addDraft = addBlank();
-    location.hash = `#/entry/${encodeURIComponent(j.entry.id)}`;
-  } catch(err){
-    addDraft.busy = null; addDraft.error = err.message;
+    const j = isEdit
+      ? await request(`/api/entries/${encodeURIComponent(draft._editing)}`, { method:'PUT', body: JSON.stringify(body) })
+      : await request('/api/entries', { method:'POST', body: JSON.stringify(body) });
+    // If this came from capture triage, flip the triage status to 'promoted'.
+    if(draft._pendingCapture){
+      try {
+        await request('/api/capture-triage', {
+          method:'POST', body: JSON.stringify({ ...draft._pendingCapture, status:'promoted' })
+        });
+      } catch { /* triage flip is best-effort; the entry saved successfully */ }
+    }
+    await loadAll(); recomputeAgg();
+    toast(isEdit ? 'Entry updated' : 'Entry saved', 'success');
+    location.hash = `#/entry/${encodeURIComponent(j.entry?.id || draft._editing)}`;
+    resetDraft();
+  } catch(e){
+    draft._error = e.message;
     render();
   }
 }
 
 page('add','Add entry','new corpus entry', function(){
-  if(!addDraft) addDraft = addBlank();
-  const d = addDraft;
-  const hasImage = !!d.imagePath;
-  const hasEntry = !!d.entry;
-  // Capture/upload step
+  // The #/add route is the new-entry entry point. It seeds a blank draft and
+  // renders the capture/upload wizard + the full form once auto-fill produces
+  // structured fields. (Phase 2 replaces the inline wizard render with the
+  // full form renderer shared with #/edit.)
+  if(!draft._editing && !draft.image.path && !draft.critique) resetDraft();
+  const hasImage = !!draft.image.path;
+  const hasFields = !!(draft.critique || draft.patternType);
+
   const captureStep = `
     <div class="card-section">
       <div class="eyebrow">Step 1 — capture or upload a screenshot</div>
-      ${d.tab==='capture' ? `
+      ${draft._tab==='capture' ? `
         <form id="addCaptureForm" style="margin-top:10px">
-          <label>Source URL<input name="url" placeholder="https://linear.app" value="${esc(d.url)}" style="width:100%"></label>
+          <label>Source URL<input name="url" placeholder="https://linear.app" value="${esc(draft.source.url||'')}" style="width:100%"></label>
           <label>Slug (optional)<input name="slug" placeholder="linear-landing-2026" style="width:100%"></label>
           <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn primary" type="submit">Capture from URL</button>
@@ -874,39 +950,37 @@ page('add','Add entry','new corpus entry', function(){
       `}
     </div>`;
 
-  // Image preview
   const previewStep = hasImage ? `
     <div class="card-section">
       <div class="eyebrow">Step 2 — preview</div>
       <figure class="image-preview" style="margin-top:8px">
-        <img src="${API}/api/image?path=${encodeURIComponent(d.imagePath)}" alt="captured" style="max-width:100%;border-radius:6px;border:1px solid var(--hr)">
-        <figcaption class="image-ready">Image ready: ${esc(d.imagePath)}</figcaption>
+        <img src="${API}/api/image?path=${encodeURIComponent(draft.image.path)}" alt="captured" style="max-width:100%;border-radius:6px;border:1px solid var(--hr)">
+        <figcaption class="image-ready">Image ready: ${esc(draft.image.path)}</figcaption>
       </figure>
-      ${hasEntry ? '' : `<button class="btn primary" id="addAutoTag" style="margin-top:8px">✨ Auto-fill fields</button>`}
+      ${hasFields ? '' : `<button class="btn primary" id="addAutoTag" style="margin-top:8px">✨ Auto-fill fields</button>`}
     </div>` : '';
 
-  // Auto-fill results form
-  const reviewStep = hasEntry ? `
+  const reviewStep = hasFields ? `
     <div class="card-section">
       <div class="eyebrow">Step 3 — review the draft and save</div>
       <form id="addSaveForm" style="margin-top:8px;display:flex;flex-direction:column;gap:10px">
-        <label>ID (optional)<input name="id" placeholder="(auto-generated)" style="width:100%"></label>
-        <label>Title<input name="title" value="${esc(d.entry.title||'')}" style="width:100%"></label>
-        <label>Product name<input name="productName" value="${esc(d.entry.source?.productName||d.productName||'')}" style="width:100%"></label>
-        <label>Quality score (1-5)<input name="qualityScore" type="number" min="1" max="5" value="${d.entry.qualityScore||3}" style="width:60px"></label>
+        <label>ID (optional)<input name="id" placeholder="(auto-generated)" value="${esc(draft.id||'')}" style="width:100%"></label>
+        <label>Title<input name="title" value="${esc(draft.title||'')}" style="width:100%"></label>
+        <label>Product name<input name="productName" value="${esc(draft.source?.productName||'')}" style="width:100%"></label>
+        <label>Quality score (1-5)<input name="qualityScore" type="number" min="1" max="5" value="${draft.qualityScore||3}" style="width:60px"></label>
         <label>Critique
-          <textarea name="critique" rows="6" style="width:100%;font-family:var(--mono);font-size:12px">${esc(d.entry.critique||'')}</textarea>
+          <textarea name="critique" rows="6" style="width:100%;font-family:var(--mono);font-size:12px">${esc(draft.critique||'')}</textarea>
         </label>
         <details style="font-size:12px;color:var(--ink-2)">
           <summary>Pattern / categories / style (auto-detected)</summary>
-          <pre style="white-space:pre-wrap;background:var(--surface);padding:8px;border-radius:4px">${esc(JSON.stringify({patternType:d.entry.patternType, categories:d.entry.categories, styleTags:d.entry.styleTags, platform:d.entry.platform}, null, 2))}</pre>
+          <pre style="white-space:pre-wrap;background:var(--surface);padding:8px;border-radius:4px">${esc(JSON.stringify({patternType:draft.patternType, categories:draft.categories, styleTags:draft.styleTags, platform:draft.platform}, null, 2))}</pre>
         </details>
         <button class="btn primary" type="submit">Save entry →</button>
       </form>
     </div>` : '';
 
-  const busyMsg = d.busy ? `<div class="card-section" style="color:var(--accent);font-size:13px">⏳ ${esc(d.busy)}</div>` : '';
-  const errorMsg = d.error ? `<div class="card-section" style="color:#c00;font-size:13px">⚠ ${esc(d.error)}</div>` : '';
+  const busyMsg = draft._busy ? `<div class="card-section" style="color:var(--accent);font-size:13px">⏳ ${esc(draft._busy)}</div>` : '';
+  const errorMsg = draft._error ? `<div class="card-section" style="color:#c00;font-size:13px">⚠ ${esc(draft._error)}</div>` : '';
 
   return `<div class="card">
     <div class="card-head"><div><h3>Add a single entry</h3><div class="eyebrow">capture → auto-fill → review → save</div></div></div>
@@ -916,20 +990,27 @@ page('add','Add entry','new corpus entry', function(){
     ${reviewStep}
   </div>`;
 }, function(){
-  // after-mount callback — attach form listeners. Looked up by id rather than
-  // closure capture so re-renders (which replace the DOM) re-bind cleanly.
   const cap = document.getElementById('addCaptureForm');
-  if(cap) cap.addEventListener('submit', e=>{ e.preventDefault(); addDoCapture(e.target); });
+  if(cap) cap.addEventListener('submit', e=>{ e.preventDefault(); wizardCapture(e.target); });
   const upSwitch = document.getElementById('addSwitchUpload');
-  if(upSwitch) upSwitch.addEventListener('click', ()=>{ addDraft.tab='upload'; render(); });
+  if(upSwitch) upSwitch.addEventListener('click', ()=>{ draft._tab='upload'; render(); });
   const capSwitch = document.getElementById('addSwitchCapture');
-  if(capSwitch) capSwitch.addEventListener('click', ()=>{ addDraft.tab='capture'; render(); });
+  if(capSwitch) capSwitch.addEventListener('click', ()=>{ draft._tab='capture'; render(); });
   const fileInput = document.getElementById('addFileInput');
-  if(fileInput) fileInput.addEventListener('change', e=>{ addHandleUpload(e.target.files[0]); });
+  if(fileInput) fileInput.addEventListener('change', e=>{ wizardUpload(e.target.files[0]); });
   const at = document.getElementById('addAutoTag');
-  if(at) at.addEventListener('click', addDoAutoTag);
+  if(at) at.addEventListener('click', wizardAutoTag);
   const save = document.getElementById('addSaveForm');
-  if(save) save.addEventListener('submit', e=>{ e.preventDefault(); addDoSave(e.target); });
+  if(save) save.addEventListener('submit', e=>{
+    e.preventDefault();
+    // Pull form values into the draft before saving.
+    draft.id = (save.id.value||'').trim();
+    draft.title = (save.title.value||'').trim();
+    draft.source.productName = (save.productName.value||'').trim();
+    draft.qualityScore = Number(save.qualityScore.value)||3;
+    draft.critique = save.critique.value;
+    saveDraft();
+  });
 });
 
 /* -------- Bulk import -------- */

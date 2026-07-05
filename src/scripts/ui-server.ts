@@ -5,7 +5,8 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkS
 import { createHash } from "node:crypto";
 import { extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { lookup } from "node:dns";
+// SSRF guard extracted to ../ssrf.ts (shared with the CLI capture path).
+// The dns.lookup import that lived here previously moved with it.
 import sharp from "sharp";
 import { imageSize } from "image-size";
 import { chromium } from "playwright";
@@ -435,68 +436,30 @@ function mimeFor(path: string): string {
 }
 
 /**
- * Reject URL-capture targets that point at private, loopback, link-local, or
- * cloud-metadata addresses. The capture route launches a real browser on the
- * operator's machine using their network, so without this check any web page
- * open in a tab could ask the curator to screenshot internal services or
- * http://169.254.169.254/... and read the resulting file path back.
+ * SSRF guard for URL capture — extracted to ../ssrf.ts so the CLI capture
+ * path (npm run capture, npm run capture-batch) and this UI route share one
+ * rule. A drift here would silently re-enable SSRF on whichever path fell
+ * out of sync, which is the worst-case failure mode.
  *
- * Resolves the hostname and inspects every resolved address. Rejects if any
- * resolved address is non-public. Allows non-browser local clients to keep
- * working on localhost targets (the common dev case) by whitelisting
- * `localhost`/`127.0.0.1` hostnames explicitly when the request has no
- * cross-origin Origin.
+ * Re-exported from here for backward-compat with any caller that imported
+ * isPrivateAddress from ui-server. The thin assertSafeCaptureTarget wrapper
+ * preserves the UI's friendlier "Use a valid source URL" parse-error wording.
  */
-export function isPrivateAddress(ip: string): boolean {
-  const normalized = ip.toLowerCase();
-  const mappedIpv4 = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mappedIpv4) return isPrivateAddress(mappedIpv4[1]);
-
-  // IPv4
-  if (/^(10\.|192\.168\.|169\.254\.)/.test(normalized)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(normalized)) return true;
-  if (/^127\./.test(normalized)) return true;
-  if (/^0\./.test(normalized)) return true;
-  // IPv6
-  if (normalized === "::1" || normalized === "::") return true;
-  if (normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
-  return false;
-}
+export { isPrivateAddress } from "../ssrf.js";
+import { assertSafeCaptureTarget as assertSafeCaptureTargetShared } from "../ssrf.js";
 
 async function assertSafeCaptureTarget(rawUrl: string): Promise<URL> {
-  let parsed: URL;
   try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error("Use a valid source URL");
+    return await assertSafeCaptureTargetShared(rawUrl);
+  } catch (err) {
+    // Re-wrap the bare "Invalid URL" message as the UI's friendlier wording so
+    // existing toasts/error displays don't change. Other errors (DNS, private
+    // address, bad protocol) pass through with their already-user-facing text.
+    if (err instanceof Error && err.message === "Invalid URL") {
+      throw new Error("Use a valid source URL");
+    }
+    throw err;
   }
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw new Error("Only http and https URLs can be captured");
-  }
-  // Cloud-metadata hostname is a known SSRF target regardless of DNS.
-  const md = /metadata\.google\.internal|169\.254\.169\.254/i;
-  if (md.test(parsed.hostname)) {
-    throw new Error("Capture target resolves to a blocked metadata or private address");
-  }
-  // Explicit localhost hostname is the common dev case — allow it.
-  const explicitLocal = /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(parsed.hostname);
-  if (!explicitLocal) {
-    await new Promise<void>((resolveCheck, rejectCheck) => {
-      lookup(parsed.hostname, { all: true }, (err, addresses) => {
-        if (err) {
-          rejectCheck(new Error(`Could not resolve host: ${parsed.hostname}`));
-          return;
-        }
-        const bad = addresses.map((a) => a.address).find(isPrivateAddress);
-        if (bad) {
-          rejectCheck(new Error("Capture target resolves to a blocked metadata or private address"));
-          return;
-        }
-        resolveCheck();
-      });
-    });
-  }
-  return parsed;
 }
 
 async function handleUpload(req: IncomingMessage, res: ServerResponse) {

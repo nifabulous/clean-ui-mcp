@@ -9,18 +9,16 @@
  *   npm run corpus-stats -- --min-count 3
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { PatternType, Category, StyleTag } from "../schema.js";
 import { indexStatus } from "../corpus.js";
-import { CORPUS_ROOT } from "../paths.js";
+import { allImageFiles } from "../paths.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
 const SEED_PATH = resolve(__dirname, "..", "..", "corpus", "seed.json");
-const PRIVATE_IMAGE_DIR = resolve(CORPUS_ROOT, "images-private");
-const PUBLIC_IMAGE_DIR = resolve(CORPUS_ROOT, "images-public");
 
 const args = process.argv.slice(2);
 const asJson = args.includes("--json");
@@ -51,12 +49,6 @@ interface Entry {
   voice?: { tone?: string };
   layout?: { form?: string };
   critique?: string;
-}
-
-/** List filenames in a dir, or [] if it doesn't exist (keeps corpus-stats runnable on a fresh checkout). */
-function safeListDir(dir: string): string[] {
-  try { return readdirSync(dir).filter((f) => !f.startsWith(".")); }
-  catch { return []; }
 }
 
 const VAGUE_PHRASES = [
@@ -132,11 +124,10 @@ const index = indexStatus();
 // ── image references (orphans + missing files) ───────────────────────────────
 // Referenced = entries that point at an image path. Orphan = private image
 // files on disk that no entry references. Missing = entries whose path doesn't
-// resolve to a real file (broken reference).
+// resolve to a real file (broken reference). Walked recursively so nested
+// bulk-import batches (images-private/new-products-batch/…) are counted.
 const referencedPaths = new Set(entries.map((e) => e.image?.path).filter((p): p is string => !!p));
-const privateFiles = safeListDir(PRIVATE_IMAGE_DIR);
-const publicFiles = safeListDir(PUBLIC_IMAGE_DIR);
-const allDiskFiles = new Set([...privateFiles.map((f) => `images-private/${f}`), ...publicFiles.map((f) => `images-public/${f}`)]);
+const allDiskFiles = allImageFiles();
 const orphanFiles = [...allDiskFiles].filter((f) => !referencedPaths.has(f)).sort();
 const missingFiles = [...referencedPaths].filter((p) => !allDiskFiles.has(p)).sort();
 
@@ -161,7 +152,7 @@ const report = {
   coverageGaps: { patternType: patternTypeGaps, categories: categoryGaps, styleTags: styleTagGaps },
   staleness: { cutoffMonths: staleMonths, staleCount: staleEntries.length, staleEntries },
   antiPatternQuality: { flaggedCount: antiPatternIssues.length, flagged: antiPatternIssues },
-  indexCoverage: { indexed: index.indexed, total: index.total, hasIndex: index.hasIndex, missing: index.missing, stale: index.stale },
+  indexCoverage: { indexed: index.indexed, total: index.total, hasIndex: index.hasIndex, missing: index.missing, stale: index.stale, contentStale: index.contentStale },
   imageReferences: { referencedCount: referencedPaths.size, orphanCount: orphanFiles.length, missingCount: missingFiles.length, orphans: orphanFiles.slice(0, 20), missing: missingFiles.slice(0, 20) },
   quality: {
     voiceCoverage: entries.length ? Math.round((withVoice / entries.length) * 100) : 0,
@@ -198,11 +189,17 @@ if (asJson) {
   console.log(`\n🚩 Anti-pattern lint — ${antiPatternIssues.length} flagged`);
   antiPatternIssues.slice(0, 15).forEach((f) => { console.log(`  [${f.id}] "${f.text}"`); f.issues.forEach((i) => console.log(`      → ${i}`)); });
   hr();
-  // Index coverage — drift detection.
+  // Index coverage — drift detection (missing, stale, content-stale).
   console.log(`\n🔍 Index coverage`);
   if (report.indexCoverage.hasIndex) {
-    console.log(`  indexed: ${report.indexCoverage.indexed}/${report.indexCoverage.total}  ·  missing: ${report.indexCoverage.missing}  ·  stale: ${report.indexCoverage.stale}`);
-    if (report.indexCoverage.missing > 0 || report.indexCoverage.stale > 0) {
+    const parts = [
+      `indexed: ${report.indexCoverage.indexed}/${report.indexCoverage.total}`,
+      `missing: ${report.indexCoverage.missing}`,
+      `stale: ${report.indexCoverage.stale}`,
+      `content-stale: ${report.indexCoverage.contentStale}`,
+    ];
+    console.log(`  ${parts.join("  ·  ")}`);
+    if (report.indexCoverage.missing > 0 || report.indexCoverage.stale > 0 || report.indexCoverage.contentStale > 0) {
       console.log(`  ⚠ index is out of date — run \`npm run build-index\``);
     }
   } else {

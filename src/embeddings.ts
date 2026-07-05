@@ -10,11 +10,15 @@ import "./env.js";
  * Model: voyage-4 — Anthropic's recommended partner, 1024-dim, normalized.
  *
  * Index file: corpus/embeddings.json
- *   { version: 1, model: "voyage-4", entries: { [id]: number[] } }
- * Gitignored by default — regenerate with `npm run build-index`.
+ *   { version: 2, model: "voyage-4", entries: { [id]: { vector: number[], hash: string } } }
+ * The hash is a SHA-256 of the entryToDocument() text, so the doctor can detect
+ * content-stale embeddings (title/critique changed after the vector was built)
+ * without re-running the model. v1 indexes (bare vector arrays) are treated as
+ * fully stale on load and rebuilt. Gitignored — regenerate with `npm run build-index`.
  */
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,10 +31,15 @@ const EMBED_DIM    = 1024;
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
+export interface IndexedEntry {
+  vector: number[]; // 1024-float Voyage vector
+  hash:   string;  // SHA-256 of entryToDocument(entry) — detects content drift
+}
+
 export interface EmbeddingIndex {
-  version: 1;
+  version: 2;
   model:   string;
-  entries: Record<string, number[]>; // id → 1024-float vector
+  entries: Record<string, IndexedEntry>; // id → { vector, hash }
 }
 
 // ─── Voyage HTTP client ───────────────────────────────────────────────────────
@@ -145,30 +154,69 @@ export function loadIndex(): EmbeddingIndex | null {
     );
     return null;
   }
-  return parsed;
+  return coerceToV2(parsed);
 }
 
 /**
  * Validate that a parsed index is structurally sound AND matches the current
- * embedding model + dimension. Returns false on any mismatch so the caller can
- * fall back to keyword search instead of crashing mid-query.
+ * embedding model + dimension. Accepts v1 (bare vector arrays, no hash) and
+ * v2 ({vector, hash}). A v1 index loads but every entry is treated as
+ * content-stale (no hash to compare), so the next incremental build-index
+ * re-embeds everything and writes v2.
  */
 function isValidIndex(parsed: unknown): parsed is EmbeddingIndex {
   if (!parsed || typeof parsed !== "object") return false;
   const idx = parsed as Record<string, unknown>;
-  if (idx.version !== 1) return false;
+  if (idx.version !== 1 && idx.version !== 2) return false;
   if (idx.model !== VOYAGE_MODEL) return false;
   const entries = idx.entries;
   if (!entries || typeof entries !== "object") return false;
-  // Check the first vector's dimension; an empty index is trivially valid.
-  const vectors = Object.values(entries as Record<string, unknown>);
-  if (vectors.length === 0) return true;
-  const first = vectors[0];
-  return Array.isArray(first) && first.length === EMBED_DIM && first.every((v) => typeof v === "number");
+  // Check the first entry's dimension; an empty index is trivially valid.
+  const values = Object.values(entries as Record<string, unknown>);
+  if (values.length === 0) return true;
+  return isValidEntry(values[0]);
+}
+
+/** Accept v1 (number[]) or v2 ({vector, hash}). */
+function isValidEntry(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    // v1: bare vector array
+    return value.length === EMBED_DIM && value.every((v) => typeof v === "number");
+  }
+  if (value && typeof value === "object") {
+    // v2: { vector, hash }
+    const entry = value as { vector?: unknown; hash?: unknown };
+    return Array.isArray(entry.vector) && entry.vector.length === EMBED_DIM
+      && entry.vector.every((v) => typeof v === "number")
+      && typeof entry.hash === "string";
+  }
+  return false;
+}
+
+/**
+ * Coerce a parsed (validated) index to v2 shape. v1 entries (bare arrays)
+ * become { vector, hash: "" } — the empty hash marks them content-stale so
+ * indexStatus reports them and build-index re-embeds them.
+ */
+function coerceToV2(parsed: EmbeddingIndex): EmbeddingIndex {
+  if (parsed.version === 2) return parsed;
+  const entries: Record<string, IndexedEntry> = {};
+  for (const [id, raw] of Object.entries(parsed.entries)) {
+    // v1 entries are bare number[]; cast through unknown since the v1 type is
+    // already validated structurally by isValidEntry above.
+    const vector = raw as unknown as number[];
+    entries[id] = { vector, hash: "" };
+  }
+  return { version: 2, model: parsed.model, entries };
 }
 
 export function saveIndex(index: EmbeddingIndex): void {
   writeFileSync(INDEX_PATH, JSON.stringify(index), "utf-8");
+}
+
+/** SHA-256 (hex) of a document string — used to detect content drift cheaply. */
+export function hashForDocument(document: string): string {
+  return createHash("sha256").update(document).digest("hex");
 }
 
 // ─── text to embed per entry ──────────────────────────────────────────────────

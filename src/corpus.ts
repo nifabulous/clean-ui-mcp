@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Corpus, type CorpusEntryT } from "./schema.js";
-import { loadIndex, embedQuery, cosine, entryToDocument, indexExists } from "./embeddings.js";
+import { loadIndex, embedQuery, cosine, entryToDocument, hashForDocument, indexExists } from "./embeddings.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(__dirname, "..", "corpus", "entries.json");
@@ -140,7 +140,7 @@ async function vectorSearch(
   const queryVec = await embedQuery(query);
 
   return entries.map((e) => {
-    const docVec = index.entries[e.id];
+    const docVec = index.entries[e.id]?.vector;
     if (!docVec) {
       // Entry not yet indexed — reuse the keyword scorer so multi-token queries
       // still surface it. Previously this did doc.includes(q) (whole-query
@@ -226,7 +226,7 @@ export function findSimilarEntries(id: string, limit = 5): SimilarResult[] {
   const index = loadIndex();
   if (!index) return []; // caller tells the user to run build-index
 
-  const sourceVec = index.entries[id];
+  const sourceVec = index.entries[id]?.vector;
   if (!sourceVec) return []; // source entry not indexed
 
   const entries = loadCorpus();
@@ -235,7 +235,7 @@ export function findSimilarEntries(id: string, limit = 5): SimilarResult[] {
   for (const e of entries) {
     if (e.id === id) continue; // exclude the source itself
     if (e.reviewStatus === "draft") continue; // drafts don't surface as similar
-    const docVec = index.entries[e.id];
+    const docVec = index.entries[e.id]?.vector;
     if (!docVec) continue; // skip unindexed entries rather than scoring them 0
     results.push({ entry: e, score: cosine(sourceVec, docVec) });
   }
@@ -262,25 +262,39 @@ export function listStyleTags(): string[] {
 }
 
 export interface IndexStatus {
-  indexed: number;   // entries that have a vector in the index
-  total: number;     // total corpus entries
-  hasIndex: boolean; // is an embeddings.json present and loadable
-  missing: number;   // entries with no vector (need build-index)
-  stale: number;     // vectors whose id is no longer in the corpus (orphans)
+  indexed: number;       // entries that have a vector in the index
+  total: number;         // total corpus entries
+  hasIndex: boolean;     // is an embeddings.json present and loadable
+  missing: number;       // entries with no vector (need build-index)
+  stale: number;         // vectors whose id is no longer in the corpus (orphans)
+  contentStale: number;  // indexed entries whose content hash changed since embedding
 }
 
 /**
  * Report index coverage + drift. The index can fall out of sync with the corpus
- * in two directions: entries added since the last build-index have no vector
- * (`missing`), and entries removed from the corpus leave orphan vectors behind
- * (`stale`). Both degrade search quality silently, so surface them explicitly.
+ * in three ways, all of which degrade search quality silently:
+ *   - `missing`:       entry added since last build-index, no vector yet
+ *   - `stale`:         vector whose id was removed from the corpus (orphan)
+ *   - `contentStale`:  entry's title/critique/tags changed after it was embedded
+ *                       (the vector still points at the OLD text — detected via
+ *                       the per-entry content hash stored in v2 indexes)
  */
 export function indexStatus(): IndexStatus {
   const entries = loadCorpus();
   const index   = loadIndex();
-  if (!index) return { indexed: 0, total: entries.length, hasIndex: false, missing: entries.length, stale: 0 };
+  if (!index) return { indexed: 0, total: entries.length, hasIndex: false, missing: entries.length, stale: 0, contentStale: 0 };
   const entryIds = new Set(entries.map((e) => e.id));
-  const indexed = entries.filter((e) => !!index.entries[e.id]).length;
   const stale = Object.keys(index.entries).filter((id) => !entryIds.has(id)).length;
-  return { indexed, total: entries.length, hasIndex: true, missing: entries.length - indexed, stale };
+  let indexed = 0;
+  let contentStale = 0;
+  for (const e of entries) {
+    const rec = index.entries[e.id];
+    if (!rec) continue;
+    indexed += 1;
+    // v1 indexes load with hash:"" (unknown) — count as content-stale so the
+    // doctor surfaces them and the next incremental build re-embeds.
+    const currentHash = hashForDocument(entryToDocument(e));
+    if (!rec.hash || rec.hash !== currentHash) contentStale += 1;
+  }
+  return { indexed, total: entries.length, hasIndex: true, missing: entries.length - indexed, stale, contentStale };
 }

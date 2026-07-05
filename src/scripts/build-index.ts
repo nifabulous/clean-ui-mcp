@@ -23,6 +23,7 @@ import { loadCorpus } from "../corpus.js";
 import {
   embedDocuments,
   entryToDocument,
+  hashForDocument,
   loadIndex,
   saveIndex,
   type EmbeddingIndex,
@@ -58,10 +59,19 @@ Get a free key at https://dash.voyageai.com, add it to .env, then rerun:
 const entries = loadCorpus();
 const existing = loadIndex();
 
-// Determine which entries need embedding
-const toEmbed = values.force
-  ? entries
-  : entries.filter((e) => !existing?.entries[e.id]);
+// Determine which entries need embedding. In incremental mode this is NOT just
+// "missing from index" — it also includes entries whose content hash changed
+// since they were last embedded (title/critique edited, migrate-untitled ran,
+// entryToDocument() shape changed). --force re-embeds everything regardless.
+const needsEmbed = (e: { id: string } & Parameters<typeof entryToDocument>[0]) => {
+  if (values.force) return true;
+  const rec = existing?.entries[e.id];
+  if (!rec) return true; // missing entirely
+  // v1 indexes load with hash:"" → always re-embed (migrates to v2).
+  if (!rec.hash) return true;
+  return rec.hash !== hashForDocument(entryToDocument(e));
+};
+const toEmbed = entries.filter(needsEmbed);
 
 if (toEmbed.length === 0) {
   console.log(`✅ Index up to date — all ${entries.length} entries already embedded.`);
@@ -71,10 +81,10 @@ if (toEmbed.length === 0) {
 
 console.log(`Embedding ${toEmbed.length} entries (${entries.length - toEmbed.length} already indexed)…`);
 
-// Merge into existing index (or start fresh)
+// Merge into existing index (or start fresh). --force starts a clean v2 index.
 const index: EmbeddingIndex = existing && !values.force
   ? existing
-  : { version: 1, model: "voyage-4", entries: {} };
+  : { version: 2, model: "voyage-4", entries: {} };
 
 // Embed in checkpoints of CHUNK entries each, saving the index after every
 // chunk. A rate-limit failure at entry 300 keeps the first 300 — re-running
@@ -94,7 +104,10 @@ for (let start = 0; start < toEmbed.length; start += CHUNK) {
     process.exit(1);
   }
   for (let i = 0; i < chunk.length; i++) {
-    index.entries[chunk[i].id] = vectors[i];
+    index.entries[chunk[i].id] = {
+      vector: vectors[i],
+      hash: hashForDocument(texts[i]),
+    };
   }
   saveIndex(index); // checkpoint
   embedded += chunk.length;

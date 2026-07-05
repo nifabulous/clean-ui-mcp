@@ -11,11 +11,11 @@
  *   npm run clean-orphans -- --confirm       # delete the orphans
  *   npm run clean-orphans -- --confirm --json # delete, report as json
  */
-import { existsSync, readdirSync, rmSync, readFileSync } from "node:fs";
+import { rmSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { Corpus } from "../schema.js";
-import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PUBLIC_IMAGE_DIR } from "../paths.js";
+import { CORPUS_ROOT, listImageFilesRecursive, PRIVATE_IMAGE_DIR, PUBLIC_IMAGE_DIR } from "../paths.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
@@ -35,16 +35,15 @@ function orphanInventory() {
       .map((e) => e.image.path)
       .filter((p): p is string => !!p && p.startsWith("images-private/")),
   );
-  const privateFiles = safeListDir(PRIVATE_IMAGE_DIR).map((f) => `images-private/${f}`);
+  // Recursively walk private + public dirs so nested bulk-import batches
+  // (images-private/new-products-batch/Mercury Web Screens/…) are accounted
+  // for. The earlier flat readdirSync missed these and would have deleted
+  // files that were actually referenced via nested paths.
+  const privateFiles = listImageFilesRecursive(PRIVATE_IMAGE_DIR, "images-private/");
+  const publicFiles = listImageFilesRecursive(PUBLIC_IMAGE_DIR, "images-public/");
+  // Only private orphans are deletable (public images may be hot-linked).
   const orphans = privateFiles.filter((f) => !referenced.has(f)).sort();
-  const publicCount = safeListDir(PUBLIC_IMAGE_DIR).length;
-  return { orphans, referencedCount: referenced.size, privateTotal: privateFiles.length, publicTotal: publicCount };
-}
-
-function safeListDir(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  try { return readdirSync(dir).filter((f) => !f.startsWith(".")); }
-  catch { return []; }
+  return { orphans, referencedCount: referenced.size, privateTotal: privateFiles.length, publicTotal: publicFiles.length };
 }
 
 const inv = orphanInventory();

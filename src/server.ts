@@ -241,7 +241,12 @@ server.registerTool(
   },
   async () => {
     const status = indexStatus();
-    const drift = status.hasIndex && status.missing > 0 ? ` · ${status.missing} missing${status.stale ? `, ${status.stale} stale` : ""} — run \`npm run build-index\`` : "";
+    const driftParts = [
+      status.missing > 0 ? `${status.missing} missing` : null,
+      status.stale > 0 ? `${status.stale} stale` : null,
+      status.contentStale > 0 ? `${status.contentStale} content-stale` : null,
+    ].filter(Boolean);
+    const drift = status.hasIndex && driftParts.length ? ` · ${driftParts.join(", ")} — run \`npm run build-index\`` : "";
     const mode   = status.hasIndex
       ? `vector search active (${status.indexed}/${status.total} entries indexed${drift})`
       : `keyword search only — run \`npm run build-index\` to enable semantic vector search`;

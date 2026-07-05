@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import "../env.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,7 @@ import sharp from "sharp";
 import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, findDraftMarkers, type CorpusEntryT } from "../schema.js";
-import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, toCorpusRelativePath } from "../paths.js";
+import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
 import { tagImage, generateCritique } from "../tagger.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
 import {
@@ -363,10 +363,10 @@ export function orphanedPrivateImagePaths(files: string[], entries: CorpusEntryT
 }
 
 function privateImagePaths(): string[] {
-  if (!existsSync(PRIVATE_IMAGE_DIR)) return [];
-  return readdirSync(PRIVATE_IMAGE_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
-    .map((entry) => `images-private/${entry.name}`);
+  // Recursively walk private dir so nested bulk-import batches
+  // (images-private/new-products-batch/Mercury Web Screens/…) are visible to
+  // the orphan check. The earlier flat readdirSync missed nested files.
+  return listImageFilesRecursive(PRIVATE_IMAGE_DIR, "images-private/");
 }
 
 function explainCaptureError(error: unknown): string {

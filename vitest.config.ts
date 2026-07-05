@@ -20,4 +20,3 @@ export default defineConfig({
     testTimeout: 15_000,
   },
 });
-

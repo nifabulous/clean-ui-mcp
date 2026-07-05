@@ -563,10 +563,14 @@ function explainTagError(error: unknown): string {
 }
 
 export function publicConfigStatus(status: EnvStatus = getEnvStatus()) {
-  // hasVisionKey honors per-pass OpenAI keys (OPENAI_API_KEY_EXTRACTION /
-  // _CRITIQUE) — a split-provider setup that only sets _CRITIQUE was falsely
-  // reporting "no vision key" via the bare-key OR below.
-  const anyVisionKey = hasVisionKey();
+  // Honor the injected status (tests pass a hand-crafted EnvStatus rather than
+  // mutating process.env) but extend the openai check to include the per-pass
+  // variants — a split-provider setup using only OPENAI_API_KEY_CRITIQUE was
+  // falsely reporting "no vision key" via the bare-key OR.
+  const hasOpenAI = status.openaiKeyConfigured
+    || !!process.env.OPENAI_API_KEY_EXTRACTION
+    || !!process.env.OPENAI_API_KEY_CRITIQUE;
+  const anyVisionKey = hasOpenAI || status.anthropicKeyConfigured || status.geminiKeyConfigured;
   // Resolve the effective provider + model for each pass via the SAME logic
   // tagger.ts uses (activeModelName resolves through openaiConfigForPass on the
   // OpenAI path, so OPENAI_AUTO_TAG_MODEL_CRITIQUE etc. are honored). Previously

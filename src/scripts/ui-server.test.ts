@@ -137,6 +137,38 @@ describe("ui server entry ids", () => {
     expect(JSON.stringify(status)).not.toContain("/tmp/.env");
     expect(JSON.stringify(status)).not.toContain("sk-");
   });
+
+  it("reports visionKeyConfigured=true when only a per-pass OpenAI key is set", () => {
+    // Regression: a split-provider setup with only OPENAI_API_KEY_CRITIQUE
+    // (NIM/DeepSeek for critique, no bare OPENAI_API_KEY) was falsely reported
+    // as "no vision key" before publicConfigStatus learned about per-pass keys.
+    // The fix honors OPENAI_API_KEY_EXTRACTION / _CRITIQUE in addition to the
+    // status flag passed in, so this status object (openaiKeyConfigured:false)
+    // still surfaces visionKeyConfigured:true when the env vars are present.
+    const savedExtr = process.env.OPENAI_API_KEY_EXTRACTION;
+    const savedCrit = process.env.OPENAI_API_KEY_CRITIQUE;
+    try {
+      delete process.env.OPENAI_API_KEY_EXTRACTION;
+      process.env.OPENAI_API_KEY_CRITIQUE = "nvapi-test";
+      const status = publicConfigStatus({
+        envPath: "/tmp/.env",
+        envFileLoaded: true,
+        openaiKeyConfigured: false,            // bare key NOT set
+        anthropicKeyConfigured: false,
+        geminiKeyConfigured: false,
+        voyageKeyConfigured: false,
+        autoTagProvider: "openai",
+        openaiAutoTagModel: "test-model",
+        cleanUiPort: 3131,
+      });
+      expect(status.visionKeyConfigured).toBe(true);
+    } finally {
+      if (savedCrit === undefined) delete process.env.OPENAI_API_KEY_CRITIQUE;
+      else process.env.OPENAI_API_KEY_CRITIQUE = savedCrit;
+      if (savedExtr === undefined) delete process.env.OPENAI_API_KEY_EXTRACTION;
+      else process.env.OPENAI_API_KEY_EXTRACTION = savedExtr;
+    }
+  });
 });
 
 describe("same-origin guard", () => {

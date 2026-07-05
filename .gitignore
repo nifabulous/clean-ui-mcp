@@ -4,6 +4,9 @@ dist/
 .env
 .env.local
 
+# macOS Finder metadata — never useful, shows up in git status constantly
+.DS_Store
+
 # Test artifacts (Playwright screenshots, smoke output)
 output/
 

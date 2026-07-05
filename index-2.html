@@ -90,7 +90,15 @@
   <div class="backdrop" id="backdrop"></div>
 </div>
 
-<!-- mobile bottom action bar -->
+  <!-- bulk selection action bar — shown only when ≥1 entry is selected -->
+  <div class="bulk-bar" id="bulkBar" style="display:none">
+    <span class="bulk-count" id="bulkCount">0 selected</span>
+    <button class="btn primary" id="bulkPromote">Promote</button>
+    <button class="btn" id="bulkReject">Reject</button>
+    <button class="btn ghost" id="bulkClear">Clear</button>
+  </div>
+
+  <!-- mobile bottom action bar -->
 <nav class="bottom-bar" aria-label="Quick actions">
   <button id="bbMenu" aria-label="Menu">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>

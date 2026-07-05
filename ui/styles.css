@@ -838,3 +838,48 @@ tbody tr:hover .row-actions{opacity:1}
   border: 1px dashed var(--hairline-2); border-radius: var(--radius);
 }
 .img-fallback svg { width: 18px; height: 18px; opacity: 0.5; }
+
+/* ─── multi-select + bulk tier actions ────────────────────────────
+   Checkboxes in the table and gallery; a floating action bar appears when
+   ≥1 entry is selected. Promote → exceptional, Reject → cautionary. */
+.sel-cell { width: 28px; text-align: center; }
+.sel-cell input[type="checkbox"],
+.row-sel { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
+#entryTable tr.sel { background: var(--accent-soft); }
+#entryTable tr.sel td { border-color: transparent; }
+
+/* gallery select button — top-left of the thumb (fav btn is top-right) */
+.gcard .sel-btn {
+  position: absolute; top: 8px; left: 8px; z-index: 3;
+  width: 22px; height: 22px; border-radius: 6px; cursor: pointer; margin: 0;
+  display: grid; place-items: center;
+  background: rgba(255,255,255,.92); border: 1px solid var(--hairline-2);
+  transition: opacity .12s, transform .12s;
+}
+.gcard .sel-btn input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+/* default: a subtle empty square; reveals on hover OR when selected */
+.gcard .sel-btn::before {
+  content: ""; width: 11px; height: 11px; border-radius: 3px;
+  border: 1.6px solid var(--ink-2); background: transparent; transition: .12s;
+}
+.gcard .sel-btn.on::before,
+.gcard .sel-btn input:checked + ::before,
+.gcard .sel-btn:has(input:checked)::before {
+  background: var(--accent); border-color: var(--accent);
+}
+.gcard:not(:hover) .sel-btn:not(.on) { opacity: 0; }
+.gcard .sel-btn.on { opacity: 1; }
+.gcard.is-sel .gthumb { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* floating bulk action bar — above the statusbar, only on the Entries page */
+.bulk-bar {
+  position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+  z-index: 40; display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 9px;
+  background: var(--surface); border: 1px solid var(--hairline-2);
+  box-shadow: 0 8px 24px rgba(24,21,15,.12);
+  font-size: 12.5px;
+}
+.bulk-bar .bulk-count { font-weight: 600; padding: 0 8px 0 4px; color: var(--ink); }
+.bulk-bar .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.bulk-bar .btn.ghost:hover { background: var(--surface-2); color: var(--ink-2); }

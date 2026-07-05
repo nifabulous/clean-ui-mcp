@@ -111,6 +111,53 @@ function recomputeAgg() {
   };
 }
 
+/* ---------- multi-select + bulk tier management ----------
+   Selection is a session-scoped Set<id> (NOT localStorage — favorites are
+   persistent; selection is a transient working set). It survives pagination
+   and filter changes so you can gather entries across pages and act on them
+   together. Only the explicit Clear button (or a successful bulk action)
+   empties it. Promote = → exceptional; Reject = → cautionary (reversible). */
+const selection = new Set();
+const isSelected = (id) => selection.has(id);
+function toggleSelect(id){ selection.has(id) ? selection.delete(id) : selection.add(id); }
+function clearSelection(){ selection.clear(); }
+
+// Change one entry's tier via full-entry PUT (server validates the whole
+// object, so we send the raw entry with qualityTier mutated). Returns true on
+// success. Reads from the in-memory _raw so no extra fetch is needed.
+async function setTier(id, tier){
+  const x = E.find(e => e.id === id);
+  if(!x || !x._raw) return false;
+  const body = JSON.parse(JSON.stringify(x._raw)); // full entry, no shared refs
+  body.qualityTier = tier;
+  if(tier === 'cautionary' && (body.qualityScore ?? 5) > 2) body.qualityScore = 2;
+  if(tier === 'exceptional' && (body.qualityScore ?? 0) < 3) body.qualityScore = 3;
+  const r = await fetch(`${API}/api/entries/${encodeURIComponent(id)}`, {
+    method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  return r.ok;
+}
+
+// Apply a tier to many ids with a small concurrency pool. Reports per-outcome
+// counts, refreshes E from the server, and re-renders so tier pills + the
+// tier-filter chips' counts stay accurate. Selection is cleared on success.
+async function setTierMany(ids, tier){
+  const label = tier === 'exceptional' ? 'promoted' : 'rejected';
+  let ok = 0, fail = 0;
+  const queue = ids.slice();
+  async function worker(){
+    while(queue.length){
+      const id = queue.shift();
+      if(await setTier(id, tier)) ok++; else fail++;
+    }
+  }
+  await Promise.all([worker(), worker(), worker()]);
+  await loadAll(); recomputeAgg();
+  toast(`${ok} ${label}${fail ? `; ${fail} failed` : ''}`, ok ? '' : 'error');
+  if(ok) clearSelection();
+  refreshActivePage();
+}
+
 /* ---------- source color hash (stable across pages) ---------- */
 function srcColor(s){
   let h=0; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0;
@@ -206,9 +253,11 @@ function renderNav(){
    ============================================================ */
 const PAGES = {};
 function page(id, title, crumb, render, after){ PAGES[id] = {title, crumb, render, after}; }
+let currentRoute = 'overview';
 function route(){
   const h = location.hash.replace(/^#\/?/,'') || 'overview';
   const id = PAGES[h] ? h : 'overview';
+  currentRoute = id;
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.route===id));
   const p = PAGES[id];
   document.getElementById('pageTitle').textContent = p.title;
@@ -217,6 +266,61 @@ function route(){
   document.querySelector('.main').scrollTop = 0;
   if(p.after) p.after();
   closeDetail();
+  renderSelectionBar();
+}
+// Re-render the active page after a data change (e.g. bulk tier update).
+function refreshActivePage(){ route(); }
+
+/* ---------- selection action bar ---------- */
+function renderSelectionBar(){
+  const bar = document.getElementById('bulkBar');
+  const count = document.getElementById('bulkCount');
+  if(!bar || !count) return;
+  const n = selection.size;
+  if(n > 0 && currentRoute === 'entries'){
+    bar.style.display = 'flex';
+    count.textContent = `${n} selected`;
+  } else {
+    bar.style.display = 'none';
+  }
+}
+// Toggle a row's selection, update its DOM, and refresh the bar — without a
+// full re-render so the user doesn't lose scroll/pagination position.
+function toggleRowSelection(id){
+  toggleSelect(id);
+  document.querySelectorAll(`.row-sel[data-id="${cssEsc(id)}"]`).forEach(cb => {
+    cb.checked = isSelected(id);
+    const tr = cb.closest('tr'); if(tr) tr.classList.toggle('sel', cb.checked);
+    const lbl = cb.closest('.sel-btn'); if(lbl) lbl.classList.toggle('on', cb.checked);
+    const card = cb.closest('.gcard'); if(card) card.classList.toggle('is-sel', cb.checked);
+  });
+  // refresh the select-all header checkbox state too
+  const sa = document.getElementById('selAll');
+  if(sa){
+    const vis = Array.from(document.querySelectorAll('#entryTable tbody .row-sel')).map(cb=>cb.dataset.id);
+    sa.checked = vis.length>0 && vis.every(x=>isSelected(x));
+  }
+  renderSelectionBar();
+}
+// Minimal CSS.escape polyfill for selector safety (ids may contain chars that
+// break attribute selectors). Standard in modern browsers; guarded for old ones.
+function cssEsc(s){ return (window.CSS&&CSS.escape) ? CSS.escape(s) : String(s).replace(/["\\]/g,'\\$&'); }
+
+function bindBulkBar(){
+  const bar = document.getElementById('bulkBar');
+  if(!bar || bar._bound) return;
+  bar._bound = true;
+  document.getElementById('bulkPromote').addEventListener('click', () => {
+    if(!selection.size) return;
+    setTierMany([...selection], 'exceptional').then(refreshActivePage);
+  });
+  document.getElementById('bulkReject').addEventListener('click', () => {
+    if(!selection.size) return;
+    setTierMany([...selection], 'cautionary').then(refreshActivePage);
+  });
+  document.getElementById('bulkClear').addEventListener('click', () => {
+    clearSelection(); refreshActivePage();
+  });
 }
 
 /* ============================================================
@@ -256,7 +360,9 @@ function entryRow(x){
   const idParts = x.id.split('-');
   const idHead = idParts[0];
   const idTail = x.id.substring(idHead.length+1);
-  return `<tr data-id="${x.id}">
+  const checked = isSelected(x.id) ? 'checked' : '';
+  return `<tr data-id="${x.id}" ${checked?'class="sel"':''}>
+    <td class="sel-cell"><input type="checkbox" class="row-sel" data-id="${x.id}" ${checked} aria-label="Select ${esc(x.id)}"></td>
     <td><span class="id" title="${x.id}"><b>${idHead}</b>${idTail?'-'+idTail:''}</span></td>
     <td><div class="src"><span class="pd" style="background:${srcColor(x.source)}"></span><span class="nm">${x.source}</span></div></td>
     <td style="color:var(--ink-2)">${x.pattern}</td>
@@ -324,6 +430,7 @@ function previewInner(x){
 /* gallery card — real screenshot if available, else wireframe */
 function galleryCard(x){
   const fav=isFav(x.id);
+  const sel=isSelected(x.id);
   const pal=(x.dominant||[]).slice(0,5).map(c=>`<span style="background:${c}"></span>`).join('');
   // data-img-id lets the delegated capture-phase error listener (mounted once
   // in the gallery container) re-lookup the entry and swap in the wireframe
@@ -332,8 +439,11 @@ function galleryCard(x){
   const thumb = x.imagePath
     ? `<img src="${API}/api/image?path=${encodeURIComponent(x.imagePath)}" alt="${esc(x.title)}" data-img-id="${esc(x.id)}" style="width:100%;height:100%;object-fit:cover;object-position:top;display:block" loading="lazy">`
     : `<div class="pv-frame">${previewInner(x)}</div>`;
-  return `<div class="gcard ${fav?'is-fav':''}" data-id="${x.id}">
+  return `<div class="gcard ${fav?'is-fav':''} ${sel?'is-sel':''}" data-id="${x.id}">
     <div class="gthumb">
+      <label class="sel-btn ${sel?'on':''}" title="Select">
+        <input type="checkbox" class="row-sel" data-id="${x.id}" ${sel?'checked':''} aria-label="Select ${esc(x.id)}">
+      </label>
       ${thumb}
       <div class="pv-actions"><button class="fav-btn ${fav?'fav-on':''}" data-id="${x.id}" title="Favorite" aria-label="Toggle favorite">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="${fav?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>
@@ -587,15 +697,23 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
     if(st.view==='grid'){
       out.innerHTML = slice.length ? `<div class="gallery">${slice.map(galleryCard).join('')}</div>`+pagination(rows.length) : `<div class="empty" style="padding:60px 20px"><div style="font-size:32px;margin-bottom:8px;opacity:.5">🔍</div><div style="font-weight:600;color:var(--ink-2)">No matches</div></div>`;
     } else {
-      out.innerHTML = slice.length ? `<table id="entryTable"><thead><tr><th>ID</th><th>Source</th><th>Pattern</th><th>Style</th><th>Tier</th><th>Score</th><th class="r">Steals</th><th></th></tr></thead><tbody>${slice.map(entryRow).join('')}</tbody></table>`+pagination(rows.length) : `<div class="empty">No entries match these filters.</div>`;
+      const visIds = slice.map(x=>x.id);
+      const allVisSel = visIds.length>0 && visIds.every(id=>isSelected(id));
+      out.innerHTML = slice.length ? `<table id="entryTable"><thead><tr><th class="sel-cell"><input type="checkbox" id="selAll" ${allVisSel?'checked':''} aria-label="Select all visible" title="Select all on this page"></th><th>ID</th><th>Source</th><th>Pattern</th><th>Style</th><th>Tier</th><th>Score</th><th class="r">Steals</th><th></th></tr></thead><tbody>${slice.map(entryRow).join('')}</tbody></table>`+pagination(rows.length) : `<div class="empty">No entries match these filters.</div>`;
     }
     out.querySelectorAll('#entryResults .pg, .pages .pg').forEach(b=>b.addEventListener('click',()=>{const p=+b.dataset.pg;if(p>=1&&p<=totalPages){st.page=p;render();document.querySelector('.main').scrollTop=0;}}));
     out.querySelectorAll('.pages .pg').forEach(b=>b.addEventListener('click',()=>{const p=+b.dataset.pg;if(p>=1&&p<=totalPages){st.page=p;render();document.querySelector('.main').scrollTop=0;}}));
     bindGallery(); bindEntryRows();
+    bindBulkBar(); renderSelectionBar();
   }
   function bindGallery(){
     document.querySelectorAll('#entryResults .gcard').forEach(card=>{
-      card.addEventListener('click',e=>{ if(e.target.closest('.fav-btn'))return; const x=E.find(en=>en.id===card.dataset.id); if(x)openDetail(x); });
+      card.addEventListener('click',e=>{ if(e.target.closest('.fav-btn,.sel-btn,.row-sel'))return; const x=E.find(en=>en.id===card.dataset.id); if(x)openDetail(x); });
+    });
+    document.querySelectorAll('#entryResults .sel-btn .row-sel').forEach(cb=>{
+      if(cb._bound) return; cb._bound=true;
+      cb.addEventListener('click', e => e.stopPropagation());
+      cb.addEventListener('change', () => toggleRowSelection(cb.dataset.id));
     });
     document.querySelectorAll('#entryResults .fav-btn').forEach(b=>{
       b.addEventListener('click',e=>{ e.stopPropagation(); const id=b.dataset.id; const on=toggleFav(id);
@@ -1018,8 +1136,29 @@ page('settings','Settings','transport · tools · maintenance', function(){
    ============================================================ */
 function bindEntryRows(){
   document.querySelectorAll('tr[data-id]').forEach(tr=>{
-    tr.addEventListener('click',()=>{const x=E.find(e=>e.id===tr.dataset.id);if(x)openDetail(x);});
+    tr.addEventListener('click',(e)=>{ if(e.target.closest('.row-sel,#selAll'))return; const x=E.find(en=>en.id===tr.dataset.id);if(x)openDetail(x); });
   });
+  // Row checkboxes — toggle without re-rendering (preserves scroll/page).
+  document.querySelectorAll('#entryTable .row-sel').forEach(cb=>{
+    if(cb._bound) return; cb._bound=true;
+    cb.addEventListener('click', e => e.stopPropagation());
+    cb.addEventListener('change', () => toggleRowSelection(cb.dataset.id));
+  });
+  // Select-all-visible (header checkbox) — toggles every row on this page.
+  const sa = document.getElementById('selAll');
+  if(sa && !sa._bound){ sa._bound=true;
+    sa.addEventListener('click', e => e.stopPropagation());
+    sa.addEventListener('change', () => {
+      const vis = Array.from(document.querySelectorAll('#entryTable tbody .row-sel')).map(c=>c.dataset.id);
+      vis.forEach(id => { (sa.checked ? selection.add(id) : selection.delete(id)); });
+      // Reflect in DOM without a full render.
+      document.querySelectorAll('#entryTable .row-sel').forEach(cb=>{
+        cb.checked = sa.checked;
+        const tr = cb.closest('tr'); if(tr) tr.classList.toggle('sel', sa.checked);
+      });
+      renderSelectionBar();
+    });
+  }
 }
 
 function initSidebar(){

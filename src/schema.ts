@@ -100,6 +100,24 @@ export const PatternType = z.enum([
 ]);
 
 /**
+ * Platform — the device class the screenshot was captured on. Orthogonal to
+ * patternType: a mobile app can have a dashboard, settings, onboarding, auth
+ * screen — none of which are "mobile-nav" (that's a component, not a platform).
+ * Lets the corpus answer "show me mobile onboarding flows" vs "show me web
+ * onboarding flows." Optional + auto-detected from the screenshot aspect ratio
+ * at tag time, so existing entries backfill instantly from their dimensions.
+ */
+export const Platform = z.enum(["web", "mobile", "tablet"]);
+
+/** Detect platform from image dimensions. Shared rule — tagger, backfill, UI. */
+export function detectPlatform(width: number | null | undefined, height: number | null | undefined): "web" | "mobile" | "tablet" {
+  if (!width || !height) return "web"; // unknown — default to web (most corpus)
+  if (height > width * 1.2) return "mobile";   // portrait → phone
+  if (width > height * 1.2) return "web";      // landscape → desktop
+  return "tablet";                               // roughly square → tablet
+}
+
+/**
  * Structured anti-patterns — the corpus's biggest differentiator from raw
  * screenshot libraries (Mobbin has 621k screenshots, zero anti-patterns).
  * Replaces the old free-text `whatToAvoidHere` array.
@@ -249,6 +267,7 @@ export const CorpusEntry = z.object({
   id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Expected stable kebab-case slug"), // stable slug, e.g. "linear-issue-board-2026"
   title: z.string(), // human label, e.g. "Linear — Issue board, grouped view"
   patternType: PatternType, // primary pattern (one) — complements the multi-tag categories
+  platform: Platform.optional(), // device class (web/mobile/tablet) — orthogonal to patternType
   categories: z.array(Category).min(1).max(4),
   styleTags: z.array(StyleTag).min(1).max(4),
 

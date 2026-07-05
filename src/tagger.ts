@@ -17,6 +17,7 @@ import "./env.js";
 import { readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { toCorpusRelativePath } from "./paths.js";
+import { detectPlatform } from "./schema.js";
 import { Vibrant } from "node-vibrant/node";
 import sharp from "sharp";
 
@@ -85,6 +86,7 @@ export interface TaggerOutput {
   id:             string;
   title:          string;
   patternType:    string;
+  platform?:      "web" | "mobile" | "tablet";
   categories:     string[];
   styleTags:      string[];
   source: {
@@ -96,8 +98,8 @@ export interface TaggerOutput {
   image: {
     visibility: "private";
     path:       string;
-    width:      null;
-    height:     null;
+    width:      number | null;
+    height:     number | null;
   };
   visual: {
     dominantColors: string[];
@@ -528,6 +530,14 @@ function validateNoBannedPhrases(obj: Record<string, unknown>): string[] {
  *
  * Returns { data, mimeType }. mimeType reflects the source (no re-encoding).
  */
+/** Read image dimensions via sharp. Returns {width, height} or nulls on failure. */
+async function readImageDimensions(imagePath: string): Promise<{ width: number | null; height: number | null }> {
+  try {
+    const meta = await sharp(imagePath).metadata();
+    return { width: meta.width ?? null, height: meta.height ?? null };
+  } catch { return { width: null, height: null }; }
+}
+
 async function readImageForDetail(
   imagePath: string,
   detail: "low" | "high",
@@ -708,6 +718,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
 
   const corpusPath = toCorpusRelativePath(input.imagePath);
   const today = new Date().toISOString().slice(0, 10);
+  const { width: imgWidth, height: imgHeight } = await readImageDimensions(input.imagePath);
+  const platform = detectPlatform(imgWidth, imgHeight);
 
   // ── Deterministic color extraction (code-level, not model-guessed) ─────────
   let quantizedColors: string[] = [];
@@ -791,6 +803,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       id:         autoId,
       title:      `${effectiveName} — (add descriptive subtitle)`,
       patternType: extraction.patternType,
+      platform,
       categories: extraction.categories,
       styleTags:  extraction.styleTags,
       source: {
@@ -802,8 +815,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       image: {
         visibility: "private",
         path:       corpusPath,
-        width:      null,
-        height:     null,
+        width:      imgWidth,
+        height:     imgHeight,
       },
       visual: {
         dominantColors: extraction.dominantColors,
@@ -881,6 +894,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     id:         autoId,
     title:      `${effectiveName} — (add descriptive subtitle)`,
     patternType: extraction.patternType,
+    platform,
     categories: extraction.categories,
     styleTags:  extraction.styleTags,
     source: {
@@ -892,8 +906,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     image: {
       visibility: "private",
       path:       corpusPath,
-      width:      null,
-      height:     null,
+      width:      imgWidth,
+      height:     imgHeight,
     },
     visual: {
       dominantColors: extraction.dominantColors,

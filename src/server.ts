@@ -27,7 +27,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const QUERY_LOG_PATH = resolve(__dirname, "..", "corpus", "query-log.jsonl");
 
 /** Append-only query log for retrieval analytics (query-stats.ts). Never throws. */
-async function logQuery(params: { query?: string; category?: string; styleTag?: string; qualityTier?: string }, resultIds: string[]): Promise<void> {
+async function logQuery(params: { query?: string; category?: string; styleTag?: string; qualityTier?: string; platform?: string }, resultIds: string[]): Promise<void> {
   const entry = JSON.stringify({ ts: new Date().toISOString(), ...params, resultIds });
   appendFile(QUERY_LOG_PATH, entry + "\n").catch(() => {});
 }
@@ -75,11 +75,15 @@ server.registerTool(
         .enum(["approved", "draft", "any"])
         .optional()
         .describe("Workflow state: 'approved' (default, finished entries), 'draft' (work-in-progress), or 'any' (both). Drafts are hidden from search by default so half-finished entries don't leak into results."),
+      platform: z
+        .enum(["web", "mobile", "tablet"])
+        .optional()
+        .describe("Filter to a device class — orthogonal to patternType. Use 'mobile' for phone screenshots, 'web' for desktop. Lets you ask 'mobile onboarding' vs 'web onboarding'."),
       limit: z.number().int().min(1).max(20).optional().describe("Max results, default 5"),
     },
   },
-  async ({ query, category, styleTag, minQuality, qualityTier, reviewStatus, limit }) => {
-    const results = await searchEntries({ query, category, styleTag, minQuality, qualityTier, reviewStatus: reviewStatus as "draft" | "approved" | "any" | undefined, limit });
+  async ({ query, category, styleTag, minQuality, qualityTier, reviewStatus, platform, limit }) => {
+    const results = await searchEntries({ query, category, styleTag, minQuality, qualityTier, reviewStatus: reviewStatus as "draft" | "approved" | "any" | undefined, platform: platform as "web" | "mobile" | "tablet" | undefined, limit });
 
     // Log for retrieval analytics (query-stats.ts) — never blocks the response.
     logQuery({ query, category, styleTag, qualityTier }, results.map((e) => e.id));
@@ -438,18 +442,22 @@ server.registerTool(
         .enum(["exceptional", "cautionary"])
         .optional()
         .describe("Filter to a quality tier. 'exceptional' (default) finds great examples to emulate; 'cautionary' finds bad examples to learn what to AVOID — the synthesis reframes the techniques as pitfalls."),
+      platform: z
+        .enum(["web", "mobile", "tablet"])
+        .optional()
+        .describe("Filter to a device class — 'mobile' for phone screenshots, 'web' for desktop. Recommend a direction for a mobile app vs a web app."),
       framework: z.enum(["brief", "tokens"]).optional().describe("Output shape: 'brief' (markdown, default) or 'tokens' (JSON)"),
     },
   },
-  async ({ productContext, count, category, qualityTier, framework }) => {
-    void logQuery({ query: `recommend_ui_direction:${productContext.slice(0, 80)}`, category, qualityTier }, []);
+  async ({ productContext, count, category, qualityTier, platform, framework }) => {
+    void logQuery({ query: `recommend_ui_direction:${productContext.slice(0, 80)}`, category, qualityTier, platform }, []);
     const status = indexStatus();
     if (!status.hasIndex) {
       return { content: [{ type: "text", text: "The embedding index hasn't been built. Run `npm run build-index` to enable recommendations." }], isError: true };
     }
     // Over-fetch (limit 20) so the diversity picker has a real pool to choose from;
     // searchEntries would already slice to the final count and starve the picker.
-    const results = await searchRanked({ query: productContext, category: category as string | undefined, qualityTier: qualityTier as string | undefined, limit: 20 });
+    const results = await searchRanked({ query: productContext, category: category as string | undefined, qualityTier: qualityTier as string | undefined, platform: platform as "web" | "mobile" | "tablet" | undefined, limit: 20 });
     if (!results.length) {
       const scope = qualityTier === "cautionary" ? " cautionary" : "";
       return { content: [{ type: "text", text: `No${scope} corpus entries matched "${productContext}". Try a different description or broader terms.` }] };

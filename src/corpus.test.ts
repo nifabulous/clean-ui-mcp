@@ -65,10 +65,21 @@ describe("corpus search (fixtures)", () => {
 
   it("excludes drafts from findSimilarEntries results", () => {
     setCorpusForTesting(fixtures);
-    // No index → returns []. But if it did return, drafts must not appear.
-    // The contract test: even with no index, it never throws and returns [].
     const results = findSimilarEntries("linear-board", 10);
     expect(results.every((r) => r.entry.reviewStatus !== "draft")).toBe(true);
+  });
+
+  it("filters by platform — mobile vs web as orthogonal axis to patternType", async () => {
+    setCorpusForTesting(fixtures);
+    const mobile = await searchEntries({ platform: "mobile", limit: 100 });
+    expect(mobile.every((e) => e.platform === "mobile")).toBe(true);
+    expect(mobile.some((e) => e.id === "cash-app-mobile-onboarding")).toBe(true);
+    expect(mobile.some((e) => e.id === "linear-board")).toBe(false); // linear is web
+
+    const web = await searchEntries({ platform: "web", limit: 100 });
+    expect(web.every((e) => e.platform === "web")).toBe(true);
+    expect(web.some((e) => e.id === "linear-board")).toBe(true);
+    expect(web.some((e) => e.id === "cash-app-mobile-onboarding")).toBe(false);
   });
 });
 

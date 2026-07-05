@@ -32,6 +32,7 @@ export const fixtures: CorpusEntryT[] = [
     source: { productName: "Linear", url: "https://linear.app", capturedAt: "2026-05-10", capturedBy: "self" },
     categories: ["dashboard", "data-table"],
     styleTags: ["minimal", "dense-data"],
+    platform: "web",
     qualityScore: 5,
   }),
   entry({
@@ -62,6 +63,16 @@ export const fixtures: CorpusEntryT[] = [
     source: { productName: "Example", url: null, capturedAt: "2026-03-01", capturedBy: "self" },
     qualityScore: 2,
     qualityTier: "cautionary",
+  }),
+  entry({
+    id: "cash-app-mobile-onboarding",
+    title: "Cash App — Mobile onboarding",
+    patternType: "onboarding",
+    categories: ["onboarding"],
+    styleTags: ["minimal", "playful"],
+    source: { productName: "Cash App", url: "https://cash.app", capturedAt: "2026-06-15", capturedBy: "self" },
+    platform: "mobile", // portrait screenshot — orthogonal to the onboarding patternType
+    qualityScore: 4,
   }),
   entry({
     id: "draft-unchecked-entry",

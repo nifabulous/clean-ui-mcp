@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CorpusEntry } from "./schema.js";
+import { CorpusEntry, detectPlatform } from "./schema.js";
 
 const validEntry = {
   id: "example-product-dashboard",
@@ -212,5 +212,44 @@ describe("corpus schema", () => {
     const result = CorpusEntry.safeParse(validEntry);
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.provenance).toBeUndefined();
+  });
+});
+
+describe("detectPlatform", () => {
+  it("classifies portrait dimensions as mobile", () => {
+    expect(detectPlatform(1284, 2778)).toBe("mobile"); // iPhone screenshot
+    expect(detectPlatform(750, 1334)).toBe("mobile");
+  });
+
+  it("classifies landscape dimensions as web", () => {
+    expect(detectPlatform(1920, 1080)).toBe("web");
+    expect(detectPlatform(1440, 900)).toBe("web");
+  });
+
+  it("classifies roughly-square dimensions as tablet", () => {
+    // Tablet is the middle band: height/width between 0.83 and 1.2.
+    expect(detectPlatform(820, 980)).toBe("tablet");   // 1.195 — just under the mobile threshold
+    expect(detectPlatform(800, 800)).toBe("tablet");   // exactly square
+    expect(detectPlatform(1024, 900)).toBe("tablet");  // mildly landscape, not enough for web
+  });
+
+  it("defaults to web when dimensions are missing", () => {
+    expect(detectPlatform(null, null)).toBe("web");
+    expect(detectPlatform(undefined, undefined)).toBe("web");
+  });
+
+  it("accepts platform as an optional field on entries (backward-compat)", () => {
+    // Existing entries without platform must still validate.
+    const result = CorpusEntry.safeParse(validEntry);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.platform).toBeUndefined();
+  });
+
+  it("round-trips an explicit platform value", () => {
+    for (const platform of ["web", "mobile", "tablet"] as const) {
+      const result = CorpusEntry.safeParse({ ...validEntry, platform });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.platform).toBe(platform);
+    }
   });
 });

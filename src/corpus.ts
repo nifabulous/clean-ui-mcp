@@ -43,6 +43,7 @@ export interface SearchOptions {
   styleTag?:     string;
   minQuality?:   number;
   qualityTier?:  string;
+  platform?:     "web" | "mobile" | "tablet";
   /** "approved" (default) hides drafts; "draft" surfaces only drafts; "any" shows both. */
   reviewStatus?: "draft" | "approved" | "any";
   limit?:        number;
@@ -171,6 +172,7 @@ export async function searchRanked(opts: SearchOptions): Promise<SearchResult[]>
     if (opts.styleTag    && !e.styleTags.includes(opts.styleTag as never))   return false;
     if (opts.minQuality  && e.qualityScore < opts.minQuality)                return false;
     if (opts.qualityTier && e.qualityTier !== opts.qualityTier)              return false;
+    if (opts.platform    && e.platform !== opts.platform)                    return false;
     // Workflow state: hide drafts unless the caller explicitly asks for them.
     // "approved" (default/omitted) → only approved; "draft" → only drafts;
     // "any" → both. This prevents half-finished entries from leaking into

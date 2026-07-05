@@ -124,6 +124,7 @@ function renderList() {
       <span class="entry-title">${esc(entry.title)}</span>
       <span class="entry-meta">
         ${entry.categories.slice(0, 2).map((cat) => `<span class="mini-tag">${cat}</span>`).join("")}
+        ${entry.platform === "mobile" ? `<span class="mini-tag">mobile</span>` : entry.platform === "tablet" ? `<span class="mini-tag">tablet</span>` : ""}
         ${entry.image.path ? `<span class="mini-tag">image</span>` : `<span class="mini-tag">link-only</span>`}
         ${entry.reviewStatus === "draft" ? `<span class="mini-tag draft">draft</span>` : ""}
       </span>
@@ -180,6 +181,19 @@ function renderLibrary() {
   const image = entry.image.path
     ? `<img src="${API}/image?path=${encodeURIComponent(entry.image.path)}" alt="${esc(entry.title)}"><span class="badge image-badge">${entry.image.visibility}</span>`
     : `<div class="image-empty"><i data-lucide="image-off"></i><span>Link-only sample</span><span class="badge">${entry.image.visibility}</span></div>`;
+
+  // Classify the screenshot shape so the image-stage picks the right fit.
+  // Mobile (portrait) screenshots were getting center-cropped to a landscape
+  // slot, losing the top and bottom — the most common mobile pattern (actions
+  // at the bottom) was invisible. Landscape → cover-crop; portrait → contain,
+  // no crop; square → contain in a square slot.
+  const stageShape = (() => {
+    const w = entry.image.width, h = entry.image.height;
+    if (!w || !h) return "is-landscape"; // unknown — default to web (most corpus)
+    if (h > w * 1.2) return "is-portrait";   // tall → mobile
+    if (w > h * 1.2) return "is-landscape";  // wide → desktop
+    return "is-square";                        // roughly equal → tablet/square
+  })();
 
   // ── Attribute rail (right column) — renders only what the entry has.
   // Sibling to .detail-main, not nested inside the critique card.
@@ -243,7 +257,7 @@ function renderLibrary() {
       <div class="panel-head">
         <div>
           <div class="panel-title tier-label">${esc(entry.source.productName)}</div>
-          <div class="panel-sub">${esc(entry.id)} · ${entry.patternType}</div>
+          <div class="panel-sub">${esc(entry.id)} · ${entry.patternType} · ${entry.platform || "web"}</div>
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn secondary" id="editSelected"><i data-lucide="pencil"></i>Edit</button>
@@ -266,7 +280,7 @@ function renderLibrary() {
         </div>
         <div class="detail-body">
           <div class="detail-main">
-            <div class="image-stage">${image}</div>
+            <div class="image-stage ${stageShape}">${image}</div>
             <section class="panel"><div class="panel-body"><h2 class="section-title">Critique</h2><p class="critique">${esc(entry.critique)}</p></div></section>
             <section class="panel"><div class="panel-body"><h2 class="section-title">What to steal</h2><ul class="steal-list">${entry.whatToSteal.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>
             ${(entry.antiPatterns?.antiPatterns || []).length ? `<section class="panel"><div class="panel-body"><h2 class="section-title">Anti-patterns (mistakes avoided)</h2><ul class="avoid-list">${entry.antiPatterns.antiPatterns.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>` : ""}
@@ -336,6 +350,7 @@ function syncDraftFromForm() {
     ...[...form.querySelectorAll("input[name='styleTags']:checked")].map((input) => input.value),
   ].filter(Boolean))];
   state.draft.patternType = form.patternType.value;
+  if (form.platform) state.draft.platform = form.platform.value;
   state.draft.image.visibility = form.visibility.value;
   state.draft.image.path = form.imagePath.value.trim() || null;
   state.draft.image.width = form.imageWidth.value ? Number(form.imageWidth.value) : null;
@@ -465,6 +480,7 @@ function renderForm() {
               <legend>Review draft</legend>
               <label>Title<input name="title" value="${esc(entry.title)}"></label>
               <label>Primary pattern type (the ONE pattern this exemplifies)<select name="patternType">${state.schema.patternTypes.map((p) => `<option value="${p}" ${entry.patternType === p ? "selected" : ""}>${p}</option>`).join("")}</select></label>
+              <label>Platform<select name="platform"><option value="web" ${(entry.platform || "web") === "web" ? "selected" : ""}>web (desktop)</option><option value="mobile" ${entry.platform === "mobile" ? "selected" : ""}>mobile (phone)</option><option value="tablet" ${entry.platform === "tablet" ? "selected" : ""}>tablet</option></select></label>
               <div class="grid-2">
                 <label>Primary category<select name="primaryCategory"><option value="">Choose one</option>${state.schema.categories.map((cat) => `<option value="${cat}" ${entry.categories[0] === cat ? "selected" : ""}>${cat}</option>`).join("")}</select></label>
                 <label>Primary style<select name="primaryStyleTag"><option value="">Choose one</option>${state.schema.styleTags.map((tag) => `<option value="${tag}" ${entry.styleTags[0] === tag ? "selected" : ""}>${tag}</option>`).join("")}</select></label>
@@ -731,6 +747,8 @@ function cleanTaggedDraft(entry, previous) {
   if (previous.reviewStatus) cleaned.reviewStatus = previous.reviewStatus;
   // Preserve provenance — auto-fill produces "auto" but a human may have set it.
   if (previous.provenance) cleaned.provenance = previous.provenance;
+  // Preserve platform — auto-fill detects it, but a human may have corrected it.
+  if (previous.platform) cleaned.platform = previous.platform;
   cleaned.addedAt = previous.addedAt || today();
   return cleaned;
 }

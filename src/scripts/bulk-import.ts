@@ -268,6 +268,14 @@ if (toProcess.length === 0) {
 
 console.log(`\nProcessing ${toProcess.length} images (${workList.length - toProcess.length} skipped) at concurrency ${CONCURRENCY}…\n`);
 
+// Incremental checkpoint: merge each tagged entry into the draft and save as we
+// go, so a crash/timeout mid-batch loses at most the in-flight concurrency slot
+// (≤ CONCURRENCY images), not the whole run. --resume picks up cleanly.
+// Save every N completions to avoid hammering disk on huge batches.
+const CHECKPOINT_EVERY = 5;
+let sinceLastCheckpoint = 0;
+let taggedCount = 0;
+
 const tasks = toProcess.map((item, i) => async () => {
   const label = `[${i + 1}/${toProcess.length}] ${basename(item.imagePath)}`;
   console.log(`  🔍 ${label}`);
@@ -281,24 +289,28 @@ const results: TaggerOutput[] = [];
 await runWithConcurrency(
   tasks,
   CONCURRENCY,
-  (result) => results.push(result),
+  (result) => {
+    results.push(result);
+    taggedCount++;
+    // Merge into draft immediately and checkpoint periodically.
+    const existingIdx = draft.entries.findIndex((e) => e.image.path === result.image.path);
+    const withStatus = { ...result, _importStatus: "draft" as const };
+    if (existingIdx >= 0) draft.entries[existingIdx] = withStatus;
+    else draft.entries.push(withStatus);
+    sinceLastCheckpoint++;
+    if (sinceLastCheckpoint >= CHECKPOINT_EVERY) {
+      draft.exportedAt = new Date().toISOString();
+      saveDraft(draft);
+      sinceLastCheckpoint = 0;
+    }
+  },
   (err, i) => {
     const item = toProcess[i];
     console.error(`  ❌ Failed: ${basename(item?.imagePath ?? "?")} — ${err}`);
   },
 );
 
-// Merge results into draft (replace if --force, append if new)
-for (const result of results) {
-  const existingIdx = draft.entries.findIndex((e) => e.image.path === result.image.path);
-  const withStatus  = { ...result, _importStatus: "draft" as const };
-  if (existingIdx >= 0) {
-    draft.entries[existingIdx] = withStatus;
-  } else {
-    draft.entries.push(withStatus);
-  }
-}
-
+// Final save (covers the tail past the last checkpoint).
 draft.exportedAt = new Date().toISOString();
 saveDraft(draft);
 
@@ -306,7 +318,7 @@ const draftCount = draft.entries.filter((e) => e._importStatus === "draft").leng
 console.log(`
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Done.
-  Tagged:  ${results.length} new/updated
+  Tagged:  ${taggedCount} new/updated
   Draft:   ${draftCount} entries awaiting review
   File:    ${OUT_PATH}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

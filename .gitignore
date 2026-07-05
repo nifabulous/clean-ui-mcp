@@ -21,6 +21,8 @@ corpus/entries.json
 corpus/embeddings.json
 # Derived — dHash fingerprint cache, rebuilt by the curator UI at runtime
 corpus/.dhash-cache.json
+# Derived — MCP query log (retrieval analytics), populated at runtime by the server
+corpus/query-log.jsonl
 # Durability — rolling snapshots of entries.json, written on every UI save.
 # Gitignored because they're large, derivable, and purely a local safety net.
 corpus/.snapshots/

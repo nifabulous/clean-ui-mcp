@@ -310,30 +310,101 @@ different scroll positions produce hashes that differ by only a handful of bits.
 
 ## MCP tools
 
-Six tools, all read-only over the corpus:
+Twelve tools, all read-only over the corpus, organized into three tiers:
+**retrieval** (find + read), **synthesis** (generate a direction), and
+**aggregation** (corpus-wide knowledge).
 
-### `search_ui_examples(query?, category?, styleTag?, qualityTier?, minQuality?, limit?)`
-The main entry point. Returns metadata + critique for matches, no images.
-Uses vector search when an index exists (Voyage), keyword fallback otherwise.
-`qualityTier` filter: `"exceptional"` (great examples) or `"cautionary"` (bad
-examples worth teaching what NOT to do).
+### Retrieval — find and read entries
 
-### `get_ui_example(id)`
-Full detail for one entry: critique, steal items, anti-patterns, voice, color
-roles (as a paste-ready token line), visual attributes, layout, and the image
-itself if cleared for redistribution.
+#### `search_ui_examples(query?, category?, styleTag?, qualityTier?, minQuality?, reviewStatus?, limit?)`
+The primary entry point. Free-text + structural filters. Returns metadata +
+critique per match, no images by default (keeps responses small). Uses vector
+search when an index exists (Voyage), keyword fallback otherwise. Filters:
+`qualityTier` (`"exceptional"` default, `"cautionary"` for bad examples),
+`reviewStatus` (`"approved"` default, `"draft"` to surface WIP entries hidden by
+default, `"any"` for both).
 
-### `get_similar_ui_examples(id, limit?)`
-Takes a source entry id, ranks the rest by vector cosine similarity. "What other
-empty states are like this one?" Requires the embedding index.
+#### `get_ui_example(id)`
+Full detail for one entry: critique, what to steal, anti-patterns, voice, color
+roles (paste-ready CSS tokens), visual attributes, layout wireframe, provenance
+(how the fields were produced), and the image itself if available.
 
-### `compare_ui_examples(ids)`
+#### `get_similar_ui_examples(id, limit?)`
+Ranks the rest by vector cosine similarity to one source entry. "What other
+empty states are like this one?" Requires the embedding index. Excludes drafts.
+
+#### `compare_ui_examples(ids)`
 Takes 2-3 ids, returns a structured comparison table across patternType, style,
-density, critique angle, top steal, and anti-patterns.
+density, critique angle, top steal, and anti-patterns. For choosing between
+approaches.
 
-### `list_categories()` / `list_style_tags()`
+#### `list_categories()` / `list_style_tags()`
 Discover valid filter values. `list_categories` also reports the search mode
-(vector active vs keyword-only).
+(vector active vs keyword-only) and index drift.
+
+#### `browse_ui_examples(styleTag?)`
+Discovery tool — summarizes what's in the corpus grouped by patternType: count,
+top products, and the highest-quality exemplar entry per pattern. Use before
+searching when you don't yet know what to look for.
+
+### Synthesis — generate a design direction
+
+#### `recommend_ui_direction(productContext, count?, category?, qualityTier?, framework?)`
+The "design advisor." Describe what you're building; it embeds the description,
+finds the 3-5 most relevant entries with **product diversity** (won't return 3
+from the same app), and synthesizes a direction citing each. Pure deterministic
+aggregation — no LLM call, no hallucination. Use when you have a description but
+no specific ids. Pass `qualityTier:"cautionary"` to recommend what to AVOID
+(reframes the synthesis as pitfalls to avoid, not techniques to emulate).
+
+#### `generate_design_prompt(ids, framework?, context?)`
+Synthesize a design brief across 2-5 specific entry ids you already know.
+Returns paste-ready color tokens (CSS `:root`), typography approach, layout
+structure, voice register, techniques to borrow, and anti-patterns to avoid —
+each traced back to a source entry. `framework:"tokens"` returns JSON design
+tokens. Use when you have ids (e.g. "build me a pricing page like Stripe +
+Linear"). **Recommend vs generate:** `recommend` searches for you (description
+in, direction out); `generate` synthesizes from entries you've chosen (ids in,
+brief out).
+
+### Aggregation — corpus-wide knowledge
+
+#### `get_anti_patterns(patternType?, category?, limit?)`
+Returns the consensus anti-patterns (common UI mistakes to avoid) for a pattern,
+aggregated across all matching entries and ranked by how many raise each. Each
+lists its source entries. This is the Mobbin-can't-offer feature: the corpus
+knows what NOT to do.
+
+#### `get_color_palette(patternType?, styleTag?, limit?)`
+Paste-ready color token sets from entries with `colorRoles`, grouped by accent
+hue band (red/blue/green/...). Sorted by hue for visual grouping. For "give me
+real palettes for a dashboard."
+
+#### `get_stealable_techniques(patternType?, styleTag?, limit?)`
+Concrete, copyable techniques across a category, deduped by theme. Each cites
+its source entry. For "what can I steal for a dense data table?"
+
+All aggregation tools exclude drafts by default (mirrors search).
+
+---
+
+## Skill — `clean-ui-design`
+
+The repo ships a companion skill (`skill/clean-ui-design/`) that orchestrates
+the MCP tools into an agent workflow: search → read → compare → synthesize, with
+a strict quality bar against generic AI output. Install it:
+
+```bash
+# Copy the skill into your ZCode skills directory
+cp -r skill/clean-ui-design ~/.zcode/skills/
+```
+
+The skill documents the full 12-tool catalog, the recommend-vs-generate decision
+tree, and points to two reference files:
+- `references/banned-phrases.md` — the anti-slop list (banned phrases + the
+  DECISION + EFFECT + REJECTION pattern that replaces them)
+- `references/decision-effect-rejection.md` — the critique format with worked
+  examples (sloppy vs grounded)
 
 ---
 

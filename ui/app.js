@@ -181,88 +181,100 @@ function renderLibrary() {
     ? `<img src="${API}/image?path=${encodeURIComponent(entry.image.path)}" alt="${esc(entry.title)}"><span class="badge image-badge">${entry.image.visibility}</span>`
     : `<div class="image-empty"><i data-lucide="image-off"></i><span>Link-only sample</span><span class="badge">${entry.image.visibility}</span></div>`;
 
-  // Attributes block — was the right rail; now folded into the main card so the
-  // whole shell is two columns. Renders only what the entry actually has.
-  const attrs = `
-    ${entry.layout ? `<div class="attr-block">${renderLayoutWireframe(entry.layout)}</div>` : ""}
-    <div class="attr-block">
-      <div class="section-title">Visual attributes</div>
-      <div class="attr-grid">
-        <div>
-          <div class="swatches">
-            ${entry.visual.dominantColors.map((c) => `<div class="swatch" style="background:${c}" title="${c}"></div>`).join("")}
-            ${entry.visual.accentColor ? `<div class="swatch accent" style="background:${entry.visual.accentColor}" title="accent ${entry.visual.accentColor}"></div>` : ""}
+  // ── Attribute rail (right column) — renders only what the entry has.
+  // Sibling to .detail-main, not nested inside the critique card.
+  const rail = `
+    ${entry.layout ? `<section class="panel">${renderLayoutWireframe(entry.layout)}</section>` : ""}
+    <section class="panel">
+      <div class="panel-head"><div class="panel-title">Visual attributes</div></div>
+      <div class="panel-body">
+        <div class="attr-grid">
+          <div>
+            <div class="swatches">
+              ${entry.visual.dominantColors.map((c) => `<div class="swatch" style="background:${c}" title="${c}"></div>`).join("")}
+              ${entry.visual.accentColor ? `<div class="swatch accent" style="background:${entry.visual.accentColor}" title="accent ${entry.visual.accentColor}"></div>` : ""}
+            </div>
           </div>
+          <dl>
+            <div class="kv"><dt>Spacing</dt><dd>${entry.visual.spacingDensity}</dd></div>
+            <div class="kv"><dt>Corners</dt><dd>${entry.visual.cornerStyle}</dd></div>
+            <div class="kv"><dt>Shadows</dt><dd>${entry.visual.usesShadows ? "yes" : "no"}</dd></div>
+            <div class="kv"><dt>Borders</dt><dd>${entry.visual.usesBorders ? "yes" : "no"}</dd></div>
+            <div class="kv"><dt>Display</dt><dd>${entry.visual.typePairing.display || "—"}</dd></div>
+            <div class="kv"><dt>Body</dt><dd>${entry.visual.typePairing.body || "—"}</dd></div>
+            ${entry.visual.typePairing.notes ? `<div class="kv"><dt>Notes</dt><dd>${esc(entry.visual.typePairing.notes)}</dd></div>` : ""}
+          </dl>
         </div>
-        <dl>
-          <div class="kv"><dt>Spacing</dt><dd>${entry.visual.spacingDensity}</dd></div>
-          <div class="kv"><dt>Corners</dt><dd>${entry.visual.cornerStyle}</dd></div>
-          <div class="kv"><dt>Shadows</dt><dd>${entry.visual.usesShadows ? "yes" : "no"}</dd></div>
-          <div class="kv"><dt>Borders</dt><dd>${entry.visual.usesBorders ? "yes" : "no"}</dd></div>
-          <div class="kv"><dt>Display</dt><dd>${entry.visual.typePairing.display || "—"}</dd></div>
-          <div class="kv"><dt>Body</dt><dd>${entry.visual.typePairing.body || "—"}</dd></div>
-          ${entry.visual.typePairing.notes ? `<div class="kv"><dt>Notes</dt><dd>${esc(entry.visual.typePairing.notes)}</dd></div>` : ""}
-        </dl>
       </div>
-    </div>
+    </section>
     ${entry.visual.colorRoles ? `
-    <div class="attr-block">
-      <div class="section-title">Color roles · token set</div>
-      <div class="color-tokens">
-        ${[
-          ["canvas", entry.visual.colorRoles.canvas],
-          ["surface", entry.visual.colorRoles.surface],
-          ["ink", entry.visual.colorRoles.ink],
-          entry.visual.colorRoles.muted ? ["muted", entry.visual.colorRoles.muted] : null,
-          ["accent", entry.visual.colorRoles.accent],
-        ].filter(Boolean).map(([role, hex]) =>
-          `<div class="color-token"><span class="color-chip" style="background:${hex}"></span><span class="color-role">${role}</span><span class="color-hex">${hex}</span></div>`
-        ).join("")}
+    <section class="panel">
+      <div class="panel-head"><div class="panel-title">Color roles · token set</div></div>
+      <div class="panel-body">
+        <div class="color-tokens">
+          ${[
+            ["canvas", entry.visual.colorRoles.canvas],
+            ["surface", entry.visual.colorRoles.surface],
+            ["ink", entry.visual.colorRoles.ink],
+            entry.visual.colorRoles.muted ? ["muted", entry.visual.colorRoles.muted] : null,
+            ["accent", entry.visual.colorRoles.accent],
+          ].filter(Boolean).map(([role, hex]) =>
+            `<div class="color-token"><span class="color-chip" style="background:${hex}"></span><span class="color-role">${role}</span><span class="color-hex">${hex}</span></div>`
+          ).join("")}
+        </div>
       </div>
-    </div>` : ""}
+    </section>` : ""}
     ${entry.voice ? `
-    <div class="attr-block">
-      <div class="section-title">Voice</div>
-      <div class="voice-tone">${esc(entry.voice.tone)}</div>
-      <ul class="voice-examples">${entry.voice.examples.map((ex) => `<li>${esc(ex)}</li>`).join("")}</ul>
-      ${entry.voice.avoid.length ? `<div class="voice-avoid">Avoids: ${entry.voice.avoid.map(esc).join("; ")}</div>` : ""}
-    </div>` : ""}
+    <section class="panel">
+      <div class="panel-head"><div class="panel-title">Voice</div></div>
+      <div class="panel-body">
+        <div class="voice-tone">${esc(entry.voice.tone)}</div>
+        <ul class="voice-examples">${entry.voice.examples.map((ex) => `<li>${esc(ex)}</li>`).join("")}</ul>
+        ${entry.voice.avoid.length ? `<div class="voice-avoid">Avoids: ${entry.voice.avoid.map(esc).join("; ")}</div>` : ""}
+      </div>
+    </section>` : ""}
   `;
 
-  // ── Main canvas: the selected entry as a single card. One column, one job.
+  // ── Detail view: unframed hero on top, then main + rail as sibling grid regions.
+  // No card-within-card — the panel--spacious wraps the whole thing, but the
+  // hero is unframed and the main/rail columns are direct grid children.
   $("#page").innerHTML = `
-    <div class="canvas-card">
-      <div class="card-head">
+    <div class="panel panel--spacious">
+      <div class="panel-head">
         <div>
-          <div class="panel-title">${esc(entry.source.productName)}</div>
+          <div class="panel-title tier-label">${esc(entry.source.productName)}</div>
           <div class="panel-sub">${esc(entry.id)} · ${entry.patternType}</div>
         </div>
         <div style="display:flex;gap:6px">
-          <button class="btn" id="editSelected"><i data-lucide="pencil"></i>Edit</button>
+          <button class="btn secondary" id="editSelected"><i data-lucide="pencil"></i>Edit</button>
           <button class="btn danger" id="deleteSelected"><i data-lucide="trash-2"></i>Delete</button>
         </div>
       </div>
-      <div class="card-body detail-hero">
-        <h1 class="sample-title">${esc(entry.title)}</h1>
-        <div class="source-line">
-          ${entry.source.url ? `<a href="${esc(entry.source.url)}" target="_blank" rel="noopener">${esc(entry.source.url)}</a>` : `<span>No source URL</span>`}
-          <span>· ${entry.source.capturedAt}</span>
-          ${qualityDots(entry.qualityScore)}
-          ${entry.reviewStatus === "draft" ? `<span class="mini-tag draft">draft — hidden from search</span>` : ""}
+      <div class="panel-body">
+        <div class="detail-hero">
+          <h1 class="sample-title tier-label">${esc(entry.title)}</h1>
+          <div class="source-line">
+            ${entry.source.url ? `<a href="${esc(entry.source.url)}" target="_blank" rel="noopener">${esc(entry.source.url)}</a>` : `<span>No source URL</span>`}
+            <span class="tier-temporal">· ${entry.source.capturedAt}</span>
+            ${qualityDots(entry.qualityScore)}
+            ${entry.reviewStatus === "draft" ? `<span class="mini-tag draft">draft — hidden from search</span>` : ""}
+          </div>
+          <div class="tag-row">
+            ${entry.categories.map((cat) => `<span class="tag category">${cat}</span>`).join("")}
+            ${entry.styleTags.map((tag) => `<span class="tag style">${tag}</span>`).join("")}
+          </div>
         </div>
-        <div class="tag-row">
-          ${entry.categories.map((cat) => `<span class="tag category">${cat}</span>`).join("")}
-          ${entry.styleTags.map((tag) => `<span class="tag style">${tag}</span>`).join("")}
+        <div class="detail-body">
+          <div class="detail-main">
+            <div class="image-stage">${image}</div>
+            <section class="panel"><div class="panel-body"><h2 class="section-title">Critique</h2><p class="critique">${esc(entry.critique)}</p></div></section>
+            <section class="panel"><div class="panel-body"><h2 class="section-title">What to steal</h2><ul class="steal-list">${entry.whatToSteal.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>
+            ${(entry.antiPatterns?.antiPatterns || []).length ? `<section class="panel"><div class="panel-body"><h2 class="section-title">Anti-patterns (mistakes avoided)</h2><ul class="avoid-list">${entry.antiPatterns.antiPatterns.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>` : ""}
+            ${(entry.antiPatterns?.whereThisFails || []).length ? `<section class="panel"><div class="panel-body"><h2 class="section-title">Where copying this fails</h2><ul class="avoid-list">${entry.antiPatterns.whereThisFails.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>` : ""}
+            ${(entry.antiPatterns?.accessibilityRisks || []).length ? `<section class="panel"><div class="panel-body"><h2 class="section-title">Accessibility risks</h2><ul class="avoid-list">${entry.antiPatterns.accessibilityRisks.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>` : ""}
+          </div>
+          <div class="detail-rail">${rail}</div>
         </div>
-        <div class="image-stage">${image}</div>
-        <div class="copy-block">
-          <section><h2 class="section-title">Critique</h2><p class="critique">${esc(entry.critique)}</p></section>
-          <section><h2 class="section-title">What to steal</h2><ul class="steal-list">${entry.whatToSteal.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></section>
-          ${(entry.antiPatterns?.antiPatterns || []).length ? `<section><h2 class="section-title">Anti-patterns (mistakes avoided)</h2><ul class="avoid-list">${entry.antiPatterns.antiPatterns.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></section>` : ""}
-          ${(entry.antiPatterns?.whereThisFails || []).length ? `<section><h2 class="section-title">Where copying this fails</h2><ul class="avoid-list">${entry.antiPatterns.whereThisFails.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></section>` : ""}
-          ${(entry.antiPatterns?.accessibilityRisks || []).length ? `<section><h2 class="section-title">Accessibility risks</h2><ul class="avoid-list">${entry.antiPatterns.accessibilityRisks.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></section>` : ""}
-        </div>
-        ${attrs}
       </div>
     </div>
   `;

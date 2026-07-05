@@ -1,0 +1,4 @@
+interface:
+  display_name: "Clean UI Design"
+  short_description: "Ground UI design in a curated corpus of real, critiqued examples"
+  default_prompt: "Search the clean-ui corpus for relevant UI patterns, read the critiques, and synthesize a design brief grounded in real examples"

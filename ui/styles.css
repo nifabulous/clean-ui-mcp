@@ -45,7 +45,35 @@
     --r-sm: 6px;
     --r:    8px;
     --r-lg: 12px;
+    /*
+     * Spacing scale — the brief (recommend_ui_direction on our own dashboard)
+     * flagged that gaps were hardcoded 16-24px when the corpus advised 24-32px
+     * for "spacious inter-card spacing that treats each metric as an isolated
+     * scannable object." Tokens make the scale intentional, not per-component.
+     */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --space-7: 48px;
   }
+
+  /*
+   * Three-tier type hierarchy — the brief (Origin/Mobbin/Hume synthesis)
+   * advised "bold sentence-case for section labels, all-caps tracked for
+   * scannable numerics, lighter gray for temporal." The existing .section-title
+   * already IS the tracked-eyebrow tier; these formalize the other two.
+   */
+  /* tier-label: confident bold sentence-case for display heads (panel titles,
+     sample title). NOT for section eyebrows — those stay .section-title. */
+  .tier-label { font-weight: 600; letter-spacing: -0.01em; }
+  /* tier-numeric: tracked all-caps for counts/status — formalizes section-title's
+     pattern for the list footer, stat counts, tally badges. */
+  .tier-numeric { text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500; color: var(--faint); }
+  /* tier-temporal: recedes metadata (dates, captured-by) into supporting context. */
+  .tier-temporal { color: var(--faint); }
 
   html, body { height: 100%; margin: 0; background: var(--canvas); color: var(--ink); font-family: var(--sans); font-size: 14px; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
   body { overflow: hidden; }
@@ -96,6 +124,11 @@
   .btn.icon { width: 34px; padding: 0; }
   .btn:disabled { opacity: .4; cursor: not-allowed; }
   .btn:disabled:hover { border-color: var(--line); }
+  /* Secondary pill — scoped to top-level secondary actions (Edit, Refresh) per
+     the brief ("outlined pill buttons for secondary actions"). NOT global: keeps
+     destructive/icon/form-toolbar/compact buttons at --r-sm so operational UI
+     stays predictable. Add the class explicitly in markup. */
+  .btn.secondary { border-radius: 999px; padding: 0 16px; }
 
   /* ── Layout shell ──────────────────────────────────────────── */
   /*
@@ -144,36 +177,57 @@
   .page { padding: 28px 32px 40px; }
 
   /* ── Grids / panels ────────────────────────────────────────── */
-  .detail-layout, .library-grid, .form-layout { display: grid; gap: 20px; align-items: start; }
+  .detail-layout, .library-grid, .form-layout { display: grid; gap: var(--space-5); align-items: start; }
+  /*
+   * Two-column grids per the brief (recommend_ui_direction on our own UI
+   * advised a two/three-column structure — current views were single-column
+   * despite the class names). Each view gets its own grid rule so the columns
+   * don't leak across views; collapses to 1 col under 1100px.
+   */
+  .detail-body { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--space-5); align-items: start; }
+  .detail-main { display: grid; gap: var(--space-5); min-width: 0; }
+  .detail-rail { display: grid; gap: var(--space-5); min-width: 0; }
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5); align-items: start; }
+  @media (max-width: 1100px) {
+    .detail-body { grid-template-columns: 1fr; }
+    .stats-grid { grid-template-columns: 1fr; }
+  }
 
-  /* The main canvas: 1px hairline, no shadow. Depth = whitespace + type. */
+  /* The main canvas: alias to .panel--spacious. Kept so existing markup works
+     during the migration; new detail-view markup uses .panel--spacious directly. */
   .canvas-card {
     background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
     overflow: hidden;
   }
   .canvas-card > .card-head {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 18px 24px; border-bottom: 1px solid var(--line);
+    padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--line);
   }
-  .canvas-card > .card-body { padding: 24px; display: grid; gap: 20px; }
+  .canvas-card > .card-body { padding: var(--space-5); display: grid; gap: var(--space-5); }
 
   /* Attribute block — was the right rail; now a bordered section inside the main card. */
-  .attr-block { background: var(--inset); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; }
+  .attr-block { background: var(--inset); border: 1px solid var(--line); border-radius: var(--r); padding: var(--space-5); }
   .attr-block + .attr-block { margin-top: 14px; }
   .attr-block .section-title { margin-bottom: 12px; }
   /* In-page save-check (Form view) — sits below the form, always visible now. */
   .in-page-rail { margin-top: 20px; }
-  .in-page-rail .rail-card { background: var(--inset); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; }
+  .in-page-rail .rail-card { background: var(--inset); border: 1px solid var(--line); border-radius: var(--r); padding: var(--space-5); }
   .in-page-rail .rail-card .section-title { margin-bottom: 12px; }
 
   .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+  /* Spacious variant for the detail view — larger radius + padding. Unifies the
+     former .canvas-card into the .panel family so there's one card component,
+     not two parallel ones doing the same job. */
+  .panel--spacious { border-radius: var(--r-lg); }
+  .panel--spacious > .panel-head { padding: var(--space-4) var(--space-5); }
+  .panel--spacious > .panel-body { padding: var(--space-5); }
   .panel-head { min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
   .panel-title { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
   .panel-sub { color: var(--faint); font: 500 11px/1.3 var(--sans); margin-top: 3px; }
-  .panel-body { padding: 18px; }
+  .panel-body { padding: var(--space-5); }
 
   /* ── Detail view ───────────────────────────────────────────── */
-  .detail-hero { display: grid; gap: 16px; }
+  .detail-hero { display: grid; gap: var(--space-4); }
   /* The Library hero title — serif, the editorial centerpiece. */
   .sample-title { margin: 0; font-family: var(--serif); font-weight: 500; font-size: 34px; line-height: 1.15; letter-spacing: -0.02em; font-optical-sizing: auto; overflow-wrap: anywhere; color: var(--ink); }
   .source-line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--faint); font: 500 12px/1.2 var(--sans); }
@@ -185,10 +239,10 @@
   .tag.style { color: var(--muted); }
 
   .image-stage {
-    min-height: 320px; aspect-ratio: 16 / 10; border: 1px solid var(--line); border-radius: var(--r);
+    max-height: 420px; aspect-ratio: 16 / 10; border: 1px solid var(--line); border-radius: var(--r);
     background: var(--inset); display: grid; place-items: center; overflow: hidden; position: relative;
   }
-  .image-stage img { width: 100%; height: 100%; object-fit: contain; display: block; background: var(--surface); }
+  .image-stage img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; background: var(--surface); }
   .image-empty { text-align: center; color: var(--faint); display: grid; gap: 8px; justify-items: center; }
   .image-empty svg { width: 30px; height: 30px; }
   .badge {

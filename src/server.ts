@@ -427,28 +427,41 @@ server.registerTool(
       "synthesizes a design direction citing each one — why it was selected, what " +
       "it contributes, and the concrete decisions to borrow. Requires the embedding " +
       "index (npm run build-index). Use this when you don't know which specific " +
-      "entries to look at; use generate_design_prompt when you already have ids.",
+      "entries to look at; use generate_design_prompt when you already have ids. " +
+      "Pass qualityTier:'cautionary' to recommend what to AVOID (the corpus's " +
+      "cautionary entries are bad examples with critiques of why they fail).",
     inputSchema: {
       productContext: z.string().min(8).describe("What you're building, in natural language (e.g. 'a pricing page for a developer tool with a generous free tier')"),
       count: z.number().min(1).max(5).optional().describe("How many entries to ground the recommendation in (default 3, max 5)"),
       category: Category.optional().describe("Scope the search to a specific UI category"),
+      qualityTier: z
+        .enum(["exceptional", "cautionary"])
+        .optional()
+        .describe("Filter to a quality tier. 'exceptional' (default) finds great examples to emulate; 'cautionary' finds bad examples to learn what to AVOID — the synthesis reframes the techniques as pitfalls."),
       framework: z.enum(["brief", "tokens"]).optional().describe("Output shape: 'brief' (markdown, default) or 'tokens' (JSON)"),
     },
   },
-  async ({ productContext, count, category, framework }) => {
-    void logQuery({ query: `recommend_ui_direction:${productContext.slice(0, 80)}`, category }, []);
+  async ({ productContext, count, category, qualityTier, framework }) => {
+    void logQuery({ query: `recommend_ui_direction:${productContext.slice(0, 80)}`, category, qualityTier }, []);
     const status = indexStatus();
     if (!status.hasIndex) {
       return { content: [{ type: "text", text: "The embedding index hasn't been built. Run `npm run build-index` to enable recommendations." }], isError: true };
     }
     // Over-fetch (limit 20) so the diversity picker has a real pool to choose from;
     // searchEntries would already slice to the final count and starve the picker.
-    const results = await searchRanked({ query: productContext, category: category as string | undefined, limit: 20 });
+    const results = await searchRanked({ query: productContext, category: category as string | undefined, qualityTier: qualityTier as string | undefined, limit: 20 });
     if (!results.length) {
-      return { content: [{ type: "text", text: `No corpus entries matched "${productContext}". Try a different description or broader terms.` }] };
+      const scope = qualityTier === "cautionary" ? " cautionary" : "";
+      return { content: [{ type: "text", text: `No${scope} corpus entries matched "${productContext}". Try a different description or broader terms.` }] };
     }
     const rec = buildRecommendation(results, { productContext, count, category: category as string | undefined, framework: framework ?? "brief" });
-    return { content: [{ type: "text", text: renderRecommendation(rec) }] };
+    // Cautionary recommendation: reframe the headline so the agent knows this is
+    // "what to avoid," not "what to emulate." The synthesis body still names the
+    // techniques, but the framing inverts them to pitfalls.
+    const out = qualityTier === "cautionary"
+      ? renderRecommendation(rec).replace("# Design recommendation", "# Cautionary recommendation — what to AVOID")
+      : renderRecommendation(rec);
+    return { content: [{ type: "text", text: out }] };
   },
 );
 

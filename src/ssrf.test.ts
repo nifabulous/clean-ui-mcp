@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isPrivateAddress, assertSafeCaptureTarget } from "./ssrf.js";
-import { captureSlug, isAllowedByRobots, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT } from "./scripts/capture.js";
+import { captureSlug, isAllowedByRobots, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT, VIEWPORTS } from "./scripts/capture.js";
 
 // ============================================================
 // SSRF guard — the lint that prevents the capture pipeline from
@@ -249,17 +249,60 @@ describe("group-member size filter (sliver rejection)", () => {
   it("accepts legitimate group-member shapes", () => {
     expect(groupMemberPasses(300, 200)).toBe(true);   // typical card
     expect(groupMemberPasses(200, 200)).toBe(true);   // square tile
-    expect(groupMemberPasses(60, 60)).toBe(true);     // exactly at floor
-    expect(groupMemberPasses(480, 60)).toBe(true);    // 8:1 exactly, both axes ≥60
+    expect(groupMemberPasses(80, 80)).toBe(true);     // exactly at floor (MIN_GROUP_DIM=80)
+    expect(groupMemberPasses(640, 80)).toBe(true);    // 8:1 exactly, both axes ≥80
     expect(groupMemberPasses(120, 120)).toBe(true);   // small icon tile
+    // The 60×60 case used to pass at MIN_GROUP_DIM=60; with the floor at 80
+    // it's now (correctly) rejected — small enough that it's likely an icon
+    // grid rather than a real card grid.
+    expect(groupMemberPasses(60, 60)).toBe(false);
   });
 
   it("the threshold tuning is internally consistent with the exported constants", () => {
     // Sanity: the constants exist and have sensible values. If someone tunes
     // them later, this catches accidental drift to a nonsensical range.
-    expect(MIN_GROUP_DIM).toBeGreaterThanOrEqual(40);
+    // MIN_GROUP_DIM matches section-mode's minH=80 deliberately — keeps the
+    // "what counts as a UI unit" floor consistent across detection modes.
+    expect(MIN_GROUP_DIM).toBeGreaterThanOrEqual(60);
     expect(MIN_GROUP_DIM).toBeLessThanOrEqual(120);
     expect(MAX_GROUP_ASPECT).toBeGreaterThanOrEqual(4);
     expect(MAX_GROUP_ASPECT).toBeLessThanOrEqual(20);
+  });
+});
+
+// ============================================================
+// VIEWPORTS — filtered by CAPTURE_VIEWPORTS env var. Default is both
+// desktop + mobile. The filter exists so a curator building out one corpus
+// (e.g. web-only) can skip the other viewport without editing code.
+// ============================================================
+
+describe("VIEWPORTS filter (CAPTURE_VIEWPORTS env)", () => {
+  // Note: VIEWPORTS is computed at module load from process.env.CAPTURE_VIEWPORTS,
+  // so this test asserts the *current* process's filter result. The default
+  // (env unset) is both viewports; setting CAPTURE_VIEWPORTS=desktop at boot
+  // filters to just desktop. We can't easily test both from one process, so
+  // this test locks in whichever shape is currently active and asserts the
+  // invariants that hold regardless of the filter.
+  it("returns at least one viewport (never empty — empty would silently produce zero captures)", () => {
+    expect(VIEWPORTS.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("every entry has a name, width, and height", () => {
+    for (const v of VIEWPORTS) {
+      expect(typeof v.name).toBe("string");
+      expect(v.name.length).toBeGreaterThan(0);
+      expect(v.width).toBeGreaterThan(0);
+      expect(v.height).toBeGreaterThan(0);
+    }
+  });
+
+  it("the desktop viewport (1440×900) is in the active set under default config", () => {
+    // Default env = both viewports. If this test process has CAPTURE_VIEWPORTS
+    // set to mobile-only, this would fail — but the default-run expectation
+    // is desktop present.
+    const desktop = VIEWPORTS.find((v) => v.name === "desktop");
+    expect(desktop).toBeDefined();
+    expect(desktop?.width).toBe(1440);
+    expect(desktop?.height).toBe(900);
   });
 });

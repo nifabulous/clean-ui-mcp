@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isPrivateAddress, assertSafeCaptureTarget } from "./ssrf.js";
-import { captureSlug, isAllowedByRobots, escapeCssId } from "./scripts/capture.js";
+import { captureSlug, isAllowedByRobots, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT } from "./scripts/capture.js";
 
 // ============================================================
 // SSRF guard — the lint that prevents the capture pipeline from
@@ -158,5 +158,108 @@ describe("robots.txt gate", () => {
     // environment has no network, the fetch throws and the gate returns true.
     const allowed = await isAllowedByRobots("https://example.com/some-path-with-no-disallow").catch(() => true);
     expect(allowed).toBe(true);
+  });
+});
+
+// ============================================================
+// selectorFingerprint — short id generation for capture filenames.
+// Bug it fixes: cssPath() in DETECT_SCRIPT can chain up to 6 nodes worth of
+// tag+classes; slugified directly into a filename that regularly exceeded
+// 200 chars ("File name too long" on zip/tar). The fingerprint is sha1/10
+// so ids stay short and stable; selectorPath in the manifest keeps the
+// human-readable original.
+// ============================================================
+
+describe("selectorFingerprint (short id generation)", () => {
+  it("returns a 10-char hex string regardless of input length", () => {
+    const short = selectorFingerprint("#main");
+    const long = selectorFingerprint("body > div.very.deeply.nested.container > section.foo.bar > article > p.baz.qux > span");
+    expect(short).toMatch(/^[a-f0-9]{10}$/);
+    expect(long).toMatch(/^[a-f0-9]{10}$/);
+    expect(short.length).toBe(10);
+    expect(long.length).toBe(10);
+  });
+
+  it("is deterministic — same selector always produces the same fingerprint", () => {
+    const s = "body > main > section.hero > div.container > h1";
+    expect(selectorFingerprint(s)).toBe(selectorFingerprint(s));
+  });
+
+  it("distinguishes different selectors", () => {
+    // Two selectors that differ only in their tail should produce different ids.
+    const a = selectorFingerprint("body > main > section.hero");
+    const b = selectorFingerprint("body > main > section.footer");
+    expect(a).not.toBe(b);
+  });
+
+  it("produces ids short enough that filenames stay under common filesystem limits", () => {
+    // Real batch id from the linear.app run before this fix:
+    //   linear-group-div-7bwwmq-root-7bwwmq-homepage-nth-of-type-2-div-...-mobile
+    // (200+ chars). With fingerprinting, the worst case is product + group +
+    // 10-char-hash + viewport, ~40 chars total.
+    const longSelector = "body > main > section > div > div > div > div.a.b > div.c.d > div.e.f > article > p";
+    const id = `linear-group-${selectorFingerprint(longSelector)}-desktop`;
+    expect(id.length).toBeLessThan(50);
+  });
+});
+
+// ============================================================
+// Group-member size filter — the sliver-rejection predicate that gates Pass B
+// (repeated sibling groups). Ported here from DETECT_SCRIPT so we can test
+// the math directly. The in-page script uses the same constants
+// (MIN_GROUP_DIM, MAX_GROUP_ASPECT); the predicate below mirrors its logic.
+//
+// Bug cases this catches:
+//   - 12×249 chart-bar sliver (passed the old height-only floor)
+//   - <60px icon fragments (now dropped by the per-axis floor)
+// Bug cases it correctly still rejects:
+//   - SVG-internal <path> siblings (caught by the SVG guard, not this filter)
+// ============================================================
+
+describe("group-member size filter (sliver rejection)", () => {
+  // Predicate mirroring the in-page check (group.map(...).filter).
+  function groupMemberPasses(width: number, height: number): boolean {
+    if (width < MIN_GROUP_DIM || height < MIN_GROUP_DIM) return false;
+    const longSide = Math.max(width, height);
+    const shortSide = Math.max(1, Math.min(width, height));
+    return longSide / shortSide <= MAX_GROUP_ASPECT;
+  }
+
+  it("rejects the 12×249 sliver that motivated the fix", () => {
+    // Real case from the linear.app batch: a chart-bar inside an <svg>. The
+    // 12px width passed the area check (249×12 = 2988 > 2500) but the capture
+    // was a content-free vertical strip. With MIN_GROUP_DIM=60 this is now
+    // rejected on width alone.
+    expect(groupMemberPasses(12, 249)).toBe(false);
+  });
+
+  it("rejects anything below the per-axis 60px floor", () => {
+    expect(groupMemberPasses(59, 200)).toBe(false);
+    expect(groupMemberPasses(200, 59)).toBe(false);
+    expect(groupMemberPasses(59, 59)).toBe(false);
+  });
+
+  it("rejects extreme aspect ratios even when both axes clear the floor", () => {
+    // 60×481 = ~8:1, just over the cap.
+    expect(groupMemberPasses(60, 481)).toBe(false);
+    // 600×60 = 10:1 — legit width, but a sliver-thin strip.
+    expect(groupMemberPasses(600, 60)).toBe(false);
+  });
+
+  it("accepts legitimate group-member shapes", () => {
+    expect(groupMemberPasses(300, 200)).toBe(true);   // typical card
+    expect(groupMemberPasses(200, 200)).toBe(true);   // square tile
+    expect(groupMemberPasses(60, 60)).toBe(true);     // exactly at floor
+    expect(groupMemberPasses(480, 60)).toBe(true);    // 8:1 exactly, both axes ≥60
+    expect(groupMemberPasses(120, 120)).toBe(true);   // small icon tile
+  });
+
+  it("the threshold tuning is internally consistent with the exported constants", () => {
+    // Sanity: the constants exist and have sensible values. If someone tunes
+    // them later, this catches accidental drift to a nonsensical range.
+    expect(MIN_GROUP_DIM).toBeGreaterThanOrEqual(40);
+    expect(MIN_GROUP_DIM).toBeLessThanOrEqual(120);
+    expect(MAX_GROUP_ASPECT).toBeGreaterThanOrEqual(4);
+    expect(MAX_GROUP_ASPECT).toBeLessThanOrEqual(20);
   });
 });

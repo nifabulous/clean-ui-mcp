@@ -49,6 +49,7 @@ import { existsSync, mkdirSync, promises as fs, readdirSync, rmSync, writeFileSy
 import { resolve, dirname, join, basename, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { createHash } from "node:crypto";
 import { chromium, type Browser, type BrowserContext, type Page, type Locator } from "playwright";
 import sharp from "sharp";
 import { assertSafeCaptureTarget } from "../ssrf.js";
@@ -107,7 +108,23 @@ export type CaptureMeta = {
   height: number;
 };
 
-const MIN_CAPTURE_AREA = 2500; // 50x50px — drops icon-fragment false positives
+const MIN_CAPTURE_AREA = 2500; // 50x50px — secondary guard for small-but-square fragments
+// Per-axis floor — catches slivers area alone misses (e.g. a 12×249 bar-chart
+// bar passes 2500px² on area but is unusable as a corpus entry). Applied at
+// both the detection stage (group members) and the screenshot stage (defense
+// in depth, in case live layout differs from detected bounding box by the
+// time the screenshot fires).
+const MIN_CAPTURE_DIM = 40;
+// Group-member candidates (Pass B) — repeated sibling elements like cards in
+// a grid. The first run on linear.app produced dozens of <40px icon fragments
+// and 12×249 chart-bar slivers because the only filter was a height floor.
+// Tightened to: both axes ≥60px AND longest:shortest side ≤8:1.
+// The 60px floor is between section-mode's minH=80 and the icon-fragment floor
+// — drops small icon grids while keeping real small cards. The 8:1 cap drops
+// thin slivers but (acknowledged trade-off) also drops legit wide bars; the
+// latter are rare as group members and triage can recover anything important.
+const MIN_GROUP_DIM = 60;
+const MAX_GROUP_ASPECT = 8;
 const DEDUP_HAMMING_THRESHOLD = 6; // of 64 bits — near-duplicate cutoff
 
 // ============================================================
@@ -188,6 +205,18 @@ function hammingHex(a: string, b: string): number {
 // Mirrors the slugify discipline used by ui-server.ts and the old capture.ts.
 function safeId(...parts: string[]): string {
   return parts.map(slug).filter(Boolean).join("-") || "capture";
+}
+
+/**
+ * Short, filesystem-safe fingerprint for a CSS selector path. Selectors built
+ * by cssPath() in DETECT_SCRIPT can chain up to 6 nodes' tag+classes, which
+ * slug()'d directly into an id/filename regularly exceeded 200+ characters —
+ * broke on extraction (zip/tar "File name too long") and bloated triage.json
+ * keys. The full selector is preserved separately as selectorPath in the
+ * manifest; the id only needs to be unique and stable, not human-readable.
+ */
+function selectorFingerprint(selector: string): string {
+  return createHash("sha1").update(selector).digest("hex").slice(0, 10);
 }
 
 // ============================================================
@@ -380,7 +409,18 @@ const DETECT_SCRIPT = `
   }
   const groups = [];
   const seenParents = new Set();
-  const allEls = [...root.querySelectorAll('*')];
+  // Exclude everything INSIDE an <svg> from Pass B. Decorative illustrations
+  // (Linear's animated icon graphics, for instance) are built from many
+  // same-tag <path>/<g> siblings that satisfy the "repeated sibling" test
+  // just as well as real card/list grids do, so without this guard the walk
+  // below individually captures each path segment of a single icon as its
+  // own "group-member" — content-free slivers, not corpus candidates. The
+  // outer <svg> itself is still eligible (it's not inside another <svg>), so
+  // whole illustrations are still captured as one unit.
+  const isInsideSvg = (el) => !!(el.parentElement && el.parentElement.closest('svg'));
+  const minGroupDim = %MINGROUPDIM%;
+  const maxGroupAspect = %MAXGROUPASPECT%;
+  const allEls = [...root.querySelectorAll('*')].filter(el => !isInsideSvg(el));
   for (const el of allEls) {
     const parent = el.parentElement;
     if (!parent || seenParents.has(parent)) continue;
@@ -391,7 +431,16 @@ const DETECT_SCRIPT = `
     const group = sameTagSiblings.filter(n => sig(n) === baseSig && isVisible(n));
     if (group.length >= 2) {
       seenParents.add(parent);
-      const groupCandidates = group.map(toCandidate).filter(c => c.height >= minH);
+      const groupCandidates = group.map(toCandidate).filter(c => {
+        // Height-only floor (the original check) let thin slivers through —
+        // e.g. a single 12x249 bar-chart bar passed minH=80 on height alone.
+        // Require both axes to clear a floor, and cap the aspect ratio so an
+        // isolated bar/rule/divider can't pass just by being "tall enough".
+        if (c.width < minGroupDim || c.height < minGroupDim) return false;
+        const longSide = Math.max(c.width, c.height);
+        const shortSide = Math.max(1, Math.min(c.width, c.height));
+        return longSide / shortSide <= maxGroupAspect;
+      });
       if (groupCandidates.length >= 2) groups.push(groupCandidates);
     }
   }
@@ -409,7 +458,9 @@ async function detect(page: Page, rootSelector: string) {
     .replace("%ROOT%", JSON.stringify(rootSelector))
     .replace("%MINW%", "0.5")
     .replace("%MINH%", "80")
-    .replace("%MAXHFRAC%", "2");
+    .replace("%MAXHFRAC%", "2")
+    .replace("%MINGROUPDIM%", String(MIN_GROUP_DIM))
+    .replace("%MAXGROUPASPECT%", String(MAX_GROUP_ASPECT));
   return page.evaluate(script) as Promise<{
     sections: Candidate[];
     groups: Candidate[][];
@@ -436,7 +487,11 @@ async function captureLocator(
   const meta = await image.metadata();
   const width = meta.width ?? 0;
   const height = meta.height ?? 0;
-  if (width * height < MIN_CAPTURE_AREA) return null;
+  // Area alone doesn't catch slivers (a 12x249 sliver clears 2500px² on area
+  // but is unusable as a corpus entry) — a per-axis floor is the actual guard;
+  // area stays as a secondary check for small-but-square fragments the axis
+  // floor wouldn't catch (e.g. a 45x45 icon crop).
+  if (width < MIN_CAPTURE_DIM || height < MIN_CAPTURE_DIM || width * height < MIN_CAPTURE_AREA) return null;
 
   const buffer = await image.toBuffer();
   const aHash = await aHashOf(raw);
@@ -550,7 +605,7 @@ async function captureSource(
           const loc = page.locator(sec.selector).first();
           if (!(await loc.isVisible().catch(() => false))) continue;
           const meta = await captureLocator(loc, batchDir, batchId, {
-            id: safeId(source.sourceName, mode, sec.selector, viewport.name),
+            id: safeId(source.sourceName, mode, selectorFingerprint(sec.selector), viewport.name),
             sourceUrl: source.url,
             sourceName: source.sourceName,
             captureMode: mode,
@@ -564,7 +619,7 @@ async function captureSource(
           const loc = page.locator(rep.selector).first();
           if (!(await loc.isVisible().catch(() => false))) continue;
           const meta = await captureLocator(loc, batchDir, batchId, {
-            id: safeId(source.sourceName, "group", rep.selector, viewport.name),
+            id: safeId(source.sourceName, "group", selectorFingerprint(rep.selector), viewport.name),
             sourceUrl: source.url,
             sourceName: source.sourceName,
             captureMode: "group-member",
@@ -780,4 +835,4 @@ Example:
   }
 }
 
-export { runSingleCapture, runBatchCapture, captureSource, isAllowedByRobots, slug as captureSlug, escapeCssId };
+export { runSingleCapture, runBatchCapture, captureSource, isAllowedByRobots, slug as captureSlug, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT };

@@ -118,6 +118,51 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
+/**
+ * CSS-escape an identifier for use in a CSS selector, mirroring the browser's
+ * `CSS.escape()` for the cases this file produces (anchor IDs read out of
+ * href="#..." attributes — often contain dots, colons, brackets, leading
+ * digits, or other characters that aren't valid in a bare CSS identifier).
+ *
+ * Used in NODE code (page.locator(`#${escapeCssId(id)}`)) — the in-page
+ * DETECT_SCRIPT still uses the browser-native CSS.escape, which is correct
+ * because page.evaluate runs in the browser. The previous version called the
+ * browser-only `CSS.escape` here too, which threw a ReferenceError (CSS is
+ * undefined outside the browser), got caught at the viewport loop, and
+ * silently skipped every section/group/interaction capture for that viewport
+ * whenever a page had any anchor ID. Bug surfaced in PR review.
+ *
+ * Implements the omittable-char + code-point cases from
+ * https://www.w3.org/TR/cssom-1/#serialize-an-identifier — sufficient for the
+ * DOM-sourced IDs we feed it; not a full implementation of every edge case.
+ */
+function escapeCssId(id: string): string {
+  let out = "";
+  for (let i = 0; i < id.length; i++) {
+    const ch = id.charCodeAt(i);
+    // NULL → replacement; high-surrogate/codepoint → \XXXXXX; control chars → escaped
+    if (ch === 0) {
+      out += "\uFFFD";
+    } else if (ch < 0x20 || ch === 0x7f) {
+      out += "\\" + ch.toString(16) + " ";
+    } else if (
+      (ch >= 0x30 && ch <= 0x39) ||    // 0-9
+      (ch >= 0x41 && ch <= 0x5a) ||    // A-Z
+      (ch >= 0x61 && ch <= 0x7a) ||    // a-z
+      ch === 0x5f || ch === 0x2d       // _ -
+    ) {
+      // First char must not be a digit (would make an invalid ident); escape it.
+      if (i === 0 && ch >= 0x30 && ch <= 0x39) out += "\\" + ch.toString(16) + " ";
+      else out += id[i];
+    } else {
+      // Special-characters that need backslash escaping in a CSS identifier.
+      // Hex-escape to be safe across the rest of Unicode.
+      out += "\\" + id[i];
+    }
+  }
+  return out;
+}
+
 async function aHashOf(buffer: Buffer): Promise<string> {
   // 8x8 grayscale average hash — cheap, dependency-light, sufficient for the
   // near-duplicate problem (repeated card/list captures from Pass B).
@@ -535,7 +580,9 @@ async function captureSource(
       };
 
       for (const id of anchorIds) {
-        const loc = page.locator(`#${CSS.escape(id)}`).first();
+        // escapeCssId (Node-side) — must NOT use the browser-only CSS.escape
+        // here. See escapeCssId's doc comment for why.
+        const loc = page.locator(`#${escapeCssId(id)}`).first();
         if (!(await loc.isVisible().catch(() => false))) continue;
         const meta = await captureLocator(loc, batchDir, batchId, {
           id: safeId(source.sourceName, "anchor", id, viewport.name),
@@ -733,4 +780,4 @@ Example:
   }
 }
 
-export { runSingleCapture, runBatchCapture, captureSource, isAllowedByRobots, slug as captureSlug };
+export { runSingleCapture, runBatchCapture, captureSource, isAllowedByRobots, slug as captureSlug, escapeCssId };

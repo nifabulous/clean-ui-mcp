@@ -838,4 +838,3 @@ tbody tr:hover .row-actions{opacity:1}
   border: 1px dashed var(--hairline-2); border-radius: var(--radius);
 }
 .img-fallback svg { width: 18px; height: 18px; opacity: 0.5; }
-

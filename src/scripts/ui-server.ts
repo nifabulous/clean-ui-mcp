@@ -12,7 +12,7 @@ import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
-import { tagImage, generateCritique } from "../tagger.js";
+import { tagImage, generateCritique, hasVisionKey, activeModelName } from "../tagger.js";
 import type { CaptureMeta } from "./capture.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
 import {
@@ -421,6 +421,13 @@ type CaptureBatchItem = {
   viewport: string;
   imagePath: string;
   status: string;
+  // Capture provenance surfaced to the UI so the promote action can stamp
+  // them onto the new entry's provenance.capture. Without these the promoted
+  // entry got sourceUrl:"" + selectorPath:"" — silently dropping the very
+  // metadata the capture pipeline exists to record.
+  sourceUrl?: string;
+  selectorPath?: string;
+  capturedAt?: string;
 };
 
 type CaptureBatchSummary = {
@@ -469,6 +476,9 @@ function listCaptureBatches(): CaptureBatchSummary[] {
         viewport: m.viewport,
         imagePath: m.imagePath,
         status,
+        sourceUrl: m.sourceUrl,
+        selectorPath: m.selectorPath,
+        capturedAt: m.capturedAt,
       };
     });
     // capturedAt: newest capture in the batch (manifest writes per-item ISO
@@ -553,16 +563,19 @@ function explainTagError(error: unknown): string {
 }
 
 export function publicConfigStatus(status: EnvStatus = getEnvStatus()) {
-  const anyVisionKey = status.openaiKeyConfigured || status.anthropicKeyConfigured || status.geminiKeyConfigured;
-  // Resolve the effective provider + model for each pass (mirrors tagger.resolveProvider).
+  // hasVisionKey honors per-pass OpenAI keys (OPENAI_API_KEY_EXTRACTION /
+  // _CRITIQUE) — a split-provider setup that only sets _CRITIQUE was falsely
+  // reporting "no vision key" via the bare-key OR below.
+  const anyVisionKey = hasVisionKey();
+  // Resolve the effective provider + model for each pass via the SAME logic
+  // tagger.ts uses (activeModelName resolves through openaiConfigForPass on the
+  // OpenAI path, so OPENAI_AUTO_TAG_MODEL_CRITIQUE etc. are honored). Previously
+  // this hand-rolled the resolution and missed the per-pass overrides, so the
+  // /api/config status exposed to the UI lied about which model ran.
   const extractionProvider = process.env.AUTO_TAG_PROVIDER_EXTRACTION ?? process.env.AUTO_TAG_PROVIDER ?? "openai";
   const critiqueProvider = process.env.AUTO_TAG_PROVIDER_CRITIQUE ?? process.env.AUTO_TAG_PROVIDER ?? "openai";
-  const extractionModel = extractionProvider === "claude" ? (process.env.CLAUDE_AUTO_TAG_MODEL ?? "claude-haiku-4-5")
-    : extractionProvider === "gemini" ? (process.env.GEMINI_AUTO_TAG_MODEL ?? "gemini-2.5-flash")
-    : (process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano");
-  const critiqueModel = critiqueProvider === "claude" ? (process.env.CLAUDE_AUTO_TAG_MODEL ?? "claude-haiku-4-5")
-    : critiqueProvider === "gemini" ? (process.env.GEMINI_AUTO_TAG_MODEL ?? "gemini-2.5-flash")
-    : (process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano");
+  const extractionModel = activeModelName("extraction");
+  const critiqueModel = activeModelName("critique");
   return {
     openaiKeyConfigured: status.openaiKeyConfigured,
     anthropicKeyConfigured: status.anthropicKeyConfigured,
@@ -929,8 +942,12 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       return;
     }
 
-    if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY && !process.env.GEMINI_API_KEY) {
-      sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
+    // hasVisionKey (shared with the tagger) honors OPENAI_API_KEY_EXTRACTION /
+    // _CRITIQUE too — a split-provider setup using only OPENAI_API_KEY_CRITIQUE
+    // (NIM/DeepSeek for critique + real OpenAI for extraction) was falsely
+    // rejected by the bare OPENAI_API_KEY check.
+    if (!hasVisionKey()) {
+      sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY (or OPENAI_API_KEY_EXTRACTION / _CRITIQUE for split-provider setups), ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
       return;
     }
 
@@ -965,8 +982,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       sendJson(res, 400, { error: "extraction is required (pass the entry's _raw.extraction)" });
       return;
     }
-    if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY && !process.env.GEMINI_API_KEY) {
-      sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
+    if (!hasVisionKey()) {
+      sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY (or OPENAI_API_KEY_EXTRACTION / _CRITIQUE for split-provider setups), ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
       return;
     }
 

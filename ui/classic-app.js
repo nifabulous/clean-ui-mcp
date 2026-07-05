@@ -1067,9 +1067,16 @@ async function promoteCapture(batchId, captureId) {
   const item = batch.items.find((i) => i.id === captureId);
   if (!item) return;
   // Build a draft from the manifest: sourceName → productName, imagePath, and a
-  // capture-provenance stub the save path will stamp on commit.
+  // capture-provenance block stamped from the manifest's per-item fields. Earlier
+  // this hardcoded sourceUrl:"" and dropped selectorPath, which silently lost the
+  // recapture metadata the pipeline exists to record. The server now surfaces
+  // these per-item (CaptureBatchItem), so use them.
   const draft = blankDraft();
   draft.source.productName = item.sourceName;
+  // Prefer the manifest's per-item sourceUrl for the entry's source.url too —
+  // it's the actual page the screenshot came from, which is what source.url
+  // is documented to mean.
+  if (item.sourceUrl) draft.source.url = item.sourceUrl;
   draft.image = { visibility: "private", path: item.imagePath, width: null, height: null };
   draft.title = `${item.sourceName} — (add descriptive subtitle)`;
   // Stash batchId + captureId so saveDraft flips triage to "promoted" after the
@@ -1080,8 +1087,14 @@ async function promoteCapture(batchId, captureId) {
     capture: {
       mode: item.captureMode,
       viewport: item.viewport,
-      capturedAt: batch.capturedAt,
-      sourceUrl: "",
+      // Per-item timestamp when present (more accurate than batch-level); fall
+      // back to the batch's dir-derived timestamp for older manifests.
+      capturedAt: item.capturedAt || batch.capturedAt,
+      sourceUrl: item.sourceUrl || "",
+      // selectorPath is optional in the schema — only include when the manifest
+      // had one. Empty string would also validate (it's a non-required string)
+      // but omitting is cleaner.
+      ...(item.selectorPath ? { selectorPath: item.selectorPath } : {}),
     },
   };
   resetDraft(draft);

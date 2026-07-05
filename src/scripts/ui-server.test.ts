@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findDuplicateAtCommit, isPrivateAddress, orphanedPrivateImagePaths, prepareNewEntryPayload, publicConfigStatus, sameOrigin, uniqueEntryId, validateEntryPayload } from "./ui-server.js";
+import { cleanupBatch, findDuplicateAtCommit, isPrivateAddress, orphanedPrivateImagePaths, prepareNewEntryPayload, publicConfigStatus, sameOrigin, setTriageStatus, uniqueEntryId, validateEntryPayload } from "./ui-server.js";
 import type { IncomingMessage } from "node:http";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PRIVATE_IMAGE_DIR } from "../paths.js";
 import type { CorpusEntryT } from "../schema.js";
@@ -136,6 +136,38 @@ describe("ui server entry ids", () => {
     expect(status).toHaveProperty("critiqueModel");
     expect(JSON.stringify(status)).not.toContain("/tmp/.env");
     expect(JSON.stringify(status)).not.toContain("sk-");
+  });
+
+  it("reports visionKeyConfigured=true when only a per-pass OpenAI key is set", () => {
+    // Regression: a split-provider setup with only OPENAI_API_KEY_CRITIQUE
+    // (NIM/DeepSeek for critique, no bare OPENAI_API_KEY) was falsely reported
+    // as "no vision key" before publicConfigStatus learned about per-pass keys.
+    // The fix honors OPENAI_API_KEY_EXTRACTION / _CRITIQUE in addition to the
+    // status flag passed in, so this status object (openaiKeyConfigured:false)
+    // still surfaces visionKeyConfigured:true when the env vars are present.
+    const savedExtr = process.env.OPENAI_API_KEY_EXTRACTION;
+    const savedCrit = process.env.OPENAI_API_KEY_CRITIQUE;
+    try {
+      delete process.env.OPENAI_API_KEY_EXTRACTION;
+      process.env.OPENAI_API_KEY_CRITIQUE = "nvapi-test";
+      const status = publicConfigStatus({
+        envPath: "/tmp/.env",
+        envFileLoaded: true,
+        openaiKeyConfigured: false,            // bare key NOT set
+        anthropicKeyConfigured: false,
+        geminiKeyConfigured: false,
+        voyageKeyConfigured: false,
+        autoTagProvider: "openai",
+        openaiAutoTagModel: "test-model",
+        cleanUiPort: 3131,
+      });
+      expect(status.visionKeyConfigured).toBe(true);
+    } finally {
+      if (savedCrit === undefined) delete process.env.OPENAI_API_KEY_CRITIQUE;
+      else process.env.OPENAI_API_KEY_CRITIQUE = savedCrit;
+      if (savedExtr === undefined) delete process.env.OPENAI_API_KEY_EXTRACTION;
+      else process.env.OPENAI_API_KEY_EXTRACTION = savedExtr;
+    }
   });
 });
 
@@ -276,5 +308,123 @@ describe("commit-time duplicate gate", () => {
       existing,
     );
     expect(dup).toBeNull();
+  });
+});
+
+describe("capture provenance flows through the save path", () => {
+  // Confirms the schema change (Commit 2: provenance.capture) parses through the
+  // UI's save endpoint. prepareNewEntryPayload is the exact entry point POST
+  // /api/entries uses; if it accepts capture provenance, the classic promote
+  // flow and the SPA add flow both land it in the corpus.
+  it("accepts an entry with provenance.capture populated", () => {
+    const payload = {
+      ...baseEntry,
+      id: "",
+      title: "Linear Dashboard",
+      provenance: {
+        taggedBy: "auto",
+        capture: {
+          mode: "section",
+          viewport: "desktop",
+          selectorPath: "main > section.hero",
+          capturedAt: "2026-07-05T12:00:00.000Z",
+          sourceUrl: "https://linear.app",
+        },
+      },
+    };
+    const entry = prepareNewEntryPayload(payload, []);
+    expect(entry.provenance?.capture).toBeDefined();
+    expect(entry.provenance?.capture?.mode).toBe("section");
+    expect(entry.provenance?.capture?.viewport).toBe("desktop");
+    expect(entry.provenance?.capture?.sourceUrl).toBe("https://linear.app");
+  });
+
+  it("rejects an invalid capture mode", () => {
+    expect(() =>
+      prepareNewEntryPayload(
+        { ...baseEntry, id: "", provenance: { taggedBy: "auto", capture: { mode: "bogus", viewport: "desktop", capturedAt: "x", sourceUrl: "y" } } },
+        [],
+      ),
+    ).toThrow();
+  });
+});
+
+describe("capture triage path-traversal guard", () => {
+  // The plan review flagged this: batchId/captureId name path segments under
+  // captures/, so untrusted values must not reach the path joins. setTriageStatus
+  // is the POST /api/capture-triage handler's core; it must reject ../ and any
+  // non-slug character before resolving a path.
+  const batchCases = [
+    "../../etc",
+    "..%2fetc",
+    "foo/bar",
+    "foo\\bar",
+    "foo bar",
+    ".hidden",
+    "UPPER",
+  ];
+  for (const bad of batchCases) {
+    it(`rejects batchId ${JSON.stringify(bad)}`, () => {
+      expect(() => setTriageStatus(bad, "cap-1", "promoted")).toThrow(/batchId/);
+    });
+  }
+  const captureCases = ["../foo", "a/b", "a\\b", "UPPER", "has space"];
+  for (const bad of captureCases) {
+    it(`rejects captureId ${JSON.stringify(bad)}`, () => {
+      expect(() => setTriageStatus("valid-batch", bad, "promoted")).toThrow(/captureId/);
+    });
+  }
+});
+
+describe("capture cleanup safety gate", () => {
+  // POST /api/capture-cleanup must refuse to delete a batch dir while any item
+  // is still pending — otherwise future cleanup eats private screenshots the
+  // curator hasn't reviewed. cleanupBatch is the handler core.
+  const capturesRoot = join(PRIVATE_IMAGE_DIR, "captures");
+  const batchId = "cleanup-test-batch";
+
+  beforeEach(() => {
+    const batchDir = join(capturesRoot, batchId);
+    mkdirSync(batchDir, { recursive: true });
+    writeFileSync(join(batchDir, "manifest.json"), JSON.stringify([
+      { id: "cap-1", sourceName: "Acme", captureMode: "section", viewport: "desktop", selectorPath: "main", capturedAt: "2026-07-05T00:00:00.000Z", aHash: "0", imagePath: `images-private/captures/${batchId}/cap-1.png`, width: 100, height: 100 },
+    ]));
+  });
+  afterEach(() => {
+    const batchDir = join(capturesRoot, batchId);
+    if (existsSync(batchDir)) rmSync(batchDir, { recursive: true, force: true });
+  });
+
+  it("refuses (409) and keeps the directory when items are pending", () => {
+    writeFileSync(join(capturesRoot, batchId, "triage.json"), JSON.stringify({ "cap-1": "pending" }));
+    let err: unknown;
+    try { cleanupBatch(batchId); } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { statusCode?: number }).statusCode).toBe(409);
+    expect((err as Error).message).toMatch(/pending/);
+    // Directory must still exist — the safety gate held.
+    expect(existsSync(join(capturesRoot, batchId))).toBe(true);
+  });
+
+  it("deletes the directory once nothing is pending", () => {
+    writeFileSync(join(capturesRoot, batchId, "triage.json"), JSON.stringify({ "cap-1": "promoted" }));
+    const result = cleanupBatch(batchId);
+    expect(result.deleted).toBe(batchId);
+    expect(existsSync(join(capturesRoot, batchId))).toBe(false);
+  });
+
+  it("refuses (409) when at least one item is still pending among many", () => {
+    writeFileSync(join(capturesRoot, batchId, "triage.json"), JSON.stringify({ "cap-1": "pending", "cap-2": "rejected" }));
+    let err: unknown;
+    try { cleanupBatch(batchId); } catch (e) { err = e; }
+    expect((err as { statusCode?: number }).statusCode).toBe(409);
+    expect(existsSync(join(capturesRoot, batchId))).toBe(true);
+  });
+
+  it("rejects a traversal batchId without touching disk", () => {
+    // Ensure no captures dir leaking from a stray prior run.
+    expect(() => cleanupBatch("../../etc")).toThrow(/batchId/);
+    // The captures root should contain at most our test batch — never escaped.
+    expect(readdirSync(capturesRoot).some((n) => n === "etc" || n === "..")).toBe(false);
   });
 });

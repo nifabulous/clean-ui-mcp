@@ -15,7 +15,7 @@ import "./env.js";
  */
 
 import { readFileSync } from "node:fs";
-import { extname } from "node:path";
+import { extname, basename } from "node:path";
 import { toCorpusRelativePath } from "./paths.js";
 import { detectPlatform } from "./schema.js";
 import { Vibrant } from "node-vibrant/node";
@@ -183,6 +183,52 @@ Rules that apply to every field you write:
 Return ONLY valid JSON, no markdown fences, no extra keys beyond what's requested.`;
 
 const OPENAI_RESPONSES_API = "https://api.openai.com/v1/responses";
+
+/**
+ * Per-pass OpenAI-compatible provider config. Supports a split setup where
+ * extraction and critique use different OpenAI-compatible endpoints — e.g.
+ * real OpenAI for extraction (vision) and NVIDIA NIM's DeepSeek V4 for
+ * critique (writing). Resolution order per field:
+ *
+ *   OPENAI_BASE_URL_<PASS>     → OPENAI_BASE_URL     → "" (real OpenAI)
+ *   OPENAI_API_KEY_<PASS>      → OPENAI_API_KEY      → (error if missing)
+ *   OPENAI_AUTO_TAG_MODEL_<PASS> → OPENAI_AUTO_TAG_MODEL → "gpt-5.4-nano"
+ *
+ * Where <PASS> is EXTRACTION or CRITIQUE. So the split-provider DeepSeek setup
+ * is just:
+ *
+ *   AUTO_TAG_PROVIDER_EXTRACTION=openai
+ *   AUTO_TAG_PROVIDER_CRITIQUE=openai
+ *   OPENAI_API_KEY=<real openai key>
+ *   OPENAI_AUTO_TAG_MODEL=gpt-5.4-mini
+ *   OPENAI_BASE_URL_CRITIQUE=https://integrate.api.nvidia.com/v1
+ *   OPENAI_API_KEY_CRITIQUE=nvapi-...
+ *   OPENAI_AUTO_TAG_MODEL_CRITIQUE=deepseek-ai/deepseek-v4-pro
+ *
+ * When OPENAI_BASE_URL (or the per-pass variant) is set, calls route to the
+ * /chat/completions path (the universal OpenAI-compatible format that NIM,
+ * OpenRouter, Together, Groq, vLLM all speak). When unset, real OpenAI keeps
+ * the native /v1/responses path — untouched behavior.
+ */
+interface OpenAIConfig { baseUrl: string; apiKey: string; model: string; }
+function openaiConfigForPass(pass: TaggerPass): OpenAIConfig {
+  const tier = pass.toUpperCase(); // "EXTRACTION" | "CRITIQUE"
+  const baseUrl = (process.env[`OPENAI_BASE_URL_${tier}`] ?? process.env.OPENAI_BASE_URL ?? "").replace(/\/+$/, "");
+  const apiKey = process.env[`OPENAI_API_KEY_${tier}`] ?? process.env.OPENAI_API_KEY ?? "";
+  const model = process.env[`OPENAI_AUTO_TAG_MODEL_${tier}`] ?? process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano";
+  return { baseUrl, apiKey, model };
+}
+// Some OpenAI-compatible providers expose a thinking toggle via the
+// `chat_template_kwargs` extension. NVIDIA NIM's DeepSeek V4 takes
+// {"chat_template_kwargs": {"thinking": false}}. Default: thinking ON for the
+// critique pass (DeepSeek's strength is reasoning), OFF for extraction
+// (deterministic fields don't benefit, and reasoning can push responses
+// toward max_tokens truncation on long outputs). Override globally with
+// OPENAI_THINKING_DISABLED=1 (forces OFF for both passes).
+// NOTE: the regex matches the truthy values ("1"/"true") so the constant is
+// true when the user asks to disable thinking. (An earlier version matched
+// "0"/"false", which inverted the flag — setting =1 silently did nothing.)
+const OPENAI_THINKING_DISABLED = /^(1|true)$/i.test(process.env.OPENAI_THINKING_DISABLED ?? "");
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
@@ -190,16 +236,43 @@ const OPENAI_AUTO_TAG_MODEL = process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano
 const CLAUDE_AUTO_TAG_MODEL = process.env.CLAUDE_AUTO_TAG_MODEL ?? "claude-haiku-4-5";
 const GEMINI_AUTO_TAG_MODEL = process.env.GEMINI_AUTO_TAG_MODEL ?? "gemini-2.5-flash";
 
-const MAX_OUTPUT_TOKENS = 4200;
+// Set DEBUG_TAGGER=1 to print per-call provider config and token usage to stderr.
+// Quiet by default so production logs (npm run ui, bulk-import) stay clean.
+const DEBUG_TAGGER = /^(1|true)$/i.test(process.env.DEBUG_TAGGER ?? "");
+
+// 8192 fits all three providers comfortably. Gemini/Claude critiques rarely
+// exceed ~700 tokens; DeepSeek V4 Pro on NIM (with thinking=true) routinely
+// runs longer — its reasoning tokens come out of the same max_tokens budget,
+// so a 4200 cap truncated critiques mid-stream and broke JSON parsing
+// (the same failure mode that prompted thinkingBudget:0 on Gemini 2.5).
+// 8192 is well under DeepSeek's 16384 hard limit and adds negligible cost.
+const MAX_OUTPUT_TOKENS = 8192;
 
 // Transient provider errors (502/503/504, "overloaded", "high demand", network
 // resets) are common under load — Gemini in particular returns 503 "This model
 // is currently experiencing high demand" during peak hours. Retrying with
-// backoff turns a batch-killing transient into a brief delay. 429s are NOT
-// retried here (they signal a real quota limit; the UI surfaces a clear message
-// and the user should switch keys or wait).
+// backoff turns a batch-killing transient into a brief delay.
+//
+// 429 rate-limit responses are ALSO retried, but only when the provider gives a
+// retry hint — Gemini embeds `retryDelay: "12s"` in the error body, OpenAI and
+// Anthropic use the `Retry-After` header. Free-tier per-minute quotas (e.g.
+// Gemini 3.5 Flash at 5 RPM) reset every 60s, so the hint is the right wait.
+// Capped at MAX_429_WAIT_MS so a daily-quota "retry in 1h" surfaces to the user
+// instead of hanging the batch. Without a hint, surface the error (let the user
+// decide whether to wait or switch keys) — same behavior as before.
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 800;
+// Upper bound on how long to wait for a 429 retry. Long enough to ride out a
+// per-minute quota reset (~60s worst case); a longer hint usually means the
+// daily/project quota is exhausted and the batch should stop, not stall.
+const MAX_429_WAIT_MS = 30_000;
+// Fallback wait when a 429 carries no retry hint but doesn't look like a hard
+// quota error either (e.g. NVIDIA NIM returns a bare {"status":429,"title":"Too
+// Many Requests"} with no Retry-After header). Per-minute quotas on most
+// providers (NIM, OpenRouter free tier, Groq) reset within ~60s, so waiting a
+// bit past that window turns a batch-killing burst of 429s into a brief pause.
+// Tuned slightly above 60s to be safe against clock skew on the provider side.
+const FALLBACK_429_WAIT_MS = 65_000;
 
 /**
  * fetch() wrapper that retries transient failures with exponential backoff.
@@ -212,6 +285,32 @@ async function fetchWithRetry(input: string | URL | Request, init?: RequestInit)
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const response = await fetch(input, init);
+      // 429 with a retry hint (per-minute quota reset) — wait and retry. The
+      // hint may be in the Retry-After header (OpenAI/Anthropic) or in the
+      // error body (Gemini). Free-tier per-minute limits reset quickly, so this
+      // turns a batch-killing rate-limit into a brief delay.
+      if (response.status === 429 && attempt < MAX_RETRIES) {
+        const text = await response.text().catch(() => "");
+        const wait = extract429Wait(response.headers, text);
+        if (wait !== null) {
+          await sleep(wait);
+          continue; // re-fetch with a fresh Request body
+        }
+        // No explicit hint. Distinguish "hard quota exhausted" (prepaid depleted,
+        // daily cap reached — surface to caller) from "transient per-minute limit
+        // with no hint provided" (NIM, some OpenRouter routes — wait and retry).
+        // The signal: hard-quota bodies typically say "quota"/"billing"/"credit"/
+        // "prepay"/"depleted"; a bare "Too Many Requests" with no such language
+        // is almost always a per-minute throttle that resets in ~60s.
+        const looksLikeHardQuota = /quota|billing|credit|prepay|deplet|exhausted|plan.*limit/i.test(text);
+        if (!looksLikeHardQuota) {
+          if (DEBUG_TAGGER) console.error(`[tagger] 429 with no retry hint — waiting ${FALLBACK_429_WAIT_MS}ms (transient per-minute limit suspected)`);
+          await sleep(FALLBACK_429_WAIT_MS);
+          continue;
+        }
+        // Hard quota → surface to the caller (don't stall the batch).
+        return new Response(text, { status: response.status, headers: response.headers });
+      }
       // Peek at the body once for the transient check; re-wrap for the caller.
       if (response.status >= 500 && response.status <= 599 && attempt < MAX_RETRIES) {
         const text = await response.text().catch(() => "");
@@ -234,6 +333,44 @@ async function fetchWithRetry(input: string | URL | Request, init?: RequestInit)
     }
   }
   throw lastError instanceof Error ? lastError : new Error("Provider request failed after retries");
+}
+
+/**
+ * Extract a 429 retry delay (ms, capped at MAX_429_WAIT_MS) from a provider
+ * response. Returns null if no actionable hint is present — in that case the
+ * caller should surface the error rather than guess a wait time.
+ *
+ * Sources, in priority order:
+ *   1. Gemini error body: `"retryDelay": "12s"` (or `Please retry in 12.9s.`)
+ *   2. Retry-After header (OpenAI/Anthropic): seconds, or HTTP-date
+ *
+ * If the hint exceeds MAX_429_WAIT_MS, returns null — a long hint typically
+ * means the daily/project quota is exhausted, and the batch should stop rather
+ * than stall for an hour.
+ */
+function extract429Wait(headers: Headers, body: string): number | null {
+  // Gemini-style: parse "retryDelay":"12s" or "Please retry in 12.915582564s"
+  const bodyMatch = body.match(/(?:retryDelay"?\s*:\s*"|Please retry in\s*)(\d+(?:\.\d+)?)s/i);
+  if (bodyMatch) {
+    const ms = Math.ceil(parseFloat(bodyMatch[1]) * 1000);
+    return ms <= MAX_429_WAIT_MS ? ms : null;
+  }
+  // Header-style: Retry-After (seconds or HTTP-date)
+  const retryAfter = headers.get("retry-after");
+  if (retryAfter) {
+    const asSeconds = parseInt(retryAfter, 10);
+    if (!Number.isNaN(asSeconds)) {
+      const ms = asSeconds * 1000;
+      return ms <= MAX_429_WAIT_MS ? ms : null;
+    }
+    // HTTP-date form — compute delta, still cap it.
+    const dateMs = Date.parse(retryAfter);
+    if (!Number.isNaN(dateMs)) {
+      const ms = Math.max(0, dateMs - Date.now());
+      return ms <= MAX_429_WAIT_MS ? ms : null;
+    }
+  }
+  return null;
 }
 
 function transientServerError(status: number, body: string): boolean {
@@ -260,7 +397,15 @@ type TaggerPass = "extraction" | "critique";
 function resolveProvider(pass: TaggerPass): Provider {
   const envVar = pass === "extraction" ? "AUTO_TAG_PROVIDER_EXTRACTION" : "AUTO_TAG_PROVIDER_CRITIQUE";
   const preferred = (process.env[envVar] ?? process.env.AUTO_TAG_PROVIDER ?? "openai").toLowerCase() as Provider;
-  const has = { openai: !!process.env.OPENAI_API_KEY, claude: !!process.env.ANTHROPIC_API_KEY, gemini: !!process.env.GEMINI_API_KEY };
+  // OpenAI keys may be set per-pass (OPENAI_API_KEY_EXTRACTION / _CRITIQUE) for
+  // split-provider setups — e.g. real OpenAI for extraction (vision) and NIM
+  // for critique (writing). Honor the per-pass variant when checking presence.
+  const tier = pass.toUpperCase();
+  const has = {
+    openai: !!(process.env[`OPENAI_API_KEY_${tier}`] ?? process.env.OPENAI_API_KEY),
+    claude: !!process.env.ANTHROPIC_API_KEY,
+    gemini: !!process.env.GEMINI_API_KEY,
+  };
   if (has[preferred]) return preferred;
   for (const p of ["openai", "claude", "gemini"] as const) {
     if (has[p]) {
@@ -273,7 +418,16 @@ function resolveProvider(pass: TaggerPass): Provider {
 
 /** Check if ANY vision provider key is configured. */
 export function hasVisionKey(): boolean {
-  return !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY);
+  // Per-pass OpenAI variants (OPENAI_API_KEY_EXTRACTION / _CRITIQUE) count too —
+  // a split-provider setup using only OPENAI_API_KEY_CRITIQUE (NIM/DeepSeek for
+  // critique + real OpenAI for extraction) was falsely reporting "no vision
+  // key" here, mirroring the per-pass resolution already in resolveProvider.
+  const hasOpenAI = !!(
+    process.env.OPENAI_API_KEY ||
+    process.env.OPENAI_API_KEY_EXTRACTION ||
+    process.env.OPENAI_API_KEY_CRITIQUE
+  );
+  return !!(hasOpenAI || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY);
 }
 
 const PROVIDER_NAMES: Record<Provider, string> = { openai: "OpenAI", claude: "Claude", gemini: "Gemini" };
@@ -286,7 +440,15 @@ export function activeProviderName(pass?: TaggerPass): string {
 
 /** Active model name for UI display. */
 export function activeModelName(pass?: TaggerPass): string {
-  return PROVIDER_MODELS[resolveProvider(pass ?? "extraction")];
+  const resolvedPass = pass ?? "extraction";
+  const provider = resolveProvider(resolvedPass);
+  // For the OpenAI path, the static PROVIDER_MODELS map reports the OpenAI
+  // default even when a per-pass override (OPENAI_AUTO_TAG_MODEL_CRITIQUE etc.)
+  // routes the call to a different endpoint — e.g. critique actually running on
+  // NVIDIA NIM's DeepSeek V4 while /api/config reported "gpt-5.4-mini". Resolve
+  // through openaiConfigForPass so the reported model matches the call.
+  if (provider === "openai") return openaiConfigForPass(resolvedPass).model;
+  return PROVIDER_MODELS[provider];
 }
 
 // ─── PASS 1: extraction prompt (facts + geometry) ────────────────────────────
@@ -557,9 +719,15 @@ async function callOpenAI(
   imagePath: string | null,
   retryFeedback?: string,
   detail: "low" | "high" = "high",
+  pass: TaggerPass = "extraction",
 ): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
+  const cfg = openaiConfigForPass(pass);
+  if (!cfg.apiKey) throw new Error("OPENAI_API_KEY not set");
+
+  // If a base URL is set for this pass, route to the universal OpenAI-compatible
+  // chat completions path (NVIDIA NIM, OpenRouter, Together, Groq, vLLM, etc.).
+  // Otherwise use OpenAI's native Responses API (untouched behavior).
+  if (cfg.baseUrl) return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, cfg);
 
   const userContent: Array<Record<string, unknown>> = [{ type: "input_text", text: prompt }];
   if (imagePath) {
@@ -569,9 +737,9 @@ async function callOpenAI(
 
   const response = await fetchWithRetry(OPENAI_RESPONSES_API, {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: OPENAI_AUTO_TAG_MODEL,
+      model: cfg.model,
       max_output_tokens: MAX_OUTPUT_TOKENS,
       input: [
         { role: "system", content: [{ type: "input_text", text: SYSTEM }] },
@@ -591,6 +759,96 @@ async function callOpenAI(
       .filter((c) => c.type === "output_text" || c.type === "text")
       .map((c) => c.text ?? "").join("")
     ?? "";
+}
+
+/**
+ * OpenAI-compatible chat completions path. Activated when a base URL is set
+ * for the pass (via OPENAI_BASE_URL or OPENAI_BASE_URL_<PASS>).
+ *
+ * Targets providers that mimic OpenAI's API shape but only expose
+ * /v1/chat/completions (not /v1/responses): NVIDIA NIM, OpenRouter, Together,
+ * Groq, vLLM, etc. Request/response shapes are the universal OpenAI format:
+ *
+ *   POST {baseUrl}/chat/completions
+ *   { model, messages, max_tokens, temperature, chat_template_kwargs }
+ *   → { choices: [{ message: { content } }] }
+ *
+ * Vision (when the underlying model supports it) uses OpenAI's standard
+ * chat-completions image_url part. NIM endpoints generally accept it natively.
+ *
+ * Thinking toggle: NVIDIA NIM accepts `chat_template_kwargs.thinking` to
+ * enable/disable reasoning on models that support it (DeepSeek V4, etc.).
+ * Defaults to ON for the critique pass, OFF for extraction — matches the
+ * per-pass thinking policy already in place for Gemini 3.5. Override globally
+ * with OPENAI_THINKING_DISABLED=1.
+ */
+async function callOpenAICompatible(
+  prompt: string,
+  imagePath: string | null,
+  retryFeedback?: string,
+  detail: "low" | "high" = "high",
+  pass: TaggerPass = "extraction",
+  cfg: OpenAIConfig = openaiConfigForPass(pass),
+): Promise<string> {
+  if (!cfg.apiKey) throw new Error(`OPENAI_API_KEY${pass === "extraction" ? "" : `_${pass.toUpperCase()}`} not set`);
+
+  // Build the user message. Vision via image_url part when the model supports
+  // it (NIM endpoints generally do; OpenRouter routes it correctly). The
+  // detail field is honored by OpenAI and ignored gracefully elsewhere.
+  const userParts: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
+  if (imagePath) {
+    const { data: imageData, mimeType } = await readImageForDetail(imagePath, detail);
+    userParts.push({ type: "image_url", image_url: { url: `data:${mimeType};base64,${imageData}`, detail } });
+  }
+  if (retryFeedback) userParts.push({ type: "text", text: retryFeedback });
+
+  // Per-pass thinking policy: critique ON (DeepSeek's strength is reasoning),
+  // extraction OFF (deterministic fields, avoid truncation). Overrideable.
+  const thinkingEnabled = !OPENAI_THINKING_DISABLED && pass === "critique";
+
+  const body: Record<string, unknown> = {
+    model: cfg.model,
+    messages: [
+      { role: "system", content: SYSTEM },
+      { role: "user", content: userParts },
+    ],
+    max_tokens: MAX_OUTPUT_TOKENS,
+    // Modest temperature — the tagger's quality bar comes from the prompt +
+    // banned-phrase gate, not from creative sampling. Matches NVIDIA's
+    // documented default for DeepSeek V4 Pro.
+    temperature: 1,
+    top_p: 0.95,
+    // Reasoning toggle for NIM-style endpoints. Non-NIM providers ignore
+    // unknown fields silently, so this is safe to send unconditionally.
+    chat_template_kwargs: { thinking: thinkingEnabled },
+  };
+
+  const endpoint = `${cfg.baseUrl}/chat/completions`;
+  if (DEBUG_TAGGER) {
+    console.error(`[openai-compat] model=${cfg.model} pass=${pass} base=${cfg.baseUrl} thinking=${thinkingEnabled}`);
+  }
+  const response = await fetchWithRetry(endpoint, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) throw new Error(`OpenAI-compatible API error ${response.status}: ${await response.text()}`);
+
+  const data = await response.json() as {
+    choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  };
+  if (DEBUG_TAGGER) {
+    const u = data.usage;
+    console.error(`[openai-compat] pass=${pass} usage in=${u?.prompt_tokens ?? "?"} out=${u?.completion_tokens ?? "?"} total=${u?.total_tokens ?? "?"}`);
+  }
+  const content = data.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.filter((c) => typeof c.text === "string").map((c) => c.text ?? "").join("");
+  }
+  return "";
 }
 
 async function callClaude(
@@ -641,6 +899,13 @@ async function callGemini(
   retryFeedback?: string,
   detail: "low" | "high" = "high",
   pass: TaggerPass = "extraction",
+  /**
+   * Override the per-pass default thinking level. Used by the adaptive
+   * escalation path: a weak extraction at MINIMAL re-runs at HIGH. Without an
+   * override, the level is derived from `pass` (extraction=MINIMAL, critique=HIGH).
+   * Only meaningful for 3.5 models; ignored on 2.5 (which uses thinkingBudget).
+   */
+  thinkingOverride?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH",
 ): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not set");
@@ -655,16 +920,32 @@ async function callGemini(
   parts.push({ text: prompt });
   if (retryFeedback) parts.push({ text: retryFeedback });
 
-  // Gemini 2.5 Flash/Pro are "thinking" models: reasoning tokens draw from the
-  // SAME maxOutputTokens budget as the response. On a structured extraction
-  // (deterministic fields, no judgment) the model routinely spent 1500–2500
-  // tokens "thinking" and truncated the JSON mid-stream → non-JSON → "unusable
-  // draft". Extraction doesn't benefit from chain-of-thought, so disable it
-  // (thinkingBudget: 0). Critique DOES benefit from reasoning, so leave it on.
+  // Gemini thinking control differs by model generation:
+  //   - 2.5 Flash/Pro: reasoning tokens draw from the SAME maxOutputTokens
+  //     budget. On structured extraction the model routinely spent 1500–2500
+  //     tokens "thinking" and truncated the JSON mid-stream → non-JSON →
+  //     "unusable draft". Disable via thinkingBudget: 0. Critique is left on
+  //     (default) because it benefits from reasoning.
+  //   - 3.5 Flash: reasoning runs in a SEPARATE budget (no truncation risk) and
+  //     is controlled via thinkingLevel: MINIMAL/LOW/MEDIUM/HIGH (default
+  //     MEDIUM). Extraction gets MINIMAL (deterministic fields, no judgment to
+  //     reason over — preserves the speed/cost win the 2.5 disable wanted).
+  //     Critique gets HIGH — this is the pass where deep reasoning most closes
+  //     the gap on Claude Sonnet's writing quality.
   const generationConfig: Record<string, unknown> = { maxOutputTokens: MAX_OUTPUT_TOKENS };
-  if (pass === "extraction") generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  const is35Model = /3\.5|3-5/i.test(GEMINI_AUTO_TAG_MODEL);
+  if (is35Model) {
+    const level = thinkingOverride ?? (pass === "extraction" ? "MINIMAL" : "HIGH");
+    generationConfig.thinkingConfig = { thinkingLevel: level };
+  } else if (pass === "extraction") {
+    generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  }
 
   const endpoint = `${GEMINI_API_BASE}/${GEMINI_AUTO_TAG_MODEL}:generateContent`;
+  if (DEBUG_TAGGER) {
+    const escalation = thinkingOverride ? ` (escalated from ${pass} default)` : "";
+    console.error(`[gemini] model=${GEMINI_AUTO_TAG_MODEL} pass=${pass}${escalation} thinkingConfig=${JSON.stringify(generationConfig.thinkingConfig)}`);
+  }
   const response = await fetchWithRetry(endpoint, {
     method: "POST",
     headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
@@ -680,6 +961,16 @@ async function callGemini(
   const data = await response.json() as {
     candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>;
     promptFeedback?: { blockReason?: string };
+    // usageMetadata carries token accounting. On 3.5 thinking models, reasoning
+    // tokens are reported in `thoughtsTokenCount` — a non-zero value there is
+    // the proof that thinkingLevel was actually applied by the API, not just
+    // accepted silently. (2.5 reported the same field; older models omit it.)
+    usageMetadata?: {
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+      totalTokenCount?: number;
+      thoughtsTokenCount?: number;
+    };
   };
   // Surface safety blocks and truncation explicitly — both produced cryptic
   // "unusable draft" errors before. A MAX_TOKENS finish means the JSON was cut
@@ -692,6 +983,13 @@ async function callGemini(
     throw new Error(`Gemini stopped early (${finishReason}). ${finishReason === "MAX_TOKENS" ? "Output was truncated before the JSON closed — raise MAX_OUTPUT_TOKENS or simplify the request." : "Try Auto-fill again."}`);
   }
   const parts_out = candidate?.content?.parts ?? [];
+  // Confirm the thinkingConfig was actually applied, not silently ignored.
+  // thoughtsTokenCount > 0 means reasoning tokens were generated for this call.
+  // Extraction should be ~0 (MINIMAL); critique should be materially > 0 (HIGH).
+  if (DEBUG_TAGGER) {
+    const u = data.usageMetadata;
+    console.error(`[gemini] pass=${pass} usage thoughts=${u?.thoughtsTokenCount ?? "?"} out=${u?.candidatesTokenCount ?? "?"} in=${u?.promptTokenCount ?? "?"}`);
+  }
   return parts_out.filter((p) => typeof p.text === "string").map((p) => p.text ?? "").join("");
 }
 
@@ -702,12 +1000,18 @@ async function callModel(
   imagePath: string | null,
   retryFeedback?: string,
   detail: "low" | "high" = "high",
+  /**
+   * Gemini 3.5 only: escalate the thinking level above the pass default. Used by
+   * the adaptive extraction path when the MINIMAL result came back weak. Ignored
+   * by OpenAI/Claude and by 2.5 Gemini models.
+   */
+  thinkingOverride?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH",
 ): Promise<string> {
   const provider = resolveProvider(pass);
   switch (provider) {
     case "claude":  return callClaude(prompt, imagePath, retryFeedback, detail);
-    case "gemini":  return callGemini(prompt, imagePath, retryFeedback, detail, pass);
-    default:        return callOpenAI(prompt, imagePath, retryFeedback, detail);
+    case "gemini":  return callGemini(prompt, imagePath, retryFeedback, detail, pass, thinkingOverride);
+    default:        return callOpenAI(prompt, imagePath, retryFeedback, detail, pass);
   }
 }
 
@@ -752,13 +1056,16 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   let extractionParsed = parseExtraction(extractionRawText);
 
   // Adaptive re-run: if we asked for low and the model clearly couldn't read the
-  // page, retry once at high. Weak = patternType defaulted AND name came back
-  // Untitled AND no categories. (Colors are deterministic, so they don't count.)
+  // page, retry once at high. Probe the RAW extraction output — sanitizeTaggerPayload
+  // applies defaults (patternType → "dashboard") that mask the very weakness we're
+  // detecting, making the !probe.patternType check never fire. Read the raw fields
+  // directly so a genuinely-empty result is detected as weak.
   if (requestedDetail === "low") {
-    const probe = sanitizeTaggerPayload(extractionParsed);
+    const rawType = typeof extractionParsed.patternType === "string" ? (extractionParsed.patternType as string).trim() : "";
+    const rawCats = Array.isArray(extractionParsed.categories) ? (extractionParsed.categories as unknown[]).length : 0;
     const probeName = (typeof extractionParsed.productName === "string" ? extractionParsed.productName.trim() : "");
-    const weak = (!probe.patternType || probe.patternType === "dashboard")
-      && (!probe.categories.length)
+    const weak = !rawType
+      && !rawCats
       && (!probeName || probeName.toLowerCase() === "untitled");
     if (weak) {
       extractionRawText = await callModel(
@@ -767,6 +1074,37 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         input.imagePath,
         undefined,
         "high",
+      );
+      extractionParsed = parseExtraction(extractionRawText);
+    }
+  }
+
+  // Adaptive thinking (Gemini 3.5 only): if the MINIMAL extraction came back
+  // weak on the same signals the detail escalation uses, the model likely
+  // couldn't resolve the page in low-reasoning mode. Re-run once at HIGH — the
+  // same image, same detail level, more reasoning budget. Targets the rare
+  // ambiguous/hybrid layout where perception genuinely benefits from chain of
+  // thought. Cost-free on the common case (strong first result → no re-run).
+  // Skipped if we already escalated detail above (the weak-result probe runs
+  // against the latest extractionParsed, so this naturally composes with it).
+  if (resolveProvider("extraction") === "gemini" && /3\.5|3-5/i.test(GEMINI_AUTO_TAG_MODEL)) {
+    // Same raw-probe fix as the detail-escalation block above — sanitizeTaggerPayload's
+    // defaults mask the weakness we're detecting.
+    const rawType = typeof extractionParsed.patternType === "string" ? (extractionParsed.patternType as string).trim() : "";
+    const rawCats = Array.isArray(extractionParsed.categories) ? (extractionParsed.categories as unknown[]).length : 0;
+    const probeName = (typeof extractionParsed.productName === "string" ? extractionParsed.productName.trim() : "");
+    const weak = !rawType
+      && !rawCats
+      && (!probeName || probeName.toLowerCase() === "untitled");
+    if (weak) {
+      if (DEBUG_TAGGER) console.error("[tagger] weak extraction at MINIMAL — re-running at thinkingLevel HIGH");
+      extractionRawText = await callModel(
+        "extraction",
+        buildExtractionPrompt(input.productName, input.url, quantizedColors),
+        input.imagePath,
+        undefined,
+        requestedDetail === "low" ? "high" : requestedDetail,
+        "HIGH",
       );
       extractionParsed = parseExtraction(extractionRawText);
     }
@@ -789,8 +1127,16 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     ? extractionParsed.productName.trim()
     : "";
   const effectiveName = suppliedName || inferredName || "Untitled";
+  // Auto-id must be unique per IMAGE, not per product — otherwise every image
+  // of the same product gets the same id (`alan-2026-07-05` × 127), which the
+  // corpus validator rejects as duplicates. Fold the image filename stem in so
+  // each entry has a distinct, human-meaningful id like
+  // `alan-ios-screens-42-2026-07-05`. The stem is slugified to match the id
+  // charset (lowercase, hyphens, no version noise like "-2-2" suffixes).
+  const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const imageStem = basename(input.imagePath, extname(input.imagePath));
   const autoId = input.id
-    ?? `${effectiveName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}-${today}`;
+    ?? `${slug(effectiveName)}-${slug(imageStem)}-${today}`;
 
   // ── extractionOnly: skip Pass 2 entirely. Bulk imports use this to defer the
   // critique pass (a full text-only model call per image) until the user

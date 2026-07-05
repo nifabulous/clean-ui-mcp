@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Corpus } from "./schema.js";
@@ -87,7 +87,15 @@ describe("corpus search (fixtures)", () => {
 // These touch the production entries.json but assert only invariants that hold
 // regardless of content: the schema parses, ids are unique, search returns an
 // array. They do NOT assert specific entry names/categories (those change).
-describe("real corpus contracts", () => {
+//
+// Skipped entirely when entries.json is absent — which is the case on fresh
+// CI checkouts (entries.json is gitignored; it's a local-only artifact built
+// up via the curator UI/CLI). On a developer's machine where the file exists,
+// these run as a structural guard against corruption. Skipping in CI is the
+// right call: the file's absence there isn't a regression, it's the expected
+// state for a public checkout.
+const REAL_CORPUS_PRESENT = existsSync(CORPUS_PATH);
+(REAL_CORPUS_PRESENT ? describe : describe.skip)("real corpus contracts", () => {
   it("the real corpus validates against the schema", () => {
     // This is the ONLY test allowed to depend on entries.json existing. If the
     // file is corrupt/overwritten, this catches it — that's its purpose.

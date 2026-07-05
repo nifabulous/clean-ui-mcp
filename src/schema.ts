@@ -328,6 +328,21 @@ export const CorpusEntry = z.object({
   provenance: z.object({
     taggedBy: z.enum(["human", "auto", "auto-reviewed"]),
     reviewedBy: z.string().optional(),
+    /**
+     * When the entry came from the capture pipeline (vs. manual upload), records
+     * how the image was produced. Absent = manual upload. Nested in provenance
+     * rather than flat on `image` because it describes the process that produced
+     * the pixels, not the pixels themselves — matches the taggedBy/reviewedBy
+     * convention. The UI's "real capture" indicator is a single existence check
+     * on this field.
+     */
+    capture: z.object({
+      mode: z.enum(["section", "group-member", "recursive", "full-screen", "consent-modal"]),
+      viewport: z.string(),                    // "desktop" | "mobile"
+      selectorPath: z.string().optional(),     // best-effort CSS path for re-capture
+      capturedAt: z.string(),                  // ISO timestamp
+      sourceUrl: z.string(),                   // the URL the screenshot was taken from
+    }).optional(),
   }).optional(),
 });
 

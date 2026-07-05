@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 import "../env.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync, readdirSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { extname, resolve } from "node:path";
+import { extname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { lookup } from "node:dns";
+// SSRF guard extracted to ../ssrf.ts (shared with the CLI capture path).
+// The dns.lookup import that lived here previously moved with it.
 import sharp from "sharp";
 import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, findDraftMarkers, type CorpusEntryT } from "../schema.js";
-import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, toCorpusRelativePath } from "../paths.js";
-import { tagImage, generateCritique } from "../tagger.js";
+import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
+import { tagImage, generateCritique, hasVisionKey, activeModelName } from "../tagger.js";
+import type { CaptureMeta } from "./capture.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
 import {
   ENTRIES_PATH, SNAPSHOT_DIR, SNAPSHOT_KEEP,
@@ -363,10 +365,175 @@ export function orphanedPrivateImagePaths(files: string[], entries: CorpusEntryT
 }
 
 function privateImagePaths(): string[] {
-  if (!existsSync(PRIVATE_IMAGE_DIR)) return [];
-  return readdirSync(PRIVATE_IMAGE_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
-    .map((entry) => `images-private/${entry.name}`);
+  // Recursively walk private dir so nested bulk-import batches
+  // (images-private/new-products-batch/Mercury Web Screens/…) are visible to
+  // the orphan check. The earlier flat readdirSync missed nested files.
+  return listImageFilesRecursive(PRIVATE_IMAGE_DIR, "images-private/");
+}
+
+// ─── capture-batch triage ──────────────────────────────────────────────────
+// The batch capture pipeline (capture.ts) writes one folder per batch under
+// corpus/images-private/captures/{batchId}/, each holding {captureId}.png,
+// manifest.json (CaptureMeta[]), and triage.json ({captureId: status}). The
+// classic workbench's triage view reviews these: promote → creates a corpus
+// entry stamped with capture provenance; reject → marks triage.json; cleanup →
+// deletes the batch dir ONLY when nothing is still pending. Every filesystem
+// hop is gated through the helpers below so untrusted batchId/captureId can't
+// escape the captures root (the safety gate the plan review flagged).
+
+const CAPTURES_DIR = resolve(PRIVATE_IMAGE_DIR, "captures");
+const TRIAGE_STATUSES = ["pending", "promoted", "rejected"] as const;
+type TriageStatus = (typeof TRIAGE_STATUSES)[number];
+
+/**
+ * Slug-safety check for untrusted ids that name a path segment under captures/.
+ * Rejects anything other than [a-z0-9-] so `/`, `\`, `..`, and spaces can never
+ * reach the path joins. This is the path-traversal guard for /api/capture-triage
+ * and /api/capture-cleanup — paired with the resolves-within-root check in
+ * resolveBatchDir so a cleverly-formed-but-symlinked id is still contained.
+ */
+function isSlugSafe(value: string): boolean {
+  return typeof value === "string" && value.length > 0 && /^[a-z0-9-]+$/.test(value);
+}
+
+/**
+ * Resolve a batchId to an absolute path under CAPTURES_DIR and assert the
+ * resolved path stays within that root. Throws on traversal/escape.
+ */
+function resolveBatchDir(batchId: string): string {
+  if (!isSlugSafe(batchId)) {
+    throw Object.assign(new Error("Invalid batchId"), { statusCode: 400 });
+  }
+  const root = resolve(CAPTURES_DIR);
+  const batchDir = resolve(root, batchId);
+  // Reject anything that escapes the captures root (defence-in-depth on top of
+  // the slug check — covers symlink edge cases the regex alone wouldn't catch).
+  if (batchDir !== root && !batchDir.startsWith(root + "/")) {
+    throw Object.assign(new Error("Invalid batchId"), { statusCode: 400 });
+  }
+  return batchDir;
+}
+
+type CaptureBatchItem = {
+  id: string;
+  sourceName: string;
+  captureMode: string;
+  viewport: string;
+  imagePath: string;
+  status: string;
+  // Capture provenance surfaced to the UI so the promote action can stamp
+  // them onto the new entry's provenance.capture. Without these the promoted
+  // entry got sourceUrl:"" + selectorPath:"" — silently dropping the very
+  // metadata the capture pipeline exists to record.
+  sourceUrl?: string;
+  selectorPath?: string;
+  capturedAt?: string;
+};
+
+type CaptureBatchSummary = {
+  batchId: string;
+  capturedAt: string;
+  total: number;
+  pending: number;
+  promoted: number;
+  rejected: number;
+  items: CaptureBatchItem[];
+};
+
+/**
+ * Walk the capture batches under corpus/images-private/captures and summarize
+ * each from its manifest.json + triage.json. Newer batches first (batchId is a
+ * timestamp in batch mode, so lexical sort == newest-first). Batches missing
+ * their manifest are skipped — they're not from this pipeline.
+ */
+function listCaptureBatches(): CaptureBatchSummary[] {
+  if (!existsSync(CAPTURES_DIR)) return [];
+  const out: CaptureBatchSummary[] = [];
+  for (const name of readdirSync(CAPTURES_DIR, { withFileTypes: true })) {
+    if (!name.isDirectory() || !isSlugSafe(name.name)) continue;
+    const batchDir = join(CAPTURES_DIR, name.name);
+    const manifestPath = join(batchDir, "manifest.json");
+    const triagePath = join(batchDir, "triage.json");
+    if (!existsSync(manifestPath)) continue;
+    let manifest: CaptureMeta[] = [];
+    let triage: Record<string, string> = {};
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as CaptureMeta[];
+    } catch { continue; /* corrupt manifest — skip */ }
+    try {
+      triage = existsSync(triagePath) ? JSON.parse(readFileSync(triagePath, "utf-8")) : {};
+    } catch { triage = {}; }
+    let pending = 0, promoted = 0, rejected = 0;
+    const items: CaptureBatchItem[] = manifest.map((m) => {
+      const status = triage[m.id] === "promoted" ? "promoted" : triage[m.id] === "rejected" ? "rejected" : "pending";
+      if (status === "promoted") promoted++;
+      else if (status === "rejected") rejected++;
+      else pending++;
+      return {
+        id: m.id,
+        sourceName: m.sourceName,
+        captureMode: m.captureMode,
+        viewport: m.viewport,
+        imagePath: m.imagePath,
+        status,
+        sourceUrl: m.sourceUrl,
+        selectorPath: m.selectorPath,
+        capturedAt: m.capturedAt,
+      };
+    });
+    // capturedAt: newest capture in the batch (manifest writes per-item ISO
+    // timestamps); fall back to the dir name (timestamp) if absent.
+    const capturedAt = manifest.map((m) => m.capturedAt).filter(Boolean).sort().at(-1) ?? name.name;
+    out.push({ batchId: name.name, capturedAt, total: items.length, pending, promoted, rejected, items });
+  }
+  // Newest first — batchId is a timestamp, lexical sort = chronological.
+  out.sort((a, b) => (a.batchId < b.batchId ? 1 : a.batchId > b.batchId ? -1 : 0));
+  return out;
+}
+
+/**
+ * Update one capture's status in a batch's triage.json. batchId + captureId
+ * are slug-checked + resolves-within-root; status is validated against the
+ * closed set. Returns the updated triage map.
+ */
+export function setTriageStatus(batchId: string, captureId: string, status: TriageStatus): Record<string, string> {
+  const batchDir = resolveBatchDir(batchId);
+  if (!isSlugSafe(captureId)) {
+    throw Object.assign(new Error("Invalid captureId"), { statusCode: 400 });
+  }
+  const triagePath = join(batchDir, "triage.json");
+  if (!existsSync(batchDir) || !existsSync(triagePath)) {
+    throw Object.assign(new Error("Batch not found"), { statusCode: 404 });
+  }
+  let triage: Record<string, string> = {};
+  try { triage = JSON.parse(readFileSync(triagePath, "utf-8")); } catch { triage = {}; }
+  triage[captureId] = status;
+  writeFileSync(triagePath, JSON.stringify(triage, null, 2));
+  return triage;
+}
+
+/**
+ * Delete a batch directory, but ONLY when triage.json has zero pending entries.
+ * This is the safety gate — without it the cleanup button would happily eat
+ * private screenshots the curator hadn't reviewed yet. Throws 409 with a count
+ * when pending items remain.
+ */
+export function cleanupBatch(batchId: string): { deleted: string } {
+  const batchDir = resolveBatchDir(batchId);
+  if (!existsSync(batchDir)) {
+    throw Object.assign(new Error("Batch not found"), { statusCode: 404 });
+  }
+  const triagePath = join(batchDir, "triage.json");
+  let triage: Record<string, string> = {};
+  if (existsSync(triagePath)) {
+    try { triage = JSON.parse(readFileSync(triagePath, "utf-8")); } catch { triage = {}; }
+  }
+  const pending = Object.values(triage).filter((s) => s === "pending").length;
+  if (pending > 0) {
+    throw Object.assign(new Error(`${pending} item(s) still pending triage — promote or reject them first`), { statusCode: 409 });
+  }
+  rmSync(batchDir, { recursive: true, force: false });
+  return { deleted: batchId };
 }
 
 function explainCaptureError(error: unknown): string {
@@ -396,16 +563,23 @@ function explainTagError(error: unknown): string {
 }
 
 export function publicConfigStatus(status: EnvStatus = getEnvStatus()) {
-  const anyVisionKey = status.openaiKeyConfigured || status.anthropicKeyConfigured || status.geminiKeyConfigured;
-  // Resolve the effective provider + model for each pass (mirrors tagger.resolveProvider).
+  // Honor the injected status (tests pass a hand-crafted EnvStatus rather than
+  // mutating process.env) but extend the openai check to include the per-pass
+  // variants — a split-provider setup using only OPENAI_API_KEY_CRITIQUE was
+  // falsely reporting "no vision key" via the bare-key OR.
+  const hasOpenAI = status.openaiKeyConfigured
+    || !!process.env.OPENAI_API_KEY_EXTRACTION
+    || !!process.env.OPENAI_API_KEY_CRITIQUE;
+  const anyVisionKey = hasOpenAI || status.anthropicKeyConfigured || status.geminiKeyConfigured;
+  // Resolve the effective provider + model for each pass via the SAME logic
+  // tagger.ts uses (activeModelName resolves through openaiConfigForPass on the
+  // OpenAI path, so OPENAI_AUTO_TAG_MODEL_CRITIQUE etc. are honored). Previously
+  // this hand-rolled the resolution and missed the per-pass overrides, so the
+  // /api/config status exposed to the UI lied about which model ran.
   const extractionProvider = process.env.AUTO_TAG_PROVIDER_EXTRACTION ?? process.env.AUTO_TAG_PROVIDER ?? "openai";
   const critiqueProvider = process.env.AUTO_TAG_PROVIDER_CRITIQUE ?? process.env.AUTO_TAG_PROVIDER ?? "openai";
-  const extractionModel = extractionProvider === "claude" ? (process.env.CLAUDE_AUTO_TAG_MODEL ?? "claude-haiku-4-5")
-    : extractionProvider === "gemini" ? (process.env.GEMINI_AUTO_TAG_MODEL ?? "gemini-2.5-flash")
-    : (process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano");
-  const critiqueModel = critiqueProvider === "claude" ? (process.env.CLAUDE_AUTO_TAG_MODEL ?? "claude-haiku-4-5")
-    : critiqueProvider === "gemini" ? (process.env.GEMINI_AUTO_TAG_MODEL ?? "gemini-2.5-flash")
-    : (process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano");
+  const extractionModel = activeModelName("extraction");
+  const critiqueModel = activeModelName("critique");
   return {
     openaiKeyConfigured: status.openaiKeyConfigured,
     anthropicKeyConfigured: status.anthropicKeyConfigured,
@@ -435,68 +609,30 @@ function mimeFor(path: string): string {
 }
 
 /**
- * Reject URL-capture targets that point at private, loopback, link-local, or
- * cloud-metadata addresses. The capture route launches a real browser on the
- * operator's machine using their network, so without this check any web page
- * open in a tab could ask the curator to screenshot internal services or
- * http://169.254.169.254/... and read the resulting file path back.
+ * SSRF guard for URL capture — extracted to ../ssrf.ts so the CLI capture
+ * path (npm run capture, npm run capture-batch) and this UI route share one
+ * rule. A drift here would silently re-enable SSRF on whichever path fell
+ * out of sync, which is the worst-case failure mode.
  *
- * Resolves the hostname and inspects every resolved address. Rejects if any
- * resolved address is non-public. Allows non-browser local clients to keep
- * working on localhost targets (the common dev case) by whitelisting
- * `localhost`/`127.0.0.1` hostnames explicitly when the request has no
- * cross-origin Origin.
+ * Re-exported from here for backward-compat with any caller that imported
+ * isPrivateAddress from ui-server. The thin assertSafeCaptureTarget wrapper
+ * preserves the UI's friendlier "Use a valid source URL" parse-error wording.
  */
-export function isPrivateAddress(ip: string): boolean {
-  const normalized = ip.toLowerCase();
-  const mappedIpv4 = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mappedIpv4) return isPrivateAddress(mappedIpv4[1]);
-
-  // IPv4
-  if (/^(10\.|192\.168\.|169\.254\.)/.test(normalized)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(normalized)) return true;
-  if (/^127\./.test(normalized)) return true;
-  if (/^0\./.test(normalized)) return true;
-  // IPv6
-  if (normalized === "::1" || normalized === "::") return true;
-  if (normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
-  return false;
-}
+export { isPrivateAddress } from "../ssrf.js";
+import { assertSafeCaptureTarget as assertSafeCaptureTargetShared } from "../ssrf.js";
 
 async function assertSafeCaptureTarget(rawUrl: string): Promise<URL> {
-  let parsed: URL;
   try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error("Use a valid source URL");
+    return await assertSafeCaptureTargetShared(rawUrl);
+  } catch (err) {
+    // Re-wrap the bare "Invalid URL" message as the UI's friendlier wording so
+    // existing toasts/error displays don't change. Other errors (DNS, private
+    // address, bad protocol) pass through with their already-user-facing text.
+    if (err instanceof Error && err.message === "Invalid URL") {
+      throw new Error("Use a valid source URL");
+    }
+    throw err;
   }
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw new Error("Only http and https URLs can be captured");
-  }
-  // Cloud-metadata hostname is a known SSRF target regardless of DNS.
-  const md = /metadata\.google\.internal|169\.254\.169\.254/i;
-  if (md.test(parsed.hostname)) {
-    throw new Error("Capture target resolves to a blocked metadata or private address");
-  }
-  // Explicit localhost hostname is the common dev case — allow it.
-  const explicitLocal = /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(parsed.hostname);
-  if (!explicitLocal) {
-    await new Promise<void>((resolveCheck, rejectCheck) => {
-      lookup(parsed.hostname, { all: true }, (err, addresses) => {
-        if (err) {
-          rejectCheck(new Error(`Could not resolve host: ${parsed.hostname}`));
-          return;
-        }
-        const bad = addresses.map((a) => a.address).find(isPrivateAddress);
-        if (bad) {
-          rejectCheck(new Error("Capture target resolves to a blocked metadata or private address"));
-          return;
-        }
-        resolveCheck();
-      });
-    });
-  }
-  return parsed;
 }
 
 async function handleUpload(req: IncomingMessage, res: ServerResponse) {
@@ -756,6 +892,45 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     return;
   }
 
+  // ── capture-batch triage ──
+  // GET /api/capture-batches — list capture batches (manifest + triage summary).
+  if (req.method === "GET" && url.pathname === "/api/capture-batches") {
+    sendJson(res, 200, { batches: listCaptureBatches() });
+    return;
+  }
+
+  // POST /api/capture-triage { batchId, captureId, status } — update one item.
+  if (req.method === "POST" && url.pathname === "/api/capture-triage") {
+    const payload = await readJson(req) as { batchId?: string; captureId?: string; status?: string };
+    const status = payload.status as TriageStatus;
+    if (!TRIAGE_STATUSES.includes(status)) {
+      sendJson(res, 400, { error: "status must be one of: pending, promoted, rejected" });
+      return;
+    }
+    try {
+      const triage = setTriageStatus(payload.batchId ?? "", payload.captureId ?? "", status);
+      sendJson(res, 200, { ok: true, triage });
+    } catch (error) {
+      const code = (error as { statusCode?: number }).statusCode ?? 400;
+      sendJson(res, code, { error: error instanceof Error ? error.message : "Triage update failed" });
+    }
+    return;
+  }
+
+  // POST /api/capture-cleanup { batchId } — delete a batch dir, but only when
+  // no item is still pending (the safety gate for private screenshots).
+  if (req.method === "POST" && url.pathname === "/api/capture-cleanup") {
+    const payload = await readJson(req) as { batchId?: string };
+    try {
+      const result = cleanupBatch(payload.batchId ?? "");
+      sendJson(res, 200, result);
+    } catch (error) {
+      const code = (error as { statusCode?: number }).statusCode ?? 400;
+      sendJson(res, code, { error: error instanceof Error ? error.message : "Cleanup failed" });
+    }
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/auto-tag") {
     const payload = await readJson(req) as {
       imagePath?: string;
@@ -771,8 +946,12 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       return;
     }
 
-    if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY && !process.env.GEMINI_API_KEY) {
-      sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
+    // hasVisionKey (shared with the tagger) honors OPENAI_API_KEY_EXTRACTION /
+    // _CRITIQUE too — a split-provider setup using only OPENAI_API_KEY_CRITIQUE
+    // (NIM/DeepSeek for critique + real OpenAI for extraction) was falsely
+    // rejected by the bare OPENAI_API_KEY check.
+    if (!hasVisionKey()) {
+      sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY (or OPENAI_API_KEY_EXTRACTION / _CRITIQUE for split-provider setups), ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
       return;
     }
 
@@ -807,8 +986,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       sendJson(res, 400, { error: "extraction is required (pass the entry's _raw.extraction)" });
       return;
     }
-    if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY && !process.env.GEMINI_API_KEY) {
-      sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
+    if (!hasVisionKey()) {
+      sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY (or OPENAI_API_KEY_EXTRACTION / _CRITIQUE for split-provider setups), ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
       return;
     }
 
@@ -940,6 +1119,16 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index-2.html")) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
       res.end(readFileSync(APP_PATH, "utf-8"));
+      return;
+    }
+
+    // Classic workbench — the form + bulk-import flows. The new SPA links here
+    // for those surfaces. Served from index-classic.html (parallel to APP_PATH).
+    if (req.method === "GET" && url.pathname === "/index-classic.html") {
+      const classicPath = resolve(PROJECT_ROOT, "index-classic.html");
+      if (!existsSync(classicPath)) { sendText(res, 404, "classic view not found"); return; }
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end(readFileSync(classicPath, "utf-8"));
       return;
     }
 

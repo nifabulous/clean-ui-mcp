@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sanitizeTaggerPayload, tagImage, extractQuantizedColors, hasVisionKey } from "./tagger.js";
+import { sanitizeTaggerPayload, tagImage, extractQuantizedColors, hasVisionKey, activeModelName } from "./tagger.js";
 import { PRIVATE_IMAGE_DIR } from "./paths.js";
 
 describe("tagger sanitization", () => {
@@ -74,6 +74,8 @@ describe("extractQuantizedColors (node-vibrant)", () => {
 describe("vision provider key detection", () => {
   const original = {
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENAI_API_KEY_EXTRACTION: process.env.OPENAI_API_KEY_EXTRACTION,
+    OPENAI_API_KEY_CRITIQUE: process.env.OPENAI_API_KEY_CRITIQUE,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,
   };
@@ -88,6 +90,8 @@ describe("vision provider key detection", () => {
 
   it("accepts any configured vision provider key, not only OpenAI", () => {
     delete process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY_EXTRACTION;
+    delete process.env.OPENAI_API_KEY_CRITIQUE;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.GEMINI_API_KEY;
 
@@ -99,6 +103,75 @@ describe("vision provider key detection", () => {
     delete process.env.ANTHROPIC_API_KEY;
     process.env.GEMINI_API_KEY = "gem-test";
     expect(hasVisionKey()).toBe(true);
+  });
+
+  it("recognizes per-pass OpenAI key variants (split-provider setups)", () => {
+    // A NIM/DeepSeek-for-critique + real-OpenAI-for-extraction setup uses only
+    // OPENAI_API_KEY_CRITIQUE without setting the bare OPENAI_API_KEY. Without
+    // per-pass recognition here, hasVisionKey falsely reported "no key."
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY_EXTRACTION;
+    delete process.env.OPENAI_API_KEY_CRITIQUE;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+
+    expect(hasVisionKey()).toBe(false);
+
+    process.env.OPENAI_API_KEY_CRITIQUE = "nvapi-test";
+    expect(hasVisionKey()).toBe(true);
+
+    delete process.env.OPENAI_API_KEY_CRITIQUE;
+    process.env.OPENAI_API_KEY_EXTRACTION = "sk-test";
+    expect(hasVisionKey()).toBe(true);
+  });
+});
+
+describe("activeModelName per-pass resolution", () => {
+  const original = {
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENAI_API_KEY_EXTRACTION: process.env.OPENAI_API_KEY_EXTRACTION,
+    OPENAI_API_KEY_CRITIQUE: process.env.OPENAI_API_KEY_CRITIQUE,
+    OPENAI_AUTO_TAG_MODEL: process.env.OPENAI_AUTO_TAG_MODEL,
+    OPENAI_AUTO_TAG_MODEL_EXTRACTION: process.env.OPENAI_AUTO_TAG_MODEL_EXTRACTION,
+    OPENAI_AUTO_TAG_MODEL_CRITIQUE: process.env.OPENAI_AUTO_TAG_MODEL_CRITIQUE,
+    OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+    OPENAI_BASE_URL_EXTRACTION: process.env.OPENAI_BASE_URL_EXTRACTION,
+    OPENAI_BASE_URL_CRITIQUE: process.env.OPENAI_BASE_URL_CRITIQUE,
+    AUTO_TAG_PROVIDER: process.env.AUTO_TAG_PROVIDER,
+    AUTO_TAG_PROVIDER_EXTRACTION: process.env.AUTO_TAG_PROVIDER_EXTRACTION,
+    AUTO_TAG_PROVIDER_CRITIQUE: process.env.AUTO_TAG_PROVIDER_CRITIQUE,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+  };
+
+  afterEach(() => {
+    for (const key of Object.keys(original) as Array<keyof typeof original>) {
+      const value = original[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("reports the per-pass model override, not the OpenAI default", () => {
+    // Simulate the DeepSeek-on-NIM-for-critique setup from the bulk-import work:
+    // extraction routes to real OpenAI (gpt-5.4-mini), critique routes to NIM
+    // (deepseek-v4-pro). Without per-pass resolution, activeModelName("critique")
+    // reported "gpt-5.4-mini" — the /api/config status exposed to the UI lied.
+    delete process.env.OPENAI_BASE_URL;
+    delete process.env.OPENAI_BASE_URL_EXTRACTION;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.OPENAI_API_KEY_CRITIQUE = "nvapi-test";
+    process.env.OPENAI_AUTO_TAG_MODEL = "gpt-5.4-mini";
+    process.env.OPENAI_BASE_URL_CRITIQUE = "https://integrate.api.nvidia.com/v1";
+    process.env.OPENAI_AUTO_TAG_MODEL_CRITIQUE = "deepseek-ai/deepseek-v4-pro";
+    process.env.AUTO_TAG_PROVIDER_EXTRACTION = "openai";
+    process.env.AUTO_TAG_PROVIDER_CRITIQUE = "openai";
+
+    expect(activeModelName("extraction")).toBe("gpt-5.4-mini");
+    expect(activeModelName("critique")).toBe("deepseek-ai/deepseek-v4-pro");
   });
 });
 

@@ -10,13 +10,13 @@
  *   npm run doctor
  *   npm run doctor -- --json
  */
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { Corpus, findDraftMarkers, hasDraftMarkers } from "../schema.js";
 import { indexStatus } from "../corpus.js";
-import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PUBLIC_IMAGE_DIR } from "../paths.js";
+import { CORPUS_ROOT, allImageFiles } from "../paths.js";
 import { ENTRIES_PATH, SNAPSHOT_DIR, listSnapshots, tryReadCorpus } from "../persistence.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -26,11 +26,6 @@ const asJson = args.includes("--json");
 
 type Status = "PASS" | "WARN" | "FAIL";
 interface Check { name: string; status: Status; detail: string; }
-
-function safeListDir(dir: string): string[] {
-  try { return readdirSync(dir).filter((f) => !f.startsWith(".")); }
-  catch { return []; }
-}
 
 const checks: Check[] = [];
 
@@ -92,12 +87,13 @@ if (!snaps.length) {
 }
 
 // ── 5. Image references (orphans + missing) ─────────────────────────────────
+// Walks the image dirs RECURSIVELY (bulk-import batches nest files by source
+// folder, e.g. images-private/new-products-batch/Mercury Web Screens/…). An
+// earlier flat readdirSync missed nested files entirely, surfacing false
+// "missing" warnings for refs that actually resolved and undercounting orphans.
 if (entries) {
   const referenced = new Set(entries.map((e) => e.image.path).filter((p): p is string => !!p));
-  const diskFiles = new Set([
-    ...safeListDir(PRIVATE_IMAGE_DIR).map((f) => `images-private/${f}`),
-    ...safeListDir(PUBLIC_IMAGE_DIR).map((f) => `images-public/${f}`),
-  ]);
+  const diskFiles = allImageFiles();
   const orphanCount = [...diskFiles].filter((f) => !referenced.has(f)).length;
   const missingCount = [...referenced].filter((p) => !diskFiles.has(p)).length;
   if (missingCount > 0) {
@@ -116,14 +112,25 @@ if (entries) {
 // Skip when the corpus is unreadable — indexStatus() reparses entries.json via
 // loadCorpus() and would throw on corruption. The doctor is most needed during
 // exactly that scenario, so it must not crash there.
+//
+// Three drift directions are surfaced: missing (no vector), stale (orphan
+// vector), and contentStale (vector present but the entry's title/critique/
+// tags changed after it was embedded — detected via the per-entry content hash
+// in v2 indexes). contentStale is the silent one: search still returns the
+// entry, but against stale text. Incremental build-index re-embeds these.
 if (!entries) {
   checks.push({ name: "Search index", status: "WARN", detail: "skipped — corpus unreadable; restore first (run `npm run restore-corpus -- --latest`)" });
 } else {
   const index = indexStatus();
   if (!index.hasIndex) {
     checks.push({ name: "Search index", status: "WARN", detail: "no index — keyword search only (run `npm run build-index`)" });
-  } else if (index.missing > 0 || index.stale > 0) {
-    checks.push({ name: "Search index", status: "WARN", detail: `${index.indexed}/${index.total} indexed · ${index.missing} missing · ${index.stale} stale — run \`npm run build-index\`` });
+  } else if (index.missing > 0 || index.stale > 0 || index.contentStale > 0) {
+    const parts = [
+      index.missing > 0 ? `${index.missing} missing` : null,
+      index.stale > 0 ? `${index.stale} stale` : null,
+      index.contentStale > 0 ? `${index.contentStale} content-stale` : null,
+    ].filter(Boolean).join(" · ");
+    checks.push({ name: "Search index", status: "WARN", detail: `${index.indexed}/${index.total} indexed · ${parts} — run \`npm run build-index\`` });
   } else {
     checks.push({ name: "Search index", status: "PASS", detail: `${index.indexed}/${index.total} indexed, no drift` });
   }
@@ -145,6 +152,22 @@ if (!voyage) {
   checks.push({ name: "Voyage key (vector index)", status: "WARN", detail: "VOYAGE_API_KEY not set — build-index needs it for embeddings" });
 } else {
   checks.push({ name: "Voyage key (vector index)", status: "PASS", detail: "set" });
+}
+
+// ── 8. Capture Chromium (Playwright) ──────────────────────────────────────────
+// Playwright exposes the Chromium executable path lazily — wrap in try/catch
+// because requiring playwright at module load runs its install-time browser
+// download in some setups.
+let chromiumPath: string | null = null;
+try {
+  const chromium = await import("playwright");
+  chromiumPath = (chromium as any).chromium?.executablePath?.() ?? null;
+} catch { /* playwright not installed yet */ }
+
+if (chromiumPath && existsSync(chromiumPath)) {
+  checks.push({ name: "Capture Chromium", status: "PASS", detail: "Playwright Chromium installed — `npm run capture` ready" });
+} else {
+  checks.push({ name: "Capture Chromium", status: "WARN", detail: "Playwright Chromium not found — run `npx playwright install chromium` to enable `npm run capture`" });
 }
 
 // ── report ───────────────────────────────────────────────────────────────────

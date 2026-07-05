@@ -207,6 +207,61 @@ describe("corpus schema", () => {
     if (result.success) expect(result.data.provenance?.reviewedBy).toBe("nifabulous");
   });
 
+  // ── capture provenance (additive, nested on provenance) ──────────────────────
+
+  it("round-trips a populated provenance.capture block", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      provenance: {
+        taggedBy: "auto",
+        capture: {
+          mode: "section",
+          viewport: "desktop",
+          selectorPath: "main > section.hero",
+          capturedAt: "2026-07-05T10:30:00.000Z",
+          sourceUrl: "https://example.com/pricing",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.provenance?.capture).toEqual({
+        mode: "section",
+        viewport: "desktop",
+        selectorPath: "main > section.hero",
+        capturedAt: "2026-07-05T10:30:00.000Z",
+        sourceUrl: "https://example.com/pricing",
+      });
+    }
+  });
+
+  it("treats entries with provenance but no capture as valid", () => {
+    // Manual-upload captures from the tagger don't set a capture block — they
+    // must still validate (capture is purely additive).
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      provenance: { taggedBy: "auto" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.provenance?.capture).toBeUndefined();
+  });
+
+  it("rejects an invalid provenance.capture.mode", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      provenance: {
+        taggedBy: "auto",
+        capture: {
+          mode: "bogus",
+          viewport: "desktop",
+          capturedAt: "2026-07-05T10:30:00.000Z",
+          sourceUrl: "https://example.com/pricing",
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("treats entries without provenance as valid (backward-compat, no migration)", () => {
     // Existing entries have no provenance field — they must still validate.
     const result = CorpusEntry.safeParse(validEntry);

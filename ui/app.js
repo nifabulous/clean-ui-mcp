@@ -826,20 +826,20 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
 async function wizardCapture(form){
   const url = (form.url.value||'').trim();
   const slug = (form.slug.value||'').trim();
-  if(!url){ draft._error = 'URL is required'; render(); return; }
-  draft._busy = 'Capturing screenshot…'; draft._error = null; render();
+  if(!url){ draft._error = 'URL is required'; refreshActivePage(); return; }
+  draft._busy = 'Capturing screenshot…'; draft._error = null; refreshActivePage();
   try {
     const j = await request('/api/capture-url', { method:'POST', body: JSON.stringify({ url, slug: slug || undefined }) });
     draft.image.path = j.imagePath;
     if(!draft.source.url) draft.source.url = url;
     draft._busy = null;
   } catch(e){ draft._busy = null; draft._error = e.message; }
-  render();
+  refreshActivePage();
 }
 
 function wizardUpload(file){
   if(!file) return;
-  draft._busy = 'Uploading…'; draft._error = null; render();
+  draft._busy = 'Uploading…'; draft._error = null; refreshActivePage();
   const reader = new FileReader();
   reader.onload = async () => {
     try {
@@ -849,15 +849,15 @@ function wizardUpload(file){
       draft.image.path = j.imagePath;
       draft._busy = null;
     } catch(e){ draft._busy = null; draft._error = e.message; }
-    render();
+    refreshActivePage();
   };
-  reader.onerror = () => { draft._busy = null; draft._error = 'Could not read file'; render(); };
+  reader.onerror = () => { draft._busy = null; draft._error = 'Could not read file'; refreshActivePage(); };
   reader.readAsDataURL(file);
 }
 
 async function wizardAutoTag(){
-  if(!draft.image.path){ draft._error = 'Capture or upload an image first'; render(); return; }
-  draft._busy = 'Auto-filling fields…'; draft._error = null; render();
+  if(!draft.image.path){ draft._error = 'Capture or upload an image first'; refreshActivePage(); return; }
+  draft._busy = 'Auto-filling fields…'; draft._error = null; refreshActivePage();
   try {
     const j = await request('/api/auto-tag', {
       method:'POST', body: JSON.stringify({ imagePath: draft.image.path, productName: draft.source.productName, url: draft.source.url })
@@ -868,7 +868,7 @@ async function wizardAutoTag(){
     const preserved = { _editing: draft._editing, _busy: null, _tab: draft._tab, _pendingCapture: draft._pendingCapture };
     draft = { ...j.entry, image: { ...j.entry.image, path: draft.image.path }, ...preserved };
   } catch(e){ draft._error = e.message; }
-  render();
+  refreshActivePage();
 }
 
 // Save the draft to the corpus. PUT if editing an existing entry, POST if new.
@@ -914,7 +914,7 @@ async function saveDraft(){
     resetDraft();
   } catch(e){
     draft._error = e.message;
-    render();
+    refreshActivePage();
   }
 }
 
@@ -999,9 +999,9 @@ page('add','Add entry','new corpus entry', function(){
   const cap = document.getElementById('addCaptureForm');
   if(cap) cap.addEventListener('submit', e=>{ e.preventDefault(); wizardCapture(e.target); });
   const upSwitch = document.getElementById('addSwitchUpload');
-  if(upSwitch) upSwitch.addEventListener('click', ()=>{ draft._tab='upload'; render(); });
+  if(upSwitch) upSwitch.addEventListener('click', ()=>{ draft._tab='upload'; refreshActivePage(); });
   const capSwitch = document.getElementById('addSwitchCapture');
-  if(capSwitch) capSwitch.addEventListener('click', ()=>{ draft._tab='capture'; render(); });
+  if(capSwitch) capSwitch.addEventListener('click', ()=>{ draft._tab='capture'; refreshActivePage(); });
   const fileInput = document.getElementById('addFileInput');
   if(fileInput) fileInput.addEventListener('change', e=>{ wizardUpload(e.target.files[0]); });
   const at = document.getElementById('addAutoTag');

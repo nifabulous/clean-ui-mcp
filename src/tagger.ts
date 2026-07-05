@@ -52,6 +52,17 @@ const LAYOUT_REGION_ROLES = [
 ] as const;
 
 const QUALITY_TIERS = ["exceptional", "cautionary"] as const;
+const BUSINESS_GOALS = [
+  "increase-conversion",
+  "reduce-support-load",
+  "build-trust",
+  "drive-habitual-use",
+  "reduce-cognitive-load-at-decision-point",
+  "surface-upsell-opportunity",
+  "reduce-churn-risk",
+  "establish-credibility",
+  "other",
+] as const;
 
 // ─── banned phrases — enforced in-prompt AND as a post-hoc code-level gate ───
 
@@ -131,6 +142,12 @@ export interface TaggerOutput {
   layout?: {
     form: string;
     regions: Array<{ role: string; width?: string }>;
+  };
+  businessRationale?: {
+    businessGoal: string;
+    targetUser: string;
+    rationale: string;
+    confirmed: boolean;
   };
   voice?: {
     tone: string;
@@ -524,6 +541,11 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
   "draftCritique": "",         // 3-5 sentences: for EACH notable decision name DECISION + EFFECT + REJECTION
   "draftWhatToSteal": [],      // 3-5 specific, copyable techniques with reasoning attached. Each is a string.
   "draftAntiPatterns": [],     // REQUIRED, at least 1. Must describe a DIFFERENT decision than draftCritique.
+  "businessRationale": null,   // null if isolated component crop/no product context; otherwise object below
+                               // { "businessGoal": ONE from: ${BUSINESS_GOALS.join(", ")},
+                               //   "targetUser": "short phrase, <=80 chars",
+                               //   "rationale": "one sentence, <=280 chars",
+                               //   "confirmed": false }
   "voiceTone": "",             // omit entirely if no notable copy is visible
   "voiceExamples": [],         // real copy visible on screen, verbatim
   "voiceAvoid": [],            // what voice this design does NOT use
@@ -534,6 +556,8 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
 Rules:
 - Every draftCritique/draftWhatToSteal claim must trace back to something in "observations".
 - draftAntiPatterns must not restate draftCritique's decision from the opposite angle.
+- businessRationale is about business intent, not visual quality. Return null rather than inventing intent
+  when the screenshot lacks visible product/page context (for example an isolated card or component crop).
 - No banned phrases (${BANNED_PHRASES.slice(0, 4).map((p) => `"${p}"`).join(", ")}, ...). Re-check before returning.
 - Return ONLY the JSON object.`;
 }
@@ -607,6 +631,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   draftWhatToSteal: string[];
   draftAntiPatterns: string[];
   layout?: { form: string; regions: Array<{ role: string; width?: string }> };
+  businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
   voice?: { tone: string; examples: string[]; avoid: string[] };
   qualityTier: string;
 } {
@@ -638,6 +663,23 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
     ? { tone: voiceTone, examples: voiceExamples, avoid: textList(parsed.voiceAvoid) }
     : undefined;
 
+  const rawBusinessRationale = parsed.businessRationale && typeof parsed.businessRationale === "object"
+    ? parsed.businessRationale as Record<string, unknown>
+    : null;
+  const businessGoal = rawBusinessRationale
+    ? oneFromAllowed(rawBusinessRationale.businessGoal, BUSINESS_GOALS, "other")
+    : "";
+  const targetUser = rawBusinessRationale ? text(rawBusinessRationale.targetUser).slice(0, 80) : "";
+  const rationale = rawBusinessRationale ? text(rawBusinessRationale.rationale).slice(0, 280) : "";
+  const businessRationale = rawBusinessRationale && targetUser && rationale
+    ? {
+        businessGoal,
+        targetUser,
+        rationale,
+        confirmed: booleanValue(rawBusinessRationale.confirmed, false),
+      }
+    : undefined;
+
   return {
     patternType: oneFromAllowed(parsed.patternType, PATTERN_TYPES, "dashboard"),
     categories: listFromAllowed(parsed.categories, CATEGORIES, ["dashboard"]),
@@ -662,6 +704,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
     draftAntiPatterns: textList(parsed.draftAntiPatterns).length
       ? textList(parsed.draftAntiPatterns)
       : ["[DRAFT] Review the screenshot and name one common UI mistake this design avoids."],
+    businessRationale,
   };
 }
 
@@ -1182,6 +1225,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         accessibilityRisks: [],
       },
       layout:          extraction.layout,
+      businessRationale: undefined,
       voice:           undefined,
       qualityTier:     "exceptional",
       qualityScore:    3,
@@ -1277,6 +1321,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       accessibilityRisks: [],
     },
     layout:          extraction.layout,
+    businessRationale: critique.businessRationale,
     voice:           critique.voice,
     qualityTier:     critique.qualityTier,
     qualityScore:    critique.qualityTier === "cautionary" ? 2 : 3,
@@ -1310,6 +1355,7 @@ export async function generateCritique(
   critique: string;
   whatToSteal: string[];
   antiPatterns: { antiPatterns: string[]; whereThisFails: string[]; accessibilityRisks: string[] };
+  businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
   voice?: { tone: string; examples: string[]; avoid: string[] };
   qualityTier: string;
   qualityScore: number;
@@ -1343,6 +1389,7 @@ export async function generateCritique(
       whereThisFails: [],
       accessibilityRisks: [],
     },
+    businessRationale: critique.businessRationale,
     voice: critique.voice,
     qualityTier: critique.qualityTier,
     qualityScore: critique.qualityTier === "cautionary" ? 2 : 3,

@@ -150,6 +150,68 @@ describe("escapeCssId (Node-side CSS.escape replacement)", () => {
 // capture must be skipped, but a missing/unreachable robots.txt
 // is treated as allowed (don't hard-block on transient network errors).
 // ============================================================
+// OpenAI 429 reset-header parsing — the bug that caused "Vision provider
+// rate limit reached" to surface as a hard error instead of retrying.
+// OpenAI sends x-ratelimit-reset-requests / x-ratelimit-reset-tokens (NOT
+// Retry-After); the parser below mirrors parseOpenAIResetHeader in tagger.ts.
+// ============================================================
+
+describe("OpenAI x-ratelimit-reset-* header parsing", () => {
+  // Mirror of parseOpenAIResetHeader in src/tagger.ts. Kept in sync manually
+  // (same as the group-member sliver predicate above) — the real function is
+  // module-private, so we test the parsing logic via this port.
+  function parseOpenAIResetHeader(value: string | null): number | null {
+    if (!value) return null;
+    const v = value.trim().toLowerCase();
+    if (/^[≤<]=?\s*1s$/.test(v)) return 1000;
+    const msMatch = v.match(/^(\d+(?:\.\d+)?)ms$/);
+    if (msMatch) return Math.ceil(parseFloat(msMatch[1]));
+    const sMatch = v.match(/^(\d+(?:\.\d+)?)s$/);
+    if (sMatch) return Math.ceil(parseFloat(sMatch[1]) * 1000);
+    const mMatch = v.match(/^(\d+(?:\.\d+)?)m$/);
+    if (mMatch) return Math.ceil(parseFloat(mMatch[1]) * 60_000);
+    const hMatch = v.match(/^(\d+(?:\.\d+)?)h$/);
+    if (hMatch) return Math.ceil(parseFloat(hMatch[1]) * 3_600_000);
+    return null;
+  }
+
+  it("parses seconds: '1s' → 1000ms", () => {
+    expect(parseOpenAIResetHeader("1s")).toBe(1000);
+    expect(parseOpenAIResetHeader("12s")).toBe(12_000);
+    expect(parseOpenAIResetHeader("0.5s")).toBe(500);
+  });
+
+  it("parses milliseconds: '500ms' → 500ms", () => {
+    expect(parseOpenAIResetHeader("500ms")).toBe(500);
+    expect(parseOpenAIResetHeader("100ms")).toBe(100);
+  });
+
+  it("parses minutes: '1m' → 60000ms", () => {
+    expect(parseOpenAIResetHeader("1m")).toBe(60_000);
+  });
+
+  it("parses the sub-second sentinel '≤1s' as 1000ms minimum", () => {
+    // OpenAI's literal "≤1s" means "less than a second." We treat it as 1s
+    // since sub-second waits are pointless (network RTT dominates).
+    expect(parseOpenAIResetHeader("≤1s")).toBe(1000);
+  });
+
+  it("returns null for absent or unrecognized values", () => {
+    expect(parseOpenAIResetHeader(null)).toBeNull();
+    expect(parseOpenAIResetHeader("")).toBeNull();
+    expect(parseOpenAIResetHeader("unknown")).toBeNull();
+    expect(parseOpenAIResetHeader("soon")).toBeNull();
+  });
+
+  it("handles the real-world values OpenAI actually returns", () => {
+    // These are documented in OpenAI's rate-limit headers guide.
+    expect(parseOpenAIResetHeader("1s")).toBe(1000);
+    expect(parseOpenAIResetHeader("33m")).toBe(1_980_000);
+    expect(parseOpenAIResetHeader("2h")).toBe(7_200_000);
+  });
+});
+
+// ============================================================
 
 describe("robots.txt gate", () => {
   it("allows when robots.txt is missing (404 → treat as allowed)", async () => {

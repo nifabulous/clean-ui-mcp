@@ -2,13 +2,20 @@
 /**
  * migrate-untitled-products.ts
  * ──────────────────────────────
- * Backfills productName for entries the tagger couldn't read a wordmark for
- * (productName came back "Untitled"). The product is recoverable from the image
- * filename stem — these came from Mobbin/bulk-import batches where the filename
- * preserves the product. Maps to the canonical casing the corpus already uses.
+ * Backfills two fields the tagger couldn't infer:
+ *
+ *   1. productName === "Untitled" — recovered from the image filename stem
+ *      (Mobbin/bulk-import filenames preserve the product). Maps to the canonical
+ *      casing the corpus already uses.
+ *   2. title === "Untitled" (or empty) — set from productName. Most untitled
+ *      rows already have a correct productName; they just need the title mirrored
+ *      so the gallery doesn't show "Untitled" everywhere. When a product has
+ *      multiple untitled entries, a counter is appended to disambiguate
+ *      ("Cash App", "Cash App 2", "Cash App 3"…) — this is a display label, not
+ *      a unique id (the entry id still uniquely identifies the row).
  *
  * This is a field-populator, NOT a version bump. Idempotent: skips entries whose
- * productName is already set (not "Untitled"). --dry-run previews without writing.
+ * productName AND title are already set. --dry-run previews without writing.
  *
  * Usage:
  *   npm run migrate-untitled
@@ -16,7 +23,7 @@
  *
  * After migrating:
  *   npm run validate-corpus
- *   npm run build-index -- --force   # productName feeds the embedding document
+ *   npm run build-index -- --force   # productName + title feed the embedding
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -49,6 +56,7 @@ const STEM_TO_PRODUCT: Record<string, string> = {
   aboard:    "Aboard",
   workable:  "Workable",
   juicebox:  "Juicebox",
+  wise:      "Wise",
 };
 
 /** Extract the filename stem and map to a product, or null if unrecognized. */
@@ -67,24 +75,50 @@ if (!parsed.success) {
 }
 
 const entries = parsed.data.entries;
-const toFix = entries.filter((e) => e.source.productName === "Untitled" && e.image.path);
-const unmapped: string[] = [];
-let fixed = 0;
+const isUntitledTitle = (t: string) => !t || t === "Untitled" || t.toLowerCase() === "untitled";
 
-for (const entry of toFix) {
+// Pass 1: backfill productName from the filename stem (only when productName
+// itself is "Untitled"). This is the original behavior.
+const productNameUntitled = entries.filter((e) => e.source.productName === "Untitled" && e.image.path);
+const unmapped: string[] = [];
+let productsFixed = 0;
+
+for (const entry of productNameUntitled) {
   const product = productFromImagePath(entry.image.path!);
   if (!product) {
     unmapped.push(`${entry.id} → ${entry.image.path}`);
     continue;
   }
   entry.source.productName = product;
-  fixed += 1;
+  productsFixed += 1;
 }
 
-console.log(`Untitled entries: ${toFix.length}`);
-console.log(`Mapped from filename: ${fixed}`);
+// Pass 2: backfill title from productName (only when title is "Untitled"/empty).
+// Disambiguate siblings within one product with a counter — the id stays unique,
+// the title just needs to be a readable gallery label instead of "Untitled".
+const titleUntitled = entries.filter((e) => isUntitledTitle(e.title));
+const titleCounts: Record<string, number> = {};
+let titlesFixed = 0;
+
+for (const entry of titleUntitled) {
+  const product = entry.source.productName;
+  // Skip if productName is ALSO unknown — can't synthesize a sensible title.
+  if (!product || product === "Untitled") continue;
+  titleCounts[product] = (titleCounts[product] ?? 0) + 1;
+  entry.title = titleCounts[product] === 1 ? product : `${product} ${titleCounts[product]}`;
+  titlesFixed += 1;
+}
+
+console.log(`productName == "Untitled": ${productNameUntitled.length}`);
+console.log(`  mapped from filename:    ${productsFixed}`);
+console.log(`title == "Untitled":       ${titleUntitled.length}`);
+console.log(`  set from productName:    ${titlesFixed}`);
+const stillUntitled = entries.filter((e) => isUntitledTitle(e.title)).length;
+if (stillUntitled) {
+  console.log(`  still untitled (no productName to mirror): ${stillUntitled}`);
+}
 if (unmapped.length) {
-  console.log(`\n⚠ ${unmapped.length} couldn't be mapped from filename stem (need manual naming):`);
+  console.log(`\n⚠ ${unmapped.length} productName couldn't be mapped from filename stem (need manual naming):`);
   unmapped.slice(0, 20).forEach((u) => console.log(`  ${u}`));
   if (unmapped.length > 20) console.log(`  …(+${unmapped.length - 20} more)`);
 }

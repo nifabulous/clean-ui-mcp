@@ -77,7 +77,8 @@ optional split-provider mode for best quality per cost.
 ```bash
 git clone https://github.com/nifabulous/clean-ui-mcp.git
 cd clean-ui-mcp
-npm install
+npm install               # pulls Playwright (runtime dep — capture uses it, not just tests)
+npx playwright install chromium   # browser engine for `npm run capture` and browser tests
 cp .env.example .env      # then edit .env — add at least one vision provider key
 npm run build
 npm test
@@ -210,7 +211,7 @@ there explain the design intent behind every field.
 | `visual.colorRoles` | object | `{ canvas, surface, ink, muted, accent }` — paste-ready CSS token set (75% coverage). |
 | `platform` | enum | `web` \| `mobile` \| `tablet` — device class, orthogonal to patternType. Auto-detected from the screenshot aspect ratio at tag time. Lets the corpus answer "mobile onboarding" vs "web onboarding." |
 | `reviewStatus` | enum | `approved` (default) \| `draft` — workflow state. Drafts are hidden from MCP retrieval by default; surface with `reviewStatus:"draft"` or `"any"`. |
-| `provenance` | object | `{ taggedBy: "human" \| "auto" \| "auto-reviewed", reviewedBy? }` — who produced the fields and who reviewed them. The tagger marks `auto`; the UI flips to `auto-reviewed` on human edit; the CLI marks `human`. |
+| `provenance` | object | `{ taggedBy: "human" \| "auto" \| "auto-reviewed", reviewedBy?, capture? }` — who produced the fields and who reviewed them. The tagger marks `auto`; the UI flips to `auto-reviewed` on human edit; the CLI marks `human`. The optional nested `capture` block (`{ mode, viewport, selectorPath?, capturedAt, sourceUrl }`) records how a captured screenshot was produced — present only on entries that came through the capture pipeline, absent on manual uploads. The UI shows a "real capture" indicator when set. |
 | `source.lastVerified` | ISO date | Staleness tracking. Validator warns if >12 months old. |
 
 ### Layout wireframe
@@ -591,8 +592,14 @@ phrases, DECISION + EFFECT + REJECTION structure, anti-patterns as first-class.
 ### Via the terminal
 
 ```bash
-# Capture a screenshot
+# Capture a single screenshot (Playwright/Chromium — same engine the tests use)
 npm run capture -- --url "https://linear.app" --slug "linear-landing-2026"
+
+# Or capture a whole website at once — section/group/anchor detection, dual
+# viewport, consent-modal handling, perceptual-hash dedup. Writes a batch
+# under corpus/images-private/captures/{batchId}/ with manifest.json (feeds
+# the tagger) and triage.json (feeds the classic-workbench review UI).
+npm run capture-batch -- sources.json
 
 # Interactive wizard (optionally runs the vision tagger first)
 npm run add-entry -- --image corpus/images-private/linear-landing-2026.png \
@@ -684,9 +691,12 @@ Two complementary CLIs turn the corpus and its query log into signal:
 
 - **`npm run corpus-stats`** — distribution by pattern/category/style, coverage
   gaps, source staleness, an anti-pattern vague-phrase lint, index coverage,
-  image references (orphans/missing), and quality metrics (voice/layout/image %,
-  top products, provenance split). Use this to see what the corpus has and where
-  it's thin.
+  image references (orphans + missing, split by visibility tier — public-missing
+  is CI-blocking, private-missing is expected on fresh checkouts), and quality
+  metrics: voice/layout/image %, capture-provenance % (entries sourced from
+  the capture pipeline), top products, provenance split. The image-availability
+  KPI checks that the path resolves on disk, not just that the string is set.
+  Use this to see what the corpus has and where it's thin.
 - **`npm run query-stats`** — retrieval analytics over `corpus/query-log.jsonl`.
   Surfaces dead result ids, demand-vs-supply gaps (queries that return little),
   and the most-used filters. Use this to see what people ask for vs what exists.
@@ -739,12 +749,13 @@ clean-ui-mcp/
 │   ├── persistence.ts          # atomic writes + snapshots (reused by CLIs)
 │   ├── env.ts                  # .env loading + provider config
 │   ├── tagger.ts               # two-pass vision tagger (OpenAI/Claude/Gemini)
+│   ├── ssrf.ts                 # SSRF guard — shared by /api/capture-url and CLI capture
 │   ├── paths.ts                # corpus-path validation (traversal guards)
 │   └── scripts/
 │       ├── ui-server.ts        # curator dashboard server (3-zone shell)
 │       ├── validate-corpus.ts  # standalone validator (CI / pre-commit)
 │       ├── build-index.ts      # embed all entries via Voyage AI
-│       ├── capture.ts          # Puppeteer screenshot capture
+│       ├── capture.ts          # Playwright capture — single-shot + batch modes
 │       ├── add-entry.ts        # interactive terminal wizard
 │       ├── tag-image.ts        # CLI wrapper for the vision tagger
 │       ├── bulk-import.ts      # batch ingest (terminal)
@@ -782,7 +793,8 @@ clean-ui-mcp/
 | `npm test` | Run all tests (vitest unit + Playwright browser tests) |
 | `npm run validate-corpus` | Validate `entries.json` against schema + hygiene checks |
 | `npm run build-index` | Embed all entries via Voyage AI (needs `VOYAGE_API_KEY`) |
-| `npm run capture` | Screenshot a URL via Puppeteer |
+| `npm run capture` | Screenshot a URL via Playwright/Chromium (single-shot). Prints the saved path to stdout for chaining. SSRF-guarded (private IPs, cloud-metadata blocked). |
+| `npm run capture-batch` | Crawl a website and capture many sections at once. Reads a `sources.json`, writes `corpus/images-private/captures/{batchId}/` with `manifest.json` + `triage.json`. Same detection pipeline the classic workbench's triage UI consumes. |
 | `npm run add-entry` | Interactive entry wizard (terminal) |
 | `npm run workflow` | One-shot capture → add-entry chain (`CAPTURE_ARGS` for capture flags) |
 | `npm run tag-image` | Run the vision tagger on one image |

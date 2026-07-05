@@ -50,6 +50,10 @@ function mapEntry(entry) {
     imageW: entry.image?.width || null,
     imageH: entry.image?.height || null,
     imageVis: entry.image?.visibility || 'private',
+    // Real-capture indicator — single existence check on provenance.capture.
+    // Lets a curator scanning the gallery distinguish "this is real evidence"
+    // from "this is a wireframe reconstructed from color data" at a glance.
+    capture: !!entry.provenance?.capture,
     platform: entry.platform || 'web',
     reviewStatus: entry.reviewStatus || 'approved',
     provenance: entry.provenance || null,
@@ -321,8 +325,12 @@ function previewInner(x){
 function galleryCard(x){
   const fav=isFav(x.id);
   const pal=(x.dominant||[]).slice(0,5).map(c=>`<span style="background:${c}"></span>`).join('');
+  // data-img-id lets the delegated capture-phase error listener (mounted once
+  // in the gallery container) re-lookup the entry and swap in the wireframe
+  // fallback. No inline onerror — that path was a JSON-into-attribute bug waiting
+  // to happen, and `error` doesn't bubble so a regular listener wouldn't fire.
   const thumb = x.imagePath
-    ? `<img src="${API}/api/image?path=${encodeURIComponent(x.imagePath)}" alt="${esc(x.title)}" style="width:100%;height:100%;object-fit:cover;object-position:top;display:block" loading="lazy">`
+    ? `<img src="${API}/api/image?path=${encodeURIComponent(x.imagePath)}" alt="${esc(x.title)}" data-img-id="${esc(x.id)}" style="width:100%;height:100%;object-fit:cover;object-position:top;display:block" loading="lazy">`
     : `<div class="pv-frame">${previewInner(x)}</div>`;
   return `<div class="gcard ${fav?'is-fav':''}" data-id="${x.id}">
     <div class="gthumb">
@@ -331,6 +339,7 @@ function galleryCard(x){
         <svg width="13" height="13" viewBox="0 0 24 24" fill="${fav?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>
       </button></div>
       <div class="pv-pattern">${PATTERN_ICON[x.pattern]||'▪'} ${x.pattern}</div>
+      ${x.capture ? `<div class="pv-capture" title="Real screenshot from the capture pipeline"></div>` : ''}
     </div>
     <div class="gbody">
       <div class="gtitle" title="${esc(x.title)}">${esc(x.title)}</div>
@@ -607,16 +616,202 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
   render();
 });
 
-/* -------- Add entry (redirect to form — full wizard deferred) -------- */
+/* -------- Add entry -------- */
+// Single-entry capture/upload → auto-fill → review → save flow. Mirrors the
+// classic workbench's form, but lives in the SPA so the navigation context
+// (favorites, search query) is preserved. Draft state is held locally in
+// `addDraft` below — no global state pollution.
+let addDraft = null; // { imagePath, productName, url, entry, busy, error }
+
+function addBlank(){
+  return { imagePath:null, productName:'', url:'', entry:null, busy:null, error:null, tab:'capture' };
+}
+
+async function addDoCapture(form){
+  const url = (form.url.value||'').trim();
+  const slug = (form.slug.value||'').trim();
+  if(!url){ addDraft.error = 'URL is required'; render(); return; }
+  addDraft.busy = 'Capturing screenshot…'; addDraft.error = null; render();
+  try {
+    const r = await fetch(`${API}/api/capture-url`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ url, slug: slug || undefined })
+    });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error || 'Capture failed');
+    addDraft.imagePath = j.imagePath;
+    addDraft.productName = ''; addDraft.url = url;
+    addDraft.busy = null;
+  } catch(e){
+    addDraft.busy = null; addDraft.error = e.message;
+  }
+  render();
+}
+
+function addHandleUpload(file){
+  if(!file) return;
+  addDraft.busy = 'Uploading…'; addDraft.error = null; render();
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const r = await fetch(`${API}/api/upload-image`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ filename:file.name, slug:addDraft.productName || file.name, dataUrl:reader.result })
+      });
+      const j = await r.json();
+      if(!r.ok) throw new Error(j.error || 'Upload failed');
+      addDraft.imagePath = j.imagePath;
+      addDraft.busy = null;
+    } catch(e){
+      addDraft.busy = null; addDraft.error = e.message;
+    }
+    render();
+  };
+  reader.onerror = () => { addDraft.busy = null; addDraft.error = 'Could not read file'; render(); };
+  reader.readAsDataURL(file);
+}
+
+async function addDoAutoTag(){
+  if(!addDraft.imagePath){ addDraft.error = 'Capture or upload an image first'; render(); return; }
+  addDraft.busy = 'Auto-filling fields…'; addDraft.error = null; render();
+  try {
+    const r = await fetch(`${API}/api/auto-tag`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ imagePath:addDraft.imagePath, productName:addDraft.productName, url:addDraft.url })
+    });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error || 'Auto-fill failed');
+    addDraft.entry = j.entry;
+    addDraft.busy = null;
+  } catch(e){
+    addDraft.busy = null; addDraft.error = e.message;
+  }
+  render();
+}
+
+async function addDoSave(form){
+  if(!addDraft.entry){ addDraft.error = 'Run Auto-fill first'; render(); return; }
+  // Strip leading [DRAFT …] / [DRAFT] markers the tagger inserts as a hygiene
+  // forcing function — the validator blocks commits carrying them, and the
+  // SPA review step is the human review that justifies stripping them here.
+  const strip = s => (typeof s==='string' ? s.replace(/\[(?:DRAFT[^\]]*|PLACEHOLDER[^\]]*|TODO[^\]]*)\]\s*/gi,'').trim() : s);
+  const e = addDraft.entry;
+  const payload = {
+    ...e,
+    id: (form.id.value||'').trim() || undefined,
+    title: (form.title.value||'').trim() || e.title,
+    qualityScore: Number(form.qualityScore.value)||e.qualityScore||3,
+    source: { ...e.source, productName:(form.productName.value||'').trim() || e.source.productName },
+    critique: strip(form.critique.value) || strip(e.critique),
+    whatToSteal: (e.whatToSteal||[]).map(strip),
+    antiPatterns: { ...(e.antiPatterns||{}), antiPatterns:((e.antiPatterns?.antiPatterns)||[]).map(strip) },
+    reviewStatus: 'approved',
+    provenance: { taggedBy:'auto-reviewed', ...(e.provenance||{}) },
+  };
+  addDraft.busy = 'Saving…'; addDraft.error = null; render();
+  try {
+    const r = await fetch(`${API}/api/entries`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.issues?.join('; ') || j.error || 'Save failed');
+    // Saved — reload corpus and bounce to the new entry's detail.
+    await loadAll();
+    recomputeAgg();
+    addDraft = addBlank();
+    location.hash = `#/entry/${encodeURIComponent(j.entry.id)}`;
+  } catch(err){
+    addDraft.busy = null; addDraft.error = err.message;
+    render();
+  }
+}
+
 page('add','Add entry','new corpus entry', function(){
+  if(!addDraft) addDraft = addBlank();
+  const d = addDraft;
+  const hasImage = !!d.imagePath;
+  const hasEntry = !!d.entry;
+  // Capture/upload step
+  const captureStep = `
+    <div class="card-section">
+      <div class="eyebrow">Step 1 — capture or upload a screenshot</div>
+      ${d.tab==='capture' ? `
+        <form id="addCaptureForm" style="margin-top:10px">
+          <label>Source URL<input name="url" placeholder="https://linear.app" value="${esc(d.url)}" style="width:100%"></label>
+          <label>Slug (optional)<input name="slug" placeholder="linear-landing-2026" style="width:100%"></label>
+          <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn primary" type="submit">Capture from URL</button>
+            <button class="btn" type="button" id="addSwitchUpload">⇄ Upload instead</button>
+          </div>
+        </form>
+      ` : `
+        <div style="margin-top:10px">
+          <label class="btn">
+            <input type="file" id="addFileInput" accept="image/png,image/jpeg,image/webp" hidden>
+            Choose an image file
+          </label>
+          <button class="btn" type="button" id="addSwitchCapture" style="margin-left:8px">⇄ Capture from URL instead</button>
+        </div>
+      `}
+    </div>`;
+
+  // Image preview
+  const previewStep = hasImage ? `
+    <div class="card-section">
+      <div class="eyebrow">Step 2 — preview</div>
+      <figure class="image-preview" style="margin-top:8px">
+        <img src="${API}/api/image?path=${encodeURIComponent(d.imagePath)}" alt="captured" style="max-width:100%;border-radius:6px;border:1px solid var(--hr)">
+        <figcaption class="image-ready">Image ready: ${esc(d.imagePath)}</figcaption>
+      </figure>
+      ${hasEntry ? '' : `<button class="btn primary" id="addAutoTag" style="margin-top:8px">✨ Auto-fill fields</button>`}
+    </div>` : '';
+
+  // Auto-fill results form
+  const reviewStep = hasEntry ? `
+    <div class="card-section">
+      <div class="eyebrow">Step 3 — review the draft and save</div>
+      <form id="addSaveForm" style="margin-top:8px;display:flex;flex-direction:column;gap:10px">
+        <label>ID (optional)<input name="id" placeholder="(auto-generated)" style="width:100%"></label>
+        <label>Title<input name="title" value="${esc(d.entry.title||'')}" style="width:100%"></label>
+        <label>Product name<input name="productName" value="${esc(d.entry.source?.productName||d.productName||'')}" style="width:100%"></label>
+        <label>Quality score (1-5)<input name="qualityScore" type="number" min="1" max="5" value="${d.entry.qualityScore||3}" style="width:60px"></label>
+        <label>Critique
+          <textarea name="critique" rows="6" style="width:100%;font-family:var(--mono);font-size:12px">${esc(d.entry.critique||'')}</textarea>
+        </label>
+        <details style="font-size:12px;color:var(--ink-2)">
+          <summary>Pattern / categories / style (auto-detected)</summary>
+          <pre style="white-space:pre-wrap;background:var(--surface);padding:8px;border-radius:4px">${esc(JSON.stringify({patternType:d.entry.patternType, categories:d.entry.categories, styleTags:d.entry.styleTags, platform:d.entry.platform}, null, 2))}</pre>
+        </details>
+        <button class="btn primary" type="submit">Save entry →</button>
+      </form>
+    </div>` : '';
+
+  const busyMsg = d.busy ? `<div class="card-section" style="color:var(--accent);font-size:13px">⏳ ${esc(d.busy)}</div>` : '';
+  const errorMsg = d.error ? `<div class="card-section" style="color:#c00;font-size:13px">⚠ ${esc(d.error)}</div>` : '';
+
   return `<div class="card">
-    <div class="card-head"><div><h3>Add a single entry</h3><div class="eyebrow">the curator form</div></div></div>
-    <p style="font-size:13px;color:var(--ink-2);line-height:1.6;margin-bottom:16px">
-      The full form-based entry editor lives in the classic view. Click below to open it in a new tab,
-      or use <a href="#/bulk" style="color:var(--accent)">Bulk import</a> to add many at once.
-    </p>
-    <a class="btn primary" href="/index-classic.html" target="_blank">Open entry form →</a>
+    <div class="card-head"><div><h3>Add a single entry</h3><div class="eyebrow">capture → auto-fill → review → save</div></div></div>
+    ${busyMsg}${errorMsg}
+    ${captureStep}
+    ${previewStep}
+    ${reviewStep}
   </div>`;
+}, function(){
+  // after-mount callback — attach form listeners. Looked up by id rather than
+  // closure capture so re-renders (which replace the DOM) re-bind cleanly.
+  const cap = document.getElementById('addCaptureForm');
+  if(cap) cap.addEventListener('submit', e=>{ e.preventDefault(); addDoCapture(e.target); });
+  const upSwitch = document.getElementById('addSwitchUpload');
+  if(upSwitch) upSwitch.addEventListener('click', ()=>{ addDraft.tab='upload'; render(); });
+  const capSwitch = document.getElementById('addSwitchCapture');
+  if(capSwitch) capSwitch.addEventListener('click', ()=>{ addDraft.tab='capture'; render(); });
+  const fileInput = document.getElementById('addFileInput');
+  if(fileInput) fileInput.addEventListener('change', e=>{ addHandleUpload(e.target.files[0]); });
+  const at = document.getElementById('addAutoTag');
+  if(at) at.addEventListener('click', addDoAutoTag);
+  const save = document.getElementById('addSaveForm');
+  if(save) save.addEventListener('submit', e=>{ e.preventDefault(); addDoSave(e.target); });
 });
 
 /* -------- Bulk import -------- */
@@ -880,6 +1075,17 @@ window._mcp = { toast };
   renderNav();
   initSidebar();
   window.addEventListener('hashchange',route);
+  // Delegated image-error fallback — single registration, survives re-renders.
+  // MUST use capture phase: `error` on <img> does not bubble. When an image
+  // 404s (file moved, batch cleaned up after promotion, fresh checkout without
+  // private images), re-look-up the entry in E and swap in the wireframe so the
+  // gallery never shows a broken-image icon.
+  document.addEventListener('error', (e) => {
+    const img = e.target;
+    if (!(img instanceof HTMLImageElement) || !img.dataset.imgId) return;
+    const x = E.find(en => en.id === img.dataset.imgId);
+    if (x) img.outerHTML = `<div class="pv-frame">${previewInner(x)}</div>`;
+  }, true);
   route();
 })();
 })();

@@ -439,14 +439,32 @@ describe("specimen-ledger SPA", () => {
     await page.close();
   });
 
-  it("renders the add/bulk routes as links to the classic workbench", async () => {
+  it("renders the SPA add-entry flow with a capture form (no longer a redirect)", async () => {
+    // The #/add route used to be a placeholder linking out to the classic
+    // workbench; it's now a real capture/upload → auto-fill → save flow in the
+    // SPA itself. Verify the form is present (URL input + capture button),
+    // and that the old redirect link is gone.
     const page = await browser!.newPage();
     await page.goto(baseUrl + "/#/add");
-    await page.waitForSelector("#pages a[href='/index-classic.html']");
-    const addLink = await page.locator("#pages a[href='/index-classic.html']").first().getAttribute("href");
-    expect(addLink).toBe("/index-classic.html");
+    // The capture form's URL input is the canonical selector for "the SPA add
+    // flow mounted." waitForSelector with a timeout beats a flake-y assert.
+    await page.waitForSelector("#addCaptureForm input[name='url']", { timeout: 5000 });
+    const urlInput = await page.locator("#addCaptureForm input[name='url']").count();
+    expect(urlInput).toBe(1);
+    // The capture button should also be present.
+    const captureBtn = await page.locator("#addCaptureForm button[type='submit']").count();
+    expect(captureBtn).toBe(1);
+    // The old redirect link to /index-classic.html should NOT be in #/add anymore.
+    const oldRedirect = await page.locator("#pages a[href='/index-classic.html']").count();
+    expect(oldRedirect).toBe(0);
+    await page.close();
+  });
 
-    await page.evaluate(() => { location.hash = "/bulk"; });
+  it("still routes #/bulk to the classic workbench (bulk flow unchanged)", async () => {
+    // Bulk import is intentionally NOT rebuilt in the SPA — it stays a link to
+    // the classic workbench where the queue-with-status flow already lives.
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/bulk");
     await page.waitForSelector("#pages a[href='/index-classic.html#bulk']");
     await page.close();
   });

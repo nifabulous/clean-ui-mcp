@@ -418,7 +418,16 @@ function resolveProvider(pass: TaggerPass): Provider {
 
 /** Check if ANY vision provider key is configured. */
 export function hasVisionKey(): boolean {
-  return !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY);
+  // Per-pass OpenAI variants (OPENAI_API_KEY_EXTRACTION / _CRITIQUE) count too —
+  // a split-provider setup using only OPENAI_API_KEY_CRITIQUE (NIM/DeepSeek for
+  // critique + real OpenAI for extraction) was falsely reporting "no vision
+  // key" here, mirroring the per-pass resolution already in resolveProvider.
+  const hasOpenAI = !!(
+    process.env.OPENAI_API_KEY ||
+    process.env.OPENAI_API_KEY_EXTRACTION ||
+    process.env.OPENAI_API_KEY_CRITIQUE
+  );
+  return !!(hasOpenAI || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY);
 }
 
 const PROVIDER_NAMES: Record<Provider, string> = { openai: "OpenAI", claude: "Claude", gemini: "Gemini" };
@@ -431,7 +440,15 @@ export function activeProviderName(pass?: TaggerPass): string {
 
 /** Active model name for UI display. */
 export function activeModelName(pass?: TaggerPass): string {
-  return PROVIDER_MODELS[resolveProvider(pass ?? "extraction")];
+  const resolvedPass = pass ?? "extraction";
+  const provider = resolveProvider(resolvedPass);
+  // For the OpenAI path, the static PROVIDER_MODELS map reports the OpenAI
+  // default even when a per-pass override (OPENAI_AUTO_TAG_MODEL_CRITIQUE etc.)
+  // routes the call to a different endpoint — e.g. critique actually running on
+  // NVIDIA NIM's DeepSeek V4 while /api/config reported "gpt-5.4-mini". Resolve
+  // through openaiConfigForPass so the reported model matches the call.
+  if (provider === "openai") return openaiConfigForPass(resolvedPass).model;
+  return PROVIDER_MODELS[provider];
 }
 
 // ─── PASS 1: extraction prompt (facts + geometry) ────────────────────────────
@@ -1039,13 +1056,16 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   let extractionParsed = parseExtraction(extractionRawText);
 
   // Adaptive re-run: if we asked for low and the model clearly couldn't read the
-  // page, retry once at high. Weak = patternType defaulted AND name came back
-  // Untitled AND no categories. (Colors are deterministic, so they don't count.)
+  // page, retry once at high. Probe the RAW extraction output — sanitizeTaggerPayload
+  // applies defaults (patternType → "dashboard") that mask the very weakness we're
+  // detecting, making the !probe.patternType check never fire. Read the raw fields
+  // directly so a genuinely-empty result is detected as weak.
   if (requestedDetail === "low") {
-    const probe = sanitizeTaggerPayload(extractionParsed);
+    const rawType = typeof extractionParsed.patternType === "string" ? (extractionParsed.patternType as string).trim() : "";
+    const rawCats = Array.isArray(extractionParsed.categories) ? (extractionParsed.categories as unknown[]).length : 0;
     const probeName = (typeof extractionParsed.productName === "string" ? extractionParsed.productName.trim() : "");
-    const weak = (!probe.patternType || probe.patternType === "dashboard")
-      && (!probe.categories.length)
+    const weak = !rawType
+      && !rawCats
       && (!probeName || probeName.toLowerCase() === "untitled");
     if (weak) {
       extractionRawText = await callModel(
@@ -1068,10 +1088,13 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   // Skipped if we already escalated detail above (the weak-result probe runs
   // against the latest extractionParsed, so this naturally composes with it).
   if (resolveProvider("extraction") === "gemini" && /3\.5|3-5/i.test(GEMINI_AUTO_TAG_MODEL)) {
-    const probe = sanitizeTaggerPayload(extractionParsed);
+    // Same raw-probe fix as the detail-escalation block above — sanitizeTaggerPayload's
+    // defaults mask the weakness we're detecting.
+    const rawType = typeof extractionParsed.patternType === "string" ? (extractionParsed.patternType as string).trim() : "";
+    const rawCats = Array.isArray(extractionParsed.categories) ? (extractionParsed.categories as unknown[]).length : 0;
     const probeName = (typeof extractionParsed.productName === "string" ? extractionParsed.productName.trim() : "");
-    const weak = (!probe.patternType || probe.patternType === "dashboard")
-      && (!probe.categories.length)
+    const weak = !rawType
+      && !rawCats
       && (!probeName || probeName.toLowerCase() === "untitled");
     if (weak) {
       if (DEBUG_TAGGER) console.error("[tagger] weak extraction at MINIMAL — re-running at thinkingLevel HIGH");

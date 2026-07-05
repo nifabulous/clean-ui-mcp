@@ -27,6 +27,16 @@ corpus/query-log.jsonl
 # Gitignored because they're large, derivable, and purely a local safety net.
 corpus/.snapshots/
 
+# Bulk-import working state. Draft files are the staged-but-uncommitted output
+# of `npm run bulk-import`; their .bak siblings come from the strip-and-approve
+# helper. Per-batch manifests (bulk-*-manifest.json) ARE kept — they record
+# exactly which images were in each batch. Staging folders hold extracted zips
+# mid-import. All transient, all local.
+corpus/*-draft.json
+corpus/*-draft.json.bak
+corpus/staging-*/
+corpus/bulk-test-*
+
 # Local corpus config — per-curator floor for the entry-count drift check.
 # Copy .corpus-config.example.json to .corpus-config.json and set your floor.
 corpus/.corpus-config.json

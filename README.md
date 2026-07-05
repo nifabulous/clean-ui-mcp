@@ -12,8 +12,8 @@ that already (shadcn, Figma MCP, magic-mcp). The point is to give it *specific,
 real, well-explained examples* to ground "make it clean" requests in something
 other than the statistical average of training data (the "AI slop" failure mode).
 
-> **Live corpus:** 456 entries across 83 products, 17 UI patterns, 43
-> cautionary examples, 568 anti-pattern statements, and 1,810 stealable
+> **Live corpus:** 1,019 entries across 90 products, 20 UI patterns, 45
+> cautionary examples, 1,153 anti-pattern statements, and 3,600 stealable
 > techniques. Counts drift as the corpus grows — re-derive any time with
 > `npm run corpus-stats`.
 
@@ -133,19 +133,35 @@ OPENAI_AUTO_TAG_MODEL=gpt-5.4-nano
 
 # Anthropic Claude
 ANTHROPIC_API_KEY=
-CLAUDE_AUTO_TAG_MODEL=claude-haiku-4-5
+CLAUDE_AUTO_TAG_MODEL=claude-sonnet-4-5
 
 # Google Gemini
 GEMINI_API_KEY=
-GEMINI_AUTO_TAG_MODEL=gemini-2.5-flash
+GEMINI_AUTO_TAG_MODEL=gemini-3.5-flash
 
 # ─── Split-provider mode (recommended for best quality per cost) ────────────
 # Use different providers for each pass of the two-pass tagger:
-#   Extraction (Pass 1): vision + speed → Gemini Flash
-#   Critique (Pass 2): reasoning + writing → Claude Sonnet
+#   Extraction (Pass 1): vision + speed → Gemini Flash or OpenAI
+#   Critique (Pass 2): reasoning + writing → Claude Sonnet (or DeepSeek on NIM)
 # If unset, both fall back to AUTO_TAG_PROVIDER above.
 #AUTO_TAG_PROVIDER_EXTRACTION=gemini
 #AUTO_TAG_PROVIDER_CRITIQUE=claude
+
+# ─── OpenAI-compatible endpoints (NIM, OpenRouter, Together, Groq, vLLM) ────
+# Setting OPENAI_BASE_URL routes OpenAI calls to /v1/chat/completions instead
+# of OpenAI's native /v1/responses. Per-pass overrides let extraction and
+# critique hit different OpenAI-compatible endpoints. See "Multi-provider
+# support" below for a full DeepSeek-on-NIM-for-critique example.
+#OPENAI_BASE_URL=https://integrate.api.nvidia.com/v1
+#OPENAI_BASE_URL_CRITIQUE=https://integrate.api.nvidia.com/v1
+#OPENAI_API_KEY_CRITIQUE=nvapi-...
+#OPENAI_AUTO_TAG_MODEL_CRITIQUE=deepseek-ai/deepseek-v4-pro
+
+# ─── Optional tuning ────────────────────────────────────────────────────────
+# Set to 1 to print per-call provider config + token usage to stderr.
+#DEBUG_TAGGER=1
+# Forces thinking OFF for both passes on OpenAI-compatible providers (NIM etc).
+#OPENAI_THINKING_DISABLED=1
 
 # ─── Semantic search (optional — falls back to keyword without it) ──────────
 VOYAGE_API_KEY=
@@ -328,14 +344,16 @@ Good: "Hairline borders at low contrast do structural work without the visual
 
 ## Multi-provider support
 
-The tagger works with three vision providers. Set `AUTO_TAG_PROVIDER` and the
-matching key. Each provider has its own model override:
+The tagger works with three vision provider families, plus any OpenAI-compatible
+endpoint. Set `AUTO_TAG_PROVIDER` and the matching key. Each provider has its
+own model override:
 
 | Provider | `AUTO_TAG_PROVIDER` | Key env var | Default model | Model override |
 |---|---|---|---|---|
 | OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-5.4-nano` | `OPENAI_AUTO_TAG_MODEL` |
 | Anthropic Claude | `claude` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | `CLAUDE_AUTO_TAG_MODEL` |
 | Google Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash` | `GEMINI_AUTO_TAG_MODEL` |
+| OpenAI-compatible (NIM, OpenRouter, Together, Groq, vLLM) | `openai` + `OPENAI_BASE_URL` | `OPENAI_API_KEY` | (provider-specific) | `OPENAI_AUTO_TAG_MODEL` |
 
 ### Split-provider mode (recommended)
 
@@ -351,6 +369,79 @@ Each pass auto-falls back independently if its preferred key is missing.
 
 **Per-image cost** (both passes): ~$0.007 with Gemini→Claude split, ~$0.012
 with Claude-only. Under a cent either way.
+
+### Split-provider with two OpenAI-compatible endpoints
+
+The OpenAI adapter supports **per-pass overrides** for base URL, API key, and
+model — so extraction and critique can hit different OpenAI-compatible
+endpoints while both routing through the same adapter. The canonical use case:
+real OpenAI for extraction (vision), NVIDIA NIM's DeepSeek V4 Pro for critique
+(writing).
+
+```bash
+AUTO_TAG_PROVIDER_EXTRACTION=openai
+AUTO_TAG_PROVIDER_CRITIQUE=openai
+
+# Extraction: real OpenAI (vision via gpt-5.4-mini) → native /v1/responses
+OPENAI_API_KEY=<your real openai key>
+OPENAI_AUTO_TAG_MODEL=gpt-5.4-mini
+
+# Critique: NVIDIA NIM DeepSeek V4 Pro → universal /v1/chat/completions
+OPENAI_BASE_URL_CRITIQUE=https://integrate.api.nvidia.com/v1
+OPENAI_API_KEY_CRITIQUE=nvapi-...
+OPENAI_AUTO_TAG_MODEL_CRITIQUE=deepseek-ai/deepseek-v4-pro
+```
+
+When `OPENAI_BASE_URL` (or the per-pass variant) is set, the adapter routes to
+the universal `/v1/chat/completions` endpoint instead of OpenAI's native
+`/v1/responses` — the format every NIM/OpenRouter/Together/Groq/vLLM endpoint
+speaks. Without a base URL, real OpenAI keeps the Responses API path (untouched
+behavior for existing OpenAI users).
+
+The `chat_template_kwargs.thinking` toggle is sent automatically: ON for the
+critique pass (DeepSeek's strength is reasoning), OFF for extraction
+(deterministic fields, avoids truncation). Override globally with
+`OPENAI_THINKING_DISABLED=1`.
+
+### Gemini 3.5 thinking control
+
+Gemini 3.5 Flash exposes reasoning via `thinkingLevel` (MINIMAL/LOW/MEDIUM/HIGH)
+in a separate budget from output tokens. The tagger sets this per pass:
+
+| Pass | `thinkingLevel` | Why |
+|---|---|---|
+| Extraction | `MINIMAL` | Perception task — no chain-of-thought needed. Preserves speed/cost. |
+| Critique | `HIGH` | Deep reasoning is where 3.5 Flash closes the gap on Claude Sonnet for writing. |
+
+If the MINIMAL extraction comes back weak (blank `patternType`, no categories,
+"Untitled" name — the same signals the existing low→high detail escalation
+uses), it re-runs once at HIGH. Strong first results never pay for the
+escalation. The 2.5 thinking model is still supported (`thinkingBudget: 0` on
+extraction); the tagger branches on model name.
+
+### Debug logging
+
+Set `DEBUG_TAGGER=1` to print per-call provider config and token usage to
+stderr (quiet by default so production logs stay clean):
+
+```
+[gemini] model=gemini-3.5-flash pass=extraction thinkingConfig={"thinkingLevel":"MINIMAL"}
+[gemini] pass=extraction usage thoughts=? out=249 in=2117
+[openai-compat] model=deepseek-ai/deepseek-v4-pro pass=critique base=https://integrate.api.nvidia.com/v1 thinking=true
+[openai-compat] pass=critique usage in=1034 out=3426 total=4460
+```
+
+### Reliability: retries + 429 handling
+
+- **Transient 5xx / network errors** retry with exponential backoff (502/503/504,
+  ECONNRESET, "overloaded"/"high demand").
+- **429 rate-limit responses** retry when the provider gives a hint: Gemini's
+  `retryDelay: "12s"`, OpenAI/Anthropic's `Retry-After` header, or — for
+  hint-less 429s from per-minute quotas (NIM's bare "Too Many Requests") — a
+  65s fallback wait that respects the per-minute window.
+- **Hard quota errors** (body mentions `quota`/`billing`/`credit`/`depleted`)
+  are surfaced to the caller instead of stalling — daily-cap exhaustion
+  shouldn't hang the batch.
 
 **Provider differences normalized:** system-prompt placement, image encoding
 (data-URI vs raw base64), max-tokens location, auth headers, response text
@@ -707,6 +798,14 @@ clean-ui-mcp/
 | `npm run doctor` | One-command health check: TS, corpus, snapshots, images, index, env |
 | `npm run restore-corpus` | Recover from a snapshot (`--list`, `--latest`, `--snapshot`, `--dry-run`) |
 | `npm run clean-orphans` | Delete unreferenced private images (`--dry-run` default, `--confirm` to delete) |
+
+**Helper scripts** (in `scripts/`, run with `node scripts/<name>.mjs` — not in `package.json` because they're one-off workflow helpers, not the core build/test pipeline):
+
+| Script | What it does |
+|---|---|
+| `node scripts/build-bulk-manifest.mjs --folder <dir> --out <path>` | Generate a `--manifest` JSON for `npm run bulk-import` from a folder of screenshots whose filenames don't follow the `<product>__<notes>.png` convention. Infers productName/URL from a built-in prefix map (extend `PREFIX_MAP` as you add products). Recurses subfolders. |
+| `node scripts/dedup-check.mjs --folder <dir>` | Read-only count of how many images in a folder are genuinely NEW vs already in the corpus. Uses the project's own SHA-256 + dHash logic. Run before a bulk import to size the work and cost. |
+| `node scripts/strip-and-approve.mjs --draft <path>` | Strip `[DRAFT]` markers and flip `_importStatus` to `approved` for a draft file you've decided to commit without per-entry review. Backs up to `<path>.bak` first. Idempotent. |
 
 ---
 

@@ -162,6 +162,19 @@ const isSelected = (id) => selection.has(id);
 function toggleSelect(id){ selection.has(id) ? selection.delete(id) : selection.add(id); }
 function clearSelection(){ selection.clear(); }
 
+// Capture-triage state. Batches live on disk and change between visits, so the
+// #/capture page reloads on each entry (mirrors the classic workbench). Loaded
+// lazily on first render of the page; Refresh button re-loads on demand.
+let captureBatches = [];
+let captureBatchesLoaded = false;
+async function loadCaptureBatches(){
+  try {
+    const j = await request('/api/capture-batches');
+    captureBatches = j.batches || [];
+  } catch(e){ captureBatches = []; }
+  captureBatchesLoaded = true;
+}
+
 // Change one entry's tier via full-entry PUT (server validates the whole
 // object, so we send the raw entry with qualityTier mutated). Returns true on
 // success. Reads from the in-memory _raw so no extra fetch is needed.
@@ -233,6 +246,7 @@ const NAV = [
     {id:'add',       label:'Add entry',    icon:'plus'},
     {id:'bulk',      label:'Bulk import',  icon:'bulk'},
     {id:'sources',   label:'Sources',      icon:'circle'},
+    {id:'capture',   label:'Capture triage', icon:'circle'},
   ]},
   { group:'Query layer', items:[
     {id:'search',    label:'Search index',  icon:'search'},
@@ -925,12 +939,21 @@ async function saveDraft(){
 // button appear dead. location.hash changes on every genuine navigation to
 // #/add (including back-to-add-after-save), while refreshActivePage() leaves
 // it unchanged.
+//
+// _addPreseeded is the escape hatch for promoteCapture: it pre-fills the draft
+// from a capture candidate and routes here, so we must NOT reset on arrival.
+// The flag is consumed once on the first render, then cleared.
 let _addSeededForHash = null;
+let _addPreseeded = false;
 page('add','Add entry','new corpus entry', function(){
-  // The #/add route is the new-entry entry point. Seed a blank draft when the
-  // hash actually changed (genuine navigation), then leave the draft alone
-  // across re-renders so in-flight wizard state survives.
-  if(_addSeededForHash !== location.hash){
+  if(_addPreseeded){
+    // Draft was pre-seeded by promoteCapture — keep it, just sync the guard.
+    _addPreseeded = false;
+    _addSeededForHash = location.hash;
+  } else if(_addSeededForHash !== location.hash){
+    // The #/add route is the new-entry entry point. Seed a blank draft when the
+    // hash actually changed (genuine navigation), then leave the draft alone
+    // across re-renders so in-flight wizard state survives.
     resetDraft();
     _addSeededForHash = location.hash;
   }
@@ -1036,6 +1059,151 @@ page('bulk','Bulk import','batch ingest · upload → auto-fill → commit', fun
     <a class="btn primary" href="/index-classic.html#bulk" target="_blank">Open bulk import →</a>
   </div>`;
 });
+
+/* -------- Capture triage -------- */
+// Ported from the classic workbench (ui/classic-app.js renderCapture). Lists
+// batch-capture candidates written to disk by `npm run capture-batch`, and lets
+// the user promote / reject / clean up. Batch capture itself stays CLI-only —
+// this page only triages what's already on disk. Loaded lazily on first render.
+
+// Status chip colors (Pending=amber, Promoted=green, Rejected=grey) — matches
+// the classic workbench so muscle memory carries over.
+const CAPTURE_STATUS_CHIP = {
+  pending:   { label:'Pending',   bg:'#fef3c7', fg:'#92400e' },
+  promoted:  { label:'Promoted',  bg:'#dcfce7', fg:'#166534' },
+  rejected:  { label:'Rejected',  bg:'#f1f5f9', fg:'#475569' },
+};
+
+function renderCaptureBatch(batch){
+  const t = { total: batch.items.length, pending:0, promoted:0, rejected:0 };
+  for(const it of batch.items) t[it.status]++;
+  // Client half of the cleanup safety gate: only enable when nothing is pending.
+  // The server re-checks (409) regardless, so this is UX polish, not security.
+  const cleanable = t.pending === 0 && t.total > 0;
+  return `<div class="card" style="margin-bottom:14px">
+    <div class="card-head">
+      <div>
+        <h3 style="font-family:var(--mono);font-size:14px">${esc(batch.batchId)}</h3>
+        <div class="eyebrow">${esc(batch.capturedAt||'')} · ${t.total} capture(s) · ${t.promoted} promoted · ${t.rejected} rejected · ${t.pending} pending</div>
+      </div>
+      <button class="btn" id="captureCleanup-${esc(batch.batchId)}" data-capture-cleanup="${esc(batch.batchId)}" ${cleanable?'':'disabled'} title="${cleanable?'Delete this batch folder':'Promote or reject all items first'}">Clean up batch</button>
+    </div>
+    <div class="capture-queue">
+      ${batch.items.map(it => renderCaptureRow(batch, it)).join('')}
+    </div>
+  </div>`;
+}
+
+function renderCaptureRow(batch, item){
+  const chip = CAPTURE_STATUS_CHIP[item.status] || CAPTURE_STATUS_CHIP.pending;
+  const thumb = `<img src="${API}/api/image?path=${encodeURIComponent(item.imagePath)}" alt="${esc(item.id)}" data-img-id="capture-${esc(item.id)}" style="width:96px;height:64px;object-fit:cover;object-position:top;border-radius:4px;border:1px solid var(--hr);background:var(--surface)" loading="lazy">`;
+  const key = `${esc(batch.batchId)}|${esc(item.id)}`;
+  return `<div class="capture-row" data-capture-id="${esc(item.id)}" style="display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--hr)">
+    ${thumb}
+    <div style="flex:1;min-width:0">
+      <div style="font-family:var(--mono);font-size:12px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(item.id)}</div>
+      <div style="font-size:11px;color:var(--ink-2);margin-top:2px">${esc(item.sourceName||'')} · ${esc(item.captureMode||'')} · ${esc(item.viewport||'')}</div>
+    </div>
+    <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${chip.bg};color:${chip.fg};font-weight:500">${chip.label}</span>
+    ${item.status !== 'promoted' ? `<button class="btn primary" data-capture-promote="${key}" style="padding:4px 10px;font-size:12px">Promote</button>` : ''}
+    ${item.status !== 'rejected' ? `<button class="btn" data-capture-reject="${key}" style="padding:4px 10px;font-size:12px">Reject</button>` : ''}
+  </div>`;
+}
+
+page('capture','Capture triage','batch crawl output · promote / reject / clean up', function(){
+  // Lazy-load on first render. Subsequent refreshActivePage() calls reuse the
+  // cached list; the Refresh button forces a reload.
+  if(!captureBatchesLoaded){
+    loadCaptureBatches().then(refreshActivePage);
+    return `<div class="card"><div class="eyebrow" style="padding:24px">Loading capture batches…</div></div>`;
+  }
+  const total = captureBatches.reduce((s,b)=>s+b.items.length, 0);
+  const explainer = `<div class="card" style="margin-bottom:14px">
+    <div class="card-head"><div><h3>Capture triage</h3><div class="eyebrow">${total} candidate(s) across ${captureBatches.length} batch(es)</div></div>
+      <button class="btn" id="captureRefresh">Refresh</button>
+    </div>
+    <p style="font-size:13px;color:var(--ink-2);line-height:1.6">
+      Batches are produced by the CLI crawler: <code style="font-family:var(--mono);background:var(--surface);padding:1px 4px;border-radius:3px">npm run capture-batch -- sources.json</code>.
+      Each candidate is a detected section/group of a page. Promote one to pre-fill the entry form (the triage flips to "promoted" once the entry saves);
+      reject to drop noise. Clean up removes the batch folder from disk once nothing is pending.
+    </p>
+  </div>`;
+  if(captureBatches.length === 0){
+    return `${explainer}<div class="card"><div class="empty" style="padding:60px;color:var(--ink-2);text-align:center">
+      No capture batches found. Run <code style="font-family:var(--mono)">npm run capture-batch</code> to crawl a site — batches land under <code style="font-family:var(--mono)">images-private/captures/</code> and appear here.
+    </div></div>`;
+  }
+  return explainer + captureBatches.map(renderCaptureBatch).join('');
+}, function after(){
+  // Delegated click handlers. We bind one listener per button class via
+  // data-* attributes (matches classic-app.js's pattern).
+  const refresh = document.getElementById('captureRefresh');
+  if(refresh) refresh.addEventListener('click', async ()=>{
+    captureBatchesLoaded = false; await loadCaptureBatches(); refreshActivePage();
+  });
+  document.querySelectorAll('[data-capture-promote]').forEach(b=>{
+    b.addEventListener('click', ()=>{ const [batchId, captureId] = b.dataset.capturePromote.split('|'); promoteCapture(batchId, captureId); });
+  });
+  document.querySelectorAll('[data-capture-reject]').forEach(b=>{
+    b.addEventListener('click', ()=>{ const [batchId, captureId] = b.dataset.captureReject.split('|'); rejectCapture(batchId, captureId); });
+  });
+  document.querySelectorAll('[data-capture-cleanup]').forEach(b=>{
+    b.addEventListener('click', ()=>cleanupCaptureBatch(b.dataset.captureCleanup));
+  });
+});
+
+// Reject a capture candidate — one-shot POST to triage, then reload the list.
+async function rejectCapture(batchId, captureId){
+  try {
+    await request('/api/capture-triage', { method:'POST', body: JSON.stringify({ batchId, captureId, status:'rejected' }) });
+    await loadCaptureBatches(); refreshActivePage();
+    toast('Marked rejected', 'success');
+  } catch(e){ toast(e.message, 'error'); }
+}
+
+// Delete a batch folder. Three-layer safety gate: client disabled-button (only
+// enabled when nothing is pending), browser confirm(), and the server's 409
+// check (re-counts pending). All three must agree.
+async function cleanupCaptureBatch(batchId){
+  if(!confirm(`Delete the batch folder for ${batchId}? This removes all capture screenshots in that batch from disk.`)) return;
+  try {
+    await request('/api/capture-cleanup', { method:'POST', body: JSON.stringify({ batchId }) });
+    await loadCaptureBatches(); refreshActivePage();
+    toast('Batch folder deleted', 'success');
+  } catch(e){ toast(e.message, 'error'); }
+}
+
+// Promote a capture candidate — pre-fill the entry form with the candidate's
+// image + provenance, then route to #/add. The triage status does NOT flip
+// here; it flips inside saveDraft() after the entry actually commits (the
+// promote is best-effort, gated on save success). _pendingCapture carries the
+// {batchId, captureId} through the wizard so saveDraft knows what to flip.
+function promoteCapture(batchId, captureId){
+  const batch = captureBatches.find(b => b.batchId === batchId);
+  if(!batch) return;
+  const item = batch.items.find(i => i.id === captureId);
+  if(!item) return;
+  resetDraft();
+  draft.source.productName = item.sourceName || '';
+  if(item.sourceUrl) draft.source.url = item.sourceUrl;
+  draft.image = { visibility:'private', path: item.imagePath, width:null, height:null };
+  draft.title = `${item.sourceName || ''} — (add descriptive subtitle)`;
+  draft._pendingCapture = { batchId, captureId };
+  draft.provenance = {
+    taggedBy: 'auto',
+    capture: {
+      mode: item.captureMode || '',
+      viewport: item.viewport || '',
+      capturedAt: item.capturedAt || batch.capturedAt || '',
+      sourceUrl: item.sourceUrl || '',
+      ...(item.selectorPath ? { selectorPath: item.selectorPath } : {}),
+    },
+  };
+  // Signal to #/add that the draft is pre-seeded and must NOT be reset on arrival.
+  _addPreseeded = true;
+  location.hash = '/add';
+  toast('Prefilled from capture — review, then save to promote', 'success');
+}
 
 /* -------- Sources -------- */
 page('sources','Sources',`source provenance · ${Object.keys(agg.bySource||{}).length} sources`, function(){

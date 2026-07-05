@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import "../env.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync, readdirSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { extname, resolve } from "node:path";
+import { extname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 // SSRF guard extracted to ../ssrf.ts (shared with the CLI capture path).
 // The dns.lookup import that lived here previously moved with it.
@@ -13,6 +13,7 @@ import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
 import { tagImage, generateCritique } from "../tagger.js";
+import type { CaptureMeta } from "./capture.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
 import {
   ENTRIES_PATH, SNAPSHOT_DIR, SNAPSHOT_KEEP,
@@ -370,6 +371,161 @@ function privateImagePaths(): string[] {
   return listImageFilesRecursive(PRIVATE_IMAGE_DIR, "images-private/");
 }
 
+// ─── capture-batch triage ──────────────────────────────────────────────────
+// The batch capture pipeline (capture.ts) writes one folder per batch under
+// corpus/images-private/captures/{batchId}/, each holding {captureId}.png,
+// manifest.json (CaptureMeta[]), and triage.json ({captureId: status}). The
+// classic workbench's triage view reviews these: promote → creates a corpus
+// entry stamped with capture provenance; reject → marks triage.json; cleanup →
+// deletes the batch dir ONLY when nothing is still pending. Every filesystem
+// hop is gated through the helpers below so untrusted batchId/captureId can't
+// escape the captures root (the safety gate the plan review flagged).
+
+const CAPTURES_DIR = resolve(PRIVATE_IMAGE_DIR, "captures");
+const TRIAGE_STATUSES = ["pending", "promoted", "rejected"] as const;
+type TriageStatus = (typeof TRIAGE_STATUSES)[number];
+
+/**
+ * Slug-safety check for untrusted ids that name a path segment under captures/.
+ * Rejects anything other than [a-z0-9-] so `/`, `\`, `..`, and spaces can never
+ * reach the path joins. This is the path-traversal guard for /api/capture-triage
+ * and /api/capture-cleanup — paired with the resolves-within-root check in
+ * resolveBatchDir so a cleverly-formed-but-symlinked id is still contained.
+ */
+function isSlugSafe(value: string): boolean {
+  return typeof value === "string" && value.length > 0 && /^[a-z0-9-]+$/.test(value);
+}
+
+/**
+ * Resolve a batchId to an absolute path under CAPTURES_DIR and assert the
+ * resolved path stays within that root. Throws on traversal/escape.
+ */
+function resolveBatchDir(batchId: string): string {
+  if (!isSlugSafe(batchId)) {
+    throw Object.assign(new Error("Invalid batchId"), { statusCode: 400 });
+  }
+  const root = resolve(CAPTURES_DIR);
+  const batchDir = resolve(root, batchId);
+  // Reject anything that escapes the captures root (defence-in-depth on top of
+  // the slug check — covers symlink edge cases the regex alone wouldn't catch).
+  if (batchDir !== root && !batchDir.startsWith(root + "/")) {
+    throw Object.assign(new Error("Invalid batchId"), { statusCode: 400 });
+  }
+  return batchDir;
+}
+
+type CaptureBatchItem = {
+  id: string;
+  sourceName: string;
+  captureMode: string;
+  viewport: string;
+  imagePath: string;
+  status: string;
+};
+
+type CaptureBatchSummary = {
+  batchId: string;
+  capturedAt: string;
+  total: number;
+  pending: number;
+  promoted: number;
+  rejected: number;
+  items: CaptureBatchItem[];
+};
+
+/**
+ * Walk the capture batches under corpus/images-private/captures and summarize
+ * each from its manifest.json + triage.json. Newer batches first (batchId is a
+ * timestamp in batch mode, so lexical sort == newest-first). Batches missing
+ * their manifest are skipped — they're not from this pipeline.
+ */
+function listCaptureBatches(): CaptureBatchSummary[] {
+  if (!existsSync(CAPTURES_DIR)) return [];
+  const out: CaptureBatchSummary[] = [];
+  for (const name of readdirSync(CAPTURES_DIR, { withFileTypes: true })) {
+    if (!name.isDirectory() || !isSlugSafe(name.name)) continue;
+    const batchDir = join(CAPTURES_DIR, name.name);
+    const manifestPath = join(batchDir, "manifest.json");
+    const triagePath = join(batchDir, "triage.json");
+    if (!existsSync(manifestPath)) continue;
+    let manifest: CaptureMeta[] = [];
+    let triage: Record<string, string> = {};
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as CaptureMeta[];
+    } catch { continue; /* corrupt manifest — skip */ }
+    try {
+      triage = existsSync(triagePath) ? JSON.parse(readFileSync(triagePath, "utf-8")) : {};
+    } catch { triage = {}; }
+    let pending = 0, promoted = 0, rejected = 0;
+    const items: CaptureBatchItem[] = manifest.map((m) => {
+      const status = triage[m.id] === "promoted" ? "promoted" : triage[m.id] === "rejected" ? "rejected" : "pending";
+      if (status === "promoted") promoted++;
+      else if (status === "rejected") rejected++;
+      else pending++;
+      return {
+        id: m.id,
+        sourceName: m.sourceName,
+        captureMode: m.captureMode,
+        viewport: m.viewport,
+        imagePath: m.imagePath,
+        status,
+      };
+    });
+    // capturedAt: newest capture in the batch (manifest writes per-item ISO
+    // timestamps); fall back to the dir name (timestamp) if absent.
+    const capturedAt = manifest.map((m) => m.capturedAt).filter(Boolean).sort().at(-1) ?? name.name;
+    out.push({ batchId: name.name, capturedAt, total: items.length, pending, promoted, rejected, items });
+  }
+  // Newest first — batchId is a timestamp, lexical sort = chronological.
+  out.sort((a, b) => (a.batchId < b.batchId ? 1 : a.batchId > b.batchId ? -1 : 0));
+  return out;
+}
+
+/**
+ * Update one capture's status in a batch's triage.json. batchId + captureId
+ * are slug-checked + resolves-within-root; status is validated against the
+ * closed set. Returns the updated triage map.
+ */
+export function setTriageStatus(batchId: string, captureId: string, status: TriageStatus): Record<string, string> {
+  const batchDir = resolveBatchDir(batchId);
+  if (!isSlugSafe(captureId)) {
+    throw Object.assign(new Error("Invalid captureId"), { statusCode: 400 });
+  }
+  const triagePath = join(batchDir, "triage.json");
+  if (!existsSync(batchDir) || !existsSync(triagePath)) {
+    throw Object.assign(new Error("Batch not found"), { statusCode: 404 });
+  }
+  let triage: Record<string, string> = {};
+  try { triage = JSON.parse(readFileSync(triagePath, "utf-8")); } catch { triage = {}; }
+  triage[captureId] = status;
+  writeFileSync(triagePath, JSON.stringify(triage, null, 2));
+  return triage;
+}
+
+/**
+ * Delete a batch directory, but ONLY when triage.json has zero pending entries.
+ * This is the safety gate — without it the cleanup button would happily eat
+ * private screenshots the curator hadn't reviewed yet. Throws 409 with a count
+ * when pending items remain.
+ */
+export function cleanupBatch(batchId: string): { deleted: string } {
+  const batchDir = resolveBatchDir(batchId);
+  if (!existsSync(batchDir)) {
+    throw Object.assign(new Error("Batch not found"), { statusCode: 404 });
+  }
+  const triagePath = join(batchDir, "triage.json");
+  let triage: Record<string, string> = {};
+  if (existsSync(triagePath)) {
+    try { triage = JSON.parse(readFileSync(triagePath, "utf-8")); } catch { triage = {}; }
+  }
+  const pending = Object.values(triage).filter((s) => s === "pending").length;
+  if (pending > 0) {
+    throw Object.assign(new Error(`${pending} item(s) still pending triage — promote or reject them first`), { statusCode: 409 });
+  }
+  rmSync(batchDir, { recursive: true, force: false });
+  return { deleted: batchId };
+}
+
 function explainCaptureError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/Timeout/i.test(message)) {
@@ -716,6 +872,45 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       unlinkSync(fromCorpusRelativeImagePath(path));
     }
     sendJson(res, 200, { deleted: orphans, count: orphans.length });
+    return;
+  }
+
+  // ── capture-batch triage ──
+  // GET /api/capture-batches — list capture batches (manifest + triage summary).
+  if (req.method === "GET" && url.pathname === "/api/capture-batches") {
+    sendJson(res, 200, { batches: listCaptureBatches() });
+    return;
+  }
+
+  // POST /api/capture-triage { batchId, captureId, status } — update one item.
+  if (req.method === "POST" && url.pathname === "/api/capture-triage") {
+    const payload = await readJson(req) as { batchId?: string; captureId?: string; status?: string };
+    const status = payload.status as TriageStatus;
+    if (!TRIAGE_STATUSES.includes(status)) {
+      sendJson(res, 400, { error: "status must be one of: pending, promoted, rejected" });
+      return;
+    }
+    try {
+      const triage = setTriageStatus(payload.batchId ?? "", payload.captureId ?? "", status);
+      sendJson(res, 200, { ok: true, triage });
+    } catch (error) {
+      const code = (error as { statusCode?: number }).statusCode ?? 400;
+      sendJson(res, code, { error: error instanceof Error ? error.message : "Triage update failed" });
+    }
+    return;
+  }
+
+  // POST /api/capture-cleanup { batchId } — delete a batch dir, but only when
+  // no item is still pending (the safety gate for private screenshots).
+  if (req.method === "POST" && url.pathname === "/api/capture-cleanup") {
+    const payload = await readJson(req) as { batchId?: string };
+    try {
+      const result = cleanupBatch(payload.batchId ?? "");
+      sendJson(res, 200, result);
+    } catch (error) {
+      const code = (error as { statusCode?: number }).statusCode ?? 400;
+      sendJson(res, code, { error: error instanceof Error ? error.message : "Cleanup failed" });
+    }
     return;
   }
 

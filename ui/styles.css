@@ -804,3 +804,38 @@ tbody tr:hover .row-actions{opacity:1}
 .sidebar-foot .recovery { font-size: 9.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
 .sidebar-foot .recovery code { font-size: 9.5px; background: var(--surface-2); padding: 1px 4px; border-radius: 3px; }
 
+/* ── Capture provenance indicator ──
+   A small dot on a thumbnail signalling the entry came from the capture
+   pipeline (vs. manual upload). Anchored to a position:relative container
+   (e.g. .image-stage, .gthumb). The existence of provenance.capture is the
+   single signal — see classic-app.js renderLibrary / app.js gallery card. */
+.pv-capture {
+  position: absolute; top: 6px; right: 6px;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); opacity: 0.7;
+  z-index: 2;
+}
+
+/* ── Capture triage status chips ──
+   Parallel to the bulk-queue .status-chip states (staged/tagged/etc.) but for
+   the capture pipeline's triage lifecycle: pending → promoted | rejected. */
+.status-chip.pending { color: var(--muted); border-color: var(--hairline-2); }
+.status-chip.promoted { color: var(--pos); border-color: transparent; background: var(--pos-soft); }
+.status-chip.rejected { color: var(--neg); border-color: transparent; background: var(--neg-soft); }
+
+/* Capture triage queue — rows reuse .bulk-row grid; the queue just stacks them. */
+.capture-queue { display: flex; flex-direction: column; gap: 0; }
+.capture-queue .bulk-row.pending { background: transparent; }
+.capture-queue .bulk-row.promoted { opacity: 0.7; }
+.capture-queue .bulk-row.rejected { opacity: 0.55; background: var(--surface-2); }
+
+/* Image fallback — swapped in by the capture-phase error listener when a
+   thumbnail 404s (e.g. a private screenshot removed between load and render). */
+.img-fallback {
+  width: 100%; height: 100%; min-height: 120px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  font-size: 11px; font-family: var(--mono); text-align: center; padding: 12px;
+  border: 1px dashed var(--hairline-2); border-radius: var(--radius);
+}
+.img-fallback svg { width: 18px; height: 18px; opacity: 0.5; }
+

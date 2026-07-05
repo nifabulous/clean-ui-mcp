@@ -18,6 +18,7 @@ const state = {
 	  bulkDefaultProduct: "",
 	  bulkBatchId: null,
 	  bulkEditingIndex: null,
+	  captureBatches: [],
 	  orphans: [],
 	  config: { openaiKeyConfigured: false, anthropicKeyConfigured: false, geminiKeyConfigured: false, visionKeyConfigured: false, autoTagProvider: "openai", extractionProvider: "openai", critiqueProvider: "openai", extractionModel: "", critiqueModel: "", envFileLoaded: false, openaiAutoTagModel: "gpt-5.4-nano" },
 	};
@@ -58,6 +59,32 @@ function qualityDots(score) {
 function renderIcons() {
   if (window.lucide) window.lucide.createIcons();
 }
+
+// ── Image fallback ─────────────────────────────────────────────────────────
+// <img> error events do NOT bubble, so a delegated listener on document can't
+// see them via the bubble phase. We register on the CAPTURE phase instead
+// (addEventListener('error', fn, true)) — capture fires top-down regardless of
+// bubbling, so this catches every thumbnail whose src 404s (e.g. a private
+// screenshot deleted between load and render). When an <img data-img-id="…">
+// fails, swap it for a colored placeholder div labelled with the entry's title.
+function imgFallbackMarkup(id) {
+  const entry = state.entries.find((e) => e.id === id);
+  const label = entry?.title || entry?.source?.productName || "Image unavailable";
+  const accent = entry?.visual?.accentColor || entry?.visual?.dominantColors?.[1] || "#71717a";
+  const bg = entry?.visual?.dominantColors?.[0] || "#f4f4f5";
+  return `<div class="img-fallback" style="background:${bg};color:${accent}">
+    <i data-lucide="image-off"></i><span>${esc(label)}</span>
+  </div>`;
+}
+
+// Capture-phase listener — see comment above for why `true` is required.
+document.addEventListener("error", (event) => {
+  const img = event.target;
+  if (!(img instanceof HTMLImageElement) || !img.dataset.imgId) return;
+  // Avoid loops: only swap if the failing node is still an <img>.
+  img.outerHTML = imgFallbackMarkup(img.dataset.imgId);
+  renderIcons();
+}, true);
 
 async function loadAll({ keepSelection = true } = {}) {
 	  const [schema, entries, stats, orphanData, config, health] = await Promise.all([
@@ -137,6 +164,9 @@ function setView(view) {
   state.view = view;
   document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
   if (view === "form" && !state.draft) resetDraft();
+  // Fetch capture batches on view entry — they live on disk under
+  // images-private/captures and change between visits, so always refresh.
+  if (view === "capture") loadCaptureBatches().catch((e) => toast(e.message, "error"));
   renderPage();
 }
 
@@ -148,6 +178,7 @@ function renderPage() {
   if (state.view === "form") renderForm();
   else if (state.view === "bulk") renderBulk();
   else if (state.view === "stats") renderStatsPage();
+  else if (state.view === "capture") renderCapture();
   else renderLibrary();
   renderIcons();
 }
@@ -179,7 +210,7 @@ function renderLibrary() {
   }
 
   const image = entry.image.path
-    ? `<img src="${API}/image?path=${encodeURIComponent(entry.image.path)}" alt="${esc(entry.title)}"><span class="badge image-badge">${entry.image.visibility}</span>`
+    ? `<img data-img-id="${entry.id}" src="${API}/image?path=${encodeURIComponent(entry.image.path)}" alt="${esc(entry.title)}">${entry.provenance?.capture ? `<span class="pv-capture" title="Real capture — ${esc(entry.provenance.capture.viewport)} ${esc(entry.provenance.capture.mode)}"></span>` : ""}<span class="badge image-badge">${entry.image.visibility}</span>`
     : `<div class="image-empty"><i data-lucide="image-off"></i><span>Link-only sample</span><span class="badge">${entry.image.visibility}</span></div>`;
 
   // Classify the screenshot shape so the image-stage picks the right fit.
@@ -395,7 +426,13 @@ function syncDraftFromForm() {
   state.draft.qualityTier = form.qualityTier ? form.qualityTier.value : "exceptional";
   state.draft.qualityScore = Number(form.qualityScore.value);
   if (form.reviewStatus) state.draft.reviewStatus = form.reviewStatus.value;
-  if (form.provenanceTaggedBy) state.draft.provenance = { taggedBy: form.provenanceTaggedBy.value, ...(state.draft.provenance?.reviewedBy ? { reviewedBy: state.draft.provenance.reviewedBy } : {}) };
+  if (form.provenanceTaggedBy) state.draft.provenance = {
+    taggedBy: form.provenanceTaggedBy.value,
+    ...(state.draft.provenance?.reviewedBy ? { reviewedBy: state.draft.provenance.reviewedBy } : {}),
+    // Preserve capture provenance — the promote flow stamps it from the capture
+    // manifest, and the provenance select above only edits taggedBy/reviewedBy.
+    ...(state.draft.provenance?.capture ? { capture: state.draft.provenance.capture } : {}),
+  };
   state.draft.addedAt = form.addedAt.value;
 }
 
@@ -437,7 +474,7 @@ function renderForm() {
     ? `<div class="key-status ready">Auto-fill: ${esc(state.config.extractionProvider || "openai")} (${esc(state.config.extractionModel || "?")}) → ${esc(state.config.critiqueProvider || "openai")} (${esc(state.config.critiqueModel || "?")}).</div>`
     : `<div class="key-status missing">Auto-fill needs a vision provider key (OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY) in .env.</div>`;
   const imagePreview = entry.image.path
-    ? `<figure class="image-preview"><img src="${API}/image?path=${encodeURIComponent(entry.image.path)}" alt="${esc(entry.title || entry.source.productName || "Captured screenshot")}"><figcaption class="image-ready">Image ready: ${esc(entry.image.path)} (${entry.image.width || "?"} x ${entry.image.height || "?"})</figcaption></figure>`
+    ? `<figure class="image-preview"><img data-img-id="${entry.id || "draft"}" src="${API}/image?path=${encodeURIComponent(entry.image.path)}" alt="${esc(entry.title || entry.source.productName || "Captured screenshot")}"><figcaption class="image-ready">Image ready: ${esc(entry.image.path)} (${entry.image.width || "?"} x ${entry.image.height || "?"})</figcaption></figure>`
     : `<div class="image-empty"><i data-lucide="image-off"></i><span>No screenshot yet</span><span class="badge">required for new samples</span></div>`;
   $("#page").innerHTML = `
     <div class="form-layout">
@@ -609,13 +646,29 @@ async function saveDraft() {
     return;
   }
   const isEditing = state.draftMode === "edit";
+  // The promote flow stashes {batchId, captureId} on the draft. Strip it before
+  // sending (it's not part of the schema), then flip triage to "promoted" after
+  // the entry lands. If triage fails, the entry still saved — just warn.
+  const pendingCapture = state.draft._pendingCapture;
+  const payload = JSON.parse(JSON.stringify(state.draft));
+  delete payload._pendingCapture;
   try {
     const data = await request(isEditing ? `/entries/${encodeURIComponent(state.draft.id)}` : "/entries", {
       method: isEditing ? "PUT" : "POST",
-      body: JSON.stringify(state.draft),
+      body: JSON.stringify(payload),
     });
     state.selectedId = data.entry.id;
     state.draft = null;
+    if (pendingCapture) {
+      try {
+        await request("/capture-triage", {
+          method: "POST",
+          body: JSON.stringify({ batchId: pendingCapture.batchId, captureId: pendingCapture.captureId, status: "promoted" }),
+        });
+      } catch (triageErr) {
+        toast(`Saved, but triage update failed: ${triageErr.message}`, "error");
+      }
+    }
     await loadAll({ keepSelection: true });
     setView("detail");
     toast("Saved", "success");
@@ -883,7 +936,7 @@ function renderBulk() {
 
 function renderBulkRow(item, index) {
   const thumb = item.image.path
-    ? `<img class="thumb" src="${API}/image?path=${encodeURIComponent(item.image.path)}" alt="">`
+    ? `<img class="thumb" data-img-id="${item.id || "bulk"}" src="${API}/image?path=${encodeURIComponent(item.image.path)}" alt="">`
     : `<div class="thumb empty"><i data-lucide="image-off"></i></div>`;
   const filename = item._filename || "(unknown)";
   const statusLabel = {
@@ -907,6 +960,160 @@ function renderBulkRow(item, index) {
         <button class="btn remove" data-bulk-remove="${index}" title="Remove"><i data-lucide="x"></i></button>
       </div>
     </div>`;
+}
+
+// ── Capture triage ─────────────────────────────────────────────────────────
+// Mirrors the bulk-import flow but against the batch-capture pipeline's output
+// (corpus/images-private/captures/{batchId}/). Each batch has a manifest of
+// CaptureMeta and a triage.json of {captureId: status}. Promote stamps a new
+// corpus entry with capture provenance and flips triage to "promoted"; reject
+// just flips triage to "rejected"; cleanup deletes the batch dir but only when
+// nothing is pending (the server enforces the gate).
+
+async function loadCaptureBatches() {
+  const data = await request("/capture-batches");
+  state.captureBatches = data.batches || [];
+  if (state.view === "capture") renderCapture();
+}
+
+function captureTally(batch) {
+  return {
+    total: batch.items.length,
+    pending: batch.items.filter((i) => i.status === "pending").length,
+    promoted: batch.items.filter((i) => i.status === "promoted").length,
+    rejected: batch.items.filter((i) => i.status === "rejected").length,
+  };
+}
+
+function renderCapture() {
+  const batches = state.captureBatches;
+  const empty = `<div class="empty-state"><div><i data-lucide="images"></i><p>No capture batches found. Run <code>npm run capture-batch -- sources.json</code> to crawl a site — batches land under <code>images-private/captures/</code> and show up here for triage.</p></div></div>`;
+  const body = batches.length
+    ? batches.map(renderCaptureBatch).join("")
+    : empty;
+  $("#page").innerHTML = `
+    <div class="form-layout">
+      <section class="panel">
+        <div class="panel-head">
+          <div><div class="panel-title">Capture triage</div><div class="panel-sub">Review batch captures · promote, reject, clean up</div></div>
+          <div style="display:flex;gap:6px">
+            <button class="btn" id="captureRefresh"><i data-lucide="refresh-cw"></i>Refresh</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="starter">
+            <strong>How this works</strong>
+            <p>Each batch is a crawl. <em>Promote</em> opens the entry form prefilled from the capture's manifest and stamps capture provenance on save. <em>Reject</em> marks the capture as rejected without creating an entry. <em>Clean up batch</em> deletes the batch folder once nothing is pending.</p>
+          </div>
+          ${body}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderCaptureBatch(batch) {
+  const t = captureTally(batch);
+  const cleanable = t.pending === 0 && t.total > 0;
+  return `
+    <section class="panel" style="margin-top:18px">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Batch ${esc(batch.batchId)}</div>
+          <div class="panel-sub">${esc(batch.capturedAt)} · ${t.total} capture(s) · ${t.promoted} promoted · ${t.rejected} rejected · ${t.pending} pending</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn danger" data-capture-cleanup="${esc(batch.batchId)}" ${cleanable ? "" : "disabled"} title="${cleanable ? "Delete this batch folder" : "Resolve all pending items first"}"><i data-lucide="trash-2"></i>Clean up batch</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="capture-queue">${batch.items.map((item) => renderCaptureRow(batch, item)).join("")}</div>
+      </div>
+    </section>`;
+}
+
+function renderCaptureRow(batch, item) {
+  const thumb = `<img class="thumb" data-img-id="capture-${esc(item.id)}" src="${API}/image?path=${encodeURIComponent(item.imagePath)}" alt="">`;
+  const statusLabel = { pending: "Pending", promoted: "Promoted", rejected: "Rejected" }[item.status] || item.status;
+  // Promote is only meaningful for not-yet-promoted captures; reject only for
+  // not-yet-rejected. The triage endpoint is idempotent but the buttons reflect
+  // the actionable transition.
+  const promoteBtn = item.status !== "promoted"
+    ? `<button class="btn" data-capture-promote="${esc(batch.batchId)}|${esc(item.id)}"><i data-lucide="arrow-up-circle"></i>Promote</button>`
+    : "";
+  const rejectBtn = item.status !== "rejected"
+    ? `<button class="btn remove" data-capture-reject="${esc(batch.batchId)}|${esc(item.id)}"><i data-lucide="x-circle"></i>Reject</button>`
+    : "";
+  return `
+    <div class="bulk-row ${item.status}" data-capture-id="${esc(item.id)}">
+      ${thumb}
+      <div class="meta">
+        <div class="filename">${esc(item.id)}</div>
+        <div class="filename">${esc(item.sourceName)} · ${esc(item.captureMode)} · ${esc(item.viewport)}</div>
+      </div>
+      <div class="actions">
+        <span class="status-chip ${item.status}">${statusLabel}</span>
+        ${promoteBtn}${rejectBtn}
+      </div>
+    </div>`;
+}
+
+// Promote: prefill the entry form from the manifest's data, then on save stamp
+// capture provenance and flip triage to "promoted". We stash the pending
+// capture on the draft so saveDraft() can read it after the human edits.
+async function promoteCapture(batchId, captureId) {
+  const batch = state.captureBatches.find((b) => b.batchId === batchId);
+  if (!batch) return;
+  const item = batch.items.find((i) => i.id === captureId);
+  if (!item) return;
+  // Build a draft from the manifest: sourceName → productName, imagePath, and a
+  // capture-provenance stub the save path will stamp on commit.
+  const draft = blankDraft();
+  draft.source.productName = item.sourceName;
+  draft.image = { visibility: "private", path: item.imagePath, width: null, height: null };
+  draft.title = `${item.sourceName} — (add descriptive subtitle)`;
+  // Stash batchId + captureId so saveDraft flips triage to "promoted" after the
+  // entry lands. resetDraft deep-clones, so this survives into state.draft.
+  draft._pendingCapture = { batchId, captureId };
+  draft.provenance = {
+    taggedBy: "auto",
+    capture: {
+      mode: item.captureMode,
+      viewport: item.viewport,
+      capturedAt: batch.capturedAt,
+      sourceUrl: "",
+    },
+  };
+  resetDraft(draft);
+  setView("form");
+  toast("Prefilled from capture — review, then save to promote", "success");
+}
+
+async function rejectCapture(batchId, captureId) {
+  try {
+    await request("/capture-triage", {
+      method: "POST",
+      body: JSON.stringify({ batchId, captureId, status: "rejected" }),
+    });
+    await loadCaptureBatches();
+    toast("Marked rejected", "success");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function cleanupCaptureBatch(batchId) {
+  if (!confirm(`Delete the batch folder for ${batchId}? This removes all capture screenshots in that batch from disk.`)) return;
+  try {
+    await request("/capture-cleanup", {
+      method: "POST",
+      body: JSON.stringify({ batchId }),
+    });
+    await loadCaptureBatches();
+    toast("Batch folder deleted", "success");
+  } catch (error) {
+    toast(error.message, "error");
+  }
 }
 
 function readFileAsDataUrl(file) {
@@ -1412,6 +1619,20 @@ document.addEventListener("click", (event) => {
   if (bulkRow && !event.target.closest("input") && !event.target.closest("button")) {
     bulkEditAt(Number(bulkRow.dataset.bulkIndex));
   }
+  // ── capture triage wiring ──
+  if (event.target.closest("#captureRefresh")) loadCaptureBatches().catch((e) => toast(e.message, "error"));
+  const capturePromote = event.target.closest("[data-capture-promote]");
+  if (capturePromote) {
+    const [batchId, captureId] = capturePromote.dataset.capturePromote.split("|");
+    promoteCapture(batchId, captureId);
+  }
+  const captureReject = event.target.closest("[data-capture-reject]");
+  if (captureReject) {
+    const [batchId, captureId] = captureReject.dataset.captureReject.split("|");
+    rejectCapture(batchId, captureId);
+  }
+  const captureCleanup = event.target.closest("[data-capture-cleanup]");
+  if (captureCleanup) cleanupCaptureBatch(captureCleanup.dataset.captureCleanup);
 });
 
 document.addEventListener("input", (event) => {
@@ -1473,6 +1694,50 @@ document.addEventListener("keydown", (event) => {
     saveDraft();
   }
 });
+
+// Inject the Capture triage tab into the static nav. The tabs live in
+// index-classic.html (out of this file's edit scope), so add the route here on
+// boot — keeps the classic workbench's nav a single source of truth.
+function addCaptureTab() {
+  const nav = document.querySelector(".tabs");
+  if (!nav || nav.querySelector('[data-view="capture"]')) return;
+  const bulkTab = nav.querySelector('[data-view="bulk"]');
+  const tab = document.createElement("button");
+  tab.className = "tab";
+  tab.dataset.view = "capture";
+  tab.textContent = "Capture triage";
+  // Place it right after Bulk import so the review surfaces stay grouped.
+  if (bulkTab && bulkTab.nextSibling) nav.insertBefore(tab, bulkTab.nextSibling);
+  else nav.appendChild(tab);
+}
+addCaptureTab();
+
+// Inject the capture-triage + provenance-dot + image-fallback styles. The
+// canonical definitions live in ui/styles.css (loaded by the SPA), but the
+// classic workbench loads classic-styles.css which predates these classes.
+// Rather than touch classic-styles.css (out of scope), inject the small set
+// the classic view needs so the dot, triage chips, and fallback render.
+(function injectCaptureStyles() {
+  if (document.getElementById("classic-capture-styles")) return;
+  const css = `
+.pv-capture { position:absolute; top:6px; right:6px; width:6px; height:6px; border-radius:50%;
+  background:var(--accent); opacity:0.7; z-index:2; }
+.status-chip.pending { color:var(--faint); border-color:var(--line); }
+.status-chip.promoted { color:var(--green); border-color:#c3ddd0; }
+.status-chip.rejected { color:var(--red); border-color:#ead7d7; }
+.capture-queue { display:flex; flex-direction:column; gap:0; }
+.capture-queue .bulk-row.promoted { opacity:.7; }
+.capture-queue .bulk-row.rejected { opacity:.55; background:var(--hover); }
+.img-fallback { width:100%; min-height:120px; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:6px; font-size:11px;
+  font-family:var(--mono); text-align:center; padding:12px;
+  border:1px dashed var(--line); border-radius:var(--r); }
+.img-fallback svg { width:18px; height:18px; opacity:.5; }`;
+  const style = document.createElement("style");
+  style.id = "classic-capture-styles";
+  style.textContent = css;
+  document.head.appendChild(style);
+})();
 
 loadAll({ keepSelection: false }).catch((error) => {
   $("#page").innerHTML = `<div class="empty-state"><div><i data-lucide="circle-alert"></i><p>${esc(error.message)}</p></div></div>`;

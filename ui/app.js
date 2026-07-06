@@ -1326,7 +1326,7 @@ page('add','Add entry','new corpus entry', function(){
     });
   });
   document.querySelectorAll('[data-candidate-skip]').forEach(b=>{
-    b.addEventListener('click', ()=>{
+    b.addEventListener('click', async ()=>{
       const i = Number(b.dataset.candidateSkip);
       if(draft._candidateStatus) draft._candidateStatus.set(i, 'skipped');
       // If this was the active one, clear it; then try to advance.
@@ -1337,6 +1337,13 @@ page('add','Add entry','new corpus entry', function(){
           s => (typeof s === 'string' ? s : s.status) === 'saved' || (typeof s === 'string' ? s : s.status) === 'skipped'
         );
         if(allDone){
+          // Mirror the save-completion path: clean up the temp batch dir so we
+          // don't leak captures/add-* folders (invisible to #/capture triage
+          // because they have no manifest, but still private screenshots on disk).
+          if(draft._addBatchId){
+            try { await request('/api/capture-cleanup-temp', { method:'POST', body: JSON.stringify({ batchId: draft._addBatchId }) }); }
+            catch { /* cleanup is best-effort; the temp dir can be removed later */ }
+          }
           toast('Session complete', 'success');
           resetDraft();
           location.hash = '/entries';

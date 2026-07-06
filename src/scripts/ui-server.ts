@@ -13,7 +13,7 @@ import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
 import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../tagger.js";
-import type { CaptureMeta, DomSignals } from "./capture.js";
+import type { CaptureMeta } from "./capture.js";
 import { captureCandidatesForSource, isAllowedByRobots } from "./capture.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
 import {
@@ -827,7 +827,7 @@ async function handleCaptureCandidates(req: IncomingMessage, res: ServerResponse
       batchDir,
       batchId,
       new Map(),
-      undefined as unknown as Map<string, DomSignals>, // no signalsMap — Add flow skips DOM-signal extraction entirely (no sidecar consumer; avoids paying the evaluate cost per candidate).
+      undefined, // no signalsMap — Add flow skips DOM-signal extraction entirely (no sidecar consumer; avoids paying the evaluate cost per candidate).
     );
   } finally {
     await browser.close();
@@ -1194,8 +1194,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   if (req.method === "POST" && url.pathname === "/api/auto-retag") {
     const payload = await readJson(req) as {
       id?: string;
-      extractionProvider?: "openai" | "claude" | "gemini" | "mistral";
-      critiqueProvider?: "openai" | "claude" | "gemini" | "mistral";
+      extractionProvider?: string;
+      critiqueProvider?: string;
     };
 
     if (!payload.id) {
@@ -1206,6 +1206,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
       return;
     }
+    // Validate provider values at runtime — the TS type above is a hint, not a
+    // guarantee (HTTP clients can send anything). An invalid value would pass
+    // through resolveProvider's override path and silently misroute.
+    const VALID_PROVIDERS = ["openai", "claude", "gemini", "mistral"] as const;
+    const extractionProvider = payload.extractionProvider && VALID_PROVIDERS.includes(payload.extractionProvider as typeof VALID_PROVIDERS[number])
+      ? payload.extractionProvider as typeof VALID_PROVIDERS[number] : undefined;
+    const critiqueProvider = payload.critiqueProvider && VALID_PROVIDERS.includes(payload.critiqueProvider as typeof VALID_PROVIDERS[number])
+      ? payload.critiqueProvider as typeof VALID_PROVIDERS[number] : undefined;
 
     const entry = entries.find((e) => e.id === payload.id);
     if (!entry) {
@@ -1225,8 +1233,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         url: entry.source.url,
         id: entry.id, // preserve the existing id (tagger uses it as autoId)
         imageDetail: "high",
-        extractionProvider: payload.extractionProvider,
-        critiqueProvider: payload.critiqueProvider,
+        extractionProvider,
+        critiqueProvider,
       });
 
       // Merge: tagged output REPLACES content fields; identity fields preserved.

@@ -510,18 +510,16 @@ function resolveProvider(pass: TaggerPass, override?: Provider): Provider {
   return preferred;
 }
 
-/** Check if ANY vision provider key is configured. */
+/** Check if ANY vision-capable provider key is configured.
+ *  Counts ONLY extraction-capable keys — OPENAI_API_KEY_CRITIQUE is text-only
+ *  (NIM/DeepSeek for critique) and must NOT satisfy this gate, or the UI will
+ *  advertise auto-tagging and then fail at the vision extraction pass. */
 export function hasVisionKey(): boolean {
-  // Per-pass OpenAI variants (OPENAI_API_KEY_EXTRACTION / _CRITIQUE) count too —
-  // a split-provider setup using only OPENAI_API_KEY_CRITIQUE (NIM/DeepSeek for
-  // critique + real OpenAI for extraction) was falsely reporting "no vision
-  // key" here, mirroring the per-pass resolution already in resolveProvider.
-  const hasOpenAI = !!(
+  const hasOpenAIExtraction = !!(
     process.env.OPENAI_API_KEY ||
-    process.env.OPENAI_API_KEY_EXTRACTION ||
-    process.env.OPENAI_API_KEY_CRITIQUE
+    process.env.OPENAI_API_KEY_EXTRACTION
   );
-  return !!(hasOpenAI || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY);
+  return !!(hasOpenAIExtraction || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY);
 }
 
 const PROVIDER_NAMES: Record<Provider, string> = { openai: "OpenAI", claude: "Claude", gemini: "Gemini", mistral: "Mistral" };

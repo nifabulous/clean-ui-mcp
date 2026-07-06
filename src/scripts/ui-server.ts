@@ -13,7 +13,7 @@ import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
 import { tagImage, generateCritique, hasVisionKey, activeModelName } from "../tagger.js";
-import type { CaptureMeta } from "./capture.js";
+import type { CaptureMeta, DomSignals } from "./capture.js";
 import { captureCandidatesForSource, isAllowedByRobots } from "./capture.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
 import {
@@ -608,14 +608,12 @@ function explainTagError(error: unknown): string {
 }
 
 export function publicConfigStatus(status: EnvStatus = getEnvStatus()) {
-  // Honor the injected status (tests pass a hand-crafted EnvStatus rather than
-  // mutating process.env) but extend the openai check to include the per-pass
-  // variants — a split-provider setup using only OPENAI_API_KEY_CRITIQUE was
-  // falsely reporting "no vision key" via the bare-key OR.
-  const hasOpenAI = status.openaiKeyConfigured
-    || !!process.env.OPENAI_API_KEY_EXTRACTION
-    || !!process.env.OPENAI_API_KEY_CRITIQUE;
-  const anyVisionKey = hasOpenAI || status.anthropicKeyConfigured || status.geminiKeyConfigured;
+  // Vision gate counts ONLY extraction-capable keys. OPENAI_API_KEY_CRITIQUE is
+  // text-only (NIM/DeepSeek critique split) and must NOT satisfy this gate —
+  // otherwise the UI advertises auto-tagging and then fails at extraction.
+  // status.openaiKeyConfigured reflects OPENAI_API_KEY (the bare key).
+  const hasOpenAIExtraction = status.openaiKeyConfigured || !!process.env.OPENAI_API_KEY_EXTRACTION;
+  const anyVisionKey = hasOpenAIExtraction || status.anthropicKeyConfigured || status.geminiKeyConfigured;
   // Resolve the effective provider + model for each pass via the SAME logic
   // tagger.ts uses (activeModelName resolves through openaiConfigForPass on the
   // OpenAI path, so OPENAI_AUTO_TAG_MODEL_CRITIQUE etc. are honored). Previously
@@ -827,7 +825,7 @@ async function handleCaptureCandidates(req: IncomingMessage, res: ServerResponse
       batchDir,
       batchId,
       new Map(),
-      new Map(), // signalsMap — Add flow doesn't write a dom-signals.json sidecar (no batch context); extraction runs but stays in-memory.
+      undefined as unknown as Map<string, DomSignals>, // no signalsMap — Add flow skips DOM-signal extraction entirely (no sidecar consumer; avoids paying the evaluate cost per candidate).
     );
   } finally {
     await browser.close();

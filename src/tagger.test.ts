@@ -133,9 +133,10 @@ describe("vision provider key detection", () => {
   });
 
   it("recognizes per-pass OpenAI key variants (split-provider setups)", () => {
-    // A NIM/DeepSeek-for-critique + real-OpenAI-for-extraction setup uses only
-    // OPENAI_API_KEY_CRITIQUE without setting the bare OPENAI_API_KEY. Without
-    // per-pass recognition here, hasVisionKey falsely reported "no key."
+    // The vision gate must count ONLY extraction-capable keys. A critique-only
+    // key (OPENAI_API_KEY_CRITIQUE for NIM/DeepSeek) cannot do vision, so it
+    // must NOT satisfy hasVisionKey — otherwise the UI advertises auto-tagging
+    // and then fails at the extraction pass.
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY_EXTRACTION;
     delete process.env.OPENAI_API_KEY_CRITIQUE;
@@ -144,11 +145,18 @@ describe("vision provider key detection", () => {
 
     expect(hasVisionKey()).toBe(false);
 
+    // Critique-only key does NOT satisfy the vision gate (corrected behavior).
     process.env.OPENAI_API_KEY_CRITIQUE = "nvapi-test";
-    expect(hasVisionKey()).toBe(true);
+    expect(hasVisionKey()).toBe(false);
 
+    // Extraction-capable keys DO satisfy the vision gate.
     delete process.env.OPENAI_API_KEY_CRITIQUE;
     process.env.OPENAI_API_KEY_EXTRACTION = "sk-test";
+    expect(hasVisionKey()).toBe(true);
+
+    // Bare OPENAI_API_KEY also satisfies the vision gate (used for both passes).
+    delete process.env.OPENAI_API_KEY_EXTRACTION;
+    process.env.OPENAI_API_KEY = "sk-proj-test";
     expect(hasVisionKey()).toBe(true);
   });
 });

@@ -111,6 +111,7 @@ describe("ui server entry ids", () => {
       openaiKeyConfigured: true,
       anthropicKeyConfigured: false,
       geminiKeyConfigured: false,
+      mistralKeyConfigured: false,
       voyageKeyConfigured: false,
       autoTagProvider: "openai",
       openaiAutoTagModel: "test-model",
@@ -138,13 +139,10 @@ describe("ui server entry ids", () => {
     expect(JSON.stringify(status)).not.toContain("sk-");
   });
 
-  it("reports visionKeyConfigured=true when only a per-pass OpenAI key is set", () => {
-    // Regression: a split-provider setup with only OPENAI_API_KEY_CRITIQUE
-    // (NIM/DeepSeek for critique, no bare OPENAI_API_KEY) was falsely reported
-    // as "no vision key" before publicConfigStatus learned about per-pass keys.
-    // The fix honors OPENAI_API_KEY_EXTRACTION / _CRITIQUE in addition to the
-    // status flag passed in, so this status object (openaiKeyConfigured:false)
-    // still surfaces visionKeyConfigured:true when the env vars are present.
+  it("reports visionKeyConfigured=false when only a critique-only OpenAI key is set", () => {
+    // Corrected behavior: OPENAI_API_KEY_CRITIQUE (NIM/DeepSeek) is text-only
+    // and must NOT satisfy the vision gate. The earlier version incorrectly
+    // counted it, advertising auto-tagging then failing at the vision pass.
     const savedExtr = process.env.OPENAI_API_KEY_EXTRACTION;
     const savedCrit = process.env.OPENAI_API_KEY_CRITIQUE;
     try {
@@ -156,12 +154,25 @@ describe("ui server entry ids", () => {
         openaiKeyConfigured: false,            // bare key NOT set
         anthropicKeyConfigured: false,
         geminiKeyConfigured: false,
+        mistralKeyConfigured: false,
         voyageKeyConfigured: false,
         autoTagProvider: "openai",
         openaiAutoTagModel: "test-model",
         cleanUiPort: 3131,
       });
-      expect(status.visionKeyConfigured).toBe(true);
+      // Critique-only key does NOT satisfy the vision gate.
+      expect(status.visionKeyConfigured).toBe(false);
+
+      // An extraction-capable per-pass key DOES satisfy it.
+      delete process.env.OPENAI_API_KEY_CRITIQUE;
+      process.env.OPENAI_API_KEY_EXTRACTION = "sk-test";
+      const status2 = publicConfigStatus({
+        envPath: "/tmp/.env", envFileLoaded: true,
+        openaiKeyConfigured: false, anthropicKeyConfigured: false, geminiKeyConfigured: false,
+        mistralKeyConfigured: false, voyageKeyConfigured: false,
+        autoTagProvider: "openai", openaiAutoTagModel: "test-model", cleanUiPort: 3131,
+      });
+      expect(status2.visionKeyConfigured).toBe(true);
     } finally {
       if (savedCrit === undefined) delete process.env.OPENAI_API_KEY_CRITIQUE;
       else process.env.OPENAI_API_KEY_CRITIQUE = savedCrit;

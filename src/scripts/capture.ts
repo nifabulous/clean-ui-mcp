@@ -580,12 +580,13 @@ const DOM_SIGNALS_MAX_COPY_CHARS = 200;
 
 async function extractDomSignals(locator: Locator): Promise<DomSignals | null> {
   // Race the evaluate against a hard timeout — a pathological page can hang
-  // getComputedStyle across many elements. evaluate() has no built-in timeout.
-  let resolveFn: (v: DomSignals | null) => void = () => {};
-  const timed = new Promise<DomSignals | null>((resolve) => { resolveFn = resolve; });
-  const timer = setTimeout(() => { console.warn("[dom-signals] extraction timed out"); resolveFn(null); }, DOM_SIGNALS_TIMEOUT_MS);
-  try {
-    const result = await locator.evaluate((root) => {
+  // getComputedStyle across many elements. evaluate() has no built-in timeout,
+  // so Promise.race is the only way to bound it. The losing promise (the
+  // evaluate, if the timer wins) keeps running in the background but its
+  // result is discarded; that's acceptable since the locator is about to be
+  // dropped anyway. The earlier version awaited evaluate directly and only
+  // *appeared* to race — it blocked past the timeout on heavy pages.
+  const evaluate = locator.evaluate((root) => {
       const MAX_COPY = 20;
       const MAX_COPY_CHARS = 200;
       const cs = window.getComputedStyle(root);
@@ -668,11 +669,10 @@ async function extractDomSignals(locator: Locator): Promise<DomSignals | null> {
       console.warn("[dom-signals] extraction failed:", err instanceof Error ? err.message : err);
       return null;
     });
-    resolveFn(result);
-    return await timed;
-  } finally {
-    clearTimeout(timer);
-  }
+  const timeout = new Promise<DomSignals | null>((resolve) => {
+    setTimeout(() => { console.warn("[dom-signals] extraction timed out"); resolve(null); }, DOM_SIGNALS_TIMEOUT_MS);
+  });
+  return Promise.race([evaluate, timeout]);
 }
 
 async function captureLocator(

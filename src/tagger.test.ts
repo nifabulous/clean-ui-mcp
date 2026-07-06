@@ -344,6 +344,43 @@ describe("tagImage two-pass request shape", () => {
     expect(pass1Prompt).toContain("Verdana");
   });
 
+  it("calibrates cautionary as a rare severe tier, not any teachable flaw", async () => {
+    const calls: Array<{ body: { input?: Array<{ content?: Array<Record<string, unknown>> }> } }> = [];
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      calls.push({ body });
+      callCount++;
+      const response = callCount === 1
+        ? JSON.stringify({
+            patternType: "dashboard", categories: ["dashboard"], styleTags: ["dense-data"],
+            dominantColors: ["#ffffff", "#111111"], accentColor: null,
+            displayFont: null, bodyFont: null, spacingDensity: "compact", cornerStyle: "slight-round",
+            usesShadows: false, usesBorders: true,
+          })
+        : JSON.stringify({
+            observations: ["a", "b", "c", "d", "e"],
+            typographyNotes: "notes",
+            draftCritique: "x".repeat(120),
+            draftWhatToSteal: ["x".repeat(20)],
+            draftAntiPatterns: ["y".repeat(20)],
+            draftAccessibilityRisks: ["Some secondary labels may need contrast review."],
+            qualityTier: "exceptional",
+          });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    await tagImage({ imagePath: testImage, productName: "Test", url: null });
+
+    const pass2Prompt = String(calls[1].body.input?.[1]?.content?.[0]?.text ?? "");
+    expect(pass2Prompt).toContain('Default to "exceptional"');
+    expect(pass2Prompt).toContain('Use "cautionary" only when');
+    expect(pass2Prompt).toContain("Keep otherwise strong designs exceptional");
+    expect(pass2Prompt).not.toContain('Mark "cautionary" when ANY');
+  });
+
   it("routes to the Claude endpoint when AUTO_TAG_PROVIDER=claude", async () => {
     // Override the split-provider vars so both passes route to Claude.
     const savedExtr = process.env.AUTO_TAG_PROVIDER_EXTRACTION;

@@ -704,18 +704,16 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
   "voiceTone": "",             // omit entirely if no notable copy is visible
   "voiceExamples": [],         // real copy visible on screen, verbatim
   "voiceAvoid": [],            // what voice this design does NOT use
-  "qualityTier": ""            // ONE from: ${QUALITY_TIERS.join(", ")}. Default exceptional — BUT
-                               // actively check for these cautionary signals before defaulting:
-                               // - Low text contrast (hard to read, especially metadata/labels)
-                               // - Cognitive overload (too many simultaneous actions, unclear primary CTA)
-                               // - Ambiguous affordances (clickable-looking things that aren't, or vice versa)
-                               // - Missing feedback states (no loading/empty/error states visible)
-                               // - Deceptive patterns (forced continuity, confirmshaming, hidden costs,
-                               //   roach-motel flows that are easy to enter but hard to leave)
-                               // - Information density so high it impedes task completion
-                               // - Inconsistent spacing/alignment suggesting lack of design system
-                               // Mark "cautionary" when ANY of these are present AND teachable — the
-                               // entry's value is in showing what NOT to do, not in celebrating the design.
+  "qualityTier": ""            // ONE from: ${QUALITY_TIERS.join(", ")}. Default to "exceptional".
+                               // Use "cautionary" only when the screen's PRIMARY teaching value is
+                               // failure: severe unreadability, deceptive patterns, broken task
+                               // completion, or multiple compounding issues that make the design a
+                               // better "what not to do" specimen than a pattern to emulate.
+                               // Keep otherwise strong designs exceptional even when they have
+                               // isolated flaws, dense professional UI, secondary-label contrast
+                               // concerns, missing states not visible in the screenshot, or minor
+                               // spacing/alignment issues. Put those caveats in draftAntiPatterns
+                               // or draftAccessibilityRisks instead of demoting the whole entry.
 }
 
 Rules:
@@ -723,6 +721,8 @@ Rules:
 - draftAntiPatterns must not restate draftCritique's decision from the opposite angle.
 - draftAccessibilityRisks should be concrete and specific — name the element, the issue, the threshold.
   Empty array is acceptable when the design has no significant a11y risks.
+- Quality tier calibration: "exceptional" means worth learning from, not flawless.
+  "cautionary" is rare and reserved for screens whose main lesson is the failure itself.
 - businessRationale is about business intent, not visual quality. Return null rather than inventing intent
   when the screenshot lacks visible product/page context (for example an isolated card or component crop).
 - No banned phrases (${BANNED_PHRASES.slice(0, 4).map((p) => `"${p}"`).join(", ")}, ...). Re-check before returning.

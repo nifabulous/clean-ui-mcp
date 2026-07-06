@@ -13,6 +13,13 @@ let SCHEMA = { categories: [], styleTags: [], patternTypes: [], spacingDensities
 let HEALTH = { entryCount: 0, snapshotCount: 0, newestSnapshotEpoch: null, newestSnapshotAgeMs: null };
 let CONFIG = {};
 
+function isoDate(value){
+  if(!value) return new Date().toISOString().slice(0, 10);
+  const s = String(value);
+  const m = s.match(/^\d{4}-\d{2}-\d{2}/);
+  return m ? m[0] : new Date().toISOString().slice(0, 10);
+}
+
 // ─── draft state (shared across add/edit/capture-promote flows) ──────────────
 // Replaces the old local addDraft variable. The full form (#/edit), the
 // capture-triage promote action, and the SPA's capture/upload wizard all flow
@@ -105,6 +112,8 @@ function mapEntry(entry) {
     voice: entry.voice || null,
     layout: entry.layout || null,
     added: entry.addedAt,
+    captured: entry.source?.capturedAt || entry.addedAt,
+    recent: entry.source?.capturedAt || entry.addedAt,
     imagePath: entry.image?.path || null,
     imageW: entry.image?.width || null,
     imageH: entry.image?.height || null,
@@ -228,6 +237,68 @@ async function setTierMany(ids, tier){
   toast(`${ok} ${label}${fail ? `; ${fail} failed` : ''}`, ok ? '' : 'error');
   if(ok) clearSelection();
   refreshActivePage();
+}
+
+/* ---------- bulk re-tag (extraction + critique) ---------- */
+// Re-run the full tagger on each selected entry, fixing categorization AND
+// critique. Provider is chosen per-run via the bulk-bar dropdown. Uses
+// runWithPool for concurrency + per-task error isolation; updates a live
+// progress counter so a 1000-entry run is honest about how far it's come.
+let retagBusy = false;
+function setBulkProgress(active, done, total, failed){
+  const el = document.getElementById('bulkProgress');
+  if(!el) return;
+  if(active){
+    el.style.display = 'inline';
+    el.textContent = total ? `Re-tagging… ${done}/${total}${failed?` (${failed} failed)`:''}` : 'Re-tagging…';
+  } else {
+    el.style.display = 'none';
+  }
+}
+async function retagMany(ids, provider){
+  if(retagBusy || !ids.length) return;
+  retagBusy = true;
+  setBulkButtonsDisabled(true);
+  setBulkProgress(true, 0, ids.length, 0);
+  const tasks = ids.map(id => () => fetch(`${API}/api/auto-retag`, {
+    method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({ id, extractionProvider: provider, critiqueProvider: provider }),
+  }).then(r => r.json()));
+  let ok=0, fail=0, skipped=0;
+  await runWithPool(tasks, 3,
+    (j) => {
+      if(j && j.skipped) skipped++;
+      else if(j && j.ok) ok++; else fail++;
+      setBulkProgress(true, ok+fail+skipped, ids.length, fail);
+    },
+    () => { fail++; setBulkProgress(true, ok+fail+skipped, ids.length, fail); },
+  );
+  setBulkProgress(false);
+  retagBusy = false;
+  setBulkButtonsDisabled(false);
+  await loadAll(); recomputeAgg();
+  toast(`Re-tagged ${ok}${skipped?`, ${skipped} skipped`:''}${fail?`, ${fail} failed`:''}. Run \`npm run build-index\` to refresh search.`, ok?'success':'error');
+  if(ok) clearSelection();
+  refreshActivePage();
+}
+function setBulkButtonsDisabled(disabled){
+  ['bulkPromote','bulkReject','bulkRetag','bulkClear'].forEach(id=>{
+    const b=document.getElementById(id); if(b) b.disabled=disabled;
+  });
+}
+
+// Populate the provider dropdown from /api/config. Vision-capable providers
+// (openai/claude/gemini) can do both passes; mistral is critique-only, noted.
+function populateBulkProvider(){
+  const sel = document.getElementById('bulkProvider');
+  if(!sel || sel._populated) return;
+  sel._populated = true;
+  const opts = [];
+  if(CONFIG.openaiKeyConfigured) opts.push(['openai', `OpenAI (${CONFIG.extractionModel||'?'})`]);
+  if(CONFIG.anthropicKeyConfigured) opts.push(['claude', `Claude (${CONFIG.critiqueModel||'?'})`]);
+  if(CONFIG.geminiKeyConfigured) opts.push(['gemini', `Gemini (${CONFIG.extractionModel||'?'})`]);
+  if(CONFIG.mistralKeyConfigured) opts.push(['mistral', `Mistral (critique-only — extraction falls back)`]);
+  sel.innerHTML = opts.map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
 }
 
 /* ---------- source color hash (stable across pages) ---------- */
@@ -397,6 +468,7 @@ function bindBulkBar(){
   const bar = document.getElementById('bulkBar');
   if(!bar || bar._bound) return;
   bar._bound = true;
+  populateBulkProvider();
   document.getElementById('bulkPromote').addEventListener('click', () => {
     if(!selection.size) return;
     setTierMany([...selection], 'exceptional').then(refreshActivePage);
@@ -405,7 +477,16 @@ function bindBulkBar(){
     if(!selection.size) return;
     setTierMany([...selection], 'cautionary').then(refreshActivePage);
   });
+  document.getElementById('bulkRetag').addEventListener('click', () => {
+    if(!selection.size || retagBusy) return;
+    const sel = document.getElementById('bulkProvider');
+    const provider = sel ? sel.value : undefined;
+    const n = selection.size;
+    if(!confirm(`Re-tag ${n} entr${n===1?'y':'ies'}? This re-runs vision extraction + critique and overwrites categories, critique, and tier. A snapshot is saved for rollback.`)) return;
+    retagMany([...selection], provider);
+  });
   document.getElementById('bulkClear').addEventListener('click', () => {
+    if(retagBusy) return;
     clearSelection(); refreshActivePage();
   });
 }
@@ -768,6 +849,7 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
         <button class="chip" data-f="exceptional">Exceptional · ${agg.excCount||0}</button>
         <button class="chip" data-f="cautionary">Cautionary · ${agg.cauCount||0}</button>
         <button class="chip" data-f="mobile">Mobile · ${agg.mobileCount||0}</button>
+        <button class="chip ghost" id="selectAllMatching" title="Select every entry matching the current filter + search, across all pages">Select all matching</button>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <select class="sort-select" id="entrySort" title="Sort by">
@@ -798,7 +880,7 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
     else if(st.filter==='fav') rows=rows.filter(x=>favs.includes(x.id));
     if(st.q){ rows=rows.filter(x=>(x.id+' '+x.source+' '+x.pattern+' '+x.style+' '+x.title).toLowerCase().includes(st.q)); }
     const favSet=new Set(favs);
-    if(st.sort==='recent') rows.sort((a,b)=>(b.added||'').localeCompare(a.added||''));
+    if(st.sort==='recent') rows.sort((a,b)=>(b.recent||b.added||'').localeCompare(a.recent||a.added||''));
     else if(st.sort==='score') rows.sort((a,b)=>(b.score||0)-(a.score||0));
     else if(st.sort==='fav') rows.sort((a,b)=>(favSet.has(b.id)?1:0)-(favSet.has(a.id)?1:0));
     else if(st.sort==='source') rows.sort((a,b)=>a.source.localeCompare(b.source));
@@ -833,6 +915,9 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
     out.querySelectorAll('.pages .pg').forEach(b=>b.addEventListener('click',()=>{const p=+b.dataset.pg;if(p>=1&&p<=totalPages){st.page=p;render();document.querySelector('.main').scrollTop=0;}}));
     bindGallery(); bindEntryRows();
     bindBulkBar(); renderSelectionBar();
+    // Refresh the "Select all matching" label with the current filtered count.
+    const sam = document.getElementById('selectAllMatching');
+    if(sam) sam.textContent = `Select all matching (${rows.length})`;
   }
   function bindGallery(){
     document.querySelectorAll('#entryResults .gcard').forEach(card=>{
@@ -852,9 +937,24 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
       });
     });
   }
-  document.querySelectorAll('#entryFilters .chip').forEach(c=>{
-    c.addEventListener('click',()=>{ document.querySelectorAll('#entryFilters .chip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); st.filter=c.dataset.f; st.page=1; render(); });
+  document.querySelectorAll('#entryFilters .chip[data-f]').forEach(c=>{
+    c.addEventListener('click',()=>{ document.querySelectorAll('#entryFilters .chip[data-f]').forEach(x=>x.classList.remove('on')); c.classList.add('on'); st.filter=c.dataset.f; st.page=1; render(); });
   });
+  // "Select all matching" — selects every entry in the current filtered() set,
+  // across ALL pages (not just the visible 24). Lives here so it can see the
+  // filtered() closure. The count refreshes inside render() on every filter change.
+  const selectAllBtn = document.getElementById('selectAllMatching');
+  if(selectAllBtn){
+    selectAllBtn.addEventListener('click', () => {
+      const ids = filtered().map(x => x.id);
+      // Toggle: if all are already selected, clear; otherwise select all.
+      const allSelected = ids.length > 0 && ids.every(id => isSelected(id));
+      if(allSelected){ clearSelection(); }
+      else { ids.forEach(id => selection.add(id)); }
+      renderSelectionBar();
+      render(); // re-render so checkboxes reflect the new selection
+    });
+  }
   document.getElementById('entrySort').addEventListener('change',e=>{st.sort=e.target.value;st.page=1;render();});
   document.querySelectorAll('#viewToggle button').forEach(b=>{
     b.addEventListener('click',()=>{ document.querySelectorAll('#viewToggle button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); st.view=b.dataset.v; st.page=1; render(); });
@@ -907,6 +1007,7 @@ function buildDraftFromCandidate(c, sourceUrl){
   const d = blankDraft();
   d.source.productName = c.sourceName || '';
   if(sourceUrl || c.sourceUrl) d.source.url = sourceUrl || c.sourceUrl;
+  d.source.capturedAt = isoDate(c.capturedAt);
   d.image = { visibility:'private', path: c.imagePath, width:null, height:null };
   d.title = `${c.sourceName || ''} — (add descriptive subtitle)`;
   d.provenance = {
@@ -982,7 +1083,7 @@ async function autoFillCandidates(){
     c._draft = {
       ...base, ...tagged,
       image: { ...(tagged.image||{}), path: c.imagePath, visibility:'private' },
-      source: { ...(base.source), ...(tagged.source||{}), url: sourceUrl || c.sourceUrl || base.source.url },
+      source: { ...(base.source), ...(tagged.source||{}), url: sourceUrl || c.sourceUrl || base.source.url, capturedAt: base.source.capturedAt },
       provenance: base.provenance,
     };
     draft._candidateStatus.set(i, 'tagged');
@@ -1096,6 +1197,7 @@ function wizardUpload(file){
         method:'POST', body: JSON.stringify({ filename:file.name, slug: draft.source.productName || file.name, dataUrl: reader.result })
       });
       draft.image.path = j.path;
+      draft.source.capturedAt = isoDate(j.capturedAt);
       draft._busy = null;
     } catch(e){ draft._busy = null; draft._error = e.message; }
     refreshActivePage();
@@ -1119,7 +1221,13 @@ async function wizardAutoTag(){
       _candidateStatus: draft._candidateStatus, _selectedCandidates: draft._selectedCandidates,
       _busyCandidate: draft._busyCandidate, _reviewingCandidate: draft._reviewingCandidate,
     };
-    draft = { ...j.entry, image: { ...j.entry.image, path: draft.image.path }, ...preserved };
+    const captureDate = isoDate(draft.source?.capturedAt);
+    draft = {
+      ...j.entry,
+      source: { ...(j.entry.source||{}), capturedAt: captureDate, url: draft.source?.url || j.entry.source?.url || null },
+      image: { ...j.entry.image, path: draft.image.path },
+      ...preserved,
+    };
   } catch(e){ draft._error = e.message; }
   refreshActivePage();
 }
@@ -1157,6 +1265,15 @@ async function saveDraft(){
   delete body._editing; delete body._busy; delete body._error; delete body._tab; delete body._pendingCapture;
   delete body._addBatchId; delete body._candidates; delete body._candidateStatus; delete body._selectedCandidates;
   delete body._busyCandidate; delete body._reviewingCandidate; delete body._busyStart;
+  // Schema hygiene mirrors commitCandidates(): optional dates must be absent,
+  // not empty strings, when the shared blank draft seeded them.
+  const today = new Date().toISOString().slice(0, 10);
+  if(body.source){
+    if(!body.source.capturedAt) body.source.capturedAt = today;
+    if(!body.source.lastVerified) delete body.source.lastVerified;
+  }
+  if(!body.addedAt) body.addedAt = today;
+  if(body.voice && (!body.voice.examples || body.voice.examples.length === 0)) delete body.voice;
 
   try {
     const j = isEdit
@@ -1206,6 +1323,9 @@ function ensureCandPreviewNode(){
   n = document.createElement('div');
   n.id = 'candPreview';
   n.className = 'cand-preview-overlay';
+  n.setAttribute('role', 'dialog');
+  n.setAttribute('aria-modal', 'true');
+  n.setAttribute('aria-label', 'Candidate preview');
   n.style.display = 'none';
   n.innerHTML = `<div class="cand-preview-nav cand-preview-close"><button id="candPrevClose" title="Close (Esc)">✕</button></div>
     <div class="cand-preview-nav cand-preview-prev"><button id="candPrevPrev" title="Previous (←)">‹</button></div>
@@ -1227,7 +1347,7 @@ function renderCandPreviewContent(){
   document.getElementById('candPrevHeader').innerHTML = `
     <span class="id">${esc(c.id)}</span>
     <span class="meta">${esc(c.captureMode||'')} · ${esc(c.viewport||'')} · ${_candPreviewIdx+1}/${cs.length}</span>
-    <label style="margin-left:auto;display:flex;align-items:center;gap:6px;cursor:pointer;color:#fff;font-size:13px">
+    <label class="cand-preview-select">
       <input type="checkbox" id="candPrevSelect" ${sel?'checked':''}> Select this
     </label>`;
   document.getElementById('candPrevStage').innerHTML =
@@ -1281,32 +1401,35 @@ function renderCandidateStep(){
   const busy = !!draft._busyCandidate;
   const cards = cs.map((c, i) => {
     const on = sel.has(i);
-    return `<div class="gcard ${on?'is-sel':''}" data-candidate-card="${i}" style="position:relative;cursor:pointer;display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid var(--hr);border-radius:6px;${on?'outline:2px solid var(--accent);border-color:var(--accent)':''}">
-      <button class="cand-card-preview" data-candidate-preview="${i}" title="Preview (larger view)">🔍</button>
-      <label style="display:flex;gap:6px;align-items:flex-start;cursor:pointer">
-        <input type="checkbox" class="row-sel" data-candidate-pick="${i}" ${on?'checked':''} aria-label="Select candidate ${i+1}" style="margin-top:2px">
-        <img src="${API}/api/image?path=${encodeURIComponent(c.imagePath)}" alt="${esc(c.id)}" style="width:100%;max-height:140px;object-fit:cover;object-position:top;border-radius:4px;background:var(--surface)" loading="lazy">
+    return `<article class="candidate-specimen ${on?'is-selected':''}" data-candidate-card="${i}">
+      <button class="cand-card-preview" data-candidate-preview="${i}" title="Preview candidate ${i+1}" aria-label="Preview candidate ${i+1}">Preview</button>
+      <label class="candidate-pick">
+        <input type="checkbox" class="row-sel" data-candidate-pick="${i}" ${on?'checked':''} aria-label="Select candidate ${i+1}">
+        <span class="candidate-thumb" data-candidate-preview="${i}" role="button" tabindex="0" aria-label="Preview candidate ${i+1}">
+          <img src="${API}/api/image?path=${encodeURIComponent(c.imagePath)}" alt="${esc(c.id)}" loading="lazy">
+        </span>
       </label>
-      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.id)}</div>
-      <div style="font-size:10px;color:var(--ink-2)">${esc(c.captureMode||'')} · ${esc(c.viewport||'')}</div>
-    </div>`;
+      <div class="candidate-meta">
+        <div class="candidate-id">${esc(c.id)}</div>
+        <div>${esc(c.captureMode||'capture')} · ${esc(c.viewport||'viewport')}</div>
+      </div>
+    </article>`;
   }).join('');
   const allSelected = sel.size === cs.length && cs.length > 0;
   // Cleanup is offered when every selected row is in a terminal state.
   const t = candidateTally();
   const allDone = t.total > 0 && (t.committed + t.skipped + t.duplicate + t.error) === t.total;
   const cleanable = allDone && draft._addBatchId;
-  return `<div class="card-section">
-    <div class="eyebrow">Step 2 — pick screenshots to tag · ${cs.length} candidate(s)${host ? ' from ' + esc(host) : ''}</div>
-    <div class="gallery" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-top:10px">${cards}</div>
-    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <span id="candSelCount" style="font-size:12px;color:var(--ink-2)">${sel.size} of ${cs.length} selected</span>
+  return `<section class="artifact-section candidate-picker">
+    <div class="section-kicker">Candidates · ${cs.length}${host ? ' · ' + esc(host) : ''}</div>
+    <div class="candidate-grid">${cards}</div>
+    <div class="candidate-toolbar">
+      <span id="candSelCount" class="candidate-count">${sel.size} of ${cs.length} selected</span>
       <button class="btn" id="addSelectAll" ${busy?'disabled':''}>${allSelected?'Deselect all':`Select all (${cs.length})`}</button>
-      <button class="btn primary" id="addAutoFill" ${(sel.size&&!busy)?'':'disabled'}>${busy&&draft._busyCandidate==='autofill'?'Auto-filling…':'Auto-fill selected'+(sel.size?` (${sel.size})`:'')}</button>
       ${cleanable ? `<button class="btn" id="addCleanupCandidates">Clean up</button>` : ''}
       <button class="btn" id="addDiscardCandidates" ${busy?'disabled':''} style="margin-left:auto">Discard all</button>
     </div>
-  </div>`;
+  </section>`;
 }
 
 // Render the status table — appears once auto-fill has begun (any row has a
@@ -1341,7 +1464,7 @@ function renderCandidateStatusTable(){
     const errLine = (st === 'error' || st === 'duplicate') && c._error
       ? `<div style="font-size:10px;color:#991b1b;margin-top:2px">${esc(c._error)}</div>` : '';
     rows.push(`<tr>
-      <td><img src="${API}/api/image?path=${encodeURIComponent(c.imagePath)}" alt="" data-candidate-preview="${i}" title="Preview" style="width:48px;height:32px;object-fit:cover;border-radius:3px;cursor:pointer"></td>
+      <td><button class="status-thumb" data-candidate-preview="${i}" aria-label="Preview ${esc(c.id)}" title="Preview ${esc(c.id)}"><img src="${API}/api/image?path=${encodeURIComponent(c.imagePath)}" alt=""></button></td>
       <td style="font-size:11px;max-width:240px">
         <div style="color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(title)}</div>
         <div style="font-family:var(--mono);font-size:10px;color:var(--ink-2)">${esc(c.id)}</div>
@@ -1351,19 +1474,71 @@ function renderCandidateStatusTable(){
       <td>${actions}</td>
     </tr>`);
   }
-  const commitBtn = hasTagged
-    ? `<button class="btn primary" id="addCommitAll" ${busy?'disabled':''}>${busy&&draft._busyCandidate==='commit'?'Committing…':`Commit all tagged (${t.tagged})`}</button>` : '';
-  return `<div class="card-section">
-    <div class="eyebrow">Capture session — ${progressTxt}</div>
-    <table style="width:100%;margin-top:8px;border-collapse:collapse">
+  return `<section class="artifact-section candidate-status">
+    <div class="section-kicker">Capture session · ${progressTxt}</div>
+    <table>
       <thead><tr style="text-align:left;font-size:11px;color:var(--ink-2)"><th></th><th>Title / ID</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${rows.join('')}</tbody>
     </table>
-    <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
-      ${commitBtn}
-      <span style="font-size:11px;color:var(--ink-2)">${t.committed} saved · ${t.tagged} awaiting commit · ${t.error+t.duplicate} issue(s)</span>
+    <div class="candidate-toolbar">
+      <span class="candidate-count">${t.committed} saved · ${t.tagged} awaiting commit · ${t.error+t.duplicate} issue(s)</span>
     </div>
-  </div>`;
+  </section>`;
+}
+
+function candidateStatusValue(raw){
+  return typeof raw === 'string' ? raw : raw?.status;
+}
+
+function renderAddSessionRail({ hasImage, hasFields, hasCandidates, reviewing, busy }){
+  const totalCandidates = draft._candidates?.length || 0;
+  const selected = draft._selectedCandidates?.size || 0;
+  const t = candidateTally();
+  const issueCount = (t.error || 0) + (t.duplicate || 0);
+  const tagged = t.tagged || 0;
+  const committed = t.committed || 0;
+  const statusValues = draft._candidateStatus ? [...draft._candidateStatus.values()].map(candidateStatusValue) : [];
+  const otherTagged = reviewing
+    ? statusValues.filter((s, i) => s === 'tagged' && i !== draft._reviewingCandidate).length
+    : tagged;
+  const busyLabel = draft._busy || (draft._busyCandidate === 'autofill' ? 'Auto-filling selected candidates…' : draft._busyCandidate === 'commit' ? 'Committing tagged candidates…' : draft._saving ? 'Saving entry…' : '');
+  const stateLabel = reviewing ? `Reviewing candidate ${Number(draft._reviewingCandidate)+1}` :
+    hasCandidates ? 'Candidate session' :
+    hasImage && hasFields ? 'Review draft' :
+    hasImage ? 'Image ready' :
+    'Add source';
+  let primary = '';
+  if(reviewing){
+    primary = `<button class="btn" id="addBackToQueue">Back to queue</button>`;
+  } else if(hasCandidates && otherTagged > 0){
+    primary = `<button class="btn primary" id="addCommitAll" ${busy?'disabled':''}>${draft._busyCandidate==='commit'?'Committing…':`Commit all tagged (${otherTagged})`}</button>`;
+  } else if(hasCandidates){
+    primary = `<button class="btn primary" id="addAutoFill" ${(selected&&!busy)?'':'disabled'}>${draft._busyCandidate==='autofill'?'Auto-filling…':'Auto-fill selected'+(selected?` (${selected})`:'')}</button>`;
+  } else if(hasImage && !hasFields){
+    primary = `<button class="btn primary" id="addAutoTag" ${busy?'disabled':''}>${draft._busy?'Auto-filling…':'Auto-fill fields'}</button>`;
+  } else {
+    primary = `<button class="btn primary" disabled>${hasFields ? 'Review and save' : 'Add source first'}</button>`;
+  }
+  const error = draft._error ? `<div class="session-alert error">${esc(draft._error)}</div>` : '';
+  const busyMsg = busyLabel ? `<div class="session-alert">${esc(busyLabel)}${draft._busyStart ? ` <span id="busyElapsed"></span>` : ''}</div>` : '';
+  const cleanupReady = hasCandidates && draft._addBatchId && t.total > 0 && (t.committed + t.skipped + t.duplicate + t.error) === t.total;
+  return `<aside class="add-session-rail" aria-label="Add session">
+    <div class="rail-head">
+      <div class="section-kicker">Session</div>
+      <h3>${esc(stateLabel)}</h3>
+    </div>
+    ${busyMsg}${error}
+    <div class="session-stats">
+      <div class="session-stat"><span>${selected}</span><b>selected</b></div>
+      <div class="session-stat"><span>${tagged}</span><b>tagged</b></div>
+      <div class="session-stat"><span>${committed}</span><b>saved</b></div>
+      <div class="session-stat ${issueCount?'has-issues':''}"><span>${issueCount}</span><b>issues</b></div>
+    </div>
+    ${totalCandidates ? `<div class="rail-note mono">${totalCandidates} candidate${totalCandidates===1?'':'s'} in this capture</div>` : `<div class="rail-note">Capture a URL or upload an image to start.</div>`}
+    <div class="session-action">${primary}</div>
+    ${reviewing && otherTagged > 0 ? `<button class="btn primary" id="addCommitAll" ${busy?'disabled':''}>Commit other tagged (${otherTagged})</button>` : ''}
+    ${cleanupReady ? `<button class="btn" id="addCleanupCandidates">Clean up</button>` : ''}
+  </aside>`;
 }
 
 // Tracks the hash the #/add page last seeded a fresh draft for. We reset ONLY
@@ -1401,28 +1576,29 @@ page('add','Add entry','new corpus entry', function(){
   const reviewing = draft._reviewingCandidate !== null;
   const busy = !!(draft._busy || draft._busyCandidate || draft._saving);
 
-  const captureStep = `
-    <div class="card-section">
-      <div class="eyebrow">Step 1 — capture or upload a screenshot</div>
+  const sourceStrip = `
+    <section class="source-strip" aria-label="Source">
+      <div class="source-mode" role="tablist" aria-label="Source mode">
+        <button class="seg ${draft._tab==='capture'?'on':''}" type="button" id="addSwitchCapture" ${busy?'disabled':''} aria-selected="${draft._tab==='capture'}"><span class="seg-t">Capture URL</span><span class="seg-d">detect sections</span></button>
+        <button class="seg ${draft._tab==='upload'?'on':''}" type="button" id="addSwitchUpload" ${busy?'disabled':''} aria-selected="${draft._tab==='upload'}"><span class="seg-t">Upload image</span><span class="seg-d">single specimen</span></button>
+      </div>
       ${draft._tab==='capture' ? `
-        <form id="addCaptureForm" style="margin-top:10px">
-          <label>Source URL<input name="url" placeholder="https://linear.app" value="${esc(draft.source.url||'')}" style="width:100%" ${busy?'disabled':''}></label>
-          <label>Slug (optional)<input name="slug" placeholder="linear-landing-2026" style="width:100%" ${busy?'disabled':''}></label>
-          <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+        <form id="addCaptureForm" class="source-form">
+          <label>Source URL<input name="url" type="url" placeholder="https://linear.app" value="${esc(draft.source.url||'')}" ${busy?'disabled':''}></label>
+          <label>Slug <span class="opt">optional</span><input name="slug" placeholder="linear-landing-2026" ${busy?'disabled':''}></label>
+          <div class="source-actions">
             <button class="btn primary" type="submit" ${busy?'disabled':''}>${draft._busy?'Detecting…':'Capture from URL'}</button>
-            <button class="btn" type="button" id="addSwitchUpload" ${busy?'disabled':''}>⇄ Upload instead</button>
           </div>
         </form>
       ` : `
-        <div style="margin-top:10px">
-          <label class="btn">
+        <div class="source-form upload-source">
+          <label class="btn primary">
             <input type="file" id="addFileInput" accept="image/png,image/jpeg,image/webp" hidden ${busy?'disabled':''}>
             Choose an image file
           </label>
-          <button class="btn" type="button" id="addSwitchCapture" style="margin-left:8px" ${busy?'disabled':''}>⇄ Capture from URL instead</button>
         </div>
       `}
-    </div>`;
+    </section>`;
 
   // Candidate picker grid. Stays visible whenever candidates exist — the user
   // can re-select and re-auto-fill. Hidden only when reviewing a single row.
@@ -1434,47 +1610,55 @@ page('add','Add entry','new corpus entry', function(){
   // Preview/review steps show when there's an image in the draft: single upload,
   // OR a candidate loaded for review (reviewing === true).
   const previewStep = hasImage ? `
-    <div class="card-section">
-      <div class="eyebrow">${reviewing ? 'Reviewing candidate ' + (Number(draft._reviewingCandidate)+1) : 'Step 2 — preview'}</div>
-      <figure class="image-preview" style="margin-top:8px">
-        <img src="${API}/api/image?path=${encodeURIComponent(draft.image.path)}" alt="captured" style="max-width:100%;border-radius:6px;border:1px solid var(--hr)">
-        <figcaption class="image-ready">Image ready: ${esc(draft.image.path)}</figcaption>
+    <section class="artifact-section active-image">
+      <div class="section-kicker">${reviewing ? 'Reviewing candidate ' + (Number(draft._reviewingCandidate)+1) : 'Active image'}</div>
+      <figure class="image-preview">
+        <img src="${API}/api/image?path=${encodeURIComponent(draft.image.path)}" alt="Captured UI specimen">
+        <figcaption class="image-ready mono">Image ready: ${esc(draft.image.path)}</figcaption>
       </figure>
-      ${reviewing ? `<button class="btn" id="addBackToQueue" style="margin-top:8px">← Back to queue</button>` : ''}
-      ${hasFields ? '' : `<button class="btn primary" id="addAutoTag" style="margin-top:8px" ${busy?'disabled':''}>${draft._busy?'Auto-filling…':'✨ Auto-fill fields'}</button>`}
-    </div>` : '';
+    </section>` : '';
 
   const reviewStep = hasFields ? `
-    <div class="card-section">
-      <div class="eyebrow">Step 3 — review the draft and save</div>
-      <form id="addSaveForm" style="margin-top:8px;display:flex;flex-direction:column;gap:10px">
-        <label>ID (optional)<input name="id" placeholder="(auto-generated)" value="${esc(draft.id||'')}" style="width:100%"></label>
-        <label>Title<input name="title" value="${esc(draft.title||'')}" style="width:100%"></label>
-        <label>Product name<input name="productName" value="${esc(draft.source?.productName||'')}" style="width:100%"></label>
-        <label>Quality score (1-5)<input name="qualityScore" type="number" min="1" max="5" value="${draft.qualityScore||3}" style="width:60px"></label>
+    <section class="review-sheet">
+      <div class="sheet-head">
+        <div>
+          <div class="section-kicker">Review</div>
+          <h3>Editorial judgment</h3>
+        </div>
+        ${tierPill(draft.qualityTier || 'exceptional')}
+      </div>
+      <form id="addSaveForm">
+        <div class="field-row">
+          <label>ID <span class="opt">optional</span><input name="id" placeholder="auto-generated" value="${esc(draft.id||'')}"></label>
+          <label>Quality score<input name="qualityScore" type="number" min="1" max="5" value="${draft.qualityScore||3}"></label>
+        </div>
+        <label>Title<input name="title" value="${esc(draft.title||'')}"></label>
+        <label>Product name<input name="productName" value="${esc(draft.source?.productName||'')}"></label>
         <label>Critique
-          <textarea name="critique" rows="6" style="width:100%;font-family:var(--mono);font-size:12px">${esc(draft.critique||'')}</textarea>
+          <textarea name="critique" rows="6">${esc(draft.critique||'')}</textarea>
         </label>
-        <details style="font-size:12px;color:var(--ink-2)">
-          <summary>Pattern / categories / style (auto-detected)</summary>
-          <pre style="white-space:pre-wrap;background:var(--surface);padding:8px;border-radius:4px">${esc(JSON.stringify({patternType:draft.patternType, categories:draft.categories, styleTags:draft.styleTags, platform:draft.platform}, null, 2))}</pre>
+        <details class="classification-block" open>
+          <summary>Classification</summary>
+          <pre>${esc(JSON.stringify({patternType:draft.patternType, categories:draft.categories, styleTags:draft.styleTags, platform:draft.platform}, null, 2))}</pre>
         </details>
-        <button class="btn primary" type="submit" ${draft._saving?'disabled':''}>${draft._saving?'Saving…':'Save entry →'}</button>
+        <button class="btn primary" type="submit" ${draft._saving?'disabled':''}>${draft._saving?'Saving…':'Save entry'}</button>
       </form>
-    </div>` : '';
+    </section>` : '';
 
-  const busyMsg = draft._busy ? `<div class="card-section" style="color:var(--accent);font-size:13px">⏳ ${esc(draft._busy)}${draft._busyStart ? ` <span id="busyElapsed"></span>` : ''}</div>` : '';
-  const errorMsg = draft._error ? `<div class="card-section" style="color:#c00;font-size:13px">⚠ ${esc(draft._error)}</div>` : '';
+  const rail = renderAddSessionRail({ hasImage, hasFields, hasCandidates, reviewing, busy });
+  const liveText = draft._error || draft._busy || (draft._busyCandidate === 'autofill' ? 'Auto-filling selected candidates' : draft._busyCandidate === 'commit' ? 'Committing tagged candidates' : draft._saving ? 'Saving entry' : '');
 
-  return `<div class="card">
-    <div class="card-head"><div><h3>Add a single entry</h3><div class="eyebrow">capture → auto-fill → review → save</div></div></div>
-    ${busyMsg}${errorMsg}
-    ${captureStep}
-    ${candidateStep}
-    ${previewStep}
-    ${reviewStep}
-    ${statusTable}
-  </div>`;
+  return `<div class="add-workbench">
+    ${sourceStrip}
+    <section class="add-artifact" aria-label="Add artifact">
+      ${candidateStep || (!hasImage ? `<section class="artifact-section artifact-empty"><div class="section-kicker">Evidence first</div><p>Capture a URL or upload an image. The screenshot stays central while metadata moves into review.</p></section>` : '')}
+      ${previewStep}
+      ${reviewStep}
+      ${statusTable}
+    </section>
+    ${rail}
+  </div>
+  <div id="addProgressLive" class="sr-only" aria-live="polite">${esc(liveText)}</div>`;
 }, function(){
   const cap = document.getElementById('addCaptureForm');
   if(cap) cap.addEventListener('submit', e=>{ e.preventDefault(); wizardCapture(e.target); });
@@ -1512,6 +1696,12 @@ page('add','Add entry','new corpus entry', function(){
     b.addEventListener('click', e=>{
       e.preventDefault(); e.stopPropagation();
       openCandidatePreview(Number(b.dataset.candidatePreview));
+    });
+    b.addEventListener('keydown', e=>{
+      if(e.key === 'Enter' || e.key === ' '){
+        e.preventDefault(); e.stopPropagation();
+        openCandidatePreview(Number(b.dataset.candidatePreview));
+      }
     });
   });
   // Select-all / deselect-all toggle.

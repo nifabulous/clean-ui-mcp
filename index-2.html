@@ -93,8 +93,16 @@
   <!-- bulk selection action bar — shown only when ≥1 entry is selected -->
   <div class="bulk-bar" id="bulkBar" style="display:none">
     <span class="bulk-count" id="bulkCount">0 selected</span>
+    <span class="bulk-divider" aria-hidden="true"></span>
     <button class="btn primary" id="bulkPromote">Promote</button>
     <button class="btn" id="bulkReject">Reject</button>
+    <span class="bulk-divider" aria-hidden="true"></span>
+    <label class="bulk-provider">
+      <span class="bulk-provider-label">Provider</span>
+      <select id="bulkProvider" title="Provider for Re-tag (vision extraction + critique)"></select>
+    </label>
+    <button class="btn" id="bulkRetag" title="Re-run vision extraction + critique on selected entries">Re-tag</button>
+    <span class="bulk-progress" id="bulkProgress" style="display:none"></span>
     <button class="btn ghost" id="bulkClear">Clear</button>
   </div>
 

@@ -12,7 +12,7 @@ import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
-import { tagImage, generateCritique, hasVisionKey, activeModelName } from "../tagger.js";
+import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../tagger.js";
 import type { CaptureMeta } from "./capture.js";
 import { captureCandidatesForSource, isAllowedByRobots } from "./capture.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
@@ -245,6 +245,44 @@ function entryIssues(error: unknown): string[] {
     );
   }
   return [error instanceof Error ? error.message : String(error)];
+}
+
+// Server-side draft-marker stripper. Mirrors the classic workbench's
+// stripDraftMarker: removes "[DRAFT — …] ", "[DRAFT] ", "[PLACEHOLDER] ",
+// "[TODO] " prefixes from any string. The tagger emits these as editing
+// affordances; /api/auto-retag strips them so a fresh retag lands as clean
+// text (the user rewrites later) — without weakening the draft-hygiene gate
+// that applies to manual edits via PUT.
+const DRAFT_PREFIX_RE = /\[(?:DRAFT|PLACEHOLDER|TODO)[^\]]*\]\s*/gi;
+function stripDraftPrefix(s: string): string {
+  return typeof s === "string" ? s.replace(DRAFT_PREFIX_RE, "") : s;
+}
+function stripDraftMarkersFromEntry(entry: CorpusEntryT): CorpusEntryT {
+  const e = { ...entry };
+  e.critique = stripDraftPrefix(e.critique);
+  e.whatToSteal = e.whatToSteal.map(stripDraftPrefix);
+  if (e.antiPatterns) {
+    e.antiPatterns = {
+      antiPatterns: e.antiPatterns.antiPatterns.map(stripDraftPrefix),
+      whereThisFails: e.antiPatterns.whereThisFails.map(stripDraftPrefix),
+      accessibilityRisks: e.antiPatterns.accessibilityRisks.map(stripDraftPrefix),
+    };
+  }
+  if (e.voice) {
+    e.voice = {
+      tone: stripDraftPrefix(e.voice.tone),
+      examples: e.voice.examples.map(stripDraftPrefix),
+      avoid: e.voice.avoid.map(stripDraftPrefix),
+    };
+  }
+  if (e.businessRationale) {
+    e.businessRationale = {
+      ...e.businessRationale,
+      targetUser: stripDraftPrefix(e.businessRationale.targetUser),
+      rationale: stripDraftPrefix(e.businessRationale.rationale),
+    };
+  }
+  return e;
 }
 
 export function validateEntryPayload(payload: unknown): CorpusEntryT {
@@ -570,27 +608,28 @@ function explainTagError(error: unknown): string {
 }
 
 export function publicConfigStatus(status: EnvStatus = getEnvStatus()) {
-  // Honor the injected status (tests pass a hand-crafted EnvStatus rather than
-  // mutating process.env) but extend the openai check to include the per-pass
-  // variants — a split-provider setup using only OPENAI_API_KEY_CRITIQUE was
-  // falsely reporting "no vision key" via the bare-key OR.
-  const hasOpenAI = status.openaiKeyConfigured
-    || !!process.env.OPENAI_API_KEY_EXTRACTION
-    || !!process.env.OPENAI_API_KEY_CRITIQUE;
-  const anyVisionKey = hasOpenAI || status.anthropicKeyConfigured || status.geminiKeyConfigured;
+  // Vision gate counts ONLY extraction-capable keys. OPENAI_API_KEY_CRITIQUE is
+  // text-only (NIM/DeepSeek critique split) and must NOT satisfy this gate —
+  // otherwise the UI advertises auto-tagging and then fails at extraction.
+  // status.openaiKeyConfigured reflects OPENAI_API_KEY (the bare key).
+  const hasOpenAIExtraction = status.openaiKeyConfigured || !!process.env.OPENAI_API_KEY_EXTRACTION;
+  const anyVisionKey = hasOpenAIExtraction || status.anthropicKeyConfigured || status.geminiKeyConfigured;
   // Resolve the effective provider + model for each pass via the SAME logic
-  // tagger.ts uses (activeModelName resolves through openaiConfigForPass on the
-  // OpenAI path, so OPENAI_AUTO_TAG_MODEL_CRITIQUE etc. are honored). Previously
-  // this hand-rolled the resolution and missed the per-pass overrides, so the
-  // /api/config status exposed to the UI lied about which model ran.
-  const extractionProvider = process.env.AUTO_TAG_PROVIDER_EXTRACTION ?? process.env.AUTO_TAG_PROVIDER ?? "openai";
-  const critiqueProvider = process.env.AUTO_TAG_PROVIDER_CRITIQUE ?? process.env.AUTO_TAG_PROVIDER ?? "openai";
+  // Resolve the EFFECTIVE provider + model for each pass via the SAME logic
+  // tagger.ts uses. activeProviderName() runs resolveProvider() (which applies
+  // the Mistral-can't-do-extraction fallback, key-presence checks, etc.), so
+  // the UI shows what will ACTUALLY run — not the raw env value. Raw env reads
+  // here previously made the UI display "mistral" for extraction even though
+  // the resolver correctly falls back to a vision provider at runtime.
+  const extractionProvider = activeProviderName("extraction");
+  const critiqueProvider = activeProviderName("critique");
   const extractionModel = activeModelName("extraction");
   const critiqueModel = activeModelName("critique");
   return {
     openaiKeyConfigured: status.openaiKeyConfigured,
     anthropicKeyConfigured: status.anthropicKeyConfigured,
     geminiKeyConfigured: status.geminiKeyConfigured,
+    mistralKeyConfigured: status.mistralKeyConfigured,
     visionKeyConfigured: anyVisionKey,
     autoTagProvider: status.autoTagProvider,
     extractionProvider,
@@ -788,6 +827,7 @@ async function handleCaptureCandidates(req: IncomingMessage, res: ServerResponse
       batchDir,
       batchId,
       new Map(),
+      undefined, // no signalsMap — Add flow skips DOM-signal extraction entirely (no sidecar consumer; avoids paying the evaluate cost per candidate).
     );
   } finally {
     await browser.close();
@@ -1132,8 +1172,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       sendJson(res, 400, { error: "extraction is required (pass the entry's _raw.extraction)" });
       return;
     }
-    if (!hasVisionKey()) {
-      sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY (or OPENAI_API_KEY_EXTRACTION / _CRITIQUE for split-provider setups), ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
+    if (!hasCritiqueKey()) {
+      sendJson(res, 400, { error: "No provider key set. Critique needs at least one of OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or MISTRAL_API_KEY in .env, then restart npm run ui." });
       return;
     }
 
@@ -1142,6 +1182,92 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       sendJson(res, 200, { critique: result });
     } catch (error) {
       sendJson(res, 400, { error: explainTagError(error) });
+    }
+    return;
+  }
+
+  // Bulk re-tag primitive: re-run extraction + critique on a SAVED entry,
+  // overwriting categories/critique/tier etc. while preserving identity
+  // (id, source, image, platform, addedAt, provenance). Used by the dashboard's
+  // bulk "Re-tag" action to fix miscategorization and refresh critiques across
+  // many entries. Provider is overridable per call (no env mutation races).
+  if (req.method === "POST" && url.pathname === "/api/auto-retag") {
+    const payload = await readJson(req) as {
+      id?: string;
+      extractionProvider?: string;
+      critiqueProvider?: string;
+    };
+
+    if (!payload.id) {
+      sendJson(res, 400, { error: "id is required" });
+      return;
+    }
+    if (!hasVisionKey()) {
+      sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
+      return;
+    }
+    // Validate provider values at runtime — the TS type above is a hint, not a
+    // guarantee (HTTP clients can send anything). An invalid value would pass
+    // through resolveProvider's override path and silently misroute.
+    const VALID_PROVIDERS = ["openai", "claude", "gemini", "mistral"] as const;
+    const extractionProvider = payload.extractionProvider && VALID_PROVIDERS.includes(payload.extractionProvider as typeof VALID_PROVIDERS[number])
+      ? payload.extractionProvider as typeof VALID_PROVIDERS[number] : undefined;
+    const critiqueProvider = payload.critiqueProvider && VALID_PROVIDERS.includes(payload.critiqueProvider as typeof VALID_PROVIDERS[number])
+      ? payload.critiqueProvider as typeof VALID_PROVIDERS[number] : undefined;
+
+    const entry = entries.find((e) => e.id === payload.id);
+    if (!entry) {
+      sendJson(res, 404, { error: `Entry not found: ${payload.id}` });
+      return;
+    }
+    if (!entry.image.path) {
+      sendJson(res, 200, { ok: false, skipped: true, reason: "no image" });
+      return;
+    }
+
+    try {
+      const imagePath = fromCorpusRelativeImagePath(entry.image.path);
+      const tagged = await tagImage({
+        imagePath,
+        productName: entry.source.productName,
+        url: entry.source.url,
+        id: entry.id, // preserve the existing id (tagger uses it as autoId)
+        imageDetail: "high",
+        extractionProvider,
+        critiqueProvider,
+      });
+
+      // Merge: tagged output REPLACES content fields; identity fields preserved.
+      // Title: keep the existing unless it's the placeholder template.
+      const isPlaceholderTitle = /^\S+ — \(add descriptive subtitle\)/.test(entry.title);
+      const merged: CorpusEntryT = {
+        ...entry, // preserves id, source, image, platform, addedAt, provenance, reviewStatus
+        title: isPlaceholderTitle ? tagged.title : entry.title,
+        patternType: tagged.patternType as CorpusEntryT["patternType"],
+        categories: tagged.categories as CorpusEntryT["categories"],
+        styleTags: tagged.styleTags as CorpusEntryT["styleTags"],
+        visual: tagged.visual as CorpusEntryT["visual"],
+        critique: tagged.critique,
+        whatToSteal: tagged.whatToSteal,
+        antiPatterns: tagged.antiPatterns as CorpusEntryT["antiPatterns"],
+        layout: (tagged.layout ?? undefined) as CorpusEntryT["layout"],
+        voice: (tagged.voice ?? undefined) as CorpusEntryT["voice"],
+        businessRationale: (tagged.businessRationale ?? undefined) as CorpusEntryT["businessRationale"],
+        qualityTier: tagged.qualityTier as CorpusEntryT["qualityTier"],
+        qualityScore: tagged.qualityScore,
+      };
+
+      // Strip the tagger's [DRAFT]/[DRAFT — REWRITE] editing prefixes before
+      // validation — a bulk retag is meant to land fresh, clean text the user
+      // rewrites later, not [DRAFT]-gated text that the validator rejects.
+      const cleaned = stripDraftMarkersFromEntry(merged);
+      const validated = validateEntryPayload(cleaned);
+      const idx = entries.findIndex((e) => e.id === payload.id);
+      entries[idx] = validated;
+      saveEntries(entries);
+      sendJson(res, 200, { ok: true, entry: validated });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: explainTagError(error) });
     }
     return;
   }

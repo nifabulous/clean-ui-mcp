@@ -23,6 +23,7 @@ let openaiConfigured = true;
 // Per-batch hash sets for the check-duplicate stub (mirrors the real server's
 // in-batch dedup). Cleared per test by clearing the map.
 const batchHashes = new Map<string, Set<string>>();
+let lastEntryPost: any = null;
 
 const schema = {
   categories: ["dashboard", "pricing"],
@@ -104,7 +105,7 @@ describe("curator app browser smoke", () => {
         // and lets the in-batch dedup test exercise identical-byte siblings.
         const b64 = String(body.dataUrl || "").split(",")[1] ?? "";
         const hash = createHash("sha256").update(b64).digest("hex");
-        return json(res, 201, { path: `images-private/${slug}.png`, width: 1200, height: 800, visibility: "private", hash, dhash: hash.slice(0, 16) });
+        return json(res, 201, { path: `images-private/${slug}.png`, width: 1200, height: 800, visibility: "private", hash, dhash: hash.slice(0, 16), capturedAt: "2026-07-06T04:23:45.000Z" });
       }
       if (url.pathname === "/api/check-duplicate" && req.method === "POST") {
         const body = JSON.parse(await readBody(req) || "{}");
@@ -121,9 +122,39 @@ describe("curator app browser smoke", () => {
         }
         return json(res, 200, { duplicate: false, type: null, match: null });
       }
+      if (url.pathname === "/api/capture-candidates" && req.method === "POST") {
+        const body = JSON.parse(await readBody(req) || "{}");
+        return json(res, 201, {
+          batchId: "add-test-batch",
+          candidates: [
+            {
+              id: "candidate-a",
+              imagePath: "images-private/candidate-a.png",
+              width: 1200,
+              height: 800,
+              sourceUrl: body.url || "https://example.com",
+              sourceName: "Example",
+              captureMode: "section",
+              viewport: "desktop",
+              capturedAt: "2026-07-06T01:23:45.000Z",
+            },
+            {
+              id: "candidate-b",
+              imagePath: "images-private/candidate-b.png",
+              width: 390,
+              height: 844,
+              sourceUrl: body.url || "https://example.com",
+              sourceName: "Example",
+              captureMode: "viewport",
+              viewport: "mobile",
+              capturedAt: "2026-07-06T02:23:45.000Z",
+            },
+          ],
+        });
+      }
       if (url.pathname === "/api/capture-url" && req.method === "POST") {
         await readBody(req);
-        return json(res, 201, { path: "images-private/captured.png", width: 1440, height: 1000, visibility: "private" });
+        return json(res, 201, { path: "images-private/captured.png", width: 1440, height: 1000, visibility: "private", capturedAt: "2026-07-06T03:23:45.000Z" });
       }
       if (url.pathname === "/api/auto-tag" && req.method === "POST") {
         const body = JSON.parse(await readBody(req) || "{}");
@@ -189,6 +220,10 @@ describe("curator app browser smoke", () => {
       }
       if (url.pathname === "/api/entries" && req.method === "POST") {
         const body = JSON.parse(await readBody(req) || "{}");
+        lastEntryPost = body;
+        if ("lastVerified" in (body.source || {}) && !/^\d{4}-\d{2}-\d{2}$/.test(body.source.lastVerified)) {
+          return json(res, 422, { error: "source.lastVerified: Expected YYYY-MM-DD" });
+        }
         // Mirror the real server's draft-hygiene gate (findDraftMarkers): a
         // payload that still carries [DRAFT]/[PLACEHOLDER]/[TODO] in any text
         // field must be rejected with 422 — this is the exact regression that
@@ -457,6 +492,126 @@ describe("specimen-ledger SPA", () => {
     // The old redirect link to /index-classic.html should NOT be in #/add anymore.
     const oldRedirect = await page.locator("#pages a[href='/index-classic.html']").count();
     expect(oldRedirect).toBe(0);
+    await page.close();
+  });
+
+  it("uses a workbench rail for candidate selection and auto-fill actions", async () => {
+    openaiConfigured = true;
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/add");
+    await page.fill("#addCaptureForm input[name='url']", "https://example.com");
+    await page.locator("#addCaptureForm button[type='submit']").click();
+    await page.waitForSelector(".candidate-specimen");
+
+    expect(await page.locator(".add-workbench").count()).toBe(1);
+    expect(await page.locator(".add-session-rail").count()).toBe(1);
+    expect(await page.locator(".candidate-specimen").count()).toBe(2);
+
+    await page.locator("[data-candidate-pick='0']").check();
+    expect(await page.locator(".add-session-rail").innerText()).toMatch(/1\s+SELECTED/i);
+    await page.getByRole("button", { name: /Auto-fill selected/ }).click();
+    await page.waitForSelector("[data-candidate-review='0']");
+    expect(await page.locator(".add-session-rail").innerText()).toMatch(/1\s+TAGGED/i);
+    await page.close();
+  });
+
+  it("lets a curator preview a candidate before choosing it for auto-fill", async () => {
+    openaiConfigured = true;
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/add");
+    await page.fill("#addCaptureForm input[name='url']", "https://example.com");
+    await page.locator("#addCaptureForm button[type='submit']").click();
+    await page.waitForSelector(".candidate-specimen");
+
+    const firstCard = page.locator(".candidate-specimen").first();
+    expect(await firstCard.locator("button", { hasText: /Preview/ }).count()).toBe(1);
+    await firstCard.locator("button", { hasText: /Preview/ }).click();
+    await page.waitForSelector("#candPreview[aria-modal='true']");
+    expect(await page.locator("#candPreview").innerText()).toContain("candidate-a");
+    await page.locator("#candPrevSelect").check();
+    expect(await page.locator(".add-session-rail").innerText()).toMatch(/1\s+SELECTED/i);
+    await page.close();
+  });
+
+  it("keeps single-entry save inside the review sheet during candidate review", async () => {
+    openaiConfigured = true;
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/add");
+    await page.fill("#addCaptureForm input[name='url']", "https://example.com");
+    await page.locator("#addCaptureForm button[type='submit']").click();
+    await page.waitForSelector(".candidate-specimen");
+    await page.locator("[data-candidate-pick='0']").check();
+    await page.getByRole("button", { name: /Auto-fill selected/ }).click();
+    await page.waitForSelector("[data-candidate-review='0']");
+    await page.locator("[data-candidate-review='0']").click();
+    await page.waitForSelector(".review-sheet");
+
+    expect(await page.locator(".review-sheet button[type='submit']", { hasText: /Save entry/ }).count()).toBe(1);
+    expect(await page.locator(".add-session-rail button", { hasText: /Save entry/ }).count()).toBe(0);
+    expect(await page.locator(".add-session-rail").innerText()).toContain("Back to queue");
+    await page.close();
+  });
+
+  it("saves a reviewed candidate without sending an empty lastVerified date", async () => {
+    openaiConfigured = true;
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/add");
+    await page.fill("#addCaptureForm input[name='url']", "https://example.com");
+    await page.locator("#addCaptureForm button[type='submit']").click();
+    await page.waitForSelector(".candidate-specimen");
+    await page.locator("[data-candidate-pick='0']").check();
+    await page.getByRole("button", { name: /Auto-fill selected/ }).click();
+    await page.waitForSelector("[data-candidate-review='0']");
+    await page.locator("[data-candidate-review='0']").click();
+    await page.waitForSelector(".review-sheet");
+
+    lastEntryPost = null;
+    await page.locator(".review-sheet button[type='submit']").click();
+    for (let i = 0; i < 50 && lastEntryPost === null; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(lastEntryPost).not.toBeNull();
+    expect(lastEntryPost.source.capturedAt).toBe("2026-07-06");
+    expect(lastEntryPost.source.lastVerified).toBeUndefined();
+    expect(await page.locator(".add-session-rail").innerText()).not.toContain("source.lastVerified");
+    await page.close();
+  });
+
+  it("saves uploaded screenshots with the upload capture date", async () => {
+    openaiConfigured = true;
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/add");
+    await page.locator("#addSwitchUpload").click();
+    await page.locator("#addFileInput").setInputFiles({
+      name: "uploaded.png",
+      mimeType: "image/png",
+      buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFeAJ5fVqRtwAAAABJRU5ErkJggg==", "base64"),
+    });
+    await page.waitForSelector("text=images-private/uploaded-png.png");
+    await page.getByRole("button", { name: /Auto-fill fields/ }).click();
+    await page.waitForSelector(".review-sheet");
+
+    lastEntryPost = null;
+    await page.locator(".review-sheet button[type='submit']").click();
+    for (let i = 0; i < 50 && lastEntryPost === null; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(lastEntryPost).not.toBeNull();
+    expect(lastEntryPost.source.capturedAt).toBe("2026-07-06");
+    await page.close();
+  });
+
+  it("uses mobile artifact-before-session ordering and exposes progress live text", async () => {
+    const page = await browser!.newPage();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(baseUrl + "/#/add");
+    await page.waitForSelector(".add-workbench");
+
+    const order = await page.locator(".source-strip, .add-artifact, .add-session-rail").evaluateAll((els) => els.map((el) => Array.from(el.classList).join(" ")));
+    expect(order[0]).toContain("source-strip");
+    expect(order[1]).toContain("add-artifact");
+    expect(order[2]).toContain("add-session-rail");
+    expect(await page.locator("#addProgressLive[aria-live='polite']").count()).toBe(1);
     await page.close();
   });
 

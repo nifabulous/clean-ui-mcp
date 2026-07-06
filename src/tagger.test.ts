@@ -39,6 +39,33 @@ describe("tagger sanitization", () => {
     expect(sanitized.draftCritique.length).toBeGreaterThan(80);
     expect(sanitized.draftWhatToSteal[0].length).toBeGreaterThan(10);
   });
+
+  it("keeps complete businessRationale objects and drops incomplete ones", () => {
+    const complete = sanitizeTaggerPayload({
+      businessRationale: {
+        businessGoal: "build-trust",
+        targetUser: "first-time buyer",
+        rationale: "The proof-heavy layout reassures skeptical buyers before they compare plans.",
+        confirmed: true,
+      },
+    });
+
+    expect(complete.businessRationale).toEqual({
+      businessGoal: "build-trust",
+      targetUser: "first-time buyer",
+      rationale: "The proof-heavy layout reassures skeptical buyers before they compare plans.",
+      confirmed: true,
+    });
+
+    const incomplete = sanitizeTaggerPayload({
+      businessRationale: {
+        businessGoal: "build-trust",
+        targetUser: "first-time buyer",
+      },
+    });
+
+    expect(incomplete.businessRationale).toBeUndefined();
+  });
 });
 
 describe("extractQuantizedColors (node-vibrant)", () => {
@@ -218,6 +245,12 @@ describe("tagImage two-pass request shape", () => {
             draftCritique: "This design uses hairline borders at low contrast to do structural work without the visual weight of heavier lines, so the eye reads grouping without noticing the borders. It rejects the common default of 1px black borders, which read as frames rather than separators.",
             draftWhatToSteal: ["Use hairline borders at 10% opacity for structural separation instead of visible frame borders."],
             draftAntiPatterns: ["Avoids card shadows for depth — uses background-color steps of the same hue so surfaces stay flat."],
+            businessRationale: {
+              businessGoal: "reduce-cognitive-load-at-decision-point",
+              targetUser: "operations manager",
+              rationale: "The restrained grouping helps managers compare dense status data before deciding what needs attention.",
+              confirmed: false,
+            },
             qualityTier: "exceptional",
           });
       return new Response(JSON.stringify({ output_text: response }), {
@@ -226,7 +259,7 @@ describe("tagImage two-pass request shape", () => {
       });
     }) as unknown as typeof fetch;
 
-    await tagImage({ imagePath: testImage, productName: "Test", url: null });
+    const entry = await tagImage({ imagePath: testImage, productName: "Test", url: null });
 
     // Two calls made
     expect(calls.length).toBe(2);
@@ -242,6 +275,12 @@ describe("tagImage two-pass request shape", () => {
     // Both passes: token budget adequate
     expect(calls[0].body.max_output_tokens).toBeGreaterThanOrEqual(2500);
     expect(calls[1].body.max_output_tokens).toBeGreaterThanOrEqual(2500);
+    expect(entry.businessRationale).toEqual({
+      businessGoal: "reduce-cognitive-load-at-decision-point",
+      targetUser: "operations manager",
+      rationale: "The restrained grouping helps managers compare dense status data before deciding what needs attention.",
+      confirmed: false,
+    });
   });
 
   it("routes to the Claude endpoint when AUTO_TAG_PROVIDER=claude", async () => {

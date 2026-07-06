@@ -883,3 +883,51 @@ tbody tr:hover .row-actions{opacity:1}
 .bulk-bar .bulk-count { font-weight: 600; padding: 0 8px 0 4px; color: var(--ink); }
 .bulk-bar .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
 .bulk-bar .btn.ghost:hover { background: var(--surface-2); color: var(--ink-2); }
+
+/* ─── Add-flow: disabled buttons + candidate preview overlay ─── */
+.btn[disabled],
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Candidate preview overlay — large screenshot view */
+.cand-preview-overlay {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(15, 23, 42, .82);
+  backdrop-filter: blur(4px);
+  display: grid; grid-template-rows: auto 1fr; padding: 24px; gap: 12px;
+}
+.cand-preview-header {
+  display: flex; align-items: center; gap: 12px; color: #fff;
+  font-size: 12px;
+}
+.cand-preview-header .id { font-family: var(--mono); color: rgba(255,255,255,.95); }
+.cand-preview-header .meta { color: rgba(255,255,255,.6); }
+.cand-preview-stage {
+  display: grid; place-items: center; min-height: 0; position: relative;
+}
+.cand-preview-img {
+  max-width: 86vw; max-height: 76vh; object-fit: contain;
+  border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  background: var(--surface);
+}
+.cand-preview-nav button {
+  width: 36px; height: 36px; border-radius: 50%; border: none;
+  background: rgba(255,255,255,.92); color: var(--ink); cursor: pointer;
+  display: grid; place-items: center; backdrop-filter: blur(4px);
+  font-size: 18px; line-height: 1;
+}
+.cand-preview-nav button:hover { background: #fff; }
+/* z-index keeps nav buttons above the image so they stay clickable. */
+.cand-preview-nav { z-index: 2; }
+.cand-preview-close { position: absolute; top: 16px; right: 16px; z-index: 3; }
+.cand-preview-prev { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); z-index: 3; }
+.cand-preview-next { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); z-index: 3; }
+
+/* Candidate card preview (🔍) button — top-right corner */
+.cand-card-preview {
+  position: absolute; top: 6px; right: 6px; z-index: 3;
+  width: 26px; height: 26px; border-radius: 6px; border: none;
+  background: rgba(255,255,255,.92); color: var(--ink-2); cursor: pointer;
+  display: grid; place-items: center; backdrop-filter: blur(4px);
+  font-size: 13px; line-height: 1;
+}
+.cand-card-preview:hover { background: #fff; color: var(--ink); }

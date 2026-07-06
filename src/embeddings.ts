@@ -243,6 +243,7 @@ export function entryToDocument(entry: {
   whatToSteal:  string[];
   antiPatterns?: { antiPatterns: string[]; whereThisFails?: string[]; accessibilityRisks?: string[] };
   layout?: { form?: string; regions?: Array<{ role: string; width?: string }> };
+  businessRationale?: { businessGoal?: string; targetUser?: string; rationale?: string; confirmed?: boolean };
   voice?: { tone?: string; examples?: string[]; avoid?: string[] };
   qualityTier?: string;
   source:       { productName: string; url?: string | null };
@@ -279,6 +280,10 @@ export function entryToDocument(entry: {
   if (entry.layout?.form) {
     const roles = (entry.layout.regions ?? []).map((r) => r.role).join(", ");
     parts.push(`Layout: ${entry.layout.form}${roles ? ` (${roles})` : ""}.`);
+  }
+
+  if (entry.businessRationale?.businessGoal) {
+    parts.push(`Business goal: ${entry.businessRationale.businessGoal}. Target user: ${entry.businessRationale.targetUser ?? "unknown"}. Rationale: ${entry.businessRationale.rationale ?? ""}`);
   }
 
   // Voice — improves "find restrained-voice dashboards" retrieval (copy IS design).

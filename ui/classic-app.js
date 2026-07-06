@@ -269,6 +269,18 @@ function renderLibrary() {
         </div>
       </div>
     </section>` : ""}
+    ${entry.businessRationale ? `
+    <section class="panel">
+      <div class="panel-head"><div class="panel-title">Business rationale</div></div>
+      <div class="panel-body">
+        <dl>
+          <div class="kv"><dt>Goal</dt><dd>${esc(entry.businessRationale.businessGoal)}</dd></div>
+          <div class="kv"><dt>Target</dt><dd>${esc(entry.businessRationale.targetUser)}</dd></div>
+          <div class="kv"><dt>Status</dt><dd>${entry.businessRationale.confirmed ? "confirmed" : "inferred"}</dd></div>
+        </dl>
+        <div class="voice-tone">${esc(entry.businessRationale.rationale)}</div>
+      </div>
+    </section>` : ""}
     ${entry.voice ? `
     <section class="panel">
       <div class="panel-head"><div class="panel-title">Voice</div></div>
@@ -459,6 +471,7 @@ function validateDraft() {
   const draftTexts = [
     entry.critique, ...entry.whatToSteal,
     ...(entry.antiPatterns?.antiPatterns || []), ...(entry.antiPatterns?.whereThisFails || []), ...(entry.antiPatterns?.accessibilityRisks || []),
+    ...(entry.businessRationale ? [entry.businessRationale.targetUser, entry.businessRationale.rationale] : []),
     ...(entry.voice ? [entry.voice.tone, ...entry.voice.examples, ...entry.voice.avoid] : []),
   ];
   if (draftTexts.some((t) => /\[(?:DRAFT|PLACEHOLDER|TODO\b)/i.test(t))) issues.push("Remove all [DRAFT] / [PLACEHOLDER] / [TODO] markers before saving — rewrite those fields in your own words.");
@@ -778,6 +791,10 @@ function stripMarkersFromEntry(entry) {
     if (typeof e.voice.tone === "string") e.voice.tone = stripDraftMarker(e.voice.tone);
     if (Array.isArray(e.voice.examples)) e.voice.examples = e.voice.examples.map(stripDraftMarker);
     if (Array.isArray(e.voice.avoid)) e.voice.avoid = e.voice.avoid.map(stripDraftMarker);
+  }
+  if (e.businessRationale) {
+    if (typeof e.businessRationale.targetUser === "string") e.businessRationale.targetUser = stripDraftMarker(e.businessRationale.targetUser);
+    if (typeof e.businessRationale.rationale === "string") e.businessRationale.rationale = stripDraftMarker(e.businessRationale.rationale);
   }
   return e;
 }

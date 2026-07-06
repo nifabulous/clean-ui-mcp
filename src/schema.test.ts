@@ -157,6 +157,64 @@ describe("corpus schema", () => {
     expect(CorpusEntry.safeParse(validEntry).success).toBe(true);
   });
 
+  it("accepts businessRationale undefined (optional)", () => {
+    const result = CorpusEntry.safeParse(validEntry);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.businessRationale).toBeUndefined();
+  });
+
+  it("round-trips a populated businessRationale block with confirmed defaulting false", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      businessRationale: {
+        businessGoal: "reduce-support-load",
+        targetUser: "self-serve SMB admin",
+        rationale: "The compact summary lets admins answer common setup questions without opening support docs.",
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.businessRationale).toEqual({
+        businessGoal: "reduce-support-load",
+        targetUser: "self-serve SMB admin",
+        rationale: "The compact summary lets admins answer common setup questions without opening support docs.",
+        confirmed: false,
+      });
+    }
+  });
+
+  it("rejects an invalid businessRationale businessGoal", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      businessRationale: {
+        businessGoal: "make-it-pop",
+        targetUser: "self-serve SMB admin",
+        rationale: "The compact summary lets admins answer common setup questions without opening support docs.",
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("enforces businessRationale targetUser and rationale max lengths", () => {
+    expect(CorpusEntry.safeParse({
+      ...validEntry,
+      businessRationale: {
+        businessGoal: "other",
+        targetUser: "x".repeat(81),
+        rationale: "Short rationale.",
+      },
+    }).success).toBe(false);
+
+    expect(CorpusEntry.safeParse({
+      ...validEntry,
+      businessRationale: {
+        businessGoal: "other",
+        targetUser: "admin",
+        rationale: "x".repeat(281),
+      },
+    }).success).toBe(false);
+  });
+
   it("accepts a populated colorRoles token set", () => {
     const result = CorpusEntry.safeParse({
       ...validEntry,

@@ -178,6 +178,9 @@ server.registerTool(
       entry.antiPatterns.accessibilityRisks.length
         ? `## Accessibility risks\n${entry.antiPatterns.accessibilityRisks.map((t) => `- ${t}`).join("\n")}\n`
         : "",
+      entry.businessRationale
+        ? `## Business rationale\n- Goal: ${entry.businessRationale.businessGoal}\n- Target user: ${entry.businessRationale.targetUser}\n- Rationale: ${entry.businessRationale.rationale}\n- Confirmed: ${entry.businessRationale.confirmed ? "yes" : "no"}\n`
+        : "",
       entry.voice
         ? `## Voice\n- Tone: ${entry.voice.tone}\n${entry.voice.examples.map((e) => `- Example: "${e}"`).join("\n")}${entry.voice.avoid.length ? `\n${entry.voice.avoid.map((a) => `- Avoid: ${a}`).join("\n")}` : ""}\n`
         : "",

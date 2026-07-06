@@ -48,6 +48,7 @@ interface Entry {
   image?: { visibility?: string; path?: string | null; width?: number | null; height?: number | null };
   voice?: { tone?: string };
   layout?: { form?: string };
+  businessRationale?: { businessGoal?: string; targetUser?: string; rationale?: string; confirmed?: boolean };
   critique?: string;
 }
 
@@ -143,6 +144,9 @@ const missingPrivate = missingFiles.filter((p) => p.startsWith("images-private/"
 const productCounts = countBy(entries, (e) => (e.source?.productName ? [e.source.productName] : []));
 const withVoice = entries.filter((e) => e.voice?.tone && e.voice.tone.trim()).length;
 const withLayout = entries.filter((e) => e.layout?.form && e.layout.form.trim()).length;
+const withBusinessRationale = entries.filter((e) => e.businessRationale != null);
+const confirmedBusinessRationale = withBusinessRationale.filter((e) => e.businessRationale?.confirmed === true);
+const businessGoalCounts = countBy(withBusinessRationale, (e) => e.businessRationale?.businessGoal ? [e.businessRationale.businessGoal] : []);
 // Two image metrics with different meanings:
 //   - withImageResolvable  → path is set AND the file exists on disk (the real
 //                            coverage number; what the UI will actually render)
@@ -186,6 +190,13 @@ const report = {
     missingPrivateCount: missingPrivate.length,
     // Kept for backward-compat consumers; superseded by the split above.
     missing: missingFiles.slice(0, 20),
+  },
+  businessRationale: {
+    totalEntries: entries.length,
+    withField: withBusinessRationale.length,
+    coveragePct: entries.length ? +((withBusinessRationale.length / entries.length) * 100).toFixed(1) : 0,
+    confirmedPct: withBusinessRationale.length ? +((confirmedBusinessRationale.length / withBusinessRationale.length) * 100).toFixed(1) : 0,
+    goalDistribution: businessGoalCounts,
   },
   quality: {
     voiceCoverage: entries.length ? Math.round((withVoice / entries.length) * 100) : 0,
@@ -265,6 +276,11 @@ if (asJson) {
   console.log(`\n📈 Quality coverage`);
   console.log(`  voice:   ${report.quality.voiceCoverage}% have voice.tone`);
   console.log(`  layout:  ${report.quality.layoutCoverage}% have layout.form`);
+  console.log(`  business rationale: ${report.businessRationale.coveragePct}% have field · ${report.businessRationale.confirmedPct}% confirmed`);
+  if (Object.keys(report.businessRationale.goalDistribution).length) {
+    console.log(`  business goals:`);
+    Object.entries(report.businessRationale.goalDistribution).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => console.log(`    ${k.padEnd(44)}${v}`));
+  }
   console.log(`  images:  ${report.quality.imageAvailability}% resolvable · ${report.quality.imageReferenceRate}% reference a path`);
   console.log(`  capture: ${report.quality.captureProvenance}% from the capture pipeline`);
   console.log(`  critique: avg ${report.quality.avgCritiqueLength} chars`);

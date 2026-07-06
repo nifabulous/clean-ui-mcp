@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { imageSize } from "image-size";
 import { chromium } from "playwright";
-import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, findDraftMarkers, type CorpusEntryT } from "../schema.js";
+import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
 import { tagImage, generateCritique, hasVisionKey, activeModelName } from "../tagger.js";
 import type { CaptureMeta } from "./capture.js";
@@ -251,6 +251,12 @@ export function validateEntryPayload(payload: unknown): CorpusEntryT {
   const result = CorpusEntry.safeParse(payload);
   if (!result.success) {
     throw Object.assign(new Error("Entry validation failed"), { issues: result.error.issues });
+  }
+  // Isolated group-member crops do not carry enough product/page context for
+  // honest business-intent inference. Normalize the pilot field away at the
+  // save boundary, where capture provenance is actually available.
+  if (result.data.provenance?.capture?.mode === "group-member") {
+    result.data.businessRationale = undefined;
   }
   // Draft-hygiene gate: reject entries carrying [DRAFT]/[PLACEHOLDER]/[TODO]
   // markers anywhere in their text fields. Uses the centralized check so the
@@ -847,6 +853,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       spacingDensities: SpacingDensity.options,
       cornerStyles: CornerStyle.options,
       imageVisibilities: ImageVisibility.options,
+      businessGoals: BusinessGoal.options,
     });
     return;
   }

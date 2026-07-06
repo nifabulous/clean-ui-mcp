@@ -168,6 +168,30 @@ export const LayoutStructure = z.object({
   regions: z.array(LayoutRegion).min(1),
 });
 
+export const BusinessGoal = z.enum([
+  "increase-conversion",
+  "reduce-support-load",
+  "build-trust",
+  "drive-habitual-use",
+  "reduce-cognitive-load-at-decision-point",
+  "surface-upsell-opportunity",
+  "reduce-churn-risk",
+  "establish-credibility",
+  "other",
+]);
+
+/**
+ * Business rationale — a deliberately small, pilot-friendly inference field.
+ * Optional because isolated component captures often do not contain enough
+ * product context to infer intent honestly.
+ */
+export const BusinessRationale = z.object({
+  businessGoal: BusinessGoal,
+  targetUser: z.string().max(80),
+  rationale: z.string().max(280),
+  confirmed: z.boolean().default(false),
+});
+
 export const ImageVisibility = z.enum([
   "private", // local-only, never published in the open-source repo
   "public-thumb", // low-res thumbnail, ok to redistribute, links to source
@@ -283,6 +307,13 @@ export const CorpusEntry = z.object({
   layout: LayoutStructure.optional(), // machine-readable wireframe (optional — see LayoutStructure docs)
 
   /**
+   * Business rationale — why this design choice may exist from a product
+   * perspective. Keep absent when the capture lacks enough business context
+   * (notably isolated group-member component crops).
+   */
+  businessRationale: BusinessRationale.optional(),
+
+  /**
    * Voice — microcopy as a first-class dimension. "Good afternoon, Sam" vs
    * "Dashboard" is a design decision as much as font choice. Optional; populate
    * when the writing itself is notable (empty states, onboarding, error copy).
@@ -376,6 +407,10 @@ export function entryTextFields(entry: CorpusEntryT): Array<{ field: string; tex
     ...entry.antiPatterns.antiPatterns.map((t, i) => ({ field: `antiPatterns.antiPatterns[${i}]`, text: t })),
     ...entry.antiPatterns.whereThisFails.map((t, i) => ({ field: `antiPatterns.whereThisFails[${i}]`, text: t })),
     ...entry.antiPatterns.accessibilityRisks.map((t, i) => ({ field: `antiPatterns.accessibilityRisks[${i}]`, text: t })),
+    ...(entry.businessRationale ? [
+      { field: "businessRationale.targetUser", text: entry.businessRationale.targetUser },
+      { field: "businessRationale.rationale", text: entry.businessRationale.rationale },
+    ] : []),
     ...(entry.voice ? [
       { field: "voice.tone", text: entry.voice.tone },
       ...entry.voice.examples.map((t, i) => ({ field: `voice.examples[${i}]`, text: t })),

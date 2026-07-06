@@ -101,6 +101,7 @@ function mapEntry(entry) {
     borders: entry.visual?.usesBorders || true,
     typeNotes: entry.visual?.typePairing?.notes || '',
     critique: entry.critique,
+    businessRationale: entry.businessRationale || null,
     voice: entry.voice || null,
     layout: entry.layout || null,
     added: entry.addedAt,
@@ -650,6 +651,10 @@ function openDetail(x){
   const layoutHtml = x.layout?.form ? `
     <div class="eyebrow" style="margin:14px 0 8px">Layout · ${x.layout.form}</div>
     <div style="font-size:11.5px;color:var(--muted);font-family:var(--mono);margin-bottom:14px">${(x.layout.regions||[]).map(r=>`${r.role} (${r.width})`).join(' → ')}</div>` : '';
+  const businessHtml = x.businessRationale ? `
+    <div class="eyebrow" style="margin:14px 0 8px">Business rationale · ${esc(x.businessRationale.businessGoal||'other')}</div>
+    <div style="font-size:12px;color:var(--ink-2);line-height:1.55;margin-bottom:6px">${esc(x.businessRationale.rationale||'')}</div>
+    <div style="font-size:11px;color:var(--muted)">Target: ${esc(x.businessRationale.targetUser||'unknown')} · ${x.businessRationale.confirmed?'confirmed':'inferred'}</div>` : '';
   const provHtml = x.provenance ? `<span class="provenance-tag ${x.provenance.taggedBy}">${x.provenance.taggedBy}${x.provenance.reviewedBy?' · '+x.provenance.reviewedBy:''}</span>` : '';
   const draftHtml = x.reviewStatus==='draft' ? `<span class="draft-chip">draft</span>` : '';
   const platChip = x.platform==='mobile'?'<span class="platform-chip mobile">mobile</span>':x.platform==='tablet'?'<span class="platform-chip tablet">tablet</span>':'';
@@ -686,7 +691,7 @@ function openDetail(x){
     ${colorRolesHtml}
     <div class="eyebrow" style="margin:14px 0 8px">Critique</div>
     <div class="critique" style="margin-bottom:14px">${esc(x.critique||'No critique recorded.')}</div>
-    ${stealsHtml}${antiHtml}${layoutHtml}${voiceHtml}
+    ${stealsHtml}${antiHtml}${layoutHtml}${businessHtml}${voiceHtml}
     <div style="display:flex;gap:8px;margin:14px 0">
       <a class="btn" style="flex:1;justify-content:center" href="#/add">Edit</a>
       <button class="btn primary" style="flex:1;justify-content:center" onclick="window._mcp.toast('Added to compare')">Compare</button>
@@ -1028,6 +1033,10 @@ async function commitCandidates(){
       body.antiPatterns.whereThisFails = (body.antiPatterns.whereThisFails||[]).map(stripDraftMarker);
       body.antiPatterns.accessibilityRisks = (body.antiPatterns.accessibilityRisks||[]).map(stripDraftMarker);
     }
+    if(body.businessRationale){
+      body.businessRationale.targetUser = stripDraftMarker(body.businessRationale.targetUser);
+      body.businessRationale.rationale = stripDraftMarker(body.businessRationale.rationale);
+    }
     // Schema hygiene — the tagger sometimes leaves optional fields in invalid
     // states (empty lastVerified, voice with no examples). Normalize or drop.
     if(body.source){
@@ -1135,6 +1144,10 @@ async function saveDraft(){
     draft.voice.tone = stripDraftMarker(draft.voice.tone);
     draft.voice.examples = (draft.voice.examples||[]).map(stripDraftMarker);
     draft.voice.avoid = (draft.voice.avoid||[]).map(stripDraftMarker);
+  }
+  if(draft.businessRationale){
+    draft.businessRationale.targetUser = stripDraftMarker(draft.businessRationale.targetUser);
+    draft.businessRationale.rationale = stripDraftMarker(draft.businessRationale.rationale);
   }
   draft.reviewStatus = 'approved';
   if(draft.provenance && draft.provenance.taggedBy === 'auto') draft.provenance.taggedBy = 'auto-reviewed';

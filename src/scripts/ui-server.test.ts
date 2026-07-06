@@ -249,8 +249,42 @@ describe("draft hygiene gate (centralized)", () => {
     expect(() => validateEntryPayload(payload)).toThrow("draft markers");
   });
 
+  it("rejects an entry with a [DRAFT] marker in businessRationale", () => {
+    const payload = {
+      ...baseEntry,
+      businessRationale: {
+        businessGoal: "build-trust",
+        targetUser: "new buyer",
+        rationale: "[DRAFT] This needs a curator rewrite before it can ship.",
+      },
+    };
+    expect(() => validateEntryPayload(payload)).toThrow("draft markers");
+  });
+
   it("accepts a clean entry with no markers anywhere", () => {
     expect(() => validateEntryPayload(baseEntry)).not.toThrow();
+  });
+
+  it("removes businessRationale from isolated group-member captures at validation", () => {
+    const entry = validateEntryPayload({
+      ...baseEntry,
+      businessRationale: {
+        businessGoal: "build-trust",
+        targetUser: "new buyer",
+        rationale: "[DRAFT] A group-member crop should not retain inferred business intent.",
+      },
+      provenance: {
+        taggedBy: "auto",
+        capture: {
+          mode: "group-member",
+          viewport: "desktop",
+          capturedAt: "2026-07-05T10:30:00.000Z",
+          sourceUrl: "https://example.com/pricing",
+        },
+      },
+    });
+
+    expect(entry.businessRationale).toBeUndefined();
   });
 });
 

@@ -85,6 +85,9 @@ function keywordSearch(entries: CorpusEntryT[], opts: SearchOptions): SearchResu
           ...e.whatToSteal,
           ...e.antiPatterns.antiPatterns,
           ...e.antiPatterns.whereThisFails,
+          e.businessRationale?.businessGoal,
+          e.businessRationale?.targetUser,
+          e.businessRationale?.rationale,
           e.source.productName,
         ].join(" ").toLowerCase();
         const haystack = `${title} ${categories} ${styleTags} ${visual} ${body}`;

@@ -704,8 +704,18 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
   "voiceTone": "",             // omit entirely if no notable copy is visible
   "voiceExamples": [],         // real copy visible on screen, verbatim
   "voiceAvoid": [],            // what voice this design does NOT use
-  "qualityTier": ""            // ONE from: ${QUALITY_TIERS.join(", ")}. Default exceptional. Only mark
-                               // "cautionary" if the screenshot shows clear, teachable problems.
+  "qualityTier": ""            // ONE from: ${QUALITY_TIERS.join(", ")}. Default exceptional — BUT
+                               // actively check for these cautionary signals before defaulting:
+                               // - Low text contrast (hard to read, especially metadata/labels)
+                               // - Cognitive overload (too many simultaneous actions, unclear primary CTA)
+                               // - Ambiguous affordances (clickable-looking things that aren't, or vice versa)
+                               // - Missing feedback states (no loading/empty/error states visible)
+                               // - Deceptive patterns (forced continuity, confirmshaming, hidden costs,
+                               //   roach-motel flows that are easy to enter but hard to leave)
+                               // - Information density so high it impedes task completion
+                               // - Inconsistent spacing/alignment suggesting lack of design system
+                               // Mark "cautionary" when ANY of these are present AND teachable — the
+                               // entry's value is in showing what NOT to do, not in celebrating the design.
 }
 
 Rules:

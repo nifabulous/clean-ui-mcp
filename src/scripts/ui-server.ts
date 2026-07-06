@@ -14,6 +14,7 @@ import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, C
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
 import { tagImage, generateCritique, hasVisionKey, activeModelName } from "../tagger.js";
 import type { CaptureMeta } from "./capture.js";
+import { captureCandidatesForSource, isAllowedByRobots } from "./capture.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
 import {
   ENTRIES_PATH, SNAPSHOT_DIR, SNAPSHOT_KEEP,
@@ -446,7 +447,7 @@ type CaptureBatchSummary = {
  * timestamp in batch mode, so lexical sort == newest-first). Batches missing
  * their manifest are skipped — they're not from this pipeline.
  */
-function listCaptureBatches(): CaptureBatchSummary[] {
+export function listCaptureBatches(): CaptureBatchSummary[] {
   if (!existsSync(CAPTURES_DIR)) return [];
   const out: CaptureBatchSummary[] = [];
   for (const name of readdirSync(CAPTURES_DIR, { withFileTypes: true })) {
@@ -736,6 +737,105 @@ async function handleCaptureUrl(req: IncomingMessage, res: ServerResponse) {
   });
 }
 
+/**
+ * Detect + capture multiple candidates from one URL, using the SAME detection
+ * pipeline as the batch CLI (consent, anchors, recursive oversized, group
+ * members, dedup, viewport loop). Writes candidate PNGs into a temp batch dir
+ * under captures/add-{batchId}/. No manifest.json/triage.json — so the dir is
+ * invisible to listCaptureBatches (which requires manifest.json) and the
+ * #/capture triage page. The Add flow promotes selected candidates to permanent
+ * paths at save time (see promoteTempImage /api/entries extension).
+ */
+async function handleCaptureCandidates(req: IncomingMessage, res: ServerResponse) {
+  const payload = await readJson(req) as { url?: string; slug?: string };
+  if (!payload.url) {
+    sendJson(res, 400, { error: "url is required" });
+    return;
+  }
+  let sourceUrl: URL;
+  try {
+    sourceUrl = await assertSafeCaptureTarget(payload.url);
+  } catch (error) {
+    sendJson(res, 400, { error: error instanceof Error ? error.message : "Invalid source URL" });
+    return;
+  }
+  const allowed = await isAllowedByRobots(sourceUrl.toString());
+  if (!allowed) {
+    sendJson(res, 400, { error: "robots.txt disallows capturing this URL" });
+    return;
+  }
+
+  // batchId for Add-flow temp captures. Prefixed "add-" so /api/capture-cleanup-temp
+  // (which only deletes add-* dirs) can distinguish them from real CLI batches,
+  // and so listCaptureBatches (which requires manifest.json) ignores them.
+  const batchId = `add-${new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14)}`;
+  const batchDir = resolve(CAPTURES_DIR, batchId);
+  mkdirSync(batchDir, { recursive: true });
+
+  const sourceName = slugify(payload.slug || sourceUrl.hostname);
+  const browser = await chromium.launch({ headless: true });
+  let candidates: CaptureMeta[];
+  try {
+    candidates = await captureCandidatesForSource(
+      browser,
+      { url: sourceUrl.toString(), sourceName },
+      batchDir,
+      batchId,
+      new Map(),
+    );
+  } finally {
+    await browser.close();
+  }
+
+  sendJson(res, 201, { batchId, candidates });
+}
+
+/**
+ * Promote a temp capture candidate to a permanent flat path under
+ * images-private/. Called from the /api/entries POST handler when an incoming
+ * entry's image.path points at captures/add-{batchId}/...png. Copies (not
+ * moves — the temp dir may hold other candidates still being triaged) and
+ * returns the new corpus-relative path. Slug-checked + resolves-within-root on
+ * both source and destination.
+ *
+ * Returns { path, width, height } so the caller can rewrite entry.image before
+ * saveEntries. Throws with .statusCode on path-traversal or missing source.
+ */
+export function promoteTempImage(tempPath: string, permanentSlug: string): { path: string; width: number; height: number } {
+  // Source must live under CAPTURES_DIR and start with captures/add-.
+  const absTemp = fromCorpusRelativeImagePath(tempPath);
+  const capturesRoot = resolve(CAPTURES_DIR);
+  if (!absTemp.startsWith(capturesRoot + "/")) {
+    throw Object.assign(new Error("Temp image must live under captures/"), { statusCode: 400 });
+  }
+  const relUnderCaptures = absTemp.slice(capturesRoot.length + 1);
+  if (!relUnderCaptures.startsWith("add-")) {
+    // Not an Add-flow temp image — leave it alone (could be a real batch path
+    // from CLI capture, which has its own lifecycle). Return the path as-is.
+    return { path: tempPath, width: 0, height: 0 };
+  }
+  if (!existsSync(absTemp)) {
+    throw Object.assign(new Error(`Temp image not found: ${tempPath}`), { statusCode: 404 });
+  }
+  // Destination: flat images-private/{slug}.png, collision-avoided.
+  const ext = extname(absTemp).toLowerCase() || ".png";
+  let base = slugify(permanentSlug) || "capture";
+  let destAbs = resolve(PRIVATE_IMAGE_DIR, `${base}${ext}`);
+  let n = 2;
+  while (existsSync(destAbs)) {
+    destAbs = resolve(PRIVATE_IMAGE_DIR, `${base}-${n}${ext}`);
+    n++;
+  }
+  const data = readFileSync(absTemp);
+  writeFileSync(destAbs, data); // copy, not rename — temp dir holds other candidates
+  const dimensions = imageSize(data);
+  return {
+    path: toCorpusRelativePath(destAbs),
+    width: dimensions.width ?? 0,
+    height: dimensions.height ?? 0,
+  };
+}
+
 async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   const entries = loadEntries();
 
@@ -931,6 +1031,45 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     return;
   }
 
+  // POST /api/capture-candidates { url, slug? } — multi-candidate detection
+  // for the Add-entry flow. Returns { batchId, candidates }. Distinct from
+  // /api/capture-url (single full-viewport shot, classic workbench) so the
+  // classic flow keeps its exact response shape.
+  if (req.method === "POST" && url.pathname === "/api/capture-candidates") {
+    try {
+      await handleCaptureCandidates(req, res);
+    } catch (error) {
+      sendJson(res, 400, { error: explainCaptureError(error) });
+    }
+    return;
+  }
+
+  // POST /api/capture-cleanup-temp { batchId } — delete an Add-flow temp batch
+  // dir (captures/add-*, no triage). Unlike /api/capture-cleanup there is NO
+  // pending-items safety gate — these candidates are picked-or-discarded
+  // client-side, not triaged. Only deletes dirs matching ^add-.
+  if (req.method === "POST" && url.pathname === "/api/capture-cleanup-temp") {
+    const payload = await readJson(req) as { batchId?: string };
+    const batchId = payload.batchId ?? "";
+    if (!batchId.startsWith("add-") || !isSlugSafe(batchId)) {
+      sendJson(res, 400, { error: "batchId must be an add-* temp batch id" });
+      return;
+    }
+    try {
+      const batchDir = resolveBatchDir(batchId);
+      if (!existsSync(batchDir)) {
+        sendJson(res, 404, { error: `Batch not found: ${batchId}` });
+        return;
+      }
+      rmSync(batchDir, { recursive: true, force: true });
+      sendJson(res, 200, { deleted: batchId });
+    } catch (error) {
+      const code = (error as { statusCode?: number }).statusCode ?? 400;
+      sendJson(res, code, { error: error instanceof Error ? error.message : "Cleanup failed" });
+    }
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/auto-tag") {
     const payload = await readJson(req) as {
       imagePath?: string;
@@ -1001,20 +1140,43 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/entries") {
+    let promotedPermanentPath: string | null = null;
     try {
       const entry = prepareNewEntryPayload(await readJson(req), entries);
       // Commit-time dedup gate — the authoritative check. The client dedups at
       // upload, but the corpus can change between stage and commit, and batch
       // tracking isn't bulletproof. Reject here with 409 so the client can mark
-      // the row as a duplicate rather than a generic error.
+      // the row as a duplicate rather than a generic error. Done BEFORE the
+      // temp→permanent copy so a duplicate never leaves an orphan permanent file.
       const dup = await findDuplicateAtCommit(entry, entries);
       if (dup) {
         sendJson(res, 409, { error: `Duplicate image (${dup.type}) of an existing entry: ${dup.match}`, duplicate: true, type: dup.type, match: dup.match });
         return;
       }
+      // Promote-on-save: if the entry's image.path points at an Add-flow temp
+      // capture (captures/add-*/...png), copy it to a permanent flat path and
+      // rewrite entry.image.path. The temp file stays (the temp dir holds other
+      // candidates still being triaged); only the permanent copy is referenced
+      // by the saved entry, so later /api/capture-cleanup-temp can never touch
+      // a referenced image.
+      if (entry.image.path && entry.image.path.includes("captures/add-")) {
+        const promoted = promoteTempImage(entry.image.path, entry.id);
+        if (promoted.path !== entry.image.path) {
+          promotedPermanentPath = fromCorpusRelativeImagePath(promoted.path);
+          entry.image.path = promoted.path;
+          if (promoted.width) entry.image.width = promoted.width;
+          if (promoted.height) entry.image.height = promoted.height;
+        }
+      }
       saveEntries([...entries, entry]);
       sendJson(res, 201, { entry });
     } catch (error) {
+      // Rollback: if we copied temp→permanent but saveEntries then threw, delete
+      // the orphan permanent copy. The temp file is intact (we copied, didn't
+      // move) so the user can retry.
+      if (promotedPermanentPath) {
+        try { unlinkSync(promotedPermanentPath); } catch { /* best-effort */ }
+      }
       sendJson(res, 400, { error: "Entry validation failed", issues: entryIssues(error) });
     }
     return;

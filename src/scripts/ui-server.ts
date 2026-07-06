@@ -1203,7 +1203,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   // Deferred Pass 2: fills critique/steals/antiPatterns on a row staged
   // extraction-only. No image re-sent — Pass 2 reasons from the saved extraction.
   if (req.method === "POST" && url.pathname === "/api/auto-critique") {
-    const payload = await readJson(req) as { productName?: string; extraction?: Record<string, unknown> };
+    const payload = await readJson(req) as { productName?: string; extraction?: Record<string, unknown>; domSignals?: DomSignals };
 
     if (!payload.extraction) {
       sendJson(res, 400, { error: "extraction is required (pass the entry's _raw.extraction)" });
@@ -1215,7 +1215,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     }
 
     try {
-      const result = await generateCritique((payload.productName || "").trim(), payload.extraction);
+      const result = await generateCritique((payload.productName || "").trim(), payload.extraction, undefined, payload.domSignals ?? undefined);
       sendJson(res, 200, { critique: result });
     } catch (error) {
       sendJson(res, 400, { error: explainTagError(error) });

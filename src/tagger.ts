@@ -663,11 +663,20 @@ Rules:
 function buildCritiquePrompt(
   productName: string,
   extraction: Record<string, unknown>,
+  domSignals?: TaggerInput["domSignals"],
 ): string {
+  // Inject accessibility ground truth from DOM signals when available. This is
+  // the key addition: real contrastRatio / unlabeledInteractive / imagesMissingAlt
+  // data the model can't read from pixels alone, enabling it to populate
+  // draftAccessibilityRisks with concrete findings instead of empty [].
+  const a11yBlock = domSignals?.accessibility
+    ? `\nACCESSIBILITY GROUND TRUTH — computed from the live DOM (treat as fact):\n${JSON.stringify(domSignals.accessibility, null, 2)}\n`
+    : "";
+
   return `Here is the VALIDATED structural extraction for ${productName} (treat every value as
 established fact — do not re-describe or contradict it):
 ${JSON.stringify(extraction, null, 2)}
-
+${a11yBlock}
 Step 1 — Observe first. Before writing anything else, list exactly 5 specific, concrete visual
 elements you can point to on screen (an icon color, an italic word, a specific spacing value, a
 copy choice, an interaction affordance). Put this list in "observations". Each item must be a
@@ -681,6 +690,12 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
   "draftCritique": "",         // 3-5 sentences: for EACH notable decision name DECISION + EFFECT + REJECTION
   "draftWhatToSteal": [],      // 3-5 specific, copyable techniques with reasoning attached. Each is a string.
   "draftAntiPatterns": [],     // REQUIRED, at least 1. Must describe a DIFFERENT decision than draftCritique.
+  "draftAccessibilityRisks": [], // accessibility risks found on this screen. Empty if none. Each is a string.
+                               // If ACCESSIBILITY GROUND TRUTH is provided above, use those metrics to
+                               // identify concrete risks — e.g. "contrastRatio of 3.2 falls below WCAG AA
+                               // 4.5:1 for body text" or "30 interactive elements lack accessible names".
+                               // Omit the metrics themselves if no ground truth is provided — assess
+                               // from the screenshot instead.
   "businessRationale": null,   // null if isolated component crop/no product context; otherwise object below
                                // { "businessGoal": ONE from: ${BUSINESS_GOALS.join(", ")},
                                //   "targetUser": "short phrase, <=80 chars",
@@ -696,6 +711,8 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
 Rules:
 - Every draftCritique/draftWhatToSteal claim must trace back to something in "observations".
 - draftAntiPatterns must not restate draftCritique's decision from the opposite angle.
+- draftAccessibilityRisks should be concrete and specific — name the element, the issue, the threshold.
+  Empty array is acceptable when the design has no significant a11y risks.
 - businessRationale is about business intent, not visual quality. Return null rather than inventing intent
   when the screenshot lacks visible product/page context (for example an isolated card or component crop).
 - No banned phrases (${BANNED_PHRASES.slice(0, 4).map((p) => `"${p}"`).join(", ")}, ...). Re-check before returning.
@@ -770,6 +787,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   draftCritique: string;
   draftWhatToSteal: string[];
   draftAntiPatterns: string[];
+  draftAccessibilityRisks: string[];
   layout?: { form: string; regions: Array<{ role: string; width?: string }> };
   businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
   voice?: { tone: string; examples: string[]; avoid: string[] };
@@ -844,6 +862,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
     draftAntiPatterns: textList(parsed.draftAntiPatterns).length
       ? textList(parsed.draftAntiPatterns)
       : ["[DRAFT] Review the screenshot and name one common UI mistake this design avoids."],
+    draftAccessibilityRisks: textList(parsed.draftAccessibilityRisks),
     businessRationale,
   };
 }
@@ -1407,7 +1426,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   // by re-looking at pixels. This is the spec's core architecture choice.
   let critiqueRawText = await callModel(
     "critique",
-    buildCritiquePrompt(effectiveName, extractionParsed),
+    buildCritiquePrompt(effectiveName, extractionParsed, input.domSignals),
     null, // no image — pure reasoning from facts
     undefined,
     "high",
@@ -1429,7 +1448,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${bannedErrors.join("\n")}`;
     const retryText = await callModel(
       "critique",
-      buildCritiquePrompt(effectiveName, extractionParsed),
+      buildCritiquePrompt(effectiveName, extractionParsed, input.domSignals),
       null,
       feedback,
       "high",
@@ -1483,7 +1502,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     antiPatterns: {
       antiPatterns:       critique.draftAntiPatterns.map((t) => `[DRAFT] ${t}`),
       whereThisFails:     [],
-      accessibilityRisks: [],
+      accessibilityRisks: critique.draftAccessibilityRisks.map((t) => `[DRAFT] ${t}`),
     },
     layout:          extraction.layout,
     businessRationale: critique.businessRationale,
@@ -1518,6 +1537,7 @@ export async function generateCritique(
   productName: string,
   extractionParsed: Record<string, unknown>,
   critiqueProvider?: Provider,
+  domSignals?: TaggerInput["domSignals"],
 ): Promise<{
   critique: string;
   whatToSteal: string[];
@@ -1533,7 +1553,7 @@ export async function generateCritique(
 
   let critiqueRawText = await callModel(
     "critique",
-    buildCritiquePrompt(productName, extractionParsed),
+    buildCritiquePrompt(productName, extractionParsed, domSignals),
     null,
     undefined,
     "high",
@@ -1548,7 +1568,7 @@ export async function generateCritique(
   const bannedErrors = validateNoBannedPhrases(critiqueParsed);
   if (bannedErrors.length > 0) {
     const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${bannedErrors.join("\n")}`;
-    const retryText = await callModel("critique", buildCritiquePrompt(productName, extractionParsed), null, feedback, "high", undefined, critiqueProvider);
+    const retryText = await callModel("critique", buildCritiquePrompt(productName, extractionParsed, domSignals), null, feedback, "high", undefined, critiqueProvider);
     try { critiqueParsed = JSON.parse(stripFences(retryText)); critique = sanitizeTaggerPayload(critiqueParsed); } catch { /* keep flagged original */ }
   }
 
@@ -1558,7 +1578,7 @@ export async function generateCritique(
     antiPatterns: {
       antiPatterns: critique.draftAntiPatterns.map((t) => `[DRAFT] ${t}`),
       whereThisFails: [],
-      accessibilityRisks: [],
+      accessibilityRisks: critique.draftAccessibilityRisks.map((t) => `[DRAFT] ${t}`),
     },
     businessRationale: critique.businessRationale,
     voice: critique.voice,

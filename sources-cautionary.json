@@ -1,0 +1,62 @@
+[
+  {
+    "url": "https://www.salesforce.com/products/sales-cloud/pricing/",
+    "sourceName": "Salesforce Pricing",
+    "note": "Dense pricing table with many tiers, add-ons, and asterisks — information overload at a decision point"
+  },
+  {
+    "url": "https://www.adobe.com/creativecloud/plans.html",
+    "sourceName": "Adobe CC Plans",
+    "note": "Pricing page with confusing tier comparison, forced bundles, and hidden annual commitments"
+  },
+  {
+    "url": "https://www.cvent.com/en/pricing",
+    "sourceName": "Cvent Pricing",
+    "note": "Enterprise pricing with 'Contact Us' walls and no transparent comparison — the roach motel of pricing"
+  },
+  {
+    "url": "https://login.oracle.com/",
+    "sourceName": "Oracle Login",
+    "note": "Old-school enterprise auth — dense, dated, likely missing modern affordances"
+  },
+  {
+    "url": "https://www.sap.com/products/erp/pricing.html",
+    "sourceName": "SAP ERP Pricing",
+    "note": "Classic enterprise density — tab overload, unclear hierarchy, information-dense without scannability"
+  },
+  {
+    "url": "https://www.icloud.com/",
+    "sourceName": "iCloud Web",
+    "note": "Web app that feels like a port — can teach what web apps lose when they mimic native badly"
+  },
+  {
+    "url": "https://my.freecycle.org/",
+    "sourceName": "Freecycle",
+    "note": "Known for extremely utilitarian, un-designed UI — a cautionary example of function-over-form taken too far"
+  },
+  {
+    "url": "https://www.craigslist.org/",
+    "sourceName": "Craigslist",
+    "note": "The canonical 'it works but...' design — intentionally minimalist to the point of teaching what happens with zero design investment"
+  },
+  {
+    "url": "https://www.bankofamerica.com/",
+    "sourceName": "Bank of America",
+    "note": "Large banking portal — typically cluttered, multiple competing CTAs, dense navigation trees"
+  },
+  {
+    "url": "https://cart.wellsfargo.com/",
+    "sourceName": "Wells Fargo",
+    "note": "Financial services dashboard — often dense, security-warning-heavy, competing priorities on one screen"
+  },
+  {
+    "url": "https://www.taxact.com/pricing",
+    "sourceName": "TaxAct Pricing",
+    "note": "Tax prep pricing — typically complex comparison tables with upsell pressure and asterisk-heavy tier descriptions"
+  },
+  {
+    "url": "https://www.homedepot.com/c/services",
+    "sourceName": "Home Depot Services",
+    "note": "Retail-meets-services page — typically busy, competing content types (products, services, forms) without clear hierarchy"
+  }
+]

@@ -773,7 +773,7 @@ async function captureSource(
   batchDir: string,
   batchId: string,
   seenHashes: Map<string, string>,
-  signalsMap: Map<string, DomSignals>,
+  signalsMap?: Map<string, DomSignals>,
 ): Promise<CaptureMeta[]> {
   // SSRF guard — same rule as /api/capture-url. Rejects metadata endpoints,
   // private IPs, and unresolvable hostnames before launching a browser.
@@ -790,7 +790,7 @@ async function captureSource(
     for (const [hash] of seenHashes) {
       if (hammingHex(hash, m.aHash) <= DEDUP_HAMMING_THRESHOLD) {
         fs.unlink(join(batchDir, basename(m.imagePath))).catch(() => {});
-        signalsMap.delete(m.id); // drop signals along with the PNG on dedup-reject
+        signalsMap?.delete(m.id); // drop signals along with the PNG on dedup-reject
         return;
       }
     }

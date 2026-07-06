@@ -489,7 +489,15 @@ function resolveProvider(pass: TaggerPass, override?: Provider): Provider {
     }
   }
   const envVar = pass === "extraction" ? "AUTO_TAG_PROVIDER_EXTRACTION" : "AUTO_TAG_PROVIDER_CRITIQUE";
-  const preferred = (process.env[envVar] ?? process.env.AUTO_TAG_PROVIDER ?? "openai").toLowerCase() as Provider;
+  let preferred = (process.env[envVar] ?? process.env.AUTO_TAG_PROVIDER ?? "openai").toLowerCase() as Provider;
+  // Capability guard for the ENV path (mirrors the override guard above):
+  // Mistral is text-only and cannot do the vision extraction pass. If the env
+  // resolves to mistral for extraction, log + fall through to the fallback
+  // search rather than sending an image to a text-only model.
+  if (pass === "extraction" && preferred === "mistral") {
+    console.error(`[tagger] ${envVar}="mistral" but Mistral is text-only (no vision) — falling back to a vision provider for extraction.`);
+    preferred = "openai"; // will fall through to the has-check + fallback loop below
+  }
   // OpenAI keys may be set per-pass (OPENAI_API_KEY_EXTRACTION / _CRITIQUE) for
   // split-provider setups — e.g. real OpenAI for extraction (vision) and NIM
   // for critique (writing). Honor the per-pass variant when checking presence.
@@ -520,6 +528,21 @@ export function hasVisionKey(): boolean {
     process.env.OPENAI_API_KEY_EXTRACTION
   );
   return !!(hasOpenAIExtraction || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY);
+}
+
+/** Check if ANY critique-capable provider key is configured.
+ *  Broader than hasVisionKey: includes text-only keys (MISTRAL_API_KEY,
+ *  OPENAI_API_KEY_CRITIQUE for NIM/DeepSeek). Used by critique-only paths
+ *  (generateCritique, /api/auto-critique) that don't need vision. */
+export function hasCritiqueKey(): boolean {
+  return !!(
+    process.env.OPENAI_API_KEY ||
+    process.env.OPENAI_API_KEY_EXTRACTION ||
+    process.env.OPENAI_API_KEY_CRITIQUE ||
+    process.env.ANTHROPIC_API_KEY ||
+    process.env.GEMINI_API_KEY ||
+    process.env.MISTRAL_API_KEY
+  );
 }
 
 const PROVIDER_NAMES: Record<Provider, string> = { openai: "OpenAI", claude: "Claude", gemini: "Gemini", mistral: "Mistral" };
@@ -1459,7 +1482,7 @@ export async function generateCritique(
   qualityScore: number;
   typographyNotes: string;
 }> {
-  if (!hasVisionKey()) throw new Error("No vision provider key set. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY in .env.");
+  if (!hasCritiqueKey()) throw new Error("No provider key set. Critique needs at least one of OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or MISTRAL_API_KEY in .env.");
   const stripFences = (s: string) => s.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
 
   let critiqueRawText = await callModel(

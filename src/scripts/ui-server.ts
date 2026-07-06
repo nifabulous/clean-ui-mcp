@@ -12,7 +12,7 @@ import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
-import { tagImage, generateCritique, hasVisionKey, activeModelName } from "../tagger.js";
+import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName } from "../tagger.js";
 import type { CaptureMeta, DomSignals } from "./capture.js";
 import { captureCandidatesForSource, isAllowedByRobots } from "./capture.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
@@ -1170,8 +1170,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       sendJson(res, 400, { error: "extraction is required (pass the entry's _raw.extraction)" });
       return;
     }
-    if (!hasVisionKey()) {
-      sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY (or OPENAI_API_KEY_EXTRACTION / _CRITIQUE for split-provider setups), ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
+    if (!hasCritiqueKey()) {
+      sendJson(res, 400, { error: "No provider key set. Critique needs at least one of OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or MISTRAL_API_KEY in .env, then restart npm run ui." });
       return;
     }
 

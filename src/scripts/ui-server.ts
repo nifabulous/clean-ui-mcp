@@ -12,7 +12,7 @@ import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
-import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName } from "../tagger.js";
+import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../tagger.js";
 import type { CaptureMeta, DomSignals } from "./capture.js";
 import { captureCandidatesForSource, isAllowedByRobots } from "./capture.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
@@ -615,12 +615,14 @@ export function publicConfigStatus(status: EnvStatus = getEnvStatus()) {
   const hasOpenAIExtraction = status.openaiKeyConfigured || !!process.env.OPENAI_API_KEY_EXTRACTION;
   const anyVisionKey = hasOpenAIExtraction || status.anthropicKeyConfigured || status.geminiKeyConfigured;
   // Resolve the effective provider + model for each pass via the SAME logic
-  // tagger.ts uses (activeModelName resolves through openaiConfigForPass on the
-  // OpenAI path, so OPENAI_AUTO_TAG_MODEL_CRITIQUE etc. are honored). Previously
-  // this hand-rolled the resolution and missed the per-pass overrides, so the
-  // /api/config status exposed to the UI lied about which model ran.
-  const extractionProvider = process.env.AUTO_TAG_PROVIDER_EXTRACTION ?? process.env.AUTO_TAG_PROVIDER ?? "openai";
-  const critiqueProvider = process.env.AUTO_TAG_PROVIDER_CRITIQUE ?? process.env.AUTO_TAG_PROVIDER ?? "openai";
+  // Resolve the EFFECTIVE provider + model for each pass via the SAME logic
+  // tagger.ts uses. activeProviderName() runs resolveProvider() (which applies
+  // the Mistral-can't-do-extraction fallback, key-presence checks, etc.), so
+  // the UI shows what will ACTUALLY run — not the raw env value. Raw env reads
+  // here previously made the UI display "mistral" for extraction even though
+  // the resolver correctly falls back to a vision provider at runtime.
+  const extractionProvider = activeProviderName("extraction");
+  const critiqueProvider = activeProviderName("critique");
   const extractionModel = activeModelName("extraction");
   const critiqueModel = activeModelName("critique");
   return {

@@ -533,11 +533,13 @@ export function hasVisionKey(): boolean {
 /** Check if ANY critique-capable provider key is configured.
  *  Broader than hasVisionKey: includes text-only keys (MISTRAL_API_KEY,
  *  OPENAI_API_KEY_CRITIQUE for NIM/DeepSeek). Used by critique-only paths
- *  (generateCritique, /api/auto-critique) that don't need vision. */
+ *  (generateCritique, /api/auto-critique) that don't need vision.
+ *  Does NOT count OPENAI_API_KEY_EXTRACTION — openaiConfigForPass("critique")
+ *  reads OPENAI_API_KEY_CRITIQUE or bare OPENAI_API_KEY, not the extraction
+ *  variant, so counting it here would pass the gate then fail at the call. */
 export function hasCritiqueKey(): boolean {
   return !!(
     process.env.OPENAI_API_KEY ||
-    process.env.OPENAI_API_KEY_EXTRACTION ||
     process.env.OPENAI_API_KEY_CRITIQUE ||
     process.env.ANTHROPIC_API_KEY ||
     process.env.GEMINI_API_KEY ||

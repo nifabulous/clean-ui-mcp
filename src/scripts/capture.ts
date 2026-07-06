@@ -669,10 +669,18 @@ async function extractDomSignals(locator: Locator): Promise<DomSignals | null> {
       console.warn("[dom-signals] extraction failed:", err instanceof Error ? err.message : err);
       return null;
     });
+  // Race against a timeout. The timer MUST be cleared when evaluate wins,
+  // otherwise every successful extraction logs a false "timed out" warning
+  // DOM_SIGNALS_TIMEOUT_MS later — noisy and misleading in batch logs.
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<DomSignals | null>((resolve) => {
-    setTimeout(() => { console.warn("[dom-signals] extraction timed out"); resolve(null); }, DOM_SIGNALS_TIMEOUT_MS);
+    timer = setTimeout(() => { console.warn("[dom-signals] extraction timed out"); resolve(null); }, DOM_SIGNALS_TIMEOUT_MS);
   });
-  return Promise.race([evaluate, timeout]);
+  try {
+    return await Promise.race([evaluate, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function captureLocator(

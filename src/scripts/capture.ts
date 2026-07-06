@@ -877,4 +877,14 @@ Example:
   }
 }
 
-export { runSingleCapture, runBatchCapture, captureSource, isAllowedByRobots, slug as captureSlug, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT, MIN_VH_FRAC, VIEWPORTS };
+export {
+  runSingleCapture, runBatchCapture,
+  // captureSource is the full candidate-detection pipeline (consent, anchors,
+  // recursive oversized, interactions, dedup, viewport loop). Exported so the
+  // Add-entry flow's /api/capture-candidates endpoint reuses the SAME detection
+  // as the batch CLI — no duplicated heuristics, no drift in tuning constants.
+  // Aliased as captureCandidatesForSource to signal its general purpose.
+  captureSource as captureCandidatesForSource,
+  isAllowedByRobots, slug as captureSlug, escapeCssId, selectorFingerprint,
+  MIN_GROUP_DIM, MAX_GROUP_ASPECT, MIN_VH_FRAC, DEDUP_HAMMING_THRESHOLD, VIEWPORTS,
+};

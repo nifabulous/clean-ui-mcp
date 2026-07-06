@@ -360,6 +360,11 @@ async function fetchWithRetry(input: string | URL | Request, init?: RequestInit)
  * Sources, in priority order:
  *   1. Gemini error body: `"retryDelay": "12s"` (or `Please retry in 12.9s.`)
  *   2. Retry-After header (OpenAI/Anthropic): seconds, or HTTP-date
+ *   3. OpenAI's non-standard x-ratelimit-reset-requests / x-ratelimit-reset-tokens
+ *      headers. OpenAI does NOT send Retry-After on 429s — without parsing
+ *      these, every OpenAI rate-limit surfaced to the user as a hard error
+ *      instead of retrying. Format: "<N>s", "<N>m", "<N>ms", "<N>h", or the
+ *      literal "≤1s" for sub-second windows.
  *
  * If the hint exceeds MAX_429_WAIT_MS, returns null — a long hint typically
  * means the daily/project quota is exhausted, and the batch should stop rather
@@ -387,6 +392,41 @@ function extract429Wait(headers: Headers, body: string): number | null {
       return ms <= MAX_429_WAIT_MS ? ms : null;
     }
   }
+  // OpenAI's non-standard reset headers. They return BOTH — one for the
+  // requests-per-minute window, one for the tokens-per-minute window. Take
+  // the LONGER of the two, since we need both to reset before retry succeeds.
+  const resetRequests = parseOpenAIResetHeader(headers.get("x-ratelimit-reset-requests"));
+  const resetTokens = parseOpenAIResetHeader(headers.get("x-ratelimit-reset-tokens"));
+  if (resetRequests !== null || resetTokens !== null) {
+    const ms = Math.max(resetRequests ?? 0, resetTokens ?? 0);
+    if (ms > 0) return ms <= MAX_429_WAIT_MS ? ms : null;
+  }
+  return null;
+}
+
+/**
+ * Parse OpenAI's x-ratelimit-reset-* header values into milliseconds.
+ * Format: "<N>s" | "<N>m" | "<N>ms" | "<N>h" | "≤1s" (the literal sub-second
+ * sentinel OpenAI uses when the window resets in under a second). Returns
+ * null for unrecognized/absent values — the caller treats null as "no hint."
+ */
+function parseOpenAIResetHeader(value: string | null): number | null {
+  if (!value) return null;
+  const v = value.trim().toLowerCase();
+  // Sub-second sentinel: "≤1s" or "<=1s" — treat as 1s minimum wait.
+  if (/^[≤<]=?\s*1s$/.test(v)) return 1000;
+  // "<N>ms" — must check before "<N>s" so the suffix matches correctly.
+  const msMatch = v.match(/^(\d+(?:\.\d+)?)ms$/);
+  if (msMatch) return Math.ceil(parseFloat(msMatch[1]));
+  // "<N>s"
+  const sMatch = v.match(/^(\d+(?:\.\d+)?)s$/);
+  if (sMatch) return Math.ceil(parseFloat(sMatch[1]) * 1000);
+  // "<N>m" (minutes)
+  const mMatch = v.match(/^(\d+(?:\.\d+)?)m$/);
+  if (mMatch) return Math.ceil(parseFloat(mMatch[1]) * 60_000);
+  // "<N>h" (hours — rare on rate limits, usually means quota exhaustion)
+  const hMatch = v.match(/^(\d+(?:\.\d+)?)h$/);
+  if (hMatch) return Math.ceil(parseFloat(hMatch[1]) * 3_600_000);
   return null;
 }
 

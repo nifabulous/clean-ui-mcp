@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanupBatch, findDuplicateAtCommit, isPrivateAddress, orphanedPrivateImagePaths, prepareNewEntryPayload, publicConfigStatus, sameOrigin, setTriageStatus, uniqueEntryId, validateEntryPayload } from "./ui-server.js";
+import { cleanupBatch, findDuplicateAtCommit, isPrivateAddress, listCaptureBatches, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, uniqueEntryId, validateEntryPayload } from "./ui-server.js";
 import type { IncomingMessage } from "node:http";
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -426,5 +426,102 @@ describe("capture cleanup safety gate", () => {
     expect(() => cleanupBatch("../../etc")).toThrow(/batchId/);
     // The captures root should contain at most our test batch — never escaped.
     expect(readdirSync(capturesRoot).some((n) => n === "etc" || n === "..")).toBe(false);
+  });
+});
+
+describe("promote-on-save: temp → permanent image copy", () => {
+  // promoteTempImage is the core of the /api/entries promote-on-save extension.
+  // It copies a temp captures/add-*/...png to a flat permanent images-private/{slug}.png
+  // and returns the new path. Critical properties: (1) source must be under
+  // captures/add-*, (2) the copy exists at the permanent path, (3) temp is NOT
+  // deleted (other candidates still reference it), (4) non-add-* paths pass through.
+  const capturesRoot = join(PRIVATE_IMAGE_DIR, "captures");
+  const batchId = "add-promotetest-20260706";
+  const capId = "stripe-section-abc-desktop";
+  const tempRel = `images-private/captures/${batchId}/${capId}.png`;
+
+  beforeEach(() => {
+    const batchDir = join(capturesRoot, batchId);
+    mkdirSync(batchDir, { recursive: true });
+    // 1x1 PNG bytes — smallest valid PNG.
+    writeFileSync(join(batchDir, `${capId}.png`), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC", "base64"));
+  });
+  afterEach(() => {
+    const batchDir = join(capturesRoot, batchId);
+    if (existsSync(batchDir)) rmSync(batchDir, { recursive: true, force: true });
+    // Clean any promoted permanent files we created (slug "promote-perm-test").
+    for (const name of readdirSync(PRIVATE_IMAGE_DIR)) {
+      if (name.startsWith("promote-perm-test")) {
+        rmSync(join(PRIVATE_IMAGE_DIR, name), { force: true });
+      }
+    }
+  });
+
+  it("copies a temp add-* image to a permanent flat path and returns the new path", () => {
+    const result = promoteTempImage(tempRel, "promote-perm-test");
+    expect(result.path).toMatch(/^images-private\/promote-perm-test(-\d+)?\.png$/);
+    expect(existsSync(join(PRIVATE_IMAGE_DIR, result.path.replace(/^images-private\//, "")))).toBe(true);
+  });
+
+  it("does NOT delete the temp source (other candidates still reference it)", () => {
+    promoteTempImage(tempRel, "promote-perm-test");
+    expect(existsSync(join(capturesRoot, batchId, `${capId}.png`))).toBe(true);
+  });
+
+  it("passes through non-add-* paths unchanged (no copy, no delete)", () => {
+    // A real CLI batch path (not add-*) should be left alone — it has its own lifecycle.
+    const realBatchRel = "images-private/captures/20260705120000/foo.png";
+    const result = promoteTempImage(realBatchRel, "should-not-be-used");
+    expect(result.path).toBe(realBatchRel);
+  });
+
+  it("rejects a temp path that escapes captures/ (path traversal)", () => {
+    const escaped = "images-private/../../etc/passwd";
+    let err: unknown;
+    try { promoteTempImage(escaped, "x"); } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  it("throws 404 when the temp source file does not exist", () => {
+    const missing = `images-private/captures/${batchId}/never-captured.png`;
+    let err: unknown;
+    try { promoteTempImage(missing, "x"); } catch (e) { err = e; }
+    expect((err as { statusCode?: number }).statusCode).toBe(404);
+  });
+});
+
+describe("listCaptureBatches ignores add-* temp dirs (manifest gate)", () => {
+  // The Add-flow temp dirs (captures/add-*) must NOT appear in the #/capture
+  // triage page. listCaptureBatches requires manifest.json, and the Add flow
+  // never writes one — so add-* dirs are invisible by construction. This test
+  // pins that property so a future change can't regress it.
+  const capturesRoot = join(PRIVATE_IMAGE_DIR, "captures");
+  const tempBatchId = "add-listtest-20260706";
+  const realBatchId = "listtest-real-20260706";
+
+  beforeEach(() => {
+    mkdirSync(join(capturesRoot, tempBatchId), { recursive: true });
+    // No manifest.json — simulates the Add flow exactly.
+    writeFileSync(join(capturesRoot, tempBatchId, "foo.png"), Buffer.from([]));
+    // A real batch WITH a manifest — should appear.
+    const realDir = join(capturesRoot, realBatchId);
+    mkdirSync(realDir, { recursive: true });
+    writeFileSync(join(realDir, "manifest.json"), JSON.stringify([
+      { id: "cap-1", sourceName: "Real", captureMode: "section", viewport: "desktop", selectorPath: "main", capturedAt: "2026-07-06T00:00:00.000Z", aHash: "0", imagePath: `images-private/captures/${realBatchId}/cap-1.png`, width: 100, height: 100 },
+    ]));
+    writeFileSync(join(realDir, "triage.json"), JSON.stringify({ "cap-1": "pending" }));
+  });
+  afterEach(() => {
+    for (const id of [tempBatchId, realBatchId]) {
+      const d = join(capturesRoot, id);
+      if (existsSync(d)) rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("returns the real batch but NOT the add-* temp batch", () => {
+    const batches = listCaptureBatches();
+    const ids = batches.map((b) => b.batchId);
+    expect(ids).toContain(realBatchId);
+    expect(ids).not.toContain(tempBatchId);
   });
 });

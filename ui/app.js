@@ -13,6 +13,59 @@ let SCHEMA = { categories: [], styleTags: [], patternTypes: [], spacingDensities
 let HEALTH = { entryCount: 0, snapshotCount: 0, newestSnapshotEpoch: null, newestSnapshotAgeMs: null };
 let CONFIG = {};
 
+// ─── draft state (shared across add/edit/capture-promote flows) ──────────────
+// Replaces the old local addDraft variable. The full form (#/edit), the
+// capture-triage promote action, and the SPA's capture/upload wizard all flow
+// through one draft object so the form renders + validation + save path is
+// identical regardless of how the draft was seeded.
+const blankDraft = () => ({
+  id: '',
+  title: '',
+  patternType: '',
+  platform: '',
+  categories: [],
+  styleTags: [],
+  source: { productName:'', url:'', capturedAt:'', capturedBy:'self', lastVerified:'' },
+  image: { visibility:'private', path:null, width:null, height:null },
+  visual: { dominantColors:[], accentColor:null, colorRoles:{canvas:'',surface:'',ink:'',muted:'',accent:''}, typePairing:{display:'',body:'',notes:''}, spacingDensity:'moderate', cornerStyle:'slight-round', usesShadows:false, usesBorders:true },
+  critique: '',
+  whatToSteal: [],
+  antiPatterns: { antiPatterns:[], whereThisFails:[], accessibilityRisks:[] },
+  voice: { tone:'', examples:[], avoid:[] },
+  layout: null,
+  qualityTier: 'exceptional',
+  qualityScore: 3,
+  reviewStatus: 'approved',
+  provenance: null,
+  // Form-internal state (not saved): the entry being edited (null = new entry),
+  // busy/error messages for the capture/auto-fill wizard, and the active
+  // source tab ('capture' | 'upload').
+  _editing: null,
+  _busy: null,
+  _error: null,
+  _tab: 'capture',
+  _pendingCapture: null, // {batchId, captureId} — set by promoteCapture, cleared on save
+  // Multi-candidate capture session (Add flow). After /api/capture-candidates,
+  // _candidates holds the detected screenshots; the user checks some via
+  // _selectedCandidates, and tagSelected() walks them one at a time, advancing
+  // _activeCandidateIndex. The server promotes temp→permanent at save time.
+  _addBatchId: null,             // temp batch dir (captures/add-*), for cleanup
+  _candidates: null,             // Array<CaptureMeta> | null
+  _candidateStatus: null,        // Map<index, 'drafted'|'tagging'|'saved'|'duplicate'|'error'|'skipped'>
+  _selectedCandidates: null,     // Set<index> — chosen by the user
+  _activeCandidateIndex: null,   // index currently being tagged, or null when no session active
+});
+let draft = blankDraft();
+function resetDraft(entry=null){
+  draft = entry ? JSON.parse(JSON.stringify(entry)) : blankDraft();
+  draft._editing = entry ? (entry.id||null) : null;
+  draft._busy = null; draft._error = null; draft._tab = 'capture'; draft._pendingCapture = null;
+  // Multi-candidate session state — always cleared on reset (a cloned entry
+  // won't carry these; a blankDraft already has them null).
+  draft._addBatchId = null; draft._candidates = null; draft._candidateStatus = null;
+  draft._selectedCandidates = null; draft._activeCandidateIndex = null;
+}
+
 /* ---------- field mapper: our CorpusEntry → the shape components expect ----------
    The reference components read x.source, x.pattern, x.style, x.dominant, x.accent,
    x.score, x.tier, x.steals. Our schema has nested objects. This maps once at load. */
@@ -122,6 +175,19 @@ const isSelected = (id) => selection.has(id);
 function toggleSelect(id){ selection.has(id) ? selection.delete(id) : selection.add(id); }
 function clearSelection(){ selection.clear(); }
 
+// Capture-triage state. Batches live on disk and change between visits, so the
+// #/capture page reloads on each entry (mirrors the classic workbench). Loaded
+// lazily on first render of the page; Refresh button re-loads on demand.
+let captureBatches = [];
+let captureBatchesLoaded = false;
+async function loadCaptureBatches(){
+  try {
+    const j = await request('/api/capture-batches');
+    captureBatches = j.batches || [];
+  } catch(e){ captureBatches = []; }
+  captureBatchesLoaded = true;
+}
+
 // Change one entry's tier via full-entry PUT (server validates the whole
 // object, so we send the raw entry with qualityTier mutated). Returns true on
 // success. Reads from the in-memory _raw so no extra fetch is needed.
@@ -193,6 +259,7 @@ const NAV = [
     {id:'add',       label:'Add entry',    icon:'plus'},
     {id:'bulk',      label:'Bulk import',  icon:'bulk'},
     {id:'sources',   label:'Sources',      icon:'circle'},
+    {id:'capture',   label:'Capture triage', icon:'circle'},
   ]},
   { group:'Query layer', items:[
     {id:'search',    label:'Search index',  icon:'search'},
@@ -340,10 +407,47 @@ function distRows(arr,max,colorFn){
     <span class="v">${v}</span>
   </div>`).join('');
 }
-function toast(msg){
+function toast(msg, type=''){
   const t=document.getElementById('toast');
-  t.textContent=msg; t.classList.add('on');
-  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('on'),2200);
+  t.textContent=msg; t.className='on'+(type?(' '+type):'');
+  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('on'), type==='error'?4000:2200);
+  if(type==='error') console.error('[toast]', msg);
+}
+
+// ─── shared helpers (ported from classic-app.js during unification) ──────────
+// These were duplicated between app.js and classic-app.js; now live here once.
+
+const slugify = (v) => String(v||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').replace(/-{2,}/g,'-') || 'sample';
+const lines = (v) => String(v||'').split('\n').map(l=>l.trim()).filter(Boolean);
+
+// Error-aware JSON fetch. All API calls in the form/bulk/triage flows use this
+// so server-side validation errors surface as thrown Errors with the server's
+// message (issues array or error string) rather than silent failures.
+async function request(path, options={}){
+  const response = await fetch(`${API}${path}`, {
+    headers: { 'content-type':'application/json', ...(options.headers||{}) },
+    ...options,
+  });
+  const data = await response.json().catch(()=>({}));
+  if(!response.ok){
+    const message = (data.issues && data.issues.join('\n')) || data.error || 'Request failed';
+    throw new Error(message);
+  }
+  return data;
+}
+
+// Draft-marker stripping — the tagger prefixes critique/steals/antiPatterns
+// with [DRAFT]/[DRAFT — REWRITE] as a hygiene forcing function. The form's
+// save path strips them before submit (the human review IS the rewrite gate).
+// Loops until stable to catch repeated markers the model sometimes emits.
+function stripDraftMarker(s){
+  if(typeof s !== 'string') return s;
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/\[(?:DRAFT[^\]]*|PLACEHOLDER[^\]]*|TODO[^\]]*)\]\s*/gi, '').trim();
+  } while(s !== prev);
+  return s;
 }
 function healthRow(kind,title,desc){
   const ic = kind==='ok'?'<path d="M5 12l5 5 9-9"/>'
@@ -739,124 +843,352 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
 // classic workbench's form, but lives in the SPA so the navigation context
 // (favorites, search query) is preserved. Draft state is held locally in
 // `addDraft` below — no global state pollution.
-let addDraft = null; // { imagePath, productName, url, entry, busy, error }
+// ─── capture/upload wizard (seeds the shared draft) ──────────────────────────
+// Used by the #/edit route when no entry is being edited (new-entry mode).
+// On successful capture/upload the draft.image.path is set; on successful
+// auto-tag the draft is replaced wholesale with the tagger's structured output
+// (preserving _editing/_busy/_tab/_pendingCapture). The full form then renders
+// from the draft.
 
-function addBlank(){
-  return { imagePath:null, productName:'', url:'', entry:null, busy:null, error:null, tab:'capture' };
-}
-
-async function addDoCapture(form){
+async function wizardCapture(form){
   const url = (form.url.value||'').trim();
   const slug = (form.slug.value||'').trim();
-  if(!url){ addDraft.error = 'URL is required'; render(); return; }
-  addDraft.busy = 'Capturing screenshot…'; addDraft.error = null; render();
+  if(!url){ draft._error = 'URL is required'; refreshActivePage(); return; }
+  // Multi-candidate capture: /api/capture-candidates runs the same detection
+  // pipeline as the batch CLI (sections, groups, recursive oversized) and
+  // returns N candidates. The user picks which to tag in the candidateStep.
+  // Single-shot /api/capture-url (one full-viewport PNG) is still used by the
+  // classic workbench; this SPA flow always goes through multi-candidate.
+  draft._busy = 'Detecting sections… (this launches a browser, ~15-40s)'; draft._error = null; refreshActivePage();
   try {
-    const r = await fetch(`${API}/api/capture-url`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ url, slug: slug || undefined })
-    });
-    const j = await r.json();
-    if(!r.ok) throw new Error(j.error || 'Capture failed');
-    addDraft.imagePath = j.imagePath;
-    addDraft.productName = ''; addDraft.url = url;
-    addDraft.busy = null;
-  } catch(e){
-    addDraft.busy = null; addDraft.error = e.message;
-  }
-  render();
+    const j = await request('/api/capture-candidates', { method:'POST', body: JSON.stringify({ url, slug: slug || undefined }) });
+    draft._addBatchId = j.batchId;
+    draft._candidates = j.candidates || [];
+    draft._candidateStatus = new Map();
+    draft._selectedCandidates = new Set();
+    draft._activeCandidateIndex = null;
+    if(!draft.source.url) draft.source.url = url;
+    draft._busy = null;
+    if(draft._candidates.length === 0){
+      draft._error = 'No sections detected on that page. Try a different URL or use Upload instead.';
+    }
+  } catch(e){ draft._busy = null; draft._error = e.message; }
+  refreshActivePage();
 }
 
-function addHandleUpload(file){
+// Build a draft from a capture candidate — the field mapping mirrors
+// promoteCapture (from #/capture triage) so the two flows produce identical
+// drafts. image.path stays at the TEMP path; the server promotes temp→permanent
+// at save time (see /api/entries promote-on-save). provenance.capture stamps
+// the recapture metadata. Does NOT reset _addBatchId/_candidates — the session
+// survives the tag cycle.
+function buildDraftFromCandidate(c, sourceUrl){
+  const d = blankDraft();
+  d.source.productName = c.sourceName || '';
+  if(sourceUrl || c.sourceUrl) d.source.url = sourceUrl || c.sourceUrl;
+  d.image = { visibility:'private', path: c.imagePath, width:null, height:null };
+  d.title = `${c.sourceName || ''} — (add descriptive subtitle)`;
+  d.provenance = {
+    taggedBy: 'auto',
+    capture: {
+      mode: c.captureMode || '',
+      viewport: c.viewport || '',
+      capturedAt: c.capturedAt || '',
+      sourceUrl: sourceUrl || c.sourceUrl || '',
+      ...(c.selectorPath ? { selectorPath: c.selectorPath } : {}),
+    },
+  };
+  return d;
+}
+
+// Walk the multi-candidate session: find the next drafted candidate, build its
+// draft, set _addPreseeded so the #/add guard doesn't wipe it, and re-render.
+// Called after a save (success or skip) to advance, and by tagSelected to start.
+function advanceToNextDraftedCandidate(){
+  if(!draft._candidates || !draft._candidateStatus) return false;
+  const statuses = draft._candidateStatus;
+  // Find lowest-index drafted candidate.
+  let next = -1;
+  for(const [i, st] of statuses){
+    if(st === 'drafted'){ next = Math.min(next === -1 ? Infinity : next, i); }
+  }
+  if(next === -1) return false;
+  draft._candidateStatus.set(next, 'tagging');
+  const c = draft._candidates[next];
+  const sourceUrl = draft.source.url;
+  // Preserve session fields across the rebuild.
+  const session = {
+    _addBatchId: draft._addBatchId, _candidates: draft._candidates,
+    _candidateStatus: draft._candidateStatus, _selectedCandidates: draft._selectedCandidates,
+  };
+  draft = buildDraftFromCandidate(c, sourceUrl);
+  draft._addBatchId = session._addBatchId;
+  draft._candidates = session._candidates;
+  draft._candidateStatus = session._candidateStatus;
+  draft._selectedCandidates = session._selectedCandidates;
+  draft._activeCandidateIndex = next;
+  _addPreseeded = true;
+  refreshActivePage();
+  return true;
+}
+
+// Begin tagging the selected candidates: initialize all to 'drafted', then
+// advance to the first.
+function tagSelected(){
+  if(!draft._candidates || draft._selectedCandidates.size === 0) return;
+  draft._candidateStatus = new Map();
+  for(const i of draft._selectedCandidates) draft._candidateStatus.set(i, 'drafted');
+  draft._activeCandidateIndex = null;
+  advanceToNextDraftedCandidate();
+}
+
+function wizardUpload(file){
   if(!file) return;
-  addDraft.busy = 'Uploading…'; addDraft.error = null; render();
+  draft._busy = 'Uploading…'; draft._error = null; refreshActivePage();
   const reader = new FileReader();
   reader.onload = async () => {
     try {
-      const r = await fetch(`${API}/api/upload-image`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ filename:file.name, slug:addDraft.productName || file.name, dataUrl:reader.result })
+      const j = await request('/api/upload-image', {
+        method:'POST', body: JSON.stringify({ filename:file.name, slug: draft.source.productName || file.name, dataUrl: reader.result })
       });
-      const j = await r.json();
-      if(!r.ok) throw new Error(j.error || 'Upload failed');
-      addDraft.imagePath = j.imagePath;
-      addDraft.busy = null;
-    } catch(e){
-      addDraft.busy = null; addDraft.error = e.message;
-    }
-    render();
+      draft.image.path = j.path;
+      draft._busy = null;
+    } catch(e){ draft._busy = null; draft._error = e.message; }
+    refreshActivePage();
   };
-  reader.onerror = () => { addDraft.busy = null; addDraft.error = 'Could not read file'; render(); };
+  reader.onerror = () => { draft._busy = null; draft._error = 'Could not read file'; refreshActivePage(); };
   reader.readAsDataURL(file);
 }
 
-async function addDoAutoTag(){
-  if(!addDraft.imagePath){ addDraft.error = 'Capture or upload an image first'; render(); return; }
-  addDraft.busy = 'Auto-filling fields…'; addDraft.error = null; render();
+async function wizardAutoTag(){
+  if(!draft.image.path){ draft._error = 'Capture or upload an image first'; refreshActivePage(); return; }
+  draft._busy = 'Auto-filling fields…'; draft._error = null; refreshActivePage();
   try {
-    const r = await fetch(`${API}/api/auto-tag`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ imagePath:addDraft.imagePath, productName:addDraft.productName, url:addDraft.url })
+    const j = await request('/api/auto-tag', {
+      method:'POST', body: JSON.stringify({ imagePath: draft.image.path, productName: draft.source.productName, url: draft.source.url })
     });
-    const j = await r.json();
-    if(!r.ok) throw new Error(j.error || 'Auto-fill failed');
-    addDraft.entry = j.entry;
-    addDraft.busy = null;
+    // Merge the tagger's structured output into the draft, preserving the
+    // form-internal fields (_editing, _busy, _tab, _pendingCapture) and the
+    // image path the wizard already set. The multi-candidate session fields
+    // (_addBatchId/_candidates/_candidateStatus/_selectedCandidates/
+    // _activeCandidateIndex) MUST be preserved too, or the first auto-tag in
+    // a multi-candidate flow wipes the session and the user can't advance.
+    const preserved = {
+      _editing: draft._editing, _busy: null, _tab: draft._tab, _pendingCapture: draft._pendingCapture,
+      _addBatchId: draft._addBatchId, _candidates: draft._candidates,
+      _candidateStatus: draft._candidateStatus, _selectedCandidates: draft._selectedCandidates,
+      _activeCandidateIndex: draft._activeCandidateIndex,
+    };
+    draft = { ...j.entry, image: { ...j.entry.image, path: draft.image.path }, ...preserved };
+  } catch(e){ draft._error = e.message; }
+  refreshActivePage();
+}
+
+// Save the draft to the corpus. PUT if editing an existing entry, POST if new.
+// Strips [DRAFT] markers from all text fields (the form review IS the rewrite
+// gate), flips provenance.taggedBy to 'auto-reviewed' on the tagger's output,
+// and clears any pending capture-triage state on success.
+async function saveDraft(){
+  // Strip markers from all text fields before submit.
+  draft.critique = stripDraftMarker(draft.critique);
+  draft.whatToSteal = (draft.whatToSteal||[]).map(stripDraftMarker);
+  if(draft.antiPatterns){
+    draft.antiPatterns.antiPatterns = (draft.antiPatterns.antiPatterns||[]).map(stripDraftMarker);
+    draft.antiPatterns.whereThisFails = (draft.antiPatterns.whereThisFails||[]).map(stripDraftMarker);
+    draft.antiPatterns.accessibilityRisks = (draft.antiPatterns.accessibilityRisks||[]).map(stripDraftMarker);
+  }
+  if(draft.voice){
+    draft.voice.tone = stripDraftMarker(draft.voice.tone);
+    draft.voice.examples = (draft.voice.examples||[]).map(stripDraftMarker);
+    draft.voice.avoid = (draft.voice.avoid||[]).map(stripDraftMarker);
+  }
+  draft.reviewStatus = 'approved';
+  if(draft.provenance && draft.provenance.taggedBy === 'auto') draft.provenance.taggedBy = 'auto-reviewed';
+
+  const isEdit = !!draft._editing;
+  const body = JSON.parse(JSON.stringify(draft));
+  delete body._editing; delete body._busy; delete body._error; delete body._tab; delete body._pendingCapture;
+  delete body._addBatchId; delete body._candidates; delete body._candidateStatus; delete body._selectedCandidates; delete body._activeCandidateIndex;
+
+  try {
+    const j = isEdit
+      ? await request(`/api/entries/${encodeURIComponent(draft._editing)}`, { method:'PUT', body: JSON.stringify(body) })
+      : await request('/api/entries', { method:'POST', body: JSON.stringify(body) });
+    // If this came from capture triage, flip the triage status to 'promoted'.
+    if(draft._pendingCapture){
+      try {
+        await request('/api/capture-triage', {
+          method:'POST', body: JSON.stringify({ ...draft._pendingCapture, status:'promoted' })
+        });
+      } catch { /* triage flip is best-effort; the entry saved successfully */ }
+    }
+    await loadAll(); recomputeAgg();
+    // Multi-candidate session branch: if we're in an Add-flow capture session,
+    // do NOT redirect to #/entry/... — that would abort the loop. Instead mark
+    // this candidate saved and advance to the next drafted one. Only the
+    // out-of-session path (single capture/upload/triage-promote) redirects.
+    if(draft._activeCandidateIndex !== null && draft._candidateStatus){
+      const savedIdx = draft._activeCandidateIndex;
+      const savedEntryId = j.entry?.id || draft._editing;
+      draft._candidateStatus.set(savedIdx, { status:'saved', entryId: savedEntryId });
+      const advanced = advanceToNextDraftedCandidate();
+      if(!advanced){
+        // No more drafted candidates — finish the session. Clean up the temp dir
+        // only if every selected row is saved or skipped.
+        const allDone = [...draft._candidateStatus.values()].every(
+          s => (typeof s === 'string' ? s : s.status) === 'saved' || (typeof s === 'string' ? s : s.status) === 'skipped'
+        );
+        const savedCount = [...draft._candidateStatus.values()].filter(s => (typeof s === 'string' ? s : s.status) === 'saved').length;
+        toast(`All done — ${savedCount} entr${savedCount===1?'y':'ies'} added`, 'success');
+        if(allDone && draft._addBatchId){
+          try { await request('/api/capture-cleanup-temp', { method:'POST', body: JSON.stringify({ batchId: draft._addBatchId }) }); }
+          catch { /* cleanup is best-effort; the temp dir can be removed later */ }
+        }
+        resetDraft();
+        location.hash = '/entries';
+      } else {
+        toast(`Saved (${savedEntryId}) — next candidate loaded`, 'success');
+      }
+    } else {
+      toast(isEdit ? 'Entry updated' : 'Entry saved', 'success');
+      location.hash = `#/entry/${encodeURIComponent(j.entry?.id || draft._editing)}`;
+      resetDraft();
+    }
   } catch(e){
-    addDraft.busy = null; addDraft.error = e.message;
-  }
-  render();
-}
-
-async function addDoSave(form){
-  if(!addDraft.entry){ addDraft.error = 'Run Auto-fill first'; render(); return; }
-  // Strip leading [DRAFT …] / [DRAFT] markers the tagger inserts as a hygiene
-  // forcing function — the validator blocks commits carrying them, and the
-  // SPA review step is the human review that justifies stripping them here.
-  const strip = s => (typeof s==='string' ? s.replace(/\[(?:DRAFT[^\]]*|PLACEHOLDER[^\]]*|TODO[^\]]*)\]\s*/gi,'').trim() : s);
-  const e = addDraft.entry;
-  const payload = {
-    ...e,
-    id: (form.id.value||'').trim() || undefined,
-    title: (form.title.value||'').trim() || e.title,
-    qualityScore: Number(form.qualityScore.value)||e.qualityScore||3,
-    source: { ...e.source, productName:(form.productName.value||'').trim() || e.source.productName },
-    critique: strip(form.critique.value) || strip(e.critique),
-    whatToSteal: (e.whatToSteal||[]).map(strip),
-    antiPatterns: { ...(e.antiPatterns||{}), antiPatterns:((e.antiPatterns?.antiPatterns)||[]).map(strip) },
-    reviewStatus: 'approved',
-    provenance: { taggedBy:'auto-reviewed', ...(e.provenance||{}) },
-  };
-  addDraft.busy = 'Saving…'; addDraft.error = null; render();
-  try {
-    const r = await fetch(`${API}/api/entries`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const j = await r.json();
-    if(!r.ok) throw new Error(j.issues?.join('; ') || j.error || 'Save failed');
-    // Saved — reload corpus and bounce to the new entry's detail.
-    await loadAll();
-    recomputeAgg();
-    addDraft = addBlank();
-    location.hash = `#/entry/${encodeURIComponent(j.entry.id)}`;
-  } catch(err){
-    addDraft.busy = null; addDraft.error = err.message;
-    render();
+    // In-session error: a duplicate or validation failure marks the ACTIVE
+    // candidate (not the whole session) and stays on #/add. Other candidates
+    // are unaffected. The user sees Retry/Edit/Skip on this row.
+    if(draft._activeCandidateIndex !== null && draft._candidateStatus){
+      const isDup = /duplicate/i.test(e.message);
+      draft._candidateStatus.set(draft._activeCandidateIndex, isDup ? 'duplicate' : 'error');
+      draft._error = e.message;
+      // Reset _activeCandidateIndex so the candidate-step table re-renders with
+      // the per-row status; the user picks Retry (re-tag) or Skip (advance).
+      draft._activeCandidateIndex = null;
+      refreshActivePage();
+    } else {
+      draft._error = e.message;
+      refreshActivePage();
+    }
   }
 }
 
+// Render the candidate picker grid (Step 2). Each candidate is a card with a
+// thumbnail, meta, and a checkbox. Selected cards get is-sel outline. A sticky
+// action row appears when ≥1 is selected. "Discard all" wipes the temp batch.
+function renderCandidateStep(){
+  const cs = draft._candidates;
+  const sel = draft._selectedCandidates || new Set();
+  const host = draft.source.url ? (() => { try { return new URL(draft.source.url).hostname; } catch { return ''; } })() : '';
+  const cards = cs.map((c, i) => {
+    const on = sel.has(i);
+    return `<label class="gcard ${on?'is-sel':''}" data-candidate-card="${i}" style="cursor:pointer;display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid var(--hr);border-radius:6px;${on?'outline:2px solid var(--accent);border-color:var(--accent)':''}">
+      <div style="display:flex;gap:6px;align-items:flex-start">
+        <input type="checkbox" class="row-sel" data-candidate-pick="${i}" ${on?'checked':''} aria-label="Select candidate ${i+1}" style="margin-top:2px">
+        <img src="${API}/api/image?path=${encodeURIComponent(c.imagePath)}" alt="${esc(c.id)}" style="width:100%;max-height:140px;object-fit:cover;object-position:top;border-radius:4px;background:var(--surface)" loading="lazy">
+      </div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.id)}</div>
+      <div style="font-size:10px;color:var(--ink-2)">${esc(c.captureMode||'')} · ${esc(c.viewport||'')}</div>
+    </label>`;
+  }).join('');
+  const allDone = draft._candidateStatus && draft._candidateStatus.size > 0 &&
+    [...draft._candidateStatus.values()].every(s => (typeof s === 'string' ? s : s.status) === 'saved' || (typeof s === 'string' ? s : s.status) === 'skipped');
+  const cleanable = allDone && draft._addBatchId;
+  return `<div class="card-section">
+    <div class="eyebrow">Step 2 — pick screenshots to tag · ${cs.length} candidate(s)${host ? ' from ' + esc(host) : ''}</div>
+    <div class="gallery" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-top:10px">${cards}</div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <span id="candSelCount" style="font-size:12px;color:var(--ink-2)">${sel.size} selected</span>
+      <button class="btn primary" id="addTagSelected" ${sel.size?'':'disabled'}>Tag selected${sel.size?` (${sel.size})`:''} →</button>
+      ${cleanable ? `<button class="btn" id="addCleanupCandidates">Clean up unselected</button>` : ''}
+      <button class="btn" id="addDiscardCandidates" style="margin-left:auto">Discard all</button>
+    </div>
+  </div>`;
+}
+
+// Render the status table — appears once tagging has begun, alongside the
+// preview/review of the active candidate. One row per selected candidate with
+// a status pill and per-row actions (Retry/Edit/Skip for problem rows).
+const CAND_STATUS_PILL = {
+  drafted:   { label:'Drafted',    bg:'#f1f5f9', fg:'#475569' },
+  tagging:   { label:'Tagging…',   bg:'#dbeafe', fg:'#1e40af' },
+  saved:     { label:'Saved ✓',    bg:'#dcfce7', fg:'#166534' },
+  duplicate: { label:'Duplicate',  bg:'#fef3c7', fg:'#92400e' },
+  error:     { label:'Error',      bg:'#fee2e2', fg:'#991b1b' },
+  skipped:   { label:'Skipped',    bg:'#f1f5f9', fg:'#94a3b8' },
+};
+function renderCandidateStatusTable(){
+  const rows = [];
+  for(const [i, raw] of draft._candidateStatus.entries()){
+    const st = typeof raw === 'string' ? raw : raw.status;
+    const entryId = typeof raw === 'object' && raw ? raw.entryId : null;
+    const c = draft._candidates[i];
+    const pill = CAND_STATUS_PILL[st] || CAND_STATUS_PILL.drafted;
+    let actions = '';
+    if(st === 'duplicate' || st === 'error'){
+      actions = `<button class="btn" data-candidate-retry="${i}" style="padding:2px 8px;font-size:11px">Retry</button>`
+              + `<button class="btn" data-candidate-skip="${i}" style="padding:2px 8px;font-size:11px">Skip</button>`;
+    } else if(st === 'saved' && entryId){
+      actions = `<a class="btn" href="#/entry/${encodeURIComponent(entryId)}" style="padding:2px 8px;font-size:11px">View →</a>`;
+    }
+    rows.push(`<tr>
+      <td><img src="${API}/api/image?path=${encodeURIComponent(c.imagePath)}" alt="" style="width:48px;height:32px;object-fit:cover;border-radius:3px"></td>
+      <td style="font-family:var(--mono);font-size:11px">${esc(c.id)}</td>
+      <td><span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${pill.bg};color:${pill.fg};font-weight:500">${pill.label}</span></td>
+      <td>${actions}</td>
+    </tr>`);
+  }
+  return `<div class="card-section">
+    <div class="eyebrow">Capture session — ${draft._candidateStatus.size} candidate(s)</div>
+    <table style="width:100%;margin-top:8px;border-collapse:collapse">
+      <thead><tr style="text-align:left;font-size:11px;color:var(--ink-2)"><th></th><th>ID</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table>
+  </div>`;
+}
+
+// Tracks the hash the #/add page last seeded a fresh draft for. We reset ONLY
+// on hash arrival — not on every refreshActivePage() re-render. Resetting on
+// every render wiped draft._busy / draft.image.path (and the URL the user had
+// typed) the moment any wizard action triggered a re-render, making every
+// button appear dead. location.hash changes on every genuine navigation to
+// #/add (including back-to-add-after-save), while refreshActivePage() leaves
+// it unchanged.
+//
+// _addPreseeded is the escape hatch for promoteCapture: it pre-fills the draft
+// from a capture candidate and routes here, so we must NOT reset on arrival.
+// The flag is consumed once on the first render, then cleared.
+let _addSeededForHash = null;
+let _addPreseeded = false;
 page('add','Add entry','new corpus entry', function(){
-  if(!addDraft) addDraft = addBlank();
-  const d = addDraft;
-  const hasImage = !!d.imagePath;
-  const hasEntry = !!d.entry;
-  // Capture/upload step
+  if(_addPreseeded){
+    // Draft was pre-seeded by promoteCapture — keep it, just sync the guard.
+    _addPreseeded = false;
+    _addSeededForHash = location.hash;
+  } else if(_addSeededForHash !== location.hash){
+    // The #/add route is the new-entry entry point. Seed a blank draft when the
+    // hash actually changed (genuine navigation), then leave the draft alone
+    // across re-renders so in-flight wizard state survives.
+    resetDraft();
+    _addSeededForHash = location.hash;
+  }
+  // Force _editing null regardless — #/add is always a new entry, never an edit.
+  draft._editing = null;
+  const hasImage = !!draft.image.path;
+  const hasFields = !!(draft.critique || draft.patternType);
+  const hasCandidates = !!(draft._candidates && draft._candidates.length);
+  // A capture session is "active" when a candidate is loaded into the draft for
+  // tagging. While active, the preview/review steps show for THAT candidate,
+  // and a status table appears showing the other candidates' progress.
+  const sessionActive = draft._activeCandidateIndex !== null;
+  const selCount = draft._selectedCandidates ? draft._selectedCandidates.size : 0;
+
   const captureStep = `
     <div class="card-section">
       <div class="eyebrow">Step 1 — capture or upload a screenshot</div>
-      ${d.tab==='capture' ? `
+      ${draft._tab==='capture' ? `
         <form id="addCaptureForm" style="margin-top:10px">
-          <label>Source URL<input name="url" placeholder="https://linear.app" value="${esc(d.url)}" style="width:100%"></label>
+          <label>Source URL<input name="url" placeholder="https://linear.app" value="${esc(draft.source.url||'')}" style="width:100%"></label>
           <label>Slug (optional)<input name="slug" placeholder="linear-landing-2026" style="width:100%"></label>
           <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn primary" type="submit">Capture from URL</button>
@@ -874,62 +1206,153 @@ page('add','Add entry','new corpus entry', function(){
       `}
     </div>`;
 
-  // Image preview
+  // Candidate picker — the multi-select grid. Shows when detection produced
+  // candidates AND no candidate is currently being tagged (sessionActive).
+  // Once a candidate is loaded for tagging, the picker is replaced by the
+  // preview/review steps + the status table below.
+  const candidateStep = (hasCandidates && !sessionActive) ? renderCandidateStep() : '';
+
+  // Status table — shows once tagging has begun (any candidate has a status).
+  // Visible alongside the preview/review of the active candidate.
+  const statusTable = (hasCandidates && draft._candidateStatus && draft._candidateStatus.size > 0) ? renderCandidateStatusTable() : '';
+
   const previewStep = hasImage ? `
     <div class="card-section">
-      <div class="eyebrow">Step 2 — preview</div>
+      <div class="eyebrow">${sessionActive ? 'Tagging candidate ' + (Number(draft._activeCandidateIndex)+1) + ' — preview' : 'Step 2 — preview'}</div>
       <figure class="image-preview" style="margin-top:8px">
-        <img src="${API}/api/image?path=${encodeURIComponent(d.imagePath)}" alt="captured" style="max-width:100%;border-radius:6px;border:1px solid var(--hr)">
-        <figcaption class="image-ready">Image ready: ${esc(d.imagePath)}</figcaption>
+        <img src="${API}/api/image?path=${encodeURIComponent(draft.image.path)}" alt="captured" style="max-width:100%;border-radius:6px;border:1px solid var(--hr)">
+        <figcaption class="image-ready">Image ready: ${esc(draft.image.path)}</figcaption>
       </figure>
-      ${hasEntry ? '' : `<button class="btn primary" id="addAutoTag" style="margin-top:8px">✨ Auto-fill fields</button>`}
+      ${hasFields ? '' : `<button class="btn primary" id="addAutoTag" style="margin-top:8px">✨ Auto-fill fields</button>`}
     </div>` : '';
 
-  // Auto-fill results form
-  const reviewStep = hasEntry ? `
+  const reviewStep = hasFields ? `
     <div class="card-section">
       <div class="eyebrow">Step 3 — review the draft and save</div>
       <form id="addSaveForm" style="margin-top:8px;display:flex;flex-direction:column;gap:10px">
-        <label>ID (optional)<input name="id" placeholder="(auto-generated)" style="width:100%"></label>
-        <label>Title<input name="title" value="${esc(d.entry.title||'')}" style="width:100%"></label>
-        <label>Product name<input name="productName" value="${esc(d.entry.source?.productName||d.productName||'')}" style="width:100%"></label>
-        <label>Quality score (1-5)<input name="qualityScore" type="number" min="1" max="5" value="${d.entry.qualityScore||3}" style="width:60px"></label>
+        <label>ID (optional)<input name="id" placeholder="(auto-generated)" value="${esc(draft.id||'')}" style="width:100%"></label>
+        <label>Title<input name="title" value="${esc(draft.title||'')}" style="width:100%"></label>
+        <label>Product name<input name="productName" value="${esc(draft.source?.productName||'')}" style="width:100%"></label>
+        <label>Quality score (1-5)<input name="qualityScore" type="number" min="1" max="5" value="${draft.qualityScore||3}" style="width:60px"></label>
         <label>Critique
-          <textarea name="critique" rows="6" style="width:100%;font-family:var(--mono);font-size:12px">${esc(d.entry.critique||'')}</textarea>
+          <textarea name="critique" rows="6" style="width:100%;font-family:var(--mono);font-size:12px">${esc(draft.critique||'')}</textarea>
         </label>
         <details style="font-size:12px;color:var(--ink-2)">
           <summary>Pattern / categories / style (auto-detected)</summary>
-          <pre style="white-space:pre-wrap;background:var(--surface);padding:8px;border-radius:4px">${esc(JSON.stringify({patternType:d.entry.patternType, categories:d.entry.categories, styleTags:d.entry.styleTags, platform:d.entry.platform}, null, 2))}</pre>
+          <pre style="white-space:pre-wrap;background:var(--surface);padding:8px;border-radius:4px">${esc(JSON.stringify({patternType:draft.patternType, categories:draft.categories, styleTags:draft.styleTags, platform:draft.platform}, null, 2))}</pre>
         </details>
         <button class="btn primary" type="submit">Save entry →</button>
       </form>
     </div>` : '';
 
-  const busyMsg = d.busy ? `<div class="card-section" style="color:var(--accent);font-size:13px">⏳ ${esc(d.busy)}</div>` : '';
-  const errorMsg = d.error ? `<div class="card-section" style="color:#c00;font-size:13px">⚠ ${esc(d.error)}</div>` : '';
+  const busyMsg = draft._busy ? `<div class="card-section" style="color:var(--accent);font-size:13px">⏳ ${esc(draft._busy)}</div>` : '';
+  const errorMsg = draft._error ? `<div class="card-section" style="color:#c00;font-size:13px">⚠ ${esc(draft._error)}</div>` : '';
 
   return `<div class="card">
     <div class="card-head"><div><h3>Add a single entry</h3><div class="eyebrow">capture → auto-fill → review → save</div></div></div>
     ${busyMsg}${errorMsg}
     ${captureStep}
+    ${candidateStep}
     ${previewStep}
     ${reviewStep}
+    ${statusTable}
   </div>`;
 }, function(){
-  // after-mount callback — attach form listeners. Looked up by id rather than
-  // closure capture so re-renders (which replace the DOM) re-bind cleanly.
   const cap = document.getElementById('addCaptureForm');
-  if(cap) cap.addEventListener('submit', e=>{ e.preventDefault(); addDoCapture(e.target); });
+  if(cap) cap.addEventListener('submit', e=>{ e.preventDefault(); wizardCapture(e.target); });
   const upSwitch = document.getElementById('addSwitchUpload');
-  if(upSwitch) upSwitch.addEventListener('click', ()=>{ addDraft.tab='upload'; render(); });
+  if(upSwitch) upSwitch.addEventListener('click', ()=>{ draft._tab='upload'; refreshActivePage(); });
   const capSwitch = document.getElementById('addSwitchCapture');
-  if(capSwitch) capSwitch.addEventListener('click', ()=>{ addDraft.tab='capture'; render(); });
+  if(capSwitch) capSwitch.addEventListener('click', ()=>{ draft._tab='capture'; refreshActivePage(); });
   const fileInput = document.getElementById('addFileInput');
-  if(fileInput) fileInput.addEventListener('change', e=>{ addHandleUpload(e.target.files[0]); });
+  if(fileInput) fileInput.addEventListener('change', e=>{ wizardUpload(e.target.files[0]); });
   const at = document.getElementById('addAutoTag');
-  if(at) at.addEventListener('click', addDoAutoTag);
+  if(at) at.addEventListener('click', wizardAutoTag);
   const save = document.getElementById('addSaveForm');
-  if(save) save.addEventListener('submit', e=>{ e.preventDefault(); addDoSave(e.target); });
+  if(save) save.addEventListener('submit', e=>{
+    e.preventDefault();
+    // Pull form values into the draft before saving.
+    draft.id = (save.id.value||'').trim();
+    draft.title = (save.title.value||'').trim();
+    draft.source.productName = (save.productName.value||'').trim();
+    draft.qualityScore = Number(save.qualityScore.value)||3;
+    draft.critique = save.critique.value;
+    saveDraft();
+  });
+  // ── Multi-candidate picker handlers ──
+  document.querySelectorAll('[data-candidate-pick]').forEach(cb=>{
+    cb.addEventListener('change', e=>{
+      e.stopPropagation();
+      const i = Number(cb.dataset.candidatePick);
+      if(!draft._selectedCandidates) draft._selectedCandidates = new Set();
+      if(cb.checked) draft._selectedCandidates.add(i); else draft._selectedCandidates.delete(i);
+      // Re-render to update the count + Tag button + is-sel outline.
+      refreshActivePage();
+    });
+  });
+  const tagBtn = document.getElementById('addTagSelected');
+  if(tagBtn) tagBtn.addEventListener('click', tagSelected);
+  const discardBtn = document.getElementById('addDiscardCandidates');
+  if(discardBtn) discardBtn.addEventListener('click', async ()=>{
+    if(!confirm('Discard all candidates? This deletes the temp capture folder and can\'t be undone.')) return;
+    if(draft._addBatchId){
+      try { await request('/api/capture-cleanup-temp', { method:'POST', body: JSON.stringify({ batchId: draft._addBatchId }) }); }
+      catch(e){ toast(e.message, 'error'); }
+    }
+    resetDraft();
+    refreshActivePage();
+  });
+  const cleanupBtn = document.getElementById('addCleanupCandidates');
+  if(cleanupBtn) cleanupBtn.addEventListener('click', async ()=>{
+    if(draft._addBatchId){
+      try {
+        await request('/api/capture-cleanup-temp', { method:'POST', body: JSON.stringify({ batchId: draft._addBatchId }) });
+        toast('Temp captures cleaned up', 'success');
+        // Clear candidate state but keep the now-saved entries visible.
+        draft._addBatchId = null; draft._candidates = null;
+        draft._candidateStatus = null; draft._selectedCandidates = null;
+        refreshActivePage();
+      } catch(e){ toast(e.message, 'error'); }
+    }
+  });
+  // Per-row Retry/Skip in the status table.
+  document.querySelectorAll('[data-candidate-retry]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const i = Number(b.dataset.candidateRetry);
+      if(draft._candidateStatus) draft._candidateStatus.set(i, 'drafted');
+      // If nothing else is active, advance to this one.
+      if(draft._activeCandidateIndex === null) advanceToNextDraftedCandidate();
+      else refreshActivePage();
+    });
+  });
+  document.querySelectorAll('[data-candidate-skip]').forEach(b=>{
+    b.addEventListener('click', async ()=>{
+      const i = Number(b.dataset.candidateSkip);
+      if(draft._candidateStatus) draft._candidateStatus.set(i, 'skipped');
+      // If this was the active one, clear it; then try to advance.
+      if(draft._activeCandidateIndex === i) draft._activeCandidateIndex = null;
+      if(!advanceToNextDraftedCandidate()){
+        // No more drafted — check if session is fully done.
+        const allDone = draft._candidateStatus && [...draft._candidateStatus.values()].every(
+          s => (typeof s === 'string' ? s : s.status) === 'saved' || (typeof s === 'string' ? s : s.status) === 'skipped'
+        );
+        if(allDone){
+          // Mirror the save-completion path: clean up the temp batch dir so we
+          // don't leak captures/add-* folders (invisible to #/capture triage
+          // because they have no manifest, but still private screenshots on disk).
+          if(draft._addBatchId){
+            try { await request('/api/capture-cleanup-temp', { method:'POST', body: JSON.stringify({ batchId: draft._addBatchId }) }); }
+            catch { /* cleanup is best-effort; the temp dir can be removed later */ }
+          }
+          toast('Session complete', 'success');
+          resetDraft();
+          location.hash = '/entries';
+        } else {
+          refreshActivePage();
+        }
+      }
+    });
+  });
 });
 
 /* -------- Bulk import -------- */
@@ -943,6 +1366,151 @@ page('bulk','Bulk import','batch ingest · upload → auto-fill → commit', fun
     <a class="btn primary" href="/index-classic.html#bulk" target="_blank">Open bulk import →</a>
   </div>`;
 });
+
+/* -------- Capture triage -------- */
+// Ported from the classic workbench (ui/classic-app.js renderCapture). Lists
+// batch-capture candidates written to disk by `npm run capture-batch`, and lets
+// the user promote / reject / clean up. Batch capture itself stays CLI-only —
+// this page only triages what's already on disk. Loaded lazily on first render.
+
+// Status chip colors (Pending=amber, Promoted=green, Rejected=grey) — matches
+// the classic workbench so muscle memory carries over.
+const CAPTURE_STATUS_CHIP = {
+  pending:   { label:'Pending',   bg:'#fef3c7', fg:'#92400e' },
+  promoted:  { label:'Promoted',  bg:'#dcfce7', fg:'#166534' },
+  rejected:  { label:'Rejected',  bg:'#f1f5f9', fg:'#475569' },
+};
+
+function renderCaptureBatch(batch){
+  const t = { total: batch.items.length, pending:0, promoted:0, rejected:0 };
+  for(const it of batch.items) t[it.status]++;
+  // Client half of the cleanup safety gate: only enable when nothing is pending.
+  // The server re-checks (409) regardless, so this is UX polish, not security.
+  const cleanable = t.pending === 0 && t.total > 0;
+  return `<div class="card" style="margin-bottom:14px">
+    <div class="card-head">
+      <div>
+        <h3 style="font-family:var(--mono);font-size:14px">${esc(batch.batchId)}</h3>
+        <div class="eyebrow">${esc(batch.capturedAt||'')} · ${t.total} capture(s) · ${t.promoted} promoted · ${t.rejected} rejected · ${t.pending} pending</div>
+      </div>
+      <button class="btn" id="captureCleanup-${esc(batch.batchId)}" data-capture-cleanup="${esc(batch.batchId)}" ${cleanable?'':'disabled'} title="${cleanable?'Delete this batch folder':'Promote or reject all items first'}">Clean up batch</button>
+    </div>
+    <div class="capture-queue">
+      ${batch.items.map(it => renderCaptureRow(batch, it)).join('')}
+    </div>
+  </div>`;
+}
+
+function renderCaptureRow(batch, item){
+  const chip = CAPTURE_STATUS_CHIP[item.status] || CAPTURE_STATUS_CHIP.pending;
+  const thumb = `<img src="${API}/api/image?path=${encodeURIComponent(item.imagePath)}" alt="${esc(item.id)}" data-img-id="capture-${esc(item.id)}" style="width:96px;height:64px;object-fit:cover;object-position:top;border-radius:4px;border:1px solid var(--hr);background:var(--surface)" loading="lazy">`;
+  const key = `${esc(batch.batchId)}|${esc(item.id)}`;
+  return `<div class="capture-row" data-capture-id="${esc(item.id)}" style="display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--hr)">
+    ${thumb}
+    <div style="flex:1;min-width:0">
+      <div style="font-family:var(--mono);font-size:12px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(item.id)}</div>
+      <div style="font-size:11px;color:var(--ink-2);margin-top:2px">${esc(item.sourceName||'')} · ${esc(item.captureMode||'')} · ${esc(item.viewport||'')}</div>
+    </div>
+    <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${chip.bg};color:${chip.fg};font-weight:500">${chip.label}</span>
+    ${item.status !== 'promoted' ? `<button class="btn primary" data-capture-promote="${key}" style="padding:4px 10px;font-size:12px">Promote</button>` : ''}
+    ${item.status !== 'rejected' ? `<button class="btn" data-capture-reject="${key}" style="padding:4px 10px;font-size:12px">Reject</button>` : ''}
+  </div>`;
+}
+
+page('capture','Capture triage','batch crawl output · promote / reject / clean up', function(){
+  // Lazy-load on first render. Subsequent refreshActivePage() calls reuse the
+  // cached list; the Refresh button forces a reload.
+  if(!captureBatchesLoaded){
+    loadCaptureBatches().then(refreshActivePage);
+    return `<div class="card"><div class="eyebrow" style="padding:24px">Loading capture batches…</div></div>`;
+  }
+  const total = captureBatches.reduce((s,b)=>s+b.items.length, 0);
+  const explainer = `<div class="card" style="margin-bottom:14px">
+    <div class="card-head"><div><h3>Capture triage</h3><div class="eyebrow">${total} candidate(s) across ${captureBatches.length} batch(es)</div></div>
+      <button class="btn" id="captureRefresh">Refresh</button>
+    </div>
+    <p style="font-size:13px;color:var(--ink-2);line-height:1.6">
+      Batches are produced by the CLI crawler: <code style="font-family:var(--mono);background:var(--surface);padding:1px 4px;border-radius:3px">npm run capture-batch -- sources.json</code>.
+      Each candidate is a detected section/group of a page. Promote one to pre-fill the entry form (the triage flips to "promoted" once the entry saves);
+      reject to drop noise. Clean up removes the batch folder from disk once nothing is pending.
+    </p>
+  </div>`;
+  if(captureBatches.length === 0){
+    return `${explainer}<div class="card"><div class="empty" style="padding:60px;color:var(--ink-2);text-align:center">
+      No capture batches found. Run <code style="font-family:var(--mono)">npm run capture-batch</code> to crawl a site — batches land under <code style="font-family:var(--mono)">images-private/captures/</code> and appear here.
+    </div></div>`;
+  }
+  return explainer + captureBatches.map(renderCaptureBatch).join('');
+}, function after(){
+  // Delegated click handlers. We bind one listener per button class via
+  // data-* attributes (matches classic-app.js's pattern).
+  const refresh = document.getElementById('captureRefresh');
+  if(refresh) refresh.addEventListener('click', async ()=>{
+    captureBatchesLoaded = false; await loadCaptureBatches(); refreshActivePage();
+  });
+  document.querySelectorAll('[data-capture-promote]').forEach(b=>{
+    b.addEventListener('click', ()=>{ const [batchId, captureId] = b.dataset.capturePromote.split('|'); promoteCapture(batchId, captureId); });
+  });
+  document.querySelectorAll('[data-capture-reject]').forEach(b=>{
+    b.addEventListener('click', ()=>{ const [batchId, captureId] = b.dataset.captureReject.split('|'); rejectCapture(batchId, captureId); });
+  });
+  document.querySelectorAll('[data-capture-cleanup]').forEach(b=>{
+    b.addEventListener('click', ()=>cleanupCaptureBatch(b.dataset.captureCleanup));
+  });
+});
+
+// Reject a capture candidate — one-shot POST to triage, then reload the list.
+async function rejectCapture(batchId, captureId){
+  try {
+    await request('/api/capture-triage', { method:'POST', body: JSON.stringify({ batchId, captureId, status:'rejected' }) });
+    await loadCaptureBatches(); refreshActivePage();
+    toast('Marked rejected', 'success');
+  } catch(e){ toast(e.message, 'error'); }
+}
+
+// Delete a batch folder. Three-layer safety gate: client disabled-button (only
+// enabled when nothing is pending), browser confirm(), and the server's 409
+// check (re-counts pending). All three must agree.
+async function cleanupCaptureBatch(batchId){
+  if(!confirm(`Delete the batch folder for ${batchId}? This removes all capture screenshots in that batch from disk.`)) return;
+  try {
+    await request('/api/capture-cleanup', { method:'POST', body: JSON.stringify({ batchId }) });
+    await loadCaptureBatches(); refreshActivePage();
+    toast('Batch folder deleted', 'success');
+  } catch(e){ toast(e.message, 'error'); }
+}
+
+// Promote a capture candidate — pre-fill the entry form with the candidate's
+// image + provenance, then route to #/add. The triage status does NOT flip
+// here; it flips inside saveDraft() after the entry actually commits (the
+// promote is best-effort, gated on save success). _pendingCapture carries the
+// {batchId, captureId} through the wizard so saveDraft knows what to flip.
+function promoteCapture(batchId, captureId){
+  const batch = captureBatches.find(b => b.batchId === batchId);
+  if(!batch) return;
+  const item = batch.items.find(i => i.id === captureId);
+  if(!item) return;
+  resetDraft();
+  draft.source.productName = item.sourceName || '';
+  if(item.sourceUrl) draft.source.url = item.sourceUrl;
+  draft.image = { visibility:'private', path: item.imagePath, width:null, height:null };
+  draft.title = `${item.sourceName || ''} — (add descriptive subtitle)`;
+  draft._pendingCapture = { batchId, captureId };
+  draft.provenance = {
+    taggedBy: 'auto',
+    capture: {
+      mode: item.captureMode || '',
+      viewport: item.viewport || '',
+      capturedAt: item.capturedAt || batch.capturedAt || '',
+      sourceUrl: item.sourceUrl || '',
+      ...(item.selectorPath ? { selectorPath: item.selectorPath } : {}),
+    },
+  };
+  // Signal to #/add that the draft is pre-seeded and must NOT be reset on arrival.
+  _addPreseeded = true;
+  location.hash = '/add';
+  toast('Prefilled from capture — review, then save to promote', 'success');
+}
 
 /* -------- Sources -------- */
 page('sources','Sources',`source provenance · ${Object.keys(agg.bySource||{}).length} sources`, function(){

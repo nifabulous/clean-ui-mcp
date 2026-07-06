@@ -100,6 +100,23 @@ export interface TaggerInput {
    */
   extractionProvider?: Provider;
   critiqueProvider?: Provider;
+  /**
+   * DOM signals from the capture pipeline (dom-signals.json sidecar). When
+   * present, injected into the extraction prompt as VERIFIED GROUND TRUTH so
+   * the model gets real computed styles/a11y/structure instead of guessing
+   * from pixels. The bodyFont is also overridden post-hoc (first family name
+   * parsed from fontFamily). Copy/outline/childCount excluded — copy risks
+   * prompt injection, outline/childCount are low-signal noise.
+   */
+  domSignals?: {
+    styles: { fontFamily: string | null; fontSize: string | null; fontWeight: string | null;
+              borderRadius: string | null; boxShadow: string | null; color: string | null;
+              background: string | null; letterSpacing: string | null };
+    accessibility: { contrastRatio: number | null; headingLevels: number[];
+                     imagesMissingAlt: number; unlabeledInteractive: number; hasSkipLink: boolean };
+    structure: { display: string | null; flexDirection: string | null;
+                 gridTemplateColumns: string | null; gap: string | null };
+  } | null;
 }
 
 export interface TaggerOutput {
@@ -574,6 +591,7 @@ function buildExtractionPrompt(
   productName: string,
   url: string | null | undefined,
   quantizedColors: string[],
+  domSignals?: TaggerInput["domSignals"],
 ): string {
   // When no product name was supplied, ask the model to read it off the page
   // (wordmark/logo/branding are almost always visible). Empty name must NOT
@@ -586,13 +604,25 @@ function buildExtractionPrompt(
   const nameField = supplied
     ? ""
     : `  "productName": "",       // the product name read from the page (wordmark/logo). Required when no name was supplied.\n`;
+  // DOM-signal ground truth block (mirrors the quantizedColors pattern).
+  // Only styles/accessibility/structure injected — copy excluded (prompt-injection
+  // risk), outline/childCount excluded (low signal). The model is told to treat
+  // these as fact for bodyFont/usesShadows/spacingDensity and not contradict.
+  const domSignalsBlock = domSignals
+    ? `\nVERIFIED DOM SIGNALS — computed-style ground truth from the live page:\n${JSON.stringify({
+        styles: domSignals.styles,
+        accessibility: domSignals.accessibility,
+        structure: domSignals.structure,
+      }, null, 2)}\n`
+    : "";
+
   return `${lead}
 Return a JSON object with exactly these fields.
 This is an EXTRACTION pass — factual/structural fields only, no critique yet.
 
 VERIFIED GROUND TRUTH — treat every value below as fact, do not re-derive or contradict it:
 ${JSON.stringify({ quantizedColors }, null, 2)}
-
+${domSignalsBlock}
 {
 ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
   "categories": [],        // 1-3 from: ${CATEGORIES.join(", ")}
@@ -600,10 +630,10 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
   "dominantColors": [],    // copy from quantizedColors verbatim — do not invent hex values not in that list
   "accentColor": null,     // pick the primary interactive/brand color FROM quantizedColors only
   "displayFont": null,     // name if you're confident; null beats a wrong guess
-  "bodyFont": null,        // name if identifiable; else null
-  "spacingDensity": "",    // one of: compact, moderate, spacious
-  "cornerStyle": "",       // one of: sharp, slight-round, pill, mixed
-  "usesShadows": false,    // true if box-shadow is visible and doing structural work
+  "bodyFont": null,        // if DOM signals provide fontFamily, use that name — do not contradict
+  "spacingDensity": "",    // one of: compact, moderate, spacious. If DOM signals provide fontSize/gap, use them to inform density.
+  "cornerStyle": "",       // one of: sharp, slight-round, pill, mixed. If DOM signals provide borderRadius, use it.
+  "usesShadows": false,    // if DOM signals provide boxShadow, non-null = shadows present
   "usesBorders": false,    // true if borders/dividers are used for layout structure
   "colorRoles": null,      // {canvas, surface, ink, muted, accent} — map dominantColors to semantic
                            // roles (what each is FOR). This IS a judgment call. Omit if unsure.
@@ -615,6 +645,9 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
 Rules:
 - dominantColors and accentColor MUST come from the supplied quantizedColors list. Never invent a hex.
 - If any enum field's correct value isn't listed, choose the closest listed value — never invent.
+- If DOM signals are provided, treat them as ground truth for bodyFont, usesShadows, and
+  spacingDensity. Do not contradict the computed values. Note significant a11y issues
+  (low contrastRatio, high unlabeledInteractive, imagesMissingAlt) in your assessment.
 - Categorization calibration: before choosing "dashboard" or "onboarding", check whether the
   screen is actually one of these commonly-missed patterns — a chat interface (message bubbles,
   conversation history, composer), a pricing table (tier comparison, price+features matrix), a
@@ -1201,7 +1234,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
 
   let extractionRawText = await callModel(
     "extraction",
-    buildExtractionPrompt(input.productName, input.url, quantizedColors),
+    buildExtractionPrompt(input.productName, input.url, quantizedColors, input.domSignals),
     input.imagePath,
     undefined,
     requestedDetail,
@@ -1225,7 +1258,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     if (weak) {
       extractionRawText = await callModel(
         "extraction",
-        buildExtractionPrompt(input.productName, input.url, quantizedColors),
+        buildExtractionPrompt(input.productName, input.url, quantizedColors, input.domSignals),
         input.imagePath,
         undefined,
         "high",
@@ -1257,7 +1290,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       if (DEBUG_TAGGER) console.error("[tagger] weak extraction at MINIMAL — re-running at thinkingLevel HIGH");
       extractionRawText = await callModel(
         "extraction",
-        buildExtractionPrompt(input.productName, input.url, quantizedColors),
+        buildExtractionPrompt(input.productName, input.url, quantizedColors, input.domSignals),
         input.imagePath,
         undefined,
         requestedDetail === "low" ? "high" : requestedDetail,
@@ -1273,6 +1306,15 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   // so even if the model ignored instructions, we get deterministic colors.
   if (quantizedColors.length) {
     extraction.dominantColors = quantizedColors;
+  }
+  // Override bodyFont with the DOM-signal computed fontFamily when available.
+  // Parse to the first family name (e.g. "Verdana, Geneva, sans-serif" → "Verdana")
+  // so the entry stores a clean font name. Body-only override: the DOM computed
+  // style is the body font, not the display font (which is often a different,
+  // decorative face the body element's computed style can't see).
+  if (input.domSignals?.styles?.fontFamily) {
+    const firstFamily = input.domSignals.styles.fontFamily.split(",")[0].trim().replace(/['"]/g, "");
+    if (firstFamily) extraction.bodyFont = firstFamily;
   }
 
   // ── Resolve the effective product name ───────────────────────────────────
@@ -1354,6 +1396,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         extraction: extractionParsed,
         critique: null,
         quantizedColors,
+        domSignals: input.domSignals ?? null,
         extractionOnly: true,
       },
     };
@@ -1457,6 +1500,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       extraction: extractionParsed,
       critique: critiqueParsed,
       quantizedColors,
+      domSignals: input.domSignals ?? null,
     },
   };
 }

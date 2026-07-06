@@ -291,6 +291,59 @@ describe("tagImage two-pass request shape", () => {
     });
   });
 
+  it("overrides bodyFont from DOM signals and injects them into the prompt", async () => {
+    const calls: Array<{ body: { input?: Array<{ content?: Array<Record<string, unknown>> }> } }> = [];
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      calls.push({ body });
+      callCount++;
+      const response = callCount === 1
+        ? JSON.stringify({
+            patternType: "dashboard", categories: ["dashboard"], styleTags: ["minimal"],
+            dominantColors: ["#ffffff", "#111111"], accentColor: null,
+            displayFont: null, bodyFont: null, // model didn't guess — DOM signals should override
+            spacingDensity: "moderate", cornerStyle: "slight-round",
+            usesShadows: false, usesBorders: true,
+          })
+        : JSON.stringify({
+            observations: ["a", "b", "c", "d", "e"],
+            typographyNotes: "notes",
+            draftCritique: "x".repeat(100),
+            draftWhatToSteal: ["a technique"],
+            draftAntiPatterns: ["a mistake avoided"],
+            qualityTier: "exceptional",
+          });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const entry = await tagImage({
+      imagePath: testImage,
+      productName: "Test",
+      url: null,
+      domSignals: {
+        styles: {
+          fontFamily: "Verdana, Geneva, sans-serif",
+          fontSize: "16px", fontWeight: "400", borderRadius: "0px",
+          boxShadow: null, color: "rgb(130,130,130)", background: "rgba(0,0,0,0)",
+          letterSpacing: "normal",
+        },
+        accessibility: { contrastRatio: 5.46, headingLevels: [], imagesMissingAlt: 0, unlabeledInteractive: 30, hasSkipLink: false },
+        structure: { display: "table-row", flexDirection: "row", gridTemplateColumns: null, gap: null },
+      },
+    });
+
+    // bodyFont should be overridden from DOM signals (first family name).
+    expect(entry.visual.typePairing.body).toBe("Verdana");
+
+    // The extraction prompt should include the DOM-signal ground-truth block.
+    const pass1Prompt = String(calls[0].body.input?.[1]?.content?.[0]?.text ?? "");
+    expect(pass1Prompt).toContain("VERIFIED DOM SIGNALS");
+    expect(pass1Prompt).toContain("Verdana");
+  });
+
   it("routes to the Claude endpoint when AUTO_TAG_PROVIDER=claude", async () => {
     // Override the split-provider vars so both passes route to Claude.
     const savedExtr = process.env.AUTO_TAG_PROVIDER_EXTRACTION;

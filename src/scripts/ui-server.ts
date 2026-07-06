@@ -13,7 +13,7 @@ import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
 import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../tagger.js";
-import type { CaptureMeta } from "./capture.js";
+import type { CaptureMeta, DomSignals } from "./capture.js";
 import { captureCandidatesForSource, isAllowedByRobots } from "./capture.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
 import {
@@ -283,6 +283,46 @@ function stripDraftMarkersFromEntry(entry: CorpusEntryT): CorpusEntryT {
     };
   }
   return e;
+}
+
+// ─── DOM signals reader ─────────────────────────────────────────────────────
+// Reads the dom-signals.json sidecar for a batch-captured image. Only batch
+// captures (images under images-private/captures/{batchId}/) have signals;
+// Add-flow captures skip extraction (undefined signalsMap). Promoted entries
+// whose image path was flattened by promoteTempImage also lose the batch
+// linkage — readDomSignalsForImage returns null for those, and the tagger
+// falls back to pixel-guessing (no regression — same as before DOM signals).
+//
+// NOTE: hasDomSignals on CaptureMeta is NOT persisted on corpus entries, so
+// we always attempt the read rather than using it as a fast-path skip.
+const domSignalsCache = new Map<string, Record<string, DomSignals> | null>();
+
+function readDomSignalsForImage(corpusRelativeImagePath: string): DomSignals | null {
+  // Only paths under captures/{batchId}/ can have a dom-signals.json sidecar.
+  // Path looks like: images-private/captures/{batchId}/{captureId}.png
+  const match = corpusRelativeImagePath.match(/^images-private\/captures\/([^/]+)\/(.+)$/);
+  if (!match) return null;
+  const [, batchId, captureIdWithExt] = match;
+  const captureId = captureIdWithExt.replace(/\.[^.]+$/, ""); // strip .png/.jpg
+
+  // Cache the parsed sidecar per batch dir (read once, not per image).
+  let sidecar = domSignalsCache.get(batchId);
+  if (sidecar === undefined) {
+    const sidecarPath = resolve(CORPUS_ROOT, "images-private", "captures", batchId, "dom-signals.json");
+    if (!existsSync(sidecarPath)) {
+      domSignalsCache.set(batchId, null);
+      return null;
+    }
+    try {
+      sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8")) as Record<string, DomSignals>;
+      domSignalsCache.set(batchId, sidecar);
+    } catch {
+      domSignalsCache.set(batchId, null);
+      return null;
+    }
+  }
+  if (!sidecar) return null;
+  return sidecar[captureId] ?? null;
 }
 
 export function validateEntryPayload(payload: unknown): CorpusEntryT {
@@ -1145,16 +1185,13 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       const imagePath = fromCorpusRelativeImagePath(payload.imagePath);
       const entry = await tagImage({
         imagePath,
-        // productName is optional — when absent/empty, the tagger has the vision
-        // model read the product name off the screenshot. A missing name must
-        // not block import: the upload (expensive) has already happened.
         productName: (payload.productName || "").trim(),
         url: payload.url || null,
         id: payload.id,
-        // Bulk passes imageDetail:"low" + extractionOnly:true to cut token cost:
-        // cheap extraction pass now, critique deferred to /api/auto-critique.
         imageDetail: payload.imageDetail,
         extractionOnly: payload.extractionOnly === true,
+        // DOM signals from the capture sidecar (null for non-batch images — no regression).
+        domSignals: readDomSignalsForImage(payload.imagePath),
       });
       sendJson(res, 200, { entry });
     } catch (error) {
@@ -1231,10 +1268,13 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         imagePath,
         productName: entry.source.productName,
         url: entry.source.url,
-        id: entry.id, // preserve the existing id (tagger uses it as autoId)
+        id: entry.id,
         imageDetail: "high",
         extractionProvider,
         critiqueProvider,
+        // DOM signals from the capture sidecar (null for promoted entries whose
+        // path was flattened — no regression, falls back to pixel-guessing).
+        domSignals: readDomSignalsForImage(entry.image.path),
       });
 
       // Merge: tagged output REPLACES content fields; identity fields preserved.

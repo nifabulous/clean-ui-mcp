@@ -239,6 +239,68 @@ async function setTierMany(ids, tier){
   refreshActivePage();
 }
 
+/* ---------- bulk re-tag (extraction + critique) ---------- */
+// Re-run the full tagger on each selected entry, fixing categorization AND
+// critique. Provider is chosen per-run via the bulk-bar dropdown. Uses
+// runWithPool for concurrency + per-task error isolation; updates a live
+// progress counter so a 1000-entry run is honest about how far it's come.
+let retagBusy = false;
+function setBulkProgress(active, done, total, failed){
+  const el = document.getElementById('bulkProgress');
+  if(!el) return;
+  if(active){
+    el.style.display = 'inline';
+    el.textContent = total ? `Re-tagging… ${done}/${total}${failed?` (${failed} failed)`:''}` : 'Re-tagging…';
+  } else {
+    el.style.display = 'none';
+  }
+}
+async function retagMany(ids, provider){
+  if(retagBusy || !ids.length) return;
+  retagBusy = true;
+  setBulkButtonsDisabled(true);
+  setBulkProgress(true, 0, ids.length, 0);
+  const tasks = ids.map(id => () => fetch(`${API}/api/auto-retag`, {
+    method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({ id, extractionProvider: provider, critiqueProvider: provider }),
+  }).then(r => r.json()));
+  let ok=0, fail=0, skipped=0;
+  await runWithPool(tasks, 3,
+    (j) => {
+      if(j && j.skipped) skipped++;
+      else if(j && j.ok) ok++; else fail++;
+      setBulkProgress(true, ok+fail+skipped, ids.length, fail);
+    },
+    () => { fail++; setBulkProgress(true, ok+fail+skipped, ids.length, fail); },
+  );
+  setBulkProgress(false);
+  retagBusy = false;
+  setBulkButtonsDisabled(false);
+  await loadAll(); recomputeAgg();
+  toast(`Re-tagged ${ok}${skipped?`, ${skipped} skipped`:''}${fail?`, ${fail} failed`:''}. Run \`npm run build-index\` to refresh search.`, ok?'success':'error');
+  if(ok) clearSelection();
+  refreshActivePage();
+}
+function setBulkButtonsDisabled(disabled){
+  ['bulkPromote','bulkReject','bulkRetag','bulkClear'].forEach(id=>{
+    const b=document.getElementById(id); if(b) b.disabled=disabled;
+  });
+}
+
+// Populate the provider dropdown from /api/config. Vision-capable providers
+// (openai/claude/gemini) can do both passes; mistral is critique-only, noted.
+function populateBulkProvider(){
+  const sel = document.getElementById('bulkProvider');
+  if(!sel || sel._populated) return;
+  sel._populated = true;
+  const opts = [];
+  if(CONFIG.openaiKeyConfigured) opts.push(['openai', `OpenAI (${CONFIG.extractionModel||'?'})`]);
+  if(CONFIG.anthropicKeyConfigured) opts.push(['claude', `Claude (${CONFIG.critiqueModel||'?'})`]);
+  if(CONFIG.geminiKeyConfigured) opts.push(['gemini', `Gemini (${CONFIG.extractionModel||'?'})`]);
+  if(CONFIG.mistralKeyConfigured) opts.push(['mistral', `Mistral (critique-only — extraction falls back)`]);
+  sel.innerHTML = opts.map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
+}
+
 /* ---------- source color hash (stable across pages) ---------- */
 function srcColor(s){
   let h=0; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0;
@@ -406,6 +468,7 @@ function bindBulkBar(){
   const bar = document.getElementById('bulkBar');
   if(!bar || bar._bound) return;
   bar._bound = true;
+  populateBulkProvider();
   document.getElementById('bulkPromote').addEventListener('click', () => {
     if(!selection.size) return;
     setTierMany([...selection], 'exceptional').then(refreshActivePage);
@@ -414,7 +477,16 @@ function bindBulkBar(){
     if(!selection.size) return;
     setTierMany([...selection], 'cautionary').then(refreshActivePage);
   });
+  document.getElementById('bulkRetag').addEventListener('click', () => {
+    if(!selection.size || retagBusy) return;
+    const sel = document.getElementById('bulkProvider');
+    const provider = sel ? sel.value : undefined;
+    const n = selection.size;
+    if(!confirm(`Re-tag ${n} entr${n===1?'y':'ies'}? This re-runs vision extraction + critique and overwrites categories, critique, and tier. A snapshot is saved for rollback.`)) return;
+    retagMany([...selection], provider);
+  });
   document.getElementById('bulkClear').addEventListener('click', () => {
+    if(retagBusy) return;
     clearSelection(); refreshActivePage();
   });
 }
@@ -777,6 +849,7 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
         <button class="chip" data-f="exceptional">Exceptional · ${agg.excCount||0}</button>
         <button class="chip" data-f="cautionary">Cautionary · ${agg.cauCount||0}</button>
         <button class="chip" data-f="mobile">Mobile · ${agg.mobileCount||0}</button>
+        <button class="chip ghost" id="selectAllMatching" title="Select every entry matching the current filter + search, across all pages">Select all matching</button>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <select class="sort-select" id="entrySort" title="Sort by">
@@ -842,6 +915,9 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
     out.querySelectorAll('.pages .pg').forEach(b=>b.addEventListener('click',()=>{const p=+b.dataset.pg;if(p>=1&&p<=totalPages){st.page=p;render();document.querySelector('.main').scrollTop=0;}}));
     bindGallery(); bindEntryRows();
     bindBulkBar(); renderSelectionBar();
+    // Refresh the "Select all matching" label with the current filtered count.
+    const sam = document.getElementById('selectAllMatching');
+    if(sam) sam.textContent = `Select all matching (${rows.length})`;
   }
   function bindGallery(){
     document.querySelectorAll('#entryResults .gcard').forEach(card=>{
@@ -861,9 +937,24 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
       });
     });
   }
-  document.querySelectorAll('#entryFilters .chip').forEach(c=>{
-    c.addEventListener('click',()=>{ document.querySelectorAll('#entryFilters .chip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); st.filter=c.dataset.f; st.page=1; render(); });
+  document.querySelectorAll('#entryFilters .chip[data-f]').forEach(c=>{
+    c.addEventListener('click',()=>{ document.querySelectorAll('#entryFilters .chip[data-f]').forEach(x=>x.classList.remove('on')); c.classList.add('on'); st.filter=c.dataset.f; st.page=1; render(); });
   });
+  // "Select all matching" — selects every entry in the current filtered() set,
+  // across ALL pages (not just the visible 24). Lives here so it can see the
+  // filtered() closure. The count refreshes inside render() on every filter change.
+  const selectAllBtn = document.getElementById('selectAllMatching');
+  if(selectAllBtn){
+    selectAllBtn.addEventListener('click', () => {
+      const ids = filtered().map(x => x.id);
+      // Toggle: if all are already selected, clear; otherwise select all.
+      const allSelected = ids.length > 0 && ids.every(id => isSelected(id));
+      if(allSelected){ clearSelection(); }
+      else { ids.forEach(id => selection.add(id)); }
+      renderSelectionBar();
+      render(); // re-render so checkboxes reflect the new selection
+    });
+  }
   document.getElementById('entrySort').addEventListener('change',e=>{st.sort=e.target.value;st.page=1;render();});
   document.querySelectorAll('#viewToggle button').forEach(b=>{
     b.addEventListener('click',()=>{ document.querySelectorAll('#viewToggle button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); st.view=b.dataset.v; st.page=1; render(); });

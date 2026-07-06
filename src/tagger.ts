@@ -91,6 +91,15 @@ export interface TaggerInput {
    * /api/auto-critique. Halves per-image cost for bulk batches.
    */
   extractionOnly?: boolean;
+  /**
+   * Per-call provider overrides (used by /api/auto-retag to route a specific
+   * run through a chosen provider without mutating process.env, which would
+   * race across concurrent requests). Falls back to resolveProvider() when
+   * unset. Mistral/DeepSeek are text-only — if chosen for extraction, the
+   * resolver falls back to a vision provider with a console warning.
+   */
+  extractionProvider?: Provider;
+  critiqueProvider?: Provider;
 }
 
 export interface TaggerOutput {
@@ -235,6 +244,15 @@ function openaiConfigForPass(pass: TaggerPass): OpenAIConfig {
   const model = process.env[`OPENAI_AUTO_TAG_MODEL_${tier}`] ?? process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano";
   return { baseUrl, apiKey, model };
 }
+// Mistral config — same shape as OpenAIConfig since Mistral's API is
+// OpenAI-compatible. Points at La Plateforme by default; override the base
+// URL with MISTRAL_BASE_URL to route through a compatible gateway/router.
+function mistralConfigForPass(pass: TaggerPass): OpenAIConfig {
+  const tier = pass.toUpperCase();
+  const model = process.env[`MISTRAL_AUTO_TAG_MODEL_${tier}`] ?? MISTRAL_AUTO_TAG_MODEL;
+  const baseUrl = (process.env.MISTRAL_BASE_URL ?? MISTRAL_API_BASE).replace(/\/+$/, "");
+  return { baseUrl, apiKey: process.env.MISTRAL_API_KEY ?? "", model };
+}
 // Some OpenAI-compatible providers expose a thinking toggle via the
 // `chat_template_kwargs` extension. NVIDIA NIM's DeepSeek V4 takes
 // {"chat_template_kwargs": {"thinking": false}}. Default: thinking ON for the
@@ -248,10 +266,15 @@ function openaiConfigForPass(pass: TaggerPass): OpenAIConfig {
 const OPENAI_THINKING_DISABLED = /^(1|true)$/i.test(process.env.OPENAI_THINKING_DISABLED ?? "");
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+// Mistral's chat API is OpenAI-compatible: Bearer auth, /v1/chat/completions.
+const MISTRAL_API_BASE = "https://api.mistral.ai/v1";
 
 const OPENAI_AUTO_TAG_MODEL = process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano";
 const CLAUDE_AUTO_TAG_MODEL = process.env.CLAUDE_AUTO_TAG_MODEL ?? "claude-haiku-4-5";
 const GEMINI_AUTO_TAG_MODEL = process.env.GEMINI_AUTO_TAG_MODEL ?? "gemini-2.5-flash";
+// Mistral Large — text-only flagship. Critique-only (no vision). Override the
+// base URL via MISTRAL_BASE_URL to route through a compatible gateway.
+const MISTRAL_AUTO_TAG_MODEL = process.env.MISTRAL_AUTO_TAG_MODEL ?? "mistral-large-latest";
 
 // Set DEBUG_TAGGER=1 to print per-call provider config and token usage to stderr.
 // Quiet by default so production logs (npm run ui, bulk-import) stay clean.
@@ -447,11 +470,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-type Provider = "openai" | "claude" | "gemini";
+type Provider = "openai" | "claude" | "gemini" | "mistral";
 type TaggerPass = "extraction" | "critique";
 
-/** Resolve which provider to use for a given pass, with auto-fallback. */
-function resolveProvider(pass: TaggerPass): Provider {
+/** Resolve which provider to use for a given pass, with auto-fallback.
+ *  Optional `override` (from /api/auto-retag) short-circuits env resolution —
+ *  used for per-run provider selection without mutating process.env. */
+function resolveProvider(pass: TaggerPass, override?: Provider): Provider {
+  // Explicit override from the caller (bulk re-tag). Validate capability:
+  // extraction needs vision, so mistral (text-only) falls back with a warning.
+  if (override) {
+    if (pass === "extraction" && override === "mistral") {
+      console.error("[tagger] mistral cannot do extraction (text-only) — falling back to env resolver for extraction.");
+    } else if (override === "mistral" && !process.env.MISTRAL_API_KEY) {
+      console.error("[tagger] override=mistral but MISTRAL_API_KEY not set — falling back to env resolver.");
+    } else {
+      return override;
+    }
+  }
   const envVar = pass === "extraction" ? "AUTO_TAG_PROVIDER_EXTRACTION" : "AUTO_TAG_PROVIDER_CRITIQUE";
   const preferred = (process.env[envVar] ?? process.env.AUTO_TAG_PROVIDER ?? "openai").toLowerCase() as Provider;
   // OpenAI keys may be set per-pass (OPENAI_API_KEY_EXTRACTION / _CRITIQUE) for
@@ -462,9 +498,10 @@ function resolveProvider(pass: TaggerPass): Provider {
     openai: !!(process.env[`OPENAI_API_KEY_${tier}`] ?? process.env.OPENAI_API_KEY),
     claude: !!process.env.ANTHROPIC_API_KEY,
     gemini: !!process.env.GEMINI_API_KEY,
+    mistral: !!process.env.MISTRAL_API_KEY,
   };
   if (has[preferred]) return preferred;
-  for (const p of ["openai", "claude", "gemini"] as const) {
+  for (const p of ["openai", "claude", "gemini", "mistral"] as const) {
     if (has[p]) {
       console.error(`[tagger] ${envVar}="${preferred}" but no key set — falling back to ${p} for ${pass}.`);
       return p;
@@ -487,8 +524,8 @@ export function hasVisionKey(): boolean {
   return !!(hasOpenAI || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY);
 }
 
-const PROVIDER_NAMES: Record<Provider, string> = { openai: "OpenAI", claude: "Claude", gemini: "Gemini" };
-const PROVIDER_MODELS: Record<Provider, string> = { openai: OPENAI_AUTO_TAG_MODEL, claude: CLAUDE_AUTO_TAG_MODEL, gemini: GEMINI_AUTO_TAG_MODEL };
+const PROVIDER_NAMES: Record<Provider, string> = { openai: "OpenAI", claude: "Claude", gemini: "Gemini", mistral: "Mistral" };
+const PROVIDER_MODELS: Record<Provider, string> = { openai: OPENAI_AUTO_TAG_MODEL, claude: CLAUDE_AUTO_TAG_MODEL, gemini: GEMINI_AUTO_TAG_MODEL, mistral: MISTRAL_AUTO_TAG_MODEL };
 
 /** Human-readable provider name for UI display. */
 export function activeProviderName(pass?: TaggerPass): string {
@@ -555,6 +592,13 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
 Rules:
 - dominantColors and accentColor MUST come from the supplied quantizedColors list. Never invent a hex.
 - If any enum field's correct value isn't listed, choose the closest listed value — never invent.
+- Categorization calibration: before choosing "dashboard" or "onboarding", check whether the
+  screen is actually one of these commonly-missed patterns — a chat interface (message bubbles,
+  conversation history, composer), a pricing table (tier comparison, price+features matrix), a
+  command palette (search-driven action list, keyboard-invoked), an empty state (illustration +
+  first-action prompt with no data), or a settings screen (densely grouped toggles/fields/forms).
+  These are frequently misclassified as "dashboard" when they are narrower component patterns.
+  Prefer the specific pattern over the generic one when both could apply.
 - Return ONLY the JSON object. No explanation, no markdown.`;
 }
 
@@ -1089,11 +1133,14 @@ async function callModel(
    * by OpenAI/Claude and by 2.5 Gemini models.
    */
   thinkingOverride?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH",
+  /** Per-call provider override (from /api/auto-retag). Bypasses env resolution. */
+  providerOverride?: Provider,
 ): Promise<string> {
-  const provider = resolveProvider(pass);
+  const provider = resolveProvider(pass, providerOverride);
   switch (provider) {
     case "claude":  return callClaude(prompt, imagePath, retryFeedback, detail);
     case "gemini":  return callGemini(prompt, imagePath, retryFeedback, detail, pass, thinkingOverride);
+    case "mistral": return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, mistralConfigForPass(pass));
     default:        return callOpenAI(prompt, imagePath, retryFeedback, detail, pass);
   }
 }
@@ -1135,6 +1182,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     input.imagePath,
     undefined,
     requestedDetail,
+    undefined,
+    input.extractionProvider,
   );
   let extractionParsed = parseExtraction(extractionRawText);
 
@@ -1157,6 +1206,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         input.imagePath,
         undefined,
         "high",
+        undefined,
+        input.extractionProvider,
       );
       extractionParsed = parseExtraction(extractionRawText);
     }
@@ -1188,6 +1239,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         undefined,
         requestedDetail === "low" ? "high" : requestedDetail,
         "HIGH",
+        input.extractionProvider,
       );
       extractionParsed = parseExtraction(extractionRawText);
     }
@@ -1291,6 +1343,10 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     "critique",
     buildCritiquePrompt(effectiveName, extractionParsed),
     null, // no image — pure reasoning from facts
+    undefined,
+    "high",
+    undefined,
+    input.critiqueProvider,
   );
 
   let critiqueParsed: Record<string, unknown>;
@@ -1310,6 +1366,9 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       buildCritiquePrompt(effectiveName, extractionParsed),
       null,
       feedback,
+      "high",
+      undefined,
+      input.critiqueProvider,
     );
     try {
       critiqueParsed = JSON.parse(stripFences(retryText));
@@ -1391,6 +1450,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
 export async function generateCritique(
   productName: string,
   extractionParsed: Record<string, unknown>,
+  critiqueProvider?: Provider,
 ): Promise<{
   critique: string;
   whatToSteal: string[];
@@ -1408,6 +1468,10 @@ export async function generateCritique(
     "critique",
     buildCritiquePrompt(productName, extractionParsed),
     null,
+    undefined,
+    "high",
+    undefined,
+    critiqueProvider,
   );
   let critiqueParsed: Record<string, unknown>;
   try { critiqueParsed = JSON.parse(stripFences(critiqueRawText)); }
@@ -1417,7 +1481,7 @@ export async function generateCritique(
   const bannedErrors = validateNoBannedPhrases(critiqueParsed);
   if (bannedErrors.length > 0) {
     const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${bannedErrors.join("\n")}`;
-    const retryText = await callModel("critique", buildCritiquePrompt(productName, extractionParsed), null, feedback);
+    const retryText = await callModel("critique", buildCritiquePrompt(productName, extractionParsed), null, feedback, "high", undefined, critiqueProvider);
     try { critiqueParsed = JSON.parse(stripFences(retryText)); critique = sanitizeTaggerPayload(critiqueParsed); } catch { /* keep flagged original */ }
   }
 

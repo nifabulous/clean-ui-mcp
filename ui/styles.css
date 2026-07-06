@@ -883,6 +883,14 @@ tbody tr:hover .row-actions{opacity:1}
 .bulk-bar .bulk-count { font-weight: 600; padding: 0 8px 0 4px; color: var(--ink); }
 .bulk-bar .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
 .bulk-bar .btn.ghost:hover { background: var(--surface-2); color: var(--ink-2); }
+.bulk-bar .bulk-divider { width: 1px; height: 20px; background: var(--hairline); flex-shrink: 0; }
+.bulk-bar .bulk-provider { display: flex; align-items: center; gap: 6px; }
+.bulk-bar .bulk-provider-label { font-size: 11px; color: var(--muted); font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.04em; }
+.bulk-bar #bulkProvider { height: 28px; border: 1px solid var(--hairline-2); border-radius: 6px; background: var(--surface); font-family: var(--font); font-size: 12px; padding: 0 6px; color: var(--ink); }
+.bulk-bar .bulk-progress { font-family: var(--mono); font-size: 11.5px; color: var(--accent); padding: 0 6px; white-space: nowrap; }
+/* "Select all matching" chip — visually distinct from the filter chips */
+.chip.ghost { background: transparent; border: 1px dashed var(--hairline-2); color: var(--muted); }
+.chip.ghost:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ─── Add-flow: disabled buttons + candidate preview overlay ─── */
 .btn[disabled],

@@ -24,6 +24,10 @@ import "../env.js";
  *        - {captureId}.png        one per detected section
  *        - manifest.json          CaptureMeta[] for the tagger to consume
  *        - triage.json            { [captureId]: "pending" } for the review UI
+ *        - dom-signals.json       { [captureId]: DomSignals } page-derived ground
+ *                                 truth (styles/structure/copy/a11y) extracted at
+ *                                 capture time. Private artifact — lazy-loaded by
+ *                                 the tagger; not committed to the public corpus.
  *
  * Pipeline rules (every one traces to a specific dry-run finding):
  *   1. robots.txt check (heise.de)               — hard gate, not a warning
@@ -108,6 +112,52 @@ type SourceConfig = {
 
 export type CaptureMode = "section" | "group-member" | "recursive" | "full-screen" | "consent-modal";
 
+/**
+ * DOM signals — page-derived context extracted at capture time to give the
+ * tagger ground truth beyond the screenshot pixels: computed styles, layout
+ * structure, on-screen copy, and accessibility signals. Written to a
+ * dom-signals.json sidecar (keyed by capture id); NOT persisted on the manifest
+ * (which stays lean). Optional — absent when extraction fails or the capture is
+ * an isolated component crop with no product context.
+ *
+ * Capped to keep the sidecar small and avoid prompt-injection surface:
+ * copy items ≤ 20, each ≤ 200 chars; style/structure fields are summaries, not
+ * raw CSS. All extraction is best-effort — a failure returns null and never
+ * invalidates the screenshot capture.
+ */
+export type DomSignalStyles = {
+  color: string | null;
+  background: string | null;
+  fontFamily: string | null;
+  fontSize: string | null;
+  fontWeight: string | null;
+  letterSpacing: string | null;
+  borderRadius: string | null;
+  boxShadow: string | null;
+  outline: string | null;
+};
+export type DomSignalCopyItem = { tag: string; text: string };
+export type DomSignalAccessibility = {
+  contrastRatio: number | null;       // foreground/background of primary text block
+  headingLevels: number[];            // e.g. [1, 2, 2, 3] — order of h1-h6 found
+  imagesMissingAlt: number;
+  unlabeledInteractive: number;       // buttons/links/inputs with no accessible name
+  hasSkipLink: boolean;
+};
+export type DomSignalStructure = {
+  display: string | null;             // primary container display (flex/grid/block)
+  flexDirection: string | null;
+  gridTemplateColumns: string | null;
+  gap: string | null;
+  childCount: number;                 // direct children of the captured root
+};
+export type DomSignals = {
+  styles: DomSignalStyles;
+  copy: DomSignalCopyItem[];
+  accessibility: DomSignalAccessibility;
+  structure: DomSignalStructure;
+};
+
 export type CaptureMeta = {
   id: string;
   sourceUrl: string;
@@ -122,6 +172,9 @@ export type CaptureMeta = {
   imagePath: string;
   width: number;
   height: number;
+  /** True when a dom-signals.json entry exists for this capture. Set by
+   *  runBatchCapture at manifest-write time; not populated per-capture. */
+  hasDomSignals?: boolean;
 };
 
 const MIN_CAPTURE_AREA = 2500; // 50x50px — secondary guard for small-but-square fragments
@@ -514,11 +567,120 @@ async function detect(page: Page, rootSelector: string) {
 // Capture helpers
 // ============================================================
 
+// ─── DOM signals extraction ──────────────────────────────────────────────────
+// Runs in the browser via locator.evaluate while the element handle is alive
+// (right after the screenshot). Extracts computed styles, structure, on-screen
+// copy, and accessibility signals — page-derived ground truth the tagger can't
+// reliably read from pixels alone. Best-effort + hard-timed: a failure or
+// timeout returns null and never invalidates the capture. Capped to keep the
+// sidecar small (copy ≤ 20 items × 200 chars) and limit prompt-injection risk.
+const DOM_SIGNALS_TIMEOUT_MS = 3000;
+const DOM_SIGNALS_MAX_COPY = 20;
+const DOM_SIGNALS_MAX_COPY_CHARS = 200;
+
+async function extractDomSignals(locator: Locator): Promise<DomSignals | null> {
+  // Race the evaluate against a hard timeout — a pathological page can hang
+  // getComputedStyle across many elements. evaluate() has no built-in timeout.
+  let resolveFn: (v: DomSignals | null) => void = () => {};
+  const timed = new Promise<DomSignals | null>((resolve) => { resolveFn = resolve; });
+  const timer = setTimeout(() => { console.warn("[dom-signals] extraction timed out"); resolveFn(null); }, DOM_SIGNALS_TIMEOUT_MS);
+  try {
+    const result = await locator.evaluate((root) => {
+      const MAX_COPY = 20;
+      const MAX_COPY_CHARS = 200;
+      const cs = window.getComputedStyle(root);
+      // Primary text block = first element with non-trivial text under root.
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+      let textEl: Element | null = null;
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        const el = node as Element;
+        const t = (el.textContent || "").trim();
+        if (t.length >= 3 && t.length <= 200) { textEl = el; break; }
+      }
+      const textCs = textEl ? window.getComputedStyle(textEl) : cs;
+      const textBgEl = textEl || root;
+      // Approximate contrast ratio from fg/bg colors of the primary text block.
+      const toRgb = (str: string): [number, number, number] | null => {
+        const m = str.match(/rgba?\((\d+)[,\s]+(\d+)[,\s]+(\d+)/i);
+        return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+      };
+      const relLum = (rgb: [number, number, number]) => {
+        const [r, g, b] = rgb.map((c) => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); }) as [number, number, number];
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const fg = toRgb(textCs.color);
+      const bg = toRgb(textCs.backgroundColor || textCs.background);
+      let contrastRatio: number | null = null;
+      if (fg && bg) {
+        const l1 = relLum(fg), l2 = relLum(bg);
+        const lighter = Math.max(l1, l2), darker = Math.min(l1, l2);
+        contrastRatio = +((lighter + 0.05) / (darker + 0.05)).toFixed(2);
+      }
+      // Heading levels (order of h1-h6 found within root).
+      const headingLevels: number[] = [];
+      root.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((h) => {
+        const lvl = Number(h.tagName[1]);
+        if (lvl >= 1 && lvl <= 6) headingLevels.push(lvl);
+      });
+      // Images missing alt + unlabeled interactive (no accessible name).
+      let imagesMissingAlt = 0;
+      root.querySelectorAll("img").forEach((img) => { if (!img.hasAttribute("alt")) imagesMissingAlt++; });
+      let unlabeledInteractive = 0;
+      root.querySelectorAll("button, a, input, [role='button']").forEach((el) => {
+        const name = (el.getAttribute("aria-label") || el.getAttribute("title") || (el.textContent || "").trim() || el.getAttribute("placeholder") || "").trim();
+        if (!name) unlabeledInteractive++;
+      });
+      // On-screen copy: headings, buttons, links, role=button.
+      const copy: { tag: string; text: string }[] = [];
+      const copySel = "h1, h2, h3, h4, h5, h6, button, a, [role='button']";
+      root.querySelectorAll(copySel).forEach((el) => {
+        if (copy.length >= MAX_COPY) return;
+        const text = (el.textContent || "").trim().slice(0, MAX_COPY_CHARS);
+        if (text) copy.push({ tag: el.tagName.toLowerCase(), text });
+      });
+      // Skip link detection.
+      const hasSkipLink = !!root.querySelector('a[href^="#"]:is([class*="skip"], [class*="sr-only"])')
+        || !!document.querySelector('a[href^="#main"], a[href^="#content"]');
+      return {
+        styles: {
+          color: cs.color || null,
+          background: cs.backgroundColor || null,
+          fontFamily: cs.fontFamily || null,
+          fontSize: cs.fontSize || null,
+          fontWeight: cs.fontWeight || null,
+          letterSpacing: cs.letterSpacing || null,
+          borderRadius: cs.borderRadius || null,
+          boxShadow: cs.boxShadow && cs.boxShadow !== "none" ? cs.boxShadow : null,
+          outline: cs.outline && cs.outline !== "none" ? cs.outline : null,
+        },
+        copy,
+        accessibility: { contrastRatio, headingLevels, imagesMissingAlt, unlabeledInteractive, hasSkipLink },
+        structure: {
+          display: cs.display || null,
+          flexDirection: cs.flexDirection || null,
+          gridTemplateColumns: cs.gridTemplateColumns && cs.gridTemplateColumns !== "none" ? cs.gridTemplateColumns : null,
+          gap: cs.gap && cs.gap !== "normal" ? cs.gap : null,
+          childCount: root.children.length,
+        },
+      } as DomSignals;
+    }).catch((err: unknown) => {
+      console.warn("[dom-signals] extraction failed:", err instanceof Error ? err.message : err);
+      return null;
+    });
+    resolveFn(result);
+    return await timed;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function captureLocator(
   locator: Locator,
   batchDir: string,
   batchId: string,
   info: { id: string; sourceUrl: string; sourceName: string; captureMode: CaptureMode; selectorPath: string; viewport: string },
+  signalsMap?: Map<string, DomSignals>,
 ): Promise<CaptureMeta | null> {
   const raw = await locator.screenshot({ timeout: 8000 }).catch(() => null);
   if (!raw) return null;
@@ -545,6 +707,19 @@ async function captureLocator(
   // so the relative form starts with images-private/ — satisfies the schema
   // regex and the validator's path-traversal guard.
   const relPath = `images-private/captures/${batchId}/${fileName}`;
+
+  // Extract DOM signals now — the locator is guaranteed alive (we just screenshotted it).
+  // Eager extraction (vs deferred-after-dedup) trades one extra evaluate per
+  // rejected duplicate for correctness: a deferred closure would run on a
+  // possibly-stale/detached element. The screenshot + sharp encode already
+  // dominate per-candidate cost, so one evaluate is negligible. Best-effort;
+  // null on failure/timeout. Stored in the sidecar map keyed by id; pushIfNew
+  // deletes the entry (along with the PNG) when dedup rejects the capture.
+  if (signalsMap) {
+    const signals = await extractDomSignals(locator);
+    if (signals) signalsMap.set(info.id, signals);
+  }
+
   return {
     ...info,
     aHash,
@@ -598,6 +773,7 @@ async function captureSource(
   batchDir: string,
   batchId: string,
   seenHashes: Map<string, string>,
+  signalsMap: Map<string, DomSignals>,
 ): Promise<CaptureMeta[]> {
   // SSRF guard — same rule as /api/capture-url. Rejects metadata endpoints,
   // private IPs, and unresolvable hostnames before launching a browser.
@@ -614,6 +790,7 @@ async function captureSource(
     for (const [hash] of seenHashes) {
       if (hammingHex(hash, m.aHash) <= DEDUP_HAMMING_THRESHOLD) {
         fs.unlink(join(batchDir, basename(m.imagePath))).catch(() => {});
+        signalsMap.delete(m.id); // drop signals along with the PNG on dedup-reject
         return;
       }
     }
@@ -653,7 +830,7 @@ async function captureSource(
             captureMode: mode,
             selectorPath: sec.selector,
             viewport: viewport.name,
-          }).catch(() => null);
+          }, signalsMap).catch(() => null);
           if (meta) pushIfNew(meta);
         }
         for (const group of groups) {
@@ -667,7 +844,7 @@ async function captureSource(
             captureMode: "group-member",
             selectorPath: rep.selector,
             viewport: viewport.name,
-          }).catch(() => null);
+          }, signalsMap).catch(() => null);
           if (meta) pushIfNew(meta);
         }
         for (const bigSelector of oversized) {
@@ -688,7 +865,7 @@ async function captureSource(
           captureMode: "section",
           selectorPath: `#${id}`,
           viewport: viewport.name,
-        }).catch(() => null);
+        }, signalsMap).catch(() => null);
         if (meta) pushIfNew(meta);
       }
 
@@ -716,11 +893,15 @@ async function runBatchCapture(sources: SourceConfig[], outRoot: string): Promis
   const browser = await chromium.launch();
   const seenHashes = new Map<string, string>();
   const manifest: CaptureMeta[] = [];
+  // DOM signals sidecar — keyed by capture id. Populated by captureLocator
+  // (eager extraction while the locator is alive); pushIfNew drops rejected
+  // entries. Written to dom-signals.json so consumers (tagger) can lazy-load.
+  const signalsMap = new Map<string, DomSignals>();
 
   try {
     for (const source of sources) {
       console.log(`[capture] ${source.sourceName} — ${source.url}`);
-      const metas = await captureSource(browser, source, batchDir, batchId, seenHashes);
+      const metas = await captureSource(browser, source, batchDir, batchId, seenHashes, signalsMap);
       manifest.push(...metas);
       console.log(`  → ${metas.length} candidate(s) after dedup`);
     }
@@ -728,15 +909,25 @@ async function runBatchCapture(sources: SourceConfig[], outRoot: string): Promis
     await browser.close();
   }
 
+  // Stamp hasDomSignals on each manifest entry from the signals sidecar map.
+  for (const m of manifest) m.hasDomSignals = signalsMap.has(m.id);
+
   await fs.writeFile(join(batchDir, "manifest.json"), JSON.stringify(manifest, null, 2));
   // triage.json — one "pending" entry per candidate. The classic workbench's
   // promote/reject actions update this; cleanup runs only when no key is pending.
   const triage: Record<string, "pending"> = {};
   for (const m of manifest) triage[m.id] = "pending";
   await fs.writeFile(join(batchDir, "triage.json"), JSON.stringify(triage, null, 2));
+  // dom-signals.json — id-keyed DOM signals sidecar. Always written (even if {})
+  // so consumers don't need an existence check. Private capture artifact, like
+  // triage.json — not committed to the public corpus.
+  const signalsObj: Record<string, DomSignals> = {};
+  for (const [id, sig] of signalsMap) signalsObj[id] = sig;
+  await fs.writeFile(join(batchDir, "dom-signals.json"), JSON.stringify(signalsObj, null, 2));
 
+  const sigCount = Object.keys(signalsObj).length;
   console.log(`\nWrote ${manifest.length} candidates to ${batchDir}/`);
-  console.log("  manifest.json feeds the tagger; triage.json feeds the review UI.");
+  console.log(`  manifest.json feeds the tagger; triage.json feeds the review UI; dom-signals.json (${sigCount} w/ signals) feeds richer extraction.`);
 }
 
 // ============================================================

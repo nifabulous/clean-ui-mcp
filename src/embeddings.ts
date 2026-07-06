@@ -258,61 +258,96 @@ export function entryToDocument(entry: {
     usesBorders:    boolean;
   };
 }): string {
-  const parts: string[] = [
-    `${entry.source.productName}: ${entry.title}`,
+  // Embedding document for semantic search + similarity.
+  //
+  // Design attributes (patternType, styleTags, visual, layout) are repeated
+  // to emphasize them over product identity and prose. This fixes the
+  // product-clustering problem: without reweighting, entries from the same
+  // product (same critique writing style, same productName) cluster tightly
+  // in embedding space regardless of their actual visual design. By front-
+  // loading and repeating the structural attributes, "find similar dashboards"
+  // returns visually similar dashboards from DIFFERENT products, not just
+  // more entries from the same product.
+  const patternAndStyle = [
     entry.patternType ? `Pattern: ${entry.patternType}.` : "",
-    `Categories: ${entry.categories.join(", ")}`,
-    `Style: ${entry.styleTags.join(", ")}`,
-    entry.critique,
-    entry.whatToSteal.join(". "),
+    `Categories: ${entry.categories.join(", ")}.`,
+    `Style: ${entry.styleTags.join(", ")}.`,
+  ].filter(Boolean).join(" ");
+
+  const visualAttrs = [
     `Spacing: ${entry.visual.spacingDensity}. Corners: ${entry.visual.cornerStyle}.`,
     entry.visual.usesShadows ? "Uses shadows for depth." : "No shadows; depth via other means.",
     entry.visual.usesBorders ? "Borders used for structure." : "No borders.",
-  ];
+  ].join(" ");
 
-  // Anti-patterns (mistakes avoided) characterize the design's discipline and
-  // improve "find similar restrained UIs" retrieval.
-  const ap = entry.antiPatterns?.antiPatterns ?? [];
-  if (ap.length) parts.push(`Avoids: ${ap.join("; ")}.`);
+  const colorAttrs = [
+    entry.visual.dominantColors.length ? `Colors: ${entry.visual.dominantColors.join(", ")}.` : "",
+    (() => {
+      const cr = entry.visual.colorRoles;
+      if (cr?.canvas && cr?.ink) {
+        return `Color roles: canvas ${cr.canvas}, ink ${cr.ink}${cr.accent ? `, accent ${cr.accent}` : ""}.`;
+      }
+      return "";
+    })(),
+    entry.visual.accentColor ? `Accent: ${entry.visual.accentColor}.` : "",
+  ].filter(Boolean).join(" ");
 
-  // Structured layout — improves "find dashboards with a left nav + right rail"
-  // style structural retrieval, not just attribute matching.
-  if (entry.layout?.form) {
+  const layoutAttrs = (() => {
+    if (!entry.layout?.form) return "";
     const roles = (entry.layout.regions ?? []).map((r) => r.role).join(", ");
-    parts.push(`Layout: ${entry.layout.form}${roles ? ` (${roles})` : ""}.`);
-  }
+    return `Layout: ${entry.layout.form}${roles ? ` (${roles})` : ""}.`;
+  })();
 
-  if (entry.businessRationale?.businessGoal) {
-    parts.push(`Business goal: ${entry.businessRationale.businessGoal}. Target user: ${entry.businessRationale.targetUser ?? "unknown"}. Rationale: ${entry.businessRationale.rationale ?? ""}`);
-  }
+  const typeAttrs = (() => {
+    const parts: string[] = [];
+    if (entry.visual.typePairing.display || entry.visual.typePairing.body) {
+      const tp = [entry.visual.typePairing.display, entry.visual.typePairing.body]
+        .filter(Boolean).join(" / ");
+      parts.push(`Type: ${tp}.`);
+    }
+    if (entry.visual.typePairing.notes) parts.push(entry.visual.typePairing.notes);
+    return parts.join(" ");
+  })();
 
-  // Voice — improves "find restrained-voice dashboards" retrieval (copy IS design).
-  if (entry.voice?.tone) parts.push(`Voice: ${entry.voice.tone}.`);
+  // Anti-patterns characterize the design's discipline.
+  const ap = entry.antiPatterns?.antiPatterns ?? [];
+  const avoidAttrs = ap.length ? `Avoids: ${ap.join("; ")}.` : "";
 
-  // Quality tier — "cautionary" is a strong signal; weight it explicitly so
-  // "show me bad examples" queries surface them.
-  if (entry.qualityTier && entry.qualityTier !== "exceptional") {
-    parts.push(`Tier: ${entry.qualityTier} (teach what NOT to do).`);
-  }
+  // Voice — copy IS design.
+  const voiceAttrs = entry.voice?.tone ? `Voice: ${entry.voice.tone}.` : "";
 
-  // Color roles — labeled tokens improve "find designs with a near-black ink on
-  // off-white canvas" retrieval vs bare hex lists.
-  const cr = entry.visual.colorRoles;
-  if (cr?.canvas && cr?.ink) {
-    parts.push(`Color roles: canvas ${cr.canvas}, ink ${cr.ink}${cr.accent ? `, accent ${cr.accent}` : ""}.`);
-  }
+  // Quality tier — "cautionary" is a strong signal.
+  const tierAttrs = (entry.qualityTier && entry.qualityTier !== "exceptional")
+    ? `Tier: ${entry.qualityTier} (teach what NOT to do).` : "";
 
-  if (entry.visual.typePairing.display || entry.visual.typePairing.body) {
-    const tp = [entry.visual.typePairing.display, entry.visual.typePairing.body]
-      .filter(Boolean).join(" / ");
-    parts.push(`Type: ${tp}.`);
-  }
-  if (entry.visual.typePairing.notes) {
-    parts.push(entry.visual.typePairing.notes);
-  }
-  if (entry.visual.dominantColors.length) {
-    parts.push(`Colors: ${entry.visual.dominantColors.join(", ")}.`);
-  }
+  const businessAttrs = entry.businessRationale?.businessGoal
+    ? `Business goal: ${entry.businessRationale.businessGoal}. Target user: ${entry.businessRationale.targetUser ?? "unknown"}. Rationale: ${entry.businessRationale.rationale ?? ""}`
+    : "";
+
+  // Assemble: structural attributes first + repeated (emphasized), then prose
+  // (critique + steals) once, then product identity last (de-emphasized).
+  const parts: string[] = [
+    // Structural block — repeated to weight design characteristics heavily.
+    patternAndStyle,
+    visualAttrs,
+    colorAttrs,
+    layoutAttrs,
+    typeAttrs,
+    avoidAttrs,
+    tierAttrs,
+    // One repetition of the key structural signals for extra embedding weight.
+    patternAndStyle,
+    visualAttrs,
+    layoutAttrs,
+    // Prose — included once for search depth, but not repeated.
+    entry.critique,
+    entry.whatToSteal.join(". "),
+    // Supplementary context.
+    voiceAttrs,
+    businessAttrs,
+    // Product identity — last, so it's the weakest signal.
+    entry.source.productName,
+  ];
 
   return parts.filter(Boolean).join("\n");
 }

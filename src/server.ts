@@ -26,6 +26,13 @@ import { fromCorpusRelativeImagePath } from "./paths.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const QUERY_LOG_PATH = resolve(__dirname, "..", "corpus", "query-log.jsonl");
 
+/** Strip placeholder title suffixes so "Product — (add descriptive subtitle)"
+ *  shows as just "Product" in MCP tool output. Falls back to productName. */
+function cleanTitle(title: string, fallback: string): string {
+  const cleaned = title.replace(/\s*—\s*\(add descriptive subtitle\)\s*$/i, "").trim();
+  return cleaned || fallback;
+}
+
 /** Append-only query log for retrieval analytics (query-stats.ts). Never throws. */
 async function logQuery(params: { query?: string; category?: string; styleTag?: string; qualityTier?: string; platform?: string }, resultIds: string[]): Promise<void> {
   const entry = JSON.stringify({ ts: new Date().toISOString(), ...params, resultIds });
@@ -105,7 +112,7 @@ server.registerTool(
       .map((e) => {
         const hasImage = e.image.visibility !== "private" && e.image.path;
         return [
-          `### ${e.title}  (id: ${e.id})`,
+          `### ${cleanTitle(e.title, e.source.productName)}  (id: ${e.id})`,
           `Categories: ${e.categories.join(", ")} | Style: ${e.styleTags.join(", ")}`,
           `Quality: ${e.qualityScore}/5 | Source: ${e.source.productName}${e.source.url ? ` (${e.source.url})` : ""}`,
           `Image available via get_ui_example: ${hasImage ? "yes" : "no (metadata/critique only)"}`,
@@ -159,7 +166,7 @@ server.registerTool(
     }
 
     const detail = [
-      `# ${entry.title}`,
+      `# ${cleanTitle(entry.title, entry.source.productName)}`,
       `Source: ${entry.source.productName}${entry.source.url ? ` — ${entry.source.url}` : ""}`,
       entry.qualityTier === "cautionary" ? `Quality tier: **cautionary** (a bad example — critique explains what goes wrong)` : "",
       ``,
@@ -314,12 +321,12 @@ server.registerTool(
     }
 
     const summary = [
-      `Entries similar to **${source.title}** (${id}), ranked by semantic similarity:`,
+      `Entries similar to **${cleanTitle(source.title, source.source.productName)}** (${id}), ranked by semantic similarity:`,
       ``,
       ...results.map((r) => {
         const pct = Math.round(Math.max(0, r.score) * 100);
         return [
-          `### ${r.entry.title}  (id: ${r.entry.id}) — ${pct}% similar`,
+          `### ${cleanTitle(r.entry.title, r.entry.source.productName)}  (id: ${r.entry.id}) — ${pct}% similar`,
           `Pattern: ${r.entry.patternType} | Categories: ${r.entry.categories.join(", ")} | Style: ${r.entry.styleTags.join(", ")}`,
           `Critique: ${r.entry.critique}`,
           `What to steal:`,
@@ -362,20 +369,23 @@ server.registerTool(
     const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
     const firstSentence = (s: string) => cell(s.split(/[.!?]/)[0] || s);
     const top = (arr: string[]) => cell(arr[0] ?? "—");
-
-    const header = `| Field | ${found.map((e) => cell(e.title)).join(" | ")} |`;
+    const header = `| Field | ${found.map((e) => cell(cleanTitle(e.title, e.source.productName))).join(" | ")} |`;
     const divider = `| --- | ${found.map(() => "---").join(" | ")} |`;
     const rows = [
       `| id | ${found.map((e) => cell(e.id)).join(" | ")} |`,
       `| patternType | ${found.map((e) => e.patternType).join(" | ")} |`,
       `| categories | ${found.map((e) => cell(e.categories.join(", "))).join(" | ")} |`,
       `| styleTags | ${found.map((e) => cell(e.styleTags.join(", "))).join(" | ")} |`,
+      `| platform | ${found.map((e) => (e as Record<string, unknown>).platform ?? "web").join(" | ")} |`,
+      `| layout | ${found.map((e) => e.layout?.form ?? "—").join(" | ")} |`,
+      `| accent | ${found.map((e) => e.visual.accentColor ?? e.visual.colorRoles?.accent ?? "—").join(" | ")} |`,
       `| density / corners | ${found.map((e) => `${e.visual.spacingDensity} / ${e.visual.cornerStyle}`).join(" | ")} |`,
       `| shadows / borders | ${found.map((e) => `${e.visual.usesShadows ? "yes" : "no"} / ${e.visual.usesBorders ? "yes" : "no"}`).join(" | ")} |`,
-      `| quality | ${found.map((e) => `${e.qualityScore}/5`).join(" | ")} |`,
+      `| quality | ${found.map((e) => `${e.qualityScore}/5 ${e.qualityTier}`).join(" | ")} |`,
       `| critique angle | ${found.map((e) => firstSentence(e.critique)).join(" | ")} |`,
       `| top steal | ${found.map((e) => top(e.whatToSteal)).join(" | ")} |`,
       `| anti-patterns | ${found.map((e) => top(e.antiPatterns.antiPatterns)).join(" | ")} |`,
+      `| a11y risks | ${found.map((e) => top(e.antiPatterns.accessibilityRisks)).join(" | ")} |`,
       `| where it fails | ${found.map((e) => top(e.antiPatterns.whereThisFails)).join(" | ")} |`,
     ];
 

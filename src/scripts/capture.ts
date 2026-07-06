@@ -909,9 +909,16 @@ async function runBatchCapture(sources: SourceConfig[], outRoot: string): Promis
   try {
     for (const source of sources) {
       console.log(`[capture] ${source.sourceName} — ${source.url}`);
-      const metas = await captureSource(browser, source, batchDir, batchId, seenHashes, signalsMap);
-      manifest.push(...metas);
-      console.log(`  → ${metas.length} candidate(s) after dedup`);
+      // Isolate per-source failures (DNS resolution, HTTP errors, timeouts) so
+      // one bad URL doesn't abort the entire batch and lose all prior captures.
+      try {
+        const metas = await captureSource(browser, source, batchDir, batchId, seenHashes, signalsMap);
+        manifest.push(...metas);
+        console.log(`  → ${metas.length} candidate(s) after dedup`);
+      } catch (err) {
+        console.error(`[error] ${source.url}: ${err instanceof Error ? err.message : err}`);
+        console.log(`  → 0 candidate(s) (source failed)`);
+      }
     }
   } finally {
     await browser.close();

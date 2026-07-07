@@ -160,27 +160,58 @@ async function main() {
   const loserIds = new Set(losers.map(e => e.id));
   const remaining = entries.filter(e => !loserIds.has(e.id));
 
-  console.log(`\nPersisting ${remaining.length} entries (was ${entries.length})…`);
+  if (!jsonOut) console.log(`\nPersisting ${remaining.length} entries (was ${entries.length})…`);
   persistEntries(remaining);
 
-  console.log(`Deleting ${losers.length} orphaned image(s)…`);
+  // P1 fix: only delete loser images that NO remaining entry still references.
+  // A winner in the same cluster may share the same image.path (e.g. bulk-import
+  // copied the file under different entry IDs but the same corpus-relative path).
+  // Deleting it would break the winner's reference. Build a set of all paths the
+  // surviving corpus points at, and skip any loser path that's still referenced.
+  const remainingImagePaths = new Set(
+    remaining.map(e => e.image.path).filter((p): p is string => !!p)
+  );
+  const loserPathsToDelete = losers
+    .map(e => e.image.path)
+    .filter((p): p is string => !!p && !remainingImagePaths.has(p));
+  const skippedShared = losers.length - loserPathsToDelete.length;
+
+  if (!jsonOut) {
+    console.log(`Deleting ${loserPathsToDelete.length} orphaned image(s)…`);
+    if (skippedShared > 0) console.log(`  (${skippedShared} loser(s) shared a path with a kept entry — image retained)`);
+  }
   let delErrors = 0;
-  for (const loser of losers) {
-    if (!loser.image.path) continue;
+  for (const rel of loserPathsToDelete) {
     try {
-      const abs = fromCorpusRelativeImagePath(loser.image.path);
+      const abs = fromCorpusRelativeImagePath(rel);
       rmSync(abs, { force: false });
     } catch (e) {
-      console.error(`  ⚠ Could not delete ${loser.image.path}: ${e instanceof Error ? e.message : e}`);
+      if (!jsonOut) console.error(`  ⚠ Could not delete ${rel}: ${e instanceof Error ? e.message : e}`);
       delErrors++;
     }
   }
 
-  console.log(`\n✅ Removed ${losers.length} duplicate(s) across ${dupClusters.length} cluster(s).`);
-  if (delErrors > 0) {
-    console.log(`  ${delErrors} image(s) could not be deleted — run npm run clean-orphans later.`);
-    process.exit(1);
+  if (jsonOut) {
+    // P2 fix: in JSON mode, emit ONE final JSON object. Human logs above were
+    // suppressed; errors land in the object, not mixed into stdout.
+    console.log(JSON.stringify({
+      applied: true,
+      entriesBefore: entries.length,
+      entriesAfter: remaining.length,
+      removed: losers.length,
+      clusters: dupClusters.length,
+      imagesDeleted: loserPathsToDelete.length,
+      imagesSharedRetained: skippedShared,
+      deletionErrors: delErrors,
+      threshold,
+    }, null, 2));
+  } else {
+    console.log(`\n✅ Removed ${losers.length} duplicate(s) across ${dupClusters.length} cluster(s).`);
+    if (delErrors > 0) {
+      console.log(`  ${delErrors} image(s) could not be deleted — run npm run clean-orphans later.`);
+    }
   }
+  if (delErrors > 0) process.exit(1);
 }
 
 // Only run the CLI when invoked directly — NOT when imported for testing

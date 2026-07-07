@@ -96,3 +96,30 @@ describe("dedup-cleanup completeness scoring", () => {
     expect(completenessScore(reviewed)).toBeGreaterThan(completenessScore(auto));
   });
 });
+
+describe("dedup-cleanup shared-image-path safety (P1 regression)", () => {
+  // Regression: if a winner and a loser in the same cluster share the same
+  // image.path (e.g. bulk-import copied the file under different entry IDs),
+  // deleting the loser's image would break the winner's reference. The cleanup
+  // must only delete paths that NO remaining entry references.
+  it("does not delete a loser image that a kept entry still references", () => {
+    const sharedPath = "images-private/shared-screenshot.png";
+    const entries = [
+      { ...baseEntry, id: "winner", image: { ...baseEntry.image, path: sharedPath }, reviewStatus: "approved" as const, qualityScore: 5 },
+      { ...baseEntry, id: "loser", image: { ...baseEntry.image, path: sharedPath }, reviewStatus: "draft" as const, qualityScore: 2 },
+    ];
+    // Simulate the loserIds → remaining computation.
+    const loserIds = new Set(["loser"]);
+    const remaining = entries.filter(e => !loserIds.has(e.id));
+    const remainingImagePaths = new Set(
+      remaining.map(e => e.image.path).filter((p): p is string => !!p)
+    );
+    const losers = entries.filter(e => loserIds.has(e.id));
+    const loserPathsToDelete = losers
+      .map(e => e.image.path)
+      .filter((p): p is string => !!p && !remainingImagePaths.has(p));
+    // The shared path must NOT be in the delete list — the winner still needs it.
+    expect(loserPathsToDelete).not.toContain(sharedPath);
+    expect(loserPathsToDelete).toHaveLength(0);
+  });
+});

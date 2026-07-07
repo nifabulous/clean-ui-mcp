@@ -41,7 +41,7 @@ describe("env loading", () => {
     }
   });
 
-  it("keeps shell-provided values ahead of .env values by default", () => {
+  it(".env file overrides stale shell values by default", () => {
     process.env.OPENAI_API_KEY = "sk-shell";
 
     const dir = mkdtempSync(join(tmpdir(), "clean-ui-env-"));
@@ -50,6 +50,23 @@ describe("env loading", () => {
 
     try {
       loadEnv({ path: envPath });
+
+      // .env should win — the file is the source of truth, not stale shell exports.
+      expect(process.env.OPENAI_API_KEY).toBe("sk-file");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("respects explicit override:false to keep shell values", () => {
+    process.env.OPENAI_API_KEY = "sk-shell";
+
+    const dir = mkdtempSync(join(tmpdir(), "clean-ui-env-"));
+    const envPath = join(dir, ".env");
+    writeFileSync(envPath, "OPENAI_API_KEY=sk-file\n");
+
+    try {
+      loadEnv({ path: envPath, override: false });
 
       expect(process.env.OPENAI_API_KEY).toBe("sk-shell");
     } finally {

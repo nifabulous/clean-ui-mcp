@@ -44,7 +44,7 @@ export function getEnvStatus(envPath = DEFAULT_ENV_PATH): EnvStatus {
 export function loadEnv(options: { path?: string; override?: boolean } = {}): EnvStatus {
   const envPath = options.path ?? DEFAULT_ENV_PATH;
   if (existsSync(envPath)) {
-    config({ path: envPath, override: options.override ?? false, quiet: true });
+    config({ path: envPath, override: options.override ?? true, quiet: true });
   }
   return getEnvStatus(envPath);
 }

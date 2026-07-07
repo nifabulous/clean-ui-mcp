@@ -72,6 +72,9 @@ function keywordSearch(entries: CorpusEntryT[], opts: SearchOptions): SearchResu
         const styleTags = e.styleTags.join(" ").toLowerCase();
         const components = (e.components ?? []).join(" ").toLowerCase();
         const domainTags = (e.domainTags ?? []).join(" ").toLowerCase();
+        const extraAttrs = [
+          e.colorScheme, e.industryVertical, e.responsiveBehavior, e.mood,
+        ].filter(Boolean).join(" ").toLowerCase();
         const visual = [
           ...e.visual.dominantColors,
           e.visual.accentColor,
@@ -92,7 +95,7 @@ function keywordSearch(entries: CorpusEntryT[], opts: SearchOptions): SearchResu
           e.businessRationale?.rationale,
           e.source.productName,
         ].join(" ").toLowerCase();
-        const haystack = `${title} ${categories} ${styleTags} ${components} ${domainTags} ${visual} ${body}`;
+        const haystack = `${title} ${categories} ${styleTags} ${components} ${domainTags} ${extraAttrs} ${visual} ${body}`;
 
         let matched = false;
         if (haystack.includes(q)) {
@@ -119,6 +122,10 @@ function keywordSearch(entries: CorpusEntryT[], opts: SearchOptions): SearchResu
           }
           if (domainTags.includes(term)) {
             score += 2.5;
+            matched = true;
+          }
+          if (extraAttrs.includes(term)) {
+            score += 2;
             matched = true;
           }
           if (visual.includes(term)) {

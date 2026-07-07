@@ -359,10 +359,13 @@ export const CorpusEntry = z.object({
   title: z.string(), // human label, e.g. "Linear — Issue board, grouped view"
   patternType: PatternType, // primary pattern (one) — complements the multi-tag categories
   platform: Platform.optional(), // device class (web/mobile/tablet) — orthogonal to patternType
+  colorScheme: z.enum(["light", "dark"]).optional(), // page-level theme — the most obvious visual fact, trivially queryable
   categories: z.array(Category).min(1).max(4),
   styleTags: z.array(StyleTag).min(1).max(4),
   components: z.array(Component).max(10).default([]),
   domainTags: z.array(DomainTag).max(4).optional(), // business/product context — see DomainTag docs
+  industryVertical: z.string().max(40).optional(), // industry context (fintech, devtools, healthcare) — inferred from product/copy
+  responsiveBehavior: z.enum(["responsive", "fixed-width", "adaptive"]).optional(), // layout adaptation strategy
 
   source: SourceAttribution,
   image: ImageRef,
@@ -370,6 +373,7 @@ export const CorpusEntry = z.object({
   visual: VisualAttributes,
 
   // The actual value-add: why this is here, in your own words.
+  mood: z.string().max(60).optional(), // emotional register ("playful", "clinical", "authoritative") — read from colors/type/copy/whitespace
   critique: z.string().min(80), // enforce: this can't be a one-liner
   whatToSteal: z.array(z.string().min(10)).min(1), // concrete, copyable techniques
   antiPatterns: AntiPatterns, // structured: mistakes avoided + where it fails + a11y risks

@@ -132,6 +132,9 @@ export interface TaggerOutput {
   styleTags:      string[];
   components:     string[];
   domainTags?:    string[];
+  colorScheme?:   string;
+  industryVertical?: string;
+  responsiveBehavior?: string;
   source: {
     productName: string;
     url:         string | null;
@@ -186,6 +189,7 @@ export interface TaggerOutput {
     examples: string[];
     avoid: string[];
   };
+  mood?:           string;
   qualityTier:     string;
   qualityScore:    number;
   addedAt:         string;
@@ -639,6 +643,15 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
                            // (e.g. a "Settings / Billing and Usage" breadcrumb → billing, usage).
                            // Example: "Settings / Integrations" -> domainTags:["integrations"].
                            // Leave [] if there's no clear business-domain signal.
+  "colorScheme": "",       // ONE from: light, dark. The page-level background theme.
+  "industryVertical": "",  // ONE industry the product belongs to (fintech, devtools, healthcare,
+                           // e-commerce, media, education, enterprise-saas, consumer-social,
+                           // productivity, security, ai-ml, crypto, real-estate, legal, travel).
+                           // Infer from product name, copy, visual language. Leave "" if unclear.
+  "responsiveBehavior": "",// ONE from: responsive, fixed-width, adaptive. Whether the layout
+                           // adapts to viewport. "responsive" = fluid grid that reflows; "fixed-width"
+                           // = centered max-width container that doesn't reflow; "adaptive" =
+                           // distinct layouts per breakpoint. Infer from visible container behavior.
   "dominantColors": [],    // copy from quantizedColors verbatim — do not invent hex values not in that list
   "accentColor": null,     // pick the primary interactive/brand color FROM quantizedColors only
   "displayFont": null,     // name if you're confident; null beats a wrong guess
@@ -716,6 +729,10 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
 {
   "observations": [],          // exactly 5 specific, pointable visual elements (required)
   "typographyNotes": "",       // 1-2 sentences on how the type choices create hierarchy
+  "mood": "",                  // one phrase: the emotional register of the design. Read from color
+                               // choices, typography weight, whitespace, and copy tone. Examples:
+                               // "playful and approachable", "clinical and data-forward",
+                               // "confident and restrained", "warm and tactile", "authoritative".
   "draftCritique": "",         // 3-5 sentences. For EACH decision: name the DECISION (what was chosen),
                                // the EFFECT (what perceptual/functional/behavioral outcome it creates for
                                // the user — think about HOW the user interacts, not just what it looks like),
@@ -859,6 +876,10 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   styleTags: string[];
   components: string[];
   domainTags: string[];
+  colorScheme: string;
+  industryVertical: string;
+  responsiveBehavior: string;
+  mood: string;
   dominantColors: string[];
   accentColor: string | null;
   colorRoles?: { canvas: string; surface: string; ink: string; muted: string | null; accent: string };
@@ -929,6 +950,10 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
     styleTags: listFromAllowed(parsed.styleTags, STYLE_TAGS, ["minimal"]),
     components: componentsFromAllowed(parsed.components),
     domainTags: domainTagsFromAllowed(parsed.domainTags),
+    colorScheme: oneFromAllowed(parsed.colorScheme, ["light", "dark"], ""),
+    industryVertical: text(parsed.industryVertical).slice(0, 40),
+    responsiveBehavior: oneFromAllowed(parsed.responsiveBehavior, ["responsive", "fixed-width", "adaptive"], ""),
+    mood: text(parsed.mood).slice(0, 60),
     dominantColors: hexColors(parsed.dominantColors, ["#ffffff", "#111111"]),
     accentColor: nullableHex(parsed.accentColor),
     colorRoles,
@@ -1460,6 +1485,9 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       styleTags:  extraction.styleTags,
       components: extraction.components,
     domainTags: extraction.domainTags.length ? extraction.domainTags : undefined,
+    colorScheme: extraction.colorScheme || undefined,
+    industryVertical: extraction.industryVertical || undefined,
+    responsiveBehavior: extraction.responsiveBehavior || undefined,
       source: {
         productName: effectiveName,
         url:         input.url ?? null,
@@ -1562,6 +1590,9 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     styleTags:  extraction.styleTags,
     components: extraction.components,
     domainTags: extraction.domainTags.length ? extraction.domainTags : undefined,
+    colorScheme: extraction.colorScheme || undefined,
+    industryVertical: extraction.industryVertical || undefined,
+    responsiveBehavior: extraction.responsiveBehavior || undefined,
     source: {
       productName: effectiveName,
       url:         input.url ?? null,
@@ -1598,6 +1629,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     layout:          extraction.layout,
     businessRationale: critique.businessRationale,
     voice:           critique.voice,
+    mood:            critique.mood || undefined,
     qualityTier:     critique.qualityTier,
     qualityScore:    critique.qualityTier === "cautionary" ? 2 : 3,
     addedAt:         today,
@@ -1635,6 +1667,7 @@ export async function generateCritique(
   antiPatterns: { antiPatterns: string[]; whereThisFails: string[]; accessibilityRisks: string[] };
   businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
   voice?: { tone: string; examples: string[]; avoid: string[] };
+  mood?: string;
   qualityTier: string;
   qualityScore: number;
   typographyNotes: string;
@@ -1676,5 +1709,6 @@ export async function generateCritique(
     qualityTier: critique.qualityTier,
     qualityScore: critique.qualityTier === "cautionary" ? 2 : 3,
     typographyNotes: critique.typographyNotes || "",
+    mood: critique.mood || undefined,
   };
 }

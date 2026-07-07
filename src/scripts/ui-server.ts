@@ -12,7 +12,7 @@ import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
-import { computeDHash, hammingDistance, DHASH_THRESHOLD, fingerprintFor, loadDHashCache, persistDHashCache, rebuildDHashCache, findDuplicateAtCommit, type CachedFingerprint } from "../dedup.js";
+import { checkDuplicateUpload, clearDuplicateBatch, computeDHash, loadDHashCache, rebuildDHashCache, findDuplicateAtCommit } from "../dedup.js";
 import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../tagger.js";
 import type { CaptureMeta, DomSignals } from "./capture.js";
 import { captureCandidatesForSource, isAllowedByRobots } from "./capture.js";
@@ -28,11 +28,8 @@ const STATIC_DIR = resolve(PROJECT_ROOT, "ui"); // extracted CSS/JS lives here
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
 
 // ─── perceptual hashing (dHash) + duplicate detection ───────────────────────
-// The dedup primitives (computeDHash, hammingDistance, DHASH_THRESHOLD,
-// fingerprintFor, the dHash cache, findDuplicateAtCommit) live in ../dedup.ts
-// so CLI scripts (commit-draft, dedup-cleanup) can reuse the gate without
-// importing this module (which pulls in playwright + tagger + the HTTP server).
-// This file re-imports them; behavior is unchanged.
+// Dedup policy lives in ../dedup.ts so HTTP, CLI commit, and cleanup tools share
+// one threshold/cache/batch registry. This file only owns request/response glue.
 
 // ─── durability: atomic writes + rolling snapshots ──────────────────────────
 // The disk primitives (writeAtomic, writeSnapshot, listSnapshots, tryReadCorpus,
@@ -54,20 +51,6 @@ function saveEntries(entries: CorpusEntryT[]): void {
   // poison future duplicate checks, and new entries are matched immediately.
   void rebuildDHashCache(entries);
 }
-
-// ─── in-batch dedup ──────────────────────────────────────────────────────────
-// Bulk import used to check each upload only against the COMMITTED corpus, so
-// the first near-dup passed (corpus had none) and so did the second (the first
-// was merely staged). This map tracks sibling uploads within one bulk run so a
-// later upload in the SAME batch is matched against earlier ones too.
-// Keyed by batchId; each value is an ordered list of {hash, dhash, filename}.
-const batchFingerprints = new Map<string, Array<{ hash: string; dhash: string; filename: string }>>();
-
-function registerBatchFingerprint(batchId: string, fp: { hash: string; dhash: string; filename: string }): void {
-  const list = batchFingerprints.get(batchId);
-  if (list) list.push(fp); else batchFingerprints.set(batchId, [fp]);
-}
-function clearBatch(batchId: string): void { batchFingerprints.delete(batchId); }
 
 /**
  * Local-origin guard.
@@ -869,62 +852,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 
   if (req.method === "POST" && url.pathname === "/api/check-duplicate") {
     const payload = await readJson(req) as { hash?: string; dhash?: string; width?: number; height?: number; path?: string; batchId?: string; filename?: string };
-    const newHash = payload.hash ?? "";
-    const newDhash = payload.dhash ?? "";
-    const batchId = payload.batchId ?? "";
-
-    let exactMatch: string | null = null;
-    let nearMatch: string | null = null;
-    let batchMatch: string | null = null;
-
-    // ── Level 1 + 2 against the committed corpus (cache-backed, no per-image re-reads).
-    // Two signals only: exact SHA-256, and perceptual dHash (Hamming < threshold).
-    // Dimensions are NOT evidence (two unrelated full-viewport shots share them).
-    for (const entry of entries) {
-      if (!entry.image.path) continue;
-      const fp = await fingerprintFor(entry);
-      if (!fp) continue;
-      if (fp.hash === newHash) { exactMatch = entry.id; break; }
-      if (!nearMatch && newDhash && hammingDistance(newDhash, fp.dhash) < DHASH_THRESHOLD) {
-        nearMatch = entry.id;
-      }
-    }
-
-    // ── Level 3: in-batch dedup. Compare against siblings already staged in the
-    // SAME bulk run. This is the fix for "near-dups went through" — the old code
-    // only saw the committed corpus, so the 2nd..Nth near-dup in a batch all
-    // passed because the 1st was merely staged, not committed.
-    if (!exactMatch && !nearMatch && batchId) {
-      const siblings = batchFingerprints.get(batchId) ?? [];
-      for (const sib of siblings) {
-        if (newHash && sib.hash === newHash) { batchMatch = sib.filename; break; }
-        if (newDhash && hammingDistance(newDhash, sib.dhash) < DHASH_THRESHOLD) { batchMatch = sib.filename; break; }
-      }
-    }
-
-    // If this upload is unique, register it so later siblings in the same batch
-    // can match against it. (Only when a batchId is supplied — single-entry flow
-    // passes none and skips batch dedup entirely.)
-    if (!exactMatch && !nearMatch && !batchMatch && batchId && newHash && payload.filename) {
-      registerBatchFingerprint(batchId, { hash: newHash, dhash: newDhash, filename: payload.filename });
-    }
-
-    if (exactMatch) {
-      sendJson(res, 200, { duplicate: true, type: "exact", match: exactMatch });
-    } else if (nearMatch) {
-      sendJson(res, 200, { duplicate: true, type: "near", match: nearMatch });
-    } else if (batchMatch) {
-      sendJson(res, 200, { duplicate: true, type: "batch-near", match: batchMatch });
-    } else {
-      sendJson(res, 200, { duplicate: false, type: null, match: null });
-    }
+    sendJson(res, 200, await checkDuplicateUpload(payload, entries));
     return;
   }
 
   // Clear the in-batch fingerprint set when a bulk run ends (client signals it).
   if (req.method === "POST" && url.pathname === "/api/check-duplicate/clear-batch") {
     const payload = await readJson(req) as { batchId?: string };
-    if (payload.batchId) clearBatch(payload.batchId);
+    if (payload.batchId) clearDuplicateBatch(payload.batchId);
     sendJson(res, 200, { ok: true });
     return;
   }

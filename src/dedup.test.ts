@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, existsSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { PRIVATE_IMAGE_DIR } from "./paths.js";
-import { findDuplicateAtCommit } from "./dedup.js";
+import { checkDuplicateUpload, clearDuplicateBatch, findDuplicateAtCommit } from "./dedup.js";
 import { completenessScore } from "./scripts/dedup-cleanup.js";
 import type { CorpusEntryT } from "./schema.js";
 
@@ -80,6 +80,28 @@ describe("commit-time duplicate gate (moved from ui-server.test.ts)", () => {
       existing,
     );
     expect(dup).toBeNull();
+  });
+});
+
+describe("upload-time duplicate gate", () => {
+  const batchId = "batch-test";
+
+  afterEach(() => {
+    clearDuplicateBatch(batchId);
+  });
+
+  it("uses the same shared dedup module for in-batch duplicate checks", async () => {
+    const first = await checkDuplicateUpload(
+      { hash: "hash-a", dhash: "0000000000000000", batchId, filename: "first.png" },
+      [],
+    );
+    expect(first).toEqual({ duplicate: false, type: null, match: null });
+
+    const second = await checkDuplicateUpload(
+      { hash: "hash-a", dhash: "0000000000000000", batchId, filename: "second.png" },
+      [],
+    );
+    expect(second).toEqual({ duplicate: true, type: "batch-near", match: "first.png" });
   });
 });
 

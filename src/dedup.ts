@@ -172,3 +172,61 @@ export async function findDuplicateAtCommit(
   }
   return null;
 }
+
+// ─── upload-time duplicate gate + in-batch registry ─────────────────────────
+
+export type DuplicateCheckResult =
+  | { duplicate: true; type: "exact" | "near" | "batch-near"; match: string }
+  | { duplicate: false; type: null; match: null };
+
+type BatchFingerprint = { hash: string; dhash: string; filename: string };
+const batchFingerprints = new Map<string, BatchFingerprint[]>();
+
+function registerBatchFingerprint(batchId: string, fp: BatchFingerprint): void {
+  const list = batchFingerprints.get(batchId);
+  if (list) list.push(fp); else batchFingerprints.set(batchId, [fp]);
+}
+
+export function clearDuplicateBatch(batchId: string): void {
+  batchFingerprints.delete(batchId);
+}
+
+/**
+ * Upload-time duplicate check used by /api/check-duplicate. Compares incoming
+ * SHA-256/dHash against the committed corpus, then against sibling uploads in
+ * the same batch. HTTP stays in ui-server; dedup policy lives here.
+ */
+export async function checkDuplicateUpload(
+  input: { hash?: string; dhash?: string; batchId?: string; filename?: string },
+  entries: CorpusEntryT[],
+): Promise<DuplicateCheckResult> {
+  const newHash = input.hash ?? "";
+  const newDhash = input.dhash ?? "";
+  const batchId = input.batchId ?? "";
+
+  for (const entry of entries) {
+    if (!entry.image.path) continue;
+    const fp = await fingerprintFor(entry);
+    if (!fp) continue;
+    if (newHash && fp.hash === newHash) return { duplicate: true, type: "exact", match: entry.id };
+    if (newDhash && fp.dhash && hammingDistance(newDhash, fp.dhash) < DHASH_THRESHOLD) {
+      return { duplicate: true, type: "near", match: entry.id };
+    }
+  }
+
+  if (batchId) {
+    const siblings = batchFingerprints.get(batchId) ?? [];
+    for (const sibling of siblings) {
+      if (newHash && sibling.hash === newHash) return { duplicate: true, type: "batch-near", match: sibling.filename };
+      if (newDhash && sibling.dhash && hammingDistance(newDhash, sibling.dhash) < DHASH_THRESHOLD) {
+        return { duplicate: true, type: "batch-near", match: sibling.filename };
+      }
+    }
+  }
+
+  if (batchId && newHash && input.filename) {
+    registerBatchFingerprint(batchId, { hash: newHash, dhash: newDhash, filename: input.filename });
+  }
+
+  return { duplicate: false, type: null, match: null };
+}

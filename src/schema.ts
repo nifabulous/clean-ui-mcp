@@ -363,8 +363,8 @@ export const CorpusEntry = z.object({
    */
   voice: z.object({
     tone: z.string(),                         // "restrained, confident, slightly dry"
-    examples: z.array(z.string().min(4)).min(1), // real copy from the screen, verbatim
-    avoid: z.array(z.string().min(4)).default([]), // "no exclamation enthusiasm on financial data"
+    examples: z.array(z.string().min(2)).min(1), // real copy from the screen, verbatim
+    avoid: z.array(z.string().min(2)).default([]), // "no exclamation enthusiasm on financial data"
   }).optional(),
 
   /**

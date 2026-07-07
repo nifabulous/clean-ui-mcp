@@ -81,6 +81,26 @@ describe("corpus search (fixtures)", () => {
     expect(web.some((e) => e.id === "linear-board")).toBe(true);
     expect(web.some((e) => e.id === "cash-app-mobile-onboarding")).toBe(false);
   });
+
+  it("matches component terms in keyword search", async () => {
+    setCorpusForTesting([
+      {
+        ...fixtures[0],
+        id: "newsroom-analytics",
+        title: "Newsroom Analytics",
+        components: ["sidebar-nav", "kpi-card", "donut-chart", "line-chart", "report-list"],
+      },
+      {
+        ...fixtures[1],
+        id: "plain-pricing",
+        title: "Plain Pricing",
+        components: ["pricing-card"],
+      },
+    ]);
+
+    const results = await searchEntries({ query: "donut chart", limit: 5 });
+    expect(results[0]?.id).toBe("newsroom-analytics");
+  });
 });
 
 // ── real-corpus tests: only structural contracts, never specific content ─────

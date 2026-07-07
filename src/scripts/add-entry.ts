@@ -27,7 +27,7 @@ import { parseArgs } from "node:util";
 import { execSync } from "node:child_process";
 import { imageSize } from "image-size";
 
-import { CorpusEntry, Category, StyleTag, PatternType, Corpus } from "../schema.js";
+import { CorpusEntry, Category, StyleTag, Component, PatternType, Corpus } from "../schema.js";
 import type { CorpusEntryT } from "../schema.js";
 import { toCorpusRelativePath } from "../paths.js";
 import { hasVisionKey, tagImage } from "../tagger.js";
@@ -202,6 +202,7 @@ if (tagged) {
   console.log("\n  ✅ Vision tagger complete. Draft pre-fills:");
   console.log(`     categories:  ${(tagged.categories as string[]).join(", ")}`);
   console.log(`     styleTags:   ${(tagged.styleTags as string[]).join(", ")}`);
+  console.log(`     components:  ${((tagged.components as string[] | undefined) ?? []).join(", ")}`);
   const visual = tagged.visual as CorpusEntryT["visual"] | undefined;
   console.log(`     colors:      ${visual?.dominantColors.join(", ") ?? ""}`);
   console.log(`     accent:      ${visual?.accentColor ?? "none"}`);
@@ -228,6 +229,18 @@ const styleTags = await askEnumMulti(
   StyleTag.options,
   1
 );
+const taggedComponents = ((tagged?.components as string[] | undefined) ?? [])
+  .filter((component) => (Component.options as readonly string[]).includes(component))
+  .slice(0, 10);
+let components = taggedComponents;
+if (taggedComponents.length) {
+  const accept = await askBool(`  Accept tagger components (${taggedComponents.join(", ")})?`, true);
+  components = accept
+    ? taggedComponents
+    : await askEnumMulti("Visible components (optional):", Component.options, 0);
+} else {
+  components = await askEnumMulti("Visible components (optional):", Component.options, 0);
+}
 const patternType = await askEnum(
   "Primary pattern type (the ONE pattern this exemplifies):",
   PatternType.options
@@ -322,6 +335,7 @@ const newEntry: CorpusEntryT = {
   patternType,
   categories: categories as CorpusEntryT["categories"],
   styleTags:  styleTags  as CorpusEntryT["styleTags"],
+  components: components as CorpusEntryT["components"],
   source: { productName, url, capturedAt: today, capturedBy: "self" },
   image: imageRef,
   visual: {

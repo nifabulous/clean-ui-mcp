@@ -239,6 +239,7 @@ export function entryToDocument(entry: {
   patternType?: string;
   categories:   string[];
   styleTags:    string[];
+  components?:   string[];
   critique:     string;
   whatToSteal:  string[];
   antiPatterns?: { antiPatterns: string[]; whereThisFails?: string[]; accessibilityRisks?: string[] };
@@ -272,6 +273,7 @@ export function entryToDocument(entry: {
     entry.patternType ? `Pattern: ${entry.patternType}.` : "",
     `Categories: ${entry.categories.join(", ")}.`,
     `Style: ${entry.styleTags.join(", ")}.`,
+    entry.components?.length ? `Components: ${entry.components.join(", ")}.` : "",
   ].filter(Boolean).join(" ");
 
   const visualAttrs = [

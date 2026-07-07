@@ -17,7 +17,7 @@ import "./env.js";
 import { readFileSync } from "node:fs";
 import { extname, basename } from "node:path";
 import { toCorpusRelativePath } from "./paths.js";
-import { detectPlatform } from "./schema.js";
+import { Component, detectPlatform } from "./schema.js";
 import { Vibrant } from "node-vibrant/node";
 import sharp from "sharp";
 
@@ -34,6 +34,8 @@ const STYLE_TAGS = [
   "high-contrast","soft-neumorphic","glassmorphic","retro","technical-mono",
   "warm-tactile","luxury-quiet","bold-color",
 ] as const;
+
+const COMPONENTS = Component.options;
 
 const SPACING_DENSITIES = ["compact", "moderate", "spacious"] as const;
 const CORNER_STYLES = ["sharp", "slight-round", "pill", "mixed"] as const;
@@ -126,6 +128,7 @@ export interface TaggerOutput {
   platform?:      "web" | "mobile" | "tablet";
   categories:     string[];
   styleTags:      string[];
+  components:     string[];
   source: {
     productName: string;
     url:         string | null;
@@ -627,6 +630,7 @@ ${domSignalsBlock}
 ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
   "categories": [],        // 1-3 from: ${CATEGORIES.join(", ")}
   "styleTags": [],         // 1-3 from: ${STYLE_TAGS.join(", ")}
+  "components": [],        // 3-10 visible UI building blocks from: ${COMPONENTS.join(", ")}
   "dominantColors": [],    // copy from quantizedColors verbatim — do not invent hex values not in that list
   "accentColor": null,     // pick the primary interactive/brand color FROM quantizedColors only
   "displayFont": null,     // name if you're confident; null beats a wrong guess
@@ -645,6 +649,9 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
 Rules:
 - dominantColors and accentColor MUST come from the supplied quantizedColors list. Never invent a hex.
 - If any enum field's correct value isn't listed, choose the closest listed value — never invent.
+- Components are visible evidence, not product intent. Include chart/card/list/navigation controls
+  actually present in the screenshot. Prefer specific tags (donut-chart, line-chart, kpi-card)
+  over generic chart/card terms when the specific component is visible.
 - If DOM signals are provided, treat them as ground truth for bodyFont, usesShadows, and
   spacingDensity. Do not contradict the computed values. Note significant a11y issues
   (low contrastRatio, high unlabeledInteractive, imagesMissingAlt) in your assessment.
@@ -740,6 +747,16 @@ function listFromAllowed(value: unknown, allowed: readonly string[], fallback: s
   return [...new Set(normalized)].slice(0, 3).length ? [...new Set(normalized)].slice(0, 3) : fallback;
 }
 
+function componentsFromAllowed(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const allowed = COMPONENTS as readonly string[];
+  const normalized = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => allowed.includes(item));
+  return [...new Set(normalized)].slice(0, 10);
+}
+
 function hexColors(value: unknown, fallback: string[]): string[] {
   if (!Array.isArray(value)) return fallback;
   const colors = value
@@ -784,6 +801,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   patternType: string;
   categories: string[];
   styleTags: string[];
+  components: string[];
   dominantColors: string[];
   accentColor: string | null;
   colorRoles?: { canvas: string; surface: string; ink: string; muted: string | null; accent: string };
@@ -852,6 +870,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
     patternType: oneFromAllowed(parsed.patternType, PATTERN_TYPES, "dashboard"),
     categories: listFromAllowed(parsed.categories, CATEGORIES, ["dashboard"]),
     styleTags: listFromAllowed(parsed.styleTags, STYLE_TAGS, ["minimal"]),
+    components: componentsFromAllowed(parsed.components),
     dominantColors: hexColors(parsed.dominantColors, ["#ffffff", "#111111"]),
     accentColor: nullableHex(parsed.accentColor),
     colorRoles,
@@ -1381,6 +1400,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       platform,
       categories: extraction.categories,
       styleTags:  extraction.styleTags,
+      components: extraction.components,
       source: {
         productName: effectiveName,
         url:         input.url ?? null,
@@ -1481,6 +1501,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     platform,
     categories: extraction.categories,
     styleTags:  extraction.styleTags,
+    components: extraction.components,
     source: {
       productName: effectiveName,
       url:         input.url ?? null,

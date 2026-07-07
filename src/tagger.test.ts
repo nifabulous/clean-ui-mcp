@@ -10,6 +10,7 @@ describe("tagger sanitization", () => {
     const sanitized = sanitizeTaggerPayload({
       categories: ["dashboard", "made-up"],
       styleTags: ["minimal", "nope"],
+      components: ["kpi-card", "donut-chart", "made-up-widget"],
       dominantColors: ["#ABCDEF", "blue", "#111111"],
       accentColor: "red",
       spacingDensity: "huge",
@@ -22,6 +23,7 @@ describe("tagger sanitization", () => {
 
     expect(sanitized.categories).toEqual(["dashboard"]);
     expect(sanitized.styleTags).toEqual(["minimal"]);
+    expect(sanitized.components).toEqual(["kpi-card", "donut-chart"]);
     expect(sanitized.dominantColors).toEqual(["#abcdef", "#111111"]);
     expect(sanitized.accentColor).toBeNull();
     expect(sanitized.spacingDensity).toBe("moderate");
@@ -35,6 +37,7 @@ describe("tagger sanitization", () => {
 
     expect(sanitized.categories).toEqual(["dashboard"]);
     expect(sanitized.styleTags).toEqual(["minimal"]);
+    expect(sanitized.components).toEqual([]);
     expect(sanitized.dominantColors).toEqual(["#ffffff", "#111111"]);
     expect(sanitized.draftCritique.length).toBeGreaterThan(80);
     expect(sanitized.draftWhatToSteal[0].length).toBeGreaterThan(10);
@@ -243,6 +246,7 @@ describe("tagImage two-pass request shape", () => {
       const response = callCount === 1
         ? JSON.stringify({
             patternType: "dashboard", categories: ["dashboard"], styleTags: ["minimal"],
+            components: ["sidebar-nav", "kpi-card", "donut-chart", "line-chart", "report-list"],
             dominantColors: ["#ffffff", "#111111"], accentColor: null,
             displayFont: null, bodyFont: null, spacingDensity: "moderate", cornerStyle: "slight-round",
             usesShadows: false, usesBorders: true,
@@ -289,6 +293,10 @@ describe("tagImage two-pass request shape", () => {
       rationale: "The restrained grouping helps managers compare dense status data before deciding what needs attention.",
       confirmed: false,
     });
+    expect(entry.components).toEqual(["sidebar-nav", "kpi-card", "donut-chart", "line-chart", "report-list"]);
+    const pass1Prompt = String(calls[0].body.input?.[1]?.content?.[0]?.text ?? "");
+    expect(pass1Prompt).toContain('"components"');
+    expect(pass1Prompt).toContain("kpi-card");
   });
 
   it("overrides bodyFont from DOM signals and injects them into the prompt", async () => {

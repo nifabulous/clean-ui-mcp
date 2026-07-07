@@ -6,7 +6,7 @@ const API = "/api";
 const today = () => new Date().toISOString().slice(0, 10);
 const state = {
   entries: [],
-  schema: { categories: [], styleTags: [], patternTypes: [], spacingDensities: [], cornerStyles: [], imageVisibilities: [] },
+  schema: { categories: [], styleTags: [], components: [], patternTypes: [], spacingDensities: [], cornerStyles: [], imageVisibilities: [] },
   selectedId: null,
   view: "detail",
   query: "",
@@ -130,7 +130,7 @@ function filteredEntries() {
     if (!terms.length) return true;
     const haystack = [
       entry.id, entry.title, entry.source.productName, entry.source.url, entry.critique,
-      ...entry.whatToSteal, ...(entry.antiPatterns?.antiPatterns || []), ...(entry.antiPatterns?.whereThisFails || []), entry.patternType, ...entry.categories, ...entry.styleTags,
+      ...entry.whatToSteal, ...(entry.antiPatterns?.antiPatterns || []), ...(entry.antiPatterns?.whereThisFails || []), entry.patternType, ...entry.categories, ...entry.styleTags, ...(entry.components || []),
       ...entry.visual.dominantColors, entry.visual.accentColor, entry.visual.spacingDensity,
       entry.visual.cornerStyle, entry.visual.typePairing.display, entry.visual.typePairing.body,
       entry.visual.typePairing.notes,
@@ -319,6 +319,7 @@ function renderLibrary() {
           <div class="tag-row">
             ${entry.categories.map((cat) => `<span class="tag category">${cat}</span>`).join("")}
             ${entry.styleTags.map((tag) => `<span class="tag style">${tag}</span>`).join("")}
+            ${(entry.components || []).map((component) => `<span class="tag">${component}</span>`).join("")}
           </div>
         </div>
         <div class="detail-body">
@@ -344,6 +345,7 @@ function blankDraft() {
     patternType: "dashboard",
     categories: [],
     styleTags: [],
+    components: [],
     source: { productName: "", url: null, capturedAt: today(), capturedBy: "self" },
     image: { visibility: "private", path: null, width: null, height: null },
     visual: {
@@ -392,6 +394,9 @@ function syncDraftFromForm() {
     form.primaryStyleTag.value,
     ...[...form.querySelectorAll("input[name='styleTags']:checked")].map((input) => input.value),
   ].filter(Boolean))];
+  state.draft.components = [...new Set(
+    [...form.querySelectorAll("input[name='components']:checked")].map((input) => input.value),
+  )];
   state.draft.patternType = form.patternType.value;
   if (form.platform) state.draft.platform = form.platform.value;
   state.draft.image.visibility = form.visibility.value;
@@ -566,6 +571,7 @@ function renderForm() {
               <label>Voice — what to avoid (one per line, optional)<textarea name="voiceAvoid" placeholder="e.g. no exclamation enthusiasm on financial data">${esc((entry.voice?.avoid || []).join("\n"))}</textarea></label>
               <label>Extra categories<div class="check-grid">${state.schema.categories.map((cat) => `<label class="check-chip"><input type="checkbox" name="categories" value="${cat}" ${entry.categories.slice(1).includes(cat) ? "checked" : ""}><span>${cat}</span></label>`).join("")}</div></label>
               <label>Extra style tags<div class="check-grid">${state.schema.styleTags.map((tag) => `<label class="check-chip"><input type="checkbox" name="styleTags" value="${tag}" ${entry.styleTags.slice(1).includes(tag) ? "checked" : ""}><span>${tag}</span></label>`).join("")}</div></label>
+              <label>Visible components<div class="check-grid">${(state.schema.components || []).map((component) => `<label class="check-chip"><input type="checkbox" name="components" value="${component}" ${(entry.components || []).includes(component) ? "checked" : ""}><span>${component}</span></label>`).join("")}</div></label>
               <label>Added<input name="addedAt" type="date" value="${entry.addedAt}"></label>
               </div>
             </details>

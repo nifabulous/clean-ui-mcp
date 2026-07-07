@@ -62,6 +62,48 @@ export const StyleTag = z.enum([
   "bold-color",
 ]);
 
+/**
+ * Visible component taxonomy — concrete UI building blocks observed in the
+ * screenshot. This is deliberately separate from `categories`: categories say
+ * what product/design pattern the entry belongs to; components say what is
+ * physically present on screen (charts, cards, nav, report rows, controls).
+ */
+export const Component = z.enum([
+  "sidebar-nav",
+  "top-nav",
+  "tab-nav",
+  "search-command",
+  "command-palette",
+  "kpi-card",
+  "metric-grid",
+  "summary-card",
+  "stat-card",
+  "data-table",
+  "chart",
+  "line-chart",
+  "bar-chart",
+  "area-chart",
+  "donut-chart",
+  "pie-chart",
+  "gauge-chart",
+  "report-list",
+  "card-list",
+  "feed-list",
+  "media-grid",
+  "filter-controls",
+  "form-controls",
+  "segmented-control",
+  "status-chip",
+  "icon-button",
+  "notification-bell",
+  "modal-dialog",
+  "empty-state",
+  "pricing-card",
+  "timeline",
+  "kanban-board",
+  "map-view",
+]);
+
 export const SpacingDensity = z.enum(["compact", "moderate", "spacious"]);
 export const CornerStyle = z.enum(["sharp", "slight-round", "pill", "mixed"]);
 
@@ -294,6 +336,7 @@ export const CorpusEntry = z.object({
   platform: Platform.optional(), // device class (web/mobile/tablet) — orthogonal to patternType
   categories: z.array(Category).min(1).max(4),
   styleTags: z.array(StyleTag).min(1).max(4),
+  components: z.array(Component).max(10).default([]),
 
   source: SourceAttribution,
   image: ImageRef,

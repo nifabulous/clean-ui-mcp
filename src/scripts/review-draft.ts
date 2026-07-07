@@ -82,6 +82,7 @@ async function reviewEntry(entry: DraftEntry, n: number, total: number): Promise
   console.log(`  Image:     ${entry.image.path ?? "(none)"}`);
   console.log(`  Category:  ${entry.categories.join(", ")}`);
   console.log(`  Style:     ${entry.styleTags.join(", ")}`);
+  console.log(`  Components:${(entry.components ?? []).length ? ` ${(entry.components ?? []).join(", ")}` : " (none)"}`);
   console.log(`  Colors:    ${entry.visual.dominantColors.join(", ")} | accent: ${entry.visual.accentColor ?? "none"}`);
   console.log(`  Type:      ${entry.visual.typePairing.display ?? "?"} / ${entry.visual.typePairing.body ?? "?"}`);
   console.log(`  Spacing:   ${entry.visual.spacingDensity} | Corners: ${entry.visual.cornerStyle}`);
@@ -106,6 +107,9 @@ async function reviewEntry(entry: DraftEntry, n: number, total: number): Promise
 
     const tags = await ask("Style tags (comma-separated)", entry.styleTags.join(", "));
     entry.styleTags = tags.split(",").map((t) => t.trim()).filter(Boolean) as string[];
+
+    const components = await ask("Components (comma-separated)", (entry.components ?? []).join(", "));
+    entry.components = components.split(",").map((t) => t.trim()).filter(Boolean);
 
     console.log(`\n  Current critique: ${entry.critique.replace("[DRAFT — REWRITE] ", "")}`);
     const rewrite = await ask("Rewrite critique? (Enter to keep)", "");

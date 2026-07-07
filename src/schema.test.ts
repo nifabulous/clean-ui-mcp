@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CorpusEntry, detectPlatform } from "./schema.js";
+import { Component, CorpusEntry, detectPlatform } from "./schema.js";
 
 const validEntry = {
   id: "example-product-dashboard",
@@ -129,6 +129,32 @@ describe("corpus schema", () => {
     for (const patternType of types) {
       expect(CorpusEntry.safeParse({ ...validEntry, patternType }).success).toBe(true);
     }
+  });
+
+  it("defaults components to an empty evidence list when omitted", () => {
+    const result = CorpusEntry.safeParse(validEntry);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.components).toEqual([]);
+  });
+
+  it("accepts visible component tags separately from categories", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      components: ["sidebar-nav", "kpi-card", "donut-chart", "line-chart", "report-list"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.components).toContain("kpi-card");
+      expect(Component.options).toContain("gauge-chart");
+    }
+  });
+
+  it("rejects unknown component tags", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      components: ["chart-but-vibes"],
+    });
+    expect(result.success).toBe(false);
   });
 
   // ── additive v2 fields: qualityTier, voice, colorRoles, lastVerified ───────

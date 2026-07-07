@@ -699,7 +699,10 @@ ${JSON.stringify(extraction, null, 2)}
 ${a11yBlock}
 Step 1 — Observe first. Before writing anything else, list exactly 5 specific, concrete visual
 elements you can point to on screen. Each observation should be a DESIGN DECISION you can see
-evidence of, not just a description of what's there. Examples of good observations:
+evidence of, not just a description of what's there. Think about WHO the user is (first-time vs
+returning, mobile vs desktop, expert vs novice, users with disabilities) and HOW they interact
+(muscle memory, scanning patterns, error recovery, decision-making under time pressure).
+Examples of good observations:
 - "The submit button uses text-only styling with no fill or border, relying on color alone for affordance"
 - "Status indicators are 8px naked color circles with no labels — readable by hue alone at a glance"
 - "The 'FOLLOWING' button uses all-caps verb tense to make the reversible action obvious"
@@ -719,18 +722,30 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
                                // and the REJECTION (what conventional default it replaces). Write about the
                                // USER'S EXPERIENCE, not the pixels — "muscle memory" beats "color coding,"
                                // "reduces cognitive load at decision point" beats "clean grouping."
+                               // Name the SPECIFIC USER TYPE affected: "returning users scan faster"
+                               // beats "users scan faster," "first-time users may feel lost" beats
+                               // "users may feel lost."
   "draftWhatToSteal": [],      // 3-5 SPECIFIC, COPYABLE techniques a developer could reproduce. Each must
                                // include the reasoning: not "use whitespace" but "reserve the brightest
                                // accent color for the single element that must win attention so state
                                // and action remain unmistakable." Name the technique, the constraint it
                                // satisfies, and when NOT to use it.
-  "draftAntiPatterns": [],     // REQUIRED, at least 1. Must describe a DIFFERENT decision than draftCritique.
+  "draftAntiPatterns": [],     // REQUIRED, at least 2. Each must describe a DIFFERENT decision than
+                               // draftCritique and teach a SPECIFIC lesson: "what this design avoids
+                               // doing, and why avoiding it matters for this user/task type." Think
+                               // about what conventional approaches would have FAILED here — what
+                               // would a lazy designer have done that this designer deliberately rejected?
   "draftAccessibilityRisks": [], // accessibility risks found on this screen. Empty if none. Each is a string.
                                // If ACCESSIBILITY GROUND TRUTH is provided above, use those metrics to
                                // identify concrete risks — e.g. "contrastRatio of 3.2 falls below WCAG AA
                                // 4.5:1 for body text" or "30 interactive elements lack accessible names".
-                               // Omit the metrics themselves if no ground truth is provided — assess
-                               // from the screenshot instead.
+                               // If no ground truth, actively probe for these common a11y failures:
+                               // - Color-only differentiation (status, state) invisible to color-blind users
+                               // - Icon-only controls without text labels or aria — screen reader users can't identify them
+                               // - Dense data without sufficient line-height/spacing — dyslexic users struggle
+                               // - Interactive elements too small or close together — motor-impaired users mis-tap
+                               // - Information conveyed only visually (no text alternative) — screen reader users miss it
+                               // Name the specific element, the user type affected, and the WCAG criterion if known.
   "businessRationale": null,   // null if isolated component crop/no product context; otherwise object below
                                // { "businessGoal": ONE from: ${BUSINESS_GOALS.join(", ")},
                                //   "targetUser": "short phrase, <=80 chars",
@@ -753,9 +768,12 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
 
 Rules:
 - Every draftCritique/draftWhatToSteal claim must trace back to something in "observations".
-- draftAntiPatterns must not restate draftCritique's decision from the opposite angle.
-- draftAccessibilityRisks should be concrete and specific — name the element, the issue, the threshold.
-  Empty array is acceptable when the design has no significant a11y risks.
+- draftAntiPatterns must not restate draftCritique's decision from the opposite angle. Each should
+  teach a distinct lesson about what the design deliberately avoids and why that avoidance matters.
+- draftAccessibilityRisks should be concrete and specific — name the element, the user type affected,
+  the issue, and the threshold. Aim for 2-3 risks on most screens; only return [] when the design
+  genuinely has no a11y issues. Probe systematically: color differentiation, icon-only controls,
+  density/readability, touch targets, and text alternatives.
 - Quality tier calibration: "exceptional" means worth learning from, not flawless.
   "cautionary" is rare and reserved for screens whose main lesson is the failure itself.
 - businessRationale is about business intent, not visual quality. Return null rather than inventing intent

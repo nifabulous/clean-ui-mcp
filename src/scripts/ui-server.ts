@@ -12,6 +12,7 @@ import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
+import { computeDHash, hammingDistance, DHASH_THRESHOLD, fingerprintFor, loadDHashCache, persistDHashCache, rebuildDHashCache, findDuplicateAtCommit, type CachedFingerprint } from "../dedup.js";
 import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../tagger.js";
 import type { CaptureMeta, DomSignals } from "./capture.js";
 import { captureCandidatesForSource, isAllowedByRobots } from "./capture.js";
@@ -26,55 +27,17 @@ const APP_PATH = resolve(PROJECT_ROOT, "index-2.html");
 const STATIC_DIR = resolve(PROJECT_ROOT, "ui"); // extracted CSS/JS lives here
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
 
-// ─── perceptual hashing (dHash) for near-duplicate detection ─────────────────
-
-/**
- * Compute a 64-bit dHash (difference hash) of an image using sharp.
- * Resizes to 9×8 grayscale, compares adjacent horizontal pixels, produces
- * a hex string. Two images of the same page (different scroll/compression)
- * produce hashes that differ by only a few bits.
- */
-async function computeDHash(imagePath: string): Promise<string> {
-  const data = await sharp(imagePath)
-    .greyscale()
-    .resize(9, 8, { fit: "fill" })
-    .raw()
-    .toBuffer();
-
-  // Compare each pixel with its right neighbor → 64 bits.
-  let hash = 0n;
-  for (let row = 0; row < 8; row++) {
-    for (let col = 0; col < 8; col++) {
-      const left = data[row * 9 + col];
-      const right = data[row * 9 + col + 1];
-      hash = (hash << 1n) | (BigInt(left > right ? 1 : 0));
-    }
-  }
-  return hash.toString(16).padStart(16, "0");
-}
-
-/** Hamming distance between two hex hashes (number of differing bits). */
-function hammingDistance(a: string, b: string): number {
-  const bigA = BigInt("0x" + a);
-  const bigB = BigInt("0x" + b);
-  let xor = bigA ^ bigB;
-  let count = 0;
-  while (xor) { count += Number(xor & 1n); xor >>= 1n; }
-  return count;
-}
-
-// <8 bits different out of 64 = near-duplicate. Tuned from corpus data: the
-// median distance between random pairs is ~25, and genuine same-shot variants
-// (recompression, tiny crops) cluster at 0–7. 8–11 was catching same-*page*
-// shots that differ by scroll/layout — too loose, caused false positives. The
-// prior "same dimensions" fallback (Level 3) was removed for the same reason.
-const DHASH_THRESHOLD = 8;
+// ─── perceptual hashing (dHash) + duplicate detection ───────────────────────
+// The dedup primitives (computeDHash, hammingDistance, DHASH_THRESHOLD,
+// fingerprintFor, the dHash cache, findDuplicateAtCommit) live in ../dedup.ts
+// so CLI scripts (commit-draft, dedup-cleanup) can reuse the gate without
+// importing this module (which pulls in playwright + tagger + the HTTP server).
+// This file re-imports them; behavior is unchanged.
 
 // ─── durability: atomic writes + rolling snapshots ──────────────────────────
 // The disk primitives (writeAtomic, writeSnapshot, listSnapshots, tryReadCorpus,
-// loadCorpusSafe) live in ../persistence.ts so CLIs can reuse them without
-// importing this module (which pulls in sharp + playwright). These thin wrappers
-// keep the dHash-cache coupling local to the running UI server.
+// loadCorpusSafe) live in ../persistence.ts. These thin wrappers keep the
+// dHash-cache coupling local to the running UI server.
 
 /** Load entries with snapshot fallback (delegates to persistence.loadCorpusSafe). */
 function loadEntries(): CorpusEntryT[] {
@@ -90,70 +53,6 @@ function saveEntries(entries: CorpusEntryT[]): void {
   // The corpus changed — rebuild the dHash cache so stale/removed entries don't
   // poison future duplicate checks, and new entries are matched immediately.
   void rebuildDHashCache(entries);
-}
-
-// ─── persisted dHash cache ───────────────────────────────────────────────────
-// Why: the old check-duplicate path re-read + re-hash EVERY corpus image from
-// disk on EACH check (O(n) disk reads per request). For a 200-entry corpus
-// during a 100-image bulk import that's 20,000 reads. This cache holds the
-// SHA-256 + dHash per entry id, loaded once at startup and rebuilt on mutation.
-const DHASH_CACHE_PATH = resolve(CORPUS_ROOT, ".dhash-cache.json");
-type CachedFingerprint = { hash: string; dhash: string; path: string };
-const dhashCache = new Map<string, CachedFingerprint>();
-let dhashCacheLoaded = false;
-
-function loadDHashCache(): void {
-  if (dhashCacheLoaded) return;
-  dhashCacheLoaded = true;
-  try {
-    const raw = JSON.parse(readFileSync(DHASH_CACHE_PATH, "utf-8")) as Record<string, CachedFingerprint>;
-    for (const [id, fp] of Object.entries(raw)) {
-      if (fp && typeof fp.hash === "string" && typeof fp.dhash === "string") dhashCache.set(id, fp);
-    }
-  } catch { /* missing/corrupt cache — rebuild lazily */ }
-}
-
-function persistDHashCache(): void {
-  const obj: Record<string, CachedFingerprint> = {};
-  for (const [id, fp] of dhashCache) obj[id] = fp;
-  try { writeFileSync(DHASH_CACHE_PATH, JSON.stringify(obj, null, 2), "utf-8"); } catch { /* best-effort */ }
-}
-
-/** Recompute fingerprints for every corpus entry with an image. Called on save. */
-async function rebuildDHashCache(entries: CorpusEntryT[]): Promise<void> {
-  const next = new Map<string, CachedFingerprint>();
-  for (const entry of entries) {
-    if (!entry.image.path) continue;
-    try {
-      const fullPath = fromCorpusRelativeImagePath(entry.image.path);
-      if (!existsSync(fullPath)) continue;
-      const hash = createHash("sha256").update(readFileSync(fullPath)).digest("hex");
-      const dhash = await computeDHash(fullPath).catch(() => "");
-      if (dhash) next.set(entry.id, { hash, dhash, path: entry.image.path });
-    } catch { /* skip unreadable */ }
-  }
-  dhashCache.clear();
-  for (const [id, fp] of next) dhashCache.set(id, fp);
-  persistDHashCache();
-}
-
-/** Get a fingerprint for one entry, computing + caching on first access (lazy). */
-async function fingerprintFor(entry: CorpusEntryT): Promise<CachedFingerprint | null> {
-  loadDHashCache();
-  if (!entry.image.path) return null;
-  const cached = dhashCache.get(entry.id);
-  if (cached && cached.path === entry.image.path) return cached;
-  try {
-    const fullPath = fromCorpusRelativeImagePath(entry.image.path);
-    if (!existsSync(fullPath)) return null;
-    const hash = createHash("sha256").update(readFileSync(fullPath)).digest("hex");
-    const dhash = await computeDHash(fullPath).catch(() => "");
-    if (!dhash) return null;
-    const fp: CachedFingerprint = { hash, dhash, path: entry.image.path };
-    dhashCache.set(entry.id, fp);
-    persistDHashCache();
-    return fp;
-  } catch { return null; }
 }
 
 // ─── in-batch dedup ──────────────────────────────────────────────────────────
@@ -405,37 +304,10 @@ export function prepareNewEntryPayload(payload: unknown, entries: CorpusEntryT[]
   return validateEntryPayload(raw);
 }
 
-/**
- * Commit-time duplicate gate. The client dedups at UPLOAD time (against the
- * corpus + batch siblings), but that check can go stale: a sibling committed
- * between stage and commit, a prior batch left a near-identical shot, or the
- * batch tracking missed a case. The commit endpoint is the single point where
- * the corpus actually mutates, so this is the authoritative gate.
- *
- * Computes the incoming image's SHA-256 + dHash and compares against every
- * committed entry. Returns the matched entry id + type, or null if unique.
- * Uses the same dhash cache + threshold as /api/check-duplicate for consistency.
- */
-export async function findDuplicateAtCommit(entry: CorpusEntryT, entries: CorpusEntryT[]): Promise<{ match: string; type: "exact" | "near" } | null> {
-  if (!entry.image.path) return null;
-  const fullPath = fromCorpusRelativeImagePath(entry.image.path);
-  if (!existsSync(fullPath)) return null; // can't fingerprint a missing image
-  const incomingHash = createHash("sha256").update(readFileSync(fullPath)).digest("hex");
-  // dHash can fail on unusual/encoded PNGs (sharp's libpng); the exact SHA-256
-  // check must still run, so don't bail when dHash is unavailable — just skip
-  // the near-dup comparison for that image.
-  const incomingDhash = await computeDHash(fullPath).catch(() => "");
-  loadDHashCache();
-  for (const existing of entries) {
-    if (existing.id === entry.id) continue; // self (PUT path)
-    if (!existing.image.path) continue;
-    const fp = await fingerprintFor(existing);
-    if (!fp) continue;
-    if (fp.hash === incomingHash) return { match: existing.id, type: "exact" };
-    if (incomingDhash && fp.dhash && hammingDistance(incomingDhash, fp.dhash) < DHASH_THRESHOLD) return { match: existing.id, type: "near" };
-  }
-  return null;
-}
+// findDuplicateAtCommit now lives in ../dedup.ts — re-exported here for backward
+// compat with existing tests/callers that import from ui-server. The canonical
+// import path is ../dedup.js; new code should import from there directly.
+export { findDuplicateAtCommit } from "../dedup.js";
 
 export function orphanedPrivateImagePaths(files: string[], entries: CorpusEntryT[]): string[] {
   const referenced = new Set(

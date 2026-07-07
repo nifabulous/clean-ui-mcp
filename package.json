@@ -31,6 +31,7 @@
     "query-stats": "tsc && node dist/scripts/query-stats.js",
     "restore-corpus": "tsc && node dist/scripts/restore-corpus.js",
     "clean-orphans": "tsc && node dist/scripts/clean-orphans.js",
+    "dedup-cleanup": "tsc && node dist/scripts/dedup-cleanup.js",
     "doctor": "tsc && node dist/scripts/doctor.js"
   },
   "keywords": [

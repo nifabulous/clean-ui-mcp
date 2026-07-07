@@ -227,7 +227,13 @@ describe("tagImage two-pass request shape", () => {
     process.env.OPENAI_API_KEY = "test-key";
     process.env.AUTO_TAG_PROVIDER_EXTRACTION = "openai";
     process.env.AUTO_TAG_PROVIDER_CRITIQUE = "openai";
-    mkdirSync(testDir, { recursive: true });
+    // Clear per-pass base URL overrides so critique routes through the native
+    // Responses API (output_text) that the mock returns, not callOpenAICompatible
+    // (chat completions choices[].message.content) that DeepSeek/NIM would use.
+    delete process.env.OPENAI_BASE_URL_CRITIQUE;
+    delete process.env.OPENAI_API_KEY_CRITIQUE;
+    delete process.env.OPENAI_AUTO_TAG_MODEL_CRITIQUE;
+    mkdirSync(testDir, { recursive: true, force: true });
     writeFileSync(testImage, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFeAJ5fVqRtwAAAABJRU5ErkJggg==", "base64"));
   });
 

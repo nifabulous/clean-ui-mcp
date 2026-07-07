@@ -698,17 +698,32 @@ established fact — do not re-describe or contradict it):
 ${JSON.stringify(extraction, null, 2)}
 ${a11yBlock}
 Step 1 — Observe first. Before writing anything else, list exactly 5 specific, concrete visual
-elements you can point to on screen (an icon color, an italic word, a specific spacing value, a
-copy choice, an interaction affordance). Put this list in "observations". Each item must be a
-single, pointable thing — not generic ("the layout").
+elements you can point to on screen. Each observation should be a DESIGN DECISION you can see
+evidence of, not just a description of what's there. Examples of good observations:
+- "The submit button uses text-only styling with no fill or border, relying on color alone for affordance"
+- "Status indicators are 8px naked color circles with no labels — readable by hue alone at a glance"
+- "The 'FOLLOWING' button uses all-caps verb tense to make the reversible action obvious"
+- "Image thumbnails are cropped to 1:1 squares, forcing compositional discipline over landscape realism"
+- "The left nav has icon-only buttons with no labels, creating memorization burden until muscle memory develops"
+Do NOT write generic observations like "the layout is clean" or "there is a sidebar." Each item
+must name a SPECIFIC, DEFENSIBLE choice the designer made and why it works or doesn't.
 
 Step 2 — Critique using ONLY items from your observations list. Return this JSON:
 
 {
   "observations": [],          // exactly 5 specific, pointable visual elements (required)
   "typographyNotes": "",       // 1-2 sentences on how the type choices create hierarchy
-  "draftCritique": "",         // 3-5 sentences: for EACH notable decision name DECISION + EFFECT + REJECTION
-  "draftWhatToSteal": [],      // 3-5 specific, copyable techniques with reasoning attached. Each is a string.
+  "draftCritique": "",         // 3-5 sentences. For EACH decision: name the DECISION (what was chosen),
+                               // the EFFECT (what perceptual/functional/behavioral outcome it creates for
+                               // the user — think about HOW the user interacts, not just what it looks like),
+                               // and the REJECTION (what conventional default it replaces). Write about the
+                               // USER'S EXPERIENCE, not the pixels — "muscle memory" beats "color coding,"
+                               // "reduces cognitive load at decision point" beats "clean grouping."
+  "draftWhatToSteal": [],      // 3-5 SPECIFIC, COPYABLE techniques a developer could reproduce. Each must
+                               // include the reasoning: not "use whitespace" but "reserve the brightest
+                               // accent color for the single element that must win attention so state
+                               // and action remain unmistakable." Name the technique, the constraint it
+                               // satisfies, and when NOT to use it.
   "draftAntiPatterns": [],     // REQUIRED, at least 1. Must describe a DIFFERENT decision than draftCritique.
   "draftAccessibilityRisks": [], // accessibility risks found on this screen. Empty if none. Each is a string.
                                // If ACCESSIBILITY GROUND TRUTH is provided above, use those metrics to

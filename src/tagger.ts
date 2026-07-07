@@ -637,6 +637,7 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
   "domainTags": [],        // 0-4 from: ${DOMAIN_TAGS.join(", ")}. The BUSINESS context of the
                            // page — read it off nav labels, breadcrumbs, headings, page titles
                            // (e.g. a "Settings / Billing and Usage" breadcrumb → billing, usage).
+                           // Example: "Settings / Integrations" -> domainTags:["integrations"].
                            // Leave [] if there's no clear business-domain signal.
   "dominantColors": [],    // copy from quantizedColors verbatim — do not invent hex values not in that list
   "accentColor": null,     // pick the primary interactive/brand color FROM quantizedColors only
@@ -662,6 +663,8 @@ Rules:
 - domainTags describes the page's business purpose, not its visual pattern — a billing page is
   still categories:["settings","dashboard"] AND domainTags:["billing","usage"]. Don't let one
   replace the other. Leave [] if no clear business-domain signal is visible.
+- Settings subpages with explicit page subjects must preserve that subject in domainTags:
+  "Settings / Integrations" or a page title "Integrations" -> domainTags:["integrations"].
 - If DOM signals are provided, treat them as ground truth for bodyFont, usesShadows, and
   spacingDensity. Do not contradict the computed values. Note significant a11y issues
   (low contrastRatio, high unlabeledInteractive, imagesMissingAlt) in your assessment.

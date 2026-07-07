@@ -21,6 +21,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { parseArgs } from "node:util";
 import type { TaggerOutput } from "../tagger.js";
+import { DomainTag } from "../schema.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DRAFT = resolve(__dirname, "..", "..", "corpus", "entries-draft.json");
@@ -83,6 +84,7 @@ async function reviewEntry(entry: DraftEntry, n: number, total: number): Promise
   console.log(`  Category:  ${entry.categories.join(", ")}`);
   console.log(`  Style:     ${entry.styleTags.join(", ")}`);
   console.log(`  Components:${(entry.components ?? []).length ? ` ${(entry.components ?? []).join(", ")}` : " (none)"}`);
+  console.log(`  Domain:    ${(entry.domainTags ?? []).length ? (entry.domainTags ?? []).join(", ") : "(none)"}`);
   console.log(`  Colors:    ${entry.visual.dominantColors.join(", ")} | accent: ${entry.visual.accentColor ?? "none"}`);
   console.log(`  Type:      ${entry.visual.typePairing.display ?? "?"} / ${entry.visual.typePairing.body ?? "?"}`);
   console.log(`  Spacing:   ${entry.visual.spacingDensity} | Corners: ${entry.visual.cornerStyle}`);
@@ -110,6 +112,13 @@ async function reviewEntry(entry: DraftEntry, n: number, total: number): Promise
 
     const components = await ask("Components (comma-separated)", (entry.components ?? []).join(", "));
     entry.components = components.split(",").map((t) => t.trim()).filter(Boolean);
+
+    const domains = await ask("Domain tags (comma-separated)", (entry.domainTags ?? []).join(", "));
+    const allowedDomains = DomainTag.options as readonly string[];
+    entry.domainTags = domains
+      .split(",")
+      .map((t) => t.trim())
+      .filter((tag) => tag && allowedDomains.includes(tag));
 
     console.log(`\n  Current critique: ${entry.critique.replace("[DRAFT — REWRITE] ", "")}`);
     const rewrite = await ask("Rewrite critique? (Enter to keep)", "");

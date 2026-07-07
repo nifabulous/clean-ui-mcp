@@ -249,6 +249,7 @@ describe("tagImage two-pass request shape", () => {
         ? JSON.stringify({
             patternType: "dashboard", categories: ["dashboard"], styleTags: ["minimal"],
             components: ["sidebar-nav", "kpi-card", "donut-chart", "line-chart", "report-list"],
+            domainTags: ["integrations"],
             dominantColors: ["#ffffff", "#111111"], accentColor: null,
             displayFont: null, bodyFont: null, spacingDensity: "moderate", cornerStyle: "slight-round",
             usesShadows: false, usesBorders: true,
@@ -296,9 +297,13 @@ describe("tagImage two-pass request shape", () => {
       confirmed: false,
     });
     expect(entry.components).toEqual(["sidebar-nav", "kpi-card", "donut-chart", "line-chart", "report-list"]);
+    expect(entry.domainTags).toEqual(["integrations"]);
     const pass1Prompt = String(calls[0].body.input?.[1]?.content?.[0]?.text ?? "");
     expect(pass1Prompt).toContain('"components"');
     expect(pass1Prompt).toContain("kpi-card");
+    expect(pass1Prompt).toContain('"domainTags"');
+    expect(pass1Prompt).toContain('Settings / Integrations');
+    expect(pass1Prompt).toContain('domainTags:["integrations"]');
   });
 
   it("overrides bodyFont from DOM signals and injects them into the prompt", async () => {

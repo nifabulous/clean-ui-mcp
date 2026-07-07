@@ -1380,6 +1380,7 @@ async function critiqueQueue() {
     if (c.qualityTier) next.qualityTier = c.qualityTier;
     if (typeof c.qualityScore === "number") next.qualityScore = c.qualityScore;
     if (c.typographyNotes) next.visual.typePairing.notes = c.typographyNotes;
+    if (c.mood) next.mood = c.mood;
     next._raw = { ...item._raw, critique: true };
     state.bulkQueue[index] = next;
     renderBulk();

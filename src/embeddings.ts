@@ -240,6 +240,7 @@ export function entryToDocument(entry: {
   categories:   string[];
   styleTags:    string[];
   components?:   string[];
+  domainTags?:   string[];
   critique:     string;
   whatToSteal:  string[];
   antiPatterns?: { antiPatterns: string[]; whereThisFails?: string[]; accessibilityRisks?: string[] };
@@ -274,6 +275,7 @@ export function entryToDocument(entry: {
     `Categories: ${entry.categories.join(", ")}.`,
     `Style: ${entry.styleTags.join(", ")}.`,
     entry.components?.length ? `Components: ${entry.components.join(", ")}.` : "",
+    entry.domainTags?.length ? `Domain: ${entry.domainTags.join(", ")}.` : "",
   ].filter(Boolean).join(" ");
 
   const visualAttrs = [

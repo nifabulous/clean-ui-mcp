@@ -11,6 +11,7 @@ describe("tagger sanitization", () => {
       categories: ["dashboard", "made-up"],
       styleTags: ["minimal", "nope"],
       components: ["kpi-card", "donut-chart", "made-up-widget"],
+      domainTags: ["billing", "usage", "fake-domain"],
       dominantColors: ["#ABCDEF", "blue", "#111111"],
       accentColor: "red",
       spacingDensity: "huge",
@@ -24,6 +25,7 @@ describe("tagger sanitization", () => {
     expect(sanitized.categories).toEqual(["dashboard"]);
     expect(sanitized.styleTags).toEqual(["minimal"]);
     expect(sanitized.components).toEqual(["kpi-card", "donut-chart"]);
+    expect(sanitized.domainTags).toEqual(["billing", "usage"]);
     expect(sanitized.dominantColors).toEqual(["#abcdef", "#111111"]);
     expect(sanitized.accentColor).toBeNull();
     expect(sanitized.spacingDensity).toBe("moderate");

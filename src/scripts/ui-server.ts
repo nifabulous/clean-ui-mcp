@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { imageSize } from "image-size";
 import { chromium } from "playwright";
-import { Corpus, CorpusEntry, Category, StyleTag, Component, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT } from "../schema.js";
+import { Corpus, CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT } from "../schema.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
 import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../tagger.js";
 import type { CaptureMeta, DomSignals } from "./capture.js";
@@ -930,6 +930,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       categories: Category.options,
       styleTags: StyleTag.options,
       components: Component.options,
+      domainTags: DomainTag.options,
       patternTypes: PatternType.options,
       spacingDensities: SpacingDensity.options,
       cornerStyles: CornerStyle.options,
@@ -1288,6 +1289,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         categories: tagged.categories as CorpusEntryT["categories"],
         styleTags: tagged.styleTags as CorpusEntryT["styleTags"],
         components: tagged.components as CorpusEntryT["components"],
+        domainTags: (tagged.domainTags?.length ? tagged.domainTags : undefined) as CorpusEntryT["domainTags"],
         visual: tagged.visual as CorpusEntryT["visual"],
         critique: tagged.critique,
         whatToSteal: tagged.whatToSteal,

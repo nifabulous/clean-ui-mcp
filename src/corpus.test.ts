@@ -101,6 +101,25 @@ describe("corpus search (fixtures)", () => {
     const results = await searchEntries({ query: "donut chart", limit: 5 });
     expect(results[0]?.id).toBe("newsroom-analytics");
   });
+
+  it("matches domainTags terms in keyword search", async () => {
+    setCorpusForTesting([
+      {
+        ...fixtures[0],
+        id: "billing-page",
+        title: "Billing Dashboard",
+        domainTags: ["billing", "usage"],
+      },
+      {
+        ...fixtures[1],
+        id: "generic-dashboard",
+        title: "Generic Dashboard",
+      },
+    ]);
+
+    const results = await searchEntries({ query: "billing", limit: 5 });
+    expect(results[0]?.id).toBe("billing-page");
+  });
 });
 
 // ── real-corpus tests: only structural contracts, never specific content ─────

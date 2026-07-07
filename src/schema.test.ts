@@ -157,6 +157,23 @@ describe("corpus schema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts domainTags as optional business context", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      domainTags: ["billing", "usage"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.domainTags).toEqual(["billing", "usage"]);
+  });
+
+  it("rejects unknown domainTags values", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      domainTags: ["billing", "made-up-domain"],
+    });
+    expect(result.success).toBe(false);
+  });
+
   // ── additive v2 fields: qualityTier, voice, colorRoles, lastVerified ───────
 
   it("defaults qualityTier to 'exceptional' when omitted", () => {

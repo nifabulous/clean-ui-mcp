@@ -104,6 +104,31 @@ export const Component = z.enum([
   "map-view",
 ]);
 
+/**
+ * Domain tags — the BUSINESS/PRODUCT context of the page (billing, security,
+ * team management), distinct from `categories` (design pattern: dashboard,
+ * settings) and `components` (physical UI parts: sidebar-nav, data-table).
+ * A billing page is correctly tagged categories:["settings","dashboard"] —
+ * but that gives no way to answer "show me billing screens."
+ */
+export const DomainTag = z.enum([
+  "billing",
+  "usage",
+  "team-management",
+  "security",
+  "integrations",
+  "analytics",
+  "notifications-settings",
+  "audit-log",
+  "api-keys",
+  "permissions-roles",
+  "profile-account",
+  "data-export",
+  "support-help",
+  "legal-compliance",
+  "workspace-settings",
+]);
+
 export const SpacingDensity = z.enum(["compact", "moderate", "spacious"]);
 export const CornerStyle = z.enum(["sharp", "slight-round", "pill", "mixed"]);
 
@@ -337,6 +362,7 @@ export const CorpusEntry = z.object({
   categories: z.array(Category).min(1).max(4),
   styleTags: z.array(StyleTag).min(1).max(4),
   components: z.array(Component).max(10).default([]),
+  domainTags: z.array(DomainTag).max(4).optional(), // business/product context — see DomainTag docs
 
   source: SourceAttribution,
   image: ImageRef,

@@ -17,7 +17,7 @@ import "./env.js";
 import { readFileSync } from "node:fs";
 import { extname, basename } from "node:path";
 import { toCorpusRelativePath } from "./paths.js";
-import { Component, detectPlatform } from "./schema.js";
+import { Component, DomainTag, detectPlatform } from "./schema.js";
 import { Vibrant } from "node-vibrant/node";
 import sharp from "sharp";
 
@@ -36,6 +36,8 @@ const STYLE_TAGS = [
 ] as const;
 
 const COMPONENTS = Component.options;
+
+const DOMAIN_TAGS = DomainTag.options;
 
 const SPACING_DENSITIES = ["compact", "moderate", "spacious"] as const;
 const CORNER_STYLES = ["sharp", "slight-round", "pill", "mixed"] as const;
@@ -129,6 +131,7 @@ export interface TaggerOutput {
   categories:     string[];
   styleTags:      string[];
   components:     string[];
+  domainTags?:    string[];
   source: {
     productName: string;
     url:         string | null;
@@ -631,6 +634,10 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
   "categories": [],        // 1-3 from: ${CATEGORIES.join(", ")}
   "styleTags": [],         // 1-3 from: ${STYLE_TAGS.join(", ")}
   "components": [],        // 3-10 visible UI building blocks from: ${COMPONENTS.join(", ")}
+  "domainTags": [],        // 0-4 from: ${DOMAIN_TAGS.join(", ")}. The BUSINESS context of the
+                           // page — read it off nav labels, breadcrumbs, headings, page titles
+                           // (e.g. a "Settings / Billing and Usage" breadcrumb → billing, usage).
+                           // Leave [] if there's no clear business-domain signal.
   "dominantColors": [],    // copy from quantizedColors verbatim — do not invent hex values not in that list
   "accentColor": null,     // pick the primary interactive/brand color FROM quantizedColors only
   "displayFont": null,     // name if you're confident; null beats a wrong guess
@@ -652,6 +659,9 @@ Rules:
 - Components are visible evidence, not product intent. Include chart/card/list/navigation controls
   actually present in the screenshot. Prefer specific tags (donut-chart, line-chart, kpi-card)
   over generic chart/card terms when the specific component is visible.
+- domainTags describes the page's business purpose, not its visual pattern — a billing page is
+  still categories:["settings","dashboard"] AND domainTags:["billing","usage"]. Don't let one
+  replace the other. Leave [] if no clear business-domain signal is visible.
 - If DOM signals are provided, treat them as ground truth for bodyFont, usesShadows, and
   spacingDensity. Do not contradict the computed values. Note significant a11y issues
   (low contrastRatio, high unlabeledInteractive, imagesMissingAlt) in your assessment.
@@ -757,6 +767,16 @@ function componentsFromAllowed(value: unknown): string[] {
   return [...new Set(normalized)].slice(0, 10);
 }
 
+function domainTagsFromAllowed(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const allowed = DOMAIN_TAGS as readonly string[];
+  const normalized = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => allowed.includes(item));
+  return [...new Set(normalized)].slice(0, 4);
+}
+
 function hexColors(value: unknown, fallback: string[]): string[] {
   if (!Array.isArray(value)) return fallback;
   const colors = value
@@ -802,6 +822,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   categories: string[];
   styleTags: string[];
   components: string[];
+  domainTags: string[];
   dominantColors: string[];
   accentColor: string | null;
   colorRoles?: { canvas: string; surface: string; ink: string; muted: string | null; accent: string };
@@ -871,6 +892,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
     categories: listFromAllowed(parsed.categories, CATEGORIES, ["dashboard"]),
     styleTags: listFromAllowed(parsed.styleTags, STYLE_TAGS, ["minimal"]),
     components: componentsFromAllowed(parsed.components),
+    domainTags: domainTagsFromAllowed(parsed.domainTags),
     dominantColors: hexColors(parsed.dominantColors, ["#ffffff", "#111111"]),
     accentColor: nullableHex(parsed.accentColor),
     colorRoles,
@@ -1401,6 +1423,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       categories: extraction.categories,
       styleTags:  extraction.styleTags,
       components: extraction.components,
+    domainTags: extraction.domainTags.length ? extraction.domainTags : undefined,
       source: {
         productName: effectiveName,
         url:         input.url ?? null,
@@ -1502,6 +1525,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     categories: extraction.categories,
     styleTags:  extraction.styleTags,
     components: extraction.components,
+    domainTags: extraction.domainTags.length ? extraction.domainTags : undefined,
     source: {
       productName: effectiveName,
       url:         input.url ?? null,

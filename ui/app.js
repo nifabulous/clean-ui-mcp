@@ -9,7 +9,7 @@
 
 const API = ''; // same-origin
 let E = [];     // entries (live, mapped to the shape components expect)
-let SCHEMA = { categories: [], styleTags: [], components: [], patternTypes: [], spacingDensities: [], cornerStyles: [], imageVisibilities: [] };
+let SCHEMA = { categories: [], styleTags: [], components: [], domainTags: [], patternTypes: [], spacingDensities: [], cornerStyles: [], imageVisibilities: [] };
 let HEALTH = { entryCount: 0, snapshotCount: 0, newestSnapshotEpoch: null, newestSnapshotAgeMs: null };
 let CONFIG = {};
 
@@ -33,6 +33,7 @@ const blankDraft = () => ({
   categories: [],
   styleTags: [],
   components: [],
+  domainTags: [],
   source: { productName:'', url:'', capturedAt:'', capturedBy:'self', lastVerified:'' },
   image: { visibility:'private', path:null, width:null, height:null },
   visual: { dominantColors:[], accentColor:null, colorRoles:{canvas:'',surface:'',ink:'',muted:'',accent:''}, typePairing:{display:'',body:'',notes:''}, spacingDensity:'moderate', cornerStyle:'slight-round', usesShadows:false, usesBorders:true },
@@ -93,6 +94,7 @@ function mapEntry(entry) {
     styles: entry.styleTags,
     categories: entry.categories,
     components: entry.components || [],
+    domainTags: entry.domainTags || [],
     tier: entry.qualityTier || 'exceptional',
     score: entry.qualityScore,
     steals: (entry.whatToSteal || []).length,
@@ -1641,7 +1643,7 @@ page('add','Add entry','new corpus entry', function(){
         </label>
         <details class="classification-block" open>
           <summary>Classification</summary>
-          <pre>${esc(JSON.stringify({patternType:draft.patternType, categories:draft.categories, styleTags:draft.styleTags, components:draft.components || [], platform:draft.platform}, null, 2))}</pre>
+          <pre>${esc(JSON.stringify({patternType:draft.patternType, categories:draft.categories, styleTags:draft.styleTags, components:draft.components || [], domainTags:draft.domainTags || [], platform:draft.platform}, null, 2))}</pre>
         </details>
         <button class="btn primary" type="submit" ${draft._saving?'disabled':''}>${draft._saving?'Saving…':'Save entry'}</button>
       </form>

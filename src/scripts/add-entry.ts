@@ -27,7 +27,7 @@ import { parseArgs } from "node:util";
 import { execSync } from "node:child_process";
 import { imageSize } from "image-size";
 
-import { CorpusEntry, Category, StyleTag, Component, PatternType, Corpus } from "../schema.js";
+import { CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, Corpus } from "../schema.js";
 import type { CorpusEntryT } from "../schema.js";
 import { toCorpusRelativePath } from "../paths.js";
 import { hasVisionKey, tagImage } from "../tagger.js";
@@ -203,6 +203,7 @@ if (tagged) {
   console.log(`     categories:  ${(tagged.categories as string[]).join(", ")}`);
   console.log(`     styleTags:   ${(tagged.styleTags as string[]).join(", ")}`);
   console.log(`     components:  ${((tagged.components as string[] | undefined) ?? []).join(", ")}`);
+  console.log(`     domainTags:  ${((tagged.domainTags as string[] | undefined) ?? []).join(", ")}`);
   const visual = tagged.visual as CorpusEntryT["visual"] | undefined;
   console.log(`     colors:      ${visual?.dominantColors.join(", ") ?? ""}`);
   console.log(`     accent:      ${visual?.accentColor ?? "none"}`);
@@ -240,6 +241,18 @@ if (taggedComponents.length) {
     : await askEnumMulti("Visible components (optional):", Component.options, 0);
 } else {
   components = await askEnumMulti("Visible components (optional):", Component.options, 0);
+}
+const taggedDomainTags = ((tagged?.domainTags as string[] | undefined) ?? [])
+  .filter((domain) => (DomainTag.options as readonly string[]).includes(domain))
+  .slice(0, 4);
+let domainTags = taggedDomainTags;
+if (taggedDomainTags.length) {
+  const accept = await askBool(`  Accept tagger domain tags (${taggedDomainTags.join(", ")})?`, true);
+  domainTags = accept
+    ? taggedDomainTags
+    : await askEnumMulti("Business domain tags (optional):", DomainTag.options, 0);
+} else {
+  domainTags = await askEnumMulti("Business domain tags (optional):", DomainTag.options, 0);
 }
 const patternType = await askEnum(
   "Primary pattern type (the ONE pattern this exemplifies):",
@@ -336,6 +349,7 @@ const newEntry: CorpusEntryT = {
   categories: categories as CorpusEntryT["categories"],
   styleTags:  styleTags  as CorpusEntryT["styleTags"],
   components: components as CorpusEntryT["components"],
+  domainTags: domainTags.length ? domainTags as CorpusEntryT["domainTags"] : undefined,
   source: { productName, url, capturedAt: today, capturedBy: "self" },
   image: imageRef,
   visual: {

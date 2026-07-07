@@ -9,6 +9,7 @@ describe("entryToDocument", () => {
       categories: ["dashboard", "navigation"],
       styleTags: ["dense-data"],
       components: ["sidebar-nav", "kpi-card", "donut-chart", "line-chart", "report-list"],
+      domainTags: ["integrations"],
       critique: "This dashboard organizes editorial metrics and reports into scan-friendly regions with clear hierarchy.",
       whatToSteal: ["Use KPI cards above charts so operators can read totals before trend detail."],
       antiPatterns: { antiPatterns: ["Avoids hiding operational reports behind a single analytics drawer."] },
@@ -25,5 +26,6 @@ describe("entryToDocument", () => {
     });
 
     expect(doc).toContain("Components: sidebar-nav, kpi-card, donut-chart, line-chart, report-list.");
+    expect(doc).toContain("Domain: integrations.");
   });
 });

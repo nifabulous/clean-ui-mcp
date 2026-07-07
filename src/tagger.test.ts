@@ -227,7 +227,13 @@ describe("tagImage two-pass request shape", () => {
     process.env.OPENAI_API_KEY = "test-key";
     process.env.AUTO_TAG_PROVIDER_EXTRACTION = "openai";
     process.env.AUTO_TAG_PROVIDER_CRITIQUE = "openai";
-    mkdirSync(testDir, { recursive: true });
+    // Clear per-pass base URL overrides so critique routes through the native
+    // Responses API (output_text) that the mock returns, not callOpenAICompatible
+    // (chat completions choices[].message.content) that DeepSeek/NIM would use.
+    delete process.env.OPENAI_BASE_URL_CRITIQUE;
+    delete process.env.OPENAI_API_KEY_CRITIQUE;
+    delete process.env.OPENAI_AUTO_TAG_MODEL_CRITIQUE;
+    mkdirSync(testDir, { recursive: true, force: true });
     writeFileSync(testImage, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFeAJ5fVqRtwAAAABJRU5ErkJggg==", "base64"));
   });
 
@@ -249,6 +255,7 @@ describe("tagImage two-pass request shape", () => {
         ? JSON.stringify({
             patternType: "dashboard", categories: ["dashboard"], styleTags: ["minimal"],
             components: ["sidebar-nav", "kpi-card", "donut-chart", "line-chart", "report-list"],
+            domainTags: ["integrations"],
             dominantColors: ["#ffffff", "#111111"], accentColor: null,
             displayFont: null, bodyFont: null, spacingDensity: "moderate", cornerStyle: "slight-round",
             usesShadows: false, usesBorders: true,
@@ -296,9 +303,13 @@ describe("tagImage two-pass request shape", () => {
       confirmed: false,
     });
     expect(entry.components).toEqual(["sidebar-nav", "kpi-card", "donut-chart", "line-chart", "report-list"]);
+    expect(entry.domainTags).toEqual(["integrations"]);
     const pass1Prompt = String(calls[0].body.input?.[1]?.content?.[0]?.text ?? "");
     expect(pass1Prompt).toContain('"components"');
     expect(pass1Prompt).toContain("kpi-card");
+    expect(pass1Prompt).toContain('"domainTags"');
+    expect(pass1Prompt).toContain('Settings / Integrations');
+    expect(pass1Prompt).toContain('domainTags:["integrations"]');
   });
 
   it("overrides bodyFont from DOM signals and injects them into the prompt", async () => {

@@ -132,6 +132,9 @@ export interface TaggerOutput {
   styleTags:      string[];
   components:     string[];
   domainTags?:    string[];
+  colorScheme?:   string;
+  industryVertical?: string;
+  responsiveBehavior?: string;
   source: {
     productName: string;
     url:         string | null;
@@ -186,6 +189,7 @@ export interface TaggerOutput {
     examples: string[];
     avoid: string[];
   };
+  mood?:           string;
   qualityTier:     string;
   qualityScore:    number;
   addedAt:         string;
@@ -637,7 +641,17 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
   "domainTags": [],        // 0-4 from: ${DOMAIN_TAGS.join(", ")}. The BUSINESS context of the
                            // page — read it off nav labels, breadcrumbs, headings, page titles
                            // (e.g. a "Settings / Billing and Usage" breadcrumb → billing, usage).
+                           // Example: "Settings / Integrations" -> domainTags:["integrations"].
                            // Leave [] if there's no clear business-domain signal.
+  "colorScheme": "",       // ONE from: light, dark. The page-level background theme.
+  "industryVertical": "",  // ONE industry the product belongs to (fintech, devtools, healthcare,
+                           // e-commerce, media, education, enterprise-saas, consumer-social,
+                           // productivity, security, ai-ml, crypto, real-estate, legal, travel).
+                           // Infer from product name, copy, visual language. Leave "" if unclear.
+  "responsiveBehavior": "",// ONE from: responsive, fixed-width, adaptive. Whether the layout
+                           // adapts to viewport. "responsive" = fluid grid that reflows; "fixed-width"
+                           // = centered max-width container that doesn't reflow; "adaptive" =
+                           // distinct layouts per breakpoint. Infer from visible container behavior.
   "dominantColors": [],    // copy from quantizedColors verbatim — do not invent hex values not in that list
   "accentColor": null,     // pick the primary interactive/brand color FROM quantizedColors only
   "displayFont": null,     // name if you're confident; null beats a wrong guess
@@ -662,6 +676,8 @@ Rules:
 - domainTags describes the page's business purpose, not its visual pattern — a billing page is
   still categories:["settings","dashboard"] AND domainTags:["billing","usage"]. Don't let one
   replace the other. Leave [] if no clear business-domain signal is visible.
+- Settings subpages with explicit page subjects must preserve that subject in domainTags:
+  "Settings / Integrations" or a page title "Integrations" -> domainTags:["integrations"].
 - If DOM signals are provided, treat them as ground truth for bodyFont, usesShadows, and
   spacingDensity. Do not contradict the computed values. Note significant a11y issues
   (low contrastRatio, high unlabeledInteractive, imagesMissingAlt) in your assessment.
@@ -695,24 +711,58 @@ established fact — do not re-describe or contradict it):
 ${JSON.stringify(extraction, null, 2)}
 ${a11yBlock}
 Step 1 — Observe first. Before writing anything else, list exactly 5 specific, concrete visual
-elements you can point to on screen (an icon color, an italic word, a specific spacing value, a
-copy choice, an interaction affordance). Put this list in "observations". Each item must be a
-single, pointable thing — not generic ("the layout").
+elements you can point to on screen. Each observation should be a DESIGN DECISION you can see
+evidence of, not just a description of what's there. Think about WHO the user is (first-time vs
+returning, mobile vs desktop, expert vs novice, users with disabilities) and HOW they interact
+(muscle memory, scanning patterns, error recovery, decision-making under time pressure).
+Examples of good observations:
+- "The submit button uses text-only styling with no fill or border, relying on color alone for affordance"
+- "Status indicators are 8px naked color circles with no labels — readable by hue alone at a glance"
+- "The 'FOLLOWING' button uses all-caps verb tense to make the reversible action obvious"
+- "Image thumbnails are cropped to 1:1 squares, forcing compositional discipline over landscape realism"
+- "The left nav has icon-only buttons with no labels, creating memorization burden until muscle memory develops"
+Do NOT write generic observations like "the layout is clean" or "there is a sidebar." Each item
+must name a SPECIFIC, DEFENSIBLE choice the designer made and why it works or doesn't.
 
 Step 2 — Critique using ONLY items from your observations list. Return this JSON:
 
 {
   "observations": [],          // exactly 5 specific, pointable visual elements (required)
   "typographyNotes": "",       // 1-2 sentences on how the type choices create hierarchy
-  "draftCritique": "",         // 3-5 sentences: for EACH notable decision name DECISION + EFFECT + REJECTION
-  "draftWhatToSteal": [],      // 3-5 specific, copyable techniques with reasoning attached. Each is a string.
-  "draftAntiPatterns": [],     // REQUIRED, at least 1. Must describe a DIFFERENT decision than draftCritique.
+  "mood": "",                  // one phrase: the emotional register of the design. Read from color
+                               // choices, typography weight, whitespace, and copy tone. Examples:
+                               // "playful and approachable", "clinical and data-forward",
+                               // "confident and restrained", "warm and tactile", "authoritative".
+  "draftCritique": "",         // 3-5 sentences. For EACH decision: name the DECISION (what was chosen),
+                               // the EFFECT (what perceptual/functional/behavioral outcome it creates for
+                               // the user — think about HOW the user interacts, not just what it looks like),
+                               // and the REJECTION (what conventional default it replaces). Write about the
+                               // USER'S EXPERIENCE, not the pixels — "muscle memory" beats "color coding,"
+                               // "reduces cognitive load at decision point" beats "clean grouping."
+                               // Name the SPECIFIC USER TYPE affected: "returning users scan faster"
+                               // beats "users scan faster," "first-time users may feel lost" beats
+                               // "users may feel lost."
+  "draftWhatToSteal": [],      // 3-5 SPECIFIC, COPYABLE techniques a developer could reproduce. Each must
+                               // include the reasoning: not "use whitespace" but "reserve the brightest
+                               // accent color for the single element that must win attention so state
+                               // and action remain unmistakable." Name the technique, the constraint it
+                               // satisfies, and when NOT to use it.
+  "draftAntiPatterns": [],     // REQUIRED, at least 2. Each must describe a DIFFERENT decision than
+                               // draftCritique and teach a SPECIFIC lesson: "what this design avoids
+                               // doing, and why avoiding it matters for this user/task type." Think
+                               // about what conventional approaches would have FAILED here — what
+                               // would a lazy designer have done that this designer deliberately rejected?
   "draftAccessibilityRisks": [], // accessibility risks found on this screen. Empty if none. Each is a string.
                                // If ACCESSIBILITY GROUND TRUTH is provided above, use those metrics to
                                // identify concrete risks — e.g. "contrastRatio of 3.2 falls below WCAG AA
                                // 4.5:1 for body text" or "30 interactive elements lack accessible names".
-                               // Omit the metrics themselves if no ground truth is provided — assess
-                               // from the screenshot instead.
+                               // If no ground truth, actively probe for these common a11y failures:
+                               // - Color-only differentiation (status, state) invisible to color-blind users
+                               // - Icon-only controls without text labels or aria — screen reader users can't identify them
+                               // - Dense data without sufficient line-height/spacing — dyslexic users struggle
+                               // - Interactive elements too small or close together — motor-impaired users mis-tap
+                               // - Information conveyed only visually (no text alternative) — screen reader users miss it
+                               // Name the specific element, the user type affected, and the WCAG criterion if known.
   "businessRationale": null,   // null if isolated component crop/no product context; otherwise object below
                                // { "businessGoal": ONE from: ${BUSINESS_GOALS.join(", ")},
                                //   "targetUser": "short phrase, <=80 chars",
@@ -735,9 +785,12 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
 
 Rules:
 - Every draftCritique/draftWhatToSteal claim must trace back to something in "observations".
-- draftAntiPatterns must not restate draftCritique's decision from the opposite angle.
-- draftAccessibilityRisks should be concrete and specific — name the element, the issue, the threshold.
-  Empty array is acceptable when the design has no significant a11y risks.
+- draftAntiPatterns must not restate draftCritique's decision from the opposite angle. Each should
+  teach a distinct lesson about what the design deliberately avoids and why that avoidance matters.
+- draftAccessibilityRisks should be concrete and specific — name the element, the user type affected,
+  the issue, and the threshold. Aim for 2-3 risks on most screens; only return [] when the design
+  genuinely has no a11y issues. Probe systematically: color differentiation, icon-only controls,
+  density/readability, touch targets, and text alternatives.
 - Quality tier calibration: "exceptional" means worth learning from, not flawless.
   "cautionary" is rare and reserved for screens whose main lesson is the failure itself.
 - businessRationale is about business intent, not visual quality. Return null rather than inventing intent
@@ -823,6 +876,10 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   styleTags: string[];
   components: string[];
   domainTags: string[];
+  colorScheme: string;
+  industryVertical: string;
+  responsiveBehavior: string;
+  mood: string;
   dominantColors: string[];
   accentColor: string | null;
   colorRoles?: { canvas: string; surface: string; ink: string; muted: string | null; accent: string };
@@ -893,6 +950,10 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
     styleTags: listFromAllowed(parsed.styleTags, STYLE_TAGS, ["minimal"]),
     components: componentsFromAllowed(parsed.components),
     domainTags: domainTagsFromAllowed(parsed.domainTags),
+    colorScheme: oneFromAllowed(parsed.colorScheme, ["light", "dark"], ""),
+    industryVertical: text(parsed.industryVertical).slice(0, 40),
+    responsiveBehavior: oneFromAllowed(parsed.responsiveBehavior, ["responsive", "fixed-width", "adaptive"], ""),
+    mood: text(parsed.mood).slice(0, 60),
     dominantColors: hexColors(parsed.dominantColors, ["#ffffff", "#111111"]),
     accentColor: nullableHex(parsed.accentColor),
     colorRoles,
@@ -1424,6 +1485,9 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       styleTags:  extraction.styleTags,
       components: extraction.components,
     domainTags: extraction.domainTags.length ? extraction.domainTags : undefined,
+    colorScheme: extraction.colorScheme || undefined,
+    industryVertical: extraction.industryVertical || undefined,
+    responsiveBehavior: extraction.responsiveBehavior || undefined,
       source: {
         productName: effectiveName,
         url:         input.url ?? null,
@@ -1526,6 +1590,9 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     styleTags:  extraction.styleTags,
     components: extraction.components,
     domainTags: extraction.domainTags.length ? extraction.domainTags : undefined,
+    colorScheme: extraction.colorScheme || undefined,
+    industryVertical: extraction.industryVertical || undefined,
+    responsiveBehavior: extraction.responsiveBehavior || undefined,
     source: {
       productName: effectiveName,
       url:         input.url ?? null,
@@ -1562,6 +1629,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     layout:          extraction.layout,
     businessRationale: critique.businessRationale,
     voice:           critique.voice,
+    mood:            critique.mood || undefined,
     qualityTier:     critique.qualityTier,
     qualityScore:    critique.qualityTier === "cautionary" ? 2 : 3,
     addedAt:         today,
@@ -1599,6 +1667,7 @@ export async function generateCritique(
   antiPatterns: { antiPatterns: string[]; whereThisFails: string[]; accessibilityRisks: string[] };
   businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
   voice?: { tone: string; examples: string[]; avoid: string[] };
+  mood?: string;
   qualityTier: string;
   qualityScore: number;
   typographyNotes: string;
@@ -1640,5 +1709,6 @@ export async function generateCritique(
     qualityTier: critique.qualityTier,
     qualityScore: critique.qualityTier === "cautionary" ? 2 : 3,
     typographyNotes: critique.typographyNotes || "",
+    mood: critique.mood || undefined,
   };
 }

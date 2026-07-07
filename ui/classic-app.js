@@ -6,7 +6,7 @@ const API = "/api";
 const today = () => new Date().toISOString().slice(0, 10);
 const state = {
   entries: [],
-  schema: { categories: [], styleTags: [], components: [], patternTypes: [], spacingDensities: [], cornerStyles: [], imageVisibilities: [] },
+  schema: { categories: [], styleTags: [], components: [], domainTags: [], patternTypes: [], spacingDensities: [], cornerStyles: [], imageVisibilities: [] },
   selectedId: null,
   view: "detail",
   query: "",
@@ -130,7 +130,7 @@ function filteredEntries() {
     if (!terms.length) return true;
     const haystack = [
       entry.id, entry.title, entry.source.productName, entry.source.url, entry.critique,
-      ...entry.whatToSteal, ...(entry.antiPatterns?.antiPatterns || []), ...(entry.antiPatterns?.whereThisFails || []), entry.patternType, ...entry.categories, ...entry.styleTags, ...(entry.components || []),
+      ...entry.whatToSteal, ...(entry.antiPatterns?.antiPatterns || []), ...(entry.antiPatterns?.whereThisFails || []), entry.patternType, ...entry.categories, ...entry.styleTags, ...(entry.components || []), ...(entry.domainTags || []),
       ...entry.visual.dominantColors, entry.visual.accentColor, entry.visual.spacingDensity,
       entry.visual.cornerStyle, entry.visual.typePairing.display, entry.visual.typePairing.body,
       entry.visual.typePairing.notes,
@@ -320,6 +320,7 @@ function renderLibrary() {
             ${entry.categories.map((cat) => `<span class="tag category">${cat}</span>`).join("")}
             ${entry.styleTags.map((tag) => `<span class="tag style">${tag}</span>`).join("")}
             ${(entry.components || []).map((component) => `<span class="tag">${component}</span>`).join("")}
+            ${(entry.domainTags || []).map((domain) => `<span class="tag">${domain}</span>`).join("")}
           </div>
         </div>
         <div class="detail-body">
@@ -346,6 +347,7 @@ function blankDraft() {
     categories: [],
     styleTags: [],
     components: [],
+    domainTags: [],
     source: { productName: "", url: null, capturedAt: today(), capturedBy: "self" },
     image: { visibility: "private", path: null, width: null, height: null },
     visual: {
@@ -396,6 +398,9 @@ function syncDraftFromForm() {
   ].filter(Boolean))];
   state.draft.components = [...new Set(
     [...form.querySelectorAll("input[name='components']:checked")].map((input) => input.value),
+  )];
+  state.draft.domainTags = [...new Set(
+    [...form.querySelectorAll("input[name='domainTags']:checked")].map((input) => input.value),
   )];
   state.draft.patternType = form.patternType.value;
   if (form.platform) state.draft.platform = form.platform.value;
@@ -572,6 +577,7 @@ function renderForm() {
               <label>Extra categories<div class="check-grid">${state.schema.categories.map((cat) => `<label class="check-chip"><input type="checkbox" name="categories" value="${cat}" ${entry.categories.slice(1).includes(cat) ? "checked" : ""}><span>${cat}</span></label>`).join("")}</div></label>
               <label>Extra style tags<div class="check-grid">${state.schema.styleTags.map((tag) => `<label class="check-chip"><input type="checkbox" name="styleTags" value="${tag}" ${entry.styleTags.slice(1).includes(tag) ? "checked" : ""}><span>${tag}</span></label>`).join("")}</div></label>
               <label>Visible components<div class="check-grid">${(state.schema.components || []).map((component) => `<label class="check-chip"><input type="checkbox" name="components" value="${component}" ${(entry.components || []).includes(component) ? "checked" : ""}><span>${component}</span></label>`).join("")}</div></label>
+              <label>Business domain tags<div class="check-grid">${(state.schema.domainTags || []).map((domain) => `<label class="check-chip"><input type="checkbox" name="domainTags" value="${domain}" ${(entry.domainTags || []).includes(domain) ? "checked" : ""}><span>${domain}</span></label>`).join("")}</div></label>
               <label>Added<input name="addedAt" type="date" value="${entry.addedAt}"></label>
               </div>
             </details>
@@ -1374,6 +1380,7 @@ async function critiqueQueue() {
     if (c.qualityTier) next.qualityTier = c.qualityTier;
     if (typeof c.qualityScore === "number") next.qualityScore = c.qualityScore;
     if (c.typographyNotes) next.visual.typePairing.notes = c.typographyNotes;
+    if (c.mood) next.mood = c.mood;
     next._raw = { ...item._raw, critique: true };
     state.bulkQueue[index] = next;
     renderBulk();

@@ -241,6 +241,10 @@ export function entryToDocument(entry: {
   styleTags:    string[];
   components?:   string[];
   domainTags?:   string[];
+  colorScheme?:  string;
+  industryVertical?: string;
+  responsiveBehavior?: string;
+  mood?:         string;
   critique:     string;
   whatToSteal:  string[];
   antiPatterns?: { antiPatterns: string[]; whereThisFails?: string[]; accessibilityRisks?: string[] };
@@ -276,6 +280,10 @@ export function entryToDocument(entry: {
     `Style: ${entry.styleTags.join(", ")}.`,
     entry.components?.length ? `Components: ${entry.components.join(", ")}.` : "",
     entry.domainTags?.length ? `Domain: ${entry.domainTags.join(", ")}.` : "",
+    entry.colorScheme ? `Theme: ${entry.colorScheme}.` : "",
+    entry.industryVertical ? `Industry: ${entry.industryVertical}.` : "",
+    entry.responsiveBehavior ? `Layout: ${entry.responsiveBehavior}.` : "",
+    entry.mood ? `Mood: ${entry.mood}.` : "",
   ].filter(Boolean).join(" ");
 
   const visualAttrs = [

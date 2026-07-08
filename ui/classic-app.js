@@ -131,6 +131,7 @@ function filteredEntries() {
     const haystack = [
       entry.id, entry.title, entry.source.productName, entry.source.url, entry.critique,
       ...entry.whatToSteal, ...(entry.antiPatterns?.antiPatterns || []), ...(entry.antiPatterns?.whereThisFails || []), entry.patternType, ...entry.categories, ...entry.styleTags, ...(entry.components || []), ...(entry.domainTags || []),
+      entry.colorScheme, entry.industryVertical, entry.responsiveBehavior, entry.mood,
       ...entry.visual.dominantColors, entry.visual.accentColor, entry.visual.spacingDensity,
       entry.visual.cornerStyle, entry.visual.typePairing.display, entry.visual.typePairing.body,
       entry.visual.typePairing.notes,

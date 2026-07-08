@@ -95,6 +95,10 @@ function mapEntry(entry) {
     categories: entry.categories,
     components: entry.components || [],
     domainTags: entry.domainTags || [],
+    colorScheme: entry.colorScheme || null,
+    industryVertical: entry.industryVertical || null,
+    responsiveBehavior: entry.responsiveBehavior || null,
+    mood: entry.mood || null,
     tier: entry.qualityTier || 'exceptional',
     score: entry.qualityScore,
     steals: (entry.whatToSteal || []).length,
@@ -853,6 +857,7 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
         <button class="chip" data-f="exceptional">Exceptional · ${agg.excCount||0}</button>
         <button class="chip" data-f="cautionary">Cautionary · ${agg.cauCount||0}</button>
         <button class="chip" data-f="mobile">Mobile · ${agg.mobileCount||0}</button>
+        <button class="chip" data-f="dark">Dark · ${E.filter(x=>x.colorScheme==='dark').length}</button>
         <button class="chip ghost" id="selectAllMatching" title="Select every entry matching the current filter + search, across all pages">Select all matching</button>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
@@ -881,8 +886,20 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
     if(st.filter==='exceptional') rows=rows.filter(x=>x.tier==='exceptional');
     else if(st.filter==='cautionary') rows=rows.filter(x=>x.tier==='cautionary');
     else if(st.filter==='mobile') rows=rows.filter(x=>x.platform==='mobile');
+    else if(st.filter==='dark') rows=rows.filter(x=>x.colorScheme==='dark');
     else if(st.filter==='fav') rows=rows.filter(x=>favs.includes(x.id));
-    if(st.q){ rows=rows.filter(x=>(x.id+' '+x.source+' '+x.pattern+' '+x.style+' '+x.title).toLowerCase().includes(st.q)); }
+    if(st.q){
+      const q = st.q.toLowerCase();
+      rows=rows.filter(x => {
+        const hay = [
+          x.id, x.source, x.pattern, x.style, x.title,
+          ...(x.categories||[]), ...(x.styles||[]), ...(x.components||[]),
+          ...(x.domainTags||[]), x.colorScheme, x.industryVertical,
+          x.responsiveBehavior, x.mood, x.tier, x.platform,
+        ].filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(q);
+      });
+    }
     const favSet=new Set(favs);
     if(st.sort==='recent') rows.sort((a,b)=>(b.recent||b.added||'').localeCompare(a.recent||a.added||''));
     else if(st.sort==='score') rows.sort((a,b)=>(b.score||0)-(a.score||0));

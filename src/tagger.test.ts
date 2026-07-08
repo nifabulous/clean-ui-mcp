@@ -34,6 +34,34 @@ describe("tagger sanitization", () => {
     expect(sanitized.usesBorders).toBe(false);
   });
 
+  it("parses structured accessibility risks with confidence and rejects dom-grounded", () => {
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [
+        { element: "status chips", risk: "Color-only differentiation invisible to color-blind users", confidence: "visible", wcag: "1.4.1" },
+        { element: "sidebar icons", risk: "Icon-only controls without aria labels", confidence: "inferred" },
+        { element: "contrast text", risk: "Low contrast on labels", confidence: "dom-grounded" },
+      ],
+    });
+
+    expect(sanitized.draftAccessibilityRisks).toHaveLength(3);
+    expect(sanitized.draftAccessibilityRisks[0]).toEqual({
+      element: "status chips", risk: "Color-only differentiation invisible to color-blind users",
+      confidence: "visible", wcag: "1.4.1",
+    });
+    expect(sanitized.draftAccessibilityRisks[1].confidence).toBe("inferred");
+    // dom-grounded must be downgraded to inferred — that tag is code-only
+    expect(sanitized.draftAccessibilityRisks[2].confidence).toBe("inferred");
+  });
+
+  it("accepts backward-compat plain-string accessibility risks", () => {
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: ["Some legacy risk text about contrast."],
+    });
+    expect(sanitized.draftAccessibilityRisks).toHaveLength(1);
+    expect(sanitized.draftAccessibilityRisks[0].risk).toBe("Some legacy risk text about contrast.");
+    expect(sanitized.draftAccessibilityRisks[0].confidence).toBe("inferred");
+  });
+
   it("supplies useful defaults for unusable model output", () => {
     const sanitized = sanitizeTaggerPayload({});
 

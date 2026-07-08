@@ -544,4 +544,18 @@ describe("provenance preservation (stampProvenance)", () => {
     stampProvenance(entry, "2026-07-08", "auto");
     expect(entry.provenance?.taggedAt).toBe("2026-07-08");
   });
+
+  it("stamps newly saved auto-reviewed entries without downgrading taggedBy", () => {
+    const entry = { ...baseEntry, provenance: { taggedBy: "auto-reviewed" as const } } as CorpusEntryT;
+    stampProvenance(entry, "2026-07-08", "auto-reviewed", { advanceTaggedAt: true });
+    expect(entry.provenance?.taggedBy).toBe("auto-reviewed");
+    expect(entry.provenance?.taggedAt).toBe("2026-07-08");
+  });
+
+  it("does not invent taggedAt for legacy auto-reviewed edits", () => {
+    const entry = { ...baseEntry, provenance: { taggedBy: "auto" as const } } as CorpusEntryT;
+    stampProvenance(entry, "2026-07-08", "auto-reviewed");
+    expect(entry.provenance?.taggedBy).toBe("auto-reviewed");
+    expect(entry.provenance?.taggedAt).toBeUndefined();
+  });
 });

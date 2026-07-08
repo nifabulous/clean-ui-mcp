@@ -72,15 +72,20 @@ function parseProvider(v: unknown): ValidProvider | undefined {
  *   - POST /api/auto-retag (re-tag): taggedBy stays "auto", taggedAt=today
  *   - PUT /api/entries/:id (human edit): flips to auto-reviewed, does NOT advance taggedAt
  */
-export function stampProvenance(entry: CorpusEntryT, today: string, mode: "auto" | "auto-reviewed"): void {
+export function stampProvenance(
+  entry: CorpusEntryT,
+  today: string,
+  mode: "auto" | "auto-reviewed",
+  opts: { advanceTaggedAt?: boolean } = {},
+): void {
   const prior = entry.provenance;
   entry.provenance = {
     taggedBy: mode,
     // Preserve existing capture + reviewedBy — never replace.
     capture: prior?.capture,
     reviewedBy: prior?.reviewedBy,
-    // Advance taggedAt only on auto-tag/retag, NOT on human review.
-    taggedAt: mode === "auto" ? today : (prior?.taggedAt ?? today),
+    // Advance taggedAt only on auto-tag/retag/new auto-reviewed save, NOT on later human edits.
+    taggedAt: mode === "auto" || opts.advanceTaggedAt ? today : prior?.taggedAt,
   };
 }
 
@@ -1197,9 +1202,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
           if (promoted.height) entry.image.height = promoted.height;
         }
       }
-      // Stamp taggedAt for auto-tagged entries (provenance.taggedBy === "auto").
-      if (entry.provenance?.taggedBy === "auto") {
-        stampProvenance(entry, new Date().toISOString().slice(0, 10), "auto");
+      // Stamp taggedAt for newly saved tagger-origin entries. The SPA flips
+      // auto → auto-reviewed before save, so both values mean "fresh auto-tag".
+      if (entry.provenance?.taggedBy === "auto" || entry.provenance?.taggedBy === "auto-reviewed") {
+        const today = new Date().toISOString().slice(0, 10);
+        stampProvenance(entry, today, entry.provenance.taggedBy, { advanceTaggedAt: true });
       }
       saveEntries([...entries, entry]);
       sendJson(res, 201, { entry });

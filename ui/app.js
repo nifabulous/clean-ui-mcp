@@ -674,11 +674,14 @@ function galleryCard(x){
       <div class="gfoot">
         <div class="left">
           <span class="tier-dot ${x.tier==='exceptional'?'exc':'cau'}" title="${x.tier}"></span>
-          ${gscore(x.score)}
+          ${x.colorScheme==='dark'?`<span class="scheme-dot dark" title="dark mode">●</span>`:x.colorScheme==='light'?`<span class="scheme-dot light" title="light mode">○</span>`:''}
+          <span class="score-num">${x.score||'—'}/5</span>
           ${x.platform==='mobile'?`<span class="platform-chip mobile">mobile</span>`:x.platform==='tablet'?`<span class="platform-chip tablet">tablet</span>`:''}
         </div>
         <span style="font-size:10px;color:var(--muted);font-family:var(--mono)">${x.steals} steals</span>
       </div>
+      ${x.mood?`<div class="gmood" title="${esc(x.mood)}">${esc(x.mood)}</div>`:''}
+      ${(x.domainTags&&x.domainTags.length)?`<div class="gdomain">${x.domainTags.slice(0,2).map(d=>`<span>${esc(d)}</span>`).join('')}</div>`:''}
       <div class="gpal">${pal}</div>
     </div>
   </div>`;
@@ -768,11 +771,17 @@ function openDetail(x){
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px">
       <span class="vis-chip">pattern <span class="vl">${x.pattern}</span></span>
       <span class="vis-chip">style <span class="vl">${x.style}</span></span>
+      ${x.colorScheme?`<span class="vis-chip">theme <span class="vl">${x.colorScheme}</span></span>`:''}
+      ${x.mood?`<span class="vis-chip">mood <span class="vl" style="font-style:italic">${esc(x.mood)}</span></span>`:''}
       <span class="vis-chip">density <span class="vl">${x.density}</span></span>
       <span class="vis-chip">corner <span class="vl">${x.corner}</span></span>
       <span class="vis-chip">shadows <span class="vl">${x.shadows?'yes':'no'}</span></span>
+      ${x.industryVertical?`<span class="vis-chip">industry <span class="vl">${esc(x.industryVertical)}</span></span>`:''}
+      ${x.responsiveBehavior?`<span class="vis-chip">layout <span class="vl">${x.responsiveBehavior}</span></span>`:''}
       <span class="vis-chip">steals <span class="vl">${x.steals}</span></span>
     </div>
+    ${(x.components&&x.components.length)?`<div style="margin-bottom:14px"><div class="eyebrow" style="margin-bottom:6px">Components</div><div style="display:flex;flex-wrap:wrap;gap:4px">${x.components.slice(0,8).map(c=>`<span class="classify-chip">${esc(c)}</span>`).join('')}${x.components.length>8?`<span class="classify-chip muted">+${x.components.length-8}</span>`:''}</div></div>`:''}
+    ${(x.domainTags&&x.domainTags.length)?`<div style="margin-bottom:14px"><div class="eyebrow" style="margin-bottom:6px">Domain</div><div style="display:flex;flex-wrap:wrap;gap:4px">${x.domainTags.map(d=>`<span class="classify-chip domain">${esc(d)}</span>`).join('')}</div></div>`:''}
     <div class="eyebrow" style="margin-bottom:8px">Color palette</div>
     <div class="swatch-row" style="margin-bottom:8px">${palSwatches}
       <div class="swatch" data-hex="${x.accent}" title="accent — click to copy"><div class="well" style="background:${x.accent};box-shadow:inset 0 0 0 2px var(--accent),inset 0 2px 4px rgba(0,0,0,.12)"></div><div class="hex" style="color:var(--accent)">${(x.accent||'').toUpperCase()}</div></div>
@@ -780,7 +789,7 @@ function openDetail(x){
     ${colorRolesHtml}
     <div class="eyebrow" style="margin:14px 0 8px">Critique</div>
     <div class="critique" style="margin-bottom:14px">${esc(x.critique||'No critique recorded.')}</div>
-    ${stealsHtml}${antiHtml}${layoutHtml}${businessHtml}${voiceHtml}
+    ${stealsHtml}${antiHtml}${(x.a11yRisks&&x.a11yRisks.length)?`<div class="eyebrow a11y-eyebrow" style="margin:14px 0 8px">Accessibility risks</div><ul class="steal-list a11y-list">${x.a11yRisks.map(r=>`<li>${esc(r)}</li>`).join('')}</ul>`:''}${layoutHtml}${businessHtml}${voiceHtml}
     <div style="display:flex;gap:8px;margin:14px 0">
       <a class="btn" style="flex:1;justify-content:center" href="#/add">Edit</a>
       <button class="btn primary" style="flex:1;justify-content:center" onclick="window._mcp.toast('Added to compare')">Compare</button>
@@ -861,6 +870,12 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
         <button class="chip ghost" id="selectAllMatching" title="Select every entry matching the current filter + search, across all pages">Select all matching</button>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
+        <div class="smart-filters">
+          <select id="filterPattern" title="Filter by pattern type"><option value="">All patterns</option></select>
+          <select id="filterColorScheme" title="Filter by theme"><option value="">All themes</option></select>
+          <select id="filterIndustry" title="Filter by industry"><option value="">All industries</option></select>
+          <select id="filterDomain" title="Filter by domain"><option value="">All domains</option></select>
+        </div>
         <select class="sort-select" id="entrySort" title="Sort by">
           <option value="recent">Most recent</option>
           <option value="score">Highest score</option>
@@ -877,17 +892,24 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
   </div>
   <div id="entryResults"></div>`;
 }, function after(){
-  const st = {filter:'all', sort:'recent', view:'grid', page:1, perPage:24, q:''};
+  const st = {filter:'all', sort:'recent', view:'grid', page:1, perPage:24, q:'',
+    fPattern:'', fColorScheme:'', fIndustry:'', fDomain:''};
   const globalQ = document.getElementById('globalSearch');
   if(globalQ && !globalQ._bound){ globalQ._bound=true; globalQ.addEventListener('input',e=>{ st.q=e.target.value.toLowerCase(); st.page=1; render(); }); }
   function filtered(){
     let rows = E.slice();
     const favs=getFavs();
+    // Tier/platform/theme chips (mutually exclusive quick filters)
     if(st.filter==='exceptional') rows=rows.filter(x=>x.tier==='exceptional');
     else if(st.filter==='cautionary') rows=rows.filter(x=>x.tier==='cautionary');
     else if(st.filter==='mobile') rows=rows.filter(x=>x.platform==='mobile');
     else if(st.filter==='dark') rows=rows.filter(x=>x.colorScheme==='dark');
     else if(st.filter==='fav') rows=rows.filter(x=>favs.includes(x.id));
+    // Smart faceted filters (compose with AND)
+    if(st.fPattern) rows=rows.filter(x=>x.pattern===st.fPattern);
+    if(st.fColorScheme) rows=rows.filter(x=>x.colorScheme===st.fColorScheme);
+    if(st.fIndustry) rows=rows.filter(x=>x.industryVertical===st.fIndustry);
+    if(st.fDomain) rows=rows.filter(x=>(x.domainTags||[]).includes(st.fDomain));
     if(st.q){
       const q = st.q.toLowerCase();
       rows=rows.filter(x => {
@@ -980,6 +1002,40 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
   document.querySelectorAll('#viewToggle button').forEach(b=>{
     b.addEventListener('click',()=>{ document.querySelectorAll('#viewToggle button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); st.view=b.dataset.v; st.page=1; render(); });
   });
+
+  // Smart faceted filter dropdowns — populated from the corpus, compose with AND.
+  // Each <select> is populated once (on first render) with unique values + counts.
+  function populateSmartFilters() {
+    const patterns = {}; const schemes = {}; const industries = {}; const domains = {};
+    for (const e of E) {
+      if (e.pattern) patterns[e.pattern] = (patterns[e.pattern]||0)+1;
+      if (e.colorScheme) schemes[e.colorScheme] = (schemes[e.colorScheme]||0)+1;
+      if (e.industryVertical) industries[e.industryVertical] = (industries[e.industryVertical]||0)+1;
+      for (const d of (e.domainTags||[])) domains[d] = (domains[d]||0)+1;
+    }
+    const fill = (id, obj) => {
+      const sel = document.getElementById(id);
+      if (!sel || sel._populated) return;
+      sel._populated = true;
+      const entries = Object.entries(obj).sort((a,b) => b[1]-a[1]);
+      sel.innerHTML = `<option value="">${sel.options[0].text}</option>` + entries.map(([v,c]) => `<option value="${esc(v)}">${esc(v)} (${c})</option>`).join('');
+    };
+    fill('filterPattern', patterns);
+    fill('filterColorScheme', schemes);
+    fill('filterIndustry', industries);
+    fill('filterDomain', domains);
+  }
+  populateSmartFilters();
+  const bindSmart = (id, key) => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    sel.addEventListener('change', () => { st[key] = sel.value; st.page = 1; render(); });
+  };
+  bindSmart('filterPattern', 'fPattern');
+  bindSmart('filterColorScheme', 'fColorScheme');
+  bindSmart('filterIndustry', 'fIndustry');
+  bindSmart('filterDomain', 'fDomain');
+
   render();
 });
 

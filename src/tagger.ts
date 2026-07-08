@@ -280,6 +280,14 @@ function mistralConfigForPass(pass: TaggerPass): OpenAIConfig {
   const baseUrl = (process.env.MISTRAL_BASE_URL ?? MISTRAL_API_BASE).replace(/\/+$/, "");
   return { baseUrl, apiKey: process.env.MISTRAL_API_KEY ?? "", model };
 }
+// MiniMax config — same shape (OpenAI-compatible API). Unlike Mistral, M3 is
+// native multimodal so it handles BOTH passes including vision extraction.
+function minimaxConfigForPass(pass: TaggerPass): OpenAIConfig {
+  const tier = pass.toUpperCase();
+  const model = process.env[`MINIMAX_AUTO_TAG_MODEL_${tier}`] ?? MINIMAX_AUTO_TAG_MODEL;
+  const baseUrl = (process.env.MINIMAX_BASE_URL ?? MINIMAX_API_BASE).replace(/\/+$/, "");
+  return { baseUrl, apiKey: process.env.MINIMAX_API_KEY ?? "", model };
+}
 // Some OpenAI-compatible providers expose a thinking toggle via the
 // `chat_template_kwargs` extension. NVIDIA NIM's DeepSeek V4 takes
 // {"chat_template_kwargs": {"thinking": false}}. Default: thinking ON for the
@@ -295,6 +303,12 @@ const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 // Mistral's chat API is OpenAI-compatible: Bearer auth, /v1/chat/completions.
 const MISTRAL_API_BASE = "https://api.mistral.ai/v1";
+// MiniMax M3 — native multimodal MoE (428B total / 23B activated), 1M context.
+// OpenAI-compatible API. Can do BOTH passes (vision extraction + critique),
+// unlike Mistral (text-only). Cheaper than Claude for critique ($0.30/$1.20 vs
+// $3/$15 per M tokens). Override the base URL via MINIMAX_BASE_URL to route
+// through a gateway.
+const MINIMAX_API_BASE = "https://api.minimax.com/v1";
 
 const OPENAI_AUTO_TAG_MODEL = process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano";
 const CLAUDE_AUTO_TAG_MODEL = process.env.CLAUDE_AUTO_TAG_MODEL ?? "claude-haiku-4-5";
@@ -302,6 +316,9 @@ const GEMINI_AUTO_TAG_MODEL = process.env.GEMINI_AUTO_TAG_MODEL ?? "gemini-2.5-f
 // Mistral Large — text-only flagship. Critique-only (no vision). Override the
 // base URL via MISTRAL_BASE_URL to route through a compatible gateway.
 const MISTRAL_AUTO_TAG_MODEL = process.env.MISTRAL_AUTO_TAG_MODEL ?? "mistral-large-latest";
+// MiniMax M3 — native multimodal, both passes. Cheaper critique alternative to
+// Claude; also vision-capable for extraction. Override via MINIMAX_BASE_URL.
+const MINIMAX_AUTO_TAG_MODEL = process.env.MINIMAX_AUTO_TAG_MODEL ?? "MiniMax-M3";
 
 // Set DEBUG_TAGGER=1 to print per-call provider config and token usage to stderr.
 // Quiet by default so production logs (npm run ui, bulk-import) stay clean.
@@ -497,7 +514,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-type Provider = "openai" | "claude" | "gemini" | "mistral";
+type Provider = "openai" | "claude" | "gemini" | "mistral" | "minimax";
 type TaggerPass = "extraction" | "critique";
 
 /** Resolve which provider to use for a given pass, with auto-fallback.
@@ -534,9 +551,10 @@ function resolveProvider(pass: TaggerPass, override?: Provider): Provider {
     claude: !!process.env.ANTHROPIC_API_KEY,
     gemini: !!process.env.GEMINI_API_KEY,
     mistral: !!process.env.MISTRAL_API_KEY,
+    minimax: !!process.env.MINIMAX_API_KEY,
   };
   if (has[preferred]) return preferred;
-  for (const p of ["openai", "claude", "gemini", "mistral"] as const) {
+  for (const p of ["openai", "claude", "gemini", "mistral", "minimax"] as const) {
     if (has[p]) {
       console.error(`[tagger] ${envVar}="${preferred}" but no key set — falling back to ${p} for ${pass}.`);
       return p;
@@ -554,7 +572,9 @@ export function hasVisionKey(): boolean {
     process.env.OPENAI_API_KEY ||
     process.env.OPENAI_API_KEY_EXTRACTION
   );
-  return !!(hasOpenAIExtraction || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY);
+  // MiniMax M3 is native multimodal (unlike Mistral which is text-only), so it
+  // qualifies as a vision-capable provider for the extraction pass.
+  return !!(hasOpenAIExtraction || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY || process.env.MINIMAX_API_KEY);
 }
 
 /** Check if ANY critique-capable provider key is configured.
@@ -570,12 +590,13 @@ export function hasCritiqueKey(): boolean {
     process.env.OPENAI_API_KEY_CRITIQUE ||
     process.env.ANTHROPIC_API_KEY ||
     process.env.GEMINI_API_KEY ||
-    process.env.MISTRAL_API_KEY
+    process.env.MISTRAL_API_KEY ||
+    process.env.MINIMAX_API_KEY
   );
 }
 
-const PROVIDER_NAMES: Record<Provider, string> = { openai: "OpenAI", claude: "Claude", gemini: "Gemini", mistral: "Mistral" };
-const PROVIDER_MODELS: Record<Provider, string> = { openai: OPENAI_AUTO_TAG_MODEL, claude: CLAUDE_AUTO_TAG_MODEL, gemini: GEMINI_AUTO_TAG_MODEL, mistral: MISTRAL_AUTO_TAG_MODEL };
+const PROVIDER_NAMES: Record<Provider, string> = { openai: "OpenAI", claude: "Claude", gemini: "Gemini", mistral: "Mistral", minimax: "MiniMax" };
+const PROVIDER_MODELS: Record<Provider, string> = { openai: OPENAI_AUTO_TAG_MODEL, claude: CLAUDE_AUTO_TAG_MODEL, gemini: GEMINI_AUTO_TAG_MODEL, mistral: MISTRAL_AUTO_TAG_MODEL, minimax: MINIMAX_AUTO_TAG_MODEL };
 
 /** Human-readable provider name for UI display. */
 export function activeProviderName(pass?: TaggerPass): string {
@@ -1389,6 +1410,7 @@ async function callModel(
     case "claude":  return callClaude(prompt, imagePath, retryFeedback, detail);
     case "gemini":  return callGemini(prompt, imagePath, retryFeedback, detail, pass, thinkingOverride);
     case "mistral": return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, mistralConfigForPass(pass));
+    case "minimax": return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, minimaxConfigForPass(pass));
     default:        return callOpenAI(prompt, imagePath, retryFeedback, detail, pass);
   }
 }

@@ -16,6 +16,7 @@ export interface EnvStatus {
   anthropicKeyConfigured: boolean;
   geminiKeyConfigured: boolean;
   mistralKeyConfigured: boolean;
+  minimaxKeyConfigured: boolean;
   voyageKeyConfigured: boolean;
   autoTagProvider: string;
   openaiAutoTagModel: string;
@@ -34,6 +35,7 @@ export function getEnvStatus(envPath = DEFAULT_ENV_PATH): EnvStatus {
     anthropicKeyConfigured: present(process.env.ANTHROPIC_API_KEY),
     geminiKeyConfigured: present(process.env.GEMINI_API_KEY),
     mistralKeyConfigured: present(process.env.MISTRAL_API_KEY),
+    minimaxKeyConfigured: present(process.env.MINIMAX_API_KEY),
     voyageKeyConfigured: present(process.env.VOYAGE_API_KEY),
     autoTagProvider: process.env.AUTO_TAG_PROVIDER || "openai",
     openaiAutoTagModel: process.env.OPENAI_AUTO_TAG_MODEL || DEFAULT_OPENAI_AUTO_TAG_MODEL,

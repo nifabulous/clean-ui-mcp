@@ -724,6 +724,23 @@ Examples of good observations:
 Do NOT write generic observations like "the layout is clean" or "there is a sidebar." Each item
 must name a SPECIFIC, DEFENSIBLE choice the designer made and why it works or doesn't.
 
+QUALITY BAR — bad vs good examples for each field:
+draftCritique:
+  Bad:  "Uses whitespace to keep things clean."
+  Good: "The wide gutter between the form and preview separates editing from review, so users can
+        change fields without losing the confirmation context. Rejects the common default of
+        stacking form and preview vertically, which forces scroll-back after every edit."
+draftWhatToSteal:
+  Bad:  "Avoids clutter."
+  Good: "Avoids showing all account settings at once; grouped panels keep admin scanning local to
+        one decision area at a time. Use this when settings exceed 12 items — below that, a flat
+        list is faster. Do NOT use for simple 3-4 item settings."
+draftAntiPatterns:
+  Bad:  "Doesn't use too many colors."
+  Good: "Avoids loading every chart series with a distinct hue — a lazy approach would create a
+        6-color legend that forces users to cross-reference. This design sticks to one accent so
+        the scanning path stays linear."
+
 Step 2 — Critique using ONLY items from your observations list. Return this JSON:
 
 {
@@ -752,17 +769,28 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
                                // doing, and why avoiding it matters for this user/task type." Think
                                // about what conventional approaches would have FAILED here — what
                                // would a lazy designer have done that this designer deliberately rejected?
-  "draftAccessibilityRisks": [], // accessibility risks found on this screen. Empty if none. Each is a string.
+  "draftAccessibilityRisks": [], // accessibility risks found on this screen. Each entry is an object:
+                               // { "element": "the specific UI element (e.g. 'status chips', 'sidebar icons')",
+                               //   "risk": "what fails and for whom (e.g. 'color-only differentiation invisible to color-blind users')",
+                               //   "confidence": "visible" | "inferred",
+                               //   "wcag": "criterion if known (e.g. '1.4.1 Use of Color')" }
+                               //
+                               // Return [] when no concrete risk is visible or in DOM ground truth.
+                               // Do NOT invent risks to fill a quota. A clean screen returning [] is correct.
+                               //
                                // If ACCESSIBILITY GROUND TRUTH is provided above, use those metrics to
                                // identify concrete risks — e.g. "contrastRatio of 3.2 falls below WCAG AA
                                // 4.5:1 for body text" or "30 interactive elements lack accessible names".
-                               // If no ground truth, actively probe for these common a11y failures:
+                               // Set confidence to "inferred" when you're guessing from the screenshot
+                               // without DOM metrics. Do NOT claim "dom-grounded" — that tag is set
+                               // in code, not by you.
+                               //
+                               // Common a11y failures to check (only include if you see concrete evidence):
                                // - Color-only differentiation (status, state) invisible to color-blind users
                                // - Icon-only controls without text labels or aria — screen reader users can't identify them
                                // - Dense data without sufficient line-height/spacing — dyslexic users struggle
                                // - Interactive elements too small or close together — motor-impaired users mis-tap
                                // - Information conveyed only visually (no text alternative) — screen reader users miss it
-                               // Name the specific element, the user type affected, and the WCAG criterion if known.
   "businessRationale": null,   // null if isolated component crop/no product context; otherwise object below
                                // { "businessGoal": ONE from: ${BUSINESS_GOALS.join(", ")},
                                //   "targetUser": "short phrase, <=80 chars",
@@ -787,10 +815,10 @@ Rules:
 - Every draftCritique/draftWhatToSteal claim must trace back to something in "observations".
 - draftAntiPatterns must not restate draftCritique's decision from the opposite angle. Each should
   teach a distinct lesson about what the design deliberately avoids and why that avoidance matters.
-- draftAccessibilityRisks should be concrete and specific — name the element, the user type affected,
-  the issue, and the threshold. Aim for 2-3 risks on most screens; only return [] when the design
-  genuinely has no a11y issues. Probe systematically: color differentiation, icon-only controls,
-  density/readability, touch targets, and text alternatives.
+- draftAccessibilityRisks: return [] when no concrete risk is visible or in DOM ground truth.
+  Do NOT invent risks to fill a quota. Each risk must name the specific element, the user type
+  affected, and the issue. Set confidence to "inferred" when guessing from the screenshot
+  without DOM metrics. Do NOT use "dom-grounded" — that tag is set in code.
 - Quality tier calibration: "exceptional" means worth learning from, not flawless.
   "cautionary" is rare and reserved for screens whose main lesson is the failure itself.
 - businessRationale is about business intent, not visual quality. Return null rather than inventing intent
@@ -828,6 +856,39 @@ function domainTagsFromAllowed(value: unknown): string[] {
     .map((item) => item.trim())
     .filter((item) => allowed.includes(item));
   return [...new Set(normalized)].slice(0, 4);
+}
+
+/**
+ * Sanitize accessibility risks from the critique model output.
+ * Handles both the new structured format ({ element, risk, confidence, wcag? })
+ * and backward-compat plain strings (converted to { element: "—", risk: str,
+ * confidence: "inferred" }).
+ *
+ * Confidence "dom-grounded" is NEVER accepted from the model — it's set in
+ * code by the DOM-signals injection path. The model can only emit "visible"
+ * or "inferred".
+ */
+function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; risk: string; confidence: string; wcag?: string }> {
+  if (!Array.isArray(value)) return [];
+  const result: Array<{ element: string; risk: string; confidence: string; wcag?: string }> = [];
+  for (const item of value) {
+    if (typeof item === "string" && item.trim()) {
+      // Backward compat: plain string → structured with defaults
+      result.push({ element: "—", risk: item.trim(), confidence: "inferred" });
+    } else if (item && typeof item === "object") {
+      const obj = item as Record<string, unknown>;
+      const risk = typeof obj.risk === "string" ? obj.risk.trim() : "";
+      if (!risk) continue;
+      const element = typeof obj.element === "string" ? obj.element.trim() : "—";
+      // Model can only emit "visible" or "inferred". "dom-grounded" is reserved
+      // for code-side injection and rejected from model output.
+      let confidence = typeof obj.confidence === "string" ? obj.confidence.trim().toLowerCase() : "inferred";
+      if (confidence !== "visible" && confidence !== "inferred") confidence = "inferred";
+      const wcag = typeof obj.wcag === "string" && obj.wcag.trim() ? obj.wcag.trim() : undefined;
+      result.push({ element, risk, confidence, ...(wcag ? { wcag } : {}) });
+    }
+  }
+  return result;
 }
 
 function hexColors(value: unknown, fallback: string[]): string[] {
@@ -893,7 +954,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   draftCritique: string;
   draftWhatToSteal: string[];
   draftAntiPatterns: string[];
-  draftAccessibilityRisks: string[];
+  draftAccessibilityRisks: Array<{ element: string; risk: string; confidence: string; wcag?: string }>;
   layout?: { form: string; regions: Array<{ role: string; width?: string }> };
   businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
   voice?: { tone: string; examples: string[]; avoid: string[] };
@@ -974,7 +1035,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
     draftAntiPatterns: textList(parsed.draftAntiPatterns).length
       ? textList(parsed.draftAntiPatterns)
       : ["[DRAFT] Review the screenshot and name one common UI mistake this design avoids."],
-    draftAccessibilityRisks: textList(parsed.draftAccessibilityRisks),
+    draftAccessibilityRisks: sanitizeAccessibilityRisks(parsed.draftAccessibilityRisks),
     businessRationale,
   };
 }
@@ -1624,7 +1685,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     antiPatterns: {
       antiPatterns:       critique.draftAntiPatterns.map((t) => `[DRAFT] ${t}`),
       whereThisFails:     [],
-      accessibilityRisks: critique.draftAccessibilityRisks.map((t) => `[DRAFT] ${t}`),
+      accessibilityRisks: critique.draftAccessibilityRisks.map((r) => `[DRAFT] [${r.confidence}] ${r.element}: ${r.risk}${r.wcag ? ` (${r.wcag})` : ""}`),
     },
     layout:          extraction.layout,
     businessRationale: critique.businessRationale,
@@ -1702,7 +1763,7 @@ export async function generateCritique(
     antiPatterns: {
       antiPatterns: critique.draftAntiPatterns.map((t) => `[DRAFT] ${t}`),
       whereThisFails: [],
-      accessibilityRisks: critique.draftAccessibilityRisks.map((t) => `[DRAFT] ${t}`),
+      accessibilityRisks: critique.draftAccessibilityRisks.map((r) => `[DRAFT] [${r.confidence}] ${r.element}: ${r.risk}${r.wcag ? ` (${r.wcag})` : ""}`),
     },
     businessRationale: critique.businessRationale,
     voice: critique.voice,

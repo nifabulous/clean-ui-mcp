@@ -1220,17 +1220,19 @@ async function callOpenAICompatible(
   };
 
   // MiniMax M3: thinking is ON by default and wraps content in <think> tags.
-  // For extraction (deterministic fields), disable thinking entirely. For
-  // critique, use adaptive thinking + reasoning_split so the thinking goes
-  // into a separate field, not polluting the JSON content.
+  // Disable thinking for BOTH passes:
+  //   - Extraction: deterministic fields, thinking adds noise + truncation risk
+  //   - Critique: the critique prompt is ~1500 tokens of structured instructions.
+  //     With thinking ON, MiniMax burns 800-2500 reasoning tokens and sometimes
+  //     (1 in 5 runs) produces truncated/corrupted JSON or a lazy minimal
+  //     response. Disabling thinking makes the output deterministic and reliable
+  //     without sacrificing quality (the prompt itself drives the reasoning).
+  // Also switch to max_completion_tokens (excludes any residual reasoning tokens).
   const isMiniMax = cfg.baseUrl.includes("minimax");
   if (isMiniMax) {
-    if (pass === "extraction") {
-      body.thinking = { type: "disabled" };
-    } else {
-      body.thinking = { type: "adaptive" };
-      body.reasoning_split = true;
-    }
+    body.thinking = { type: "disabled" };
+    body.max_completion_tokens = MAX_OUTPUT_TOKENS;
+    delete body.max_tokens;
   }
 
   const endpoint = `${cfg.baseUrl}/chat/completions`;

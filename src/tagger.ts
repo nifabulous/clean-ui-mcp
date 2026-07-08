@@ -308,7 +308,7 @@ const MISTRAL_API_BASE = "https://api.mistral.ai/v1";
 // unlike Mistral (text-only). Cheaper than Claude for critique ($0.30/$1.20 vs
 // $3/$15 per M tokens). Override the base URL via MINIMAX_BASE_URL to route
 // through a gateway.
-const MINIMAX_API_BASE = "https://api.minimax.com/v1";
+const MINIMAX_API_BASE = "https://api.minimax.io/v1";
 
 const OPENAI_AUTO_TAG_MODEL = process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano";
 const CLAUDE_AUTO_TAG_MODEL = process.env.CLAUDE_AUTO_TAG_MODEL ?? "claude-haiku-4-5";

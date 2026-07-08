@@ -376,15 +376,17 @@ server.registerTool(
       "choosing between approaches or contrasting design decisions.",
     inputSchema: {
       ids: z.array(z.string()).min(2).max(3).describe("2-3 entry ids to compare"),
+      responseFormat: z.enum(["concise", "detailed"]).optional().describe("Output detail level. 'concise' omits critique angle, steal items, anti-patterns, and a11y rows — lighter for quick comparison. 'detailed' (default) returns all rows."),
     },
   },
-  async ({ ids }) => {
+  async ({ ids, responseFormat }) => {
     const entries = ids.map((id) => getEntryById(id));
     const missing = ids.filter((_, i) => !entries[i]);
     if (missing.length) {
       return { content: [{ type: "text", text: `No entries found for: ${missing.join(", ")}` }], isError: true };
     }
     const found = entries.filter((e): e is NonNullable<typeof e> => !!e);
+    const concise = responseFormat === "concise";
 
     const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
     const firstSentence = (s: string) => cell(s.split(/[.!?]/)[0] || s);
@@ -400,13 +402,14 @@ server.registerTool(
       `| layout | ${found.map((e) => e.layout?.form ?? "—").join(" | ")} |`,
       `| accent | ${found.map((e) => e.visual.accentColor ?? e.visual.colorRoles?.accent ?? "—").join(" | ")} |`,
       `| density / corners | ${found.map((e) => `${e.visual.spacingDensity} / ${e.visual.cornerStyle}`).join(" | ")} |`,
-      `| shadows / borders | ${found.map((e) => `${e.visual.usesShadows ? "yes" : "no"} / ${e.visual.usesBorders ? "yes" : "no"}`).join(" | ")} |`,
       `| quality | ${found.map((e) => `${e.qualityScore}/5 ${e.qualityTier}`).join(" | ")} |`,
-      `| critique angle | ${found.map((e) => firstSentence(e.critique)).join(" | ")} |`,
-      `| top steal | ${found.map((e) => top(e.whatToSteal)).join(" | ")} |`,
-      `| anti-patterns | ${found.map((e) => top(e.antiPatterns.antiPatterns)).join(" | ")} |`,
-      `| a11y risks | ${found.map((e) => top(e.antiPatterns.accessibilityRisks)).join(" | ")} |`,
-      `| where it fails | ${found.map((e) => top(e.antiPatterns.whereThisFails)).join(" | ")} |`,
+      ...(concise ? [] : [
+        `| critique angle | ${found.map((e) => firstSentence(e.critique)).join(" | ")} |`,
+        `| top steal | ${found.map((e) => top(e.whatToSteal)).join(" | ")} |`,
+        `| anti-patterns | ${found.map((e) => top(e.antiPatterns.antiPatterns)).join(" | ")} |`,
+        `| a11y risks | ${found.map((e) => top(e.antiPatterns.accessibilityRisks)).join(" | ")} |`,
+        `| where it fails | ${found.map((e) => top(e.antiPatterns.whereThisFails)).join(" | ")} |`,
+      ]),
     ];
 
     return { content: [{ type: "text", text: [header, divider, ...rows].join("\n") }] };

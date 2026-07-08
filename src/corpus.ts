@@ -281,9 +281,10 @@ export async function searchRanked(opts: SearchOptions): Promise<SearchResult[]>
         ...rerankPool[rr.index],
         score: rr.relevanceScore,
       }));
-      // Deterministic merge: reranked pool first (sorted by relevance), then
-      // remaining tail unchanged. Don't compare scores across different scales.
-      results = [...rerankedResults, ...tail];
+      // Deterministic merge: reranked pool first (already sorted by relevance
+      // from voyageRerank), then remaining tail in its pre-rerank order.
+      // Return directly — do NOT re-sort across different score scales.
+      return [...rerankedResults, ...tail];
     }
   }
 

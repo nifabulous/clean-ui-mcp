@@ -1050,6 +1050,21 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       sendJson(res, 400, { error: "id is required" });
       return;
     }
+    const entry = entries.find((e) => e.id === payload.id);
+    if (!entry) {
+      sendJson(res, 404, { error: `Entry not found: ${payload.id}` });
+      return;
+    }
+    // Pinned check BEFORE the vision-key gate — protected entries should skip
+    // cleanly regardless of runtime provider config, not surface key errors.
+    if (entry.pinned) {
+      sendJson(res, 200, { ok: false, skipped: true, reason: "pinned" });
+      return;
+    }
+    if (!entry.image.path) {
+      sendJson(res, 200, { ok: false, skipped: true, reason: "no image" });
+      return;
+    }
     if (!hasVisionKey()) {
       sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
       return;
@@ -1062,20 +1077,6 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       ? payload.extractionProvider as typeof VALID_PROVIDERS[number] : undefined;
     const critiqueProvider = payload.critiqueProvider && VALID_PROVIDERS.includes(payload.critiqueProvider as typeof VALID_PROVIDERS[number])
       ? payload.critiqueProvider as typeof VALID_PROVIDERS[number] : undefined;
-
-    const entry = entries.find((e) => e.id === payload.id);
-    if (!entry) {
-      sendJson(res, 404, { error: `Entry not found: ${payload.id}` });
-      return;
-    }
-    if (!entry.image.path) {
-      sendJson(res, 200, { ok: false, skipped: true, reason: "no image" });
-      return;
-    }
-    if (entry.pinned) {
-      sendJson(res, 200, { ok: false, skipped: true, reason: "pinned" });
-      return;
-    }
 
     try {
       const imagePath = fromCorpusRelativeImagePath(entry.image.path);

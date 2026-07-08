@@ -154,6 +154,7 @@ describe("vision provider key detection", () => {
     delete process.env.OPENAI_API_KEY_CRITIQUE;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.GEMINI_API_KEY;
+    delete process.env.MINIMAX_API_KEY;
 
     expect(hasVisionKey()).toBe(false);
 
@@ -162,6 +163,10 @@ describe("vision provider key detection", () => {
 
     delete process.env.ANTHROPIC_API_KEY;
     process.env.GEMINI_API_KEY = "gem-test";
+    expect(hasVisionKey()).toBe(true);
+
+    delete process.env.GEMINI_API_KEY;
+    process.env.MINIMAX_API_KEY = "sk-api-test";
     expect(hasVisionKey()).toBe(true);
   });
 
@@ -175,6 +180,7 @@ describe("vision provider key detection", () => {
     delete process.env.OPENAI_API_KEY_CRITIQUE;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.GEMINI_API_KEY;
+    delete process.env.MINIMAX_API_KEY;
 
     expect(hasVisionKey()).toBe(false);
 

@@ -52,6 +52,38 @@ function saveEntries(entries: CorpusEntryT[]): void {
   void rebuildDHashCache(entries);
 }
 
+// ─── provider allowlist (shared by auto-tag, auto-critique, auto-retag) ──────
+// Must include "minimax" — the auto-retag handler previously omitted it,
+// silently dropping a UI-selected MiniMax critique provider.
+const VALID_PROVIDERS = ["openai", "claude", "gemini", "mistral", "minimax"] as const;
+type ValidProvider = (typeof VALID_PROVIDERS)[number];
+
+function parseProvider(v: unknown): ValidProvider | undefined {
+  return typeof v === "string" && (VALID_PROVIDERS as readonly string[]).includes(v) ? v as ValidProvider : undefined;
+}
+
+/**
+ * Stamp provenance with an auto-tag timestamp, preserving ALL existing fields
+ * (especially capture metadata and reviewedBy). Fixes the line-1203 bug where
+ * `entry.provenance = { taggedBy, reviewedBy }` wiped capture on PUT.
+ *
+ * Semantics:
+ *   - POST /api/entries (new auto entry): taggedBy="auto", taggedAt=today
+ *   - POST /api/auto-retag (re-tag): taggedBy stays "auto", taggedAt=today
+ *   - PUT /api/entries/:id (human edit): flips to auto-reviewed, does NOT advance taggedAt
+ */
+export function stampProvenance(entry: CorpusEntryT, today: string, mode: "auto" | "auto-reviewed"): void {
+  const prior = entry.provenance;
+  entry.provenance = {
+    taggedBy: mode,
+    // Preserve existing capture + reviewedBy — never replace.
+    capture: prior?.capture,
+    reviewedBy: prior?.reviewedBy,
+    // Advance taggedAt only on auto-tag/retag, NOT on human review.
+    taggedAt: mode === "auto" ? today : (prior?.taggedAt ?? today),
+  };
+}
+
 /**
  * Local-origin guard.
  *
@@ -978,6 +1010,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       id?: string;
       imageDetail?: "low" | "high";
       extractionOnly?: boolean;
+      critiqueProvider?: string;
     };
 
     if (!payload.imagePath) {
@@ -1003,6 +1036,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         id: payload.id,
         imageDetail: payload.imageDetail,
         extractionOnly: payload.extractionOnly === true,
+        // Per-call critique provider from the SPA dropdown (undefined → env/peak routing).
+        critiqueProvider: parseProvider(payload.critiqueProvider),
         // DOM signals from the capture sidecar (null for non-batch images — no regression).
         domSignals: readDomSignalsForImage(payload.imagePath),
       });
@@ -1016,7 +1051,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   // Deferred Pass 2: fills critique/steals/antiPatterns on a row staged
   // extraction-only. No image re-sent — Pass 2 reasons from the saved extraction.
   if (req.method === "POST" && url.pathname === "/api/auto-critique") {
-    const payload = await readJson(req) as { productName?: string; extraction?: Record<string, unknown>; domSignals?: DomSignals };
+    const payload = await readJson(req) as { productName?: string; extraction?: Record<string, unknown>; domSignals?: DomSignals; critiqueProvider?: string };
 
     if (!payload.extraction) {
       sendJson(res, 400, { error: "extraction is required (pass the entry's _raw.extraction)" });
@@ -1028,7 +1063,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     }
 
     try {
-      const result = await generateCritique((payload.productName || "").trim(), payload.extraction, undefined, payload.domSignals ?? undefined);
+      const result = await generateCritique((payload.productName || "").trim(), payload.extraction, parseProvider(payload.critiqueProvider), payload.domSignals ?? undefined);
       sendJson(res, 200, { critique: result });
     } catch (error) {
       sendJson(res, 400, { error: explainTagError(error) });
@@ -1071,14 +1106,9 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       sendJson(res, 400, { error: "No vision provider key set. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to .env, then restart npm run ui." });
       return;
     }
-    // Validate provider values at runtime — the TS type above is a hint, not a
-    // guarantee (HTTP clients can send anything). An invalid value would pass
-    // through resolveProvider's override path and silently misroute.
-    const VALID_PROVIDERS = ["openai", "claude", "gemini", "mistral"] as const;
-    const extractionProvider = payload.extractionProvider && VALID_PROVIDERS.includes(payload.extractionProvider as typeof VALID_PROVIDERS[number])
-      ? payload.extractionProvider as typeof VALID_PROVIDERS[number] : undefined;
-    const critiqueProvider = payload.critiqueProvider && VALID_PROVIDERS.includes(payload.critiqueProvider as typeof VALID_PROVIDERS[number])
-      ? payload.critiqueProvider as typeof VALID_PROVIDERS[number] : undefined;
+    // Validate provider values using the shared allowlist (includes "minimax").
+    const extractionProvider = parseProvider(payload.extractionProvider);
+    const critiqueProvider = parseProvider(payload.critiqueProvider);
 
     try {
       const imagePath = fromCorpusRelativeImagePath(entry.image.path);
@@ -1126,6 +1156,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       // rewrites later, not [DRAFT]-gated text that the validator rejects.
       const cleaned = stripDraftMarkersFromEntry(merged);
       const validated = validateEntryPayload(cleaned);
+      // Retag advances taggedAt — the content was freshly re-extracted.
+      stampProvenance(validated, new Date().toISOString().slice(0, 10), "auto");
       const idx = entries.findIndex((e) => e.id === payload.id);
       entries[idx] = validated;
       saveEntries(entries);
@@ -1165,6 +1197,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
           if (promoted.height) entry.image.height = promoted.height;
         }
       }
+      // Stamp taggedAt for auto-tagged entries (provenance.taggedBy === "auto").
+      if (entry.provenance?.taggedBy === "auto") {
+        stampProvenance(entry, new Date().toISOString().slice(0, 10), "auto");
+      }
       saveEntries([...entries, entry]);
       sendJson(res, 201, { entry });
     } catch (error) {
@@ -1198,9 +1234,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         // Provenance flip: a human editing an auto-tagged entry upgrades it to
         // "auto-reviewed" (the tagger produced the draft, a human approved the
         // edits). Don't downgrade an already-human or already-reviewed entry.
+        // PRESERVE all existing provenance fields (capture, taggedAt, reviewedBy)
+        // — the prior code replaced provenance entirely, wiping capture metadata.
         const prior = entries[index];
         if (prior && prior.provenance?.taggedBy === "auto") {
-          entry.provenance = { taggedBy: "auto-reviewed", reviewedBy: entry.provenance?.reviewedBy };
+          stampProvenance(entry, prior.provenance?.taggedAt ?? new Date().toISOString().slice(0, 10), "auto-reviewed");
         }
         entries[index] = entry;
         saveEntries(entries);

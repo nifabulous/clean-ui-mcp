@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanupBatch, findDuplicateAtCommit, isPrivateAddress, listCaptureBatches, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, uniqueEntryId, validateEntryPayload } from "./ui-server.js";
+import { cleanupBatch, findDuplicateAtCommit, isPrivateAddress, listCaptureBatches, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload } from "./ui-server.js";
 import type { IncomingMessage } from "node:http";
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -515,5 +515,33 @@ describe("listCaptureBatches ignores add-* temp dirs (manifest gate)", () => {
     const ids = batches.map((b) => b.batchId);
     expect(ids).toContain(realBatchId);
     expect(ids).not.toContain(tempBatchId);
+  });
+});
+
+describe("provenance preservation (stampProvenance)", () => {
+  it("preserves capture metadata on auto-review flip (the line-1203 regression)", () => {
+    // An auto-tagged entry WITH capture metadata gets human-reviewed.
+    // The old code replaced provenance entirely, wiping capture.
+    const entry = { ...baseEntry, provenance: {
+      taggedBy: "auto" as const,
+      capture: { mode: "section" as const, viewport: "desktop", capturedAt: "2026-07-01T00:00:00.000Z", sourceUrl: "https://example.com" },
+      taggedAt: "2026-07-01",
+    } } as CorpusEntryT;
+
+    stampProvenance(entry, "2026-07-01", "auto-reviewed");
+
+    // Capture MUST survive the flip.
+    expect(entry.provenance?.capture?.mode).toBe("section");
+    expect(entry.provenance?.capture?.sourceUrl).toBe("https://example.com");
+    // taggedBy MUST flip to auto-reviewed.
+    expect(entry.provenance?.taggedBy).toBe("auto-reviewed");
+    // taggedAt MUST NOT advance on human review.
+    expect(entry.provenance?.taggedAt).toBe("2026-07-01");
+  });
+
+  it("advances taggedAt on auto-tag/retag", () => {
+    const entry = { ...baseEntry, provenance: { taggedBy: "auto" as const } } as CorpusEntryT;
+    stampProvenance(entry, "2026-07-08", "auto");
+    expect(entry.provenance?.taggedAt).toBe("2026-07-08");
   });
 });

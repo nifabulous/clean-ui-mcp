@@ -517,11 +517,32 @@ function sleep(ms: number): Promise<void> {
 type Provider = "openai" | "claude" | "gemini" | "mistral" | "minimax";
 type TaggerPass = "extraction" | "critique";
 
+// ─── peak-hour DeepSeek → MiniMax/Claude routing ────────────────────────────
+// DeepSeek adopts peak-valley pricing starting mid-July 2026: peak UTC windows
+// 1:00–4:00 AM and 6:00–10:00 AM are 2× the regular price. During these windows
+// we auto-route critique to MiniMax (cheaper, similar quality) or Claude (the
+// quality benchmark) to avoid paying double. Extraction is unaffected (different
+// provider). Explicit per-call overrides bypass this entirely.
+const DEEPSEEK_PEAK_HOURS: ReadonlyArray<[number, number]> = [[1, 4], [6, 10]];
+
+/** True when the current UTC hour falls within a DeepSeek peak pricing window. */
+export function isDeepSeekPeakHour(now = new Date()): boolean {
+  const h = now.getUTCHours();
+  return DEEPSEEK_PEAK_HOURS.some(([start, end]) => h >= start && h < end);
+}
+
+/** True when the critique pass would run on DeepSeek (reached through the
+ *  "openai" provider via OPENAI_AUTO_TAG_MODEL_CRITIQUE or the fallback model). */
+export function isDeepSeekCritique(): boolean {
+  const model = openaiConfigForPass("critique").model;
+  return /deepseek/i.test(model);
+}
+
 /** Resolve which provider to use for a given pass, with auto-fallback.
- *  Optional `override` (from /api/auto-retag) short-circuits env resolution —
- *  used for per-run provider selection without mutating process.env. */
+ *  Optional `override` (from /api/auto-retag or the SPA dropdown) short-circuits
+ *  env resolution — used for per-run provider selection without mutating process.env. */
 function resolveProvider(pass: TaggerPass, override?: Provider): Provider {
-  // Explicit override from the caller (bulk re-tag). Validate capability:
+  // Explicit override from the caller (bulk re-tag, SPA dropdown). Validate capability:
   // extraction needs vision, so mistral (text-only) falls back with a warning.
   if (override) {
     if (pass === "extraction" && override === "mistral") {
@@ -553,6 +574,21 @@ function resolveProvider(pass: TaggerPass, override?: Provider): Provider {
     mistral: !!process.env.MISTRAL_API_KEY,
     minimax: !!process.env.MINIMAX_API_KEY,
   };
+  // Peak-hour routing: if the critique pass resolved to "openai" AND the
+  // configured critique model is DeepSeek AND we're in a peak window, swap to
+  // MiniMax (or Claude as fallback) to avoid 2× pricing. Only applies when no
+  // explicit override was given (override wins, user chose deliberately).
+  if (pass === "critique" && !override && preferred === "openai" && isDeepSeekCritique() && isDeepSeekPeakHour()) {
+    if (has.minimax) {
+      console.error(`[tagger] Peak-hour routing: DeepSeek → MiniMax (UTC ${new Date().getUTCHours()}:00) to avoid 2× peak pricing.`);
+      return "minimax";
+    }
+    if (has.claude) {
+      console.error(`[tagger] Peak-hour routing: DeepSeek → Claude (UTC ${new Date().getUTCHours()}:00) — MiniMax key not set.`);
+      return "claude";
+    }
+    console.error(`[tagger] Peak-hour warning: DeepSeek is 2× price now (UTC ${new Date().getUTCHours()}:00) but no MiniMax/Claude key set — using DeepSeek anyway.`);
+  }
   if (has[preferred]) return preferred;
   for (const p of ["openai", "claude", "gemini", "mistral", "minimax"] as const) {
     if (has[p]) {
@@ -1737,8 +1773,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     addedAt:         today,
     provenance:      { taggedBy: "auto" }, // two-pass tagger output; human review flips to auto-reviewed
     _raw: {
-      extractionProvider: resolveProvider("extraction"),
-      critiqueProvider: resolveProvider("critique"),
+      extractionProvider: resolveProvider("extraction", input.extractionProvider),
+      critiqueProvider: resolveProvider("critique", input.critiqueProvider),
       extractionModel: activeModelName("extraction"),
       critiqueModel: activeModelName("critique"),
       extraction: extractionParsed,

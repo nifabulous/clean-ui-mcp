@@ -456,6 +456,10 @@ export const CorpusEntry = z.object({
       capturedAt: z.string(),                  // ISO timestamp
       sourceUrl: z.string(),                   // the URL the screenshot was taken from
     }).optional(),
+    /** When the entry was last auto-tagged or retagged (YYYY-MM-DD). Advanced
+     *  only by the tagger/retag path, NOT by human edits. Absent on legacy
+     *  entries (pre-dating this field); display falls back to addedAt. */
+    taggedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   }).optional(),
 });
 

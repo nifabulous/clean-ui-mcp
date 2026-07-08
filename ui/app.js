@@ -67,6 +67,7 @@ const blankDraft = () => ({
   _reviewingCandidate: null,     // index loaded into form for review, or null
   _busyStart: null,              // timestamp for elapsed-timer display
   _saving: false,                // save in-flight (disables save button)
+  _critiqueProvider: 'auto',     // 'auto' (env+peak routing) | 'openai' | 'minimax' | 'claude'
 });
 let draft = blankDraft();
 function resetDraft(entry=null){
@@ -120,6 +121,7 @@ function mapEntry(entry) {
     voice: entry.voice || null,
     layout: entry.layout || null,
     added: entry.addedAt,
+    taggedAt: entry.provenance?.taggedAt || entry.addedAt,
     captured: entry.source?.capturedAt || entry.addedAt,
     recent: entry.source?.capturedAt || entry.addedAt,
     imagePath: entry.image?.path || null,
@@ -583,6 +585,7 @@ function entryRow(x){
     <td>${tierPill(x.tier)}</td>
     <td>${scoreBar(x.score)}<span style="margin-left:6px;font-size:11px;color:var(--muted)" class="num">${x.score}/5</span></td>
     <td class="r num">${x.steals}</td>
+    <td class="num" style="color:var(--muted);font-size:11px">${(x.taggedAt||x.added||'').slice(5)}</td>
     <td><div class="row-actions">
       <button class="row-inspect" title="Inspect"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
     </div></td>
@@ -669,7 +672,7 @@ function galleryCard(x){
       <div class="gmeta">
         <span class="src-dot" style="background:${srcColor(x.source)}"></span>
         <span class="src-name">${esc(x.source)}</span>
-        <span class="added">${(x.added||'').slice(5)}</span>
+        <span class="added">${(x.taggedAt && x.taggedAt !== x.added) ? `${(x.added||'').slice(5)} · tagged ${(x.taggedAt||'').slice(5)}` : (x.added||'').slice(5)}</span>
       </div>
       <div class="gfoot">
         <div class="left">
@@ -850,7 +853,7 @@ page('overview','Overview','clean-ui-mcp · v0.1.0 · stdio transport', function
   <div class="card">
     <div class="card-head"><div><h3>Recent entries</h3><div class="eyebrow">most recent · click to inspect</div></div>
       <a class="chip" href="#/entries">All ${N} →</a></div>
-    <table><thead><tr><th>ID</th><th>Source</th><th>Pattern</th><th>Style</th><th>Tier</th><th>Score</th><th class="r">Steals</th><th></th></tr></thead>
+    <table><thead><tr><th>ID</th><th>Source</th><th>Pattern</th><th>Style</th><th>Tier</th><th>Score</th><th class="r">Steals</th><th>Tagged</th><th></th></tr></thead>
       <tbody>${E.slice(-8).reverse().map(entryRow).join('')}</tbody></table>
   </div>`;
 }, function after(){ bindEntryRows(); });
@@ -878,6 +881,7 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
         </div>
         <select class="sort-select" id="entrySort" title="Sort by">
           <option value="recent">Most recent</option>
+          <option value="tagged">Recently tagged</option>
           <option value="score">Highest score</option>
           <option value="fav">Favorites first</option>
           <option value="source">By source</option>
@@ -924,6 +928,7 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
     }
     const favSet=new Set(favs);
     if(st.sort==='recent') rows.sort((a,b)=>(b.recent||b.added||'').localeCompare(a.recent||a.added||''));
+    else if(st.sort==='tagged') rows.sort((a,b)=>(b.taggedAt||b.added||'').localeCompare(a.taggedAt||a.added||''));
     else if(st.sort==='score') rows.sort((a,b)=>(b.score||0)-(a.score||0));
     else if(st.sort==='fav') rows.sort((a,b)=>(favSet.has(b.id)?1:0)-(favSet.has(a.id)?1:0));
     else if(st.sort==='source') rows.sort((a,b)=>a.source.localeCompare(b.source));
@@ -952,7 +957,7 @@ page('entries','Entries',`all ${agg.N||0} entries · visual gallery`, function()
     } else {
       const visIds = slice.map(x=>x.id);
       const allVisSel = visIds.length>0 && visIds.every(id=>isSelected(id));
-      out.innerHTML = slice.length ? `<table id="entryTable"><thead><tr><th class="sel-cell"><input type="checkbox" id="selAll" ${allVisSel?'checked':''} aria-label="Select all visible" title="Select all on this page"></th><th>ID</th><th>Source</th><th>Pattern</th><th>Style</th><th>Tier</th><th>Score</th><th class="r">Steals</th><th></th></tr></thead><tbody>${slice.map(entryRow).join('')}</tbody></table>`+pagination(rows.length) : `<div class="empty">No entries match these filters.</div>`;
+      out.innerHTML = slice.length ? `<table id="entryTable"><thead><tr><th class="sel-cell"><input type="checkbox" id="selAll" ${allVisSel?'checked':''} aria-label="Select all visible" title="Select all on this page"></th><th>ID</th><th>Source</th><th>Pattern</th><th>Style</th><th>Tier</th><th>Score</th><th class="r">Steals</th><th>Tagged</th><th></th></tr></thead><tbody>${slice.map(entryRow).join('')}</tbody></table>`+pagination(rows.length) : `<div class="empty">No entries match these filters.</div>`;
     }
     out.querySelectorAll('#entryResults .pg, .pages .pg').forEach(b=>b.addEventListener('click',()=>{const p=+b.dataset.pg;if(p>=1&&p<=totalPages){st.page=p;render();document.querySelector('.main').scrollTop=0;}}));
     out.querySelectorAll('.pages .pg').forEach(b=>b.addEventListener('click',()=>{const p=+b.dataset.pg;if(p>=1&&p<=totalPages){st.page=p;render();document.querySelector('.main').scrollTop=0;}}));
@@ -1151,7 +1156,7 @@ async function autoFillCandidates(){
     // one pass, so the user can commit immediately without a second "generate
     // critique" step. imageDetail:'low' still keeps the vision pass cheap.
     const data = await request('/api/auto-tag', {
-      method:'POST', body: JSON.stringify({ imagePath: c.imagePath, productName, url: sourceUrl || c.sourceUrl || null, imageDetail:'low' })
+      method:'POST', body: JSON.stringify({ imagePath: c.imagePath, productName, url: sourceUrl || c.sourceUrl || null, imageDetail:'low', ...(draft._critiqueProvider && draft._critiqueProvider !== 'auto' ? { critiqueProvider: draft._critiqueProvider } : {}) })
     });
     // Merge the tagger's structured output onto the candidate-seeded draft,
     // keeping the temp image path + provenance.capture.
@@ -1203,6 +1208,7 @@ async function commitCandidates(){
     delete body._editing; delete body._busy; delete body._error; delete body._tab;
     delete body._pendingCapture; delete body._addBatchId; delete body._candidates;
     delete body._candidateStatus; delete body._selectedCandidates;
+    delete body._critiqueProvider;
     // Strip [DRAFT] markers — same gate as saveDraft.
     body.critique = stripDraftMarker(body.critique);
     body.whatToSteal = (body.whatToSteal||[]).map(stripDraftMarker);
@@ -1288,7 +1294,7 @@ async function wizardAutoTag(){
   draft._busy = 'Auto-filling fields…'; draft._error = null; refreshActivePage();
   try {
     const j = await request('/api/auto-tag', {
-      method:'POST', body: JSON.stringify({ imagePath: draft.image.path, productName: draft.source.productName, url: draft.source.url })
+      method:'POST', body: JSON.stringify({ imagePath: draft.image.path, productName: draft.source.productName, url: draft.source.url, ...(draft._critiqueProvider && draft._critiqueProvider !== 'auto' ? { critiqueProvider: draft._critiqueProvider } : {}) })
     });
     // Merge the tagger's structured output into the draft, preserving the
     // form-internal fields and the multi-candidate session state.
@@ -1297,6 +1303,7 @@ async function wizardAutoTag(){
       _addBatchId: draft._addBatchId, _candidates: draft._candidates,
       _candidateStatus: draft._candidateStatus, _selectedCandidates: draft._selectedCandidates,
       _busyCandidate: draft._busyCandidate, _reviewingCandidate: draft._reviewingCandidate,
+      _critiqueProvider: draft._critiqueProvider,
     };
     const captureDate = isoDate(draft.source?.capturedAt);
     draft = {
@@ -1341,7 +1348,7 @@ async function saveDraft(){
   const body = JSON.parse(JSON.stringify(draft));
   delete body._editing; delete body._busy; delete body._error; delete body._tab; delete body._pendingCapture;
   delete body._addBatchId; delete body._candidates; delete body._candidateStatus; delete body._selectedCandidates;
-  delete body._busyCandidate; delete body._reviewingCandidate; delete body._busyStart;
+  delete body._busyCandidate; delete body._reviewingCandidate; delete body._busyStart; delete body._critiqueProvider;
   // Schema hygiene mirrors commitCandidates(): optional dates must be absent,
   // not empty strings, when the shared blank draft seeded them.
   const today = new Date().toISOString().slice(0, 10);
@@ -1596,6 +1603,12 @@ function renderAddSessionRail({ hasImage, hasFields, hasCandidates, reviewing, b
   } else {
     primary = `<button class="btn primary" disabled>${hasFields ? 'Review and save' : 'Add source first'}</button>`;
   }
+  // Show the critique-provider dropdown only when the primary action is auto-fill
+  // (single-image or candidate batch) — not during review, commit, or save-only.
+  const showProviderSelect = !reviewing && !busy && (
+    (hasCandidates && selected > 0 && otherTagged === 0) ||
+    (hasImage && !hasFields)
+  );
   const error = draft._error ? `<div class="session-alert error">${esc(draft._error)}</div>` : '';
   const busyMsg = busyLabel ? `<div class="session-alert">${esc(busyLabel)}${draft._busyStart ? ` <span id="busyElapsed"></span>` : ''}</div>` : '';
   const cleanupReady = hasCandidates && draft._addBatchId && t.total > 0 && (t.committed + t.skipped + t.duplicate + t.error) === t.total;
@@ -1612,6 +1625,12 @@ function renderAddSessionRail({ hasImage, hasFields, hasCandidates, reviewing, b
       <div class="session-stat ${issueCount?'has-issues':''}"><span>${issueCount}</span><b>issues</b></div>
     </div>
     ${totalCandidates ? `<div class="rail-note mono">${totalCandidates} candidate${totalCandidates===1?'':'s'} in this capture</div>` : `<div class="rail-note">Capture a URL or upload an image to start.</div>`}
+    ${showProviderSelect ? `<div class="session-provider"><label class="rail-label">Critique model</label><select id="critiqueProviderSelect" class="provider-select">
+      <option value="auto"${draft._critiqueProvider==='auto'?' selected':''}>Auto (peak-aware)</option>
+      <option value="openai"${draft._critiqueProvider==='openai'?' selected':''}>DeepSeek / OpenAI</option>
+      <option value="minimax"${draft._critiqueProvider==='minimax'?' selected':''}>MiniMax</option>
+      <option value="claude"${draft._critiqueProvider==='claude'?' selected':''}>Claude</option>
+    </select></div>` : ''}
     <div class="session-action">${primary}</div>
     ${reviewing && otherTagged > 0 ? `<button class="btn primary" id="addCommitAll" ${busy?'disabled':''}>Commit other tagged (${otherTagged})</button>` : ''}
     ${cleanupReady ? `<button class="btn" id="addCleanupCandidates">Clean up</button>` : ''}
@@ -1747,6 +1766,9 @@ page('add','Add entry','new corpus entry', function(){
   if(fileInput) fileInput.addEventListener('change', e=>{ wizardUpload(e.target.files[0]); });
   const at = document.getElementById('addAutoTag');
   if(at) at.addEventListener('click', wizardAutoTag);
+  // Critique-provider dropdown in the session rail.
+  const cps = document.getElementById('critiqueProviderSelect');
+  if(cps) cps.addEventListener('change', ()=>{ draft._critiqueProvider = cps.value; });
   const save = document.getElementById('addSaveForm');
   if(save) save.addEventListener('submit', e=>{
     e.preventDefault();

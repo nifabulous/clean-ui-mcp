@@ -402,6 +402,7 @@ server.registerTool(
       `| layout | ${found.map((e) => e.layout?.form ?? "—").join(" | ")} |`,
       `| accent | ${found.map((e) => e.visual.accentColor ?? e.visual.colorRoles?.accent ?? "—").join(" | ")} |`,
       `| density / corners | ${found.map((e) => `${e.visual.spacingDensity} / ${e.visual.cornerStyle}`).join(" | ")} |`,
+      `| shadows / borders | ${found.map((e) => `${e.visual.usesShadows ? "yes" : "no"} / ${e.visual.usesBorders ? "yes" : "no"}`).join(" | ")} |`,
       `| quality | ${found.map((e) => `${e.qualityScore}/5 ${e.qualityTier}`).join(" | ")} |`,
       ...(concise ? [] : [
         `| critique angle | ${found.map((e) => firstSentence(e.critique)).join(" | ")} |`,

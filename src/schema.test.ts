@@ -294,6 +294,16 @@ describe("corpus schema", () => {
     if (result.success) expect(result.data.reviewStatus).toBe("draft");
   });
 
+  it("accepts pinned: true and treats absence as undefined (not false)", () => {
+    const pinned = CorpusEntry.safeParse({ ...validEntry, pinned: true });
+    expect(pinned.success).toBe(true);
+    if (pinned.success) expect(pinned.data.pinned).toBe(true);
+
+    const omitted = CorpusEntry.safeParse(validEntry);
+    expect(omitted.success).toBe(true);
+    if (omitted.success) expect(omitted.data.pinned).toBeUndefined();
+  });
+
   it("round-trips provenance with all three taggedBy values", () => {
     for (const taggedBy of ["human", "auto", "auto-reviewed"] as const) {
       const result = CorpusEntry.safeParse({ ...validEntry, provenance: { taggedBy } });

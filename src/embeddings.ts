@@ -27,6 +27,8 @@ const INDEX_PATH = join(__dirname, "..", "corpus", "embeddings.json");
 
 const VOYAGE_MODEL = "voyage-4";
 const VOYAGE_API   = "https://api.voyageai.com/v1/embeddings";
+const VOYAGE_RERANK_API = "https://api.voyageai.com/v1/rerank";
+const VOYAGE_RERANK_MODEL = "rerank-2.5";
 const EMBED_DIM    = 1024;
 
 // ─── types ────────────────────────────────────────────────────────────────────
@@ -362,6 +364,48 @@ export function entryToDocument(entry: {
   ];
 
   return parts.filter(Boolean).join("\n");
+}
+
+// ─── rerank (Voyage rerank-2.5) ───────────────────────────────────────────────
+
+/**
+ * Rerank documents against a query using Voyage's cross-encoder.
+ * Returns relevance scores in [0,1] for each document, sorted by relevance desc.
+ * Gated by VOYAGE_API_KEY (same key as embeddings). Returns null on failure so
+ * the caller can gracefully fall back to the pre-rerank scores.
+ */
+export async function voyageRerank(
+  query: string,
+  documents: string[],
+  topK?: number,
+): Promise<Array<{ index: number; relevanceScore: number }> | null> {
+  const key = process.env.VOYAGE_API_KEY;
+  if (!key) return null;
+  try {
+    const res = await fetch(VOYAGE_RERANK_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        query,
+        documents,
+        model: VOYAGE_RERANK_MODEL,
+        ...(topK ? { top_k: topK } : {}),
+      }),
+    });
+    if (!res.ok) {
+      console.error(`[voyage-rerank] API error ${res.status}: ${await res.text()}`);
+      return null;
+    }
+    const data = await res.json() as {
+      data: Array<{ index: number; relevance_score: number }>;
+    };
+    return data.data
+      .map((d) => ({ index: d.index, relevanceScore: d.relevance_score }))
+      .sort((a, b) => b.relevanceScore - a.relevanceScore);
+  } catch (err) {
+    console.error("[voyage-rerank] failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
 }
 
 export { EMBED_DIM, INDEX_PATH };

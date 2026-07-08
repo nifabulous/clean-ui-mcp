@@ -12,7 +12,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { PatternType, Category, StyleTag } from "../schema.js";
+import { PatternType, Category, StyleTag, Component, DomainTag } from "../schema.js";
 import { indexStatus } from "../corpus.js";
 import { allImageFiles } from "../paths.js";
 
@@ -34,6 +34,8 @@ function getArg(flag: string): string | undefined {
 const FULL_PATTERN_TYPES = PatternType.options;
 const FULL_CATEGORIES = Category.options;
 const FULL_STYLE_TAGS = StyleTag.options;
+const FULL_COMPONENTS = Component.options;
+const FULL_DOMAIN_TAGS = DomainTag.options;
 
 interface Entry {
   id: string;
@@ -50,6 +52,13 @@ interface Entry {
   layout?: { form?: string };
   businessRationale?: { businessGoal?: string; targetUser?: string; rationale?: string; confirmed?: boolean };
   critique?: string;
+  components?: string[];
+  domainTags?: string[];
+  colorScheme?: string;
+  mood?: string;
+  industryVertical?: string;
+  responsiveBehavior?: string;
+  pinned?: boolean;
 }
 
 const VAGUE_PHRASES = [
@@ -99,10 +108,19 @@ const patternTypeCounts = countBy(entries, (e) => (e.patternType ? [e.patternTyp
 const categoryCounts = countBy(entries, (e) => e.categories ?? []);
 const styleTagCounts = countBy(entries, (e) => e.styleTags ?? []);
 const qualityTierCounts = countBy(entries, (e) => (e.qualityTier ? [e.qualityTier] : []));
+const componentCounts = countBy(entries, (e) => e.components ?? []);
+const domainTagCounts = countBy(entries, (e) => e.domainTags ?? []);
+const colorSchemeCounts = countBy(entries, (e) => e.colorScheme ? [e.colorScheme] : []);
+const moodCounts = countBy(entries, (e) => e.mood ? [e.mood] : []);
+const industryCounts = countBy(entries, (e) => e.industryVertical ? [e.industryVertical] : []);
+const responsiveCounts = countBy(entries, (e) => e.responsiveBehavior ? [e.responsiveBehavior] : []);
+const pinnedCount = entries.filter((e) => e.pinned === true).length;
 
 const patternTypeGaps = computeGaps(patternTypeCounts, FULL_PATTERN_TYPES, minCount);
 const categoryGaps = computeGaps(categoryCounts, FULL_CATEGORIES, minCount);
 const styleTagGaps = computeGaps(styleTagCounts, FULL_STYLE_TAGS, minCount);
+const componentGaps = computeGaps(componentCounts, FULL_COMPONENTS, minCount);
+const domainTagGaps = computeGaps(domainTagCounts, FULL_DOMAIN_TAGS, minCount);
 
 const staleCutoff = new Date();
 staleCutoff.setMonth(staleCutoff.getMonth() - staleMonths);
@@ -159,8 +177,15 @@ const withImageResolvable = entries.filter((e) => {
 }).length;
 const withImagePath = entries.filter((e) => !!e.image?.path).length;
 const withCapture = entries.filter((e) => !!e.provenance?.capture).length;
+const withComponents = entries.filter((e) => (e.components ?? []).length > 0).length;
+const withDomainTags = entries.filter((e) => (e.domainTags ?? []).length > 0).length;
+const withColorScheme = entries.filter((e) => !!e.colorScheme).length;
+const withMood = entries.filter((e) => !!e.mood).length;
+const withIndustry = entries.filter((e) => !!e.industryVertical).length;
+const withResponsive = entries.filter((e) => !!e.responsiveBehavior).length;
 const critiqueLengths = entries.map((e) => (e.critique ?? "").length).filter((n) => n > 0);
 const avgCritiqueLength = critiqueLengths.length ? Math.round(critiqueLengths.reduce((a, b) => a + b, 0) / critiqueLengths.length) : 0;
+const pct = (n: number) => entries.length ? Math.round((n / entries.length) * 100) : 0;
 
 // ── provenance split (how much was auto-tagged vs human-authored vs reviewed) ─
 const provenanceCounts = countBy(entries, (e) => {
@@ -171,8 +196,8 @@ const draftCount = entries.filter((e) => e.reviewStatus === "draft").length;
 
 const report = {
   totalEntries: entries.length,
-  distribution: { patternType: patternTypeCounts, categories: categoryCounts, styleTags: styleTagCounts, qualityTier: qualityTierCounts, product: productCounts },
-  coverageGaps: { patternType: patternTypeGaps, categories: categoryGaps, styleTags: styleTagGaps },
+  distribution: { patternType: patternTypeCounts, categories: categoryCounts, styleTags: styleTagCounts, qualityTier: qualityTierCounts, product: productCounts, components: componentCounts, domainTags: domainTagCounts, colorScheme: colorSchemeCounts, mood: moodCounts, industryVertical: industryCounts, responsiveBehavior: responsiveCounts },
+  coverageGaps: { patternType: patternTypeGaps, categories: categoryGaps, styleTags: styleTagGaps, components: componentGaps, domainTags: domainTagGaps },
   staleness: { cutoffMonths: staleMonths, staleCount: staleEntries.length, staleEntries },
   antiPatternQuality: { flaggedCount: antiPatternIssues.length, flagged: antiPatternIssues },
   indexCoverage: { indexed: index.indexed, total: index.total, hasIndex: index.hasIndex, missing: index.missing, stale: index.stale, contentStale: index.contentStale },
@@ -199,16 +224,22 @@ const report = {
     goalDistribution: businessGoalCounts,
   },
   quality: {
-    voiceCoverage: entries.length ? Math.round((withVoice / entries.length) * 100) : 0,
-    layoutCoverage: entries.length ? Math.round((withLayout / entries.length) * 100) : 0,
+    voiceCoverage: pct(withVoice),
+    layoutCoverage: pct(withLayout),
     // imageAvailability now means "path resolves to a real file" — the old
     // "path string present" behavior moves to imageReferenceRate for comparison.
-    imageAvailability: entries.length ? Math.round((withImageResolvable / entries.length) * 100) : 0,
-    imageReferenceRate: entries.length ? Math.round((withImagePath / entries.length) * 100) : 0,
-    captureProvenance: entries.length ? Math.round((withCapture / entries.length) * 100) : 0,
+    imageAvailability: pct(withImageResolvable),
+    imageReferenceRate: pct(withImagePath),
+    captureProvenance: pct(withCapture),
     avgCritiqueLength,
+    componentCoverage: pct(withComponents),
+    domainTagCoverage: pct(withDomainTags),
+    colorSchemeCoverage: pct(withColorScheme),
+    moodCoverage: pct(withMood),
+    industryVerticalCoverage: pct(withIndustry),
+    responsiveBehaviorCoverage: pct(withResponsive),
   },
-  provenance: { taggedBy: provenanceCounts, drafts: draftCount },
+  provenance: { taggedBy: provenanceCounts, drafts: draftCount, pinned: pinnedCount },
 };
 
 if (asJson) {
@@ -224,12 +255,20 @@ if (asJson) {
   console.log("\n📊 qualityTier"); ct(qualityTierCounts);
   console.log("\n📊 categories"); ct(categoryCounts);
   console.log("\n📊 styleTags"); ct(styleTagCounts);
+  console.log("\n📊 components (top 15)"); Object.entries(componentCounts).sort((a, b) => b[1] - a[1]).slice(0, 15).forEach(([k, v]) => console.log(`  ${k.padEnd(24)}${v}`));
+  console.log("\n📊 domainTags"); ct(domainTagCounts);
+  console.log("\n📊 colorScheme"); ct(colorSchemeCounts);
+  console.log("\n📊 mood (top 10)"); Object.entries(moodCounts).sort((a, b) => b[1] - a[1]).slice(0, 10).forEach(([k, v]) => console.log(`  ${k.padEnd(24)}${v}`));
+  console.log("\n📊 industryVertical (top 10)"); Object.entries(industryCounts).sort((a, b) => b[1] - a[1]).slice(0, 10).forEach(([k, v]) => console.log(`  ${k.padEnd(24)}${v}`));
+  console.log("\n📊 responsiveBehavior"); ct(responsiveCounts);
   hr();
   console.log("\n🕳️  Coverage gaps (against full schema enum)");
   console.log("  patternType — zero:", patternTypeGaps.zero.length ? patternTypeGaps.zero.join(", ") : "(none — full coverage)");
   console.log("  patternType — thin:", patternTypeGaps.belowThreshold.length ? patternTypeGaps.belowThreshold.map((g) => `${g.value} (${g.count})`).join(", ") : "(none)");
   console.log("  categories — zero:", categoryGaps.zero.length ? categoryGaps.zero.join(", ") : "(none — full coverage)");
   console.log("  styleTags — zero:", styleTagGaps.zero.length ? styleTagGaps.zero.join(", ") : "(none — full coverage)");
+  console.log("  components — zero:", componentGaps.zero.length ? componentGaps.zero.join(", ") : "(none — full coverage)");
+  console.log("  domainTags — zero:", domainTagGaps.zero.length ? domainTagGaps.zero.join(", ") : "(none — full coverage)");
   hr();
   console.log(`\n🕰️  Staleness (cutoff: ${staleMonths}mo) — ${staleEntries.length} stale`);
   staleEntries.slice(0, 15).forEach((e) => console.log(`    ${e.id}  (${e.dateStr})`));
@@ -284,9 +323,16 @@ if (asJson) {
   console.log(`  images:  ${report.quality.imageAvailability}% resolvable · ${report.quality.imageReferenceRate}% reference a path`);
   console.log(`  capture: ${report.quality.captureProvenance}% from the capture pipeline`);
   console.log(`  critique: avg ${report.quality.avgCritiqueLength} chars`);
+  console.log(`  components:     ${report.quality.componentCoverage}% have component tags`);
+  console.log(`  domainTags:     ${report.quality.domainTagCoverage}% have domain tags`);
+  console.log(`  colorScheme:    ${report.quality.colorSchemeCoverage}% have color scheme`);
+  console.log(`  mood:           ${report.quality.moodCoverage}% have mood`);
+  console.log(`  industry:       ${report.quality.industryVerticalCoverage}% have industry vertical`);
+  console.log(`  responsive:     ${report.quality.responsiveBehaviorCoverage}% have responsive behavior`);
   if (report.provenance.drafts) console.log(`  drafts:  ${report.provenance.drafts} hidden from MCP search`);
   console.log(`\n  provenance (how the fields were produced):`);
   Object.entries(provenanceCounts).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => console.log(`    ${k.padEnd(24)}${v}`));
+  if (pinnedCount > 0) console.log(`    ${"pinned (protected)".padEnd(24)}${pinnedCount}`);
   console.log(`\n  top products:`);
   Object.entries(productCounts).sort((a, b) => b[1] - a[1]).slice(0, 10).forEach(([k, v]) => console.log(`    ${k.padEnd(24)}${v}`));
   hr();

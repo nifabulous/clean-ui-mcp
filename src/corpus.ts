@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Corpus, type CorpusEntryT } from "./schema.js";
-import { loadIndex, embedQuery, cosine, entryToDocument, hashForDocument, indexExists } from "./embeddings.js";
+import { loadIndex, embedQuery, cosine, entryToDocument, hashForDocument, indexExists, voyageRerank } from "./embeddings.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(__dirname, "..", "corpus", "entries.json");
@@ -47,12 +47,14 @@ export interface SearchOptions {
   /** "approved" (default) hides drafts; "draft" surfaces only drafts; "any" shows both. */
   reviewStatus?: "draft" | "approved" | "any";
   limit?:        number;
+  /** Opt-in rerank via Voyage rerank-2.5 cross-encoder. Default: off. */
+  rerank?:       boolean;
 }
 
 export interface SearchResult {
   entry:       CorpusEntryT;
   score:       number;
-  searchMode:  "vector" | "keyword";
+  searchMode:  "vector" | "keyword" | "hybrid";
 }
 
 // ─── keyword search (fallback when no index exists) ───────────────────────────
@@ -175,6 +177,49 @@ async function vectorSearch(
   });
 }
 
+// ─── hybrid fusion ────────────────────────────────────────────────────────────
+
+/**
+ * Normalize scores within a path to [0,1] via min-max scaling.
+ * If all scores are equal, returns 0.5 for each (neutral).
+ */
+function normalizeScores(results: SearchResult[]): SearchResult[] {
+  if (!results.length) return results;
+  const scores = results.map((r) => r.score);
+  const min = Math.min(...scores);
+  const max = Math.max(...scores);
+  const range = max - min;
+  if (range === 0) return results.map((r) => ({ ...r, score: 0.5 }));
+  return results.map((r) => ({ ...r, score: (r.score - min) / range }));
+}
+
+/**
+ * Fuse vector and keyword results into a single ranked list.
+ * Scores are normalized to [0,1] within each path, then combined with a
+ * vector-weighted blend (0.6 vector + 0.4 keyword). An entry scored by both
+ * paths gets the combined score; an entry scored by only one path gets its
+ * normalized score (the missing path contributes 0).
+ */
+function fuseResults(vector: SearchResult[], keyword: SearchResult[]): SearchResult[] {
+  const normVec = normalizeScores(vector);
+  const normKw = normalizeScores(keyword);
+  const byId = new Map<string, SearchResult>();
+  // Vector pass: weighted 0.6
+  for (const r of normVec) {
+    byId.set(r.entry.id, { ...r, score: r.score * 0.6, searchMode: "hybrid" as const });
+  }
+  // Keyword pass: weighted 0.4 — adds to existing vector score or creates new entry
+  for (const r of normKw) {
+    const existing = byId.get(r.entry.id);
+    if (existing) {
+      existing.score += r.score * 0.4;
+    } else {
+      byId.set(r.entry.id, { ...r, score: r.score * 0.4, searchMode: "hybrid" as const });
+    }
+  }
+  return [...byId.values()].sort((a, b) => b.score - a.score);
+}
+
 // ─── main search entrypoint ───────────────────────────────────────────────────
 
 /**
@@ -205,17 +250,41 @@ export async function searchRanked(opts: SearchOptions): Promise<SearchResult[]>
 
   let results: SearchResult[];
 
-  if (opts.query && indexExists()) {
-    // Vector path — requires VOYAGE_API_KEY at query time
-    // If the key is missing at query time, fall through to keyword
-    if (!process.env.VOYAGE_API_KEY) {
-      console.error("[clean-ui-mcp] VOYAGE_API_KEY not set — falling back to keyword search.");
-      results = keywordSearch(filtered, opts);
-    } else {
-      results = await vectorSearch(filtered, opts.query, opts);
-    }
+  if (opts.query && indexExists() && process.env.VOYAGE_API_KEY) {
+    // Hybrid path: run both vector and keyword, then fuse.
+    // Each path scores differently (keyword: weighted bonuses; vector: cosine*10),
+    // so we normalize each to [0,1] before combining with a vector-weighted blend.
+    const vectorResults = await vectorSearch(filtered, opts.query!, opts);
+    const keywordResults = keywordSearch(filtered, opts);
+    results = fuseResults(vectorResults, keywordResults);
   } else {
+    if (opts.query && indexExists() && !process.env.VOYAGE_API_KEY) {
+      console.error("[clean-ui-mcp] VOYAGE_API_KEY not set — falling back to keyword search.");
+    }
     results = keywordSearch(filtered, opts);
+  }
+
+  // ── Optional rerank (Voyage rerank-2.5 cross-encoder) ─────────────────────
+  // Opt-in via SearchOptions.rerank. Gated behind VOYAGE_API_KEY. Takes the
+  // top-30 fused/keyword results, reranks them against the query, and returns
+  // the reranked top-K followed by the remaining tail (preserving fused scores).
+  // If rerank fails (rate limit, network), falls back to the pre-rerank scores.
+  if (opts.rerank && opts.query && process.env.VOYAGE_API_KEY && results.length > 5) {
+    results.sort((a, b) => b.score - a.score);
+    const rerankPool = results.slice(0, 30);
+    const tail = results.slice(30);
+    const documents = rerankPool.map((r) => entryToDocument(r.entry));
+    const reranked = await voyageRerank(opts.query, documents);
+    if (reranked) {
+      // Replace the pool with reranked order, using relevance scores.
+      const rerankedResults = reranked.map((rr: { index: number; relevanceScore: number }) => ({
+        ...rerankPool[rr.index],
+        score: rr.relevanceScore,
+      }));
+      // Deterministic merge: reranked pool first (sorted by relevance), then
+      // remaining tail unchanged. Don't compare scores across different scales.
+      results = [...rerankedResults, ...tail];
+    }
   }
 
   return results.sort((a, b) => b.score - a.score);
@@ -278,6 +347,12 @@ export function listCategories(): string[] {
 export function listStyleTags(): string[] {
   const set = new Set<string>();
   for (const e of loadCorpus()) for (const s of e.styleTags) set.add(s);
+  return [...set].sort();
+}
+
+export function listDomainTags(): string[] {
+  const set = new Set<string>();
+  for (const e of loadCorpus()) for (const d of (e.domainTags ?? [])) set.add(d);
   return [...set].sort();
 }
 

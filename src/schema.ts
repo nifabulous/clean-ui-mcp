@@ -420,6 +420,15 @@ export const CorpusEntry = z.object({
   reviewStatus: z.enum(["draft", "approved"]).optional().default("approved"),
 
   /**
+   * Pin — protects curated entries from bulk re-tag. When true (or present),
+   * `/api/auto-retag` skips the entry without invoking the tagger. Absent and
+   * false are equivalent. Uses `.optional()` (not `.default(false)`) so existing
+   * entries don't get a materialized `pinned: false` on their next save — no
+   * corpus churn.
+   */
+  pinned: z.boolean().optional(),
+
+  /**
    * Provenance — who produced the structured fields, and (optionally) who
    * reviewed them. Lets you tell which entries were rubber-stamped from the
    * tagger vs actually reviewed — essential for drift detection and if a second

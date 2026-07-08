@@ -1072,6 +1072,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       sendJson(res, 200, { ok: false, skipped: true, reason: "no image" });
       return;
     }
+    if (entry.pinned) {
+      sendJson(res, 200, { ok: false, skipped: true, reason: "pinned" });
+      return;
+    }
 
     try {
       const imagePath = fromCorpusRelativeImagePath(entry.image.path);

@@ -13,6 +13,7 @@ import {
   getEntryById,
   listCategories,
   listStyleTags,
+  listDomainTags,
   indexStatus,
   findSimilarEntries,
 } from "./corpus.js";
@@ -87,9 +88,10 @@ server.registerTool(
         .optional()
         .describe("Filter to a device class — orthogonal to patternType. Use 'mobile' for phone screenshots, 'web' for desktop. Lets you ask 'mobile onboarding' vs 'web onboarding'."),
       limit: z.number().int().min(1).max(20).optional().describe("Max results, default 5"),
+      responseFormat: z.enum(["concise", "detailed"]).optional().describe("Output detail level. 'concise' omits steal items and anti-patterns, truncates critique to ~100 chars — lighter for browsing. 'detailed' (default) returns everything."),
     },
   },
-  async ({ query, category, styleTag, minQuality, qualityTier, reviewStatus, platform, limit }) => {
+  async ({ query, category, styleTag, minQuality, qualityTier, reviewStatus, platform, limit, responseFormat }) => {
     const results = await searchEntries({ query, category, styleTag, minQuality, qualityTier, reviewStatus: reviewStatus as "draft" | "approved" | "any" | undefined, platform: platform as "web" | "mobile" | "tablet" | undefined, limit });
 
     // Log for retrieval analytics (query-stats.ts) — never blocks the response.
@@ -108,25 +110,31 @@ server.registerTool(
       };
     }
 
+    const concise = responseFormat === "concise";
     const summary = results
       .map((e) => {
         const hasImage = e.image.visibility !== "private" && e.image.path;
-        return [
+        const lines = [
           `### ${cleanTitle(e.title, e.source.productName)}  (id: ${e.id})`,
           `Categories: ${e.categories.join(", ")} | Style: ${e.styleTags.join(", ")}`,
           `Quality: ${e.qualityScore}/5 | Source: ${e.source.productName}${e.source.url ? ` (${e.source.url})` : ""}`,
-          `Image available via get_ui_example: ${hasImage ? "yes" : "no (metadata/critique only)"}`,
-          ``,
-          `Critique: ${e.critique}`,
-          ``,
-          `What to steal:`,
-          ...e.whatToSteal.map((t) => `  - ${t}`),
-          e.antiPatterns.antiPatterns.length
-            ? `Anti-patterns (mistakes avoided):\n${e.antiPatterns.antiPatterns.map((t) => `  - ${t}`).join("\n")}`
-            : "",
-        ]
-          .filter(Boolean)
-          .join("\n");
+        ];
+        if (concise) {
+          lines.push(`Critique: ${e.critique.slice(0, 120)}${e.critique.length > 120 ? "…" : ""}`);
+        } else {
+          lines.push(
+            `Image available via get_ui_example: ${hasImage ? "yes" : "no (metadata/critique only)"}`,
+            ``,
+            `Critique: ${e.critique}`,
+            ``,
+            `What to steal:`,
+            ...e.whatToSteal.map((t) => `  - ${t}`),
+            e.antiPatterns.antiPatterns.length
+              ? `Anti-patterns (mistakes avoided):\n${e.antiPatterns.antiPatterns.map((t) => `  - ${t}`).join("\n")}`
+              : "",
+          );
+        }
+        return lines.filter(Boolean).join("\n");
       })
       .join("\n\n---\n\n");
 
@@ -278,6 +286,18 @@ server.registerTool(
   },
   async () => ({
     content: [{ type: "text", text: listStyleTags().join(", ") }],
+  }),
+);
+
+server.registerTool(
+  "list_domain_tags",
+  {
+    title: "List available domain tags",
+    description: "Returns all business/product domain tags (billing, security, integrations, etc.) currently present in the corpus.",
+    inputSchema: {},
+  },
+  async () => ({
+    content: [{ type: "text", text: listDomainTags().join(", ") }],
   }),
 );
 

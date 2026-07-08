@@ -1219,6 +1219,20 @@ async function callOpenAICompatible(
     chat_template_kwargs: { thinking: thinkingEnabled },
   };
 
+  // MiniMax M3: thinking is ON by default and wraps content in <think> tags.
+  // For extraction (deterministic fields), disable thinking entirely. For
+  // critique, use adaptive thinking + reasoning_split so the thinking goes
+  // into a separate field, not polluting the JSON content.
+  const isMiniMax = cfg.baseUrl.includes("minimax");
+  if (isMiniMax) {
+    if (pass === "extraction") {
+      body.thinking = { type: "disabled" };
+    } else {
+      body.thinking = { type: "adaptive" };
+      body.reasoning_split = true;
+    }
+  }
+
   const endpoint = `${cfg.baseUrl}/chat/completions`;
   if (DEBUG_TAGGER) {
     console.error(`[openai-compat] model=${cfg.model} pass=${pass} base=${cfg.baseUrl} thinking=${thinkingEnabled}`);
@@ -1240,9 +1254,12 @@ async function callOpenAICompatible(
     console.error(`[openai-compat] pass=${pass} usage in=${u?.prompt_tokens ?? "?"} out=${u?.completion_tokens ?? "?"} total=${u?.total_tokens ?? "?"}`);
   }
   const content = data.choices?.[0]?.message?.content;
-  if (typeof content === "string") return content;
+  // MiniMax M3 sometimes includes <think>...</think> tags in content even with
+  // reasoning_split. Strip them so JSON parsing doesn't break.
+  const stripThinkTags = (s: string) => s.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  if (typeof content === "string") return stripThinkTags(content);
   if (Array.isArray(content)) {
-    return content.filter((c) => typeof c.text === "string").map((c) => c.text ?? "").join("");
+    return stripThinkTags(content.filter((c) => typeof c.text === "string").map((c) => c.text ?? "").join(""));
   }
   return "";
 }

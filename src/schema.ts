@@ -186,6 +186,17 @@ export function detectPlatform(width: number | null | undefined, height: number 
 }
 
 /**
+ * Pattern discovery metadata — an open-vocabulary side lane used to decide
+ * which recurring hidden patterns deserve promotion into the closed PatternType
+ * enum. This is intentionally not used for filtering/search; it is curator
+ * evidence for taxonomy evolution.
+ */
+export const PatternDiscovery = z.object({
+  suggestedPatternType: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  currentPatternType: PatternType,
+});
+
+/**
  * Accessibility risk — a single a11y concern found on screen. Accepts two shapes:
  *
  * 1. Legacy string (e.g. "[inferred] sidebar: contrast may be low"). Existing
@@ -411,6 +422,7 @@ export const CorpusEntry = z.object({
   id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Expected stable kebab-case slug"), // stable slug, e.g. "linear-issue-board-2026"
   title: z.string(), // human label, e.g. "Linear — Issue board, grouped view"
   patternType: PatternType, // primary pattern (one) — complements the multi-tag categories
+  patternDiscovery: PatternDiscovery.optional(), // open-vocab suggestion lane; never replaces canonical patternType
   platform: Platform.optional(), // device class (web/mobile/tablet) — orthogonal to patternType
   colorScheme: z.enum(["light", "dark"]).optional(), // page-level theme — the most obvious visual fact, trivially queryable
   categories: z.array(Category).min(1).max(4),

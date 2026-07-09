@@ -13,9 +13,9 @@ that already (shadcn, Figma MCP, magic-mcp). The point is to give it *specific,
 real, well-explained examples* to ground "make it clean" requests in something
 other than the statistical average of training data (the "AI slop" failure mode).
 
-> **Live corpus:** 1,029 entries across 93 products, 20 UI patterns, 31
-> component types, 15 business domains, 45 cautionary examples, 1,164
-> anti-pattern statements, and 3,640 stealable techniques. Counts drift as the
+> **Live corpus:** 787 entries with schema support for 21 UI patterns, 31
+> component types, 15 business domains, 35 cautionary examples, 920
+> anti-pattern statements, and 2,806 stealable techniques. Counts drift as the
 > corpus grows — re-derive any time with `npm run corpus-stats`.
 
 ---
@@ -199,7 +199,8 @@ for the full Zod definition — it is the single source of truth.
 
 | Field | Type | Purpose |
 |---|---|---|
-| `patternType` | enum (20) | The ONE primary pattern (`dashboard`, `pricing`, `auth`, `command-palette`, ...) |
+| `patternType` | enum (21) | The ONE primary pattern (`dashboard`, `pricing`, `auth`, `command-palette`, `calculator`, ...) |
+| `patternDiscovery` | object? | Persisted open-vocabulary suggestion lane: `{ suggestedPatternType, currentPatternType }`, summarized by `npm run pattern-discovery` before enum promotion |
 | `categories` | enum[] (1-4) | Multi-tag design-pattern classifier |
 | `styleTags` | enum[] (1-4) | Aesthetic direction (`minimal`, `dense-data`, `editorial`, `brutalist`, ...) |
 | `components` | enum[] (0-10) | Visible UI building blocks (`sidebar-nav`, `kpi-card`, `donut-chart`, `data-table`, ...) — 31 values |
@@ -228,7 +229,7 @@ for the full Zod definition — it is the single source of truth.
 |---|---|---|
 | `critique` | string (min 80) | Why this is here. DECISION + EFFECT + REJECTION structure. |
 | `whatToSteal` | string[] (min 1) | Concrete, copyable techniques with reasoning + when-NOT-to-use |
-| `antiPatterns` | object | `{ antiPatterns[], whereThisFails[], accessibilityRisks[] }` — the Mobbin-beating field |
+| `antiPatterns` | object | `{ antiPatterns[], whereThisFails[], accessibilityRisks[] }`; a11y risks accept legacy strings or structured `{ element, risk, evidence, confidence, wcag? }` objects |
 | `mood` | string? | Emotional register ("playful", "clinical", "authoritative") |
 | `voice` | object? | `{ tone, examples[], avoid[] }` — microcopy analysis |
 | `layout` | object? | Machine-readable wireframe: `{ form, regions: [{role, width}] }` |
@@ -302,7 +303,11 @@ are separate API calls and can run on different providers.
   colorScheme, industryVertical, responsiveBehavior, spacing, corners,
   shadows/borders, colorRoles, layout regions, platform (auto-detected).
 - **Categorization calibration:** prompt nudges the model toward
-  commonly-missed patterns (chat-interface, pricing, command-palette).
+  commonly-missed patterns (chat-interface, pricing, command-palette,
+  calculator).
+- **Pattern discovery lane:** when a screen does not fit the closed enum, the
+  extraction pass can persist `patternDiscovery.suggestedPatternType` for later
+  aggregation instead of silently falling back to `dashboard`.
 
 ### Pass 2: Critique (reasoning + writing)
 - **Text-only** (no image) — reasons from Pass 1's validated facts + DOM a11y
@@ -313,9 +318,12 @@ are separate API calls and can run on different providers.
   behavioral/user-experience outcome, and what conventional default it rejects.
 - **User specificity:** must name the affected user type ("returning users"
   not just "users").
-- **Accessibility probing:** a 5-point checklist (color-only differentiation,
-  icon-only controls, density/readability, touch targets, text alternatives)
-  pushes the model to find 2-3 concrete WCAG-cited risks per screen.
+- **Accessibility evidence gate:** new a11y risks must name the element, risk,
+  confidence, WCAG criterion, and concrete visible/DOM evidence. Unsupported or
+  palette-only risks are dropped instead of preserved as speculative critique.
+- **Palette stripping:** deterministic colors stay in extraction; the critique
+  pass does not receive the full palette, which prevents hex values from being
+  promoted into fake components or status chips.
 - **Banned-phrase enforcement:** generic phrases are listed in the prompt AND
   enforced as a post-hoc code-level gate with one retry.
 - **Mood extraction:** emotional register read from colors/type/copy/whitespace.
@@ -342,7 +350,7 @@ Good: "Hairline borders at low contrast do structural work without the visual
 
 ## Multi-provider support
 
-Five providers, each with independent model overrides:
+Supported provider modes, each with independent model overrides:
 
 | Provider | Vision? | Key env var | Default model |
 |---|---|---|---|
@@ -350,7 +358,8 @@ Five providers, each with independent model overrides:
 | Anthropic Claude | ✅ | `ANTHROPIC_API_KEY` | `claude-sonnet-4-5` |
 | Google Gemini | ✅ | `GEMINI_API_KEY` | `gemini-3.5-flash` |
 | Mistral Large | ❌ (text-only) | `MISTRAL_API_KEY` | `mistral-large-latest` |
-| DeepSeek / OpenAI-compatible | ❌ (text-only) | `OPENAI_API_KEY_CRITIQUE` | `deepseek-v4-pro` |
+| MiniMax M3 | ✅ | `MINIMAX_API_KEY` | `MiniMax-M3` |
+| OpenAI-compatible critique (DeepSeek) | ❌ (text-only) | `OPENAI_API_KEY_CRITIQUE` | `deepseek-v4-pro` |
 
 ### Split-provider mode (recommended)
 
@@ -371,6 +380,10 @@ Mistral and DeepSeek are text-only — they're automatically blocked from the
 extraction pass with a console warning + fallback to a vision provider. The
 `hasVisionKey()` / `hasCritiqueKey()` capability gates enforce the right check
 at each endpoint.
+
+When DeepSeek is configured as the critique provider, peak-hour routing can
+automatically send critique to MiniMax, or Claude as a fallback, unless an
+explicit provider override is supplied.
 
 ---
 
@@ -651,6 +664,7 @@ clean-ui-mcp/
 │       ├── review-draft.ts     # interactive draft reviewer
 │       ├── commit-draft.ts     # commit drafts (with dedup gate)
 │       ├── corpus-stats.ts     # distribution + coverage report
+│       ├── pattern-discovery.ts # aggregate suggested pattern gaps
 │       ├── query-stats.ts      # retrieval analytics
 │       ├── doctor.ts           # health check
 │       ├── restore-corpus.ts   # snapshot recovery
@@ -684,6 +698,7 @@ clean-ui-mcp/
 | `npm run capture-batch` | Crawl a website, capture many sections + DOM signals |
 | `npm run add-entry` | Interactive entry wizard |
 | `npm run tag-image` | Run the vision tagger on one image |
+| `npm run pattern-discovery` | Summarize persisted suggested pattern types before adding new enum values |
 | `npm run bulk-import` | Batch ingest from a folder |
 | `npm run review-draft` | Review bulk-import drafts |
 | `npm run commit-draft` | Commit approved drafts (dedup-gated) |
@@ -699,7 +714,7 @@ clean-ui-mcp/
 
 ## Testing
 
-219 tests across 15 files: vitest unit tests (schema, corpus, tagger,
+251 tests across 16 files: vitest unit tests (schema, corpus, tagger,
 embeddings, dedup, design-prompt, recommend, aggregations) + Playwright browser
 tests (dashboard flows, bulk import, capture, candidate review).
 
@@ -723,5 +738,6 @@ are stored — swap it for SQLite/Postgres later without touching `server.ts`.
 
 ## Status
 
-Active development. 1,029 entries across 93 products. The corpus is growing.
-Contributions welcome: new entries, new patterns, new providers, better critiques.
+Active development. 787 entries, 21 supported UI patterns, and a growing
+retag-readiness pipeline. Contributions welcome: new entries, new patterns,
+new providers, better critiques.

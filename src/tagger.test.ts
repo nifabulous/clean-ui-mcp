@@ -407,6 +407,86 @@ describe("tagImage two-pass request shape", () => {
     expect(pass1Prompt).toContain('domainTags:["integrations"]');
   });
 
+  it("surfaces suggestedPatternType as persisted patternDiscovery metadata", async () => {
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      callCount++;
+      const response = callCount === 1
+        ? JSON.stringify({
+            patternType: "dashboard",
+            suggestedPatternType: "monitoring-console",
+            categories: ["dashboard"],
+            styleTags: ["technical-mono"],
+            dominantColors: ["#ffffff", "#111111"],
+            accentColor: null,
+            spacingDensity: "compact",
+            cornerStyle: "sharp",
+            usesShadows: false,
+            usesBorders: true,
+          })
+        : JSON.stringify({
+            observations: ["dense monitoring table", "status rows", "compact filters", "left navigation", "alert counters"],
+            typographyNotes: "Compact technical labels prioritize scanning.",
+            draftCritique: "The monitoring layout compresses status rows and filters into one scan path, helping operators compare live conditions without moving between separate pages.",
+            draftWhatToSteal: ["Keep status rows and filters in the same visual lane when operators must diagnose changing system conditions quickly."],
+            draftAntiPatterns: ["Avoid spreading live status across isolated cards when the task is comparison under time pressure."],
+            draftAccessibilityRisks: [],
+            qualityTier: "exceptional",
+          });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const entry = await tagImage({ imagePath: testImage, productName: "Ops", url: null });
+
+    expect(entry.patternType).toBe("dashboard");
+    expect(entry.patternDiscovery).toEqual({
+      suggestedPatternType: "monitoring-console",
+      currentPatternType: "dashboard",
+    });
+  });
+
+  it("records the extraction override provider in extraction-only metadata", async () => {
+    const priorGeminiKey = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = "gemini-test";
+    process.env.AUTO_TAG_PROVIDER_EXTRACTION = "gemini";
+
+    try {
+      globalThis.fetch = vi.fn(async () => {
+        const response = JSON.stringify({
+          patternType: "dashboard",
+          categories: ["dashboard"],
+          styleTags: ["minimal"],
+          dominantColors: ["#ffffff", "#111111"],
+          accentColor: null,
+          spacingDensity: "moderate",
+          cornerStyle: "slight-round",
+          usesShadows: false,
+          usesBorders: true,
+        });
+        return new Response(JSON.stringify({ output_text: response }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch;
+
+      const entry = await tagImage({
+        imagePath: testImage,
+        productName: "Ops",
+        url: null,
+        extractionOnly: true,
+        extractionProvider: "openai",
+      });
+
+      expect(entry._raw?.extractionProvider).toBe("openai");
+    } finally {
+      if (priorGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = priorGeminiKey;
+    }
+  });
+
   it("overrides bodyFont from DOM signals and injects them into the prompt", async () => {
     const calls: Array<{ body: { input?: Array<{ content?: Array<Record<string, unknown>> }> } }> = [];
     let callCount = 0;

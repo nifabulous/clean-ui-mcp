@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Component, CorpusEntry, detectPlatform, findDraftMarkers } from "./schema.js";
+import { Component, CorpusEntry, detectPlatform, findDraftMarkers, formatAccessibilityRisk } from "./schema.js";
 
 const validEntry = {
   id: "example-product-dashboard",
@@ -440,6 +440,30 @@ describe("corpus schema", () => {
       },
     });
     expect(findDraftMarkers(entry)).toContain("antiPatterns.accessibilityRisks[0].risk");
+  });
+
+  it("accepts persisted pattern discovery suggestions", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      patternDiscovery: {
+        suggestedPatternType: "monitoring-console",
+        currentPatternType: "dashboard",
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.patternDiscovery?.suggestedPatternType).toBe("monitoring-console");
+    }
+  });
+
+  it("formats structured accessibility risks without losing evidence", () => {
+    expect(formatAccessibilityRisk({
+      element: "status dot",
+      risk: "Color is the only visible status channel.",
+      evidence: "8px red/green dots beside Paid and Failed rows",
+      confidence: "visible",
+      wcag: "1.4.1 Use of Color",
+    }, { includeEvidence: true })).toContain("Evidence: 8px red/green dots");
   });
 });
 

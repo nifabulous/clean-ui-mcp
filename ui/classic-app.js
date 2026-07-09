@@ -423,7 +423,7 @@ function syncDraftFromForm() {
   state.draft.antiPatterns = {
     antiPatterns: lines(form.antiPatterns.value),
     whereThisFails: lines(form.whereThisFails.value),
-    accessibilityRisks: lines(form.accessibilityRisks.value),
+    accessibilityRisks: parseA11yRiskLines(form.accessibilityRisks.value),
   };
   // Voice + qualityTier + colorRoles — all optional/advanced.
   if (form.voiceTone && form.voiceTone.value.trim()) {
@@ -481,7 +481,7 @@ function validateDraft() {
   // block save if any text field still carries a [DRAFT]/[PLACEHOLDER]/[TODO] marker.
   const draftTexts = [
     entry.critique, ...entry.whatToSteal,
-    ...(entry.antiPatterns?.antiPatterns || []), ...(entry.antiPatterns?.whereThisFails || []), ...(entry.antiPatterns?.accessibilityRisks || []),
+    ...(entry.antiPatterns?.antiPatterns || []), ...(entry.antiPatterns?.whereThisFails || []), ...(entry.antiPatterns?.accessibilityRisks || []).flatMap(a11yRiskTextFields),
     ...(entry.businessRationale ? [entry.businessRationale.targetUser, entry.businessRationale.rationale] : []),
     ...(entry.voice ? [entry.voice.tone, ...entry.voice.examples, ...entry.voice.avoid] : []),
   ];
@@ -568,7 +568,7 @@ function renderForm() {
                 <label>Height<input name="imageHeight" type="number" min="1" value="${entry.image.height || ""}"></label>
               </div>
               <label>Where copying this fails (one per line, optional)<textarea name="whereThisFails" placeholder="Contexts where lifting this technique would hurt">${esc((entry.antiPatterns?.whereThisFails || []).join("\n"))}</textarea></label>
-              <label>Accessibility risks (one per line, optional)<textarea name="accessibilityRisks" placeholder="Specific a11y concerns">${esc((entry.antiPatterns?.accessibilityRisks || []).join("\n"))}</textarea></label>
+              <label>Accessibility risks (one per line, optional)<textarea name="accessibilityRisks" placeholder="Specific a11y concerns">${esc(a11yRiskTextareaValue(entry.antiPatterns?.accessibilityRisks || []))}</textarea></label>
               <label>Quality tier<select name="qualityTier"><option value="exceptional" ${entry.qualityTier !== "cautionary" ? "selected" : ""}>exceptional (great example)</option><option value="cautionary" ${entry.qualityTier === "cautionary" ? "selected" : ""}>cautionary (bad example — teach what NOT to do)</option></select></label>
               <label>Review state<select name="reviewStatus"><option value="approved" ${(entry.reviewStatus || "approved") !== "draft" ? "selected" : ""}>approved (visible in MCP search)</option><option value="draft" ${entry.reviewStatus === "draft" ? "selected" : ""}>draft (hidden from search — work in progress)</option></select></label>
               <label>Provenance<select name="provenanceTaggedBy"><option value="human" ${entry.provenance?.taggedBy === "human" ? "selected" : ""}>human (hand-authored)</option><option value="auto" ${entry.provenance?.taggedBy === "auto" ? "selected" : ""}>auto (tagger-generated)</option><option value="auto-reviewed" ${(entry.provenance?.taggedBy || "auto-reviewed") === "auto-reviewed" ? "selected" : ""}>auto-reviewed (tagger + human edit)</option></select></label>
@@ -799,6 +799,39 @@ function stripDraftFromRisk(r) {
     evidence: stripDraftMarker(r.evidence || ""),
     ...(r.wcag ? { wcag: stripDraftMarker(r.wcag) } : {}),
   };
+}
+
+function a11yRiskTextFields(r) {
+  if (typeof r === "string") return [r];
+  return [r.element || "", r.risk || "", r.evidence || "", r.wcag || ""].filter(Boolean);
+}
+
+function a11yRiskTextareaValue(risks) {
+  return (risks || []).map((risk) => (
+    typeof risk === "string" ? risk : JSON.stringify(risk)
+  )).join("\n");
+}
+
+function parseA11yRiskLines(value) {
+  return lines(value).map((line) => {
+    if (!line.startsWith("{")) return line;
+    try {
+      const parsed = JSON.parse(line);
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        typeof parsed.element === "string" &&
+        typeof parsed.risk === "string" &&
+        typeof parsed.evidence === "string" &&
+        typeof parsed.confidence === "string"
+      ) {
+        return parsed;
+      }
+    } catch {
+      // Keep malformed JSON as a legacy string so validation can report it.
+    }
+    return line;
+  });
 }
 
 // Format an a11y risk for display. Legacy strings render as-is. Structured

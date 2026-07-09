@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-07. Reflects the state of `main` at 1,029 entries.
+Last updated: 2026-07-09. Reflects the state of `main` at 787 entries.
 
 ---
 
@@ -8,14 +8,15 @@ Last updated: 2026-07-07. Reflects the state of `main` at 1,029 entries.
 
 ### Corpus & schema
 
-- **1,029 entries** across 93 products, 20 pattern types, 31 component types,
-  15 domain tags, 45 cautionary examples
+- **787 entries** with schema support for 21 pattern types, 31 component types,
+  15 domain tags, 35 cautionary examples
 - **Rich schema** with 27+ fields per entry: patternType, categories, styleTags,
   components, domainTags, colorScheme, industryVertical, responsiveBehavior,
   mood, visual attributes (colors, colorRoles, typePairing, spacing, corners,
   shadows, borders), critique, whatToSteal, antiPatterns (mistakes +
-  where-fails + a11y-risks), voice, layout wireframe, businessRationale,
-  qualityTier/score, provenance, reviewStatus
+  where-fails + evidence-backed a11y risks), voice, layout wireframe,
+  businessRationale, patternDiscovery, qualityTier/score, provenance,
+  reviewStatus
 - **Draft hygiene gate** — centralized `[DRAFT]`/`[PLACEHOLDER]`/`[TODO]` marker
   rejection across validator, commit-draft, UI save, and browser validation
 
@@ -32,7 +33,14 @@ Last updated: 2026-07-07. Reflects the state of `main` at 1,029 entries.
   user types, 5-point a11y checklist, 2+ anti-patterns with "what was rejected"
   framing, mood extraction. Tuned via 3 A/B rounds (DeepSeek vs Claude).
 - **Categorization calibration** — prompt nudges toward under-represented
-  patterns (chat-interface, pricing, command-palette)
+  patterns (chat-interface, pricing, command-palette, calculator)
+- **Claim-grounded critique** — critique prompt strips deterministic palette
+  injection, requires observation-backed claims, and drops unsupported
+  accessibility risks rather than preserving speculative findings
+- **Pattern discovery lane** — extraction can persist
+  `patternDiscovery.suggestedPatternType` for screens that do not fit the
+  closed enum; `npm run pattern-discovery` summarizes candidates before enum
+  promotion
 - **Cautionary tier calibration** — sharpened prompt: "exceptional means worth
   learning from, not flawless; cautionary is rare"
 - **Adaptive detail** — low-detail extraction re-runs at high when weak
@@ -63,6 +71,8 @@ Last updated: 2026-07-07. Reflects the state of `main` at 1,029 entries.
 - **In-batch dedup** — catches sibling duplicates during bulk import
 - **Classic workbench** — bulk import triage, capture batch review, deferred
   critique queue
+- **Entry rename** — id-only rename endpoint and UI affordance; image filenames
+  stay unchanged during day-to-day curation
 
 ### Durability & trust
 
@@ -96,7 +106,7 @@ Last updated: 2026-07-07. Reflects the state of `main` at 1,029 entries.
 
 ### Infrastructure
 
-- **219 tests** across 15 files (vitest unit + Playwright browser)
+- **251 tests** across 16 files (vitest unit + Playwright browser)
 - **CI** — build + validate + test on every PR
 - **`.env` override fix** — file always wins over stale shell env vars
 - **Sources file** — `sources-cautionary.json` with 12 cautionary capture targets
@@ -107,17 +117,19 @@ Last updated: 2026-07-07. Reflects the state of `main` at 1,029 entries.
 
 ### Operational (content, not code)
 
-- **Bulk re-tag the existing corpus** — 1,029 entries are missing components,
+- **Bulk re-tag the existing corpus** — 787 entries are missing components,
   domainTags, colorScheme, mood, industryVertical, responsiveBehavior, and
   accessibilityRisks. The bulk re-tag tool is built and ready; this is the
-  single highest-ROI action. Run dedup-cleanup first, then re-tag, then
+  single highest-ROI action. Run dedup-cleanup first, smoke retag, run
+  `npm run pattern-discovery`, promote real pattern gaps, then re-tag and
   rebuild the embeddings index.
 - **Run dedup-cleanup** — the corpus likely has duplicate clusters from
   auto-capture batches. Clean before re-tagging so you don't pay to re-tag dupes.
 - **Capture under-represented patterns** — command-palette (2), pricing (4),
   notifications (5), chat-interface (6). Build targeted `sources.json` files.
-- **Triage cautionary captures** — 62 Cvent/Bank of America/Freecycle/Wells
-  Fargo/iCloud candidates sitting untagged in a batch dir.
+- **Refresh cautionary sourcing** — pending capture triage has been cleared
+  locally; the next content task is targeted recapture for under-represented
+  cautionary patterns.
 
 ### Code improvements (lower priority)
 
@@ -135,6 +147,11 @@ Last updated: 2026-07-07. Reflects the state of `main` at 1,029 entries.
 
 ## Deferred
 
+- **Image filename normalization** — if filesystem tidiness starts to matter,
+  add a separate maintenance script such as
+  `npm run normalize-image-filenames -- --dry-run`. Keep day-to-day entry
+  renames scoped to `entry.id`; do not rename image files as part of the normal
+  rename flow.
 - **pHash (DCT-based perceptual hash)** — more robust than dHash against
   compression artifacts and minor color shifts. Not needed today (the 90+
   duplicate clusters are all byte-identical or d=0 — a gate-bypass bug, not
@@ -144,7 +161,7 @@ Last updated: 2026-07-07. Reflects the state of `main` at 1,029 entries.
 - **Voyage rerank (`rerank-2`)** — cross-encoder reranking over cosine top-K.
   Biggest search-quality jump. Same key you already have. ~1 hour to implement.
 - **Database migration (SQLite/Postgres)** — JSON + snapshots is working at
-  1,029 entries. The `corpus.ts` seam is ready. Trigger: low thousands of
+  787 entries. The `corpus.ts` seam is ready. Trigger: low thousands of
   entries, concurrent multi-curator writes, or transactional multi-row commits.
 - **CLIP-style visual embeddings** — image+text in the same space for
   "find UIs that look like this one" regardless of critique text. Most novel

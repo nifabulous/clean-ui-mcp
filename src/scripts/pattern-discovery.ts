@@ -1,6 +1,8 @@
 /**
- * Pattern discovery report — reads `_raw.extraction.suggestedPatternType` across
- * the corpus and shows which patterns the tagger thinks are missing from the enum.
+ * Pattern discovery report — reads `patternDiscovery.suggestedPatternType`
+ * across the corpus and shows which patterns the tagger thinks are missing from
+ * the enum. Falls back to `_raw.extraction.suggestedPatternType` for transient
+ * or legacy debug records.
  *
  * After a bulk re-tag, run this to decide which suggested patterns earn enum
  * promotion. High-count suggestions with consistent naming are strong candidates.
@@ -30,11 +32,13 @@ let withSuggestion = 0;
 
 for (const entry of entries) {
   total++;
+  const discovery = entry.patternDiscovery as Record<string, unknown> | undefined;
   const raw = entry._raw as Record<string, unknown> | undefined;
   const extraction = raw?.extraction as Record<string, unknown> | undefined;
-  const suggestion = extraction?.suggestedPatternType;
+  const suggestion = discovery?.suggestedPatternType ?? extraction?.suggestedPatternType;
   if (typeof suggestion === "string" && suggestion.trim()) {
-    const normalized = suggestion.trim().toLowerCase().replace(/\s+/g, "-");
+    const normalized = suggestion.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").replace(/-{2,}/g, "-");
+    if (!normalized || (PatternType.options as readonly string[]).includes(normalized)) continue;
     if (!suggestions[normalized]) suggestions[normalized] = [];
     suggestions[normalized].push(entry.id as string);
     withSuggestion++;

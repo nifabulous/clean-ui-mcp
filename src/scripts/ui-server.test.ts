@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanupBatch, findDuplicateAtCommit, isPrivateAddress, listCaptureBatches, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload } from "./ui-server.js";
+import { cleanupBatch, findDuplicateAtCommit, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload } from "./ui-server.js";
 import type { IncomingMessage } from "node:http";
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -191,6 +191,11 @@ describe("ui server entry ids", () => {
     expect(uniqueEntryId({ id: "Wise Transfer Calculator" }, [])).toBe("wise-transfer-calculator");
     expect(uniqueEntryId({ id: "wise_transfer_calculator" }, [])).toBe("wise-transfer-calculator");
     expect(uniqueEntryId({ id: "wise--transfer!!!" }, [])).toBe("wise-transfer");
+  });
+
+  it("normalizes rename input without falling back to sample", () => {
+    expect(normalizeEntryIdForRename("Wise Transfer Calculator")).toBe("wise-transfer-calculator");
+    expect(normalizeEntryIdForRename("!!!")).toBe("");
   });
 
   it("rejects a rename to an id that already exists", () => {

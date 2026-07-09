@@ -127,6 +127,7 @@ export interface TaggerOutput {
   id:             string;
   title:          string;
   patternType:    string;
+  patternDiscovery?: { suggestedPatternType: string; currentPatternType: string };
   platform?:      "web" | "mobile" | "tablet";
   categories:     string[];
   styleTags:      string[];
@@ -1035,6 +1036,19 @@ function oneFromAllowed(value: unknown, allowed: readonly string[], fallback: st
   return typeof value === "string" && allowed.includes(value) ? value : fallback;
 }
 
+function normalizeSuggestedPatternType(value: unknown, currentPatternType: string): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-");
+  if (!normalized || normalized === currentPatternType) return undefined;
+  if ((PATTERN_TYPES as readonly string[]).includes(normalized)) return undefined;
+  return normalized;
+}
+
 function nullableHex(value: unknown): string | null {
   return typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value) ? value.toLowerCase() : null;
 }
@@ -1062,6 +1076,7 @@ function textList(value: unknown): string[] {
 
 export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   patternType: string;
+  suggestedPatternType?: string;
   categories: string[];
   styleTags: string[];
   components: string[];
@@ -1134,8 +1149,12 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
       }
     : undefined;
 
+  const patternType = oneFromAllowed(parsed.patternType, PATTERN_TYPES, "dashboard");
+  const suggestedPatternType = normalizeSuggestedPatternType(parsed.suggestedPatternType, patternType);
+
   return {
-    patternType: oneFromAllowed(parsed.patternType, PATTERN_TYPES, "dashboard"),
+    patternType,
+    suggestedPatternType,
     categories: listFromAllowed(parsed.categories, CATEGORIES, ["dashboard"]),
     styleTags: listFromAllowed(parsed.styleTags, STYLE_TAGS, ["minimal"]),
     components: componentsFromAllowed(parsed.components),
@@ -1643,6 +1662,9 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   }
 
   const extraction = sanitizeTaggerPayload(extractionParsed);
+  const patternDiscovery = extraction.suggestedPatternType
+    ? { suggestedPatternType: extraction.suggestedPatternType, currentPatternType: extraction.patternType }
+    : undefined;
   // Override dominantColors with the ground-truth quantized set when available,
   // so even if the model ignored instructions, we get deterministic colors.
   if (quantizedColors.length) {
@@ -1690,6 +1712,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       id:         autoId,
       title:      `${effectiveName} — (add descriptive subtitle)`,
       patternType: extraction.patternType,
+      patternDiscovery,
       platform,
       categories: extraction.categories,
       styleTags:  extraction.styleTags,
@@ -1735,7 +1758,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       addedAt:         today,
       provenance:      { taggedBy: "auto" }, // tagger produced; flips to auto-reviewed when a human edits+approves
       _raw: {
-        extractionProvider: resolveProvider("extraction"),
+        extractionProvider: resolveProvider("extraction", input.extractionProvider),
         critiqueProvider: null,
         extractionModel: activeModelName("extraction"),
         critiqueModel: null,
@@ -1795,6 +1818,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     id:         autoId,
     title:      `${effectiveName} — (add descriptive subtitle)`,
     patternType: extraction.patternType,
+    patternDiscovery,
     platform,
     categories: extraction.categories,
     styleTags:  extraction.styleTags,

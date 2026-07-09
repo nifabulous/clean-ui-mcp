@@ -308,12 +308,17 @@ function stats(entries: CorpusEntryT[]) {
   };
 }
 
-function slugify(value: string): string {
-  return value
+function slugify(value: string, fallback = "sample"): string {
+  const slug = value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .replace(/-{2,}/g, "-") || "sample";
+    .replace(/-{2,}/g, "-");
+  return slug || fallback;
+}
+
+export function normalizeEntryIdForRename(value: string): string {
+  return slugify(value, "");
 }
 
 export function uniqueEntryId(entry: { id?: string; title?: string; source?: { productName?: string } }, entries: CorpusEntryT[]): string {
@@ -1148,6 +1153,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         ...entry, // preserves id, source, image, platform, addedAt, provenance, reviewStatus
         title: isPlaceholderTitle ? tagged.title : entry.title,
         patternType: tagged.patternType as CorpusEntryT["patternType"],
+        patternDiscovery: (tagged.patternDiscovery ?? undefined) as CorpusEntryT["patternDiscovery"],
         categories: tagged.categories as CorpusEntryT["categories"],
         styleTags: tagged.styleTags as CorpusEntryT["styleTags"],
         components: tagged.components as CorpusEntryT["components"],
@@ -1250,7 +1256,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       sendJson(res, 400, { error: "newId is required" });
       return;
     }
-    const newId = slugify(rawNewId);
+    const newId = normalizeEntryIdForRename(rawNewId);
+    if (!newId) {
+      sendJson(res, 400, { error: "newId must contain at least one letter or number" });
+      return;
+    }
     if (newId === oldId) {
       sendJson(res, 400, { error: "New id is the same as the current id" });
       return;

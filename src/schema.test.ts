@@ -447,7 +447,6 @@ describe("corpus schema", () => {
       ...validEntry,
       patternDiscovery: {
         suggestedPatternType: "monitoring-console",
-        currentPatternType: "dashboard",
       },
     });
     expect(result.success).toBe(true);

@@ -444,7 +444,6 @@ describe("tagImage two-pass request shape", () => {
     expect(entry.patternType).toBe("dashboard");
     expect(entry.patternDiscovery).toEqual({
       suggestedPatternType: "monitoring-console",
-      currentPatternType: "dashboard",
     });
   });
 

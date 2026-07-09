@@ -190,10 +190,13 @@ export function detectPlatform(width: number | null | undefined, height: number 
  * which recurring hidden patterns deserve promotion into the closed PatternType
  * enum. This is intentionally not used for filtering/search; it is curator
  * evidence for taxonomy evolution.
+ *
+ * Only the suggestion is persisted — the "current" patternType is already on
+ * the entry and deriving it here would denormalize (drift if patternType is
+ * later edited via PUT while this field stays stale).
  */
 export const PatternDiscovery = z.object({
   suggestedPatternType: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  currentPatternType: PatternType,
 });
 
 /**

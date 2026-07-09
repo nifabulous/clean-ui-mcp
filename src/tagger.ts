@@ -127,7 +127,7 @@ export interface TaggerOutput {
   id:             string;
   title:          string;
   patternType:    string;
-  patternDiscovery?: { suggestedPatternType: string; currentPatternType: string };
+  patternDiscovery?: { suggestedPatternType: string };
   platform?:      "web" | "mobile" | "tablet";
   categories:     string[];
   styleTags:      string[];
@@ -1663,7 +1663,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
 
   const extraction = sanitizeTaggerPayload(extractionParsed);
   const patternDiscovery = extraction.suggestedPatternType
-    ? { suggestedPatternType: extraction.suggestedPatternType, currentPatternType: extraction.patternType }
+    ? { suggestedPatternType: extraction.suggestedPatternType }
     : undefined;
   // Override dominantColors with the ground-truth quantized set when available,
   // so even if the model ignored instructions, we get deterministic colors.

@@ -975,6 +975,7 @@ function domainTagsFromAllowed(value: unknown): string[] {
  *   - Evidence that is only a generic component name (sidebar, buttons, icons)
  *   - Evidence that is only a hex value or palette mention
  *   - Self-referential evidence (citing the extraction output, not the screenshot)
+ *   - Fabricated pixel measurements (8px, 3px) unless DOM/computed ground truth cited
  *   - Unlabeled-control risks (icon-only, icon with no label, unlabeled button —
  *     pixels cannot establish absence of an accessible name; only DOM ground truth can)
  *   - Color-only risks where evidence doesn't name a concrete visible state/control
@@ -991,6 +992,11 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
   // Evidence that is only a hex color or palette-derivation phrase.
   const PALETTE_EVIDENCE = /^#?[0-9a-f]{6}$/i;
   const PALETTE_WORDS = /\b(palette|dominant color|accent color|color palette|extracted color|from (?:the )?color)\b/i;
+  // Fabricated pixel measurements — the model cannot measure pixels from an
+  // image. "8px dots", "3px badge", "12-pixel" are invented precision. Only
+  // allowed when the evidence explicitly cites DOM/computed ground truth.
+  const PIXEL_MEASUREMENT = /\b\d+(?:\.\d+)?\s*-?\s*(?:px|pixel[s]?|pt|rem|em)\b/i;
+  const DOM_GROUND_TRUTH = /\b(?:dom|computed|contrast[\s-]*ratio|accessibility\s+tree|aria-|offsetwidth|offsetheight|getboundingclientrect|measured\s+(?:from|via))\b/i;
   // Unlabeled-control risk patterns — the model phrases this many ways. The
   // governing principle: PIXELS CANNOT ESTABLISH THE ABSENCE of a text label
   // or accessible name. The model hallucinated "no visible text labels" on
@@ -1004,9 +1010,12 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
     "|icons?\\s+(?:alone|symbols?\\s+alone)" +                          // "icons alone"
     "|icons?\\s+without\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +       // "icons without labels"
     "|represented\\s+(?:solely\\s+)?by\\s+icons?" +                     // "represented by icons"
-    "|(?:icon|glyph|symbol|button|control)\\s+with\\s+(?:no|without)\\s+(?:visible\\s+)?(?:text\\s+)?labels?" + // "icon with no text label"
-    "|no\\s+(?:visible\\s+)?(?:text\\s+)?labels?\\s+(?:beside|next to|on|for)" + // "no labels beside"
-    "|lack(?:s|ing)?\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +          // "lacks labels"
+    "|(?:icon|glyph|symbol|button|control)\\s+with\\s+(?:no|without)\\s+(?:a\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" + // "icon with no text label"
+    "|(?:icon|glyph|symbol|button|control)\\s+(?:has|have|having)\\s+no\\s+(?:visible\\s+)?(?:text\\s+)?labels?" + // "button has no visible label"
+    "|(?:icon|glyph|symbol|button|control)\\s+lack(?:s|ing)?\\s+(?:a\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" + // "button lacks a visible label"
+    "|no\\s+(?:visible\\s+)?(?:text\\s+)?labels?\\s+(?:beside|next to|on|for|is visible)" + // "no labels beside" / "no label is visible"
+    "|no\\s+(?:visible\\s+)?(?:text\\s+)?labels?\\s+(?:are\\s+)?visible" + // "no labels are visible"
+    "|lack(?:s|ing)?\\s+(?:a\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" + // "lacks a visible label"
     "|no\\s+(?:visible\\s+)?accessible\\s+name" +                        // "no accessible name"
     "|unlabeled\\s+(?:icon|button|control|nav)" +                        // "unlabeled button"
     "|rel(?:iance|ies|y)\\s+on\\s+(?:memorized\\s+)?(?:icon\\s+)?shapes?" + // "reliance on shapes"
@@ -1054,6 +1063,13 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
     // extraction output ("component inventory lists icon-button") instead of a
     // visible screenshot detail. Reasoning from the prompt is not observation.
     if (SELF_REFERENTIAL_EVIDENCE.test(evidence)) continue;
+
+    // Gate 3c: reject fabricated pixel measurements. The model cannot measure
+    // pixels from an image — "8px dots", "3px badge", "12-pixel" are invented
+    // precision. Only allowed when DOM/computed ground truth is cited (e.g.
+    // "contrastRatio 2.8:1", "computed from the DOM"). Relative size words
+    // ("small", "narrow") are fine.
+    if (PIXEL_MEASUREMENT.test(evidence) && !DOM_GROUND_TRUTH.test(evidence)) continue;
 
     // Gate 4: unlabeled-control risks are the #1 hallucination class. The model
     // CANNOT reliably establish the absence of a text label or accessible name

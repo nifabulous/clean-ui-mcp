@@ -37,7 +37,7 @@ describe("tagger sanitization", () => {
   it("parses structured accessibility risks with confidence and rejects dom-grounded", () => {
     const sanitized = sanitizeTaggerPayload({
       draftAccessibilityRisks: [
-        { element: "status chips", risk: "Color-only differentiation invisible to color-blind users", evidence: "8px red/green dots beside Paid and Failed rows with no text status label", confidence: "visible", wcag: "1.4.1" },
+        { element: "status chips", risk: "Color-only differentiation invisible to color-blind users", evidence: "small red/green dots beside Paid and Failed rows with no text status label", confidence: "visible", wcag: "1.4.1" },
         { element: "contrast text", risk: "Low contrast on labels", evidence: "secondary label at #999 on #fff background, computed ratio 2.8:1", confidence: "dom-grounded" },
       ],
     });
@@ -45,7 +45,7 @@ describe("tagger sanitization", () => {
     expect(sanitized.draftAccessibilityRisks).toHaveLength(2);
     expect(sanitized.draftAccessibilityRisks[0]).toEqual({
       element: "status chips", risk: "Color-only differentiation invisible to color-blind users",
-      evidence: "8px red/green dots beside Paid and Failed rows with no text status label",
+      evidence: "small red/green dots beside Paid and Failed rows with no text status label",
       confidence: "visible", wcag: "1.4.1",
     });
     // dom-grounded must be downgraded to inferred — that tag is code-only
@@ -137,17 +137,44 @@ describe("tagger sanitization", () => {
     expect(sanitized.draftAccessibilityRisks).toEqual([]);
   });
 
-  it("keeps evidence that describes a visible screenshot detail, not an absence claim", () => {
-    // A legitimate color-only risk: names a concrete visible element (status
-    // dots) and what it communicates. This is a PRESENCE claim, not an absence
-    // claim — it survives the gate.
+  it("drops broader absence phrasings: 'lacks a visible label', 'has no visible label', 'no label is visible'", () => {
+    // The reviewer found these bypassing the original regex. They are the same
+    // "pixels cannot prove absence" failure class — just different phrasings.
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [
+        { element: "close button", risk: "The close button lacks a visible text label.", evidence: "Top-right corner X glyph; no text label is visible beside it.", confidence: "visible" },
+        { element: "menu button", risk: "Control has no visible label.", evidence: "Hamburger icon in the header; no label is visible.", confidence: "visible" },
+        { element: "icon row", risk: "Icons have no labels.", evidence: "No labels are visible next to the icon row.", confidence: "inferred" },
+        { element: "action button", risk: "Button lacks a label.", evidence: "The action button lacks a visible label.", confidence: "inferred" },
+      ],
+    });
+    expect(sanitized.draftAccessibilityRisks).toEqual([]);
+  });
+
+  it("rejects fabricated pixel measurements in evidence unless DOM ground truth is cited", () => {
+    // The model cannot measure pixels from an image — "8px dots", "3px badge"
+    // are invented precision. The prompt discourages them, but the sanitizer
+    // must gate them too so they can't survive a model that ignores the prompt.
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [
+        { element: "status dots", risk: "Color-only differentiation.", evidence: "8px red/green dots beside Paid and Failed rows, no text status label.", confidence: "visible" },
+        { element: "notification badge", risk: "Small target size.", evidence: "The badge is approximately 3px tall.", confidence: "inferred" },
+        { element: "touch target", risk: "Below minimum size.", evidence: "The close button is 12-pixel wide.", confidence: "inferred" },
+      ],
+    });
+    expect(sanitized.draftAccessibilityRisks).toEqual([]);
+  });
+
+  it("keeps pixel measurements when DOM ground truth is cited", () => {
+    // DOM-computed measurements (contrastRatio, computed size) are real data,
+    // not pixel-guessing. They should survive the gate.
     const sanitized = sanitizeTaggerPayload({
       draftAccessibilityRisks: [{
-        element: "payment status dot",
-        risk: "State is communicated by color alone, which color-blind users may miss.",
-        evidence: "Small red and green dots beside the Paid and Failed rows, with no text status label.",
-        confidence: "visible",
-        wcag: "1.4.1 Use of Color",
+        element: "secondary text",
+        risk: "Low contrast below WCAG 4.5:1 threshold.",
+        evidence: "DOM computed contrastRatio of 2.8:1 between the muted text and canvas background.",
+        confidence: "inferred",
+        wcag: "1.4.3 Contrast (Minimum)",
       }],
     });
     expect(sanitized.draftAccessibilityRisks).toHaveLength(1);
@@ -234,7 +261,7 @@ describe("tagger sanitization", () => {
       draftAccessibilityRisks: [{
         element: "payment status dot",
         risk: "State is communicated by color alone, which color-blind users may miss.",
-        evidence: "8px red/green dots beside Paid and Failed rows with no text status label",
+        evidence: "small red/green dots beside Paid and Failed rows with no text status label",
         confidence: "visible",
         wcag: "1.4.1 Use of Color",
       }],
@@ -258,11 +285,11 @@ describe("tagger sanitization", () => {
       draftAccessibilityRisks: [{
         element: "payment status dot",
         risk: "State is communicated by color alone.",
-        evidence: "8px red/green dots beside Paid and Failed rows",
+        evidence: "small red/green dots beside Paid and Failed rows",
         confidence: "visible",
       }],
     });
-    expect(sanitized.draftAccessibilityRisks[0].evidence).toBe("8px red/green dots beside Paid and Failed rows");
+    expect(sanitized.draftAccessibilityRisks[0].evidence).toBe("small red/green dots beside Paid and Failed rows");
   });
 
   it("supplies useful defaults for unusable model output", () => {

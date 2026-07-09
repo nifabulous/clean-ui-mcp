@@ -1173,9 +1173,9 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         // does not pass the prior tier in, so the model cannot know whether it is
         // changing cautionary → exceptional. Any tierChangeJustification it emits
         // is therefore fabricated context — the model is defending a flip it
-        // can't know it's making. Tier is a curatorial judgment; store the model's
-        // suggested tier + justification for human review but never let it
-        // authorize a silent flip during bulk retag.
+        // can't know it's making. Tier is a curatorial judgment; the model's
+        // suggested tier is discarded here. A curator who wants to change the
+        // tier does so explicitly via the edit endpoint.
         qualityTier: entry.qualityTier,
         qualityScore: entry.qualityScore,
       };

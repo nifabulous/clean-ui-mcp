@@ -55,7 +55,7 @@ function saveEntries(entries: CorpusEntryT[]): void {
 // ─── provider allowlist (shared by auto-tag, auto-critique, auto-retag) ──────
 // Must include "minimax" — the auto-retag handler previously omitted it,
 // silently dropping a UI-selected MiniMax critique provider.
-const VALID_PROVIDERS = ["openai", "claude", "gemini", "mistral", "minimax"] as const;
+const VALID_PROVIDERS = ["openai", "claude", "gemini", "mistral", "minimax", "grok"] as const;
 type ValidProvider = (typeof VALID_PROVIDERS)[number];
 
 function parseProvider(v: unknown): ValidProvider | undefined {
@@ -561,8 +561,8 @@ export function publicConfigStatus(status: EnvStatus = getEnvStatus()) {
   // otherwise the UI advertises auto-tagging and then fails at extraction.
   // status.openaiKeyConfigured reflects OPENAI_API_KEY (the bare key).
   const hasOpenAIExtraction = status.openaiKeyConfigured || !!process.env.OPENAI_API_KEY_EXTRACTION;
-  // MiniMax M3 is native multimodal (unlike Mistral), so it counts as vision-capable.
-  const anyVisionKey = !!(hasOpenAIExtraction || status.anthropicKeyConfigured || status.geminiKeyConfigured || status.minimaxKeyConfigured);
+  // MiniMax M3 and Grok 4.5 are native multimodal (unlike Mistral), so they count as vision-capable.
+  const anyVisionKey = !!(hasOpenAIExtraction || status.anthropicKeyConfigured || status.geminiKeyConfigured || status.minimaxKeyConfigured || status.xaiKeyConfigured);
   // Resolve the effective provider + model for each pass via the SAME logic
   // Resolve the EFFECTIVE provider + model for each pass via the SAME logic
   // tagger.ts uses. activeProviderName() runs resolveProvider() (which applies
@@ -580,6 +580,7 @@ export function publicConfigStatus(status: EnvStatus = getEnvStatus()) {
     geminiKeyConfigured: status.geminiKeyConfigured,
     mistralKeyConfigured: status.mistralKeyConfigured,
     minimaxKeyConfigured: status.minimaxKeyConfigured,
+    xaiKeyConfigured: status.xaiKeyConfigured,
     visionKeyConfigured: anyVisionKey,
     autoTagProvider: status.autoTagProvider,
     extractionProvider,

@@ -191,6 +191,15 @@ describe("tagger sanitization", () => {
       expect(errors[0]).toMatch(/icon-only/i);
     });
 
+    it("flags unsupported absence and pixel-measurement claims across prose fields", () => {
+      const errors = validateNoIconOnlyClaims({
+        draftCritique: "The top-right bell and avatar icons lack visible text labels, saving horizontal space.",
+        draftWhatToSteal: ["Pair each navigation item with a persistent text label unless the sidebar is extremely narrow (< 48px)."],
+        businessRationale: { rationale: "The command-bar search has no accompanying text label so expert users can move faster." },
+      });
+      expect(errors.join("\n")).toMatch(/absence|label|pixel|48px/i);
+    });
+
     it("does NOT flag contrast/rejection sentences (correct observations)", () => {
       // origin-origin-2 correctly said the sidebar "keeps icons paired with text
       // labels instead of going icon-only" — that's a legitimate observation,
@@ -241,6 +250,28 @@ describe("tagger sanitization", () => {
       expect(critique.businessRationale?.rationale).not.toContain("icon-only");
       expect(critique.businessRationale?.rationale).toContain("A second sentence about onboarding");
     });
+
+    it("scrubs unsupported absence and pixel-measurement sentences from prose", () => {
+      const critique = {
+        draftCritique: "The top-right bell and avatar icons lack visible text labels. The transaction list uses compact rows for scanning.",
+        draftWhatToSteal: ["Pair labels with nav items unless the sidebar is extremely narrow (< 48px)."],
+        draftAntiPatterns: ["Avoid controls with no accompanying text label when the audience is first-time users."],
+        typographyNotes: "The label hierarchy is compact and readable.",
+        businessRationale: {
+          businessGoal: "reduce-cognitive-load-at-decision-point",
+          targetUser: "finance operators",
+          rationale: "The command-bar search has no accompanying text label. It still keeps frequent lookup paths short.",
+          confirmed: false,
+        },
+      };
+      scrubProseIconOnly(critique);
+      const blob = JSON.stringify(critique);
+      expect(blob).not.toMatch(/lack visible text labels|no accompanying text label|48px/i);
+      expect(critique.draftCritique).toContain("compact rows");
+      expect(critique.businessRationale?.rationale).toContain("frequent lookup paths");
+      expect(critique.draftWhatToSteal).toHaveLength(1);
+      expect(critique.draftWhatToSteal[0]).toMatch(/Review the screenshot/i);
+    });
   });
 
   it("drops color-only risks when evidence is only a palette color", () => {
@@ -267,6 +298,29 @@ describe("tagger sanitization", () => {
       }],
     });
     expect(sanitized.draftAccessibilityRisks).toHaveLength(1);
+  });
+
+  it("drops contrast risks unless computed DOM contrast evidence is present", () => {
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [
+        {
+          element: "status badge text",
+          risk: "The colored pill may not provide enough contrast for low-vision users.",
+          evidence: "The exact contrast ratios are not visible from the screenshot, but the colors appear moderately saturated.",
+          confidence: "inferred",
+          wcag: "1.4.3 Contrast (Minimum)",
+        },
+        {
+          element: "secondary label",
+          risk: "The muted label is below the 4.5:1 contrast threshold.",
+          evidence: "DOM computed contrastRatio is 2.8:1 for the muted label against the canvas.",
+          confidence: "inferred",
+          wcag: "1.4.3 Contrast (Minimum)",
+        },
+      ],
+    });
+    expect(sanitized.draftAccessibilityRisks).toHaveLength(1);
+    expect(sanitized.draftAccessibilityRisks[0].element).toBe("secondary label");
   });
 
   it("caps non-DOM accessibility risks to two", () => {
@@ -368,6 +422,8 @@ describe("vision provider key detection", () => {
     OPENAI_API_KEY_CRITIQUE: process.env.OPENAI_API_KEY_CRITIQUE,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    MINIMAX_API_KEY: process.env.MINIMAX_API_KEY,
+    XAI_API_KEY: process.env.XAI_API_KEY,
   };
 
   afterEach(() => {
@@ -385,6 +441,7 @@ describe("vision provider key detection", () => {
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.GEMINI_API_KEY;
     delete process.env.MINIMAX_API_KEY;
+    delete process.env.XAI_API_KEY;
 
     expect(hasVisionKey()).toBe(false);
 
@@ -397,6 +454,10 @@ describe("vision provider key detection", () => {
 
     delete process.env.GEMINI_API_KEY;
     process.env.MINIMAX_API_KEY = "sk-api-test";
+    expect(hasVisionKey()).toBe(true);
+
+    delete process.env.MINIMAX_API_KEY;
+    process.env.XAI_API_KEY = "xai-test";
     expect(hasVisionKey()).toBe(true);
   });
 
@@ -411,6 +472,7 @@ describe("vision provider key detection", () => {
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.GEMINI_API_KEY;
     delete process.env.MINIMAX_API_KEY;
+    delete process.env.XAI_API_KEY;
 
     expect(hasVisionKey()).toBe(false);
 
@@ -463,6 +525,7 @@ describe("activeModelName per-pass resolution", () => {
     // reported "gpt-5.4-mini" — the /api/config status exposed to the UI lied.
     delete process.env.OPENAI_BASE_URL;
     delete process.env.OPENAI_BASE_URL_EXTRACTION;
+    delete process.env.OPENAI_AUTO_TAG_MODEL_EXTRACTION;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.GEMINI_API_KEY;
 
@@ -481,7 +544,23 @@ describe("activeModelName per-pass resolution", () => {
 
 describe("tagImage two-pass request shape", () => {
   const originalFetch = globalThis.fetch;
-  const originalOpenaiKey = process.env.OPENAI_API_KEY;
+  const original = {
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENAI_API_KEY_EXTRACTION: process.env.OPENAI_API_KEY_EXTRACTION,
+    OPENAI_API_KEY_CRITIQUE: process.env.OPENAI_API_KEY_CRITIQUE,
+    OPENAI_AUTO_TAG_MODEL: process.env.OPENAI_AUTO_TAG_MODEL,
+    OPENAI_AUTO_TAG_MODEL_EXTRACTION: process.env.OPENAI_AUTO_TAG_MODEL_EXTRACTION,
+    OPENAI_AUTO_TAG_MODEL_CRITIQUE: process.env.OPENAI_AUTO_TAG_MODEL_CRITIQUE,
+    OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+    OPENAI_BASE_URL_EXTRACTION: process.env.OPENAI_BASE_URL_EXTRACTION,
+    OPENAI_BASE_URL_CRITIQUE: process.env.OPENAI_BASE_URL_CRITIQUE,
+    AUTO_TAG_PROVIDER: process.env.AUTO_TAG_PROVIDER,
+    AUTO_TAG_PROVIDER_EXTRACTION: process.env.AUTO_TAG_PROVIDER_EXTRACTION,
+    AUTO_TAG_PROVIDER_CRITIQUE: process.env.AUTO_TAG_PROVIDER_CRITIQUE,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    MINIMAX_API_KEY: process.env.MINIMAX_API_KEY,
+  };
   const testDir = join(PRIVATE_IMAGE_DIR, "__tagger2-test");
   const testImage = join(testDir, "shot.png");
 
@@ -494,16 +573,28 @@ describe("tagImage two-pass request shape", () => {
     // Clear per-pass base URL overrides so critique routes through the native
     // Responses API (output_text) that the mock returns, not callOpenAICompatible
     // (chat completions choices[].message.content) that DeepSeek/NIM would use.
+    delete process.env.AUTO_TAG_PROVIDER;
+    delete process.env.OPENAI_BASE_URL;
+    delete process.env.OPENAI_BASE_URL_EXTRACTION;
     delete process.env.OPENAI_BASE_URL_CRITIQUE;
+    delete process.env.OPENAI_API_KEY_EXTRACTION;
     delete process.env.OPENAI_API_KEY_CRITIQUE;
+    delete process.env.OPENAI_AUTO_TAG_MODEL_EXTRACTION;
     delete process.env.OPENAI_AUTO_TAG_MODEL_CRITIQUE;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.MINIMAX_API_KEY;
     mkdirSync(testDir, { recursive: true, force: true });
     writeFileSync(testImage, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFeAJ5fVqRtwAAAABJRU5ErkJggg==", "base64"));
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
-    process.env.OPENAI_API_KEY = originalOpenaiKey;
+    for (const key of Object.keys(original) as Array<keyof typeof original>) {
+      const value = original[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
   });
 
@@ -527,7 +618,7 @@ describe("tagImage two-pass request shape", () => {
         : JSON.stringify({
             observations: ["a", "b", "c", "d", "e"],
             typographyNotes: "notes",
-            draftCritique: "This design uses hairline borders at low contrast to do structural work without the visual weight of heavier lines, so the eye reads grouping without noticing the borders. It rejects the common default of 1px black borders, which read as frames rather than separators.",
+            draftCritique: "This design uses hairline borders at low contrast to do structural work without the visual weight of heavier lines, so the eye reads grouping without noticing the borders. It rejects the common default of heavy black borders, which read as frames rather than separators.",
             draftWhatToSteal: ["Use hairline borders at 10% opacity for structural separation instead of visible frame borders."],
             draftAntiPatterns: ["Avoids card shadows for depth — uses background-color steps of the same hue so surfaces stay flat."],
             businessRationale: {
@@ -908,5 +999,37 @@ describe("tagImage two-pass request shape", () => {
     expect(pass2Prompt).not.toContain("accentColor");
     expect(pass2Prompt).not.toContain("colorRoles");
     expect(pass2Prompt).not.toContain("#7464a4");
+  });
+
+  it("calibrates navigation away from mobile money dashboards", async () => {
+    const prompts: string[] = [];
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const text = String(body.input?.[1]?.content?.[0]?.text ?? "");
+      prompts.push(text);
+      const response = JSON.stringify({
+        patternType: "dashboard",
+        categories: ["dashboard"],
+        styleTags: ["minimal"],
+        dominantColors: ["#ffffff", "#111111"],
+        accentColor: null,
+        spacingDensity: "moderate",
+        cornerStyle: "slight-round",
+        usesShadows: false,
+        usesBorders: true,
+      });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    await tagImage({ imagePath: testImage, productName: "Money", url: null, extractionOnly: true });
+
+    expect(prompts[0]).toContain("navigation only when the primary job is moving between destinations");
+    expect(prompts[0]).toContain("balance");
+    expect(prompts[0]).toContain("transactions");
+    expect(prompts[0]).toContain("money movement");
+    expect(prompts[0]).toContain("do not classify it as navigation");
   });
 });

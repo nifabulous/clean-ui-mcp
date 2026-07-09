@@ -68,6 +68,35 @@ const BUSINESS_GOALS = [
   "other",
 ] as const;
 
+// Trust-boundary gates shared by accessibility-risk sanitization and prose
+// scrubbing. Pixels can establish visible presence; they cannot prove absence
+// of labels/accessibility names or exact measurements.
+const PIXEL_MEASUREMENT = /\b\d+(?:\.\d+)?\s*-?\s*(?:px|pixel[s]?|pt|rem|em)\b/i;
+const DOM_GROUND_TRUTH = /\b(?:dom|computed|contrast[\s-]*ratio|accessibility\s+tree|aria-|offsetwidth|offsetheight|getboundingclientrect|measured\s+(?:from|via))\b/i;
+const UNLABELED_CONTROL_RISK = new RegExp(
+  "\\bicon[\\s-]*only" +
+  "|icons?\\s+(?:alone|symbols?\\s+alone)" +
+  "|icons?\\s+without\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +
+  "|represented\\s+(?:solely\\s+)?by\\s+icons?" +
+  "|(?:icon|glyph|symbol|button|control)\\s+with\\s+(?:no|without)\\s+(?:a\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" +
+  "|(?:icon|glyph|symbol|button|control)\\s+(?:has|have|having)\\s+no\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +
+  "|(?:icon|glyph|symbol|button|control)\\s+lack(?:s|ing)?\\s+(?:a\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" +
+  "|no\\s+(?:visible\\s+)?(?:text\\s+)?labels?\\s+(?:beside|next to|on|for|is visible)" +
+  "|no\\s+(?:visible\\s+)?(?:text\\s+)?labels?\\s+(?:are\\s+)?visible" +
+  "|(?:has|have)\\s+no\\s+(?:accompanying\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" +
+  "|no\\s+accompanying\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +
+  "|lack(?:s|ing)?\\s+(?:an?\\s+|a\\s+)?(?:accompanying\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" +
+  "|no\\s+(?:visible\\s+)?accessible\\s+name" +
+  "|unlabeled\\s+(?:icon|button|control|nav)" +
+  "|rel(?:iance|ies|y)\\s+on\\s+(?:memorized\\s+)?(?:icon\\s+)?shapes?" +
+  "|\\bnaked\\s+icons?\\b" +
+  "|lacks?\\s+(?:an?\\s+)?accessible\\s+name" +
+  "|without\\s+(?:an?\\s+)?accessible\\s+name" +
+  "\\b",
+  "i",
+);
+const LOW_CONTRAST_RISK = /\b(?:low|poor|insufficient|fail(?:s|ing)?|below|under|not enough|too little)\b.{0,60}\bcontrast\b|\bcontrast\b.{0,60}\b(?:low|poor|insufficient|fail(?:s|ing)?|below|under|ratio|threshold|4\.5)\b/i;
+
 // ─── banned phrases — enforced in-prompt AND as a post-hoc code-level gate ───
 
 const BANNED_PHRASES = [
@@ -290,6 +319,14 @@ function minimaxConfigForPass(pass: TaggerPass): OpenAIConfig {
   const baseUrl = (process.env.MINIMAX_BASE_URL ?? MINIMAX_API_BASE).replace(/\/+$/, "");
   return { baseUrl, apiKey: process.env.MINIMAX_API_KEY ?? "", model };
 }
+// Grok config — same shape (OpenAI-compatible API at api.x.ai). Native
+// multimodal so it handles BOTH passes including vision extraction.
+function grokConfigForPass(pass: TaggerPass): OpenAIConfig {
+  const tier = pass.toUpperCase();
+  const model = process.env[`XAI_AUTO_TAG_MODEL_${tier}`] ?? XAI_AUTO_TAG_MODEL;
+  const baseUrl = (process.env.XAI_BASE_URL ?? XAI_API_BASE).replace(/\/+$/, "");
+  return { baseUrl, apiKey: process.env.XAI_API_KEY ?? "", model };
+}
 // Some OpenAI-compatible providers expose a thinking toggle via the
 // `chat_template_kwargs` extension. NVIDIA NIM's DeepSeek V4 takes
 // {"chat_template_kwargs": {"thinking": false}}. Default: thinking ON for the
@@ -311,6 +348,10 @@ const MISTRAL_API_BASE = "https://api.mistral.ai/v1";
 // $3/$15 per M tokens). Override the base URL via MINIMAX_BASE_URL to route
 // through a gateway.
 const MINIMAX_API_BASE = "https://api.minimax.io/v1";
+// xAI Grok — native multimodal, OpenAI-compatible API at api.x.ai/v1.
+// Handles BOTH passes (vision extraction + critique). Priced at $2/$6 per M
+// tokens. Override the base URL via XAI_BASE_URL to route through a gateway.
+const XAI_API_BASE = "https://api.x.ai/v1";
 
 const OPENAI_AUTO_TAG_MODEL = process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano";
 const CLAUDE_AUTO_TAG_MODEL = process.env.CLAUDE_AUTO_TAG_MODEL ?? "claude-haiku-4-5";
@@ -321,6 +362,8 @@ const MISTRAL_AUTO_TAG_MODEL = process.env.MISTRAL_AUTO_TAG_MODEL ?? "mistral-la
 // MiniMax M3 — native multimodal, both passes. Cheaper critique alternative to
 // Claude; also vision-capable for extraction. Override via MINIMAX_BASE_URL.
 const MINIMAX_AUTO_TAG_MODEL = process.env.MINIMAX_AUTO_TAG_MODEL ?? "MiniMax-M3";
+// Grok 4.5 — xAI's flagship, multimodal. Override via XAI_AUTO_TAG_MODEL.
+const XAI_AUTO_TAG_MODEL = process.env.XAI_AUTO_TAG_MODEL ?? "grok-4.5";
 
 // Set DEBUG_TAGGER=1 to print per-call provider config and token usage to stderr.
 // Quiet by default so production logs (npm run ui, bulk-import) stay clean.
@@ -516,7 +559,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-type Provider = "openai" | "claude" | "gemini" | "mistral" | "minimax";
+type Provider = "openai" | "claude" | "gemini" | "mistral" | "minimax" | "grok";
 type TaggerPass = "extraction" | "critique";
 
 // ─── peak-hour DeepSeek → MiniMax/Claude routing ────────────────────────────
@@ -575,6 +618,7 @@ function resolveProvider(pass: TaggerPass, override?: Provider): Provider {
     gemini: !!process.env.GEMINI_API_KEY,
     mistral: !!process.env.MISTRAL_API_KEY,
     minimax: !!process.env.MINIMAX_API_KEY,
+    grok: !!process.env.XAI_API_KEY,
   };
   // Peak-hour routing: if the critique pass resolved to "openai" AND the
   // configured critique model is DeepSeek AND we're in a peak window, swap to
@@ -592,7 +636,7 @@ function resolveProvider(pass: TaggerPass, override?: Provider): Provider {
     console.error(`[tagger] Peak-hour warning: DeepSeek is 2× price now (UTC ${new Date().getUTCHours()}:00) but no MiniMax/Claude key set — using DeepSeek anyway.`);
   }
   if (has[preferred]) return preferred;
-  for (const p of ["openai", "claude", "gemini", "mistral", "minimax"] as const) {
+  for (const p of ["openai", "claude", "gemini", "mistral", "minimax", "grok"] as const) {
     if (has[p]) {
       console.error(`[tagger] ${envVar}="${preferred}" but no key set — falling back to ${p} for ${pass}.`);
       return p;
@@ -610,9 +654,9 @@ export function hasVisionKey(): boolean {
     process.env.OPENAI_API_KEY ||
     process.env.OPENAI_API_KEY_EXTRACTION
   );
-  // MiniMax M3 is native multimodal (unlike Mistral which is text-only), so it
-  // qualifies as a vision-capable provider for the extraction pass.
-  return !!(hasOpenAIExtraction || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY || process.env.MINIMAX_API_KEY);
+  // MiniMax M3 and Grok 4.5 are native multimodal (unlike Mistral which is
+  // text-only), so they qualify as vision-capable providers for extraction.
+  return !!(hasOpenAIExtraction || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY || process.env.MINIMAX_API_KEY || process.env.XAI_API_KEY);
 }
 
 /** Check if ANY critique-capable provider key is configured.
@@ -629,12 +673,13 @@ export function hasCritiqueKey(): boolean {
     process.env.ANTHROPIC_API_KEY ||
     process.env.GEMINI_API_KEY ||
     process.env.MISTRAL_API_KEY ||
-    process.env.MINIMAX_API_KEY
+    process.env.MINIMAX_API_KEY ||
+    process.env.XAI_API_KEY
   );
 }
 
-const PROVIDER_NAMES: Record<Provider, string> = { openai: "OpenAI", claude: "Claude", gemini: "Gemini", mistral: "Mistral", minimax: "MiniMax" };
-const PROVIDER_MODELS: Record<Provider, string> = { openai: OPENAI_AUTO_TAG_MODEL, claude: CLAUDE_AUTO_TAG_MODEL, gemini: GEMINI_AUTO_TAG_MODEL, mistral: MISTRAL_AUTO_TAG_MODEL, minimax: MINIMAX_AUTO_TAG_MODEL };
+const PROVIDER_NAMES: Record<Provider, string> = { openai: "OpenAI", claude: "Claude", gemini: "Gemini", mistral: "Mistral", minimax: "MiniMax", grok: "Grok" };
+const PROVIDER_MODELS: Record<Provider, string> = { openai: OPENAI_AUTO_TAG_MODEL, claude: CLAUDE_AUTO_TAG_MODEL, gemini: GEMINI_AUTO_TAG_MODEL, mistral: MISTRAL_AUTO_TAG_MODEL, minimax: MINIMAX_AUTO_TAG_MODEL, grok: XAI_AUTO_TAG_MODEL };
 
 /** Human-readable provider name for UI display. */
 export function activeProviderName(pass?: TaggerPass): string {
@@ -651,6 +696,7 @@ export function activeModelName(pass?: TaggerPass): string {
   // NVIDIA NIM's DeepSeek V4 while /api/config reported "gpt-5.4-mini". Resolve
   // through openaiConfigForPass so the reported model matches the call.
   if (provider === "openai") return openaiConfigForPass(resolvedPass).model;
+  if (provider === "grok") return grokConfigForPass(resolvedPass).model;
   return PROVIDER_MODELS[provider];
 }
 
@@ -756,6 +802,11 @@ Rules:
   they are narrower patterns. Use "calculator" for tools where the primary screen pattern is entering
   numeric variables and seeing computed results. Do not default these to "dashboard" unless the primary
   experience is monitoring many existing metrics. Prefer the specific pattern over the generic one.
+- Use navigation only when the primary job is moving between destinations. Do not classify a screen
+  as navigation merely because it has a top nav, sidebar, tabs, search bar, bell, avatar, or icon row.
+  If the screen shows balance, transactions, money movement, account state, recent payments, or add-money
+  flows, choose the primary work pattern (dashboard, checkout, calculator, or forms as appropriate) and
+  set suggestedPatternType when the enum is too coarse; do not classify it as navigation.
 - Return ONLY the JSON object. No explanation, no markdown.`;
 }
 
@@ -992,39 +1043,6 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
   // Evidence that is only a hex color or palette-derivation phrase.
   const PALETTE_EVIDENCE = /^#?[0-9a-f]{6}$/i;
   const PALETTE_WORDS = /\b(palette|dominant color|accent color|color palette|extracted color|from (?:the )?color)\b/i;
-  // Fabricated pixel measurements — the model cannot measure pixels from an
-  // image. "8px dots", "3px badge", "12-pixel" are invented precision. Only
-  // allowed when the evidence explicitly cites DOM/computed ground truth.
-  const PIXEL_MEASUREMENT = /\b\d+(?:\.\d+)?\s*-?\s*(?:px|pixel[s]?|pt|rem|em)\b/i;
-  const DOM_GROUND_TRUTH = /\b(?:dom|computed|contrast[\s-]*ratio|accessibility\s+tree|aria-|offsetwidth|offsetheight|getboundingclientrect|measured\s+(?:from|via))\b/i;
-  // Unlabeled-control risk patterns — the model phrases this many ways. The
-  // governing principle: PIXELS CANNOT ESTABLISH THE ABSENCE of a text label
-  // or accessible name. The model hallucinated "no visible text labels" on
-  // multiple entries where labels were clearly visible, and "icon with no text
-  // label" / "glyph with no label" / "unlabeled button" are the same failure
-  // class — inferring absence from pixels. Drop ALL model-generated
-  // unlabeled-control risks. Only DOM ground truth (unlabeledInteractive count
-  // from the capture pipeline) can produce one, and that is code-injected.
-  const UNLABELED_CONTROL_RISK = new RegExp(
-    "\\bicon[\\s-]*only" +                                              // "icon-only"
-    "|icons?\\s+(?:alone|symbols?\\s+alone)" +                          // "icons alone"
-    "|icons?\\s+without\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +       // "icons without labels"
-    "|represented\\s+(?:solely\\s+)?by\\s+icons?" +                     // "represented by icons"
-    "|(?:icon|glyph|symbol|button|control)\\s+with\\s+(?:no|without)\\s+(?:a\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" + // "icon with no text label"
-    "|(?:icon|glyph|symbol|button|control)\\s+(?:has|have|having)\\s+no\\s+(?:visible\\s+)?(?:text\\s+)?labels?" + // "button has no visible label"
-    "|(?:icon|glyph|symbol|button|control)\\s+lack(?:s|ing)?\\s+(?:a\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" + // "button lacks a visible label"
-    "|no\\s+(?:visible\\s+)?(?:text\\s+)?labels?\\s+(?:beside|next to|on|for|is visible)" + // "no labels beside" / "no label is visible"
-    "|no\\s+(?:visible\\s+)?(?:text\\s+)?labels?\\s+(?:are\\s+)?visible" + // "no labels are visible"
-    "|lack(?:s|ing)?\\s+(?:a\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" + // "lacks a visible label"
-    "|no\\s+(?:visible\\s+)?accessible\\s+name" +                        // "no accessible name"
-    "|unlabeled\\s+(?:icon|button|control|nav)" +                        // "unlabeled button"
-    "|rel(?:iance|ies|y)\\s+on\\s+(?:memorized\\s+)?(?:icon\\s+)?shapes?" + // "reliance on shapes"
-    "|\\bnaked\\s+icons?\\b" +                                           // "naked icons"
-    "|lacks?\\s+(?:an?\\s+)?accessible\\s+name" +                        // "lacks an accessible name"
-    "|without\\s+(?:an?\\s+)?accessible\\s+name" +                       // "without accessible name"
-    "\\b",
-    "i",
-  );
   const VISIBLE_LABEL_LANG = /\b(label|labels?|text|caption|word|named|home|cards?|settings?|transactions?|balance|account|profile|menu)\b/i;
   // Color-only / status risk where evidence must name a concrete visible state/control.
   const COLOR_ONLY_RISK = /\b(color[\s-]*only|sole (?:status )?differentiator|color alone|status (?:indicator|chip|dot|badge))\b/i;
@@ -1070,6 +1088,10 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
     // "contrastRatio 2.8:1", "computed from the DOM"). Relative size words
     // ("small", "narrow") are fine.
     if (PIXEL_MEASUREMENT.test(evidence) && !DOM_GROUND_TRUTH.test(evidence)) continue;
+
+    // Gate 3d: contrast failures require computed contrast data. A screenshot
+    // can suggest "this looks muted", but it cannot prove WCAG contrast failure.
+    if ((LOW_CONTRAST_RISK.test(risk) || LOW_CONTRAST_RISK.test(evidence) || /\b1\.4\.3\b/.test(String(obj.wcag ?? ""))) && !DOM_GROUND_TRUTH.test(evidence)) continue;
 
     // Gate 4: unlabeled-control risks are the #1 hallucination class. The model
     // CANNOT reliably establish the absence of a text label or accessible name
@@ -1286,15 +1308,15 @@ function validateNoBannedPhrases(obj: Record<string, unknown>): string[] {
   return errors;
 }
 
-// ─── icon-only prose gate (stops hallucination from migrating to prose) ───────
+// ─── unsupported prose gate (stops hallucinations migrating to prose) ─────────
 //
-// The a11y sanitizer empties model-generated icon-only risks from the
-// accessibilityRisks array, but the #1 hallucination — "icon-only navigation
-// / icon-only buttons with no text labels" — was migrating into critique,
-// whatToSteal, antiPatterns, businessRationale, and typographyNotes unchecked.
-// This gate scans prose fields for icon-only ASSERTIONS and rejects the whole
-// critique with a retry (mirroring the banned-phrase gate), then scrubs
-// surviving assertions as a safety net.
+// The a11y sanitizer empties model-generated unsupported risks from the
+// accessibilityRisks array, but those same hallucinations were migrating into
+// critique, whatToSteal, antiPatterns, businessRationale, and typographyNotes
+// unchecked. This gate scans prose fields for unsupported absence-of-label
+// claims and fabricated exact measurements, rejects the whole critique with a
+// retry (mirroring the banned-phrase gate), then scrubs surviving assertions as
+// a safety net.
 //
 // Key nuance: we preserve sentences that CONTRAST or REJECT icon-only nav
 // ("the sidebar keeps icons paired with text labels instead of going icon-only"
@@ -1310,32 +1332,45 @@ const ICON_ONLY_PROSE = /\bicon[\s-]*only|icons?\s+(?:alone|symbols?\s+alone|wit
 // is the absence claim itself, and "not" is too broad. We require explicit
 // negation verbs (are not / is not / do not) or comparison conjunctions.
 const CONTRAST_CLAUSE = /\b(?:instead\s+of|rather\s+than|avoids?|rejects?|unlike|in\s+contrast\s+to|could\s+have|might\s+(?:have\s+)?(?:used|gone)|do\s+not|does\s+not|are\s+not|is\s+not|not\s+(?:icon|going))\b/i;
+const POSITIVE_LABEL_PAIRING = /\b(?:paired?\s+with|keeps?\s+icons?\s+paired|icons?\s+(?:and|with)\s+(?:text\s+)?labels?|(?:text\s+)?labels?\s+(?:beside|next to|alongside)|instead\s+of\s+going\s+icon[\s-]*only)\b/i;
+
+function isAllowedIconOnlyContrast(sentence: string): boolean {
+  return ICON_ONLY_PROSE.test(sentence) && CONTRAST_CLAUSE.test(sentence) && POSITIVE_LABEL_PAIRING.test(sentence);
+}
+
+function unsupportedProseReason(sentence: string): string | null {
+  if (PIXEL_MEASUREMENT.test(sentence) && !DOM_GROUND_TRUTH.test(sentence)) {
+    return "fabricated pixel measurement";
+  }
+  if (UNLABELED_CONTROL_RISK.test(sentence) && !isAllowedIconOnlyContrast(sentence)) {
+    return "unsupported absence-of-label claim";
+  }
+  return null;
+}
 
 /**
- * Scan critique prose fields for icon-only ASSERTIONS (not contrast clauses).
+ * Scan critique prose fields for unsupported assertions.
  * Returns a list of rejection reasons for the retry-feedback path. Empty when
- * the model is clean or only used icon-only in a contrast/rejection sense.
+ * the model is clean or only used icon-only in a supported contrast/rejection
+ * sense.
  */
 export function validateNoIconOnlyClaims(parsed: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  const hits: Array<{ field: string; sentence: string }> = [];
+  const hits: Array<{ field: string; sentence: string; reason: string }> = [];
 
   for (const field of PROSE_FIELDS) {
     const value = collectProseValue(parsed, field);
     for (const sentence of splitSentences(value)) {
-      if (!ICON_ONLY_PROSE.test(sentence)) continue;
-      // If the same sentence contains a contrast/rejection clause, it's a
-      // legitimate observation ("avoids going icon-only"). Skip it.
-      if (CONTRAST_CLAUSE.test(sentence)) continue;
-      hits.push({ field, sentence });
+      const reason = unsupportedProseReason(sentence);
+      if (reason) hits.push({ field, sentence, reason });
     }
   }
 
   if (hits.length) {
     errors.push(
-      `Icon-only navigation claims are the #1 hallucination — text labels are usually visible. ` +
-      `Do NOT assert icon-only nav/buttons in any field. Found ${hits.length} assertion(s):\n` +
-      hits.map((h) => `  [${h.field}] "${h.sentence.trim().slice(0, 140)}"`).join("\n"),
+      `Unsupported prose claims found: pixels cannot prove absence of labels/accessibility names or exact dimensions. ` +
+      `Found ${hits.length} unsupported assertion(s):\n` +
+      hits.map((h) => `  [${h.field}] ${h.reason}: "${h.sentence.trim().slice(0, 140)}"`).join("\n"),
     );
   }
   return errors;
@@ -1380,10 +1415,10 @@ function splitSentences(value: string): string[] {
 }
 
 /**
- * Safety-net scrubber: strip icon-only ASSERTION sentences from prose fields
- * after the retry. Preserves contrast/rejection sentences. Called on the
- * sanitized critique object (not the raw parse) so it runs even if the retry
- * fails or the model persists the claim.
+ * Safety-net scrubber: strip unsupported assertion sentences from prose fields
+ * after the retry. Preserves supported contrast/rejection sentences. Called on
+ * the sanitized critique object (not the raw parse) so it runs even if the
+ * retry fails or the model persists the claim.
  *
  * Mutates and returns the critique object. Operates on the post-sanitize shape
  * (draftCritique, draftWhatToSteal, etc. have been validated already).
@@ -1398,8 +1433,7 @@ export function scrubProseIconOnly(critique: {
 }): void {
   const filterSentences = (text: string): string => {
     const kept = splitSentences(text).filter((s) => {
-      if (!ICON_ONLY_PROSE.test(s)) return true;
-      return CONTRAST_CLAUSE.test(s);
+      return unsupportedProseReason(s) === null;
     });
     return kept.join(" ");
   };
@@ -1790,6 +1824,7 @@ async function callModel(
     case "gemini":  return callGemini(prompt, imagePath, retryFeedback, detail, pass, thinkingOverride);
     case "mistral": return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, mistralConfigForPass(pass));
     case "minimax": return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, minimaxConfigForPass(pass));
+    case "grok":    return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, grokConfigForPass(pass));
     default:        return callOpenAI(prompt, imagePath, retryFeedback, detail, pass);
   }
 }

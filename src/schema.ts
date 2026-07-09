@@ -185,6 +185,58 @@ export function detectPlatform(width: number | null | undefined, height: number 
 }
 
 /**
+ * Accessibility risk — a single a11y concern found on screen. Accepts two shapes:
+ *
+ * 1. Legacy string (e.g. "[inferred] sidebar: contrast may be low"). Existing
+ *    corpus entries stay valid without migration; they migrate to the structured
+ *    shape naturally as entries are re-tagged.
+ * 2. Structured object with a required `evidence` field — the gate that prevents
+ *    fabricated risks. Evidence must cite visible text, name an exact screen
+ *    region, or quote a DOM metric. Palette values, generic component guesses,
+ *    and absent-state speculation are not valid evidence.
+ *
+ * `confidence: "dom-grounded"` is code-owned (set by the DOM-signals injection
+ * path); models may only emit "visible" or "inferred".
+ */
+export const AccessibilityRisk = z.union([
+  z.string().min(10),
+  z.object({
+    element: z.string().min(3),
+    risk: z.string().min(10),
+    evidence: z.string().min(8),
+    confidence: z.enum(["visible", "inferred", "dom-grounded"]),
+    wcag: z.string().optional(),
+  }),
+]);
+
+export type AccessibilityRiskT = z.infer<typeof AccessibilityRisk>;
+
+/**
+ * Collect every free-text string from an accessibility risk (for draft-marker
+ * scanning). Legacy strings return themselves; structured objects return their
+ * element/risk/evidence/wcag fields (empty strings filtered).
+ */
+export function accessibilityRiskTextFields(risk: AccessibilityRiskT): string[] {
+  if (typeof risk === "string") return [risk];
+  return [risk.element, risk.risk, risk.evidence, risk.wcag ?? ""].filter(Boolean);
+}
+
+/**
+ * Format an accessibility risk as a single human-readable string. Used by MCP
+ * rendering and anywhere that needs the legacy flat display. Set
+ * `includeEvidence` to append the evidence on a second line (UI detail views).
+ */
+export function formatAccessibilityRisk(
+  risk: AccessibilityRiskT,
+  opts: { includeEvidence?: boolean } = {},
+): string {
+  if (typeof risk === "string") return risk;
+  const wcag = risk.wcag ? ` (${risk.wcag})` : "";
+  const base = `[${risk.confidence}] ${risk.element}: ${risk.risk}${wcag}`;
+  return opts.includeEvidence ? `${base}\n  Evidence: ${risk.evidence}` : base;
+}
+
+/**
  * Structured anti-patterns — the corpus's biggest differentiator from raw
  * screenshot libraries (Mobbin has 621k screenshots, zero anti-patterns).
  * Replaces the old free-text `whatToAvoidHere` array.
@@ -195,7 +247,7 @@ export function detectPlatform(width: number | null | undefined, height: number 
 export const AntiPatterns = z.object({
   antiPatterns: z.array(z.string().min(10)).min(1), // common mistakes this design avoids
   whereThisFails: z.array(z.string().min(10)).default([]), // contexts where copying hurts
-  accessibilityRisks: z.array(z.string().min(10)).default([]), // specific a11y concerns
+  accessibilityRisks: z.array(AccessibilityRisk).default([]), // specific a11y concerns — structured (with evidence) or legacy string
 });
 
 /**
@@ -492,7 +544,19 @@ export function entryTextFields(entry: CorpusEntryT): Array<{ field: string; tex
     ...entry.whatToSteal.map((t, i) => ({ field: `whatToSteal[${i}]`, text: t })),
     ...entry.antiPatterns.antiPatterns.map((t, i) => ({ field: `antiPatterns.antiPatterns[${i}]`, text: t })),
     ...entry.antiPatterns.whereThisFails.map((t, i) => ({ field: `antiPatterns.whereThisFails[${i}]`, text: t })),
-    ...entry.antiPatterns.accessibilityRisks.map((t, i) => ({ field: `antiPatterns.accessibilityRisks[${i}]`, text: t })),
+    // Structured a11y risks carry multiple text fields (element/risk/evidence/wcag).
+    // Expand each with indexed field paths so draft-marker reports point at the
+    // exact sub-field that's dirty. Legacy strings map as-is.
+    ...entry.antiPatterns.accessibilityRisks.flatMap((risk, i) => {
+      if (typeof risk === "string") return [{ field: `antiPatterns.accessibilityRisks[${i}]`, text: risk }];
+      const fields: Array<{ field: string; text: string }> = [
+        { field: `antiPatterns.accessibilityRisks[${i}].element`, text: risk.element },
+        { field: `antiPatterns.accessibilityRisks[${i}].risk`, text: risk.risk },
+        { field: `antiPatterns.accessibilityRisks[${i}].evidence`, text: risk.evidence },
+      ];
+      if (risk.wcag) fields.push({ field: `antiPatterns.accessibilityRisks[${i}].wcag`, text: risk.wcag });
+      return fields;
+    }),
     ...(entry.businessRationale ? [
       { field: "businessRationale.targetUser", text: entry.businessRationale.targetUser },
       { field: "businessRationale.rationale", text: entry.businessRationale.rationale },

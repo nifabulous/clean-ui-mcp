@@ -17,7 +17,7 @@ import {
   indexStatus,
   findSimilarEntries,
 } from "./corpus.js";
-import { Category, StyleTag, PatternType } from "./schema.js";
+import { Category, StyleTag, PatternType, formatAccessibilityRisk, AccessibilityRiskT } from "./schema.js";
 import { generateBrief, renderBrief } from "./design-prompt.js";
 import { buildRecommendation, renderRecommendation } from "./recommend.js";
 import { aggregateAntiPatterns, collectPalettes, collectTechniques, browseByPattern, hueBand } from "./aggregations.js";
@@ -191,7 +191,7 @@ server.registerTool(
         ? `## Where copying this fails\n${entry.antiPatterns.whereThisFails.map((t) => `- ${t}`).join("\n")}\n`
         : "",
       entry.antiPatterns.accessibilityRisks.length
-        ? `## Accessibility risks\n${entry.antiPatterns.accessibilityRisks.map((t) => `- ${t}`).join("\n")}\n`
+        ? `## Accessibility risks\n${entry.antiPatterns.accessibilityRisks.map((r) => `- ${formatAccessibilityRisk(r, { includeEvidence: true })}`).join("\n")}\n`
         : "",
       entry.businessRationale
         ? `## Business rationale\n- Goal: ${entry.businessRationale.businessGoal}\n- Target user: ${entry.businessRationale.targetUser}\n- Rationale: ${entry.businessRationale.rationale}\n- Confirmed: ${entry.businessRationale.confirmed ? "yes" : "no"}\n`
@@ -391,6 +391,9 @@ server.registerTool(
     const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
     const firstSentence = (s: string) => cell(s.split(/[.!?]/)[0] || s);
     const top = (arr: string[]) => cell(arr[0] ?? "—");
+    // A11y risks are a string|object union — format to strings before the table cell.
+    const topRisk = (risks: AccessibilityRiskT[]) =>
+      cell(risks.length ? formatAccessibilityRisk(risks[0]) : "—");
     const header = `| Field | ${found.map((e) => cell(cleanTitle(e.title, e.source.productName))).join(" | ")} |`;
     const divider = `| --- | ${found.map(() => "---").join(" | ")} |`;
     const rows = [
@@ -408,7 +411,7 @@ server.registerTool(
         `| critique angle | ${found.map((e) => firstSentence(e.critique)).join(" | ")} |`,
         `| top steal | ${found.map((e) => top(e.whatToSteal)).join(" | ")} |`,
         `| anti-patterns | ${found.map((e) => top(e.antiPatterns.antiPatterns)).join(" | ")} |`,
-        `| a11y risks | ${found.map((e) => top(e.antiPatterns.accessibilityRisks)).join(" | ")} |`,
+        `| a11y risks | ${found.map((e) => topRisk(e.antiPatterns.accessibilityRisks)).join(" | ")} |`,
         `| where it fails | ${found.map((e) => top(e.antiPatterns.whereThisFails)).join(" | ")} |`,
       ]),
     ];

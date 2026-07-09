@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Component, CorpusEntry, detectPlatform } from "./schema.js";
+import { Component, CorpusEntry, detectPlatform, findDraftMarkers } from "./schema.js";
 
 const validEntry = {
   id: "example-product-dashboard",
@@ -378,6 +378,68 @@ describe("corpus schema", () => {
     const result = CorpusEntry.safeParse(validEntry);
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.provenance).toBeUndefined();
+  });
+
+  // ── structured accessibility risks (evidence gate) ──────────────────────────
+
+  it("accepts legacy string accessibility risks", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      antiPatterns: {
+        ...validEntry.antiPatterns,
+        accessibilityRisks: ["[inferred] sidebar: possible contrast issue for small text"],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts structured accessibility risks with evidence", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      antiPatterns: {
+        ...validEntry.antiPatterns,
+        accessibilityRisks: [{
+          element: "left sidebar navigation",
+          risk: "Icon labels may be difficult to scan for low-vision users at small sizes.",
+          evidence: "visible labels: Home, Cards, Transactions, Balance",
+          confidence: "visible",
+          wcag: "1.4.3 Contrast (Minimum)",
+        }],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects structured accessibility risks without evidence", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      antiPatterns: {
+        ...validEntry.antiPatterns,
+        accessibilityRisks: [{
+          element: "sidebar",
+          risk: "Icon-only controls may lack accessible names for screen reader users.",
+          evidence: "",
+          confidence: "inferred",
+        }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("findDraftMarkers scans structured accessibility risk text fields", () => {
+    const entry = CorpusEntry.parse({
+      ...validEntry,
+      antiPatterns: {
+        ...validEntry.antiPatterns,
+        accessibilityRisks: [{
+          element: "status row",
+          risk: "[DRAFT] Color-only status may fail for color-blind users.",
+          evidence: "8px red dot next to Failed row",
+          confidence: "visible",
+        }],
+      },
+    });
+    expect(findDraftMarkers(entry)).toContain("antiPatterns.accessibilityRisks[0].risk");
   });
 });
 

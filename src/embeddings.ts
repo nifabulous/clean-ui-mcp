@@ -249,7 +249,7 @@ export function entryToDocument(entry: {
   mood?:         string;
   critique:     string;
   whatToSteal:  string[];
-  antiPatterns?: { antiPatterns: string[]; whereThisFails?: string[]; accessibilityRisks?: string[] };
+  antiPatterns?: { antiPatterns: string[]; whereThisFails?: string[]; accessibilityRisks?: Array<string | { element: string; risk: string; evidence: string; confidence: string; wcag?: string }> };
   layout?: { form?: string; regions?: Array<{ role: string; width?: string }> };
   businessRationale?: { businessGoal?: string; targetUser?: string; rationale?: string; confirmed?: boolean };
   voice?: { tone?: string; examples?: string[]; avoid?: string[] };

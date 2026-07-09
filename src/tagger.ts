@@ -44,7 +44,7 @@ const CORNER_STYLES = ["sharp", "slight-round", "pill", "mixed"] as const;
 
 const PATTERN_TYPES = [
   "dashboard","landing-page","pricing","onboarding","auth","settings",
-  "search","checkout","profile","marketing-hero",
+  "search","checkout","profile","marketing-hero","calculator",
   "data-table","empty-state","navigation","forms","mobile-nav",
   "notifications","editor-canvas","chat-interface","command-palette","modal",
 ] as const;
@@ -742,9 +742,12 @@ Rules:
   screen is actually one of these commonly-missed patterns — a chat interface (message bubbles,
   conversation history, composer), a pricing table (tier comparison, price+features matrix), a
   command palette (search-driven action list, keyboard-invoked), an empty state (illustration +
-  first-action prompt with no data), or a settings screen (densely grouped toggles/fields/forms).
-  These are frequently misclassified as "dashboard" when they are narrower component patterns.
-  Prefer the specific pattern over the generic one when both could apply.
+  first-action prompt with no data), a calculator (numeric/business inputs producing immediate
+  computed results — fees, ROI, savings, loan payments, pricing estimates), or a settings screen
+  (densely grouped toggles/fields/forms). These are frequently misclassified as "dashboard" when
+  they are narrower patterns. Use "calculator" for tools where the primary screen pattern is entering
+  numeric variables and seeing computed results. Do not default these to "dashboard" unless the primary
+  experience is monitoring many existing metrics. Prefer the specific pattern over the generic one.
 - Return ONLY the JSON object. No explanation, no markdown.`;
 }
 

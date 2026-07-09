@@ -153,6 +153,7 @@ export const PatternType = z.enum([
   "checkout",
   "profile",
   "marketing-hero",
+  "calculator", // numeric inputs -> live-computed outputs: transfer fees, ROI, pricing estimators, mortgage/loan
   // component patterns
   "data-table",
   "empty-state",

@@ -122,7 +122,7 @@ describe("corpus schema", () => {
   it("accepts every valid PatternType enum value", () => {
     const types = [
       "dashboard", "landing-page", "pricing", "onboarding", "auth", "settings",
-      "search", "checkout", "profile", "marketing-hero",
+      "search", "checkout", "profile", "marketing-hero", "calculator",
       "data-table", "empty-state", "navigation", "forms", "mobile-nav",
       "notifications", "editor-canvas", "chat-interface", "command-palette", "modal",
     ];

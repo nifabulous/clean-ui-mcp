@@ -36,7 +36,7 @@ const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
 // enums ever diverge.
 const VALID_PATTERN_TYPES = new Set([
   "dashboard", "landing-page", "pricing", "onboarding", "auth", "settings",
-  "search", "checkout", "profile", "marketing-hero",
+  "search", "checkout", "profile", "marketing-hero", "calculator",
   "data-table", "empty-state", "navigation", "forms", "mobile-nav",
   "notifications", "editor-canvas", "chat-interface", "command-palette", "modal",
 ]);

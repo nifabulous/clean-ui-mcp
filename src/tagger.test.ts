@@ -37,29 +37,90 @@ describe("tagger sanitization", () => {
   it("parses structured accessibility risks with confidence and rejects dom-grounded", () => {
     const sanitized = sanitizeTaggerPayload({
       draftAccessibilityRisks: [
-        { element: "status chips", risk: "Color-only differentiation invisible to color-blind users", confidence: "visible", wcag: "1.4.1" },
-        { element: "sidebar icons", risk: "Icon-only controls without aria labels", confidence: "inferred" },
-        { element: "contrast text", risk: "Low contrast on labels", confidence: "dom-grounded" },
+        { element: "status chips", risk: "Color-only differentiation invisible to color-blind users", evidence: "8px red/green dots beside Paid and Failed rows with no text status label", confidence: "visible", wcag: "1.4.1" },
+        { element: "contrast text", risk: "Low contrast on labels", evidence: "secondary label at #999 on #fff background, computed ratio 2.8:1", confidence: "dom-grounded" },
       ],
     });
 
-    expect(sanitized.draftAccessibilityRisks).toHaveLength(3);
+    expect(sanitized.draftAccessibilityRisks).toHaveLength(2);
     expect(sanitized.draftAccessibilityRisks[0]).toEqual({
       element: "status chips", risk: "Color-only differentiation invisible to color-blind users",
+      evidence: "8px red/green dots beside Paid and Failed rows with no text status label",
       confidence: "visible", wcag: "1.4.1",
     });
-    expect(sanitized.draftAccessibilityRisks[1].confidence).toBe("inferred");
     // dom-grounded must be downgraded to inferred — that tag is code-only
-    expect(sanitized.draftAccessibilityRisks[2].confidence).toBe("inferred");
+    expect(sanitized.draftAccessibilityRisks[1].confidence).toBe("inferred");
   });
 
-  it("accepts backward-compat plain-string accessibility risks", () => {
+  it("drops accessibility risks without evidence", () => {
     const sanitized = sanitizeTaggerPayload({
-      draftAccessibilityRisks: ["Some legacy risk text about contrast."],
+      draftAccessibilityRisks: [
+        { element: "sidebar", risk: "Icon-only controls may lack accessible names.", evidence: "", confidence: "inferred" },
+      ],
+    });
+    expect(sanitized.draftAccessibilityRisks).toEqual([]);
+  });
+
+  it("drops icon-only risks when evidence names visible text labels", () => {
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [{
+        element: "sidebar icons",
+        risk: "Icon-only controls may lack accessible names.",
+        evidence: "visible labels: Home, Cards, Transactions, Balance",
+        confidence: "inferred",
+        wcag: "1.1.1 Non-text Content",
+      }],
+    });
+    expect(sanitized.draftAccessibilityRisks).toEqual([]);
+  });
+
+  it("drops color-only risks when evidence is only a palette color", () => {
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [{
+        element: "status chips",
+        risk: "Purple is used as the sole status differentiator.",
+        evidence: "#7464a4 from dominant color palette",
+        confidence: "inferred",
+        wcag: "1.4.1 Use of Color",
+      }],
+    });
+    expect(sanitized.draftAccessibilityRisks).toEqual([]);
+  });
+
+  it("keeps visible color-only risks with concrete UI evidence", () => {
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [{
+        element: "payment status dot",
+        risk: "State is communicated by color alone, which color-blind users may miss.",
+        evidence: "8px red/green dots beside Paid and Failed rows with no text status label",
+        confidence: "visible",
+        wcag: "1.4.1 Use of Color",
+      }],
     });
     expect(sanitized.draftAccessibilityRisks).toHaveLength(1);
-    expect(sanitized.draftAccessibilityRisks[0].risk).toBe("Some legacy risk text about contrast.");
-    expect(sanitized.draftAccessibilityRisks[0].confidence).toBe("inferred");
+  });
+
+  it("caps non-DOM accessibility risks to two", () => {
+    const risks = [1, 2, 3].map((n) => ({
+      element: `visible control ${n}`,
+      risk: `Risk ${n} with enough specific detail for validation.`,
+      evidence: `top-right region ${n} with visible control and label`,
+      confidence: "visible",
+    }));
+    const sanitized = sanitizeTaggerPayload({ draftAccessibilityRisks: risks });
+    expect(sanitized.draftAccessibilityRisks).toHaveLength(2);
+  });
+
+  it("keeps evidence on structured accessibility risks", () => {
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [{
+        element: "payment status dot",
+        risk: "State is communicated by color alone.",
+        evidence: "8px red/green dots beside Paid and Failed rows",
+        confidence: "visible",
+      }],
+    });
+    expect(sanitized.draftAccessibilityRisks[0].evidence).toBe("8px red/green dots beside Paid and Failed rows");
   });
 
   it("supplies useful defaults for unusable model output", () => {

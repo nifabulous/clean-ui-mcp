@@ -172,7 +172,7 @@ export interface TaggerOutput {
   antiPatterns: {
     antiPatterns:       string[];
     whereThisFails:     string[];
-    accessibilityRisks: string[];
+    accessibilityRisks: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag?: string }>;
   };
   layout?: {
     form: string;
@@ -917,35 +917,80 @@ function domainTagsFromAllowed(value: unknown): string[] {
 
 /**
  * Sanitize accessibility risks from the critique model output.
- * Handles both the new structured format ({ element, risk, confidence, wcag? })
- * and backward-compat plain strings (converted to { element: "—", risk: str,
- * confidence: "inferred" }).
  *
- * Confidence "dom-grounded" is NEVER accepted from the model — it's set in
- * code by the DOM-signals injection path. The model can only emit "visible"
- * or "inferred".
+ * EVIDENCE GATE — the core defense against fabricated risks. Each risk must
+ * cite observable UI evidence or computed DOM evidence. The following are
+ * rejected:
+ *   - Missing or too-short evidence (<8 chars)
+ *   - Evidence that is only a generic component name (sidebar, buttons, icons)
+ *   - Evidence that is only a hex value or palette mention
+ *   - Icon-only risks where evidence contains visible text labels (contradiction)
+ *   - Color-only risks where evidence doesn't name a concrete visible state/control
+ *   - More than 2 non-DOM risks (quota cap — [] is honest when guessing)
+ *
+ * Confidence "dom-grounded" is NEVER accepted from the model — it's downgraded
+ * to "inferred". Only code (DOM-signals injection) may set "dom-grounded".
  */
-function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; risk: string; confidence: string; wcag?: string }> {
+function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; risk: string; evidence: string; confidence: string; wcag?: string }> {
   if (!Array.isArray(value)) return [];
-  const result: Array<{ element: string; risk: string; confidence: string; wcag?: string }> = [];
+
+  // Evidence that is just a generic component name with no visible detail.
+  const GENERIC_EVIDENCE = /^(sidebar|buttons?|icons?|cards?|text|layout|navigation|form|chart|table|menu|header|footer|modal|overlay|inputs?)\s*$/i;
+  // Evidence that is only a hex color or palette-derivation phrase.
+  const PALETTE_EVIDENCE = /^#?[0-9a-f]{6}$/i;
+  const PALETTE_WORDS = /\b(palette|dominant color|accent color|color palette|extracted color|from (?:the )?color)\b/i;
+  // Icon-only risk where evidence mentions visible labels — the model contradicts itself.
+  const ICON_ONLY_RISK = /\bicon[\s-]*only\b/i;
+  const VISIBLE_LABEL_LANG = /\b(label|labels?|text|caption|word|named|home|cards?|settings?|transactions?|balance|account|profile|menu)\b/i;
+  // Color-only / status risk where evidence must name a concrete visible state/control.
+  const COLOR_ONLY_RISK = /\b(color[\s-]*only|sole (?:status )?differentiator|color alone|status (?:indicator|chip|dot|badge))\b/i;
+  const CONCRETE_STATE_LANG = /\b(dot|chip|badge|row|column|cell|button|indicator|status|state|paid|failed|pending|active|inactive|success|error|warning|danger|stop|go)\b/i;
+
+  const result: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag?: string }> = [];
+
   for (const item of value) {
     if (typeof item === "string" && item.trim()) {
-      // Backward compat: plain string → structured with defaults
-      result.push({ element: "—", risk: item.trim(), confidence: "inferred" });
-    } else if (item && typeof item === "object") {
-      const obj = item as Record<string, unknown>;
-      const risk = typeof obj.risk === "string" ? obj.risk.trim() : "";
-      if (!risk) continue;
-      const element = typeof obj.element === "string" ? obj.element.trim() : "—";
-      // Model can only emit "visible" or "inferred". "dom-grounded" is reserved
-      // for code-side injection and rejected from model output.
-      let confidence = typeof obj.confidence === "string" ? obj.confidence.trim().toLowerCase() : "inferred";
-      if (confidence !== "visible" && confidence !== "inferred") confidence = "inferred";
-      const wcag = typeof obj.wcag === "string" && obj.wcag.trim() ? obj.wcag.trim() : undefined;
-      result.push({ element, risk, confidence, ...(wcag ? { wcag } : {}) });
+      // Legacy plain strings from old model output can't satisfy the evidence
+      // gate — drop them rather than invent evidence. New prompts emit objects.
+      continue;
     }
+    if (!item || typeof item !== "object") continue;
+
+    const obj = item as Record<string, unknown>;
+    const risk = typeof obj.risk === "string" ? obj.risk.trim() : "";
+    const evidence = typeof obj.evidence === "string" ? obj.evidence.trim() : "";
+    if (!risk) continue;
+
+    // Gate 1: evidence must exist and be substantive
+    if (evidence.length < 8) continue;
+
+    // Gate 2: reject generic component-name-only evidence
+    if (GENERIC_EVIDENCE.test(evidence)) continue;
+
+    // Gate 3: reject palette-only evidence
+    if (PALETTE_EVIDENCE.test(evidence) || PALETTE_WORDS.test(evidence)) continue;
+
+    // Gate 4: icon-only risk contradicted by visible labels in evidence
+    if (ICON_ONLY_RISK.test(risk) && VISIBLE_LABEL_LANG.test(evidence)) continue;
+
+    // Gate 5: color-only risk must name a concrete visible state/control
+    if (COLOR_ONLY_RISK.test(risk) && !CONCRETE_STATE_LANG.test(evidence)) continue;
+
+    const element = typeof obj.element === "string" ? obj.element.trim() : "—";
+    // Model can only emit "visible" or "inferred". "dom-grounded" is reserved
+    // for code-side injection — downgrade if the model tries to emit it.
+    let confidence = typeof obj.confidence === "string" ? obj.confidence.trim().toLowerCase() : "inferred";
+    if (confidence !== "visible" && confidence !== "inferred" && confidence !== "dom-grounded") confidence = "inferred";
+    if (confidence === "dom-grounded") confidence = "inferred";
+    const wcag = typeof obj.wcag === "string" && obj.wcag.trim() ? obj.wcag.trim() : undefined;
+    result.push({ element, risk, evidence, confidence, ...(wcag ? { wcag } : {}) });
   }
-  return result;
+
+  // Gate 6: cap non-DOM risks at 2. DOM-injected risks (confidence "dom-grounded")
+  // bypass the cap since they're computed facts, not guesses. But since the
+  // sanitizer only processes model output (which can't be dom-grounded after
+  // the downgrade above), this effectively caps all risks at 2.
+  return result.slice(0, 2);
 }
 
 function hexColors(value: unknown, fallback: string[]): string[] {
@@ -1011,7 +1056,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   draftCritique: string;
   draftWhatToSteal: string[];
   draftAntiPatterns: string[];
-  draftAccessibilityRisks: Array<{ element: string; risk: string; confidence: string; wcag?: string }>;
+  draftAccessibilityRisks: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag?: string }>;
   layout?: { form: string; regions: Array<{ role: string; width?: string }> };
   businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
   voice?: { tone: string; examples: string[]; avoid: string[] };
@@ -1762,7 +1807,9 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     antiPatterns: {
       antiPatterns:       critique.draftAntiPatterns.map((t) => `[DRAFT] ${t}`),
       whereThisFails:     [],
-      accessibilityRisks: critique.draftAccessibilityRisks.map((r) => `[DRAFT] [${r.confidence}] ${r.element}: ${r.risk}${r.wcag ? ` (${r.wcag})` : ""}`),
+      // Pass structured objects directly — the evidence gate already ran in the
+      // sanitizer. No flattening to strings; the schema accepts the union type.
+      accessibilityRisks: critique.draftAccessibilityRisks,
     },
     layout:          extraction.layout,
     businessRationale: critique.businessRationale,
@@ -1802,7 +1849,7 @@ export async function generateCritique(
 ): Promise<{
   critique: string;
   whatToSteal: string[];
-  antiPatterns: { antiPatterns: string[]; whereThisFails: string[]; accessibilityRisks: string[] };
+  antiPatterns: { antiPatterns: string[]; whereThisFails: string[]; accessibilityRisks: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag?: string }> };
   businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
   voice?: { tone: string; examples: string[]; avoid: string[] };
   mood?: string;
@@ -1840,7 +1887,7 @@ export async function generateCritique(
     antiPatterns: {
       antiPatterns: critique.draftAntiPatterns.map((t) => `[DRAFT] ${t}`),
       whereThisFails: [],
-      accessibilityRisks: critique.draftAccessibilityRisks.map((r) => `[DRAFT] [${r.confidence}] ${r.element}: ${r.risk}${r.wcag ? ` (${r.wcag})` : ""}`),
+      accessibilityRisks: critique.draftAccessibilityRisks,
     },
     businessRationale: critique.businessRationale,
     voice: critique.voice,

@@ -202,7 +202,7 @@ The evaluation compares at minimum:
 - citation completeness and unsupported-claim rate;
 - cost and latency per decision.
 
-The first product increment proceeds only after this evaluation defines acceptable evidence coverage, Lean eligibility, and a cost ceiling. If the corpus grounding does not improve decision-brief quality, ship the tool as screen-observation and validation support rather than a corpus-backed comparator.
+The first product increment may proceed as screen-observation and validation support while the evaluation set and corpus enrichment run in parallel. Evaluation defines the acceptable evidence coverage, Lean eligibility, and cost ceiling required to enable corpus-backed Lean. If corpus grounding does not improve decision-brief quality, retain the brief without Lean rather than blocking the workflow.
 
 Unit tests cover schemas, screen-only scope rules, rubric-to-evidence linkage, corpus fallback/coverage labeling, accessibility-risk citation handling, cost-stage state, and MCP request/response validation.
 
@@ -214,10 +214,11 @@ Manual verification confirms that the trade-offs are explainable from the defaul
 
 Deliver in focused increments:
 
-1. Build and calibrate the held-out evaluation set; establish evidence, quality, cost, and latency baselines.
-2. Decision model, uploaded screenshots, single-screen decision brief, explainable evidence, and experiment-brief export.
-3. Three MCP tools over the shared analysis service.
-4. Evaluate a distinct multi-screen methodology before implementing flow comparison.
-5. Add Figma-link frame import after the upload workflow proves useful.
+1. Build the decision model, uploaded screenshots, single-screen decision brief, explainable evidence, and experiment-brief export. Keep Lean disabled.
+2. In parallel, build and calibrate the held-out evaluation set; establish evidence, quality, cost, and latency baselines. Grow corpus coverage through the planned retagging workflow.
+3. Enable corpus-backed Lean only when the evaluation-defined coverage and quality gates pass; otherwise retain the coverage-labeled brief.
+4. Add the three MCP tools over the shared analysis service.
+5. Evaluate a distinct multi-screen methodology before implementing flow comparison.
+6. Add Figma-link frame import after the upload workflow proves useful.
 
 Decision records are stored in a decisions.json sidecar using the existing atomic-write and rolling-snapshot durability primitives. This establishes the core decision-brief experience before external integration and expanded agent access.

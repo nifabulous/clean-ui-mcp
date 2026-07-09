@@ -74,10 +74,11 @@ describe("tagger sanitization", () => {
     expect(sanitized.draftAccessibilityRisks).toEqual([]);
   });
 
-  it("drops icon-only risks when evidence describes icons without confirming absence of labels", () => {
-    // The #1 hallucination: model sees icons in a sidebar and assumes icon-only,
-    // without confirming that no text labels are visible. Evidence must explicitly
-    // state "no labels" / "no text" / "without text" to survive.
+  it("drops ALL model-generated icon-only risks — even with confident absence claims", () => {
+    // The model hallucinated "no visible text labels" on Workable where labels
+    // were clearly visible. Policy: model-generated icon-only risks are NEVER
+    // trusted. Only DOM ground truth (unlabeledInteractive) can produce one,
+    // and that is code-injected, not model-generated.
     const sanitized = sanitizeTaggerPayload({
       draftAccessibilityRisks: [{
         element: "sidebar icon-only navigation items",
@@ -87,10 +88,11 @@ describe("tagger sanitization", () => {
         wcag: "1.1.1 Non-text Content",
       }],
     });
-    // This should survive — evidence explicitly says "no visible text labels"
-    expect(sanitized.draftAccessibilityRisks).toHaveLength(1);
+    // Even with explicit "no visible text labels" — dropped. The model's
+    // pixel-only absence claims are too easy to hallucinate.
+    expect(sanitized.draftAccessibilityRisks).toEqual([]);
 
-    // But this should be dropped — describes icons without confirming label absence
+    // Also drops weaker phrasings
     const sanitized2 = sanitizeTaggerPayload({
       draftAccessibilityRisks: [{
         element: "sidebar navigation buttons",

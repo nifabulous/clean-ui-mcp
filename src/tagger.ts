@@ -193,6 +193,7 @@ export interface TaggerOutput {
   mood?:           string;
   qualityTier:     string;
   qualityScore:    number;
+  tierChangeJustification?: string;
   addedAt:         string;
   provenance?:     { taggedBy: "human" | "auto" | "auto-reviewed"; reviewedBy?: string };
   _raw?: Record<string, unknown>;
@@ -873,8 +874,10 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
                                // Common a11y failures — ONLY include if you can cite concrete evidence:
                                // - Color-only differentiation: name the exact status indicator and what states
                                //   it shows (e.g. "8px red/green dots beside Paid and Failed rows, no text label")
-                               // - Icon-only controls: only if you can see there are NO text labels — if labels
-                               //   ARE visible, this is not a risk
+                               // - DO NOT report icon-only navigation risks. The model cannot reliably tell
+                               //   whether text labels are present beside icons — this has been the #1 false
+                               //   positive. Only DOM ground truth (unlabeledInteractive) can establish this,
+                               //   and that is handled in code, not by you.
                                // - Low contrast: only if DOM ground truth provides a contrastRatio below 4.5:1
                                // - Tiny touch targets: name the specific control and its visible size
   "businessRationale": null,   // null if isolated component crop/no product context; otherwise object below
@@ -885,7 +888,7 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
   "voiceTone": "",             // omit entirely if no notable copy is visible
   "voiceExamples": [],         // real copy visible on screen, verbatim
   "voiceAvoid": [],            // what voice this design does NOT use
-  "qualityTier": ""            // ONE from: ${QUALITY_TIERS.join(", ")}. Default to "exceptional".
+  "qualityTier": "",            // ONE from: ${QUALITY_TIERS.join(", ")}. Default to "exceptional".
                                // Use "cautionary" only when the screen's PRIMARY teaching value is
                                // failure: severe unreadability, deceptive patterns, broken task
                                // completion, or multiple compounding issues that make the design a
@@ -894,6 +897,10 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
                                // isolated flaws, dense professional UI, secondary-label contrast
                                // concerns, missing states not visible in the screenshot, or minor
                                // spacing/alignment issues. Put those caveats in draftAntiPatterns
+  "tierChangeJustification": null, // If this screen was previously tagged "cautionary" and you are
+                               // now returning "exceptional" (or vice versa), explain WHY in one
+                               // sentence. Null when keeping the same tier. This prevents silent
+                               // tier laundering during bulk retags.
                                // or draftAccessibilityRisks instead of demoting the whole entry.
 }
 
@@ -1004,20 +1011,14 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
     // Gate 3: reject palette-only evidence
     if (PALETTE_EVIDENCE.test(evidence) || PALETTE_WORDS.test(evidence)) continue;
 
-    // Gate 4: icon-only risks are the #1 hallucination. Require the evidence to
-    // EXPLICITLY state that no labels are visible — "no text labels," "no visible
-    // text," "without text." If the evidence describes icons but doesn't confirm
-    // the ABSENCE of labels, drop the risk (the model likely missed them).
-    if (ICON_ONLY_RISK.test(risk) || ICON_ONLY_RISK.test(evidence)) {
-      const ABSENT_LABEL_RE = /\bno\s+(?:visible\s+)?(?:text\s+)?labels?\b|\bwithout\s+(?:visible\s+)?text\b|\bno\s+(?:visible\s+)?text\b/i;
-      if (ABSENT_LABEL_RE.test(evidence)) {
-        // Evidence explicitly confirms labels are absent — keep this risk.
-      } else if (VISIBLE_LABEL_LANG.test(evidence)) {
-        continue; // labels ARE visible → contradiction → drop
-      } else {
-        continue; // no explicit absence confirmation → drop (model likely missed labels)
-      }
-    }
+    // Gate 4: icon-only risks are the #1 hallucination. The model CANNOT
+    // reliably tell whether text labels are present — it hallucinated "no
+    // visible text labels" on multiple entries where labels were clearly
+    // visible. Policy: drop ALL model-generated icon-only risks. Only DOM
+    // ground truth (unlabeledInteractive count from the capture pipeline)
+    // can produce an icon-only risk, and that is code-injected, not model-
+    // generated. The model's confidence in "I see no labels" is worthless.
+    if (ICON_ONLY_RISK.test(risk) || ICON_ONLY_RISK.test(evidence)) continue;
 
     // Gate 5: color-only risk must name a concrete visible state/control
     if (COLOR_ONLY_RISK.test(risk) && !CONCRETE_STATE_LANG.test(evidence)) continue;
@@ -1121,6 +1122,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
   voice?: { tone: string; examples: string[]; avoid: string[] };
   qualityTier: string;
+  tierChangeJustification?: string;
 } {
   const layoutForm = oneFromAllowed(parsed.layoutForm, LAYOUT_FORMS, "");
   const rawRegions = Array.isArray(parsed.layoutRegions) ? parsed.layoutRegions : [];
@@ -1195,6 +1197,9 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
     layout,
     voice,
     qualityTier: oneFromAllowed(parsed.qualityTier, QUALITY_TIERS, "exceptional"),
+    tierChangeJustification: typeof parsed.tierChangeJustification === "string" && parsed.tierChangeJustification.trim()
+      ? parsed.tierChangeJustification.trim()
+      : undefined,
     draftWhatToSteal: textList(parsed.draftWhatToSteal).length
       ? textList(parsed.draftWhatToSteal)
       : ["Review the screenshot and extract one concrete interface technique before saving."],
@@ -1886,6 +1891,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     mood:            critique.mood || undefined,
     qualityTier:     critique.qualityTier,
     qualityScore:    critique.qualityTier === "cautionary" ? 2 : 3,
+    tierChangeJustification: critique.tierChangeJustification,
     addedAt:         today,
     provenance:      { taggedBy: "auto" }, // two-pass tagger output; human review flips to auto-reviewed
     _raw: {

@@ -1169,8 +1169,17 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         layout: (tagged.layout ?? undefined) as CorpusEntryT["layout"],
         voice: (tagged.voice ?? undefined) as CorpusEntryT["voice"],
         businessRationale: (tagged.businessRationale ?? undefined) as CorpusEntryT["businessRationale"],
-        qualityTier: tagged.qualityTier as CorpusEntryT["qualityTier"],
-        qualityScore: tagged.qualityScore,
+        // Preserve the prior qualityTier on retag unless the model provides an
+        // explicit tierChangeJustification. Without this guard, cautionary entries
+        // keep getting laundered into "exceptional" because the prompt biases
+        // toward it. The retag refreshes content; the tier is a curatorial
+        // judgment that shouldn't flip silently.
+        qualityTier: (entry.qualityTier !== tagged.qualityTier && !tagged.tierChangeJustification)
+          ? entry.qualityTier
+          : tagged.qualityTier as CorpusEntryT["qualityTier"],
+        qualityScore: (entry.qualityTier !== tagged.qualityTier && !tagged.tierChangeJustification)
+          ? entry.qualityScore
+          : tagged.qualityScore,
       };
 
       // Strip the tagger's [DRAFT]/[DRAFT — REWRITE] editing prefixes before

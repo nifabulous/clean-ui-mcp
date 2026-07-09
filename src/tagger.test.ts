@@ -74,6 +74,34 @@ describe("tagger sanitization", () => {
     expect(sanitized.draftAccessibilityRisks).toEqual([]);
   });
 
+  it("drops icon-only risks when evidence describes icons without confirming absence of labels", () => {
+    // The #1 hallucination: model sees icons in a sidebar and assumes icon-only,
+    // without confirming that no text labels are visible. Evidence must explicitly
+    // state "no labels" / "no text" / "without text" to survive.
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [{
+        element: "sidebar icon-only navigation items",
+        risk: "All navigation items in the left sidebar are represented solely by icons with no visible text labels.",
+        evidence: "The left sidebar contains 6+ icon buttons with no visible text labels beside them; icons include a house, briefcase, chart, and gear.",
+        confidence: "visible",
+        wcag: "1.1.1 Non-text Content",
+      }],
+    });
+    // This should survive — evidence explicitly says "no visible text labels"
+    expect(sanitized.draftAccessibilityRisks).toHaveLength(1);
+
+    // But this should be dropped — describes icons without confirming label absence
+    const sanitized2 = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [{
+        element: "sidebar navigation buttons",
+        risk: "Navigation destinations are communicated by icon symbols alone.",
+        evidence: "The primary-nav region is described as a vertically stacked set of icon buttons along the left edge.",
+        confidence: "inferred",
+      }],
+    });
+    expect(sanitized2.draftAccessibilityRisks).toEqual([]);
+  });
+
   it("drops color-only risks when evidence is only a palette color", () => {
     const sanitized = sanitizeTaggerPayload({
       draftAccessibilityRisks: [{

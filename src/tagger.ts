@@ -802,9 +802,14 @@ Examples of good observations:
 - "Status indicators are 8px naked color circles with no labels — readable by hue alone at a glance"
 - "The 'FOLLOWING' button uses all-caps verb tense to make the reversible action obvious"
 - "Image thumbnails are cropped to 1:1 squares, forcing compositional discipline over landscape realism"
-- "The left nav has icon-only buttons with no labels, creating memorization burden until muscle memory develops"
 Do NOT write generic observations like "the layout is clean" or "there is a sidebar." Each item
 must name a SPECIFIC, DEFENSIBLE choice the designer made and why it works or doesn't.
+
+CRITICAL — icon-only claims: Most sidebars and nav rails have BOTH icons AND text labels.
+Before claiming "icon-only navigation" or "icon-only buttons," verify that you genuinely
+cannot see ANY text labels beside the icons. If labels ARE visible (even small ones), do
+NOT report an icon-only risk — that is a fabrication. The #1 a11y hallucination is claiming
+icon-only nav when text labels are clearly present.
 
 QUALITY BAR — bad vs good examples for each field:
 draftCritique:
@@ -967,8 +972,9 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
   // Evidence that is only a hex color or palette-derivation phrase.
   const PALETTE_EVIDENCE = /^#?[0-9a-f]{6}$/i;
   const PALETTE_WORDS = /\b(palette|dominant color|accent color|color palette|extracted color|from (?:the )?color)\b/i;
-  // Icon-only risk where evidence mentions visible labels — the model contradicts itself.
-  const ICON_ONLY_RISK = /\bicon[\s-]*only\b/i;
+  // Icon-only risk patterns — the model phrases this many ways. The #1 a11y
+  // hallucination is claiming icon-only nav when text labels are actually visible.
+  const ICON_ONLY_RISK = /\bicon[\s-]*only|icons?\s+(?:alone|symbols?\s+alone|without\s+(?:visible\s+)?(?:text\s+)?labels?)|represented\s+(?:solely\s+)?by\s+icons?\b/i;
   const VISIBLE_LABEL_LANG = /\b(label|labels?|text|caption|word|named|home|cards?|settings?|transactions?|balance|account|profile|menu)\b/i;
   // Color-only / status risk where evidence must name a concrete visible state/control.
   const COLOR_ONLY_RISK = /\b(color[\s-]*only|sole (?:status )?differentiator|color alone|status (?:indicator|chip|dot|badge))\b/i;
@@ -998,8 +1004,20 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
     // Gate 3: reject palette-only evidence
     if (PALETTE_EVIDENCE.test(evidence) || PALETTE_WORDS.test(evidence)) continue;
 
-    // Gate 4: icon-only risk contradicted by visible labels in evidence
-    if (ICON_ONLY_RISK.test(risk) && VISIBLE_LABEL_LANG.test(evidence)) continue;
+    // Gate 4: icon-only risks are the #1 hallucination. Require the evidence to
+    // EXPLICITLY state that no labels are visible — "no text labels," "no visible
+    // text," "without text." If the evidence describes icons but doesn't confirm
+    // the ABSENCE of labels, drop the risk (the model likely missed them).
+    if (ICON_ONLY_RISK.test(risk) || ICON_ONLY_RISK.test(evidence)) {
+      const ABSENT_LABEL_RE = /\bno\s+(?:visible\s+)?(?:text\s+)?labels?\b|\bwithout\s+(?:visible\s+)?text\b|\bno\s+(?:visible\s+)?text\b/i;
+      if (ABSENT_LABEL_RE.test(evidence)) {
+        // Evidence explicitly confirms labels are absent — keep this risk.
+      } else if (VISIBLE_LABEL_LANG.test(evidence)) {
+        continue; // labels ARE visible → contradiction → drop
+      } else {
+        continue; // no explicit absence confirmation → drop (model likely missed labels)
+      }
+    }
 
     // Gate 5: color-only risk must name a concrete visible state/control
     if (COLOR_ONLY_RISK.test(risk) && !CONCRETE_STATE_LANG.test(evidence)) continue;

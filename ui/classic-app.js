@@ -1411,7 +1411,7 @@ async function critiqueQueue() {
     renderBulk();
     const data = await request("/auto-critique", {
       method: "POST",
-      body: JSON.stringify({ productName: item.source.productName, extraction: item._raw.extraction }),
+      body: JSON.stringify({ productName: item.source.productName, extraction: item._raw.extraction, platform: item.platform }),
     });
     const c = data.critique;
     const next = { ...item, _status: "tagged", _error: null };

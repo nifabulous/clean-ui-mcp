@@ -24,6 +24,7 @@ let openaiConfigured = true;
 // in-batch dedup). Cleared per test by clearing the map.
 const batchHashes = new Map<string, Set<string>>();
 let lastEntryPost: any = null;
+let lastAutoCritiquePost: any = null;
 
 const schema = {
   categories: ["dashboard", "pricing"],
@@ -168,6 +169,7 @@ describe("curator app browser smoke", () => {
           patternType: "dashboard",
           categories: ["dashboard"],
           styleTags: ["minimal"],
+          platform: "mobile",
           source: { productName: "Mock", url: null, capturedAt: "2026-07-02", capturedBy: "self" },
           image: { visibility: "private", path: "images-private/draft.png", width: 1200, height: 800 },
           visual: {
@@ -204,7 +206,7 @@ describe("curator app browser smoke", () => {
         }});
       }
       if (url.pathname === "/api/auto-critique" && req.method === "POST") {
-        await readBody(req);
+        lastAutoCritiquePost = JSON.parse(await readBody(req) || "{}");
         return json(res, 200, { critique: {
           critique: "[DRAFT — REWRITE] This is a long enough draft critique to clear the schema minimum length for testing.",
           whatToSteal: ["[DRAFT] A concrete copyable technique a developer could apply directly."],
@@ -403,6 +405,7 @@ describe("bulk import", () => {
     await page.waitForSelector(".status-chip.tagged", { timeout: 5000 });
     expect(await page.locator(".status-chip.tagged").count()).toBe(1);
     expect(await page.getByRole("button", { name: /Commit ready/ }).isDisabled()).toBe(false);
+    expect(lastAutoCritiquePost.platform).toBe("mobile");
 
     // Regression: deferred-critique rows MUST commit cleanly. The critique
     // endpoint prepends [DRAFT — REWRITE]/[DRAFT] markers to every field; if the

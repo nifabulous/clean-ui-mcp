@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { getWcagTitle } from "./wcag/registry.js";
 
 /**
  * CORPUS SCHEMA
@@ -202,55 +203,65 @@ export const PatternDiscovery = z.object({
 });
 
 /**
- * Accessibility risk — a single a11y concern found on screen. Accepts two shapes:
+ * Accessibility risk — a single a11y concern found on screen. A structured
+ * object with a required `evidence` field — the gate that prevents fabricated
+ * risks. Evidence must cite visible text, name an exact screen region, or quote
+ * a DOM metric. Palette values, generic component guesses, and absent-state
+ * speculation are not valid evidence.
  *
- * 1. Legacy string (e.g. "[inferred] sidebar: contrast may be low"). Existing
- *    corpus entries stay valid without migration; they migrate to the structured
- *    shape naturally as entries are re-tagged.
- * 2. Structured object with a required `evidence` field — the gate that prevents
- *    fabricated risks. Evidence must cite visible text, name an exact screen
- *    region, or quote a DOM metric. Palette values, generic component guesses,
- *    and absent-state speculation are not valid evidence.
+ * `wcag` is a REQUIRED array of one or more canonical WCAG 2.2 success-criterion
+ * IDs (e.g. ["1.4.3"]). Only IDs that exist in the vendored WCAG 2.2 registry
+ * are accepted — this is referential integrity, not proof that a screenshot
+ * violates the criterion (the evidence gate remains the authority on that).
+ * Titles are never persisted here; they are looked up from the registry at
+ * display time via formatAccessibilityRisk.
  *
- * `confidence: "dom-grounded"` is code-owned (set by the DOM-signals injection
- * path); models may only emit "visible" or "inferred".
+ * `confidence: "dom-grounded"` is code-owned (reserved for future DOM-signals
+ * injection); models may only emit "visible" or "inferred".
+ *
+ * Historical uncited notes (legacy free-text strings from older prompts) are
+ * NOT valid here — they live in `antiPatterns.legacyAccessibilityNotes`, where
+ * they're retained for human review but excluded from MCP retrieval and
+ * semantic embeddings.
  */
-export const AccessibilityRisk = z.union([
-  z.string().min(10),
-  z.object({
-    element: z.string().min(3),
-    risk: z.string().min(10),
-    evidence: z.string().min(8),
-    confidence: z.enum(["visible", "inferred", "dom-grounded"]),
-    wcag: z.string().optional(),
-  }),
-]);
+export const AccessibilityRisk = z.object({
+  element: z.string().min(3),
+  risk: z.string().min(10),
+  evidence: z.string().min(8),
+  confidence: z.enum(["visible", "inferred", "dom-grounded"]),
+  wcag: z.array(z.string().regex(/^\d+\.\d+\.\d+$/, "canonical WCAG 2.2 ID")).min(1).max(3),
+});
 
 export type AccessibilityRiskT = z.infer<typeof AccessibilityRisk>;
 
 /**
  * Collect every free-text string from an accessibility risk (for draft-marker
- * scanning). Legacy strings return themselves; structured objects return their
- * element/risk/evidence/wcag fields (empty strings filtered).
+ * scanning). Returns the element/risk/evidence fields plus each wcag ID joined.
  */
 export function accessibilityRiskTextFields(risk: AccessibilityRiskT): string[] {
-  if (typeof risk === "string") return [risk];
-  return [risk.element, risk.risk, risk.evidence, risk.wcag ?? ""].filter(Boolean);
+  return [risk.element, risk.risk, risk.evidence, risk.wcag.join(", ")].filter(Boolean);
 }
 
 /**
  * Format an accessibility risk as a single human-readable string. Used by MCP
- * rendering and anywhere that needs the legacy flat display. Set
- * `includeEvidence` to append the evidence on a second line (UI detail views).
+ * rendering and anywhere that needs the flat display. Set `includeEvidence` to
+ * append the evidence on a second line (UI detail views). WCAG IDs are rendered
+ * with their registry titles (e.g. "1.4.3 Contrast (Minimum)"), looked up at
+ * display time so a registry refresh can fix a title without a corpus edit.
  */
 export function formatAccessibilityRisk(
   risk: AccessibilityRiskT,
   opts: { includeEvidence?: boolean } = {},
 ): string {
-  if (typeof risk === "string") return risk;
-  const wcag = risk.wcag ? ` (${risk.wcag})` : "";
+  const wcag = risk.wcag.length ? ` (${risk.wcag.map(formatWcagId).join("; ")})` : "";
   const base = `[${risk.confidence}] ${risk.element}: ${risk.risk}${wcag}`;
   return opts.includeEvidence ? `${base}\n  Evidence: ${risk.evidence}` : base;
+}
+
+/** Render a single WCAG ID with its registry title for display. */
+function formatWcagId(id: string): string {
+  const title = getWcagTitle(id);
+  return title ? `${id} ${title}` : id;
 }
 
 /**
@@ -264,7 +275,8 @@ export function formatAccessibilityRisk(
 export const AntiPatterns = z.object({
   antiPatterns: z.array(z.string().min(10)).min(1), // common mistakes this design avoids
   whereThisFails: z.array(z.string().min(10)).default([]), // contexts where copying hurts
-  accessibilityRisks: z.array(AccessibilityRisk).default([]), // specific a11y concerns — structured (with evidence) or legacy string
+  accessibilityRisks: z.array(AccessibilityRisk).default([]), // active a11y risks — each with canonical WCAG 2.2 IDs + evidence
+  legacyAccessibilityNotes: z.array(z.string().min(10)).default([]), // retained uncited historical notes — human review backlog, excluded from MCP + embeddings
 });
 
 /**
@@ -564,17 +576,19 @@ export function entryTextFields(entry: CorpusEntryT): Array<{ field: string; tex
     ...entry.antiPatterns.whereThisFails.map((t, i) => ({ field: `antiPatterns.whereThisFails[${i}]`, text: t })),
     // Structured a11y risks carry multiple text fields (element/risk/evidence/wcag).
     // Expand each with indexed field paths so draft-marker reports point at the
-    // exact sub-field that's dirty. Legacy strings map as-is.
+    // exact sub-field that's dirty.
     ...entry.antiPatterns.accessibilityRisks.flatMap((risk, i) => {
-      if (typeof risk === "string") return [{ field: `antiPatterns.accessibilityRisks[${i}]`, text: risk }];
       const fields: Array<{ field: string; text: string }> = [
         { field: `antiPatterns.accessibilityRisks[${i}].element`, text: risk.element },
         { field: `antiPatterns.accessibilityRisks[${i}].risk`, text: risk.risk },
         { field: `antiPatterns.accessibilityRisks[${i}].evidence`, text: risk.evidence },
+        { field: `antiPatterns.accessibilityRisks[${i}].wcag`, text: risk.wcag.join(", ") },
       ];
-      if (risk.wcag) fields.push({ field: `antiPatterns.accessibilityRisks[${i}].wcag`, text: risk.wcag });
       return fields;
     }),
+    ...(entry.antiPatterns.legacyAccessibilityNotes ?? []).map((note, i) => ({
+      field: `antiPatterns.legacyAccessibilityNotes[${i}]`, text: note,
+    })),
     ...(entry.businessRationale ? [
       { field: "businessRationale.targetUser", text: entry.businessRationale.targetUser },
       { field: "businessRationale.rationale", text: entry.businessRationale.rationale },

@@ -389,13 +389,25 @@ describe("corpus schema", () => {
       ...validEntry,
       antiPatterns: {
         ...validEntry.antiPatterns,
-        accessibilityRisks: ["[inferred] sidebar: possible contrast issue for small text"],
+        legacyAccessibilityNotes: ["[inferred] sidebar: possible contrast issue for small text"],
+        accessibilityRisks: [],
       },
     });
     expect(result.success).toBe(true);
   });
 
-  it("accepts structured accessibility risks with evidence", () => {
+  it("rejects legacy string accessibility risks in the active array", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      antiPatterns: {
+        ...validEntry.antiPatterns,
+        accessibilityRisks: ["[inferred] sidebar: possible contrast issue" as never],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts structured accessibility risks with canonical WCAG IDs", () => {
     const result = CorpusEntry.safeParse({
       ...validEntry,
       antiPatterns: {
@@ -405,14 +417,14 @@ describe("corpus schema", () => {
           risk: "Icon labels may be difficult to scan for low-vision users at small sizes.",
           evidence: "visible labels: Home, Cards, Transactions, Balance",
           confidence: "visible",
-          wcag: "1.4.3 Contrast (Minimum)",
+          wcag: ["1.4.3"],
         }],
       },
     });
     expect(result.success).toBe(true);
   });
 
-  it("rejects structured accessibility risks without evidence", () => {
+  it("rejects structured accessibility risks without a wcag array", () => {
     const result = CorpusEntry.safeParse({
       ...validEntry,
       antiPatterns: {
@@ -420,8 +432,25 @@ describe("corpus schema", () => {
         accessibilityRisks: [{
           element: "sidebar",
           risk: "Icon-only controls may lack accessible names for screen reader users.",
-          evidence: "",
+          evidence: "the sidebar icons have no visible text labels",
           confidence: "inferred",
+        } as never],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects structured accessibility risks with an empty wcag array", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      antiPatterns: {
+        ...validEntry.antiPatterns,
+        accessibilityRisks: [{
+          element: "sidebar",
+          risk: "Icon-only controls may lack accessible names for screen reader users.",
+          evidence: "the sidebar icons have no visible text labels",
+          confidence: "inferred",
+          wcag: [],
         }],
       },
     });
@@ -436,8 +465,9 @@ describe("corpus schema", () => {
         accessibilityRisks: [{
           element: "status row",
           risk: "[DRAFT] Color-only status may fail for color-blind users.",
-          evidence: "8px red dot next to Failed row",
+          evidence: "red dot next to Failed row",
           confidence: "visible",
+          wcag: ["1.4.1"],
         }],
       },
     });
@@ -457,14 +487,25 @@ describe("corpus schema", () => {
     }
   });
 
-  it("formats structured accessibility risks without losing evidence", () => {
+  it("formats structured accessibility risks with WCAG titles without losing evidence", () => {
     expect(formatAccessibilityRisk({
       element: "status dot",
       risk: "Color is the only visible status channel.",
       evidence: "8px red/green dots beside Paid and Failed rows",
       confidence: "visible",
-      wcag: "1.4.1 Use of Color",
+      wcag: ["1.4.1"],
     }, { includeEvidence: true })).toContain("Evidence: 8px red/green dots");
+  });
+
+  it("formats WCAG IDs with their registry titles", () => {
+    const formatted = formatAccessibilityRisk({
+      element: "status dot",
+      risk: "Color is the only visible status channel.",
+      evidence: "red/green dots beside Paid and Failed rows",
+      confidence: "visible",
+      wcag: ["1.4.1"],
+    });
+    expect(formatted).toContain("1.4.1 Use of Color");
   });
 });
 

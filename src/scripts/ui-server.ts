@@ -176,15 +176,14 @@ const DRAFT_PREFIX_RE = /\[(?:DRAFT|PLACEHOLDER|TODO)[^\]]*\]\s*/gi;
 function stripDraftPrefix(s: string): string {
   return typeof s === "string" ? s.replace(DRAFT_PREFIX_RE, "") : s;
 }
-/** Strip draft markers from a single a11y risk — handles legacy strings and structured objects. */
+/** Strip draft markers from a single a11y risk (structured object with canonical WCAG IDs). */
 function stripDraftFromRisk(risk: CorpusEntryT["antiPatterns"]["accessibilityRisks"][number]): typeof risk {
-  if (typeof risk === "string") return stripDraftPrefix(risk);
   return {
     ...risk,
     element: stripDraftPrefix(risk.element),
     risk: stripDraftPrefix(risk.risk),
     evidence: stripDraftPrefix(risk.evidence),
-    ...(risk.wcag ? { wcag: stripDraftPrefix(risk.wcag) } : {}),
+    wcag: risk.wcag,
   };
 }
 function stripDraftMarkersFromEntry(entry: CorpusEntryT): CorpusEntryT {
@@ -196,6 +195,7 @@ function stripDraftMarkersFromEntry(entry: CorpusEntryT): CorpusEntryT {
       antiPatterns: e.antiPatterns.antiPatterns.map(stripDraftPrefix),
       whereThisFails: e.antiPatterns.whereThisFails.map(stripDraftPrefix),
       accessibilityRisks: e.antiPatterns.accessibilityRisks.map(stripDraftFromRisk),
+      legacyAccessibilityNotes: e.antiPatterns.legacyAccessibilityNotes.map(stripDraftPrefix),
     };
   }
   if (e.voice) {

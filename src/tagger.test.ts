@@ -37,8 +37,8 @@ describe("tagger sanitization", () => {
   it("parses structured accessibility risks with confidence and rejects dom-grounded", () => {
     const sanitized = sanitizeTaggerPayload({
       draftAccessibilityRisks: [
-        { element: "status chips", risk: "Color-only differentiation invisible to color-blind users", evidence: "small red/green dots beside Paid and Failed rows with no text status label", confidence: "visible", wcag: "1.4.1" },
-        { element: "contrast text", risk: "Low contrast on labels", evidence: "secondary label at #999 on #fff background, computed ratio 2.8:1", confidence: "dom-grounded" },
+        { element: "status chips", risk: "Color-only differentiation invisible to color-blind users", evidence: "small red/green dots beside Paid and Failed rows with no text status label", confidence: "visible", wcag: ["1.4.1"] },
+        { element: "contrast text", risk: "Low contrast on labels", evidence: "secondary label at #999 on #fff background, computed ratio 2.8:1", confidence: "dom-grounded", wcag: ["1.4.3"] },
       ],
     });
 
@@ -46,10 +46,12 @@ describe("tagger sanitization", () => {
     expect(sanitized.draftAccessibilityRisks[0]).toEqual({
       element: "status chips", risk: "Color-only differentiation invisible to color-blind users",
       evidence: "small red/green dots beside Paid and Failed rows with no text status label",
-      confidence: "visible", wcag: "1.4.1",
+      confidence: "visible", wcag: ["1.4.1"],
     });
     // dom-grounded must be downgraded to inferred — that tag is code-only
     expect(sanitized.draftAccessibilityRisks[1].confidence).toBe("inferred");
+    // wcag is normalized to a canonical ID array
+    expect(sanitized.draftAccessibilityRisks[1].wcag).toEqual(["1.4.3"]);
   });
 
   it("drops accessibility risks without evidence", () => {
@@ -353,6 +355,7 @@ describe("tagger sanitization", () => {
       risk: `Risk ${n} with enough specific detail for validation.`,
       evidence: `top-right region ${n} with visible control and label`,
       confidence: "visible",
+      wcag: ["1.4.1"],
     }));
     const sanitized = sanitizeTaggerPayload({ draftAccessibilityRisks: risks });
     expect(sanitized.draftAccessibilityRisks).toHaveLength(2);
@@ -365,6 +368,7 @@ describe("tagger sanitization", () => {
         risk: "State is communicated by color alone.",
         evidence: "small red/green dots beside Paid and Failed rows",
         confidence: "visible",
+        wcag: ["1.4.1"],
       }],
     });
     expect(sanitized.draftAccessibilityRisks[0].evidence).toBe("small red/green dots beside Paid and Failed rows");

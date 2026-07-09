@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { extname, basename } from "node:path";
 import { toCorpusRelativePath } from "./paths.js";
 import { Component, DomainTag, detectPlatform } from "./schema.js";
+import { isWcagCriterion, extractAllWcagIds } from "./wcag/registry.js";
 import { Vibrant } from "node-vibrant/node";
 import sharp from "sharp";
 
@@ -206,7 +207,7 @@ export interface TaggerOutput {
   antiPatterns: {
     antiPatterns:       string[];
     whereThisFails:     string[];
-    accessibilityRisks: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag?: string }>;
+    accessibilityRisks: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag: string[] }>;
   };
   layout?: {
     form: string;
@@ -934,12 +935,15 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
                                //                the DOM metric that PROVES this risk exists. If you cannot point to
                                //                something concrete, do not include the risk — return [] instead.",
                                //   "confidence": "visible" | "inferred",
-                               //   "wcag": "criterion if known (e.g. '1.4.1 Use of Color')" }
+                               //   "wcag": ["1.4.1"] — REQUIRED array of 1-3 canonical WCAG 2.2 success-criterion
+                               //           IDs (bare numbers, e.g. "1.4.1", "1.4.3", "2.4.7"). No title text. If you
+                               //           cannot recall the exact criterion number, do NOT include the risk — return
+                               //           [] instead. A risk with no valid canonical ID is dropped. }
                                //
                                // EVIDENCE IS THE GATE. Risks without concrete evidence will be rejected.
                                // Palette hex values are NOT evidence. Generic component names are NOT evidence.
                                // Absent states you cannot see are NOT evidence. [] is the correct answer
-                               // when you cannot point to something specific on screen.
+                               // when you cannot point to something specific on screen or recall the WCAG ID.
                                //
                                // Common a11y failures — ONLY include if you can cite concrete evidence:
                                // - Color-only differentiation: name the exact status indicator and what states
@@ -1088,7 +1092,7 @@ function domainTagsFromAllowed(value: unknown): string[] {
  * Confidence "dom-grounded" is NEVER accepted from the model — it's downgraded
  * to "inferred". Only code (DOM-signals injection) may set "dom-grounded".
  */
-function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; risk: string; evidence: string; confidence: string; wcag?: string }> {
+function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; risk: string; evidence: string; confidence: string; wcag: string[] }> {
   if (!Array.isArray(value)) return [];
 
   // Evidence that is just a generic component name with no visible detail.
@@ -1106,7 +1110,7 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
   // prompt, not observation — reject it.
   const SELF_REFERENTIAL_EVIDENCE = /\b(component inventory|component list|extraction (?:shows|lists|describes|states)|layout region (?:is )?described|the (?:above|validated) (?:extraction|inventory))\b/i;
 
-  const result: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag?: string }> = [];
+  const result: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag: string[] }> = [];
 
   for (const item of value) {
     if (typeof item === "string" && item.trim()) {
@@ -1149,7 +1153,9 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
 
     // Gate 3d: contrast failures require computed contrast data. A screenshot
     // can suggest "this looks muted", but it cannot prove WCAG contrast failure.
-    if ((LOW_CONTRAST_RISK.test(risk) || LOW_CONTRAST_RISK.test(evidence) || /\b1\.4\.3\b/.test(String(obj.wcag ?? ""))) && !DOM_GROUND_TRUTH.test(evidence)) continue;
+    // Check raw citation (string or array) for 1.4.3 before validation normalizes it.
+    const rawCitations = extractAllWcagIds(Array.isArray(obj.wcag) ? obj.wcag.join(", ") : String(obj.wcag ?? ""));
+    if ((LOW_CONTRAST_RISK.test(risk) || LOW_CONTRAST_RISK.test(evidence) || rawCitations.includes("1.4.3")) && !DOM_GROUND_TRUTH.test(evidence)) continue;
 
     // Gate 4: unlabeled-control risks are the #1 hallucination class. The model
     // CANNOT reliably establish the absence of a text label or accessible name
@@ -1171,8 +1177,22 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
     let confidence = typeof obj.confidence === "string" ? obj.confidence.trim().toLowerCase() : "inferred";
     if (confidence !== "visible" && confidence !== "inferred" && confidence !== "dom-grounded") confidence = "inferred";
     if (confidence === "dom-grounded") confidence = "inferred";
-    const wcag = typeof obj.wcag === "string" && obj.wcag.trim() ? obj.wcag.trim() : undefined;
-    result.push({ element, risk, evidence, confidence, ...(wcag ? { wcag } : {}) });
+
+    // WCAG citation gate: every active risk must carry at least one canonical
+    // WCAG 2.2 ID. Extract IDs from whatever shape the model emitted (string,
+    // array of strings, comma-joined multi-citation), validate each against the
+    // registry, deduplicate. A risk with no valid citation is DROPPED — "no
+    // valid citation means no risk." This is referential integrity, not proof
+    // of a WCAG violation; the evidence gate above remains the authority on that.
+    const emitted = Array.isArray(obj.wcag)
+      ? obj.wcag.flatMap((w) => (typeof w === "string" ? extractAllWcagIds(w) : []))
+      : typeof obj.wcag === "string"
+        ? extractAllWcagIds(obj.wcag)
+        : [];
+    const wcag = [...new Set(emitted)].filter((id) => isWcagCriterion(id)).slice(0, 3);
+    if (wcag.length === 0) continue; // no valid canonical ID → drop the risk
+
+    result.push({ element, risk, evidence, confidence, wcag });
   }
 
   // Gate 6: cap non-DOM risks at 2. DOM-injected risks (confidence "dom-grounded")
@@ -1259,7 +1279,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   draftCritique: string;
   draftWhatToSteal: string[];
   draftAntiPatterns: string[];
-  draftAccessibilityRisks: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag?: string }>;
+  draftAccessibilityRisks: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag: string[] }>;
   layout?: { form: string; regions: Array<{ role: string; width?: string }> };
   businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
   voice?: { tone: string; examples: string[]; avoid: string[] };
@@ -2351,7 +2371,7 @@ export async function generateCritique(
 ): Promise<{
   critique: string;
   whatToSteal: string[];
-  antiPatterns: { antiPatterns: string[]; whereThisFails: string[]; accessibilityRisks: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag?: string }> };
+  antiPatterns: { antiPatterns: string[]; whereThisFails: string[]; accessibilityRisks: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag: string[] }> };
   businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
   voice?: { tone: string; examples: string[]; avoid: string[] };
   mood?: string;

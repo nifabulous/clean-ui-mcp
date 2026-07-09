@@ -228,7 +228,7 @@ for the full Zod definition — it is the single source of truth.
 |---|---|---|
 | `critique` | string (min 80) | Why this is here. DECISION + EFFECT + REJECTION structure. |
 | `whatToSteal` | string[] (min 1) | Concrete, copyable techniques with reasoning + when-NOT-to-use |
-| `antiPatterns` | object | `{ antiPatterns[], whereThisFails[], accessibilityRisks[] }`; a11y risks accept legacy strings or structured `{ element, risk, evidence, confidence, wcag? }` objects |
+| `antiPatterns` | object | `{ antiPatterns[], whereThisFails[], accessibilityRisks[], legacyAccessibilityNotes[] }`; a11y risks are structured `{ element, risk, evidence, confidence, wcag: string[] }` with required canonical WCAG 2.2 IDs; legacy uncited notes are retained but excluded from search |
 | `mood` | string? | Emotional register ("playful", "clinical", "authoritative") |
 | `voice` | object? | `{ tone, examples[], avoid[] }` — microcopy analysis |
 | `layout` | object? | Machine-readable wireframe: `{ form, regions: [{role, width}] }` |
@@ -626,9 +626,34 @@ npm run migrate              # v1 → v2: patternType + antiPatterns
 npm run migrate-layout       # layout field for dashboards
 npm run migrate-untitled     # product name canonicalization
 npm run migrate-platform     # platform from screenshot dimensions
+npm run migrate-wcag-ids     # accessibility risks → canonical WCAG 2.2 IDs
 ```
 
 All idempotent — safe to re-run.
+
+### `migrate-wcag-ids` — canonical WCAG citations
+
+Migrates accessibility risks to require canonical WCAG 2.2 success-criterion IDs
+(`wcag: ["1.4.3"]`). Three transformations:
+
+1. **Normalize** — title-bearing citations (`"1.4.3 Contrast (Minimum)"`) are
+   parsed to bare IDs (`["1.4.3"]`), validated against the vendored WCAG 2.2
+   registry, and deduplicated.
+2. **Delete** — uncited structured objects that are self-described non-risks
+   (their own evidence confirms no risk) are removed, not assigned a citation.
+3. **Quarantine** — legacy free-text strings move to
+   `antiPatterns.legacyAccessibilityNotes`, a retained human-review backlog that
+   is excluded from MCP retrieval and semantic embeddings.
+
+The WCAG 2.2 registry is vendored at `src/wcag/wcag-2.2.ts` (pinned from the W3C
+machine-readable export). Titles are never persisted on risks — they are looked
+up at display time via `formatAccessibilityRisk`, so a registry refresh can fix a
+title without a corpus edit. Note: 4.1.1 Parsing was removed in WCAG 2.2 and is
+not citable.
+
+Referential integrity only: a valid citation proves the referenced criterion
+*exists* in WCAG 2.2, not that a screenshot violates it. The evidence, contrast,
+and pixel-measurement gates remain the authority on whether a risk is real.
 
 ---
 
@@ -660,6 +685,9 @@ clean-ui-mcp/
 │   ├── tagger.ts               # two-pass vision tagger (5 providers)
 │   ├── ssrf.ts                 # SSRF guard
 │   ├── paths.ts                # corpus-path validation
+│   ├── wcag/                   # vendored WCAG 2.2 registry + helpers
+│   │   ├── wcag-2.2.ts         # pinned W3C snapshot (86 active criteria)
+│   │   └── registry.ts         # isWcagCriterion, getWcagTitle, ID parsing
 │   └── scripts/
 │       ├── ui-server.ts        # curator dashboard server
 │       ├── capture.ts          # Playwright capture (single + batch)
@@ -716,14 +744,16 @@ clean-ui-mcp/
 | `npm run restore-corpus` | Snapshot recovery |
 | `npm run clean-orphans` | Delete unreferenced images |
 | `npm run migrate` | Schema migrations (all idempotent) |
+| `npm run migrate-wcag-ids` | Accessibility risks → canonical WCAG 2.2 IDs |
 
 ---
 
 ## Testing
 
-251 tests across 16 files: vitest unit tests (schema, corpus, tagger,
-embeddings, dedup, design-prompt, recommend, aggregations) + Playwright browser
-tests (dashboard flows, bulk import, capture, candidate review).
+317 tests across 19 files: vitest unit tests (schema, corpus, tagger, tagger
+contract, WCAG registry, embeddings, dedup, design-prompt, recommend,
+aggregations) + Playwright browser tests (dashboard flows, bulk import, capture,
+candidate review).
 
 ```bash
 npm test                 # all tests

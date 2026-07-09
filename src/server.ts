@@ -391,7 +391,7 @@ server.registerTool(
     const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
     const firstSentence = (s: string) => cell(s.split(/[.!?]/)[0] || s);
     const top = (arr: string[]) => cell(arr[0] ?? "—");
-    // A11y risks are a string|object union — format to strings before the table cell.
+    // A11y risks are structured objects with canonical WCAG IDs — format to a string cell.
     const topRisk = (risks: AccessibilityRiskT[]) =>
       cell(risks.length ? formatAccessibilityRisk(risks[0]) : "—");
     const header = `| Field | ${found.map((e) => cell(cleanTitle(e.title, e.source.productName))).join(" | ")} |`;

@@ -46,7 +46,11 @@ interface Entry {
   reviewStatus?: string;
   provenance?: { taggedBy?: string; reviewedBy?: string; capture?: { mode?: string; viewport?: string } };
   source?: { productName?: string; lastVerified?: string; capturedAt?: string };
-  antiPatterns?: { antiPatterns?: string[] };
+  antiPatterns?: {
+    antiPatterns?: string[];
+    accessibilityRisks?: Array<{ wcag?: string[] }>;
+    legacyAccessibilityNotes?: string[];
+  };
   image?: { visibility?: string; path?: string | null; width?: number | null; height?: number | null };
   voice?: { tone?: string };
   layout?: { form?: string };
@@ -137,6 +141,19 @@ for (const e of entries) {
   }
 }
 
+// ── accessibility risk distribution (active cited risks vs legacy backlog) ───
+let activeRisks = 0;
+let legacyBacklog = 0;
+const wcagFrequency = new Map<string, number>();
+for (const e of entries) {
+  for (const _r of e.antiPatterns?.accessibilityRisks ?? []) {
+    activeRisks++;
+    for (const id of _r.wcag ?? []) wcagFrequency.set(id, (wcagFrequency.get(id) ?? 0) + 1);
+  }
+  legacyBacklog += e.antiPatterns?.legacyAccessibilityNotes?.length ?? 0;
+}
+const topWcag = [...wcagFrequency.entries()].sort((a, b) => b[1] - a[1]);
+
 // ── index coverage (drift detection: missing + stale vectors) ────────────────
 const index = indexStatus();
 
@@ -200,6 +217,7 @@ const report = {
   coverageGaps: { patternType: patternTypeGaps, categories: categoryGaps, styleTags: styleTagGaps, components: componentGaps, domainTags: domainTagGaps },
   staleness: { cutoffMonths: staleMonths, staleCount: staleEntries.length, staleEntries },
   antiPatternQuality: { flaggedCount: antiPatternIssues.length, flagged: antiPatternIssues },
+  accessibilityRisks: { activeCited: activeRisks, legacyBacklog, topCriteria: topWcag },
   indexCoverage: { indexed: index.indexed, total: index.total, hasIndex: index.hasIndex, missing: index.missing, stale: index.stale, contentStale: index.contentStale },
   imageReferences: {
     referencedCount: referencedPaths.size,
@@ -275,6 +293,14 @@ if (asJson) {
   hr();
   console.log(`\n🚩 Anti-pattern lint — ${antiPatternIssues.length} flagged`);
   antiPatternIssues.slice(0, 15).forEach((f) => { console.log(`  [${f.id}] "${f.text}"`); f.issues.forEach((i) => console.log(`      → ${i}`)); });
+  hr();
+
+  // Accessibility risk distribution — active cited risks vs legacy backlog.
+  console.log(`\n♿ Accessibility risks — ${activeRisks} active (cited), ${legacyBacklog} legacy (review backlog)`);
+  if (topWcag.length) {
+    console.log("  Top WCAG criteria:");
+    topWcag.slice(0, 8).forEach(([id, n]) => console.log(`    ${id}: ${n}`));
+  }
   hr();
   // Index coverage — drift detection (missing, stale, content-stale).
   console.log(`\n🔍 Index coverage`);

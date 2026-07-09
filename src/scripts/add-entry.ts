@@ -264,7 +264,10 @@ console.log("  This is the differentiator. Be specific.");
 const antiPatterns = await askList("Mistakes avoided (the core anti-pattern field):");
 console.log("\n[ Where copying this fails / accessibility risks (optional) ]");
 const whereThisFails = await askList("Contexts where copying hurts (empty to skip):");
-const accessibilityRisks = await askList("Accessibility risks (empty to skip):");
+// Accessibility risks require structured objects with canonical WCAG IDs — the
+// interactive wizard can't collect those reliably, so the auto-tagger is the
+// path that populates them. Legacy notes go through the migration script.
+await askList("Accessibility risks (handled by Auto-fill — press enter to skip):");
 
 console.log("\n[ Image ]");
 const hasImage = imagePath && existsSync(resolve(imagePath));
@@ -370,7 +373,8 @@ const newEntry: CorpusEntryT = {
   antiPatterns: {
     antiPatterns: antiPatterns.length ? antiPatterns : ["[PLACEHOLDER — fill this in]"],
     whereThisFails,
-    accessibilityRisks,
+    accessibilityRisks: [],
+    legacyAccessibilityNotes: [],
   },
   qualityTier: "exceptional",
   qualityScore,

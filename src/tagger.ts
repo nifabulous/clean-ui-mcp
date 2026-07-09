@@ -96,6 +96,10 @@ const UNLABELED_CONTROL_RISK = new RegExp(
   "i",
 );
 const LOW_CONTRAST_RISK = /\b(?:low|poor|insufficient|fail(?:s|ing)?|below|under|not enough|too little)\b.{0,60}\bcontrast\b|\bcontrast\b.{0,60}\b(?:low|poor|insufficient|fail(?:s|ing)?|below|under|ratio|threshold|4\.5)\b/i;
+// A risk list must only contain confirmed failures. Models occasionally emit a
+// useful observation followed by "likely accessible" / "no risk confirmed";
+// that commentary belongs in critique prose, never in accessibilityRisks.
+const NON_RISK_ASSERTION = /\b(?:no (?:accessibility )?risk (?:is )?(?:confirmed|identified)|likely accessible|text (?:label|labels?|content)?\s*(?:provides?|conveys?)\s+redundant (?:information|state)|(?:is|are)\s+(?:fully\s+)?accessible)\b/i;
 
 // ─── banned phrases — enforced in-prompt AND as a post-hoc code-level gate ───
 
@@ -706,8 +710,16 @@ function buildExtractionPrompt(
   productName: string,
   url: string | null | undefined,
   quantizedColors: string[],
+  platform: string,
   domSignals?: TaggerInput["domSignals"],
 ): string {
+  // Platform instruction — the model can't reliably infer "this is a phone"
+  // from pixels alone, and hallucinates desktop side rails on portrait mobile.
+  const platformInstruction = platform === "mobile"
+    ? `DETECTED PLATFORM: mobile (portrait phone). Do NOT propose desktop-only components like sidebar-nav — a phone screen cannot contain a side rail. Use bottom-nav for the bottom tab bar, action-list for stacked action/funding-option rows, and tab-nav for segmented tabs. Only include components that have a visible instance on screen.`
+    : platform === "web"
+      ? `DETECTED PLATFORM: web (landscape/desktop). Do NOT propose mobile-only components like bottom-nav.`
+      : ""; // tablet — ambiguous, let the model decide
   // When no product name was supplied, ask the model to read it off the page
   // (wordmark/logo/branding are almost always visible). Empty name must NOT
   // block import — the upload already happened; gating on a manual field wastes
@@ -735,6 +747,10 @@ function buildExtractionPrompt(
 Return a JSON object with exactly these fields.
 This is an EXTRACTION pass — factual/structural fields only, no critique yet.
 
+A supplied product name is a provenance label, not visual evidence; URLs can be generic, stale, or
+misleading too. The screenshot always wins. Do not infer a typical product shell, page type, or component
+from the product name, industry, filename, or URL when it is not visibly present.
+${platformInstruction ? `\n${platformInstruction}\n` : ""}
 VERIFIED GROUND TRUTH — treat every value below as fact, do not re-derive or contradict it:
 ${JSON.stringify({ quantizedColors }, null, 2)}
 ${domSignalsBlock}
@@ -783,7 +799,8 @@ Rules:
 - If any enum field's correct value isn't listed, choose the closest listed value — never invent.
 - Components are visible evidence, not product intent. Include chart/card/list/navigation controls
   actually present in the screenshot. Prefer specific tags (donut-chart, line-chart, kpi-card)
-  over generic chart/card terms when the specific component is visible.
+  over generic chart/card terms when the specific component is visible. Do not add a component just
+  because it is common for that product type; every component must have a visible instance on screen.
 - domainTags describes the page's business purpose, not its visual pattern — a billing page is
   still categories:["settings","dashboard"] AND domainTags:["billing","usage"]. Don't let one
   replace the other. Leave [] if no clear business-domain signal is visible.
@@ -1006,6 +1023,42 @@ function componentsFromAllowed(value: unknown): string[] {
   return [...new Set(normalized)].slice(0, 10);
 }
 
+// ─── platform normalization ──────────────────────────────────────────────────
+// Components that imply a desktop side rail — physically impossible on a
+// portrait phone screenshot. Removed from mobile extraction output.
+const DESKTOP_ONLY_COMPONENTS: ReadonlySet<string> = new Set(["sidebar-nav"]);
+// Components that only appear on mobile UIs — removed from web screenshots so
+// the model can't retroactively add a bottom-nav to a desktop page.
+const MOBILE_ONLY_COMPONENTS: ReadonlySet<string> = new Set(["bottom-nav"]);
+// Layout region roles that imply a desktop nav rail. Stripped from mobile.
+const DESKTOP_NAV_ROLES: ReadonlySet<string> = new Set(["primary-nav", "icon-nav"]);
+
+/**
+ * Normalize extraction facts by detected platform. Mobile screenshots lose
+ * desktop side-rail components/layout; web screenshots lose mobile-only
+ * components. Tablet (ambiguous aspect ratio) is left unchanged.
+ *
+ * Returns a NEW extraction object; the original `_raw.extraction` is preserved
+ * unmodified for auditability.
+ */
+export function normalizeExtractionByPlatform(
+  extraction: { components?: string[]; layout?: { form: string; regions: Array<{ role: string; width?: string }> } },
+  platform: string,
+): { components: string[]; layout: { form: string; regions: Array<{ role: string; width?: string }> } | undefined } {
+  const components = extraction.components ?? [];
+  const filteredComponents = components.filter((c) => {
+    if (platform === "mobile" && DESKTOP_ONLY_COMPONENTS.has(c)) return false;
+    if (platform === "web" && MOBILE_ONLY_COMPONENTS.has(c)) return false;
+    return true;
+  });
+  let layout = extraction.layout;
+  if (platform === "mobile" && layout) {
+    const filteredRegions = layout.regions.filter((r) => !DESKTOP_NAV_ROLES.has(r.role));
+    layout = filteredRegions.length ? { ...layout, regions: filteredRegions } : undefined;
+  }
+  return { components: filteredComponents, layout };
+}
+
 function domainTagsFromAllowed(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const allowed = DOMAIN_TAGS as readonly string[];
@@ -1067,6 +1120,11 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
     const risk = typeof obj.risk === "string" ? obj.risk.trim() : "";
     const evidence = typeof obj.evidence === "string" ? obj.evidence.trim() : "";
     if (!risk) continue;
+
+    // A model sometimes appends a non-finding such as "likely accessible" to
+    // the risk array. Keep the observation out of this machine-queryable list
+    // rather than presenting it to curators as an issue to resolve.
+    if (NON_RISK_ASSERTION.test(`${risk}\n${evidence}`)) continue;
 
     // Gate 1: evidence must exist and be substantive
     if (evidence.length < 8) continue;
@@ -1376,6 +1434,61 @@ export function validateNoIconOnlyClaims(parsed: Record<string, unknown>): strin
   return errors;
 }
 
+// Pass 2 does not see the image. It may reason from Pass 1's facts, but it
+// must not grow a new product shell around them. We only guard components that
+// make a concrete claim about the current screen; anti-patterns can still name
+// alternatives the screen deliberately avoids.
+const COMPONENT_CLAIM_RULES: Array<{ label: string; pattern: RegExp; components: readonly string[] }> = [
+  { label: "sidebar", pattern: /\b(?:sidebar|side rail)\b/i, components: ["sidebar-nav"] },
+  { label: "top navigation", pattern: /\b(?:top nav(?:igation)?|header bar)\b/i, components: ["top-nav"] },
+  { label: "tab bar", pattern: /\b(?:tab bar|tabs?)\b/i, components: ["tab-nav"] },
+  { label: "line chart", pattern: /\bline chart\b/i, components: ["line-chart"] },
+  { label: "bar chart", pattern: /\bbar chart\b/i, components: ["bar-chart"] },
+  { label: "area chart", pattern: /\barea chart\b/i, components: ["area-chart"] },
+  { label: "circular chart", pattern: /\b(?:circular progress|radial progress|donut chart|pie chart|gauge chart)\b/i, components: ["donut-chart", "pie-chart", "gauge-chart"] },
+  { label: "summary card", pattern: /\bsummary cards?\b/i, components: ["summary-card"] },
+  { label: "KPI card", pattern: /\b(?:kpi|metric) cards?\b/i, components: ["kpi-card", "metric-grid", "stat-card"] },
+  { label: "search command", pattern: /\b(?:command[- ]bar|command search|search command)\b/i, components: ["search-command", "command-palette"] },
+];
+const COMPONENT_ALTERNATIVE_CLAUSE = /\b(?:instead of|rather than|avoids?|rejects?|unlike|without|does(?: not|n't) use|could have|would have|might have)\b/i;
+
+function unsupportedComponentClaimReason(sentence: string, components: readonly string[]): string | null {
+  const observed = new Set(components);
+  for (const rule of COMPONENT_CLAIM_RULES) {
+    if (
+      rule.pattern.test(sentence)
+      && !COMPONENT_ALTERNATIVE_CLAUSE.test(sentence)
+      && !rule.components.some((component) => observed.has(component))
+    ) {
+      return `mentions ${rule.label}, but extraction did not observe ${rule.components.join(" or ")}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Reject concrete component claims in critique/technique prose unless Pass 1
+ * observed the corresponding component. This is a consistency gate, not image
+ * verification: it prevents Pass 2 from inventing a sidebar, tab bar, or chart
+ * that the extraction never supplied.
+ */
+export function validateCritiqueComponentClaims(parsed: Record<string, unknown>, components: readonly string[]): string[] {
+  const hits: Array<{ field: string; sentence: string; reason: string }> = [];
+  for (const field of COMPONENT_GROUNDED_PROSE_FIELDS) {
+    const value = collectProseValue(parsed, field);
+    for (const sentence of splitSentences(value)) {
+      const reason = unsupportedComponentClaimReason(sentence, components);
+      if (reason) hits.push({ field, sentence, reason });
+    }
+  }
+  if (!hits.length) return [];
+  return [
+    `Unsupported component claims found: critique may only describe components present in the validated extraction. ` +
+    `Found ${hits.length} unsupported assertion(s):\n` +
+    hits.map((hit) => `  [${hit.field}] ${hit.reason}: "${hit.sentence.trim().slice(0, 140)}"`).join("\n"),
+  ];
+}
+
 /** Prose fields scanned by the icon-only gate + scrubber. */
 const PROSE_FIELDS = [
   "draftCritique",
@@ -1385,6 +1498,13 @@ const PROSE_FIELDS = [
   "draftAntiPatterns",
   "voiceExamples",
   "voiceAvoid",
+  "businessRationale.rationale",
+] as const;
+
+/** Fields that must describe the actual current screen, not an alternative. */
+const COMPONENT_GROUNDED_PROSE_FIELDS = [
+  "draftCritique",
+  "draftWhatToSteal",
   "businessRationale.rationale",
 ] as const;
 
@@ -1465,6 +1585,40 @@ export function scrubProseIconOnly(critique: {
   }
   if (critique.draftAntiPatterns.length === 0) {
     critique.draftAntiPatterns = ["[DRAFT] Review the screenshot and name one common UI mistake this design avoids."];
+  }
+}
+
+/**
+ * Safety net for the component-consistency retry. Deliberately leaves
+ * anti-patterns untouched because they are allowed to describe absent,
+ * conventional alternatives (for example, "avoid a tab bar here").
+ */
+function scrubUnsupportedComponentClaims(critique: {
+  draftCritique: string;
+  draftWhatToSteal: string[];
+  draftAntiPatterns: string[];
+  typographyNotes: string;
+  businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
+  voice?: { tone: string; examples: string[]; avoid: string[] };
+}, components: readonly string[]): void {
+  const filterSentences = (value: string): string => splitSentences(value)
+    .filter((sentence) => unsupportedComponentClaimReason(sentence, components) === null)
+    .join(" ");
+
+  critique.draftCritique = filterSentences(critique.draftCritique);
+  critique.draftWhatToSteal = critique.draftWhatToSteal
+    .map((value) => filterSentences(value).trim())
+    .filter((value) => value.length > 0);
+  if (critique.businessRationale?.rationale) {
+    critique.businessRationale.rationale = filterSentences(critique.businessRationale.rationale);
+  }
+  if (critique.draftWhatToSteal.length === 0) {
+    critique.draftWhatToSteal = ["Review the screenshot and extract one concrete interface technique before saving."];
+  }
+  // CorpusEntry requires a substantive critique. A scrubbed draft must remain
+  // visibly review-only instead of becoming an invalid empty entry.
+  if (critique.draftCritique.length < 80) {
+    critique.draftCritique = "This critique contained unsupported component claims and needs a human rewrite based on the screenshot.";
   }
 }
 
@@ -1862,7 +2016,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
 
   let extractionRawText = await callModel(
     "extraction",
-    buildExtractionPrompt(input.productName, input.url, quantizedColors, input.domSignals),
+    buildExtractionPrompt(input.productName, input.url, quantizedColors, platform, input.domSignals),
     input.imagePath,
     undefined,
     requestedDetail,
@@ -1886,7 +2040,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     if (weak) {
       extractionRawText = await callModel(
         "extraction",
-        buildExtractionPrompt(input.productName, input.url, quantizedColors, input.domSignals),
+        buildExtractionPrompt(input.productName, input.url, quantizedColors, platform, input.domSignals),
         input.imagePath,
         undefined,
         "high",
@@ -1918,7 +2072,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       if (DEBUG_TAGGER) console.error("[tagger] weak extraction at MINIMAL — re-running at thinkingLevel HIGH");
       extractionRawText = await callModel(
         "extraction",
-        buildExtractionPrompt(input.productName, input.url, quantizedColors, input.domSignals),
+        buildExtractionPrompt(input.productName, input.url, quantizedColors, platform, input.domSignals),
         input.imagePath,
         undefined,
         requestedDetail === "low" ? "high" : requestedDetail,
@@ -1947,6 +2101,21 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     const firstFamily = input.domSignals.styles.fontFamily.split(",")[0].trim().replace(/['"]/g, "");
     if (firstFamily) extraction.bodyFont = firstFamily;
   }
+
+  // Platform normalization: strip desktop-only components/layout from mobile
+  // screenshots and vice versa. This runs AFTER sanitization so the enum
+  // filter already removed unknown values. `_raw.extraction` (the raw model
+  // response) is preserved unmodified below for auditability.
+  const normalized = normalizeExtractionByPlatform(extraction, platform);
+  extraction.components = normalized.components;
+  extraction.layout = normalized.layout;
+
+  // Build the platform-scoped critique context: the normalized extraction with
+  // palette fields stripped (so the critique model can't infer color risks).
+  // Using the normalized (not raw) extraction here means Pass 2 never sees the
+  // desktop sidebar that was stripped from a mobile screenshot — preventing it
+  // from re-inventing it in critique prose.
+  const critiqueExtraction = critiqueSafeExtraction(extraction);
 
   // ── Resolve the effective product name ───────────────────────────────────
   // If the caller supplied one, use it verbatim. Otherwise take the name the
@@ -2044,7 +2213,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   // by re-looking at pixels. This is the spec's core architecture choice.
   let critiqueRawText = await callModel(
     "critique",
-    buildCritiquePrompt(effectiveName, critiqueSafeExtraction(extractionParsed), input.domSignals),
+    buildCritiquePrompt(effectiveName, critiqueExtraction, input.domSignals),
     null, // no image — pure reasoning from facts
     undefined,
     "high",
@@ -2060,18 +2229,20 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   }
   let critique = sanitizeTaggerPayload(critiqueParsed);
 
-  // ── Combined prose gate: banned phrases + icon-only assertions ─────────────
-  // Both are #1-class hallucination vectors. Retry once with explicit feedback,
-  // then scrub surviving icon-only assertions as a safety net (the retry may
-  // fail, the model may persist the claim, or the retry may not parse).
+  // ── Combined critique gates ────────────────────────────────────────────────
+  // Retry once with explicit feedback, then scrub surviving unsupported prose
+  // as a safety net (the retry may fail, the model may persist the claim, or it
+  // may not parse). Component consistency keeps Pass 2 from inventing structure
+  // that Pass 1 did not observe.
   const bannedErrors = validateNoBannedPhrases(critiqueParsed);
   const iconOnlyErrors = validateNoIconOnlyClaims(critiqueParsed);
-  const gateErrors = [...bannedErrors, ...iconOnlyErrors];
+  const componentErrors = validateCritiqueComponentClaims(critiqueParsed, extraction.components);
+  const gateErrors = [...bannedErrors, ...iconOnlyErrors, ...componentErrors];
   if (gateErrors.length > 0) {
     const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${gateErrors.join("\n")}`;
     const retryText = await callModel(
       "critique",
-      buildCritiquePrompt(effectiveName, critiqueSafeExtraction(extractionParsed), input.domSignals),
+      buildCritiquePrompt(effectiveName, critiqueExtraction, input.domSignals),
       null,
       feedback,
       "high",
@@ -2086,11 +2257,10 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     }
   }
 
-  // Safety net: strip any icon-only ASSERTION sentences that survived the retry.
-  // Preserves contrast/rejection sentences ("avoids going icon-only"). Runs on
-  // the sanitized critique object so it catches both the retry result and the
-  // original (when the retry failed or the model persisted the claim).
+  // Safety nets run on the sanitized critique object so they cover both a retry
+  // result and the original (when the retry failed or persisted a bad claim).
   scrubProseIconOnly(critique);
+  scrubUnsupportedComponentClaims(critique, extraction.components);
 
   // ── Merge passes into TaggerOutput ─────────────────────────────────────────
   return {
@@ -2177,6 +2347,7 @@ export async function generateCritique(
   extractionParsed: Record<string, unknown>,
   critiqueProvider?: Provider,
   domSignals?: TaggerInput["domSignals"],
+  platform?: "web" | "mobile" | "tablet",
 ): Promise<{
   critique: string;
   whatToSteal: string[];
@@ -2191,9 +2362,19 @@ export async function generateCritique(
   if (!hasCritiqueKey()) throw new Error("No provider key set. Critique needs at least one of OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or MISTRAL_API_KEY in .env.");
   const stripFences = (s: string) => s.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
 
+  // Normalize extraction by platform (same as the immediate tagImage path) so
+  // deferred critique doesn't re-introduce desktop sidebar claims on mobile.
+  const extraction = sanitizeTaggerPayload(extractionParsed);
+  if (platform) {
+    const normalized = normalizeExtractionByPlatform(extraction, platform);
+    extraction.components = normalized.components;
+    extraction.layout = normalized.layout;
+  }
+  const critiqueExtraction = critiqueSafeExtraction(extraction);
+
   let critiqueRawText = await callModel(
     "critique",
-    buildCritiquePrompt(productName, critiqueSafeExtraction(extractionParsed), domSignals),
+    buildCritiquePrompt(productName, critiqueExtraction, domSignals),
     null,
     undefined,
     "high",
@@ -2206,11 +2387,16 @@ export async function generateCritique(
   let critique = sanitizeTaggerPayload(critiqueParsed);
 
   const bannedErrors = validateNoBannedPhrases(critiqueParsed);
-  if (bannedErrors.length > 0) {
-    const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${bannedErrors.join("\n")}`;
-    const retryText = await callModel("critique", buildCritiquePrompt(productName, extractionParsed, domSignals), null, feedback, "high", undefined, critiqueProvider);
+  const iconOnlyErrors = validateNoIconOnlyClaims(critiqueParsed);
+  const componentErrors = validateCritiqueComponentClaims(critiqueParsed, extraction.components);
+  const gateErrors = [...bannedErrors, ...iconOnlyErrors, ...componentErrors];
+  if (gateErrors.length > 0) {
+    const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${gateErrors.join("\n")}`;
+    const retryText = await callModel("critique", buildCritiquePrompt(productName, critiqueExtraction, domSignals), null, feedback, "high", undefined, critiqueProvider);
     try { critiqueParsed = JSON.parse(stripFences(retryText)); critique = sanitizeTaggerPayload(critiqueParsed); } catch { /* keep flagged original */ }
   }
+  scrubProseIconOnly(critique);
+  scrubUnsupportedComponentClaims(critique, extraction.components);
 
   return {
     critique: `[DRAFT — REWRITE] ${critique.draftCritique}`,

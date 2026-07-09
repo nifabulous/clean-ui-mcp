@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sanitizeTaggerPayload, tagImage, extractQuantizedColors, hasVisionKey, activeModelName, validateNoIconOnlyClaims, scrubProseIconOnly } from "./tagger.js";
+import { sanitizeTaggerPayload, tagImage, generateCritique, extractQuantizedColors, hasVisionKey, activeModelName, validateNoIconOnlyClaims, validateCritiqueComponentClaims, scrubProseIconOnly } from "./tagger.js";
 import { PRIVATE_IMAGE_DIR } from "./paths.js";
 
 describe("tagger sanitization", () => {
@@ -274,6 +274,14 @@ describe("tagger sanitization", () => {
     });
   });
 
+  it("allows critique to name an absent component only as a rejected alternative", () => {
+    const errors = validateCritiqueComponentClaims({
+      draftCritique: "The single-column form avoids a tab bar, keeping each funding method in one continuous scan path.",
+    }, ["form-controls"]);
+
+    expect(errors).toEqual([]);
+  });
+
   it("drops color-only risks when evidence is only a palette color", () => {
     const sanitized = sanitizeTaggerPayload({
       draftAccessibilityRisks: [{
@@ -284,6 +292,22 @@ describe("tagger sanitization", () => {
         wcag: "1.4.1 Use of Color",
       }],
     });
+    expect(sanitized.draftAccessibilityRisks).toEqual([]);
+  });
+
+  it("drops accessibility entries that explicitly say no risk is confirmed", () => {
+    // A risk list must contain failures, not a model's commentary that an
+    // observed pattern is probably accessible. This was emitted for Workable's
+    // timeline dots even though the text labels made the state redundant.
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [{
+        element: "timeline status dots",
+        risk: "Color is used to differentiate status but is accompanied by a text label; this is likely accessible.",
+        evidence: "Each event has a colored dot and a text label like 'Scheduled'; the text provides redundant information, so no risk is confirmed.",
+        confidence: "inferred",
+      }],
+    });
+
     expect(sanitized.draftAccessibilityRisks).toEqual([]);
   });
 
@@ -1031,5 +1055,221 @@ describe("tagImage two-pass request shape", () => {
     expect(prompts[0]).toContain("transactions");
     expect(prompts[0]).toContain("money movement");
     expect(prompts[0]).toContain("do not classify it as navigation");
+    expect(prompts[0]).toContain("provenance label, not visual evidence");
+    expect(prompts[0]).toContain('"components": [],        // 3-10 visible UI building blocks');
+  });
+
+  it("keeps mobile-native components and removes desktop sidebars from portrait screenshots", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      const response = JSON.stringify({
+        patternType: "forms",
+        categories: ["forms", "mobile-nav"],
+        styleTags: ["minimal"],
+        components: ["sidebar-nav", "bottom-nav", "action-list", "icon-button", "card-list"],
+        dominantColors: ["#ffffff", "#111111"],
+        accentColor: null,
+        spacingDensity: "moderate",
+        cornerStyle: "slight-round",
+        usesShadows: false,
+        usesBorders: true,
+        layoutForm: "single-column",
+        layoutRegions: [
+          { role: "primary-nav", width: "fixed-narrow" },
+          { role: "main-canvas", width: "flex" },
+        ],
+      });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const entry = await tagImage({
+      imagePath: join(PRIVATE_IMAGE_DIR, "cash-app-ios-nov-2025-26.png"),
+      productName: "Money",
+      url: null,
+      extractionOnly: true,
+    });
+
+    expect(entry.platform).toBe("mobile");
+    expect(entry.components).toEqual(["bottom-nav", "action-list", "icon-button", "card-list"]);
+    expect(entry.layout?.regions).not.toContainEqual({ role: "primary-nav", width: "fixed-narrow" });
+  });
+
+  it("removes mobile-only bottom-nav from web screenshots and retains desktop navigation", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      const response = JSON.stringify({
+        patternType: "dashboard",
+        categories: ["dashboard"],
+        styleTags: ["minimal"],
+        components: ["sidebar-nav", "bottom-nav", "kpi-card", "data-table"],
+        dominantColors: ["#ffffff", "#111111"],
+        accentColor: null,
+        spacingDensity: "moderate",
+        cornerStyle: "slight-round",
+        usesShadows: false,
+        usesBorders: true,
+        layoutForm: "two-column",
+        layoutRegions: [
+          { role: "primary-nav", width: "fixed-narrow" },
+          { role: "main-canvas", width: "flex" },
+        ],
+      });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    // sample-5.png is a landscape desktop screenshot → platform "web"
+    const entry = await tagImage({
+      imagePath: join(PRIVATE_IMAGE_DIR, "sample-5.png"),
+      productName: "Origin",
+      url: null,
+      extractionOnly: true,
+    });
+
+    expect(entry.platform).toBe("web");
+    // bottom-nav removed, sidebar-nav kept (desktop side rail is valid on web)
+    expect(entry.components).toEqual(["sidebar-nav", "kpi-card", "data-table"]);
+    // layout regions preserved (primary-nav is valid on web)
+    expect(entry.layout?.regions).toContainEqual({ role: "primary-nav", width: "fixed-narrow" });
+  });
+
+  it("does not filter components or layout on tablet (ambiguous aspect ratio)", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      const response = JSON.stringify({
+        patternType: "dashboard",
+        categories: ["dashboard"],
+        styleTags: ["minimal"],
+        components: ["sidebar-nav", "bottom-nav", "kpi-card"],
+        dominantColors: ["#ffffff", "#111111"],
+        accentColor: null,
+        spacingDensity: "moderate",
+        cornerStyle: "slight-round",
+        usesShadows: false,
+        usesBorders: true,
+        layoutForm: "two-column",
+        layoutRegions: [{ role: "primary-nav", width: "fixed-narrow" }],
+      });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const entry = await tagImage({
+      imagePath: testImage, // 1×1 test image → width===height → "tablet"
+      productName: "Test",
+      url: null,
+      extractionOnly: true,
+    });
+
+    // Tablet: neither mobile nor web filters apply — both sidebar-nav and
+    // bottom-nav survive, and primary-nav layout region is preserved.
+    expect(entry.platform).toBe("tablet");
+    expect(entry.components).toEqual(["sidebar-nav", "bottom-nav", "kpi-card"]);
+    expect(entry.layout?.regions).toContainEqual({ role: "primary-nav", width: "fixed-narrow" });
+  });
+
+  it("injects the detected platform instruction into the extraction prompt", async () => {
+    const prompts: string[] = [];
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      prompts.push(String(body.input?.[1]?.content?.[0]?.text ?? ""));
+      const response = JSON.stringify({
+        patternType: "dashboard", categories: ["dashboard"], styleTags: ["minimal"],
+        dominantColors: ["#ffffff", "#111111"], accentColor: null,
+        spacingDensity: "moderate", cornerStyle: "slight-round",
+        usesShadows: false, usesBorders: true,
+      });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    // Mobile screenshot
+    await tagImage({
+      imagePath: join(PRIVATE_IMAGE_DIR, "cash-app-ios-nov-2025-26.png"),
+      productName: "Money",
+      url: null,
+      extractionOnly: true,
+    });
+    expect(prompts[0]).toContain("DETECTED PLATFORM: mobile");
+    expect(prompts[0]).toContain("Do NOT propose desktop-only components like sidebar-nav");
+    expect(prompts[0]).toContain("bottom-nav");
+  });
+
+  it("retries and scrubs critique claims for components absent from extraction", async () => {
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      callCount++;
+      const response = callCount === 1
+        ? JSON.stringify({
+            patternType: "forms", categories: ["forms"], styleTags: ["minimal"],
+            components: ["form-controls"],
+            dominantColors: ["#ffffff", "#111111"], accentColor: null,
+            spacingDensity: "moderate", cornerStyle: "slight-round",
+            usesShadows: false, usesBorders: true,
+          })
+        : JSON.stringify({
+            observations: ["amount field", "currency selector", "fee summary", "send button", "exchange-rate line"],
+            typographyNotes: "The form labels create a clear input hierarchy.",
+            draftCritique: "A persistent sidebar gives returning users a stable navigation anchor. The amount and currency fields sit together so people can compare transfer inputs without scanning the page.",
+            draftWhatToSteal: ["Use a persistent sidebar to preserve spatial memory for returning users."],
+            draftAntiPatterns: ["Avoid separating related form inputs across multiple pages when users need to compare them."],
+            draftAccessibilityRisks: [],
+            qualityTier: "exceptional",
+          });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const entry = await tagImage({ imagePath: testImage, productName: "Transfer", url: null });
+
+    // Pass 2 is rejected once, then the safety scrubber protects the stored
+    // result when the retry repeats the unsupported assertion.
+    expect(callCount).toBe(3);
+    expect(entry.critique).not.toContain("persistent sidebar");
+    expect(entry.critique).toContain("amount and currency fields");
+    expect(entry.whatToSteal[0]).toMatch(/Review the screenshot/i);
+  });
+
+  it("filters desktop-only facts before deferred mobile critique", async () => {
+    const prompts: string[] = [];
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      prompts.push(String(body.input?.[1]?.content?.[0]?.text ?? ""));
+      const response = JSON.stringify({
+        observations: ["transfer amount", "currency selector", "fee summary", "primary action", "exchange-rate line"],
+        typographyNotes: "Labels distinguish the transfer inputs from supporting details.",
+        draftCritique: "The amount and currency fields keep the transfer decision in one focused flow for people comparing options.",
+        draftWhatToSteal: ["Keep related transfer inputs together so people can compare them without changing context."],
+        draftAntiPatterns: ["Avoid splitting a small transfer decision across separate pages."],
+        draftAccessibilityRisks: [],
+        qualityTier: "exceptional",
+      });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    await generateCritique("Money", {
+      components: ["sidebar-nav", "bottom-nav", "action-list", "form-controls"],
+      layoutForm: "single-column",
+      layoutRegions: [
+        { role: "primary-nav", width: "fixed-narrow" },
+        { role: "main-canvas", width: "flex" },
+      ],
+    }, undefined, undefined, "mobile");
+
+    expect(prompts[0]).not.toContain('"sidebar-nav"');
+    expect(prompts[0]).not.toContain('"primary-nav"');
+    expect(prompts[0]).toContain('"bottom-nav"');
+    expect(prompts[0]).toContain('"action-list"');
   });
 });

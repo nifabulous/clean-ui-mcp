@@ -72,6 +72,8 @@ export const Component = z.enum([
   "sidebar-nav",
   "top-nav",
   "tab-nav",
+  "bottom-nav",
+  "action-list",
   "search-command",
   "command-palette",
   "kpi-card",

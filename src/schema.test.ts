@@ -146,6 +146,8 @@ describe("corpus schema", () => {
     if (result.success) {
       expect(result.data.components).toContain("kpi-card");
       expect(Component.options).toContain("gauge-chart");
+      expect(Component.options).toContain("bottom-nav");
+      expect(Component.options).toContain("action-list");
     }
   });
 

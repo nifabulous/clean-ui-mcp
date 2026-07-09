@@ -1,20 +1,19 @@
 # Roadmap
 
 Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
-🔴 are deferred. Counts are live as of 426 entries — re-derive with
-`npm run corpus-stats`.
+🔴 are deferred. Run `npm run corpus-stats` for live corpus totals and coverage.
 
 ---
 
 ## ✅ Shipped
 
 ### Schema v2
-- `patternType` (required, 20-value enum) — primary pattern classification
+- `patternType` (required, 21-value enum) — primary pattern classification
 - `antiPatterns` (required) — structured: mistakes avoided + where it fails + a11y
-- `layout` (optional) — machine-readable wireframe `{form, regions[]}` (84% coverage)
-- `voice` (optional) — `{tone, examples, avoid}` microcopy dimension (95% coverage)
-- `qualityTier` — `exceptional` (default) / `cautionary` — 41 cautionary entries exist
-- `visual.colorRoles` — paste-ready CSS token set (73% coverage)
+- `layout` (optional) — machine-readable wireframe `{form, regions[]}`
+- `voice` (optional) — `{tone, examples, avoid}` microcopy dimension
+- `qualityTier` — `exceptional` (default) / `cautionary`
+- `visual.colorRoles` — paste-ready CSS token set
 - `source.lastVerified` — staleness tracking + validator warning
 
 ### Tagging pipeline
@@ -27,6 +26,11 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
 - dHash perceptual dedup at bulk import + **commit-time dedup gate** (the
   authoritative check at `POST /entries`, not just at upload)
 - Deferred-critique mode (extraction now, critique on demand) halves bulk cost
+- Platform-aware extraction: portrait mobile removes desktop side rails and
+  their layout regions; web removes mobile bottom navigation; tablet remains
+  intentionally unfiltered
+- Critique grounding: immediate and deferred critique consume normalized
+  extraction facts, while raw model output remains audit-only
 
 ### Workflow state
 - `reviewStatus: "draft" | "approved"` schema field (optional, defaults approved)
@@ -54,13 +58,12 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
   2-5 entries (paste-ready color tokens, typography, layout, voice, anti-patterns)
 - `recommend_ui_direction(productContext)` — the "design advisor": describe what
   you're building, it embeds + searches + synthesizes with product diversity
-- `get_anti_patterns(patternType?)` — consensus mistakes to avoid, the Mobbin-
-  can't-offer feature (534 anti-pattern statements, ranked by how many entries
-  raise each)
+- `get_anti_patterns(patternType?)` — consensus mistakes to avoid, ranked by
+  how many entries raise each
 - `get_color_palette(patternType?, styleTag?)` — paste-ready token sets grouped
-  by accent hue band (192 distinct accents → palette generator)
-- `get_stealable_techniques(patternType?, styleTag?)` — 1690 techniques deduped
-  by theme, browsed by pattern/style
+  by accent hue band
+- `get_stealable_techniques(patternType?, styleTag?)` — techniques deduped by
+  theme, browsed by pattern/style
 - `browse_ui_examples(styleTag?)` — what's in the corpus by pattern (count,
   top products, exemplar) — discovery before search
 
@@ -114,10 +117,9 @@ The list should grow as real offenders are spotted. Prevents quality erosion as
 volume increases and review time per entry drops.
 
 ### `qualityScore` vs `qualityTier` definition
-Unresolved. With 41 cautionary entries, the question is acute: for a cautionary
-entry, does `qualityScore` mean "how bad the design is" or "how instructive the
-example is"? Decide in one sentence and document it in the schema before scaling
-past solo curation to avoid inconsistent tagging.
+Unresolved. For a cautionary entry, does `qualityScore` mean "how bad the design
+is" or "how instructive the example is"? Decide in one sentence and document it
+in the schema before scaling past solo curation to avoid inconsistent tagging.
 
 ### Schema versioning strategy
 Decide now: bump schema version per field addition, or batch into v3? Otherwise
@@ -135,25 +137,13 @@ cache loosely coordinated. Stage a batch with a manifest, then commit the batch
 atomically after validation. Deferred from the recovery cluster — it's a workflow
 redesign that deserves focused attention.
 
-### Seed / private corpus split — ✅ shipped (simplest form)
-`corpus/entries.json` is gitignored (it references private screenshots + product
-names + critique — not publishable). The repo ships `corpus/seed.json` as a
-minimal schema example (1 link-only entry). Both loaders (`loadCorpus`,
-`loadCorpusSafe`), `validate-corpus`, and `corpus-stats` fall back to the seed
-when `entries.json` is absent — so CI validates the seed, a fresh clone returns a
-real search response, and the curator's working corpus stays local. Snapshots +
-`restore-corpus` protect against loss. This resolves the deferred split item in
-its simplest form; a richer multi-curator split (reviewed-by, merge) is still
-future work.
-
 ---
 
 ## 🔴 Deferred (needs new infrastructure or scale)
 
 ### Design signals expansion (prove-then-expand)
 - **Typography stack** — `{display, body, mono, weights, tracking}` as a real
-  CSS-ready block (not just font names). Second-highest designSignals priority
-  after colorRoles (which is now at 73%).
+  CSS-ready block (not just font names).
 - **Iconography** — `iconStyle` (line/filled/duotone), library, sizingScale.
 - **Imagery strategy** — `imageStrategy`, treatment, aspect ratios.
 - Each proven individually with real data before adding the next.
@@ -177,9 +167,9 @@ callouts. The annotation UI is the non-trivial part.
 
 ### Collections / design recipes
 A `collections.json` sidecar with named groups of entry IDs + a synthesis note.
-`get_collection(name)` MCP tool returns the full collection. "Modern fintech
-onboarding" as a one-call loadable brief. **Valuable at 426 entries now** —
-worth revisiting once `generate_design_prompt` proves the synthesis pattern.
+  `get_collection(name)` MCP tool returns the full collection. "Modern fintech
+  onboarding" as a one-call loadable brief. Revisit once
+  `generate_design_prompt` proves the synthesis pattern.
 
 ### Version history per entry
 A `history[]` array with dated snapshots. Low implementation cost (store diffs),
@@ -203,11 +193,11 @@ alerts, staleness dashboards. Analysis tooling, not schema — extend
 
 These need human judgment, not code:
 
-- **colorRoles**: 73% → finish the last ~115 in normal curation (no longer a
-  roadmap blocker)
-- **patternType coverage**: 17/20 — only `command-palette` is empty now
-- **"Untitled" product name**: ✅ backfilled via `npm run migrate-untitled` — all
-  91 mapped from filename stems to canonical product names (Cash App, Aboard,
-  Workable, Juicebox). Reusable if more Untitleds appear.
-- **Cautionary entries**: 41 exist (the Mobbin-can't-touch-this feature) — keep
-  growing as you find genuinely instructive bad UIs
+- **Enrichment fields:** components, domain tags, color scheme, mood, industry,
+  and responsive behavior remain sparse; improve them through staged retagging.
+- **Thin patterns:** prioritize calculator, notifications, and command-palette
+  examples while maintaining full pattern coverage.
+- **Product names:** rerun `npm run migrate-untitled` when new imports leave
+  canonical names unresolved.
+- **Cautionary entries:** keep growing the collection only with genuinely
+  instructive failures.

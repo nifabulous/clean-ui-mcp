@@ -13,10 +13,9 @@ that already (shadcn, Figma MCP, magic-mcp). The point is to give it *specific,
 real, well-explained examples* to ground "make it clean" requests in something
 other than the statistical average of training data (the "AI slop" failure mode).
 
-> **Live corpus:** 787 entries with schema support for 21 UI patterns, 31
-> component types, 15 business domains, 35 cautionary examples, 920
-> anti-pattern statements, and 2,806 stealable techniques. Counts drift as the
-> corpus grows — re-derive any time with `npm run corpus-stats`.
+> **Live corpus:** run `npm run corpus-stats` for current entry, coverage, and
+> quality metrics. The schema and retrieval API evolve independently of corpus
+> size, so this command is the source of truth for live totals.
 
 ---
 
@@ -62,16 +61,16 @@ seven things this corpus leads with:
    can't do this at all.
 3. **Layout wireframes** — `{ form, regions: [{role, width}] }` per entry, so
    an agent can consume page *structure* programmatically, not just read prose
-   (89% coverage).
+   when layout is the teachable part of the screen.
 4. **Color role tokens** — `colorRoles: {canvas, surface, ink, muted, accent}`,
-   a paste-ready CSS `:root` token set, not a bare hex list (86% coverage).
+   a paste-ready CSS `:root` token set, not a bare hex list.
 5. **Voice/microcopy** — `voice: {tone, examples, avoid}` captures the writing
-   voice, not just the visual design (78% coverage). "Good afternoon, Sam" vs
+   voice, not just the visual design. "Good afternoon, Sam" vs
    "Dashboard" is a design decision.
-6. **Component taxonomy** — 31-value enum (`sidebar-nav`, `kpi-card`,
-   `donut-chart`, `pricing-card`, `kanban-board`, etc.) capturing what's
-   physically on screen, separate from the design-pattern categories. Enables
-   "show me dashboards with donut charts."
+6. **Component taxonomy** — visible UI parts (`sidebar-nav`, `bottom-nav`,
+   `action-list`, `kpi-card`, `donut-chart`, `pricing-card`,
+   `kanban-board`, etc.) separate from design-pattern categories. Enables
+   "show me dashboards with donut charts" without inferring a product shell.
 7. **Domain tags** — 15-value enum (`billing`, `security`, `team-management`,
    `integrations`, etc.) capturing the business/product context of the page.
    A billing page is correctly tagged `categories:["settings","dashboard"]` —
@@ -203,7 +202,7 @@ for the full Zod definition — it is the single source of truth.
 | `patternDiscovery` | object? | Persisted open-vocabulary suggestion lane: `{ suggestedPatternType, currentPatternType }`, summarized by `npm run pattern-discovery` before enum promotion |
 | `categories` | enum[] (1-4) | Multi-tag design-pattern classifier |
 | `styleTags` | enum[] (1-4) | Aesthetic direction (`minimal`, `dense-data`, `editorial`, `brutalist`, ...) |
-| `components` | enum[] (0-10) | Visible UI building blocks (`sidebar-nav`, `kpi-card`, `donut-chart`, `data-table`, ...) — 31 values |
+| `components` | enum[] (0-10) | Visible UI building blocks (`sidebar-nav`, `bottom-nav`, `action-list`, `kpi-card`, `donut-chart`, `data-table`, ...) |
 | `domainTags` | enum[] (0-4) | Business/product context (`billing`, `security`, `integrations`, ...) — 15 values |
 | `platform` | enum | `web` \| `mobile` \| `tablet` — auto-detected from screenshot dimensions |
 | `colorScheme` | enum | `light` \| `dark` — page-level theme |
@@ -302,6 +301,9 @@ are separate API calls and can run on different providers.
 - **Structure:** patternType, categories, styleTags, components, domainTags,
   colorScheme, industryVertical, responsiveBehavior, spacing, corners,
   shadows/borders, colorRoles, layout regions, platform (auto-detected).
+- **Platform scoping:** portrait mobile strips desktop side rails and their
+  layout regions; web strips mobile bottom navigation; tablet stays unfiltered
+  because its layout is ambiguous.
 - **Categorization calibration:** prompt nudges the model toward
   commonly-missed patterns (chat-interface, pricing, command-palette,
   calculator).
@@ -310,8 +312,8 @@ are separate API calls and can run on different providers.
   aggregation instead of silently falling back to `dashboard`.
 
 ### Pass 2: Critique (reasoning + writing)
-- **Text-only** (no image) — reasons from Pass 1's validated facts + DOM a11y
-  ground truth.
+- **Text-only** (no image) — reasons from Pass 1's platform-normalized facts +
+  DOM a11y ground truth. Raw model extraction is retained only as audit data.
 - **Observation-first:** must list 5 specific design decisions (with examples
   of good vs generic observations) before critiquing.
 - **DECISION + EFFECT + REJECTION:** every claim names the specific choice, the
@@ -344,7 +346,8 @@ Good: "Hairline borders at low contrast do structural work without the visual
   Anthropic's `Retry-After` header, NIM fallback wait).
 - **Adaptive detail:** low-detail extraction re-runs at high if the result is
   weak (blank patternType, no categories, "Untitled" name).
-- **Deferred-critique mode:** run extraction now, defer critique to on-demand.
+- **Deferred-critique mode:** run extraction now, defer critique to on-demand;
+  it applies the staged entry's platform before building the text-only prompt.
 
 ---
 
@@ -590,13 +593,17 @@ staging, and again at commit time.
   `--snapshot <name>`. A restore snapshots the current state first.
 - **Entry-count drift floor** — set `expectedMinEntries` in
   `corpus/.corpus-config.json`; `validate-corpus` and `doctor` warn if below.
-- **Index drift detection** — `indexStatus()` reports missing/stale vectors.
+- **Index drift detection** — `indexStatus()` reports missing, orphaned, and
+  content-stale vectors. `npm run build-index` incrementally repairs changed or
+  missing entries and removes orphaned vectors; use `-- --force` only after
+  changing the embedding document format.
 
 ```bash
 npm run doctor                       # full health check
 npm run restore-corpus -- --list     # see available snapshots
 npm run restore-corpus -- --latest   # restore the newest
 npm run clean-orphans -- --dry-run   # find unreferenced images
+npm run build-index                  # repair semantic-search index drift
 ```
 
 ---
@@ -693,7 +700,7 @@ clean-ui-mcp/
 | `npm run ui` | Build + start curator dashboard at `http://localhost:3131` |
 | `npm test` | All tests (vitest unit + Playwright browser) |
 | `npm run validate-corpus` | Validate entries.json against schema + hygiene |
-| `npm run build-index` | Embed all entries via Voyage AI |
+| `npm run build-index` | Incrementally embed missing/changed entries and remove orphaned Voyage vectors |
 | `npm run capture` | Single screenshot via Playwright |
 | `npm run capture-batch` | Crawl a website, capture many sections + DOM signals |
 | `npm run add-entry` | Interactive entry wizard |
@@ -738,6 +745,7 @@ are stored — swap it for SQLite/Postgres later without touching `server.ts`.
 
 ## Status
 
-Active development. 787 entries, 21 supported UI patterns, and a growing
-retag-readiness pipeline. Contributions welcome: new entries, new patterns,
-new providers, better critiques.
+Active development with a growing retag-readiness pipeline. See the
+[roadmap](ROADMAP.md), and run `npm run corpus-stats` for current corpus totals.
+Contributions welcome: new entries, new patterns, new providers, better
+critiques.

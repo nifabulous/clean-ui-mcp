@@ -627,7 +627,7 @@ export const DecisionScreen = z.object({
   id: z.string(),
   order: z.number().int().min(0),
   source: ScreenSource,
-  imageRef: z.string(),
+  imageRef: z.string().min(1),
   /** Present when source is "figma" (post-MVP). */
   figma: z.object({
     fileKey: z.string(),
@@ -680,13 +680,13 @@ export const Decision = z.object({
   if (val.scope === "flow") {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Multi-screen flow comparison is not yet supported", path: ["scope"] });
   }
-  for (const dir of val.directions) {
-    for (const screen of dir.screens) {
+  val.directions.forEach((dir, i) => {
+    dir.screens.forEach((screen, j) => {
       if (screen.source === "figma") {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Figma import is not yet supported — upload screenshots instead", path: ["directions", dir.id, "screens", screen.id, "source"] });
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Figma import is not yet supported — upload screenshots instead", path: ["directions", i, "screens", j, "source"] });
       }
-    }
-  }
+    });
+  });
 });
 
 export type DecisionT = z.infer<typeof Decision>;
@@ -705,6 +705,8 @@ export const Decisions = z.object({
   version: z.literal(1),
   decisions: z.array(Decision),
 });
+
+export type DecisionsT = z.infer<typeof Decisions>;
 
 // ─── draft hygiene (single source of truth) ──────────────────────────────────
 

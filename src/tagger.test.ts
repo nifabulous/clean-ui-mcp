@@ -611,4 +611,54 @@ describe("tagImage two-pass request shape", () => {
     delete process.env.GEMINI_API_KEY;
     process.env.AUTO_TAG_PROVIDER_EXTRACTION = savedExtr;
   }, 15000); // backoff is real (800+1600+3200ms); needs headroom over the 5s default.
+
+  it("does not pass palette fields into the critique prompt", async () => {
+    const prompts: string[] = [];
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const text = String(body.input?.[1]?.content?.[0]?.text ?? "");
+      prompts.push(text);
+      callCount++;
+      const response = callCount === 1
+        ? JSON.stringify({
+            patternType: "calculator",
+            categories: ["dashboard", "forms"],
+            styleTags: ["minimal"],
+            components: ["sidebar-nav", "form-controls", "summary-card", "icon-button"],
+            domainTags: ["billing"],
+            colorScheme: "light",
+            industryVertical: "fintech",
+            responsiveBehavior: "fixed-width",
+            dominantColors: ["#7464a4", "#ffffff", "#16302b"],
+            accentColor: "#7464a4",
+            colorRoles: { canvas: "#ffffff", surface: "#f8f8f8", ink: "#111111", muted: "#777777", accent: "#7464a4" },
+            spacingDensity: "moderate",
+            cornerStyle: "slight-round",
+            usesShadows: false,
+            usesBorders: true,
+          })
+        : JSON.stringify({
+            observations: ["left sidebar includes Home, Cards, Transactions labels", "calculator input area", "computed fee output", "primary action button", "exchange-rate note"],
+            typographyNotes: "Specific hierarchy note.",
+            draftCritique: "The calculator layout keeps inputs and computed outputs close together, reducing back-and-forth scanning for people comparing transfer cost before committing.",
+            draftWhatToSteal: ["Keep numeric inputs adjacent to computed outputs when users are comparing cost before deciding."],
+            draftAntiPatterns: ["Avoid separating fee results from the amount input; that forces users to memorize numbers across regions."],
+            draftAccessibilityRisks: [],
+            qualityTier: "exceptional",
+          });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    await tagImage({ imagePath: testImage, productName: "Wise", url: null });
+
+    const pass2Prompt = prompts[1];
+    expect(pass2Prompt).not.toContain("dominantColors");
+    expect(pass2Prompt).not.toContain("accentColor");
+    expect(pass2Prompt).not.toContain("colorRoles");
+    expect(pass2Prompt).not.toContain("#7464a4");
+  });
 });

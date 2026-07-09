@@ -750,6 +750,21 @@ Rules:
 
 // ─── PASS 2: critique prompt (judgment + design intent) ──────────────────────
 
+/**
+ * Strip color palette fields from the extraction object before it reaches the
+ * critique prompt. The critique model was turning palette hex values into fake
+ * UI state ("purple status chips" fabricated from a dominant color). Colors
+ * are extraction facts — they belong in Pass 1, not in the critique's reasoning
+ * context. Structural tags, components, layout, and typography stay.
+ */
+function critiqueSafeExtraction(extraction: Record<string, unknown>): Record<string, unknown> {
+  const copy = { ...extraction };
+  delete copy.dominantColors;
+  delete copy.accentColor;
+  delete copy.colorRoles;
+  return copy;
+}
+
 function buildCritiquePrompt(
   productName: string,
   extraction: Record<string, unknown>,
@@ -827,27 +842,26 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
                                // about what conventional approaches would have FAILED here — what
                                // would a lazy designer have done that this designer deliberately rejected?
   "draftAccessibilityRisks": [], // accessibility risks found on this screen. Each entry is an object:
-                               // { "element": "the specific UI element (e.g. 'status chips', 'sidebar icons')",
-                               //   "risk": "what fails and for whom (e.g. 'color-only differentiation invisible to color-blind users')",
+                               // { "element": "the specific UI element (e.g. 'payment status dot', 'sidebar icons')",
+                               //   "risk": "what fails and for whom (e.g. 'state is communicated by color alone')",
+                               //   "evidence": "quote the visible text label, name the exact screen region, or cite
+                               //                the DOM metric that PROVES this risk exists. If you cannot point to
+                               //                something concrete, do not include the risk — return [] instead.",
                                //   "confidence": "visible" | "inferred",
                                //   "wcag": "criterion if known (e.g. '1.4.1 Use of Color')" }
                                //
-                               // Return [] when no concrete risk is visible or in DOM ground truth.
-                               // Do NOT invent risks to fill a quota. A clean screen returning [] is correct.
+                               // EVIDENCE IS THE GATE. Risks without concrete evidence will be rejected.
+                               // Palette hex values are NOT evidence. Generic component names are NOT evidence.
+                               // Absent states you cannot see are NOT evidence. [] is the correct answer
+                               // when you cannot point to something specific on screen.
                                //
-                               // If ACCESSIBILITY GROUND TRUTH is provided above, use those metrics to
-                               // identify concrete risks — e.g. "contrastRatio of 3.2 falls below WCAG AA
-                               // 4.5:1 for body text" or "30 interactive elements lack accessible names".
-                               // Set confidence to "inferred" when you're guessing from the screenshot
-                               // without DOM metrics. Do NOT claim "dom-grounded" — that tag is set
-                               // in code, not by you.
-                               //
-                               // Common a11y failures to check (only include if you see concrete evidence):
-                               // - Color-only differentiation (status, state) invisible to color-blind users
-                               // - Icon-only controls without text labels or aria — screen reader users can't identify them
-                               // - Dense data without sufficient line-height/spacing — dyslexic users struggle
-                               // - Interactive elements too small or close together — motor-impaired users mis-tap
-                               // - Information conveyed only visually (no text alternative) — screen reader users miss it
+                               // Common a11y failures — ONLY include if you can cite concrete evidence:
+                               // - Color-only differentiation: name the exact status indicator and what states
+                               //   it shows (e.g. "8px red/green dots beside Paid and Failed rows, no text label")
+                               // - Icon-only controls: only if you can see there are NO text labels — if labels
+                               //   ARE visible, this is not a risk
+                               // - Low contrast: only if DOM ground truth provides a contrastRatio below 4.5:1
+                               // - Tiny touch targets: name the specific control and its visible size
   "businessRationale": null,   // null if isolated component crop/no product context; otherwise object below
                                // { "businessGoal": ONE from: ${BUSINESS_GOALS.join(", ")},
                                //   "targetUser": "short phrase, <=80 chars",
@@ -869,17 +883,21 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
 }
 
 Rules:
-- Every draftCritique/draftWhatToSteal claim must trace back to something in "observations".
+- Every draftCritique/draftWhatToSteal/draftAntiPatterns claim must trace back to something in
+  "observations". Do not make claims about UI elements you cannot point to on screen.
 - draftAntiPatterns must not restate draftCritique's decision from the opposite angle. Each should
   teach a distinct lesson about what the design deliberately avoids and why that avoidance matters.
-- draftAccessibilityRisks: return [] when no concrete risk is visible or in DOM ground truth.
-  Do NOT invent risks to fill a quota. Each risk must name the specific element, the user type
-  affected, and the issue. Set confidence to "inferred" when guessing from the screenshot
-  without DOM metrics. Do NOT use "dom-grounded" — that tag is set in code.
+- voiceExamples must be EXACT visible copy from the screen, quoted verbatim. Do not invent copy,
+  paraphrase, or include copy you think might be there. If no notable copy is visible, omit voice entirely.
+- businessRationale must be null unless the screenshot shows visible product context (page title,
+  navigation, copy) that supports the intent. Do not invent business goals for isolated components.
+- draftAccessibilityRisks: each risk MUST include concrete "evidence" — quote the visible text label,
+  name the exact screen region, or cite a DOM metric. Palette hex values are NOT evidence. Generic
+  component names are NOT evidence. Absent states are NOT evidence. Return [] when you cannot point
+  to something specific. Maximum 2 risks — [] is the correct answer for a clean screen.
+  Set confidence to "inferred" when guessing from pixels. Do NOT use "dom-grounded" — code sets that.
 - Quality tier calibration: "exceptional" means worth learning from, not flawless.
   "cautionary" is rare and reserved for screens whose main lesson is the failure itself.
-- businessRationale is about business intent, not visual quality. Return null rather than inventing intent
-  when the screenshot lacks visible product/page context (for example an isolated card or component crop).
 - No banned phrases (${BANNED_PHRASES.slice(0, 4).map((p) => `"${p}"`).join(", ")}, ...). Re-check before returning.
 - Return ONLY the JSON object.`;
 }
@@ -1726,7 +1744,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   // by re-looking at pixels. This is the spec's core architecture choice.
   let critiqueRawText = await callModel(
     "critique",
-    buildCritiquePrompt(effectiveName, extractionParsed, input.domSignals),
+    buildCritiquePrompt(effectiveName, critiqueSafeExtraction(extractionParsed), input.domSignals),
     null, // no image — pure reasoning from facts
     undefined,
     "high",
@@ -1748,7 +1766,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${bannedErrors.join("\n")}`;
     const retryText = await callModel(
       "critique",
-      buildCritiquePrompt(effectiveName, extractionParsed, input.domSignals),
+      buildCritiquePrompt(effectiveName, critiqueSafeExtraction(extractionParsed), input.domSignals),
       null,
       feedback,
       "high",
@@ -1862,7 +1880,7 @@ export async function generateCritique(
 
   let critiqueRawText = await callModel(
     "critique",
-    buildCritiquePrompt(productName, extractionParsed, domSignals),
+    buildCritiquePrompt(productName, critiqueSafeExtraction(extractionParsed), domSignals),
     null,
     undefined,
     "high",

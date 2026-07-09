@@ -120,13 +120,34 @@ describe("tagger sanitization", () => {
     expect(sanitized.draftAccessibilityRisks).toEqual([]);
   });
 
-  it("keeps evidence that describes a visible screenshot detail, not the extraction", () => {
+  it("drops ALL absence-of-label claims on controls — pixels cannot establish absence of an accessible name", () => {
+    // The policy is broader than just "icon-only": ANY claim that a control
+    // lacks a text label or accessible name is dropped, because the model is
+    // inferring absence from pixels. Covers "icon with no text label",
+    // "glyph with no label", "unlabeled button", "no accessible name", etc.
+    // Only DOM ground truth (unlabeledInteractive) can establish this.
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [
+        { element: "send button", risk: "Send action uses a paper-plane icon with no text label.", evidence: "Bottom-right of the chat composer shows a paper-plane glyph inside a circle; no 'Send' text is visible.", confidence: "visible" },
+        { element: "close button", risk: "Close control is a glyph with no label.", evidence: "Top-right corner shows an X glyph with no visible text label beside it.", confidence: "visible" },
+        { element: "nav items", risk: "Unlabeled buttons in the header.", evidence: "Three icon buttons in the top nav with no accessible name visible.", confidence: "inferred" },
+        { element: "action bar", risk: "Controls lack accessible names.", evidence: "The action bar relies on memorized icon shapes for recognition.", confidence: "inferred" },
+      ],
+    });
+    expect(sanitized.draftAccessibilityRisks).toEqual([]);
+  });
+
+  it("keeps evidence that describes a visible screenshot detail, not an absence claim", () => {
+    // A legitimate color-only risk: names a concrete visible element (status
+    // dots) and what it communicates. This is a PRESENCE claim, not an absence
+    // claim — it survives the gate.
     const sanitized = sanitizeTaggerPayload({
       draftAccessibilityRisks: [{
-        element: "send button",
-        risk: "Send action uses a paper-plane icon with no text label.",
-        evidence: "Bottom-right of the chat composer shows a paper-plane glyph inside a circle; no 'Send' text is visible.",
+        element: "payment status dot",
+        risk: "State is communicated by color alone, which color-blind users may miss.",
+        evidence: "Small red and green dots beside the Paid and Failed rows, with no text status label.",
         confidence: "visible",
+        wcag: "1.4.1 Use of Color",
       }],
     });
     expect(sanitized.draftAccessibilityRisks).toHaveLength(1);
@@ -166,8 +187,10 @@ describe("tagger sanitization", () => {
       expect(critique.draftCritique).not.toContain("icon-only buttons");
       expect(critique.draftCritique).toContain("This works for returning users");
       expect(critique.draftCritique).toContain("instead of going icon-only");
-      // whatToSteal assertion entry dropped entirely.
-      expect(critique.draftWhatToSteal).toEqual([]);
+      // whatToSteal assertion entry dropped, but fallback restores a non-empty
+      // placeholder so the schema's min(1) constraint isn't violated.
+      expect(critique.draftWhatToSteal).toHaveLength(1);
+      expect(critique.draftWhatToSteal[0]).toMatch(/Review the screenshot/i);
       // antiPatterns entry has no icon-only claim — kept.
       expect(critique.draftAntiPatterns).toHaveLength(1);
       // typographyNotes assertion sentence removed.

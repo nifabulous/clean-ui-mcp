@@ -800,11 +800,13 @@ returning, mobile vs desktop, expert vs novice, users with disabilities) and HOW
 (muscle memory, scanning patterns, error recovery, decision-making under time pressure).
 Examples of good observations:
 - "The submit button uses text-only styling with no fill or border, relying on color alone for affordance"
-- "Status indicators are 8px naked color circles with no labels — readable by hue alone at a glance"
+- "Status indicators are small naked color circles with no labels — readable by hue alone at a glance"
 - "The 'FOLLOWING' button uses all-caps verb tense to make the reversible action obvious"
 - "Image thumbnails are cropped to 1:1 squares, forcing compositional discipline over landscape realism"
 Do NOT write generic observations like "the layout is clean" or "there is a sidebar." Each item
 must name a SPECIFIC, DEFENSIBLE choice the designer made and why it works or doesn't.
+Do NOT invent pixel dimensions (e.g. "8px dots", "3px badge") — you cannot measure pixels reliably
+from an image. Describe size relatively ("small", "narrow") or omit it.
 
 CRITICAL — icon-only claims: Most sidebars and nav rails have BOTH icons AND text labels.
 Before claiming "icon-only navigation" or "icon-only buttons," verify that you genuinely
@@ -873,13 +875,18 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
                                //
                                // Common a11y failures — ONLY include if you can cite concrete evidence:
                                // - Color-only differentiation: name the exact status indicator and what states
-                               //   it shows (e.g. "8px red/green dots beside Paid and Failed rows, no text label")
-                               // - DO NOT report icon-only navigation risks. The model cannot reliably tell
-                               //   whether text labels are present beside icons — this has been the #1 false
-                               //   positive. Only DOM ground truth (unlabeledInteractive) can establish this,
-                               //   and that is handled in code, not by you.
+                               //   it shows (e.g. "small red/green dots beside Paid and Failed rows, no text
+                               //   status label"). Do NOT invent pixel dimensions — describe size relatively.
+                               // - DO NOT report unlabeled-control / icon-only risks. The model cannot
+                               //   reliably tell whether an accessible name exists beside an icon — this has
+                               //   been the #1 false positive. Pixels cannot establish the ABSENCE of a label
+                               //   or accessible name. Only DOM ground truth (unlabeledInteractive) can
+                               //   establish this, and that is handled in code, not by you. This covers
+                               //   "icon-only", "icon with no text label", "glyph with no label",
+                               //   "unlabeled button", "no accessible name" — ALL absence-of-label claims.
                                // - Low contrast: only if DOM ground truth provides a contrastRatio below 4.5:1
-                               // - Tiny touch targets: name the specific control and its visible size
+                               // - Tiny touch targets: name the specific control; describe size relatively,
+                               //   do NOT invent exact pixel sizes unless a DOM signal provides them
   "businessRationale": null,   // null if isolated component crop/no product context; otherwise object below
                                // { "businessGoal": ONE from: ${BUSINESS_GOALS.join(", ")},
                                //   "targetUser": "short phrase, <=80 chars",
@@ -918,6 +925,9 @@ Rules:
   component names are NOT evidence. Absent states are NOT evidence. Return [] when you cannot point
   to something specific. Maximum 2 risks — [] is the correct answer for a clean screen.
   Set confidence to "inferred" when guessing from pixels. Do NOT use "dom-grounded" — code sets that.
+  Do NOT report unlabeled-control or icon-only risks of any kind — pixels cannot establish the absence
+  of an accessible name. Do NOT invent pixel dimensions — describe size relatively unless a DOM signal
+  provides exact measurements.
 - Quality tier calibration: "exceptional" means worth learning from, not flawless.
   "cautionary" is rare and reserved for screens whose main lesson is the failure itself.
 - No banned phrases (${BANNED_PHRASES.slice(0, 4).map((p) => `"${p}"`).join(", ")}, ...). Re-check before returning.
@@ -965,7 +975,8 @@ function domainTagsFromAllowed(value: unknown): string[] {
  *   - Evidence that is only a generic component name (sidebar, buttons, icons)
  *   - Evidence that is only a hex value or palette mention
  *   - Self-referential evidence (citing the extraction output, not the screenshot)
- *   - Icon-only risks where evidence contains visible text labels (contradiction)
+ *   - Unlabeled-control risks (icon-only, icon with no label, unlabeled button —
+ *     pixels cannot establish absence of an accessible name; only DOM ground truth can)
  *   - Color-only risks where evidence doesn't name a concrete visible state/control
  *   - More than 2 non-DOM risks (quota cap — [] is honest when guessing)
  *
@@ -980,9 +991,31 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
   // Evidence that is only a hex color or palette-derivation phrase.
   const PALETTE_EVIDENCE = /^#?[0-9a-f]{6}$/i;
   const PALETTE_WORDS = /\b(palette|dominant color|accent color|color palette|extracted color|from (?:the )?color)\b/i;
-  // Icon-only risk patterns — the model phrases this many ways. The #1 a11y
-  // hallucination is claiming icon-only nav when text labels are actually visible.
-  const ICON_ONLY_RISK = /\bicon[\s-]*only|icons?\s+(?:alone|symbols?\s+alone|without\s+(?:visible\s+)?(?:text\s+)?labels?)|represented\s+(?:solely\s+)?by\s+icons?\b/i;
+  // Unlabeled-control risk patterns — the model phrases this many ways. The
+  // governing principle: PIXELS CANNOT ESTABLISH THE ABSENCE of a text label
+  // or accessible name. The model hallucinated "no visible text labels" on
+  // multiple entries where labels were clearly visible, and "icon with no text
+  // label" / "glyph with no label" / "unlabeled button" are the same failure
+  // class — inferring absence from pixels. Drop ALL model-generated
+  // unlabeled-control risks. Only DOM ground truth (unlabeledInteractive count
+  // from the capture pipeline) can produce one, and that is code-injected.
+  const UNLABELED_CONTROL_RISK = new RegExp(
+    "\\bicon[\\s-]*only" +                                              // "icon-only"
+    "|icons?\\s+(?:alone|symbols?\\s+alone)" +                          // "icons alone"
+    "|icons?\\s+without\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +       // "icons without labels"
+    "|represented\\s+(?:solely\\s+)?by\\s+icons?" +                     // "represented by icons"
+    "|(?:icon|glyph|symbol|button|control)\\s+with\\s+(?:no|without)\\s+(?:visible\\s+)?(?:text\\s+)?labels?" + // "icon with no text label"
+    "|no\\s+(?:visible\\s+)?(?:text\\s+)?labels?\\s+(?:beside|next to|on|for)" + // "no labels beside"
+    "|lack(?:s|ing)?\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +          // "lacks labels"
+    "|no\\s+(?:visible\\s+)?accessible\\s+name" +                        // "no accessible name"
+    "|unlabeled\\s+(?:icon|button|control|nav)" +                        // "unlabeled button"
+    "|rel(?:iance|ies|y)\\s+on\\s+(?:memorized\\s+)?(?:icon\\s+)?shapes?" + // "reliance on shapes"
+    "|\\bnaked\\s+icons?\\b" +                                           // "naked icons"
+    "|lacks?\\s+(?:an?\\s+)?accessible\\s+name" +                        // "lacks an accessible name"
+    "|without\\s+(?:an?\\s+)?accessible\\s+name" +                       // "without accessible name"
+    "\\b",
+    "i",
+  );
   const VISIBLE_LABEL_LANG = /\b(label|labels?|text|caption|word|named|home|cards?|settings?|transactions?|balance|account|profile|menu)\b/i;
   // Color-only / status risk where evidence must name a concrete visible state/control.
   const COLOR_ONLY_RISK = /\b(color[\s-]*only|sole (?:status )?differentiator|color alone|status (?:indicator|chip|dot|badge))\b/i;
@@ -1022,14 +1055,16 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
     // visible screenshot detail. Reasoning from the prompt is not observation.
     if (SELF_REFERENTIAL_EVIDENCE.test(evidence)) continue;
 
-    // Gate 4: icon-only risks are the #1 hallucination. The model CANNOT
-    // reliably tell whether text labels are present — it hallucinated "no
-    // visible text labels" on multiple entries where labels were clearly
-    // visible. Policy: drop ALL model-generated icon-only risks. Only DOM
-    // ground truth (unlabeledInteractive count from the capture pipeline)
-    // can produce an icon-only risk, and that is code-injected, not model-
-    // generated. The model's confidence in "I see no labels" is worthless.
-    if (ICON_ONLY_RISK.test(risk) || ICON_ONLY_RISK.test(evidence)) continue;
+    // Gate 4: unlabeled-control risks are the #1 hallucination class. The model
+    // CANNOT reliably establish the absence of a text label or accessible name
+    // from pixels — it hallucinated "no visible text labels" on multiple entries
+    // where labels were clearly visible, and "icon with no text label" /
+    // "glyph with no label" / "unlabeled button" are the same failure. Policy:
+    // drop ALL model-generated unlabeled-control risks. Only DOM ground truth
+    // (unlabeledInteractive count from the capture pipeline) can produce one,
+    // and that is code-injected, not model-generated. Pixels cannot establish
+    // absence.
+    if (UNLABELED_CONTROL_RISK.test(risk) || UNLABELED_CONTROL_RISK.test(evidence)) continue;
 
     // Gate 5: color-only risk must name a concrete visible state/control
     if (COLOR_ONLY_RISK.test(risk) && !CONCRETE_STATE_LANG.test(evidence)) continue;
@@ -1368,6 +1403,18 @@ export function scrubProseIconOnly(critique: {
     critique.voice.examples = critique.voice.examples
       .map((t) => filterSentences(t).trim())
       .filter((t) => t.length > 0);
+  }
+
+  // Post-scrub fallback: sanitizeTaggerPayload guarantees non-empty
+  // draftWhatToSteal / draftAntiPatterns (schema requires min(1)), but the
+  // scrubber can empty them if every entry contained an icon-only assertion.
+  // Restore a neutral placeholder so a successful model call doesn't become a
+  // validation failure downstream. The human reviewer will rewrite these.
+  if (critique.draftWhatToSteal.length === 0) {
+    critique.draftWhatToSteal = ["Review the screenshot and extract one concrete interface technique before saving."];
+  }
+  if (critique.draftAntiPatterns.length === 0) {
+    critique.draftAntiPatterns = ["[DRAFT] Review the screenshot and name one common UI mistake this design avoids."];
   }
 }
 

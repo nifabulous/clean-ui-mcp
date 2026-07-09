@@ -1169,17 +1169,15 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         layout: (tagged.layout ?? undefined) as CorpusEntryT["layout"],
         voice: (tagged.voice ?? undefined) as CorpusEntryT["voice"],
         businessRationale: (tagged.businessRationale ?? undefined) as CorpusEntryT["businessRationale"],
-        // Preserve the prior qualityTier on retag unless the model provides an
-        // explicit tierChangeJustification. Without this guard, cautionary entries
-        // keep getting laundered into "exceptional" because the prompt biases
-        // toward it. The retag refreshes content; the tier is a curatorial
-        // judgment that shouldn't flip silently.
-        qualityTier: (entry.qualityTier !== tagged.qualityTier && !tagged.tierChangeJustification)
-          ? entry.qualityTier
-          : tagged.qualityTier as CorpusEntryT["qualityTier"],
-        qualityScore: (entry.qualityTier !== tagged.qualityTier && !tagged.tierChangeJustification)
-          ? entry.qualityScore
-          : tagged.qualityScore,
+        // Always preserve the prior qualityTier on retag. The critique prompt
+        // does not pass the prior tier in, so the model cannot know whether it is
+        // changing cautionary → exceptional. Any tierChangeJustification it emits
+        // is therefore fabricated context — the model is defending a flip it
+        // can't know it's making. Tier is a curatorial judgment; store the model's
+        // suggested tier + justification for human review but never let it
+        // authorize a silent flip during bulk retag.
+        qualityTier: entry.qualityTier,
+        qualityScore: entry.qualityScore,
       };
 
       // Strip the tagger's [DRAFT]/[DRAFT — REWRITE] editing prefixes before

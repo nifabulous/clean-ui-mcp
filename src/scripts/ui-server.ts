@@ -1233,6 +1233,39 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     return;
   }
 
+  // ── Rename endpoint: id-only, no image file rename ─────────────────────────
+  // The image is served by entry.image.path (a string lookup), not by id, so
+  // renaming the id does NOT require renaming the image file on disk.
+  const renameMatch = url.pathname.match(/^\/api\/entries\/([^/]+)\/rename$/);
+  if (renameMatch && req.method === "POST") {
+    const oldId = decodeURIComponent(renameMatch[1]);
+    const index = entries.findIndex((e) => e.id === oldId);
+    if (index === -1) {
+      sendJson(res, 404, { error: `Entry not found: ${oldId}` });
+      return;
+    }
+    const payload = await readJson(req) as { newId?: string };
+    const rawNewId = (payload.newId || "").trim();
+    if (!rawNewId) {
+      sendJson(res, 400, { error: "newId is required" });
+      return;
+    }
+    const newId = slugify(rawNewId);
+    if (newId === oldId) {
+      sendJson(res, 400, { error: "New id is the same as the current id" });
+      return;
+    }
+    if (entries.some((e) => e.id === newId)) {
+      sendJson(res, 409, { error: `An entry with id "${newId}" already exists` });
+      return;
+    }
+    // Update only the id — image.path stays as-is (lookup is by path string).
+    entries[index] = { ...entries[index], id: newId };
+    saveEntries(entries);
+    sendJson(res, 200, { ok: true, entry: entries[index] });
+    return;
+  }
+
   const entryMatch = url.pathname.match(/^\/api\/entries\/([^/]+)$/);
   if (entryMatch) {
     const id = decodeURIComponent(entryMatch[1]);

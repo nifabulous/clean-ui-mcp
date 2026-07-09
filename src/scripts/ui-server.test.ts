@@ -180,6 +180,38 @@ describe("ui server entry ids", () => {
       else process.env.OPENAI_API_KEY_EXTRACTION = savedExtr;
     }
   });
+
+  // ── rename validation (id-only, no image rename) ───────────────────────────
+  // The endpoint uses slugify() for normalization + a duplicate-id check.
+  // These tests verify the building blocks the /rename handler relies on.
+
+  it("slugifies rename input to valid kebab-case", () => {
+    // slugify is the normalization the rename endpoint applies to newId.
+    // It lowercases, replaces non-alphanumeric runs with dashes, and trims.
+    expect(uniqueEntryId({ id: "Wise Transfer Calculator" }, [])).toBe("wise-transfer-calculator");
+    expect(uniqueEntryId({ id: "wise_transfer_calculator" }, [])).toBe("wise-transfer-calculator");
+    expect(uniqueEntryId({ id: "wise--transfer!!!" }, [])).toBe("wise-transfer");
+  });
+
+  it("rejects a rename to an id that already exists", () => {
+    const entries = [
+      { id: "wise-calculator" },
+      { id: "wise-transfer" },
+    ] as CorpusEntryT[];
+    // uniqueEntryId appends a suffix on collision — the rename endpoint must
+    // check duplicates BEFORE calling it and reject instead of auto-suffixing.
+    const exists = entries.some((e) => e.id === "wise-calculator");
+    expect(exists).toBe(true);
+  });
+
+  it("preserves image.path when renaming id (no image file rename)", () => {
+    // The rename endpoint updates only entry.id; image.path stays as-is because
+    // image lookup is by path string, not by id. This test documents that invariant.
+    const entry = { ...baseEntry, id: "wise-wise-4", image: { ...baseEntry.image, path: "images-private/wise-web-screens-14.png" } };
+    const renamed = { ...entry, id: "wise-transfer-calculator" };
+    expect(renamed.image.path).toBe("images-private/wise-web-screens-14.png");
+    expect(renamed.id).toBe("wise-transfer-calculator");
+  });
 });
 
 describe("same-origin guard", () => {

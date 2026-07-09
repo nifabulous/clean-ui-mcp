@@ -791,6 +791,9 @@ function openDetail(x){
     <div style="font-size:11.5px;color:var(--ink-2);margin-bottom:14px;display:flex;align-items:center;gap:6px">
       <span style="width:7px;height:7px;border-radius:50%;background:${srcColor(x.source)};display:inline-block"></span>
       ${esc(x.source)} · <span class="mono">${x.id}</span>
+      <button class="icon-btn" id="detailRenameBtn" style="width:22px;height:22px;color:var(--muted);margin-left:2px" title="Rename entry id">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      </button>
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px">
       <span class="vis-chip">pattern <span class="vl">${x.pattern}</span></span>
@@ -824,6 +827,33 @@ function openDetail(x){
   document.getElementById('detailFavBtn')?.addEventListener('click',()=>{
     const on=toggleFav(x.id); openDetail(x);
     document.querySelectorAll(`.gcard[data-id="${x.id}"]`).forEach(c=>c.classList.toggle('is-fav',on));
+  });
+  document.getElementById('detailRenameBtn')?.addEventListener('click', async () => {
+    const newId = prompt('New entry id (kebab-case):', x.id);
+    if (!newId || newId.trim() === x.id) return;
+    try {
+      const r = await fetch(`/api/entries/${encodeURIComponent(x.id)}/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newId: newId.trim() }),
+      });
+      const data = await r.json();
+      if (!r.ok) { toast(data.error || 'Rename failed', 'error'); return; }
+      // Update local state: replace the old-id entry, update favorites if needed.
+      const idx = E.findIndex((e) => e.id === x.id);
+      if (idx !== -1) E[idx] = { ...E[idx], id: data.entry.id };
+      const favs = getFavs();
+      if (favs.includes(x.id)) {
+        const fi = favs.indexOf(x.id);
+        favs[fi] = data.entry.id;
+        localStorage.setItem('clean-ui-favs', JSON.stringify(favs));
+      }
+      toast(`Renamed to ${data.entry.id}`);
+      openDetail(E[idx]);
+      render();
+    } catch (e) {
+      toast('Rename failed: ' + (e.message || 'network error'), 'error');
+    }
   });
   document.querySelectorAll('#detailBody .swatch').forEach(s=>{
     s.addEventListener('click',()=>{

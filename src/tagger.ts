@@ -1178,19 +1178,13 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
     if (confidence !== "visible" && confidence !== "inferred" && confidence !== "dom-grounded") confidence = "inferred";
     if (confidence === "dom-grounded") confidence = "inferred";
 
-    // WCAG citation gate: every active risk must carry at least one canonical
-    // WCAG 2.2 ID. Extract IDs from whatever shape the model emitted (string,
-    // array of strings, comma-joined multi-citation), validate each against the
-    // registry, deduplicate. A risk with no valid citation is DROPPED — "no
-    // valid citation means no risk." This is referential integrity, not proof
-    // of a WCAG violation; the evidence gate above remains the authority on that.
-    const emitted = Array.isArray(obj.wcag)
-      ? obj.wcag.flatMap((w) => (typeof w === "string" ? extractAllWcagIds(w) : []))
-      : typeof obj.wcag === "string"
-        ? extractAllWcagIds(obj.wcag)
-        : [];
-    const wcag = [...new Set(emitted)].filter((id) => isWcagCriterion(id)).slice(0, 3);
-    if (wcag.length === 0) continue; // no valid canonical ID → drop the risk
+    // WCAG citation gate: live model output must already be a canonical ID
+    // array. Decorative titles and comma-joined values are legacy migration
+    // inputs only; accepting them here would reintroduce a clean-up gate after
+    // generation instead of enforcing the constrained schema at this boundary.
+    if (!Array.isArray(obj.wcag) || !obj.wcag.every((id) => typeof id === "string" && isWcagCriterion(id))) continue;
+    const wcag = [...new Set(obj.wcag)].slice(0, 3);
+    if (wcag.length === 0) continue;
 
     result.push({ element, risk, evidence, confidence, wcag });
   }

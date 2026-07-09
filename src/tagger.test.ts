@@ -176,10 +176,24 @@ describe("tagger sanitization", () => {
         risk: "Low contrast below WCAG 4.5:1 threshold.",
         evidence: "DOM computed contrastRatio of 2.8:1 between the muted text and canvas background.",
         confidence: "inferred",
-        wcag: "1.4.3 Contrast (Minimum)",
+        wcag: ["1.4.3"],
       }],
     });
     expect(sanitized.draftAccessibilityRisks).toHaveLength(1);
+  });
+
+  it("drops decorative or combined WCAG strings from live model output", () => {
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [{
+        element: "payment status dot",
+        risk: "State is communicated by color alone, which color-blind users may miss.",
+        evidence: "small red and green dots beside Paid and Failed rows with no text status label",
+        confidence: "visible",
+        wcag: "1.4.1 Use of Color, 2.4.7 Focus Visible",
+      }],
+    });
+
+    expect(sanitized.draftAccessibilityRisks).toEqual([]);
   });
 
   describe("icon-only prose gate (stops hallucination migrating to prose)", () => {
@@ -291,7 +305,7 @@ describe("tagger sanitization", () => {
         risk: "Purple is used as the sole status differentiator.",
         evidence: "#7464a4 from dominant color palette",
         confidence: "inferred",
-        wcag: "1.4.1 Use of Color",
+        wcag: ["1.4.1"],
       }],
     });
     expect(sanitized.draftAccessibilityRisks).toEqual([]);
@@ -320,7 +334,7 @@ describe("tagger sanitization", () => {
         risk: "State is communicated by color alone, which color-blind users may miss.",
         evidence: "small red/green dots beside Paid and Failed rows with no text status label",
         confidence: "visible",
-        wcag: "1.4.1 Use of Color",
+        wcag: ["1.4.1"],
       }],
     });
     expect(sanitized.draftAccessibilityRisks).toHaveLength(1);
@@ -334,14 +348,14 @@ describe("tagger sanitization", () => {
           risk: "The colored pill may not provide enough contrast for low-vision users.",
           evidence: "The exact contrast ratios are not visible from the screenshot, but the colors appear moderately saturated.",
           confidence: "inferred",
-          wcag: "1.4.3 Contrast (Minimum)",
+          wcag: ["1.4.3"],
         },
         {
           element: "secondary label",
           risk: "The muted label is below the 4.5:1 contrast threshold.",
           evidence: "DOM computed contrastRatio is 2.8:1 for the muted label against the canvas.",
           confidence: "inferred",
-          wcag: "1.4.3 Contrast (Minimum)",
+          wcag: ["1.4.3"],
         },
       ],
     });

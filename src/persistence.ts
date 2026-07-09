@@ -85,17 +85,21 @@ export function writeAtomic(path: string, content: string): void {
   renameSync(tmp, path); // atomic on POSIX and Windows
 }
 
+/** Write a timestamped raw corpus snapshot. Errors intentionally propagate. */
+export function writeRawSnapshot(content: string): void {
+  mkdirSync(SNAPSHOT_DIR, { recursive: true });
+  const stamped = resolve(SNAPSHOT_DIR, `entries-${Date.now()}.json`);
+  writeAtomic(stamped, content.endsWith("\n") ? content : `${content}\n`);
+  const all = listSnapshots();
+  if (all.length > SNAPSHOT_KEEP) {
+    for (const stale of all.slice(SNAPSHOT_KEEP)) unlinkSync(stale);
+  }
+}
+
 /** Keep a rolling timestamped snapshot of the corpus. */
 export function writeSnapshot(entries: CorpusEntryT[]): void {
   try {
-    mkdirSync(SNAPSHOT_DIR, { recursive: true });
-    const stamped = resolve(SNAPSHOT_DIR, `entries-${Date.now()}.json`);
-    writeAtomic(stamped, `${JSON.stringify({ version: 2, entries }, null, 2)}\n`);
-    // Prune to the most recent SNAPSHOT_KEEP. The slice is the oldest tail.
-    const all = listSnapshots();
-    if (all.length > SNAPSHOT_KEEP) {
-      try { for (const stale of all.slice(SNAPSHOT_KEEP)) unlinkSync(stale); } catch { /* best-effort */ }
-    }
+    writeRawSnapshot(JSON.stringify({ version: 2, entries }, null, 2));
   } catch (err) {
     console.error("[corpus] snapshot write failed (non-fatal):", err instanceof Error ? err.message : err);
   }

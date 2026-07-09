@@ -35,8 +35,9 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { writeAtomic } from "../persistence.js";
-import { extractAllWcagIds, isWcagCriterion } from "../wcag/registry.js";
+import { writeAtomic, writeRawSnapshot } from "../persistence.js";
+import { Corpus } from "../schema.js";
+import { transformAccessibilityRisk, type LegacyRisk } from "./wcag-migration.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
@@ -55,14 +56,6 @@ if (values.help) {
   process.exit(0);
 }
 
-type LegacyRisk = string | {
-  element: string;
-  risk: string;
-  evidence: string;
-  confidence: string;
-  wcag?: string | string[];
-};
-
 type AntiPatterns = {
   antiPatterns: string[];
   whereThisFails: string[];
@@ -70,7 +63,8 @@ type AntiPatterns = {
   legacyAccessibilityNotes?: string[];
 };
 
-const raw = JSON.parse(readFileSync(CORPUS_PATH, "utf-8"));
+const originalSerialized = readFileSync(CORPUS_PATH, "utf-8");
+const raw = JSON.parse(originalSerialized);
 const entries: Array<{ id: string; antiPatterns?: AntiPatterns }> = raw.entries;
 
 /** Report tallies + per-entry transformation log for the dry-run output. */
@@ -91,61 +85,36 @@ for (const entry of entries) {
   const active: LegacyRisk[] = ap.accessibilityRisks ?? [];
   const legacy: string[] = ap.legacyAccessibilityNotes ?? [];
 
-  // Detect already-migrated state: all active risks are objects with wcag: string[].
-  const isMigrated = active.every(
-    (r) => typeof r !== "string" && Array.isArray((r as { wcag?: unknown }).wcag),
-  ) && active.length >= 0 && legacy.length >= 0;
-  // (length >= 0 is always true; the real signal is the wcag-array check above.)
-
   const newActive: NonNullable<AntiPatterns["accessibilityRisks"]> = [];
 
   for (const risk of active) {
-    if (typeof risk === "string") {
-      // Legacy free-text string → quarantine
-      report.quarantined.push({ id: entry.id, note: risk.slice(0, 70) });
-      legacy.push(risk);
+    const transformed = transformAccessibilityRisk(risk);
+    if (transformed.kind === "quarantined") {
+      report.quarantined.push({ id: entry.id, note: transformed.note.slice(0, 70) });
+      legacy.push(transformed.note);
       continue;
     }
 
-    // Structured object
-    const wcagRaw = risk.wcag;
-    if (Array.isArray(wcagRaw)) {
-      // Already an array (post-migration shape) — keep as-is. Validate.
-      const valid = [...new Set(wcagRaw)].filter((id) => isWcagCriterion(String(id))).map(String);
-      if (valid.length === 0) {
-        report.invalidCitations.push({ id: entry.id, raw: JSON.stringify(wcagRaw) });
-        report.deleted.push({ id: entry.id, reason: "post-migration risk with no valid WCAG IDs" });
-        continue;
+    if (transformed.kind === "normalized") {
+      if (typeof risk !== "string" && typeof risk.wcag === "string") {
+        report.normalized.push({ id: entry.id, from: risk.wcag, to: transformed.wcag });
       }
-      newActive.push({ ...risk, wcag: valid });
+      newActive.push(transformed.risk);
       continue;
     }
 
-    if (typeof wcagRaw === "string" && wcagRaw.trim()) {
-      // Title-bearing citation → extract bare IDs, validate, deduplicate.
-      const ids = [...new Set(extractAllWcagIds(wcagRaw))].filter((id) => isWcagCriterion(id));
-
-      if (ids.length === 0) {
-        // Citation string present but no valid IDs extracted.
-        report.invalidCitations.push({ id: entry.id, raw: wcagRaw });
-        report.deleted.push({ id: entry.id, reason: "citation string yielded no valid WCAG IDs" });
-        continue;
-      }
-
-      report.normalized.push({ id: entry.id, from: wcagRaw, to: ids });
-      newActive.push({ ...risk, wcag: ids });
-      continue;
+    if (transformed.rawCitation) {
+      report.invalidCitations.push({ id: entry.id, raw: transformed.rawCitation });
+      report.deleted.push({ id: entry.id, reason: "citation yielded no valid WCAG IDs" });
+    } else {
+      const description = typeof risk === "string" ? "" : risk.risk;
+      report.deleted.push({
+        id: entry.id,
+        reason: description.includes("no risk is confirmed") || description.includes("likely accessible")
+          ? "self-described non-risk (evidence confirms no risk)"
+          : "structured risk with no wcag citation",
+      });
     }
-
-    // Structured object with no wcag field at all. The only such record in the
-    // corpus (workable-workable-2) is a self-described non-risk ("no risk is
-    // confirmed"). Delete it — do not assign a citation to a non-risk.
-    report.deleted.push({
-      id: entry.id,
-      reason: risk.risk?.includes("no risk is confirmed") || risk.risk?.includes("likely accessible")
-        ? "self-described non-risk (evidence confirms no risk)"
-        : "structured risk with no wcag citation",
-    });
   }
 
   // If nothing changed for this entry, count as already-migrated.
@@ -197,10 +166,24 @@ if (report.invalidCitations.length > 0) {
   process.exit(1);
 }
 
+// Validate the complete post-migration document before preserving or replacing
+// anything. The migration can accept legacy input, but its output must satisfy
+// the current corpus schema exactly.
+const migrated = Corpus.safeParse(raw);
+if (!migrated.success) {
+  console.error("\n❌ Aborting: migration output does not satisfy the corpus schema.");
+  console.error(migrated.error.issues.map((issue) => `   ${issue.path.join(".")}: ${issue.message}`).join("\n"));
+  process.exit(1);
+}
+
 // ─── Write (or preview) ───────────────────────────────────────────────────────
 if (values["dry-run"]) {
   console.log("\n(dry-run — no changes written)");
 } else {
-  writeAtomic(CORPUS_PATH, JSON.stringify(raw, null, 2) + "\n");
+  // Preserve the exact original document before overwrite. Unlike UI saves,
+  // this migration may begin with a legacy shape that the current schema cannot
+  // parse, so it snapshots raw serialized JSON rather than typed entries.
+  writeRawSnapshot(originalSerialized);
+  writeAtomic(CORPUS_PATH, JSON.stringify(migrated.data, null, 2) + "\n");
   console.log(`\n✓ Wrote ${entries.length} entries to ${CORPUS_PATH}`);
 }

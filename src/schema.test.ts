@@ -424,6 +424,23 @@ describe("corpus schema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("rejects canonical-looking WCAG IDs missing from the registry", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      antiPatterns: {
+        ...validEntry.antiPatterns,
+        accessibilityRisks: [{
+          element: "status indicator",
+          risk: "State is communicated by color alone, which some users may miss.",
+          evidence: "red and green dots distinguish failed and paid rows without text labels",
+          confidence: "visible",
+          wcag: ["9.9.9"],
+        }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects structured accessibility risks without a wcag array", () => {
     const result = CorpusEntry.safeParse({
       ...validEntry,

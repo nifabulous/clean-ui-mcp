@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getWcagTitle } from "./wcag/registry.js";
+import { getWcagTitle, isWcagCriterion } from "./wcag/registry.js";
 
 /**
  * CORPUS SCHEMA
@@ -229,7 +229,7 @@ export const AccessibilityRisk = z.object({
   risk: z.string().min(10),
   evidence: z.string().min(8),
   confidence: z.enum(["visible", "inferred", "dom-grounded"]),
-  wcag: z.array(z.string().regex(/^\d+\.\d+\.\d+$/, "canonical WCAG 2.2 ID")).min(1).max(3),
+  wcag: z.array(z.string().refine(isWcagCriterion, "canonical WCAG 2.2 registry ID")).min(1).max(3),
 });
 
 export type AccessibilityRiskT = z.infer<typeof AccessibilityRisk>;

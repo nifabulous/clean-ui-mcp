@@ -57,7 +57,7 @@ export const ACCESSIBILITY_RISK_FIXTURES: ContractFixture[] = [
     },
   },
   {
-    name: "normalizes title-bearing citation to bare IDs",
+    name: "drops title-bearing citation from live model output",
     input: {
       draftAccessibilityRisks: [{
         element: "status chips",
@@ -69,12 +69,11 @@ export const ACCESSIBILITY_RISK_FIXTURES: ContractFixture[] = [
       }],
     },
     expect: {
-      accessibilityRisks: [{ wcag: ["1.4.1"] }],
-      accessibilityRiskCount: 1,
+      accessibilityRiskCount: 0,
     },
   },
   {
-    name: "splits comma-joined multi-citation into array",
+    name: "drops comma-joined citations from live model output",
     input: {
       draftAccessibilityRisks: [{
         element: "status indicators",
@@ -85,8 +84,7 @@ export const ACCESSIBILITY_RISK_FIXTURES: ContractFixture[] = [
       }],
     },
     expect: {
-      accessibilityRisks: [{ wcag: ["1.4.1", "2.4.7"] }],
-      accessibilityRiskCount: 1,
+      accessibilityRiskCount: 0,
     },
   },
   {
@@ -116,7 +114,7 @@ export const ACCESSIBILITY_RISK_FIXTURES: ContractFixture[] = [
     expect: { accessibilityRiskCount: 0 },
   },
   {
-    name: "DROPS risk with only invalid IDs, keeps valid ones in mixed array",
+    name: "drops a risk with any invalid WCAG ID",
     input: {
       draftAccessibilityRisks: [
         {
@@ -124,14 +122,11 @@ export const ACCESSIBILITY_RISK_FIXTURES: ContractFixture[] = [
           risk: "Color is the only visible status channel.",
           evidence: "red/green dots beside Paid and Failed rows with no text label",
           confidence: "visible",
-          wcag: ["1.4.1", "9.9.9"], // one valid, one invalid → keeps the risk, drops invalid ID
+          wcag: ["1.4.1", "9.9.9"], // a constrained live field rejects the entire mixed array
         },
       ],
     },
-    expect: {
-      accessibilityRisks: [{ wcag: ["1.4.1"] }],
-      accessibilityRiskCount: 1,
-    },
+    expect: { accessibilityRiskCount: 0 },
   },
   {
     name: "DROPS contrast (1.4.3) risk without DOM ground truth",

@@ -691,7 +691,13 @@ VERIFIED GROUND TRUTH — treat every value below as fact, do not re-derive or c
 ${JSON.stringify({ quantizedColors }, null, 2)}
 ${domSignalsBlock}
 {
-${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}
+${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}. If none fit well, use
+                           // the closest match AND set suggestedPatternType below.
+  "suggestedPatternType": null, // DISCOVERY LANE — when patternType is a forced/closest fit, name
+                           // what the pattern REALLY is in kebab-case (e.g. "kanban-board",
+                           // "activity-feed", "monitoring-console", "calendar-view"). Null when
+                           // patternType is accurate. This goes into _raw for the curator to
+                           // review — it never replaces the canonical patternType.
   "categories": [],        // 1-3 from: ${CATEGORIES.join(", ")}
   "styleTags": [],         // 1-3 from: ${STYLE_TAGS.join(", ")}
   "components": [],        // 3-10 visible UI building blocks from: ${COMPONENTS.join(", ")}

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sanitizeTaggerPayload, tagImage, extractQuantizedColors, hasVisionKey, activeModelName } from "./tagger.js";
+import { sanitizeTaggerPayload, tagImage, extractQuantizedColors, hasVisionKey, activeModelName, validateNoIconOnlyClaims, scrubProseIconOnly } from "./tagger.js";
 import { PRIVATE_IMAGE_DIR } from "./paths.js";
 
 describe("tagger sanitization", () => {
@@ -102,6 +102,95 @@ describe("tagger sanitization", () => {
       }],
     });
     expect(sanitized2.draftAccessibilityRisks).toEqual([]);
+  });
+
+  it("drops self-referential evidence (model citing its own extraction output)", () => {
+    // Regression: hume-hume-12's a11y evidence said "The component inventory
+    // lists 'icon-button' as a standalone element" — reasoning from the prompt
+    // (the extraction JSON), not from the screenshot. The model was using its
+    // own output as evidence.
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [{
+        element: "sidebar icon-button",
+        risk: "Icon button lacks an accessible name visible on screen.",
+        evidence: "The component inventory lists 'icon-button' as a standalone element.",
+        confidence: "inferred",
+      }],
+    });
+    expect(sanitized.draftAccessibilityRisks).toEqual([]);
+  });
+
+  it("keeps evidence that describes a visible screenshot detail, not the extraction", () => {
+    const sanitized = sanitizeTaggerPayload({
+      draftAccessibilityRisks: [{
+        element: "send button",
+        risk: "Send action uses a paper-plane icon with no text label.",
+        evidence: "Bottom-right of the chat composer shows a paper-plane glyph inside a circle; no 'Send' text is visible.",
+        confidence: "visible",
+      }],
+    });
+    expect(sanitized.draftAccessibilityRisks).toHaveLength(1);
+  });
+
+  describe("icon-only prose gate (stops hallucination migrating to prose)", () => {
+    it("flags icon-only assertions in critique/whatToSteal/businessRationale", () => {
+      const errors = validateNoIconOnlyClaims({
+        draftCritique: "The sidebar uses icon-only buttons with no text labels.",
+        draftWhatToSteal: ["Use icon-only navigation in a fixed-narrow sidebar to reduce visual load."],
+        businessRationale: { rationale: "The icon-only sidebar reduces friction for frequent users." },
+      });
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0]).toMatch(/icon-only/i);
+    });
+
+    it("does NOT flag contrast/rejection sentences (correct observations)", () => {
+      // origin-origin-2 correctly said the sidebar "keeps icons paired with text
+      // labels instead of going icon-only" — that's a legitimate observation,
+      // not a hallucination.
+      const errors = validateNoIconOnlyClaims({
+        draftCritique: "The sidebar keeps icons paired with text labels instead of going icon-only.",
+        draftWhatToSteal: ["Avoid icon-only navigation when first-time users are common; pair icons with labels."],
+      });
+      expect(errors).toEqual([]);
+    });
+
+    it("scrubs icon-only assertion sentences but preserves contrast sentences", () => {
+      const critique = {
+        draftCritique: "The sidebar uses icon-only buttons with no text labels. This works for returning users. The sidebar keeps icons paired with text labels instead of going icon-only.",
+        draftWhatToSteal: ["Use icon-only navigation for daily-active users."],
+        draftAntiPatterns: ["Avoid labeling every icon in the sidebar."],
+        typographyNotes: "The lack of labels on icons forces reliance on memorized shapes.",
+      };
+      scrubProseIconOnly(critique);
+      // Assertion sentence removed; contrast sentence + neutral sentence kept.
+      expect(critique.draftCritique).not.toContain("icon-only buttons");
+      expect(critique.draftCritique).toContain("This works for returning users");
+      expect(critique.draftCritique).toContain("instead of going icon-only");
+      // whatToSteal assertion entry dropped entirely.
+      expect(critique.draftWhatToSteal).toEqual([]);
+      // antiPatterns entry has no icon-only claim — kept.
+      expect(critique.draftAntiPatterns).toHaveLength(1);
+      // typographyNotes assertion sentence removed.
+      expect(critique.typographyNotes).not.toContain("memorized shapes");
+    });
+
+    it("preserves businessRationale.rationale by stripping only the assertion sentence", () => {
+      const critique = {
+        draftCritique: "A valid critique with no icon-only claims.",
+        draftWhatToSteal: ["A valid technique."],
+        draftAntiPatterns: ["A valid avoided mistake."],
+        typographyNotes: "Valid notes.",
+        businessRationale: {
+          businessGoal: "drive-habitual-use",
+          targetUser: "daily users",
+          rationale: "The icon-only sidebar reduces friction. A second sentence about onboarding.",
+          confirmed: false,
+        },
+      };
+      scrubProseIconOnly(critique);
+      expect(critique.businessRationale?.rationale).not.toContain("icon-only");
+      expect(critique.businessRationale?.rationale).toContain("A second sentence about onboarding");
+    });
   });
 
   it("drops color-only risks when evidence is only a palette color", () => {

@@ -964,6 +964,7 @@ function domainTagsFromAllowed(value: unknown): string[] {
  *   - Missing or too-short evidence (<8 chars)
  *   - Evidence that is only a generic component name (sidebar, buttons, icons)
  *   - Evidence that is only a hex value or palette mention
+ *   - Self-referential evidence (citing the extraction output, not the screenshot)
  *   - Icon-only risks where evidence contains visible text labels (contradiction)
  *   - Color-only risks where evidence doesn't name a concrete visible state/control
  *   - More than 2 non-DOM risks (quota cap — [] is honest when guessing)
@@ -986,6 +987,11 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
   // Color-only / status risk where evidence must name a concrete visible state/control.
   const COLOR_ONLY_RISK = /\b(color[\s-]*only|sole (?:status )?differentiator|color alone|status (?:indicator|chip|dot|badge))\b/i;
   const CONCRETE_STATE_LANG = /\b(dot|chip|badge|row|column|cell|button|indicator|status|state|paid|failed|pending|active|inactive|success|error|warning|danger|stop|go)\b/i;
+  // Self-referencing evidence: the model citing its OWN extraction output (the
+  // component inventory, the layoutRegions, "the extraction shows") as evidence
+  // instead of something visible on the screenshot. This is reasoning from the
+  // prompt, not observation — reject it.
+  const SELF_REFERENTIAL_EVIDENCE = /\b(component inventory|component list|extraction (?:shows|lists|describes|states)|layout region (?:is )?described|the (?:above|validated) (?:extraction|inventory))\b/i;
 
   const result: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag?: string }> = [];
 
@@ -1010,6 +1016,11 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
 
     // Gate 3: reject palette-only evidence
     if (PALETTE_EVIDENCE.test(evidence) || PALETTE_WORDS.test(evidence)) continue;
+
+    // Gate 3b: reject self-referential evidence — the model citing its own
+    // extraction output ("component inventory lists icon-button") instead of a
+    // visible screenshot detail. Reasoning from the prompt is not observation.
+    if (SELF_REFERENTIAL_EVIDENCE.test(evidence)) continue;
 
     // Gate 4: icon-only risks are the #1 hallucination. The model CANNOT
     // reliably tell whether text labels are present — it hallucinated "no
@@ -1222,6 +1233,142 @@ function validateNoBannedPhrases(obj: Record<string, unknown>): string[] {
     }
   }
   return errors;
+}
+
+// ─── icon-only prose gate (stops hallucination from migrating to prose) ───────
+//
+// The a11y sanitizer empties model-generated icon-only risks from the
+// accessibilityRisks array, but the #1 hallucination — "icon-only navigation
+// / icon-only buttons with no text labels" — was migrating into critique,
+// whatToSteal, antiPatterns, businessRationale, and typographyNotes unchecked.
+// This gate scans prose fields for icon-only ASSERTIONS and rejects the whole
+// critique with a retry (mirroring the banned-phrase gate), then scrubs
+// surviving assertions as a safety net.
+//
+// Key nuance: we preserve sentences that CONTRAST or REJECT icon-only nav
+// ("the sidebar keeps icons paired with text labels instead of going icon-only"
+// is a correct observation, not a hallucination). Only assertion sentences are
+// treated as errors.
+
+// Broader than the a11y ICON_ONLY_RISK: catches "icon-only" + absence-of-label
+// phrasings across prose. Anchored on the noun phrase, not the full risk.
+const ICON_ONLY_PROSE = /\bicon[\s-]*only|icons?\s+(?:alone|symbols?\s+alone|without\s+(?:visible\s+)?(?:text\s+)?labels?)|represented\s+(?:solely\s+)?by\s+icons?|reli(?:ance|es)\s+on\s+(?:memorized\s+)?(?:icon\s+)?shapes?\b/i;
+// Contrast/rejection clause markers — if a sentence both mentions icon-only and
+// one of these, it's describing what the design AVOIDS or negating icon-only,
+// not asserting it. NOTE: bare "no" and "not" are excluded — "no text labels"
+// is the absence claim itself, and "not" is too broad. We require explicit
+// negation verbs (are not / is not / do not) or comparison conjunctions.
+const CONTRAST_CLAUSE = /\b(?:instead\s+of|rather\s+than|avoids?|rejects?|unlike|in\s+contrast\s+to|could\s+have|might\s+(?:have\s+)?(?:used|gone)|do\s+not|does\s+not|are\s+not|is\s+not|not\s+(?:icon|going))\b/i;
+
+/**
+ * Scan critique prose fields for icon-only ASSERTIONS (not contrast clauses).
+ * Returns a list of rejection reasons for the retry-feedback path. Empty when
+ * the model is clean or only used icon-only in a contrast/rejection sense.
+ */
+export function validateNoIconOnlyClaims(parsed: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  const hits: Array<{ field: string; sentence: string }> = [];
+
+  for (const field of PROSE_FIELDS) {
+    const value = collectProseValue(parsed, field);
+    for (const sentence of splitSentences(value)) {
+      if (!ICON_ONLY_PROSE.test(sentence)) continue;
+      // If the same sentence contains a contrast/rejection clause, it's a
+      // legitimate observation ("avoids going icon-only"). Skip it.
+      if (CONTRAST_CLAUSE.test(sentence)) continue;
+      hits.push({ field, sentence });
+    }
+  }
+
+  if (hits.length) {
+    errors.push(
+      `Icon-only navigation claims are the #1 hallucination — text labels are usually visible. ` +
+      `Do NOT assert icon-only nav/buttons in any field. Found ${hits.length} assertion(s):\n` +
+      hits.map((h) => `  [${h.field}] "${h.sentence.trim().slice(0, 140)}"`).join("\n"),
+    );
+  }
+  return errors;
+}
+
+/** Prose fields scanned by the icon-only gate + scrubber. */
+const PROSE_FIELDS = [
+  "draftCritique",
+  "typographyNotes",
+  "voiceTone",
+  "draftWhatToSteal",
+  "draftAntiPatterns",
+  "voiceExamples",
+  "voiceAvoid",
+  "businessRationale.rationale",
+] as const;
+
+/** Collect a prose value (string or array element) as a single string. */
+function collectProseValue(obj: Record<string, unknown>, field: string): string {
+  // draftWhatToSteal / draftAntiPatterns / voiceExamples / voiceAvoid are arrays.
+  if (field === "draftWhatToSteal" || field === "draftAntiPatterns" || field === "voiceExamples" || field === "voiceAvoid") {
+    const arr = obj[field];
+    return Array.isArray(arr) ? arr.filter((s): s is string => typeof s === "string").join(". ") : "";
+  }
+  // businessRationale is a nested object.
+  if (field === "businessRationale.rationale") {
+    const br = obj.businessRationale;
+    return br && typeof br === "object" ? text((br as Record<string, unknown>).rationale) : "";
+  }
+  const v = obj[field];
+  return typeof v === "string" ? v : "";
+}
+
+/** Split prose into sentence-ish units (period + space, or bullet boundaries). */
+function splitSentences(value: string): string[] {
+  if (!value) return [];
+  return value
+    .replace(/\.\s+/g, ".\n")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Safety-net scrubber: strip icon-only ASSERTION sentences from prose fields
+ * after the retry. Preserves contrast/rejection sentences. Called on the
+ * sanitized critique object (not the raw parse) so it runs even if the retry
+ * fails or the model persists the claim.
+ *
+ * Mutates and returns the critique object. Operates on the post-sanitize shape
+ * (draftCritique, draftWhatToSteal, etc. have been validated already).
+ */
+export function scrubProseIconOnly(critique: {
+  draftCritique: string;
+  draftWhatToSteal: string[];
+  draftAntiPatterns: string[];
+  typographyNotes: string;
+  businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
+  voice?: { tone: string; examples: string[]; avoid: string[] };
+}): void {
+  const filterSentences = (text: string): string => {
+    const kept = splitSentences(text).filter((s) => {
+      if (!ICON_ONLY_PROSE.test(s)) return true;
+      return CONTRAST_CLAUSE.test(s);
+    });
+    return kept.join(" ");
+  };
+
+  critique.draftCritique = filterSentences(critique.draftCritique);
+  critique.typographyNotes = filterSentences(critique.typographyNotes);
+  critique.draftWhatToSteal = critique.draftWhatToSteal
+    .map((t) => filterSentences(t).trim())
+    .filter((t) => t.length > 0);
+  critique.draftAntiPatterns = critique.draftAntiPatterns
+    .map((t) => filterSentences(t).trim())
+    .filter((t) => t.length > 0);
+  if (critique.businessRationale?.rationale) {
+    critique.businessRationale.rationale = filterSentences(critique.businessRationale.rationale);
+  }
+  if (critique.voice?.examples) {
+    critique.voice.examples = critique.voice.examples
+      .map((t) => filterSentences(t).trim())
+      .filter((t) => t.length > 0);
+  }
 }
 
 // ─── model call helpers (multi-provider) ─────────────────────────────────────
@@ -1815,10 +1962,15 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   }
   let critique = sanitizeTaggerPayload(critiqueParsed);
 
-  // ── Banned-phrase gate: retry once with error feedback ─────────────────────
+  // ── Combined prose gate: banned phrases + icon-only assertions ─────────────
+  // Both are #1-class hallucination vectors. Retry once with explicit feedback,
+  // then scrub surviving icon-only assertions as a safety net (the retry may
+  // fail, the model may persist the claim, or the retry may not parse).
   const bannedErrors = validateNoBannedPhrases(critiqueParsed);
-  if (bannedErrors.length > 0) {
-    const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${bannedErrors.join("\n")}`;
+  const iconOnlyErrors = validateNoIconOnlyClaims(critiqueParsed);
+  const gateErrors = [...bannedErrors, ...iconOnlyErrors];
+  if (gateErrors.length > 0) {
+    const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${gateErrors.join("\n")}`;
     const retryText = await callModel(
       "critique",
       buildCritiquePrompt(effectiveName, critiqueSafeExtraction(extractionParsed), input.domSignals),
@@ -1835,6 +1987,12 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       // Retry failed to parse — keep the original (flagged) critique; the human will rewrite it.
     }
   }
+
+  // Safety net: strip any icon-only ASSERTION sentences that survived the retry.
+  // Preserves contrast/rejection sentences ("avoids going icon-only"). Runs on
+  // the sanitized critique object so it catches both the retry result and the
+  // original (when the retry failed or the model persisted the claim).
+  scrubProseIconOnly(critique);
 
   // ── Merge passes into TaggerOutput ─────────────────────────────────────────
   return {

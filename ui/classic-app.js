@@ -331,7 +331,7 @@ function renderLibrary() {
             <section class="panel"><div class="panel-body"><h2 class="section-title">What to steal</h2><ul class="steal-list">${entry.whatToSteal.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>
             ${(entry.antiPatterns?.antiPatterns || []).length ? `<section class="panel"><div class="panel-body"><h2 class="section-title">Anti-patterns (mistakes avoided)</h2><ul class="avoid-list">${entry.antiPatterns.antiPatterns.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>` : ""}
             ${(entry.antiPatterns?.whereThisFails || []).length ? `<section class="panel"><div class="panel-body"><h2 class="section-title">Where copying this fails</h2><ul class="avoid-list">${entry.antiPatterns.whereThisFails.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>` : ""}
-            ${(entry.antiPatterns?.accessibilityRisks || []).length ? `<section class="panel"><div class="panel-body"><h2 class="section-title">Accessibility risks</h2><ul class="avoid-list">${entry.antiPatterns.accessibilityRisks.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div></section>` : ""}
+            ${(entry.antiPatterns?.accessibilityRisks || []).length ? `<section class="panel"><div class="panel-body"><h2 class="section-title">Accessibility risks</h2><ul class="avoid-list">${entry.antiPatterns.accessibilityRisks.map((item) => `<li>${formatA11yRisk(item)}</li>`).join("")}</ul></div></section>` : ""}
           </div>
           <div class="detail-rail">${rail}</div>
         </div>
@@ -788,6 +788,29 @@ function stripDraftMarker(s) {
   return out.trim();
 }
 
+// Strip draft markers from a single a11y risk — handles legacy strings and
+// structured objects (strips each text field individually).
+function stripDraftFromRisk(r) {
+  if (typeof r === "string") return stripDraftMarker(r);
+  return {
+    ...r,
+    element: stripDraftMarker(r.element || ""),
+    risk: stripDraftMarker(r.risk || ""),
+    evidence: stripDraftMarker(r.evidence || ""),
+    ...(r.wcag ? { wcag: stripDraftMarker(r.wcag) } : {}),
+  };
+}
+
+// Format an a11y risk for display. Legacy strings render as-is. Structured
+// objects show [confidence] element: risk with evidence on a muted second line.
+function formatA11yRisk(r) {
+  if (typeof r === "string") return esc(r);
+  const conf = r.confidence || "inferred";
+  const wcag = r.wcag ? ` <span class="a11y-wcag">(${esc(r.wcag)})</span>` : "";
+  const ev = r.evidence ? `<div class="a11y-evidence">Evidence: ${esc(r.evidence)}</div>` : "";
+  return `<span class="a11y-conf ${conf}">[${conf}]</span> <strong>${esc(r.element || "")}</strong>: ${esc(r.risk || "")}${wcag}${ev}`;
+}
+
 // Apply stripDraftMarker to every free-text field the hygiene gate inspects —
 // the same field set entryTextFields() enumerates server-side. Used by both the
 // single-sample auto-fill and the bulk critique pass so they share one rule.
@@ -798,7 +821,7 @@ function stripMarkersFromEntry(entry) {
   if (e.antiPatterns) {
     if (Array.isArray(e.antiPatterns.antiPatterns)) e.antiPatterns.antiPatterns = e.antiPatterns.antiPatterns.map(stripDraftMarker);
     if (Array.isArray(e.antiPatterns.whereThisFails)) e.antiPatterns.whereThisFails = e.antiPatterns.whereThisFails.map(stripDraftMarker);
-    if (Array.isArray(e.antiPatterns.accessibilityRisks)) e.antiPatterns.accessibilityRisks = e.antiPatterns.accessibilityRisks.map(stripDraftMarker);
+    if (Array.isArray(e.antiPatterns.accessibilityRisks)) e.antiPatterns.accessibilityRisks = e.antiPatterns.accessibilityRisks.map(stripDraftFromRisk);
   }
   if (e.voice) {
     if (typeof e.voice.tone === "string") e.voice.tone = stripDraftMarker(e.voice.tone);
@@ -1370,7 +1393,7 @@ async function critiqueQueue() {
     if (next.antiPatterns) {
       next.antiPatterns.antiPatterns = (next.antiPatterns.antiPatterns || []).map(stripDraftMarker);
       next.antiPatterns.whereThisFails = (next.antiPatterns.whereThisFails || []).map(stripDraftMarker);
-      next.antiPatterns.accessibilityRisks = (next.antiPatterns.accessibilityRisks || []).map(stripDraftMarker);
+      next.antiPatterns.accessibilityRisks = (next.antiPatterns.accessibilityRisks || []).map(stripDraftFromRisk);
     }
     if (c.voice) {
       next.voice = c.voice;

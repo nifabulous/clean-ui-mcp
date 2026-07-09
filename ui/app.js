@@ -560,6 +560,27 @@ function stripDraftMarker(s){
   } while(s !== prev);
   return s;
 }
+// Strip draft markers from a single a11y risk — handles legacy strings and
+// structured objects (strips each text field individually).
+function stripDraftFromRisk(r){
+  if(typeof r === 'string') return stripDraftMarker(r);
+  return {
+    ...r,
+    element: stripDraftMarker(r.element||''),
+    risk: stripDraftMarker(r.risk||''),
+    evidence: stripDraftMarker(r.evidence||''),
+    ...(r.wcag ? { wcag: stripDraftMarker(r.wcag) } : {}),
+  };
+}
+// Format an a11y risk for display. Legacy strings render as-is. Structured
+// objects show [confidence] element: risk with evidence on a muted second line.
+function formatA11yRisk(r){
+  if(typeof r === 'string') return esc(r);
+  const conf = r.confidence || 'inferred';
+  const wcag = r.wcag ? ` <span class="a11y-wcag">(${esc(r.wcag)})</span>` : '';
+  const ev = r.evidence ? `<div class="a11y-evidence">Evidence: ${esc(r.evidence)}</div>` : '';
+  return `<span class="a11y-conf ${conf}">[${conf}]</span> <strong>${esc(r.element||'')}</strong>: ${esc(r.risk||'')}${wcag}${ev}`;
+}
 function healthRow(kind,title,desc){
   const ic = kind==='ok'?'<path d="M5 12l5 5 9-9"/>'
            : kind==='warn'?'<path d="M12 8v5M12 16v.5"/><circle cx="12" cy="12" r="9"/>'
@@ -792,7 +813,7 @@ function openDetail(x){
     ${colorRolesHtml}
     <div class="eyebrow" style="margin:14px 0 8px">Critique</div>
     <div class="critique" style="margin-bottom:14px">${esc(x.critique||'No critique recorded.')}</div>
-    ${stealsHtml}${antiHtml}${(x.a11yRisks&&x.a11yRisks.length)?`<div class="eyebrow a11y-eyebrow" style="margin:14px 0 8px">Accessibility risks</div><ul class="steal-list a11y-list">${x.a11yRisks.map(r=>`<li>${esc(r)}</li>`).join('')}</ul>`:''}${layoutHtml}${businessHtml}${voiceHtml}
+    ${stealsHtml}${antiHtml}${(x.a11yRisks&&x.a11yRisks.length)?`<div class="eyebrow a11y-eyebrow" style="margin:14px 0 8px">Accessibility risks</div><ul class="steal-list a11y-list">${x.a11yRisks.map(r=>`<li>${formatA11yRisk(r)}</li>`).join('')}</ul>`:''}${layoutHtml}${businessHtml}${voiceHtml}
     <div style="display:flex;gap:8px;margin:14px 0">
       <a class="btn" style="flex:1;justify-content:center" href="#/add">Edit</a>
       <button class="btn primary" style="flex:1;justify-content:center" onclick="window._mcp.toast('Added to compare')">Compare</button>
@@ -1215,7 +1236,7 @@ async function commitCandidates(){
     if(body.antiPatterns){
       body.antiPatterns.antiPatterns = (body.antiPatterns.antiPatterns||[]).map(stripDraftMarker);
       body.antiPatterns.whereThisFails = (body.antiPatterns.whereThisFails||[]).map(stripDraftMarker);
-      body.antiPatterns.accessibilityRisks = (body.antiPatterns.accessibilityRisks||[]).map(stripDraftMarker);
+      body.antiPatterns.accessibilityRisks = (body.antiPatterns.accessibilityRisks||[]).map(stripDraftFromRisk);
     }
     if(body.businessRationale){
       body.businessRationale.targetUser = stripDraftMarker(body.businessRationale.targetUser);
@@ -1330,7 +1351,7 @@ async function saveDraft(){
   if(draft.antiPatterns){
     draft.antiPatterns.antiPatterns = (draft.antiPatterns.antiPatterns||[]).map(stripDraftMarker);
     draft.antiPatterns.whereThisFails = (draft.antiPatterns.whereThisFails||[]).map(stripDraftMarker);
-    draft.antiPatterns.accessibilityRisks = (draft.antiPatterns.accessibilityRisks||[]).map(stripDraftMarker);
+    draft.antiPatterns.accessibilityRisks = (draft.antiPatterns.accessibilityRisks||[]).map(stripDraftFromRisk);
   }
   if(draft.voice){
     draft.voice.tone = stripDraftMarker(draft.voice.tone);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Component, CorpusEntry, detectPlatform, findDraftMarkers, formatAccessibilityRisk } from "./schema.js";
+import { Component, CorpusEntry, Decision, detectPlatform, findDraftMarkers, formatAccessibilityRisk } from "./schema.js";
 
 const validEntry = {
   id: "example-product-dashboard",
@@ -562,5 +562,100 @@ describe("detectPlatform", () => {
       expect(result.success).toBe(true);
       if (result.success) expect(result.data.platform).toBe(platform);
     }
+  });
+});
+
+describe("Decision schema", () => {
+  const validContext = {
+    targetUser: "First-time visitors",
+    businessGoal: "Make the value prop clear in 10 seconds",
+    primaryKpi: "Trial starts",
+  };
+
+  it("accepts a minimal valid single-screen decision", () => {
+    const result = Decision.safeParse({
+      id: "choose-homepage-direction",
+      title: "Choose the homepage direction",
+      createdAt: "2026-07-10",
+      updatedAt: "2026-07-10",
+      context: validContext,
+      scope: "screen",
+      directions: [
+        {
+          id: "dir-a",
+          name: "Hero with product screenshot",
+          screens: [{ id: "scr-1", order: 0, source: "upload", imageRef: "corpus/images-private/decisions/shot.png" }],
+        },
+        {
+          id: "dir-b",
+          name: "Bold headline + CTA",
+          screens: [{ id: "scr-2", order: 0, source: "upload", imageRef: "corpus/images-private/decisions/shot2.png" }],
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("requires at least two directions", () => {
+    const result = Decision.safeParse({
+      id: "lonely",
+      title: "T",
+      createdAt: "2026-07-10",
+      updatedAt: "2026-07-10",
+      context: validContext,
+      scope: "screen",
+      directions: [
+        { id: "dir-a", name: "A", screens: [{ id: "scr-1", order: 0, source: "upload", imageRef: "x.png" }] },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects more than three directions", () => {
+    const directions = [0, 1, 2, 3].map((i) => ({
+      id: `dir-${i}`, name: `D${i}`,
+      screens: [{ id: `scr-${i}`, order: 0, source: "upload" as const, imageRef: "x.png" }],
+    }));
+    const result = Decision.safeParse({
+      id: "too-many", title: "T", createdAt: "2026-07-10", updatedAt: "2026-07-10",
+      context: validContext, scope: "screen", directions,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("requires at least one screen per direction", () => {
+    const result = Decision.safeParse({
+      id: "empty-dir", title: "T", createdAt: "2026-07-10", updatedAt: "2026-07-10",
+      context: validContext, scope: "screen",
+      directions: [
+        { id: "dir-a", name: "A", screens: [] },
+        { id: "dir-b", name: "B", screens: [{ id: "scr-1", order: 0, source: "upload", imageRef: "x.png" }] },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects flow scope in increment 1", () => {
+    const result = Decision.safeParse({
+      id: "flow-not-yet", title: "T", createdAt: "2026-07-10", updatedAt: "2026-07-10",
+      context: validContext, scope: "flow",
+      directions: [
+        { id: "dir-a", name: "A", screens: [{ id: "s1", order: 0, source: "upload", imageRef: "x.png" }] },
+        { id: "dir-b", name: "B", screens: [{ id: "s2", order: 0, source: "upload", imageRef: "y.png" }] },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects figma source in increment 1", () => {
+    const result = Decision.safeParse({
+      id: "figma-not-yet", title: "T", createdAt: "2026-07-10", updatedAt: "2026-07-10",
+      context: validContext, scope: "screen",
+      directions: [
+        { id: "dir-a", name: "A", screens: [{ id: "s1", order: 0, source: "figma", imageRef: "x.png" }] },
+        { id: "dir-b", name: "B", screens: [{ id: "s2", order: 0, source: "upload", imageRef: "y.png" }] },
+      ],
+    });
+    expect(result.success).toBe(false);
   });
 });

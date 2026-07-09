@@ -554,6 +554,158 @@ export const Corpus = z.object({
 
 export type CorpusT = z.infer<typeof Corpus>;
 
+// ─── Decision Lab (increment 1: single-screen decision brief) ──────────────────
+
+/** Scope of the comparison. Increment 1 supports "screen" only; "flow" is
+ *  reserved for a later increment and rejected by the validator. */
+export const DecisionScope = z.enum(["screen", "flow"]);
+
+/** Workflow state of a decision's analysis. */
+export const DecisionStatus = z.enum(["draft", "analyzing", "analyzed", "failed"]);
+
+/** Where a screen image came from. Increment 1 supports "upload" only; "figma"
+ *  is reserved for a later increment and rejected by the validator. */
+export const ScreenSource = z.enum(["upload", "figma"]);
+
+/** Honest corpus-evidence labeling. Shown separately from analysis confidence. */
+export const EvidenceCoverage = z.enum(["strong", "limited", "unavailable"]);
+
+export const DecisionContext = z.object({
+  targetUser: z.string().min(1),
+  businessGoal: z.string().min(1),
+  primaryKpi: z.string().min(1),
+  platform: Platform.optional(),
+  constraints: z.string().optional(),
+});
+
+/** One rubric dimension scored for a direction. Every score must cite at least
+ *  one evidence id — enforced by the citation gate in decision-lab.ts. */
+export const RubricDimension = z.enum([
+  "goal-alignment",
+  "visual-hierarchy",
+  "cognitive-load",
+  "copy-clarity",
+  "consistency",
+]);
+
+export const RubricScore = z.object({
+  dimension: RubricDimension,
+  /** 1-5 scale. Null means the evidence was insufficient to score this dimension. */
+  score: z.number().int().min(1).max(5).nullable(),
+  rationale: z.string().min(1),
+  /** Evidence ids (assembled-evidence keys) that justify this score. */
+  evidence: z.array(z.string()).min(1),
+});
+
+/** One of the four fixed simulated perspectives. */
+export const Perspective = z.object({
+  lens: z.enum(["new-user", "returning-power-user", "accessibility-first", "growth-pm"]),
+  directionId: z.string(),
+  reaction: z.string().min(1),
+  observations: z.array(z.object({
+    note: z.string().min(1),
+    evidence: z.array(z.string()).min(1),
+  })).max(3),
+  concern: z.string().min(1),
+  confidence: z.enum(["high", "medium", "low"]),
+  questionForUsers: z.string().min(1),
+});
+
+export const ExperimentBrief = z.object({
+  hypothesis: z.string().min(1),
+  successMetric: z.string().min(1),
+  guardrails: z.array(z.string()).min(1),
+});
+
+/** A decision-relevant trade-off surfaced by the comparison. */
+export const Tradeoff = z.object({
+  description: z.string().min(1),
+  evidence: z.array(z.string()).min(1),
+});
+
+export const DecisionScreen = z.object({
+  id: z.string(),
+  order: z.number().int().min(0),
+  source: ScreenSource,
+  imageRef: z.string(),
+  /** Present when source is "figma" (post-MVP). */
+  figma: z.object({
+    fileKey: z.string(),
+    nodeId: z.string(),
+    frameName: z.string(),
+  }).optional(),
+  /** The tagger extraction output (Pass 1), stored as an opaque record.
+   *  Consumed by the synthesis as assembled evidence. */
+  tagging: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const Direction = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  screens: z.array(DecisionScreen).min(1),
+});
+
+export const DecisionAnalysis = z.object({
+  status: DecisionStatus,
+  providerMetadata: z.object({
+    extractionProvider: z.string(),
+    synthesisProvider: z.string(),
+    model: z.string(),
+  }).optional(),
+  analyzedAt: IsoDate.optional(),
+  directionRubrics: z.array(z.object({
+    directionId: z.string(),
+    scores: z.array(RubricScore),
+  })),
+  tradeoffs: z.array(Tradeoff).min(1).max(3),
+  evidenceCoverage: EvidenceCoverage,
+  corpusEntryCount: z.number().int().min(0),
+  perspectives: z.array(Perspective),
+  experimentBrief: ExperimentBrief,
+});
+
+export const Decision = z.object({
+  id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "lowercase kebab-case id"),
+  title: z.string().min(1),
+  createdAt: IsoDate,
+  updatedAt: IsoDate,
+  context: DecisionContext,
+  /** Increment 1: must be "screen". The enum includes "flow" for forward
+   *  compatibility, but the refines below reject it until the flow increment. */
+  scope: DecisionScope,
+  directions: z.array(Direction).min(2).max(3),
+  analysis: DecisionAnalysis.optional(),
+}).superRefine((val, ctx) => {
+  if (val.scope === "flow") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Multi-screen flow comparison is not yet supported", path: ["scope"] });
+  }
+  for (const dir of val.directions) {
+    for (const screen of dir.screens) {
+      if (screen.source === "figma") {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Figma import is not yet supported — upload screenshots instead", path: ["directions", dir.id, "screens", screen.id, "source"] });
+      }
+    }
+  }
+});
+
+export type DecisionT = z.infer<typeof Decision>;
+export type DirectionT = z.infer<typeof Direction>;
+export type DecisionScreenT = z.infer<typeof DecisionScreen>;
+export type DecisionContextT = z.infer<typeof DecisionContext>;
+export type DecisionAnalysisT = z.infer<typeof DecisionAnalysis>;
+export type RubricScoreT = z.infer<typeof RubricScore>;
+export type PerspectiveT = z.infer<typeof Perspective>;
+export type ExperimentBriefT = z.infer<typeof ExperimentBrief>;
+export type TradeoffT = z.infer<typeof Tradeoff>;
+export type EvidenceCoverageT = z.infer<typeof EvidenceCoverage>;
+
+/** Container for decisions.json, mirroring the Corpus wrapper. */
+export const Decisions = z.object({
+  version: z.literal(1),
+  decisions: z.array(Decision),
+});
+
 // ─── draft hygiene (single source of truth) ──────────────────────────────────
 
 /**

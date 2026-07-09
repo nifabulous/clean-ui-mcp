@@ -4,11 +4,11 @@ Date: 2026-07-10
 
 ## Goal
 
-Add Decision Lab to clean-ui: a single-user, pre-launch product-design decision workspace for PMs and designers. Users compare two or three competing designs, state the outcome they want, and receive an evidence-grounded recommendation, simulated-perspective feedback, and an experiment brief.
+Add Decision Lab to clean-ui: a single-user, pre-launch product-design decision workspace for PMs and designers. Users compare two or three competing designs, state the outcome they want, and receive evidence-grounded arguments, risks, simulated-perspective feedback, and an experiment brief.
 
-> Compare product-design directions before you ship.
+> Understand the trade-offs between product-design directions before you ship.
 
-Decision Lab predicts likely strengths, risks, and research hypotheses. It must never present output as statistically valid A/B-test results; that requires production traffic and experiment data.
+Decision Lab is a decision brief, not an automated design verdict. It predicts likely strengths, risks, and research hypotheses. It must never present output as statistically valid A/B-test results; that requires production traffic and experiment data.
 
 ## Audience and Job
 
@@ -25,17 +25,16 @@ The MVP serves product managers and product designers choosing a design directio
 
 - A single user creates a decision with title, target user, business goal, primary KPI, platform, and optional constraints.
 - Two or three directions per decision.
-- A direction contains one screen or an ordered sequence of screens.
-- Inputs are uploaded PNG/JPG/WebP screenshots or Figma frames selected from a link.
+- The first delivery compares one screen per direction.
+- Inputs are uploaded PNG/JPG/WebP screenshots.
 - Single-screen comparisons, such as homepage concepts.
-- Multi-screen flow comparisons, such as onboarding or checkout.
-- Per-screen tagging, evidence-grounded scoring, corpus retrieval, fixed simulated perspectives, recommendation, and experiment brief.
+- Per-screen tagging, evidence-grounded comparative arguments, corpus retrieval where coverage supports it, fixed simulated perspectives, and experiment brief.
 - Report export and equivalent MCP workflow.
 
 ### Out of scope
 
 - Live experiment assignment, traffic collection, or statistical A/B analysis.
-- Interactive prototype playback, direct .fig file parsing, custom personas, collaboration, shared links, team roles, Figma editing, or writing back to Figma.
+- Multi-screen flow comparisons, interactive prototype playback, Figma integration, direct .fig file parsing, custom personas, collaboration, shared links, team roles, Figma editing, or writing back to Figma.
 
 ## Experience
 
@@ -47,41 +46,53 @@ Users start with a decision rather than an A/B test:
 - Target user: First-time visitors.
 - Business goal: Make the value proposition understandable in 10 seconds.
 - Primary KPI: Trial starts.
-- Scope: Single screen or multi-screen flow.
+- Scope: single-screen comparison in the first delivery.
 
 ### Competing directions
 
-Each decision has two or three named directions, A through C. A direction can use either source:
+Each decision has two or three named directions, A through C. The MVP accepts uploads:
 
-- Paste a Figma link, authenticate if private, select frames, and set their order.
 - Upload one or more screenshots and set their order.
 
-Figma and uploaded inputs can be mixed in one comparison. Both normalize into the same data model.
+Figma-link frame selection is a post-MVP integration. Uploaded frames cover the initial decision job without OAuth, file/node traversal, rendering, and private-access recovery.
 
 ### Decision-first report
 
-The default report shows:
+The default report is a brief. It shows:
 
-- Recommended direction and confidence.
-- One-line rationale.
-- Scorecard for goal alignment, visual hierarchy, cognitive load, accessibility readiness, copy clarity, consistency, and flow coherence when applicable.
-- Three strongest reasons for the recommendation.
-- One strongest corpus signal.
+- Per-direction arguments, strengths, risks, and evidence coverage.
+- Comparative rubric results for goal alignment, visual hierarchy, cognitive load, copy clarity, and consistency. Flow coherence is a later, separately evaluated dimension.
+- Cited accessibility risks, not an accessibility score.
+- The three most decision-relevant trade-offs.
+- Corpus evidence coverage: strong, limited, or unavailable, with the supporting-entry count.
 - One major risk or uncertainty.
 - Post-launch hypothesis, success metric, and guardrails.
 
-Expandable evidence includes per-screen annotations, complete score rationale, simulated-perspective observations, retrieved exceptional and cautionary examples, accessibility findings, model metadata, and score inputs.
+When evidence is sufficiently strong, a secondary **Lean** callout may say: “If forced to choose, lean toward Direction B because …”. It is omitted when evidence is insufficient or materially conflicted. It is never the headline.
+
+Expandable evidence includes per-screen annotations, complete rubric rationale, simulated-perspective observations, retrieved exceptional and cautionary examples, accessibility findings, model metadata, and score inputs.
 
 ## Explainability
 
-No direction gets an unexplained score. Each score must link to at least one source:
+No direction gets an unexplained rubric result. Each result must link to at least one source:
 
 - visible screen or flow evidence;
 - deterministic extracted tag or fact;
 - corpus example or anti-pattern;
 - named simulated perspective.
 
-The recommendation must compare its strongest signals with the competing directions. Confidence represents evidence quality and agreement; it never represents experimental certainty.
+The system does not invent a corpus precedent when pattern coverage is thin. Corpus coverage is calculated from retrieved, applicable entries and shown separately from analysis confidence. Thin-pattern output must say “limited corpus evidence” and lead with screen observations and validation questions instead of a Lean.
+
+## Scoring Methodology
+
+Decision Lab uses a fixed, evidence-constrained process:
+
+1. **Deterministic extraction** — the existing first-pass tagger extracts visible, DOM-derived when available, and image-derived facts.
+2. **Evidence assembly** — the system gathers only extracted facts, relevant corpus entries, anti-patterns, and decision context for each direction.
+3. **Constrained comparative rubric** — one structured synthesis generates the comparative arguments. It may score goal alignment, hierarchy, cognitive load, copy clarity, and consistency only when it cites assembled evidence. It cannot use unsupported visual claims.
+4. **Risk presentation** — accessibility remains cited, evidence-backed risks rather than a numeric readiness score. The report must preserve the project’s rule that a valid WCAG citation does not by itself prove a screenshot violation.
+
+Thresholds, weighting, Lean eligibility, and the corpus-coverage threshold are configuration owned by the evaluation harness. They are not hard-coded product claims before validation.
 
 ## Simulated Perspectives
 
@@ -99,11 +110,11 @@ Each returns a concise reaction, up to three evidence-linked observations, one c
 Add a Decision Lab route to the existing curator dashboard with four views:
 
 1. Decision setup — context form plus scope selector.
-2. Direction importer — Figma-link import or image upload, naming, and ordering.
-3. Comparison report — direction grid, recommendation rail, scorecards, and evidence summary.
+2. Direction importer — image upload, naming, and ordering.
+3. Comparison report — direction grid, decision-brief rail, rubric results, and evidence summary.
 4. Evidence detail — expandable direction, screen, persona, corpus, and accessibility evidence.
 
-Desktop uses a three-direction grid and a persistent recommendation rail. Narrow layouts stack directions. The user can inspect source material without losing comparison context.
+Desktop uses a three-direction grid and a persistent decision-brief rail. Narrow layouts stack directions. The user can inspect source material without losing comparison context.
 
 ## Data Model
 
@@ -128,7 +139,7 @@ DecisionScreen {
 
 DecisionAnalysis {
   status, providerMetadata, analyzedAt,
-  directionScores, recommendation,
+  directionRubrics, evidenceCoverage, lean?,
   personas, corpusEvidence, experimentBrief
 }
 ~~~
@@ -139,58 +150,74 @@ Every evidence record links to its direction and, when applicable, screen.
 
 1. Validate and normalize Decision to Direction to Screen.
 2. Run the existing image tagger for each screen to extract visual, layout, component, domain, copy, and accessibility signals.
-3. When a direction has multiple screens, synthesize sequencing, continuity, commitment points, repeated friction, and consistency.
-4. Retrieve relevant exceptional and cautionary corpus examples from decision context and extracted signals.
-5. Generate per-direction scorecards with evidence traces.
-6. Generate comparison, recommendation, confidence, fixed perspectives, and experiment brief.
-7. Persist inputs, report, evidence references, provider metadata, and timestamps.
+3. Retrieve relevant exceptional and cautionary corpus examples from decision context and extracted signals.
+4. Generate per-direction comparative rubrics with evidence traces.
+5. Generate comparison, optional Lean, evidence coverage, fixed perspectives, and experiment brief.
+6. Persist inputs, report, evidence references, provider metadata, and timestamps.
 
 The model must distinguish direct visual observation from inference, flag weak evidence, and consume deterministic signals and corpus facts instead of relying on freeform image judgment.
 
-## Figma Link Import
+## Post-MVP: Figma Link Import
 
-Figma links are first-class input. The importer parses and validates a file/node URL, authenticates private access, fetches selectable frame metadata and rendered images, retains file key/node ID/frame name, and lets users order frames before analysis.
+Figma links become a first-class input only after the upload-based decision brief is evaluated. The importer will parse and validate a file/node URL, authenticate private access, fetch selectable frame metadata and rendered images, retain file key/node ID/frame name, and let users order frames before analysis.
 
 On import failure, provide recovery: reconnect access, select another frame, or upload an exported image.
 
 ## MCP Surface
 
-The dashboard and MCP share decision-analysis services. Add:
+The dashboard and MCP share decision-analysis services. Keep the initial MCP surface to:
 
 - create_design_decision
 - analyze_design_decision
 - get_design_decision_report
-- compare_design_directions
-- generate_experiment_brief
-- critique_design_screen
 
-MCP returns the decision-first summary by default, supports evidence detail on demand, and includes the pre-launch guidance caveat.
+The report includes the experiment brief. MCP returns the brief summary by default, supports evidence detail on demand, and includes the pre-launch guidance caveat. A standalone screen-critique tool and other convenience tools remain deferred until usage shows that the shared report shape is insufficient.
 
 ## Error Handling and Safety
 
 - Require two or three directions and at least one screen per direction.
 - Reject unsupported, inaccessible, or oversized images with actionable errors.
 - Isolate per-screen tag failures; preserve the decision and allow retry.
-- Preserve Figma metadata where possible and offer upload fallback.
-- If corpus retrieval fails, complete the visual review but mark corpus evidence unavailable and lower confidence.
-- Preserve completed stages and offer retry when model analysis fails; never present a final recommendation from partial evidence.
-- Only send Figma URLs, images, and decision content to the configured analysis provider with clear disclosure.
+- If corpus retrieval fails, complete the visual review but mark corpus evidence unavailable and remove Lean eligibility.
+- Preserve completed stages and offer retry when model analysis fails; never present a completed brief from partial evidence.
+- Only send uploaded images and decision content to the configured analysis provider with clear disclosure.
+
+## Cost, Latency, and Partial Results
+
+The MVP bounds analysis to two or three directions with one uploaded screen each. It runs deterministic extraction for each screen, then one structured comparative synthesis that includes the four fixed simulated perspectives; it does not run separate persona calls. Existing deferred-critique output is reused where it is relevant.
+
+The UI exposes stages — extracting facts, retrieving evidence, preparing brief — and preserves each completed stage. It gives an estimated provider/model cost before analysis and records actual provider usage after it completes. A missing or failed stage lowers evidence coverage and disables Lean; it does not silently produce a final verdict.
+
+Multi-screen flow comparison is deferred until its own cost envelope, methodology, and evaluation set are defined. It cannot inherit credibility from single-screen analysis.
 
 ## Verification
 
-Unit tests cover schemas, scope rules, score-to-evidence linkage, corpus fallback/confidence reduction, Figma URL/node parsing, and MCP request/response validation.
+Before implementation, build a held-out evaluation set of 15–25 real design comparisons with expert-judged preference and, where available, a known post-launch outcome. Run the deterministic extraction plus constrained comparative synthesis against that set before changing the Decision Lab prompts or weights.
 
-Browser tests cover a two-direction uploaded screen comparison, ordered flow comparison, mock Figma import, expandable evidence linked to the correct source, recommendation rail, responsive layout, retries, and report export.
+The evaluation compares at minimum:
 
-Manual verification confirms that Direction B is explainable from the default report and that the product clearly distinguishes simulated/predicted guidance from real A/B results.
+- grounded synthesis against ungrounded synthesis;
+- corpus-strong versus corpus-limited patterns;
+- Lean eligibility against evaluator confidence;
+- citation completeness and unsupported-claim rate;
+- cost and latency per decision.
+
+The first product increment proceeds only after this evaluation defines acceptable evidence coverage, Lean eligibility, and a cost ceiling. If the corpus grounding does not improve decision-brief quality, ship the tool as screen-observation and validation support rather than a corpus-backed comparator.
+
+Unit tests cover schemas, screen-only scope rules, rubric-to-evidence linkage, corpus fallback/coverage labeling, accessibility-risk citation handling, cost-stage state, and MCP request/response validation.
+
+Browser tests cover a two-direction uploaded screen comparison, expandable evidence linked to the correct source, coverage labeling, retry/partial-result behavior, responsive layout, and report export.
+
+Manual verification confirms that the trade-offs are explainable from the default report, that a Lean never appears with limited evidence, and that the product clearly distinguishes simulated/predicted guidance from real A/B results.
 
 ## Delivery Sequence
 
 Deliver in focused increments:
 
-1. Decision model, uploaded screenshots, single-screen comparison, explainable report.
-2. Ordered multi-screen flow analysis and experiment-brief export.
-3. Figma-link frame import.
-4. MCP tools over the shared analysis service.
+1. Build and calibrate the held-out evaluation set; establish evidence, quality, cost, and latency baselines.
+2. Decision model, uploaded screenshots, single-screen decision brief, explainable evidence, and experiment-brief export.
+3. Three MCP tools over the shared analysis service.
+4. Evaluate a distinct multi-screen methodology before implementing flow comparison.
+5. Add Figma-link frame import after the upload workflow proves useful.
 
-This establishes the core decision experience before external integration and agent access.
+Decision records are stored in a decisions.json sidecar using the existing atomic-write and rolling-snapshot durability primitives. This establishes the core decision-brief experience before external integration and expanded agent access.

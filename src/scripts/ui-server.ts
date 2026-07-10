@@ -11,7 +11,6 @@ import sharp from "sharp";
 import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { Corpus, CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT, type DirectionT } from "../schema.js";
-import { findVagueAntiPatterns } from "../content-lint.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
 import { checkDuplicateUpload, clearDuplicateBatch, computeDHash, loadDHashCache, rebuildDHashCache, findDuplicateAtCommit } from "../dedup.js";
 import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../tagger.js";
@@ -276,17 +275,6 @@ export function validateEntryPayload(payload: unknown): CorpusEntryT {
   if (dirty.length) {
     throw Object.assign(new Error("Entry contains draft markers"), {
       issues: dirty.map((f) => ({ path: [f], message: `remove the [DRAFT]/[PLACEHOLDER]/[TODO] marker from ${f} before saving` })),
-    });
-  }
-  // Vague-phrase gate: reject generic filler in antiPatterns.antiPatterns.
-  // "keep it clean" is never a high-value statement — same severity as draft markers.
-  const vague = findVagueAntiPatterns(result.data);
-  if (vague.length) {
-    throw Object.assign(new Error("Entry contains generic filler"), {
-      issues: vague.map((v) => ({
-        path: [v.field],
-        message: `${v.issues[0]} — name the specific mistake this design avoids and the consequence of making it.`,
-      })),
     });
   }
   return result.data;

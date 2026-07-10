@@ -12,6 +12,7 @@
  * Mirrors tagger.ts (LLM call + post-hoc gate) and design-prompt.ts (pure synthesis + rendering).
  */
 import type { DecisionT, EvidenceCoverageT } from "./schema.js";
+import { hasCritiqueKey, activeProviderName, activeModelName } from "./tagger.js";
 
 /** A screen's Pass-1 tagger extraction (the `tagging` field on DecisionScreen). */
 export interface ExtractedScreen {
@@ -166,4 +167,118 @@ export function gateCitations(output: SynthesisOutput, validEvidenceIds: string[
   });
 
   return { output: { directionRubrics, perspectives, experimentBrief: output.experimentBrief, tradeoffs }, dropped };
+}
+
+/** Build the constrained comparative-synthesis prompt. */
+export function buildSynthesisPrompt(decision: DecisionT, bundle: EvidenceBundle): string {
+  const lines: string[] = [];
+  lines.push("You are a product-design decision analyst. You produce a pre-launch DECISION BRIEF.");
+  lines.push("");
+  lines.push("## Decision context");
+  lines.push(`- Title: ${decision.title}`);
+  lines.push(`- Target user: ${decision.context.targetUser}`);
+  lines.push(`- Business goal: ${decision.context.businessGoal}`);
+  lines.push(`- Primary KPI: ${decision.context.primaryKpi}`);
+  if (decision.context.platform) lines.push(`- Platform: ${decision.context.platform}`);
+  if (decision.context.constraints) lines.push(`- Constraints: ${decision.context.constraints}`);
+  lines.push("");
+  lines.push("## Directions");
+  for (const dir of decision.directions) {
+    lines.push(`### ${dir.name} (id: ${dir.id})`);
+    if (dir.description) lines.push(dir.description);
+  }
+  lines.push("");
+  lines.push("## Assembled evidence (you may ONLY cite these ids)");
+  lines.push("Every rubric score, perspective observation, and tradeoff MUST reference at least one evidence id from this list. Scores or observations citing any other id will be REJECTED.");
+  lines.push("");
+  for (const item of bundle.catalog) {
+    lines.push(`- ${item.id}: ${item.description}`);
+  }
+  lines.push("");
+  lines.push("## Required output (JSON only)");
+  lines.push("Return a JSON object with this shape:");
+  lines.push("{");
+  lines.push('  "directionRubrics": [{ "directionId": "dir-a", "scores": [{ "dimension": "visual-hierarchy", "score": 1-5-or-null, "rationale": "...", "evidence": ["valid-id"] }] }],');
+  lines.push('  "perspectives": [{ "lens": "new-user|returning-power-user|accessibility-first|growth-pm", "directionId": "dir-a", "reaction": "...", "observations": [{ "note": "...", "evidence": ["valid-id"] }], "concern": "...", "confidence": "high|medium|low", "questionForUsers": "..." }],');
+  lines.push('  "experimentBrief": { "hypothesis": "...", "successMetric": "...", "guardrails": ["..."] },');
+  lines.push('  "tradeoffs": [{ "description": "...", "evidence": ["valid-id"] }]');
+  lines.push("}");
+  lines.push("");
+  lines.push("Rules:");
+  lines.push("- Score dimensions: goal-alignment, visual-hierarchy, cognitive-load, copy-clarity, consistency.");
+  lines.push("- Generate one perspective per lens, per direction that warrants it.");
+  lines.push("- Produce 1-3 tradeoffs.");
+  lines.push("- A score of null means insufficient evidence — prefer null over guessing.");
+  lines.push("- Do NOT produce a recommendation or 'winner'. This is a brief, not a verdict.");
+  lines.push("- Do NOT claim statistical significance. This is pre-launch guidance.");
+  return lines.join("\n");
+}
+
+export interface SynthesizeResult {
+  output: SynthesisOutput;
+  gateDrops: number;
+  gateRetries: number;
+  provider: string;
+  model: string;
+}
+
+/** Call the model. Mirrors tagger.ts callModel for OpenAI-compatible shape. */
+async function callSynthesisModel(prompt: string): Promise<string> {
+  const model = activeModelName() ?? "gpt-4o";
+  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 4000,
+    }),
+  });
+  if (!resp.ok) throw new Error(`Synthesis provider returned ${resp.status}: ${await resp.text()}`);
+  const data = await resp.json() as { output_text?: string; choices?: { message?: { content?: string } }[] };
+  // Support both response formats (output_text like the tagger, or choices[].message.content)
+  return data.output_text ?? data.choices?.[0]?.message?.content ?? "";
+}
+
+/**
+ * Run the constrained comparative synthesis with citation gating.
+ * Calls the model, gates the output, retries once if any items were dropped.
+ */
+export async function synthesize(decision: DecisionT, bundle: EvidenceBundle): Promise<SynthesizeResult> {
+  if (!hasCritiqueKey()) {
+    throw new Error("No provider key set for Decision Lab synthesis. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY.");
+  }
+  const prompt = buildSynthesisPrompt(decision, bundle);
+  const provider = activeProviderName() ?? "openai";
+  const model = activeModelName() ?? "unknown";
+
+  let lastOutput: SynthesisOutput | null = null;
+  let lastDrops = 0;
+  let retries = 0;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const raw = await callSynthesisModel(prompt + (attempt === 1 ? "\n\nNOTE: Your previous response contained scores/observations citing evidence ids that do not exist. Re-issue using ONLY ids from the assembled evidence list." : ""));
+    const parsed = parseSynthesisJSON(raw);
+    if (!parsed) throw new Error("Synthesis provider returned unparseable JSON.");
+    const gated = gateCitations(parsed, bundle.evidenceIds);
+    lastOutput = gated.output;
+    lastDrops = gated.dropped;
+    if (gated.dropped === 0) break;
+    retries = attempt + 1;
+  }
+
+  return { output: lastOutput!, gateDrops: lastDrops, gateRetries: retries, provider, model };
+}
+
+/** Parse the model's JSON response, tolerant of markdown fences. */
+function parseSynthesisJSON(raw: string): SynthesisOutput | null {
+  try {
+    const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+    return JSON.parse(cleaned) as SynthesisOutput;
+  } catch {
+    return null;
+  }
 }

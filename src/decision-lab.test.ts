@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { assembleEvidence, classifyCoverage, gateCitations, type ExtractedScreen, type SynthesisOutput } from "./decision-lab.js";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { assembleEvidence, classifyCoverage, gateCitations, synthesize, type ExtractedScreen, type SynthesisOutput, type EvidenceBundle } from "./decision-lab.js";
 import type { DecisionT } from "./schema.js";
 
 function makeDecision(): DecisionT {
@@ -139,5 +139,73 @@ describe("gateCitations", () => {
     const result = gateCitations(output, validEvidenceIds);
     expect(result.dropped).toBe(1);
     expect(result.output.tradeoffs).toHaveLength(0);
+  });
+});
+
+describe("synthesize (mocked provider)", () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AUTO_TAG_PROVIDER = "openai";
+    delete process.env.AUTO_TAG_PROVIDER_EXTRACTION;
+    delete process.env.AUTO_TAG_PROVIDER_CRITIQUE;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    process.env = { ...originalEnv };
+  });
+
+  it("makes one API call and returns gated synthesis output", async () => {
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async () => {
+      callCount++;
+      const response = JSON.stringify({
+        directionRubrics: [{
+          directionId: "dir-a",
+          scores: [{
+            dimension: "visual-hierarchy", score: 4, rationale: "Clear hierarchy",
+            evidence: ["dir-a:s1:patternType"],
+          }],
+        }],
+        perspectives: [],
+        experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G1"] },
+        tradeoffs: [{ description: "T", evidence: ["dir-a:s1:patternType"] }],
+      });
+      return new Response(JSON.stringify({ output_text: response }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const decision = makeDecision();
+    const bundle: EvidenceBundle = {
+      evidenceIds: ["dir-a:s1:patternType"],
+      catalog: [{ id: "dir-a:s1:patternType", description: "[A] patternType: landing-page" }],
+      corpusItems: [],
+    };
+    const result = await synthesize(decision, bundle);
+    expect(callCount).toBe(1);
+    expect(result.output.directionRubrics[0].scores).toHaveLength(1);
+    expect(result.gateDrops).toBe(0);
+  });
+
+  it("retries once when the first response has uncited scores", async () => {
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async () => {
+      callCount++;
+      const raw = callCount === 1
+        ? { directionRubrics: [{ directionId: "dir-a", scores: [{ dimension: "visual-hierarchy", score: 4, rationale: "R", evidence: ["bogus"] }] }], perspectives: [], experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] }, tradeoffs: [{ description: "T", evidence: ["bogus"] }] }
+        : { directionRubrics: [{ directionId: "dir-a", scores: [{ dimension: "visual-hierarchy", score: 4, rationale: "R", evidence: ["dir-a:s1:patternType"] }] }], perspectives: [], experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] }, tradeoffs: [{ description: "T", evidence: ["dir-a:s1:patternType"] }] };
+      return new Response(JSON.stringify({ output_text: JSON.stringify(raw) }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const decision = makeDecision();
+    const bundle: EvidenceBundle = {
+      evidenceIds: ["dir-a:s1:patternType"],
+      catalog: [{ id: "dir-a:s1:patternType", description: "[A] patternType: landing-page" }],
+      corpusItems: [],
+    };
+    const result = await synthesize(decision, bundle);
+    expect(callCount).toBe(2);
+    expect(result.gateRetries).toBe(1);
   });
 });

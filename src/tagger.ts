@@ -139,6 +139,16 @@ export interface TaggerInput {
   extractionProvider?: Provider;
   critiqueProvider?: Provider;
   /**
+   * Per-call endpoint-config overrides (used by the eval matrix to pin exact
+   * {provider, baseUrl, apiKey, model} triples per run). These reach
+   * openaiConfigForPass, which the provider-name overrides above cannot.
+   * DeepSeek V4 Pro is an OpenAI-compatible endpoint with a different triple —
+   * only the config override can express that. Falls back to env-driven
+   * resolution when unset (current behavior). Bypasses peak-hour routing.
+   */
+  extractionOverride?: EndpointOverride;
+  critiqueOverride?: EndpointOverride;
+  /**
    * DOM signals from the capture pipeline (dom-signals.json sidecar). When
    * present, injected into the extraction prompt as VERIFIED GROUND TRUTH so
    * the model gets real computed styles/a11y/structure instead of guessing
@@ -306,6 +316,52 @@ function openaiConfigForPass(pass: TaggerPass): OpenAIConfig {
   const apiKey = process.env[`OPENAI_API_KEY_${tier}`] ?? process.env.OPENAI_API_KEY ?? "";
   const model = process.env[`OPENAI_AUTO_TAG_MODEL_${tier}`] ?? process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano";
   return { baseUrl, apiKey, model };
+}
+
+/**
+ * Per-call endpoint-config override. Mirrors the existing extractionProvider /
+ * critiqueProvider pattern but reaches the config-reading layer (openaiConfigForPass)
+ * instead of just selecting a provider name. DeepSeek V4 Pro is an OpenAI-compatible
+ * endpoint with a different {baseUrl, apiKey, model} triple — the name-only override
+ * can't express that.
+ *
+ * - provider: which provider slot to use (selects callOpenAI vs callClaude etc.)
+ * - baseUrl/apiKey/model: for OpenAI-compatible providers, the full config triple.
+ *   For non-OpenAI providers (claude, gemini), these are ignored — the model
+ *   resolves from env (CLAUDE_AUTO_TAG_MODEL etc.). Provider-only lanes are
+ *   documented as "not model-pinned" in the eval matrix.
+ */
+export type EndpointOverride = {
+  provider: Provider;
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+};
+
+/**
+ * Validate an endpoint override at the boundary — fail fast with a named-field
+ * error before any fetch call. The eval matrix runner's primary input is these
+ * config objects, so malformed input must produce a clear error, not a confusing
+ * runtime failure inside the HTTP call.
+ */
+function validateEndpointOverride(cfg: EndpointOverride, pass: TaggerPass): void {
+  const VALID_PROVIDERS: Provider[] = ["openai", "claude", "gemini", "mistral", "minimax", "grok"];
+  if (!VALID_PROVIDERS.includes(cfg.provider)) {
+    throw new Error(`Invalid endpoint override: provider "${String(cfg.provider)}" is not one of ${VALID_PROVIDERS.join(", ")}`);
+  }
+  // For OpenAI-compatible providers, apiKey and model are required (they replace
+  // env-driven resolution). baseUrl may be empty (= real OpenAI native Responses API).
+  // Mistral/MiniMax/Grok also use this path but have their own configForPass —
+  // so validate only when provider is "openai" (the main use case: DeepSeek via NIM).
+  if (cfg.provider === "openai") {
+    if (!cfg.apiKey) throw new Error(`Invalid endpoint override for ${pass}: apiKey is required for provider "openai"`);
+    if (!cfg.model) throw new Error(`Invalid endpoint override for ${pass}: model is required for provider "openai"`);
+  }
+  // Extraction with a text-only provider is a capability error (same guard as
+  // resolveProvider's mistral-extraction fallback).
+  if (pass === "extraction" && cfg.provider === "mistral") {
+    throw new Error(`Invalid endpoint override for extraction: mistral is text-only (no vision capability)`);
+  }
 }
 // Mistral config — same shape as OpenAIConfig since Mistral's API is
 // OpenAI-compatible. Points at La Plateforme by default; override the base
@@ -591,7 +647,7 @@ export function isDeepSeekCritique(): boolean {
 /** Resolve which provider to use for a given pass, with auto-fallback.
  *  Optional `override` (from /api/auto-retag or the SPA dropdown) short-circuits
  *  env resolution — used for per-run provider selection without mutating process.env. */
-function resolveProvider(pass: TaggerPass, override?: Provider): Provider {
+function resolveProvider(pass: TaggerPass, override?: Provider, hasConfigOverride = false): Provider {
   // Explicit override from the caller (bulk re-tag, SPA dropdown). Validate capability:
   // extraction needs vision, so mistral (text-only) falls back with a warning.
   if (override) {
@@ -627,9 +683,11 @@ function resolveProvider(pass: TaggerPass, override?: Provider): Provider {
   };
   // Peak-hour routing: if the critique pass resolved to "openai" AND the
   // configured critique model is DeepSeek AND we're in a peak window, swap to
-  // MiniMax (or Claude as fallback) to avoid 2× pricing. Only applies when no
-  // explicit override was given (override wins, user chose deliberately).
-  if (pass === "critique" && !override && preferred === "openai" && isDeepSeekCritique() && isDeepSeekPeakHour()) {
+  // MiniMax (or Claude as fallback) to avoid 2× pricing. Bypassed when an
+  // explicit override OR a config override is given (the caller pinned the
+  // endpoint deliberately — eval runs must be deterministic regardless of
+  // wall-clock time).
+  if (pass === "critique" && !override && !hasConfigOverride && preferred === "openai" && isDeepSeekCritique() && isDeepSeekPeakHour()) {
     if (has.minimax) {
       console.error(`[tagger] Peak-hour routing: DeepSeek → MiniMax (UTC ${new Date().getUTCHours()}:00) to avoid 2× peak pricing.`);
       return "minimax";
@@ -1678,8 +1736,9 @@ async function callOpenAI(
   retryFeedback?: string,
   detail: "low" | "high" = "high",
   pass: TaggerPass = "extraction",
+  cfgOverride?: OpenAIConfig,
 ): Promise<string> {
-  const cfg = openaiConfigForPass(pass);
+  const cfg = cfgOverride ?? openaiConfigForPass(pass);
   if (!cfg.apiKey) throw new Error("OPENAI_API_KEY not set");
 
   // If a base URL is set for this pass, route to the universal OpenAI-compatible
@@ -1985,15 +2044,20 @@ async function callModel(
   thinkingOverride?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH",
   /** Per-call provider override (from /api/auto-retag). Bypasses env resolution. */
   providerOverride?: Provider,
+  /** Per-call OpenAI-compatible config override (from eval matrix). When set,
+   *  reaches openaiConfigForPass so a pinned {baseUrl, apiKey, model} triple
+   *  (e.g. DeepSeek via NIM) is used instead of env-driven resolution. Only
+   *  applies to the "openai" provider branch. */
+  cfgOverride?: OpenAIConfig,
 ): Promise<string> {
-  const provider = resolveProvider(pass, providerOverride);
+  const provider = resolveProvider(pass, providerOverride, cfgOverride !== undefined);
   switch (provider) {
     case "claude":  return callClaude(prompt, imagePath, retryFeedback, detail);
     case "gemini":  return callGemini(prompt, imagePath, retryFeedback, detail, pass, thinkingOverride);
     case "mistral": return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, mistralConfigForPass(pass));
     case "minimax": return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, minimaxConfigForPass(pass));
     case "grok":    return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, grokConfigForPass(pass));
-    default:        return callOpenAI(prompt, imagePath, retryFeedback, detail, pass);
+    default:        return callOpenAI(prompt, imagePath, retryFeedback, detail, pass, cfgOverride);
   }
 }
 
@@ -2020,6 +2084,19 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   const today = new Date().toISOString().slice(0, 10);
   const { width: imgWidth, height: imgHeight } = await readImageDimensions(input.imagePath);
   const platform = detectPlatform(imgWidth, imgHeight);
+
+  // ── Resolve per-call endpoint-config overrides (eval matrix) ────────────────
+  // These reach openaiConfigForPass so a pinned {baseUrl, apiKey, model} triple
+  // (e.g. DeepSeek via NIM) is used instead of env-driven resolution. Falls back
+  // to env when unset (current behavior). Bypasses peak-hour routing.
+  if (input.extractionOverride) validateEndpointOverride(input.extractionOverride, "extraction");
+  if (input.critiqueOverride) validateEndpointOverride(input.critiqueOverride, "critique");
+  const extractionCfgOverride = input.extractionOverride?.provider === "openai" && input.extractionOverride.model && input.extractionOverride.apiKey
+    ? { baseUrl: (input.extractionOverride.baseUrl ?? "").replace(/\/+$/, ""), apiKey: input.extractionOverride.apiKey, model: input.extractionOverride.model }
+    : undefined;
+  const critiqueCfgOverride = input.critiqueOverride?.provider === "openai" && input.critiqueOverride.model && input.critiqueOverride.apiKey
+    ? { baseUrl: (input.critiqueOverride.baseUrl ?? "").replace(/\/+$/, ""), apiKey: input.critiqueOverride.apiKey, model: input.critiqueOverride.model }
+    : undefined;
 
   // ── Deterministic color extraction (code-level, not model-guessed) ─────────
   let quantizedColors: string[] = [];
@@ -2049,7 +2126,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     undefined,
     requestedDetail,
     undefined,
-    input.extractionProvider,
+    input.extractionOverride?.provider ?? input.extractionProvider,
+    extractionCfgOverride,
   );
   let extractionParsed = parseExtraction(extractionRawText);
 
@@ -2073,7 +2151,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         undefined,
         "high",
         undefined,
-        input.extractionProvider,
+        input.extractionOverride?.provider ?? input.extractionProvider,
+        extractionCfgOverride,
       );
       extractionParsed = parseExtraction(extractionRawText);
     }
@@ -2105,7 +2184,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         undefined,
         requestedDetail === "low" ? "high" : requestedDetail,
         "HIGH",
-        input.extractionProvider,
+        input.extractionOverride?.provider ?? input.extractionProvider,
+        extractionCfgOverride,
       );
       extractionParsed = parseExtraction(extractionRawText);
     }
@@ -2223,9 +2303,9 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       addedAt:         today,
       provenance:      { taggedBy: "auto" }, // tagger produced; flips to auto-reviewed when a human edits+approves
       _raw: {
-        extractionProvider: resolveProvider("extraction", input.extractionProvider),
+        extractionProvider: resolveProvider("extraction", input.extractionOverride?.provider ?? input.extractionProvider, extractionCfgOverride !== undefined),
         critiqueProvider: null,
-        extractionModel: activeModelName("extraction"),
+        extractionModel: extractionCfgOverride?.model ?? activeModelName("extraction"),
         critiqueModel: null,
         extraction: extractionParsed,
         critique: null,
@@ -2246,7 +2326,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     undefined,
     "high",
     undefined,
-    input.critiqueProvider,
+    input.critiqueOverride?.provider ?? input.critiqueProvider,
+    critiqueCfgOverride,
   );
 
   let critiqueParsed: Record<string, unknown>;
@@ -2275,7 +2356,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       feedback,
       "high",
       undefined,
-      input.critiqueProvider,
+      input.critiqueOverride?.provider ?? input.critiqueProvider,
+      critiqueCfgOverride,
     );
     try {
       critiqueParsed = JSON.parse(stripFences(retryText));
@@ -2349,10 +2431,10 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     addedAt:         today,
     provenance:      { taggedBy: "auto" }, // two-pass tagger output; human review flips to auto-reviewed
     _raw: {
-      extractionProvider: resolveProvider("extraction", input.extractionProvider),
-      critiqueProvider: resolveProvider("critique", input.critiqueProvider),
-      extractionModel: activeModelName("extraction"),
-      critiqueModel: activeModelName("critique"),
+      extractionProvider: resolveProvider("extraction", input.extractionOverride?.provider ?? input.extractionProvider, extractionCfgOverride !== undefined),
+      critiqueProvider: resolveProvider("critique", input.critiqueOverride?.provider ?? input.critiqueProvider, critiqueCfgOverride !== undefined),
+      extractionModel: extractionCfgOverride?.model ?? activeModelName("extraction"),
+      critiqueModel: critiqueCfgOverride?.model ?? activeModelName("critique"),
       extraction: extractionParsed,
       critique: critiqueParsed,
       quantizedColors,
@@ -2376,6 +2458,7 @@ export async function generateCritique(
   critiqueProvider?: Provider,
   domSignals?: TaggerInput["domSignals"],
   platform?: "web" | "mobile" | "tablet",
+  critiqueOverride?: EndpointOverride,
 ): Promise<{
   critique: string;
   whatToSteal: string[];
@@ -2390,6 +2473,12 @@ export async function generateCritique(
 }> {
   if (!hasCritiqueKey()) throw new Error("No provider key set. Critique needs at least one of OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or MISTRAL_API_KEY in .env.");
   const stripFences = (s: string) => s.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+
+  // Resolve per-call endpoint-config override (same pattern as tagImage).
+  if (critiqueOverride) validateEndpointOverride(critiqueOverride, "critique");
+  const critiqueCfgOverride = critiqueOverride?.provider === "openai" && critiqueOverride.model && critiqueOverride.apiKey
+    ? { baseUrl: (critiqueOverride.baseUrl ?? "").replace(/\/+$/, ""), apiKey: critiqueOverride.apiKey, model: critiqueOverride.model }
+    : undefined;
 
   // Normalize extraction by platform (same as the immediate tagImage path) so
   // deferred critique doesn't re-introduce desktop sidebar claims on mobile.
@@ -2408,7 +2497,8 @@ export async function generateCritique(
     undefined,
     "high",
     undefined,
-    critiqueProvider,
+    critiqueOverride?.provider ?? critiqueProvider,
+    critiqueCfgOverride,
   );
   let critiqueParsed: Record<string, unknown>;
   try { critiqueParsed = JSON.parse(stripFences(critiqueRawText)); }
@@ -2421,7 +2511,7 @@ export async function generateCritique(
   const gateErrors = [...bannedErrors, ...iconOnlyErrors, ...componentErrors];
   if (gateErrors.length > 0) {
     const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${gateErrors.join("\n")}`;
-    const retryText = await callModel("critique", buildCritiquePrompt(productName, critiqueExtraction, domSignals), null, feedback, "high", undefined, critiqueProvider);
+    const retryText = await callModel("critique", buildCritiquePrompt(productName, critiqueExtraction, domSignals), null, feedback, "high", undefined, critiqueOverride?.provider ?? critiqueProvider, critiqueCfgOverride);
     try { critiqueParsed = JSON.parse(stripFences(retryText)); critique = sanitizeTaggerPayload(critiqueParsed); } catch { /* keep flagged original */ }
   }
   scrubProseIconOnly(critique);

@@ -1,0 +1,16 @@
+{
+  "name": "openai-gpt54",
+  "modelPinned": true,
+  "extraction": {
+    "provider": "openai",
+    "baseUrl": "",
+    "apiKey": "${OPENAI_API_KEY}",
+    "model": "gpt-5.4-mini"
+  },
+  "critique": {
+    "provider": "openai",
+    "baseUrl": "",
+    "apiKey": "${OPENAI_API_KEY}",
+    "model": "gpt-5.4-mini"
+  }
+}

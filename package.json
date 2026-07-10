@@ -35,7 +35,8 @@
     "dedup-cleanup": "tsc && node dist/scripts/dedup-cleanup.js",
     "doctor": "tsc && node dist/scripts/doctor.js",
     "pattern-discovery": "tsc && node dist/scripts/pattern-discovery.js",
-    "eval-baseline": "tsc && node scripts/eval-baseline.mjs"
+    "eval-baseline": "tsc && node scripts/eval-baseline.mjs",
+    "eval-matrix": "tsc && node scripts/eval-matrix.mjs"
   },
   "keywords": [
     "mcp",

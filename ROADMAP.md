@@ -144,6 +144,22 @@ redesign that deserves focused attention.
 
 ---
 
+## ✅ Shipped: deterministic eval + provider/model matrix
+
+- **`npm run eval-baseline`** — 15-image stratified eval scoring raw pre-sanitize
+  output. Now pins explicit `{provider, baseUrl, apiKey, model}` from env at
+  startup, bypassing peak-hour routing for deterministic `--diff` comparisons.
+- **`npm run eval-matrix`** — provider/model matrix runner. Loops over config
+  triples in `eval/configs/`, emits one `baseline-{name}.json` per config,
+  prints a comparison table. Uses the same scorer as `eval-baseline`.
+- **Per-call endpoint-config override** in `src/tagger.ts` — reaches
+  `openaiConfigForPass` so the matrix can pin DeepSeek V4 Pro (NIM endpoint)
+  vs GPT-5.4 (real OpenAI) per run without env-var manipulation.
+- Two comparison classes: fully-pinned OpenAI-compatible lanes (`modelPinned:
+  true`) and provider-only lanes (Claude/Gemini, not model-pinned yet).
+
+---
+
 ## 🔴 Deferred (needs new infrastructure or scale)
 
 ### Design signals expansion (prove-then-expand)

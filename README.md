@@ -805,6 +805,40 @@ Requires a vision provider key. The output records per-image scores
 (accuracy %, average banned-phrase count, average latency). The `--diff` mode
 flags regressions: any metric that moved in the wrong direction.
 
+**Determinism:** every baseline run pins explicit `{provider, baseUrl,
+apiKey, model}` overrides resolved from env at startup. This bypasses
+peak-hour routing (the production DeepSeek→MiniMax auto-swap) so `--diff`
+comparisons are stable across wall-clock time. Production tagging keeps
+peak-hour routing unchanged — the bypass is eval-only.
+
+### Provider/model matrix
+
+```bash
+npm run eval-matrix -- --configs eval/configs/openai-gpt54.json,eval/configs/deepseek-nim.json
+```
+
+Runs the same 15-image eval against each config triple, writes one
+`eval/baseline-{name}.json` per config, and prints a comparison table
+with accuracy, hallucination counts, latency, and errors side by side.
+Config files live in `eval/configs/` — see `openai-gpt54.json`,
+`deepseek-nim.json`, and `claude.json` for examples.
+
+**Two comparison classes:**
+
+- **Fully-pinned lanes** (`modelPinned: true`) — OpenAI-compatible endpoints
+  where the full `{provider, baseUrl, apiKey, model}` triple is pinned per
+  run. Reproducible across machines and wall-clock time. This is what answers
+  the DeepSeek V4 Pro vs GPT-5.4 question.
+- **Provider-only lanes** (`modelPinned: false`) — provider is pinned but
+  model resolves from env (`CLAUDE_AUTO_TAG_MODEL`, `GEMINI_AUTO_TAG_MODEL`).
+  Reproducible only if you also pin the model env var. Extending the override
+  path to these providers is a follow-up.
+
+If a config's API key is missing, that config is skipped with a clear message
+(not silently rerouted — that would defeat the pinning). The matrix uses the
+same scorer (`scoreExtraction`/`scoreCritique`) as `eval-baseline` — no
+parallel truth model.
+
 ### What a regression looks like
 
 - **patternType accuracy drops** — a prompt change broke detection for a pattern
@@ -814,8 +848,9 @@ flags regressions: any metric that moved in the wrong direction.
 
 ### Deferred
 
-Gold labels for components/domainTags/colorRoles, Promptfoo provider matrix,
-ScreenSpot IoU, token-usage capture.
+Gold labels for components/domainTags/colorRoles, Promptfoo harness (revisit
+after CLI matrix settles the provider/model decision), ScreenSpot IoU,
+token-usage capture.
 
 ---
 

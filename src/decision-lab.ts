@@ -98,3 +98,72 @@ export function classifyCoverage(corpusEntryCount: number): EvidenceCoverageT {
   if (corpusEntryCount >= 1) return "limited";
   return "unavailable";
 }
+
+/** The raw synthesis output shape (what the model returns). */
+export interface SynthesisOutput {
+  directionRubrics: {
+    directionId: string;
+    scores: {
+      dimension: string;
+      score: number | null;
+      rationale: string;
+      evidence: string[];
+    }[];
+  }[];
+  perspectives: {
+    lens: string;
+    directionId: string;
+    reaction: string;
+    observations: { note: string; evidence: string[] }[];
+    concern: string;
+    confidence: string;
+    questionForUsers: string;
+  }[];
+  experimentBrief: { hypothesis: string; successMetric: string; guardrails: string[] };
+  tradeoffs: { description: string; evidence: string[] }[];
+}
+
+export interface GateResult {
+  output: SynthesisOutput;
+  /** Number of scores/observations/tradeoffs dropped for uncited evidence. */
+  dropped: number;
+}
+
+/**
+ * Post-hoc citation gate. Drops any rubric score, perspective observation, or
+ * tradeoff whose evidence array references an id not in the assembled evidence
+ * bundle. Mirrors the tagger's banned-phrase gate and sanitizeAccessibilityRisks
+ * evidence gate — enforce, don't just measure.
+ *
+ * Returns the cleaned output + a dropped count (for retry decisions and logging).
+ */
+export function gateCitations(output: SynthesisOutput, validEvidenceIds: string[]): GateResult {
+  const valid = new Set(validEvidenceIds);
+  let dropped = 0;
+
+  const directionRubrics = output.directionRubrics.map((rubric) => ({
+    directionId: rubric.directionId,
+    scores: rubric.scores.filter((score) => {
+      const ok = score.evidence.length > 0 && score.evidence.every((e) => valid.has(e));
+      if (!ok) dropped++;
+      return ok;
+    }),
+  }));
+
+  const perspectives = output.perspectives.map((p) => {
+    const observations = p.observations.filter((obs) => {
+      const ok = obs.evidence.length > 0 && obs.evidence.every((e) => valid.has(e));
+      if (!ok) dropped++;
+      return ok;
+    });
+    return { ...p, observations };
+  });
+
+  const tradeoffs = output.tradeoffs.filter((t) => {
+    const ok = t.evidence.length > 0 && t.evidence.every((e) => valid.has(e));
+    if (!ok) dropped++;
+    return ok;
+  });
+
+  return { output: { directionRubrics, perspectives, experimentBrief: output.experimentBrief, tradeoffs }, dropped };
+}

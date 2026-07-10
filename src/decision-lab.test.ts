@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assembleEvidence, classifyCoverage, type ExtractedScreen } from "./decision-lab.js";
+import { assembleEvidence, classifyCoverage, gateCitations, type ExtractedScreen, type SynthesisOutput } from "./decision-lab.js";
 import type { DecisionT } from "./schema.js";
 
 function makeDecision(): DecisionT {
@@ -61,5 +61,83 @@ describe("classifyCoverage", () => {
   });
   it("returns 'unavailable' when 0 entries are retrieved", () => {
     expect(classifyCoverage(0)).toBe("unavailable");
+  });
+});
+
+const validEvidenceIds = ["dir-a:s1:patternType", "corpus:stripe-pricing", "dir-b:s2:components"];
+
+describe("gateCitations", () => {
+  it("keeps rubric scores whose evidence ids are all valid", () => {
+    const output: SynthesisOutput = {
+      directionRubrics: [{
+        directionId: "dir-a",
+        scores: [{
+          dimension: "visual-hierarchy",
+          score: 4,
+          rationale: "Clear F-pattern",
+          evidence: ["dir-a:s1:patternType"],
+        }],
+      }],
+      perspectives: [],
+      experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] },
+      tradeoffs: [{ description: "T", evidence: ["dir-a:s1:patternType"] }],
+    };
+    const result = gateCitations(output, validEvidenceIds);
+    expect(result.dropped).toBe(0);
+    expect(result.output.directionRubrics[0].scores).toHaveLength(1);
+  });
+
+  it("drops rubric scores that cite a non-existent evidence id", () => {
+    const output: SynthesisOutput = {
+      directionRubrics: [{
+        directionId: "dir-a",
+        scores: [
+          { dimension: "visual-hierarchy", score: 4, rationale: "Good", evidence: ["dir-a:s1:patternType"] },
+          { dimension: "cognitive-load", score: 3, rationale: "Maybe", evidence: ["made-up-id"] },
+        ],
+      }],
+      perspectives: [],
+      experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] },
+      tradeoffs: [{ description: "T", evidence: ["dir-a:s1:patternType"] }],
+    };
+    const result = gateCitations(output, validEvidenceIds);
+    expect(result.dropped).toBe(1);
+    expect(result.output.directionRubrics[0].scores).toHaveLength(1);
+    expect(result.output.directionRubrics[0].scores[0].dimension).toBe("visual-hierarchy");
+  });
+
+  it("drops perspective observations with uncited evidence", () => {
+    const output: SynthesisOutput = {
+      directionRubrics: [{ directionId: "dir-a", scores: [{ dimension: "goal-alignment", score: 4, rationale: "R", evidence: ["dir-a:s1:patternType"] }] }],
+      perspectives: [{
+        lens: "new-user",
+        directionId: "dir-a",
+        reaction: "Clear",
+        observations: [
+          { note: "Good CTA", evidence: ["corpus:stripe-pricing"] },
+          { note: "Speculation", evidence: ["invented-id"] },
+        ],
+        concern: "X",
+        confidence: "medium",
+        questionForUsers: "Q?",
+      }],
+      experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] },
+      tradeoffs: [{ description: "T", evidence: ["dir-a:s1:patternType"] }],
+    };
+    const result = gateCitations(output, validEvidenceIds);
+    expect(result.dropped).toBe(1);
+    expect(result.output.perspectives[0].observations).toHaveLength(1);
+  });
+
+  it("drops tradeoffs with uncited evidence", () => {
+    const output: SynthesisOutput = {
+      directionRubrics: [{ directionId: "dir-a", scores: [{ dimension: "goal-alignment", score: 4, rationale: "R", evidence: ["dir-a:s1:patternType"] }] }],
+      perspectives: [],
+      experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] },
+      tradeoffs: [{ description: "bad", evidence: ["nope"] }],
+    };
+    const result = gateCitations(output, validEvidenceIds);
+    expect(result.dropped).toBe(1);
+    expect(result.output.tradeoffs).toHaveLength(0);
   });
 });

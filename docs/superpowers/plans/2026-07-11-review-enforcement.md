@@ -1,10 +1,18 @@
 # Review Enforcement Implementation Plan
 
+> **Implementation note (2026-07-11):** Task 1's ZCode hook probe failed twice
+> (workspace-scoped `.zcode/config.json` PreToolUse hooks did not fire). Per the
+> plan's stop condition, the design switched to **git-native hooks** (pre-push +
+> prepare-commit-msg) which don't depend on the agent runtime. The hooks live in
+> `.zcode/git-hooks/` and are installed via `.zcode/scripts/install-git-hooks`.
+> Tasks 2-5 were revised accordingly. The original ZCode hook config remains in
+> `.zcode/config.json` for if/when the hook runner is fixed.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add local review-enforcement hooks, review-artifact writers, and workflow documentation so task-level review and branch-level review are both mechanically required before shipping.
 
-**Architecture:** Use two local hook gates plus one shared artifact writer. Task reviews are stored per commit under `.zcode/reviews/tasks/`, branch reviews are stored per branch under `.zcode/reviews/branches/`, and Bash PreToolUse hooks check those artifacts before allowing the next task commit or any push / PR creation. Documentation then explains the policy and the emergency bypass.
+**Architecture:** Two git-native hooks enforce the review mandate. A `prepare-commit-msg` hook blocks the next task commit until the current HEAD has an approved task-review artifact. A `pre-push` hook blocks pushes unless the branch HEAD has an approved, non-stale branch-review artifact. Review artifacts are JSON files under `.zcode/reviews/` (gitignored, per-machine state). An installer script copies the hooks into `.git/hooks/` since that directory isn't version-controlled.
 
 **Tech Stack:** shell hooks under `.zcode/`, JSON sidecar artifacts, repo docs in `CLAUDE.md`, gitignore updates, existing plan workflow under `docs/superpowers/plans/`.
 

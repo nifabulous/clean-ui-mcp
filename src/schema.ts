@@ -716,10 +716,21 @@ export type ExperimentBriefT = z.infer<typeof ExperimentBrief>;
 export type TradeoffT = z.infer<typeof Tradeoff>;
 export type EvidenceCoverageT = z.infer<typeof EvidenceCoverage>;
 
+/** Persistence shape for a direction — allows 0+ screens for work-in-progress. */
+const PersistedDirection = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  screens: z.array(DecisionScreen).min(0),
+});
+
 /** Persistence shape for a single decision — allows incomplete work-in-progress
- *  (0+ directions) without the increment-1 flow/figma gating. The strict
- *  `Decision` schema (min 2 directions, scope/source gates) is enforced at the
- *  API/analysis boundary, not at the persistence layer. */
+ *  (0+ directions, 0+ screens per direction) without the increment-1 flow/figma
+ *  gating. The strict `Decision` schema (min 2 directions, min 1 screen per
+ *  direction, scope/source gates) is enforced at the API/analysis boundary, not
+ *  at the persistence layer — so an empty-screen WIP direction survives a
+ *  process restart instead of failing `Decisions.parse()` and silently wiping
+ *  all decisions. */
 const PersistedDecision = z.object({
   id: z.string(),
   title: z.string(),
@@ -727,7 +738,7 @@ const PersistedDecision = z.object({
   updatedAt: IsoDate,
   context: DecisionContext,
   scope: DecisionScope,
-  directions: z.array(Direction).min(0).max(3),
+  directions: z.array(PersistedDirection).min(0).max(3),
   analysis: DecisionAnalysis.optional(),
 });
 

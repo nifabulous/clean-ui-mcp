@@ -2457,7 +2457,7 @@ function bindDecisionReport() {
   });
   const exportBtn = document.getElementById('export-brief-btn');
   if (exportBtn) exportBtn.addEventListener('click', () => {
-    const brief = document.querySelector('.decision-brief')?.textContent ?? '';
+    const brief = currentDecision?._brief ?? '';
     const blob = new Blob([brief], { type: 'text/markdown' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -2468,13 +2468,18 @@ function bindDecisionReport() {
 
 async function persistDecision() {
   if (!currentDecision) return;
-  const resp = await fetch(`/api/decisions/${currentDecision.id}`, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ directions: currentDecision.directions }),
-  });
-  const data = await resp.json();
-  if (data.decision) currentDecision = { ...currentDecision, ...data.decision };
+  try {
+    const resp = await fetch(`/api/decisions/${currentDecision.id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ directions: currentDecision.directions }),
+    });
+    const data = await resp.json();
+    if (data.error) { toast(data.error); return; }
+    if (data.decision) currentDecision = { ...currentDecision, ...data.decision };
+  } catch (err) {
+    toast('Failed to save decision');
+  }
 }
 
 /* ============================================================

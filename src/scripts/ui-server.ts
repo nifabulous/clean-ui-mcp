@@ -10,13 +10,16 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { imageSize } from "image-size";
 import { chromium } from "playwright";
-import { Corpus, CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT } from "../schema.js";
+import { Corpus, CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT, type DirectionT } from "../schema.js";
+import { findVagueAntiPatterns } from "../content-lint.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
 import { checkDuplicateUpload, clearDuplicateBatch, computeDHash, loadDHashCache, rebuildDHashCache, findDuplicateAtCommit } from "../dedup.js";
 import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../tagger.js";
 import type { CaptureMeta, DomSignals } from "./capture.js";
 import { captureCandidatesForSource, isAllowedByRobots } from "./capture.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
+import { createDecision, saveDecision, getDecisionById, listDecisions } from "../decisions.js";
+import { analyzeDecision } from "../decision-lab.js";
 import {
   ENTRIES_PATH, SNAPSHOT_DIR, SNAPSHOT_KEEP,
   listSnapshots, tryReadCorpus, loadCorpusSafe, writeAtomic, writeSnapshot,
@@ -273,6 +276,17 @@ export function validateEntryPayload(payload: unknown): CorpusEntryT {
   if (dirty.length) {
     throw Object.assign(new Error("Entry contains draft markers"), {
       issues: dirty.map((f) => ({ path: [f], message: `remove the [DRAFT]/[PLACEHOLDER]/[TODO] marker from ${f} before saving` })),
+    });
+  }
+  // Vague-phrase gate: reject generic filler in antiPatterns.antiPatterns.
+  // "keep it clean" is never a high-value statement — same severity as draft markers.
+  const vague = findVagueAntiPatterns(result.data);
+  if (vague.length) {
+    throw Object.assign(new Error("Entry contains generic filler"), {
+      issues: vague.map((v) => ({
+        path: [v.field],
+        message: `${v.issues[0]} — name the specific mistake this design avoids and the consequence of making it.`,
+      })),
     });
   }
   return result.data;
@@ -862,6 +876,103 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     sendJson(res, 200, { entries });
     return;
   }
+
+  // ─── Decision Lab ────────────────────────────────────────────────────────
+
+  if (req.method === "GET" && url.pathname === "/api/decisions") {
+    sendJson(res, 200, { decisions: listDecisions() });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/decisions") {
+    const payload = await readJson(req) as {
+      title?: string; targetUser?: string; businessGoal?: string;
+      primaryKpi?: string; scope?: string; platform?: string; constraints?: string;
+    };
+    if (!payload.title || !payload.targetUser || !payload.businessGoal || !payload.primaryKpi) {
+      sendJson(res, 400, { error: "title, targetUser, businessGoal, and primaryKpi are required" });
+      return;
+    }
+    const decision = createDecision({
+      title: payload.title,
+      targetUser: payload.targetUser,
+      businessGoal: payload.businessGoal,
+      primaryKpi: payload.primaryKpi,
+      ...(payload.platform ? { platform: payload.platform as "web" | "mobile" | "tablet" } : {}),
+      ...(payload.constraints ? { constraints: payload.constraints } : {}),
+    });
+    saveDecision(decision);
+    sendJson(res, 201, { decision });
+    return;
+  }
+
+  const decisionMatch = url.pathname.match(/^\/api\/decisions\/([^/]+)$/);
+  if (req.method === "GET" && decisionMatch) {
+    const decision = getDecisionById(decisionMatch[1]);
+    if (!decision) { sendJson(res, 404, { error: "Decision not found" }); return; }
+    sendJson(res, 200, { decision });
+    return;
+  }
+
+  if (req.method === "PUT" && decisionMatch) {
+    const existing = getDecisionById(decisionMatch[1]);
+    if (!existing) { sendJson(res, 404, { error: "Decision not found" }); return; }
+    const payload = await readJson(req) as { directions?: DirectionT[] };
+    const updated = { ...existing, ...(payload.directions ? { directions: payload.directions } : {}) };
+    saveDecision(updated);
+    sendJson(res, 200, { decision: updated });
+    return;
+  }
+
+  const analyzeMatch = url.pathname.match(/^\/api\/decisions\/([^/]+)\/analyze$/);
+  if (req.method === "POST" && analyzeMatch) {
+    const decision = getDecisionById(analyzeMatch[1]);
+    if (!decision) { sendJson(res, 404, { error: "Decision not found" }); return; }
+    if (decision.directions.length < 2) {
+      sendJson(res, 400, { error: "Add at least two directions with at least one screen each before analyzing." });
+      return;
+    }
+    for (const dir of decision.directions) {
+      if (dir.screens.length === 0) {
+        sendJson(res, 400, { error: `Direction "${dir.name}" has no screens.` });
+        return;
+      }
+    }
+    try {
+      const { analysis, brief } = await analyzeDecision(decision);
+      const updated = { ...decision, analysis };
+      saveDecision(updated);
+      sendJson(res, 200, { decision: updated, brief });
+    } catch (err) {
+      sendJson(res, 400, { error: err instanceof Error ? err.message : "Analysis failed" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/decision-upload-image") {
+    const payload = await readJson(req) as { filename?: string; dataUrl?: string };
+    if (!payload.filename || !payload.dataUrl) {
+      sendJson(res, 400, { error: "filename and dataUrl are required" });
+      return;
+    }
+    const match = payload.dataUrl.match(/^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/i);
+    if (!match) {
+      sendJson(res, 400, { error: "dataUrl must be a base64 image (png/jpeg/webp)" });
+      return;
+    }
+    const ext = match[1].toLowerCase() === "jpeg" ? "jpg" : match[1].toLowerCase();
+    const slug = payload.filename.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "screen";
+    const dir = resolve(CORPUS_ROOT, "images-private", "decisions");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    let filename = `${slug}.${ext}`;
+    let counter = 1;
+    while (existsSync(resolve(dir, filename))) filename = `${slug}-${counter++}.${ext}`;
+    const fullPath = resolve(dir, filename);
+    writeFileSync(fullPath, Buffer.from(match[2], "base64"));
+    sendJson(res, 201, { path: `corpus/images-private/decisions/${filename}` });
+    return;
+  }
+
 
   if (req.method === "GET" && url.pathname === "/api/stats") {
     sendJson(res, 200, stats(entries));

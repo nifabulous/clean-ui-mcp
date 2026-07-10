@@ -126,15 +126,25 @@ export function resolvedEndpoint(pass, override) {
  * per-pass env vars that openaiConfigForPass would have read at call time —
  * but resolves them ONCE here so they're frozen for the entire run.
  *
+ * CRITICAL: reads provider from env DIRECTLY, NOT via activeProviderName().
+ * activeProviderName() → resolveProvider() runs the peak-hour DeepSeek→MiniMax
+ * swap. At peak hours that would return "minimax" instead of "openai", causing
+ * this function to return undefined and the eval to fall back to ambient
+ * routing — defeating the determinism this function exists to enforce.
+ *
  * Returns undefined for non-OpenAI providers (claude, gemini, etc.) — those
  * are provider-pinned but not model-pinned this milestone.
  *
  * @param {"extraction" | "critique"} pass
- * @returns {object | undefined} EndpointOverride, or undefined if the active
- *   provider is not OpenAI-compatible
+ * @returns {object | undefined} EndpointOverride, or undefined if the env
+ *   provider is not openai
  */
 export function buildEnvOverride(pass) {
-  const provider = activeProviderName(pass).toLowerCase();
+  // Read provider from env directly — mirrors resolveProvider's env path but
+  // WITHOUT the peak-hour swap, capability fallback, or key-presence search.
+  const envVar = pass === "extraction" ? "AUTO_TAG_PROVIDER_EXTRACTION" : "AUTO_TAG_PROVIDER_CRITIQUE";
+  const provider = (process.env[envVar] ?? process.env.AUTO_TAG_PROVIDER ?? "openai").toLowerCase();
+
   // Only pin OpenAI-compatible providers (the override reaches openaiConfigForPass).
   // Claude/Gemini are provider-only lanes — model stays env-driven this milestone.
   if (provider !== "openai") return undefined;

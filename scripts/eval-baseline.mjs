@@ -123,11 +123,16 @@ for (const img of images) {
 
 // ─── summarize ────────────────────────────────────────────────────────────────
 const validExtractions = results.filter((r) => r.extraction);
-const validCritiques = results.filter((r) => r.critique);
+// Filter out critique errors — a critique that errored is stored as { error: "..." },
+// not a score object. Including it would drag avgBannedPhrasesRaw / avgCritiqueWords
+// toward zero (summarizeScores reads missing fields as 0), turning API failures
+// into misleadingly good-looking metrics instead of explicit failures.
+const validCritiques = results.filter((r) => r.critique && !r.critique.error);
 const summary = {
   ...summarizeScores(validExtractions.map((r) => r.extraction), validCritiques.map((r) => r.critique)),
   avgExtractionLatencyMs: validExtractions.reduce((s, r) => s + r.extractionLatencyMs, 0) / (validExtractions.length || 1),
   errorCount: results.filter((r) => r.error).length,
+  critiqueErrorCount: results.filter((r) => r.critique?.error).length,
 };
 
 const baseline = {
@@ -153,7 +158,8 @@ console.log(`  avg icon-only (raw):   ${summary.avgIconOnlyRaw.toFixed(1)}`);
 console.log(`  avg banned (raw):      ${summary.avgBannedPhrasesRaw.toFixed(1)}`);
 console.log(`  avg critique words:    ${summary.avgCritiqueWords.toFixed(0)}`);
 console.log(`  avg extraction latency:${summary.avgExtractionLatencyMs.toFixed(0)}ms`);
-if (summary.errorCount) console.log(`  errors:                ${summary.errorCount}`);
+if (summary.errorCount) console.log(`  extraction errors:     ${summary.errorCount}`);
+if (summary.critiqueErrorCount) console.log(`  critique errors:       ${summary.critiqueErrorCount}`);
 
 if (diffPath && !existsSync(diffPath)) {
   console.error(`\n⚠  Baseline file not found at ${diffPath}`);

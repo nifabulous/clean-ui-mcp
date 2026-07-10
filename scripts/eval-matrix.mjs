@@ -91,21 +91,51 @@ console.log(`   Git: ${gitCommit}\n`);
 // ─── run each config ──────────────────────────────────────────────────────────
 const summaries = [];
 
+// Map provider name to the env var that holds its API key. Used for preflight
+// checks so non-OpenAI providers (claude, gemini, etc.) are skipped cleanly when
+// their key is missing, instead of failing per-image with a confusing error.
+const PROVIDER_KEY_ENV = {
+  openai: "OPENAI_API_KEY",
+  claude: "ANTHROPIC_API_KEY",
+  gemini: "GEMINI_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  minimax: "MINIMAX_API_KEY",
+  grok: "XAI_API_KEY",
+};
+
+function hasProviderKey(provider, cfgOverride) {
+  // For openai-compatible configs, the override's apiKey field is authoritative
+  // (it may be a per-pass key like OPENAI_API_KEY_CRITIQUE, expanded by resolveApiKey).
+  if (provider === "openai" && cfgOverride?.apiKey) return true;
+  const envVar = PROVIDER_KEY_ENV[provider];
+  return envVar ? !!process.env[envVar] : false;
+}
+
 for (const config of configs) {
   const extraction = resolveApiKey(config.extraction);
   const critique = config.critique ? resolveApiKey(config.critique) : undefined;
 
-  // Precondition: check API key presence. Skip cleanly if missing — do NOT
-  // silently reroute (that would defeat the pinning).
-  if (extraction.provider === "openai" && !extraction.apiKey) {
-    console.log(`\n  ⏭  ${config.name}: SKIPPED — extraction apiKey not set (env var missing)`);
-    summaries.push({ name: config.name, skipped: true, reason: "extraction apiKey missing" });
+  // Preflight: skip cleanly if any required key is missing. Do NOT silently
+  // reroute (that would defeat the pinning).
+  if (!hasProviderKey(extraction.provider, extraction)) {
+    console.log(`\n  ⏭  ${config.name}: SKIPPED — extraction API key for "${extraction.provider}" not set`);
+    summaries.push({ name: config.name, skipped: true, reason: `extraction key (${extraction.provider}) missing` });
     continue;
   }
-  if (!extractionOnly && critique?.provider === "openai" && !critique.apiKey) {
-    console.log(`\n  ⏭  ${config.name}: SKIPPED — critique apiKey not set (env var missing)`);
-    summaries.push({ name: config.name, skipped: true, reason: "critique apiKey missing" });
-    continue;
+  if (!extractionOnly) {
+    // When running critique, the config MUST explicitly declare its critique lane.
+    // Falling back to ambient env critique would undermine the "pinned per lane"
+    // contract — the whole point of the matrix.
+    if (!critique) {
+      console.log(`\n  ⏭  ${config.name}: SKIPPED — critique config missing (required when not --extraction-only)`);
+      summaries.push({ name: config.name, skipped: true, reason: "critique config missing" });
+      continue;
+    }
+    if (!hasProviderKey(critique.provider, critique)) {
+      console.log(`\n  ⏭  ${config.name}: SKIPPED — critique API key for "${critique.provider}" not set`);
+      summaries.push({ name: config.name, skipped: true, reason: `critique key (${critique.provider}) missing` });
+      continue;
+    }
   }
 
   const modelPinned = config.modelPinned ?? (extraction.provider === "openai");
@@ -156,6 +186,7 @@ for (const config of configs) {
     ...summarizeScores(validExtractions.map((r) => r.extraction), validCritiques.map((r) => r.critique)),
     avgExtractionLatencyMs: validExtractions.reduce((s, r) => s + r.extractionLatencyMs, 0) / (validExtractions.length || 1),
     errorCount: results.filter((r) => r.error).length,
+    critiqueErrorCount: results.filter((r) => r.critique?.error).length,
   };
 
   // Write per-config baseline artifact

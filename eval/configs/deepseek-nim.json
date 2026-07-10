@@ -1,0 +1,16 @@
+{
+  "name": "deepseek-nim",
+  "modelPinned": true,
+  "extraction": {
+    "provider": "openai",
+    "baseUrl": "",
+    "apiKey": "${OPENAI_API_KEY}",
+    "model": "gpt-5.4-mini"
+  },
+  "critique": {
+    "provider": "openai",
+    "baseUrl": "https://integrate.api.nvidia.com/v1",
+    "apiKey": "${OPENAI_API_KEY_CRITIQUE}",
+    "model": "deepseek-ai/deepseek-v4-pro"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "claude",
+  "modelPinned": false,
+  "_comment": "Provider-only lane — provider is pinned but model resolves from CLAUDE_AUTO_TAG_MODEL env var. NOT model-pinned this milestone. To make it model-pinned, set the env var before the run.",
+  "extraction": { "provider": "claude" },
+  "critique": { "provider": "claude" }
+}

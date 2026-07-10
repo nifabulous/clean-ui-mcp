@@ -247,9 +247,12 @@ for the full Zod definition — it is the single source of truth.
 ### Draft hygiene
 
 Entries containing `[DRAFT]`, `[PLACEHOLDER]`, or `[TODO]` markers in any text
-field are rejected at validation. The centralized `findDraftMarkers()` check runs
-in the validator, the commit-draft script, the server's save endpoint, and the
-browser's real-time validation — one rule, enforced everywhere.
+field are rejected at validation. The centralized `findDraftMarkers()` +
+`findVagueAntiPatterns()` gates run in three write-time paths (the ui-server
+save endpoint, the commit-draft script, and the add-entry CLI) and the
+validate-corpus CI backstop. Bulk-import writes pre-review drafts that are
+gated at commit time by design — drafts may carry `[DRAFT]` markers until a
+curator promotes them. One rule, enforced at every path to the committed corpus.
 
 ---
 
@@ -688,6 +691,7 @@ clean-ui-mcp/
 │   ├── wcag/                   # vendored WCAG 2.2 registry + helpers
 │   │   ├── wcag-2.2.ts         # pinned W3C snapshot (86 active criteria)
 │   │   └── registry.ts         # isWcagCriterion, getWcagTitle, ID parsing
+│   ├── content-lint.ts          # vague-phrase hard gate + word-count warning
 │   └── scripts/
 │       ├── ui-server.ts        # curator dashboard server
 │       ├── capture.ts          # Playwright capture (single + batch)
@@ -745,6 +749,7 @@ clean-ui-mcp/
 | `npm run clean-orphans` | Delete unreferenced images |
 | `npm run migrate` | Schema migrations (all idempotent) |
 | `npm run migrate-wcag-ids` | Accessibility risks → canonical WCAG 2.2 IDs |
+| `npm run eval-baseline` | Tagger eval: score raw output against gold labels, write/diff baseline |
 
 ---
 
@@ -761,6 +766,91 @@ npx vitest run           # unit tests only
 ```
 
 CI runs on every PR: `npm ci` → Playwright install → `build` → `validate-corpus` → `test`.
+
+---
+
+## Tagger evaluation loop
+
+The tagger is a two-pass vision pipeline whose prompt and provider config change
+over time. The eval loop provides a **scored, repeatable baseline** so every
+prompt or provider change can be diffed against a recorded result — instead of
+eyeballing outputs and guessing whether they got better.
+
+### Why it scores raw output, not sanitized output
+
+Scoring sanitized output against the sanitizer's own rules is a tautology — the
+pass rate is 100% by construction. The eval scores **raw pre-sanitize model
+output** (`_raw.extraction`, `_raw.critique`) for the things the gates catch:
+patternType misclassification, icon-only hallucinations, pixel measurements,
+banned phrases. A prompt change that reduces these counts is a real improvement.
+
+### The 15-image stratified set
+
+`scripts/eval-set.mjs` defines a fixed set covering 8 patterns (dashboard,
+pricing, calculator, auth, landing-page, data-table, command-palette, mobile),
+each with a hand-verified gold `patternType` label. The set is stratified so a
+single-pattern regression (e.g. calculator detection breaking) is detectable.
+
+### Running the eval
+
+```bash
+npm run eval-baseline                                  # full run, writes eval/baseline.json
+npm run eval-baseline -- --extraction-only             # skip critique (faster)
+npm run eval-baseline -- --images 5                    # limit to first 5 images
+npm run eval-baseline -- --diff eval/baseline.json     # re-run, compare to saved baseline
+```
+
+Requires a vision provider key. The output records per-image scores
+(patternType correctness, raw hallucination counts, latency) plus a summary
+(accuracy %, average banned-phrase count, average latency). The `--diff` mode
+flags regressions: any metric that moved in the wrong direction.
+
+**Determinism:** every baseline run pins explicit `{provider, baseUrl,
+apiKey, model}` overrides resolved from env at startup. This bypasses
+peak-hour routing (the production DeepSeek→MiniMax auto-swap) so `--diff`
+comparisons are stable across wall-clock time. Production tagging keeps
+peak-hour routing unchanged — the bypass is eval-only.
+
+### Provider/model matrix
+
+```bash
+npm run eval-matrix -- --configs eval/configs/openai-gpt54.json,eval/configs/deepseek-nim.json
+```
+
+Runs the same 15-image eval against each config triple, writes one
+`eval/baseline-{name}.json` per config, and prints a comparison table
+with accuracy, hallucination counts, latency, and errors side by side.
+Config files live in `eval/configs/` — see `openai-gpt54.json`,
+`deepseek-nim.json`, and `claude.json` for examples.
+
+**Two comparison classes:**
+
+- **Fully-pinned lanes** (`modelPinned: true`) — OpenAI-compatible endpoints
+  where the full `{provider, baseUrl, apiKey, model}` triple is pinned per
+  run. Reproducible across machines and wall-clock time. This is what answers
+  the DeepSeek V4 Pro vs GPT-5.4 question.
+- **Provider-only lanes** (`modelPinned: false`) — provider is pinned but
+  model resolves from env (`CLAUDE_AUTO_TAG_MODEL`, `GEMINI_AUTO_TAG_MODEL`).
+  Reproducible only if you also pin the model env var. Extending the override
+  path to these providers is a follow-up.
+
+If a config's API key is missing, that config is skipped with a clear message
+(not silently rerouted — that would defeat the pinning). The matrix uses the
+same scorer (`scoreExtraction`/`scoreCritique`) as `eval-baseline` — no
+parallel truth model.
+
+### What a regression looks like
+
+- **patternType accuracy drops** — a prompt change broke detection for a pattern
+- **avg banned phrases rises** — the model is emitting more generic filler pre-gate
+- **avg icon-only count rises** — more hallucinated "no visible labels" claims
+- **avg critique words drops** — critiques became shorter/more generic
+
+### Deferred
+
+Gold labels for components/domainTags/colorRoles, Promptfoo harness (revisit
+after CLI matrix settles the provider/model decision), ScreenSpot IoU,
+token-usage capture.
 
 ---
 

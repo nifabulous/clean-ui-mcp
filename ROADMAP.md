@@ -99,7 +99,7 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
 - Tests decoupled from mutable corpus (fixtures + `setCorpusForTesting`)
 - Skill (`clean-ui-design`) for agent workflow orchestration
 - CI (GitHub Actions: build + validate + tests with Playwright)
-- Centralized `findDraftMarkers()` enforced across all 4 write paths
+- Centralized `findDraftMarkers()` + vague-phrase lint gated across 3 write-time paths + commit-draft (bulk-import drafts gated at commit by design)
 - Embedding rebuild is incremental + checkpointed + 429-resilient
 - Git repo at `github.com/nifabulous/clean-ui-mcp`
 
@@ -109,33 +109,54 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
 
 The corpus has crossed the density thresholds several deferred items needed.
 
-### Anti-pattern quality lint at validation time
-`corpus-stats` has a reporting-only vague-phrase lint. Promote it to a
-validation-time gate (separate from the critique banned-phrase list) so generic
-filler ("avoid clutter," "keep it clean") is caught at save, not at report time.
-The list should grow as real offenders are spotted. Prevents quality erosion as
-volume increases and review time per entry drops.
+### ✅ Anti-pattern quality lint at validation time
+Done. The vague-phrase lint is promoted from a reporting-only corpus-stats check
+to a hard save-time gate (`src/content-lint.ts`). Vague phrases ("avoid clutter,"
+"keep it clean") block saves in the ui-server, commit-draft, add-entry, and
+validate-corpus paths. The short-word-count check remains a corpus-stats warning
+(not a hard gate — a specific technique can be legitimate in <8 words).
 
-### `qualityScore` vs `qualityTier` definition
-Unresolved. For a cautionary entry, does `qualityScore` mean "how bad the design
-is" or "how instructive the example is"? Decide in one sentence and document it
-in the schema before scaling past solo curation to avoid inconsistent tagging.
+### ✅ `qualityScore` vs `qualityTier` definition
+Resolved. `qualityScore` rates how *instructive* the example is (not how good the
+design is). Exceptional: 3-5, cautionary: 1-2. Enforced by a schema `.refine()` so
+inconsistent tier/score pairs are rejected. Documented in `schema.ts`.
 
 ### Schema versioning strategy
 Decide now: bump schema version per field addition, or batch into v3? Otherwise
 migration debt accumulates exactly when corpus size makes migrations expensive
 to hand-verify. The v1→v2 migration worked because the corpus was small.
 
-### Draft-hygiene regression test
-`findDraftMarkers()` runs in four places (validate-corpus, commit-draft,
-ui-server, browser). A regression where a refactor silently stops a check firing
-is invisible. Add a checklist test proving all four call sites invoke it.
+### ✅ Draft-hygiene regression test
+Done. `findDraftMarkers()` + `findVagueAntiPatterns()` run in three write-time
+paths (ui-server via `validateEntryPayload`, add-entry via `validateEntryGates`,
+commit-draft) and the validate-corpus CI backstop. The ui-server and add-entry
+paths have genuine integration tests (`src/content-lint.test.ts`) that would
+fail if the gate wiring were removed. commit-draft and validate-corpus are
+file-reading CLI scripts (structurally hard to unit-test); their wiring is
+covered by shared-function predicate tests + CI. Bulk-import drafts are gated at
+commit time by design.
 
 ### Transactional imports
 The bulk-import flow has screenshots, drafts, entries, snapshots, and the dedup
 cache loosely coordinated. Stage a batch with a manifest, then commit the batch
 atomically after validation. Deferred from the recovery cluster — it's a workflow
 redesign that deserves focused attention.
+
+---
+
+## ✅ Shipped: deterministic eval + provider/model matrix
+
+- **`npm run eval-baseline`** — 15-image stratified eval scoring raw pre-sanitize
+  output. Now pins explicit `{provider, baseUrl, apiKey, model}` from env at
+  startup, bypassing peak-hour routing for deterministic `--diff` comparisons.
+- **`npm run eval-matrix`** — provider/model matrix runner. Loops over config
+  triples in `eval/configs/`, emits one `baseline-{name}.json` per config,
+  prints a comparison table. Uses the same scorer as `eval-baseline`.
+- **Per-call endpoint-config override** in `src/tagger.ts` — reaches
+  `openaiConfigForPass` so the matrix can pin DeepSeek V4 Pro (NIM endpoint)
+  vs GPT-5.4 (real OpenAI) per run without env-var manipulation.
+- Two comparison classes: fully-pinned OpenAI-compatible lanes (`modelPinned:
+  true`) and provider-only lanes (Claude/Gemini, not model-pinned yet).
 
 ---
 

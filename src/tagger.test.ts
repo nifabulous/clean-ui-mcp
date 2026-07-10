@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import sharp from "sharp";
 import { sanitizeTaggerPayload, tagImage, generateCritique, extractQuantizedColors, hasVisionKey, activeModelName, validateNoIconOnlyClaims, validateCritiqueComponentClaims, scrubProseIconOnly } from "./tagger.js";
 import { PRIVATE_IMAGE_DIR } from "./paths.js";
 
@@ -605,8 +606,10 @@ describe("tagImage two-pass request shape", () => {
   };
   const testDir = join(PRIVATE_IMAGE_DIR, "__tagger2-test");
   const testImage = join(testDir, "shot.png");
+  const portraitImage = join(testDir, "portrait.png");   // mobile (h > w × 1.2)
+  const landscapeImage = join(testDir, "landscape.png");  // web (w > h × 1.2)
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // Force OpenAI routing so the mock's OpenAI-shaped responses work.
     // Clear any split-provider vars that .env might have set at import time.
     process.env.OPENAI_API_KEY = "test-key";
@@ -628,6 +631,11 @@ describe("tagImage two-pass request shape", () => {
     delete process.env.MINIMAX_API_KEY;
     mkdirSync(testDir, { recursive: true, force: true });
     writeFileSync(testImage, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFeAJ5fVqRtwAAAABJRU5ErkJggg==", "base64"));
+    // Generate synthetic images with the right aspect ratios for platform detection.
+    // detectPlatform needs h > w*1.2 for mobile, w > h*1.2 for web. sharp creates
+    // real PNGs with embedded dimensions so image-size can read them in CI.
+    await sharp({ create: { width: 100, height: 200, channels: 3, background: "#999999" } }).png().toFile(portraitImage);
+    await sharp({ create: { width: 200, height: 100, channels: 3, background: "#999999" } }).png().toFile(landscapeImage);
   });
 
   afterEach(() => {
@@ -1103,7 +1111,7 @@ describe("tagImage two-pass request shape", () => {
     }) as unknown as typeof fetch;
 
     const entry = await tagImage({
-      imagePath: join(PRIVATE_IMAGE_DIR, "cash-app-ios-nov-2025-26.png"),
+      imagePath: portraitImage,
       productName: "Money",
       url: null,
       extractionOnly: true,
@@ -1139,9 +1147,9 @@ describe("tagImage two-pass request shape", () => {
       });
     }) as unknown as typeof fetch;
 
-    // sample-5.png is a landscape desktop screenshot → platform "web"
+    // Synthetic landscape image → platform "web"
     const entry = await tagImage({
-      imagePath: join(PRIVATE_IMAGE_DIR, "sample-5.png"),
+      imagePath: landscapeImage,
       productName: "Origin",
       url: null,
       extractionOnly: true,
@@ -1207,9 +1215,9 @@ describe("tagImage two-pass request shape", () => {
       });
     }) as unknown as typeof fetch;
 
-    // Mobile screenshot
+    // Synthetic portrait image → mobile
     await tagImage({
-      imagePath: join(PRIVATE_IMAGE_DIR, "cash-app-ios-nov-2025-26.png"),
+      imagePath: portraitImage,
       productName: "Money",
       url: null,
       extractionOnly: true,
@@ -1289,5 +1297,294 @@ describe("tagImage two-pass request shape", () => {
     expect(prompts[0]).not.toContain('"primary-nav"');
     expect(prompts[0]).toContain('"bottom-nav"');
     expect(prompts[0]).toContain('"action-list"');
+  });
+
+  it("generateCritique exposes raw pre-sanitize critique JSON via _raw", async () => {
+    // The eval harness needs the raw model output (before scrub) to count
+    // hallucinations the gates would catch. generateCritique must expose it
+    // symmetrically with tagImage's _raw.critique.
+    const fakeCritique = JSON.stringify({
+      draftCritique: "This design uses restrained surfaces and clear grouping.",
+      draftWhatToSteal: ["Use quiet spacing for dense interfaces."],
+      draftAntiPatterns: ["Avoids heavy shadows for depth."],
+      draftAccessibilityRisks: [],
+      qualityTier: "exceptional",
+    });
+    globalThis.fetch = (() =>
+      new Response(JSON.stringify({ output_text: fakeCritique }), {
+        status: 200, headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+
+    const result = await generateCritique("Money", { components: [], layoutForm: "" });
+    expect(result._raw).toBeDefined();
+    expect(result._raw!.critique).toBeDefined();
+    expect(typeof result._raw!.critique).toBe("object");
+    // The raw critique should have the model's draft fields (pre-scrub)
+    expect(result._raw!.critique).toHaveProperty("draftCritique");
+    expect(result._raw!.critique).toHaveProperty("draftAntiPatterns");
+  });
+});
+
+// ─── endpoint-config override (per-call {provider, baseUrl, apiKey, model} triple) ─
+// The override reaches openaiConfigForPass, which the existing provider-name
+// override (extractionProvider/critiqueProvider) cannot. This is the
+// capability the eval matrix uses to pin DeepSeek/GPT/MiniMax endpoints per
+// run. These tests verify the override is threaded correctly + validated.
+describe("endpoint-config override", () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = {
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENAI_API_KEY_EXTRACTION: process.env.OPENAI_API_KEY_EXTRACTION,
+    OPENAI_API_KEY_CRITIQUE: process.env.OPENAI_API_KEY_CRITIQUE,
+    OPENAI_AUTO_TAG_MODEL: process.env.OPENAI_AUTO_TAG_MODEL,
+    OPENAI_AUTO_TAG_MODEL_EXTRACTION: process.env.OPENAI_AUTO_TAG_MODEL_EXTRACTION,
+    OPENAI_AUTO_TAG_MODEL_CRITIQUE: process.env.OPENAI_AUTO_TAG_MODEL_CRITIQUE,
+    OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+    OPENAI_BASE_URL_EXTRACTION: process.env.OPENAI_BASE_URL_EXTRACTION,
+    OPENAI_BASE_URL_CRITIQUE: process.env.OPENAI_BASE_URL_CRITIQUE,
+    AUTO_TAG_PROVIDER: process.env.AUTO_TAG_PROVIDER,
+    AUTO_TAG_PROVIDER_EXTRACTION: process.env.AUTO_TAG_PROVIDER_EXTRACTION,
+    AUTO_TAG_PROVIDER_CRITIQUE: process.env.AUTO_TAG_PROVIDER_CRITIQUE,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    MINIMAX_API_KEY: process.env.MINIMAX_API_KEY,
+    XAI_API_KEY: process.env.XAI_API_KEY,
+    MISTRAL_API_KEY: process.env.MISTRAL_API_KEY,
+  };
+  const testDir2 = join(PRIVATE_IMAGE_DIR, "__tagger3-test");
+  const testImage2 = join(testDir2, "shot.png");
+
+  beforeEach(async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AUTO_TAG_PROVIDER_EXTRACTION = "openai";
+    process.env.AUTO_TAG_PROVIDER_CRITIQUE = "openai";
+    delete process.env.AUTO_TAG_PROVIDER;
+    delete process.env.OPENAI_BASE_URL;
+    delete process.env.OPENAI_BASE_URL_EXTRACTION;
+    delete process.env.OPENAI_BASE_URL_CRITIQUE;
+    delete process.env.OPENAI_API_KEY_EXTRACTION;
+    delete process.env.OPENAI_API_KEY_CRITIQUE;
+    delete process.env.OPENAI_AUTO_TAG_MODEL_EXTRACTION;
+    delete process.env.OPENAI_AUTO_TAG_MODEL_CRITIQUE;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.MINIMAX_API_KEY;
+    delete process.env.XAI_API_KEY;
+    delete process.env.MISTRAL_API_KEY;
+    mkdirSync(testDir2, { recursive: true });
+    writeFileSync(testImage2, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFeAJ5fVqRtwAAAABJRU5ErkJggg==", "base64"));
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    for (const key of Object.keys(originalEnv) as Array<keyof typeof originalEnv>) {
+      const value = originalEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    if (existsSync(testDir2)) rmSync(testDir2, { recursive: true, force: true });
+  });
+
+  /** Mock that records the URL + body of each fetch call, returns valid extraction JSON.
+   *  Returns the right response shape based on whether the call hits a custom base
+   *  URL (chat/completions → choices[0].message.content) or native OpenAI (output_text). */
+  function recordingMock() {
+    const calls: Array<{ url: string; model?: string }> = [];
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      calls.push({ url, model: body.model });
+      callCount++;
+      const isCompat = url.includes("/chat/completions");
+      // First call = extraction; second = critique (for full two-pass).
+      const responseText = callCount === 1
+        ? JSON.stringify({
+            patternType: "dashboard", categories: ["dashboard"], styleTags: ["minimal"],
+            components: ["sidebar-nav", "kpi-card"], domainTags: ["integrations"],
+            dominantColors: ["#ffffff", "#111111"], accentColor: null,
+            displayFont: null, bodyFont: null, spacingDensity: "moderate", cornerStyle: "slight-round",
+            usesShadows: false, usesBorders: true,
+          })
+        : JSON.stringify({
+            observations: ["a", "b", "c", "d", "e"],
+            typographyNotes: "notes",
+            draftCritique: "Restrained surfaces and clear grouping without heavy borders.",
+            draftWhatToSteal: ["Use quiet spacing for dense interfaces."],
+            draftAntiPatterns: ["Avoids heavy shadows for depth."],
+            draftAccessibilityRisks: [],
+            qualityTier: "exceptional",
+          });
+      // chat/completions endpoints return { choices: [{ message: { content } }] };
+      // native Responses API returns { output_text }.
+      const envelope = isCompat
+        ? JSON.stringify({ choices: [{ message: { content: responseText } }] })
+        : JSON.stringify({ output_text: responseText });
+      return new Response(envelope, {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    return calls;
+  }
+
+  it("uses default env config when no override is passed", async () => {
+    process.env.OPENAI_AUTO_TAG_MODEL = "gpt-default-model";
+    const calls = recordingMock();
+
+    await tagImage({ imagePath: testImage2, productName: "Test", url: null });
+
+    // No override → fetch hits the native OpenAI Responses API (no base URL = empty string
+    // → callOpenAI builds the /v1/responses endpoint). Model matches env default.
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls[0].model).toBe("gpt-default-model");
+    // URL should NOT contain a custom base URL like nvidia.com
+    expect(calls[0].url).not.toContain("nvidia");
+  });
+
+  it("routes critique to the overridden endpoint config (DeepSeek via NIM)", async () => {
+    const calls = recordingMock();
+
+    await tagImage({
+      imagePath: testImage2,
+      productName: "Test",
+      url: null,
+      critiqueOverride: {
+        provider: "openai",
+        baseUrl: "https://integrate.api.nvidia.com/v1",
+        apiKey: "nvapi-test",
+        model: "deepseek-ai/deepseek-v4-pro",
+      },
+    });
+
+    // Two calls: extraction (default env) + critique (overridden to NIM)
+    expect(calls.length).toBe(2);
+    // Critique call (2nd) hits the NIM base URL with the DeepSeek model
+    expect(calls[1].url).toContain("integrate.api.nvidia.com");
+    expect(calls[1].model).toBe("deepseek-ai/deepseek-v4-pro");
+    // Extraction call (1st) is NOT routed to NIM — per-pass independence
+    expect(calls[0].url).not.toContain("nvidia");
+  });
+
+  it("extraction and critique can use different overrides independently", async () => {
+    const calls = recordingMock();
+
+    await tagImage({
+      imagePath: testImage2,
+      productName: "Test",
+      url: null,
+      extractionOverride: {
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "sk-real-openai",
+        model: "gpt-5.4-mini",
+      },
+      critiqueOverride: {
+        provider: "openai",
+        baseUrl: "https://integrate.api.nvidia.com/v1",
+        apiKey: "nvapi-test",
+        model: "deepseek-ai/deepseek-v4-pro",
+      },
+    });
+
+    expect(calls.length).toBe(2);
+    // Extraction → OpenAI endpoint + gpt model
+    expect(calls[0].model).toBe("gpt-5.4-mini");
+    expect(calls[0].url).not.toContain("nvidia");
+    // Critique → NIM endpoint + deepseek model
+    expect(calls[1].model).toBe("deepseek-ai/deepseek-v4-pro");
+    expect(calls[1].url).toContain("integrate.api.nvidia.com");
+  });
+
+  it("does not leak the override into subsequent calls with no override", async () => {
+    const calls = recordingMock();
+
+    // First call with override
+    await tagImage({
+      imagePath: testImage2,
+      productName: "Test",
+      url: null,
+      extractionOverride: {
+        provider: "openai",
+        baseUrl: "https://integrate.api.nvidia.com/v1",
+        apiKey: "nvapi-test",
+        model: "deepseek-ai/deepseek-v4-pro",
+      },
+    });
+
+    // Second call WITHOUT override — must revert to env defaults
+    calls.length = 0;
+    // Reset call count in the mock by installing a fresh one
+    let callCount2 = 0;
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      calls.push({ url: "", model: body.model });
+      callCount2++;
+      const response = JSON.stringify({
+        patternType: "dashboard", categories: ["dashboard"], styleTags: ["minimal"],
+        components: ["sidebar-nav", "kpi-card"], domainTags: ["integrations"],
+        dominantColors: ["#ffffff", "#111111"], accentColor: null,
+        displayFont: null, bodyFont: null, spacingDensity: "moderate", cornerStyle: "slight-round",
+        usesShadows: false, usesBorders: true,
+      });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    process.env.OPENAI_AUTO_TAG_MODEL = "gpt-default-model";
+    await tagImage({ imagePath: testImage2, productName: "Test", url: null });
+
+    // The second run must use env defaults, not the stale override
+    expect(calls[0].model).toBe("gpt-default-model");
+  });
+
+  it("bypasses peak-hour routing when a config override is set", async () => {
+    // Set env so that critique WITHOUT override would auto-swap DeepSeek→MiniMax
+    // during peak hours. With an override, the call must stay on the pinned endpoint.
+    process.env.OPENAI_AUTO_TAG_MODEL_CRITIQUE = "deepseek-ai/deepseek-v4-pro";
+    process.env.OPENAI_BASE_URL_CRITIQUE = "https://api.deepseek.com/v1";
+    process.env.OPENAI_API_KEY_CRITIQUE = "ds-test-key";
+    process.env.MINIMAX_API_KEY = "minimax-key"; // peak-hour fallback would use this
+    const calls = recordingMock();
+
+    await tagImage({
+      imagePath: testImage2,
+      productName: "Test",
+      url: null,
+      critiqueOverride: {
+        provider: "openai",
+        baseUrl: "https://api.deepseek.com/v1",
+        apiKey: "ds-test-key",
+        model: "deepseek-ai/deepseek-v4-pro",
+      },
+    });
+
+    // Critique call must hit DeepSeek (the pinned endpoint), NOT MiniMax
+    expect(calls.length).toBe(2);
+    expect(calls[1].model).toBe("deepseek-ai/deepseek-v4-pro");
+    // The URL should contain deepseek, not minimax
+    expect(calls[1].url).toContain("deepseek");
+  });
+
+  it("rejects a malformed config with a clear error before reaching callOpenAI", async () => {
+    recordingMock();
+
+    // Missing required fields for an openai-compatible config: apiKey empty, model empty
+    await expect(
+      tagImage({
+        imagePath: testImage2,
+        productName: "Test",
+        url: null,
+        critiqueOverride: {
+          provider: "openai",
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+          apiKey: "",   // empty → invalid
+          model: "",    // empty → invalid
+        },
+      }),
+    ).rejects.toThrow(/apiKey|model|invalid|malformed|endpoint/i);
+
+    // No fetch should have been made — validation fails fast at the boundary
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });

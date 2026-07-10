@@ -1997,6 +1997,20 @@ async function callModel(
   }
 }
 
+/**
+ * Text-only model call for non-tagger consumers (e.g. Decision Lab synthesis).
+ * Routes through the same provider abstraction as the tagger's callModel, but
+ * sends no image and uses the critique pass's provider/key resolution. This
+ * ensures Claude/Gemini/Mistral configurations work, not just OpenAI.
+ */
+export async function callTextModel(
+  prompt: string,
+  providerOverride?: Provider,
+  retryFeedback?: string,
+): Promise<string> {
+  return callModel("critique", prompt, null, retryFeedback, "high", undefined, providerOverride);
+}
+
 // ─── core two-pass orchestration ─────────────────────────────────────────────
 
 export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
@@ -2372,6 +2386,7 @@ export async function generateCritique(
   qualityTier: string;
   qualityScore: number;
   typographyNotes: string;
+  _raw?: { critique: Record<string, unknown> };
 }> {
   if (!hasCritiqueKey()) throw new Error("No provider key set. Critique needs at least one of OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or MISTRAL_API_KEY in .env.");
   const stripFences = (s: string) => s.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
@@ -2426,5 +2441,6 @@ export async function generateCritique(
     qualityScore: critique.qualityTier === "cautionary" ? 2 : 3,
     typographyNotes: critique.typographyNotes || "",
     mood: critique.mood || undefined,
+    _raw: { critique: critiqueParsed },
   };
 }

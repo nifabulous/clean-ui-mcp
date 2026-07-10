@@ -1,4 +1,5 @@
 import { Corpus, findDraftMarkers } from "../schema.js";
+import { findVagueAntiPatterns } from "../content-lint.js";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -41,6 +42,15 @@ for (const e of entries) {
   const dirtyFields = findDraftMarkers(e);
   if (dirtyFields.length) {
     hygieneErrors.push(`${e.id}: contains draft/placeholder marker in ${dirtyFields.join(", ")}`);
+  }
+
+  // Vague-phrase lint: generic filler is a hard error — caught at save, but this
+  // is the CI backstop for entries that slipped through or were hand-edited.
+  const vague = findVagueAntiPatterns(e);
+  if (vague.length) {
+    for (const v of vague) {
+      hygieneErrors.push(`${e.id}: generic filler in ${v.field} (${v.issues.join("; ")})`);
+    }
   }
 
   if (e.image.visibility !== "private" && e.image.path) {

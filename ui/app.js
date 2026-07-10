@@ -357,6 +357,9 @@ const NAV = [
     {id:'quality',   label:'Quality',       icon:'star'},
     {id:'settings',  label:'Settings',      icon:'gear'},
   ]},
+  { group:'Decision Lab', items:[
+    {id:'decision-lab', label:'Decision Lab', icon:'gitcompare'},
+  ]},
 ];
 const IC = {
   overview:'<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
@@ -2274,6 +2277,255 @@ page('settings','Settings','transport · tools · maintenance', function(){
     </div>
   </div>`;
 });
+
+/* ============================================================
+   DECISION LAB
+   ============================================================ */
+let currentDecision = null;
+
+page('decision-lab', 'Decision Lab', 'compare design directions before you ship', function(){
+  if (currentDecision && currentDecision.analysis) {
+    return renderDecisionReport(currentDecision);
+  }
+  if (currentDecision) {
+    return renderDecisionBuilder(currentDecision);
+  }
+  return renderDecisionSetup();
+}, function(){
+  // after() — bind events after DOM insertion
+  bindDecisionSetup();
+  bindDecisionBuilder();
+  bindDecisionReport();
+  // Load saved decisions into the list (if we're on the setup view)
+  loadDecisionList();
+});
+
+function renderDecisionSetup() {
+  return `
+    <div class="decision-setup">
+      <h2>Decision Lab</h2>
+      <p class="muted">Compare two or three competing designs before you ship. Get an evidence-grounded brief — not a verdict.</p>
+      <form id="decision-setup-form" class="entry-form">
+        <label>Title <input type="text" name="title" placeholder="Choose the homepage direction" required></label>
+        <label>Target user <input type="text" name="targetUser" placeholder="First-time visitors" required></label>
+        <label>Business goal <input type="text" name="businessGoal" placeholder="Make the value prop clear in 10s" required></label>
+        <label>Primary KPI <input type="text" name="primaryKpi" placeholder="Trial starts" required></label>
+        <label>Platform
+          <select name="platform"><option value="">Any</option><option value="web">Web</option><option value="mobile">Mobile</option><option value="tablet">Tablet</option></select>
+        </label>
+        <label>Constraints (optional) <input type="text" name="constraints" placeholder="Must use existing color system"></label>
+        <button type="submit" class="btn primary">Create decision</button>
+      </form>
+      <div id="decision-list"></div>
+    </div>`;
+}
+
+function renderDecisionBuilder(decision) {
+  const dirCards = decision.directions.map((dir, i) => {
+    const label = String.fromCharCode(65 + i);
+    const screens = dir.screens.map(s =>
+      `<img src="/api/image?path=${encodeURIComponent(s.imageRef)}" style="max-width:200px;border-radius:4px">`
+    ).join('');
+    return `<div class="direction-card" style="border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px">
+      <h4>Direction ${label}: <input type="text" value="${esc(dir.name)}" data-rename="${dir.id}" style="font-size:1em;border:none;border-bottom:1px solid var(--border)"></h4>
+      <div class="screens" style="margin:8px 0">${screens}</div>
+      <label class="btn" style="cursor:pointer">Upload screen
+        <input type="file" accept="image/png,image/jpeg,image/webp" data-direction-id="${dir.id}" class="screen-upload" style="display:none">
+      </label>
+      <button class="btn ghost" data-remove-screen="${dir.id}" style="margin-left:8px">Remove last screen</button>
+    </div>`;
+  }).join('');
+
+  return `
+    <div class="decision-builder">
+      <h2>${esc(decision.title)}</h2>
+      <p class="muted">Target: ${esc(decision.context.targetUser)} · Goal: ${esc(decision.context.businessGoal)} · KPI: ${esc(decision.context.primaryKpi)}</p>
+      <div id="directions-grid">${dirCards}</div>
+      ${decision.directions.length < 3 ? `<button class="btn" id="add-direction-btn">Add direction</button>` : ''}
+      <button class="btn primary" id="analyze-btn" style="margin-left:8px" ${decision.directions.length < 2 ? 'disabled title="Need at least 2 directions"' : ''}>Analyze</button>
+      <button class="btn ghost" id="back-to-setup" style="margin-left:8px">New decision</button>
+    </div>`;
+}
+
+function renderDecisionReport(decision) {
+  const brief = decision._brief || '';
+  return `
+    <div class="decision-report">
+      <h2>${esc(decision.title)}</h2>
+      <button class="btn ghost" id="back-to-builder" style="margin-bottom:16px">← Back to directions</button>
+      <pre class="decision-brief" style="white-space:pre-wrap;font-family:inherit;line-height:1.6;background:var(--surface);padding:16px;border-radius:8px;border:1px solid var(--border)">${esc(brief)}</pre>
+      <button class="btn primary" id="export-brief-btn" style="margin-top:12px">Export brief (.md)</button>
+    </div>`;
+}
+
+function bindDecisionSetup() {
+  const form = document.getElementById('decision-setup-form');
+  if (!form) return;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const resp = await fetch('/api/decisions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: form.title.value, targetUser: form.targetUser.value,
+        businessGoal: form.businessGoal.value, primaryKpi: form.primaryKpi.value,
+        ...(form.platform.value ? { platform: form.platform.value } : {}),
+        ...(form.constraints.value ? { constraints: form.constraints.value } : {}),
+      }),
+    });
+    const data = await resp.json();
+    if (data.error) { toast(data.error); return; }
+    currentDecision = data.decision;
+    route();
+  });
+}
+
+function bindDecisionBuilder() {
+  const addBtn = document.getElementById('add-direction-btn');
+  if (addBtn) addBtn.addEventListener('click', async () => {
+    if (!currentDecision) return;
+    if (currentDecision.directions.length >= 3) { toast('Maximum 3 directions.'); return; }
+    currentDecision.directions.push({ id: `dir-${Date.now()}`, name: 'New direction', screens: [] });
+    await persistDecision();
+    route();
+  });
+
+  document.querySelectorAll('.screen-upload').forEach(input => {
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const resp = await fetch('/api/decision-upload-image', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ filename: file.name, dataUrl: reader.result }),
+        });
+        const data = await resp.json();
+        if (data.error) { toast(data.error); return; }
+        const dir = currentDecision.directions.find(d => d.id === input.dataset.directionId);
+        if (dir) dir.screens.push({ id: `scr-${Date.now()}`, order: dir.screens.length, source: 'upload', imageRef: data.path });
+        await persistDecision();
+        route();
+      };
+      reader.readAsDataURL(file);
+    };
+  });
+
+  document.querySelectorAll('[data-remove-screen]').forEach(btn => {
+    btn.onclick = async () => {
+      const dir = currentDecision.directions.find(d => d.id === btn.dataset.removeScreen);
+      if (dir && dir.screens.length) { dir.screens.pop(); await persistDecision(); route(); }
+    };
+  });
+
+  document.querySelectorAll('[data-rename]').forEach(input => {
+    input.onchange = async () => {
+      const dir = currentDecision.directions.find(d => d.id === input.dataset.rename);
+      if (dir) { dir.name = input.value; await persistDecision(); }
+    };
+  });
+
+  const analyzeBtn = document.getElementById('analyze-btn');
+  if (analyzeBtn) analyzeBtn.addEventListener('click', async () => {
+    if (!currentDecision || currentDecision.directions.length < 2) return;
+    analyzeBtn.textContent = 'Analyzing…';
+    analyzeBtn.disabled = true;
+    try {
+      const resp = await fetch(`/api/decisions/${currentDecision.id}/analyze`, { method: 'POST' });
+      const data = await resp.json();
+      if (data.error) { toast(data.error); return; }
+      currentDecision = data.decision;
+      currentDecision._brief = data.brief;
+      route();
+    } finally {
+      analyzeBtn.textContent = 'Analyze';
+      analyzeBtn.disabled = false;
+    }
+  });
+
+  const backBtn = document.getElementById('back-to-setup');
+  if (backBtn) backBtn.addEventListener('click', () => {
+    currentDecision = null;
+    route();
+  });
+}
+
+function bindDecisionReport() {
+  const backBtn = document.getElementById('back-to-builder');
+  if (backBtn) backBtn.addEventListener('click', () => {
+    if (currentDecision) { delete currentDecision._brief; delete currentDecision.analysis; }
+    route();
+  });
+  const exportBtn = document.getElementById('export-brief-btn');
+  if (exportBtn) exportBtn.addEventListener('click', () => {
+    const brief = currentDecision?._brief ?? '';
+    const blob = new Blob([brief], { type: 'text/markdown' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${currentDecision?.id ?? 'decision'}-brief.md`;
+    a.click();
+  });
+}
+
+async function persistDecision() {
+  if (!currentDecision) return;
+  try {
+    const resp = await fetch(`/api/decisions/${currentDecision.id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ directions: currentDecision.directions }),
+    });
+    const data = await resp.json();
+    if (data.error) { toast(data.error); return; }
+    if (data.decision) currentDecision = { ...currentDecision, ...data.decision };
+  } catch (err) {
+    toast('Failed to save decision');
+  }
+}
+
+async function loadDecisionList() {
+  const container = document.getElementById('decision-list');
+  if (!container) return;
+  try {
+    const resp = await fetch('/api/decisions');
+    const data = await resp.json();
+    if (data.error || !data.decisions || !data.decisions.length) {
+      container.innerHTML = '';
+      return;
+    }
+    container.innerHTML = '<h3 style="margin-top:24px">Saved decisions</h3>' +
+      data.decisions.map(d => {
+        const status = d.analysis ? '<span class="count" style="background:var(--accent);color:#fff">analyzed</span>' : '';
+        const dirs = `${d.directions.length} direction${d.directions.length===1?'':'s'}`;
+        return `<a class="nav-item" data-load-decision="${d.id}" href="#/decision-lab" style="margin:4px 0">
+          <span class="lbl">${esc(d.title)}</span>
+          <span class="count">${dirs}</span>
+          ${status}
+        </a>`;
+      }).join('');
+    container.querySelectorAll('[data-load-decision]').forEach(el => {
+      el.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const id = el.dataset.loadDecision;
+        const r = await fetch(`/api/decisions/${id}`);
+        const d = await r.json();
+        if (d.decision) {
+          currentDecision = d.decision;
+          // Stash the brief for the report view if analyzed
+          if (currentDecision.analysis) {
+            // The brief isn't persisted — it's re-derived. For now, show the builder
+            // with the analysis attached so the user can re-analyze or view metadata.
+            currentDecision._brief = ''; // will show builder, not report, on reload
+          }
+          route();
+        }
+      });
+    });
+  } catch {
+    container.innerHTML = '';
+  }
+}
 
 /* ============================================================
    EVENT BINDINGS

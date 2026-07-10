@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import sharp from "sharp";
 import { sanitizeTaggerPayload, tagImage, generateCritique, extractQuantizedColors, hasVisionKey, activeModelName, validateNoIconOnlyClaims, validateCritiqueComponentClaims, scrubProseIconOnly } from "./tagger.js";
 import { PRIVATE_IMAGE_DIR } from "./paths.js";
 
@@ -605,8 +606,10 @@ describe("tagImage two-pass request shape", () => {
   };
   const testDir = join(PRIVATE_IMAGE_DIR, "__tagger2-test");
   const testImage = join(testDir, "shot.png");
+  const portraitImage = join(testDir, "portrait.png");   // mobile (h > w × 1.2)
+  const landscapeImage = join(testDir, "landscape.png");  // web (w > h × 1.2)
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // Force OpenAI routing so the mock's OpenAI-shaped responses work.
     // Clear any split-provider vars that .env might have set at import time.
     process.env.OPENAI_API_KEY = "test-key";
@@ -628,6 +631,11 @@ describe("tagImage two-pass request shape", () => {
     delete process.env.MINIMAX_API_KEY;
     mkdirSync(testDir, { recursive: true, force: true });
     writeFileSync(testImage, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFeAJ5fVqRtwAAAABJRU5ErkJggg==", "base64"));
+    // Generate synthetic images with the right aspect ratios for platform detection.
+    // detectPlatform needs h > w*1.2 for mobile, w > h*1.2 for web. sharp creates
+    // real PNGs with embedded dimensions so image-size can read them in CI.
+    await sharp({ create: { width: 100, height: 200, channels: 3, background: "#999999" } }).png().toFile(portraitImage);
+    await sharp({ create: { width: 200, height: 100, channels: 3, background: "#999999" } }).png().toFile(landscapeImage);
   });
 
   afterEach(() => {
@@ -1103,7 +1111,7 @@ describe("tagImage two-pass request shape", () => {
     }) as unknown as typeof fetch;
 
     const entry = await tagImage({
-      imagePath: join(PRIVATE_IMAGE_DIR, "cash-app-ios-nov-2025-26.png"),
+      imagePath: portraitImage,
       productName: "Money",
       url: null,
       extractionOnly: true,
@@ -1139,9 +1147,9 @@ describe("tagImage two-pass request shape", () => {
       });
     }) as unknown as typeof fetch;
 
-    // sample-5.png is a landscape desktop screenshot → platform "web"
+    // Synthetic landscape image → platform "web"
     const entry = await tagImage({
-      imagePath: join(PRIVATE_IMAGE_DIR, "sample-5.png"),
+      imagePath: landscapeImage,
       productName: "Origin",
       url: null,
       extractionOnly: true,
@@ -1207,9 +1215,9 @@ describe("tagImage two-pass request shape", () => {
       });
     }) as unknown as typeof fetch;
 
-    // Mobile screenshot
+    // Synthetic portrait image → mobile
     await tagImage({
-      imagePath: join(PRIVATE_IMAGE_DIR, "cash-app-ios-nov-2025-26.png"),
+      imagePath: portraitImage,
       productName: "Money",
       url: null,
       extractionOnly: true,
@@ -1289,5 +1297,30 @@ describe("tagImage two-pass request shape", () => {
     expect(prompts[0]).not.toContain('"primary-nav"');
     expect(prompts[0]).toContain('"bottom-nav"');
     expect(prompts[0]).toContain('"action-list"');
+  });
+
+  it("generateCritique exposes raw pre-sanitize critique JSON via _raw", async () => {
+    // The eval harness needs the raw model output (before scrub) to count
+    // hallucinations the gates would catch. generateCritique must expose it
+    // symmetrically with tagImage's _raw.critique.
+    const fakeCritique = JSON.stringify({
+      draftCritique: "This design uses restrained surfaces and clear grouping.",
+      draftWhatToSteal: ["Use quiet spacing for dense interfaces."],
+      draftAntiPatterns: ["Avoids heavy shadows for depth."],
+      draftAccessibilityRisks: [],
+      qualityTier: "exceptional",
+    });
+    globalThis.fetch = (() =>
+      new Response(JSON.stringify({ output_text: fakeCritique }), {
+        status: 200, headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+
+    const result = await generateCritique("Money", { components: [], layoutForm: "" });
+    expect(result._raw).toBeDefined();
+    expect(result._raw!.critique).toBeDefined();
+    expect(typeof result._raw!.critique).toBe("object");
+    // The raw critique should have the model's draft fields (pre-scrub)
+    expect(result._raw!.critique).toHaveProperty("draftCritique");
+    expect(result._raw!.critique).toHaveProperty("draftAntiPatterns");
   });
 });

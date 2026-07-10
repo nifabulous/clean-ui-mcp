@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { PatternType, Category, StyleTag, Component, DomainTag } from "../schema.js";
+import { lintAntiPattern } from "../content-lint.js";
 import { indexStatus } from "../corpus.js";
 import { allImageFiles } from "../paths.js";
 
@@ -63,25 +64,6 @@ interface Entry {
   industryVertical?: string;
   responsiveBehavior?: string;
   pinned?: boolean;
-}
-
-const VAGUE_PHRASES = [
-  "avoid clutter", "keep it clean", "keep it simple", "don't overdo it",
-  "be consistent", "avoid confusion", "too busy", "too much going on",
-  "not intuitive", "bad ux", "poor ux",
-];
-const MIN_WORDS = 8;
-
-function lintAntiPattern(text: string): string[] {
-  const issues: string[] = [];
-  const lower = text.toLowerCase();
-  for (const phrase of VAGUE_PHRASES) {
-    if (lower.includes(phrase)) issues.push(`generic filler: "${phrase}"`);
-  }
-  if (text.trim().split(/\s+/).length < MIN_WORDS) {
-    issues.push(`too short (<${MIN_WORDS} words) to be specific`);
-  }
-  return issues;
 }
 
 function countBy(entries: Entry[], getter: (e: Entry) => string[]): Record<string, number> {

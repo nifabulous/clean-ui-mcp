@@ -872,6 +872,60 @@ function closeDetail(){
 
 function esc(s){ return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+/** Zero-dependency markdown → HTML renderer. Handles headings, bold, bullets,
+ *  numbered lists, tables, hr, paragraphs. HTML-escapes first (security), then
+ *  applies formatting. Good enough for the decision brief — not a full spec parser. */
+function renderMarkdown(md){
+  if(!md) return '';
+  const lines = esc(md).split('\n');
+  let html = '', inUL = false, inOL = false, inTable = false, tableRows = [];
+  const closeLists = () => { if(inUL){html+='</ul>';inUL=false;} if(inOL){html+='</ol>';inOL=false;} };
+  const closeTable = () => {
+    if(!inTable) return;
+    if(tableRows.length){
+      html += '<table class="decision-table"><thead><tr>';
+      const cells = tableRows[0].split('|').map(s=>s.trim()).filter(Boolean);
+      html += cells.map(c=>`<th>${c}</th>`).join('');
+      html += '</tr></thead><tbody>';
+      for(let i=1;i<tableRows.length;i++){
+        const rcells = tableRows[i].split('|').map(s=>s.trim()).filter(Boolean);
+        html += '<tr>' + rcells.map(c=>`<td>${c}</td>`).join('') + '</tr>';
+      }
+      html += '</tbody></table>';
+    }
+    inTable = false; tableRows = [];
+  };
+  for(const raw of lines){
+    const line = raw.trim();
+    // Table row detection: contains | and at least 2 cells
+    if(line.includes('|') && line.split('|').filter(s=>s.trim()).length >= 2 && !line.startsWith('#')){
+      closeLists();
+      if(!inTable) inTable = true;
+      if(/^[\s|:-]+$/.test(line)) continue; // skip separator rows
+      tableRows.push(line);
+      continue;
+    }
+    if(inTable) closeTable();
+    // Headings
+    const h = line.match(/^(#{1,4})\s+(.+)$/);
+    if(h){ closeLists(); const lvl = h[1].length; html += `<h${lvl+1}>${h[2]}</h${lvl+1}>`; continue; }
+    // Horizontal rule
+    if(/^---+$/.test(line)){ closeLists(); html += '<hr>'; continue; }
+    // Unordered list
+    if(/^[-•]\s+/.test(line)){ if(!inUL){closeLists();inUL=true;} html += `<li>${line.replace(/^[-•]\s+/,'')}</li>`; continue; }
+    // Ordered list
+    if(/^\d+\.\s+/.test(line)){ if(!inOL){closeLists();inOL=true;} html += `<li>${line.replace(/^\d+\.\s+/,'')}</li>`; continue; }
+    // Close lists on non-list line
+    if(inUL || inOL) closeLists();
+    // Blank line
+    if(!line){ continue; }
+    // Paragraph — apply inline bold
+    html += `<p>${line.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')}</p>`;
+  }
+  closeLists(); closeTable();
+  return html;
+}
+
 /* ============================================================
    PAGES
    ============================================================ */
@@ -2284,7 +2338,7 @@ page('settings','Settings','transport · tools · maintenance', function(){
 let currentDecision = null;
 
 page('decision-lab', 'Decision Lab', 'compare design directions before you ship', function(){
-  if (currentDecision && currentDecision.analysis) {
+  if (currentDecision && currentDecision.analysis && currentDecision._brief) {
     return renderDecisionReport(currentDecision);
   }
   if (currentDecision) {
@@ -2303,19 +2357,46 @@ page('decision-lab', 'Decision Lab', 'compare design directions before you ship'
 function renderDecisionSetup() {
   return `
     <div class="decision-setup">
-      <h2>Decision Lab</h2>
-      <p class="muted">Compare two or three competing designs before you ship. Get an evidence-grounded brief — not a verdict.</p>
-      <form id="decision-setup-form" class="entry-form">
-        <label>Title <input type="text" name="title" placeholder="Choose the homepage direction" required></label>
-        <label>Target user <input type="text" name="targetUser" placeholder="First-time visitors" required></label>
-        <label>Business goal <input type="text" name="businessGoal" placeholder="Make the value prop clear in 10s" required></label>
-        <label>Primary KPI <input type="text" name="primaryKpi" placeholder="Trial starts" required></label>
-        <label>Platform
-          <select name="platform"><option value="">Any</option><option value="web">Web</option><option value="mobile">Mobile</option><option value="tablet">Tablet</option></select>
-        </label>
-        <label>Constraints (optional) <input type="text" name="constraints" placeholder="Must use existing color system"></label>
-        <button type="submit" class="btn primary">Create decision</button>
-      </form>
+      <div class="wiz-card">
+        <h2 class="step-title">Decision Lab</h2>
+        <p class="step-sub">Compare two or three competing designs before you ship. Get an evidence-grounded brief — not a verdict.</p>
+        <form id="decision-setup-form">
+          <div class="field">
+            <label>Title</label>
+            <input type="text" name="title" placeholder="Choose the homepage direction" required>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Target user</label>
+              <input type="text" name="targetUser" placeholder="First-time visitors" required>
+            </div>
+            <div class="field">
+              <label>Business goal</label>
+              <input type="text" name="businessGoal" placeholder="Make the value prop clear in 10s" required>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Primary KPI</label>
+              <input type="text" name="primaryKpi" placeholder="Trial starts" required>
+            </div>
+            <div class="field">
+              <label>Platform <span class="opt">optional</span></label>
+              <select name="platform">
+                <option value="">Any</option>
+                <option value="web">Web</option>
+                <option value="mobile">Mobile</option>
+                <option value="tablet">Tablet</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label>Constraints <span class="opt">optional</span></label>
+            <input type="text" name="constraints" placeholder="Must use existing color system">
+          </div>
+          <button type="submit" class="btn primary" style="margin-top:4px">Create decision</button>
+        </form>
+      </div>
       <div id="decision-list"></div>
     </div>`;
 }
@@ -2323,38 +2404,61 @@ function renderDecisionSetup() {
 function renderDecisionBuilder(decision) {
   const dirCards = decision.directions.map((dir, i) => {
     const label = String.fromCharCode(65 + i);
-    const screens = dir.screens.map(s =>
-      `<img src="/api/image?path=${encodeURIComponent(s.imageRef)}" style="max-width:200px;border-radius:4px">`
+    const screenImgs = dir.screens.map(s =>
+      `<img src="/api/image?path=${encodeURIComponent(s.imageRef)}" alt="${esc(dir.name)} screen">`
     ).join('');
-    return `<div class="direction-card" style="border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px">
-      <h4>Direction ${label}: <input type="text" value="${esc(dir.name)}" data-rename="${dir.id}" style="font-size:1em;border:none;border-bottom:1px solid var(--border)"></h4>
-      <div class="screens" style="margin:8px 0">${screens}</div>
-      <label class="btn" style="cursor:pointer">Upload screen
-        <input type="file" accept="image/png,image/jpeg,image/webp" data-direction-id="${dir.id}" class="screen-upload" style="display:none">
-      </label>
-      <button class="btn ghost" data-remove-screen="${dir.id}" style="margin-left:8px">Remove last screen</button>
+    const screenArea = dir.screens.length
+      ? `<div class="screen-strip">${screenImgs}</div>`
+      : `<div class="screen-empty">No screens yet</div>`;
+    return `<div class="direction-card">
+      <div class="dir-head">
+        <span class="dir-badge">${label}</span>
+        <input type="text" class="dir-name-input" value="${esc(dir.name)}" data-rename="${dir.id}" placeholder="Direction name">
+      </div>
+      ${screenArea}
+      <div class="dir-actions">
+        <label class="dz-screen">Upload screen
+          <input type="file" accept="image/png,image/jpeg,image/webp" data-direction-id="${dir.id}" class="screen-upload" style="display:none">
+        </label>
+        ${dir.screens.length ? `<button class="btn" data-remove-screen="${dir.id}">Remove last</button>` : ''}
+      </div>
     </div>`;
   }).join('');
 
+  const canAnalyze = decision.directions.length >= 2 && decision.directions.every(d => d.screens.length > 0);
+
   return `
     <div class="decision-builder">
-      <h2>${esc(decision.title)}</h2>
-      <p class="muted">Target: ${esc(decision.context.targetUser)} · Goal: ${esc(decision.context.businessGoal)} · KPI: ${esc(decision.context.primaryKpi)}</p>
-      <div id="directions-grid">${dirCards}</div>
-      ${decision.directions.length < 3 ? `<button class="btn" id="add-direction-btn">Add direction</button>` : ''}
-      <button class="btn primary" id="analyze-btn" style="margin-left:8px" ${decision.directions.length < 2 ? 'disabled title="Need at least 2 directions"' : ''}>Analyze</button>
-      <button class="btn ghost" id="back-to-setup" style="margin-left:8px">New decision</button>
+      <div class="decision-builder-header">
+        <h2>${esc(decision.title)}</h2>
+        <p class="meta">Target: ${esc(decision.context.targetUser)} · Goal: ${esc(decision.context.businessGoal)} · KPI: ${esc(decision.context.primaryKpi)}</p>
+      </div>
+      <div class="directions-grid">${dirCards}</div>
+      <div class="builder-actions">
+        ${decision.directions.length < 3 ? `<button class="btn" id="add-direction-btn">Add direction</button>` : ''}
+        <button class="btn primary" id="analyze-btn" ${!canAnalyze ? 'disabled style="opacity:.5;cursor:not-allowed"' : ''} ${decision.directions.length < 2 ? 'title="Need at least 2 directions with screens"' : ''}>Analyze</button>
+        <button class="btn" id="back-to-setup">New decision</button>
+      </div>
     </div>`;
 }
 
 function renderDecisionReport(decision) {
   const brief = decision._brief || '';
+  const coverage = decision.analysis?.evidenceCoverage;
+  const covBadge = coverage ? `<span class="cov-badge ${coverage}">${coverage}</span>` : '';
   return `
     <div class="decision-report">
-      <h2>${esc(decision.title)}</h2>
-      <button class="btn ghost" id="back-to-builder" style="margin-bottom:16px">← Back to directions</button>
-      <pre class="decision-brief" style="white-space:pre-wrap;font-family:inherit;line-height:1.6;background:var(--surface);padding:16px;border-radius:8px;border:1px solid var(--border)">${esc(brief)}</pre>
-      <button class="btn primary" id="export-brief-btn" style="margin-top:12px">Export brief (.md)</button>
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h3>${esc(decision.title)}</h3>
+            <div class="eyebrow" style="margin-top:4px">Decision Brief ${covBadge}</div>
+          </div>
+          <button class="btn primary" id="export-brief-btn">Export (.md)</button>
+        </div>
+        <button class="btn" id="back-to-builder" style="margin-bottom:16px">← Back to directions</button>
+        <div class="decision-brief-rendered">${renderMarkdown(brief)}</div>
+      </div>
     </div>`;
 }
 
@@ -2494,16 +2598,16 @@ async function loadDecisionList() {
       container.innerHTML = '';
       return;
     }
-    container.innerHTML = '<h3 style="margin-top:24px">Saved decisions</h3>' +
+    container.innerHTML = '<div class="card" style="margin-top:20px"><div class="card-head"><h3>Saved decisions</h3></div>' +
       data.decisions.map(d => {
-        const status = d.analysis ? '<span class="count" style="background:var(--accent);color:#fff">analyzed</span>' : '';
+        const status = d.analysis ? '<span class="chip on">analyzed</span>' : '<span class="chip">draft</span>';
         const dirs = `${d.directions.length} direction${d.directions.length===1?'':'s'}`;
         return `<a class="nav-item" data-load-decision="${d.id}" href="#/decision-lab" style="margin:4px 0">
           <span class="lbl">${esc(d.title)}</span>
-          <span class="count">${dirs}</span>
+          <span style="font-size:11px;color:var(--muted)">${dirs}</span>
           ${status}
         </a>`;
-      }).join('');
+      }).join('') + '</div>';
     container.querySelectorAll('[data-load-decision]').forEach(el => {
       el.addEventListener('click', async (e) => {
         e.preventDefault();

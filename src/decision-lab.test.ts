@@ -23,8 +23,8 @@ function makeDecision(): DecisionT {
     context: { targetUser: "new users", businessGoal: "clarity", primaryKpi: "signups" },
     scope: "screen",
     directions: [
-      { id: "dir-a", name: "A", screens: [{ id: "s1", order: 0, source: "upload", imageRef: "a.png" }] },
-      { id: "dir-b", name: "B", screens: [{ id: "s2", order: 0, source: "upload", imageRef: "b.png" }] },
+      { id: "dir-a", name: "A", screens: [{ id: "s1", order: 0, source: "upload", imageRef: "images-private/decisions/a.png" }] },
+      { id: "dir-b", name: "B", screens: [{ id: "s2", order: 0, source: "upload", imageRef: "images-private/decisions/b.png" }] },
     ],
   };
 }

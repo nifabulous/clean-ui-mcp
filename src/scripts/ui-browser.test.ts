@@ -520,27 +520,52 @@ describe("specimen-ledger SPA", () => {
 
     await page.waitForSelector("#analyze-btn");
     expect(await page.locator("#analyze-btn").isVisible()).toBe(true);
-    expect(await page.locator(".decision-brief").count()).toBe(0);
+    expect(await page.locator(".decision-brief-rendered").count()).toBe(0);
     await page.close();
   });
 
   it("renderMarkdown produces valid ul/ol list HTML with opening tags", async () => {
     const page = await browser!.newPage();
     await page.goto(baseUrl + "/#/decision-lab");
-    // renderMarkdown is exposed on window by app.js for testability.
     const html = await page.evaluate(() => {
       const fn = (window as any).renderMarkdown;
       return fn ? fn("- First point\n- Second point\n\n1. Step one\n2. Step two") : null;
     });
     expect(html).not.toBeNull();
-    // Must contain opening <ul> and <ol> tags, not just closing — the bug was
-    // that closeLists emitted </ul></ol> but the opening tags were never written.
     expect(html).toContain("<ul>");
     expect(html).toContain("</ul>");
     expect(html).toContain("<ol>");
     expect(html).toContain("</ol>");
     expect(html).toContain("<li>First point</li>");
     expect(html).toContain("<li>Step one</li>");
+    await page.close();
+  });
+
+  it("renderMarkdown applies bold in list items and headings, not just paragraphs", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/decision-lab");
+    const html = await page.evaluate(() => {
+      const fn = (window as any).renderMarkdown;
+      return fn ? fn("## **Bold** heading\n\n- Item with **bold** text\n\nPlain **bold** paragraph") : null;
+    });
+    expect(html).not.toBeNull();
+    // Bold must render as <strong> in all three contexts
+    expect(html).toContain("<h3><strong>Bold</strong> heading</h3>");
+    expect(html).toContain("<li>Item with <strong>bold</strong> text</li>");
+    expect(html).toContain("<p>Plain <strong>bold</strong> paragraph</p>");
+    await page.close();
+  });
+
+  it("renderMarkdown does not false-positive table detection on inline pipes", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/decision-lab");
+    const html = await page.evaluate(() => {
+      const fn = (window as any).renderMarkdown;
+      return fn ? fn("The ratio is 3|2 in this design.") : null;
+    });
+    expect(html).not.toBeNull();
+    expect(html).not.toContain("<table");
+    expect(html).toContain("<p>The ratio is 3|2 in this design.</p>");
     await page.close();
   });
 

@@ -880,16 +880,18 @@ function renderMarkdown(md){
   const lines = esc(md).split('\n');
   let html = '', inUL = false, inOL = false, inTable = false, tableRows = [];
   const closeLists = () => { if(inUL){html+='</ul>';inUL=false;} if(inOL){html+='</ol>';inOL=false;} };
+  /** Apply inline formatting (bold) to already-escaped text. */
+  const inlineFmt = (s) => s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
   const closeTable = () => {
     if(!inTable) return;
     if(tableRows.length){
       html += '<table class="decision-table"><thead><tr>';
       const cells = tableRows[0].split('|').map(s=>s.trim()).filter(Boolean);
-      html += cells.map(c=>`<th>${c}</th>`).join('');
+      html += cells.map(c=>`<th>${inlineFmt(c)}</th>`).join('');
       html += '</tr></thead><tbody>';
       for(let i=1;i<tableRows.length;i++){
         const rcells = tableRows[i].split('|').map(s=>s.trim()).filter(Boolean);
-        html += '<tr>' + rcells.map(c=>`<td>${c}</td>`).join('') + '</tr>';
+        html += '<tr>' + rcells.map(c=>`<td>${inlineFmt(c)}</td>`).join('') + '</tr>';
       }
       html += '</tbody></table>';
     }
@@ -897,8 +899,9 @@ function renderMarkdown(md){
   };
   for(const raw of lines){
     const line = raw.trim();
-    // Table row detection: contains | and at least 2 cells
-    if(line.includes('|') && line.split('|').filter(s=>s.trim()).length >= 2 && !line.startsWith('#')){
+    // Table row detection: requires leading | (GFM table convention) to avoid
+    // false positives on inline pipes like "3|2" in prose.
+    if(line.startsWith('|') && line.endsWith('|') && line.split('|').filter(s=>s.trim()).length >= 2){
       closeLists();
       if(!inTable) inTable = true;
       if(/^[\s|:-]+$/.test(line)) continue; // skip separator rows
@@ -908,19 +911,19 @@ function renderMarkdown(md){
     if(inTable) closeTable();
     // Headings
     const h = line.match(/^(#{1,4})\s+(.+)$/);
-    if(h){ closeLists(); const lvl = h[1].length; html += `<h${lvl+1}>${h[2]}</h${lvl+1}>`; continue; }
+    if(h){ closeLists(); const lvl = h[1].length; html += `<h${lvl+1}>${inlineFmt(h[2])}</h${lvl+1}>`; continue; }
     // Horizontal rule
     if(/^---+$/.test(line)){ closeLists(); html += '<hr>'; continue; }
     // Unordered list
-    if(/^[-•]\s+/.test(line)){ if(!inUL){closeLists();html+='<ul>';inUL=true;} html += `<li>${line.replace(/^[-•]\s+/,'')}</li>`; continue; }
+    if(/^[-•]\s+/.test(line)){ if(!inUL){closeLists();html+='<ul>';inUL=true;} html += `<li>${inlineFmt(line.replace(/^[-•]\s+/,''))}</li>`; continue; }
     // Ordered list
-    if(/^\d+\.\s+/.test(line)){ if(!inOL){closeLists();html+='<ol>';inOL=true;} html += `<li>${line.replace(/^\d+\.\s+/,'')}</li>`; continue; }
+    if(/^\d+\.\s+/.test(line)){ if(!inOL){closeLists();html+='<ol>';inOL=true;} html += `<li>${inlineFmt(line.replace(/^\d+\.\s+/,''))}</li>`; continue; }
     // Close lists on non-list line
     if(inUL || inOL) closeLists();
     // Blank line
     if(!line){ continue; }
-    // Paragraph — apply inline bold
-    html += `<p>${line.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')}</p>`;
+    // Paragraph
+    html += `<p>${inlineFmt(line)}</p>`;
   }
   closeLists(); closeTable();
   return html;

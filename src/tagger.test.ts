@@ -1290,4 +1290,29 @@ describe("tagImage two-pass request shape", () => {
     expect(prompts[0]).toContain('"bottom-nav"');
     expect(prompts[0]).toContain('"action-list"');
   });
+
+  it("generateCritique exposes raw pre-sanitize critique JSON via _raw", async () => {
+    // The eval harness needs the raw model output (before scrub) to count
+    // hallucinations the gates would catch. generateCritique must expose it
+    // symmetrically with tagImage's _raw.critique.
+    const fakeCritique = JSON.stringify({
+      draftCritique: "This design uses restrained surfaces and clear grouping.",
+      draftWhatToSteal: ["Use quiet spacing for dense interfaces."],
+      draftAntiPatterns: ["Avoids heavy shadows for depth."],
+      draftAccessibilityRisks: [],
+      qualityTier: "exceptional",
+    });
+    globalThis.fetch = (() =>
+      new Response(JSON.stringify({ output_text: fakeCritique }), {
+        status: 200, headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+
+    const result = await generateCritique("Money", { components: [], layoutForm: "" });
+    expect(result._raw).toBeDefined();
+    expect(result._raw!.critique).toBeDefined();
+    expect(typeof result._raw!.critique).toBe("object");
+    // The raw critique should have the model's draft fields (pre-scrub)
+    expect(result._raw!.critique).toHaveProperty("draftCritique");
+    expect(result._raw!.critique).toHaveProperty("draftAntiPatterns");
+  });
 });

@@ -186,7 +186,7 @@ describe("corpus schema", () => {
   });
 
   it("accepts qualityTier: 'cautionary'", () => {
-    const result = CorpusEntry.safeParse({ ...validEntry, qualityTier: "cautionary" });
+    const result = CorpusEntry.safeParse({ ...validEntry, qualityTier: "cautionary", qualityScore: 2 });
     expect(result.success).toBe(true);
   });
 
@@ -380,6 +380,27 @@ describe("corpus schema", () => {
     const result = CorpusEntry.safeParse(validEntry);
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.provenance).toBeUndefined();
+  });
+
+  // ── qualityScore / qualityTier coupling ─────────────────────────────────────
+
+  it("rejects cautionary entries with qualityScore > 2", () => {
+    const result = CorpusEntry.safeParse({ ...validEntry, qualityTier: "cautionary", qualityScore: 3 });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects exceptional entries with qualityScore < 3", () => {
+    const result = CorpusEntry.safeParse({ ...validEntry, qualityTier: "exceptional", qualityScore: 2 });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts cautionary with qualityScore 1-2", () => {
+    expect(CorpusEntry.safeParse({ ...validEntry, qualityTier: "cautionary", qualityScore: 1 }).success).toBe(true);
+    expect(CorpusEntry.safeParse({ ...validEntry, qualityTier: "cautionary", qualityScore: 2 }).success).toBe(true);
+  });
+
+  it("accepts exceptional with qualityScore 3-5", () => {
+    expect(CorpusEntry.safeParse({ ...validEntry, qualityTier: "exceptional", qualityScore: 5 }).success).toBe(true);
   });
 
   // ── structured accessibility risks (evidence gate) ──────────────────────────

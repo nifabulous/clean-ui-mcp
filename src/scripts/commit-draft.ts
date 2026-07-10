@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { execSync } from "node:child_process";
 import { Corpus, CorpusEntry, findDraftMarkers } from "../schema.js";
+import { findVagueAntiPatterns } from "../content-lint.js";
 import { findDuplicateAtCommit } from "../dedup.js";
 import { ENTRIES_PATH, persistEntries } from "../persistence.js";
 
@@ -95,6 +96,12 @@ async function main() {
     const dirtyFields = findDraftMarkers(result.data);
     if (dirtyFields.length) {
       errors.push(`${result.data.id}: contains draft/placeholder marker in ${dirtyFields.join(", ")}`);
+      continue;
+    }
+
+    const vague = findVagueAntiPatterns(result.data);
+    if (vague.length) {
+      errors.push(`${result.data.id}: generic filler in ${vague.map((v) => `${v.field} (${v.issues.join("; ")})`).join(", ")}`);
       continue;
     }
 

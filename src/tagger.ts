@@ -2372,6 +2372,7 @@ export async function generateCritique(
   qualityTier: string;
   qualityScore: number;
   typographyNotes: string;
+  _raw?: { critique: Record<string, unknown> };
 }> {
   if (!hasCritiqueKey()) throw new Error("No provider key set. Critique needs at least one of OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or MISTRAL_API_KEY in .env.");
   const stripFences = (s: string) => s.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
@@ -2426,5 +2427,6 @@ export async function generateCritique(
     qualityScore: critique.qualityTier === "cautionary" ? 2 : 3,
     typographyNotes: critique.typographyNotes || "",
     mood: critique.mood || undefined,
+    _raw: { critique: critiqueParsed },
   };
 }

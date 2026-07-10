@@ -12,7 +12,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { writeAtomic } from "./persistence.js";
 import {
   Decisions,
@@ -22,9 +22,28 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_ROOT = resolve(__dirname, "..", "corpus");
-export const DECISIONS_PATH = resolve(CORPUS_ROOT, "decisions.json");
-const DECISION_SNAPSHOT_DIR = resolve(CORPUS_ROOT, ".snapshots");
+
+/** Default decisions.json location (kept as an export for reference, e.g.
+ *  .gitignore documentation). Internal code reads the `decisionsPath` let. */
+export const DEFAULT_DECISIONS_PATH = resolve(CORPUS_ROOT, "decisions.json");
+
+/** Mutable internal paths — overridable via setDecisionsPathsForTesting so
+ *  tests can target a temp dir without polluting the real corpus. */
+let decisionsPath = resolve(CORPUS_ROOT, "decisions.json");
+let decisionSnapshotDir = resolve(CORPUS_ROOT, ".snapshots");
 const DECISION_SNAPSHOT_KEEP = 20;
+
+/** Test-only path override. Pass temp dirs to avoid polluting the real corpus. */
+export function setDecisionsPathsForTesting(opts: { path?: string; snapshotDir?: string }): void {
+  if (opts.path) decisionsPath = opts.path;
+  if (opts.snapshotDir) decisionSnapshotDir = opts.snapshotDir;
+}
+
+/** Test-only restore to the default corpus paths. */
+export function resetDecisionsPathsForTesting(): void {
+  decisionsPath = resolve(CORPUS_ROOT, "decisions.json");
+  decisionSnapshotDir = resolve(CORPUS_ROOT, ".snapshots");
+}
 
 /** Module-level cache (mirrors corpus.ts). */
 let cached: DecisionT[] | null = null;
@@ -60,27 +79,28 @@ function parseDecisions(raw: string): DecisionT[] {
  *  simpler — decisions are regenerable from re-analysis, no seed fallback. */
 export function loadDecisionsSafe(): DecisionT[] {
   if (cached) return cached;
-  if (!existsSync(DECISIONS_PATH)) {
+  if (!existsSync(decisionsPath)) {
     cached = [];
     return cached;
   }
-  cached = parseDecisions(readFileSync(DECISIONS_PATH, "utf-8"));
+  cached = parseDecisions(readFileSync(decisionsPath, "utf-8"));
   return cached;
 }
 
 /** Write a rolling snapshot of the current decisions (best-effort, never throws). */
 function writeDecisionSnapshot(decisions: DecisionT[]): void {
   try {
-    if (!existsSync(DECISION_SNAPSHOT_DIR)) mkdirSync(DECISION_SNAPSHOT_DIR, { recursive: true });
+    if (!existsSync(decisionSnapshotDir)) mkdirSync(decisionSnapshotDir, { recursive: true });
     const name = `decisions-${Date.now()}.json`;
-    writeAtomic(resolve(DECISION_SNAPSHOT_DIR, name), JSON.stringify({ version: 1, decisions }, null, 2));
-    // Trim to KEEP
-    const snaps = readdirSync(DECISION_SNAPSHOT_DIR)
-      .filter((f) => /^decisions-\d+\.json$/.test(f))
-      .sort()
-      .reverse();
+    writeAtomic(resolve(decisionSnapshotDir, name), JSON.stringify({ version: 1, decisions }, null, 2));
+    // Trim to KEEP — sort by the embedded epoch numerically (not lexicographically),
+    // mirroring persistence.ts's listSnapshots.
+    const snaps = readdirSync(decisionSnapshotDir)
+      .filter((f) => /^decisions-(\d+)\.json$/.test(f))
+      .map((f) => ({ name: f, epoch: Number(f.match(/^decisions-(\d+)\.json$/)?.[1] ?? 0) }))
+      .sort((a, b) => b.epoch - a.epoch);
     for (const old of snaps.slice(DECISION_SNAPSHOT_KEEP)) {
-      try { rmSync(resolve(DECISION_SNAPSHOT_DIR, old), { force: true }); } catch { /* best-effort */ }
+      try { rmSync(resolve(decisionSnapshotDir, old.name), { force: true }); } catch { /* best-effort */ }
     }
   } catch { /* snapshots are best-effort */ }
 }
@@ -88,7 +108,7 @@ function writeDecisionSnapshot(decisions: DecisionT[]): void {
 /** Persist the full decisions array to disk atomically + snapshot. */
 export function persistDecisions(decisions: DecisionT[]): void {
   writeDecisionSnapshot(decisions);
-  writeAtomic(DECISIONS_PATH, JSON.stringify({ version: 1, decisions }, null, 2));
+  writeAtomic(decisionsPath, JSON.stringify({ version: 1, decisions }, null, 2));
   cached = decisions;
 }
 
@@ -98,7 +118,9 @@ export function createDecision(input: {
   targetUser: string;
   businessGoal: string;
   primaryKpi: string;
-  scope: "screen" | "flow";
+  /** Defaults to "screen"; "flow" is not supported in increment 1 (rejected by
+   *  the Decision schema). */
+  scope?: "screen";
   platform?: "web" | "mobile" | "tablet";
   constraints?: string;
 }): DecisionT {
@@ -116,21 +138,18 @@ export function createDecision(input: {
     createdAt: today,
     updatedAt: today,
     context,
-    scope: input.scope,
+    scope: input.scope ?? "screen",
     directions: [],
   };
 }
 
-/** Upsert a decision by id. Preserves any updatedAt the caller set explicitly;
- *  only stamps today when the decision carries no updatedAt (defensive). This
- *  mirrors how corpus entries preserve their addedAt and lets callers control
- *  ordering (e.g. tests that pin a decision to a fixed date). */
+/** Upsert a decision by id. Always bumps updatedAt to today so the list reflects
+ *  when a decision was actually edited. Tests that need to pin a timestamp
+ *  should write via persistDecisions directly. */
 export function saveDecision(decision: DecisionT): void {
   const all = loadDecisionsSafe();
   const idx = all.findIndex((d) => d.id === decision.id);
-  if (!decision.updatedAt) {
-    decision.updatedAt = new Date().toISOString().slice(0, 10);
-  }
+  decision.updatedAt = new Date().toISOString().slice(0, 10);
   if (idx >= 0) all[idx] = decision;
   else all.push(decision);
   persistDecisions(all);

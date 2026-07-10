@@ -488,7 +488,16 @@ export const CorpusEntry = z.object({
    */
   qualityTier: z.enum(["exceptional", "cautionary"]).default("exceptional"),
 
-  qualityScore: z.number().min(1).max(5), // your own rating, for ranking in search
+  /**
+   * qualityScore rates how INSTRUCTIVE the example is (not how good the design
+   * is). Exceptional: 3-5 (5 = canonical reference). Cautionary: 1-2 (2 = clear
+   * teaching specimen, 1 = marginal). Keeps cautionary entries sinking in search
+   * by default while rewarding the best teaching examples within each tier.
+   *
+   * Constrained by a refine on CorpusEntry: cautionary must be 1-2, exceptional
+   * must be 3-5. The corpus already complies (no migration needed).
+   */
+  qualityScore: z.number().min(1).max(5), // instructiveness rating, constrained by tier (see CorpusEntry refine)
   addedAt: IsoDate, // ISO date
 
   /**
@@ -543,7 +552,14 @@ export const CorpusEntry = z.object({
      *  entries (pre-dating this field); display falls back to addedAt. */
     taggedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   }).optional(),
-});
+})
+// qualityScore ↔ qualityTier coupling: cautionary entries score 1-2 (sinking in
+// search by default), exceptional entries score 3-5. Prevents drift without a
+// migration — the corpus already complies.
+.refine(
+  (e) => (e.qualityTier === "cautionary" ? e.qualityScore <= 2 : e.qualityScore >= 3),
+  { message: "qualityScore must be 1-2 for cautionary, 3-5 for exceptional", path: ["qualityScore"] },
+);
 
 export type CorpusEntryT = z.infer<typeof CorpusEntry>;
 
@@ -700,10 +716,26 @@ export type ExperimentBriefT = z.infer<typeof ExperimentBrief>;
 export type TradeoffT = z.infer<typeof Tradeoff>;
 export type EvidenceCoverageT = z.infer<typeof EvidenceCoverage>;
 
-/** Container for decisions.json, mirroring the Corpus wrapper. */
+/** Persistence shape for a single decision — allows incomplete work-in-progress
+ *  (0+ directions) without the increment-1 flow/figma gating. The strict
+ *  `Decision` schema (min 2 directions, scope/source gates) is enforced at the
+ *  API/analysis boundary, not at the persistence layer. */
+const PersistedDecision = z.object({
+  id: z.string(),
+  title: z.string(),
+  createdAt: IsoDate,
+  updatedAt: IsoDate,
+  context: DecisionContext,
+  scope: DecisionScope,
+  directions: z.array(Direction).min(0).max(3),
+  analysis: DecisionAnalysis.optional(),
+});
+
+/** Container for decisions.json. Uses the lenient PersistedDecision shape so
+ *  incomplete decisions survive a process restart. */
 export const Decisions = z.object({
   version: z.literal(1),
-  decisions: z.array(Decision),
+  decisions: z.array(PersistedDecision),
 });
 
 export type DecisionsT = z.infer<typeof Decisions>;

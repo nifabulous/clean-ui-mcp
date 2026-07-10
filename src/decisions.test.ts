@@ -1,14 +1,22 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdirSync, rmSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { createDecision, getDecisionById, listDecisions, saveDecision, setDecisionsForTesting } from "./decisions.js";
+import { createDecision, getDecisionById, listDecisions, persistDecisions, saveDecision, setDecisionsForTesting, setDecisionsPathsForTesting, resetDecisionsPathsForTesting } from "./decisions.js";
+
+const TMP_DIR = resolve(process.cwd(), "tmp-decisions-test");
+const TMP_DECISIONS_PATH = resolve(TMP_DIR, "decisions.json");
+const TMP_SNAPSHOT_DIR = resolve(TMP_DIR, ".snapshots");
 
 describe("decision persistence", () => {
   beforeEach(() => {
+    mkdirSync(TMP_DIR, { recursive: true });
     setDecisionsForTesting(null);
+    setDecisionsPathsForTesting({ path: TMP_DECISIONS_PATH, snapshotDir: TMP_SNAPSHOT_DIR });
   });
   afterEach(() => {
     setDecisionsForTesting(null);
+    resetDecisionsPathsForTesting();
+    if (existsSync(TMP_DIR)) rmSync(TMP_DIR, { recursive: true, force: true });
   });
 
   it("creates a decision with generated id and timestamps", () => {
@@ -38,8 +46,8 @@ describe("decision persistence", () => {
     old.updatedAt = "2026-01-01";
     const newer = createDecision({ title: "New", targetUser: "u", businessGoal: "g", primaryKpi: "k", scope: "screen" });
     newer.updatedAt = "2026-07-10";
-    saveDecision(old);
-    saveDecision(newer);
+    // Use persistDecisions directly to preserve explicit timestamps (saveDecision auto-bumps)
+    persistDecisions([old, newer]);
     const all = listDecisions();
     expect(all[0].title).toBe("New");
   });

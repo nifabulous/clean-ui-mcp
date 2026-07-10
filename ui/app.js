@@ -2529,7 +2529,17 @@ function bindDecisionBuilder() {
   });
 
   document.querySelectorAll('[data-rename]').forEach(input => {
+    // Save eagerly on input (debounced) AND on blur, so the name persists even
+    // if the user immediately clicks Analyze without blurring first.
+    let renameTimer = null;
+    input.oninput = () => {
+      const dir = currentDecision.directions.find(d => d.id === input.dataset.rename);
+      if (dir) dir.name = input.value;
+      clearTimeout(renameTimer);
+      renameTimer = setTimeout(() => persistDecision(), 400);
+    };
     input.onchange = async () => {
+      clearTimeout(renameTimer);
       const dir = currentDecision.directions.find(d => d.id === input.dataset.rename);
       if (dir) { dir.name = input.value; await persistDecision(); }
     };
@@ -2541,6 +2551,11 @@ function bindDecisionBuilder() {
     analyzeBtn.textContent = 'Analyzing…';
     analyzeBtn.disabled = true;
     try {
+      // Flush any unsaved direction names to disk before the server reads them.
+      // The rename input uses commit-on-blur (onchange); if the user typed a name
+      // and immediately clicked Analyze, the async PUT may not have landed yet.
+      // This ensures the server sees the current names when it re-reads the decision.
+      await persistDecision();
       const resp = await fetch(`/api/decisions/${currentDecision.id}/analyze`, { method: 'POST' });
       const data = await resp.json();
       if (data.error) { toast(data.error); return; }

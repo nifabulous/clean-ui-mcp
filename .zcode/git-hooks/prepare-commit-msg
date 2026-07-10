@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# prepare-commit-msg — git native prepare-commit-msg hook.
+# Blocks new commits when the previous task commit (current HEAD) lacks an
+# approved task-review artifact at .zcode/reviews/tasks/<headSha>.json.
+#
+# This enforces the "review after each task" rule: after committing task N,
+# you must review it before committing task N+1.
+#
+# Bypass: ZCODE_BYPASS_REVIEW=1 git commit ...
+# Merge commits and initial commits are exempt.
+#
+# Install: .zcode/scripts/install-git-hooks
+set -euo pipefail
+
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="${2:-}"
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "${ZCODE_PROJECT_DIR:-$(pwd)}")"
+BRANCH="$(git branch --show-current 2>/dev/null || echo 'unknown')"
+HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo '')"
+
+# Exempt: merge commits, squash commits, amended commits, and initial commits
+# (no parent to review). These don't represent a new task that needs the
+# previous task reviewed first.
+case "$COMMIT_SOURCE" in
+  merge|squash|commit) exit 0 ;;
+esac
+
+# If HEAD has no parent (initial commit), nothing to review.
+if ! git rev-parse HEAD^ >/dev/null 2>&1; then
+  exit 0
+fi
+
+# Exempt trunk branches.
+case "$BRANCH" in
+  main|master) exit 0 ;;
+esac
+
+# Emergency bypass.
+if [ "${ZCODE_BYPASS_REVIEW:-}" = "1" ]; then
+  exit 0
+fi
+
+# Skip if the commit message starts with certain prefixes that indicate
+# non-task commits (chore, fix for the enforcement system itself, etc.)
+# This prevents the hook from blocking its own installation commits.
+if [ -f "$COMMIT_MSG_FILE" ]; then
+  FIRST_LINE="$(head -1 "$COMMIT_MSG_FILE" 2>/dev/null || echo '')"
+  case "$FIRST_LINE" in
+    chore\(review\):*|chore\(hooks\):*) exit 0 ;;
+  esac
+fi
+
+# Check for task-review artifact at current HEAD.
+[ -n "$HEAD_SHA" ] || exit 0
+TASK_ARTIFACT="$ROOT/.zcode/reviews/tasks/$HEAD_SHA.json"
+if [ ! -f "$TASK_ARTIFACT" ]; then
+  echo "" >&2
+  echo "  ⛔ COMMIT BLOCKED: previous task not reviewed" >&2
+  echo "" >&2
+  echo "  HEAD $HEAD_SHA (branch $BRANCH) has no approved task-review artifact." >&2
+  echo "  Review the work at this commit, then write the artifact:" >&2
+  echo "" >&2
+  echo "    .zcode/scripts/write-review-artifact \\" >&2
+  echo "      --type task --result approved --reviewer agent \\" >&2
+  echo "      --base-sha <parent> --head-sha $HEAD_SHA \\" >&2
+  echo "      --branch $BRANCH" >&2
+  echo "" >&2
+  echo "  Then retry the commit. Emergency bypass: ZCODE_BYPASS_REVIEW=1 git commit ..." >&2
+  echo "" >&2
+  exit 1
+fi
+
+# Validate: result must be approved.
+RESULT="$(python3 -c "import json; d=json.load(open('$TASK_ARTIFACT')); print(d.get('result',''))" 2>/dev/null || echo "")"
+if [ "$RESULT" != "approved" ]; then
+  echo "" >&2
+  echo "  ⛔ COMMIT BLOCKED: task review not approved" >&2
+  echo "" >&2
+  echo "  Task review for $HEAD_SHA exists but result is '$RESULT'." >&2
+  echo "  Address the review findings, then re-approve." >&2
+  echo "" >&2
+  exit 1
+fi
+
+exit 0

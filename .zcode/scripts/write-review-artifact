@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# write-review-artifact — write a task or branch review artifact as JSON.
+#
+# Usage:
+#   write-review-artifact --type task|branch \
+#     --result approved|changes-requested \
+#     --reviewer human|agent \
+#     --base-sha <sha> --head-sha <sha> \
+#     --branch <branch> \
+#     [--issues '{"critical":0,"important":1,"minor":2}']
+#
+# Task artifacts:   .zcode/reviews/tasks/<headSha>.json
+# Branch artifacts: .zcode/reviews/branches/<branch>.json
+set -euo pipefail
+
+TYPE=""
+RESULT=""
+REVIEWER=""
+BASE_SHA=""
+HEAD_SHA=""
+BRANCH=""
+ISSUES=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --type) TYPE="$2"; shift 2 ;;
+    --result) RESULT="$2"; shift 2 ;;
+    --reviewer) REVIEWER="$2"; shift 2 ;;
+    --base-sha) BASE_SHA="$2"; shift 2 ;;
+    --head-sha) HEAD_SHA="$2"; shift 2 ;;
+    --branch) BRANCH="$2"; shift 2 ;;
+    --issues) ISSUES="$2"; shift 2 ;;
+    *) echo "unknown arg: $1" >&2; exit 1 ;;
+  esac
+done
+
+[ -n "$TYPE" ] && [ -n "$RESULT" ] && [ -n "$REVIEWER" ] && [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ] && [ -n "$BRANCH" ] || {
+  echo "missing required args. Need: --type --result --reviewer --base-sha --head-sha --branch" >&2
+  exit 1
+}
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "${ZCODE_PROJECT_DIR:-$(pwd)}")"
+mkdir -p "$ROOT/.zcode/reviews/tasks" "$ROOT/.zcode/reviews/branches"
+NOW="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+# Sanitize branch name for filename: replace / with - (feat/x → feat-x).
+# The full branch name is preserved in the JSON "branch" field.
+BRANCH_SAFE="$(echo "$BRANCH" | tr '/' '-')"
+
+if [ "$TYPE" = "task" ]; then
+  TARGET="$ROOT/.zcode/reviews/tasks/$HEAD_SHA.json"
+else
+  TARGET="$ROOT/.zcode/reviews/branches/$BRANCH_SAFE.json"
+fi
+
+# Build issues JSON (empty object if not provided)
+ISSUES_JSON="${ISSUES:-{}}"
+
+cat > "$TARGET" <<EOF
+{
+  "type": "${TYPE}-review",
+  "branch": "$BRANCH",
+  "baseSha": "$BASE_SHA",
+  "headSha": "$HEAD_SHA",
+  "reviewedAt": "$NOW",
+  "reviewer": "$REVIEWER",
+  "result": "$RESULT",
+  "issues": $ISSUES_JSON
+}
+EOF
+
+echo "wrote $TARGET"

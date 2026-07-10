@@ -52,3 +52,8 @@ corpus/bulk-test-*
 # Local corpus config — per-curator floor for the entry-count drift check.
 # Copy .corpus-config.example.json to .corpus-config.json and set your floor.
 corpus/.corpus-config.json
+
+# Review-enforcement artifacts — per-machine state. The PR conversation is the
+# shared record; these JSON files are local gates for the git hooks.
+.zcode/reviews/
+.zcode/tmp/

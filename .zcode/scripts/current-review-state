@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# current-review-state — resolve branch, HEAD SHA, prev SHA, and artifact paths.
+# Used by both git hooks and the artifact writer so path logic stays in one place.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "${ZCODE_PROJECT_DIR:-$(pwd)}")"
+BRANCH="$(git branch --show-current 2>/dev/null || echo 'unknown')"
+HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo '')"
+PREV_SHA="$(git rev-parse HEAD^ 2>/dev/null || echo '')"
+
+TASK_PATH="$ROOT/.zcode/reviews/tasks/$HEAD_SHA.json"
+# Sanitize branch name for filename: replace / with - (feat/x → feat-x).
+BRANCH_SAFE="$(echo "$BRANCH" | tr '/' '-')"
+BRANCH_PATH="$ROOT/.zcode/reviews/branches/$BRANCH_SAFE.json"
+
+printf 'ROOT=%s\n' "$ROOT"
+printf 'BRANCH=%s\n' "$BRANCH"
+printf 'HEAD_SHA=%s\n' "$HEAD_SHA"
+printf 'PREV_SHA=%s\n' "$PREV_SHA"
+printf 'TASK_REVIEW_PATH=%s\n' "$TASK_PATH"
+printf 'BRANCH_REVIEW_PATH=%s\n' "$BRANCH_PATH"

@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# pre-push — git native pre-push hook.
+# Blocks pushes unless the current branch HEAD has an approved branch-review
+# artifact at .zcode/reviews/branches/<branch>.json with a matching headSha.
+#
+# Bypass: ZCODE_BYPASS_REVIEW=1 git push (logs to .zcode/reviews/bypass-log.jsonl)
+# Main/master branches are exempt (trunk pushes aren't feature work).
+#
+# Install: .zcode/scripts/install-git-hooks
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "${ZCODE_PROJECT_DIR:-$(pwd)}")"
+BRANCH="$(git branch --show-current 2>/dev/null || echo 'unknown')"
+HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo '')"
+
+# Read ref updates from stdin (git pre-push protocol) and discard — we gate on
+# the current branch state, not on which refs are being pushed.
+cat >/dev/null 2>&1 || true
+
+# Exempt trunk branches — trunk pushes aren't feature work needing review.
+case "$BRANCH" in
+  main|master) exit 0 ;;
+esac
+
+# Emergency bypass with audit log.
+if [ "${ZCODE_BYPASS_REVIEW:-}" = "1" ]; then
+  mkdir -p "$ROOT/.zcode/reviews"
+  printf '{"ts":"%s","branch":"%s","headSha":"%s","hook":"pre-push","bypass":true}\n' \
+    "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    "$BRANCH" \
+    "$HEAD_SHA" \
+    >> "$ROOT/.zcode/reviews/bypass-log.jsonl"
+  exit 0
+fi
+
+# Check for branch-review artifact.
+# Sanitize branch name for filename: replace / with - (feat/x → feat-x).
+BRANCH_SAFE="$(echo "$BRANCH" | tr '/' '-')"
+ARTIFACT="$ROOT/.zcode/reviews/branches/$BRANCH_SAFE.json"
+if [ ! -f "$ARTIFACT" ]; then
+  echo "" >&2
+  echo "  ⛔ PUSH BLOCKED: no branch review for $BRANCH" >&2
+  echo "" >&2
+  echo "  Branch $BRANCH (HEAD $HEAD_SHA) has no holistic review artifact." >&2
+  echo "  Run the branch review, then write the artifact:" >&2
+  echo "" >&2
+  echo "    .zcode/scripts/write-review-artifact \\" >&2
+  echo "      --type branch --result approved --reviewer agent \\" >&2
+  echo "      --base-sha <base> --head-sha $HEAD_SHA \\" >&2
+  echo "      --branch $BRANCH" >&2
+  echo "" >&2
+  echo "  Emergency bypass: ZCODE_BYPASS_REVIEW=1 git push" >&2
+  echo "" >&2
+  exit 1
+fi
+
+# Validate artifact: result must be approved, headSha must match current HEAD.
+RESULT="$(python3 -c "import json; d=json.load(open('$ARTIFACT')); print(d.get('result',''))" 2>/dev/null || echo "")"
+REVIEWED_SHA="$(python3 -c "import json; d=json.load(open('$ARTIFACT')); print(d.get('headSha',''))" 2>/dev/null || echo "")"
+
+if [ "$RESULT" != "approved" ]; then
+  echo "" >&2
+  echo "  ⛔ PUSH BLOCKED: branch review not approved" >&2
+  echo "" >&2
+  echo "  Branch $BRANCH review exists but result is '$RESULT', not 'approved'." >&2
+  echo "  Address the review findings, then re-approve:" >&2
+  echo "" >&2
+  echo "    .zcode/scripts/write-review-artifact \\" >&2
+  echo "      --type branch --result approved --reviewer agent \\" >&2
+  echo "      --base-sha <base> --head-sha $HEAD_SHA \\" >&2
+  echo "      --branch $BRANCH" >&2
+  echo "" >&2
+  exit 1
+fi
+
+if [ "$REVIEWED_SHA" != "$HEAD_SHA" ]; then
+  echo "" >&2
+  echo "  ⛔ PUSH BLOCKED: branch review is stale" >&2
+  echo "" >&2
+  echo "  Branch $BRANCH was reviewed at $REVIEWED_SHA but HEAD is $HEAD_SHA." >&2
+  echo "  New commits since the review need re-review before pushing." >&2
+  echo "" >&2
+  echo "  Re-run the branch review for $HEAD_SHA, then:" >&2
+  echo "" >&2
+  echo "    .zcode/scripts/write-review-artifact \\" >&2
+  echo "      --type branch --result approved --reviewer agent \\" >&2
+  echo "      --base-sha $REVIEWED_SHA --head-sha $HEAD_SHA \\" >&2
+  echo "      --branch $BRANCH" >&2
+  echo "" >&2
+  echo "  Emergency bypass: ZCODE_BYPASS_REVIEW=1 git push" >&2
+  echo "" >&2
+  exit 1
+fi
+
+echo "  ✓ Branch review verified for $BRANCH ($HEAD_SHA)" >&2
+exit 0

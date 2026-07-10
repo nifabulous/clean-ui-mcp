@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# install-git-hooks — copy repo-tracked hook scripts into .git/hooks/
+# .git/hooks/ is not version-controlled, so hooks live in .zcode/git-hooks/
+# and are installed into each clone via this script.
+#
+# Usage: .zcode/scripts/install-git-hooks
+#
+# Run after cloning or pulling hook updates. Idempotent.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$ROOT" ]; then
+  echo "❌ Not in a git repo" >&2
+  exit 1
+fi
+
+HOOKS_DIR="$ROOT/.git/hooks"
+SRC_DIR="$ROOT/.zcode/git-hooks"
+
+mkdir -p "$HOOKS_DIR"
+
+INSTALLED=0
+for hook in pre-push prepare-commit-msg; do
+  SRC="$SRC_DIR/$hook"
+  DST="$HOOKS_DIR/$hook"
+  if [ ! -f "$SRC" ]; then
+    echo "  ⚠  Source hook not found, skipping: $hook"
+    continue
+  fi
+  # Back up existing hook if it's not ours (doesn't have our marker comment).
+  if [ -f "$DST" ] && ! grep -q "Install: .zcode/scripts/install-git-hooks" "$DST" 2>/dev/null; then
+    BACKUP="$DST.bak.$(date +%s)"
+    cp "$DST" "$BACKUP"
+    echo "  ℹ  Backed up existing $hook to $(basename "$BACKUP")"
+  fi
+  cp "$SRC" "$DST"
+  chmod +x "$DST"
+  echo "  ✓ Installed $hook"
+  INSTALLED=$((INSTALLED + 1))
+done
+
+echo ""
+echo "  $INSTALLED hook(s) installed to .git/hooks/"
+echo "  Review artifacts go in .zcode/reviews/ (gitignored — per-machine state)"
+echo ""
+echo "  Workflow:"
+echo "    1. Complete a task, commit it"
+echo "    2. Review it, write artifact: .zcode/scripts/write-review-artifact --type task ..."
+echo "    3. Commit the next task (blocked until step 2 is done)"
+echo "    4. Before pushing: run branch review, write artifact: .zcode/scripts/write-review-artifact --type branch ..."
+echo "    5. Push (blocked until step 4 is done)"
+echo ""
+echo "  Emergency bypass: ZCODE_BYPASS_REVIEW=1 git push"

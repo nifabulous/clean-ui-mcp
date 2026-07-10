@@ -11,8 +11,9 @@
  *
  * Mirrors tagger.ts (LLM call + post-hoc gate) and design-prompt.ts (pure synthesis + rendering).
  */
-import type { DecisionT, EvidenceCoverageT } from "./schema.js";
-import { hasCritiqueKey, activeProviderName, activeModelName } from "./tagger.js";
+import type { DecisionT, DecisionAnalysisT, EvidenceCoverageT } from "./schema.js";
+import { hasCritiqueKey, activeProviderName, activeModelName, tagImage } from "./tagger.js";
+import { searchRanked } from "./corpus.js";
 
 /** A screen's Pass-1 tagger extraction (the `tagging` field on DecisionScreen). */
 export interface ExtractedScreen {
@@ -365,4 +366,88 @@ function lensLabel(lens: string): string {
     "growth-pm": "Growth-minded PM",
   };
   return map[lens] ?? lens;
+}
+
+export interface AnalyzeResult {
+  analysis: DecisionAnalysisT;
+  brief: string;
+}
+
+/**
+ * Full Decision Lab analysis pipeline:
+ * 1. Extract visual/layout/component/a11y signals via the existing tagger (extractionOnly).
+ * 2. Retrieve relevant corpus examples from decision context + extracted signals.
+ * 3. Assemble evidence into a cited bundle.
+ * 4. Run the constrained comparative synthesis with citation gating.
+ * 5. Classify corpus coverage honestly.
+ * 6. Render the decision brief.
+ */
+export async function analyzeDecision(decision: DecisionT): Promise<AnalyzeResult> {
+  // ── Step 1: Extraction via existing tagger ──
+  const screens: Record<string, ExtractedScreen> = {};
+  const extractionProvider = activeProviderName() ?? "openai";
+  for (const direction of decision.directions) {
+    for (const screen of direction.screens) {
+      const tagged = await tagImage({
+        imagePath: screen.imageRef,
+        productName: direction.name,
+        extractionOnly: true,
+      });
+      screens[screen.id] = {
+        extraction: (tagged._raw?.extraction as Record<string, unknown>) ?? {
+          patternType: tagged.patternType,
+          categories: tagged.categories,
+          components: tagged.components,
+        },
+      };
+    }
+  }
+
+  // ── Step 2: Corpus retrieval ──
+  const query = `${decision.context.businessGoal} ${decision.context.primaryKpi} ${decision.context.targetUser}`;
+  const searchResults = await searchRanked({ query, limit: 10 });
+  const corpusEvidence: CorpusEvidenceItem[] = searchResults.slice(0, 8).map((r) => ({
+    id: r.entry.id,
+    patternType: r.entry.patternType,
+    critique: r.entry.critique,
+    categories: r.entry.categories,
+  }));
+
+  // ── Step 3: Assemble evidence ──
+  const bundle = assembleEvidence(decision, screens, corpusEvidence);
+
+  // ── Step 4: Synthesize ──
+  const synth = await synthesize(decision, bundle);
+
+  // ── Step 5: Classify coverage ──
+  const coverage = classifyCoverage(corpusEvidence.length);
+
+  // ── Step 6: Build analysis record + render brief ──
+  const analysis: DecisionAnalysisT = {
+    status: "analyzed",
+    providerMetadata: {
+      extractionProvider,
+      synthesisProvider: synth.provider,
+      model: synth.model,
+    },
+    analyzedAt: new Date().toISOString().slice(0, 10),
+    directionRubrics: synth.output.directionRubrics.map((r) => ({
+      directionId: r.directionId,
+      scores: r.scores.map((s) => ({
+        dimension: s.dimension as DecisionAnalysisT["directionRubrics"][0]["scores"][0]["dimension"],
+        score: s.score,
+        rationale: s.rationale,
+        evidence: s.evidence,
+      })),
+    })),
+    tradeoffs: synth.output.tradeoffs,
+    evidenceCoverage: coverage,
+    corpusEntryCount: corpusEvidence.length,
+    perspectives: synth.output.perspectives as DecisionAnalysisT["perspectives"],
+    experimentBrief: synth.output.experimentBrief,
+  };
+
+  const brief = renderDecisionBrief(decision, synth.output, { coverage, corpusEntryCount: corpusEvidence.length });
+
+  return { analysis, brief };
 }

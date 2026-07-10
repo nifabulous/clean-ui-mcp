@@ -1,6 +1,18 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { assembleEvidence, classifyCoverage, gateCitations, synthesize, renderDecisionBrief, type ExtractedScreen, type SynthesisOutput, type EvidenceBundle } from "./decision-lab.js";
+import { assembleEvidence, classifyCoverage, gateCitations, synthesize, renderDecisionBrief, analyzeDecision, type ExtractedScreen, type SynthesisOutput, type EvidenceBundle } from "./decision-lab.js";
 import type { DecisionT } from "./schema.js";
+import { tagImage } from "./tagger.js";
+import { searchRanked } from "./corpus.js";
+
+vi.mock("./tagger.js", () => ({
+  tagImage: vi.fn(),
+  hasCritiqueKey: vi.fn(() => true),
+  activeProviderName: vi.fn(() => "openai"),
+  activeModelName: vi.fn(() => "test-model"),
+}));
+vi.mock("./corpus.js", () => ({
+  searchRanked: vi.fn(),
+}));
 
 function makeDecision(): DecisionT {
   return {
@@ -237,5 +249,45 @@ describe("renderDecisionBrief", () => {
     const md = renderDecisionBrief(decision, output, { coverage: "strong", corpusEntryCount: 10 });
     expect(md.toLowerCase()).not.toContain("recommend");
     expect(md.toLowerCase()).not.toContain("lean toward");
+  });
+});
+
+describe("analyzeDecision", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = "test-key";
+    vi.mocked(tagImage).mockResolvedValue({
+      patternType: "landing-page", categories: ["marketing-hero"], components: [],
+      _raw: { extraction: { patternType: "landing-page", categories: ["marketing-hero"], components: [] } },
+    } as any);
+    vi.mocked(searchRanked).mockResolvedValue([
+      { entry: { id: "stripe-pricing", patternType: "pricing", critique: "Clean", categories: ["pricing"] }, score: 0.8, searchMode: "vector" },
+    ]);
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("extracts, retrieves, assembles, synthesizes, and returns an analysis", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      const response = JSON.stringify({
+        directionRubrics: [{ directionId: "dir-a", scores: [{ dimension: "visual-hierarchy", score: 4, rationale: "R", evidence: ["dir-a:s1:patternType"] }] }],
+        perspectives: [],
+        experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] },
+        tradeoffs: [{ description: "T", evidence: ["corpus:stripe-pricing"] }],
+      });
+      return new Response(JSON.stringify({ output_text: response }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const decision = makeDecision();
+    const result = await analyzeDecision(decision);
+    expect(result.analysis.status).toBe("analyzed");
+    expect(result.analysis.evidenceCoverage).toBe("limited");  // 1 corpus entry
+    expect(result.analysis.corpusEntryCount).toBe(1);
+    expect(result.analysis.directionRubrics[0].scores[0].dimension).toBe("visual-hierarchy");
+    expect(result.brief).toContain("Decision brief");
+    expect(tagImage).toHaveBeenCalledTimes(2);  // once per screen
+    expect(searchRanked).toHaveBeenCalled();
   });
 });

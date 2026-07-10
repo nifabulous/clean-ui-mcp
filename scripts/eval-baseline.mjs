@@ -33,7 +33,14 @@ const DEFAULT_BASELINE = resolve(EVAL_DIR, "baseline.json");
 
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
-const diffPath = args[args.indexOf("--diff") + 1] && args.includes("--diff") ? resolve(args[args.indexOf("--diff") + 1]) : null;
+const wantDiff = args.includes("--diff");
+// Bare --diff (no path following) defaults to the standard baseline location.
+// Without this, `npm run eval-baseline -- --diff` silently overwrites the baseline.
+const diffIdx = args.indexOf("--diff");
+const diffPathArg = diffIdx >= 0 ? args[diffIdx + 1] : undefined;
+const diffPath = wantDiff
+  ? resolve(diffPathArg && !diffPathArg.startsWith("--") ? diffPathArg : DEFAULT_BASELINE)
+  : null;
 const extractionOnly = args.includes("--extraction-only");
 const maxImages = parseInt(args.find((_, i, a) => a[i - 1] === "--images") ?? "99", 10);
 const images = EVAL_SET.slice(0, maxImages);
@@ -157,7 +164,6 @@ console.log(`  avg critique words:    ${summary.avgCritiqueWords.toFixed(0)}`);
 console.log(`  avg extraction latency:${summary.avgExtractionLatencyMs.toFixed(0)}ms`);
 if (summary.errorCount) console.log(`  errors:                ${summary.errorCount}`);
 
-const wantDiff = args.includes("--diff");
 if (diffPath && !existsSync(diffPath)) {
   console.error(`\n⚠  Baseline file not found at ${diffPath}`);
   console.error(`   Writing a new baseline instead. Next time, diff against: ${DEFAULT_BASELINE}`);

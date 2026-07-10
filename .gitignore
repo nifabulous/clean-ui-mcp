@@ -20,6 +20,11 @@ corpus/images-private/*
 # Snapshots + restore-corpus protect against loss.
 corpus/entries.json
 
+# Local working decisions (Decision Lab) — the user's own comparison briefs,
+# created via the UI/CLI. Like entries.json, this is a private working file, not
+# part of the publishable corpus. Rolling snapshots protect against loss.
+corpus/decisions.json
+
 # Derived — regenerate with `npm run build-index`
 corpus/embeddings.json
 # Derived — dHash fingerprint cache, rebuilt by the curator UI at runtime

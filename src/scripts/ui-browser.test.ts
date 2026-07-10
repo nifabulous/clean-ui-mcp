@@ -25,6 +25,19 @@ let openaiConfigured = true;
 const batchHashes = new Map<string, Set<string>>();
 let lastEntryPost: any = null;
 let lastAutoCritiquePost: any = null;
+const savedDecisions = [{
+  id: "saved-homepage",
+  title: "Saved homepage direction",
+  createdAt: "2026-07-10",
+  updatedAt: "2026-07-10",
+  context: { targetUser: "Visitors", businessGoal: "Clarify value", primaryKpi: "Trial starts" },
+  scope: "screen",
+  directions: [
+    { id: "dir-a", name: "A", screens: [{ id: "screen-a", order: 0, source: "upload", imageRef: "images-private/decisions/a.png" }] },
+    { id: "dir-b", name: "B", screens: [{ id: "screen-b", order: 0, source: "upload", imageRef: "images-private/decisions/b.png" }] },
+  ],
+  analysis: { status: "analyzed" },
+}];
 
 const schema = {
   categories: ["dashboard", "pricing"],
@@ -77,6 +90,8 @@ describe("curator app browser smoke", () => {
       }
       if (url.pathname === "/api/schema") return json(res, 200, schema);
       if (url.pathname === "/api/entries" && req.method === "GET") return json(res, 200, { entries: [] });
+      if (url.pathname === "/api/decisions" && req.method === "GET") return json(res, 200, { decisions: savedDecisions });
+      if (url.pathname === "/api/decisions/saved-homepage" && req.method === "GET") return json(res, 200, { decision: savedDecisions[0] });
       if (url.pathname === "/api/health") return json(res, 200, { entryCount: 0, snapshotCount: 0, newestSnapshotEpoch: 0, newestSnapshotAgeMs: 0 });
       if (url.pathname === "/api/stats") return json(res, 200, { total: 0, avgQuality: 0, withImages: 0 });
       if (url.pathname === "/api/orphans" && req.method === "GET") return json(res, 200, { orphans: [], count: 0 });
@@ -495,6 +510,37 @@ describe("specimen-ledger SPA", () => {
     // The old redirect link to /index-classic.html should NOT be in #/add anymore.
     const oldRedirect = await page.locator("#pages a[href='/index-classic.html']").count();
     expect(oldRedirect).toBe(0);
+    await page.close();
+  });
+
+  it("opens a saved analyzed decision in the builder when its rendered brief is not persisted", async () => {
+    const page = await browser.newPage();
+    await page.goto(baseUrl + "/#/decision-lab");
+    await page.getByText("Saved homepage direction", { exact: true }).click();
+
+    await page.waitForSelector("#analyze-btn");
+    expect(await page.locator("#analyze-btn").isVisible()).toBe(true);
+    expect(await page.locator(".decision-brief").count()).toBe(0);
+    await page.close();
+  });
+
+  it("renderMarkdown produces valid ul/ol list HTML with opening tags", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/decision-lab");
+    // renderMarkdown is exposed on window by app.js for testability.
+    const html = await page.evaluate(() => {
+      const fn = (window as any).renderMarkdown;
+      return fn ? fn("- First point\n- Second point\n\n1. Step one\n2. Step two") : null;
+    });
+    expect(html).not.toBeNull();
+    // Must contain opening <ul> and <ol> tags, not just closing — the bug was
+    // that closeLists emitted </ul></ol> but the opening tags were never written.
+    expect(html).toContain("<ul>");
+    expect(html).toContain("</ul>");
+    expect(html).toContain("<ol>");
+    expect(html).toContain("</ol>");
+    expect(html).toContain("<li>First point</li>");
+    expect(html).toContain("<li>Step one</li>");
     await page.close();
   });
 

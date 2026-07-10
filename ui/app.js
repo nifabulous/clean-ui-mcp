@@ -912,9 +912,9 @@ function renderMarkdown(md){
     // Horizontal rule
     if(/^---+$/.test(line)){ closeLists(); html += '<hr>'; continue; }
     // Unordered list
-    if(/^[-•]\s+/.test(line)){ if(!inUL){closeLists();inUL=true;} html += `<li>${line.replace(/^[-•]\s+/,'')}</li>`; continue; }
+    if(/^[-•]\s+/.test(line)){ if(!inUL){closeLists();html+='<ul>';inUL=true;} html += `<li>${line.replace(/^[-•]\s+/,'')}</li>`; continue; }
     // Ordered list
-    if(/^\d+\.\s+/.test(line)){ if(!inOL){closeLists();inOL=true;} html += `<li>${line.replace(/^\d+\.\s+/,'')}</li>`; continue; }
+    if(/^\d+\.\s+/.test(line)){ if(!inOL){closeLists();html+='<ol>';inOL=true;} html += `<li>${line.replace(/^\d+\.\s+/,'')}</li>`; continue; }
     // Close lists on non-list line
     if(inUL || inOL) closeLists();
     // Blank line
@@ -925,6 +925,8 @@ function renderMarkdown(md){
   closeLists(); closeTable();
   return html;
 }
+// Expose for browser tests (the IIFE scope hides it from page.evaluate otherwise)
+window.renderMarkdown = renderMarkdown;
 
 /* ============================================================
    PAGES

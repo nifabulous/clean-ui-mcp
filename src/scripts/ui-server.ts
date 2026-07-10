@@ -17,7 +17,7 @@ import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelNa
 import type { CaptureMeta, DomSignals } from "./capture.js";
 import { captureCandidatesForSource, isAllowedByRobots } from "./capture.js";
 import { getEnvStatus, type EnvStatus } from "../env.js";
-import { createDecision, saveDecision, getDecisionById, listDecisions } from "../decisions.js";
+import { createDecision, saveDecision, getDecisionById, listDecisions, persistDecisions } from "../decisions.js";
 import { analyzeDecision } from "../decision-lab.js";
 import {
   ENTRIES_PATH, SNAPSHOT_DIR, SNAPSHOT_KEEP,
@@ -912,6 +912,15 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     return;
   }
 
+  if (req.method === "DELETE" && decisionMatch) {
+    const existing = getDecisionById(decisionMatch[1]);
+    if (!existing) { sendJson(res, 404, { error: "Decision not found" }); return; }
+    const all = listDecisions().filter((d) => d.id !== decisionMatch[1]);
+    persistDecisions(all);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
   const analyzeMatch = url.pathname.match(/^\/api\/decisions\/([^/]+)\/analyze$/);
   if (req.method === "POST" && analyzeMatch) {
     const decision = getDecisionById(analyzeMatch[1]);
@@ -957,7 +966,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     while (existsSync(resolve(dir, filename))) filename = `${slug}-${counter++}.${ext}`;
     const fullPath = resolve(dir, filename);
     writeFileSync(fullPath, Buffer.from(match[2], "base64"));
-    sendJson(res, 201, { path: `corpus/images-private/decisions/${filename}` });
+    sendJson(res, 201, { path: `images-private/decisions/${filename}` });
     return;
   }
 

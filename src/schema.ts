@@ -674,7 +674,7 @@ export const DecisionAnalysis = z.object({
     directionId: z.string(),
     scores: z.array(RubricScore),
   })),
-  tradeoffs: z.array(Tradeoff).min(1).max(3),
+  tradeoffs: z.array(Tradeoff).max(3),
   evidenceCoverage: EvidenceCoverage,
   corpusEntryCount: z.number().int().min(0),
   perspectives: z.array(Perspective),

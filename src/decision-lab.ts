@@ -14,6 +14,7 @@
 import type { DecisionT, DecisionAnalysisT, EvidenceCoverageT } from "./schema.js";
 import { hasCritiqueKey, activeProviderName, activeModelName, tagImage } from "./tagger.js";
 import { searchRanked } from "./corpus.js";
+import { fromCorpusRelativeImagePath } from "./paths.js";
 
 /** A screen's Pass-1 tagger extraction (the `tagging` field on DecisionScreen). */
 export interface ExtractedScreen {
@@ -235,7 +236,7 @@ async function callSynthesisModel(prompt: string): Promise<string> {
     body: JSON.stringify({
       model,
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 4000,
+      max_tokens: 8192,
     }),
   });
   if (!resp.ok) throw new Error(`Synthesis provider returned ${resp.status}: ${await resp.text()}`);
@@ -386,32 +387,47 @@ export async function analyzeDecision(decision: DecisionT): Promise<AnalyzeResul
   // ── Step 1: Extraction via existing tagger ──
   const screens: Record<string, ExtractedScreen> = {};
   const extractionProvider = activeProviderName() ?? "openai";
+  const failedScreens: string[] = [];
   for (const direction of decision.directions) {
     for (const screen of direction.screens) {
-      const tagged = await tagImage({
-        imagePath: screen.imageRef,
-        productName: direction.name,
-        extractionOnly: true,
-      });
-      screens[screen.id] = {
-        extraction: (tagged._raw?.extraction as Record<string, unknown>) ?? {
-          patternType: tagged.patternType,
-          categories: tagged.categories,
-          components: tagged.components,
-        },
-      };
+      try {
+        const tagged = await tagImage({
+          imagePath: fromCorpusRelativeImagePath(screen.imageRef),
+          productName: direction.name,
+          extractionOnly: true,
+        });
+        screens[screen.id] = {
+          extraction: (tagged._raw?.extraction as Record<string, unknown>) ?? {
+            patternType: tagged.patternType,
+            categories: tagged.categories,
+            components: tagged.components,
+          },
+        };
+      } catch (err) {
+        failedScreens.push(`${direction.name}/${screen.id}: ${err instanceof Error ? err.message : "extraction failed"}`);
+      }
     }
+  }
+  // If every screen failed, we can't analyze at all.
+  if (Object.keys(screens).length === 0) {
+    throw new Error(`All screen extractions failed:\n${failedScreens.join("\n")}`);
   }
 
   // ── Step 2: Corpus retrieval ──
   const query = `${decision.context.businessGoal} ${decision.context.primaryKpi} ${decision.context.targetUser}`;
-  const searchResults = await searchRanked({ query, limit: 10 });
-  const corpusEvidence: CorpusEvidenceItem[] = searchResults.slice(0, 8).map((r) => ({
-    id: r.entry.id,
-    patternType: r.entry.patternType,
-    critique: r.entry.critique,
-    categories: r.entry.categories,
-  }));
+  let corpusEvidence: CorpusEvidenceItem[] = [];
+  try {
+    const searchResults = await searchRanked({ query, limit: 10 });
+    corpusEvidence = searchResults.slice(0, 8).map((r) => ({
+      id: r.entry.id,
+      patternType: r.entry.patternType,
+      critique: r.entry.critique,
+      categories: r.entry.categories,
+    }));
+  } catch {
+    // Corpus retrieval failed — proceed with screen observations only.
+    // Coverage will classify as "unavailable".
+  }
 
   // ── Step 3: Assemble evidence ──
   const bundle = assembleEvidence(decision, screens, corpusEvidence);

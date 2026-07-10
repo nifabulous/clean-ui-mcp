@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${ZCODE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+mkdir -p "$ROOT/.zcode/tmp"
+date -u +"%Y-%m-%dT%H:%M:%SZ" > "$ROOT/.zcode/tmp/probe-hook-fired"
+cat >/dev/null

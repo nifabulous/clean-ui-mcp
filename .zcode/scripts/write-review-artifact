@@ -39,6 +39,11 @@ done
   exit 1
 }
 
+# Validate enum values (M4 from review).
+case "$TYPE" in task|branch) ;; *) echo "invalid --type: $TYPE (expected task|branch)" >&2; exit 1 ;; esac
+case "$RESULT" in approved|changes-requested) ;; *) echo "invalid --result: $RESULT (expected approved|changes-requested)" >&2; exit 1 ;; esac
+case "$REVIEWER" in human|agent) ;; *) echo "invalid --reviewer: $REVIEWER (expected human|agent)" >&2; exit 1 ;; esac
+
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "${ZCODE_PROJECT_DIR:-$(pwd)}")"
 mkdir -p "$ROOT/.zcode/reviews/tasks" "$ROOT/.zcode/reviews/branches"
 NOW="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -53,20 +58,36 @@ else
   TARGET="$ROOT/.zcode/reviews/branches/$BRANCH_SAFE.json"
 fi
 
-# Build issues JSON (empty object if not provided)
-ISSUES_JSON="${ISSUES:-{}}"
+# Build the artifact JSON using python3's json.dumps so branch names, SHAs,
+# and other values containing quotes/backticks/$() can't break out of the JSON
+# or execute as shell (C1/I1 from review). The values are passed via sys.argv,
+# never interpolated into the Python source string.
+python3 - "$TARGET" "$TYPE" "$BRANCH" "$BASE_SHA" "$HEAD_SHA" "$NOW" "$REVIEWER" "$RESULT" "$ISSUES" <<'PY'
+import json, sys, os
 
-cat > "$TARGET" <<EOF
-{
-  "type": "${TYPE}-review",
-  "branch": "$BRANCH",
-  "baseSha": "$BASE_SHA",
-  "headSha": "$HEAD_SHA",
-  "reviewedAt": "$NOW",
-  "reviewer": "$REVIEWER",
-  "result": "$RESULT",
-  "issues": $ISSUES_JSON
+target, rtype, branch, base_sha, head_sha, now, reviewer, result, issues_raw = sys.argv[1:10]
+
+# Parse issues if provided, default to empty object.
+try:
+    issues = json.loads(issues_raw) if issues_raw else {}
+except (json.JSONDecodeError, TypeError):
+    print(f"warning: --issues is not valid JSON, using empty object: {issues_raw}", file=sys.stderr)
+    issues = {}
+
+doc = {
+    "type": f"{rtype}-review",
+    "branch": branch,
+    "baseSha": base_sha,
+    "headSha": head_sha,
+    "reviewedAt": now,
+    "reviewer": reviewer,
+    "result": result,
+    "issues": issues,
 }
-EOF
+
+with open(target, "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PY
 
 echo "wrote $TARGET"

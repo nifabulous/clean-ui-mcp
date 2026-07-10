@@ -36,8 +36,16 @@ case "$BRANCH" in
   main|master) exit 0 ;;
 esac
 
-# Emergency bypass.
+# Emergency bypass with audit log (I2 fix — was silently passing).
 if [ "${ZCODE_BYPASS_REVIEW:-}" = "1" ]; then
+  ROOT_FOR_LOG="${ZCODE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}"
+  mkdir -p "$ROOT_FOR_LOG/.zcode/reviews"
+  python3 -c '
+import json, sys
+entry = {"ts": sys.argv[1], "branch": sys.argv[2], "headSha": sys.argv[3], "hook": "prepare-commit-msg", "bypass": True}
+print(json.dumps(entry))
+' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$BRANCH" "$HEAD_SHA" \
+    >> "$ROOT_FOR_LOG/.zcode/reviews/bypass-log.jsonl"
   exit 0
 fi
 
@@ -72,7 +80,8 @@ if [ ! -f "$TASK_ARTIFACT" ]; then
 fi
 
 # Validate: result must be approved.
-RESULT="$(python3 -c "import json; d=json.load(open('$TASK_ARTIFACT')); print(d.get('result',''))" 2>/dev/null || echo "")"
+# Pass path via sys.argv (M7 from review).
+RESULT="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("result",""))' "$TASK_ARTIFACT" 2>/dev/null || echo "")"
 if [ "$RESULT" != "approved" ]; then
   echo "" >&2
   echo "  ⛔ COMMIT BLOCKED: task review not approved" >&2

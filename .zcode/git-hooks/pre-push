@@ -22,13 +22,15 @@ case "$BRANCH" in
   main|master) exit 0 ;;
 esac
 
-# Emergency bypass with audit log.
+# Emergency bypass with audit log (I1 fix: serialize via python3 to prevent
+# branch-name injection into the JSON log).
 if [ "${ZCODE_BYPASS_REVIEW:-}" = "1" ]; then
   mkdir -p "$ROOT/.zcode/reviews"
-  printf '{"ts":"%s","branch":"%s","headSha":"%s","hook":"pre-push","bypass":true}\n' \
-    "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-    "$BRANCH" \
-    "$HEAD_SHA" \
+  python3 -c '
+import json, sys
+entry = {"ts": sys.argv[1], "branch": sys.argv[2], "headSha": sys.argv[3], "hook": "pre-push", "bypass": True}
+print(json.dumps(entry))
+' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$BRANCH" "$HEAD_SHA" \
     >> "$ROOT/.zcode/reviews/bypass-log.jsonl"
   exit 0
 fi
@@ -55,8 +57,9 @@ if [ ! -f "$ARTIFACT" ]; then
 fi
 
 # Validate artifact: result must be approved, headSha must match current HEAD.
-RESULT="$(python3 -c "import json; d=json.load(open('$ARTIFACT')); print(d.get('result',''))" 2>/dev/null || echo "")"
-REVIEWED_SHA="$(python3 -c "import json; d=json.load(open('$ARTIFACT')); print(d.get('headSha',''))" 2>/dev/null || echo "")"
+# Pass the path via sys.argv (M7 from review — don't interpolate into Python source).
+RESULT="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("result",""))' "$ARTIFACT" 2>/dev/null || echo "")"
+REVIEWED_SHA="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("headSha",""))' "$ARTIFACT" 2>/dev/null || echo "")"
 
 if [ "$RESULT" != "approved" ]; then
   echo "" >&2

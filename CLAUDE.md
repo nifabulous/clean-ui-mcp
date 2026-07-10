@@ -30,10 +30,15 @@ Write it after reviewing:
 
 ### Branch-level gate (`pre-push`)
 
-Before `git push` or `gh pr create`, the hook blocks unless the branch HEAD has
-an approved, non-stale branch review artifact. This enforces "holistic review
-before PR." The `headSha` in the artifact must match `git rev-parse HEAD` — a
-review of an older commit is rejected as stale.
+Before `git push`, the hook blocks unless the branch HEAD has an approved,
+non-stale branch review artifact. This enforces "holistic review before PR."
+The `headSha` in the artifact must match `git rev-parse HEAD` — a review of an
+older commit is rejected as stale.
+
+**Note:** `gh pr create` calls the GitHub API and does not trigger git hooks.
+The branch-level gate covers `git push` (which is the step that publishes the
+commits); once the branch is pushed, `gh pr create` opens the PR against the
+already-pushed commits. The push is the enforcement point.
 
 ```
 Branch artifact: .zcode/reviews/branches/<branch-with-slashes-replaced>.json

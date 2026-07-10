@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { assembleEvidence, classifyCoverage, gateCitations, synthesize, type ExtractedScreen, type SynthesisOutput, type EvidenceBundle } from "./decision-lab.js";
+import { assembleEvidence, classifyCoverage, gateCitations, synthesize, renderDecisionBrief, type ExtractedScreen, type SynthesisOutput, type EvidenceBundle } from "./decision-lab.js";
 import type { DecisionT } from "./schema.js";
 
 function makeDecision(): DecisionT {
@@ -207,5 +207,35 @@ describe("synthesize (mocked provider)", () => {
     const result = await synthesize(decision, bundle);
     expect(callCount).toBe(2);
     expect(result.gateRetries).toBe(1);
+  });
+});
+
+describe("renderDecisionBrief", () => {
+  it("renders coverage label and pre-launch caveat", () => {
+    const decision = makeDecision();
+    const output: SynthesisOutput = {
+      directionRubrics: [{ directionId: "dir-a", scores: [{ dimension: "visual-hierarchy", score: 4, rationale: "Clear", evidence: ["dir-a:s1:patternType"] }] }],
+      perspectives: [{ lens: "new-user", directionId: "dir-a", reaction: "Clear", observations: [{ note: "Good CTA", evidence: ["dir-a:s1:patternType"] }], concern: "X", confidence: "medium", questionForUsers: "Q?" }],
+      experimentBrief: { hypothesis: "Direction A yields more signups", successMetric: "Trial start rate", guardrails: ["Bounce rate < 60%"] },
+      tradeoffs: [{ description: "A is clearer but B is more on-brand", evidence: ["dir-a:s1:patternType"] }],
+    };
+    const md = renderDecisionBrief(decision, output, { coverage: "limited", corpusEntryCount: 3 });
+    expect(md).toContain("# Decision brief");
+    expect(md).toContain("limited");
+    expect(md).not.toContain("Lean");  // no Lean in increment 1
+    expect(md).toContain("pre-launch");
+    expect(md).toContain("Experiment brief");
+  });
+
+  it("does not render a Lean callout", () => {
+    const decision = makeDecision();
+    const output: SynthesisOutput = {
+      directionRubrics: [], perspectives: [],
+      experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] },
+      tradeoffs: [],
+    };
+    const md = renderDecisionBrief(decision, output, { coverage: "strong", corpusEntryCount: 10 });
+    expect(md.toLowerCase()).not.toContain("recommend");
+    expect(md.toLowerCase()).not.toContain("lean toward");
   });
 });

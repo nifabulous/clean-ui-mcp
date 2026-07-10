@@ -282,3 +282,87 @@ function parseSynthesisJSON(raw: string): SynthesisOutput | null {
     return null;
   }
 }
+
+/** Render the decision brief as markdown. Mirrors renderBriefMarkdown. */
+export function renderDecisionBrief(
+  decision: DecisionT,
+  output: SynthesisOutput,
+  meta: { coverage: EvidenceCoverageT; corpusEntryCount: number },
+): string {
+  const lines: string[] = [];
+  lines.push("# Decision brief");
+  lines.push(`\n*${decision.title} — ${decision.context.businessGoal}*\n`);
+
+  // ── Coverage label (honest, separate from confidence) ──
+  lines.push(`## Corpus evidence coverage: ${meta.coverage}`);
+  lines.push(`Grounded in ${meta.corpusEntryCount} corpus entr${meta.corpusEntryCount === 1 ? "y" : "ies"}.`);
+  if (meta.coverage === "limited") {
+    lines.push("**Limited corpus evidence** — this brief leads with screen observations and validation questions.");
+  } else if (meta.coverage === "unavailable") {
+    lines.push("**No corpus evidence available** for this pattern — analysis is based on screen observations only.");
+  }
+  lines.push("");
+
+  // ── Per-direction rubrics ──
+  for (const rubric of output.directionRubrics) {
+    const direction = decision.directions.find((d) => d.id === rubric.directionId);
+    lines.push(`## ${direction?.name ?? rubric.directionId}`);
+    if (rubric.scores.length === 0) {
+      lines.push("*No rubric dimensions could be scored from the available evidence.*\n");
+      continue;
+    }
+    for (const score of rubric.scores) {
+      const val = score.score === null ? "insufficient evidence" : `${score.score}/5`;
+      lines.push(`- **${score.dimension}**: ${val} — ${score.rationale} _(evidence: ${score.evidence.join(", ")})_`);
+    }
+    lines.push("");
+  }
+
+  // ── Trade-offs ──
+  if (output.tradeoffs.length) {
+    lines.push("## Key trade-offs");
+    output.tradeoffs.forEach((t, i) => lines.push(`${i + 1}. ${t.description} _(evidence: ${t.evidence.join(", ")})_`));
+    lines.push("");
+  }
+
+  // ── Simulated perspectives ──
+  if (output.perspectives.length) {
+    lines.push("## Simulated perspectives");
+    lines.push("*These are simulated reactions, not user research. Validate with real users.*\n");
+    for (const p of output.perspectives) {
+      const direction = decision.directions.find((d) => d.id === p.directionId);
+      lines.push(`### ${lensLabel(p.lens)} — ${direction?.name ?? p.directionId}`);
+      lines.push(`**Reaction:** ${p.reaction}`);
+      lines.push(`**Confidence:** ${p.confidence}`);
+      if (p.observations.length) {
+        lines.push("**Observations:**");
+        for (const obs of p.observations) lines.push(`- ${obs.note} _(evidence: ${obs.evidence.join(", ")})_`);
+      }
+      lines.push(`**Concern:** ${p.concern}`);
+      lines.push(`**Validate with users:** ${p.questionForUsers}\n`);
+    }
+  }
+
+  // ── Experiment brief ──
+  lines.push("## Experiment brief");
+  lines.push(`- **Hypothesis:** ${output.experimentBrief.hypothesis}`);
+  lines.push(`- **Success metric:** ${output.experimentBrief.successMetric}`);
+  lines.push(`- **Guardrails:** ${output.experimentBrief.guardrails.join("; ")}`);
+  lines.push("");
+
+  // ── Pre-launch caveat ──
+  lines.push("---");
+  lines.push("*This is a pre-launch decision brief. It predicts likely strengths, risks, and research hypotheses. It is not statistically valid A/B-test results — that requires production traffic and experiment data.*");
+
+  return lines.join("\n");
+}
+
+function lensLabel(lens: string): string {
+  const map: Record<string, string> = {
+    "new-user": "New user",
+    "returning-power-user": "Returning/power user",
+    "accessibility-first": "Accessibility-first user",
+    "growth-pm": "Growth-minded PM",
+  };
+  return map[lens] ?? lens;
+}

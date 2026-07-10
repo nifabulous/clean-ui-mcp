@@ -1997,6 +1997,20 @@ async function callModel(
   }
 }
 
+/**
+ * Text-only model call for non-tagger consumers (e.g. Decision Lab synthesis).
+ * Routes through the same provider abstraction as the tagger's callModel, but
+ * sends no image and uses the critique pass's provider/key resolution. This
+ * ensures Claude/Gemini/Mistral configurations work, not just OpenAI.
+ */
+export async function callTextModel(
+  prompt: string,
+  providerOverride?: Provider,
+  retryFeedback?: string,
+): Promise<string> {
+  return callModel("critique", prompt, null, retryFeedback, "high", undefined, providerOverride);
+}
+
 // ─── core two-pass orchestration ─────────────────────────────────────────────
 
 export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {

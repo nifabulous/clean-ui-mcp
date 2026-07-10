@@ -2296,6 +2296,8 @@ page('decision-lab', 'Decision Lab', 'compare design directions before you ship'
   bindDecisionSetup();
   bindDecisionBuilder();
   bindDecisionReport();
+  // Load saved decisions into the list (if we're on the setup view)
+  loadDecisionList();
 });
 
 function renderDecisionSetup() {
@@ -2479,6 +2481,49 @@ async function persistDecision() {
     if (data.decision) currentDecision = { ...currentDecision, ...data.decision };
   } catch (err) {
     toast('Failed to save decision');
+  }
+}
+
+async function loadDecisionList() {
+  const container = document.getElementById('decision-list');
+  if (!container) return;
+  try {
+    const resp = await fetch('/api/decisions');
+    const data = await resp.json();
+    if (data.error || !data.decisions || !data.decisions.length) {
+      container.innerHTML = '';
+      return;
+    }
+    container.innerHTML = '<h3 style="margin-top:24px">Saved decisions</h3>' +
+      data.decisions.map(d => {
+        const status = d.analysis ? '<span class="count" style="background:var(--accent);color:#fff">analyzed</span>' : '';
+        const dirs = `${d.directions.length} direction${d.directions.length===1?'':'s'}`;
+        return `<a class="nav-item" data-load-decision="${d.id}" href="#/decision-lab" style="margin:4px 0">
+          <span class="lbl">${esc(d.title)}</span>
+          <span class="count">${dirs}</span>
+          ${status}
+        </a>`;
+      }).join('');
+    container.querySelectorAll('[data-load-decision]').forEach(el => {
+      el.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const id = el.dataset.loadDecision;
+        const r = await fetch(`/api/decisions/${id}`);
+        const d = await r.json();
+        if (d.decision) {
+          currentDecision = d.decision;
+          // Stash the brief for the report view if analyzed
+          if (currentDecision.analysis) {
+            // The brief isn't persisted — it's re-derived. For now, show the builder
+            // with the analysis attached so the user can re-analyze or view metadata.
+            currentDecision._brief = ''; // will show builder, not report, on reload
+          }
+          route();
+        }
+      });
+    });
+  } catch {
+    container.innerHTML = '';
   }
 }
 

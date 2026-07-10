@@ -12,7 +12,8 @@
  * Mirrors tagger.ts (LLM call + post-hoc gate) and design-prompt.ts (pure synthesis + rendering).
  */
 import type { DecisionT, DecisionAnalysisT, EvidenceCoverageT } from "./schema.js";
-import { hasCritiqueKey, activeProviderName, activeModelName, tagImage } from "./tagger.js";
+import { DecisionAnalysis } from "./schema.js";
+import { hasCritiqueKey, activeProviderName, activeModelName, tagImage, callTextModel } from "./tagger.js";
 import { searchRanked } from "./corpus.js";
 import { fromCorpusRelativeImagePath } from "./paths.js";
 
@@ -224,25 +225,10 @@ export interface SynthesizeResult {
   model: string;
 }
 
-/** Call the model. Mirrors tagger.ts callModel for OpenAI-compatible shape. */
-async function callSynthesisModel(prompt: string): Promise<string> {
-  const model = activeModelName() ?? "gpt-4o";
-  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 8192,
-    }),
-  });
-  if (!resp.ok) throw new Error(`Synthesis provider returned ${resp.status}: ${await resp.text()}`);
-  const data = await resp.json() as { output_text?: string; choices?: { message?: { content?: string } }[] };
-  // Support both response formats (output_text like the tagger, or choices[].message.content)
-  return data.output_text ?? data.choices?.[0]?.message?.content ?? "";
+/** Call the model via the tagger's provider abstraction (supports all
+ *  configured providers, not just OpenAI). Text-only — no image sent. */
+async function callSynthesisModel(prompt: string, retryFeedback?: string): Promise<string> {
+  return callTextModel(prompt, undefined, retryFeedback);
 }
 
 /**
@@ -262,7 +248,10 @@ export async function synthesize(decision: DecisionT, bundle: EvidenceBundle): P
   let retries = 0;
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const raw = await callSynthesisModel(prompt + (attempt === 1 ? "\n\nNOTE: Your previous response contained scores/observations citing evidence ids that do not exist. Re-issue using ONLY ids from the assembled evidence list." : ""));
+    const retryFeedback = attempt === 1
+      ? "Your previous response contained scores/observations citing evidence ids that do not exist. Re-issue using ONLY ids from the assembled evidence list."
+      : undefined;
+    const raw = await callSynthesisModel(prompt, retryFeedback);
     const parsed = parseSynthesisJSON(raw);
     if (!parsed) throw new Error("Synthesis provider returned unparseable JSON.");
     const gated = gateCitations(parsed, bundle.evidenceIds);
@@ -414,16 +403,24 @@ export async function analyzeDecision(decision: DecisionT): Promise<AnalyzeResul
   }
 
   // ── Step 2: Corpus retrieval ──
+  // Filter by a relevance floor — vector search returns every entry ranked,
+  // so without a threshold almost every decision would label "strong" coverage
+  // regardless of actual pattern relevance. 0.3 on the fused 0-1 scale is a
+  // conservative floor that excludes weak matches while keeping genuine hits.
+  const RELEVANCE_FLOOR = 0.3;
   const query = `${decision.context.businessGoal} ${decision.context.primaryKpi} ${decision.context.targetUser}`;
   let corpusEvidence: CorpusEvidenceItem[] = [];
   try {
     const searchResults = await searchRanked({ query, limit: 10 });
-    corpusEvidence = searchResults.slice(0, 8).map((r) => ({
-      id: r.entry.id,
-      patternType: r.entry.patternType,
-      critique: r.entry.critique,
-      categories: r.entry.categories,
-    }));
+    corpusEvidence = searchResults
+      .filter((r) => r.score >= RELEVANCE_FLOOR)
+      .slice(0, 8)
+      .map((r) => ({
+        id: r.entry.id,
+        patternType: r.entry.patternType,
+        critique: r.entry.critique,
+        categories: r.entry.categories,
+      }));
   } catch {
     // Corpus retrieval failed — proceed with screen observations only.
     // Coverage will classify as "unavailable".
@@ -465,5 +462,14 @@ export async function analyzeDecision(decision: DecisionT): Promise<AnalyzeResul
 
   const brief = renderDecisionBrief(decision, synth.output, { coverage, corpusEntryCount: corpusEvidence.length });
 
-  return { analysis, brief };
+  // Validate the analysis against the schema before returning — an invalid
+  // enum/score from the model must not be persisted (it would corrupt the
+  // decisions.json sidecar and cause loadDecisionsSafe to silently drop
+  // everything on the next restart).
+  const validated = DecisionAnalysis.safeParse(analysis);
+  if (!validated.success) {
+    throw new Error(`Synthesis produced an invalid analysis: ${validated.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
+  }
+
+  return { analysis: validated.data, brief };
 }

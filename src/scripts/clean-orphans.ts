@@ -14,11 +14,12 @@
 import { rmSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { Corpus } from "../schema.js";
+import { Corpus, Decisions } from "../schema.js";
 import { CORPUS_ROOT, listImageFilesRecursive, PRIVATE_IMAGE_DIR, PUBLIC_IMAGE_DIR } from "../paths.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
+const DECISIONS_PATH = resolve(__dirname, "..", "..", "corpus", "decisions.json");
 const args = process.argv.slice(2);
 const confirm = args.includes("--confirm");
 const asJson = args.includes("--json");
@@ -35,6 +36,27 @@ function orphanInventory() {
       .map((e) => e.image.path)
       .filter((p): p is string => !!p && p.startsWith("images-private/")),
   );
+  // Decision Lab screenshots live under images-private/decisions/ — they're not
+  // referenced by corpus entries, so without this they'd be treated as orphans.
+  // Parse leniently: if decisions.json is missing/corrupt, just skip (no images
+  // to protect).
+  try {
+    const rawDecisions = readFileSync(DECISIONS_PATH, "utf-8");
+    const parsed = Decisions.safeParse(JSON.parse(rawDecisions));
+    if (parsed.success) {
+      for (const d of parsed.data.decisions) {
+        for (const dir of d.directions) {
+          for (const screen of dir.screens) {
+            if (screen.imageRef?.startsWith("images-private/")) {
+              referenced.add(screen.imageRef);
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // decisions.json missing or unreadable — no Decision Lab images to protect.
+  }
   // Recursively walk private + public dirs so nested bulk-import batches
   // (images-private/new-products-batch/Mercury Web Screens/…) are accounted
   // for. The earlier flat readdirSync missed these and would have deleted

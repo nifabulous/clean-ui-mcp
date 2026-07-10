@@ -949,7 +949,12 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     }
     try {
       const { analysis, brief } = await analyzeDecision(decision);
-      const updated = { ...decision, analysis };
+      // Re-fetch the decision before saving — analysis is async and another tab
+      // may have edited directions/screens while it ran. Merge the analysis onto
+      // the current state instead of the stale snapshot from before the call.
+      const current = getDecisionById(analyzeMatch[1]);
+      if (!current) { sendJson(res, 404, { error: "Decision was deleted during analysis" }); return; }
+      const updated = { ...current, analysis };
       saveDecision(updated);
       sendJson(res, 200, { decision: updated, brief });
     } catch (err) {

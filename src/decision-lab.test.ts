@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { assembleEvidence, classifyCoverage, gateCitations, synthesize, renderDecisionBrief, analyzeDecision, type ExtractedScreen, type SynthesisOutput, type EvidenceBundle } from "./decision-lab.js";
 import type { DecisionT } from "./schema.js";
-import { tagImage } from "./tagger.js";
+import { tagImage, callTextModel } from "./tagger.js";
 import { searchRanked } from "./corpus.js";
 
 vi.mock("./tagger.js", () => ({
@@ -9,6 +9,7 @@ vi.mock("./tagger.js", () => ({
   hasCritiqueKey: vi.fn(() => true),
   activeProviderName: vi.fn(() => "openai"),
   activeModelName: vi.fn(() => "test-model"),
+  callTextModel: vi.fn(),
 }));
 vi.mock("./corpus.js", () => ({
   searchRanked: vi.fn(),
@@ -155,38 +156,23 @@ describe("gateCitations", () => {
 });
 
 describe("synthesize (mocked provider)", () => {
-  const originalFetch = globalThis.fetch;
-  const originalEnv = { ...process.env };
-
   beforeEach(() => {
-    process.env.OPENAI_API_KEY = "test-key";
-    process.env.AUTO_TAG_PROVIDER = "openai";
-    delete process.env.AUTO_TAG_PROVIDER_EXTRACTION;
-    delete process.env.AUTO_TAG_PROVIDER_CRITIQUE;
-  });
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    process.env = { ...originalEnv };
+    vi.mocked(callTextModel).mockReset();
   });
 
   it("makes one API call and returns gated synthesis output", async () => {
-    let callCount = 0;
-    globalThis.fetch = vi.fn(async () => {
-      callCount++;
-      const response = JSON.stringify({
-        directionRubrics: [{
-          directionId: "dir-a",
-          scores: [{
-            dimension: "visual-hierarchy", score: 4, rationale: "Clear hierarchy",
-            evidence: ["dir-a:s1:patternType"],
-          }],
+    vi.mocked(callTextModel).mockResolvedValueOnce(JSON.stringify({
+      directionRubrics: [{
+        directionId: "dir-a",
+        scores: [{
+          dimension: "visual-hierarchy", score: 4, rationale: "Clear hierarchy",
+          evidence: ["dir-a:s1:patternType"],
         }],
-        perspectives: [],
-        experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G1"] },
-        tradeoffs: [{ description: "T", evidence: ["dir-a:s1:patternType"] }],
-      });
-      return new Response(JSON.stringify({ output_text: response }), { status: 200, headers: { "content-type": "application/json" } });
-    }) as unknown as typeof fetch;
+      }],
+      perspectives: [],
+      experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G1"] },
+      tradeoffs: [{ description: "T", evidence: ["dir-a:s1:patternType"] }],
+    }));
 
     const decision = makeDecision();
     const bundle: EvidenceBundle = {
@@ -195,20 +181,25 @@ describe("synthesize (mocked provider)", () => {
       corpusItems: [],
     };
     const result = await synthesize(decision, bundle);
-    expect(callCount).toBe(1);
+    expect(callTextModel).toHaveBeenCalledTimes(1);
     expect(result.output.directionRubrics[0].scores).toHaveLength(1);
     expect(result.gateDrops).toBe(0);
   });
 
   it("retries once when the first response has uncited scores", async () => {
-    let callCount = 0;
-    globalThis.fetch = vi.fn(async () => {
-      callCount++;
-      const raw = callCount === 1
-        ? { directionRubrics: [{ directionId: "dir-a", scores: [{ dimension: "visual-hierarchy", score: 4, rationale: "R", evidence: ["bogus"] }] }], perspectives: [], experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] }, tradeoffs: [{ description: "T", evidence: ["bogus"] }] }
-        : { directionRubrics: [{ directionId: "dir-a", scores: [{ dimension: "visual-hierarchy", score: 4, rationale: "R", evidence: ["dir-a:s1:patternType"] }] }], perspectives: [], experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] }, tradeoffs: [{ description: "T", evidence: ["dir-a:s1:patternType"] }] };
-      return new Response(JSON.stringify({ output_text: JSON.stringify(raw) }), { status: 200, headers: { "content-type": "application/json" } });
-    }) as unknown as typeof fetch;
+    vi.mocked(callTextModel)
+      .mockResolvedValueOnce(JSON.stringify({
+        directionRubrics: [{ directionId: "dir-a", scores: [{ dimension: "visual-hierarchy", score: 4, rationale: "R", evidence: ["bogus"] }] }],
+        perspectives: [],
+        experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] },
+        tradeoffs: [{ description: "T", evidence: ["bogus"] }],
+      }))
+      .mockResolvedValueOnce(JSON.stringify({
+        directionRubrics: [{ directionId: "dir-a", scores: [{ dimension: "visual-hierarchy", score: 4, rationale: "R", evidence: ["dir-a:s1:patternType"] }] }],
+        perspectives: [],
+        experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] },
+        tradeoffs: [{ description: "T", evidence: ["dir-a:s1:patternType"] }],
+      }));
 
     const decision = makeDecision();
     const bundle: EvidenceBundle = {
@@ -217,7 +208,7 @@ describe("synthesize (mocked provider)", () => {
       corpusItems: [],
     };
     const result = await synthesize(decision, bundle);
-    expect(callCount).toBe(2);
+    expect(callTextModel).toHaveBeenCalledTimes(2);
     expect(result.gateRetries).toBe(1);
   });
 });
@@ -253,10 +244,7 @@ describe("renderDecisionBrief", () => {
 });
 
 describe("analyzeDecision", () => {
-  const originalFetch = globalThis.fetch;
-
   beforeEach(() => {
-    process.env.OPENAI_API_KEY = "test-key";
     vi.mocked(tagImage).mockResolvedValue({
       patternType: "landing-page", categories: ["marketing-hero"], components: [],
       _raw: { extraction: { patternType: "landing-page", categories: ["marketing-hero"], components: [] } },
@@ -264,22 +252,15 @@ describe("analyzeDecision", () => {
     vi.mocked(searchRanked).mockResolvedValue([
       { entry: { id: "stripe-pricing", patternType: "pricing", critique: "Clean", categories: ["pricing"] }, score: 0.8, searchMode: "vector" },
     ]);
-  });
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
+    vi.mocked(callTextModel).mockResolvedValue(JSON.stringify({
+      directionRubrics: [{ directionId: "dir-a", scores: [{ dimension: "visual-hierarchy", score: 4, rationale: "R", evidence: ["dir-a:s1:patternType"] }] }],
+      perspectives: [],
+      experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] },
+      tradeoffs: [{ description: "T", evidence: ["corpus:stripe-pricing"] }],
+    }));
   });
 
   it("extracts, retrieves, assembles, synthesizes, and returns an analysis", async () => {
-    globalThis.fetch = vi.fn(async () => {
-      const response = JSON.stringify({
-        directionRubrics: [{ directionId: "dir-a", scores: [{ dimension: "visual-hierarchy", score: 4, rationale: "R", evidence: ["dir-a:s1:patternType"] }] }],
-        perspectives: [],
-        experimentBrief: { hypothesis: "H", successMetric: "M", guardrails: ["G"] },
-        tradeoffs: [{ description: "T", evidence: ["corpus:stripe-pricing"] }],
-      });
-      return new Response(JSON.stringify({ output_text: response }), { status: 200, headers: { "content-type": "application/json" } });
-    }) as unknown as typeof fetch;
-
     const decision = makeDecision();
     const result = await analyzeDecision(decision);
     expect(result.analysis.status).toBe("analyzed");

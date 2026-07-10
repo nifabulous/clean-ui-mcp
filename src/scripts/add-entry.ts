@@ -27,13 +27,37 @@ import { parseArgs } from "node:util";
 import { execSync } from "node:child_process";
 import { imageSize } from "image-size";
 
-import { CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, Corpus } from "../schema.js";
+import { CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, Corpus, findDraftMarkers } from "../schema.js";
 import type { CorpusEntryT } from "../schema.js";
+import { findVagueAntiPatterns } from "../content-lint.js";
 import { toCorpusRelativePath } from "../paths.js";
 import { hasVisionKey, tagImage } from "../tagger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
+
+/**
+ * Draft-hygiene + vague-phrase gate for the add-entry CLI. Returns a formatted
+ * error string if the entry is blocked, or null if clean. Exported so tests can
+ * prove the wiring exists (a refactor that removes the gate would break the test).
+ */
+export function validateEntryGates(entry: CorpusEntryT): string | null {
+  const dirtyFields = findDraftMarkers(entry);
+  if (dirtyFields.length) {
+    let msg = "\n  ❌ Entry contains draft/placeholder markers:";
+    for (const field of dirtyFields) msg += `\n     ${field}`;
+    msg += "\n     Rewrite these fields with real content before saving.";
+    return msg;
+  }
+  const vague = findVagueAntiPatterns(entry);
+  if (vague.length) {
+    let msg = "\n  ❌ Entry contains generic filler in anti-patterns:";
+    for (const v of vague) msg += `\n     ${v.field}: ${v.issues.join("; ")}`;
+    msg += '\n     Name the specific mistake this design avoids — not "keep it clean".';
+    return msg;
+  }
+  return null;
+}
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -340,8 +364,10 @@ if (tagged?.draftWhatToSteal) {
 const whatToSteal = await askList("What to steal:");
 
 console.log("\n[ Quality ]");
-const qualityRaw = await ask("Quality score (1–5)", "4");
-const qualityScore = Math.min(5, Math.max(1, parseInt(qualityRaw) || 4));
+console.log("  Exceptional entries: 3-5. Cautionary (bad-example) entries: 1-2.");
+console.log("  This wizard creates exceptional entries — use 3-5.");
+const qualityRaw = await ask("Quality score (3-5 for exceptional)", "4");
+const qualityScore = Math.min(5, Math.max(3, parseInt(qualityRaw) || 4));
 
 // ─── assemble + validate ─────────────────────────────────────────────────────
 
@@ -391,6 +417,16 @@ if (!validation.success) {
   }
   console.log("\n  Draft entry (fix and add manually):");
   console.log(JSON.stringify(newEntry, null, 2));
+  rl.close();
+  process.exit(1);
+}
+
+// Draft-hygiene + vague-phrase gates: reject before writing. Both were missing
+// before this milestone — the [PLACEHOLDER — fill this in] defaults above could
+// reach entries.json directly, caught only by the post-write validator.
+const gateError = validateEntryGates(validation.data);
+if (gateError) {
+  console.error(gateError);
   rl.close();
   process.exit(1);
 }

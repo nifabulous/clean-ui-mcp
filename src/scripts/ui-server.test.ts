@@ -313,6 +313,28 @@ describe("draft hygiene gate (centralized)", () => {
     expect(() => validateEntryPayload(baseEntry)).not.toThrow();
   });
 
+  it("rejects a vague-phrase anti-pattern (generic filler gate)", () => {
+    const payload = {
+      ...baseEntry,
+      antiPatterns: {
+        ...baseEntry.antiPatterns,
+        antiPatterns: ["This design will keep it clean and avoid clutter everywhere."],
+      },
+    };
+    expect(() => validateEntryPayload(payload)).toThrow("generic filler");
+  });
+
+  it("accepts a specific, detailed anti-pattern", () => {
+    const payload = {
+      ...baseEntry,
+      antiPatterns: {
+        ...baseEntry.antiPatterns,
+        antiPatterns: ["Reserves the brightest accent color for the single element that must win attention so state remains unmistakable."],
+      },
+    };
+    expect(() => validateEntryPayload(payload)).not.toThrow();
+  });
+
   it("removes businessRationale from isolated group-member captures at validation", () => {
     const entry = validateEntryPayload({
       ...baseEntry,

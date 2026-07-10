@@ -488,7 +488,16 @@ export const CorpusEntry = z.object({
    */
   qualityTier: z.enum(["exceptional", "cautionary"]).default("exceptional"),
 
-  qualityScore: z.number().min(1).max(5), // your own rating, for ranking in search
+  /**
+   * qualityScore rates how INSTRUCTIVE the example is (not how good the design
+   * is). Exceptional: 3-5 (5 = canonical reference). Cautionary: 1-2 (2 = clear
+   * teaching specimen, 1 = marginal). Keeps cautionary entries sinking in search
+   * by default while rewarding the best teaching examples within each tier.
+   *
+   * Constrained by a refine on CorpusEntry: cautionary must be 1-2, exceptional
+   * must be 3-5. The corpus already complies (no migration needed).
+   */
+  qualityScore: z.number().min(1).max(5), // instructiveness rating, constrained by tier (see CorpusEntry refine)
   addedAt: IsoDate, // ISO date
 
   /**
@@ -543,7 +552,14 @@ export const CorpusEntry = z.object({
      *  entries (pre-dating this field); display falls back to addedAt. */
     taggedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   }).optional(),
-});
+})
+// qualityScore ↔ qualityTier coupling: cautionary entries score 1-2 (sinking in
+// search by default), exceptional entries score 3-5. Prevents drift without a
+// migration — the corpus already complies.
+.refine(
+  (e) => (e.qualityTier === "cautionary" ? e.qualityScore <= 2 : e.qualityScore >= 3),
+  { message: "qualityScore must be 1-2 for cautionary, 3-5 for exceptional", path: ["qualityScore"] },
+);
 
 export type CorpusEntryT = z.infer<typeof CorpusEntry>;
 
@@ -553,6 +569,187 @@ export const Corpus = z.object({
 });
 
 export type CorpusT = z.infer<typeof Corpus>;
+
+// ─── Decision Lab (increment 1: single-screen decision brief) ──────────────────
+
+/** Scope of the comparison. Increment 1 supports "screen" only; "flow" is
+ *  reserved for a later increment and rejected by the validator. */
+export const DecisionScope = z.enum(["screen", "flow"]);
+
+/** Workflow state of a decision's analysis. */
+export const DecisionStatus = z.enum(["draft", "analyzing", "analyzed", "failed"]);
+
+/** Where a screen image came from. Increment 1 supports "upload" only; "figma"
+ *  is reserved for a later increment and rejected by the validator. */
+export const ScreenSource = z.enum(["upload", "figma"]);
+
+/** Honest corpus-evidence labeling. Shown separately from analysis confidence. */
+export const EvidenceCoverage = z.enum(["strong", "limited", "unavailable"]);
+
+export const DecisionContext = z.object({
+  targetUser: z.string().min(1),
+  businessGoal: z.string().min(1),
+  primaryKpi: z.string().min(1),
+  platform: Platform.optional(),
+  constraints: z.string().optional(),
+});
+
+/** One rubric dimension scored for a direction. Every score must cite at least
+ *  one evidence id — enforced by the citation gate in decision-lab.ts. */
+export const RubricDimension = z.enum([
+  "goal-alignment",
+  "visual-hierarchy",
+  "cognitive-load",
+  "copy-clarity",
+  "consistency",
+]);
+
+export const RubricScore = z.object({
+  dimension: RubricDimension,
+  /** 1-5 scale. Null means the evidence was insufficient to score this dimension. */
+  score: z.number().int().min(1).max(5).nullable(),
+  rationale: z.string().min(1),
+  /** Evidence ids (assembled-evidence keys) that justify this score. */
+  evidence: z.array(z.string()).min(1),
+});
+
+/** One of the four fixed simulated perspectives. */
+export const Perspective = z.object({
+  lens: z.enum(["new-user", "returning-power-user", "accessibility-first", "growth-pm"]),
+  directionId: z.string(),
+  reaction: z.string().min(1),
+  observations: z.array(z.object({
+    note: z.string().min(1),
+    evidence: z.array(z.string()).min(1),
+  })).max(3),
+  concern: z.string().min(1),
+  confidence: z.enum(["high", "medium", "low"]),
+  questionForUsers: z.string().min(1),
+});
+
+export const ExperimentBrief = z.object({
+  hypothesis: z.string().min(1),
+  successMetric: z.string().min(1),
+  guardrails: z.array(z.string()).min(1),
+});
+
+/** A decision-relevant trade-off surfaced by the comparison. */
+export const Tradeoff = z.object({
+  description: z.string().min(1),
+  evidence: z.array(z.string()).min(1),
+});
+
+export const DecisionScreen = z.object({
+  id: z.string(),
+  order: z.number().int().min(0),
+  source: ScreenSource,
+  imageRef: z.string().min(1),
+  /** Present when source is "figma" (post-MVP). */
+  figma: z.object({
+    fileKey: z.string(),
+    nodeId: z.string(),
+    frameName: z.string(),
+  }).optional(),
+  /** The tagger extraction output (Pass 1), stored as an opaque record.
+   *  Consumed by the synthesis as assembled evidence. */
+  tagging: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const Direction = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  screens: z.array(DecisionScreen).min(1),
+});
+
+export const DecisionAnalysis = z.object({
+  status: DecisionStatus,
+  providerMetadata: z.object({
+    extractionProvider: z.string(),
+    synthesisProvider: z.string(),
+    model: z.string(),
+  }).optional(),
+  analyzedAt: IsoDate.optional(),
+  directionRubrics: z.array(z.object({
+    directionId: z.string(),
+    scores: z.array(RubricScore),
+  })),
+  tradeoffs: z.array(Tradeoff).max(3),
+  evidenceCoverage: EvidenceCoverage,
+  corpusEntryCount: z.number().int().min(0),
+  perspectives: z.array(Perspective),
+  experimentBrief: ExperimentBrief,
+});
+
+export const Decision = z.object({
+  id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "lowercase kebab-case id"),
+  title: z.string().min(1),
+  createdAt: IsoDate,
+  updatedAt: IsoDate,
+  context: DecisionContext,
+  /** Increment 1: must be "screen". The enum includes "flow" for forward
+   *  compatibility, but the refines below reject it until the flow increment. */
+  scope: DecisionScope,
+  directions: z.array(Direction).min(2).max(3),
+  analysis: DecisionAnalysis.optional(),
+}).superRefine((val, ctx) => {
+  if (val.scope === "flow") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Multi-screen flow comparison is not yet supported", path: ["scope"] });
+  }
+  val.directions.forEach((dir, i) => {
+    dir.screens.forEach((screen, j) => {
+      if (screen.source === "figma") {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Figma import is not yet supported — upload screenshots instead", path: ["directions", i, "screens", j, "source"] });
+      }
+    });
+  });
+});
+
+export type DecisionT = z.infer<typeof Decision>;
+export type DirectionT = z.infer<typeof Direction>;
+export type DecisionScreenT = z.infer<typeof DecisionScreen>;
+export type DecisionContextT = z.infer<typeof DecisionContext>;
+export type DecisionAnalysisT = z.infer<typeof DecisionAnalysis>;
+export type RubricScoreT = z.infer<typeof RubricScore>;
+export type PerspectiveT = z.infer<typeof Perspective>;
+export type ExperimentBriefT = z.infer<typeof ExperimentBrief>;
+export type TradeoffT = z.infer<typeof Tradeoff>;
+export type EvidenceCoverageT = z.infer<typeof EvidenceCoverage>;
+
+/** Persistence shape for a direction — allows 0+ screens for work-in-progress. */
+const PersistedDirection = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  screens: z.array(DecisionScreen).min(0),
+});
+
+/** Persistence shape for a single decision — allows incomplete work-in-progress
+ *  (0+ directions, 0+ screens per direction) without the increment-1 flow/figma
+ *  gating. The strict `Decision` schema (min 2 directions, min 1 screen per
+ *  direction, scope/source gates) is enforced at the API/analysis boundary, not
+ *  at the persistence layer — so an empty-screen WIP direction survives a
+ *  process restart instead of failing `Decisions.parse()` and silently wiping
+ *  all decisions. */
+const PersistedDecision = z.object({
+  id: z.string(),
+  title: z.string(),
+  createdAt: IsoDate,
+  updatedAt: IsoDate,
+  context: DecisionContext,
+  scope: DecisionScope,
+  directions: z.array(PersistedDirection).min(0).max(3),
+  analysis: DecisionAnalysis.optional(),
+});
+
+/** Container for decisions.json. Uses the lenient PersistedDecision shape so
+ *  incomplete decisions survive a process restart. */
+export const Decisions = z.object({
+  version: z.literal(1),
+  decisions: z.array(PersistedDecision),
+});
+
+export type DecisionsT = z.infer<typeof Decisions>;
 
 // ─── draft hygiene (single source of truth) ──────────────────────────────────
 

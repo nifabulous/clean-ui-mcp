@@ -20,12 +20,21 @@ corpus/images-private/*
 # Snapshots + restore-corpus protect against loss.
 corpus/entries.json
 
+# Local working decisions (Decision Lab) — the user's own comparison briefs,
+# created via the UI/CLI. Like entries.json, this is a private working file, not
+# part of the publishable corpus. Rolling snapshots protect against loss.
+corpus/decisions.json
+
 # Derived — regenerate with `npm run build-index`
 corpus/embeddings.json
 # Derived — dHash fingerprint cache, rebuilt by the curator UI at runtime
 corpus/.dhash-cache.json
 # Derived — MCP query log (retrieval analytics), populated at runtime by the server
 corpus/query-log.jsonl
+
+# Eval baselines — machine/provider-specific (latency, model, private images).
+# Regenerate with `npm run eval-baseline`. Not portable across machines.
+eval/
 # Durability — rolling snapshots of entries.json, written on every UI save.
 # Gitignored because they're large, derivable, and purely a local safety net.
 corpus/.snapshots/

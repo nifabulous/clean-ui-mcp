@@ -17,11 +17,13 @@ tagger can reference when classifying real-world UIs.
 
 ---
 
-## Color tokens (49-role system)
+## Color tokens
 
 MD3 defines a tonal color system where each role maps to a tone (0-100) in a
 generated palette. The system is scheme-aware (light/dark) with fixed variants
-that stay constant across schemes.
+that stay constant across schemes. MD3's own roles page cites **45 color
+roles** in its canonical swatch; counting all `md.sys.color.*` system tokens
+(including deprecated `background`/`onBackground`/`surfaceVariant`) totals 49.
 
 ### Accent roles (primary / secondary / tertiary)
 
@@ -38,7 +40,7 @@ Each accent group has 4 tokens:
 
 `error`, `onError`, `errorContainer`, `onErrorContainer` — same 4-token pattern.
 
-### Surfaces (5 elevation levels, flat-design-friendly)
+### Surfaces (tonal elevation — flat-design-friendly)
 
 | Token | Purpose |
 |---|---|
@@ -72,72 +74,106 @@ Scheme-invariant — only the role→tone mapping changes between light and dark
 
 ---
 
-## Type scale (15 levels)
+## Type scale (15 baseline tokens)
 
-Base: 16px × 1.2^step. Two font families: **titles** (display/headline/title)
-and **body** (body/label).
+MD3 uses hand-tuned sizes — there is **no geometric ratio formula** (the
+"16px × 1.2^step" generator is a Material Design 2 concept and does not
+produce these values). Verified against m3.material.io, Jetpack Compose
+(`androidx.compose.material3`), Flutter Material 3, and Material Web CSS.
 
-| Token | Step | Size | Weight | Line height |
+| Token | Size | Weight | Line height | Tracking |
 |---|---|---|---|---|
-| `display-large` | +7 | 57px | 400 | 1.1 |
-| `display-medium` | +6 | 48px | 400 | 1.1 |
-| `display-small` | +5 | 40px | 400 | 1.1 |
-| `headline-large` | +4 | 33px | 400 | 1.2 |
-| `headline-medium` | +3 | 28px | 400 | 1.2 |
-| `headline-small` | +2 | 23px | 400 | 1.2 |
-| `title-large` | +1 | 19px | 500 | 1.2 |
-| `title-medium` | 0 | 16px | 500 | 1.2 |
-| `title-small` | -1 | 13px | 500 | 1.2 |
-| `body-large` | 0 | 16px | 400 | 1.5 |
-| `body-medium` | -1 | 13px | 400 | 1.5 |
-| `body-small` | -2 | 11px | 400 | 1.5 |
-| `label-large` | -1 | 13px | 500 | 1.4 |
-| `label-medium` | -2 | 11px | 500 | 1.4 |
-| `label-small` | -3 | 10px | 500 | 1.4 |
+| `display-large` | 57px | 400 | 64px | -0.25px |
+| `display-medium` | 45px | 400 | 52px | 0px |
+| `display-small` | 36px | 400 | 44px | 0px |
+| `headline-large` | 32px | 400 | 40px | 0px |
+| `headline-medium` | 28px | 400 | 36px | 0px |
+| `headline-small` | 24px | 400 | 32px | 0px |
+| `title-large` | 22px | 400 | 28px | 0px |
+| `title-medium` | 16px | 500 | 24px | 0.15px |
+| `title-small` | 14px | 500 | 20px | 0.1px |
+| `body-large` | 16px | 400 | 24px | 0.5px |
+| `body-medium` | 14px | 400 | 20px | 0.25px |
+| `body-small` | 12px | 400 | 16px | 0.4px |
+| `label-large` | 14px | 500 | 20px | 0.1px |
+| `label-medium` | 12px | 500 | 16px | 0.5px |
+| `label-small` | 11px | 500 | 16px | 0.5px |
+
+The spec also defines 15 *emphasized* variants (`*.emphasized`) that share
+the same sizes and line heights but use bolder variable-font weights. For
+sizing and layout, the 15 baseline tokens above are the complete set.
 
 ---
 
-## Spacing scale (5 steps, base 16px)
+## Spacing scale (8dp base grid)
 
-| Token | Size | Multiplier |
-|---|---|---|
-| `xs` | 4px | ×0.25 |
-| `sm` | 8px | ×0.5 |
-| `md` | 16px | base |
-| `lg` | 24px | ×1.5 |
-| `xl` | 48px | ×3 |
+MD3 does not use t-shirt sizing (xs/sm/md/lg/xl). It uses a numbered token
+system on an 8dp grid (`spaceN`), where `space100 = 8dp`:
 
----
-
-## Shape scale (6 steps)
-
-| Token | Radius |
+| Token | Value |
 |---|---|
-| `xs` | 4px |
-| `sm` | 8px |
-| `md` | 12px |
-| `lg` | 16px |
-| `xl` | 24px |
-| `full` | 9999px |
+| `space0` | 0dp |
+| `space50` | 4dp |
+| `space100` | 8dp |
+| `space150` | 12dp |
+| `space200` | 16dp |
+| `space250` | 20dp |
+| `space300` | 24dp |
+| `space400` | 32dp |
+| `space500` | 40dp |
+| `space600` | 48dp |
+
+Scale continues in 4dp increments. Most components use `space100`–`space300`
+(8–24dp) for internal padding.
 
 ---
 
-## Component tokens (16 canonical)
+## Shape scale (corner radius)
 
-Buttons: `button-primary` (+`-hover`/`-pressed`/`-disabled`), `button-secondary`
-(+`-hover`), `button-text` (+`-hover`).
+MD3's canonical corner radius scale from m3.material.io/styles/shape:
 
-Inputs: `input-field` (+`-focused`/`-error`/`-disabled`).
-
-Surfaces: `card`, `chip` (+`-selected`), `tooltip`.
-
-### Interactive states (non-normative properties)
-
-| Property | Values |
+| MD3 name | Radius |
 |---|---|
-| `stateLayerOpacity` | hover 8%, pressed 10%, focus 10%, dragged 16% |
-| `backgroundOpacity` | disabled buttons 12%, inputs 4% |
-| `textOpacity` | disabled 38% |
+| None | 0dp |
+| Extra small | 4dp |
+| Small | 8dp |
+| Medium | 12dp |
+| Large | 16dp |
+| Large increased | 20dp |
+| Extra large | 28dp |
+| Full | 50% (stadium/pill) |
 
-State layers are semi-transparent overlays on interactive elements — they
+---
+
+## Component design tokens
+
+MD3 does not define a flat list of "canonical component tokens." Instead,
+each component has its own token namespace (`md.comp.*`) with properties
+like `container-color`, `label-text-color`, `container-elevation`,
+`state-layer-opacity`. The component catalog includes (non-exhaustive):
+
+**Buttons:** `filled-button`, `tonal-button`, `outlined-button`, `text-button`,
+`elevated-button` — each with container/label/state-layer tokens.
+
+**Inputs:** `text-field` (filled + outlined variants) with indicator, label,
+supporting-text, and container tokens.
+
+**Containers:** `filled-card`, `outlined-card`, `elevated-card`.
+
+**Other:** `chip` (assist/filter/input/suggestion), `dialog`, `navigation-bar`,
+`navigation-rail`, `snackbar`, `tooltip`, `fab`, `menu`, `slider`, `switch`.
+
+Each component defines dozens of properties; consult the spec page for the
+specific component when classifying.
+
+### Interactive state layers
+
+| State | Opacity |
+|---|---|
+| Hover | 8% |
+| Focus | 10% |
+| Pressed | 10% |
+| Dragged | 16% |
+
+State layers are semi-transparent overlays using the `on{Role}` color — they
 signal affordance without changing the element's base color.

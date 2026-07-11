@@ -114,11 +114,12 @@ capture (motion, interaction polish, design-system taxonomies). Apply at synthes
   building principles (scale on press, origin-aware popovers, clip-path), gesture
   interactions, performance rules, accessibility. Use when the design brief
   touches motion, micro-interactions, or component polish.
-- `references/material-design-3.md` — MD3 design-system taxonomy: 49-role tonal
-  color system, 15-level type scale, spacing/shape scales, component tokens.
+- `references/material-design-3.md` — MD3 design-system taxonomy: tonal color
+  roles (45 canonical / 49 with deprecated tokens), 15-token type scale,
+  8dp spacing grid, corner-radius scale, per-component token namespaces.
   Use as a tagging vocabulary anchor when classifying real-world UIs against a
   codified design language (e.g. "tonal elevation via surfaceContainer steps
-  instead of shadows," "label-small type role at 10px/500").
+  instead of shadows," "label-small type role at 11px/500").
 
 ## Do not
 

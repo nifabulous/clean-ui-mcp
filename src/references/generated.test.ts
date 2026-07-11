@@ -57,6 +57,13 @@ describe("generated machine rules", () => {
     expect(readFileSync(generatedPath, "utf8")).toBe(before);
   });
 
+  it("passes --check on the clean committed state (no drift)", () => {
+    // This catches the case where someone edits machine-rules.json and commits
+    // without regenerating generated.ts. If this test fails, run:
+    //   npm run generate-references
+    expect(() => runGenerator(["--check"])).not.toThrow();
+  });
+
   it("fails --check when the generated file drifts", () => {
     const original = readFileSync(generatedPath, "utf8");
     try {

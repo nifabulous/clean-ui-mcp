@@ -21,6 +21,7 @@ import {
   BANNED_PHRASES,
   PIXEL_MEASUREMENT,
   UNLABELED_CONTROL_RISK,
+  EXEMPTION_PATTERNS,
 } from "./references/generated.js";
 import { Component, DomainTag, detectPlatform } from "./schema.js";
 import { isWcagCriterion, extractAllWcagIds } from "./wcag/registry.js";
@@ -77,7 +78,8 @@ const BUSINESS_GOALS = [
 // Trust-boundary gates shared by accessibility-risk sanitization and prose
 // scrubbing. Pixels can establish visible presence; they cannot prove absence
 // of labels/accessibility names or exact measurements.
-const DOM_GROUND_TRUTH = /\b(?:dom|computed|contrast[\s-]*ratio|accessibility\s+tree|aria-|offsetwidth|offsetheight|getboundingclientrect|measured\s+(?:from|via))\b/i;
+// DOM_GROUND_TRUTH, CONTRAST_CLAUSE, and POSITIVE_LABEL_PAIRING are imported
+// from generated.ts as EXEMPTION_PATTERNS to avoid duplication drift.
 const LOW_CONTRAST_RISK = /\b(?:low|poor|insufficient|fail(?:s|ing)?|below|under|not enough|too little)\b.{0,60}\bcontrast\b|\bcontrast\b.{0,60}\b(?:low|poor|insufficient|fail(?:s|ing)?|below|under|ratio|threshold|4\.5)\b/i;
 // A risk list must only contain confirmed failures. Models occasionally emit a
 // useful observation followed by "likely accessible" / "no risk confirmed";
@@ -1221,13 +1223,13 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
     // precision. Only allowed when DOM/computed ground truth is cited (e.g.
     // "contrastRatio 2.8:1", "computed from the DOM"). Relative size words
     // ("small", "narrow") are fine.
-    if (PIXEL_MEASUREMENT.test(evidence) && !DOM_GROUND_TRUTH.test(evidence)) continue;
+    if (PIXEL_MEASUREMENT.test(evidence) && !EXEMPTION_PATTERNS.domGroundTruth.test(evidence)) continue;
 
     // Gate 3d: contrast failures require computed contrast data. A screenshot
     // can suggest "this looks muted", but it cannot prove WCAG contrast failure.
     // Check raw citation (string or array) for 1.4.3 before validation normalizes it.
     const rawCitations = extractAllWcagIds(Array.isArray(obj.wcag) ? obj.wcag.join(", ") : String(obj.wcag ?? ""));
-    if ((LOW_CONTRAST_RISK.test(risk) || LOW_CONTRAST_RISK.test(evidence) || rawCitations.includes("1.4.3")) && !DOM_GROUND_TRUTH.test(evidence)) continue;
+    if ((LOW_CONTRAST_RISK.test(risk) || LOW_CONTRAST_RISK.test(evidence) || rawCitations.includes("1.4.3")) && !EXEMPTION_PATTERNS.domGroundTruth.test(evidence)) continue;
 
     // Gate 4: unlabeled-control risks are the #1 hallucination class. The model
     // CANNOT reliably establish the absence of a text label or accessible name
@@ -1475,15 +1477,15 @@ const ICON_ONLY_PROSE = /\bicon[\s-]*only|icons?\s+(?:alone|symbols?\s+alone|wit
 // not asserting it. NOTE: bare "no" and "not" are excluded — "no text labels"
 // is the absence claim itself, and "not" is too broad. We require explicit
 // negation verbs (are not / is not / do not) or comparison conjunctions.
-const CONTRAST_CLAUSE = /\b(?:instead\s+of|rather\s+than|avoids?|rejects?|unlike|in\s+contrast\s+to|could\s+have|might\s+(?:have\s+)?(?:used|gone)|do\s+not|does\s+not|are\s+not|is\s+not|not\s+(?:icon|going))\b/i;
-const POSITIVE_LABEL_PAIRING = /\b(?:paired?\s+with|keeps?\s+icons?\s+paired|icons?\s+(?:and|with)\s+(?:text\s+)?labels?|(?:text\s+)?labels?\s+(?:beside|next to|alongside)|instead\s+of\s+going\s+icon[\s-]*only)\b/i;
+// CONTRAST_CLAUSE and POSITIVE_LABEL_PAIRING are imported from generated.ts
+// as EXEMPTION_PATTERNS to avoid duplication drift.
 
 function isAllowedIconOnlyContrast(sentence: string): boolean {
-  return ICON_ONLY_PROSE.test(sentence) && CONTRAST_CLAUSE.test(sentence) && POSITIVE_LABEL_PAIRING.test(sentence);
+  return ICON_ONLY_PROSE.test(sentence) && EXEMPTION_PATTERNS.contrastClause.test(sentence) && EXEMPTION_PATTERNS.positiveLabelPairing.test(sentence);
 }
 
 function unsupportedProseReason(sentence: string): string | null {
-  if (PIXEL_MEASUREMENT.test(sentence) && !DOM_GROUND_TRUTH.test(sentence)) {
+  if (PIXEL_MEASUREMENT.test(sentence) && !EXEMPTION_PATTERNS.domGroundTruth.test(sentence)) {
     return "fabricated pixel measurement";
   }
   if (UNLABELED_CONTROL_RISK.test(sentence) && !isAllowedIconOnlyContrast(sentence)) {

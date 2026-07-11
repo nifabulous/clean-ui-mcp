@@ -20,6 +20,11 @@
 import { tagImage, generateCritique } from "../dist/tagger.js";
 import {
   PIXEL_MEASUREMENT,
+  // NOTE: This uses the canonical UNLABELED_CONTROL_RISK pattern from generated.ts,
+  // which is wider than the hand-maintained subset grok-eval previously used.
+  // This is intentional — the regex now mirrors the tagger's sanitizer exactly.
+  // Baseline JSONs from before this change are NOT comparable (iconOnly counts
+  // will be higher). Re-baseline if comparing across this boundary.
   UNLABELED_CONTROL_RISK as UNLABELED_CONTROL,
 } from "../dist/references/generated.js";
 import { readFileSync, writeFileSync } from "node:fs";

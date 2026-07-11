@@ -80,7 +80,7 @@ describe("enforcement-rule consumers", () => {
       new URL("./content-lint.ts", import.meta.url),
       new URL("../scripts/eval-scorer.mjs", import.meta.url),
     ];
-    const duplicateDeclarations = /const (?:BANNED_PHRASES|VAGUE_PHRASES|UNLABELED_CONTROL|PIXEL_MEASUREMENT)\b/;
+    const duplicateDeclarations = /const (?:BANNED_PHRASES|VAGUE_PHRASES|UNLABELED_CONTROL|PIXEL_MEASUREMENT|DOM_GROUND_TRUTH|CONTRAST_CLAUSE|POSITIVE_LABEL_PAIRING)\b/;
 
     for (const consumer of consumers) {
       const source = readFileSync(fileURLToPath(consumer), "utf8");

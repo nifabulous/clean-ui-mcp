@@ -18,7 +18,19 @@ import { setCorpusForTesting } from "./corpus.js";
 
 const RUN_LIVE = process.env.RUN_LIVE_INTEGRATION === "1"
   && !!process.env.IMAGE_EMBEDDING_API_KEY
-  && !!process.env.OPENAI_API_KEY;
+  && !!process.env.OPENAI_API_KEY
+  && process.env.IMAGE_EMBEDDING_PROVIDER === "voyage";
+
+const LIVE_OPENAI_MODEL = process.env.LIVE_INTEGRATION_OPENAI_MODEL ?? "gpt-5.4-nano";
+
+function openAiEndpointOverride() {
+  return {
+    provider: "openai" as const,
+    baseUrl: "",
+    apiKey: process.env.OPENAI_API_KEY!,
+    model: LIVE_OPENAI_MODEL,
+  };
+}
 
 const FIXTURE_DIR = resolve(import.meta.dirname ?? __dirname, "..", "eval", "critique-fixtures");
 const DESKTOP_IMG = resolve(FIXTURE_DIR, "desktop-dashboard.png");
@@ -158,7 +170,14 @@ const DESKTOP_IMG = resolve(FIXTURE_DIR, "desktop-dashboard.png");
 
     // Extract facts via tagger
     const tagged = await withValidatedImageFile(validation.input, async (imagePath) => {
-      return tagImage({ imagePath, productName: "Dashboard", url: null, imageDetail: "low", extractionOnly: true });
+      return tagImage({
+        imagePath,
+        productName: "Dashboard",
+        url: null,
+        imageDetail: "low",
+        extractionOnly: true,
+        extractionOverride: openAiEndpointOverride(),
+      });
     });
     const extraction = toNormalizedTaggerFacts(tagged);
     const platform = validation.input.platform ?? tagged.platform ?? "web";
@@ -195,7 +214,12 @@ const DESKTOP_IMG = resolve(FIXTURE_DIR, "desktop-dashboard.png");
     // Synthesize critique
     const evidence = buildCritiqueEvidence(extraction, retrieval, validation.input.productContext);
     const evidenceIds = evidence.map((e) => e.id);
-    const draft = await synthesizeCritique(evidence, { productContext: validation.input.productContext, platform });
+    const draft = await synthesizeCritique(evidence, {
+      productContext: validation.input.productContext,
+      platform,
+      providerOverride: "openai",
+      endpointOverride: openAiEndpointOverride(),
+    });
     const gated = gateCritique(draft, evidenceIds);
 
     // Core assertion: every actionable recommendation must cite valid evidence.

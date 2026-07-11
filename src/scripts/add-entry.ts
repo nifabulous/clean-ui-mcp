@@ -465,6 +465,6 @@ rl.close();
 // imported by tests for validateEntryGates. Two independent conditions: VITEST
 // env var catches vitest runs; pathToFileURL comparison catches any import
 // (path-safe: handles spaces and platform-specific path formats).
-if (!process.env.VITEST && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (!process.env.VITEST && process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => { console.error(err); process.exit(1); });
 }

@@ -41,6 +41,7 @@ export interface RetrievalResult {
 export interface RetrieveCritiqueInput {
   imageProvider: ImageEmbeddingProvider | null;
   imageData: Buffer | null; // decoded image bytes for embedding
+  imageMimeType?: string; // I2 fix: the actual MIME type (was hardcoded to image/png)
   extraction: Record<string, unknown>;
   productContext?: string;
   platform?: string;
@@ -53,15 +54,15 @@ const MAX_ENTRIES = 5;
  * Retrieve up to 5 approved corpus entries as evidence for a screenshot critique.
  */
 export async function retrieveCritiqueEvidence(input: RetrieveCritiqueInput): Promise<RetrievalResult> {
-  const { imageProvider, imageData, extraction, productContext, platform, imageIndex } = input;
+  const { imageProvider, imageData, imageMimeType, extraction, productContext, platform, imageIndex } = input;
 
   // ── Try image retrieval first ────────────────────────────────────────────────
   if (imageProvider && imageData && imageIndex) {
     try {
       const queryVec = await imageProvider.embedImage({
         data: imageData,
-        mimeType: "image/png", // default; the caller should set this
-      } as ValidatedImage);
+        mimeType: (imageMimeType ?? "image/png") as ValidatedImage["mimeType"],
+      });
 
       // Rank all index entries by cosine similarity.
       const ranked = Object.entries(imageIndex.entries)

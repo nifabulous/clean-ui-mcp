@@ -732,12 +732,13 @@ server.registerTool(
 
       const imageProvider = createImageEmbeddingProvider();
       const imageIndex = imageProvider
-        ? loadImageIndex(imageProvider.model, 0 /* dimension learned at query time */)
+        ? loadImageIndex(imageProvider.model)
         : null;
 
       const retrieval = await retrieveCritiqueEvidence({
         imageProvider,
         imageData: Buffer.from(input.image.data, "base64"),
+        imageMimeType: input.image.mimeType,
         extraction,
         productContext: input.productContext,
         platform: detectedPlatform,

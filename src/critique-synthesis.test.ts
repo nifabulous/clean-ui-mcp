@@ -41,7 +41,7 @@ describe("gateCritique", () => {
     expect(result.recommendations[0].uncertain).toBeFalsy();
   });
 
-  it("converts uncited recommendations to uncertain", () => {
+  it("downgrades fabricated-evidence recommendations to observations", () => {
     const draft: CritiqueUiDraft = {
       summary: "Good",
       observations: ["Nice layout."],
@@ -51,8 +51,24 @@ describe("gateCritique", () => {
       accessibilityRisks: [],
     };
     const result = gateCritique(draft, validIds);
+    // I1 fix: fabricated-evidence recs are downgraded to observations, not kept
+    expect(result.recommendations.length).toBe(0);
+    expect(result.observations.length).toBe(2); // original + downgraded
+    expect(result.observations[1]).toMatch(/uncertain/i);
+  });
+
+  it("keeps recommendations with at least one valid evidence ID, strips invalid IDs", () => {
+    const draft: CritiqueUiDraft = {
+      summary: "OK",
+      observations: ["Fine."],
+      recommendations: [
+        { observation: "Low contrast", impact: "A11y", recommendation: "Fix contrast", evidence: ["screen:patternType", "corpus:fabricated"] },
+      ],
+      accessibilityRisks: [],
+    };
+    const result = gateCritique(draft, validIds);
     expect(result.recommendations.length).toBe(1);
-    expect(result.recommendations[0].uncertain).toBe(true);
+    expect(result.recommendations[0].evidence).toEqual(["screen:patternType"]); // invalid ID stripped
   });
 
   it("drops accessibility risks without valid evidence", () => {
@@ -66,9 +82,9 @@ describe("gateCritique", () => {
       ],
     };
     const result = gateCritique(draft, validIds);
-    // Both a11y risks are kept (they're structured data, not cited recommendations)
-    // but the gate should flag ones with empty evidence
-    expect(result.accessibilityRisks.length).toBeGreaterThanOrEqual(1);
+    // Risk with evidence is kept, risk with empty evidence is dropped
+    expect(result.accessibilityRisks.length).toBe(1);
+    expect(result.accessibilityRisks[0].element).toBe("icon button");
   });
 
   it("handles no-corpus-evidence case gracefully", () => {
@@ -81,7 +97,8 @@ describe("gateCritique", () => {
       accessibilityRisks: [],
     };
     const result = gateCritique(draft, ["screen:patternType"]);
-    // Recommendation with empty evidence → uncertain
-    expect(result.recommendations[0].uncertain).toBe(true);
+    // I1 fix: empty-evidence rec is downgraded to observation, not kept as uncertain rec
+    expect(result.recommendations.length).toBe(0);
+    expect(result.observations.length).toBe(2); // original + downgraded
   });
 });

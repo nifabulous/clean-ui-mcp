@@ -64,9 +64,17 @@ export function imageIndexStatus(): ImageIndexStatus {
 
 /**
  * Load the image index. Returns null if the file doesn't exist or is stale
- * (wrong model/dimension). Never loads or overwrites corpus/embeddings.json.
+ * (wrong model). The index is self-describing: it carries its own dimension
+ * field, so we validate the model name but trust the stored dimension.
+ *
+ * C1 fix: the old signature took expectedDimension as a caller-supplied param,
+ * but the caller didn't know the dimension until the index was loaded — causing
+ * loadImageIndex to always return null when called with dimension 0. Now the
+ * index's own dimension is authoritative.
+ *
+ * Never loads or overwrites corpus/embeddings.json.
  */
-export function loadImageIndex(expectedModel: string, expectedDimension: number): ImageEmbeddingIndex | null {
+export function loadImageIndex(expectedModel: string): ImageEmbeddingIndex | null {
   if (!existsSync(IMAGE_INDEX_PATH)) return null;
   let raw: unknown;
   try {
@@ -85,8 +93,8 @@ export function loadImageIndex(expectedModel: string, expectedDimension: number)
     console.error(`[image-index] Model mismatch: expected "${expectedModel}", got "${idx.model}". Ignoring.`);
     return null;
   }
-  if (idx.dimension !== expectedDimension) {
-    console.error(`[image-index] Dimension mismatch: expected ${expectedDimension}, got ${idx.dimension}. Ignoring.`);
+  if (typeof idx.dimension !== "number" || idx.dimension <= 0) {
+    console.error(`[image-index] Invalid dimension: ${idx.dimension}. Ignoring.`);
     return null;
   }
   return idx as ImageEmbeddingIndex;

@@ -8,6 +8,7 @@
  *
  * Usage: npm run build-image-index
  */
+import "../env.js";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { Corpus } from "../schema.js";
@@ -38,17 +39,15 @@ async function main() {
   console.log(`   Provider: ${provider.name} / ${provider.model}`);
   console.log(`   Approved entries: ${entries.length}`);
 
-  // Load existing index to skip unchanged images (incremental).
-  // We need a test embedding to learn the dimension.
-  let dimension = 0;
-  const existing = loadImageIndex(provider.name + "-unknown", 0); // will return null (model mismatch)
-  let index: ImageEmbeddingIndex = existing ?? {
+  // Load existing index for incremental skipping. C2 fix: pass the real model
+  // name, not a fake one. loadImageIndex validates model and trusts the stored
+  // dimension (C1 fix).
+  let index: ImageEmbeddingIndex = loadImageIndex(provider.model) ?? {
     version: 1,
     model: provider.model,
-    dimension: 0,
+    dimension: 0, // learned from the first embed
     entries: {},
   };
-  index.model = provider.model;
 
   let embedded = 0, skipped = 0, failed = 0;
   for (const entry of entries) {
@@ -58,15 +57,10 @@ async function main() {
       failed++;
       continue;
     }
-    if (!existsSync(imgPath)) {
-      console.error(`  ⚠  Image not found, skipping: ${entry.id}`);
-      failed++;
-      continue;
-    }
     const imgData = readFileSync(imgPath);
     const hash = hashForImage(imgData);
 
-    // Skip if already indexed and hash unchanged.
+    // Skip if already indexed and hash unchanged (incremental).
     if (index.entries[entry.id]?.hash === hash) {
       skipped++;
       continue;
@@ -74,9 +68,8 @@ async function main() {
 
     try {
       const vec = await provider.embedImage({ data: imgData, mimeType: "image/png" });
-      if (dimension === 0) {
-        dimension = vec.length;
-        index.dimension = dimension;
+      if (index.dimension === 0) {
+        index.dimension = vec.length;
       }
       index.entries[entry.id] = { vector: vec, hash };
       embedded++;
@@ -85,6 +78,12 @@ async function main() {
       console.error(`\n  ✗ ${entry.id}: ${e instanceof Error ? e.message : e}`);
       failed++;
     }
+  }
+
+  if (index.dimension === 0 && embedded === 0 && skipped > 0) {
+    // All entries were skipped but dimension was never learned (shouldn't happen
+    // with a real index, but guard against it).
+    console.error("  ⚠  No new embeddings and dimension unknown — index may be incomplete.");
   }
 
   saveImageIndex(index);

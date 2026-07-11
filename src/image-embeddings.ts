@@ -30,9 +30,13 @@ export interface ImageEmbeddingProvider {
 
 // ─── provider defaults ─────────────────────────────────────────────────────────
 
+// C3 fix: removed the OpenAI default — text-embedding-3-large is a text-only
+// model that rejects image_url input. OpenAI does not currently offer a
+// multimodal embedding model. To use an OpenAI-compatible image embedder,
+// set IMAGE_EMBEDDING_PROVIDER=voyage (the only verified adapter) or extend
+// this map with a verified provider.
 const PROVIDER_DEFAULTS: Record<string, { model: string; api: string }> = {
   voyage: { model: "voyage-multimodal-3", api: "https://api.voyageai.com/v1/multimodalembeddings" },
-  openai: { model: "text-embedding-3-large", api: "https://api.openai.com/v1/embeddings" },
 };
 
 /**
@@ -132,7 +136,9 @@ async function callVoyage(
       inputs: [{ type: "image", image: `data:${mimeType};base64,${base64}` }],
     }),
   });
-  if (!res.ok) throw new Error(`Voyage image embedding error ${res.status}: ${await res.text()}`);
+  // I4 fix: log only the status code, not the response body — provider error
+  // bodies can echo request details or auth info on 401/403.
+  if (!res.ok) throw new Error(`Voyage image embedding error (HTTP ${res.status})`);
   const data = (await res.json()) as { data?: Array<{ embedding?: number[] }> };
   const vec = data.data?.[0]?.embedding;
   if (!vec || !Array.isArray(vec)) throw new Error("Voyage returned no embedding vector");
@@ -155,7 +161,8 @@ async function callOpenAI(
       input: [{ type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } }],
     }),
   });
-  if (!res.ok) throw new Error(`OpenAI image embedding error ${res.status}: ${await res.text()}`);
+  // I4 fix: log only the status code, not the response body.
+  if (!res.ok) throw new Error(`OpenAI image embedding error (HTTP ${res.status})`);
   const data = (await res.json()) as { data?: Array<{ embedding?: number[] }> };
   const vec = data.data?.[0]?.embedding;
   if (!vec || !Array.isArray(vec)) throw new Error("OpenAI returned no embedding vector");

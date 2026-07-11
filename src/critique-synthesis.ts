@@ -138,6 +138,8 @@ Platform: ${options.platform ?? "Not specified"}
 
 /**
  * Call the text model with the critique rubric. Returns the raw draft for gating.
+ * I3 fix: validates the parsed shape with defaults — a malformed LLM response
+ * no longer crashes the gate with TypeError.
  */
 export async function synthesizeCritique(
   evidence: CritiqueEvidence[],
@@ -146,17 +148,37 @@ export async function synthesizeCritique(
   const prompt = buildCritiquePrompt(evidence, options);
   const raw = await callTextModel(prompt);
   const parsed = JSON.parse(stripFences(raw));
-  return parsed as CritiqueUiDraft;
+  // Defensive defaults: the LLM may omit or malform fields.
+  return {
+    summary: typeof parsed.summary === "string" ? parsed.summary : "",
+    observations: Array.isArray(parsed.observations) ? parsed.observations.filter((s: unknown) => typeof s === "string") : [],
+    recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations.filter(isValidRec) : [],
+    accessibilityRisks: Array.isArray(parsed.accessibilityRisks) ? parsed.accessibilityRisks.filter(isValidRisk) : [],
+  };
+}
+
+function isValidRec(r: unknown): r is CritiqueUiDraft["recommendations"][number] {
+  if (!r || typeof r !== "object") return false;
+  const rec = r as Record<string, unknown>;
+  return typeof rec.observation === "string" && typeof rec.recommendation === "string";
+}
+
+function isValidRisk(r: unknown): r is CritiqueUiDraft["accessibilityRisks"][number] {
+  if (!r || typeof r !== "object") return false;
+  const risk = r as Record<string, unknown>;
+  return typeof risk.element === "string" && typeof risk.risk === "string";
 }
 
 // ─── citation gate ─────────────────────────────────────────────────────────────
 
 /**
  * Post-hoc citation gate: removes unsupported claims, rejects unknown citations,
- * and converts uncited recommendations into uncertain observations.
+ * and downgrades uncited recommendations to uncertain observations.
  *
- * Mirrors Decision Lab's gateCitations concept but operates on CritiqueUiDraft,
- * not SynthesisOutput.
+ * I1 fix: recommendations with entirely fabricated evidence (no valid IDs at all)
+ * are downgraded to observations rather than kept as actionable recommendations.
+ * Recommendations with at least one valid evidence ID are kept; any invalid IDs
+ * in their evidence list are stripped.
  */
 export function gateCritique(draft: CritiqueUiDraft, validEvidenceIds: string[]): {
   summary: string;
@@ -166,14 +188,20 @@ export function gateCritique(draft: CritiqueUiDraft, validEvidenceIds: string[])
 } {
   const validSet = new Set(validEvidenceIds);
 
-  // Gate recommendations: keep all, but mark uncertain if evidence is empty or invalid.
-  const recommendations: CritiqueRecommendation[] = draft.recommendations.map((rec) => {
-    const hasValidEvidence = rec.evidence.length > 0 && rec.evidence.every((id) => validSet.has(id));
-    return {
-      ...rec,
-      uncertain: !hasValidEvidence,
-    };
-  });
+  const keptRecommendations: CritiqueRecommendation[] = [];
+  const downgradedObservations: string[] = [];
+
+  for (const rec of draft.recommendations) {
+    const validEvidence = rec.evidence.filter((id) => validSet.has(id));
+    if (validEvidence.length > 0) {
+      // Keep the recommendation with only its valid evidence IDs.
+      keptRecommendations.push({ ...rec, evidence: validEvidence });
+    } else {
+      // I1 fix: no valid evidence → downgrade to an observation, don't keep
+      // as an actionable recommendation.
+      downgradedObservations.push(`${rec.observation} (uncertain — no cited evidence)`);
+    }
+  }
 
   // Gate accessibility risks: drop ones with empty evidence.
   const accessibilityRisks = draft.accessibilityRisks.filter(
@@ -182,8 +210,8 @@ export function gateCritique(draft: CritiqueUiDraft, validEvidenceIds: string[])
 
   return {
     summary: draft.summary,
-    observations: draft.observations,
-    recommendations,
+    observations: [...draft.observations, ...downgradedObservations],
+    recommendations: keptRecommendations,
     accessibilityRisks,
   };
 }

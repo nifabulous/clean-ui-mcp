@@ -22,9 +22,9 @@
 - Modify: `src/schema.ts`
 - Test: `src/schema.test.ts`
 
-- [ ] Add a failing corpus-entry test with `wcag: ["9.9.9"]`.
-- [ ] Require each `wcag` item to pass `isWcagCriterion` in addition to numeric formatting.
-- [ ] Run `npx vitest run src/schema.test.ts`.
+- [x] Add a failing corpus-entry test with `wcag: ["9.9.9"]`.
+- [x] Require each `wcag` item to pass `isWcagCriterion` in addition to numeric formatting.
+- [x] Run `npx vitest run src/schema.test.ts`.
 
 ### Task 2: Strict live tagger citations
 
@@ -32,9 +32,9 @@
 - Modify: `src/tagger.ts`
 - Test: `src/tagger.test.ts`
 
-- [ ] Add a failing sanitizer test for a titled or comma-joined model citation.
-- [ ] Accept only arrays whose individual string elements are bare registry IDs; drop any risk with no valid canonical IDs.
-- [ ] Run `npx vitest run src/tagger.test.ts`.
+- [x] Add a failing sanitizer test for a titled or comma-joined model citation.
+- [x] Accept only arrays whose individual string elements are bare registry IDs; drop any risk with no valid canonical IDs.
+- [x] Run `npx vitest run src/tagger.test.ts`.
 
 ### Task 3: Durable validated migration
 
@@ -43,14 +43,14 @@
 - Modify: `src/scripts/migrate-wcag-ids.ts`
 - Test: `src/scripts/migrate-wcag-ids.test.ts`
 
-- [ ] Extract the migration transform into an importable function and test it directly.
-- [ ] Add a raw-document snapshot helper for migrations, validate the transformed `Corpus` before persistence, and retain atomic output.
-- [ ] Run `npx vitest run src/scripts/migrate-wcag-ids.test.ts` and `npm run migrate-wcag-ids -- --dry-run`.
+- [x] Extract the migration transform into an importable function and test it directly.
+- [x] Add a raw-document snapshot helper for migrations, validate the transformed `Corpus` before persistence, and retain atomic output.
+- [x] Run `npx vitest run src/scripts/migrate-wcag-ids.test.ts` and `npm run migrate-wcag-ids -- --dry-run`.
 
 ### Task 4: Full verification
 
 **Files:**
 - Verify only
 
-- [ ] Run `npm run build`, `npm run validate-corpus`, and `npm test`.
-- [ ] Inspect the diff and report unrelated pre-existing files separately.
+- [x] Run `npm run build`, `npm run validate-corpus`, and `npm test`.
+- [x] Inspect the diff and report unrelated pre-existing files separately.

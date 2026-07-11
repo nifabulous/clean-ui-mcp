@@ -82,6 +82,11 @@ export const StructuredCritique = z.object({
   md3: z.object({
     classification: z.enum(["supported", "insufficient-evidence", "conflicting"]),
     matchedCategories: z.array(z.string()),
+    conflictingSignals: z.array(z.object({
+      category: z.string(),
+      evidenceId: z.string(),
+      detail: z.string(),
+    })).default([]),
     evidenceIds: z.array(z.string()),
     confidence: z.number(),
   }).optional(),

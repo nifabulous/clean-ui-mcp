@@ -69,6 +69,12 @@ export function toNormalizedTaggerFacts(tagged: Pick<TaggerOutput,
     domainTags: tagged.domainTags,
     layoutForm: tagged.layout?.form,
     layout: tagged.layout,
+    // I1 fix: project the visual fields needed by buildSynthesisContext for
+    // screen:visual:colors / accentColor / colorRoles / typePairing evidence.
+    dominantColors: tagged.visual.dominantColors,
+    accentColor: tagged.visual.accentColor,
+    colorRoles: tagged.visual.colorRoles,
+    typePairing: tagged.visual.typePairing,
     spacingDensity: tagged.visual.spacingDensity,
     cornerStyle: tagged.visual.cornerStyle,
     usesShadows: tagged.visual.usesShadows,

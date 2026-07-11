@@ -693,6 +693,31 @@ server.registerTool(
       image_mime_type: z.enum(["image/png", "image/jpeg", "image/webp"]).describe("MIME type of the image data"),
       product_context: z.string().optional().describe("What the product is (e.g. 'A KPI tracking dashboard')"),
       platform: z.enum(["web", "mobile", "tablet"]).optional().describe("Target platform for platform-aware retrieval"),
+      framework: z.string().optional().describe("Design framework hint (e.g. 'md3' to enable MD3 resemblance classification)"),
+    },
+    outputSchema: {
+      schemaVersion: z.literal("1.0"),
+      platform: z.string(),
+      retrievalMode: z.string(),
+      fallbackUsed: z.boolean(),
+      coverage: z.string(),
+      summary: z.string(),
+      observations: z.array(z.string()),
+      recommendations: z.array(z.object({
+        observation: z.string(),
+        impact: z.string(),
+        recommendation: z.string(),
+        evidence: z.array(z.string()),
+        basis: z.string(),
+      })),
+      accessibilityRisks: z.array(z.object({
+        element: z.string(),
+        risk: z.string(),
+        evidence: z.string(),
+        wcag: z.array(z.string()),
+        basis: z.string(),
+      })),
+      confidence: z.string(),
     },
   },
   async (args) => {
@@ -748,9 +773,17 @@ server.registerTool(
       // ── Synthesize critique ───────────────────────────────────────────────────
       const { synthesizeCritique, gateCritique } = await import("./critique-synthesis.js");
       const { buildSynthesisContext } = await import("./synthesis/context.js");
+      type BuildContextInput = import("./synthesis/context.js").BuildContextInput;
       const { renderCritiqueMarkdown } = await import("./synthesis/render.js");
       const { CRITIQUE_SCHEMA_VERSION } = await import("./synthesis/contracts.js");
-      const context = buildSynthesisContext({ extraction, retrieval, productContext: input.productContext });
+      // C1 fix: pass motion signals from extraction if domSignals.motion exists
+      const domSignals = extraction.domSignals as { motion?: { signals?: NonNullable<BuildContextInput["motion"]> } | null } | undefined;
+      const motionSignals = domSignals?.motion?.signals ?? null;
+      const context = buildSynthesisContext({
+        extraction, retrieval,
+        productContext: input.productContext,
+        motion: motionSignals,
+      });
 
       const draft = await synthesizeCritique(context, {
         productContext: input.productContext,
@@ -760,9 +793,8 @@ server.registerTool(
       const gated = gateCritique(draft, context.evidenceIds);
 
       // ── Build structured critique output ──────────────────────────────────────
-      // Task 10: MD3 resemblance classification (disabled by default — only when
-      // the user explicitly requests MD3 via the framework option).
-      const md3Classification = (args as Record<string, unknown>).framework === "md3"
+      // Task 10: MD3 resemblance classification — only when framework:"md3" is requested
+      const md3Classification = args.framework === "md3"
         ? (await import("./md3-classifier.js")).classifyMd3Resemblance({
             dominantColors: Array.isArray(extraction.dominantColors) ? extraction.dominantColors as string[] : undefined,
             accentColor: (extraction.accentColor as string | null | undefined) ?? null,
@@ -788,7 +820,8 @@ server.registerTool(
           impact: rec.impact,
           recommendation: rec.recommendation,
           evidence: rec.evidence,
-          basis: "visible" as const,
+          // I4 fix: assign basis based on evidence source
+          basis: (rec.evidence.some((id) => id.startsWith("dom:")) ? "dom-grounded" : "visible") as "visible" | "dom-grounded",
         })),
         accessibilityRisks: gated.accessibilityRisks.map((risk) => ({
           element: risk.element,

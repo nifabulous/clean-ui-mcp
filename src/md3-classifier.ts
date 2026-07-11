@@ -163,7 +163,10 @@ function detectConflicts(input: Md3EvidenceInput): Md3Signal[] {
 
 // ─── main classifier ───────────────────────────────────────────────────────────
 
-const CONFIDENCE_THRESHOLD = 0.7;
+// C3 fix: threshold lowered from 0.7 to 0.6 so that exactly 3 of 5 categories
+// (3/5 = 0.6) qualifies as "supported", matching the plan's specification
+// ("Return supported only when three categories match").
+const CONFIDENCE_THRESHOLD = 0.6;
 
 /**
  * Classify whether the evidence resembles Material Design 3.

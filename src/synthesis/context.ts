@@ -9,6 +9,7 @@
  * This separation enforces the trust boundary: only evidence IDs support
  * observations; editorial guidance supports recommendations but never facts.
  */
+import { createRequire } from "node:module";
 import type { CritiqueEvidence } from "../critique-ui.js";
 import type { RetrievalResult } from "../critique-retrieval.js";
 import { BANNED_PHRASES, VAGUE_PHRASES, UNLABELED_CONTROL_RISK, PIXEL_MEASUREMENT, EXEMPTION_PATTERNS } from "../references/generated.js";
@@ -171,6 +172,9 @@ function buildRulesLane(): MachineRulesLane {
 
 // ─── guidance lane ────────────────────────────────────────────────────────────
 
+// C1 fix: use createRequire for ESM compatibility (require() is undefined in ESM modules).
+const require = createRequire(import.meta.url);
+
 function buildGuidanceLane(): GuidanceLane[] {
   // I1 fix: use validateReferenceRegistry + selectReferences to derive guidance
   // from the actual manifest, not a hardcoded list. Falls back to static
@@ -179,8 +183,9 @@ function buildGuidanceLane(): GuidanceLane[] {
     const { validateReferenceRegistry, selectReferences } = require("../references/loader.js");
     const root = process.cwd();
     const descriptors = validateReferenceRegistry(root);
+    // I3 fix: use canonical ReferencePurpose values from references/types.ts
     const selected = selectReferences(descriptors, [
-      "text-quality", "critique-structure", "design-system-vocabulary", "polish-guidance", "motion-guidance",
+      "text-anti-slop", "visual-anti-slop", "critique-structure", "motion-guidance", "design-taxonomy",
     ]);
     if (selected.length > 0) {
       return selected.map((d: { id: string; title: string; purposes: string[] }) => ({

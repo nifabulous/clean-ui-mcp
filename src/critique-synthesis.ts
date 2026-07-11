@@ -93,7 +93,7 @@ function buildCritiquePrompt(
   options: SynthesizeOptions,
 ): string {
   const evidenceBlock = context.evidence
-    .map((e) => `- [${e.id}] ${e.source === "screen" ? "Screenshot fact" : "Corpus example"}: ${e.label}${e.detail ? ` — ${e.detail}` : ""}`)
+    .map((e) => `- [${e.id}] ${e.source === "screen" ? "Screenshot fact" : e.source === "dom" ? "DOM declaration" : "Corpus example"}: ${e.label}${e.detail ? ` — ${e.detail}` : ""}`)
     .join("\n");
 
   const rulesBlock = [

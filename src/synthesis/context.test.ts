@@ -168,3 +168,41 @@ describe("registerVisualEvidence", () => {
     expect(ids).not.toContain("screen:visual:typePairing");
   });
 });
+
+describe("DOM motion evidence", () => {
+  it("creates dom:motion:* evidence IDs from motion signals", () => {
+    const ctx = buildSynthesisContext({
+      extraction: makeExtraction(),
+      retrieval: makeRetrieval(),
+      motion: [
+        { selector: "button", property: "transform", durationMs: 300, delayMs: 0 },
+        { selector: ".card", property: "opacity", durationMs: 200, delayMs: 50 },
+      ],
+    });
+    const ids = ctx.evidence.map((e) => e.id);
+    expect(ids).toContain("dom:motion:0");
+    expect(ids).toContain("dom:motion:1");
+    // Evidence source is "dom", not "screen"
+    const domEvidence = ctx.evidence.filter((e) => e.source === "dom");
+    expect(domEvidence.length).toBe(2);
+  });
+
+  it("produces no motion evidence when motion is null or absent", () => {
+    const ctx = buildSynthesisContext({
+      extraction: makeExtraction(),
+      retrieval: makeRetrieval(),
+    });
+    expect(ctx.evidence.filter((e) => e.source === "dom")).toEqual([]);
+  });
+
+  it("caps motion evidence at 10 signals", () => {
+    const ctx = buildSynthesisContext({
+      extraction: makeExtraction(),
+      retrieval: makeRetrieval(),
+      motion: Array.from({ length: 20 }, (_, i) => ({
+        selector: `el-${i}`, property: "transform", durationMs: 300, delayMs: 0,
+      })),
+    });
+    expect(ctx.evidence.filter((e) => e.source === "dom").length).toBe(10);
+  });
+});

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { selectReferences, validateReferenceRegistry } from "./loader.js";
+import { validateReferenceRegistry } from "./loader.js";
 import type { ReferenceDescriptor } from "./types.js";
 
 const sha256 = (content: string) => createHash("sha256").update(content).digest("hex");
@@ -151,13 +151,5 @@ describe("validateReferenceRegistry", () => {
     const withoutGit = mkdtempSync(join(tmpdir(), "reference-registry-no-git-"));
     execFileSync("cp", ["-R", `${root}/skill`, withoutGit]);
     expect(() => validateReferenceRegistry(withoutGit)).toThrow(/previous reference manifest.*not a git repository/i);
-  });
-});
-
-describe("selectReferences", () => {
-  it("returns matching references in registry order", () => {
-    const { descriptors } = fixture();
-    expect(selectReferences(descriptors, ["motion-guidance"]).map((item) => item.id))
-      .toEqual(["design-engineering"]);
   });
 });

@@ -70,5 +70,20 @@ export function renderCritiqueMarkdown(result: StructuredCritiqueT): string {
       lines.push(`- ${ref.id} (v${ref.version}, ${ref.purpose})`);
     }
   }
+  if (result.md3) {
+    lines.push("");
+    lines.push("## MD3 Resemblance");
+    lines.push("This assesses how the UI resembles MD3; it does not establish adherence to any design system.");
+    lines.push(`- Classification: ${result.md3.classification}`);
+    lines.push(`- Confidence: ${result.md3.confidence}`);
+    lines.push(`- Matched categories: ${result.md3.matchedCategories.join(", ") || "none"}`);
+    lines.push(`- Evidence: ${result.md3.evidenceIds.join(", ") || "none"}`);
+    if (result.md3.conflictingSignals.length > 0) {
+      lines.push("- Conflicting signals:");
+      for (const signal of result.md3.conflictingSignals) {
+        lines.push(`  - ${signal.category} (${signal.evidenceId}): ${signal.detail}`);
+      }
+    }
+  }
   return lines.join("\n");
 }

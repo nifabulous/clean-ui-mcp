@@ -37,3 +37,35 @@ export const EXEMPTION_PATTERNS = Object.freeze({
   contrastClause: new RegExp("\\b(?:instead\\s+of|rather\\s+than|avoids?|rejects?|unlike|in\\s+contrast\\s+to|could\\s+have|might\\s+(?:have\\s+)?(?:used|gone)|do\\s+not|does\\s+not|are\\s+not|is\\s+not|not\\s+(?:icon|going))\\b", "i"),
   positiveLabelPairing: new RegExp("\\b(?:paired?\\s+with|keeps?\\s+icons?\\s+paired|icons?\\s+(?:and|with)\\s+(?:text\\s+)?labels?|(?:text\\s+)?labels?\\s+(?:beside|next to|alongside)|instead\\s+of\\s+going\\s+icon[\\s-]*only)\\b", "i"),
 });
+
+export const REFERENCE_METADATA = Object.freeze([
+  {
+    "id": "banned-phrases",
+    "version": 2,
+    "purposes": [
+      "text-anti-slop",
+      "visual-anti-slop"
+    ]
+  },
+  {
+    "id": "decision-effect-rejection",
+    "version": 1,
+    "purposes": [
+      "critique-structure"
+    ]
+  },
+  {
+    "id": "design-engineering",
+    "version": 1,
+    "purposes": [
+      "motion-guidance"
+    ]
+  },
+  {
+    "id": "material-design-3",
+    "version": 1,
+    "purposes": [
+      "design-taxonomy"
+    ]
+  }
+]) as readonly { id: string; version: number; purposes: readonly string[] }[];

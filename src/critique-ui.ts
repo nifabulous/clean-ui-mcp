@@ -15,7 +15,7 @@ import { writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
-import type { TaggerOutput } from "./tagger.js";
+import type { TaggerInput, TaggerOutput } from "./tagger.js";
 
 /** Maximum decoded image payload: 10 MiB. */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -36,7 +36,7 @@ export interface CritiqueUiInput {
 
 export interface CritiqueEvidence {
   id: string;
-  source: "screen" | "corpus";
+  source: "screen" | "corpus" | "dom";
   label: string;
   detail?: string;
 }
@@ -59,7 +59,7 @@ export type ValidationResult =
  */
 export function toNormalizedTaggerFacts(tagged: Pick<TaggerOutput,
   "patternType" | "platform" | "categories" | "styleTags" | "components" |
-  "domainTags" | "layout" | "visual">): Record<string, unknown> {
+  "domainTags" | "layout" | "visual">, trustedDomSignals?: TaggerInput["domSignals"]): Record<string, unknown> {
   return {
     patternType: tagged.patternType,
     platform: tagged.platform,
@@ -69,16 +69,27 @@ export function toNormalizedTaggerFacts(tagged: Pick<TaggerOutput,
     domainTags: tagged.domainTags,
     layoutForm: tagged.layout?.form,
     layout: tagged.layout,
+    // I1 fix: project the visual fields needed by buildSynthesisContext for
+    // screen:visual:colors / accentColor / colorRoles / typePairing evidence.
+    dominantColors: tagged.visual.dominantColors,
+    accentColor: tagged.visual.accentColor,
+    colorRoles: tagged.visual.colorRoles,
+    typePairing: tagged.visual.typePairing,
     spacingDensity: tagged.visual.spacingDensity,
     cornerStyle: tagged.visual.cornerStyle,
     usesShadows: tagged.visual.usesShadows,
     usesBorders: tagged.visual.usesBorders,
+    // DOM signals are passed explicitly from a trusted capture caller, never
+    // inferred from the screenshot or model output.
+    ...(trustedDomSignals ? { domSignals: trustedDomSignals } : {}),
   };
 }
 
 /**
  * Validate a critique_ui input payload. Checks MIME type, base64 decodability,
- * decoded size, and optional field formats. Does NOT decode or persist the image.
+ * decoded size, and optional field formats. This is the screenshot-only public
+ * request validator; it refuses caller-supplied DOM facts. Does NOT decode or
+ * persist the image.
  */
 export function validateCritiqueUiInput(raw: unknown): ValidationResult {
   if (!raw || typeof raw !== "object") {
@@ -135,6 +146,10 @@ export function validateCritiqueUiInput(raw: unknown): ValidationResult {
 
   if (obj.productContext !== undefined && typeof obj.productContext !== "string") {
     return { valid: false, error: "productContext must be a string if provided." };
+  }
+
+  if (obj.domSignals !== undefined || obj.dom_signals !== undefined) {
+    return { valid: false, error: "DOM signals are not accepted from public critique_ui requests." };
   }
 
   return {

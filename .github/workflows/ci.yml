@@ -16,7 +16,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install chromium --with-deps
-      - run: npm run build
       - run: npm run validate-references
+      - run: npm run build
       - run: npm run validate-corpus
       - run: npm test

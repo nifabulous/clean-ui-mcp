@@ -11,7 +11,7 @@
  */
 import type { CritiqueEvidence } from "../critique-ui.js";
 import type { RetrievalResult } from "../critique-retrieval.js";
-import { BANNED_PHRASES, VAGUE_PHRASES, UNLABELED_CONTROL_RISK, PIXEL_MEASUREMENT, EXEMPTION_PATTERNS } from "../references/generated.js";
+import { BANNED_PHRASES, VAGUE_PHRASES, UNLABELED_CONTROL_RISK, PIXEL_MEASUREMENT, EXEMPTION_PATTERNS, REFERENCE_METADATA } from "../references/generated.js";
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -28,6 +28,7 @@ export interface MachineRulesLane {
 export interface GuidanceLane {
   id: string;
   label: string;
+  version: number;
   purpose: string;
 }
 
@@ -43,6 +44,15 @@ export interface BuildContextInput {
   extraction: Record<string, unknown>;
   retrieval: RetrievalResult;
   productContext?: string;
+  /** Optional DOM motion signals — becomes dom:motion:* evidence. */
+  motion?: Array<{
+    selector: string;
+    property: string;
+    durationMs: number;
+    delayMs: number;
+    iterationCount?: string;
+    timingFunction?: string;
+  }> | null;
 }
 
 // ─── evidence constants ───────────────────────────────────────────────────────
@@ -163,32 +173,14 @@ function buildRulesLane(): MachineRulesLane {
 // ─── guidance lane ────────────────────────────────────────────────────────────
 
 function buildGuidanceLane(): GuidanceLane[] {
-  // I1 fix: use validateReferenceRegistry + selectReferences to derive guidance
-  // from the actual manifest, not a hardcoded list. Falls back to static
-  // descriptors if the manifest can't be loaded (e.g. during tests).
-  try {
-    const { validateReferenceRegistry, selectReferences } = require("../references/loader.js");
-    const root = process.cwd();
-    const descriptors = validateReferenceRegistry(root);
-    const selected = selectReferences(descriptors, [
-      "text-quality", "critique-structure", "design-system-vocabulary", "polish-guidance", "motion-guidance",
-    ]);
-    if (selected.length > 0) {
-      return selected.map((d: { id: string; title: string; purposes: string[] }) => ({
-        id: `ref:${d.id}`,
-        label: d.title,
-        purpose: d.purposes[0] ?? "general",
-      }));
-    }
-  } catch {
-    // Fall through to static descriptors
-  }
-  return [
-    { id: "ref:banned-phrases", label: "Banned phrases — the anti-slop list", purpose: "text-quality" },
-    { id: "ref:decision-effect-rejection", label: "Decision/effect/rejection framework", purpose: "critique-structure" },
-    { id: "ref:material-design-3", label: "Material Design 3 taxonomy", purpose: "design-system-vocabulary" },
-    { id: "ref:design-engineering", label: "Design engineering philosophy", purpose: "polish-guidance" },
-  ];
+  // Generated at build time from the validated reference manifest; production
+  // requests never read repository files or silently fall back to stale values.
+  return REFERENCE_METADATA.map((reference) => ({
+    id: `ref:${reference.id}`,
+    label: reference.id,
+    version: reference.version,
+    purpose: reference.purposes[0] ?? "general",
+  }));
 }
 
 // ─── main builder ─────────────────────────────────────────────────────────────
@@ -236,6 +228,22 @@ export function buildSynthesisContext(input: BuildContextInput): SynthesisContex
       label: entry.title ?? entry.id,
       detail: entry.patternType ? `Pattern: ${entry.patternType}` : undefined,
     });
+  }
+
+  // ── DOM motion evidence (Task 9) ───────────────────────────────────────────
+  // DOM motion signals become dom:motion:<index> evidence. These are factual
+  // declarations (the stylesheet says "transition: 0.3s"), NOT runtime proof
+  // that an animation ran. The prompt and gate enforce this distinction.
+  if (input.motion && Array.isArray(input.motion)) {
+    for (let i = 0; i < Math.min(input.motion.length, MAX_ARRAY_DETAIL); i++) {
+      const sig = input.motion[i];
+      evidence.push({
+        id: `dom:motion:${i}`,
+        source: "dom",
+        label: `Motion: ${sig.selector} ${sig.property}`,
+        detail: `${sig.durationMs}ms${sig.delayMs ? ` (+${sig.delayMs}ms delay)` : ""}${sig.iterationCount ? ` × ${sig.iterationCount}` : ""}`,
+      });
+    }
   }
 
   return {

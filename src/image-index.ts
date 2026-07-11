@@ -38,30 +38,6 @@ export interface ImageIndexStatus {
   path: string;
 }
 
-/** Check if the image index file exists on disk. */
-export function imageIndexExists(): boolean {
-  return existsSync(IMAGE_INDEX_PATH);
-}
-
-/** Report the current image-index status for UI/diagnostics. */
-export function imageIndexStatus(): ImageIndexStatus {
-  if (!existsSync(IMAGE_INDEX_PATH)) {
-    return { exists: false, model: null, dimension: null, entryCount: 0, path: IMAGE_INDEX_PATH };
-  }
-  try {
-    const raw = JSON.parse(readFileSync(IMAGE_INDEX_PATH, "utf-8"));
-    return {
-      exists: true,
-      model: raw.model ?? null,
-      dimension: raw.dimension ?? null,
-      entryCount: Object.keys(raw.entries ?? {}).length,
-      path: IMAGE_INDEX_PATH,
-    };
-  } catch {
-    return { exists: false, model: null, dimension: null, entryCount: 0, path: IMAGE_INDEX_PATH };
-  }
-}
-
 /**
  * Test-only override of the image index (mirrors setCorpusForTesting).
  * When set, loadImageIndex returns this instead of reading from disk.

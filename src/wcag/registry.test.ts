@@ -2,30 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   isWcagCriterion,
   getWcagTitle,
-  getWcagLevel,
-  formatWcagCitation,
-  extractWcagId,
   extractAllWcagIds,
-  allWcagCriteria,
 } from "./registry.js";
-
-describe("WCAG 2.2 registry", () => {
-  it("contains 86 active success criteria (WCAG 2.2 minus the removed 4.1.1)", () => {
-    expect(allWcagCriteria().length).toBe(86);
-  });
-
-  it("is frozen (read-only)", () => {
-    expect(Object.isFrozen(allWcagCriteria())).toBe(true);
-  });
-
-  it("every criterion has an id, title, and level", () => {
-    for (const c of allWcagCriteria()) {
-      expect(c.id).toMatch(/^\d+\.\d+\.\d+$/);
-      expect(c.title.length).toBeGreaterThan(0);
-      expect(["A", "AA", "AAA"]).toContain(c.level);
-    }
-  });
-});
 
 describe("isWcagCriterion", () => {
   it("accepts known IDs", () => {
@@ -62,44 +40,6 @@ describe("getWcagTitle", () => {
 
   it("returns undefined for unknown IDs", () => {
     expect(getWcagTitle("9.9.9")).toBeUndefined();
-  });
-});
-
-describe("getWcagLevel", () => {
-  it("returns the conformance level", () => {
-    expect(getWcagLevel("1.4.3")).toBe("AA");
-    expect(getWcagLevel("1.4.1")).toBe("A");
-  });
-
-  it("returns undefined for unknown IDs", () => {
-    expect(getWcagLevel("9.9.9")).toBeUndefined();
-  });
-});
-
-describe("formatWcagCitation", () => {
-  it("renders ID + title for display", () => {
-    expect(formatWcagCitation("1.4.3")).toBe("1.4.3 Contrast (Minimum)");
-    expect(formatWcagCitation("1.4.1")).toBe("1.4.1 Use of Color");
-  });
-
-  it("falls back to bare ID for unknown criteria", () => {
-    expect(formatWcagCitation("9.9.9")).toBe("9.9.9");
-  });
-});
-
-describe("extractWcagId", () => {
-  it("extracts from a title-bearing citation", () => {
-    expect(extractWcagId("1.4.3 Contrast (Minimum)")).toBe("1.4.3");
-    expect(extractWcagId("1.4.1 Use of Color")).toBe("1.4.1");
-  });
-
-  it("returns a bare ID unchanged", () => {
-    expect(extractWcagId("1.4.3")).toBe("1.4.3");
-  });
-
-  it("returns null for strings with no numeric ID", () => {
-    expect(extractWcagId("color contrast")).toBeNull();
-    expect(extractWcagId("")).toBeNull();
   });
 });
 

@@ -77,6 +77,30 @@ describe("normalizeMotionDeclarations", () => {
     expect(uniqueSelectors.size).toBeLessThanOrEqual(50);
   });
 
+  it("does not let static selectors consume the element cap", () => {
+    const inputs: DomMotionInput[] = [
+      ...Array.from({ length: 50 }, (_, i) => ({
+        selector: `div.static-${i}`,
+        transitionDuration: "0s",
+        transitionProperty: "opacity",
+      })),
+      { selector: "button", transitionDuration: "150ms", transitionProperty: "transform" },
+    ];
+
+    const result = normalizeMotionDeclarations(inputs);
+
+    expect(result.signals).toEqual([expect.objectContaining({ selector: "button", property: "transform" })]);
+  });
+
+  it("deduplicates repeated motion declarations for the same semantic selector", () => {
+    const result = normalizeMotionDeclarations([
+      { selector: "button.primary", transitionDuration: "150ms", transitionProperty: "transform" },
+      { selector: "button.secondary", transitionDuration: "150ms", transitionProperty: "transform" },
+    ]);
+
+    expect(result.signals).toHaveLength(1);
+  });
+
   it("redacts unstable selectors (class hashes)", () => {
     const result = normalizeMotionDeclarations([
       { selector: ".css-1abc2def button", transitionDuration: "0.3s", transitionProperty: "opacity", transitionDelay: "0s" },
@@ -84,6 +108,18 @@ describe("normalizeMotionDeclarations", () => {
     // Should keep the tag/role hint but strip the class hash
     expect(result.signals[0].selector).not.toContain("css-1abc2def");
     expect(result.signals[0].selector).toContain("button");
+  });
+
+  it("keeps only semantic tag, role, and data-testid selector hints", () => {
+    const result = normalizeMotionDeclarations([
+      {
+        selector: "section#billing .customer-card[data-email='person@example.com'] button[role='tab'][data-testid='save-button']",
+        transitionDuration: "0.3s",
+        transitionProperty: "opacity",
+      },
+    ]);
+
+    expect(result.signals[0].selector).toBe("section button[role=tab][data-testid=save-button]");
   });
 
   it("returns partial coverage instead of throwing on empty input", () => {

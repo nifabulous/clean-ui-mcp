@@ -23,6 +23,7 @@ import { buildRecommendation, renderRecommendation } from "./recommend.js";
 import { aggregateAntiPatterns, collectPalettes, collectTechniques, browseByPattern, hueBand } from "./aggregations.js";
 import { readFileSync, existsSync } from "node:fs";
 import { fromCorpusRelativeImagePath } from "./paths.js";
+import { CRITIQUE_UI_OUTPUT_SCHEMA } from "./synthesis/contracts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const QUERY_LOG_PATH = resolve(__dirname, "..", "corpus", "query-log.jsonl");
@@ -694,31 +695,17 @@ server.registerTool(
       product_context: z.string().optional().describe("What the product is (e.g. 'A KPI tracking dashboard')"),
       platform: z.enum(["web", "mobile", "tablet"]).optional().describe("Target platform for platform-aware retrieval"),
       framework: z.string().optional().describe("Design framework hint (e.g. 'md3' to enable MD3 resemblance classification)"),
+      dom_signals: z.object({
+        styles: z.object({ fontFamily: z.string().max(500).nullable(), fontSize: z.string().max(500).nullable(), fontWeight: z.string().max(500).nullable(), borderRadius: z.string().max(500).nullable(), boxShadow: z.string().max(500).nullable(), color: z.string().max(500).nullable(), background: z.string().max(500).nullable(), letterSpacing: z.string().max(500).nullable() }),
+        accessibility: z.object({ contrastRatio: z.number().min(0).max(100).nullable(), headingLevels: z.array(z.number().int().min(1).max(6)).max(64), imagesMissingAlt: z.number().int().min(0).max(100_000), unlabeledInteractive: z.number().int().min(0).max(100_000), hasSkipLink: z.boolean() }),
+        structure: z.object({ display: z.string().max(500).nullable(), flexDirection: z.string().max(500).nullable(), gridTemplateColumns: z.string().max(500).nullable(), gap: z.string().max(500).nullable() }),
+        motion: z.object({
+          signals: z.array(z.object({ selector: z.string().max(200), property: z.string().max(120), durationMs: z.number().int().min(0).max(60_000), delayMs: z.number().int().min(0).max(60_000), iterationCount: z.string().optional(), timingFunction: z.string().optional() })).max(100),
+          coverage: z.enum(["full", "partial", "none"]), inaccessibleStylesheets: z.number().int().min(0).max(10_000), prefersReducedMotion: z.boolean(),
+        }).nullable().optional(),
+      }).optional().describe("Optional DOM ground-truth captured by a trusted caller; declarations are evidence of stylesheet intent, not proof motion ran."),
     },
-    outputSchema: {
-      schemaVersion: z.literal("1.0"),
-      platform: z.string(),
-      retrievalMode: z.string(),
-      fallbackUsed: z.boolean(),
-      coverage: z.string(),
-      summary: z.string(),
-      observations: z.array(z.string()),
-      recommendations: z.array(z.object({
-        observation: z.string(),
-        impact: z.string(),
-        recommendation: z.string(),
-        evidence: z.array(z.string()),
-        basis: z.string(),
-      })),
-      accessibilityRisks: z.array(z.object({
-        element: z.string(),
-        risk: z.string(),
-        evidence: z.string(),
-        wcag: z.array(z.string()),
-        basis: z.string(),
-      })),
-      confidence: z.string(),
-    },
+    outputSchema: CRITIQUE_UI_OUTPUT_SCHEMA,
   },
   async (args) => {
     const t0 = Date.now();
@@ -729,6 +716,7 @@ server.registerTool(
         image: { data: args.image_data, mimeType: args.image_mime_type },
         productContext: args.product_context,
         platform: args.platform,
+        domSignals: args.dom_signals,
       });
       if (!validation.valid) {
         return { content: [{ type: "text", text: `❌ Invalid input: ${validation.error}` }], isError: true };
@@ -744,10 +732,11 @@ server.registerTool(
           url: null,
           imageDetail: "low",
           extractionOnly: true,
+          domSignals: input.domSignals,
         });
       });
 
-      const extraction = toNormalizedTaggerFacts(tagged);
+      const extraction = toNormalizedTaggerFacts(tagged, input.domSignals);
       const detectedPlatform = input.platform ?? tagged.platform ?? "web";
 
       // ── Retrieve evidence ─────────────────────────────────────────────────────
@@ -775,8 +764,9 @@ server.registerTool(
       const { buildSynthesisContext } = await import("./synthesis/context.js");
       type BuildContextInput = import("./synthesis/context.js").BuildContextInput;
       const { renderCritiqueMarkdown } = await import("./synthesis/render.js");
-      const { CRITIQUE_SCHEMA_VERSION } = await import("./synthesis/contracts.js");
-      // C1 fix: pass motion signals from extraction if domSignals.motion exists
+      const { buildStructuredCritique } = await import("./synthesis/structured-output.js");
+      // Screenshot-only calls have no DOM source. This only uses signals injected
+      // by trusted internal capture callers, never inferred from pixels.
       const domSignals = extraction.domSignals as { motion?: { signals?: NonNullable<BuildContextInput["motion"]> } | null } | undefined;
       const motionSignals = domSignals?.motion?.signals ?? null;
       const context = buildSynthesisContext({
@@ -790,7 +780,7 @@ server.registerTool(
         platform: detectedPlatform,
       });
 
-      const gated = gateCritique(draft, context.evidenceIds);
+      const gated = gateCritique(draft, context.evidenceIds, context.guidance.map((guide) => guide.id));
 
       // ── Build structured critique output ──────────────────────────────────────
       // Task 10: MD3 resemblance classification — only when framework:"md3" is requested
@@ -807,38 +797,14 @@ server.registerTool(
           })
         : undefined;
 
-      const structuredResult = {
-        schemaVersion: CRITIQUE_SCHEMA_VERSION,
+      const structuredResult = buildStructuredCritique({
         platform: detectedPlatform,
-        retrievalMode: retrieval.mode,
-        fallbackUsed: retrieval.fallbackUsed,
-        coverage: retrieval.coverage,
-        summary: gated.summary,
-        observations: gated.observations,
-        recommendations: gated.recommendations.map((rec) => ({
-          observation: rec.observation,
-          impact: rec.impact,
-          recommendation: rec.recommendation,
-          evidence: rec.evidence,
-          // I4 fix: assign basis based on evidence source
-          basis: (rec.evidence.some((id) => id.startsWith("dom:")) ? "dom-grounded" : "visible") as "visible" | "dom-grounded",
-        })),
-        accessibilityRisks: gated.accessibilityRisks.map((risk) => ({
-          element: risk.element,
-          risk: risk.risk,
-          evidence: risk.evidence,
-          wcag: risk.wcag,
-          basis: "visible" as const,
-        })),
-        visualSlop: [],
-        motion: [],
-        appliedReferences: [],
+        retrieval,
+        gated,
         evidenceIds: context.evidenceIds,
-        confidence: retrieval.coverage === "strong" ? "high" as const
-          : retrieval.coverage === "moderate" ? "medium" as const
-          : "low" as const,
+        guidance: context.guidance,
         md3: md3Classification,
-      };
+      });
 
       // ── Return both legacy text + structuredContent ───────────────────────────
       return {

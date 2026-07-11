@@ -58,15 +58,15 @@ function parseTimeMs(value: string | undefined): number {
 
 /** Redact a CSS selector: strip class hashes, keep tag/role/test-id hints. */
 function redactSelector(selector: string): string {
-  // Split compound selectors, keep only tag names and [data-testid=...] / [role=...]
+  // Keep only semantic tag names and allowlisted role/test-id attributes. Never
+  // echo IDs, classes, or arbitrary attribute values from the captured DOM.
   const parts = selector.trim().split(/\s+/);
   return parts
     .map((part) => {
-      // Strip class hashes like .css-1abc2def
-      return part
-        .replace(/\.css-[a-z0-9]+/gi, "")
-        .replace(/\.[a-z]+-[a-z0-9]{6,}/gi, "") // styled-components/emotion hashes
-        .trim();
+      const tag = part.match(/^(?:[a-z][a-z0-9-]*|\*)/i)?.[0] ?? "";
+      const role = part.match(/\[role\s*=\s*["']?([a-z][a-z0-9-]*)["']?\s*\]/i)?.[1];
+      const testId = part.match(/\[data-testid\s*=\s*["']?([a-z0-9_-]+)["']?\s*\]/i)?.[1];
+      return `${tag}${role ? `[role=${role}]` : ""}${testId ? `[data-testid=${testId}]` : ""}`;
     })
     .filter((p) => p.length > 0)
     .join(" ") || "element";
@@ -87,16 +87,22 @@ export function normalizeMotionDeclarations(
 ): MotionResult {
   const signals: DomMotionSignal[] = [];
   const seenSelectors = new Set<string>();
+  const seenSignals = new Set<string>();
+
+  const appendSignal = (signal: DomMotionSignal): void => {
+    const key = [signal.selector, signal.property, signal.durationMs, signal.delayMs, signal.iterationCount ?? "", signal.timingFunction ?? ""].join("\u0000");
+    if (seenSignals.has(key)) return;
+    seenSignals.add(key);
+    signals.push(signal);
+  };
 
   for (const input of inputs) {
     if (signals.length >= MAX_SIGNALS) break;
-    if (seenSelectors.size >= MAX_ELEMENTS) break;
 
     const selector = redactSelector(input.selector);
-    if (seenSelectors.has(selector) && signals.some((s) => s.selector === selector && s.property === "all")) {
-      continue; // already have a "transition: all" for this selector
-    }
-    seenSelectors.add(selector);
+    const selectorAlreadyCounted = seenSelectors.has(selector);
+    if (!selectorAlreadyCounted && seenSelectors.size >= MAX_ELEMENTS) continue;
+    const signalsBefore = signals.length;
 
     // ── Transitions ──────────────────────────────────────────────────────
     const tDurations = splitList(input.transitionDuration);
@@ -111,7 +117,7 @@ export function normalizeMotionDeclarations(
       const property = tProperties[i] ?? tProperties[0] ?? "unknown";
       const delayMs = tDelays.length > 1 ? parseTimeMs(tDelays[i]) : parseTimeMs(tDelays[0]);
 
-      signals.push({
+      appendSignal({
         selector,
         property,
         durationMs,
@@ -131,7 +137,7 @@ export function normalizeMotionDeclarations(
         if (durationMs === 0) continue;
 
         const name = aNames[i] ?? aNames[0] ?? "unknown";
-        signals.push({
+        appendSignal({
           selector,
           property: `animation:${name}`,
           durationMs,
@@ -141,6 +147,10 @@ export function normalizeMotionDeclarations(
         });
       }
     }
+
+    // The element cap limits elements that actually yield motion. Static
+    // declarations must not crowd later animated elements out of the budget.
+    if (signals.length > signalsBefore) seenSelectors.add(selector);
   }
 
   const coverage: MotionResult["coverage"] =

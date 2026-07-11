@@ -9,10 +9,9 @@
  * This separation enforces the trust boundary: only evidence IDs support
  * observations; editorial guidance supports recommendations but never facts.
  */
-import { createRequire } from "node:module";
 import type { CritiqueEvidence } from "../critique-ui.js";
 import type { RetrievalResult } from "../critique-retrieval.js";
-import { BANNED_PHRASES, VAGUE_PHRASES, UNLABELED_CONTROL_RISK, PIXEL_MEASUREMENT, EXEMPTION_PATTERNS } from "../references/generated.js";
+import { BANNED_PHRASES, VAGUE_PHRASES, UNLABELED_CONTROL_RISK, PIXEL_MEASUREMENT, EXEMPTION_PATTERNS, REFERENCE_METADATA } from "../references/generated.js";
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -29,6 +28,7 @@ export interface MachineRulesLane {
 export interface GuidanceLane {
   id: string;
   label: string;
+  version: number;
   purpose: string;
 }
 
@@ -172,37 +172,15 @@ function buildRulesLane(): MachineRulesLane {
 
 // ─── guidance lane ────────────────────────────────────────────────────────────
 
-// C1 fix: use createRequire for ESM compatibility (require() is undefined in ESM modules).
-const require = createRequire(import.meta.url);
-
 function buildGuidanceLane(): GuidanceLane[] {
-  // I1 fix: use validateReferenceRegistry + selectReferences to derive guidance
-  // from the actual manifest, not a hardcoded list. Falls back to static
-  // descriptors if the manifest can't be loaded (e.g. during tests).
-  try {
-    const { validateReferenceRegistry, selectReferences } = require("../references/loader.js");
-    const root = process.cwd();
-    const descriptors = validateReferenceRegistry(root);
-    // I3 fix: use canonical ReferencePurpose values from references/types.ts
-    const selected = selectReferences(descriptors, [
-      "text-anti-slop", "visual-anti-slop", "critique-structure", "motion-guidance", "design-taxonomy",
-    ]);
-    if (selected.length > 0) {
-      return selected.map((d: { id: string; title: string; purposes: string[] }) => ({
-        id: `ref:${d.id}`,
-        label: d.title,
-        purpose: d.purposes[0] ?? "general",
-      }));
-    }
-  } catch {
-    // Fall through to static descriptors
-  }
-  return [
-    { id: "ref:banned-phrases", label: "Banned phrases — the anti-slop list", purpose: "text-quality" },
-    { id: "ref:decision-effect-rejection", label: "Decision/effect/rejection framework", purpose: "critique-structure" },
-    { id: "ref:material-design-3", label: "Material Design 3 taxonomy", purpose: "design-system-vocabulary" },
-    { id: "ref:design-engineering", label: "Design engineering philosophy", purpose: "polish-guidance" },
-  ];
+  // Generated at build time from the validated reference manifest; production
+  // requests never read repository files or silently fall back to stale values.
+  return REFERENCE_METADATA.map((reference) => ({
+    id: `ref:${reference.id}`,
+    label: reference.id,
+    version: reference.version,
+    purpose: reference.purposes[0] ?? "general",
+  }));
 }
 
 // ─── main builder ─────────────────────────────────────────────────────────────

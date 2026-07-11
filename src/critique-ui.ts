@@ -15,7 +15,7 @@ import { writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
-import type { TaggerOutput } from "./tagger.js";
+import type { TaggerInput, TaggerOutput } from "./tagger.js";
 
 /** Maximum decoded image payload: 10 MiB. */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -32,6 +32,8 @@ export interface CritiqueUiInput {
   };
   productContext?: string;
   platform?: (typeof SUPPORTED_PLATFORMS)[number];
+  /** Internal capture-pipeline injection; screenshot-only MCP calls omit this. */
+  domSignals?: TaggerInput["domSignals"];
 }
 
 export interface CritiqueEvidence {
@@ -52,6 +54,43 @@ export type ValidationResult =
   | { valid: true; input: CritiqueUiInput }
   | { valid: false; error: string };
 
+function isStringOrNull(value: unknown): boolean {
+  return value === null || (typeof value === "string" && value.length <= 500);
+}
+
+/** Bound the opt-in DOM handoff before it can reach prompts or evidence. */
+function isValidDomSignals(value: unknown): value is NonNullable<TaggerInput["domSignals"]> {
+  if (!value || typeof value !== "object") return false;
+  const dom = value as Record<string, unknown>;
+  const styles = dom.styles as Record<string, unknown> | undefined;
+  const accessibility = dom.accessibility as Record<string, unknown> | undefined;
+  const structure = dom.structure as Record<string, unknown> | undefined;
+  if (!styles || !accessibility || !structure) return false;
+  if (!["fontFamily", "fontSize", "fontWeight", "borderRadius", "boxShadow", "color", "background", "letterSpacing"].every((key) => isStringOrNull(styles[key]))) return false;
+  if (!(accessibility.contrastRatio === null || (typeof accessibility.contrastRatio === "number" && accessibility.contrastRatio >= 0 && accessibility.contrastRatio <= 100))
+    || !Array.isArray(accessibility.headingLevels) || accessibility.headingLevels.length > 64 || !accessibility.headingLevels.every((level) => Number.isInteger(level) && level >= 1 && level <= 6)
+    || !["imagesMissingAlt", "unlabeledInteractive"].every((key) => typeof accessibility[key] === "number" && (accessibility[key] as number) >= 0 && (accessibility[key] as number) <= 100_000)
+    || typeof accessibility.hasSkipLink !== "boolean") return false;
+  if (!["display", "flexDirection", "gridTemplateColumns", "gap"].every((key) => isStringOrNull(structure[key]))) return false;
+  if (dom.motion === undefined || dom.motion === null) return true;
+  if (typeof dom.motion !== "object") return false;
+  const motion = dom.motion as Record<string, unknown>;
+  if (!Array.isArray(motion.signals) || motion.signals.length > 100
+    || !["full", "partial", "none"].includes(String(motion.coverage))
+    || typeof motion.inaccessibleStylesheets !== "number" || !Number.isInteger(motion.inaccessibleStylesheets) || motion.inaccessibleStylesheets < 0 || motion.inaccessibleStylesheets > 10_000
+    || typeof motion.prefersReducedMotion !== "boolean") return false;
+  return motion.signals.every((signal) => {
+    if (!signal || typeof signal !== "object") return false;
+    const item = signal as Record<string, unknown>;
+    return typeof item.selector === "string" && item.selector.length <= 200
+      && typeof item.property === "string" && item.property.length <= 120
+      && typeof item.durationMs === "number" && Number.isInteger(item.durationMs) && item.durationMs >= 0 && item.durationMs <= 60_000
+      && typeof item.delayMs === "number" && Number.isInteger(item.delayMs) && item.delayMs >= 0 && item.delayMs <= 60_000
+      && (item.iterationCount === undefined || (typeof item.iterationCount === "string" && item.iterationCount.length <= 32))
+      && (item.timingFunction === undefined || (typeof item.timingFunction === "string" && item.timingFunction.length <= 64));
+  });
+}
+
 /**
  * Project only the tagger's sanitized, platform-normalized fields into the
  * evidence shape used by critique retrieval and synthesis. `_raw` is
@@ -59,7 +98,7 @@ export type ValidationResult =
  */
 export function toNormalizedTaggerFacts(tagged: Pick<TaggerOutput,
   "patternType" | "platform" | "categories" | "styleTags" | "components" |
-  "domainTags" | "layout" | "visual">): Record<string, unknown> {
+  "domainTags" | "layout" | "visual">, domSignals?: TaggerInput["domSignals"]): Record<string, unknown> {
   return {
     patternType: tagged.patternType,
     platform: tagged.platform,
@@ -79,6 +118,9 @@ export function toNormalizedTaggerFacts(tagged: Pick<TaggerOutput,
     cornerStyle: tagged.visual.cornerStyle,
     usesShadows: tagged.visual.usesShadows,
     usesBorders: tagged.visual.usesBorders,
+    // DOM signals are passed explicitly from a trusted capture caller, never
+    // inferred from the screenshot or model output.
+    ...(domSignals ? { domSignals } : {}),
   };
 }
 
@@ -143,12 +185,20 @@ export function validateCritiqueUiInput(raw: unknown): ValidationResult {
     return { valid: false, error: "productContext must be a string if provided." };
   }
 
+  if (obj.domSignals !== undefined && !isValidDomSignals(obj.domSignals)) {
+    return { valid: false, error: "domSignals must be a bounded trusted capture object if provided." };
+  }
+
   return {
     valid: true,
     input: {
       image: { data: img.data as string, mimeType: img.mimeType as SupportedMimeType },
       productContext: obj.productContext as string | undefined,
       platform: obj.platform as CritiqueUiInput["platform"],
+      // The public screenshot-only MCP schema does not expose this field. It is
+      // retained solely for internal capture callers that already possess DOM
+      // ground truth, so we never fabricate it from image analysis.
+      domSignals: obj.domSignals as TaggerInput["domSignals"] | undefined,
     },
   };
 }

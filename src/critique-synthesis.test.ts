@@ -124,6 +124,40 @@ describe("gateCritique", () => {
     expect(result.recommendations.length).toBe(0);
     expect(result.observations.length).toBe(2); // original + downgraded
   });
+
+  it("keeps grounded visual-slop findings and editorial motion guidance", () => {
+    const draft: CritiqueUiDraft = {
+      summary: "OK",
+      observations: [],
+      recommendations: [],
+      accessibilityRisks: [],
+      visualSlop: [{ pattern: "Overused gradient hero", basis: "visible", evidence: ["screen:patternType"] }],
+      motion: [{ basis: "editorial", evidence: ["dom:motion:0"], note: "Use a restrained hover transition", reference: "ref:design-engineering" }],
+    };
+    const result = gateCritique(draft, [...validIds, "dom:motion:0"], ["ref:design-engineering"]);
+    expect(result.visualSlop).toEqual(draft.visualSlop);
+    expect(result.motion).toEqual(draft.motion);
+  });
+
+  it("drops visual-slop and motion entries without registered support", () => {
+    const draft: CritiqueUiDraft = {
+      summary: "OK", observations: [], recommendations: [], accessibilityRisks: [],
+      visualSlop: [{ pattern: "Unsupported", basis: "visible", evidence: ["screen:invented"] }],
+      motion: [{ basis: "editorial", evidence: ["screen:invented"], note: "Unsupported", reference: "ref:invented" }],
+    };
+    const result = gateCritique(draft, validIds, ["ref:design-engineering"]);
+    expect(result.visualSlop).toEqual([]);
+    expect(result.motion).toEqual([]);
+  });
+
+  it("does not permit editorial basis for visual-slop findings", () => {
+    const draft: CritiqueUiDraft = {
+      summary: "OK", observations: [], recommendations: [], accessibilityRisks: [],
+      visualSlop: [{ pattern: "Editorial claim", basis: "editorial", evidence: ["screen:patternType"] } as never],
+    };
+    const result = gateCritique(draft, validIds);
+    expect(result.visualSlop).toEqual([]);
+  });
 });
 
 describe("synthesizeCritique retry", () => {

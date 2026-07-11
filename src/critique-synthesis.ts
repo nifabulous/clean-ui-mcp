@@ -13,6 +13,7 @@ import type { EndpointOverride, Provider } from "./tagger.js";
 import type { CritiqueEvidence, CritiqueRecommendation } from "./critique-ui.js";
 import type { RetrievalResult } from "./critique-retrieval.js";
 import type { SynthesisContext } from "./synthesis/context.js";
+import type { MotionGuidanceT, VisualSlopFindingT } from "./synthesis/contracts.js";
 import { isWcagCriterion } from "./wcag/registry.js";
 
 // ─── types ────────────────────────────────────────────────────────────────────
@@ -32,6 +33,8 @@ export interface CritiqueUiDraft {
     evidence: string;
     wcag: string[];
   }>;
+  visualSlop?: VisualSlopFindingT[];
+  motion?: MotionGuidanceT[];
 }
 
 export interface SynthesizeOptions {
@@ -151,7 +154,9 @@ Platform: ${options.platform ?? "Not specified"}
       "evidence": "A single evidence ID from the list above, such as screen:components",
       "wcag": ["4.1.2"]
     }
-  ]
+  ],
+  "visualSlop": [{"pattern": "Specific visual pattern", "basis": "visible", "evidence": ["screen:patternType"]}],
+  "motion": [{"basis": "editorial", "evidence": ["dom:motion:0"], "note": "Actionable motion guidance", "reference": "ref:design-engineering"}]
 }
 
 ## Rules
@@ -193,7 +198,7 @@ export async function synthesizeCritique(
       parsed = JSON.parse(stripFences(raw)) as Record<string, unknown>;
     } catch {
       // Second parse failure — degrade to empty draft rather than throw.
-      return { summary: "", observations: [], recommendations: [], accessibilityRisks: [] };
+      return { summary: "", observations: [], recommendations: [], accessibilityRisks: [], visualSlop: [], motion: [] };
     }
   }
   // Defensive defaults: the LLM may omit or malform fields.
@@ -202,7 +207,27 @@ export async function synthesizeCritique(
     observations: Array.isArray(parsed.observations) ? parsed.observations.filter((s: unknown) => typeof s === "string") : [],
     recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations.filter(isValidRec) : [],
     accessibilityRisks: Array.isArray(parsed.accessibilityRisks) ? parsed.accessibilityRisks.filter(isValidRisk) : [],
+    visualSlop: Array.isArray(parsed.visualSlop) ? parsed.visualSlop.filter(isValidVisualSlop) : [],
+    motion: Array.isArray(parsed.motion) ? parsed.motion.filter(isValidMotion) : [],
   };
+}
+
+function isValidVisualSlop(value: unknown): value is VisualSlopFindingT {
+  if (!value || typeof value !== "object") return false;
+  const finding = value as Record<string, unknown>;
+  return typeof finding.pattern === "string"
+    && ["visible", "inferred", "dom-grounded"].includes(String(finding.basis))
+    && Array.isArray(finding.evidence) && finding.evidence.every((id) => typeof id === "string") && finding.evidence.length > 0
+    && (finding.exception === undefined || typeof finding.exception === "string");
+}
+
+function isValidMotion(value: unknown): value is MotionGuidanceT {
+  if (!value || typeof value !== "object") return false;
+  const guidance = value as Record<string, unknown>;
+  return guidance.basis === "editorial"
+    && typeof guidance.note === "string"
+    && Array.isArray(guidance.evidence) && guidance.evidence.every((id) => typeof id === "string") && guidance.evidence.length > 0
+    && (guidance.reference === undefined || typeof guidance.reference === "string");
 }
 
 function isValidRec(r: unknown): r is CritiqueUiDraft["recommendations"][number] {
@@ -228,11 +253,13 @@ function isValidRisk(r: unknown): r is CritiqueUiDraft["accessibilityRisks"][num
  * Recommendations with at least one valid evidence ID are kept; any invalid IDs
  * in their evidence list are stripped.
  */
-export function gateCritique(draft: CritiqueUiDraft, validEvidenceIds: string[]): {
+export function gateCritique(draft: CritiqueUiDraft, validEvidenceIds: string[], validGuidanceIds: string[] = []): {
   summary: string;
   observations: string[];
   recommendations: CritiqueRecommendation[];
   accessibilityRisks: CritiqueUiDraft["accessibilityRisks"];
+  visualSlop: VisualSlopFindingT[];
+  motion: MotionGuidanceT[];
 } {
   const validSet = new Set(validEvidenceIds);
 
@@ -260,12 +287,21 @@ export function gateCritique(draft: CritiqueUiDraft, validEvidenceIds: string[])
     ...risk,
     wcag: [...new Set(risk.wcag)],
   }));
+  const visualSlop = (draft.visualSlop ?? []).filter((finding) =>
+    ["visible", "inferred", "dom-grounded"].includes(finding.basis)
+    && finding.evidence.every((id) => validSet.has(id)),
+  );
+  const guidanceSet = new Set(validGuidanceIds);
+  const motion = (draft.motion ?? []).filter((guidance) => guidance.evidence.every((id) => validSet.has(id))
+    && !!guidance.reference && guidanceSet.has(guidance.reference));
 
   return {
     summary: draft.summary,
     observations: [...draft.observations, ...downgradedObservations],
     recommendations: keptRecommendations,
     accessibilityRisks,
+    visualSlop,
+    motion,
   };
 }
 

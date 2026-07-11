@@ -19,11 +19,15 @@ export const ClaimBasis = z.enum([
 ]);
 export type ClaimBasisT = z.infer<typeof ClaimBasis>;
 
+/** Visual findings can be screenshot/DOM grounded, never editorial guidance. */
+export const VisualSlopBasis = z.enum(["visible", "inferred", "dom-grounded"]);
+export type VisualSlopBasisT = z.infer<typeof VisualSlopBasis>;
+
 // ─── structured finding types ──────────────────────────────────────────────────
 
 export const VisualSlopFinding = z.object({
   pattern: z.string(),                 // e.g. "centered hero on gradient"
-  basis: ClaimBasis,                   // how the claim is supported
+  basis: VisualSlopBasis,              // how the screenshot/DOM claim is supported
   evidence: z.array(z.string()).min(1), // evidence IDs
   exception: z.string().optional(),     // legitimate exception if applicable
 });
@@ -92,3 +96,6 @@ export const StructuredCritique = z.object({
   }).optional(),
 });
 export type StructuredCritiqueT = z.infer<typeof StructuredCritique>;
+
+/** The exact schema registered on the critique_ui MCP tool. */
+export const CRITIQUE_UI_OUTPUT_SCHEMA = StructuredCritique;

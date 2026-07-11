@@ -8,12 +8,13 @@
     "clean-ui-mcp": "dist/server.js"
   },
   "scripts": {
-    "build": "tsc",
+    "generate-references": "node scripts/generate-reference-artifacts.mjs",
+    "validate-references": "node scripts/generate-reference-artifacts.mjs --check && tsc && node dist/references/loader.js",
+    "build": "npm run generate-references && tsc",
     "start": "node dist/server.js",
     "dev": "tsc && node dist/server.js",
     "ui": "tsc && node dist/scripts/ui-server.js",
     "validate-corpus": "tsc && node dist/scripts/validate-corpus.js",
-    "validate-references": "tsc && node dist/references/loader.js",
     "tag-image": "tsc && node dist/scripts/tag-image.js",
     "add-entry": "tsc && node dist/scripts/add-entry.js",
     "capture": "tsc && node dist/scripts/capture.js",

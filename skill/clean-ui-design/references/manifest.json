@@ -1,9 +1,9 @@
 [
   {
     "id": "banned-phrases",
-    "version": 1,
+    "version": 2,
     "path": "skill/clean-ui-design/references/banned-phrases.md",
-    "sha256": "ece68c170e771664252be48457dc26c4981a2b17a66b81598e6f720f4f63e115",
+    "sha256": "f0efde2794e8a1677517b1402535badcf823e4c58c5333bb50f827eeaabb286f",
     "authority": "machine-rule",
     "purposes": ["text-anti-slop", "visual-anti-slop"],
     "sourceUrl": "https://github.com/educlopez/ui-craft",

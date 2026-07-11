@@ -1,3 +1,7 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+<!-- © 2024 Darlan Rod. Derived from https://github.com/darlanrod/material-design-md -->
+<!-- Licensed under the Mozilla Public License 2.0 — see THIRD_PARTY_LICENSES.md -->
+
 # Material Design 3 — Design-System Taxonomy Reference
 
 > Vendored from [darlanrod/material-design-md](https://github.com/darlanrod/material-design-md)

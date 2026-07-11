@@ -45,6 +45,7 @@ banned list is the enforcement mechanism.
 
 ## Visual slop — patterns that make UI look "AI-generated"
 
+<!-- © Edu Calvo (educlopez), MIT License — https://github.com/educlopez/ui-craft -->
 > Merged from [educlopez/ui-craft](https://github.com/educlopez/ui-craft). These
 > are *visual* anti-slop patterns — the design equivalent of the text phrases
 > above. When critiquing or synthesizing, flag these patterns the same way you'd

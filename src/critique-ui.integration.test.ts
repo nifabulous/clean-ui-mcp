@@ -14,7 +14,7 @@
 import { describe, expect, it, afterEach, beforeAll } from "vitest";
 import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
-import { setCorpusForTesting, type loadCorpus } from "./corpus.js";
+import { setCorpusForTesting } from "./corpus.js";
 
 const RUN_LIVE = process.env.RUN_LIVE_INTEGRATION === "1"
   && !!process.env.IMAGE_EMBEDDING_API_KEY
@@ -48,6 +48,44 @@ const DESKTOP_IMG = resolve(FIXTURE_DIR, "desktop-dashboard.png");
 
     expect(vec1.length).toBe(vec2.length);
   }, 60_000); // 2 API calls
+
+  // I2 fix: verify the actual request body shape sent to the API, not just
+  // the response. This is the test that would have caught the request-shape
+  // bug (sending { type: "image" } instead of { content: [{ type: "image_base64" }] }).
+  it("sends the correct request body shape to the Voyage API", async () => {
+    const { createImageEmbeddingProvider } = await import("./image-embeddings.js");
+    const provider = createImageEmbeddingProvider()!;
+
+    // Spy on fetch to capture the outgoing request body
+    const originalFetch = globalThis.fetch;
+    let capturedBody: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.body) capturedBody = JSON.parse(String(init.body));
+      return originalFetch(_input, init);
+    }) as typeof fetch;
+
+    try {
+      const imgData = readFileSync(DESKTOP_IMG);
+      await provider.embedImage({ data: imgData, mimeType: "image/png" });
+
+      // Assert the request shape matches Voyage's documented multimodal API format
+      expect(capturedBody).not.toBeNull();
+      const body = capturedBody!;
+      expect(body).toHaveProperty("inputs");
+      expect(body).toHaveProperty("model");
+
+      const inputs = body.inputs as unknown[];
+      expect(inputs.length).toBe(1);
+      const input0 = inputs[0] as Record<string, unknown>;
+      expect(input0).toHaveProperty("content");
+      const content = input0.content as Array<Record<string, unknown>>;
+      expect(content.length).toBe(1);
+      expect(content[0].type).toBe("image_base64");
+      expect(content[0].image_base64).toMatch(/^data:image\/png;base64,/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }, 30_000);
 });
 
 // ─── End-to-end critique pipeline (hermetic) ──────────────────────────────────
@@ -88,18 +126,21 @@ const DESKTOP_IMG = resolve(FIXTURE_DIR, "desktop-dashboard.png");
 
   afterEach(() => {
     setCorpusForTesting(null);
+    // Also reset the image index override
+    import("./image-index.js").then(({ setImageIndexForTesting }) => setImageIndexForTesting(null));
   });
 
   it("every recommendation has at least one valid evidence ID", async () => {
     const { validateCritiqueUiInput, withValidatedImageFile, toNormalizedTaggerFacts } = await import("./critique-ui.js");
     const { retrieveCritiqueEvidence } = await import("./critique-retrieval.js");
     const { createImageEmbeddingProvider } = await import("./image-embeddings.js");
-    const { loadImageIndex } = await import("./image-index.js");
+    const { loadImageIndex, setImageIndexForTesting, hashForImage } = await import("./image-index.js");
+    type ImageEmbeddingIndex = import("./image-index.js").ImageEmbeddingIndex;
     const { buildCritiqueEvidence, synthesizeCritique, gateCritique } = await import("./critique-synthesis.js");
     const { tagImage } = await import("./tagger.js");
     const { hasVisionKey } = await import("./tagger.js");
 
-    if (!hasVisionKey()) return; // skip if no vision key
+    if (!hasVisionKey()) return;
 
     // Read the fixture image
     const imgData = readFileSync(DESKTOP_IMG);
@@ -120,8 +161,23 @@ const DESKTOP_IMG = resolve(FIXTURE_DIR, "desktop-dashboard.png");
     const extraction = toNormalizedTaggerFacts(tagged);
     const platform = validation.input.platform ?? tagged.platform ?? "web";
 
-    // Retrieve evidence
+    // I1 fix: build a hermetic fixture image index by embedding the fixture
+    // images with the real provider, then inject via setImageIndexForTesting.
+    // This avoids reading the developer's real corpus/image-embeddings.json.
     const imageProvider = createImageEmbeddingProvider();
+    if (imageProvider) {
+      const fixtureVec = await imageProvider.embedImage({ data: imgData, mimeType: "image/png" });
+      const fixtureIndex: ImageEmbeddingIndex = {
+        version: 1,
+        model: imageProvider.model,
+        dimension: fixtureVec.length,
+        entries: {
+          "fixture-dashboard-1": { vector: fixtureVec, hash: hashForImage(imgData) },
+        },
+      };
+      setImageIndexForTesting(fixtureIndex);
+    }
+
     const imageIndex = imageProvider ? loadImageIndex(imageProvider.model) : null;
 
     const retrieval = await retrieveCritiqueEvidence({

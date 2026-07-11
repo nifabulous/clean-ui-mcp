@@ -32,11 +32,6 @@ function makeMockEntries(n: number, status: "approved" | "draft" = "approved", p
 }
 
 afterEach(() => {
-  // Reset the default mock returns after each test
-  const { searchRanked, loadCorpus } = vi.mocked(
-    // Import for type only — actual mock is already installed
-    {} as typeof import("./corpus.js"),
-  );
   vi.clearAllMocks();
 });
 
@@ -248,18 +243,12 @@ describe("retrieveCritiqueEvidence", () => {
       { id: "web-1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Web A" },
       { id: "mobile-1", patternType: "dashboard", platform: "mobile", reviewStatus: "approved", title: "Mobile A" },
     ] as never);
-    // Use real cosine for this test so platform penalty has real scores to work with
-    const { cosine: realCosine } = await import("./image-index.js");
-    vi.mocked(realCosine).mockRestore();
-    vi.doUnmock("./image-index.js");
-
-    // Since the mock is already installed at module level, we need to use real cosine
-    // by computing scores ourselves. The mock returns 0.5 for everything, so let's
-    // override it to return different values for different vectors.
-    vi.mocked(realCosine).mockImplementation((a: number[], b: number[]) => {
-      if (b[0] === 0.8) return 0.8;
-      if (b[0] === 0.95) return 0.95;
-      return 0.5;
+    // Override the cosine mock to return distinct scores per entry vector so the
+    // platform penalty has real differentiation to work with.
+    const { cosine } = await import("./image-index.js");
+    vi.mocked(cosine).mockImplementation((_a: number[], b: number[]) => {
+      // b is the entry vector — return the first element as the score
+      return b[0] ?? 0.5;
     });
 
     const result = await retrieveCritiqueEvidence({

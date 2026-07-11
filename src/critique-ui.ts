@@ -36,7 +36,7 @@ export interface CritiqueUiInput {
 
 export interface CritiqueEvidence {
   id: string;
-  source: "screen" | "corpus";
+  source: "screen" | "corpus" | "dom";
   label: string;
   detail?: string;
 }

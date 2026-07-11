@@ -156,6 +156,21 @@ export type DomSignals = {
   copy: DomSignalCopyItem[];
   accessibility: DomSignalAccessibility;
   structure: DomSignalStructure;
+  motion?: DomSignalMotion;
+};
+
+export type DomSignalMotion = {
+  signals: Array<{
+    selector: string;
+    property: string;
+    durationMs: number;
+    delayMs: number;
+    iterationCount?: string;
+    timingFunction?: string;
+  }>;
+  coverage: "full" | "partial" | "none";
+  inaccessibleStylesheets: number;
+  prefersReducedMotion: boolean;
 };
 
 export type CaptureMeta = {

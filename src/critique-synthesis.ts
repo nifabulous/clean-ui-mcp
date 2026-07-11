@@ -161,6 +161,7 @@ Platform: ${options.platform ?? "Not specified"}
 - Editorial guidance IDs (ref:*) do NOT count as evidence — they support recommendations only.
 - WCAG IDs must be canonical (e.g. "1.4.3", "4.1.2") — only cite when visible evidence supports the claim.
 - Observations must be specific and factual, not generic ("good layout", "clean design" are banned).
+- DOM motion declarations (dom:motion:*) describe what the stylesheet SAYS, not what RAN. Never claim an animation "ran," "felt smooth," or "performed well" from stylesheet evidence alone.
 - 3-7 observations, 3-5 recommendations maximum.
 - Return ONLY the JSON object.`;
 }

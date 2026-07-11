@@ -43,6 +43,15 @@ export interface BuildContextInput {
   extraction: Record<string, unknown>;
   retrieval: RetrievalResult;
   productContext?: string;
+  /** Optional DOM motion signals — becomes dom:motion:* evidence. */
+  motion?: Array<{
+    selector: string;
+    property: string;
+    durationMs: number;
+    delayMs: number;
+    iterationCount?: string;
+    timingFunction?: string;
+  }> | null;
 }
 
 // ─── evidence constants ───────────────────────────────────────────────────────
@@ -236,6 +245,22 @@ export function buildSynthesisContext(input: BuildContextInput): SynthesisContex
       label: entry.title ?? entry.id,
       detail: entry.patternType ? `Pattern: ${entry.patternType}` : undefined,
     });
+  }
+
+  // ── DOM motion evidence (Task 9) ───────────────────────────────────────────
+  // DOM motion signals become dom:motion:<index> evidence. These are factual
+  // declarations (the stylesheet says "transition: 0.3s"), NOT runtime proof
+  // that an animation ran. The prompt and gate enforce this distinction.
+  if (input.motion && Array.isArray(input.motion)) {
+    for (let i = 0; i < Math.min(input.motion.length, MAX_ARRAY_DETAIL); i++) {
+      const sig = input.motion[i];
+      evidence.push({
+        id: `dom:motion:${i}`,
+        source: "dom",
+        label: `Motion: ${sig.selector} ${sig.property}`,
+        detail: `${sig.durationMs}ms${sig.delayMs ? ` (+${sig.delayMs}ms delay)` : ""}${sig.iterationCount ? ` × ${sig.iterationCount}` : ""}`,
+      });
+    }
   }
 
   return {

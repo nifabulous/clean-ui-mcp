@@ -149,6 +149,7 @@ const ALLOWLIST = new Set<string>([
   "setImageIndexForTesting",   // image-index.ts — test-only export
   "assertCorpusImagePath",     // paths.ts — used by scripts
   "validateReferenceRegistry", // references/loader.ts — called internally at loader.ts:125
+  "selectReferences",          // references/loader.ts — public registry-selection contract for downstream dist consumers
   "accessibilityRiskTextFields", // schema.ts — used by content-lint test
   "PatternDiscovery",          // schema.ts — Zod schema, used by scripts
   "AccessibilityRisk",         // schema.ts — Zod schema, used by schema validation

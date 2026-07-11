@@ -113,6 +113,20 @@ export function validateReferenceRegistry(root: string): ReferenceDescriptor[] {
   }))) as unknown as ReferenceDescriptor[];
 }
 
+/**
+ * Select manifest descriptors for one or more declared purposes.
+ *
+ * This is a reusable registry API for downstream tooling; filtering retains
+ * manifest order so consumers get a deterministic reference sequence.
+ */
+export function selectReferences(
+  descriptors: readonly ReferenceDescriptor[],
+  purposes: readonly ReferencePurpose[],
+): ReferenceDescriptor[] {
+  const requested = new Set(purposes);
+  return descriptors.filter((descriptor) => descriptor.purposes.some((purpose) => requested.has(purpose)));
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const descriptors = validateReferenceRegistry(process.cwd());
   console.log(`Validated ${descriptors.length} references.`);

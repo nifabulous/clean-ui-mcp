@@ -179,4 +179,30 @@ describe("synthesizeCritique retry", () => {
     await synthesizeCritique(makeContext(), { providerOverride: "openai", endpointOverride });
     expect(callTextModel).toHaveBeenCalledWith(expect.any(String), "openai", undefined, endpointOverride);
   });
+
+  it("accepts a built synthesis context and gates against its evidence and guidance IDs without provider credentials", async () => {
+    const { buildSynthesisContext } = await import("./synthesis/context.js");
+    const { synthesizeCritique, gateCritique } = await import("./critique-synthesis.js");
+    const context = buildSynthesisContext({
+      extraction: { patternType: "dashboard", usesBorders: true },
+      retrieval: { entries: [], mode: "structured-fallback", fallbackUsed: true, coverage: "none" },
+      productContext: "KPI dashboard",
+    });
+    const guidanceIds = context.guidance.map((guidance) => guidance.id);
+    expect(context.evidenceIds).toContain("screen:patternType");
+    expect(guidanceIds).toContain("ref:design-engineering");
+    callTextModel.mockResolvedValueOnce(JSON.stringify({
+      summary: "Grounded",
+      observations: [],
+      recommendations: [{ observation: "Dashboard", impact: "Scanning", recommendation: "Improve grouping", evidence: ["screen:patternType"] }],
+      accessibilityRisks: [],
+      motion: [{ basis: "editorial", evidence: ["screen:patternType"], note: "Keep transitions restrained", reference: "ref:design-engineering" }],
+    }));
+
+    const draft = await synthesizeCritique(context, {});
+    const gated = gateCritique(draft, context.evidenceIds, guidanceIds);
+
+    expect(gated.recommendations).toHaveLength(1);
+    expect(gated.motion).toHaveLength(1);
+  });
 });

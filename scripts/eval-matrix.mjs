@@ -28,7 +28,7 @@ import { execSync } from "node:child_process";
 
 import "../dist/env.js";
 import { EVAL_SET } from "./eval-set.mjs";
-import { summarizeScores } from "./eval-scorer.mjs";
+import { summarizeScores, summarizeCritiqueQuality } from "./eval-scorer.mjs";
 import { runEvalCase } from "./eval-runner.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -190,11 +190,14 @@ for (const config of configs) {
   // Summarize this config
   const validExtractions = results.filter((r) => r.extraction);
   const validCritiques = results.filter((r) => r.critique && !r.critique.error);
+  const critiqueQualityScores = results.filter((r) => r.critiqueQuality && !r.critiqueQuality.error).map((r) => r.critiqueQuality);
+  const critiqueQualitySummary = summarizeCritiqueQuality(critiqueQualityScores);
   const summary = {
     ...summarizeScores(validExtractions.map((r) => r.extraction), validCritiques.map((r) => r.critique)),
     avgExtractionLatencyMs: validExtractions.reduce((s, r) => s + r.extractionLatencyMs, 0) / (validExtractions.length || 1),
     errorCount: results.filter((r) => r.error).length,
     critiqueErrorCount: results.filter((r) => r.critique?.error).length,
+    ...critiqueQualitySummary,
   };
 
   // Write per-config baseline artifact
@@ -233,9 +236,9 @@ console.log(`\n${"=".repeat(90)}`);
 console.log("MATRIX COMPARISON");
 console.log(`${"=".repeat(90)}`);
 console.log(
-  `  ${"Config".padEnd(22)} ${"Pinned".padEnd(7)} ${"patternAcc".padEnd(12)} ${"iconOnly".padEnd(10)} ${"banned".padEnd(8)} ${"critWds".padEnd(8)} ${"latency".padEnd(8)} ${"errors"}`,
+  `  ${"Config".padEnd(22)} ${"Pinned".padEnd(7)} ${"patternAcc".padEnd(12)} ${"iconOnly".padEnd(10)} ${"banned".padEnd(8)} ${"critWds".padEnd(8)} ${"cqPass".padEnd(8)} ${"citation".padEnd(9)} ${"ns".padEnd(4)} ${"latency".padEnd(8)} ${"errors"}`,
 );
-console.log(`  ${"-".repeat(85)}`);
+console.log(`  ${"-".repeat(105)}`);
 for (const s of summaries) {
   if (s.skipped) {
     console.log(`  ${s.name.padEnd(22)} SKIPPED — ${s.reason}`);
@@ -243,7 +246,7 @@ for (const s of summaries) {
   }
   const pinned = s.modelPinned ? "✓" : "env";
   console.log(
-    `  ${s.name.padEnd(22)} ${pinned.padEnd(7)} ${((s.patternTypeAccuracy ?? 0) * 100).toFixed(1).padStart(5)}%     ${(s.avgIconOnlyRaw ?? 0).toFixed(1).padStart(5)}    ${(s.avgBannedPhrasesRaw ?? 0).toFixed(1).padStart(5)}  ${(s.avgCritiqueWords ?? 0).toFixed(0).padStart(5)}   ${(s.avgExtractionLatencyMs ?? 0).toFixed(0).padStart(5)}ms  ${s.errorCount ?? 0}`,
+    `  ${s.name.padEnd(22)} ${pinned.padEnd(7)} ${((s.patternTypeAccuracy ?? 0) * 100).toFixed(1).padStart(5)}%     ${(s.avgIconOnlyRaw ?? 0).toFixed(1).padStart(5)}    ${(s.avgBannedPhrasesRaw ?? 0).toFixed(1).padStart(5)}  ${(s.avgCritiqueWords ?? 0).toFixed(0).padStart(5)}   ${((s.overallPassRate ?? 0) * 100).toFixed(0).padStart(4)}%   ${((s.avgCitationRate ?? 0) * 100).toFixed(0).padStart(4)}%   ${(s.notScorableCount ?? 0).toString().padStart(2)}  ${(s.avgExtractionLatencyMs ?? 0).toFixed(0).padStart(5)}ms  ${s.errorCount ?? 0}`,
   );
 }
 console.log();

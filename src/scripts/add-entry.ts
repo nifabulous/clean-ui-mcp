@@ -461,4 +461,8 @@ try {
 rl.close();
 } // end main()
 
-main().catch((err) => { console.error(err); process.exit(1); });
+// Only run the interactive wizard when executed directly (not when imported by tests)
+// for validateEntryGates. Vitest sets vitest-specific env vars we can detect.
+if (!process.env.VITEST && import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => { console.error(err); process.exit(1); });
+}

@@ -1,3 +1,7 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- © Emil Kowalski. Derived from https://github.com/emilkowalski/skills (MIT License) -->
+<!-- See THIRD_PARTY_LICENSES.md for details. -->
+
 # Design Engineering — Emil Kowalski's UI Polish Philosophy
 
 > Vendored from [emilkowalski/skills](https://github.com/emilkowalski/skills) (`emil-design-eng`).

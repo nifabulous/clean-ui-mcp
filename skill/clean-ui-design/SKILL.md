@@ -120,6 +120,8 @@ capture (motion, interaction polish, design-system taxonomies). Apply at synthes
   Use as a tagging vocabulary anchor when classifying real-world UIs against a
   codified design language (e.g. "tonal elevation via surfaceContainer steps
   instead of shadows," "label-small type role at 11px/500").
+- `references/VENDORED_SOURCES.md` — provenance manifest: upstream repo, commit
+  SHA, license, and local modifications for each vendored reference file.
 
 ## Do not
 

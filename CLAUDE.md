@@ -70,7 +70,9 @@ head SHA, and the hook that was bypassed. Use sparingly — the log is auditable
 ### Exemptions
 
 - `main` and `master` branches are exempt (trunk pushes aren't feature work).
-- Merge, squash, and amend commits are exempt from the task gate.
+- Merge commits are exempt from the task gate. Squash and amend commits still
+  run the task gate because Git does not reliably identify every amend/squash
+  invocation through `prepare-commit-msg`'s commit-source argument.
 - Initial commits (no parent) are exempt.
 
 ### Why git-native instead of ZCode hooks

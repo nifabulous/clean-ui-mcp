@@ -10,7 +10,8 @@
 #     [--issues '{"critical":0,"important":1,"minor":2}']
 #
 # Task artifacts:   .zcode/reviews/tasks/<headSha>.json
-# Branch artifacts: .zcode/reviews/branches/<branch>.json
+# Branch artifacts: .zcode/reviews/branches/<url-encoded-branch>.json
+# (the writer URL-encodes branch names so names such as feat/ui are injective.)
 set -euo pipefail
 
 TYPE=""

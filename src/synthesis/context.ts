@@ -96,7 +96,9 @@ export function registerVisualEvidence(input: VisualEvidenceInput): CritiqueEvid
   }
 
   if (input.colorRoles && typeof input.colorRoles === "object") {
-    const roles = Object.entries(input.colorRoles).filter(([, v]) => v != null);
+    // I8 fix: only stringify primitive values — skip objects to avoid [object Object]
+    const roles = Object.entries(input.colorRoles)
+      .filter(([, v]) => v != null && typeof v !== "object");
     if (roles.length > 0) {
       evidence.push({
         id: "screen:visual:colorRoles",
@@ -161,9 +163,26 @@ function buildRulesLane(): MachineRulesLane {
 // ─── guidance lane ────────────────────────────────────────────────────────────
 
 function buildGuidanceLane(): GuidanceLane[] {
-  // Static guidance descriptors — the actual file contents are read by the
-  // loader at validation time. Here we declare which references are available
-  // as editorial guidance for the synthesis prompt.
+  // I1 fix: use validateReferenceRegistry + selectReferences to derive guidance
+  // from the actual manifest, not a hardcoded list. Falls back to static
+  // descriptors if the manifest can't be loaded (e.g. during tests).
+  try {
+    const { validateReferenceRegistry, selectReferences } = require("../references/loader.js");
+    const root = process.cwd();
+    const descriptors = validateReferenceRegistry(root);
+    const selected = selectReferences(descriptors, [
+      "text-quality", "critique-structure", "design-system-vocabulary", "polish-guidance", "motion-guidance",
+    ]);
+    if (selected.length > 0) {
+      return selected.map((d: { id: string; title: string; purposes: string[] }) => ({
+        id: `ref:${d.id}`,
+        label: d.title,
+        purpose: d.purposes[0] ?? "general",
+      }));
+    }
+  } catch {
+    // Fall through to static descriptors
+  }
   return [
     { id: "ref:banned-phrases", label: "Banned phrases — the anti-slop list", purpose: "text-quality" },
     { id: "ref:decision-effect-rejection", label: "Decision/effect/rejection framework", purpose: "critique-structure" },

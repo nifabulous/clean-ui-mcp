@@ -99,7 +99,7 @@ describe("scoreCritiqueQuality", () => {
   it("detects non-canonical WCAG IDs", () => {
     const output = makeOutput({
       accessibilityRisks: [
-        { element: "x", risk: "y", evidence: "screen:components", wcag: ["not-a-real-id"], basis: "visible" },
+        { element: "x", risk: "y", evidence: "screen:components", wcag: ["9.9.9"], basis: "visible" },
       ],
     });
     const result = scoreCritiqueQuality(output, GOLD_LABEL);

@@ -748,6 +748,8 @@ server.registerTool(
       // ── Synthesize critique ───────────────────────────────────────────────────
       const { synthesizeCritique, gateCritique } = await import("./critique-synthesis.js");
       const { buildSynthesisContext } = await import("./synthesis/context.js");
+      const { renderCritiqueMarkdown } = await import("./synthesis/render.js");
+      const { CRITIQUE_SCHEMA_VERSION } = await import("./synthesis/contracts.js");
       const context = buildSynthesisContext({ extraction, retrieval, productContext: input.productContext });
 
       const draft = await synthesizeCritique(context, {
@@ -757,44 +759,43 @@ server.registerTool(
 
       const gated = gateCritique(draft, context.evidenceIds);
 
-      // ── Build response ────────────────────────────────────────────────────────
-      const latencyMs = Date.now() - t0;
-      const lines: string[] = [];
-      lines.push(`# UI Critique (${latencyMs}ms)`);
-      lines.push("");
-      lines.push(`**Platform:** ${detectedPlatform}`);
-      lines.push(`**Retrieval mode:** ${retrieval.mode}${retrieval.fallbackUsed ? " (fallback)" : ""}`);
-      lines.push(`**Evidence coverage:** ${retrieval.coverage}`);
-      lines.push("");
-      lines.push(`## Summary`);
-      lines.push(gated.summary);
-      lines.push("");
-      lines.push(`## Observations`);
-      for (const obs of gated.observations) {
-        lines.push(`- ${obs}`);
-      }
-      lines.push("");
-      lines.push(`## Recommendations`);
-      for (const rec of gated.recommendations) {
-        const tag = rec.uncertain ? " *(uncertain — no cited evidence)*" : "";
-        lines.push(`- **${rec.recommendation}**${tag}`);
-        lines.push(`  - Observation: ${rec.observation}`);
-        lines.push(`  - Impact: ${rec.impact}`);
-        if (rec.evidence.length > 0) {
-          lines.push(`  - Evidence: ${rec.evidence.join(", ")}`);
-        }
-      }
-      if (gated.accessibilityRisks.length > 0) {
-        lines.push("");
-        lines.push(`## Accessibility Risks`);
-        for (const risk of gated.accessibilityRisks) {
-          const wcag = risk.wcag.length > 0 ? ` (${risk.wcag.join("; ")})` : "";
-          lines.push(`- **${risk.element}**: ${risk.risk}${wcag}`);
-          lines.push(`  - Evidence: ${risk.evidence}`);
-        }
-      }
+      // ── Build structured critique output ──────────────────────────────────────
+      const structuredResult = {
+        schemaVersion: CRITIQUE_SCHEMA_VERSION,
+        platform: detectedPlatform,
+        retrievalMode: retrieval.mode,
+        fallbackUsed: retrieval.fallbackUsed,
+        coverage: retrieval.coverage,
+        summary: gated.summary,
+        observations: gated.observations,
+        recommendations: gated.recommendations.map((rec) => ({
+          observation: rec.observation,
+          impact: rec.impact,
+          recommendation: rec.recommendation,
+          evidence: rec.evidence,
+          basis: "visible" as const,
+        })),
+        accessibilityRisks: gated.accessibilityRisks.map((risk) => ({
+          element: risk.element,
+          risk: risk.risk,
+          evidence: risk.evidence,
+          wcag: risk.wcag,
+          basis: "visible" as const,
+        })),
+        visualSlop: [],
+        motion: [],
+        appliedReferences: [],
+        evidenceIds: context.evidenceIds,
+        confidence: retrieval.coverage === "strong" ? "high" as const
+          : retrieval.coverage === "moderate" ? "medium" as const
+          : "low" as const,
+      };
 
-      return { content: [{ type: "text", text: lines.join("\n") }] };
+      // ── Return both legacy text + structuredContent ───────────────────────────
+      return {
+        content: [{ type: "text" as const, text: renderCritiqueMarkdown(structuredResult) }],
+        structuredContent: structuredResult,
+      };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return { content: [{ type: "text", text: `❌ Critique failed: ${msg}` }], isError: true };

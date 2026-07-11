@@ -9,6 +9,7 @@
  * Exported for testing via `export function scoreCritiqueQuality(output, label)`.
  */
 import { BANNED_PHRASES } from "../dist/references/generated.js";
+import { isWcagCriterion } from "../dist/wcag/registry.js";
 
 /**
  * @typedef {Object} GoldLabel
@@ -33,8 +34,9 @@ import { BANNED_PHRASES } from "../dist/references/generated.js";
  * @property {boolean} overallPass
  */
 
-// Canonical WCAG criterion pattern (hex.dotted)
-const WCAG_ID_PATTERN = /^\d+\.\d+\.\d+$/;
+// C3 fix: use the canonical WCAG registry validator instead of a loose regex.
+// The regex accepted hallucinated IDs like 9.9.9 and the obsolete 4.1.1;
+// isWcagCriterion() rejects both.
 
 /**
  * Score a structured critique output against gold labels.
@@ -92,10 +94,12 @@ export function scoreCritiqueQuality(output, label) {
     if (proseText.includes(phrase)) result.bannedPhraseCount++;
   }
 
-  // ── Forbidden claims in summary ─────────────────────────────────────────────
+  // ── Forbidden claims in summary AND observations (I7 fix) ────────────────────
   const summaryLower = typeof output.summary === "string" ? output.summary.toLowerCase() : "";
+  const obsLower = output.observations.filter((o) => typeof o === "string").map((o) => o.toLowerCase()).join(" \n ");
   for (const claim of label.forbiddenClaims) {
-    if (summaryLower.includes(claim.toLowerCase())) result.forbiddenClaimCount++;
+    const claimLower = claim.toLowerCase();
+    if (summaryLower.includes(claimLower) || obsLower.includes(claimLower)) result.forbiddenClaimCount++;
   }
 
   // ── Motion policy ──────────────────────────────────────────────────────────
@@ -104,20 +108,22 @@ export function scoreCritiqueQuality(output, label) {
     result.motionPolicyViolations = motion.length;
   }
 
-  // ── Accessibility risk quality ──────────────────────────────────────────────
+  // ── Accessibility risk quality (I6 fix: guard non-string evidence) ───────────
   for (const risk of output.accessibilityRisks) {
-    if (!risk.evidence || risk.evidence.trim() === "") {
+    const evidenceStr = typeof risk.evidence === "string" ? risk.evidence.trim() : "";
+    if (!evidenceStr) {
       result.emptyEvidenceRiskCount++;
     }
     const wcag = Array.isArray(risk.wcag) ? risk.wcag : [];
     for (const id of wcag) {
-      if (!WCAG_ID_PATTERN.test(id)) result.invalidWcagCount++;
+      if (!isWcagCriterion(id)) result.invalidWcagCount++;
     }
   }
 
-  // ── Overall pass ────────────────────────────────────────────────────────────
+  // ── Overall pass (I4 fix: unknown evidence IDs now gate) ──────────────────────
   result.overallPass = result.schemaValid
     && result.citationRate === 1.0
+    && result.unknownEvidenceIds.length === 0
     && result.bannedPhraseCount === 0
     && result.forbiddenClaimCount === 0
     && result.motionPolicyViolations === 0

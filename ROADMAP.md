@@ -188,8 +188,9 @@ prose. Lower priority until the corpus has motion-rich examples.
 ### ✅ `critique_ui(image_data, productContext)`
 Shipped. Screenshot your own product, find visually + structurally similar
 approved corpus entries, and receive a grounded critique with cited
-recommendations. Uses a pluggable image-embedding provider ( Voyage multimodal
-or OpenAI) with structured-only fallback when unconfigured. The tool follows
+recommendations. Uses a pluggable image-embedding provider (Voyage multimodal
+only — OpenAI has no verified multimodal embedding model) with structured-only
+fallback when unconfigured. The tool follows
 the same trust-boundary pattern as the tagger and Decision Lab: raw model
 output is audit-only, synthesis receives sanitized evidence, and a post-hoc
 citation gate drops uncited recommendations. Bounded base64 image input

@@ -110,8 +110,11 @@ export function hashForImage(data: Buffer): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-/** Compute cosine similarity between two vectors. */
+/** Compute cosine similarity between two vectors.
+ *  N2 fix: returns 0 (no similarity) on dimension mismatch instead of NaN,
+ *  which would silently corrupt ranking. */
 export function cosine(a: number[], b: number[]): number {
+  if (a.length !== b.length) return 0;
   let dot = 0, magA = 0, magB = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];

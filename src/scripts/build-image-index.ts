@@ -10,7 +10,7 @@
  */
 import "../env.js";
 import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, extname } from "node:path";
 import { Corpus } from "../schema.js";
 import { fromCorpusRelativeImagePath } from "../paths.js";
 import { createImageEmbeddingProvider } from "../image-embeddings.js";
@@ -67,7 +67,11 @@ async function main() {
     }
 
     try {
-      const vec = await provider.embedImage({ data: imgData, mimeType: "image/png" });
+      // N1 fix: infer MIME from the file extension instead of hardcoding image/png.
+      // ~9% of corpus images are JPEG — sending them labeled as PNG produces garbage vectors.
+      const ext = extname(imgPath).toLowerCase();
+      const mimeType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".webp" ? "image/webp" : "image/png";
+      const vec = await provider.embedImage({ data: imgData, mimeType: mimeType as "image/png" | "image/jpeg" | "image/webp" });
       if (index.dimension === 0) {
         index.dimension = vec.length;
       }

@@ -801,7 +801,7 @@ clean-ui-mcp/
 
 ## Testing
 
-419 tests across 28 files: vitest unit tests (schema, corpus, tagger, tagger
+420 tests across 28 files: vitest unit tests (schema, corpus, tagger, tagger
 contract, WCAG registry, embeddings, dedup, design-prompt, recommend,
 aggregations, decision lab, eval scorer, critique-ui, image-embeddings,
 image-index, critique-retrieval, critique-synthesis) + Playwright browser

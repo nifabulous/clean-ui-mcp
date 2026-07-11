@@ -16,8 +16,8 @@
  * Platform filtering: if the input specifies a platform, entries that don't
  * match are deprioritized (not removed — cross-platform inspiration has value).
  */
-import { searchRanked } from "./corpus.js";
-import { cosine, loadImageIndex, type ImageEmbeddingIndex } from "./image-index.js";
+import { searchRanked, loadCorpus } from "./corpus.js";
+import { cosine, type ImageEmbeddingIndex } from "./image-index.js";
 import type { ImageEmbeddingProvider, ValidatedImage } from "./image-embeddings.js";
 
 export interface CritiqueEntry {
@@ -64,20 +64,41 @@ export async function retrieveCritiqueEvidence(input: RetrieveCritiqueInput): Pr
         mimeType: (imageMimeType ?? "image/png") as ValidatedImage["mimeType"],
       });
 
-      // Rank all index entries by cosine similarity.
+      // N2 fix: runtime dimension guard — if the query vector doesn't match the
+      // index's dimension, fall back to structured retrieval instead of
+      // producing NaN-scored garbage rankings.
+      if (queryVec.length !== imageIndex.dimension) {
+        console.error(`[critique-retrieval] Dimension mismatch: query=${queryVec.length} vs index=${imageIndex.dimension}. Falling back.`);
+        throw new Error("dimension mismatch");
+      }
+
+      // N3 fix: look up each ranked entry in the live corpus to verify it's
+      // still approved. The image index may contain stale entries (demoted to
+      // draft or deleted after indexing).
+      const corpusEntries = loadCorpus();
+      const corpusById = new Map(corpusEntries.map((e) => [e.id, e]));
       const ranked = Object.entries(imageIndex.entries)
         .map(([id, entry]) => ({ id, score: cosine(queryVec, entry.vector) }))
         .sort((a, b) => b.score - a.score)
-        .slice(0, MAX_ENTRIES * 2); // over-fetch for platform filtering
+        .slice(0, MAX_ENTRIES * 2);
 
-      // Fetch entry metadata from corpus (searchRanked does approved-only,
-      // but the image index may contain stale entries — filter by id lookup).
-      // For now, use the scores directly; the synthesis layer will validate.
-      const entries: CritiqueEntry[] = ranked.map((r) => ({
-        id: r.id,
-        score: r.score,
-        patternType: undefined, // resolved by caller from corpus lookup
-      }));
+      // Filter to approved entries only — enforce the global constraint at runtime.
+      const entries: CritiqueEntry[] = ranked
+        .filter((r) => {
+          const ce = corpusById.get(r.id);
+          return ce && ce.reviewStatus === "approved";
+        })
+        .map((r) => {
+          const ce = corpusById.get(r.id)!;
+          return {
+            id: r.id,
+            score: r.score,
+            patternType: ce.patternType,
+            platform: ce.platform,
+            reviewStatus: ce.reviewStatus,
+            title: ce.title,
+          };
+        });
 
       if (entries.length > 0) {
         const filtered = applyPlatformFilter(entries, platform);

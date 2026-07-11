@@ -9,6 +9,10 @@ vi.mock("./corpus.js", () => ({
       { entry: { id: "e2", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Dashboard B" }, score: 0.85 },
     ];
   }),
+  loadCorpus: vi.fn(() => [
+    { id: "e1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Dashboard A" },
+    { id: "e2", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Dashboard B" },
+  ]),
 }));
 
 vi.mock("./image-index.js", () => ({

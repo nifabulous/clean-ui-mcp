@@ -114,9 +114,6 @@ async function callProvider(
   if (provider === "voyage") {
     return callVoyage(api, apiKey, model, base64, image.mimeType);
   }
-  if (provider === "openai") {
-    return callOpenAI(api, apiKey, model, base64, image.mimeType);
-  }
   throw new Error(`No HTTP implementation for provider "${provider}"`);
 }
 
@@ -142,29 +139,5 @@ async function callVoyage(
   const data = (await res.json()) as { data?: Array<{ embedding?: number[] }> };
   const vec = data.data?.[0]?.embedding;
   if (!vec || !Array.isArray(vec)) throw new Error("Voyage returned no embedding vector");
-  return vec;
-}
-
-/** OpenAI embeddings API (text-embedding-3 supports image input via image_url). */
-async function callOpenAI(
-  api: string,
-  apiKey: string,
-  model: string,
-  base64: string,
-  mimeType: string,
-): Promise<number[]> {
-  const res = await fetch(api, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model,
-      input: [{ type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } }],
-    }),
-  });
-  // I4 fix: log only the status code, not the response body.
-  if (!res.ok) throw new Error(`OpenAI image embedding error (HTTP ${res.status})`);
-  const data = (await res.json()) as { data?: Array<{ embedding?: number[] }> };
-  const vec = data.data?.[0]?.embedding;
-  if (!vec || !Array.isArray(vec)) throw new Error("OpenAI returned no embedding vector");
   return vec;
 }

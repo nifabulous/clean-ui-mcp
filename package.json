@@ -41,8 +41,7 @@
     "eval-matrix": "tsc && node scripts/eval-matrix.mjs",
     "benchmark-image-embeddings": "tsc && node scripts/benchmark-image-embeddings.mjs",
     "build-image-index": "tsc && node dist/scripts/build-image-index.js",
-    "test:critique-quality": "vitest run scripts/critique-quality-scorer.test.mjs",
-    "eval-critique-quality": "tsc && node -e \"import('./scripts/critique-quality-scorer.mjs').then(m => { console.log('critique-quality scorer loaded — use eval-matrix to run live baselines'); })\""
+    "test:critique-quality": "vitest run scripts/critique-quality-scorer.test.mjs scripts/eval-scorer.test.mjs"
   },
   "keywords": [
     "mcp",

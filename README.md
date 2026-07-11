@@ -802,9 +802,11 @@ consumers get typed findings with evidence IDs, claim bases, and provenance.
 
 ### Critique-quality scoring
 
-`npm run test:critique-quality` runs the offline deterministic scorer against the
-gold labels. `npm run eval-critique-quality` loads the scorer for live baseline
-runs (requires `RUN_LIVE_INTEGRATION=1` + provider keys).
+`npm run test:critique-quality` is the offline deterministic gate — it runs the
+scorer and the eval-scorer tests against the gold labels with no network or
+provider keys required. For live provider baselines across the eval matrix, use
+`npm run eval-matrix -- --configs eval/configs/<lane>.json` (requires provider
+keys + `RUN_LIVE_INTEGRATION=1`).
 
 ---
 

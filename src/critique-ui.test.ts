@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import { validateCritiqueUiInput, withValidatedImageFile, toNormalizedTaggerFacts, MAX_IMAGE_BYTES, type CritiqueUiInput } from "./critique-ui.js";
+import type { TaggerInput } from "./tagger.js";
+import { CRITIQUE_UI_INPUT_SCHEMA } from "./synthesis/contracts.js";
 
 // A tiny valid PNG (1×1 red pixel) for size/MIME tests.
 const TINY_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
@@ -81,27 +83,37 @@ describe("validateCritiqueUiInput", () => {
     expect(result.valid).toBe(true);
   });
 
-  it("preserves trusted DOM signals for internal capture callers", () => {
-    const domSignals: NonNullable<CritiqueUiInput["domSignals"]> = {
+  it("does not expose caller-supplied DOM signals in the public MCP schema", () => {
+    const result = CRITIQUE_UI_INPUT_SCHEMA.safeParse({
+      image_data: TINY_PNG_B64,
+      image_mime_type: "image/png",
+      dom_signals: { motion: { signals: [] } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects caller-supplied DOM signals during public request validation", () => {
+    const domSignals: NonNullable<TaggerInput["domSignals"]> = {
       styles: { fontFamily: null, fontSize: null, fontWeight: null, borderRadius: null, boxShadow: null, color: null, background: null, letterSpacing: null },
       accessibility: { contrastRatio: null, headingLevels: [], imagesMissingAlt: 0, unlabeledInteractive: 0, hasSkipLink: false },
       structure: { display: null, flexDirection: null, gridTemplateColumns: null, gap: null },
       motion: { signals: [{ selector: "button", property: "opacity", durationMs: 100, delayMs: 0 }], coverage: "full", inaccessibleStylesheets: 0, prefersReducedMotion: false },
     };
-    const result = validateCritiqueUiInput({ image: { data: TINY_PNG_B64, mimeType: "image/png" }, domSignals });
-    expect(result).toMatchObject({ valid: true, input: { domSignals } });
+    const result = validateCritiqueUiInput({ image: { data: TINY_PNG_B64, mimeType: "image/png" }, dom_signals: domSignals });
+    expect(result).toMatchObject({ valid: false });
+    if (!result.valid) expect(result.error).toMatch(/dom.?signals|public/i);
   });
 
-  it("rejects malformed or oversized DOM motion injection", () => {
+  it("rejects malformed or oversized caller DOM motion injection", () => {
     const malformed = validateCritiqueUiInput({
       image: { data: TINY_PNG_B64, mimeType: "image/png" },
       domSignals: { motion: { signals: Array.from({ length: 101 }, () => ({})) } },
     });
     expect(malformed).toMatchObject({ valid: false });
-    if (!malformed.valid) expect(malformed.error).toMatch(/domsignals/i);
+    if (!malformed.valid) expect(malformed.error).toMatch(/dom.?signals|public/i);
   });
 
-  it("bounds DOM strings before they can enter a synthesis prompt", () => {
+  it("rejects caller DOM strings before they can enter a synthesis prompt", () => {
     const valid = validateCritiqueUiInput({
       image: { data: TINY_PNG_B64, mimeType: "image/png" },
       domSignals: {
@@ -172,7 +184,7 @@ describe("withValidatedImageFile", () => {
 });
 
 describe("toNormalizedTaggerFacts", () => {
-  it("projects sanitized top-level tagger fields, DOM signals, and never forwards _raw", () => {
+  it("accepts trusted DOM capture only through its explicit internal parameter and never forwards _raw", () => {
     const facts = toNormalizedTaggerFacts({
       patternType: "dashboard",
       platform: "mobile",

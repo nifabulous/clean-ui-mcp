@@ -23,7 +23,7 @@ import { buildRecommendation, renderRecommendation } from "./recommend.js";
 import { aggregateAntiPatterns, collectPalettes, collectTechniques, browseByPattern, hueBand } from "./aggregations.js";
 import { readFileSync, existsSync } from "node:fs";
 import { fromCorpusRelativeImagePath } from "./paths.js";
-import { CRITIQUE_UI_OUTPUT_SCHEMA } from "./synthesis/contracts.js";
+import { CRITIQUE_UI_INPUT_SCHEMA, CRITIQUE_UI_OUTPUT_SCHEMA } from "./synthesis/contracts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const QUERY_LOG_PATH = resolve(__dirname, "..", "corpus", "query-log.jsonl");
@@ -689,22 +689,7 @@ server.registerTool(
       "facts or corpus evidence IDs. Falls back to structured-only retrieval " +
       "when image embeddings are unavailable. Image input is bounded base64 " +
       "(max 10 MiB) — no paths or URLs accepted. No corpus mutation occurs.",
-    inputSchema: {
-      image_data: z.string().describe("Base64-encoded screenshot image data (png, jpeg, or webp)"),
-      image_mime_type: z.enum(["image/png", "image/jpeg", "image/webp"]).describe("MIME type of the image data"),
-      product_context: z.string().optional().describe("What the product is (e.g. 'A KPI tracking dashboard')"),
-      platform: z.enum(["web", "mobile", "tablet"]).optional().describe("Target platform for platform-aware retrieval"),
-      framework: z.string().optional().describe("Design framework hint (e.g. 'md3' to enable MD3 resemblance classification)"),
-      dom_signals: z.object({
-        styles: z.object({ fontFamily: z.string().max(500).nullable(), fontSize: z.string().max(500).nullable(), fontWeight: z.string().max(500).nullable(), borderRadius: z.string().max(500).nullable(), boxShadow: z.string().max(500).nullable(), color: z.string().max(500).nullable(), background: z.string().max(500).nullable(), letterSpacing: z.string().max(500).nullable() }),
-        accessibility: z.object({ contrastRatio: z.number().min(0).max(100).nullable(), headingLevels: z.array(z.number().int().min(1).max(6)).max(64), imagesMissingAlt: z.number().int().min(0).max(100_000), unlabeledInteractive: z.number().int().min(0).max(100_000), hasSkipLink: z.boolean() }),
-        structure: z.object({ display: z.string().max(500).nullable(), flexDirection: z.string().max(500).nullable(), gridTemplateColumns: z.string().max(500).nullable(), gap: z.string().max(500).nullable() }),
-        motion: z.object({
-          signals: z.array(z.object({ selector: z.string().max(200), property: z.string().max(120), durationMs: z.number().int().min(0).max(60_000), delayMs: z.number().int().min(0).max(60_000), iterationCount: z.string().optional(), timingFunction: z.string().optional() })).max(100),
-          coverage: z.enum(["full", "partial", "none"]), inaccessibleStylesheets: z.number().int().min(0).max(10_000), prefersReducedMotion: z.boolean(),
-        }).nullable().optional(),
-      }).optional().describe("Optional DOM ground-truth captured by a trusted caller; declarations are evidence of stylesheet intent, not proof motion ran."),
-    },
+    inputSchema: CRITIQUE_UI_INPUT_SCHEMA,
     outputSchema: CRITIQUE_UI_OUTPUT_SCHEMA,
   },
   async (args) => {
@@ -716,7 +701,6 @@ server.registerTool(
         image: { data: args.image_data, mimeType: args.image_mime_type },
         productContext: args.product_context,
         platform: args.platform,
-        domSignals: args.dom_signals,
       });
       if (!validation.valid) {
         return { content: [{ type: "text", text: `❌ Invalid input: ${validation.error}` }], isError: true };
@@ -732,11 +716,10 @@ server.registerTool(
           url: null,
           imageDetail: "low",
           extractionOnly: true,
-          domSignals: input.domSignals,
         });
       });
 
-      const extraction = toNormalizedTaggerFacts(tagged, input.domSignals);
+      const extraction = toNormalizedTaggerFacts(tagged);
       const detectedPlatform = input.platform ?? tagged.platform ?? "web";
 
       // ── Retrieve evidence ─────────────────────────────────────────────────────

@@ -9,6 +9,19 @@ import { z } from "zod";
 
 export const CRITIQUE_SCHEMA_VERSION = "1.0" as const;
 
+/**
+ * The public, screenshot-only input contract for the critique_ui MCP tool.
+ * DOM-derived facts are deliberately absent: only a server-owned capture path
+ * may pass trusted DOM signals to the tagger/synthesis internals.
+ */
+export const CRITIQUE_UI_INPUT_SCHEMA = z.object({
+  image_data: z.string().describe("Base64-encoded screenshot image data (png, jpeg, or webp)"),
+  image_mime_type: z.enum(["image/png", "image/jpeg", "image/webp"]).describe("MIME type of the image data"),
+  product_context: z.string().optional().describe("What the product is (e.g. 'A KPI tracking dashboard')"),
+  platform: z.enum(["web", "mobile", "tablet"]).optional().describe("Target platform for platform-aware retrieval"),
+  framework: z.string().optional().describe("Design framework hint (e.g. 'md3' to enable MD3 resemblance classification)"),
+}).strict();
+
 // ─── enums ────────────────────────────────────────────────────────────────────
 
 export const ClaimBasis = z.enum([

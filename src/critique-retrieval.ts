@@ -29,7 +29,7 @@ export interface CritiqueEntry {
   score: number;
 }
 
-export type RetrievalMode = "image" | "hybrid" | "structured-fallback";
+export type RetrievalMode = "image" | "structured-fallback";
 
 export interface RetrievalResult {
   entries: CritiqueEntry[];

@@ -127,12 +127,32 @@ describe("gateCritique", () => {
 });
 
 describe("synthesizeCritique retry", () => {
+  // Helper: minimal SynthesisContext for testing
+  function makeContext(evidence: Array<{ id: string; source: "screen" | "corpus"; label: string; detail?: string }> = []) {
+    return {
+      evidence,
+      evidenceIds: evidence.map((e) => e.id),
+      rules: {
+        bannedPhrases: ["clean layout"] as readonly string[],
+        vaguePhrases: ["clean"] as readonly string[],
+        detectors: {
+          unlabeledControl: "icon", pixelMeasurement: "px",
+          exemptions: { domGroundTruth: "dom", contrastClause: "instead", positiveLabelPairing: "paired" },
+        },
+      },
+      guidance: [],
+    };
+  }
+
   it("retries once when the model returns malformed JSON", async () => {
     callTextModel
       .mockResolvedValueOnce("not json")
       .mockResolvedValueOnce(JSON.stringify({ summary: "Recovered", observations: [], recommendations: [], accessibilityRisks: [] }));
     const { synthesizeCritique } = await import("./critique-synthesis.js");
-    await expect(synthesizeCritique([{ id: "screen:patternType", source: "screen", label: "patternType", detail: "dashboard" }], {})).resolves.toMatchObject({ summary: "Recovered" });
+    await expect(synthesizeCritique(
+      makeContext([{ id: "screen:patternType", source: "screen", label: "patternType", detail: "dashboard" }]),
+      {},
+    )).resolves.toMatchObject({ summary: "Recovered" });
     expect(callTextModel).toHaveBeenCalledTimes(2);
   });
 
@@ -145,7 +165,7 @@ describe("synthesizeCritique retry", () => {
       model: "gpt-5.4-nano",
     };
     const { synthesizeCritique } = await import("./critique-synthesis.js");
-    await synthesizeCritique([], { providerOverride: "openai", endpointOverride });
+    await synthesizeCritique(makeContext(), { providerOverride: "openai", endpointOverride });
     expect(callTextModel).toHaveBeenCalledWith(expect.any(String), "openai", undefined, endpointOverride);
   });
 });

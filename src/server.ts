@@ -746,16 +746,16 @@ server.registerTool(
       });
 
       // ── Synthesize critique ───────────────────────────────────────────────────
-      const { buildCritiqueEvidence, synthesizeCritique, gateCritique } = await import("./critique-synthesis.js");
-      const evidence = buildCritiqueEvidence(extraction, retrieval, input.productContext);
-      const evidenceIds = evidence.map((e) => e.id);
+      const { synthesizeCritique, gateCritique } = await import("./critique-synthesis.js");
+      const { buildSynthesisContext } = await import("./synthesis/context.js");
+      const context = buildSynthesisContext({ extraction, retrieval, productContext: input.productContext });
 
-      const draft = await synthesizeCritique(evidence, {
+      const draft = await synthesizeCritique(context, {
         productContext: input.productContext,
         platform: detectedPlatform,
       });
 
-      const gated = gateCritique(draft, evidenceIds);
+      const gated = gateCritique(draft, context.evidenceIds);
 
       // ── Build response ────────────────────────────────────────────────────────
       const latencyMs = Date.now() - t0;

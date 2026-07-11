@@ -17,6 +17,11 @@ import "./env.js";
 import { readFileSync } from "node:fs";
 import { extname, basename } from "node:path";
 import { toCorpusRelativePath } from "./paths.js";
+import {
+  BANNED_PHRASES,
+  PIXEL_MEASUREMENT,
+  UNLABELED_CONTROL_RISK,
+} from "./references/generated.js";
 import { Component, DomainTag, detectPlatform } from "./schema.js";
 import { isWcagCriterion, extractAllWcagIds } from "./wcag/registry.js";
 import { Vibrant } from "node-vibrant/node";
@@ -72,43 +77,12 @@ const BUSINESS_GOALS = [
 // Trust-boundary gates shared by accessibility-risk sanitization and prose
 // scrubbing. Pixels can establish visible presence; they cannot prove absence
 // of labels/accessibility names or exact measurements.
-const PIXEL_MEASUREMENT = /\b\d+(?:\.\d+)?\s*-?\s*(?:px|pixel[s]?|pt|rem|em)\b/i;
 const DOM_GROUND_TRUTH = /\b(?:dom|computed|contrast[\s-]*ratio|accessibility\s+tree|aria-|offsetwidth|offsetheight|getboundingclientrect|measured\s+(?:from|via))\b/i;
-const UNLABELED_CONTROL_RISK = new RegExp(
-  "\\bicon[\\s-]*only" +
-  "|icons?\\s+(?:alone|symbols?\\s+alone)" +
-  "|icons?\\s+without\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|represented\\s+(?:solely\\s+)?by\\s+icons?" +
-  "|(?:icon|glyph|symbol|button|control)\\s+with\\s+(?:no|without)\\s+(?:a\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|(?:icon|glyph|symbol|button|control)\\s+(?:has|have|having)\\s+no\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|(?:icon|glyph|symbol|button|control)\\s+lack(?:s|ing)?\\s+(?:a\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|no\\s+(?:visible\\s+)?(?:text\\s+)?labels?\\s+(?:beside|next to|on|for|is visible)" +
-  "|no\\s+(?:visible\\s+)?(?:text\\s+)?labels?\\s+(?:are\\s+)?visible" +
-  "|(?:has|have)\\s+no\\s+(?:accompanying\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|no\\s+accompanying\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|lack(?:s|ing)?\\s+(?:an?\\s+|a\\s+)?(?:accompanying\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|no\\s+(?:visible\\s+)?accessible\\s+name" +
-  "|unlabeled\\s+(?:icon|button|control|nav)" +
-  "|rel(?:iance|ies|y)\\s+on\\s+(?:memorized\\s+)?(?:icon\\s+)?shapes?" +
-  "|\\bnaked\\s+icons?\\b" +
-  "|lacks?\\s+(?:an?\\s+)?accessible\\s+name" +
-  "|without\\s+(?:an?\\s+)?accessible\\s+name" +
-  "\\b",
-  "i",
-);
 const LOW_CONTRAST_RISK = /\b(?:low|poor|insufficient|fail(?:s|ing)?|below|under|not enough|too little)\b.{0,60}\bcontrast\b|\bcontrast\b.{0,60}\b(?:low|poor|insufficient|fail(?:s|ing)?|below|under|ratio|threshold|4\.5)\b/i;
 // A risk list must only contain confirmed failures. Models occasionally emit a
 // useful observation followed by "likely accessible" / "no risk confirmed";
 // that commentary belongs in critique prose, never in accessibilityRisks.
 const NON_RISK_ASSERTION = /\b(?:no (?:accessibility )?risk (?:is )?(?:confirmed|identified)|likely accessible|text (?:label|labels?|content)?\s*(?:provides?|conveys?)\s+redundant (?:information|state)|(?:is|are)\s+(?:fully\s+)?accessible)\b/i;
-
-// ─── banned phrases — enforced in-prompt AND as a post-hoc code-level gate ───
-
-const BANNED_PHRASES = [
-  "clean layout", "modern design", "user-friendly", "intuitive", "sleek",
-  "minimalist", "good spacing", "nice typography", "visually appealing",
-  "easy to use", "well-organized", "polished look",
-];
 
 // ─── types ────────────────────────────────────────────────────────────────────
 

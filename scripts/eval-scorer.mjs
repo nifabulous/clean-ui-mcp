@@ -12,43 +12,15 @@
  *   + pre-gate hallucination counts on extraction prose
  * - scoreCritique(rawCritique): pre-gate hallucination counts on critique prose
  *
- * The regexes mirror the tagger's internal gates (src/tagger.ts lines 75-98,
- * 107-111) so the counts are directly comparable to what the sanitizer drops.
+ * The rules are imported from the canonical generated artifact so the counts
+ * remain directly comparable to what the sanitizer drops.
  */
 
-// ─── hallucination detectors (copied EXACTLY from src/tagger.ts to avoid drift) ─
-// These count what the model WOULD emit before the gates catch it. The regexes
-// must match the tagger's sanitizer exactly — if you change one, change both.
-// See tagger.ts lines 77-98 (UNLABELED_CONTROL_RISK), 75 (PIXEL_MEASUREMENT),
-// 107-111 (BANNED_PHRASES).
-const UNLABELED_CONTROL = new RegExp(
-  "\\bicon[\\s-]*only" +
-  "|icons?\\s+(?:alone|symbols?\\s+alone)" +
-  "|icons?\\s+without\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|represented\\s+(?:solely\\s+)?by\\s+icons?" +
-  "|(?:icon|glyph|symbol|button|control)\\s+with\\s+(?:no|without)\\s+(?:a\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|(?:icon|glyph|symbol|button|control)\\s+(?:has|have|having)\\s+no\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|(?:icon|glyph|symbol|button|control)\\s+lack(?:s|ing)?\\s+(?:a\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|no\\s+(?:visible\\s+)?(?:text\\s+)?labels?\\s+(?:beside|next to|on|for|is visible)" +
-  "|no\\s+(?:visible\\s+)?(?:text\\s+)?labels?\\s+(?:are\\s+)?visible" +
-  "|(?:has|have)\\s+no\\s+(?:accompanying\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|no\\s+accompanying\\s+(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|lack(?:s|ing)?\\s+(?:an?\\s+|a\\s+)?(?:accompanying\\s+)?(?:visible\\s+)?(?:text\\s+)?labels?" +
-  "|no\\s+(?:visible\\s+)?accessible\\s+name" +
-  "|unlabeled\\s+(?:icon|button|control|nav)" +
-  "|rel(?:iance|ies|y)\\s+on\\s+(?:memorized\\s+)?(?:icon\\s+)?shapes?" +
-  "|\\bnaked\\s+icons?\\b" +
-  "|lacks?\\s+(?:an?\\s+)?accessible\\s+name" +
-  "|without\\s+(?:an?\\s+)?accessible\\s+name" +
-  "\\b",
-  "i",
-);
-const PIXEL_MEASUREMENT = /\b\d+(?:\.\d+)?\s*-?\s*(?:px|pixel[s]?|pt|rem|em)\b/i;
-const BANNED_PHRASES = [
-  "clean layout", "modern design", "user-friendly", "intuitive", "sleek",
-  "minimalist", "good spacing", "nice typography", "visually appealing",
-  "easy to use", "well-organized", "polished look",
-];
+import {
+  BANNED_PHRASES,
+  PIXEL_MEASUREMENT,
+  UNLABELED_CONTROL_RISK as UNLABELED_CONTROL,
+} from "../dist/references/generated.js";
 
 function countMatches(text, regex) {
   if (!text || typeof text !== "string") return 0;

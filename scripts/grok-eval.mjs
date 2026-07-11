@@ -18,6 +18,10 @@
  * Output: /tmp/grok-eval-results.json + console summary
  */
 import { tagImage, generateCritique } from "../dist/tagger.js";
+import {
+  PIXEL_MEASUREMENT,
+  UNLABELED_CONTROL_RISK as UNLABELED_CONTROL,
+} from "../dist/references/generated.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createRequire } from "node:module";
@@ -41,10 +45,8 @@ const EVAL_SET = [
 const maxImages = parseInt(process.argv.find((_, i, a) => a[i - 1] === "--images") ?? "99", 10);
 const images = EVAL_SET.slice(0, maxImages);
 
-// ─── hallucination detectors (mirror the sanitizer's regexes) ────────────────
+// ─── hallucination detectors (mirror the sanitizer's canonical rules) ────────
 // These show what each provider WOULD emit before the gates catch it.
-const UNLABELED_CONTROL = /\bicon[\s-]*only|icons?\s+(?:alone|without\s+(?:visible\s+)?(?:text\s+)?labels?)|represented\s+(?:solely\s+)?by\s+icons?|(?:icon|glyph|button)\s+with\s+no\s+(?:visible\s+)?(?:text\s+)?labels?|no\s+(?:visible\s+)?(?:text\s+)?labels?\s+(?:beside|next to|is visible)|lacks?\s+(?:a\s+)?(?:visible\s+)?(?:text\s+)?labels?|no\s+(?:visible\s+)?accessible\s+name|unlabeled\s+(?:icon|button|control|nav)/i;
-const PIXEL_MEASUREMENT = /\b\d+(?:\.\d+)?\s*-?\s*(?:px|pixel[s]?|pt|rem|em)\b/i;
 const SELF_REFERENTIAL = /\b(component inventory|component list|extraction (?:shows|lists|describes|states)|layout region (?:is )?described|the (?:above|validated) (?:extraction|inventory))\b/i;
 
 function countHallucinations(text) {

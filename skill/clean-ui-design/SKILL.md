@@ -100,6 +100,26 @@ The corpus exists to fight generic AI output. When synthesizing or summarizing, 
 - **Specificity over coverage**: one sharp, correct detail grounded in a real example beats three generic observations that could apply to any UI.
 - **Anti-patterns are first-class**: surface what to avoid as prominently as what to steal.
 
+## Reference material
+
+These references are editorial guidance for the agent — NOT corpus facts. They
+enrich critiques and design briefs with vocabulary the static screenshots can't
+capture (motion, interaction polish, design-system taxonomies). Apply at synthesis time.
+
+- `references/banned-phrases.md` — the banned-phrase list + visual anti-slop
+  patterns (text slop + visual slop that makes UI look "AI-generated").
+- `references/decision-effect-rejection.md` — the critique structure spec.
+- `references/design-engineering.md` — Emil Kowalski's UI polish philosophy:
+  animation decision framework (when to animate, easing, duration), component
+  building principles (scale on press, origin-aware popovers, clip-path), gesture
+  interactions, performance rules, accessibility. Use when the design brief
+  touches motion, micro-interactions, or component polish.
+- `references/material-design-3.md` — MD3 design-system taxonomy: 49-role tonal
+  color system, 15-level type scale, spacing/shape scales, component tokens.
+  Use as a tagging vocabulary anchor when classifying real-world UIs against a
+  codified design language (e.g. "tonal elevation via surfaceContainer steps
+  instead of shadows," "label-small type role at 10px/500").
+
 ## Do not
 
 - Do NOT copy the screenshots. Do NOT reproduce the visual appearance. Extract the **shared structural decisions** and adapt them.

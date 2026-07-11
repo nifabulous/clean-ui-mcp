@@ -665,6 +665,143 @@ server.registerTool(
   },
 );
 
+/**
+ * Tool: critique_ui
+ * Accepts a screenshot (base64, bounded) and optional product context, extracts
+ * structured facts via the two-pass tagger, retrieves visually/structurally
+ * similar approved corpus entries, and returns a grounded critique with cited
+ * recommendations. Falls back to structured-only retrieval when no
+ * image-embedding provider is configured.
+ *
+ * Image privacy: accepts bounded base64 only — no filesystem paths or URLs.
+ * Max decoded payload: 10 MiB. Image bytes are never logged.
+ */
+server.registerTool(
+  "critique_ui",
+  {
+    title: "Critique a UI screenshot",
+    description:
+      "Upload a UI screenshot and receive a grounded critique with cited " +
+      "recommendations. The tool extracts structured facts via the vision " +
+      "tagger, retrieves similar approved corpus examples, and synthesizes " +
+      "an observation-grounded critique. Every recommendation cites screenshot " +
+      "facts or corpus evidence IDs. Falls back to structured-only retrieval " +
+      "when image embeddings are unavailable. Image input is bounded base64 " +
+      "(max 10 MiB) — no paths or URLs accepted. No corpus mutation occurs.",
+    inputSchema: {
+      image_data: z.string().describe("Base64-encoded screenshot image data (png, jpeg, or webp)"),
+      image_mime_type: z.enum(["image/png", "image/jpeg", "image/webp"]).describe("MIME type of the image data"),
+      product_context: z.string().optional().describe("What the product is (e.g. 'A KPI tracking dashboard')"),
+      platform: z.enum(["web", "mobile", "tablet"]).optional().describe("Target platform for platform-aware retrieval"),
+    },
+  },
+  async (args) => {
+    const t0 = Date.now();
+    try {
+      // ── Validate input ──────────────────────────────────────────────────────
+      const { validateCritiqueUiInput, withValidatedImageFile, toNormalizedTaggerFacts } = await import("./critique-ui.js");
+      const validation = validateCritiqueUiInput({
+        image: { data: args.image_data, mimeType: args.image_mime_type },
+        productContext: args.product_context,
+        platform: args.platform,
+      });
+      if (!validation.valid) {
+        return { content: [{ type: "text", text: `❌ Invalid input: ${validation.error}` }], isError: true };
+      }
+      const input = validation.input;
+
+      // ── Extract facts via the two-pass tagger (extraction only) ──────────────
+      const { tagImage } = await import("./tagger.js");
+      const tagged = await withValidatedImageFile(input, async (imagePath) => {
+        return tagImage({
+          imagePath,
+          productName: input.productContext ?? "Screenshot",
+          url: null,
+          imageDetail: "low",
+          extractionOnly: true,
+        });
+      });
+
+      const extraction = toNormalizedTaggerFacts(tagged);
+      const detectedPlatform = input.platform ?? tagged.platform ?? "web";
+
+      // ── Retrieve evidence ─────────────────────────────────────────────────────
+      const { retrieveCritiqueEvidence } = await import("./critique-retrieval.js");
+      const { createImageEmbeddingProvider } = await import("./image-embeddings.js");
+      const { loadImageIndex } = await import("./image-index.js");
+
+      const imageProvider = createImageEmbeddingProvider();
+      const imageIndex = imageProvider
+        ? loadImageIndex(imageProvider.model)
+        : null;
+
+      const retrieval = await retrieveCritiqueEvidence({
+        imageProvider,
+        imageData: Buffer.from(input.image.data, "base64"),
+        imageMimeType: input.image.mimeType,
+        extraction,
+        productContext: input.productContext,
+        platform: detectedPlatform,
+        imageIndex,
+      });
+
+      // ── Synthesize critique ───────────────────────────────────────────────────
+      const { buildCritiqueEvidence, synthesizeCritique, gateCritique } = await import("./critique-synthesis.js");
+      const evidence = buildCritiqueEvidence(extraction, retrieval, input.productContext);
+      const evidenceIds = evidence.map((e) => e.id);
+
+      const draft = await synthesizeCritique(evidence, {
+        productContext: input.productContext,
+        platform: detectedPlatform,
+      });
+
+      const gated = gateCritique(draft, evidenceIds);
+
+      // ── Build response ────────────────────────────────────────────────────────
+      const latencyMs = Date.now() - t0;
+      const lines: string[] = [];
+      lines.push(`# UI Critique (${latencyMs}ms)`);
+      lines.push("");
+      lines.push(`**Platform:** ${detectedPlatform}`);
+      lines.push(`**Retrieval mode:** ${retrieval.mode}${retrieval.fallbackUsed ? " (fallback)" : ""}`);
+      lines.push(`**Evidence coverage:** ${retrieval.coverage}`);
+      lines.push("");
+      lines.push(`## Summary`);
+      lines.push(gated.summary);
+      lines.push("");
+      lines.push(`## Observations`);
+      for (const obs of gated.observations) {
+        lines.push(`- ${obs}`);
+      }
+      lines.push("");
+      lines.push(`## Recommendations`);
+      for (const rec of gated.recommendations) {
+        const tag = rec.uncertain ? " *(uncertain — no cited evidence)*" : "";
+        lines.push(`- **${rec.recommendation}**${tag}`);
+        lines.push(`  - Observation: ${rec.observation}`);
+        lines.push(`  - Impact: ${rec.impact}`);
+        if (rec.evidence.length > 0) {
+          lines.push(`  - Evidence: ${rec.evidence.join(", ")}`);
+        }
+      }
+      if (gated.accessibilityRisks.length > 0) {
+        lines.push("");
+        lines.push(`## Accessibility Risks`);
+        for (const risk of gated.accessibilityRisks) {
+          const wcag = risk.wcag.length > 0 ? ` (${risk.wcag.join("; ")})` : "";
+          lines.push(`- **${risk.element}**: ${risk.risk}${wcag}`);
+          lines.push(`  - Evidence: ${risk.evidence}`);
+        }
+      }
+
+      return { content: [{ type: "text", text: lines.join("\n") }] };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { content: [{ type: "text", text: `❌ Critique failed: ${msg}` }], isError: true };
+    }
+  },
+);
+
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);

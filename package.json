@@ -36,7 +36,9 @@
     "doctor": "tsc && node dist/scripts/doctor.js",
     "pattern-discovery": "tsc && node dist/scripts/pattern-discovery.js",
     "eval-baseline": "tsc && node scripts/eval-baseline.mjs",
-    "eval-matrix": "tsc && node scripts/eval-matrix.mjs"
+    "eval-matrix": "tsc && node scripts/eval-matrix.mjs",
+    "benchmark-image-embeddings": "tsc && node scripts/benchmark-image-embeddings.mjs",
+    "build-image-index": "tsc && node dist/scripts/build-image-index.js"
   },
   "keywords": [
     "mcp",

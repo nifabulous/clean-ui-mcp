@@ -38,7 +38,7 @@ Then add to their MCP client config:
 { "mcpServers": { "clean-ui": { "command": "node", "args": ["/path/to/clean-ui-mcp/dist/server.js"] } } }
 ```
 
-## Tool catalog (13 tools — three tiers)
+## Tool catalog (14 tools — three tiers)
 
 ### Retrieval — find and read entries
 - **`search_ui_examples(query?, category?, styleTag?, qualityTier?, minQuality?, reviewStatus?, limit?)`** — primary entry point. Free-text + structural filters. Returns metadata + critique per match. `qualityTier:"cautionary"` for bad examples; `reviewStatus:"draft"` to see WIP entries (hidden by default).

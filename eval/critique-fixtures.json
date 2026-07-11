@@ -1,0 +1,32 @@
+{
+  "_comment": "Deterministic fixtures for critique_ui testing. Each fixture references a small local image + expected metadata. Provider responses are never stored — these are for scoring citation coverage, retrieval mode, and fallback behavior.",
+  "fixtures": [
+    {
+      "id": "desktop-dashboard",
+      "_comment": "Desktop dashboard screenshot — expects strong corpus matches in dashboard/data-table patterns",
+      "imagePath": "eval/critique-fixtures/desktop-dashboard.png",
+      "productContext": "A dashboard for tracking sales KPIs",
+      "platform": "web",
+      "expectedPatternType": "dashboard",
+      "expectCorpusMatch": true
+    },
+    {
+      "id": "mobile-onboarding",
+      "_comment": "Portrait mobile flow — expects mobile-filtered retrieval, onboarding/landing patterns",
+      "imagePath": "eval/critique-fixtures/mobile-onboarding.png",
+      "productContext": "A mobile onboarding flow for a fintech app",
+      "platform": "mobile",
+      "expectedPatternType": "onboarding",
+      "expectCorpusMatch": true
+    },
+    {
+      "id": "no-match",
+      "_comment": "Abstract/ambiguous screenshot — expects low similarity, fallback to structured retrieval",
+      "imagePath": "eval/critique-fixtures/no-match.png",
+      "productContext": "An experimental 3D rendering interface",
+      "platform": "web",
+      "expectedPatternType": null,
+      "expectCorpusMatch": false
+    }
+  ]
+}

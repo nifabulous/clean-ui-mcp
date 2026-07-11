@@ -27,6 +27,8 @@ corpus/decisions.json
 
 # Derived — regenerate with `npm run build-index`
 corpus/embeddings.json
+# Derived — image embeddings, regenerate with `npm run build-image-index`
+corpus/image-embeddings.json
 # Derived — dHash fingerprint cache, rebuilt by the curator UI at runtime
 corpus/.dhash-cache.json
 # Derived — MCP query log (retrieval analytics), populated at runtime by the server

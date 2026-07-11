@@ -32,7 +32,7 @@ other than the statistical average of training data (the "AI slop" failure mode)
 - [DOM signals extraction](#dom-signals-extraction)
 - [Bulk re-tag](#bulk-re-tag)
 - [Dedup](#dedup)
-- [MCP tools (13)](#mcp-tools-13)
+- [MCP tools (14)](#mcp-tools-14)
 - [Decision Lab](#decision-lab)
 - [Skill — agent workflow](#skill--agent-workflow)
 - [Adding entries](#adding-entries)
@@ -127,8 +127,8 @@ After `npm run build`, point any MCP-compatible client at the server:
 
 Drop this into your client's config file — `claude_desktop_config.json` for
 Claude Desktop, `.mcp.json` for Claude Code, or the equivalent for whichever
-MCP client you use. The server speaks stdio and exposes the 13 tools listed
-under [MCP tools](#mcp-tools-13).
+MCP client you use. The server speaks stdio and exposes the 14 tools listed
+under [MCP tools](#mcp-tools-14).
 
 ---
 
@@ -462,7 +462,7 @@ scripts can reuse it without importing the HTTP server.
 
 ---
 
-## MCP tools (13)
+## MCP tools (14)
 
 All tools are read-only over the corpus, organized into three tiers:
 **retrieval**, **synthesis**, and **aggregation**.
@@ -492,6 +492,12 @@ All tools are read-only over the corpus, organized into three tiers:
 | `get_anti_patterns(patternType?, category?, limit?)` | Consensus "what NOT to do" across matching entries, ranked by frequency. |
 | `get_color_palette(patternType?, styleTag?, limit?)` | Paste-ready color token sets grouped by accent hue band. |
 | `get_stealable_techniques(patternType?, styleTag?, limit?)` | Copyable techniques across a category, deduped by theme. |
+
+### Screenshot critique
+
+| Tool | Purpose |
+|---|---|
+| `critique_ui(image_data, image_mime_type, product_context?, platform?)` | Upload a UI screenshot (bounded base64, max 10 MiB) and receive a grounded critique with cited recommendations. Extracts structured facts via the vision tagger, retrieves similar approved corpus examples, and synthesizes an observation-grounded critique. Falls back to structured-only retrieval when image embeddings are unavailable. Image bytes are never logged. |
 
 All tools exclude drafts by default.
 
@@ -712,7 +718,7 @@ clean-ui-mcp/
 ├── src/
 │   ├── schema.ts               # Zod schema (the data model)
 │   ├── corpus.ts               # load / search / similar / compare
-│   ├── server.ts               # MCP server: 13 tools
+│   ├── server.ts               # MCP server: 14 tools
 │   ├── design-prompt.ts        # generate_design_prompt synthesis
 │   ├── recommend.ts            # recommend_ui_direction synthesis
 │   ├── aggregations.ts         # anti-patterns / palettes / techniques / browse
@@ -788,15 +794,18 @@ clean-ui-mcp/
 | `npm run migrate-wcag-ids` | Accessibility risks → canonical WCAG 2.2 IDs |
 | `npm run eval-baseline` | Tagger eval: score raw output against gold labels, write/diff baseline |
 | `npm run eval-matrix` | Provider/model matrix: loop over config triples, emit per-config baselines + comparison table |
+| `npm run build-image-index` | Embed approved corpus images into the image-embedding index (requires image-embedding provider configured) |
+| `npm run benchmark-image-embeddings` | Benchmark the configured image-embedding provider against the critique fixtures |
 
 ---
 
 ## Testing
 
-385 tests across 23 files: vitest unit tests (schema, corpus, tagger, tagger
+420 tests across 28 files: vitest unit tests (schema, corpus, tagger, tagger
 contract, WCAG registry, embeddings, dedup, design-prompt, recommend,
-aggregations, decision lab, eval scorer) + Playwright browser tests (dashboard
-flows, bulk import, capture, candidate review).
+aggregations, decision lab, eval scorer, critique-ui, image-embeddings,
+image-index, critique-retrieval, critique-synthesis) + Playwright browser
+tests (dashboard flows, bulk import, capture, candidate review).
 
 ```bash
 npm test                 # all tests

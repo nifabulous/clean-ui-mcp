@@ -1,0 +1,24 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:  # manual trigger
+  schedule:
+    - cron: '0 6 * * 1'  # weekly Monday 6am UTC
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install chromium --with-deps
+      - run: npm run build
+      - run: RUN_LIVE_INTEGRATION=1 npm test
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          IMAGE_EMBEDDING_API_KEY: ${{ secrets.IMAGE_EMBEDDING_API_KEY }}
+          IMAGE_EMBEDDING_PROVIDER: voyage

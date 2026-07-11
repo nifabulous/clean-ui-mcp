@@ -112,10 +112,25 @@ enforcement mechanism for this standard; the skill instructions are the process.
 ### How to review
 
 Use `superpowers:requesting-code-review`. Dispatch a code-reviewer
-subagent with:
+subagent using the prompt template at `.zcode/code-reviewer.md`. That template
+adds four mandatory review dimensions that catch the bug classes pure-consistency
+reviews miss:
+
+1. **Plan-step completion** — verify EVERY step's requirements are implemented, not just "something was done"
+2. **External contract verification** — verify request/response shapes against real API docs, not internal mocks
+3. **Data-flow tracing** — for each constraint in the plan's Global Constraints, trace the specific variable that enforces it
+4. **Edge-case adequacy** — check whether tests use enough entries to trigger the bug class (2 entries can't catch a 12-vs-1 ordering bug)
+
+**Mocked tests give false confidence at integration seams.** A review that only
+checks internal consistency (types match, tests pass) will miss contract bugs
+that only surface against real external protocols. Always verify the external
+contract, not just the mock.
+
+Required inputs to the dispatcher:
 - The description of what was built
-- The plan or requirements reference
+- The plan file path (exact)
 - BASE_SHA and HEAD_SHA for the git range
+- The plan's Global Constraints section, pasted inline
 - Calibration: categorize by actual severity (Critical / Important / Minor)
 
 After the review returns, write the artifact so the git gate passes:

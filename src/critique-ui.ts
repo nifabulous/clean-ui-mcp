@@ -32,7 +32,6 @@ export interface CritiqueUiInput {
   };
   productContext?: string;
   platform?: (typeof SUPPORTED_PLATFORMS)[number];
-  framework?: string;
 }
 
 export interface CritiqueEvidence {
@@ -48,20 +47,6 @@ export interface CritiqueRecommendation {
   recommendation: string;
   evidence: string[]; // evidence IDs
   uncertain?: boolean;
-}
-
-export interface CritiqueUiResult {
-  summary: string;
-  observations: string[];
-  recommendations: CritiqueRecommendation[];
-  accessibilityRisks: Array<{ element: string; risk: string; evidence: string; wcag: string[] }>;
-  evidence: CritiqueEvidence[];
-  confidence: "high" | "medium" | "low";
-  fallbackUsed: boolean;
-  provider: {
-    embedding?: string;
-    synthesis?: string;
-  };
 }
 
 export type ValidationResult =
@@ -153,17 +138,12 @@ export function validateCritiqueUiInput(raw: unknown): ValidationResult {
     return { valid: false, error: "productContext must be a string if provided." };
   }
 
-  if (obj.framework !== undefined && typeof obj.framework !== "string") {
-    return { valid: false, error: "framework must be a string if provided." };
-  }
-
   return {
     valid: true,
     input: {
       image: { data: img.data as string, mimeType: img.mimeType as SupportedMimeType },
       productContext: obj.productContext as string | undefined,
       platform: obj.platform as CritiqueUiInput["platform"],
-      framework: obj.framework as string | undefined,
     },
   };
 }

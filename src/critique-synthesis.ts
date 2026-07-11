@@ -162,7 +162,12 @@ export async function synthesizeCritique(
       "Your previous response was not valid JSON. Return the complete critique as one JSON object only.",
       options.endpointOverride,
     );
-    parsed = JSON.parse(stripFences(raw)) as Record<string, unknown>;
+    try {
+      parsed = JSON.parse(stripFences(raw)) as Record<string, unknown>;
+    } catch {
+      // Second parse failure — degrade to empty draft rather than throw.
+      return { summary: "", observations: [], recommendations: [], accessibilityRisks: [] };
+    }
   }
   // Defensive defaults: the LLM may omit or malform fields.
   return {

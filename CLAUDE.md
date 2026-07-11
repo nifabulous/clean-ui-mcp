@@ -45,8 +45,12 @@ commits); once the branch is pushed, `gh pr create` opens the PR against the
 already-pushed commits. The push is the enforcement point.
 
 ```
-Branch artifact: .zcode/reviews/branches/<branch-with-slashes-replaced>.json
+Branch artifact: .zcode/reviews/branches/<url-encoded-branch>.json
 ```
+
+The branch name is URL-encoded for the filename (e.g. `feat/x` → `feat%2Fx`)
+so the mapping is injective. Use the `write-review-artifact` script to create
+artifacts — it handles the encoding automatically.
 
 Write it after the holistic review:
 

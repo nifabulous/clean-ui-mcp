@@ -54,7 +54,7 @@ CHECKED_SHA="$(git rev-parse HEAD 2>/dev/null || echo '')"
 
 if [ "${ZCODE_BYPASS_REVIEW:-}" = "1" ]; then
   mkdir -p "$ZCODE_DIR/reviews"
-  PUSHED_NAMES="$(echo "$PUSH_ENTRIES" | tr ' ' '\n' | cut -d: -f1 | xargs)"
+  PUSHED_NAMES="$(echo "$PUSH_ENTRIES" | tr ' ' '\n' | cut -d: -f1 | tr '\n' ' ' | sed 's/ $//')"
   python3 -c '
 import json, sys
 entry = {"ts": sys.argv[1], "checkedBranch": sys.argv[2], "checkedSha": sys.argv[3], "hook": "pre-push", "bypass": True, "pushedBranches": sys.argv[4]}

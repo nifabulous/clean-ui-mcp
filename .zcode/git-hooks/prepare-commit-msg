@@ -47,10 +47,11 @@ case "$BRANCH" in
   main|master) exit 0 ;;
 esac
 
-# C1 fix (bootstrap): if HEAD is reachable from main or master, it's a trunk
+# C1 fix (bootstrap): if HEAD is reachable from a trunk branch, it's a trunk
 # commit that predates the hooks — no task review exists or should exist.
 # Without this, the first feature commit after branching is permanently blocked.
-for trunk in main master; do
+# I1 fix: also check origin/main, origin/master for clones without local main.
+for trunk in main master origin/main origin/master; do
   if git merge-base --is-ancestor "$HEAD_SHA" "$trunk" 2>/dev/null; then
     exit 0
   fi

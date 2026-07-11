@@ -44,6 +44,25 @@ case "$TYPE" in task|branch) ;; *) echo "invalid --type: $TYPE (expected task|br
 case "$RESULT" in approved|changes-requested) ;; *) echo "invalid --result: $RESULT (expected approved|changes-requested)" >&2; exit 1 ;; esac
 case "$REVIEWER" in human|agent) ;; *) echo "invalid --reviewer: $REVIEWER (expected human|agent)" >&2; exit 1 ;; esac
 
+# I2 fix: validate SHA format to prevent path traversal (e.g. --head-sha "../../pwned").
+# Git SHAs are 40 hex chars (SHA-1) or 64 hex chars (SHA-256). Zero-SHA is also valid.
+case "$HEAD_SHA" in
+  *[!0-9a-f]*)
+    echo "invalid --head-sha: must be hex characters only (got: $HEAD_SHA)" >&2
+    exit 1
+    ;;
+esac
+case ${#HEAD_SHA} in
+  40|64) ;;
+  *) echo "invalid --head-sha: must be 40 or 64 hex chars (got ${#HEAD_SHA}: $HEAD_SHA)" >&2; exit 1 ;;
+esac
+case "$BASE_SHA" in
+  *[!0-9a-f]*)
+    echo "invalid --base-sha: must be hex characters only (got: $BASE_SHA)" >&2
+    exit 1
+    ;;
+esac
+
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "${ZCODE_PROJECT_DIR:-$(pwd)}")"
 ZCODE_DIR="$ROOT/.zcode"
 # C4 fix: refuse if .zcode is a symlink (security).

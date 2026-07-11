@@ -551,6 +551,9 @@ describe("activeModelName per-pass resolution", () => {
     AUTO_TAG_PROVIDER_CRITIQUE: process.env.AUTO_TAG_PROVIDER_CRITIQUE,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    MINIMAX_API_KEY: process.env.MINIMAX_API_KEY,
+    XAI_API_KEY: process.env.XAI_API_KEY,
+    MISTRAL_API_KEY: process.env.MISTRAL_API_KEY,
   };
 
   afterEach(() => {
@@ -571,6 +574,11 @@ describe("activeModelName per-pass resolution", () => {
     delete process.env.OPENAI_AUTO_TAG_MODEL_EXTRACTION;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.GEMINI_API_KEY;
+    // Clear peak-hour fallback keys so the DeepSeek→MiniMax swap can't fire
+    // during peak UTC windows (was the source of a pre-existing flake).
+    delete process.env.MINIMAX_API_KEY;
+    delete process.env.XAI_API_KEY;
+    delete process.env.MISTRAL_API_KEY;
 
     process.env.OPENAI_API_KEY = "sk-test";
     process.env.OPENAI_API_KEY_CRITIQUE = "nvapi-test";
@@ -1547,6 +1555,17 @@ describe("endpoint-config override", () => {
     process.env.MINIMAX_API_KEY = "minimax-key"; // peak-hour fallback would use this
     const calls = recordingMock();
 
+    // I4 fix: mock Date to a known peak hour (02:00 UTC) so the test is
+    // deterministic. isDeepSeekPeakHour checks getUTCHours() against [1-4, 6-10].
+    // Using vi.spyOn(Date, 'now') + a custom Date constructor wrapper would be
+    // cleaner, but vitest's fake timers also intercept setTimeout which breaks
+    // the async tagImage call. Instead, mock the Date object's getUTCHours.
+    const realDate = Date;
+    const mockDate = class extends realDate {
+      getUTCHours() { return 2; } // 02:00 UTC = peak window
+    };
+    vi.stubGlobal("Date", mockDate);
+
     await tagImage({
       imagePath: testImage2,
       productName: "Test",
@@ -1558,6 +1577,8 @@ describe("endpoint-config override", () => {
         model: "deepseek-ai/deepseek-v4-pro",
       },
     });
+
+    vi.unstubAllGlobals();
 
     // Critique call must hit DeepSeek (the pinned endpoint), NOT MiniMax
     expect(calls.length).toBe(2);

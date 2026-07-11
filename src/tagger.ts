@@ -368,6 +368,17 @@ function validateEndpointOverride(cfg: EndpointOverride, pass: TaggerPass): void
   if (pass === "extraction" && cfg.provider === "mistral") {
     throw new Error(`Invalid endpoint override for extraction: mistral is text-only (no vision capability)`);
   }
+  // M7 fix: for non-openai providers, baseUrl/apiKey/model are silently ignored
+  // (the override only forwards the full triple for openai). Reject them so
+  // users don't set a model on a claude lane expecting it to be pinned.
+  if (cfg.provider !== "openai") {
+    if (cfg.baseUrl || cfg.apiKey || cfg.model) {
+      throw new Error(
+        `Invalid endpoint override for ${pass}: baseUrl/apiKey/model are not honored for provider "${cfg.provider}" ` +
+        `(only "openai" supports the full config triple). Remove these fields or switch the provider to "openai".`,
+      );
+    }
+  }
 }
 // Mistral config — same shape as OpenAIConfig since Mistral's API is
 // OpenAI-compatible. Points at La Plateforme by default; override the base

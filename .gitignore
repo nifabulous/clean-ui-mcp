@@ -53,12 +53,10 @@ corpus/bulk-test-*
 # Copy .corpus-config.example.json to .corpus-config.json and set your floor.
 corpus/.corpus-config.json
 
-# Review-enforcement artifacts — per-machine state. The PR conversation is the
-# shared record; these JSON files are local gates for the git hooks.
-.zcode/reviews/
-.zcode/tmp/
-# ZCode session/debug artifacts — machine-specific, not shared
-.zcode/plans/
-.zcode/e2e-*
-.zcode/fresh-marker
-.zcode/*-marker
+# ZCode per-machine/session state — allowlist only the deliberately-shared paths.
+# Everything else under .zcode/ is local (reviews, tmp, plans, debug markers).
+.zcode/*
+!.zcode/config.json
+!.zcode/git-hooks/
+!.zcode/hooks/
+!.zcode/scripts/

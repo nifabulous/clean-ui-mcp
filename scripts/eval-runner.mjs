@@ -100,26 +100,6 @@ export async function runEvalCase(input) {
 }
 
 /**
- * Resolve the active provider/model names for a given pass, respecting an
- * optional override. Used by baseline/matrix runners to stamp traceability
- * metadata in baseline artifacts.
- *
- * @param {"extraction" | "critique"} pass
- * @param {import("../dist/tagger.js").EndpointOverride} [override]
- * @returns {{ provider: string, model: string }}
- */
-export function resolvedEndpoint(pass, override) {
-  if (override) {
-    // Override is a pinned config triple — report what was pinned.
-    return {
-      provider: activeProviderName(pass),
-      model: override.model ?? activeModelName(pass),
-    };
-  }
-  return { provider: activeProviderName(pass), model: activeModelName(pass) };
-}
-
-/**
  * Build an EndpointOverride from env vars for a given pass. Used by the
  * baseline runner to pin explicit configs at startup (bypasses peak-hour
  * routing for determinism). For OpenAI-compatible providers, reads the

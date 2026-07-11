@@ -48,7 +48,7 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
   on human edit; CLI marks `human`. corpus-stats surfaces the split. Optional,
   defaults absent (existing entries show as "unknown" — no migration).
 
-### MCP tools (13)
+### MCP tools (14)
 - `search_ui_examples` — vector/keyword search with qualityTier filter
 - `get_ui_example` — full detail + image
 - `get_similar_ui_examples` — cosine similarity ranking
@@ -185,11 +185,15 @@ premium" is often *how it moves*. Needs a `motion` dimension. **Cannot
 auto-extract from static screenshots** — requires interaction recording or manual
 prose. Lower priority until the corpus has motion-rich examples.
 
-### `critique_ui(image, productContext)`
-The end-state feature: screenshot your own product, find structurally similar
-corpus entries, synthesize a critique. Needs **image embeddings** (separate from
-text embeddings). Voyage voyage-4 is text-only; this requires a multimodal
-embedding model. Significant new integration.
+### ✅ `critique_ui(image_data, productContext)`
+Shipped. Screenshot your own product, find visually + structurally similar
+approved corpus entries, and receive a grounded critique with cited
+recommendations. Uses a pluggable image-embedding provider ( Voyage multimodal
+or OpenAI) with structured-only fallback when unconfigured. The tool follows
+the same trust-boundary pattern as the tagger and Decision Lab: raw model
+output is audit-only, synthesis receives sanitized evidence, and a post-hoc
+citation gate drops uncited recommendations. Bounded base64 image input
+(max 10 MiB), no corpus mutation, no image bytes logged.
 
 ### Multi-image entries + annotations
 `ImageRef` is single-image. Add a `screenshots[]` array supporting desktop/mobile/

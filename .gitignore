@@ -57,3 +57,8 @@ corpus/.corpus-config.json
 # shared record; these JSON files are local gates for the git hooks.
 .zcode/reviews/
 .zcode/tmp/
+# ZCode session/debug artifacts — machine-specific, not shared
+.zcode/plans/
+.zcode/e2e-*
+.zcode/fresh-marker
+.zcode/*-marker

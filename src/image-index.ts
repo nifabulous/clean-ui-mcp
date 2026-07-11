@@ -63,6 +63,16 @@ export function imageIndexStatus(): ImageIndexStatus {
 }
 
 /**
+ * Test-only override of the image index (mirrors setCorpusForTesting).
+ * When set, loadImageIndex returns this instead of reading from disk.
+ * Pass null to restore real file-based loading.
+ */
+let testIndexOverride: ImageEmbeddingIndex | null = null;
+export function setImageIndexForTesting(index: ImageEmbeddingIndex | null): void {
+  testIndexOverride = index;
+}
+
+/**
  * Load the image index. Returns null if the file doesn't exist or is stale
  * (wrong model). The index is self-describing: it carries its own dimension
  * field, so we validate the model name but trust the stored dimension.
@@ -75,6 +85,11 @@ export function imageIndexStatus(): ImageIndexStatus {
  * Never loads or overwrites corpus/embeddings.json.
  */
 export function loadImageIndex(expectedModel: string): ImageEmbeddingIndex | null {
+  // Test override: return the injected index if set (hermetic testing).
+  if (testIndexOverride !== null) {
+    if (testIndexOverride.model !== expectedModel) return null;
+    return testIndexOverride;
+  }
   if (!existsSync(IMAGE_INDEX_PATH)) return null;
   let raw: unknown;
   try {

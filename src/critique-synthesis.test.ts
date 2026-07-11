@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCritiqueEvidence, gateCritique, type CritiqueUiDraft } from "./critique-synthesis.js";
 
 const callTextModel = vi.hoisted(() => vi.fn());
@@ -7,6 +7,8 @@ vi.mock("./tagger.js", () => ({
   activeProviderName: () => "test",
   activeModelName: () => "test-model",
 }));
+
+afterEach(() => callTextModel.mockReset());
 
 describe("buildCritiqueEvidence", () => {
   it("assembles screen evidence from extraction facts", () => {
@@ -132,5 +134,18 @@ describe("synthesizeCritique retry", () => {
     const { synthesizeCritique } = await import("./critique-synthesis.js");
     await expect(synthesizeCritique([{ id: "screen:patternType", source: "screen", label: "patternType", detail: "dashboard" }], {})).resolves.toMatchObject({ summary: "Recovered" });
     expect(callTextModel).toHaveBeenCalledTimes(2);
+  });
+
+  it("forwards a pinned endpoint override to the synthesis model call", async () => {
+    callTextModel.mockResolvedValueOnce(JSON.stringify({ summary: "Pinned", observations: [], recommendations: [], accessibilityRisks: [] }));
+    const endpointOverride = {
+      provider: "openai" as const,
+      baseUrl: "",
+      apiKey: "test-key",
+      model: "gpt-5.4-nano",
+    };
+    const { synthesizeCritique } = await import("./critique-synthesis.js");
+    await synthesizeCritique([], { providerOverride: "openai", endpointOverride });
+    expect(callTextModel).toHaveBeenCalledWith(expect.any(String), "openai", undefined, endpointOverride);
   });
 });

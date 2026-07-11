@@ -9,6 +9,7 @@
  */
 import { callTextModel } from "./tagger.js";
 import { activeProviderName, activeModelName } from "./tagger.js";
+import type { EndpointOverride, Provider } from "./tagger.js";
 import type { CritiqueEvidence, CritiqueRecommendation } from "./critique-ui.js";
 import type { RetrievalResult } from "./critique-retrieval.js";
 import { isWcagCriterion } from "./wcag/registry.js";
@@ -35,6 +36,8 @@ export interface CritiqueUiDraft {
 export interface SynthesizeOptions {
   productContext?: string;
   platform?: string;
+  providerOverride?: Provider;
+  endpointOverride?: EndpointOverride;
 }
 
 // ─── evidence assembly ─────────────────────────────────────────────────────────
@@ -148,15 +151,16 @@ export async function synthesizeCritique(
   options: SynthesizeOptions,
 ): Promise<CritiqueUiDraft> {
   const prompt = buildCritiquePrompt(evidence, options);
-  let raw = await callTextModel(prompt);
+  let raw = await callTextModel(prompt, options.providerOverride, undefined, options.endpointOverride);
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(stripFences(raw)) as Record<string, unknown>;
   } catch {
     raw = await callTextModel(
       prompt,
-      undefined,
+      options.providerOverride,
       "Your previous response was not valid JSON. Return the complete critique as one JSON object only.",
+      options.endpointOverride,
     );
     parsed = JSON.parse(stripFences(raw)) as Record<string, unknown>;
   }

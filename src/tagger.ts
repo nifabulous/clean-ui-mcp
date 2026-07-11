@@ -637,7 +637,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-type Provider = "openai" | "claude" | "gemini" | "mistral" | "minimax" | "grok";
+export type Provider = "openai" | "claude" | "gemini" | "mistral" | "minimax" | "grok";
 type TaggerPass = "extraction" | "critique";
 
 // ─── peak-hour DeepSeek → MiniMax/Claude routing ────────────────────────────
@@ -2111,8 +2111,26 @@ export async function callTextModel(
   prompt: string,
   providerOverride?: Provider,
   retryFeedback?: string,
+  endpointOverride?: EndpointOverride,
 ): Promise<string> {
-  return callModel("critique", prompt, null, retryFeedback, "high", undefined, providerOverride);
+  if (endpointOverride) validateEndpointOverride(endpointOverride, "critique");
+  const cfgOverride = endpointOverride?.provider === "openai" && endpointOverride.model && endpointOverride.apiKey
+    ? {
+        baseUrl: (endpointOverride.baseUrl ?? "").replace(/\/+$/, ""),
+        apiKey: endpointOverride.apiKey,
+        model: endpointOverride.model,
+      }
+    : undefined;
+  return callModel(
+    "critique",
+    prompt,
+    null,
+    retryFeedback,
+    "high",
+    undefined,
+    endpointOverride?.provider ?? providerOverride,
+    cfgOverride,
+  );
 }
 
 // ─── core two-pass orchestration ─────────────────────────────────────────────

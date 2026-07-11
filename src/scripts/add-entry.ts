@@ -22,7 +22,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { execSync } from "node:child_process";
 import { imageSize } from "image-size";
@@ -461,4 +461,10 @@ try {
 rl.close();
 } // end main()
 
-main().catch((err) => { console.error(err); process.exit(1); });
+// Only run the interactive wizard when executed directly as a script, not when
+// imported by tests for validateEntryGates. Two independent conditions: VITEST
+// env var catches vitest runs; pathToFileURL comparison catches any import
+// (path-safe: handles spaces and platform-specific path formats).
+if (!process.env.VITEST && process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => { console.error(err); process.exit(1); });
+}

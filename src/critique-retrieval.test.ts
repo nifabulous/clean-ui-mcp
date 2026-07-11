@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { retrieveCritiqueEvidence, type RetrievalResult } from "./critique-retrieval.js";
+import { describe, expect, it, vi, afterEach } from "vitest";
+import { retrieveCritiqueEvidence } from "./critique-retrieval.js";
 
 // Mock corpus + embeddings to test retrieval in isolation.
 vi.mock("./corpus.js", () => ({
@@ -16,9 +16,13 @@ vi.mock("./corpus.js", () => ({
 }));
 
 vi.mock("./image-index.js", () => ({
-  loadImageIndex: vi.fn(() => null), // no index by default
+  loadImageIndex: vi.fn(() => null),
   cosine: vi.fn((a: number[], b: number[]) => 0.5),
 }));
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("retrieveCritiqueEvidence", () => {
   it("falls back to structured retrieval when no image provider", async () => {
@@ -104,5 +108,174 @@ describe("retrieveCritiqueEvidence", () => {
     });
     expect(result.mode).toBe("image");
     expect(result.entries.map((e) => e.id)).toContain("approved-1");
+  });
+
+  // ─── Edge-case tests (proportional to bug classes) ──────────────────────────
+
+  it("returns empty entries with coverage 'none' when searchRanked has no matches", async () => {
+    const { searchRanked } = await import("./corpus.js");
+    vi.mocked(searchRanked).mockResolvedValueOnce([]);
+    const result = await retrieveCritiqueEvidence({
+      imageProvider: null,
+      imageData: null,
+      extraction: { patternType: "nonexistent" },
+      productContext: "A product with no corpus match",
+      platform: "web",
+      imageIndex: null,
+    });
+    expect(result.entries.length).toBe(0);
+    expect(result.coverage).toBe("none");
+    expect(result.mode).toBe("structured-fallback");
+  });
+
+  it("falls back to structured when image index has no entries", async () => {
+    const result = await retrieveCritiqueEvidence({
+      imageProvider: { name: "voyage", model: "m", embedImage: async () => [1] },
+      imageData: Buffer.from("fake"),
+      imageMimeType: "image/png",
+      extraction: { patternType: "dashboard" },
+      platform: "web",
+      imageIndex: { version: 1, model: "m", dimension: 1, entries: {} },
+    });
+    expect(result.mode).toBe("structured-fallback");
+    expect(result.fallbackUsed).toBe(true);
+  });
+
+  it("falls back to structured when embedImage throws", async () => {
+    const result = await retrieveCritiqueEvidence({
+      imageProvider: { name: "voyage", model: "m", embedImage: async () => { throw new Error("API timeout"); } },
+      imageData: Buffer.from("fake"),
+      imageMimeType: "image/png",
+      extraction: { patternType: "dashboard" },
+      platform: "web",
+      imageIndex: {
+        version: 1, model: "m", dimension: 1,
+        entries: { e1: { vector: [1], hash: "x" } },
+      },
+    });
+    expect(result.mode).toBe("structured-fallback");
+    expect(result.fallbackUsed).toBe(true);
+  });
+
+  it("filters orphaned image-index entries (id not in corpus)", async () => {
+    const { loadCorpus } = await import("./corpus.js");
+    vi.mocked(loadCorpus).mockReturnValueOnce([
+      { id: "real-1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Real" },
+    ] as never);
+    const result = await retrieveCritiqueEvidence({
+      imageProvider: { name: "voyage", model: "m", embedImage: async () => [1] },
+      imageData: Buffer.from("fake"),
+      imageMimeType: "image/png",
+      extraction: { patternType: "dashboard" },
+      platform: "web",
+      imageIndex: {
+        version: 1, model: "m", dimension: 1,
+        entries: {
+          "orphaned-1": { vector: [1], hash: "x" }, // not in corpus → filtered
+          "real-1": { vector: [0.9], hash: "y" },   // in corpus → kept
+        },
+      },
+    });
+    expect(result.mode).toBe("image");
+    expect(result.entries.map((e) => e.id)).toContain("real-1");
+    expect(result.entries.map((e) => e.id)).not.toContain("orphaned-1");
+  });
+
+  it("filters entries demoted from approved to draft after indexing", async () => {
+    const { loadCorpus } = await import("./corpus.js");
+    vi.mocked(loadCorpus).mockReturnValueOnce([
+      { id: "demoted", patternType: "dashboard", platform: "web", reviewStatus: "draft", title: "Was Approved" },
+      { id: "still-approved", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Still Good" },
+    ] as never);
+    const result = await retrieveCritiqueEvidence({
+      imageProvider: { name: "voyage", model: "m", embedImage: async () => [1] },
+      imageData: Buffer.from("fake"),
+      imageMimeType: "image/png",
+      extraction: { patternType: "dashboard" },
+      platform: "web",
+      imageIndex: {
+        version: 1, model: "m", dimension: 1,
+        entries: {
+          "demoted": { vector: [1], hash: "x" },         // was approved at indexing time, now draft
+          "still-approved": { vector: [0.9], hash: "y" },
+        },
+      },
+    });
+    expect(result.mode).toBe("image");
+    expect(result.entries.map((e) => e.id)).toContain("still-approved");
+    expect(result.entries.map((e) => e.id)).not.toContain("demoted");
+  });
+
+  it("falls back gracefully with empty corpus", async () => {
+    const { loadCorpus, searchRanked } = await import("./corpus.js");
+    vi.mocked(loadCorpus).mockReturnValueOnce([] as never);
+    vi.mocked(searchRanked).mockResolvedValueOnce([]);
+    const result = await retrieveCritiqueEvidence({
+      imageProvider: { name: "voyage", model: "m", embedImage: async () => [1] },
+      imageData: Buffer.from("fake"),
+      imageMimeType: "image/png",
+      extraction: { patternType: "dashboard" },
+      platform: "web",
+      imageIndex: {
+        version: 1, model: "m", dimension: 1,
+        entries: { "ghost": { vector: [1], hash: "x" } },
+      },
+    });
+    // Image index has entries but none are in corpus → falls through to structured
+    // Structured also returns empty → coverage "none"
+    expect(result.entries.length).toBe(0);
+  });
+
+  it("applies platform penalty after approved filtering", async () => {
+    const { loadCorpus } = await import("./corpus.js");
+    vi.mocked(loadCorpus).mockReturnValueOnce([
+      { id: "web-1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Web A" },
+      { id: "mobile-1", patternType: "dashboard", platform: "mobile", reviewStatus: "approved", title: "Mobile A" },
+    ] as never);
+    // Override the cosine mock to return distinct scores per entry vector so the
+    // platform penalty has real differentiation to work with.
+    const { cosine } = await import("./image-index.js");
+    vi.mocked(cosine).mockImplementation((_a: number[], b: number[]) => {
+      // b is the entry vector — return the first element as the score
+      return b[0] ?? 0.5;
+    });
+
+    const result = await retrieveCritiqueEvidence({
+      imageProvider: { name: "voyage", model: "m", embedImage: async () => [1] },
+      imageData: Buffer.from("fake"),
+      imageMimeType: "image/png",
+      extraction: { patternType: "dashboard" },
+      platform: "web",
+      imageIndex: {
+        version: 1, model: "m", dimension: 1,
+        entries: {
+          "web-1": { vector: [0.8], hash: "x" },
+          "mobile-1": { vector: [0.95], hash: "y" }, // higher raw score but wrong platform
+        },
+      },
+    });
+    expect(result.mode).toBe("image");
+    // Both survive approved filtering, but web-1 should be ranked above mobile-1
+    // because mobile-1's score is halved (0.95 * 0.5 = 0.475 < 0.8)
+    const ids = result.entries.map((e) => e.id);
+    expect(ids).toContain("web-1");
+    expect(ids).toContain("mobile-1");
+    expect(ids.indexOf("web-1")).toBeLessThan(ids.indexOf("mobile-1"));
+  });
+
+  it("falls back when query vector dimension doesn't match index dimension", async () => {
+    const result = await retrieveCritiqueEvidence({
+      imageProvider: { name: "voyage", model: "m", embedImage: async () => [1, 2, 3] }, // dim 3
+      imageData: Buffer.from("fake"),
+      imageMimeType: "image/png",
+      extraction: { patternType: "dashboard" },
+      platform: "web",
+      imageIndex: {
+        version: 1, model: "m", dimension: 1024, // mismatch: 3 vs 1024
+        entries: { e1: { vector: new Array(1024).fill(0), hash: "x" } },
+      },
+    });
+    expect(result.mode).toBe("structured-fallback");
+    expect(result.fallbackUsed).toBe(true);
   });
 });

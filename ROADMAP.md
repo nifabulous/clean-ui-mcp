@@ -48,12 +48,12 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
   on human edit; CLI marks `human`. corpus-stats surfaces the split. Optional,
   defaults absent (existing entries show as "unknown" — no migration).
 
-### MCP tools (12)
+### MCP tools (13)
 - `search_ui_examples` — vector/keyword search with qualityTier filter
 - `get_ui_example` — full detail + image
 - `get_similar_ui_examples` — cosine similarity ranking
 - `compare_ui_examples` — side-by-side structured comparison
-- `list_categories` / `list_style_tags`
+- `list_categories` / `list_style_tags` / `list_domain_tags`
 - `generate_design_prompt(ids, framework?)` — synthesize a design brief across
   2-5 entries (paste-ready color tokens, typography, layout, voice, anti-patterns)
 - `recommend_ui_direction(productContext)` — the "design advisor": describe what
@@ -76,6 +76,15 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
 - Recovery surface (`/api/health` + snapshot count on stats page)
 - Split into `ui/styles.css` + `ui/app.js` + slim HTML shell (was 1931 lines,
   now 57 + 426 + 1450), served via path-traversal-guarded `/static/*` route
+
+### Decision Lab
+- Comparative UI analysis: 2-3 screenshots → tagger extraction → corpus
+  retrieval → cited comparative brief
+- Three-layer architecture (evidence assembly → LLM synthesis → citation gate)
+  mirrors the tagger's LLM + post-hoc gate pattern
+- Separate `corpus/decisions.json` sidecar, independent from the curated corpus
+- Dashboard UI with three views: setup (screens + context), builder (edit
+  analysis), report (rendered markdown brief with cited evidence)
 
 ### Corpus trust & recovery
 - `npm run doctor` — one-command PASS/WARN/FAIL health check
@@ -101,6 +110,7 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
 - CI (GitHub Actions: build + validate + tests with Playwright)
 - Centralized `findDraftMarkers()` + vague-phrase lint gated across 3 write-time paths + commit-draft (bulk-import drafts gated at commit by design)
 - Embedding rebuild is incremental + checkpointed + 429-resilient
+- Review-enforcement git hooks (task + branch gates) + CLAUDE.md conventions
 - Git repo at `github.com/nifabulous/clean-ui-mcp`
 
 ---

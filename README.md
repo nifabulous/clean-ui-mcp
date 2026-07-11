@@ -32,7 +32,8 @@ other than the statistical average of training data (the "AI slop" failure mode)
 - [DOM signals extraction](#dom-signals-extraction)
 - [Bulk re-tag](#bulk-re-tag)
 - [Dedup](#dedup)
-- [MCP tools (12)](#mcp-tools-12)
+- [MCP tools (13)](#mcp-tools-13)
+- [Decision Lab](#decision-lab)
 - [Skill — agent workflow](#skill--agent-workflow)
 - [Adding entries](#adding-entries)
 - [Batch capture pipeline](#batch-capture-pipeline)
@@ -40,6 +41,7 @@ other than the statistical average of training data (the "AI slop" failure mode)
 - [Corpus trust & recovery](#corpus-trust--recovery)
 - [Analytics](#analytics)
 - [Migrations](#migrations)
+- [Tagger evaluation loop](#tagger-evaluation-loop)
 - [Project structure](#project-structure)
 - [npm scripts reference](#npm-scripts-reference)
 - [Testing](#testing)
@@ -125,8 +127,8 @@ After `npm run build`, point any MCP-compatible client at the server:
 
 Drop this into your client's config file — `claude_desktop_config.json` for
 Claude Desktop, `.mcp.json` for Claude Code, or the equivalent for whichever
-MCP client you use. The server speaks stdio and exposes the 12 tools listed
-under [MCP tools](#mcp-tools-12).
+MCP client you use. The server speaks stdio and exposes the 13 tools listed
+under [MCP tools](#mcp-tools-13).
 
 ---
 
@@ -460,7 +462,7 @@ scripts can reuse it without importing the HTTP server.
 
 ---
 
-## MCP tools (12)
+## MCP tools (13)
 
 All tools are read-only over the corpus, organized into three tiers:
 **retrieval**, **synthesis**, and **aggregation**.
@@ -473,7 +475,7 @@ All tools are read-only over the corpus, organized into three tiers:
 | `get_ui_example(id)` | Full detail for one entry: critique, steals, anti-patterns, a11y risks, voice, mood, color roles, layout, components, domain tags, provenance, and image. |
 | `get_similar_ui_examples(id, limit?)` | Ranks by vector cosine similarity. Embeddings weighted by design characteristics (pattern, style, components, colors), not product identity. |
 | `compare_ui_examples(ids)` | 2-3 id comparison table: pattern, style, platform, layout, accent, density, quality tier, critique angle, top steal, anti-patterns, a11y risks. Placeholder titles auto-cleaned. |
-| `list_categories()` / `list_style_tags()` | Discover valid filter values. |
+| `list_categories()` / `list_style_tags()` / `list_domain_tags()` | Discover valid filter values. |
 | `browse_ui_examples(styleTag?)` | Discovery: what's in the corpus grouped by patternType. |
 
 ### Synthesis
@@ -492,6 +494,39 @@ All tools are read-only over the corpus, organized into three tiers:
 | `get_stealable_techniques(patternType?, styleTag?, limit?)` | Copyable techniques across a category, deduped by theme. |
 
 All tools exclude drafts by default.
+
+---
+
+## Decision Lab
+
+The Decision Lab is a comparative UI analysis tool accessible from the curator
+dashboard (`/#/decision-lab`). It takes 2-3 screenshots of your product, tags
+them via the two-pass vision tagger, retrieves structurally similar corpus
+examples, and synthesizes a cited comparative brief — grounded in corpus
+evidence, not free-form LLM opinion.
+
+### How it works
+
+Three layers mirror the tagger's architecture:
+
+1. **Evidence assembly** (pure) — flattens tagger extractions + corpus
+   retrievals into a cited evidence bundle with stable IDs.
+2. **Comparative synthesis** (LLM call) — a constrained comparative rubric fed
+   ONLY the assembled evidence.
+3. **Citation gate** (post-hoc runtime gate) — drops rubric scores and
+   observations that don't cite assembled evidence, with one retry.
+
+Decisions are stored in a separate `corpus/decisions.json` sidecar, independent
+from the curated corpus. The UI renders the brief as formatted markdown with
+three views: setup (add screens + context), builder (edit the analysis), and
+report (rendered brief with cited evidence).
+
+### Running it
+
+```bash
+npm run ui                # start the dashboard
+# navigate to http://localhost:3131/#/decision-lab
+```
 
 ---
 
@@ -677,7 +712,7 @@ clean-ui-mcp/
 ├── src/
 │   ├── schema.ts               # Zod schema (the data model)
 │   ├── corpus.ts               # load / search / similar / compare
-│   ├── server.ts               # MCP server: 12 tools
+│   ├── server.ts               # MCP server: 13 tools
 │   ├── design-prompt.ts        # generate_design_prompt synthesis
 │   ├── recommend.ts            # recommend_ui_direction synthesis
 │   ├── aggregations.ts         # anti-patterns / palettes / techniques / browse
@@ -685,7 +720,9 @@ clean-ui-mcp/
 │   ├── persistence.ts          # atomic writes + snapshots
 │   ├── dedup.ts                # dHash + SHA-256 + findDuplicateAtCommit
 │   ├── env.ts                  # .env loading + provider config
-│   ├── tagger.ts               # two-pass vision tagger (5 providers)
+│   ├── tagger.ts               # two-pass vision tagger (6 providers)
+│   ├── decision-lab.ts         # comparative UI analysis engine (evidence + citation gate)
+│   ├── decisions.ts            # Decision Lab persistence (decisions.json sidecar)
 │   ├── ssrf.ts                 # SSRF guard
 │   ├── paths.ts                # corpus-path validation
 │   ├── wcag/                   # vendored WCAG 2.2 registry + helpers
@@ -750,15 +787,16 @@ clean-ui-mcp/
 | `npm run migrate` | Schema migrations (all idempotent) |
 | `npm run migrate-wcag-ids` | Accessibility risks → canonical WCAG 2.2 IDs |
 | `npm run eval-baseline` | Tagger eval: score raw output against gold labels, write/diff baseline |
+| `npm run eval-matrix` | Provider/model matrix: loop over config triples, emit per-config baselines + comparison table |
 
 ---
 
 ## Testing
 
-317 tests across 19 files: vitest unit tests (schema, corpus, tagger, tagger
+385 tests across 23 files: vitest unit tests (schema, corpus, tagger, tagger
 contract, WCAG registry, embeddings, dedup, design-prompt, recommend,
-aggregations) + Playwright browser tests (dashboard flows, bulk import, capture,
-candidate review).
+aggregations, decision lab, eval scorer) + Playwright browser tests (dashboard
+flows, bulk import, capture, candidate review).
 
 ```bash
 npm test                 # all tests

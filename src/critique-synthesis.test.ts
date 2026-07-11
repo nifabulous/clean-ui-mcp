@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildCritiqueEvidence, gateCritique, type CritiqueUiDraft } from "./critique-synthesis.js";
+
+const callTextModel = vi.hoisted(() => vi.fn());
+vi.mock("./tagger.js", () => ({
+  callTextModel,
+  activeProviderName: () => "test",
+  activeModelName: () => "test-model",
+}));
 
 describe("buildCritiqueEvidence", () => {
   it("assembles screen evidence from extraction facts", () => {
@@ -25,7 +32,7 @@ describe("buildCritiqueEvidence", () => {
 });
 
 describe("gateCritique", () => {
-  const validIds = ["screen:patternType", "corpus:e1", "corpus:e2"];
+  const validIds = ["screen:patternType", "screen:components", "corpus:e1", "corpus:e2"];
 
   it("keeps recommendations with valid citations", () => {
     const draft: CritiqueUiDraft = {
@@ -77,7 +84,7 @@ describe("gateCritique", () => {
       observations: ["Fine."],
       recommendations: [],
       accessibilityRisks: [
-        { element: "icon button", risk: "no label", evidence: "visible", wcag: ["4.1.2"] },
+        { element: "icon button", risk: "no label", evidence: "screen:components", wcag: ["4.1.2"] },
         { element: "mystery", risk: "unknown", evidence: "", wcag: ["1.4.3"] },
       ],
     };
@@ -85,6 +92,20 @@ describe("gateCritique", () => {
     // Risk with evidence is kept, risk with empty evidence is dropped
     expect(result.accessibilityRisks.length).toBe(1);
     expect(result.accessibilityRisks[0].element).toBe("icon button");
+  });
+
+  it("drops accessibility risks with fabricated evidence or non-canonical WCAG IDs", () => {
+    const draft: CritiqueUiDraft = {
+      summary: "OK",
+      observations: [],
+      recommendations: [],
+      accessibilityRisks: [
+        { element: "fake", risk: "unsupported", evidence: "screen:not-real", wcag: ["1.4.3"] },
+        { element: "obsolete", risk: "unsupported", evidence: "screen:patternType", wcag: ["4.1.1"] },
+      ],
+    };
+    const result = gateCritique(draft, validIds);
+    expect(result.accessibilityRisks).toEqual([]);
   });
 
   it("handles no-corpus-evidence case gracefully", () => {
@@ -100,5 +121,16 @@ describe("gateCritique", () => {
     // I1 fix: empty-evidence rec is downgraded to observation, not kept as uncertain rec
     expect(result.recommendations.length).toBe(0);
     expect(result.observations.length).toBe(2); // original + downgraded
+  });
+});
+
+describe("synthesizeCritique retry", () => {
+  it("retries once when the model returns malformed JSON", async () => {
+    callTextModel
+      .mockResolvedValueOnce("not json")
+      .mockResolvedValueOnce(JSON.stringify({ summary: "Recovered", observations: [], recommendations: [], accessibilityRisks: [] }));
+    const { synthesizeCritique } = await import("./critique-synthesis.js");
+    await expect(synthesizeCritique([{ id: "screen:patternType", source: "screen", label: "patternType", detail: "dashboard" }], {})).resolves.toMatchObject({ summary: "Recovered" });
+    expect(callTextModel).toHaveBeenCalledTimes(2);
   });
 });

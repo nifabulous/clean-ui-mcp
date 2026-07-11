@@ -699,7 +699,7 @@ server.registerTool(
     const t0 = Date.now();
     try {
       // ── Validate input ──────────────────────────────────────────────────────
-      const { validateCritiqueUiInput, withValidatedImageFile } = await import("./critique-ui.js");
+      const { validateCritiqueUiInput, withValidatedImageFile, toNormalizedTaggerFacts } = await import("./critique-ui.js");
       const validation = validateCritiqueUiInput({
         image: { data: args.image_data, mimeType: args.image_mime_type },
         productContext: args.product_context,
@@ -722,7 +722,7 @@ server.registerTool(
         });
       });
 
-      const extraction = (tagged._raw?.extraction ?? {}) as Record<string, unknown>;
+      const extraction = toNormalizedTaggerFacts(tagged);
       const detectedPlatform = input.platform ?? tagged.platform ?? "web";
 
       // ── Retrieve evidence ─────────────────────────────────────────────────────

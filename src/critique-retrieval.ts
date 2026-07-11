@@ -79,8 +79,7 @@ export async function retrieveCritiqueEvidence(input: RetrieveCritiqueInput): Pr
       const corpusById = new Map(corpusEntries.map((e) => [e.id, e]));
       const ranked = Object.entries(imageIndex.entries)
         .map(([id, entry]) => ({ id, score: cosine(queryVec, entry.vector) }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, MAX_ENTRIES * 2);
+        .sort((a, b) => b.score - a.score);
 
       // Filter to approved entries only — enforce the global constraint at runtime.
       const entries: CritiqueEntry[] = ranked
@@ -98,13 +97,14 @@ export async function retrieveCritiqueEvidence(input: RetrieveCritiqueInput): Pr
             reviewStatus: ce.reviewStatus,
             title: ce.title,
           };
-        });
+        })
+        .slice(0, MAX_ENTRIES);
 
       if (entries.length > 0) {
         const filtered = applyPlatformFilter(entries, platform);
         const coverage = classifyCoverage(filtered);
         return {
-          entries: filtered.slice(0, MAX_ENTRIES),
+          entries: filtered,
           mode: "image",
           fallbackUsed: false,
           coverage,

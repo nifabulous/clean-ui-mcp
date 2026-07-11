@@ -130,7 +130,12 @@ async function callVoyage(
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       model,
-      inputs: [{ type: "image", image: `data:${mimeType};base64,${base64}` }],
+      inputs: [{
+        content: [{
+          type: "image_base64",
+          image_base64: `data:${mimeType};base64,${base64}`,
+        }],
+      }],
     }),
   });
   // I4 fix: log only the status code, not the response body — provider error

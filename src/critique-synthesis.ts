@@ -11,6 +11,7 @@ import { callTextModel } from "./tagger.js";
 import { activeProviderName, activeModelName } from "./tagger.js";
 import type { CritiqueEvidence, CritiqueRecommendation } from "./critique-ui.js";
 import type { RetrievalResult } from "./critique-retrieval.js";
+import { isWcagCriterion } from "./wcag/registry.js";
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -119,7 +120,7 @@ Platform: ${options.platform ?? "Not specified"}
     {
       "element": "The UI element with the risk",
       "risk": "What the accessibility risk is",
-      "evidence": "What visible evidence supports this",
+      "evidence": "A single evidence ID from the list above, such as screen:components",
       "wcag": ["4.1.2"]
     }
   ]
@@ -128,6 +129,7 @@ Platform: ${options.platform ?? "Not specified"}
 ## Rules
 
 - Every recommendation MUST cite at least one evidence ID from the list above.
+- Every accessibility risk MUST set evidence to one evidence ID from the list above.
 - WCAG IDs must be canonical (e.g. "1.4.3", "4.1.2") — only cite when visible evidence supports the claim.
 - Observations must be specific and factual, not generic ("good layout", "clean design" are banned).
 - 3-7 observations, 3-5 recommendations maximum.
@@ -146,8 +148,18 @@ export async function synthesizeCritique(
   options: SynthesizeOptions,
 ): Promise<CritiqueUiDraft> {
   const prompt = buildCritiquePrompt(evidence, options);
-  const raw = await callTextModel(prompt);
-  const parsed = JSON.parse(stripFences(raw));
+  let raw = await callTextModel(prompt);
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(stripFences(raw)) as Record<string, unknown>;
+  } catch {
+    raw = await callTextModel(
+      prompt,
+      undefined,
+      "Your previous response was not valid JSON. Return the complete critique as one JSON object only.",
+    );
+    parsed = JSON.parse(stripFences(raw)) as Record<string, unknown>;
+  }
   // Defensive defaults: the LLM may omit or malform fields.
   return {
     summary: typeof parsed.summary === "string" ? parsed.summary : "",
@@ -203,10 +215,15 @@ export function gateCritique(draft: CritiqueUiDraft, validEvidenceIds: string[])
     }
   }
 
-  // Gate accessibility risks: drop ones with empty evidence.
+  // Gate accessibility risks: require a real evidence ID and canonical WCAG IDs.
   const accessibilityRisks = draft.accessibilityRisks.filter(
-    (risk) => risk.evidence && risk.evidence.trim().length > 0,
-  );
+    (risk) => validSet.has(risk.evidence.trim())
+      && risk.wcag.length > 0
+      && risk.wcag.every((id) => isWcagCriterion(id)),
+  ).map((risk) => ({
+    ...risk,
+    wcag: [...new Set(risk.wcag)],
+  }));
 
   return {
     summary: draft.summary,

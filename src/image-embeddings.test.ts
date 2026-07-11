@@ -73,3 +73,22 @@ describe("ImageEmbeddingProvider contract (fake provider test)", () => {
     expect(provider.model).toBe("voyage-multimodal-3");
   });
 });
+
+describe("Voyage multimodal request contract", () => {
+  it("sends image_base64 inside the content wrapper", async () => {
+    vi.stubEnv("IMAGE_EMBEDDING_PROVIDER", "voyage");
+    vi.stubEnv("IMAGE_EMBEDDING_API_KEY", "test-key");
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      expect(body.inputs).toEqual([{
+        content: [{ type: "image_base64", image_base64: "data:image/png;base64,aW1hZ2U=" }],
+      }]);
+      return new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2] }] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createImageEmbeddingProvider();
+    await expect(provider!.embedImage({ data: Buffer.from("image"), mimeType: "image/png" })).resolves.toEqual([0.1, 0.2]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

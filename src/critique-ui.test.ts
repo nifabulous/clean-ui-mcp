@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
-import { validateCritiqueUiInput, withValidatedImageFile, MAX_IMAGE_BYTES, type CritiqueUiInput } from "./critique-ui.js";
+import { validateCritiqueUiInput, withValidatedImageFile, toNormalizedTaggerFacts, MAX_IMAGE_BYTES, type CritiqueUiInput } from "./critique-ui.js";
 
 // A tiny valid PNG (1×1 red pixel) for size/MIME tests.
 const TINY_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
@@ -136,5 +136,29 @@ describe("withValidatedImageFile", () => {
       },
     );
     expect(ext).toBe("jpg");
+  });
+});
+
+describe("toNormalizedTaggerFacts", () => {
+  it("projects sanitized top-level tagger fields and never forwards _raw", () => {
+    const facts = toNormalizedTaggerFacts({
+      patternType: "dashboard",
+      platform: "mobile",
+      categories: ["dashboard"],
+      styleTags: ["minimal"],
+      components: ["bottom-nav"],
+      domainTags: ["finance"],
+      layout: { form: "stacked", regions: [{ role: "main" }] },
+      visual: { spacingDensity: "comfortable", cornerStyle: "rounded", usesShadows: false, usesBorders: true },
+      _raw: { extraction: { components: ["sidebar-nav"], patternType: "dashboard" } },
+    });
+    expect(facts).toMatchObject({
+      patternType: "dashboard",
+      platform: "mobile",
+      components: ["bottom-nav"],
+      layoutForm: "stacked",
+    });
+    expect(JSON.stringify(facts)).not.toContain("sidebar-nav");
+    expect(facts).not.toHaveProperty("_raw");
   });
 });

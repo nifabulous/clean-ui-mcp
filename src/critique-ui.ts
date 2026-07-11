@@ -15,6 +15,7 @@ import { writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
+import type { TaggerOutput } from "./tagger.js";
 
 /** Maximum decoded image payload: 10 MiB. */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -66,6 +67,30 @@ export interface CritiqueUiResult {
 export type ValidationResult =
   | { valid: true; input: CritiqueUiInput }
   | { valid: false; error: string };
+
+/**
+ * Project only the tagger's sanitized, platform-normalized fields into the
+ * evidence shape used by critique retrieval and synthesis. `_raw` is
+ * intentionally excluded: it contains the untrusted model response.
+ */
+export function toNormalizedTaggerFacts(tagged: Pick<TaggerOutput,
+  "patternType" | "platform" | "categories" | "styleTags" | "components" |
+  "domainTags" | "layout" | "visual">): Record<string, unknown> {
+  return {
+    patternType: tagged.patternType,
+    platform: tagged.platform,
+    categories: tagged.categories,
+    styleTags: tagged.styleTags,
+    components: tagged.components,
+    domainTags: tagged.domainTags,
+    layoutForm: tagged.layout?.form,
+    layout: tagged.layout,
+    spacingDensity: tagged.visual.spacingDensity,
+    cornerStyle: tagged.visual.cornerStyle,
+    usesShadows: tagged.visual.usesShadows,
+    usesBorders: tagged.visual.usesBorders,
+  };
+}
 
 /**
  * Validate a critique_ui input payload. Checks MIME type, base64 decodability,

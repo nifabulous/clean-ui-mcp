@@ -81,4 +81,28 @@ describe("retrieveCritiqueEvidence", () => {
     });
     expect(result.entries.length).toBeLessThanOrEqual(5);
   });
+
+  it("filters stale drafts before limiting image candidates", async () => {
+    const { loadCorpus } = await import("./corpus.js");
+    vi.mocked(loadCorpus).mockReturnValue([
+      ...Array.from({ length: 12 }, (_, i) => ({ id: `draft-${i}`, patternType: "dashboard", platform: "web", reviewStatus: "draft", title: `Draft ${i}` })),
+      { id: "approved-1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Approved" },
+    ] as never);
+    const result = await retrieveCritiqueEvidence({
+      imageProvider: { name: "voyage", model: "m", embedImage: async () => [1] },
+      imageData: Buffer.from("fake"),
+      imageMimeType: "image/png",
+      extraction: { patternType: "dashboard" },
+      platform: "web",
+      imageIndex: {
+        version: 1, model: "m", dimension: 1,
+        entries: Object.fromEntries([
+          ...Array.from({ length: 12 }, (_, i) => [`draft-${i}`, { vector: [1], hash: "" }]),
+          ["approved-1", { vector: [0.9], hash: "" }],
+        ]),
+      },
+    });
+    expect(result.mode).toBe("image");
+    expect(result.entries.map((e) => e.id)).toContain("approved-1");
+  });
 });

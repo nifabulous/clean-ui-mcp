@@ -79,5 +79,11 @@ export const StructuredCritique = z.object({
   appliedReferences: z.array(AppliedReference).default([]),
   evidenceIds: z.array(z.string()),
   confidence: z.enum(["high", "medium", "low"]),
+  md3: z.object({
+    classification: z.enum(["supported", "insufficient-evidence", "conflicting"]),
+    matchedCategories: z.array(z.string()),
+    evidenceIds: z.array(z.string()),
+    confidence: z.number(),
+  }).optional(),
 });
 export type StructuredCritiqueT = z.infer<typeof StructuredCritique>;

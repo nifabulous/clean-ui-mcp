@@ -760,6 +760,21 @@ server.registerTool(
       const gated = gateCritique(draft, context.evidenceIds);
 
       // ── Build structured critique output ──────────────────────────────────────
+      // Task 10: MD3 resemblance classification (disabled by default — only when
+      // the user explicitly requests MD3 via the framework option).
+      const md3Classification = (args as Record<string, unknown>).framework === "md3"
+        ? (await import("./md3-classifier.js")).classifyMd3Resemblance({
+            dominantColors: Array.isArray(extraction.dominantColors) ? extraction.dominantColors as string[] : undefined,
+            accentColor: (extraction.accentColor as string | null | undefined) ?? null,
+            typePairing: extraction.typePairing as { display?: string | null; body?: string | null; notes?: string } | null,
+            components: Array.isArray(extraction.components) ? extraction.components as string[] : undefined,
+            cornerStyle: extraction.cornerStyle as string | null | undefined,
+            usesShadows: extraction.usesShadows as boolean | null | undefined,
+            usesBorders: extraction.usesBorders as boolean | null | undefined,
+            spacingDensity: extraction.spacingDensity as string | null | undefined,
+          })
+        : undefined;
+
       const structuredResult = {
         schemaVersion: CRITIQUE_SCHEMA_VERSION,
         platform: detectedPlatform,
@@ -789,6 +804,7 @@ server.registerTool(
         confidence: retrieval.coverage === "strong" ? "high" as const
           : retrieval.coverage === "moderate" ? "medium" as const
           : "low" as const,
+        md3: md3Classification,
       };
 
       // ── Return both legacy text + structuredContent ───────────────────────────

@@ -56,7 +56,7 @@ for hook in pre-push prepare-commit-msg; do
 done
 
 echo ""
-echo "  $INSTALLED hook(s) installed to .git/hooks/"
+echo "  $INSTALLED hook(s) installed to $HOOKS_DIR/"
 echo "  Review artifacts go in .zcode/reviews/ (gitignored — per-machine state)"
 echo ""
 echo "  Workflow:"

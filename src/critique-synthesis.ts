@@ -12,6 +12,7 @@ import { activeProviderName, activeModelName } from "./tagger.js";
 import type { EndpointOverride, Provider } from "./tagger.js";
 import type { CritiqueEvidence, CritiqueRecommendation } from "./critique-ui.js";
 import type { RetrievalResult } from "./critique-retrieval.js";
+import type { SynthesisContext } from "./synthesis/context.js";
 import { isWcagCriterion } from "./wcag/registry.js";
 
 // ─── types ────────────────────────────────────────────────────────────────────
@@ -82,24 +83,48 @@ export function buildCritiqueEvidence(
 // ─── synthesis prompt ──────────────────────────────────────────────────────────
 
 /**
- * Build the critique rubric prompt. The LLM receives ONLY:
- * - The sanitized evidence bundle (no raw model output)
- * - A bounded rubric (3-7 observations, 3-5 recommendations)
- * - The requirement to cite evidence IDs in every recommendation
+ * Build the critique rubric prompt with three authority-separated lanes:
+ * - Evidence: screenshot-derived facts + corpus entries (citable as screen:* and corpus:*)
+ * - Machine rules: banned phrases, vague phrases, detectors
+ * - Editorial guidance: reference material (supports recommendations, not observations)
  */
 function buildCritiquePrompt(
-  evidence: CritiqueEvidence[],
+  context: SynthesisContext,
   options: SynthesizeOptions,
 ): string {
-  const evidenceBlock = evidence
+  const evidenceBlock = context.evidence
     .map((e) => `- [${e.id}] ${e.source === "screen" ? "Screenshot fact" : "Corpus example"}: ${e.label}${e.detail ? ` — ${e.detail}` : ""}`)
+    .join("\n");
+
+  const rulesBlock = [
+    `**Banned phrases** (never use): ${context.rules.bannedPhrases.join(", ")}`,
+    `**Vague phrases** (avoid): ${context.rules.vaguePhrases.join(", ")}`,
+    `**Detectors**: icon-only claims, pixel measurements, and accessibility assertions must be grounded in evidence.`,
+  ].join("\n");
+
+  const guidanceBlock = context.guidance
+    .map((g) => `- [${g.id}] ${g.label} (${g.purpose})`)
     .join("\n");
 
   return `You are a UI design critic. Analyze the screenshot evidence below and produce a grounded critique.
 
 ## Evidence
 
+Only evidence IDs support observations. Every observation must reference at least one evidence ID.
+
 ${evidenceBlock}
+
+## Machine rules
+
+These are the enforced quality rules. Do not produce text that would trip these detectors.
+
+${rulesBlock}
+
+## Editorial guidance
+
+Editorial guidance supports recommendations but NOT observations. Do not cite editorial IDs as evidence.
+
+${guidanceBlock}
 
 ## Context
 
@@ -131,8 +156,9 @@ Platform: ${options.platform ?? "Not specified"}
 
 ## Rules
 
-- Every recommendation MUST cite at least one evidence ID from the list above.
-- Every accessibility risk MUST set evidence to one evidence ID from the list above.
+- Every recommendation MUST cite at least one evidence ID from the Evidence section above.
+- Every accessibility risk MUST set evidence to one evidence ID from the Evidence section above.
+- Editorial guidance IDs (ref:*) do NOT count as evidence — they support recommendations only.
 - WCAG IDs must be canonical (e.g. "1.4.3", "4.1.2") — only cite when visible evidence supports the claim.
 - Observations must be specific and factual, not generic ("good layout", "clean design" are banned).
 - 3-7 observations, 3-5 recommendations maximum.
@@ -147,10 +173,10 @@ Platform: ${options.platform ?? "Not specified"}
  * no longer crashes the gate with TypeError.
  */
 export async function synthesizeCritique(
-  evidence: CritiqueEvidence[],
+  context: SynthesisContext,
   options: SynthesizeOptions,
 ): Promise<CritiqueUiDraft> {
-  const prompt = buildCritiquePrompt(evidence, options);
+  const prompt = buildCritiquePrompt(context, options);
   let raw = await callTextModel(prompt, options.providerOverride, undefined, options.endpointOverride);
   let parsed: Record<string, unknown>;
   try {

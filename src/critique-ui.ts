@@ -46,7 +46,6 @@ export interface CritiqueRecommendation {
   impact: string;
   recommendation: string;
   evidence: string[]; // evidence IDs
-  uncertain?: boolean;
 }
 
 export type ValidationResult =

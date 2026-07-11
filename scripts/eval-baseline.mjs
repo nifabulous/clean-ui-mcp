@@ -97,6 +97,7 @@ for (const img of images) {
     goldPatternType: img.patternType,
     runCritique,
     projectRoot: PROJECT_ROOT,
+    imageId: img.id,
     extractionOverride,
     critiqueOverride,
   });

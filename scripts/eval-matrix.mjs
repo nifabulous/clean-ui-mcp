@@ -164,6 +164,7 @@ for (const config of configs) {
       goldPatternType: img.patternType,
       runCritique: !extractionOnly,
       projectRoot: PROJECT_ROOT,
+      imageId: img.id,
       extractionOverride: extraction.provider === "openai" ? extraction : { provider: extraction.provider },
       critiqueOverride: critique ? (critique.provider === "openai" ? critique : { provider: critique.provider }) : undefined,
     });

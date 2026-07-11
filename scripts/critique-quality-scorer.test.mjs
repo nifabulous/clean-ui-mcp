@@ -117,4 +117,48 @@ describe("scoreCritiqueQuality", () => {
     const result = scoreCritiqueQuality(output, GOLD_LABEL);
     expect(result.citationRate).toBe(0.5); // 1 of 2 recs has valid evidence
   });
+
+  it("reports citationRate as 'notScorable' when there are zero recommendations", () => {
+    const output = makeOutput({
+      recommendations: [],
+      accessibilityRisks: [],
+    });
+    const result = scoreCritiqueQuality(output, GOLD_LABEL);
+    expect(result.citationRate).toBe("notScorable");
+    // Zero recs = can't verify citation grounding, so the run does not pass.
+    expect(result.overallPass).toBe(false);
+    expect(result.prefixViolations).toBe(0);
+  });
+
+  it("counts a prefix violation when a rec's evidence has no required prefix", () => {
+    const output = makeOutput({
+      recommendations: [
+        // Evidence exists but none starts with the required "screen:" prefix
+        { observation: "a", impact: "b", recommendation: "c", evidence: ["corpus:foo"], basis: "visible" },
+      ],
+      evidenceIds: ["corpus:foo", "screen:patternType"],
+    });
+    const result = scoreCritiqueQuality(output, GOLD_LABEL);
+    expect(result.prefixViolations).toBe(1);
+    expect(result.overallPass).toBe(false);
+  });
+
+  it("does not count a prefix violation when a rec has no evidence at all", () => {
+    const output = makeOutput({
+      recommendations: [
+        // Empty evidence: skip the prefix check (no evidence to mis-ground)
+        { observation: "a", impact: "b", recommendation: "c", evidence: [], basis: "visible" },
+      ],
+      evidenceIds: ["screen:patternType"],
+    });
+    const result = scoreCritiqueQuality(output, GOLD_LABEL);
+    expect(result.prefixViolations).toBe(0);
+  });
+
+  it("passes when every rec's evidence matches a required prefix", () => {
+    const output = makeOutput();
+    const result = scoreCritiqueQuality(output, GOLD_LABEL);
+    expect(result.prefixViolations).toBe(0);
+    expect(result.overallPass).toBe(true);
+  });
 });

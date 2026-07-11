@@ -152,6 +152,56 @@ export function registerVisualEvidence(input: VisualEvidenceInput): CritiqueEvid
   return evidence;
 }
 
+// ─── screen evidence builder (shared) ────────────────────────────────────────
+
+/**
+ * Build the full CritiqueEvidence objects for screen-level facts
+ * (screen:*) and visual facts (screen:visual:*). Shared by
+ * buildSynthesisContext (for the prompt) and buildScreenEvidenceIds
+ * (for the eval pipeline) so both derive IDs from the same source.
+ */
+function buildScreenEvidence(extraction: Record<string, unknown>): CritiqueEvidence[] {
+  const evidence: CritiqueEvidence[] = [];
+
+  // ── Screen-level evidence from extraction facts ──────────────────────────
+  for (const key of CITABLE_KEYS) {
+    const val = extraction[key];
+    if (val == null) continue;
+    if (typeof val === "string" && val) {
+      evidence.push({ id: `screen:${key}`, source: "screen", label: key, detail: val });
+    } else if (typeof val === "boolean") {
+      evidence.push({ id: `screen:${key}`, source: "screen", label: key, detail: String(val) });
+    } else if (Array.isArray(val) && val.length > 0) {
+      const detail = val.slice(0, MAX_ARRAY_DETAIL).join(", ");
+      evidence.push({ id: `screen:${key}`, source: "screen", label: key, detail });
+    }
+  }
+
+  // ── Visual evidence (colors, shadows, borders, type pairing) ──────────────
+  const visual = registerVisualEvidence({
+    dominantColors: extraction.dominantColors as string[] | undefined,
+    accentColor: extraction.accentColor as string | null | undefined,
+    colorRoles: extraction.colorRoles as Record<string, unknown> | null | undefined,
+    usesShadows: extraction.usesShadows as boolean | null | undefined,
+    usesBorders: extraction.usesBorders as boolean | null | undefined,
+    typePairing: extraction.typePairing as Record<string, unknown> | null | undefined,
+    spacingDensity: extraction.spacingDensity as string | null | undefined,
+    cornerStyle: extraction.cornerStyle as string | null | undefined,
+  });
+  evidence.push(...visual);
+
+  return evidence;
+}
+
+/**
+ * Build screen:* + screen:visual:* evidence IDs from extraction keys.
+ * Shared by buildSynthesisContext and the eval pipeline so both produce
+ * identical evidence-ID sets (no inline duplication).
+ */
+export function buildScreenEvidenceIds(extraction: Record<string, unknown>): string[] {
+  return buildScreenEvidence(extraction).map((e) => e.id);
+}
+
 // ─── rules lane ───────────────────────────────────────────────────────────────
 
 function buildRulesLane(): MachineRulesLane {
@@ -193,32 +243,10 @@ export function buildSynthesisContext(input: BuildContextInput): SynthesisContex
   const { extraction, retrieval } = input;
   const evidence: CritiqueEvidence[] = [];
 
-  // ── Screen-level evidence from extraction facts ──────────────────────────
-  for (const key of CITABLE_KEYS) {
-    const val = extraction[key];
-    if (val == null) continue;
-    if (typeof val === "string" && val) {
-      evidence.push({ id: `screen:${key}`, source: "screen", label: key, detail: val });
-    } else if (typeof val === "boolean") {
-      evidence.push({ id: `screen:${key}`, source: "screen", label: key, detail: String(val) });
-    } else if (Array.isArray(val) && val.length > 0) {
-      const detail = val.slice(0, MAX_ARRAY_DETAIL).join(", ");
-      evidence.push({ id: `screen:${key}`, source: "screen", label: key, detail });
-    }
-  }
-
-  // ── Visual evidence (colors, shadows, borders, type pairing) ──────────────
-  const visual = registerVisualEvidence({
-    dominantColors: extraction.dominantColors as string[] | undefined,
-    accentColor: extraction.accentColor as string | null | undefined,
-    colorRoles: extraction.colorRoles as Record<string, unknown> | null | undefined,
-    usesShadows: extraction.usesShadows as boolean | null | undefined,
-    usesBorders: extraction.usesBorders as boolean | null | undefined,
-    typePairing: extraction.typePairing as Record<string, unknown> | null | undefined,
-    spacingDensity: extraction.spacingDensity as string | null | undefined,
-    cornerStyle: extraction.cornerStyle as string | null | undefined,
-  });
-  evidence.push(...visual);
+  // ── Screen-level + visual evidence (shared with the eval pipeline) ──────────
+  // Delegates to buildScreenEvidence so buildSynthesisContext and the eval
+  // pipeline's buildScreenEvidenceIds derive identical evidence-ID sets.
+  evidence.push(...buildScreenEvidence(extraction));
 
   // ── Corpus-level evidence from retrieval ──────────────────────────────────
   for (const entry of retrieval.entries) {

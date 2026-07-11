@@ -12,8 +12,11 @@
 
 - `npm test` stays credential-free — the scorer is offline and deterministic.
 - The eval pipeline continues to require provider keys for live runs (via `eval-baseline` / `eval-matrix`).
-- The inline converter is best-effort: it maps what the legacy shape provides. Missing fields (`evidenceIds`, `basis`, `visualSlop`, `motion`) are defaulted — the scorer reports their absence, not crashes.
-- `grok-eval.mjs`'s unique detector (`SELF_REFERENTIAL`) is not needed — `eval-scorer.mjs` already has the canonical detectors via generated rules.
+- The inline converter is best-effort: it maps what the legacy shape provides. Missing fields (`basis`, `visualSlop`, `motion`) are defaulted — the scorer reports their absence, not crashes.
+- Evidence ID generation must NOT be duplicated inline. Export a `buildScreenEvidenceIds(extraction)` helper from `synthesis/context.ts` and reuse it in the eval pipeline.
+- `grok-eval.mjs`'s `SELF_REFERENTIAL` detector is intentionally dropped from eval scoring. Production sanitization already handles self-referential claims at `tagger.ts:1187` — eval scoring doesn't need to re-enforce it. The canonical `eval-scorer.mjs` detectors (banned phrases, pixel measurement, unlabeled control) cover the eval-side hallucination counting.
+- `recommendations: []` from the legacy shape means the citation score is **not scorable**, not a pass. The scorer must report `notScorable` for zero-recommendation cases, not `citationRate: 1.0`.
+- DeepSeek config already exists at `eval/configs/deepseek-nim.json` — do not duplicate it. Only add `eval/configs/grok.json`.
 - `grok-eval.mjs`'s private 9-image EVAL_SET is abandoned — the canonical 15-image set is the only one.
 - No changes to `src/tagger.ts` or `src/server.ts` in this milestone.
 
@@ -22,6 +25,7 @@
 ## File Structure
 
 - Modify: `scripts/eval-runner.mjs` — add inline converter, load gold labels, call scorer, add `critiqueQuality` to result
+- Modify: `src/synthesis/context.ts` — export `buildScreenEvidenceIds(extraction)` helper for reuse by eval pipeline
 - Modify: `scripts/eval-scorer.mjs` — add `summarizeCritiqueQuality()` aggregate function
 - Modify: `scripts/eval-baseline.mjs` — add critique-quality fields to summary + diff table
 - Modify: `scripts/eval-matrix.mjs` — add critique-quality columns to comparison table
@@ -48,26 +52,52 @@
 
 Load `eval/critique-quality-labels.json` at the top of `eval-runner.mjs`. Build a `Map<string, GoldLabel>` keyed by `id`. Export it so baseline/matrix can access the same labels.
 
-- [ ] **Step 2: Implement the inline converter**
+- [ ] **Step 2: Export buildScreenEvidenceIds helper from synthesis/context.ts**
+
+In `src/synthesis/context.ts`, extract the screen-evidence-ID-generation logic from `buildSynthesisContext` into a reusable exported function:
+
+```ts
+/** Build screen:* evidence IDs from extraction keys. Shared by buildSynthesisContext and the eval pipeline. */
+export function buildScreenEvidenceIds(extraction: Record<string, unknown>): string[] {
+  const ids: string[] = [];
+  for (const key of CITABLE_KEYS) {
+    if (extraction[key] != null) ids.push(`screen:${key}`);
+  }
+  // Visual evidence
+  const visual = registerVisualEvidence({
+    dominantColors: extraction.dominantColors as string[] | undefined,
+    accentColor: extraction.accentColor as string | null | undefined,
+    colorRoles: extraction.colorRoles as Record<string, unknown> | null | undefined,
+    usesShadows: extraction.usesShadows as boolean | null | undefined,
+    usesBorders: extraction.usesBorders as boolean | null | undefined,
+    typePairing: extraction.typePairing as Record<string, unknown> | null | undefined,
+    spacingDensity: extraction.spacingDensity as string | null | undefined,
+    cornerStyle: extraction.cornerStyle as string | null | undefined,
+  });
+  ids.push(...visual.map(e => e.id));
+  return ids;
+}
+```
+
+Then refactor `buildSynthesisContext` to call `buildScreenEvidenceIds` instead of the inline loop — keeps the two paths from drifting.
+
+- [ ] **Step 3: Implement the inline converter using the shared helper**
 
 ```js
 function critiqueToStructured(rawCritique, extraction) {
   // Map legacy raw blob to partial StructuredCritique shape.
   // The legacy shape has: draftCritique, draftWhatToSteal, draftAntiPatterns,
   // draftAccessibilityRisks, businessRationale, qualityTier.
-  // The StructuredCritique scorer checks: schemaVersion, summary, observations,
-  // recommendations[].evidence, accessibilityRisks[].evidence/wcag, evidenceIds, motion.
+  // Evidence IDs are generated via the shared buildScreenEvidenceIds helper —
+  // NOT duplicated inline, to prevent drift from context.ts.
 
   const draftAntiPatterns = Array.isArray(rawCritique.draftAntiPatterns) ? rawCritique.draftAntiPatterns : [];
   const draftCritique = typeof rawCritique.draftCritique === "string" ? rawCritique.draftCritique : "";
   const draftA11yRisks = Array.isArray(rawCritique.draftAccessibilityRisks) ? rawCritique.draftAccessibilityRisks : [];
 
-  // Build evidenceIds from extraction keys (same logic as buildSynthesisContext's CITABLE_KEYS)
-  const evidenceIds = [];
-  const citableKeys = ["patternType", "layoutForm", "spacingDensity", "cornerStyle", "components", "categories", "styleTags"];
-  for (const key of citableKeys) {
-    if (extraction[key] != null) evidenceIds.push(`screen:${key}`);
-  }
+  // Import the shared helper from the compiled output
+  const { buildScreenEvidenceIds } = await import("../dist/synthesis/context.js");
+  const evidenceIds = buildScreenEvidenceIds(extraction);
 
   return {
     schemaVersion: "1.0",
@@ -77,7 +107,9 @@ function critiqueToStructured(rawCritique, extraction) {
     coverage: "moderate",
     summary: draftCritique.slice(0, 500),
     observations: draftAntiPatterns.filter(s => typeof s === "string"),
-    recommendations: [], // Legacy shape doesn't have structured recommendations — scorer will report citationRate as 1.0 (no recs to fail)
+    // Legacy shape has no structured recommendations — the scorer reports
+    // citationRate as "notScorable" (not 1.0) for zero recommendations.
+    recommendations: [],
     accessibilityRisks: draftA11yRisks.map(r => ({
       element: r.element ?? r.risk ?? "unknown",
       risk: r.risk ?? "unknown",
@@ -91,7 +123,27 @@ function critiqueToStructured(rawCritique, extraction) {
 }
 ```
 
-- [ ] **Step 3: Call scorer in runEvalCase and add critiqueQuality to result**
+- [ ] **Step 4: Call scorer in runEvalCase and add critiqueQuality to result**
+
+In the critique path of `runEvalCase` (after `scoreCritique`), add:
+```js
+// Score critique quality against gold labels
+let critiqueQuality = null;
+try {
+  const { scoreCritiqueQuality } = await import("./critique-quality-scorer.mjs");
+  const label = GOLD_LABELS.get(input.imageId ?? "");
+  if (label) {
+    const structured = critiqueToStructured(rawCritique, rawExtraction);
+    critiqueQuality = scoreCritiqueQuality(structured, label);
+  }
+} catch (e) {
+  critiqueQuality = { error: e.message };
+}
+```
+
+Add `critiqueQuality` to the result object.
+
+**Critical scorer change:** The scorer must report `citationRate: "notScorable"` (not 1.0) when `recommendations.length === 0`. A zero-recommendation case should NOT contribute to `overallPassRate` — it should be counted as `notScorableCount` in the summary. This prevents "no citation-bearing recommendations were produced" from looking like "all recommendations were grounded."
 
 In the critique path of `runEvalCase` (after `scoreCritique`), add:
 ```js
@@ -139,16 +191,23 @@ git commit -m "feat(eval): wire critique-quality scorer into eval-runner"
 ```js
 export function summarizeCritiqueQuality(scores) {
   const valid = scores.filter(s => s && !s.error);
-  if (valid.length === 0) return { schemaValidRate: 0, avgCitationRate: 0, overallPassRate: 0, totalBannedPhrases: 0, totalInvalidWcag: 0 };
+  if (valid.length === 0) return { schemaValidRate: 0, avgCitationRate: 0, overallPassRate: 0, notScorableCount: 0, scorableCount: 0, totalBannedPhrases: 0, totalInvalidWcag: 0 };
   const schemaValid = valid.filter(s => s.schemaValid).length;
-  const passCount = valid.filter(s => s.overallPass).length;
-  const avgCitation = valid.reduce((sum, s) => sum + (s.citationRate ?? 0), 0) / valid.length;
+  const notScorable = valid.filter(s => s.citationRate === "notScorable");
+  const scorable = valid.filter(s => s.citationRate !== "notScorable");
+  // overallPassRate counts only scorable cases — notScorable is reported separately
+  const passCount = scorable.filter(s => s.overallPass).length;
+  const avgCitation = scorable.length > 0
+    ? scorable.reduce((sum, s) => sum + (s.citationRate ?? 0), 0) / scorable.length
+    : 0;
   const banned = valid.reduce((sum, s) => sum + (s.bannedPhraseCount ?? 0), 0);
   const invalidWcag = valid.reduce((sum, s) => sum + (s.invalidWcagCount ?? 0), 0);
   return {
     schemaValidRate: schemaValid / valid.length,
     avgCitationRate: avgCitation,
-    overallPassRate: passCount / valid.length,
+    overallPassRate: scorable.length > 0 ? passCount / scorable.length : 0,
+    notScorableCount: notScorable.length,
+    scorableCount: scorable.length,
     totalBannedPhrases: banned,
     totalInvalidWcag: invalidWcag,
     critiqueQualityErrorCount: scores.filter(s => s?.error).length,
@@ -302,9 +361,10 @@ git commit -m "fix(scorer): implement requiredEvidencePrefixes check"
 
 **Files:**
 - Create: `eval/configs/grok.json`
-- Create: `eval/configs/deepseek-via-openai.json`
 - Delete: `scripts/grok-eval.mjs`
 - Modify: `package.json` (remove any grok-eval references if any)
+
+Note: `eval/configs/deepseek-nim.json` already exists and covers the DeepSeek-via-NIM lane. Do NOT create a duplicate.
 
 - [ ] **Step 1: Create Grok config**
 
@@ -318,25 +378,15 @@ git commit -m "fix(scorer): implement requiredEvidencePrefixes check"
 }
 ```
 
-- [ ] **Step 2: Create DeepSeek config**
-
-```json
-{
-  "_comment": "DeepSeek V4 Pro via NVIDIA NIM (OpenAI-compatible). Extraction stays on OpenAI for vision; critique routes to DeepSeek.",
-  "name": "deepseek-via-openai",
-  "modelPinned": true,
-  "extraction": { "provider": "openai", "baseUrl": "", "apiKey": "${OPENAI_API_KEY}", "model": "gpt-5.4-mini" },
-  "critique": { "provider": "openai", "baseUrl": "https://integrate.api.nvidia.com/v1", "apiKey": "${OPENAI_API_KEY_CRITIQUE}", "model": "deepseek-ai/deepseek-v4-pro" }
-}
-```
-
-- [ ] **Step 3: Delete grok-eval.mjs**
+- [ ] **Step 2: Delete grok-eval.mjs**
 
 ```bash
 git rm scripts/grok-eval.mjs
 ```
 
-- [ ] **Step 4: Verify no references to grok-eval remain**
+Note: grok-eval.mjs's `SELF_REFERENTIAL` detector is intentionally dropped. Production sanitization at `tagger.ts:1187` handles self-referential claims at runtime — eval scoring doesn't need to re-enforce it. The canonical eval-scorer.mjs detectors (banned phrases, pixel measurement, unlabeled control) cover the eval-side hallucination counting that matters.
+
+- [ ] **Step 3: Verify no references to grok-eval remain**
 
 Run: `rg "grok-eval" . --glob '!node_modules' --glob '!.git'`
 Expected: zero hits (or only historical plan docs)
@@ -356,6 +406,7 @@ git commit -m "refactor(eval): migrate grok/deepseek to matrix configs, delete g
 **Files:**
 - Modify: `.github/workflows/ci.yml`
 - Modify: `package.json`
+- Modify: `README.md`
 
 - [ ] **Step 1: Replace the stub eval-critique-quality script**
 
@@ -380,11 +431,15 @@ This ensures the deterministic scorer tests run as a separate explicit CI step, 
 Run: `npm run test:critique-quality`
 Expected: PASS (offline, no credentials)
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Update README**
+
+Remove or fix the stale `eval-critique-quality` reference in README.md. Replace with documentation of the new `test:critique-quality` script and the critique-quality columns in eval-matrix output.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add .github/workflows/ci.yml package.json
-git commit -m "ci: gate critique-quality scorer tests"
+git add .github/workflows/ci.yml package.json README.md
+git commit -m "ci: gate critique-quality scorer tests + update docs"
 ```
 
 ---
@@ -428,4 +483,4 @@ git diff --cached --quiet || git commit -m "chore(eval): finalize critique-quali
 
 **Type consistency:** The `critiqueQuality` field on `EvalCaseResult` is a `ScoreResult` from `scoreCritiqueQuality`. The `summarizeCritiqueQuality` takes `ScoreResult[]`. The gold labels join on `imageId` which is the EVAL_SET `id`.
 
-**Known gap:** The inline converter maps legacy fields to StructuredCritique but `recommendations` is always empty (legacy shape doesn't have structured recommendations). The scorer reports `citationRate: 1.0` for zero recommendations (no recs to fail). This is correct behavior — it means the deterministic gate catches banned phrases, WCAG validity, forbidden claims, and schema validity, but not citation grounding on recommendations (because the legacy critique shape doesn't produce structured recommendations). Full citation scoring requires the StructuredCritique synthesis path, which is a future milestone.
+**Known gap:** The inline converter maps legacy fields to StructuredCritique but `recommendations` is always empty (legacy shape doesn't have structured recommendations). The scorer reports `citationRate: "notScorable"` for zero recommendations, and the summary reports `notScorableCount` separately from `overallPassRate`. This means the deterministic gate honestly reports "not scorable for citation grounding" rather than pretending zero recommendations is a pass. The gate still catches banned phrases, WCAG validity, forbidden claims, and schema validity. Full citation scoring requires the StructuredCritique synthesis path, which is a future milestone — at which point `notScorableCount` drops to 0 and `overallPassRate` becomes meaningful for all fixtures.

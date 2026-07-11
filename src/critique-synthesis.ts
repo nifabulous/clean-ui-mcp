@@ -13,6 +13,7 @@ import type { EndpointOverride, Provider } from "./tagger.js";
 import type { CritiqueEvidence, CritiqueRecommendation } from "./critique-ui.js";
 import type { RetrievalResult } from "./critique-retrieval.js";
 import type { SynthesisContext } from "./synthesis/context.js";
+import type { MotionGuidanceT, VisualSlopFindingT } from "./synthesis/contracts.js";
 import { isWcagCriterion } from "./wcag/registry.js";
 
 // ─── types ────────────────────────────────────────────────────────────────────
@@ -32,6 +33,8 @@ export interface CritiqueUiDraft {
     evidence: string;
     wcag: string[];
   }>;
+  visualSlop?: VisualSlopFindingT[];
+  motion?: MotionGuidanceT[];
 }
 
 export interface SynthesizeOptions {
@@ -39,45 +42,6 @@ export interface SynthesizeOptions {
   platform?: string;
   providerOverride?: Provider;
   endpointOverride?: EndpointOverride;
-}
-
-// ─── evidence assembly ─────────────────────────────────────────────────────────
-
-/**
- * Build a stable evidence bundle from extraction facts + retrieval results.
- * Evidence IDs use the `screen:<key>` and `corpus:<entryId>` scheme so the
- * citation gate can verify every recommendation references real evidence.
- */
-export function buildCritiqueEvidence(
-  extraction: Record<string, unknown>,
-  retrieval: RetrievalResult,
-  productContext?: string,
-): CritiqueEvidence[] {
-  const evidence: CritiqueEvidence[] = [];
-
-  // Screen-level evidence from the tagger extraction.
-  const citableKeys = ["patternType", "layoutForm", "spacingDensity", "cornerStyle", "components", "categories", "styleTags"];
-  for (const key of citableKeys) {
-    const val = extraction[key];
-    if (val == null) continue;
-    if (typeof val === "string" && val) {
-      evidence.push({ id: `screen:${key}`, source: "screen", label: key, detail: val });
-    } else if (Array.isArray(val) && val.length > 0) {
-      evidence.push({ id: `screen:${key}`, source: "screen", label: key, detail: val.join(", ") });
-    }
-  }
-
-  // Corpus-level evidence from retrieval.
-  for (const entry of retrieval.entries) {
-    evidence.push({
-      id: `corpus:${entry.id}`,
-      source: "corpus",
-      label: entry.title ?? entry.id,
-      detail: entry.patternType ? `Pattern: ${entry.patternType}` : undefined,
-    });
-  }
-
-  return evidence;
 }
 
 // ─── synthesis prompt ──────────────────────────────────────────────────────────
@@ -93,7 +57,7 @@ function buildCritiquePrompt(
   options: SynthesizeOptions,
 ): string {
   const evidenceBlock = context.evidence
-    .map((e) => `- [${e.id}] ${e.source === "screen" ? "Screenshot fact" : "Corpus example"}: ${e.label}${e.detail ? ` — ${e.detail}` : ""}`)
+    .map((e) => `- [${e.id}] ${e.source === "screen" ? "Screenshot fact" : e.source === "dom" ? "DOM declaration" : "Corpus example"}: ${e.label}${e.detail ? ` — ${e.detail}` : ""}`)
     .join("\n");
 
   const rulesBlock = [
@@ -151,7 +115,9 @@ Platform: ${options.platform ?? "Not specified"}
       "evidence": "A single evidence ID from the list above, such as screen:components",
       "wcag": ["4.1.2"]
     }
-  ]
+  ],
+  "visualSlop": [{"pattern": "Specific visual pattern", "basis": "visible", "evidence": ["screen:patternType"]}],
+  "motion": [{"basis": "editorial", "evidence": ["dom:motion:0"], "note": "Actionable motion guidance", "reference": "ref:design-engineering"}]
 }
 
 ## Rules
@@ -161,6 +127,7 @@ Platform: ${options.platform ?? "Not specified"}
 - Editorial guidance IDs (ref:*) do NOT count as evidence — they support recommendations only.
 - WCAG IDs must be canonical (e.g. "1.4.3", "4.1.2") — only cite when visible evidence supports the claim.
 - Observations must be specific and factual, not generic ("good layout", "clean design" are banned).
+- DOM motion declarations (dom:motion:*) describe what the stylesheet SAYS, not what RAN. Never claim an animation "ran," "felt smooth," or "performed well" from stylesheet evidence alone.
 - 3-7 observations, 3-5 recommendations maximum.
 - Return ONLY the JSON object.`;
 }
@@ -192,7 +159,7 @@ export async function synthesizeCritique(
       parsed = JSON.parse(stripFences(raw)) as Record<string, unknown>;
     } catch {
       // Second parse failure — degrade to empty draft rather than throw.
-      return { summary: "", observations: [], recommendations: [], accessibilityRisks: [] };
+      return { summary: "", observations: [], recommendations: [], accessibilityRisks: [], visualSlop: [], motion: [] };
     }
   }
   // Defensive defaults: the LLM may omit or malform fields.
@@ -201,7 +168,27 @@ export async function synthesizeCritique(
     observations: Array.isArray(parsed.observations) ? parsed.observations.filter((s: unknown) => typeof s === "string") : [],
     recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations.filter(isValidRec) : [],
     accessibilityRisks: Array.isArray(parsed.accessibilityRisks) ? parsed.accessibilityRisks.filter(isValidRisk) : [],
+    visualSlop: Array.isArray(parsed.visualSlop) ? parsed.visualSlop.filter(isValidVisualSlop) : [],
+    motion: Array.isArray(parsed.motion) ? parsed.motion.filter(isValidMotion) : [],
   };
+}
+
+function isValidVisualSlop(value: unknown): value is VisualSlopFindingT {
+  if (!value || typeof value !== "object") return false;
+  const finding = value as Record<string, unknown>;
+  return typeof finding.pattern === "string"
+    && ["visible", "inferred", "dom-grounded"].includes(String(finding.basis))
+    && Array.isArray(finding.evidence) && finding.evidence.every((id) => typeof id === "string") && finding.evidence.length > 0
+    && (finding.exception === undefined || typeof finding.exception === "string");
+}
+
+function isValidMotion(value: unknown): value is MotionGuidanceT {
+  if (!value || typeof value !== "object") return false;
+  const guidance = value as Record<string, unknown>;
+  return guidance.basis === "editorial"
+    && typeof guidance.note === "string"
+    && Array.isArray(guidance.evidence) && guidance.evidence.every((id) => typeof id === "string") && guidance.evidence.length > 0
+    && (guidance.reference === undefined || typeof guidance.reference === "string");
 }
 
 function isValidRec(r: unknown): r is CritiqueUiDraft["recommendations"][number] {
@@ -227,11 +214,13 @@ function isValidRisk(r: unknown): r is CritiqueUiDraft["accessibilityRisks"][num
  * Recommendations with at least one valid evidence ID are kept; any invalid IDs
  * in their evidence list are stripped.
  */
-export function gateCritique(draft: CritiqueUiDraft, validEvidenceIds: string[]): {
+export function gateCritique(draft: CritiqueUiDraft, validEvidenceIds: string[], validGuidanceIds: string[] = []): {
   summary: string;
   observations: string[];
   recommendations: CritiqueRecommendation[];
   accessibilityRisks: CritiqueUiDraft["accessibilityRisks"];
+  visualSlop: VisualSlopFindingT[];
+  motion: MotionGuidanceT[];
 } {
   const validSet = new Set(validEvidenceIds);
 
@@ -259,12 +248,21 @@ export function gateCritique(draft: CritiqueUiDraft, validEvidenceIds: string[])
     ...risk,
     wcag: [...new Set(risk.wcag)],
   }));
+  const visualSlop = (draft.visualSlop ?? []).filter((finding) =>
+    ["visible", "inferred", "dom-grounded"].includes(finding.basis)
+    && finding.evidence.every((id) => validSet.has(id)),
+  );
+  const guidanceSet = new Set(validGuidanceIds);
+  const motion = (draft.motion ?? []).filter((guidance) => guidance.evidence.every((id) => validSet.has(id))
+    && !!guidance.reference && guidanceSet.has(guidance.reference));
 
   return {
     summary: draft.summary,
     observations: [...draft.observations, ...downgradedObservations],
     recommendations: keptRecommendations,
     accessibilityRisks,
+    visualSlop,
+    motion,
   };
 }
 

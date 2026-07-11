@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import { validateCritiqueUiInput, withValidatedImageFile, toNormalizedTaggerFacts, MAX_IMAGE_BYTES, type CritiqueUiInput } from "./critique-ui.js";
+import type { TaggerInput } from "./tagger.js";
+import { CRITIQUE_UI_INPUT_SCHEMA } from "./synthesis/contracts.js";
 
 // A tiny valid PNG (1×1 red pixel) for size/MIME tests.
 const TINY_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
@@ -81,6 +83,48 @@ describe("validateCritiqueUiInput", () => {
     expect(result.valid).toBe(true);
   });
 
+  it("does not expose caller-supplied DOM signals in the public MCP schema", () => {
+    const result = CRITIQUE_UI_INPUT_SCHEMA.safeParse({
+      image_data: TINY_PNG_B64,
+      image_mime_type: "image/png",
+      dom_signals: { motion: { signals: [] } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects caller-supplied DOM signals during public request validation", () => {
+    const domSignals: NonNullable<TaggerInput["domSignals"]> = {
+      styles: { fontFamily: null, fontSize: null, fontWeight: null, borderRadius: null, boxShadow: null, color: null, background: null, letterSpacing: null },
+      accessibility: { contrastRatio: null, headingLevels: [], imagesMissingAlt: 0, unlabeledInteractive: 0, hasSkipLink: false },
+      structure: { display: null, flexDirection: null, gridTemplateColumns: null, gap: null },
+      motion: { signals: [{ selector: "button", property: "opacity", durationMs: 100, delayMs: 0 }], coverage: "full", inaccessibleStylesheets: 0, prefersReducedMotion: false },
+    };
+    const result = validateCritiqueUiInput({ image: { data: TINY_PNG_B64, mimeType: "image/png" }, dom_signals: domSignals });
+    expect(result).toMatchObject({ valid: false });
+    if (!result.valid) expect(result.error).toMatch(/dom.?signals|public/i);
+  });
+
+  it("rejects malformed or oversized caller DOM motion injection", () => {
+    const malformed = validateCritiqueUiInput({
+      image: { data: TINY_PNG_B64, mimeType: "image/png" },
+      domSignals: { motion: { signals: Array.from({ length: 101 }, () => ({})) } },
+    });
+    expect(malformed).toMatchObject({ valid: false });
+    if (!malformed.valid) expect(malformed.error).toMatch(/dom.?signals|public/i);
+  });
+
+  it("rejects caller DOM strings before they can enter a synthesis prompt", () => {
+    const valid = validateCritiqueUiInput({
+      image: { data: TINY_PNG_B64, mimeType: "image/png" },
+      domSignals: {
+        styles: { fontFamily: "x".repeat(501), fontSize: null, fontWeight: null, borderRadius: null, boxShadow: null, color: null, background: null, letterSpacing: null },
+        accessibility: { contrastRatio: null, headingLevels: [], imagesMissingAlt: 0, unlabeledInteractive: 0, hasSkipLink: false },
+        structure: { display: null, flexDirection: null, gridTemplateColumns: null, gap: null },
+      },
+    });
+    expect(valid).toMatchObject({ valid: false });
+  });
+
   it("rejects invalid platform values", () => {
     const input = {
       image: { data: TINY_PNG_B64, mimeType: "image/png" },
@@ -140,7 +184,7 @@ describe("withValidatedImageFile", () => {
 });
 
 describe("toNormalizedTaggerFacts", () => {
-  it("projects sanitized top-level tagger fields and never forwards _raw", () => {
+  it("accepts trusted DOM capture only through its explicit internal parameter and never forwards _raw", () => {
     const facts = toNormalizedTaggerFacts({
       patternType: "dashboard",
       platform: "mobile",
@@ -151,12 +195,18 @@ describe("toNormalizedTaggerFacts", () => {
       layout: { form: "stacked", regions: [{ role: "main" }] },
       visual: { spacingDensity: "comfortable", cornerStyle: "rounded", usesShadows: false, usesBorders: true },
       _raw: { extraction: { components: ["sidebar-nav"], patternType: "dashboard" } },
+    }, {
+      styles: { fontFamily: null, fontSize: null, fontWeight: null, borderRadius: null, boxShadow: null, color: null, background: null, letterSpacing: null },
+      accessibility: { contrastRatio: null, headingLevels: [], imagesMissingAlt: 0, unlabeledInteractive: 0, hasSkipLink: false },
+      structure: { display: null, flexDirection: null, gridTemplateColumns: null, gap: null },
+      motion: { signals: [{ selector: "button", property: "opacity", durationMs: 200, delayMs: 0 }], coverage: "full", inaccessibleStylesheets: 0, prefersReducedMotion: false },
     });
     expect(facts).toMatchObject({
       patternType: "dashboard",
       platform: "mobile",
       components: ["bottom-nav"],
       layoutForm: "stacked",
+      domSignals: expect.objectContaining({ motion: expect.objectContaining({ signals: [expect.objectContaining({ selector: "button" })] }) }),
     });
     expect(JSON.stringify(facts)).not.toContain("sidebar-nav");
     expect(facts).not.toHaveProperty("_raw");

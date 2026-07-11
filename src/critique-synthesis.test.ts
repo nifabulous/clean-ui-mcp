@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildCritiqueEvidence, gateCritique, type CritiqueUiDraft } from "./critique-synthesis.js";
+import { gateCritique, type CritiqueUiDraft } from "./critique-synthesis.js";
 
 const callTextModel = vi.hoisted(() => vi.fn());
 vi.mock("./tagger.js", () => ({
@@ -9,29 +9,6 @@ vi.mock("./tagger.js", () => ({
 }));
 
 afterEach(() => callTextModel.mockReset());
-
-describe("buildCritiqueEvidence", () => {
-  it("assembles screen evidence from extraction facts", () => {
-    const evidence = buildCritiqueEvidence(
-      { patternType: "dashboard", components: ["sidebar-nav", "kpi-card"], layoutForm: "sidebar+main" },
-      { entries: [{ id: "e1", patternType: "dashboard", title: "Dashboard A", score: 0.9 }], mode: "structured-fallback", fallbackUsed: true, coverage: "strong" },
-      "A KPI tracking dashboard",
-    );
-    const ids = evidence.map((e) => e.id);
-    expect(ids).toContain("screen:patternType");
-    expect(ids).toContain("screen:layoutForm");
-    expect(ids).toContain("corpus:e1");
-  });
-
-  it("includes corpus evidence IDs for retrieved entries", () => {
-    const evidence = buildCritiqueEvidence(
-      { patternType: "pricing" },
-      { entries: [{ id: "abc-123", score: 0.8 }], mode: "image", fallbackUsed: false, coverage: "moderate" },
-      undefined,
-    );
-    expect(evidence.some((e) => e.id === "corpus:abc-123")).toBe(true);
-  });
-});
 
 describe("gateCritique", () => {
   const validIds = ["screen:patternType", "screen:components", "corpus:e1", "corpus:e2"];
@@ -124,6 +101,40 @@ describe("gateCritique", () => {
     expect(result.recommendations.length).toBe(0);
     expect(result.observations.length).toBe(2); // original + downgraded
   });
+
+  it("keeps grounded visual-slop findings and editorial motion guidance", () => {
+    const draft: CritiqueUiDraft = {
+      summary: "OK",
+      observations: [],
+      recommendations: [],
+      accessibilityRisks: [],
+      visualSlop: [{ pattern: "Overused gradient hero", basis: "visible", evidence: ["screen:patternType"] }],
+      motion: [{ basis: "editorial", evidence: ["dom:motion:0"], note: "Use a restrained hover transition", reference: "ref:design-engineering" }],
+    };
+    const result = gateCritique(draft, [...validIds, "dom:motion:0"], ["ref:design-engineering"]);
+    expect(result.visualSlop).toEqual(draft.visualSlop);
+    expect(result.motion).toEqual(draft.motion);
+  });
+
+  it("drops visual-slop and motion entries without registered support", () => {
+    const draft: CritiqueUiDraft = {
+      summary: "OK", observations: [], recommendations: [], accessibilityRisks: [],
+      visualSlop: [{ pattern: "Unsupported", basis: "visible", evidence: ["screen:invented"] }],
+      motion: [{ basis: "editorial", evidence: ["screen:invented"], note: "Unsupported", reference: "ref:invented" }],
+    };
+    const result = gateCritique(draft, validIds, ["ref:design-engineering"]);
+    expect(result.visualSlop).toEqual([]);
+    expect(result.motion).toEqual([]);
+  });
+
+  it("does not permit editorial basis for visual-slop findings", () => {
+    const draft: CritiqueUiDraft = {
+      summary: "OK", observations: [], recommendations: [], accessibilityRisks: [],
+      visualSlop: [{ pattern: "Editorial claim", basis: "editorial", evidence: ["screen:patternType"] } as never],
+    };
+    const result = gateCritique(draft, validIds);
+    expect(result.visualSlop).toEqual([]);
+  });
 });
 
 describe("synthesizeCritique retry", () => {
@@ -167,5 +178,31 @@ describe("synthesizeCritique retry", () => {
     const { synthesizeCritique } = await import("./critique-synthesis.js");
     await synthesizeCritique(makeContext(), { providerOverride: "openai", endpointOverride });
     expect(callTextModel).toHaveBeenCalledWith(expect.any(String), "openai", undefined, endpointOverride);
+  });
+
+  it("accepts a built synthesis context and gates against its evidence and guidance IDs without provider credentials", async () => {
+    const { buildSynthesisContext } = await import("./synthesis/context.js");
+    const { synthesizeCritique, gateCritique } = await import("./critique-synthesis.js");
+    const context = buildSynthesisContext({
+      extraction: { patternType: "dashboard", usesBorders: true },
+      retrieval: { entries: [], mode: "structured-fallback", fallbackUsed: true, coverage: "none" },
+      productContext: "KPI dashboard",
+    });
+    const guidanceIds = context.guidance.map((guidance) => guidance.id);
+    expect(context.evidenceIds).toContain("screen:patternType");
+    expect(guidanceIds).toContain("ref:design-engineering");
+    callTextModel.mockResolvedValueOnce(JSON.stringify({
+      summary: "Grounded",
+      observations: [],
+      recommendations: [{ observation: "Dashboard", impact: "Scanning", recommendation: "Improve grouping", evidence: ["screen:patternType"] }],
+      accessibilityRisks: [],
+      motion: [{ basis: "editorial", evidence: ["screen:patternType"], note: "Keep transitions restrained", reference: "ref:design-engineering" }],
+    }));
+
+    const draft = await synthesizeCritique(context, {});
+    const gated = gateCritique(draft, context.evidenceIds, guidanceIds);
+
+    expect(gated.recommendations).toHaveLength(1);
+    expect(gated.motion).toHaveLength(1);
   });
 });

@@ -5,14 +5,6 @@
 
 export interface WcagCriterion { id: string; title: string; level: string; }
 
-export const WCAG_2_2_SNAPSHOT = {
-  sourceUrl: "https://www.w3.org/WAI/WCAG22/wcag.json",
-  specUrl: "https://www.w3.org/TR/WCAG22/",
-  // Pin: upstream repo (w3c/wcag) commit that produced this export's structure.
-  sourceCommit: "8d1a2b09e72d36eee6e28ee68bb843f741590091",
-  snapshotDate: "2026-07-09",
-} as const;
-
 export const WCAG_2_2: readonly WcagCriterion[] = Object.freeze([
   {
     "id": "1.1.1",

@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rulesPath = resolve(process.env.MACHINE_RULES_PATH ?? resolve(root, "skill/clean-ui-design/references/machine-rules.json"));
+const manifestPath = resolve(root, "skill/clean-ui-design/references/manifest.json");
 const generatedPath = resolve(root, "src/references/generated.ts");
 const check = process.argv.slice(2).join(" ") === "--check";
 
@@ -57,6 +58,18 @@ function loadRules() {
   return rules;
 }
 
+function loadReferenceMetadata() {
+  let manifest;
+  try { manifest = JSON.parse(readFileSync(manifestPath, "utf8")); } catch (error) { throw new Error(`Invalid reference manifest: ${error.message}`); }
+  if (!Array.isArray(manifest)) throw new Error("Invalid reference manifest: expected an array");
+  return manifest.map((entry) => {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string" || !Number.isInteger(entry.version) || !Array.isArray(entry.purposes)) {
+      throw new Error("Invalid reference manifest: every entry needs id, version, and purposes");
+    }
+    return { id: entry.id, version: entry.version, purposes: entry.purposes };
+  });
+}
+
 function literal(value) {
   return JSON.stringify(value, null, 2);
 }
@@ -65,7 +78,7 @@ function regexExpression({ source, flags }) {
   return `new RegExp(${JSON.stringify(source)}, ${JSON.stringify(flags)})`;
 }
 
-function render(rules) {
+function render(rules, references) {
   const exemptions = Object.entries(rules.exemptionPatterns)
     .map(([name, definition]) => `  ${name}: ${regexExpression(definition)},`)
     .join("\n");
@@ -74,10 +87,11 @@ function render(rules) {
     `export const VAGUE_PHRASES = Object.freeze(${literal(rules.vaguePhrases)}) as readonly string[];\n\n` +
     `export const UNLABELED_CONTROL_RISK = ${regexExpression(rules.patterns.unlabeledControlRisk)};\n` +
     `export const PIXEL_MEASUREMENT = ${regexExpression(rules.patterns.pixelMeasurement)};\n\n` +
-    `export const EXEMPTION_PATTERNS = Object.freeze({\n${exemptions}\n});\n`;
+    `export const EXEMPTION_PATTERNS = Object.freeze({\n${exemptions}\n});\n` +
+    `\nexport const REFERENCE_METADATA = Object.freeze(${literal(references)}) as readonly { id: string; version: number; purposes: readonly string[] }[];\n`;
 }
 
-const output = render(loadRules());
+const output = render(loadRules(), loadReferenceMetadata());
 if (check) {
   const current = readFileSync(generatedPath, "utf8");
   if (current !== output) {

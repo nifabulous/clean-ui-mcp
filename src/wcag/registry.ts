@@ -39,12 +39,6 @@ const ID_PATTERN = /^\d+\.\d+\.\d+$/;
  * Returns null if no leading numeric ID is found. Does NOT validate that the
  * extracted ID exists in the registry — call isWcagCriterion() for that.
  */
-export function extractWcagId(raw: string): string | null {
-  if (typeof raw !== "string") return null;
-  const m = raw.match(/(\d+\.\d+\.\d+)/);
-  return m ? m[1] : null;
-}
-
 /**
  * Split a citation string into its constituent bare IDs, handling the
  * comma-joined multi-citation form that older corpus entries use
@@ -66,24 +60,4 @@ export function isWcagCriterion(id: string): boolean {
  */
 export function getWcagTitle(id: string): string | undefined {
   return BY_ID.get(id)?.title;
-}
-
-/** The W3C level (A / AA / AAA) for a criterion, or undefined if unknown. */
-export function getWcagLevel(id: string): string | undefined {
-  return BY_ID.get(id)?.level;
-}
-
-/**
- * Format an ID for display, appending the registry title:
- * "1.4.3" → "1.4.3 Contrast (Minimum)". Falls back to the bare ID if the
- * title is unknown (so display never breaks on an unrecognized ID).
- */
-export function formatWcagCitation(id: string): string {
-  const title = getWcagTitle(id);
-  return title ? `${id} ${title}` : id;
-}
-
-/** All active (non-obsolete) canonical WCAG 2.2 criteria (frozen, read-only). */
-export function allWcagCriteria(): readonly WcagCriterion[] {
-  return ACTIVE;
 }

@@ -23,6 +23,7 @@ import { buildRecommendation, renderRecommendation } from "./recommend.js";
 import { aggregateAntiPatterns, collectPalettes, collectTechniques, browseByPattern, hueBand } from "./aggregations.js";
 import { readFileSync, existsSync } from "node:fs";
 import { fromCorpusRelativeImagePath } from "./paths.js";
+import { CRITIQUE_UI_INPUT_SCHEMA, CRITIQUE_UI_OUTPUT_SCHEMA } from "./synthesis/contracts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const QUERY_LOG_PATH = resolve(__dirname, "..", "corpus", "query-log.jsonl");
@@ -688,12 +689,8 @@ server.registerTool(
       "facts or corpus evidence IDs. Falls back to structured-only retrieval " +
       "when image embeddings are unavailable. Image input is bounded base64 " +
       "(max 10 MiB) — no paths or URLs accepted. No corpus mutation occurs.",
-    inputSchema: {
-      image_data: z.string().describe("Base64-encoded screenshot image data (png, jpeg, or webp)"),
-      image_mime_type: z.enum(["image/png", "image/jpeg", "image/webp"]).describe("MIME type of the image data"),
-      product_context: z.string().optional().describe("What the product is (e.g. 'A KPI tracking dashboard')"),
-      platform: z.enum(["web", "mobile", "tablet"]).optional().describe("Target platform for platform-aware retrieval"),
-    },
+    inputSchema: CRITIQUE_UI_INPUT_SCHEMA,
+    outputSchema: CRITIQUE_UI_OUTPUT_SCHEMA,
   },
   async (args) => {
     const t0 = Date.now();
@@ -748,48 +745,49 @@ server.registerTool(
       // ── Synthesize critique ───────────────────────────────────────────────────
       const { synthesizeCritique, gateCritique } = await import("./critique-synthesis.js");
       const { buildSynthesisContext } = await import("./synthesis/context.js");
+      type BuildContextInput = import("./synthesis/context.js").BuildContextInput;
       const { renderCritiqueMarkdown } = await import("./synthesis/render.js");
-      const { CRITIQUE_SCHEMA_VERSION } = await import("./synthesis/contracts.js");
-      const context = buildSynthesisContext({ extraction, retrieval, productContext: input.productContext });
+      const { buildStructuredCritique } = await import("./synthesis/structured-output.js");
+      // Screenshot-only calls have no DOM source. This only uses signals injected
+      // by trusted internal capture callers, never inferred from pixels.
+      const domSignals = extraction.domSignals as { motion?: { signals?: NonNullable<BuildContextInput["motion"]> } | null } | undefined;
+      const motionSignals = domSignals?.motion?.signals ?? null;
+      const context = buildSynthesisContext({
+        extraction, retrieval,
+        productContext: input.productContext,
+        motion: motionSignals,
+      });
 
       const draft = await synthesizeCritique(context, {
         productContext: input.productContext,
         platform: detectedPlatform,
       });
 
-      const gated = gateCritique(draft, context.evidenceIds);
+      const gated = gateCritique(draft, context.evidenceIds, context.guidance.map((guide) => guide.id));
 
       // ── Build structured critique output ──────────────────────────────────────
-      const structuredResult = {
-        schemaVersion: CRITIQUE_SCHEMA_VERSION,
+      // Task 10: MD3 resemblance classification — only when framework:"md3" is requested
+      const md3Classification = args.framework === "md3"
+        ? (await import("./md3-classifier.js")).classifyMd3Resemblance({
+            dominantColors: Array.isArray(extraction.dominantColors) ? extraction.dominantColors as string[] : undefined,
+            accentColor: (extraction.accentColor as string | null | undefined) ?? null,
+            typePairing: extraction.typePairing as { display?: string | null; body?: string | null; notes?: string } | null,
+            components: Array.isArray(extraction.components) ? extraction.components as string[] : undefined,
+            cornerStyle: extraction.cornerStyle as string | null | undefined,
+            usesShadows: extraction.usesShadows as boolean | null | undefined,
+            usesBorders: extraction.usesBorders as boolean | null | undefined,
+            spacingDensity: extraction.spacingDensity as string | null | undefined,
+          })
+        : undefined;
+
+      const structuredResult = buildStructuredCritique({
         platform: detectedPlatform,
-        retrievalMode: retrieval.mode,
-        fallbackUsed: retrieval.fallbackUsed,
-        coverage: retrieval.coverage,
-        summary: gated.summary,
-        observations: gated.observations,
-        recommendations: gated.recommendations.map((rec) => ({
-          observation: rec.observation,
-          impact: rec.impact,
-          recommendation: rec.recommendation,
-          evidence: rec.evidence,
-          basis: "visible" as const,
-        })),
-        accessibilityRisks: gated.accessibilityRisks.map((risk) => ({
-          element: risk.element,
-          risk: risk.risk,
-          evidence: risk.evidence,
-          wcag: risk.wcag,
-          basis: "visible" as const,
-        })),
-        visualSlop: [],
-        motion: [],
-        appliedReferences: [],
+        retrieval,
+        gated,
         evidenceIds: context.evidenceIds,
-        confidence: retrieval.coverage === "strong" ? "high" as const
-          : retrieval.coverage === "moderate" ? "medium" as const
-          : "low" as const,
-      };
+        guidance: context.guidance,
+        md3: md3Classification,
+      });
 
       // ── Return both legacy text + structuredContent ───────────────────────────
       return {

@@ -173,4 +173,28 @@ describe("renderCritiqueMarkdown", () => {
     expect(md).toContain("## Applied References");
     expect(md).toContain("ref:banned-phrases");
   });
+
+  it("renders MD3 resemblance as evidence-backed resemblance rather than compliance", () => {
+    const md = renderCritiqueMarkdown(makeCritique({
+      md3: {
+        classification: "conflicting",
+        confidence: 0.67,
+        matchedCategories: ["tonal-surfaces", "type-hierarchy"],
+        evidenceIds: ["md3:tonal-surfaces", "screen:visual:colors"],
+        conflictingSignals: [{
+          category: "shape",
+          evidenceId: "md3:conflict:flat",
+          detail: "The visible corners are flat rather than rounded.",
+        }],
+      },
+    }));
+    expect(md).toContain("## MD3 Resemblance");
+    expect(md).toContain("Classification: conflicting");
+    expect(md).toContain("Confidence: 0.67");
+    expect(md).toContain("tonal-surfaces, type-hierarchy");
+    expect(md).toContain("md3:tonal-surfaces, screen:visual:colors");
+    expect(md).toContain("md3:conflict:flat");
+    expect(md).toContain("resembles");
+    expect(md).not.toMatch(/MD3 compliance/i);
+  });
 });

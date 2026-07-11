@@ -766,6 +766,48 @@ clean-ui-mcp/
 
 ---
 
+## Reference integrity and machine rules
+
+The skill's reference Markdown files (`skill/clean-ui-design/references/*.md`) are
+editorial guidance for the critique synthesis prompt. They are validated against a
+checked-in manifest with SHA-256 hashes and version numbers.
+
+### Authored vs generated files
+
+| File | Type | Description |
+|------|------|-------------|
+| `skill/clean-ui-design/references/manifest.json` | Authored | Declares each reference file with hash, license, version |
+| `skill/clean-ui-design/references/machine-rules.json` | Authored | Canonical source for all enforcement patterns (regexes, phrase lists) |
+| `src/references/generated.ts` | Generated | Compiled from `machine-rules.json` — never hand-edit |
+| `src/references/loader.ts` | Authored | Validates manifest integrity at load time |
+
+### Build generation
+
+`npm run build` runs `generate-references` before `tsc`, regenerating `generated.ts`
+from `machine-rules.json`. If the generated file drifts (someone edits the JSON
+without regenerating), `npm run validate-references` catches it via the `--check` flag.
+
+### Version-bump policy
+
+When a reference file's content changes, its SHA-256 hash changes, which requires
+incrementing the `version` field in `manifest.json`. The loader's version-policy
+validation enforces this: changed hash without version bump → validation failure.
+
+### MCP structured output
+
+The `critique_ui` tool returns both a legacy Markdown text (`content[0].text`) and
+a `structuredContent` object matching the `StructuredCritique` schema (version 1.0).
+Consumers that read only `content[0].text` get the full critique; structured
+consumers get typed findings with evidence IDs, claim bases, and provenance.
+
+### Critique-quality scoring
+
+`npm run test:critique-quality` runs the offline deterministic scorer against the
+gold labels. `npm run eval-critique-quality` loads the scorer for live baseline
+runs (requires `RUN_LIVE_INTEGRATION=1` + provider keys).
+
+---
+
 ## npm scripts reference
 
 | Script | What it does |

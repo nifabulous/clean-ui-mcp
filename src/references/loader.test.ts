@@ -155,9 +155,16 @@ describe("validateReferenceRegistry", () => {
 });
 
 describe("selectReferences", () => {
-  it("returns matching references in registry order", () => {
-    const { descriptors } = fixture();
-    expect(selectReferences(descriptors, ["motion-guidance"]).map((item) => item.id))
-      .toEqual(["design-engineering"]);
+  it("returns descriptors matching any requested purpose in manifest order", () => {
+    const descriptors: ReferenceDescriptor[] = [
+      { ...descriptor("first", "first.md", "first"), purposes: ["critique-structure"] },
+      { ...descriptor("second", "second.md", "second"), purposes: ["motion-guidance", "visual-anti-slop"] },
+      { ...descriptor("third", "third.md", "third"), purposes: ["design-taxonomy"] },
+      { ...descriptor("fourth", "fourth.md", "fourth"), purposes: ["visual-anti-slop"] },
+    ];
+
+    expect(selectReferences(descriptors, ["visual-anti-slop", "critique-structure"])
+      .map((reference) => reference.id))
+      .toEqual(["first", "second", "fourth"]);
   });
 });

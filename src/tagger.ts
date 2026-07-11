@@ -140,6 +140,8 @@ export interface TaggerInput {
                      imagesMissingAlt: number; unlabeledInteractive: number; hasSkipLink: boolean };
     structure: { display: string | null; flexDirection: string | null;
                  gridTemplateColumns: string | null; gap: string | null };
+    motion?: { signals: Array<{ selector: string; property: string; durationMs: number; delayMs: number; iterationCount?: string; timingFunction?: string }>;
+               coverage: "full" | "partial" | "none"; inaccessibleStylesheets: number; prefersReducedMotion: boolean } | null;
   } | null;
 }
 

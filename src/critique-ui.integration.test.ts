@@ -150,7 +150,8 @@ const DESKTOP_IMG = resolve(FIXTURE_DIR, "desktop-dashboard.png");
     const { createImageEmbeddingProvider } = await import("./image-embeddings.js");
     const { loadImageIndex, setImageIndexForTesting, hashForImage } = await import("./image-index.js");
     type ImageEmbeddingIndex = import("./image-index.js").ImageEmbeddingIndex;
-    const { buildCritiqueEvidence, synthesizeCritique, gateCritique } = await import("./critique-synthesis.js");
+    const { buildSynthesisContext } = await import("./synthesis/context.js");
+    const { synthesizeCritique, gateCritique } = await import("./critique-synthesis.js");
     const { tagImage } = await import("./tagger.js");
     const { hasVisionKey } = await import("./tagger.js");
 
@@ -212,15 +213,22 @@ const DESKTOP_IMG = resolve(FIXTURE_DIR, "desktop-dashboard.png");
     });
 
     // Synthesize critique
-    const evidence = buildCritiqueEvidence(extraction, retrieval, validation.input.productContext);
-    const evidenceIds = evidence.map((e) => e.id);
-    const draft = await synthesizeCritique(evidence, {
+    const context = buildSynthesisContext({
+      extraction,
+      retrieval,
+      productContext: validation.input.productContext,
+    });
+    const draft = await synthesizeCritique(context, {
       productContext: validation.input.productContext,
       platform,
       providerOverride: "openai",
       endpointOverride: openAiEndpointOverride(),
     });
-    const gated = gateCritique(draft, evidenceIds);
+    const gated = gateCritique(
+      draft,
+      context.evidenceIds,
+      context.guidance.map((guidance) => guidance.id),
+    );
 
     // Core assertion: every actionable recommendation must cite valid evidence.
     // The gate CAN return zero recommendations when evidence is weak — that's fine.
@@ -229,7 +237,7 @@ const DESKTOP_IMG = resolve(FIXTURE_DIR, "desktop-dashboard.png");
       expect(rec.evidence.length).toBeGreaterThan(0);
       // Every cited evidence ID must be in the valid set
       for (const eid of rec.evidence) {
-        expect(evidenceIds).toContain(eid);
+        expect(context.evidenceIds).toContain(eid);
       }
     }
   }, 60_000);

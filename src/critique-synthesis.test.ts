@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildCritiqueEvidence, gateCritique, type CritiqueUiDraft } from "./critique-synthesis.js";
+import { gateCritique, type CritiqueUiDraft } from "./critique-synthesis.js";
 
 const callTextModel = vi.hoisted(() => vi.fn());
 vi.mock("./tagger.js", () => ({
@@ -9,29 +9,6 @@ vi.mock("./tagger.js", () => ({
 }));
 
 afterEach(() => callTextModel.mockReset());
-
-describe("buildCritiqueEvidence", () => {
-  it("assembles screen evidence from extraction facts", () => {
-    const evidence = buildCritiqueEvidence(
-      { patternType: "dashboard", components: ["sidebar-nav", "kpi-card"], layoutForm: "sidebar+main" },
-      { entries: [{ id: "e1", patternType: "dashboard", title: "Dashboard A", score: 0.9 }], mode: "structured-fallback", fallbackUsed: true, coverage: "strong" },
-      "A KPI tracking dashboard",
-    );
-    const ids = evidence.map((e) => e.id);
-    expect(ids).toContain("screen:patternType");
-    expect(ids).toContain("screen:layoutForm");
-    expect(ids).toContain("corpus:e1");
-  });
-
-  it("includes corpus evidence IDs for retrieved entries", () => {
-    const evidence = buildCritiqueEvidence(
-      { patternType: "pricing" },
-      { entries: [{ id: "abc-123", score: 0.8 }], mode: "image", fallbackUsed: false, coverage: "moderate" },
-      undefined,
-    );
-    expect(evidence.some((e) => e.id === "corpus:abc-123")).toBe(true);
-  });
-});
 
 describe("gateCritique", () => {
   const validIds = ["screen:patternType", "screen:components", "corpus:e1", "corpus:e2"];

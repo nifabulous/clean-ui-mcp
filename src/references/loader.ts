@@ -113,14 +113,6 @@ export function validateReferenceRegistry(root: string): ReferenceDescriptor[] {
   }))) as unknown as ReferenceDescriptor[];
 }
 
-export function selectReferences(
-  descriptors: readonly ReferenceDescriptor[],
-  purposes: readonly ReferencePurpose[],
-): ReferenceDescriptor[] {
-  const requested = new Set(purposes);
-  return descriptors.filter((descriptor) => descriptor.purposes.some((purpose) => requested.has(purpose)));
-}
-
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const descriptors = validateReferenceRegistry(process.cwd());
   console.log(`Validated ${descriptors.length} references.`);

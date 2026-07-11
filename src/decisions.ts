@@ -25,7 +25,7 @@ const CORPUS_ROOT = resolve(__dirname, "..", "corpus");
 
 /** Default decisions.json location (kept as an export for reference, e.g.
  *  .gitignore documentation). Internal code reads the `decisionsPath` let. */
-export const DEFAULT_DECISIONS_PATH = resolve(CORPUS_ROOT, "decisions.json");
+// Note: decisions.json path is resolved inline where needed; no separate constant needed.
 
 /** Mutable internal paths — overridable via setDecisionsPathsForTesting so
  *  tests can target a temp dir without polluting the real corpus. */

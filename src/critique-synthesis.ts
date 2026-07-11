@@ -44,45 +44,6 @@ export interface SynthesizeOptions {
   endpointOverride?: EndpointOverride;
 }
 
-// ─── evidence assembly ─────────────────────────────────────────────────────────
-
-/**
- * Build a stable evidence bundle from extraction facts + retrieval results.
- * Evidence IDs use the `screen:<key>` and `corpus:<entryId>` scheme so the
- * citation gate can verify every recommendation references real evidence.
- */
-export function buildCritiqueEvidence(
-  extraction: Record<string, unknown>,
-  retrieval: RetrievalResult,
-  productContext?: string,
-): CritiqueEvidence[] {
-  const evidence: CritiqueEvidence[] = [];
-
-  // Screen-level evidence from the tagger extraction.
-  const citableKeys = ["patternType", "layoutForm", "spacingDensity", "cornerStyle", "components", "categories", "styleTags"];
-  for (const key of citableKeys) {
-    const val = extraction[key];
-    if (val == null) continue;
-    if (typeof val === "string" && val) {
-      evidence.push({ id: `screen:${key}`, source: "screen", label: key, detail: val });
-    } else if (Array.isArray(val) && val.length > 0) {
-      evidence.push({ id: `screen:${key}`, source: "screen", label: key, detail: val.join(", ") });
-    }
-  }
-
-  // Corpus-level evidence from retrieval.
-  for (const entry of retrieval.entries) {
-    evidence.push({
-      id: `corpus:${entry.id}`,
-      source: "corpus",
-      label: entry.title ?? entry.id,
-      detail: entry.patternType ? `Pattern: ${entry.patternType}` : undefined,
-    });
-  }
-
-  return evidence;
-}
-
 // ─── synthesis prompt ──────────────────────────────────────────────────────────
 
 /**

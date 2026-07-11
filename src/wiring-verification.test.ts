@@ -12,6 +12,9 @@
  * - Semantic correctness of wiring — still needs review agents
  * - Dynamic imports without destructured names — rare; current codebase always destructures
  * - Type-only exports (export type, export interface) — out of scope
+ * - Comment/string defeat: a symbol name appearing in a comment or string literal
+ *   in any production file satisfies the check. This is a known heuristic limitation;
+ *   do not rely on comments to "wire" a symbol.
  *
  * This test follows the proven pattern from content-lint.test.ts (readFileSync +
  * regex assertions), avoiding shell-grep portability issues.
@@ -133,7 +136,6 @@ const ALLOWLIST = new Set<string>([
   // Consumed by .mjs scripts via dist/ imports (not visible in src/*.ts grep):
   "MIN_WORDS",                 // content-lint.ts — used by eval-scorer.mjs
   "MAX_IMAGE_BYTES",           // critique-ui.ts — used by eval test
-  "DEFAULT_DECISIONS_PATH",    // decisions.ts — used by test utilities
   "setDecisionsPathsForTesting", // decisions.ts — test-only export
   "resetDecisionsPathsForTesting", // decisions.ts — test-only export
   "setDecisionsForTesting",    // decisions.ts — test-only export
@@ -144,12 +146,9 @@ const ALLOWLIST = new Set<string>([
   "DEFAULT_OPENAI_AUTO_TAG_MODEL", // env.ts — used by .mjs scripts
   "DEFAULT_CLEAN_UI_PORT",     // env.ts — used by .mjs scripts
   "loadEnv",                   // env.ts — used by .mjs scripts
-  "imageIndexExists",          // image-index.ts — used by build-image-index.mjs
-  "imageIndexStatus",          // image-index.ts — used by status reporting
   "setImageIndexForTesting",   // image-index.ts — test-only export
   "assertCorpusImagePath",     // paths.ts — used by scripts
-  "validateReferenceRegistry", // references/loader.ts — used by validate-references CLI
-  "selectReferences",          // references/loader.ts — used by synthesis/context.ts via createRequire
+  "validateReferenceRegistry", // references/loader.ts — called internally at loader.ts:125
   "accessibilityRiskTextFields", // schema.ts — used by content-lint test
   "PatternDiscovery",          // schema.ts — Zod schema, used by scripts
   "AccessibilityRisk",         // schema.ts — Zod schema, used by schema validation
@@ -159,7 +158,6 @@ const ALLOWLIST = new Set<string>([
   "renderBriefTokens",         // design-prompt.ts — used by generate_design_prompt tool
   "renderDecisionBrief",       // decision-lab.ts — used by decision-lab UI
   "pickDiverse",               // recommend.ts — used by recommend_ui_direction
-  "buildCritiqueEvidence",     // critique-synthesis.ts — superseded by buildSynthesisContext (kept for compat)
   "registerVisualEvidence",    // synthesis/context.ts — exported for test use, called by buildSynthesisContext
   // Zod schema consts — consumed by Zod composition (.extend, .parse) not by name reference:
   "ImageRef", "SourceAttribution", "TypePairing", "ColorRoles", "VisualAttributes",
@@ -169,8 +167,6 @@ const ALLOWLIST = new Set<string>([
   "ClaimBasis", "VisualSlopBasis",
   "VisualSlopFinding", "MotionGuidance", "StructuredRecommendation",
   "StructuredAccessibilityRisk", "AppliedReference",
-  // WCAG registry public API — consumed by registry.ts via data composition, not by name:
-  "extractWcagId", "getWcagLevel", "formatWcagCitation", "allWcagCriteria", "WCAG_2_2_SNAPSHOT",
   // normalizeMotionDeclarations — DEFERRED: Task 8 Step 4 (browser-side Playwright
   // collection) hasn't landed yet. The pure function is ready but has no caller until
   // the capture pipeline collects transition/animation CSS. Remove from allowlist when wired.

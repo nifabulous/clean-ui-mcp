@@ -184,3 +184,12 @@ task or push the branch without writing the review artifact.
 - **Corpus isolation:** never let tests write to the real `corpus/entries.json`
   or `corpus/decisions.json`. Use test-path injection (`setCorpusForTesting`,
   `setDecisionsPathsForTesting`).
+- **Wiring verification:** `src/wiring-verification.test.ts` mechanically verifies
+  that every exported function/const/class in `src/*.ts` is referenced by at least
+  one non-test production file. This catches the recurring "built but not wired"
+  failure mode where a module is created and unit-tested in isolation but never
+  connected to production code. When adding a new export, ensure it has a production
+  caller, or add it to the allowlist in the test with a comment explaining why
+  (e.g., consumed by `.mjs` scripts via `dist/`, Zod schema composition, test-only
+  export). What it does NOT catch: interface/call-site drift (needs ts-morph),
+  semantic correctness (still needs review agents), type-only exports.

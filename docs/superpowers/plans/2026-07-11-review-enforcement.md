@@ -27,7 +27,14 @@
 
 ---
 
-## File Structure
+> **⚠ SUPERSEDED:** The File Structure and Tasks 2–5 below describe the
+> original ZCode-hook design that was abandoned after Task 1 proved workspace-
+> scoped hooks don't fire. The actual implementation lives in `.zcode/git-hooks/`
+> (git-native hooks), `.zcode/scripts/` (artifact writer, installer, helper),
+> and `CLAUDE.md`. Read those files for how the system actually works. The
+> sections below are kept for design history only.
+
+## File Structure (SUPERSEDED — see .zcode/git-hooks/ for actual implementation)
 
 - Create: `.zcode/config.json` — repo-scoped hook registration
 - Create: `.zcode/hooks/require-review-before-commit` — blocks a new task commit when the previous task commit lacks a task-review artifact

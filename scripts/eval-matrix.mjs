@@ -138,7 +138,11 @@ for (const config of configs) {
     }
   }
 
-  const modelPinned = config.modelPinned ?? (extraction.provider === "openai");
+  // I9 fix: modelPinned should reflect whether model+apiKey are actually
+  // pinned in the config, not whether the provider is openai. A non-openai
+  // config with explicit model+apiKey IS model-pinned even though the override
+  // plumbing doesn't reach those providers yet.
+  const modelPinned = config.modelPinned ?? !!(extraction.model && extraction.apiKey);
   console.log(`\n  ── ${config.name} ${modelPinned ? "" : "(provider-only, not model-pinned)"} ──`);
 
   const results = [];

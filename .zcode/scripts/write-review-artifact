@@ -45,17 +45,27 @@ case "$RESULT" in approved|changes-requested) ;; *) echo "invalid --result: $RES
 case "$REVIEWER" in human|agent) ;; *) echo "invalid --reviewer: $REVIEWER (expected human|agent)" >&2; exit 1 ;; esac
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "${ZCODE_PROJECT_DIR:-$(pwd)}")"
-mkdir -p "$ROOT/.zcode/reviews/tasks" "$ROOT/.zcode/reviews/branches"
+ZCODE_DIR="$ROOT/.zcode"
+# C4 fix: refuse if .zcode is a symlink (security).
+if [ -L "$ZCODE_DIR" ]; then
+  echo "  ⚠  .zcode is a symlink — refusing to operate (security). Remove the symlink." >&2
+  exit 1
+fi
+mkdir -p "$ZCODE_DIR/reviews/tasks" "$ZCODE_DIR/reviews/branches"
 NOW="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-# Sanitize branch name for filename: replace / with - (feat/x → feat-x).
-# The full branch name is preserved in the JSON "branch" field.
-BRANCH_SAFE="$(echo "$BRANCH" | tr '/' '-')"
+# I1 fix: URL-encode the branch name for the filename so the mapping is
+# injective (feat/ab and feat-ab produce different files). The full branch
+# name is preserved in the JSON "branch" field.
+BRANCH_SAFE="$(python3 -c "
+import urllib.parse, sys
+print(urllib.parse.quote(sys.argv[1], safe=''))
+" "$BRANCH" 2>/dev/null || echo "$BRANCH" | tr '/' '-')"
 
 if [ "$TYPE" = "task" ]; then
-  TARGET="$ROOT/.zcode/reviews/tasks/$HEAD_SHA.json"
+  TARGET="$ZCODE_DIR/reviews/tasks/$HEAD_SHA.json"
 else
-  TARGET="$ROOT/.zcode/reviews/branches/$BRANCH_SAFE.json"
+  TARGET="$ZCODE_DIR/reviews/branches/$BRANCH_SAFE.json"
 fi
 
 # Build the artifact JSON using python3's json.dumps so branch names, SHAs,

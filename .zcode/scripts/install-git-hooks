@@ -14,7 +14,22 @@ if [ -z "$ROOT" ]; then
   exit 1
 fi
 
-HOOKS_DIR="$ROOT/.git/hooks"
+# M3 fix: use git's own hooks path resolution (handles worktrees, gitdir-file,
+# and core.hooksPath). Warn if core.hooksPath is set — hooks won't run from
+# .git/hooks in that case.
+HOOKS_PATH="$(git config --get core.hooksPath 2>/dev/null || true)"
+if [ -n "$HOOKS_PATH" ]; then
+  echo "  ⚠  core.hooksPath is set to '$HOOKS_PATH' — hooks must be installed there, not .git/hooks/" >&2
+  HOOKS_DIR="$(cd "$ROOT" && cd "$HOOKS_PATH" 2>/dev/null && pwd || echo "$ROOT/$HOOKS_PATH")"
+else
+  # git-path hooks resolves the correct .git/hooks even for worktrees.
+  HOOKS_DIR="$(git rev-parse --git-path hooks)"
+  # Make it absolute if it's relative.
+  case "$HOOKS_DIR" in
+    /*) ;;
+    *) HOOKS_DIR="$ROOT/$HOOKS_DIR" ;;
+  esac
+fi
 SRC_DIR="$ROOT/.zcode/git-hooks"
 
 mkdir -p "$HOOKS_DIR"
@@ -29,7 +44,8 @@ for hook in pre-push prepare-commit-msg; do
   fi
   # Back up existing hook if it's not ours (doesn't have our marker comment).
   if [ -f "$DST" ] && ! grep -q "Install: .zcode/scripts/install-git-hooks" "$DST" 2>/dev/null; then
-    BACKUP="$DST.bak.$(date +%s)"
+    # M1 fix: use PID + timestamp to avoid same-second collision.
+    BACKUP="$DST.bak.$(date +%s).$$"
     cp "$DST" "$BACKUP"
     echo "  ℹ  Backed up existing $hook to $(basename "$BACKUP")"
   fi

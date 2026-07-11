@@ -10,10 +10,14 @@ which tool (agent, human CLI, IDE) initiates the git operation.
 
 **Install after cloning:** `.zcode/scripts/install-git-hooks`
 
+**Re-install after pulling hook updates:** if `.zcode/git-hooks/` changes (someone updated a hook script), run `install-git-hooks` again to copy the new versions into `.git/hooks/`. Existing clones keep stale hooks until re-installed.
+
 ### Task-level gate (`prepare-commit-msg`)
 
 After committing task N, the hook blocks committing task N+1 until task N has
-an approved review artifact. This enforces "review after each task."
+an approved review artifact. This enforces "review after each task." The
+artifact's `headSha` is the SHA of the task you just committed (current `HEAD`
+at the time you write the artifact), not the next task you're about to commit.
 
 ```
 Task artifact: .zcode/reviews/tasks/<commitSha>.json

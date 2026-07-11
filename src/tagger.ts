@@ -356,6 +356,12 @@ function validateEndpointOverride(cfg: EndpointOverride, pass: TaggerPass): void
   if (cfg.provider === "openai") {
     if (!cfg.apiKey) throw new Error(`Invalid endpoint override for ${pass}: apiKey is required for provider "openai"`);
     if (!cfg.model) throw new Error(`Invalid endpoint override for ${pass}: model is required for provider "openai"`);
+    // I5 fix: validate baseUrl format so a typo'd URL fails here, not inside fetch.
+    // Empty baseUrl is valid (= real OpenAI native Responses API). Non-empty must
+    // be a valid http(s) URL so it doesn't reach fetchWithRetry as garbage.
+    if (cfg.baseUrl !== undefined && cfg.baseUrl !== "" && !/^https?:\/\//i.test(cfg.baseUrl)) {
+      throw new Error(`Invalid endpoint override for ${pass}: baseUrl "${cfg.baseUrl}" must start with http:// or https:// (or be empty for real OpenAI)`);
+    }
   }
   // Extraction with a text-only provider is a capability error (same guard as
   // resolveProvider's mistral-extraction fallback).
@@ -761,6 +767,29 @@ export function activeModelName(pass?: TaggerPass): string {
   if (provider === "openai") return openaiConfigForPass(resolvedPass).model;
   if (provider === "grok") return grokConfigForPass(resolvedPass).model;
   return PROVIDER_MODELS[provider];
+}
+
+/**
+ * Resolve the model name for a pass, respecting an optional EndpointOverride.
+ * C5 fix: when a non-openai provider override is set (e.g. provider: "claude"),
+ * activeModelName() resolves from env (not the override), misreporting the model
+ * in _raw. This helper resolves through the override's provider when set, so the
+ * _raw metadata matches what was actually called.
+ */
+function activeModelNameForOverride(pass: TaggerPass, override?: EndpointOverride, cfgOverride?: OpenAIConfig): string {
+  // Config override (openai triple) → the model is in the cfg.
+  if (cfgOverride?.model) return cfgOverride.model;
+  // Provider-only override (claude/gemini/etc.) → resolve through the override's provider.
+  if (override?.provider) {
+    const p = override.provider;
+    if (p === "openai") return openaiConfigForPass(pass).model;
+    if (p === "grok") return grokConfigForPass(pass).model;
+    if (p === "mistral") return mistralConfigForPass(pass).model;
+    if (p === "minimax") return minimaxConfigForPass(pass).model;
+    return PROVIDER_MODELS[p] ?? activeModelName(pass);
+  }
+  // No override → env default.
+  return activeModelName(pass);
 }
 
 // ─── PASS 1: extraction prompt (facts + geometry) ────────────────────────────
@@ -2305,7 +2334,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       _raw: {
         extractionProvider: resolveProvider("extraction", input.extractionOverride?.provider ?? input.extractionProvider, extractionCfgOverride !== undefined),
         critiqueProvider: null,
-        extractionModel: extractionCfgOverride?.model ?? activeModelName("extraction"),
+        extractionModel: activeModelNameForOverride("extraction", input.extractionOverride, extractionCfgOverride),
         critiqueModel: null,
         extraction: extractionParsed,
         critique: null,
@@ -2433,8 +2462,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     _raw: {
       extractionProvider: resolveProvider("extraction", input.extractionOverride?.provider ?? input.extractionProvider, extractionCfgOverride !== undefined),
       critiqueProvider: resolveProvider("critique", input.critiqueOverride?.provider ?? input.critiqueProvider, critiqueCfgOverride !== undefined),
-      extractionModel: extractionCfgOverride?.model ?? activeModelName("extraction"),
-      critiqueModel: critiqueCfgOverride?.model ?? activeModelName("critique"),
+      extractionModel: activeModelNameForOverride("extraction", input.extractionOverride, extractionCfgOverride),
+      critiqueModel: activeModelNameForOverride("critique", input.critiqueOverride, critiqueCfgOverride),
       extraction: extractionParsed,
       critique: critiqueParsed,
       quantizedColors,

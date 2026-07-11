@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# install-git-hooks — copy repo-tracked hook scripts into .git/hooks/
+# .git/hooks/ is not version-controlled, so hooks live in .zcode/git-hooks/
+# and are installed into each clone via this script.
+#
+# Usage: .zcode/scripts/install-git-hooks
+#
+# Run after cloning or pulling hook updates. Idempotent.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$ROOT" ]; then
+  echo "❌ Not in a git repo" >&2
+  exit 1
+fi
+
+# M3 fix: use git's own hooks path resolution (handles worktrees, gitdir-file,
+# and core.hooksPath). Warn if core.hooksPath is set — hooks won't run from
+# .git/hooks in that case.
+HOOKS_PATH="$(git config --get core.hooksPath 2>/dev/null || true)"
+if [ -n "$HOOKS_PATH" ]; then
+  echo "  ⚠  core.hooksPath is set to '$HOOKS_PATH' — hooks must be installed there, not .git/hooks/" >&2
+  HOOKS_DIR="$(cd "$ROOT" && cd "$HOOKS_PATH" 2>/dev/null && pwd || echo "$ROOT/$HOOKS_PATH")"
+else
+  # git-path hooks resolves the correct .git/hooks even for worktrees.
+  HOOKS_DIR="$(git rev-parse --git-path hooks)"
+  # Make it absolute if it's relative.
+  case "$HOOKS_DIR" in
+    /*) ;;
+    *) HOOKS_DIR="$ROOT/$HOOKS_DIR" ;;
+  esac
+fi
+SRC_DIR="$ROOT/.zcode/git-hooks"
+
+mkdir -p "$HOOKS_DIR"
+
+INSTALLED=0
+for hook in pre-push prepare-commit-msg; do
+  SRC="$SRC_DIR/$hook"
+  DST="$HOOKS_DIR/$hook"
+  if [ ! -f "$SRC" ]; then
+    echo "  ⚠  Source hook not found, skipping: $hook"
+    continue
+  fi
+  # Back up existing hook if it's not ours (doesn't have our marker comment).
+  if [ -f "$DST" ] && ! grep -q "Install: .zcode/scripts/install-git-hooks" "$DST" 2>/dev/null; then
+    # M1 fix: use PID + timestamp to avoid same-second collision.
+    BACKUP="$DST.bak.$(date +%s).$$"
+    cp "$DST" "$BACKUP"
+    echo "  ℹ  Backed up existing $hook to $(basename "$BACKUP")"
+  fi
+  cp "$SRC" "$DST"
+  chmod +x "$DST"
+  echo "  ✓ Installed $hook"
+  INSTALLED=$((INSTALLED + 1))
+done
+
+echo ""
+echo "  $INSTALLED hook(s) installed to .git/hooks/"
+echo "  Review artifacts go in .zcode/reviews/ (gitignored — per-machine state)"
+echo ""
+echo "  Workflow:"
+echo "    1. Complete a task, commit it"
+echo "    2. Review it, write artifact: .zcode/scripts/write-review-artifact --type task ..."
+echo "    3. Commit the next task (blocked until step 2 is done)"
+echo "    4. Before pushing: run branch review, write artifact: .zcode/scripts/write-review-artifact --type branch ..."
+echo "    5. Push (blocked until step 4 is done)"
+echo ""
+echo "  Emergency bypass: ZCODE_BYPASS_REVIEW=1 git push"

@@ -138,7 +138,14 @@ for (const config of configs) {
     }
   }
 
-  const modelPinned = config.modelPinned ?? (extraction.provider === "openai");
+  // modelPinned: true only when the config pins model+apiKey AND the override
+  // plumbing actually honors them. The tagger's EndpointOverride only forwards
+  // the full {baseUrl, apiKey, model} triple for provider === "openai" —
+  // non-OpenAI providers (claude/gemini/etc.) are reduced to { provider } at
+  // the call site, so their model field is ignored and the ambient env model
+  // is used instead. Reporting those as model-pinned would be a lie.
+  const modelPinned = config.modelPinned ??
+    (extraction.provider === "openai" && !!(extraction.model && extraction.apiKey));
   console.log(`\n  ── ${config.name} ${modelPinned ? "" : "(provider-only, not model-pinned)"} ──`);
 
   const results = [];

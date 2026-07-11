@@ -52,3 +52,11 @@ corpus/bulk-test-*
 # Local corpus config — per-curator floor for the entry-count drift check.
 # Copy .corpus-config.example.json to .corpus-config.json and set your floor.
 corpus/.corpus-config.json
+
+# ZCode per-machine/session state — allowlist only the deliberately-shared paths.
+# Everything else under .zcode/ is local (reviews, tmp, plans, debug markers).
+.zcode/*
+!.zcode/config.json
+!.zcode/git-hooks/
+!.zcode/hooks/
+!.zcode/scripts/

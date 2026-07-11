@@ -320,7 +320,7 @@ Class 2 — **provider-only lanes** (provider is pinned, model resolves from env
 }
 ```
 
-The `modelPinned` field makes the comparison-class distinction machine-readable: the matrix runner stamps each baseline artifact with `modelPinned: true|false`, and the comparison table groups fully-pinned lanes separately from provider-only lanes. To make a Claude/Gemini lane model-pinned, set the model env var before the run (documented in README) — the follow-up to extend the override path to those providers is out of scope this milestone.
+The `modelPinned` field makes the comparison-class distinction machine-readable: the matrix runner stamps each baseline artifact with `modelPinned: true|false`, and the comparison table shows a `Pinned` column (`✓`/`env`) distinguishing fully-pinned lanes from provider-only lanes. To make a Claude/Gemini lane model-pinned, set the model env var before the run (documented in README) — the follow-up to extend the override path to those providers is out of scope this milestone.
 
 - [ ] **Step 1: Make eval-baseline pin explicit configs**
 

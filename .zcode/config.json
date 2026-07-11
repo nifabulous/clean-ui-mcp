@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "enabled": false,
+    "_comment": "Disabled: ZCode workspace-scoped PreToolUse hooks did not fire in testing (verified twice, two sessions). Git-native hooks in .zcode/git-hooks/ provide enforcement instead. Kept for if/when the hook runner is fixed — re-enable by setting enabled: true and replacing probe-hook with require-review-before-push/commit.",
+    "events": {
+      "PreToolUse": [
+        {
+          "matcher": "Bash",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "${ZCODE_PROJECT_DIR}/.zcode/hooks/probe-hook",
+              "timeout": 5
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

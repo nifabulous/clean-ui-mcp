@@ -1,0 +1,111 @@
+{
+  "_comment": "Gold labels for deterministic critique-quality scoring. Each label corresponds to an eval-set fixture. Scoring is offline — no provider credentials required.",
+  "labelVersion": 1,
+  "labels": [
+    {
+      "id": "workable-workable-2",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "untitled-untitled",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "arcade-arcade-web-screens-77",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "arcade-arcade-web-screens-78",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "wise-transfer-calculator",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "cash-app-cash-app-7",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "wise-wise",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "cowrywise-desktop",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "wealthsimple-ios-47",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "mercury-web-43",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "peoplegpt-6",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "arcade-web-68",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "stackai-web-37",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "wealthsimple-ios-0",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    },
+    {
+      "id": "cowrywise-mobile",
+      "requiredEvidencePrefixes": ["screen:"],
+      "forbiddenClaims": ["icon-only", "pixel-perfect"],
+      "motionPolicy": "no-dom-motion",
+      "md3Expectation": "not-applicable"
+    }
+  ]
+}

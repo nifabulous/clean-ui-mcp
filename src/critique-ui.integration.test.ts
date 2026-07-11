@@ -124,10 +124,12 @@ const DESKTOP_IMG = resolve(FIXTURE_DIR, "desktop-dashboard.png");
     ] as never);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     setCorpusForTesting(null);
-    // Also reset the image index override
-    import("./image-index.js").then(({ setImageIndexForTesting }) => setImageIndexForTesting(null));
+    // Reset the image index override — await the import so the reset
+    // completes before the next test starts (was fire-and-forget).
+    const { setImageIndexForTesting } = await import("./image-index.js");
+    setImageIndexForTesting(null);
   });
 
   it("every recommendation has at least one valid evidence ID", async () => {

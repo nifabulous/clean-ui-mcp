@@ -20,17 +20,6 @@ vi.mock("./image-index.js", () => ({
   cosine: vi.fn((a: number[], b: number[]) => 0.5),
 }));
 
-// ─── helper: generate N mock corpus entries ───────────────────────────────────
-function makeMockEntries(n: number, status: "approved" | "draft" = "approved", platform = "web"): Array<Record<string, unknown>> {
-  return Array.from({ length: n }, (_, i) => ({
-    id: `${status}-${i}`,
-    patternType: "dashboard",
-    platform,
-    reviewStatus: status,
-    title: `${status} ${i}`,
-  }));
-}
-
 afterEach(() => {
   vi.clearAllMocks();
 });

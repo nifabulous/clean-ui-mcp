@@ -1,0 +1,46 @@
+[
+  {
+    "id": "banned-phrases",
+    "version": 2,
+    "path": "skill/clean-ui-design/references/banned-phrases.md",
+    "sha256": "f0efde2794e8a1677517b1402535badcf823e4c58c5333bb50f827eeaabb286f",
+    "authority": "machine-rule",
+    "purposes": ["text-anti-slop", "visual-anti-slop"],
+    "sourceUrl": "https://github.com/educlopez/ui-craft",
+    "sourceCommit": "2ad8124987501096b84bf85d0dc710f3e8cc1c48",
+    "license": "MIT"
+  },
+  {
+    "id": "decision-effect-rejection",
+    "version": 1,
+    "path": "skill/clean-ui-design/references/decision-effect-rejection.md",
+    "sha256": "37d951e7bdfbb926d5cfb5a8e0a35669207c927066a22694708e6fae9bba288b",
+    "authority": "editorial",
+    "purposes": ["critique-structure"],
+    "sourceUrl": "https://github.com/nifabulous/clean-ui-mcp",
+    "sourceCommit": "adf8900896e71cae7a2adbaf6250cd463fd564c6",
+    "license": "MIT"
+  },
+  {
+    "id": "design-engineering",
+    "version": 1,
+    "path": "skill/clean-ui-design/references/design-engineering.md",
+    "sha256": "c27aa8ab4a2659b3045250143e964688ef8e1dcbcd0518251d894c22a185901e",
+    "authority": "editorial",
+    "purposes": ["motion-guidance"],
+    "sourceUrl": "https://github.com/emilkowalski/skills",
+    "sourceCommit": "220e8607c90b17337d210125777b7b695f26c221",
+    "license": "MIT"
+  },
+  {
+    "id": "material-design-3",
+    "version": 1,
+    "path": "skill/clean-ui-design/references/material-design-3.md",
+    "sha256": "69fe19cd38a92061b65e82f0d7c8ef30dd2ce83437b9c2c9877de448562fc43e",
+    "authority": "external-standard",
+    "purposes": ["design-taxonomy"],
+    "sourceUrl": "https://github.com/darlanrod/material-design-md",
+    "sourceCommit": "8cdbaf58a00532490710bb88710e68c289ac75af",
+    "license": "MPL-2.0"
+  }
+]

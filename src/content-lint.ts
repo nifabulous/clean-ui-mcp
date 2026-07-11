@@ -15,12 +15,9 @@
  * quotes.
  */
 import type { CorpusEntryT } from "./schema.js";
+import { VAGUE_PHRASES } from "./references/generated.js";
 
-export const VAGUE_PHRASES = [
-  "avoid clutter", "keep it clean", "keep it simple", "don't overdo it",
-  "be consistent", "avoid confusion", "too busy", "too much going on",
-  "not intuitive", "bad ux", "poor ux",
-] as const;
+export { VAGUE_PHRASES } from "./references/generated.js";
 
 export const MIN_WORDS = 8;
 

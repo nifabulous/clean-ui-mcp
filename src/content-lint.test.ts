@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { lintAntiPattern, findVagueAntiPatterns, VAGUE_PHRASES } from "./content-lint.js";
+import { VAGUE_PHRASES as GENERATED_VAGUE_PHRASES } from "./references/generated.js";
 import { findDraftMarkers, CorpusEntry } from "./schema.js";
 import type { CorpusEntryT } from "./schema.js";
 import { validateEntryPayload } from "./scripts/ui-server.js";
@@ -65,8 +68,25 @@ describe("findVagueAntiPatterns", () => {
     expect(issues).toEqual([]);
   });
 
-  it("VAGUE_PHRASES has exactly 11 entries", () => {
-    expect(VAGUE_PHRASES).toHaveLength(11);
+  it("uses the generated vague phrase list", () => {
+    expect(VAGUE_PHRASES).toEqual(GENERATED_VAGUE_PHRASES);
+  });
+});
+
+describe("enforcement-rule consumers", () => {
+  it("imports generated rules instead of declaring private detector copies", () => {
+    const consumers = [
+      new URL("./tagger.ts", import.meta.url),
+      new URL("./content-lint.ts", import.meta.url),
+      new URL("../scripts/eval-scorer.mjs", import.meta.url),
+    ];
+    const duplicateDeclarations = /const (?:BANNED_PHRASES|VAGUE_PHRASES|UNLABELED_CONTROL|PIXEL_MEASUREMENT|DOM_GROUND_TRUTH|CONTRAST_CLAUSE|POSITIVE_LABEL_PAIRING)\b/;
+
+    for (const consumer of consumers) {
+      const source = readFileSync(fileURLToPath(consumer), "utf8");
+      expect(source).toMatch(/references\/generated/);
+      expect(source).not.toMatch(duplicateDeclarations);
+    }
   });
 });
 

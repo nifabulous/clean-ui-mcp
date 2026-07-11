@@ -7,19 +7,20 @@ claim in a synthesis must name a **specific, reproducible decision** instead.
 If you catch yourself writing any of these, stop and replace with the specific
 choice + its effect.
 
-## The list
+## Banned phrases
 
-**Generic evaluatives** — "clean layout", "modern design", "user-friendly",
-"intuitive", "sleek", "minimalist", "good spacing", "nice typography",
-"visually appealing", "easy to use", "well-organized", "polished look",
-"beautiful", "elegant", "professional", "stunning", "gorgeous", "delightful".
+"clean layout", "modern design", "user-friendly", "intuitive", "sleek",
+"minimalist", "good spacing", "nice typography", "visually appealing",
+"easy to use", "well-organized", "polished look".
 
-**Filler techniques** — "use whitespace", "keep it simple", "avoid clutter",
-"be consistent", "good hierarchy", "clear visual hierarchy", "strong typography",
-"thoughtful spacing", "attention to detail".
+## Vague phrases
 
-**Vague anti-patterns** — "bad ux", "poor ux", "too busy", "too much going on",
-"not intuitive", "confusing".
+"avoid clutter", "keep it clean", "keep it simple", "don't overdo it",
+"be consistent", "avoid confusion", "too busy", "too much going on",
+"not intuitive", "bad ux", "poor ux".
+
+The checked-in lists above mirror `machine-rules.json` exactly. The remaining
+guidance in this document is editorial rather than a runtime detector.
 
 ## The replacement pattern: DECISION + EFFECT + REJECTION
 

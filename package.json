@@ -8,7 +8,9 @@
     "clean-ui-mcp": "dist/server.js"
   },
   "scripts": {
-    "build": "tsc",
+    "generate-references": "node scripts/generate-reference-artifacts.mjs",
+    "validate-references": "node scripts/generate-reference-artifacts.mjs --check && tsc && node dist/references/loader.js",
+    "build": "npm run generate-references && tsc",
     "start": "node dist/server.js",
     "dev": "tsc && node dist/server.js",
     "ui": "tsc && node dist/scripts/ui-server.js",

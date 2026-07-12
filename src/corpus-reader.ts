@@ -27,6 +27,7 @@ import { resolve } from "node:path";
 import type { CorpusEntryT } from "./schema.js";
 import {
   keywordSearch,
+  applyStructuralFilters,
   loadCorpus,
   searchEntries,
   searchRanked,
@@ -203,28 +204,14 @@ export class PublicCorpusReader implements CorpusReader {
   }
 
   /**
-   * Apply the structural filters (category/styleTag/minQuality/qualityTier/
-   * platform/reviewStatus) to the snapshot entries. Mirrors the filter block in
-   * corpus.ts `searchRanked`, but operates on the snapshot set — never the live
-   * corpus. The snapshot is already filtered to eligible entries at export
-   * time, so this is a pure subset operation.
+   * Apply the structural filters to the snapshot entries via the shared
+   * `applyStructuralFilters` helper from corpus.ts. Using the shared helper
+   * (rather than a copy) keeps the public and private filter logic identical
+   * so they cannot drift on a leak-relevant invariant. The snapshot is already
+   * filtered to eligible entries at export time, so this is a pure subset.
    */
   private structurallyFiltered(opts: SearchOptions): CorpusEntryT[] {
-    return this.entries.filter((e) => {
-      if (opts.category && !e.categories.includes(opts.category as never)) return false;
-      if (opts.styleTag && !e.styleTags.includes(opts.styleTag as never)) return false;
-      if (opts.minQuality && e.qualityScore < opts.minQuality) return false;
-      if (opts.qualityTier && e.qualityTier !== opts.qualityTier) return false;
-      if (opts.platform && e.platform !== opts.platform) return false;
-      // Workflow state: the snapshot only contains approved entries (drafts are
-      // ineligible at export time), so the default "approved" filter is a no-op.
-      // Honor an explicit "draft"/"any" for API parity, but in practice the
-      // snapshot has no drafts to surface.
-      const statusFilter = opts.reviewStatus ?? "approved";
-      if (statusFilter === "approved" && e.reviewStatus === "draft") return false;
-      if (statusFilter === "draft" && e.reviewStatus !== "draft") return false;
-      return true;
-    });
+    return applyStructuralFilters(this.entries, opts);
   }
 
   /**
@@ -249,7 +236,9 @@ export class PublicCorpusReader implements CorpusReader {
    * Ranked search. In public mode this is identical to `search` (keyword-only,
    * no rerank). The private reader delegates to the global `searchRanked`
    * (which may fuse vector + keyword results); the public reader CANNOT, so it
-   * runs keyword-only and returns the same results `search` would.
+   * runs keyword-only and returns the same results `search` would. An explicit
+   * `opts.rerank` is silently ignored — rerank is an external Voyage API call
+   * that would leak entry data, so it is unavailable in public mode.
    */
   searchRanked(options: SearchOptions): Promise<SearchResult[]> {
     return Promise.resolve(this.keywordRanked(options));

@@ -50,6 +50,33 @@ export interface SearchResult {
   searchMode:  "vector" | "keyword" | "hybrid";
 }
 
+// ─── structural filter (shared by searchRanked + PublicCorpusReader) ──────────
+
+/**
+ * Apply the structural filters (category/styleTag/minQuality/qualityTier/
+ * platform/reviewStatus) to an entries array. Shared between `searchRanked`
+ * (private reader, live corpus) and `PublicCorpusReader.structurallyFiltered`
+ * (public reader, snapshot entries) so the two paths cannot drift. Takes the
+ * entries as a parameter — never touches the global cache.
+ */
+export function applyStructuralFilters(entries: readonly CorpusEntryT[], opts: SearchOptions): CorpusEntryT[] {
+  return entries.filter((e) => {
+    if (opts.category    && !e.categories.includes(opts.category as never))  return false;
+    if (opts.styleTag    && !e.styleTags.includes(opts.styleTag as never))   return false;
+    if (opts.minQuality  && e.qualityScore < opts.minQuality)                return false;
+    if (opts.qualityTier && e.qualityTier !== opts.qualityTier)              return false;
+    if (opts.platform    && e.platform !== opts.platform)                    return false;
+    // Workflow state: hide drafts unless the caller explicitly asks for them.
+    // "approved" (default/omitted) → only approved; "draft" → only drafts;
+    // "any" → both. This prevents half-finished entries from leaking into
+    // retrieval results.
+    const statusFilter = opts.reviewStatus ?? "approved";
+    if (statusFilter === "approved" && e.reviewStatus === "draft") return false;
+    if (statusFilter === "draft" && e.reviewStatus !== "draft") return false;
+    return true;
+  });
+}
+
 // ─── keyword search (fallback when no index exists) ───────────────────────────
 
 /**
@@ -236,22 +263,8 @@ function fuseResults(vector: SearchResult[], keyword: SearchResult[]): SearchRes
 export async function searchRanked(opts: SearchOptions): Promise<SearchResult[]> {
   const entries = loadCorpus();
 
-  // Structural filters always apply regardless of search mode
-  const filtered = entries.filter((e) => {
-    if (opts.category    && !e.categories.includes(opts.category as never))  return false;
-    if (opts.styleTag    && !e.styleTags.includes(opts.styleTag as never))   return false;
-    if (opts.minQuality  && e.qualityScore < opts.minQuality)                return false;
-    if (opts.qualityTier && e.qualityTier !== opts.qualityTier)              return false;
-    if (opts.platform    && e.platform !== opts.platform)                    return false;
-    // Workflow state: hide drafts unless the caller explicitly asks for them.
-    // "approved" (default/omitted) → only approved; "draft" → only drafts;
-    // "any" → both. This prevents half-finished entries from leaking into
-    // retrieval results.
-    const statusFilter = opts.reviewStatus ?? "approved";
-    if (statusFilter === "approved" && e.reviewStatus === "draft") return false;
-    if (statusFilter === "draft" && e.reviewStatus !== "draft") return false;
-    return true;
-  });
+  // Structural filters always apply regardless of search mode.
+  const filtered = applyStructuralFilters(entries, opts);
 
   let results: SearchResult[];
 

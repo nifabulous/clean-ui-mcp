@@ -30,7 +30,7 @@
  * corpus-reader.test.ts (which uses `zenithcode`/`cobaltfox`/`quartzlynx`) so a
  * coincidence in one fixture can't mask a leak in the other.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -40,6 +40,68 @@ import type { CorpusEntryT } from "./schema.js";
 import { PublicCorpusReader } from "./corpus-reader.js";
 import { createServer } from "./server-factory.js";
 import { exportPublicSnapshot } from "./publication/exporter.js";
+
+// ─── F3 (round 2): stub the vision/synthesis deps so critique_ui runs offline ─
+//
+// critique_ui is the one tool that needs external API keys to run for real
+// (the vision tagger → OpenAI/Anthropic, the image-embedding provider → Voyage,
+// and the critique synthesis → text LLM). Without keys the handler threw at the
+// first API call and the tool was skipped in this contract suite — leaving the
+// full handler path (including the F2 getImageIndex leak guard) unverified in
+// public mode.
+//
+// The mocks below stub the THREE modules that make network calls:
+//   - ./tagger.js          → tagImage returns canned tagger facts.
+//   - ./image-embeddings.js → createImageEmbeddingProvider returns a STUB provider
+//                            (so the handler calls reader.getImageIndex(provider.model),
+//                            which the PublicCorpusReader answers with null — the
+//                            exact leak guard F2 introduced). embedImage is never
+//                            called because imageIndex is null (structured fallback).
+//   - ./critique-synthesis.js → synthesizeCritique returns a canned draft; the real
+//                            gateCritique is preserved via importOriginal (it is pure
+//                            and validates citations against the evidence set).
+//
+// Everything else (critique-ui validation, critique-retrieval over the injected
+// reader, synthesis context/render/structured-output) runs for real. This proves
+// the COMPLETE handler path runs in public mode without leaking private markers,
+// AND that reader.getImageIndex() returns null (so no private corpus vectors are
+// loaded). The mocks are safe for the other 13 tools: none of them import these
+// three modules.
+const tagImageStub = vi.hoisted(() => vi.fn());
+vi.mock("./tagger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./tagger.js")>();
+  return {
+    ...actual,
+    tagImage: tagImageStub,
+  };
+});
+
+const createImageEmbeddingProviderStub = vi.hoisted(() => vi.fn());
+vi.mock("./image-embeddings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./image-embeddings.js")>();
+  return {
+    ...actual,
+    createImageEmbeddingProvider: createImageEmbeddingProviderStub,
+  };
+});
+
+const synthesizeCritiqueStub = vi.hoisted(() => vi.fn());
+vi.mock("./critique-synthesis.js", async (importOriginal) => {
+  // Preserve gateCritique (pure) — only synthesizeCritique makes a network call.
+  const actual = await importOriginal<typeof import("./critique-synthesis.js")>();
+  return {
+    ...actual,
+    synthesizeCritique: synthesizeCritiqueStub,
+  };
+});
+
+// Reset the stubs between tests so canned return values don't leak across the
+// critique_ui test (and so the stubs are in a clean state if the suite grows).
+beforeEach(() => {
+  tagImageStub.mockReset();
+  createImageEmbeddingProviderStub.mockReset();
+  synthesizeCritiqueStub.mockReset();
+});
 
 // ─── unique markers (distinct from corpus-reader.test.ts) ────────────────────
 //
@@ -457,18 +519,124 @@ describe("public MCP contract — no private marker leaks through any tool path"
 
   // ── 14. critique_ui ────────────────────────────────────────────────────────
   //
-  // SKIPPED: critique_ui requires the vision tagger (an external LLM call via
-  // ./tagger.ts → OpenAI/Anthropic API) plus image-embedding provider keys.
-  // It cannot be invoked without real provider credentials, which the test
-  // environment doesn't have. The leak-relevant path for this tool — corpus
-  // retrieval via the injected reader — IS covered indirectly: critique's
-  // evidence retrieval uses reader.searchRanked/getById, the same methods
-  // search_ui_examples and get_ui_example exercise above, and the public reader
-  // serves only snapshot entries. If critique_ui is ever made runnable without
-  // provider keys (e.g. a tagger stub), add it here. Until then, the other 13
-  // tools give full output-scanning coverage of every reader code path.
-  it.skip("critique_ui: (skipped — requires vision API keys; see comment above)", async () => {
-    // Intentionally empty — kept as a placeholder so the skipped coverage is
-    // visible in the test report rather than silently absent.
+  // F3 (round 2): critique_ui was previously SKIPPED because it needs vision API
+  // keys (the tagger + synthesis deps). The vision deps are now stubbed at the
+  // top of this file (tagImage, createImageEmbeddingProvider, synthesizeCritique)
+  // so the COMPLETE handler path runs offline:
+  //   validate → stub tagger → createImageEmbeddingProvider (stub) →
+  //   reader.getImageIndex(provider.model) [returns null in public mode] →
+  //   retrieveCritiqueEvidence (structured fallback over the snapshot) →
+  //   stub synthesis → real gateCritique → structured output → markdown.
+  //
+  // The keystone assertion: the handler calls reader.getImageIndex(), the
+  // PublicCorpusReader answers null (the F2 leak guard — no private corpus
+  // vectors are loaded), and retrieval degrades to the structured fallback over
+  // the snapshot. The output must contain no private/unapproved markers.
+  it("critique_ui: full handler path runs in public mode; getImageIndex returns null; no private markers leak", async () => {
+    // A real (tiny) base64 PNG so the input validator's base64 round-trip + size
+    // checks pass and withValidatedImageFile can write the temp file the tagger
+    // stub receives the path of.
+    const imageB64 = PNG_BYTES.toString("base64");
+
+    // Stub the tagger: return a canned TaggerOutput-shaped object. The handler
+    // only reads a few fields (patternType, platform, visual.*) via
+    // toNormalizedTaggerFacts, so a minimal-but-typed object suffices.
+    tagImageStub.mockResolvedValue({
+      id: "screenshot",
+      title: "Screenshot",
+      patternType: "dashboard",
+      platform: "web",
+      categories: ["dashboard"],
+      styleTags: ["minimal"],
+      components: ["sidebar"],
+      domainTags: ["analytics"],
+      source: { productName: "Screenshot", url: null, capturedAt: "2026-07-12", capturedBy: "self" },
+      image: { visibility: "private", path: "screenshot.png", width: 1440, height: 900 },
+      visual: {
+        dominantColors: ["#ffffff", "#111111"],
+        accentColor: "#635bff",
+        colorRoles: { canvas: "#ffffff", surface: "#f5f5f5", ink: "#111111", muted: "#999999", accent: "#635bff" },
+        typePairing: { display: "Inter", body: "Inter", notes: "" },
+        spacingDensity: "moderate",
+        cornerStyle: "slight-round",
+        usesShadows: false,
+        usesBorders: true,
+      },
+      critique: "",
+      whatToSteal: [],
+      antiPatterns: { antiPatterns: [], whereThisFails: [], accessibilityRisks: [] },
+      qualityTier: "exceptional",
+      qualityScore: 4,
+      addedAt: "2026-07-12",
+    });
+
+    // Stub the image-embedding provider: return a stub provider so the handler
+    // takes the `imageProvider` truthy branch and calls
+    // reader.getImageIndex(provider.model). The PublicCorpusReader answers null
+    // (no public corpus index), so retrieval uses the structured fallback. The
+    // stub's embedImage is never called (the image branch is skipped when
+    // imageIndex is null) — the provider exists solely to drive the
+    // getImageIndex call, which is the F2 leak guard under test.
+    createImageEmbeddingProviderStub.mockReturnValue({
+      name: "stub-voyage",
+      model: "voyage-multimodal-3",
+      embedImage: vi.fn().mockResolvedValue([0.1, 0.2, 0.3, 0.4]),
+    });
+
+    // Stub the synthesis: return a canned draft. The real gateCritique (preserved
+    // via importOriginal) validates the draft's citations against the evidence
+    // set built by buildSynthesisContext, so the draft's evidence IDs must be
+    // real screen: facts the context registers (patternType, components, etc.).
+    synthesizeCritiqueStub.mockResolvedValue({
+      summary: "A restrained dashboard with a clear hierarchy.",
+      observations: ["The sidebar organizes navigation well."],
+      recommendations: [
+        {
+          observation: "Contrast is adequate.",
+          impact: "Readability.",
+          recommendation: "Keep the current contrast ratio.",
+          evidence: ["screen:patternType"],
+        },
+      ],
+      accessibilityRisks: [],
+      visualSlop: [],
+      motion: [],
+    });
+
+    const resp = await call("critique_ui", {
+      image_data: imageB64,
+      image_mime_type: "image/png",
+      product_context: "a calm analytics dashboard",
+      platform: "web",
+    });
+
+    const text = responseText(resp);
+
+    // The handler must NOT surface a private/unapproved marker. The retrieval
+    // ran over the public snapshot (structured fallback because getImageIndex
+    // returned null), so only the eligible entry could appear as evidence.
+    expectNoPrivateMarkers(text, "critique_ui");
+
+    // The handler must NOT return an error — the full path (including the
+    // getImageIndex null-answer) must complete cleanly in public mode.
+    expect(resp.isError, `critique_ui returned an error: ${text.slice(0, 500)}`).toBeFalsy();
+
+    // The tagger stub WAS called (the handler reached the tagger step).
+    expect(tagImageStub).toHaveBeenCalledTimes(1);
+    // The provider stub WAS called (the handler reached the getImageIndex step).
+    expect(createImageEmbeddingProviderStub).toHaveBeenCalledTimes(1);
+    // The synthesis stub WAS called (the handler reached the synthesis step).
+    expect(synthesizeCritiqueStub).toHaveBeenCalledTimes(1);
+
+    // KEYSTONE (F2 leak guard): retrieval used the STRUCTURED FALLBACK path,
+    // which only happens when reader.getImageIndex() returned null (no image
+    // index available). If the public reader had leaked the private corpus
+    // index, retrieval would have taken the "image" mode and ranked against
+    // private vectors. Asserting fallbackUsed + structured-fallback mode here
+    // proves the getImageIndex null-answer held end-to-end through the handler.
+    const structured = resp.structuredContent as Record<string, unknown> | undefined;
+    expect(structured, "critique_ui must return structuredContent").toBeDefined();
+    expect(structured!.retrievalMode, "retrieval must be structured-fallback (imageIndex was null)").toBe("structured-fallback");
+    expect(structured!.fallbackUsed, "fallbackUsed must be true (no image index in public mode)").toBe(true);
   });
 });

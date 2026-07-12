@@ -487,18 +487,18 @@ export class PublicCorpusReader implements CorpusReader {
       walk(imageDir);
     }
 
-    // Compare and throw with a precise discrepancy report.
-    const subset = (a: Set<string>, b: Set<string>): string[] =>
+    // Compare and throw with a precise discrepancy report. `missing` computes
+    // a − b (elements in a but not in b) — used for subset checks and for naming
+    // the extra paths in each direction of the manifest==disk equality check.
+    const missing = (a: Set<string>, b: Set<string>): string[] =>
       [...a].filter((p) => !b.has(p)).sort();
     const setEqual = (x: Set<string>, y: Set<string>): boolean =>
       x.size === y.size && [...x].every((p) => y.has(p));
-    const diff = (a: Set<string>, b: Set<string>): string[] =>
-      [...a].filter((p) => !b.has(p)).sort();
 
     const failures: string[] = [];
 
     // (1) eligible ⊆ manifest
-    const eligibleNotInManifest = subset(eligibleImagePaths, manifestAssetPaths);
+    const eligibleNotInManifest = missing(eligibleImagePaths, manifestAssetPaths);
     if (eligibleNotInManifest.length > 0) {
       failures.push(
         `eligible entries reference undeclared assets: ${JSON.stringify(eligibleNotInManifest)}`,
@@ -506,7 +506,7 @@ export class PublicCorpusReader implements CorpusReader {
     }
 
     // (2) manifest ⊆ allEntryPaths (no orphan manifest assets)
-    const orphanManifestAssets = subset(manifestAssetPaths, allEntryImagePaths);
+    const orphanManifestAssets = missing(manifestAssetPaths, allEntryImagePaths);
     if (orphanManifestAssets.length > 0) {
       failures.push(
         `manifest declares assets referenced by no entry (orphan): ${JSON.stringify(orphanManifestAssets)}`,
@@ -517,8 +517,8 @@ export class PublicCorpusReader implements CorpusReader {
     if (!setEqual(manifestAssetPaths, onDiskPaths)) {
       failures.push(
         `manifest assets ≠ files on disk`
-        + ` (manifest-only: ${JSON.stringify(diff(manifestAssetPaths, onDiskPaths))}`
-        + `; disk-only: ${JSON.stringify(diff(onDiskPaths, manifestAssetPaths))})`,
+        + ` (manifest-only: ${JSON.stringify(missing(manifestAssetPaths, onDiskPaths))}`
+        + `; disk-only: ${JSON.stringify(missing(onDiskPaths, manifestAssetPaths))})`,
       );
     }
 

@@ -41,9 +41,12 @@ export const critiqueQualityLabels = (() => {
     const labels = Array.isArray(data.labels) ? data.labels : [];
     const labelVersion = typeof data.labelVersion === "number" ? data.labelVersion : 1;
     return new Map(labels.map((l) => [{ ...l, labelVersion: l.labelVersion ?? labelVersion }.id, { ...l, labelVersion: l.labelVersion ?? labelVersion }]));
-  } catch {
-    // Missing/corrupt labels file → empty map. Scoring is skipped when no label
-    // matches, so a missing file never breaks the eval run.
+  } catch (e) {
+    // Fail visible, not silent. A missing/corrupt labels file means the
+    // deterministic gate is broken — report it loudly so operators notice.
+    console.error(`⚠  critique-quality labels not loaded: ${e instanceof Error ? e.message : e}`);
+    console.error(`   Path: ${LABELS_PATH}`);
+    console.error(`   Critique-quality scoring will be skipped (metrics will be missing).`);
     return new Map();
   }
 })();
@@ -169,12 +172,15 @@ export async function runEvalCase(input) {
         const rawCritique = critique._raw?.critique ?? {};
         result.critique = scoreCritique(rawCritique);
 
-        // Deterministic critique-quality scoring (Task 1/5 wiring). Only runs
-        // when a gold label exists for this fixture id; otherwise skipped.
+        // Deterministic critique-quality scoring (Task 1/5 wiring).
+        // Reports an error when no gold label matches — visible failure,
+        // not silent skip.
         const goldLabel = imageId ? critiqueQualityLabels.get(imageId) : undefined;
         if (goldLabel) {
           const structured = critiqueToStructured(rawCritique, rawExtraction);
           result.critiqueQuality = scoreCritiqueQuality(structured, goldLabel);
+        } else {
+          result.critiqueQuality = { error: `no gold label for fixture "${imageId}" — add it to eval/critique-quality-labels.json` };
         }
       } catch (e) {
         result.critiqueLatencyMs = Date.now() - tc0;

@@ -8,7 +8,7 @@
  * spec.
  */
 import { describe, expect, it } from "vitest";
-import { scoreExtraction, scoreCritique, summarizeScores } from "./eval-scorer.mjs";
+import { scoreExtraction, scoreCritique, summarizeScores, summarizeCritiqueQuality } from "./eval-scorer.mjs";
 
 describe("scoreExtraction", () => {
   it("scores patternType correctness against the gold label", () => {
@@ -143,5 +143,68 @@ describe("summarizeScores", () => {
     const summary = summarizeScores([], [{ critiqueWords: 10, bannedPhrasesRaw: 0, iconOnlyRaw: 0, pixelRaw: 0, a11yRiskCount: 0 }]);
     expect(summary.patternTypeAccuracy).toBe(0);
     expect(summary.avgIconOnlyRaw).toBe(0);
+  });
+});
+
+describe("summarizeCritiqueQuality", () => {
+  it("reports zero pass rate when all cases are notScorable", () => {
+    const result = summarizeCritiqueQuality([
+      { schemaValid: true, citationRate: "notScorable", overallPass: false, bannedPhraseCount: 0, invalidWcagCount: 0 },
+      { schemaValid: true, citationRate: "notScorable", overallPass: false, bannedPhraseCount: 0, invalidWcagCount: 0 },
+    ]);
+    expect(result.overallPassRate).toBe(0);
+    expect(result.notScorableCount).toBe(2);
+    expect(result.scorableCount).toBe(0);
+    expect(result.avgCitationRate).toBe(0);
+  });
+
+  it("computes pass rate over scorable cases only", () => {
+    const result = summarizeCritiqueQuality([
+      { schemaValid: true, citationRate: 1.0, overallPass: true, bannedPhraseCount: 0, invalidWcagCount: 0 },
+      { schemaValid: true, citationRate: 0.5, overallPass: false, bannedPhraseCount: 1, invalidWcagCount: 0 },
+      { schemaValid: true, citationRate: "notScorable", overallPass: false, bannedPhraseCount: 0, invalidWcagCount: 0 },
+    ]);
+    expect(result.scorableCount).toBe(2);
+    expect(result.notScorableCount).toBe(1);
+    expect(result.overallPassRate).toBe(0.5); // 1 of 2 scorable passed
+    expect(result.avgCitationRate).toBe(0.75); // (1.0 + 0.5) / 2
+  });
+
+  it("counts errors separately from valid scores", () => {
+    const result = summarizeCritiqueQuality([
+      { schemaValid: true, citationRate: 1.0, overallPass: true, bannedPhraseCount: 0, invalidWcagCount: 0 },
+      { error: "scorer crashed" },
+      { error: "missing label" },
+    ]);
+    expect(result.critiqueQualityErrorCount).toBe(2);
+    expect(result.scorableCount).toBe(1);
+    expect(result.overallPassRate).toBe(1.0);
+  });
+
+  it("returns zero metrics for all-error input", () => {
+    const result = summarizeCritiqueQuality([
+      { error: "crash 1" },
+      { error: "crash 2" },
+    ]);
+    expect(result.schemaValidRate).toBe(0);
+    expect(result.overallPassRate).toBe(0);
+    expect(result.critiqueQualityErrorCount).toBe(2);
+  });
+
+  it("returns zero metrics for empty input", () => {
+    const result = summarizeCritiqueQuality([]);
+    expect(result.schemaValidRate).toBe(0);
+    expect(result.overallPassRate).toBe(0);
+    expect(result.notScorableCount).toBe(0);
+    expect(result.critiqueQualityErrorCount).toBe(0);
+  });
+
+  it("sums banned phrases and invalid WCAG across all valid scores", () => {
+    const result = summarizeCritiqueQuality([
+      { schemaValid: true, citationRate: 1.0, overallPass: true, bannedPhraseCount: 2, invalidWcagCount: 1 },
+      { schemaValid: true, citationRate: 0.5, overallPass: false, bannedPhraseCount: 1, invalidWcagCount: 3 },
+    ]);
+    expect(result.totalBannedPhrases).toBe(3);
+    expect(result.totalInvalidWcag).toBe(4);
   });
 });

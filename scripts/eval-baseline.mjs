@@ -187,6 +187,7 @@ if (diffPath && existsSync(diffPath)) {
     ["avgExtractionLatencyMs", "ms", (v) => v.toFixed(0)],
     ["overallPassRate", "%", (v) => (v * 100).toFixed(1)],
     ["avgCitationRate", "%", (v) => (v * 100).toFixed(1)],
+    ["notScorableCount", "", (v) => v.toFixed(0)],
     ["totalBannedPhrases", "", (v) => v.toFixed(0)],
   ];
   let regressions = 0;

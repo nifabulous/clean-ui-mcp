@@ -145,7 +145,7 @@ export function summarizeScores(extractionScores, critiqueScores) {
  */
 export function summarizeCritiqueQuality(scores) {
   const valid = scores.filter(s => s && !s.error);
-  if (valid.length === 0) return { schemaValidRate: 0, avgCitationRate: 0, overallPassRate: 0, notScorableCount: 0, scorableCount: 0, totalBannedPhrases: 0, totalInvalidWcag: 0 };
+  if (valid.length === 0) return { schemaValidRate: 0, avgCitationRate: 0, overallPassRate: 0, notScorableCount: 0, scorableCount: 0, totalBannedPhrases: 0, totalInvalidWcag: 0, critiqueQualityErrorCount: scores.filter(s => s?.error).length };
   const schemaValid = valid.filter(s => s.schemaValid).length;
   const notScorable = valid.filter(s => s.citationRate === "notScorable");
   const scorable = valid.filter(s => s.citationRate !== "notScorable");

@@ -148,8 +148,7 @@ const ALLOWLIST = new Set<string>([
   "loadEnv",                   // env.ts — used by .mjs scripts
   "setImageIndexForTesting",   // image-index.ts — test-only export
   "assertCorpusImagePath",     // paths.ts — used by scripts
-  "validateReferenceRegistry", // references/loader.ts — called internally at loader.ts:125
-  "selectReferences",          // references/loader.ts — public registry-selection contract for downstream dist consumers
+  "validateReferenceRegistry", // references/loader.ts — called internally at loader.ts:131
   "accessibilityRiskTextFields", // schema.ts — used by content-lint test
   "PatternDiscovery",          // schema.ts — Zod schema, used by scripts
   "AccessibilityRisk",         // schema.ts — Zod schema, used by schema validation

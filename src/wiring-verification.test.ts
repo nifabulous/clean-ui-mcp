@@ -164,7 +164,8 @@ const ALLOWLIST = new Set<string>([
   "DecisionScope", "DecisionStatus", "ScreenSource", "EvidenceCoverage", "DecisionContext",
   "RubricDimension", "RubricScore", "Perspective", "ExperimentBrief", "Tradeoff",
   "Publication",                 // schema.ts — Zod schema, consumed by CorpusEntry composition
-  "evaluatePublication",         // publication/policy.ts — Gate 1A Task 2; wired by the exporter (Task 3) and readers (Task 4)
+  // TODO(Task 3/4): remove this allowlist entry once evaluatePublication is imported by the exporter or a reader.
+  "evaluatePublication",
   "entryTextFields",
   "ClaimBasis", "VisualSlopBasis",
   "VisualSlopFinding", "MotionGuidance", "StructuredRecommendation",

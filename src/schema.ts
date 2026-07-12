@@ -461,11 +461,11 @@ export const Publication = z.object({
   /** Pointer to the durable evidence of the rights basis (doc path, URL, etc.). */
   evidenceRef: z.string().min(1).max(200).optional(),
   /** When the clearance decision was made (YYYY-MM-DD). */
-  reviewedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  reviewedAt: IsoDate.optional(),
   /** Who made the clearance decision (name/handle). */
   reviewedBy: z.string().min(1).max(80).optional(),
   /** When the clearance expires (YYYY-MM-DD). Absent = no recorded expiry. */
-  expiresAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  expiresAt: IsoDate.optional(),
 });
 
 export const CorpusEntry = z.object({

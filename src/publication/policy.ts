@@ -108,7 +108,8 @@ export function evaluatePublication(
     // Expiry: absent expiresAt = no recorded expiry (never expires on this
     // axis). expiresAt >= now is still valid (clearance good through end-of-day).
     // Applies to approved entries only — an unreviewed/rejected entry has no
-    // clearance to expire.
+    // clearance to expire. String comparison is safe here: YYYY-MM-DD lexicographic
+    // order equals chronological order for zero-padded ISO dates.
     if (pub.clearance === "approved" && pub.expiresAt && pub.expiresAt < ctx.now) {
       reasons.push("clearance-expired");
     }

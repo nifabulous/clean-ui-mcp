@@ -324,6 +324,19 @@ describe("evaluatePublication — full reason-code coverage matrix", () => {
   // One row per reason code from the PublicationReason union, asserting that
   // each code is reachable and is the SOLE reason for its fixture. This is the
   // exhaustiveness backstop: if a code becomes unreachable, this table fails.
+  //
+  // The ALL_REASONS array + coverage test below enforce that EVERY union member
+  // appears as a row. If you add a reason to PublicationReason, you MUST add a
+  // row here — the `satisfies` check makes ALL_REASONS compile-time exhaustive,
+  // and the coverage test fails if a reason has no matrix row.
+  const ALL_REASONS = [
+    "entry-private", "clearance-unreviewed", "clearance-rejected",
+    "missing-rights-basis", "missing-evidence", "missing-reviewer",
+    "missing-review-date", "clearance-expired",
+    "image-private", "image-path-missing", "image-path-not-public",
+    "image-file-missing", "image-metadata-missing",
+  ] as const satisfies readonly PublicationReason[];
+
   const cases: Array<{ name: string; reason: PublicationReason; build: () => CorpusEntryT; exists: (p: string) => boolean }> = [
     { name: "entry-private (no publication)", reason: "entry-private",
       build: () => { const e = eligibleEntry(); delete (e as { publication?: unknown }).publication; return e; },
@@ -376,4 +389,15 @@ describe("evaluatePublication — full reason-code coverage matrix", () => {
       if (!decision.eligible) expect(decision.reasons).toEqual([c.reason]);
     });
   }
+
+  // Exhaustiveness guard: every PublicationReason union member must have at
+  // least one matrix row. Catches the "added a reason to the union, forgot the
+  // row" failure mode. (ALL_REASONS itself is compile-time-checked via
+  // `satisfies` above; this test closes the runtime gap.)
+  it("matrix covers every PublicationReason union member", () => {
+    const covered = new Set(cases.map((c) => c.reason));
+    for (const reason of ALL_REASONS) {
+      expect(covered, `missing matrix row for reason: ${reason}`).toContain(reason);
+    }
+  });
 });

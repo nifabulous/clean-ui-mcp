@@ -36,7 +36,7 @@ async function main(): Promise<void> {
   const mode = pickMode();
   // PublicCorpusReader is Task 4b. Until it lands, an explicit "public" mode
   // falls back to private so the server still boots and lists tools.
-  const reader = mode === "public" ? new PrivateCorpusReader() : new PrivateCorpusReader();
+  const reader = new PrivateCorpusReader();
   if (mode === "public") {
     console.error("[clean-ui-mcp] CLEAN_UI_MODE=public requested but PublicCorpusReader is not yet implemented (Task 4b); falling back to private mode.");
   }

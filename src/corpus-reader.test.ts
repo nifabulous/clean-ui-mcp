@@ -610,53 +610,36 @@ describe("PublicCorpusReader (F3) — snapshot JSON is validated, not trusted af
     expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/snapshot asset set mismatch/);
   });
 
-  it("filters out a private entry injected into the snapshot (filter-and-log, defense-in-depth)", () => {
-    // Both entries pass schema + integrity + cross-checks. But one is private
-    // (visibility=private) — the exporter should never have shipped it, but a
-    // modified snapshot could. The constructor's policy re-evaluation must
-    // EXCLUDE it rather than serve it.
+  it("rejects a snapshot containing a private entry (stale — bytes must not remain packaged)", () => {
+    // Round-3 F1: a snapshot containing an entry that fails publication
+    // re-evaluation at load time is STALE, not filtered. The private entry's
+    // image bytes are still physically in the snapshot directory; filtering
+    // only the metadata leaves the bytes in the artifact. The snapshot must
+    // be rejected and regenerated.
     const goodEntry = baseEntry("good-public", "A well-structured, fully-cleared public dashboard example that is safe for open redistribution everywhere. zen");
     const injectedPrivate: CorpusEntryT = {
       ...baseEntry("injected-private", "A private entry that should never have been shipped in any public snapshot at all. cob"),
       publication: { ...eligiblePublication, visibility: "private" },
       image: { visibility: "private", path: "images-private/injected-private.png", width: 1440, height: 900 },
     } as CorpusEntryT;
-    // The private entry's image.path is images-private/... which is NOT under
-    // images-public/, so it must NOT be in the assets list (assets are public).
-    // writeSnapshot writes one PNG per entry.image.path — skip the private one
-    // (its path isn't images-public/ so it has no public asset).
     const snapshotPath = writeSnapshot(root, [goodEntry, injectedPrivate], {
       assetsOverride: [`images-public/good-public.png`],
     });
-    const reader = new PublicCorpusReader(snapshotPath);
-    // Only the good entry survives; the private one is filtered out.
-    expect([...reader.entriesForAggregation()].map((e) => e.id)).toEqual(["good-public"]);
-    expect(reader.getById("injected-private")).toBeUndefined();
-    expect(reader.getById("good-public")).toBeDefined();
+    expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/stale/i);
   });
 
-  it("filters out an unapproved entry injected into the snapshot (asset absent → policy excludes it)", () => {
-    // F2 (round 2) tightened the load-time invariant to EXACT three-way set
-    // equality (eligible entry paths == manifest assets == files on disk). A
-    // snapshot carrying an unapproved entry's PUBLIC asset now fails that check
-    // outright (the asset is an orphan relative to the eligible set) — covered
-    // by the F2 rejection tests below. THIS test keeps the policy-filter path
-    // exercised: the unapproved entry is in entries.json but its image file is
-    // NOT present on disk (only the eligible entry's asset is), so policy
-    // excludes it for image-file-missing and the served set is just the
-    // eligible entry. The manifest + disk sets are consistent (both contain
-    // only the eligible asset), so the set check passes and filtering runs.
+  it("rejects a snapshot containing an unapproved entry (stale — must regenerate)", () => {
+    // Round-3 F1: same principle — an unapproved entry's bytes are still in
+    // the snapshot. Reject, don't filter.
     const goodEntry = baseEntry("approved-one", "A fully cleared, reviewed, and approved public dashboard entry that is cleared for the open corpus. zen");
     const injectedUnapproved: CorpusEntryT = {
       ...baseEntry("injected-unapproved", "An unreviewed entry that was slipped into the snapshot illegally and must be filtered out. qua"),
       publication: { ...eligiblePublication, clearance: "unreviewed" },
     } as CorpusEntryT;
-    const snapshotPath = writeSnapshot(root, [goodEntry, injectedUnapproved], {
-      assetsOverride: ["images-public/approved-one.png"],
-    });
-    const reader = new PublicCorpusReader(snapshotPath);
-    expect([...reader.entriesForAggregation()].map((e) => e.id)).toEqual(["approved-one"]);
-    expect(reader.getById("injected-unapproved")).toBeUndefined();
+    // Both entries have images-public/ paths; writeSnapshot writes both assets.
+    // The manifest declares both. But the unapproved entry fails policy.
+    const snapshotPath = writeSnapshot(root, [goodEntry, injectedUnapproved]);
+    expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/stale/i);
   });
 
   it("loads a fully valid snapshot unchanged (the happy path still works after F3)", () => {
@@ -700,15 +683,12 @@ describe("PublicCorpusReader (F1) — expiry uses the injected current date, not
     return entry;
   }
 
-  it("filters out an entry whose expiresAt is in the past relative to the injected now", () => {
-    // Snapshot generated 2026-01-01 (BEFORE the 2026-02-01 expiry), but it is now
-    // 2026-07-12 — the clearance has lapsed. The OLD code used generatedAt
-    // (2026-01-01) as `now`, so expiresAt < now was false and the entry stayed
-    // eligible forever. With the injected current date the entry is excluded.
+  it("rejects a snapshot whose entry has expired relative to the injected now (stale — must regenerate)", () => {
+    // Round-3 F1: an expired entry's image bytes are still physically packaged
+    // in the snapshot. Filtering only the metadata leaves the bytes in the
+    // artifact. The snapshot must be rejected and regenerated.
     const snapshotPath = writeSnapshot(root, [expiringEntry()]);
-    const reader = new PublicCorpusReader(snapshotPath, "2026-07-12");
-    expect([...reader.entriesForAggregation()].map((e) => e.id)).toEqual([]);
-    expect(reader.getById("expiring-entry")).toBeUndefined();
+    expect(() => new PublicCorpusReader(snapshotPath, "2026-07-12")).toThrow(/stale/i);
   });
 
   it("keeps the same entry eligible when the injected now is before the expiry", () => {
@@ -731,15 +711,15 @@ describe("PublicCorpusReader (F1) — expiry uses the injected current date, not
   });
 
   it("proves the decision follows the injected now, not generatedAt (same snapshot, different now)", () => {
-    // The keystone: ONE snapshot, TWO readers with different `now`. The entry is
-    // served before expiry and filtered after — driven entirely by the injected
-    // clock. generatedAt is fixed at 2026-07-12 (F3_NOW) in the manifest; if the
-    // reader used generatedAt, both readers would behave identically.
+    // The keystone: ONE snapshot, TWO readers with different `now`. Before
+    // expiry the snapshot loads and serves the entry; after expiry the snapshot
+    // is rejected as stale — driven entirely by the injected clock. generatedAt
+    // is fixed in the manifest; if the reader used generatedAt, both readers
+    // would behave identically.
     const snapshotPath = writeSnapshot(root, [expiringEntry()]);
     const before = new PublicCorpusReader(snapshotPath, "2026-01-15");
-    const after = new PublicCorpusReader(snapshotPath, "2026-07-12");
     expect([...before.entriesForAggregation()].map((e) => e.id)).toEqual(["expiring-entry"]);
-    expect([...after.entriesForAggregation()].map((e) => e.id)).toEqual([]);
+    expect(() => new PublicCorpusReader(snapshotPath, "2026-07-12")).toThrow(/stale/i);
   });
 
   it("throws on a malformed injected now (not YYYY-MM-DD)", () => {

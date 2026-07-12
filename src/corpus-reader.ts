@@ -22,7 +22,7 @@
  * private reader delegates correctly via the `setCorpusForTesting` seam, and
  * that the public reader never leaks private/unapproved data.
  */
-import { existsSync, readdirSync, readFileSync, statSync, realpathSync, type Dirent } from "node:fs";
+import { existsSync, readdirSync, readFileSync, lstatSync, realpathSync, type Dirent, type Stats } from "node:fs";
 import { resolve, relative, sep, join } from "node:path";
 import { z } from "zod";
 import type { CorpusEntryT } from "./schema.js";
@@ -368,64 +368,56 @@ export class PublicCorpusReader implements CorpusReader {
       return existsSync(resolve(snapshotPath, corpusRelPath));
     };
     const policyEligible: CorpusEntryT[] = [];
-    let excluded = 0;
+    const ineligible: Array<{ id: string; reasons: string[] }> = [];
     for (const entry of parsedEntries) {
       const decision = evaluatePublication(entry, { now: nowDate, imageExists });
       if (decision.eligible) {
         policyEligible.push(entry);
       } else {
-        excluded++;
+        ineligible.push({ id: entry.id, reasons: decision.reasons });
       }
     }
-    if (excluded > 0) {
-      console.error(
-        `[public-reader] excluded ${excluded} entr${excluded === 1 ? "y" : "ies"} from `
-        + `${snapshotPath} that failed publication re-evaluation (defense-in-depth; `
-        + `the exporter should have pre-filtered these).`,
+    if (ineligible.length > 0) {
+      // Round-3 F1: a snapshot containing an entry that fails publication
+      // re-evaluation at load time is STALE. Its image bytes are still
+      // physically packaged in the snapshot directory — a consumer can inspect
+      // the files independently of MCP tools. Filtering only the metadata
+      // (serving the entry's neighbors without serving the entry) leaves the
+      // ineligible bytes in the artifact, violating design principle 6
+      // (physical isolation beats filtering). Reject the entire snapshot and
+      // require regeneration (re-export to produce a snapshot without the
+      // expired/ineligible entry and its asset).
+      const detail = ineligible
+        .map((e) => `${e.id} (${e.reasons.join(", ")})`)
+        .join("; ");
+      throw new Error(
+        `[public-reader] snapshot ${snapshotPath} is stale: ${ineligible.length} `
+        + `entr${ineligible.length === 1 ? "y" : "ies"} failed publication re-evaluation `
+        + `against the current date (${nowDate}). Their image bytes are still physically `
+        + `packaged in the snapshot. Regenerate the snapshot (re-run the exporter) to `
+        + `remove them. Details: ${detail}`,
       );
     }
 
-    // ── 5. Asset set consistency (F2, round 2) ─────────────────────────────
-    // Three invariants, each closing a gap the original (entries ⊆ manifest)
-    // check left open:
+    // ── 5. Asset set consistency (F2, round 2 + round 3) ──────────────────
+    // Three-way EXACT equality among:
     //
-    //   (1) eligible ⊆ manifest: every SURVIVING entry's image path is a
-    //       declared manifest asset (the original check, kept). Catches an
-    //       eligible entry whose image points at an undeclared file.
+    //   (1) eligible entry image paths (every eligible entry's image path)
+    //   (2) manifest declared asset paths
+    //   (3) actual regular files on disk under <snapshot>/images-public/
     //
-    //   (2) manifest ⊆ allEntryPaths: every manifest asset is referenced by SOME
-    //       entry in entries.json (eligible or not). Catches an ORPHAN MANIFEST
-    //       ASSET — a declared asset that NO entry references (e.g. a private
-    //       entry's image smuggled into the manifest). An asset referenced by an
-    //       ineligible-but-present entry is NOT an orphan: it's the entry's own
-    //       image, legitimately declared at export time. This distinction matters
-    //       for F1: a time-expired entry is filtered from the SERVED set but its
-    //       asset was validly declared — treating it as an orphan would make
-    //       every old snapshot (with a since-expired entry) unloadable, defeating
-    //       F1's filter-and-log design. The finding's TDD pins the real target:
-    //       "an extra manifest asset NOT REFERENCED BY ANY ENTRY."
+    // All three sets must be exactly equal. This is the physical-bytes
+    // boundary: if an eligible entry's image is missing from the manifest or
+    // disk, the snapshot is incomplete. If the manifest or disk contains a
+    // file no eligible entry references, unrelated bytes ship in the artifact.
+    // Since ineligible entries are rejected above (not filtered), there are no
+    // "ineligible-but-present" entries whose assets could be in the manifest —
+    // every entry in the snapshot is eligible, so eligible paths == all paths.
     //
-    //   (3) manifest == disk (EXACT): every manifest asset exists on disk AND
-    //       every regular file under <snapshot>/images-public/ is in the manifest.
-    //       Catches an UNMANIFESTED FILE (a file riding in the snapshot that no
-    //       manifest entry vouches for — would be packaged by a naive npm pack)
-    //       and a MISSING FILE (a declared asset whose file was deleted).
-    //
-    // Any discrepancy throws with the specific extra/missing paths named.
+    // Round-3 F2: the disk walk uses lstatSync (not statSync) and rejects
+    // symlinks, so a symlinked file or directory cannot enter the on-disk
+    // asset set. Realpath containment is enforced during the walk.
 
-    // (a) ALL parsed entries' image paths (non-null, images-public/...). Used for
-    // the orphan-manifest-asset check (2): an asset in the manifest that no
-    // entry references is a smuggled file. Ineligible entries are included so a
-    // time-expired or unreviewed entry's own asset isn't mis-flagged.
-    const allEntryImagePaths = new Set<string>();
-    for (const entry of parsedEntries) {
-      const imgPath = entry.image.path;
-      if (imgPath !== null) {
-        allEntryImagePaths.add(imgPath);
-      }
-    }
-
-    // (a') Eligible entries' image paths — for the eligible ⊆ manifest check (1).
     const eligibleImagePaths = new Set<string>();
     for (const entry of policyEligible) {
       const imgPath = entry.image.path;
@@ -438,11 +430,14 @@ export class PublicCorpusReader implements CorpusReader {
     const manifestAssetPaths = new Set(manifest.assets.map((a) => a.path));
 
     // (c) Actual regular files under <snapshot>/images-public/ (recursive walk,
-    // relativized to "images-public/..."). Directories, symlinks, fifos, etc.
-    // are excluded — only regular files count as assets. This mirrors how the
-    // exporter populates the asset list (regular files only).
+    // relativized to "images-public/..."). Round-3 F2: uses lstatSync (not
+    // statSync) so symlinks are NEVER classified as regular files or
+    // directories — a symlinked file or directory cannot enter the on-disk
+    // asset set. Every traversed path must also remain realpath-contained
+    // beneath the snapshot's images-public root. This mirrors the exporter's
+    // resolveSafeAssetSource containment and the resolveImagePath guards.
     const onDiskPaths = new Set<string>();
-    const imageDir = resolve(snapshotPath, "images-public");
+    const imageDir = resolve(this.realSnapshotRoot, "images-public");
     if (existsSync(imageDir)) {
       const walk = (dir: string): void => {
         let entries: Dirent[];
@@ -453,35 +448,49 @@ export class PublicCorpusReader implements CorpusReader {
         }
         for (const ent of entries) {
           const abs = join(dir, ent.name);
-          // Use ent.isDirectory()/isFile() off the Dirent when possible; fall
-          // back to statSync for platforms/filesystems where the Dirent type
-          // is unknown (DT_UNKNOWN). A symlinked directory must be traversed
-          // via statSync (not lstatSync) so a legit symlinked subfolder inside
-          // images-public/ is still walked — the per-file regular-file check
-          // below uses statSync too, staying consistent with resolveImagePath.
-          let isDir = false;
-          let isFile = false;
+          // lstatSync does NOT follow symlinks. A symlink entry has
+          // isSymbolicLink() true and is rejected below. This is the fix for
+          // round-3 F2: statSync followed symlinks, allowing a symlinked file
+          // to be classified as a regular asset.
+          let st: Stats;
           try {
-            if (ent.isDirectory()) {
-              isDir = true;
-            } else if (ent.isFile()) {
-              isFile = true;
-            } else {
-              // DT_UNKNOWN or special type: stat to classify.
-              const s = statSync(abs);
-              isDir = s.isDirectory();
-              isFile = s.isFile();
-            }
+            st = lstatSync(abs);
           } catch {
-            // Broken symlink / unreadable — skip (can't be a regular asset).
-            continue;
+            continue; // unreadable — skip
           }
-          if (isDir) {
+          if (st.isSymbolicLink()) {
+            // Reject all symlinks — a snapshot must contain only regular files
+            // and directories under images-public/. A symlink could escape the
+            // snapshot root, and the physical-bytes boundary requires that
+            // every packaged file is a real file the exporter copied.
+            throw new Error(
+              `[public-reader] snapshot ${snapshotPath} contains a symlink under `
+              + `images-public/ (${relative(snapshotPath, abs)}). Snapshots must `
+              + `contain only regular files. Regenerate the snapshot.`,
+            );
+          }
+          if (st.isDirectory()) {
+            // Realpath containment for directories too: a bind mount or
+            // hardlinked directory could escape. Resolve and check.
+            let realDir: string;
+            try {
+              realDir = realpathSync(abs);
+            } catch {
+              continue;
+            }
+            if (relative(this.realSnapshotRoot, realDir).startsWith("..")) {
+              throw new Error(
+                `[public-reader] directory ${relative(snapshotPath, abs)} resolves `
+                + `outside the snapshot root. Snapshots must be self-contained.`,
+              );
+            }
             walk(abs);
-          } else if (isFile) {
-            const rel = relative(snapshotPath, abs).split(sep).join("/");
+          } else if (st.isFile()) {
+            const rel = relative(this.realSnapshotRoot, abs).split(sep).join("/");
             onDiskPaths.add(rel);
           }
+          // All other types (fifos, sockets, block devices, etc.) are silently
+          // skipped — they can't be image assets and don't belong in a snapshot.
         }
       };
       walk(imageDir);
@@ -505,8 +514,8 @@ export class PublicCorpusReader implements CorpusReader {
       );
     }
 
-    // (2) manifest ⊆ allEntryPaths (no orphan manifest assets)
-    const orphanManifestAssets = missing(manifestAssetPaths, allEntryImagePaths);
+    // (2) manifest ⊆ eligible entry paths (no orphan manifest assets)
+    const orphanManifestAssets = missing(manifestAssetPaths, eligibleImagePaths);
     if (orphanManifestAssets.length > 0) {
       failures.push(
         `manifest declares assets referenced by no entry (orphan): ${JSON.stringify(orphanManifestAssets)}`,
@@ -701,8 +710,13 @@ export class PublicCorpusReader implements CorpusReader {
     if (relReal === "" || relReal.startsWith("..") || relReal.startsWith(sep)) return null;
 
     // Must be a regular file (reject directories, fifos, symlinks-to-dirs, etc.).
+    // Use lstatSync on the ORIGINAL path (not the realpath) to reject symlinks
+    // at the entry level — a symlink whose target is a regular file would pass
+    // a statSync(real).isFile() check, but we want to reject the symlink itself
+    // since the snapshot should contain only regular files (the exporter copies
+    // files, not links). The realpath containment above already prevents escape.
     try {
-      if (!statSync(real).isFile()) return null;
+      if (!lstatSync(abs).isFile()) return null;
     } catch {
       return null;
     }

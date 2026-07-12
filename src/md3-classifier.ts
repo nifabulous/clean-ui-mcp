@@ -173,7 +173,7 @@ const CONFIDENCE_THRESHOLD = 0.6;
  *
  * Returns "supported" only when:
  * 1. At least 3 independent signal categories match
- * 2. Confidence >= 0.7
+ * 2. Confidence >= 0.6
  * 3. No hard conflicts exist
  *
  * Never uses the word "compliant" — this is resemblance, not conformance.

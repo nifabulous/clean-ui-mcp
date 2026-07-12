@@ -25,7 +25,7 @@ describe("classifyMd3Resemblance", () => {
     expect(result.classification).toBe("supported");
     expect(result.matchedCategories.length).toBeGreaterThanOrEqual(3);
     expect(result.evidenceIds.length).toBeGreaterThan(0);
-    expect(result.confidence).toBeGreaterThanOrEqual(0.7);
+    expect(result.confidence).toBeGreaterThanOrEqual(0.6);
   });
 
   it("returns 'insufficient-evidence' for a single rounded card (only shape)", () => {

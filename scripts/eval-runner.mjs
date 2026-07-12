@@ -15,9 +15,41 @@
  * tagger falls back to env-driven resolution (current behavior).
  */
 import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
 
 import { tagImage, generateCritique, activeModelName, activeProviderName } from "../dist/tagger.js";
+import { buildScreenEvidenceIds } from "../dist/synthesis/context.js";
 import { scoreExtraction, scoreCritique } from "./eval-scorer.mjs";
+import { scoreCritiqueQuality } from "./critique-quality-scorer.mjs";
+
+// ─── gold labels ───────────────────────────────────────────────────────────────
+// Loaded once at module init. Keyed by label `id` for O(1) lookup in runEvalCase.
+// Labels are offline (no credentials) and pinned per fixture.
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const LABELS_PATH = resolve(__dirname, "..", "eval", "critique-quality-labels.json");
+
+/**
+ * Gold labels for deterministic critique-quality scoring, keyed by label `id`.
+ * @type {Map<string, object>}
+ */
+export const critiqueQualityLabels = (() => {
+  try {
+    const data = JSON.parse(readFileSync(LABELS_PATH, "utf8"));
+    const labels = Array.isArray(data.labels) ? data.labels : [];
+    const labelVersion = typeof data.labelVersion === "number" ? data.labelVersion : 1;
+    return new Map(labels.map((l) => [{ ...l, labelVersion: l.labelVersion ?? labelVersion }.id, { ...l, labelVersion: l.labelVersion ?? labelVersion }]));
+  } catch (e) {
+    // Fail visible, not silent. A missing/corrupt labels file means the
+    // deterministic gate is broken — report it loudly so operators notice.
+    console.error(`⚠  critique-quality labels not loaded: ${e instanceof Error ? e.message : e}`);
+    console.error(`   Path: ${LABELS_PATH}`);
+    console.error(`   Critique-quality scoring will be skipped (metrics will be missing).`);
+    return new Map();
+  }
+})();
 
 /**
  * @typedef {Object} EvalCaseInput
@@ -27,9 +59,62 @@ import { scoreExtraction, scoreCritique } from "./eval-scorer.mjs";
  * @property {string} goldPatternType
  * @property {boolean} runCritique  - whether to run the critique pass
  * @property {string} projectRoot   - absolute path to repo root (for resolving imagePath)
+ * @property {string} [imageId]     - fixture id; used to look up the gold label for critique-quality scoring
  * @property {object} [extractionOverride] - EndpointOverride triple (added in Task 3); when undefined, tagger uses env defaults
  * @property {object} [critiqueOverride]   - EndpointOverride triple (added in Task 3); when undefined, tagger uses env defaults
  */
+
+/**
+ * Convert the legacy raw critique blob (Pass 2 shape) into a partial
+ * StructuredCritique shape for the deterministic quality scorer.
+ *
+ * The legacy blob has no structured recommendations — only prose
+ * (draftCritique/draftWhatToSteal/draftAntiPatterns) and accessibility
+ * risks. Evidence IDs are derived from the extraction via the shared
+ * buildScreenEvidenceIds helper (NOT duplicated inline) so they match
+ * what synthesis would produce.
+ *
+ * @param {Record<string, unknown>} rawCritique - the _raw.critique blob
+ * @param {Record<string, unknown>} extraction  - the raw extraction (for evidence IDs)
+ * @returns {Record<string, unknown>} partial StructuredCritique
+ */
+export function critiqueToStructured(rawCritique, extraction) {
+  const c = (rawCritique && typeof rawCritique === "object") ? rawCritique : {};
+  const summary = typeof c.draftCritique === "string" ? c.draftCritique : "";
+  const whatToSteal = Array.isArray(c.draftWhatToSteal) ? c.draftWhatToSteal.filter((s) => typeof s === "string") : [];
+  const antiPatterns = Array.isArray(c.draftAntiPatterns) ? c.draftAntiPatterns.filter((s) => typeof s === "string") : [];
+  const observations = [...whatToSteal, ...antiPatterns];
+
+  const rawRisks = Array.isArray(c.draftAccessibilityRisks) ? c.draftAccessibilityRisks : [];
+  const accessibilityRisks = rawRisks
+    .filter((r) => r && typeof r === "object")
+    .map((r) => ({
+      element: typeof r.element === "string" ? r.element : "",
+      risk: typeof r.risk === "string" ? r.risk : "",
+      evidence: typeof r.evidence === "string" ? r.evidence : "",
+      wcag: Array.isArray(r.wcag) ? r.wcag.filter((w) => typeof w === "string") : [],
+      basis: "visible",
+    }));
+
+  return {
+    schemaVersion: "1.0",
+    platform: typeof c.platform === "string" ? c.platform : "web",
+    retrievalMode: "structured-fallback",
+    fallbackUsed: true,
+    coverage: "moderate",
+    summary,
+    observations,
+    // Legacy shape has no structured recommendations — the scorer reports
+    // citationRate "notScorable" for these, which is the intended signal.
+    recommendations: [],
+    accessibilityRisks,
+    visualSlop: [],
+    motion: [],
+    appliedReferences: [],
+    evidenceIds: buildScreenEvidenceIds(extraction ?? {}),
+    confidence: "medium",
+  };
+}
 
 /**
  * Run a single-image eval case: extraction (+ optional critique), scored.
@@ -38,11 +123,11 @@ import { scoreExtraction, scoreCritique } from "./eval-scorer.mjs";
  * @returns {Promise<Object>} result with extraction/critique scores + latency
  */
 export async function runEvalCase(input) {
-  const { imagePath, productName, platform, goldPatternType, runCritique, projectRoot } = input;
+  const { imagePath, productName, platform, goldPatternType, runCritique, projectRoot, imageId } = input;
   const fullPath = resolve(projectRoot, "corpus", imagePath);
 
   const result = {
-    imageId: null, // caller sets from fixture id
+    imageId: imageId ?? null,
     goldPatternType,
     platform,
     extractionModel: null,
@@ -50,6 +135,7 @@ export async function runEvalCase(input) {
     extraction: null,
     critique: null,
     critiqueLatencyMs: null,
+    critiqueQuality: null,
     error: null,
   };
 
@@ -85,6 +171,17 @@ export async function runEvalCase(input) {
         result.critiqueLatencyMs = Date.now() - tc0;
         const rawCritique = critique._raw?.critique ?? {};
         result.critique = scoreCritique(rawCritique);
+
+        // Deterministic critique-quality scoring (Task 1/5 wiring).
+        // Reports an error when no gold label matches — visible failure,
+        // not silent skip.
+        const goldLabel = imageId ? critiqueQualityLabels.get(imageId) : undefined;
+        if (goldLabel) {
+          const structured = critiqueToStructured(rawCritique, rawExtraction);
+          result.critiqueQuality = scoreCritiqueQuality(structured, goldLabel);
+        } else {
+          result.critiqueQuality = { error: `no gold label for fixture "${imageId}" — add it to eval/critique-quality-labels.json` };
+        }
       } catch (e) {
         result.critiqueLatencyMs = Date.now() - tc0;
         // Critique failure is non-fatal for the extraction score; record the error.

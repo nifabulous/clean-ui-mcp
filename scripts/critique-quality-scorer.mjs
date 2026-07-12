@@ -24,13 +24,14 @@ import { isWcagCriterion } from "../dist/wcag/registry.js";
 /**
  * @typedef {Object} ScoreResult
  * @property {boolean} schemaValid
- * @property {number} citationRate - fraction of recs with at least one valid evidence ID
+ * @property {number | "notScorable"} citationRate - fraction of recs with at least one valid evidence ID, or "notScorable" when there are zero recommendations
  * @property {string[]} unknownEvidenceIds - evidence IDs in recs not in the valid set
  * @property {number} bannedPhraseCount - banned phrases found in summary + observations
  * @property {number} forbiddenClaimCount - forbidden claims found in summary
  * @property {number} motionPolicyViolations
  * @property {number} emptyEvidenceRiskCount - a11y risks with empty evidence
  * @property {number} invalidWcagCount - a11y risks with non-canonical WCAG IDs
+ * @property {number} prefixViolations - recs whose evidence has no requiredEvidencePrefix match
  * @property {boolean} overallPass
  */
 
@@ -56,6 +57,7 @@ export function scoreCritiqueQuality(output, label) {
     motionPolicyViolations: 0,
     emptyEvidenceRiskCount: 0,
     invalidWcagCount: 0,
+    prefixViolations: 0,
     overallPass: false,
   };
 
@@ -70,20 +72,38 @@ export function scoreCritiqueQuality(output, label) {
   const validEvidenceSet = new Set(Array.isArray(output.evidenceIds) ? output.evidenceIds : []);
 
   // ── Citation rate + unknown evidence ──────────────────────────────────────
-  let recsWithValidEvidence = 0;
-  for (const rec of output.recommendations) {
-    const evidence = Array.isArray(rec.evidence) ? rec.evidence : [];
-    const hasValid = evidence.some((id) => validEvidenceSet.has(id));
-    if (hasValid) recsWithValidEvidence++;
-    for (const id of evidence) {
-      if (!validEvidenceSet.has(id)) {
-        result.unknownEvidenceIds.push(id);
+  // Zero recommendations means citation grounding can't be verified — the run
+  // is "notScorable" rather than vacuously perfect. overallPass stays false.
+  if (output.recommendations.length === 0) {
+    result.citationRate = "notScorable";
+  } else {
+    let recsWithValidEvidence = 0;
+    for (const rec of output.recommendations) {
+      const evidence = Array.isArray(rec.evidence) ? rec.evidence : [];
+      const hasValid = evidence.some((id) => validEvidenceSet.has(id));
+      if (hasValid) recsWithValidEvidence++;
+      for (const id of evidence) {
+        if (!validEvidenceSet.has(id)) {
+          result.unknownEvidenceIds.push(id);
+        }
+      }
+    }
+    result.citationRate = recsWithValidEvidence / output.recommendations.length;
+
+    // ── requiredEvidencePrefixes (Task 5) ───────────────────────────────────
+    // A rec that HAS evidence but none of it matches a required prefix is
+    // grounded against the wrong authority lane. Recs with no evidence at all
+    // are skipped here (they're already caught by the citation gate).
+    const prefixes = Array.isArray(label.requiredEvidencePrefixes) ? label.requiredEvidencePrefixes : [];
+    if (prefixes.length > 0) {
+      for (const rec of output.recommendations) {
+        const evidence = Array.isArray(rec.evidence) ? rec.evidence : [];
+        if (evidence.length === 0) continue;
+        const matchesPrefix = evidence.some((id) => prefixes.some((p) => id.startsWith(p)));
+        if (!matchesPrefix) result.prefixViolations++;
       }
     }
   }
-  result.citationRate = output.recommendations.length > 0
-    ? recsWithValidEvidence / output.recommendations.length
-    : 1.0; // no recs → no citation failure
 
   // ── Banned phrases in summary + observations ───────────────────────────────
   const proseText = [
@@ -121,6 +141,8 @@ export function scoreCritiqueQuality(output, label) {
   }
 
   // ── Overall pass (I4 fix: unknown evidence IDs now gate) ──────────────────────
+  // notScorable (zero recs) keeps overallPass false — `"notScorable" === 1.0`
+  // is false, so no special-case branch is needed.
   result.overallPass = result.schemaValid
     && result.citationRate === 1.0
     && result.unknownEvidenceIds.length === 0
@@ -128,7 +150,8 @@ export function scoreCritiqueQuality(output, label) {
     && result.forbiddenClaimCount === 0
     && result.motionPolicyViolations === 0
     && result.emptyEvidenceRiskCount === 0
-    && result.invalidWcagCount === 0;
+    && result.invalidWcagCount === 0
+    && result.prefixViolations === 0;
 
   return result;
 }

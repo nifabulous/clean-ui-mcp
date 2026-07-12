@@ -128,3 +128,41 @@ export function summarizeScores(extractionScores, critiqueScores) {
   const avgCritiqueWords = critiqueScores.reduce((sum, s) => sum + s.critiqueWords, 0) / (critiqueScores.length || 1);
   return { patternTypeAccuracy, avgIconOnlyRaw, avgBannedPhrasesRaw, avgCritiqueWords };
 }
+
+/**
+ * Summarize a set of critique-quality scores (from scoreCritiqueQuality) into
+ * aggregate metrics.
+ *
+ * overallPassRate counts ONLY scorable cases (those with >=1 recommendation).
+ * notScorable cases (zero recommendations) are reported separately via
+ * notScorableCount so they don't get folded into the pass rate. With zero
+ * scorable cases overallPassRate is 0, not 1.0 — a vacuously perfect run on
+ * unscorable output would be misleading.
+ *
+ * @param {Array} scores - array of scoreCritiqueQuality results (may include
+ *   error stubs; those are filtered out before aggregation)
+ * @returns {object} summary with aggregate critique-quality metrics
+ */
+export function summarizeCritiqueQuality(scores) {
+  const valid = scores.filter(s => s && !s.error);
+  if (valid.length === 0) return { schemaValidRate: 0, avgCitationRate: 0, overallPassRate: 0, notScorableCount: 0, scorableCount: 0, totalBannedPhrases: 0, totalInvalidWcag: 0, critiqueQualityErrorCount: scores.filter(s => s?.error).length };
+  const schemaValid = valid.filter(s => s.schemaValid).length;
+  const notScorable = valid.filter(s => s.citationRate === "notScorable");
+  const scorable = valid.filter(s => s.citationRate !== "notScorable");
+  const passCount = scorable.filter(s => s.overallPass).length;
+  const avgCitation = scorable.length > 0
+    ? scorable.reduce((sum, s) => sum + (s.citationRate ?? 0), 0) / scorable.length
+    : 0;
+  const banned = valid.reduce((sum, s) => sum + (s.bannedPhraseCount ?? 0), 0);
+  const invalidWcag = valid.reduce((sum, s) => sum + (s.invalidWcagCount ?? 0), 0);
+  return {
+    schemaValidRate: schemaValid / valid.length,
+    avgCitationRate: avgCitation,
+    overallPassRate: scorable.length > 0 ? passCount / scorable.length : 0,
+    notScorableCount: notScorable.length,
+    scorableCount: scorable.length,
+    totalBannedPhrases: banned,
+    totalInvalidWcag: invalidWcag,
+    critiqueQualityErrorCount: scores.filter(s => s?.error).length,
+  };
+}

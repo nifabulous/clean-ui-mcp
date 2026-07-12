@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSynthesisContext,
+  buildScreenEvidenceIds,
   registerVisualEvidence,
   type SynthesisContext,
 } from "./context.js";
@@ -204,5 +205,59 @@ describe("DOM motion evidence", () => {
       })),
     });
     expect(ctx.evidence.filter((e) => e.source === "dom").length).toBe(10);
+  });
+});
+
+describe("buildScreenEvidenceIds", () => {
+  it("returns screen:* IDs for present extraction keys", () => {
+    const ids = buildScreenEvidenceIds(makeExtraction());
+    expect(ids).toContain("screen:patternType");
+    expect(ids).toContain("screen:components");
+    expect(ids).toContain("screen:layoutForm");
+    expect(ids).toContain("screen:spacingDensity");
+    expect(ids).toContain("screen:cornerStyle");
+  });
+
+  it("includes screen:visual:* IDs for visual fields", () => {
+    const ids = buildScreenEvidenceIds(makeExtraction({
+      dominantColors: ["#ffffff", "#111111"],
+      accentColor: "#0066cc",
+      usesShadows: false,
+      usesBorders: true,
+      typePairing: { display: null, body: null, notes: "Clean sans-serif pairing" },
+    }));
+    expect(ids).toContain("screen:visual:colors");
+    expect(ids).toContain("screen:visual:accentColor");
+    expect(ids).toContain("screen:visual:usesShadows");
+    expect(ids).toContain("screen:visual:usesBorders");
+    expect(ids).toContain("screen:visual:typePairing");
+  });
+
+  it("omits screen:* IDs for null/undefined extraction keys", () => {
+    const ids = buildScreenEvidenceIds({ patternType: "dashboard" });
+    expect(ids).toContain("screen:patternType");
+    expect(ids).not.toContain("screen:components");
+    expect(ids).not.toContain("screen:layoutForm");
+  });
+
+  it("produces only screen:* and screen:visual:* IDs (no corpus:/dom:)", () => {
+    const ids = buildScreenEvidenceIds(makeExtraction());
+    for (const id of ids) {
+      expect(id).toMatch(/^screen:(visual:)?/);
+    }
+  });
+
+  it("matches the screen+visual IDs produced by buildSynthesisContext", () => {
+    const extraction = makeExtraction({
+      dominantColors: ["#ffffff", "#111111"],
+      accentColor: "#0066cc",
+    });
+    const ctx = buildSynthesisContext({ extraction, retrieval: makeRetrieval() });
+    const screenAndVisual = ctx.evidence
+      .filter((e) => e.source === "screen")
+      .map((e) => e.id)
+      .sort();
+    const fromHelper = [...buildScreenEvidenceIds(extraction)].sort();
+    expect(fromHelper).toEqual(screenAndVisual);
   });
 });

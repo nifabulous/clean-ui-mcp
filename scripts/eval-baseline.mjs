@@ -29,7 +29,7 @@ import { execSync } from "node:child_process";
 import "../dist/env.js";
 import { hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../dist/tagger.js";
 import { EVAL_SET } from "./eval-set.mjs";
-import { summarizeScores } from "./eval-scorer.mjs";
+import { summarizeScores, summarizeCritiqueQuality } from "./eval-scorer.mjs";
 import { runEvalCase, buildEnvOverride } from "./eval-runner.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -97,6 +97,7 @@ for (const img of images) {
     goldPatternType: img.patternType,
     runCritique,
     projectRoot: PROJECT_ROOT,
+    imageId: img.id,
     extractionOverride,
     critiqueOverride,
   });
@@ -128,11 +129,14 @@ const validExtractions = results.filter((r) => r.extraction);
 // toward zero (summarizeScores reads missing fields as 0), turning API failures
 // into misleadingly good-looking metrics instead of explicit failures.
 const validCritiques = results.filter((r) => r.critique && !r.critique.error);
+const critiqueQualityScores = results.filter(r => r.critiqueQuality && !r.critiqueQuality.error).map(r => r.critiqueQuality);
+const critiqueQualitySummary = summarizeCritiqueQuality(critiqueQualityScores);
 const summary = {
   ...summarizeScores(validExtractions.map((r) => r.extraction), validCritiques.map((r) => r.critique)),
   avgExtractionLatencyMs: validExtractions.reduce((s, r) => s + r.extractionLatencyMs, 0) / (validExtractions.length || 1),
   errorCount: results.filter((r) => r.error).length,
   critiqueErrorCount: results.filter((r) => r.critique?.error).length,
+  ...critiqueQualitySummary,
 };
 
 const baseline = {
@@ -160,6 +164,12 @@ console.log(`  avg critique words:    ${summary.avgCritiqueWords.toFixed(0)}`);
 console.log(`  avg extraction latency:${summary.avgExtractionLatencyMs.toFixed(0)}ms`);
 if (summary.errorCount) console.log(`  extraction errors:     ${summary.errorCount}`);
 if (summary.critiqueErrorCount) console.log(`  critique errors:       ${summary.critiqueErrorCount}`);
+if (summary.overallPassRate !== undefined) {
+  console.log(`  critique-quality pass:  ${(summary.overallPassRate * 100).toFixed(1)}%`);
+  console.log(`  avg citation rate:      ${(summary.avgCitationRate * 100).toFixed(1)}%`);
+  console.log(`  not scorable:           ${summary.notScorableCount ?? 0}/${summary.scorableCount ?? 0}`);
+  console.log(`  total banned phrases:   ${summary.totalBannedPhrases ?? 0}`);
+}
 
 if (diffPath && !existsSync(diffPath)) {
   console.error(`\n⚠  Baseline file not found at ${diffPath}`);
@@ -175,6 +185,10 @@ if (diffPath && existsSync(diffPath)) {
     ["avgBannedPhrasesRaw", "", (v) => v.toFixed(1)],
     ["avgCritiqueWords", "", (v) => v.toFixed(0)],
     ["avgExtractionLatencyMs", "ms", (v) => v.toFixed(0)],
+    ["overallPassRate", "%", (v) => (v * 100).toFixed(1)],
+    ["avgCitationRate", "%", (v) => (v * 100).toFixed(1)],
+    ["notScorableCount", "", (v) => v.toFixed(0)],
+    ["totalBannedPhrases", "", (v) => v.toFixed(0)],
   ];
   let regressions = 0;
   for (const [key, unit, fmt] of metrics) {
@@ -183,8 +197,11 @@ if (diffPath && existsSync(diffPath)) {
     if (oldVal === undefined || newVal === undefined) continue;
     const delta = newVal - oldVal;
     const arrow = delta > 0 ? "↑" : delta < 0 ? "↓" : "=";
-    // For accuracy and critiqueWords: higher is better. For hallucination counts + latency: lower is better.
-    const isRegression = (key === "patternTypeAccuracy" || key === "avgCritiqueWords") ? delta < 0 : delta > 0;
+    // For accuracy, critiqueWords, and critique-quality rates: higher is better.
+    // For hallucination counts + latency: lower is better.
+    const higherIsBetter = key === "patternTypeAccuracy" || key === "avgCritiqueWords"
+      || key === "overallPassRate" || key === "avgCitationRate";
+    const isRegression = higherIsBetter ? delta < 0 : delta > 0;
     if (isRegression) regressions++;
     const flag = isRegression ? " ⚠ REGRESSION" : "";
     console.log(`  ${key.padEnd(25)} ${fmt(oldVal)}${unit} → ${fmt(newVal)}${unit} (${arrow} ${Math.abs(delta).toFixed(key.includes("Latency") ? 0 : 1)})${flag}`);

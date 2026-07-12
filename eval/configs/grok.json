@@ -1,0 +1,7 @@
+{
+  "_comment": "Grok (xAI) provider lane for the eval matrix",
+  "name": "grok",
+  "modelPinned": false,
+  "extraction": { "provider": "grok" },
+  "critique": { "provider": "grok" }
+}

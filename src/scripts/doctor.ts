@@ -14,7 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
-import { Corpus, findDraftMarkers, hasDraftMarkers } from "../schema.js";
+import { hasDraftMarkers } from "../schema.js";
 import { indexStatus } from "../corpus.js";
 import { CORPUS_ROOT, allImageFiles } from "../paths.js";
 import { ENTRIES_PATH, SNAPSHOT_DIR, listSnapshots, tryReadCorpus } from "../persistence.js";
@@ -40,9 +40,23 @@ try {
 }
 
 // ── 2. Corpus validates (schema + draft hygiene) ─────────────────────────────
-let entries = tryReadCorpus(ENTRIES_PATH)?.entries;
+// The doctor is the one tool that must NEVER crash on a broken corpus — it's
+// what a developer reaches for when something is wrong. tryReadCorpus returns
+// null for missing/corrupt files but THROWS on unsupported-newer (a {version:3}
+// file is fatal by design, so the loader doesn't silently mask it). Catch both
+// outcomes here and surface them as a FAIL row with an actionable detail,
+// rather than letting the throw escape as a stack trace.
+let entries: import("../schema.js").CorpusEntryT[] | null = null;
+try {
+  entries = tryReadCorpus(ENTRIES_PATH)?.entries ?? null;
+} catch (err) {
+  const msg = err instanceof Error ? err.message : String(err);
+  checks.push({ name: "Corpus validates", status: "FAIL", detail: `entries.json: ${msg}` });
+}
 if (!entries) {
-  checks.push({ name: "Corpus validates", status: "FAIL", detail: `entries.json unreadable — run \`npm run restore-corpus -- --latest\`` });
+  if (!checks.some((c) => c.name === "Corpus validates")) {
+    checks.push({ name: "Corpus validates", status: "FAIL", detail: `entries.json unreadable — run \`npm run restore-corpus -- --latest\`` });
+  }
 } else {
   const dirtyDraft = entries.filter((e) => hasDraftMarkers(e));
   const ids = new Set<string>();

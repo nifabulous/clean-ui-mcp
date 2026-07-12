@@ -84,23 +84,17 @@ describe("decodeCorpusFile — classification", () => {
     } finally { writeFileCleanup(path); }
   });
 
-  it("version:1 (a prior version) → kind 'supported-old' (we can still read it)", () => {
-    // v1 isn't a real prior corpus shape today, but the decoder's job is to
-    // classify — if it parses against the current schema we accept it as
-    // supported-old. This guards the "version detection kept even though v2
-    // stays current" requirement: a future {version:3} is distinguished from
-    // a corrupt file because the decoder inspects .version first.
-    // NOTE: schema today is z.literal(2), so a v1 envelope is NOT readable
-    // as a corpus. The decoder must classify it by the version field: a known
-    // lower version that doesn't parse becomes 'corrupt' (the schema can't
-    // read it), NOT 'unsupported-newer'. Assert the classifier doesn't lie.
+  it("version:1 (a prior version, not readable by the current z.literal(2) schema) → kind 'corrupt'", () => {
+    // v1 isn't a real prior corpus shape today. The decoder inspects .version
+    // first: 1 < CURRENT, so it falls through to Corpus.safeParse, which rejects
+    // it (the schema is z.literal(2)) — landing in 'corrupt', NOT
+    // 'unsupported-newer' (reserved for versions > current). This is the
+    // forward-compat guard: the version field is classified before parsing, so
+    // a future {version:3} is distinguished from a genuinely corrupt file.
     const path = writeFile("c.json", JSON.stringify({ version: 1, entries: [] }));
     try {
       const result = decodeCorpusFile(path);
-      // v1 isn't supported by the current schema; it's either supported-old
-      // (if we ever add a reader) or corrupt. The important assertion here:
-      // it is NOT unsupported-newer (that's reserved for versions > current).
-      expect(result.kind).not.toBe("unsupported-newer");
+      expect(result.kind).toBe("corrupt");
     } finally { writeFileCleanup(path); }
   });
 });

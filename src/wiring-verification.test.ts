@@ -163,6 +163,8 @@ const ALLOWLIST = new Set<string>([
   "ImageRef", "SourceAttribution", "TypePairing", "ColorRoles", "VisualAttributes",
   "DecisionScope", "DecisionStatus", "ScreenSource", "EvidenceCoverage", "DecisionContext",
   "RubricDimension", "RubricScore", "Perspective", "ExperimentBrief", "Tradeoff",
+  "Publication",                 // schema.ts — Zod schema, consumed by CorpusEntry composition
+  "evaluatePublication",         // publication/policy.ts — Gate 1A Task 2; wired by the exporter (Task 3) and readers (Task 4)
   "entryTextFields",
   "ClaimBasis", "VisualSlopBasis",
   "VisualSlopFinding", "MotionGuidance", "StructuredRecommendation",

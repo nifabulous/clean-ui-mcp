@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Component, CorpusEntry, Decision, detectPlatform, findDraftMarkers, formatAccessibilityRisk } from "./schema.js";
+import { Component, Corpus, CorpusEntry, Decision, detectPlatform, findDraftMarkers, formatAccessibilityRisk } from "./schema.js";
 
 const validEntry = {
   id: "example-product-dashboard",
@@ -544,6 +544,113 @@ describe("corpus schema", () => {
       wcag: ["1.4.1"],
     });
     expect(formatted).toContain("1.4.1 Use of Color");
+  });
+
+  // ── publication (Gate 1A — optional, no default for zero-churn) ──────────────
+
+  it("accepts a fully-populated publication block", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      publication: {
+        visibility: "public",
+        clearance: "approved",
+        rightsBasis: "owned",
+        evidenceRef: "docs/rights/linear-issue-board.md",
+        reviewedAt: "2026-07-01",
+        reviewedBy: "nifabulous",
+        expiresAt: "2027-07-01",
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts an entry with no publication field (optional)", () => {
+    const result = CorpusEntry.safeParse(validEntry);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.publication).toBeUndefined();
+  });
+
+  it("rejects an invalid publication.visibility enum", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      publication: { visibility: "secret", clearance: "approved" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an invalid publication.clearance enum", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      publication: { visibility: "public", clearance: "pending" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a malformed publication.reviewedAt (not YYYY-MM-DD)", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      publication: {
+        visibility: "public",
+        clearance: "approved",
+        reviewedAt: "July 1, 2026",
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a malformed publication.expiresAt (not YYYY-MM-DD)", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      publication: {
+        visibility: "public",
+        clearance: "approved",
+        expiresAt: "2026/07/01",
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts publication with only required fields (visibility + clearance)", () => {
+    const result = CorpusEntry.safeParse({
+      ...validEntry,
+      publication: { visibility: "private", clearance: "unreviewed" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("does NOT materialize publication on round-trip when absent (zero-churn, D17)", () => {
+    // Construct an entry WITHOUT publication, run it through the
+    // Corpus.parse → JSON.stringify → re-parse round-trip that persistEntries
+    // performs, and assert the re-parsed entry still has NO publication field.
+    // This is the load-bearing test for the no-default decision: .optional()
+    // (no .default) means absent stays absent through parse → serialize.
+    const parsed = Corpus.parse({ version: 2, entries: [validEntry] });
+    expect(parsed.entries[0].publication).toBeUndefined();
+
+    const serialized = JSON.stringify(parsed);
+    const reparsed = Corpus.parse(JSON.parse(serialized));
+
+    expect(reparsed.entries[0].publication).toBeUndefined();
+  });
+
+  it("does NOT materialize publication sub-fields on round-trip when partial", () => {
+    // A publication block with only visibility+clearance must survive round-trip
+    // without the optional sub-fields (rightsBasis, evidenceRef, etc.) being
+    // filled in with defaults — that would be churn.
+    const parsed = Corpus.parse({
+      version: 2,
+      entries: [{
+        ...validEntry,
+        publication: { visibility: "private", clearance: "unreviewed" },
+      }],
+    });
+    const serialized = JSON.stringify(parsed);
+    const reparsed = Corpus.parse(JSON.parse(serialized));
+
+    expect(reparsed.entries[0].publication).toEqual({
+      visibility: "private",
+      clearance: "unreviewed",
+    });
   });
 });
 

@@ -63,3 +63,10 @@ corpus/.corpus-config.json
 !.zcode/git-hooks/
 !.zcode/hooks/
 !.zcode/scripts/
+!.zcode/code-reviewer.md
+
+# Superpowers session state
+.superpowers/
+
+# Worktrees (stale checkouts cause test double-counting)
+.worktrees/

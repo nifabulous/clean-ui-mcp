@@ -845,11 +845,12 @@ keys + `RUN_LIVE_INTEGRATION=1`).
 
 ## Testing
 
-420 tests across 28 files: vitest unit tests (schema, corpus, tagger, tagger
+533 tests across 39 files: vitest unit tests (schema, corpus, tagger, tagger
 contract, WCAG registry, embeddings, dedup, design-prompt, recommend,
 aggregations, decision lab, eval scorer, critique-ui, image-embeddings,
-image-index, critique-retrieval, critique-synthesis) + Playwright browser
-tests (dashboard flows, bulk import, capture, candidate review).
+image-index, critique-retrieval, critique-synthesis, dom-motion, md3-classifier,
+synthesis context/contracts/render, wiring verification) + Playwright browser
+tests (dashboard flows, bulk import, capture, candidate review, DOM motion).
 
 ```bash
 npm test                 # all tests

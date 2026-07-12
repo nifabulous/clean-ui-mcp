@@ -744,28 +744,40 @@ async function collectMotionDeclarations(locator: Locator): Promise<CollectedMot
 
     // Gather authored rules once (page-wide). Matching rule.selectorText against
     // each element later scopes the evidence to the capture root.
+    // Recursively walk grouping rules (@media, @supports, @layer, etc.) so
+    // motion declarations inside media queries are not missed.
     let inaccessibleStylesheets = 0;
     const ruleStyles: { selectorText: string; style: Record<string, string> }[] = [];
+    const walkRules = (rules: CSSRuleList | readonly CSSRule[]): void => {
+      for (const rule of Array.from(rules)) {
+        const r = rule as unknown as { selectorText?: string; style?: CSSStyleDeclaration; cssRules?: CSSRuleList };
+        if (r.style && r.selectorText) {
+          const styleRec: Record<string, string> = {};
+          for (const prop of MOTION_PROPS) {
+            const v = (r.style as unknown as Record<string, string>)[prop];
+            if (v) styleRec[prop] = v;
+          }
+          if (Object.keys(styleRec).length > 0) ruleStyles.push({ selectorText: r.selectorText, style: styleRec });
+        }
+        // Recurse into grouping rules (@media, @supports, @layer, etc.)
+        if (r.cssRules) walkRules(r.cssRules);
+      }
+    };
     for (const sheet of Array.from(document.styleSheets)) {
       try {
-        for (const rule of Array.from(sheet.cssRules)) {
-          const r = rule as unknown as { selectorText?: string; style?: CSSStyleDeclaration };
-          if (r.style && r.selectorText) {
-            const styleRec: Record<string, string> = {};
-            for (const prop of MOTION_PROPS) {
-              const v = (r.style as unknown as Record<string, string>)[prop];
-              if (v) styleRec[prop] = v;
-            }
-            if (Object.keys(styleRec).length > 0) ruleStyles.push({ selectorText: r.selectorText, style: styleRec });
-          }
-        }
+        walkRules(sheet.cssRules);
       } catch {
         // SecurityError on cross-origin sheets — can't read rules.
         inaccessibleStylesheets++;
       }
     }
 
-    const elements = Array.from(root.querySelectorAll(interactiveSel)).slice(0, MAX_ELEMENTS);
+    // Include root itself if it matches the interactive selector (P2-2 fix).
+    const rootEl = root as Element;
+    const rootMatches = rootEl.matches ? rootEl.matches(interactiveSel) : false;
+    const childElements = Array.from(root.querySelectorAll(interactiveSel));
+    // Dedupe root if it also appears in querySelectorAll results
+    const elements = (rootMatches ? [rootEl, ...childElements.filter((e) => e !== rootEl)] : childElements).slice(0, MAX_ELEMENTS);
     const inputs: DomMotionInput[] = [];
     for (const el of elements) {
       // Merge authored declarations in document order (later rule wins), then

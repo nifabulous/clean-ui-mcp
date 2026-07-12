@@ -25,18 +25,41 @@
  * the bottom-of-module `main()` call — keep it.
  */
 import "./env.js";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { fileURLToPath } from "node:url";
 import { createServer } from "./server-factory.js";
 import { PrivateCorpusReader, PublicCorpusReader, type CorpusMode, type CorpusReader } from "./corpus-reader.js";
 import { PUBLIC_SNAPSHOT_DIR } from "./paths.js";
 
-function pickMode(): CorpusMode {
-  const raw = process.env.CLEAN_UI_MODE;
+/**
+ * Resolve `CLEAN_UI_MODE` to a CorpusMode. F1 (Gate 1A): this is fail-CLOSED,
+ * not fail-open.
+ *
+ *   - absent / empty / unset → `"private"` (the historical default; keeps the
+ *     smoke test, which sets no env var, working unchanged).
+ *   - `"public"`  → `"public"`
+ *   - `"private"` → `"private"`
+ *   - ANY OTHER non-empty value → throws at startup. A typo like `publci` MUST
+ *     NOT silently fall back to private (the previous behavior served the full
+ *     private corpus for any unrecognized value — a direct leak the gate exists
+ *     to prevent). Naming the bad value + valid options makes the operator's
+ *     fix obvious.
+ *
+ * Exported (and `main()` is guarded by `isMainModule`) so the mode-selection
+ * logic is unit-testable in isolation without importing a module that starts a
+ * stdio server as a side effect.
+ */
+export function pickMode(env: NodeJS.ProcessEnv = process.env): CorpusMode {
+  const raw = env.CLEAN_UI_MODE;
+  // Absent or empty → private (historical default; smoke test sets no env).
+  if (raw === undefined || raw === "") return "private";
   if (raw === "public" || raw === "private") return raw;
-  // Absent or unrecognized → private (the historical default). This keeps the
-  // smoke test (which sets no mode) working unchanged.
-  return "private";
+  // Unrecognized non-empty value → fail CLOSED with a clear, actionable error.
+  throw new Error(
+    `[clean-ui-mcp] Unrecognized CLEAN_UI_MODE=${JSON.stringify(raw)}. `
+    + `Valid values: "public", "private", or unset/empty (defaults to "private").`,
+  );
 }
 
 /**
@@ -103,7 +126,26 @@ async function main(): Promise<void> {
   console.error(`clean-ui-mcp server running on stdio (mode=${mode})`);
 }
 
-main().catch((err) => {
-  console.error("Fatal error starting clean-ui-mcp:", err);
-  process.exit(1);
-});
+/**
+ * Only auto-start when this module is the process entry point. The `bin` entry
+ * (`dist/server.js`) and mcp-smoke.test.ts (which spawns `dist/server.js`
+ * expecting auto-start + the readiness string) set argv[1] to this file, so
+ * this guard preserves that behavior. Unit tests import `pickMode` directly;
+ * without this guard, importing server.ts would open a stdio server as a side
+ * effect — making the module untestable in isolation.
+ */
+const isMainModule = () => {
+  try {
+    return realpathSync(process.argv[1] ?? "") === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    // argv[1] missing or unresolvable (e.g. some test runners) → don't start.
+    return false;
+  }
+};
+
+if (isMainModule()) {
+  main().catch((err) => {
+    console.error("Fatal error starting clean-ui-mcp:", err);
+    process.exit(1);
+  });
+}

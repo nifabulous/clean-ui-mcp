@@ -22,8 +22,8 @@
  * this module changing. The caller (the critique_ui tool handler) passes the
  * reader it received from createServer.
  */
-import type { CorpusReader } from "./corpus-reader.js";
-import { cosine, type ImageEmbeddingIndex } from "./image-index.js";
+import type { CorpusReader, ReaderImageIndex } from "./corpus-reader.js";
+import { cosine } from "./image-index.js";
 import type { ImageEmbeddingProvider, ValidatedImage } from "./image-embeddings.js";
 
 export interface CritiqueEntry {
@@ -53,7 +53,7 @@ export interface RetrieveCritiqueInput {
   extraction: Record<string, unknown>;
   productContext?: string;
   platform?: string;
-  imageIndex: ImageEmbeddingIndex | null; // pre-loaded, or null
+  imageIndex: ReaderImageIndex | null; // pre-loaded via the reader, or null
 }
 
 const MAX_ENTRIES = 5;

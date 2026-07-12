@@ -90,7 +90,7 @@ function baseEntry(id: string, critique: string): CorpusEntryT {
     categories: ["dashboard"],
     styleTags: ["minimal"],
     components: [],
-    domainTags: ["dashboards"],
+    domainTags: ["analytics"],
     source: {
       productName: `${id}-product`,
       url: "https://example.com",
@@ -157,14 +157,14 @@ async function buildContractFixture(): Promise<ContractFixture> {
 
   const eligible = baseEntry(
     ELIGIBLE_ID,
-    `This dashboard uses calm spacing and restrained contrast. ${ELIGIBLE_MARKER}`,
+    `This dashboard uses calm spacing, restrained contrast, and a very clear single visual hierarchy throughout the layout. ${ELIGIBLE_MARKER}`,
   );
 
   // Private entry: visibility=private → entry-private (and image-private below).
   const privateEntry: CorpusEntryT = {
     ...baseEntry(
       PRIVATE_ID,
-      `Confidential client financials on this screen. ${PRIVATE_MARKER}`,
+      `Confidential client financials on this screen, visible only behind a login and never intended for open redistribution. ${PRIVATE_MARKER}`,
     ),
     publication: { ...eligiblePublication, visibility: "private" },
     image: {
@@ -179,7 +179,7 @@ async function buildContractFixture(): Promise<ContractFixture> {
   const unapproved: CorpusEntryT = {
     ...baseEntry(
       UNAPPROVED_ID,
-      `Pending legal sign-off before redistribution. ${UNAPPROVED_MARKER}`,
+      `Pending legal sign-off before any redistribution; the clearance review has not yet been completed by the assigned reviewer. ${UNAPPROVED_MARKER}`,
     ),
     publication: { ...eligiblePublication, clearance: "unreviewed" },
   } as CorpusEntryT;

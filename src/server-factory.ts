@@ -744,13 +744,22 @@ function registerCritiqueUi(server: McpServer, reader: CorpusReader): void {
         const detectedPlatform = input.platform ?? tagged.platform ?? "web";
 
         // ── Retrieve evidence ─────────────────────────────────────────────────────
+        // F2 (Gate 1A): the image-embedding INDEX (the corpus's vectors) MUST come
+        // from the injected reader, NOT from a direct loadImageIndex import. The
+        // reader is the single authority on what corpus data is visible:
+        //   - PrivateCorpusReader loads the global index (current behavior).
+        //   - PublicCorpusReader returns null → critique_ui degrades to the
+        //     structured-retrieval fallback (critique-retrieval.ts:~121).
+        // The previous code imported loadImageIndex unconditionally and loaded the
+        // GLOBAL index even in public mode — a direct leak of the private corpus's
+        // vectors + entry counts. The imageProvider (input-screenshot embedder) is
+        // NOT corpus data and is fine to create in both modes.
         const { retrieveCritiqueEvidence } = await import("./critique-retrieval.js");
         const { createImageEmbeddingProvider } = await import("./image-embeddings.js");
-        const { loadImageIndex } = await import("./image-index.js");
 
         const imageProvider = createImageEmbeddingProvider();
         const imageIndex = imageProvider
-          ? loadImageIndex(imageProvider.model)
+          ? await reader.getImageIndex(imageProvider.model)
           : null;
 
         const retrieval = await retrieveCritiqueEvidence({

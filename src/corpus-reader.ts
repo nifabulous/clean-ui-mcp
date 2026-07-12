@@ -22,8 +22,9 @@
  * private reader delegates correctly via the `setCorpusForTesting` seam, and
  * that the public reader never leaks private/unapproved data.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
+import { resolve, relative, sep } from "node:path";
+import { z } from "zod";
 import type { CorpusEntryT } from "./schema.js";
 import {
   keywordSearch,
@@ -44,9 +45,24 @@ import {
 } from "./corpus.js";
 import { fromCorpusRelativeImagePath } from "./paths.js";
 import { verifySnapshotIntegrity } from "./publication/exporter.js";
-import type { PublicSnapshotManifest } from "./publication/manifest.js";
+import { PublicSnapshotManifestSchema, type PublicSnapshotManifest } from "./publication/manifest.js";
+import { CorpusEntry } from "./schema.js";
+import { evaluatePublication } from "./publication/policy.js";
 
 export type CorpusMode = "private" | "public";
+
+/**
+ * The image-embedding index the critique_ui tool ranks against. Opaque to the
+ * reader interface (the concrete shape lives in image-index.ts); only the
+ * critique_ui handler + critique-retrieval.ts consume it. `null` means "no
+ * index available in this mode" — public mode has no public image-embedding
+ * snapshot in Gate 1A, so it returns null and critique_ui falls back to the
+ * structured-retrieval path (critique-retrieval.ts:~121) which needs no index.
+ */
+export interface ReaderImageIndex {
+  dimension: number;
+  entries: Record<string, { vector: number[]; hash: string }>;
+}
 
 export interface CorpusReader {
   search(options: SearchOptions): Promise<CorpusEntryT[]>;
@@ -61,6 +77,22 @@ export interface CorpusReader {
   entriesForAggregation(): readonly CorpusEntryT[];
   /** Resolve a corpus-relative image path to an absolute filesystem path (or null if invalid/unresolvable). */
   resolveImagePath(path: string): string | null;
+  /**
+   * The image-embedding index for critique_ui's visual-similarity ranking, or
+   * null when none is available in this mode.
+   *
+   * F2 (Gate 1A): the critique_ui tool previously imported `loadImageIndex`
+   * directly from ./image-index.js and loaded the GLOBAL index regardless of
+   * which reader was injected. In public mode that loaded the PRIVATE corpus's
+   * embedding index — a direct leak. Routing the index through the reader makes
+   * the reader the single authority: PrivateCorpusReader returns the loaded
+   * global index (loaded via a dynamic import so corpus-reader.ts stays free of
+   * a static image-index dependency); PublicCorpusReader returns null (no public
+   * snapshot index in Gate 1A), and critique_ui degrades to structured
+   * retrieval. `providerModel` is the embedding model name the caller's provider
+   * uses; loadImageIndex validates the index's stored model against it.
+   */
+  getImageIndex(providerModel?: string): Promise<ReaderImageIndex | null>;
 }
 
 /**
@@ -133,6 +165,26 @@ export class PrivateCorpusReader implements CorpusReader {
       return null;
     }
   }
+
+  /**
+   * F2 (Gate 1A): the global image-embedding index, loaded on demand. Private
+   * mode is the only mode that exposes a corpus image index; this preserves
+   * the pre-refactor critique_ui behavior exactly.
+   *
+   * Loaded via a DYNAMIC import (not a static `import ... from` statement) so
+   * the public-import-boundary static check stays satisfied — corpus-reader.ts
+   * must not statically wire the image-index module. The import is lazy: the
+   * index is only touched when critique_ui actually asks for it, so modes that
+   * never call this (every tool except critique_ui) pay nothing.
+   *
+   * The provider's model name is required because loadImageIndex validates the
+   * index's stored model against it (rejects a stale/wrong-model index).
+   */
+  async getImageIndex(providerModel?: string): Promise<ReaderImageIndex | null> {
+    if (!providerModel) return null;
+    const { loadImageIndex } = await import("./image-index.js");
+    return loadImageIndex(providerModel);
+  }
 }
 
 // ─── PublicCorpusReader (Task 4b) ────────────────────────────────────────────
@@ -167,6 +219,14 @@ export class PrivateCorpusReader implements CorpusReader {
  */
 export class PublicCorpusReader implements CorpusReader {
   private readonly snapshotPath: string;
+  /**
+   * The snapshot dir resolved through realpath ONCE (cached) so F4's containment
+   * check agrees even on platforms where the snapshot dir is itself a symlink
+   * (macOS: $TMPDIR=/var/... → /private/var/...). Falls back to the as-passed
+   * path if the dir can't be resolved (the asset check will then report every
+   * image as escaping — safe-by-default).
+   */
+  private readonly realSnapshotRoot: string;
   /** Cached eligible entries from the snapshot's entries.json. Frozen at load. */
   private readonly entries: readonly CorpusEntryT[];
 
@@ -174,11 +234,38 @@ export class PublicCorpusReader implements CorpusReader {
    * @param snapshotPath absolute path to a committed snapshot directory
    *   (`<snapshotDir>/<snapshotId>/`) containing manifest.json, entries.json,
    *   and the images-public/ tree.
-   * @throws if the snapshot is missing, unreadable, or fails integrity
-   *   verification (re-hash mismatch, missing asset, etc.).
+   * @throws if the snapshot is missing, unreadable, fails integrity
+   *   verification (re-hash mismatch, missing asset), has schema-invalid
+   *   manifest/entries, an entryCount mismatch, an asset/path mismatch, or a
+   *   publication-policy violation that can't be filtered out.
+   *
+   * F3 (Gate 1A): a snapshot is an UNTRUSTED input at load time. Integrity
+   * hashing proves only self-consistency (files match the manifest hashes), NOT
+   * that the manifest/entries are well-formed or that the entries are eligible
+   * for publication. A hand-crafted snapshot with private/unapproved entries +
+   * recomputed hashes would pass integrity and be served. The load pipeline now:
+   *   1. Zod-parse the manifest (rejects malformed manifest shapes; runs before
+   *      verifySnapshotIntegrity so the verifier reads validated fields).
+   *   2. verifySnapshotIntegrity (re-hash) — unchanged.
+   *   3. Zod-parse entries.json (rejects malformed entry shapes).
+   *   4. assert manifest.entryCount === entries.length (rejects a lying count).
+   *   5. re-run evaluatePublication against each entry (imageExists rooted at
+   *      the snapshot dir); EXCLUDE any that fail (filter-and-log). Runs before
+   *      the asset cross-check so a private entry's images-private/ path isn't a
+   *      false-positive asset violation. Defense-in-depth: the exporter
+   *      pre-filters, but a modified/externally-supplied snapshot is re-verified
+   *      here so an ineligible entry can never be served.
+   *   6. assert every SURVIVING entry's image.path (when present) is a declared
+   *      manifest asset (rejects eligible entries referencing undeclared files).
    */
   constructor(snapshotPath: string) {
     this.snapshotPath = snapshotPath;
+    // Resolve the snapshot root through realpath once (F4 containment check).
+    try {
+      this.realSnapshotRoot = realpathSync(snapshotPath);
+    } catch {
+      this.realSnapshotRoot = snapshotPath;
+    }
 
     const entriesPath = resolve(snapshotPath, "entries.json");
     const manifestPath = resolve(snapshotPath, "manifest.json");
@@ -189,18 +276,101 @@ export class PublicCorpusReader implements CorpusReader {
       throw new Error(`[public-reader] snapshot missing manifest.json: ${manifestPath}`);
     }
 
-    const manifest = JSON.parse(
-      readFileSync(manifestPath, "utf-8"),
-    ) as PublicSnapshotManifest;
+    // ── 1. Integrity: re-hash every file against the manifest ───────────────
+    // Parse the manifest with Zod FIRST so verifySnapshotIntegrity reads
+    // validated fields (not a type-cast `as PublicSnapshotManifest`). A tampered
+    // manifest with a non-hex entriesSha256 would otherwise reach the verifier.
+    const manifestParse = PublicSnapshotManifestSchema.safeParse(
+      JSON.parse(readFileSync(manifestPath, "utf-8")),
+    );
+    if (!manifestParse.success) {
+      throw new Error(
+        `[public-reader] manifest.json failed schema validation: `
+        + `${manifestParse.error.message}`,
+      );
+    }
+    const manifest: PublicSnapshotManifest = manifestParse.data;
 
     // Re-hash every file against the manifest before caching anything. This
     // reuses the exporter's own verifier so a snapshot that fails its own
     // integrity check (tampered, truncated, partial write) is refused at load.
     verifySnapshotIntegrity(snapshotPath, manifest);
 
-    this.entries = JSON.parse(
-      readFileSync(entriesPath, "utf-8"),
-    ) as CorpusEntryT[];
+    // ── 2. Zod-parse entries.json (reject malformed entry shapes) ───────────
+    const entriesParse = z.array(CorpusEntry).safeParse(
+      JSON.parse(readFileSync(entriesPath, "utf-8")),
+    );
+    if (!entriesParse.success) {
+      throw new Error(
+        `[public-reader] entries.json failed schema validation: `
+        + `${entriesParse.error.message}`,
+      );
+    }
+    const parsedEntries: CorpusEntryT[] = entriesParse.data;
+
+    // ── 3. entryCount cross-check (manifest must not lie about its size) ────
+    if (manifest.entryCount !== parsedEntries.length) {
+      throw new Error(
+        `[public-reader] manifest entryCount (${manifest.entryCount}) does not match `
+        + `entries.json length (${parsedEntries.length}) — refusing to serve an `
+        + `inconsistent snapshot.`,
+      );
+    }
+
+    // ── 4. Re-evaluate publication eligibility (filter-and-log) ─────────────
+    // Run the policy BEFORE the asset cross-check: a private entry legitimately
+    // carries an images-private/ path that is (correctly) NOT in the manifest's
+    // public assets, so asset-checking it would be a false positive. The policy
+    // removes private/unapproved entries first; only the survivors (which must
+    // have images-public/ paths) are asset-checked.
+    //
+    // imageExists is rooted at the SNAPSHOT dir: a public entry's image.path is
+    // "images-public/<asset>" which lives at <snapshot>/images-public/<asset>.
+    // An entry whose image file is missing from the snapshot fails the policy
+    // and is excluded — it can't be served without its redistributable asset.
+    const pubDate = manifest.generatedAt.slice(0, 10);
+    const imageExists = (corpusRelPath: string): boolean => {
+      const prefix = "images-public/";
+      if (!corpusRelPath.startsWith(prefix)) return false;
+      return existsSync(resolve(snapshotPath, corpusRelPath));
+    };
+    const policyEligible: CorpusEntryT[] = [];
+    let excluded = 0;
+    for (const entry of parsedEntries) {
+      const decision = evaluatePublication(entry, { now: pubDate, imageExists });
+      if (decision.eligible) {
+        policyEligible.push(entry);
+      } else {
+        excluded++;
+      }
+    }
+    if (excluded > 0) {
+      console.error(
+        `[public-reader] excluded ${excluded} entr${excluded === 1 ? "y" : "ies"} from `
+        + `${snapshotPath} that failed publication re-evaluation (defense-in-depth; `
+        + `the exporter should have pre-filtered these).`,
+      );
+    }
+
+    // ── 5. Asset cross-check on SURVIVING entries ───────────────────────────
+    // Every eligible entry's image.path must be a declared manifest asset. This
+    // catches an eligible entry whose image points at an undeclared file (e.g.
+    // an externally-supplied snapshot that references a file outside the
+    // snapshot tree). Private entries were already filtered above, so this only
+    // runs over entries asserting they're public.
+    const declaredAssets = new Set(manifest.assets.map((a) => a.path));
+    for (const entry of policyEligible) {
+      const imgPath = entry.image.path;
+      if (imgPath !== null && !declaredAssets.has(imgPath)) {
+        throw new Error(
+          `[public-reader] entry "${entry.id}" references image "${imgPath}" that is `
+          + `not a declared manifest asset — refusing to serve an entry whose image `
+          + `may point outside the snapshot.`,
+        );
+      }
+    }
+
+    this.entries = policyEligible;
   }
 
   /**
@@ -264,6 +434,18 @@ export class PublicCorpusReader implements CorpusReader {
     return [];
   }
 
+  /**
+   * F2 (Gate 1A): NO image-embedding index in public mode. There is no public
+   * snapshot index in Gate 1A, and the global index covers the PRIVATE corpus —
+   * loading it here would leak private entry vectors + counts into
+   * critique_ui's visual-similarity ranking. Returning null routes critique_ui
+   * to the structured-retrieval fallback (critique-retrieval.ts:~121), which
+   * needs no image index and serves only snapshot entries.
+   */
+  getImageIndex(_providerModel?: string): Promise<ReaderImageIndex | null> {
+    return Promise.resolve(null);
+  }
+
   listCategories(): string[] {
     const set = new Set<string>();
     for (const e of this.entries) for (const c of e.categories) set.add(c);
@@ -315,11 +497,22 @@ export class PublicCorpusReader implements CorpusReader {
    * rooted at the SNAPSHOT directory (not the repo corpus root). An entry's
    * `image.path` is `images-public/<asset>`; this maps it to
    * `<snapshotPath>/images-public/<asset>`. Returns null if the path is
-   * malformed or the file doesn't exist on disk — the tool handler degrades
-   * gracefully to "image not found locally".
+   * malformed, the file doesn't exist, OR a symlink escapes the snapshot — the
+   * tool handler degrades gracefully to "image not found locally".
    *
    * Containment: only `images-public/...` paths under the snapshot dir are
    * accepted; a `..` traversal or absolute path is rejected.
+   *
+   * F4 (Gate 1A): the previous version checked the textual path + `existsSync`
+   * but NOT the resolved real path. A symlink under `images-public/` could
+   * resolve outside the snapshot (e.g. to `images-private/secret.png`), and
+   * `existsSync` would happily return true for it. This now mirrors the
+   * exporter's `resolveSafeAssetSource` (exporter.ts:101-139): resolve the real
+   * path via `realpathSync`, confirm it's contained beneath the snapshot dir,
+   * and require it to be a regular file. The snapshot dir itself is resolved
+   * through realpath once (cached) so the containment comparison agrees on
+   * platforms where the temp dir is itself a symlink (macOS: $TMPDIR=/var/...
+   * → /private/var/...). Returns null on ANY failure.
    */
   resolveImagePath(path: string): string | null {
     if (typeof path !== "string" || path.length === 0) return null;
@@ -329,6 +522,31 @@ export class PublicCorpusReader implements CorpusReader {
     if (!path.startsWith("images-public/")) return null;
     const abs = resolve(this.snapshotPath, path);
     if (!existsSync(abs)) return null;
+
+    // Resolve the snapshot root through realpath ONCE (cached) so the
+    // containment check agrees even on platforms where the snapshot dir is
+    // itself a symlink.
+    const realRoot = this.realSnapshotRoot;
+    let real: string;
+    try {
+      real = realpathSync(abs);
+    } catch {
+      // Broken symlink or otherwise unresolvable → treat as not found.
+      return null;
+    }
+    // Containment: the resolved real path must stay inside the snapshot dir.
+    // relative() returns something starting with ".." (or an absolute path on
+    // Windows) iff `real` escapes the snapshot root. An empty relative path
+    // means real === realRoot (the dir itself, not a file) — reject.
+    const relReal = relative(realRoot, real);
+    if (relReal === "" || relReal.startsWith("..") || relReal.startsWith(sep)) return null;
+
+    // Must be a regular file (reject directories, fifos, symlinks-to-dirs, etc.).
+    try {
+      if (!statSync(real).isFile()) return null;
+    } catch {
+      return null;
+    }
     return abs;
   }
 }

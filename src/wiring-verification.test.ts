@@ -164,12 +164,14 @@ const ALLOWLIST = new Set<string>([
   "DecisionScope", "DecisionStatus", "ScreenSource", "EvidenceCoverage", "DecisionContext",
   "RubricDimension", "RubricScore", "Perspective", "ExperimentBrief", "Tradeoff",
   "Publication",                 // schema.ts — Zod schema, consumed by CorpusEntry composition
-  // TODO(Task 3/4): remove this allowlist entry once evaluatePublication is imported by the exporter or a reader.
-  "evaluatePublication",
   "entryTextFields",
   "ClaimBasis", "VisualSlopBasis",
   "VisualSlopFinding", "MotionGuidance", "StructuredRecommendation",
   "StructuredAccessibilityRisk", "AppliedReference",
+  // TODO(Task 4b): remove once the PublicCorpusReader imports PUBLIC_SNAPSHOT_DIR.
+  // The exporter takes snapshotDir as a parameter (testable), so the production
+  // path constant is consumed by the reader, not the exporter.
+  "PUBLIC_SNAPSHOT_DIR",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

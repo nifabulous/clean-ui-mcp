@@ -52,7 +52,19 @@ export interface SearchResult {
 
 // ─── keyword search (fallback when no index exists) ───────────────────────────
 
-function keywordSearch(entries: CorpusEntryT[], opts: SearchOptions): SearchResult[] {
+/**
+ * Keyword-only scorer. Self-contained: takes the entries array as an argument
+ * and never touches the global corpus cache or the embedding index, so it can
+ * be reused by readers that operate on a different data source (the public
+ * snapshot reader — Task 4b — calls this directly against the snapshot's
+ * entries to provide keyword search with NO access to the private embedding
+ * index, which would otherwise leak private entry counts + similarity scores).
+ *
+ * Behavior: structural filters (category/styleTag/minQuality/qualityTier/
+ * platform/reviewStatus) are applied by the CALLER before passing `entries`;
+ * this function only scores the query against the already-filtered set.
+ */
+export function keywordSearch(entries: CorpusEntryT[], opts: SearchOptions): SearchResult[] {
   const q = opts.query?.toLowerCase().trim();
   const terms = q
     ? q.split(/[^a-z0-9#]+/).map((t) => t.trim()).filter((t) => t.length >= 2)

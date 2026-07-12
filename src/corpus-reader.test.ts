@@ -1,5 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { PrivateCorpusReader } from "./corpus-reader.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import type { CorpusEntryT } from "./schema.js";
+import { PrivateCorpusReader, PublicCorpusReader } from "./corpus-reader.js";
 import {
   searchEntries,
   searchRanked,
@@ -14,6 +18,7 @@ import {
 } from "./corpus.js";
 import { fromCorpusRelativeImagePath } from "./paths.js";
 import { fixtures } from "./scripts/__fixtures__/corpus-fixtures.js";
+import { exportPublicSnapshot } from "./publication/exporter.js";
 
 /**
  * corpus-reader.test.ts — regression guard for the PrivateCorpusReader delegate.
@@ -144,5 +149,249 @@ describe("PrivateCorpusReader — delegates to corpus.ts (behavior-preserving)",
     expect(reader.resolveImagePath("../escape.png")).toBeNull();
     // A path that doesn't live under images-private/ or images-public/ is rejected.
     expect(reader.resolveImagePath("entries.json")).toBeNull();
+  });
+});
+
+// ─── PublicCorpusReader (Task 4b) ────────────────────────────────────────────
+
+/**
+ * The leak-prevention reader. Tests build a real snapshot via the Task 3
+ * exporter from a MIXED fixture corpus (one eligible public entry, one private
+ * entry, one public-but-unapproved entry), then assert that NO private or
+ * unapproved data — IDs, products, image paths, critique text, palettes, tags,
+ * or unique marker strings — can surface through ANY reader method.
+ *
+ * Each entry carries a UNIQUE MARKER string in its critique so a leak is
+ * detectable: "ELIGIBLE_MARKER_7Q", "PRIVATE_MARKER_3K", "UNAPPROVED_MARKER_9J".
+ * If any private/unapproved marker appears in public-reader output, that's a leak.
+ */
+const NOW = "2026-07-12T00:00:00.000Z";
+
+const ELIGIBLE_MARKER = "zenithcode";
+const PRIVATE_MARKER = "cobaltfox";
+const UNAPPROVED_MARKER = "quartzlynx";
+
+const ELIGIBLE_ID = "public-eligible-entry";
+const PRIVATE_ID = "secret-private-entry";
+const UNAPPROVED_ID = "unapproved-public-entry";
+
+const eligiblePublication = {
+  visibility: "public" as const,
+  clearance: "approved" as const,
+  rightsBasis: "owned" as const,
+  evidenceRef: "docs/rights/example.md",
+  reviewedAt: "2026-06-01",
+  reviewedBy: "nifabulous",
+};
+
+const PNG_BYTES = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...new Array(32).fill(0),
+]);
+
+function baseEntry(id: string, critique: string): CorpusEntryT {
+  return {
+    id,
+    title: `${id} title`,
+    patternType: "dashboard",
+    categories: ["dashboard"],
+    styleTags: ["minimal"],
+    components: [],
+    domainTags: [],
+    source: { productName: `${id}-product`, url: "https://example.com", capturedAt: "2026-07-01", capturedBy: "self" },
+    image: { visibility: "public-own", path: `images-public/${id}.png`, width: 1440, height: 900 },
+    visual: {
+      dominantColors: ["#ffffff", "#111111"],
+      accentColor: "#635bff",
+      typePairing: { display: "Inter", body: "Inter" },
+      spacingDensity: "moderate",
+      cornerStyle: "slight-round",
+      usesShadows: false,
+      usesBorders: true,
+    },
+    critique,
+    whatToSteal: [`${id} stealable technique`],
+    antiPatterns: { antiPatterns: [`${id} antipattern`], whereThisFails: [], accessibilityRisks: [] },
+    qualityTier: "exceptional",
+    qualityScore: 4,
+    reviewStatus: "approved",
+    addedAt: "2026-07-01",
+    publication: { ...eligiblePublication },
+  } as CorpusEntryT;
+}
+
+interface PublicFixture {
+  reader: PublicCorpusReader;
+  snapshotPath: string;
+  root: string;
+}
+
+/** Build a snapshot from a mixed fixture, return a PublicCorpusReader over it. */
+function buildPublicReader(): PublicFixture {
+  const root = mkdtempSync(join(tmpdir(), "public-reader-test-"));
+  const imageRoot = resolve(root, "images-public");
+  const snapshotDir = resolve(root, "public-snapshots");
+  mkdirSync(imageRoot, { recursive: true });
+  mkdirSync(snapshotDir, { recursive: true });
+  // Create real source images for all entries (the exporter copies assets for
+  // eligible entries only; the ineligible ones are filtered out before copy).
+  writeFileSync(resolve(imageRoot, `${ELIGIBLE_ID}.png`), PNG_BYTES);
+  writeFileSync(resolve(imageRoot, `${PRIVATE_ID}.png`), PNG_BYTES);
+  writeFileSync(resolve(imageRoot, `${UNAPPROVED_ID}.png`), PNG_BYTES);
+
+  const eligible = baseEntry(ELIGIBLE_ID, `This dashboard uses calm spacing. ${ELIGIBLE_MARKER}`);
+
+  const privateEntry: CorpusEntryT = {
+    ...baseEntry(PRIVATE_ID, `Confidential client details. ${PRIVATE_MARKER}`),
+    publication: { ...eligiblePublication, visibility: "private" }, // entry-private
+  } as CorpusEntryT;
+
+  const unapproved: CorpusEntryT = {
+    ...baseEntry(UNAPPROVED_ID, `Pending legal review. ${UNAPPROVED_MARKER}`),
+    publication: { ...eligiblePublication, clearance: "unreviewed" }, // clearance-unreviewed
+  } as CorpusEntryT;
+
+  const result = exportPublicSnapshot({
+    corpusEntries: [eligible, privateEntry, unapproved],
+    snapshotDir,
+    imageRoot,
+    now: NOW,
+  });
+
+  // Sanity: only the eligible entry shipped.
+  expect(result.entryCount).toBe(1);
+
+  return { reader: new PublicCorpusReader(result.snapshotPath), snapshotPath: result.snapshotPath, root };
+}
+
+/** Assert the string contains no private/unapproved markers (a leak detector). */
+function expectNoPrivateMarkers(text: string): void {
+  expect(text).not.toContain(PRIVATE_MARKER);
+  expect(text).not.toContain(UNAPPROVED_MARKER);
+  expect(text).not.toContain(PRIVATE_ID);
+  expect(text).not.toContain(UNAPPROVED_ID);
+}
+
+describe("PublicCorpusReader — serves only the snapshot's eligible entries", () => {
+  let f: PublicFixture;
+  beforeEach(() => { f = buildPublicReader(); });
+  afterEach(() => {
+    try { rmSync(f.root, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
+  // ── Keystone: no private data leaks through ANY method ─────────────────────
+
+  it("never returns private/unapproved entries via getById (direct ineligible-id lookup → undefined)", () => {
+    expect(f.reader.getById(PRIVATE_ID)).toBeUndefined();
+    expect(f.reader.getById(UNAPPROVED_ID)).toBeUndefined();
+    // The eligible entry IS served.
+    const got = f.reader.getById(ELIGIBLE_ID);
+    expect(got).toBeDefined();
+    expect(got!.id).toBe(ELIGIBLE_ID);
+    expect(got!.source.productName).toBe(`${ELIGIBLE_ID}-product`);
+  });
+
+  it("search(keyword) returns the eligible entry, never the private/unapproved ones", async () => {
+    const eligibleHit = await f.reader.search({ query: ELIGIBLE_MARKER, limit: 10 });
+    expect(eligibleHit.map((e) => e.id)).toContain(ELIGIBLE_ID);
+    for (const e of eligibleHit) expectNoPrivateMarkers(JSON.stringify(e));
+
+    // A keyword ONLY in the private entry's critique → nothing.
+    const privateHit = await f.reader.search({ query: PRIVATE_MARKER, limit: 10 });
+    expect(privateHit).toEqual([]);
+
+    // A keyword ONLY in the unapproved entry's critique → nothing.
+    const unapprovedHit = await f.reader.search({ query: UNAPPROVED_MARKER, limit: 10 });
+    expect(unapprovedHit).toEqual([]);
+  });
+
+  it("searchRanked returns the same keyword-only results as search (no vector path)", async () => {
+    const viaSearch = await f.reader.search({ query: ELIGIBLE_MARKER, limit: 10 });
+    const viaRanked = await f.reader.searchRanked({ query: ELIGIBLE_MARKER, limit: 10 });
+    expect(viaRanked.map((r) => r.entry.id)).toEqual(viaSearch.map((e) => e.id));
+    // All public-mode results are keyword mode (never vector/hybrid).
+    for (const r of viaRanked) expect(r.searchMode).toBe("keyword");
+    for (const r of viaRanked) expectNoPrivateMarkers(JSON.stringify(r.entry));
+  });
+
+  it("search with no query lists only the eligible entry (structural browse)", async () => {
+    const all = await f.reader.search({ limit: 100 });
+    expect(all).toHaveLength(1);
+    expect(all[0].id).toBe(ELIGIBLE_ID);
+  });
+
+  it("findSimilar returns an empty array (unavailable in public mode, never private data)", () => {
+    expect(f.reader.findSimilar(ELIGIBLE_ID, 5)).toEqual([]);
+    // Even an ineligible id returns nothing — no leak via the similarity path.
+    expect(f.reader.findSimilar(PRIVATE_ID, 5)).toEqual([]);
+  });
+
+  it("listCategories/listStyleTags/listDomainTags reflect ONLY the eligible entry", () => {
+    const cats = f.reader.listCategories();
+    expect(cats).toEqual(["dashboard"]);
+    expect(cats.join(" ")).not.toContain(PRIVATE_ID);
+
+    const styles = f.reader.listStyleTags();
+    expect(styles).toEqual(["minimal"]);
+
+    const domains = f.reader.listDomainTags();
+    expect(domains).toEqual([]); // eligible entry has no domain tags
+  });
+
+  it("indexStatus reports ONLY the public snapshot count (never the private corpus total)", () => {
+    const status = f.reader.indexStatus();
+    expect(status.total).toBe(1); // only the one eligible entry
+    expect(status.hasIndex).toBe(false);
+    expect(status.indexed).toBe(0);
+    expect(status.missing).toBe(0);
+    expect(status.stale).toBe(0);
+    expect(status.contentStale).toBe(0);
+  });
+
+  it("entriesForAggregation returns only the snapshot's eligible entries (no runtime policy needed)", () => {
+    const entries = [...f.reader.entriesForAggregation()];
+    expect(entries).toHaveLength(1);
+    expect(entries[0].id).toBe(ELIGIBLE_ID);
+    for (const e of entries) expectNoPrivateMarkers(JSON.stringify(e));
+  });
+
+  // ── Image path resolution ──────────────────────────────────────────────────
+
+  it("resolveImagePath roots at the snapshot dir for an existing public asset", () => {
+    const rel = `images-public/${ELIGIBLE_ID}.png`;
+    const resolved = f.reader.resolveImagePath(rel);
+    expect(resolved).toBe(resolve(f.snapshotPath, rel));
+    expect(resolved).not.toBeNull();
+  });
+
+  it("resolveImagePath returns null for a missing file", () => {
+    expect(f.reader.resolveImagePath("images-public/does-not-exist.png")).toBeNull();
+  });
+
+  it("resolveImagePath rejects paths outside images-public/ (no escape to private tree)", () => {
+    expect(f.reader.resolveImagePath("entries.json")).toBeNull();
+    expect(f.reader.resolveImagePath("images-private/secret.png")).toBeNull();
+    expect(f.reader.resolveImagePath("../escape.png")).toBeNull();
+    expect(f.reader.resolveImagePath("/etc/passwd")).toBeNull();
+  });
+
+  // ── Integrity at load ──────────────────────────────────────────────────────
+
+  it("constructor throws on a snapshot missing entries.json", () => {
+    const badRoot = mkdtempSync(join(tmpdir(), "public-reader-bad-"));
+    try {
+      // manifest.json present but no entries.json
+      writeFileSync(resolve(badRoot, "manifest.json"), "{}");
+      expect(() => new PublicCorpusReader(badRoot)).toThrow(/entries\.json/);
+    } finally {
+      try { rmSync(badRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+  });
+
+  it("constructor throws on a snapshot with a tampered entries.json (integrity check fails)", () => {
+    // Tamper with entries.json after export: append bytes so the SHA no longer
+    // matches the manifest. The reader must refuse to serve it.
+    const tampered = resolve(f.snapshotPath, "entries.json");
+    writeFileSync(tampered, `${readFileSync(tampered, "utf-8")}\n  {"tampered": true}\n]`);
+    expect(() => new PublicCorpusReader(f.snapshotPath)).toThrow(/integrity|mismatch|sha256/i);
   });
 });

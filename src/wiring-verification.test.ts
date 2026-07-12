@@ -168,9 +168,11 @@ const ALLOWLIST = new Set<string>([
   "ClaimBasis", "VisualSlopBasis",
   "VisualSlopFinding", "MotionGuidance", "StructuredRecommendation",
   "StructuredAccessibilityRisk", "AppliedReference",
-  // TODO(Task 4b): remove once the PublicCorpusReader imports PUBLIC_SNAPSHOT_DIR.
-  // The exporter takes snapshotDir as a parameter (testable), so the production
-  // path constant is consumed by the reader, not the exporter.
+  // PUBLIC_SNAPSHOT_DIR is consumed by server.ts (the executable entry that
+  // resolves the default snapshot path), not by the exporter or reader (which
+  // take paths as parameters for testability). The wiring-verification scan
+  // excludes the scripts/ dir and server.ts is the executable entry, so the
+  // symbol appears unreferenced from the scanned production set.
   "PUBLIC_SNAPSHOT_DIR",
 ]);
 

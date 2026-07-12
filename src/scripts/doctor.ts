@@ -16,16 +16,24 @@ import { dirname, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { hasDraftMarkers } from "../schema.js";
 import { indexStatus } from "../corpus.js";
-import { CORPUS_ROOT, allImageFiles } from "../paths.js";
+import { CORPUS_ROOT, allImageFiles, fromCorpusRelativeImagePath } from "../paths.js";
 import { ENTRIES_PATH, SNAPSHOT_DIR, listSnapshots, tryReadCorpus } from "../persistence.js";
+// Shared Check/Status types + the two Task 6 diagnostics live in the helpers
+// module so they can be imported + unit-tested without triggering doctor.ts's
+// import-time side effects (arg parsing, process.exit). doctor.ts pushes the
+// Check rows these functions return straight into `checks`, so they ship in
+// both the human-readable report and the `--json` output verbatim.
+import {
+  loaderHealthCheck,
+  publicationCheck,
+  type Check,
+  type Status,
+} from "./doctor-helpers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = resolve(CORPUS_ROOT, ".corpus-config.json");
 const args = process.argv.slice(2);
 const asJson = args.includes("--json");
-
-type Status = "PASS" | "WARN" | "FAIL";
-interface Check { name: string; status: Status; detail: string; }
 
 const checks: Check[] = [];
 
@@ -46,13 +54,19 @@ try {
 // file is fatal by design, so the loader doesn't silently mask it). Catch both
 // outcomes here and surface them as a FAIL row with an actionable detail,
 // rather than letting the throw escape as a stack trace.
-let entries: import("../schema.js").CorpusEntryT[] | null = null;
+//
+// The LoadedCorpus is captured (not just `.entries`) so it can feed BOTH the
+// loader-health check (Task 6) and this validates check — one read, two
+// diagnostics. `loaded` is null on missing/corrupt/throw; the loader-health
+// check below handles that explicitly rather than silently passing.
+let loaded: import("../persistence.js").LoadedCorpus | null = null;
 try {
-  entries = tryReadCorpus(ENTRIES_PATH)?.entries ?? null;
+  loaded = tryReadCorpus(ENTRIES_PATH);
 } catch (err) {
   const msg = err instanceof Error ? err.message : String(err);
   checks.push({ name: "Corpus validates", status: "FAIL", detail: `entries.json: ${msg}` });
 }
+const entries = loaded?.entries ?? null;
 if (!entries) {
   if (!checks.some((c) => c.name === "Corpus validates")) {
     checks.push({ name: "Corpus validates", status: "FAIL", detail: `entries.json unreadable — run \`npm run restore-corpus -- --latest\`` });
@@ -182,6 +196,37 @@ if (chromiumPath && existsSync(chromiumPath)) {
   checks.push({ name: "Capture Chromium", status: "PASS", detail: "Playwright Chromium installed — `npm run capture` ready" });
 } else {
   checks.push({ name: "Capture Chromium", status: "WARN", detail: "Playwright Chromium not found — run `npx playwright install chromium` to enable `npm run capture`" });
+}
+
+// ── 9. Loader health (Gate 1A: which source is backing the session) ───────────
+// tryReadCorpus above reads the primary file only — when it returns null
+// (missing/corrupt), loadCorpusSafe() in ui-server.ts would fall back through
+// snapshot → seed → empty. The doctor reads the PRIMARY directly so this check
+// reports primary-vs-missing rather than the recovered chain; a null here means
+// the primary is unreadable and the curator should restore before relying on
+// the corpus. This is the red-alarm surface for the Gate 1A write-protection:
+// "is my working corpus backed by the primary file?"
+if (loaded) {
+  checks.push(loaderHealthCheck(loaded));
+} else {
+  checks.push({
+    name: "Corpus loader source",
+    status: "FAIL",
+    detail: "primary entries.json unreadable — run `npm run restore-corpus -- --latest`",
+  });
+}
+
+// ── 10. Publication pipeline (Gate 1A: redistribution readiness) ─────────────
+// Tallies how many entries are eligible to ship in the open-source corpus and
+// why the ineligible ones aren't. WARN when nothing is eligible ("publication
+// pipeline has nothing to publish"); PASS otherwise, with the stable reason-code
+// slugs in the detail line. imageExists is a real filesystem check rooted at
+// the corpus image dirs (the policy evaluator is pure and takes the existence
+// predicate as an injected dependency so its own tests stay deterministic).
+if (entries) {
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const imageExists = (p: string) => existsSync(fromCorpusRelativeImagePath(p));
+  checks.push(publicationCheck(entries, { now: today, imageExists }));
 }
 
 // ── report ───────────────────────────────────────────────────────────────────

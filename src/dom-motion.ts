@@ -22,6 +22,7 @@ export interface DomMotionInput {
   animationName?: string;
   animationIterationCount?: string;
   animationDelay?: string;
+  animationTimingFunction?: string;
 }
 
 export interface DomMotionSignal {
@@ -143,7 +144,7 @@ export function normalizeMotionDeclarations(
           durationMs,
           delayMs: parseTimeMs(input.animationDelay),
           iterationCount: input.animationIterationCount,
-          timingFunction: input.transitionTimingFunction,
+          timingFunction: input.animationTimingFunction ?? input.transitionTimingFunction,
         });
       }
     }

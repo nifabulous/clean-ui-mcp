@@ -58,6 +58,32 @@ describe("normalizeMotionDeclarations", () => {
     expect(result.signals[0].iterationCount).toBe("infinite");
   });
 
+  it("uses animationTimingFunction for animation signals when provided", () => {
+    const result = normalizeMotionDeclarations([
+      {
+        selector: ".spinner",
+        animationDuration: "1s",
+        animationName: "spin",
+        animationIterationCount: "infinite",
+        animationTimingFunction: "ease-in-out",
+      },
+    ]);
+    expect(result.signals[0].timingFunction).toBe("ease-in-out");
+  });
+
+  it("falls back to transitionTimingFunction for animations when animationTimingFunction is absent", () => {
+    const result = normalizeMotionDeclarations([
+      {
+        selector: ".spinner",
+        animationDuration: "1s",
+        animationName: "spin",
+        animationIterationCount: "infinite",
+        transitionTimingFunction: "linear",
+      },
+    ]);
+    expect(result.signals[0].timingFunction).toBe("linear");
+  });
+
   it("caps at 100 signals", () => {
     const inputs: DomMotionInput[] = Array.from({ length: 200 }, (_, i) => ({
       selector: `el-${i}`, transitionDuration: "0.3s", transitionProperty: "transform", transitionDelay: "0s",

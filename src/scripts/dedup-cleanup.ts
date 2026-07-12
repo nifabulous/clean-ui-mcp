@@ -63,10 +63,15 @@ export function completenessScore(entry: CorpusEntryT): number {
 }
 
 async function main() {
-  const entries = loadCorpusSafe();
+  const loaded = loadCorpusSafe();
+  const entries = loaded.entries;
   if (entries.length === 0) {
     console.log("Corpus is empty — nothing to dedup.");
     process.exit(0);
+  }
+  if (!loaded.writable) {
+    console.error(`Refusing to dedup: corpus is READ-ONLY (source: ${loaded.source}). Restore the primary first (npm run restore-corpus -- --latest).`);
+    process.exit(1);
   }
 
   // ── Fingerprint every entry ──────────────────────────────────────────────
@@ -161,7 +166,7 @@ async function main() {
   const remaining = entries.filter(e => !loserIds.has(e.id));
 
   if (!jsonOut) console.log(`\nPersisting ${remaining.length} entries (was ${entries.length})…`);
-  persistEntries(remaining);
+  persistEntries(loaded, remaining);
 
   // P1 fix: only delete loser images that NO remaining entry still references.
   // A winner in the same cluster may share the same image.path (e.g. bulk-import

@@ -1,30 +1,23 @@
-import { existsSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { Corpus, type CorpusEntryT } from "./schema.js";
+import { type CorpusEntryT } from "./schema.js";
 import { loadIndex, embedQuery, cosine, entryToDocument, hashForDocument, indexExists, voyageRerank } from "./embeddings.js";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const CORPUS_PATH = join(__dirname, "..", "corpus", "entries.json");
-const SEED_PATH = join(__dirname, "..", "corpus", "seed.json");
+import { loadCorpusSafe } from "./persistence.js";
 
 let cached: CorpusEntryT[] | null = null;
 
 /**
- * Load + validate the corpus once per process. Falls back to the shipped
- * corpus/seed.json when entries.json is absent (fresh clone) so the MCP tools
- * return a real response instead of throwing — entries.json is gitignored
- * (it references private images + screenshot metadata that aren't publishable).
+ * Load + validate the corpus once per process, via the hardened persistence
+ * path (loadCorpusSafe). This consolidation (Gate 1A) means the MCP server —
+ * every tool here calls loadCorpus — gets the SAME safety property as the
+ * curator UI: missing/corrupt files fall back read-only to snapshot/seed
+ * rather than silently rewriting the primary, and an unsupported-newer version
+ * fails visibly instead of being masked as a parse error.
+ *
+ * Caching is preserved so a single process doesn't re-read disk on every tool
+ * call; the test seam (setCorpusForTesting) overrides the cache for fixtures.
  */
 export function loadCorpus(): CorpusEntryT[] {
   if (cached) return cached;
-  const raw = existsSync(CORPUS_PATH)
-    ? readFileSync(CORPUS_PATH, "utf-8")
-    : existsSync(SEED_PATH)
-      ? readFileSync(SEED_PATH, "utf-8")
-      : '{"version":2,"entries":[]}';
-  const parsed = Corpus.parse(JSON.parse(raw));
-  cached = parsed.entries;
+  cached = loadCorpusSafe().entries;
   return cached;
 }
 

@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { imageSize } from "image-size";
 import { chromium } from "playwright";
-import { Corpus, CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT, type DirectionT } from "../schema.js";
+import { CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT, type DirectionT } from "../schema.js";
 import { findVagueAntiPatterns } from "../content-lint.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
 import { checkDuplicateUpload, clearDuplicateBatch, computeDHash, loadDHashCache, rebuildDHashCache, findDuplicateAtCommit } from "../dedup.js";
@@ -22,7 +22,8 @@ import { createDecision, saveDecision, getDecisionById, listDecisions, persistDe
 import { analyzeDecision } from "../decision-lab.js";
 import {
   ENTRIES_PATH, SNAPSHOT_DIR, SNAPSHOT_KEEP,
-  listSnapshots, tryReadCorpus, loadCorpusSafe, writeAtomic, writeSnapshot,
+  listSnapshots, loadCorpusSafe, persistEntries,
+  type LoadedCorpus,
 } from "../persistence.js";
 
 const PORT = Number(process.env.CLEAN_UI_PORT ?? 3131);
@@ -35,21 +36,37 @@ const MAX_BODY_BYTES = 20 * 1024 * 1024;
 // one threshold/cache/batch registry. This file only owns request/response glue.
 
 // ─── durability: atomic writes + rolling snapshots ──────────────────────────
-// The disk primitives (writeAtomic, writeSnapshot, listSnapshots, tryReadCorpus,
-// loadCorpusSafe) live in ../persistence.ts. These thin wrappers keep the
-// dHash-cache coupling local to the running UI server.
+// The disk primitives (persistEntries, listSnapshots, loadCorpusSafe) live in
+// ../persistence.ts. These thin wrappers keep the dHash-cache coupling local
+// to the running UI server and thread write-protection through.
+
+/**
+ * The most recently loaded corpus, with provenance. Refreshed on every
+ * loadEntries() call (handleApi loads once per request). saveEntries reads
+ * this so it can enforce write-protection via persistEntries: if the primary
+ * was missing/corrupt and loadCorpusSafe fell back to seed/snapshot, a UI save
+ * must NOT clobber the primary with fallback content.
+ */
+let currentLoaded: LoadedCorpus | null = null;
 
 /** Load entries with snapshot fallback (delegates to persistence.loadCorpusSafe). */
 function loadEntries(): CorpusEntryT[] {
-  return loadCorpusSafe();
+  currentLoaded = loadCorpusSafe();
+  return currentLoaded.entries;
 }
 
 function saveEntries(entries: CorpusEntryT[]): void {
-  const corpus = Corpus.parse({ version: 2, entries });
-  // Snapshot BEFORE the overwrite, so even a failure mid-write leaves the
-  // prior state recoverable. Then atomic-write the primary.
-  writeSnapshot(entries);
-  writeAtomic(ENTRIES_PATH, `${JSON.stringify(corpus, null, 2)}\n`);
+  if (!currentLoaded || !currentLoaded.writable) {
+    const source = currentLoaded?.source ?? "none";
+    throw Object.assign(
+      new Error(`Refusing to save: corpus is READ-ONLY (source: ${source}). Restore the primary first (npm run restore-corpus -- --latest).`),
+      { statusCode: 409 },
+    );
+  }
+  // persistEntries snapshots the prior state then atomic-writes the primary,
+  // and refuses read-only LoadedCorpus. Threading currentLoaded through means
+  // the UI gets the same write-protection as the CLIs.
+  persistEntries(currentLoaded, entries);
   // The corpus changed — rebuild the dHash cache so stale/removed entries don't
   // poison future duplicate checks, and new entries are matched immediately.
   void rebuildDHashCache(entries);

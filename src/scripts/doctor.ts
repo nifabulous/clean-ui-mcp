@@ -40,7 +40,7 @@ try {
 }
 
 // ── 2. Corpus validates (schema + draft hygiene) ─────────────────────────────
-let entries = tryReadCorpus(ENTRIES_PATH);
+let entries = tryReadCorpus(ENTRIES_PATH)?.entries;
 if (!entries) {
   checks.push({ name: "Corpus validates", status: "FAIL", detail: `entries.json unreadable — run \`npm run restore-corpus -- --latest\`` });
 } else {

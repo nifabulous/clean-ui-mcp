@@ -19,7 +19,7 @@
 import { existsSync, unlinkSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { hasDraftMarkers, type CorpusEntryT } from "../schema.js";
-import { ENTRIES_PATH, SNAPSHOT_DIR, listSnapshots, tryReadCorpus, writeSnapshot, persistEntries } from "../persistence.js";
+import { ENTRIES_PATH, SNAPSHOT_DIR, listSnapshots, tryReadCorpus, writeSnapshot, persistEntries, writableLoadedCorpus } from "../persistence.js";
 import { CORPUS_ROOT } from "../paths.js";
 
 const DHASH_CACHE_PATH = resolve(CORPUS_ROOT, ".dhash-cache.json");
@@ -115,14 +115,14 @@ function main(): void {
       console.log(`No snapshots found in ${SNAPSHOT_DIR}.`);
       process.exit(0);
     }
-    const current = tryReadCorpus(ENTRIES_PATH) ?? [];
+    const current = tryReadCorpus(ENTRIES_PATH)?.entries ?? [];
     console.log(`Current corpus: ${current.length} entries\n`);
     console.log("Snapshots (newest first):");
     for (const snap of snaps) {
-      const entries = tryReadCorpus(snap);
+      const loaded = tryReadCorpus(snap);
       const name = basename(snap);
-      const count = entries ? `${entries.length}` : "UNREADABLE";
-      console.log(`  ${name}  ${count.padStart(4)} entries  ${ageLabel(epochFromName(name)).padStart(8)}  ${entries ? "valid" : "corrupt"}`);
+      const count = loaded ? `${loaded.entries.length}` : "UNREADABLE";
+      console.log(`  ${name}  ${count.padStart(4)} entries  ${ageLabel(epochFromName(name)).padStart(8)}  ${loaded ? "valid" : "corrupt"}`);
     }
     console.log(`\nRestore with: npm run restore-corpus -- --latest`);
     process.exit(0);
@@ -150,13 +150,14 @@ function main(): void {
     process.exit(1);
   }
 
-  const target = tryReadCorpus(targetPath);
-  if (!target) {
+  const targetLoaded = tryReadCorpus(targetPath);
+  if (!targetLoaded) {
     console.error(`Snapshot is corrupt or unparseable: ${targetPath}`);
     process.exit(1);
   }
+  const target = targetLoaded.entries;
 
-  const current = tryReadCorpus(ENTRIES_PATH) ?? [];
+  const current = tryReadCorpus(ENTRIES_PATH)?.entries ?? [];
   const diff = computeRestoreDiff(current, target);
   console.log("Restore plan:");
   printDiff(diff, targetPath);
@@ -169,11 +170,15 @@ function main(): void {
   // ── restore: snapshot current state first, then write the target ───────────
   // Snapshot the CURRENT state so a mistaken restore is itself recoverable.
   if (current.length) {
-    writeSnapshot(current);
+    writeSnapshot(current, targetLoaded.version);
     console.log(`\n  ✓ snapshotted current state (${current.length} entries) before overwrite`);
   }
 
-  persistEntries(target);
+  // Explicit restore: the user chose to overwrite the primary from this
+  // snapshot, so wrap the target as a writable LoadedCorpus. This is the
+  // sanctioned escape hatch around persistEntries' write-protect — restore is
+  // exactly the "I definitely want to write these" case.
+  persistEntries(writableLoadedCorpus(target, targetLoaded.version), target);
   console.log(`  ✓ restored ${target.length} entries to ${ENTRIES_PATH}`);
 
   // Invalidate the dHash cache — restored entries may point at different images,

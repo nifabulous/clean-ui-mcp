@@ -19,7 +19,7 @@
 import { existsSync, unlinkSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { hasDraftMarkers, type CorpusEntryT } from "../schema.js";
-import { ENTRIES_PATH, SNAPSHOT_DIR, listSnapshots, tryReadCorpus, writeSnapshot, persistEntries } from "../persistence.js";
+import { ENTRIES_PATH, SNAPSHOT_DIR, listSnapshots, tryReadCorpus, writeSnapshot, persistEntries, writableLoadedCorpus, type LoadedCorpus } from "../persistence.js";
 import { CORPUS_ROOT } from "../paths.js";
 
 const DHASH_CACHE_PATH = resolve(CORPUS_ROOT, ".dhash-cache.json");
@@ -49,6 +49,24 @@ export function findDuplicateIds(entries: CorpusEntryT[]): string[] {
     seen.add(e.id);
   }
   return dupes;
+}
+
+/**
+ * Read a corpus file without throwing. tryReadCorpus returns null for
+ * missing/corrupt files but THROWS on unsupported-newer (a {version:3} file is
+ * fatal by design). restore-corpus lists/inspects snapshots and the current
+ * corpus; a single unsupported-newer file among them must not crash the whole
+ * listing. Catch the throw here, log it, and return null so callers treat it as
+ * unreadable — the same outcome as a corrupt file. The distinct error message
+ * still surfaces on stderr so the user sees WHY it was skipped.
+ */
+export function safeTryRead(path: string): LoadedCorpus | null {
+  try {
+    return tryReadCorpus(path);
+  } catch (err) {
+    console.error(`[restore-corpus] ${err instanceof Error ? err.message : String(err)} — treating as unreadable.`);
+    return null;
+  }
 }
 
 /** The structured diff between current and target — what restore will change. */
@@ -115,14 +133,14 @@ function main(): void {
       console.log(`No snapshots found in ${SNAPSHOT_DIR}.`);
       process.exit(0);
     }
-    const current = tryReadCorpus(ENTRIES_PATH) ?? [];
+    const current = safeTryRead(ENTRIES_PATH)?.entries ?? [];
     console.log(`Current corpus: ${current.length} entries\n`);
     console.log("Snapshots (newest first):");
     for (const snap of snaps) {
-      const entries = tryReadCorpus(snap);
+      const loaded = safeTryRead(snap);
       const name = basename(snap);
-      const count = entries ? `${entries.length}` : "UNREADABLE";
-      console.log(`  ${name}  ${count.padStart(4)} entries  ${ageLabel(epochFromName(name)).padStart(8)}  ${entries ? "valid" : "corrupt"}`);
+      const count = loaded ? `${loaded.entries.length}` : "UNREADABLE";
+      console.log(`  ${name}  ${count.padStart(4)} entries  ${ageLabel(epochFromName(name)).padStart(8)}  ${loaded ? "valid" : "corrupt"}`);
     }
     console.log(`\nRestore with: npm run restore-corpus -- --latest`);
     process.exit(0);
@@ -150,13 +168,14 @@ function main(): void {
     process.exit(1);
   }
 
-  const target = tryReadCorpus(targetPath);
-  if (!target) {
+  const targetLoaded = safeTryRead(targetPath);
+  if (!targetLoaded) {
     console.error(`Snapshot is corrupt or unparseable: ${targetPath}`);
     process.exit(1);
   }
+  const target = targetLoaded.entries;
 
-  const current = tryReadCorpus(ENTRIES_PATH) ?? [];
+  const current = safeTryRead(ENTRIES_PATH)?.entries ?? [];
   const diff = computeRestoreDiff(current, target);
   console.log("Restore plan:");
   printDiff(diff, targetPath);
@@ -169,11 +188,15 @@ function main(): void {
   // ── restore: snapshot current state first, then write the target ───────────
   // Snapshot the CURRENT state so a mistaken restore is itself recoverable.
   if (current.length) {
-    writeSnapshot(current);
+    writeSnapshot(current, targetLoaded.version);
     console.log(`\n  ✓ snapshotted current state (${current.length} entries) before overwrite`);
   }
 
-  persistEntries(target);
+  // Explicit restore: the user chose to overwrite the primary from this
+  // snapshot, so wrap the target as a writable LoadedCorpus. This is the
+  // sanctioned escape hatch around persistEntries' write-protect — restore is
+  // exactly the "I definitely want to write these" case.
+  persistEntries(writableLoadedCorpus(target, targetLoaded.version), target);
   console.log(`  ✓ restored ${target.length} entries to ${ENTRIES_PATH}`);
 
   // Invalidate the dHash cache — restored entries may point at different images,

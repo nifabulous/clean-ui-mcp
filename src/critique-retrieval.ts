@@ -15,9 +15,15 @@
  *
  * Platform filtering: if the input specifies a platform, entries that don't
  * match are deprioritized (not removed — cross-platform inspiration has value).
+ *
+ * Gate 1A, Task 4a: corpus access now flows through an injected `CorpusReader`
+ * instead of importing loadCorpus/searchRanked directly. This is what lets the
+ * public reader (Task 4b) filter evidence by the publication policy without
+ * this module changing. The caller (the critique_ui tool handler) passes the
+ * reader it received from createServer.
  */
-import { searchRanked, loadCorpus } from "./corpus.js";
-import { cosine, type ImageEmbeddingIndex } from "./image-index.js";
+import type { CorpusReader, ReaderImageIndex } from "./corpus-reader.js";
+import { cosine } from "./image-index.js";
 import type { ImageEmbeddingProvider, ValidatedImage } from "./image-embeddings.js";
 
 export interface CritiqueEntry {
@@ -39,13 +45,15 @@ export interface RetrievalResult {
 }
 
 export interface RetrieveCritiqueInput {
+  /** Corpus access (search + entriesForAggregation) — injected by the caller. */
+  reader: CorpusReader;
   imageProvider: ImageEmbeddingProvider | null;
   imageData: Buffer | null; // decoded image bytes for embedding
   imageMimeType?: string; // I2 fix: the actual MIME type (was hardcoded to image/png)
   extraction: Record<string, unknown>;
   productContext?: string;
   platform?: string;
-  imageIndex: ImageEmbeddingIndex | null; // pre-loaded, or null
+  imageIndex: ReaderImageIndex | null; // pre-loaded via the reader, or null
 }
 
 const MAX_ENTRIES = 5;
@@ -54,7 +62,7 @@ const MAX_ENTRIES = 5;
  * Retrieve up to 5 approved corpus entries as evidence for a screenshot critique.
  */
 export async function retrieveCritiqueEvidence(input: RetrieveCritiqueInput): Promise<RetrievalResult> {
-  const { imageProvider, imageData, imageMimeType, extraction, productContext, platform, imageIndex } = input;
+  const { reader, imageProvider, imageData, imageMimeType, extraction, productContext, platform, imageIndex } = input;
 
   // ── Try image retrieval first ────────────────────────────────────────────────
   if (imageProvider && imageData && imageIndex) {
@@ -75,7 +83,7 @@ export async function retrieveCritiqueEvidence(input: RetrieveCritiqueInput): Pr
       // N3 fix: look up each ranked entry in the live corpus to verify it's
       // still approved. The image index may contain stale entries (demoted to
       // draft or deleted after indexing).
-      const corpusEntries = loadCorpus();
+      const corpusEntries = reader.entriesForAggregation();
       const corpusById = new Map(corpusEntries.map((e) => [e.id, e]));
       const ranked = Object.entries(imageIndex.entries)
         .map(([id, entry]) => ({ id, score: cosine(queryVec, entry.vector) }))
@@ -118,7 +126,7 @@ export async function retrieveCritiqueEvidence(input: RetrieveCritiqueInput): Pr
   // ── Structured fallback ─────────────────────────────────────────────────────
   const query = buildStructuredQuery(extraction, productContext);
   // searchRanked's default reviewStatus:"approved" filter ensures drafts are excluded.
-  const results = await searchRanked({ query, limit: MAX_ENTRIES * 2 });
+  const results = await reader.searchRanked({ query, limit: MAX_ENTRIES * 2 });
   const entries: CritiqueEntry[] = results.map((r) => ({
     id: r.entry.id,
     patternType: r.entry.patternType,

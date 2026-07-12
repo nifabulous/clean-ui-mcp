@@ -163,10 +163,17 @@ const ALLOWLIST = new Set<string>([
   "ImageRef", "SourceAttribution", "TypePairing", "ColorRoles", "VisualAttributes",
   "DecisionScope", "DecisionStatus", "ScreenSource", "EvidenceCoverage", "DecisionContext",
   "RubricDimension", "RubricScore", "Perspective", "ExperimentBrief", "Tradeoff",
+  "Publication",                 // schema.ts — Zod schema, consumed by CorpusEntry composition
   "entryTextFields",
   "ClaimBasis", "VisualSlopBasis",
   "VisualSlopFinding", "MotionGuidance", "StructuredRecommendation",
   "StructuredAccessibilityRisk", "AppliedReference",
+  // PUBLIC_SNAPSHOT_DIR is consumed by server.ts (the executable entry that
+  // resolves the default snapshot path), not by the exporter or reader (which
+  // take paths as parameters for testability). The wiring-verification scan
+  // excludes the scripts/ dir and server.ts is the executable entry, so the
+  // symbol appears unreferenced from the scanned production set.
+  "PUBLIC_SNAPSHOT_DIR",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

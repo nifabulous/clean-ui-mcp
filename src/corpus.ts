@@ -1,30 +1,23 @@
-import { existsSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { Corpus, type CorpusEntryT } from "./schema.js";
+import { type CorpusEntryT } from "./schema.js";
 import { loadIndex, embedQuery, cosine, entryToDocument, hashForDocument, indexExists, voyageRerank } from "./embeddings.js";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const CORPUS_PATH = join(__dirname, "..", "corpus", "entries.json");
-const SEED_PATH = join(__dirname, "..", "corpus", "seed.json");
+import { loadCorpusSafe } from "./persistence.js";
 
 let cached: CorpusEntryT[] | null = null;
 
 /**
- * Load + validate the corpus once per process. Falls back to the shipped
- * corpus/seed.json when entries.json is absent (fresh clone) so the MCP tools
- * return a real response instead of throwing — entries.json is gitignored
- * (it references private images + screenshot metadata that aren't publishable).
+ * Load + validate the corpus once per process, via the hardened persistence
+ * path (loadCorpusSafe). This consolidation (Gate 1A) means the MCP server —
+ * every tool here calls loadCorpus — gets the SAME safety property as the
+ * curator UI: missing/corrupt files fall back read-only to snapshot/seed
+ * rather than silently rewriting the primary, and an unsupported-newer version
+ * fails visibly instead of being masked as a parse error.
+ *
+ * Caching is preserved so a single process doesn't re-read disk on every tool
+ * call; the test seam (setCorpusForTesting) overrides the cache for fixtures.
  */
 export function loadCorpus(): CorpusEntryT[] {
   if (cached) return cached;
-  const raw = existsSync(CORPUS_PATH)
-    ? readFileSync(CORPUS_PATH, "utf-8")
-    : existsSync(SEED_PATH)
-      ? readFileSync(SEED_PATH, "utf-8")
-      : '{"version":2,"entries":[]}';
-  const parsed = Corpus.parse(JSON.parse(raw));
-  cached = parsed.entries;
+  cached = loadCorpusSafe().entries;
   return cached;
 }
 
@@ -57,9 +50,48 @@ export interface SearchResult {
   searchMode:  "vector" | "keyword" | "hybrid";
 }
 
+// ─── structural filter (shared by searchRanked + PublicCorpusReader) ──────────
+
+/**
+ * Apply the structural filters (category/styleTag/minQuality/qualityTier/
+ * platform/reviewStatus) to an entries array. Shared between `searchRanked`
+ * (private reader, live corpus) and `PublicCorpusReader.structurallyFiltered`
+ * (public reader, snapshot entries) so the two paths cannot drift. Takes the
+ * entries as a parameter — never touches the global cache.
+ */
+export function applyStructuralFilters(entries: readonly CorpusEntryT[], opts: SearchOptions): CorpusEntryT[] {
+  return entries.filter((e) => {
+    if (opts.category    && !e.categories.includes(opts.category as never))  return false;
+    if (opts.styleTag    && !e.styleTags.includes(opts.styleTag as never))   return false;
+    if (opts.minQuality  && e.qualityScore < opts.minQuality)                return false;
+    if (opts.qualityTier && e.qualityTier !== opts.qualityTier)              return false;
+    if (opts.platform    && e.platform !== opts.platform)                    return false;
+    // Workflow state: hide drafts unless the caller explicitly asks for them.
+    // "approved" (default/omitted) → only approved; "draft" → only drafts;
+    // "any" → both. This prevents half-finished entries from leaking into
+    // retrieval results.
+    const statusFilter = opts.reviewStatus ?? "approved";
+    if (statusFilter === "approved" && e.reviewStatus === "draft") return false;
+    if (statusFilter === "draft" && e.reviewStatus !== "draft") return false;
+    return true;
+  });
+}
+
 // ─── keyword search (fallback when no index exists) ───────────────────────────
 
-function keywordSearch(entries: CorpusEntryT[], opts: SearchOptions): SearchResult[] {
+/**
+ * Keyword-only scorer. Self-contained: takes the entries array as an argument
+ * and never touches the global corpus cache or the embedding index, so it can
+ * be reused by readers that operate on a different data source (the public
+ * snapshot reader — Task 4b — calls this directly against the snapshot's
+ * entries to provide keyword search with NO access to the private embedding
+ * index, which would otherwise leak private entry counts + similarity scores).
+ *
+ * Behavior: structural filters (category/styleTag/minQuality/qualityTier/
+ * platform/reviewStatus) are applied by the CALLER before passing `entries`;
+ * this function only scores the query against the already-filtered set.
+ */
+export function keywordSearch(entries: CorpusEntryT[], opts: SearchOptions): SearchResult[] {
   const q = opts.query?.toLowerCase().trim();
   const terms = q
     ? q.split(/[^a-z0-9#]+/).map((t) => t.trim()).filter((t) => t.length >= 2)
@@ -231,22 +263,8 @@ function fuseResults(vector: SearchResult[], keyword: SearchResult[]): SearchRes
 export async function searchRanked(opts: SearchOptions): Promise<SearchResult[]> {
   const entries = loadCorpus();
 
-  // Structural filters always apply regardless of search mode
-  const filtered = entries.filter((e) => {
-    if (opts.category    && !e.categories.includes(opts.category as never))  return false;
-    if (opts.styleTag    && !e.styleTags.includes(opts.styleTag as never))   return false;
-    if (opts.minQuality  && e.qualityScore < opts.minQuality)                return false;
-    if (opts.qualityTier && e.qualityTier !== opts.qualityTier)              return false;
-    if (opts.platform    && e.platform !== opts.platform)                    return false;
-    // Workflow state: hide drafts unless the caller explicitly asks for them.
-    // "approved" (default/omitted) → only approved; "draft" → only drafts;
-    // "any" → both. This prevents half-finished entries from leaking into
-    // retrieval results.
-    const statusFilter = opts.reviewStatus ?? "approved";
-    if (statusFilter === "approved" && e.reviewStatus === "draft") return false;
-    if (statusFilter === "draft" && e.reviewStatus !== "draft") return false;
-    return true;
-  });
+  // Structural filters always apply regardless of search mode.
+  const filtered = applyStructuralFilters(entries, opts);
 
   let results: SearchResult[];
 

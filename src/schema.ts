@@ -435,6 +435,39 @@ export const VisualAttributes = z.object({
   usesBorders: z.boolean(),
 });
 
+/**
+ * Publication metadata — the Gate 1A redistribution-safety gate. Records whether
+ * an entry is cleared to leave the private research copy and ship in the
+ * open-source corpus, and on what rights basis.
+ *
+ * CRITICAL — no `.default()` (decision D17): every field uses `.optional()` so
+ * that an existing entry without a publication block survives the
+ * `Corpus.parse → JSON.stringify` round-trip `persistEntries` performs WITHOUT
+ * materializing the field. This is the `pinned` precedent (schema.ts:516) applied
+ * to a whole sub-object. The policy evaluator (src/publication/policy.ts)
+ * interprets absence as private/unreviewed at READ time — absent in stays absent
+ * out, so a normal save does not churn all 787 entries.
+ *
+ * Only `visibility` and `clearance` are required when the block IS present; the
+ * rest are optional evidence of the clearance decision.
+ */
+export const Publication = z.object({
+  /** Whether the entry may leave the private research copy at all. */
+  visibility: z.enum(["private", "public"]),
+  /** Human review state of the entry's redistribution readiness. */
+  clearance: z.enum(["unreviewed", "approved", "rejected"]),
+  /** The legal basis under which the entry (image + critique) may ship. */
+  rightsBasis: z.enum(["owned", "license", "permission", "public-domain"]).optional(),
+  /** Pointer to the durable evidence of the rights basis (doc path, URL, etc.). */
+  evidenceRef: z.string().min(1).max(200).optional(),
+  /** When the clearance decision was made (YYYY-MM-DD). */
+  reviewedAt: IsoDate.optional(),
+  /** Who made the clearance decision (name/handle). */
+  reviewedBy: z.string().min(1).max(80).optional(),
+  /** When the clearance expires (YYYY-MM-DD). Absent = no recorded expiry. */
+  expiresAt: IsoDate.optional(),
+});
+
 export const CorpusEntry = z.object({
   id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Expected stable kebab-case slug"), // stable slug, e.g. "linear-issue-board-2026"
   title: z.string(), // human label, e.g. "Linear — Issue board, grouped view"
@@ -518,6 +551,16 @@ export const CorpusEntry = z.object({
    * corpus churn.
    */
   pinned: z.boolean().optional(),
+
+  /**
+   * Publication — Gate 1A redistribution gate. Optional and NO default: an
+   * entry without this field stays without it through a save (zero-churn, D17).
+   * The policy evaluator in src/publication/policy.ts treats absence as
+   * private/unreviewed, so existing entries are ineligible to ship in the
+   * open-source corpus by default — they must be explicitly cleared. See the
+   * Publication schema above for the field contract.
+   */
+  publication: Publication.optional(),
 
   /**
    * Provenance — who produced the structured fields, and (optionally) who

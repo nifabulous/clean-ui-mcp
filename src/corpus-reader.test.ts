@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { CorpusEntryT } from "./schema.js";
@@ -583,12 +583,13 @@ describe("PublicCorpusReader (F3) — snapshot JSON is validated, not trusted af
     expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/entryCount.*does not match/);
   });
 
-  it("rejects an eligible entry whose image.path is not a declared manifest asset", () => {
+  it("rejects an eligible entry whose image.path is not a declared manifest asset (entry ⊄ manifest)", () => {
     // The entry is eligible (public + approved + image file present on disk),
     // but its image.path points at a file that is NOT in the manifest.assets
-    // list. The policy passes (the file exists on disk), so only the asset
-    // cross-check catches the undeclared reference — an eligible entry must not
-    // point at an asset the manifest doesn't vouch for.
+    // list. The policy passes (the file exists on disk), so only the F2
+    // three-way set check catches the undeclared reference — an eligible entry
+    // must not point at an asset the manifest doesn't vouch for. The set check
+    // reports the discrepancy as "entry image paths ≠ manifest assets".
     const entry = baseEntry("rogue-asset", "x".repeat(80));
     entry.image.path = "images-public/undeclared.png";
     // Write BOTH the entry's actual image file AND a decoy declared asset, so
@@ -596,8 +597,6 @@ describe("PublicCorpusReader (F3) — snapshot JSON is validated, not trusted af
     // does not contain the entry's path.
     const snapshotPath = writeSnapshot(root, [entry], {
       assetsOverride: ["images-public/undeclared.png", "images-public/something-else.png"],
-      // Override assets AFTER the fact: remove the entry's path from the declared
-      // set by rewriting the manifest with a hand-pruned asset list.
     });
     // Rewrite the manifest so it declares ONLY the decoy (not the entry's path),
     // with a recomputed snapshotId so the entries.json hash still matches. The
@@ -608,7 +607,7 @@ describe("PublicCorpusReader (F3) — snapshot JSON is validated, not trusted af
     manifest.assets = manifest.assets.filter((a) => a.path === "images-public/something-else.png");
     manifest.snapshotId = deriveSnapshotId(manifest.entriesSha256, manifest.assets);
     writeFileSync(manifestPath, serializeManifest(manifest), "utf-8");
-    expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/not a declared manifest asset/);
+    expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/snapshot asset set mismatch/);
   });
 
   it("filters out a private entry injected into the snapshot (filter-and-log, defense-in-depth)", () => {
@@ -636,13 +635,25 @@ describe("PublicCorpusReader (F3) — snapshot JSON is validated, not trusted af
     expect(reader.getById("good-public")).toBeDefined();
   });
 
-  it("filters out an unapproved entry injected into the snapshot", () => {
+  it("filters out an unapproved entry injected into the snapshot (asset absent → policy excludes it)", () => {
+    // F2 (round 2) tightened the load-time invariant to EXACT three-way set
+    // equality (eligible entry paths == manifest assets == files on disk). A
+    // snapshot carrying an unapproved entry's PUBLIC asset now fails that check
+    // outright (the asset is an orphan relative to the eligible set) — covered
+    // by the F2 rejection tests below. THIS test keeps the policy-filter path
+    // exercised: the unapproved entry is in entries.json but its image file is
+    // NOT present on disk (only the eligible entry's asset is), so policy
+    // excludes it for image-file-missing and the served set is just the
+    // eligible entry. The manifest + disk sets are consistent (both contain
+    // only the eligible asset), so the set check passes and filtering runs.
     const goodEntry = baseEntry("approved-one", "A fully cleared, reviewed, and approved public dashboard entry that is cleared for the open corpus. zen");
     const injectedUnapproved: CorpusEntryT = {
       ...baseEntry("injected-unapproved", "An unreviewed entry that was slipped into the snapshot illegally and must be filtered out. qua"),
       publication: { ...eligiblePublication, clearance: "unreviewed" },
     } as CorpusEntryT;
-    const snapshotPath = writeSnapshot(root, [goodEntry, injectedUnapproved]);
+    const snapshotPath = writeSnapshot(root, [goodEntry, injectedUnapproved], {
+      assetsOverride: ["images-public/approved-one.png"],
+    });
     const reader = new PublicCorpusReader(snapshotPath);
     expect([...reader.entriesForAggregation()].map((e) => e.id)).toEqual(["approved-one"]);
     expect(reader.getById("injected-unapproved")).toBeUndefined();
@@ -653,5 +664,202 @@ describe("PublicCorpusReader (F3) — snapshot JSON is validated, not trusted af
     const snapshotPath = writeSnapshot(root, [entry]);
     const reader = new PublicCorpusReader(snapshotPath);
     expect([...reader.entriesForAggregation()].map((e) => e.id)).toEqual(["valid-entry"]);
+  });
+});
+
+// ─── F1 (round 2): expiry uses the current date, not the snapshot's generatedAt ─
+
+/**
+ * F1 (Gate 1A, round 2): the publication re-evaluation at load MUST use the
+ * current date for the expiry check, NOT the snapshot's `generatedAt`. The bug:
+ * `evaluatePublication` was called with `now: manifest.generatedAt.slice(0,10)`,
+ * so an entry that expires AFTER the snapshot was created was eligible forever
+ * — a snapshot generated Jan 1 with rights expiring Feb 1 was still served in
+ * July. The fix injects a `now` (defaulting to today) into the reader; the
+ * tests below pin both halves of the contract:
+ *   - when `now` is AFTER the entry's expiresAt, the entry is filtered out;
+ *   - when `now` is BEFORE (or on) the entry's expiresAt, the entry is eligible.
+ *
+ * The `now` argument is the only thing that varies between the two cases — the
+ * snapshot on disk is IDENTICAL (same generatedAt, same expiresAt), so the test
+ * proves the decision follows the injected clock, not the manifest's creation
+ * timestamp.
+ */
+describe("PublicCorpusReader (F1) — expiry uses the injected current date, not generatedAt", () => {
+  let root: string;
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "f1-expiry-")); });
+  afterEach(() => { try { rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ } });
+
+  /** An eligible entry whose clearance expires on 2026-02-01. */
+  function expiringEntry(): CorpusEntryT {
+    const entry = baseEntry(
+      "expiring-entry",
+      "A fully cleared public dashboard entry whose redistribution rights expire on a fixed date. zen",
+    );
+    entry.publication = { ...entry.publication!, expiresAt: "2026-02-01" };
+    return entry;
+  }
+
+  it("filters out an entry whose expiresAt is in the past relative to the injected now", () => {
+    // Snapshot generated 2026-01-01 (BEFORE the 2026-02-01 expiry), but it is now
+    // 2026-07-12 — the clearance has lapsed. The OLD code used generatedAt
+    // (2026-01-01) as `now`, so expiresAt < now was false and the entry stayed
+    // eligible forever. With the injected current date the entry is excluded.
+    const snapshotPath = writeSnapshot(root, [expiringEntry()]);
+    const reader = new PublicCorpusReader(snapshotPath, "2026-07-12");
+    expect([...reader.entriesForAggregation()].map((e) => e.id)).toEqual([]);
+    expect(reader.getById("expiring-entry")).toBeUndefined();
+  });
+
+  it("keeps the same entry eligible when the injected now is before the expiry", () => {
+    // Identical snapshot, but the injected now is 2026-01-15 (before the
+    // 2026-02-01 expiry) — clearance is still valid, so the entry is served.
+    // This pins the other half: the fix doesn't over-filter entries that are
+    // still within their clearance window.
+    const snapshotPath = writeSnapshot(root, [expiringEntry()]);
+    const reader = new PublicCorpusReader(snapshotPath, "2026-01-15");
+    expect([...reader.entriesForAggregation()].map((e) => e.id)).toEqual(["expiring-entry"]);
+    expect(reader.getById("expiring-entry")).toBeDefined();
+  });
+
+  it("keeps the entry eligible on the expiry day (expiresAt >= now is still valid through end-of-day)", () => {
+    // Policy semantics: expiresAt >= now is still valid (clearance good through
+    // end-of-day). now === expiresAt (2026-02-01) must NOT be filtered.
+    const snapshotPath = writeSnapshot(root, [expiringEntry()]);
+    const reader = new PublicCorpusReader(snapshotPath, "2026-02-01");
+    expect([...reader.entriesForAggregation()].map((e) => e.id)).toEqual(["expiring-entry"]);
+  });
+
+  it("proves the decision follows the injected now, not generatedAt (same snapshot, different now)", () => {
+    // The keystone: ONE snapshot, TWO readers with different `now`. The entry is
+    // served before expiry and filtered after — driven entirely by the injected
+    // clock. generatedAt is fixed at 2026-07-12 (F3_NOW) in the manifest; if the
+    // reader used generatedAt, both readers would behave identically.
+    const snapshotPath = writeSnapshot(root, [expiringEntry()]);
+    const before = new PublicCorpusReader(snapshotPath, "2026-01-15");
+    const after = new PublicCorpusReader(snapshotPath, "2026-07-12");
+    expect([...before.entriesForAggregation()].map((e) => e.id)).toEqual(["expiring-entry"]);
+    expect([...after.entriesForAggregation()].map((e) => e.id)).toEqual([]);
+  });
+
+  it("throws on a malformed injected now (not YYYY-MM-DD)", () => {
+    const snapshotPath = writeSnapshot(root, [expiringEntry()]);
+    expect(() => new PublicCorpusReader(snapshotPath, "not-a-date")).toThrow(/YYYY-MM-DD/);
+    expect(() => new PublicCorpusReader(snapshotPath, "2026-7-12")).toThrow(/YYYY-MM-DD/);
+  });
+
+  it("rejects a manifest with a non-ISO-datetime generatedAt (schema-level guard)", () => {
+    // F1 also validates generatedAt independently as an ISO 8601 datetime at the
+    // Zod level (it's still used for the manifest's own field). A bare date
+    // "2026-07-12" or garbage must be rejected by the schema, not accepted.
+    const entry = baseEntry("ok-entry", "A clean eligible entry that ships fine. zen");
+    const snapshotPath = writeSnapshot(root, [entry], {
+      manifestOverride: { generatedAt: "2026-07-12" }, // missing the T-time component
+    });
+    expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/schema validation/);
+  });
+});
+
+// ─── F2 (round 2): asset set consistency (eligible⊆manifest, no orphans, manifest==disk)
+
+/**
+ * F2 (Gate 1A, round 2): the asset cross-check previously verified only that
+ * every surviving entry's image.path was a declared manifest asset (entries ⊆
+ * manifest). It did NOT check the reverse (no orphan manifest assets) or the
+ * filesystem (no unmanifested files under images-public/). So a snapshot could
+ * carry extra manifest assets or arbitrary files that no entry references —
+ * those would travel with a future npm artifact despite never passing
+ * publication policy.
+ *
+ * The fix enforces three invariants at load:
+ *   (1) eligible ⊆ manifest — every surviving entry's image is a declared asset;
+ *   (2) manifest ⊆ all-entry-paths — no manifest asset is an orphan (an asset
+ *       that NO entry in entries.json references, eligible or not);
+ *   (3) manifest == disk — every declared asset exists on disk and every regular
+ *       file under images-public/ is declared (no unmanifested files, no missing
+ *       manifest files).
+ * Each test below injects ONE discrepancy and asserts the reader throws.
+ */
+describe("PublicCorpusReader (F2) — asset set consistency (eligible⊆manifest, no orphans, manifest==disk)", () => {
+  let root: string;
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "f2-assets-")); });
+  afterEach(() => { try { rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ } });
+
+  it("rejects an extra manifest asset not referenced by any entry (orphan manifest asset)", () => {
+    // The snapshot declares TWO assets but the single eligible entry references
+    // only one. The orphan manifest asset ("images-public/orphan.png") is
+    // referenced by NO entry — it would ride in a future npm artifact without
+    // ever passing publication policy. The manifest ⊆ all-entry-paths check
+    // catches it.
+    const entry = baseEntry("only-entry", "A clean eligible public dashboard entry that ships with exactly one declared asset. zen");
+    const snapshotPath = writeSnapshot(root, [entry], {
+      assetsOverride: ["images-public/only-entry.png", "images-public/orphan.png"],
+    });
+    expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/snapshot asset set mismatch/);
+    // The error names the specific orphan path.
+    expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/orphan\.png/);
+  });
+
+  it("rejects an extra file under images-public/ not declared in the manifest (unmanifested file)", () => {
+    // The manifest declares one asset (the eligible entry's image) and that file
+    // is on disk, PLUS a second arbitrary file under images-public/ that the
+    // manifest does NOT declare. The unmanifested file would be packaged by a
+    // naive `npm pack`. The manifest == disk check catches it.
+    const entry = baseEntry("legit-entry", "A clean eligible public dashboard entry with its single declared redistributable asset. zen");
+    const snapshotPath = writeSnapshot(root, [entry]);
+    // Drop an extra file on disk that the manifest doesn't declare.
+    writeFileSync(resolve(snapshotPath, "images-public", "stowaway.png"), PNG_BYTES);
+    expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/snapshot asset set mismatch/);
+    expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/stowaway\.png/);
+  });
+
+  it("rejects a manifest asset whose file is missing on disk (declared but absent)", () => {
+    // The manifest declares an asset and the eligible entry references it, but
+    // the file was deleted from disk after export. verifySnapshotIntegrity
+    // already catches this (it re-hashes every asset), so either layer may fire
+    // — assert a throw mentioning integrity or the asset set mismatch.
+    const entry = baseEntry("lost-asset", "A clean eligible public dashboard entry whose declared asset file has gone missing. zen");
+    const snapshotPath = writeSnapshot(root, [entry]);
+    // Delete the declared asset file from disk.
+    unlinkSync(resolve(snapshotPath, "images-public", "lost-asset.png"));
+    expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/integrity|asset missing|snapshot asset set mismatch/i);
+  });
+
+  it("rejects a manifest asset with an unsafe path (images-private/ or .. traversal) at the schema level", () => {
+    // The schema refine on PublicSnapshotAssetSchema rejects any asset path that
+    // doesn't start with images-public/ or that contains "..". A hand-crafted
+    // manifest declaring "images-private/secret.png" or "../etc/passwd" must be
+    // rejected at Zod parse time, before integrity or the set check run.
+    const entry = baseEntry("ok-entry", "A clean eligible public dashboard entry with one safe public asset path. zen");
+    const snapshotPath = writeSnapshot(root, [entry], {
+      assetsOverride: ["images-public/ok-entry.png", "images-private/secret.png"],
+    });
+    // The manifest fails schema validation (the asset path refine).
+    expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/schema validation/);
+    // The refine surfaces a message about the safe images-public/ requirement.
+    expect(() => new PublicCorpusReader(snapshotPath)).toThrow(/images-public/);
+  });
+
+  it("walks nested subdirectories under images-public/ (nested assets count as disk files)", () => {
+    // The on-disk walk is recursive. An asset in images-public/nested/sub.png is
+    // a legitimate regular file and must be counted. Build a consistent snapshot
+    // where the entry references the nested path, the manifest declares it, and
+    // the file lives nested — all invariants hold, so it loads.
+    const entry = baseEntry("nested-entry", "A clean eligible public dashboard entry with a nested asset path under images-public. zen");
+    entry.image.path = "images-public/nested/nested-entry.png";
+    const snapshotPath = writeSnapshot(root, [entry]);
+    const reader = new PublicCorpusReader(snapshotPath);
+    expect([...reader.entriesForAggregation()].map((e) => e.id)).toEqual(["nested-entry"]);
+  });
+
+  it("loads a snapshot whose three sets are consistent (the happy path still passes F2)", () => {
+    // Two eligible entries, two assets declared, two files on disk — eligible ⊆
+    // manifest, manifest ⊆ all-entry-paths, manifest == disk. This is the green
+    // path: no discrepancy, loads cleanly.
+    const e1 = baseEntry("entry-a", "A clean eligible public dashboard entry A with its own redistributable asset. zen");
+    const e2 = baseEntry("entry-b", "A clean eligible public dashboard entry B with its own redistributable asset. zen");
+    const snapshotPath = writeSnapshot(root, [e1, e2]);
+    const reader = new PublicCorpusReader(snapshotPath);
+    expect([...reader.entriesForAggregation()].map((e) => e.id).sort()).toEqual(["entry-a", "entry-b"]);
   });
 });

@@ -30,10 +30,24 @@ import { z } from "zod";
  * Used at load to validate a manifest that may have been tampered with after
  * export (the exporter's in-process builder is type-safe, but a snapshot is an
  * untrusted input at load time).
+ *
+ * F2 (Gate 1A, round 2): `path` is constrained at the schema level to a SAFE
+ * `images-public/...` path. The `.refine` rejects anything that doesn't start
+ * with `images-public/` or that contains a `..` segment — so a hand-crafted
+ * manifest can't declare an asset pointing at `entries.json`,
+ * `images-private/secret.png`, or `images-public/../../etc/passwd`. This is the
+ * schema-level guard; the reader's load-time set-equality check is the
+ * runtime guard that the declared paths match the bytes on disk exactly.
  */
 export const PublicSnapshotAssetSchema = z.object({
-  /** Snapshot-relative path, e.g. "images-public/foo.png". */
-  path: z.string().min(1),
+  /**
+   * Snapshot-relative path, e.g. "images-public/foo.png". Must live under
+   * `images-public/` and contain no `..` traversal — enforced by `.refine`.
+   */
+  path: z.string().min(1).refine(
+    (p) => p.startsWith("images-public/") && !p.includes(".."),
+    "asset path must be a safe \"images-public/...\" path with no \"..\"",
+  ),
   /** SHA-256 hex digest (64 lowercase hex chars). */
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   /** File size in bytes (non-negative). */
@@ -51,8 +65,18 @@ export const PublicSnapshotManifestSchema = z.object({
   schemaVersion: z.literal(1),
   corpusVersion: z.literal(2),
   snapshotId: z.string().min(1),
-  /** ISO 8601 timestamp. */
-  generatedAt: z.string().min(1),
+  /**
+   * ISO 8601 timestamp (e.g. "2026-07-12T00:00:00.000Z"). F1 (Gate 1A, round 2):
+   * validated at the schema level as an ISO datetime so a malformed/non-datetime
+   * `generatedAt` is rejected at load. This field is the SNAPSHOT's creation time;
+   * it is NOT used for publication expiry (that uses an injected current date so
+   * an old snapshot's expired entries are re-evaluated against today, not against
+   * the date the snapshot was generated).
+   */
+  generatedAt: z.string().regex(
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
+    "generatedAt must be an ISO 8601 datetime (e.g. 2026-07-12T00:00:00.000Z)",
+  ),
   entryCount: z.number().int().nonnegative(),
   entriesSha256: z.string().regex(/^[0-9a-f]{64}$/),
   assets: z.array(PublicSnapshotAssetSchema),

@@ -22,8 +22,8 @@
  * private reader delegates correctly via the `setCorpusForTesting` seam, and
  * that the public reader never leaks private/unapproved data.
  */
-import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
-import { resolve, relative, sep } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync, realpathSync, type Dirent } from "node:fs";
+import { resolve, relative, sep, join } from "node:path";
 import { z } from "zod";
 import type { CorpusEntryT } from "./schema.js";
 import {
@@ -234,6 +234,19 @@ export class PublicCorpusReader implements CorpusReader {
    * @param snapshotPath absolute path to a committed snapshot directory
    *   (`<snapshotDir>/<snapshotId>/`) containing manifest.json, entries.json,
    *   and the images-public/ tree.
+   * @param now OPTIONAL current date as a `YYYY-MM-DD` string, used ONLY for the
+   *   publication expiry re-evaluation (NOT for the manifest's `generatedAt`,
+   *   which is the snapshot's own creation time). Defaults to today's date in
+   *   production. Tests inject a fixed date for determinism.
+   *
+   * F1 (Gate 1A, round 2): the expiry check MUST use the current date, NOT the
+   * snapshot's `generatedAt`. The previous code derived `pubDate` from
+   * `manifest.generatedAt.slice(0, 10)`, which meant an entry that expired
+   * AFTER the snapshot was created was eligible forever — a snapshot generated
+   * Jan 1 with rights expiring Feb 1 was still served in July. The injected
+   * `now` fixes this: `evaluatePublication` sees today, so an expired entry is
+   * filtered out at load regardless of when the snapshot was built.
+   *
    * @throws if the snapshot is missing, unreadable, fails integrity
    *   verification (re-hash mismatch, missing asset), has schema-invalid
    *   manifest/entries, an entryCount mismatch, an asset/path mismatch, or a
@@ -255,16 +268,32 @@ export class PublicCorpusReader implements CorpusReader {
    *      false-positive asset violation. Defense-in-depth: the exporter
    *      pre-filters, but a modified/externally-supplied snapshot is re-verified
    *      here so an ineligible entry can never be served.
-   *   6. assert every SURVIVING entry's image.path (when present) is a declared
-   *      manifest asset (rejects eligible entries referencing undeclared files).
+   *   6. assert asset set consistency (F2, round 2): eligible ⊆ manifest,
+   *      manifest ⊆ all-entry-paths (no orphan manifest assets), and manifest
+   *      == disk (no unmanifested files, no missing manifest files). Any
+   *      discrepancy (orphan manifest asset, unmanifested file on disk, or a
+   *      manifest asset whose file is missing) throws. This closes the gap
+   *      where a snapshot could carry extra manifest assets or arbitrary files
+   *      under images-public/ that no entry references.
    */
-  constructor(snapshotPath: string) {
+  constructor(snapshotPath: string, now?: string) {
     this.snapshotPath = snapshotPath;
     // Resolve the snapshot root through realpath once (F4 containment check).
     try {
       this.realSnapshotRoot = realpathSync(snapshotPath);
     } catch {
       this.realSnapshotRoot = snapshotPath;
+    }
+
+    // F1 (round 2): the injected current date for expiry checking. Defaults to
+    // today in production; tests pass a fixed date for determinism. Validated as
+    // a YYYY-MM-DD string so a bad caller input fails loudly rather than
+    // silently comparing garbage lexicographically.
+    const nowDate = now ?? new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(nowDate)) {
+      throw new Error(
+        `[public-reader] 'now' must be a YYYY-MM-DD string (got: ${JSON.stringify(nowDate)})`,
+      );
     }
 
     const entriesPath = resolve(snapshotPath, "entries.json");
@@ -328,7 +357,11 @@ export class PublicCorpusReader implements CorpusReader {
     // "images-public/<asset>" which lives at <snapshot>/images-public/<asset>.
     // An entry whose image file is missing from the snapshot fails the policy
     // and is excluded — it can't be served without its redistributable asset.
-    const pubDate = manifest.generatedAt.slice(0, 10);
+    //
+    // F1 (round 2): the expiry check uses the INJECTED current date (`nowDate`),
+    // NOT manifest.generatedAt. Using generatedAt meant an entry that expired
+    // after the snapshot was created stayed eligible forever. Now an old
+    // snapshot's expired entries are re-evaluated against today at every load.
     const imageExists = (corpusRelPath: string): boolean => {
       const prefix = "images-public/";
       if (!corpusRelPath.startsWith(prefix)) return false;
@@ -337,7 +370,7 @@ export class PublicCorpusReader implements CorpusReader {
     const policyEligible: CorpusEntryT[] = [];
     let excluded = 0;
     for (const entry of parsedEntries) {
-      const decision = evaluatePublication(entry, { now: pubDate, imageExists });
+      const decision = evaluatePublication(entry, { now: nowDate, imageExists });
       if (decision.eligible) {
         policyEligible.push(entry);
       } else {
@@ -352,22 +385,148 @@ export class PublicCorpusReader implements CorpusReader {
       );
     }
 
-    // ── 5. Asset cross-check on SURVIVING entries ───────────────────────────
-    // Every eligible entry's image.path must be a declared manifest asset. This
-    // catches an eligible entry whose image points at an undeclared file (e.g.
-    // an externally-supplied snapshot that references a file outside the
-    // snapshot tree). Private entries were already filtered above, so this only
-    // runs over entries asserting they're public.
-    const declaredAssets = new Set(manifest.assets.map((a) => a.path));
+    // ── 5. Asset set consistency (F2, round 2) ─────────────────────────────
+    // Three invariants, each closing a gap the original (entries ⊆ manifest)
+    // check left open:
+    //
+    //   (1) eligible ⊆ manifest: every SURVIVING entry's image path is a
+    //       declared manifest asset (the original check, kept). Catches an
+    //       eligible entry whose image points at an undeclared file.
+    //
+    //   (2) manifest ⊆ allEntryPaths: every manifest asset is referenced by SOME
+    //       entry in entries.json (eligible or not). Catches an ORPHAN MANIFEST
+    //       ASSET — a declared asset that NO entry references (e.g. a private
+    //       entry's image smuggled into the manifest). An asset referenced by an
+    //       ineligible-but-present entry is NOT an orphan: it's the entry's own
+    //       image, legitimately declared at export time. This distinction matters
+    //       for F1: a time-expired entry is filtered from the SERVED set but its
+    //       asset was validly declared — treating it as an orphan would make
+    //       every old snapshot (with a since-expired entry) unloadable, defeating
+    //       F1's filter-and-log design. The finding's TDD pins the real target:
+    //       "an extra manifest asset NOT REFERENCED BY ANY ENTRY."
+    //
+    //   (3) manifest == disk (EXACT): every manifest asset exists on disk AND
+    //       every regular file under <snapshot>/images-public/ is in the manifest.
+    //       Catches an UNMANIFESTED FILE (a file riding in the snapshot that no
+    //       manifest entry vouches for — would be packaged by a naive npm pack)
+    //       and a MISSING FILE (a declared asset whose file was deleted).
+    //
+    // Any discrepancy throws with the specific extra/missing paths named.
+
+    // (a) ALL parsed entries' image paths (non-null, images-public/...). Used for
+    // the orphan-manifest-asset check (2): an asset in the manifest that no
+    // entry references is a smuggled file. Ineligible entries are included so a
+    // time-expired or unreviewed entry's own asset isn't mis-flagged.
+    const allEntryImagePaths = new Set<string>();
+    for (const entry of parsedEntries) {
+      const imgPath = entry.image.path;
+      if (imgPath !== null) {
+        allEntryImagePaths.add(imgPath);
+      }
+    }
+
+    // (a') Eligible entries' image paths — for the eligible ⊆ manifest check (1).
+    const eligibleImagePaths = new Set<string>();
     for (const entry of policyEligible) {
       const imgPath = entry.image.path;
-      if (imgPath !== null && !declaredAssets.has(imgPath)) {
-        throw new Error(
-          `[public-reader] entry "${entry.id}" references image "${imgPath}" that is `
-          + `not a declared manifest asset — refusing to serve an entry whose image `
-          + `may point outside the snapshot.`,
-        );
+      if (imgPath !== null) {
+        eligibleImagePaths.add(imgPath);
       }
+    }
+
+    // (b) Manifest declared asset paths.
+    const manifestAssetPaths = new Set(manifest.assets.map((a) => a.path));
+
+    // (c) Actual regular files under <snapshot>/images-public/ (recursive walk,
+    // relativized to "images-public/..."). Directories, symlinks, fifos, etc.
+    // are excluded — only regular files count as assets. This mirrors how the
+    // exporter populates the asset list (regular files only).
+    const onDiskPaths = new Set<string>();
+    const imageDir = resolve(snapshotPath, "images-public");
+    if (existsSync(imageDir)) {
+      const walk = (dir: string): void => {
+        let entries: Dirent[];
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return; // unreadable subdir — treat as empty (the set check will flag it).
+        }
+        for (const ent of entries) {
+          const abs = join(dir, ent.name);
+          // Use ent.isDirectory()/isFile() off the Dirent when possible; fall
+          // back to statSync for platforms/filesystems where the Dirent type
+          // is unknown (DT_UNKNOWN). A symlinked directory must be traversed
+          // via statSync (not lstatSync) so a legit symlinked subfolder inside
+          // images-public/ is still walked — the per-file regular-file check
+          // below uses statSync too, staying consistent with resolveImagePath.
+          let isDir = false;
+          let isFile = false;
+          try {
+            if (ent.isDirectory()) {
+              isDir = true;
+            } else if (ent.isFile()) {
+              isFile = true;
+            } else {
+              // DT_UNKNOWN or special type: stat to classify.
+              const s = statSync(abs);
+              isDir = s.isDirectory();
+              isFile = s.isFile();
+            }
+          } catch {
+            // Broken symlink / unreadable — skip (can't be a regular asset).
+            continue;
+          }
+          if (isDir) {
+            walk(abs);
+          } else if (isFile) {
+            const rel = relative(snapshotPath, abs).split(sep).join("/");
+            onDiskPaths.add(rel);
+          }
+        }
+      };
+      walk(imageDir);
+    }
+
+    // Compare and throw with a precise discrepancy report.
+    const subset = (a: Set<string>, b: Set<string>): string[] =>
+      [...a].filter((p) => !b.has(p)).sort();
+    const setEqual = (x: Set<string>, y: Set<string>): boolean =>
+      x.size === y.size && [...x].every((p) => y.has(p));
+    const diff = (a: Set<string>, b: Set<string>): string[] =>
+      [...a].filter((p) => !b.has(p)).sort();
+
+    const failures: string[] = [];
+
+    // (1) eligible ⊆ manifest
+    const eligibleNotInManifest = subset(eligibleImagePaths, manifestAssetPaths);
+    if (eligibleNotInManifest.length > 0) {
+      failures.push(
+        `eligible entries reference undeclared assets: ${JSON.stringify(eligibleNotInManifest)}`,
+      );
+    }
+
+    // (2) manifest ⊆ allEntryPaths (no orphan manifest assets)
+    const orphanManifestAssets = subset(manifestAssetPaths, allEntryImagePaths);
+    if (orphanManifestAssets.length > 0) {
+      failures.push(
+        `manifest declares assets referenced by no entry (orphan): ${JSON.stringify(orphanManifestAssets)}`,
+      );
+    }
+
+    // (3) manifest == disk (exact)
+    if (!setEqual(manifestAssetPaths, onDiskPaths)) {
+      failures.push(
+        `manifest assets ≠ files on disk`
+        + ` (manifest-only: ${JSON.stringify(diff(manifestAssetPaths, onDiskPaths))}`
+        + `; disk-only: ${JSON.stringify(diff(onDiskPaths, manifestAssetPaths))})`,
+      );
+    }
+
+    if (failures.length > 0) {
+      throw new Error(
+        `[public-reader] snapshot asset set mismatch — refusing to serve a snapshot `
+        + `whose entries, manifest, and on-disk files disagree: ${failures.join("; ")}.`,
+      );
     }
 
     this.entries = policyEligible;

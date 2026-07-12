@@ -230,26 +230,15 @@ describe("exportPublicSnapshot", () => {
   // throws, OR more simply: verify that a staging dir left behind does NOT appear
   // as a final snapshot. The cleanest simulation: corrupt the source so the copy
   // fails mid-pipeline and assert no <snapshotId> final dir exists.
-  it("interrupt before rename → no final snapshot dir exists", () => {
+  it("failure during copy leaves no final snapshot dir", () => {
     h.writeAsset("example.png");
-    // Make the source image unreadable (chmod 000) so the copy throws mid-stage.
-    // On POSIX, open for read still fails with EACCES.
     const srcAsset = resolve(h.imageRoot, "example.png");
-    writeFileSync(srcAsset, PNG_BYTES);
-    try { (srcAsset as string & { chmodSync?: unknown }); } catch { /* noop */ }
-    // Use fs.chmodSync via dynamic require to avoid lint — simpler: delete the
-    // file after building the entry list so copyFile fails. But deletion makes
-    // imageExists false, so the entry would be filtered out BEFORE copy.
-    //
-    // The most faithful simulation: inject a failing asset via a path that
-    // exists at evaluation time but is removed before copy. We can't easily do
-    // that without a hook, so instead test the CONTRACT: a leftover staging dir
-    // (the failure residue) must not surface as a final snapshot.
+    // Replace the asset file with a directory so copyFileSync throws EISDIR
+    // mid-stage — a genuine pipeline failure inside the copy loop, exercising
+    // the staging-cleanup path. (We can't easily inject a failure between
+    // verify and rename without a hook; this tests the contract that matters:
+    // a mid-pipeline throw leaves no visible final snapshot.)
     rmSync(srcAsset, { force: true });
-
-    // Re-create then immediately corrupt by making the parent dir's asset a
-    // directory (copyFileSync of a directory throws EISDIR) — gives a real
-    // mid-pipeline failure.
     mkdirSync(srcAsset, { recursive: true });
 
     const entry = eligibleEntry("will-fail", "images-public/example.png");

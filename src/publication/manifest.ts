@@ -66,9 +66,14 @@ export function sha256(data: Uint8Array): string {
  * exporters on the same corpus agree.
  */
 export function deriveSnapshotId(entriesSha256: string, assets: PublicSnapshotAsset[]): string {
+  // Sort by path before hashing so the id is canonical regardless of the order
+  // callers accumulated assets in. Without this, two semantically-identical
+  // snapshots with entry arrays in different orders would derive different ids,
+  // silently breaking idempotency.
+  const ordered = [...assets].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const assetsHash = sha256(
     Buffer.from(
-      assets.map((a) => `${a.path}:${a.sha256}:${a.bytes}`).join("\n"),
+      ordered.map((a) => `${a.path}:${a.sha256}:${a.bytes}`).join("\n"),
       "utf-8",
     ),
   );

@@ -167,10 +167,6 @@ const ALLOWLIST = new Set<string>([
   "ClaimBasis", "VisualSlopBasis",
   "VisualSlopFinding", "MotionGuidance", "StructuredRecommendation",
   "StructuredAccessibilityRisk", "AppliedReference",
-  // normalizeMotionDeclarations — DEFERRED: Task 8 Step 4 (browser-side Playwright
-  // collection) hasn't landed yet. The pure function is ready but has no caller until
-  // the capture pipeline collects transition/animation CSS. Remove from allowlist when wired.
-  "normalizeMotionDeclarations",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

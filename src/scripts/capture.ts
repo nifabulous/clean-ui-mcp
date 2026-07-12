@@ -57,6 +57,7 @@ import { createHash } from "node:crypto";
 import { chromium, type Browser, type BrowserContext, type Page, type Locator } from "playwright";
 import sharp from "sharp";
 import { assertSafeCaptureTarget } from "../ssrf.js";
+import { normalizeMotionDeclarations, type DomMotionInput } from "../dom-motion.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PRIVATE_IMAGE_DIR = resolve(__dirname, "..", "..", "corpus", "images-private");
@@ -410,7 +411,7 @@ async function captureAndDismissConsent(
 // 2. Navigate + settle + lazy-load scroll
 // ============================================================
 
-async function settlePage(page: Page): Promise<void> {
+async function waitAndLazyLoadPage(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
   // Trigger lazy-loaded content (cursor.com finding: scroll-linked animations
   // would otherwise be captured mid-transition; this pass only forces mount).
@@ -426,6 +427,9 @@ async function settlePage(page: Page): Promise<void> {
     window.scrollTo(0, 0);
     await new Promise((r) => setTimeout(r, 250));
   });
+}
+
+async function freezePageMotion(page: Page): Promise<void> {
   // Freeze motion so a screenshot doesn't land mid-fade — corrupts the
   // deterministic color quantization the tagger depends on.
   await page.addStyleTag({
@@ -438,6 +442,13 @@ async function settlePage(page: Page): Promise<void> {
     }`,
   }).catch(() => {});
   await page.waitForTimeout(300);
+}
+
+async function settlePage(page: Page): Promise<void> {
+  // Backward-compat wrapper — convenience for callers (e.g. single-shot mode)
+  // that don't need to interleave motion collection between the two phases.
+  await waitAndLazyLoadPage(page);
+  await freezePageMotion(page);
 }
 
 // ============================================================
@@ -698,12 +709,102 @@ async function extractDomSignals(locator: Locator): Promise<DomSignals | null> {
   }
 }
 
+// ─── Motion declarations collection ───────────────────────────────────────────
+// Reads AUTHORED stylesheet rules (document.styleSheets → cssRules), NOT computed
+// styles. Why: the browser context is launched with reducedMotion:"reduce", so
+// getComputedStyle reflects the reduced-motion cascade and suppresses transitions
+// — useless for detecting what the author actually declared. Authored rules are
+// cascade-independent. Collection is scoped per capture-root (the locator's DOM
+// subtree) so a cropped capture only carries motion evidence for elements that
+// appear in the screenshot. Best-effort: returns null on failure. Cross-origin
+// stylesheets throw SecurityError on cssRules access and are counted as
+// inaccessible (surfaced as coverage metadata) rather than failing the capture.
+type CollectedMotion = {
+  inputs: DomMotionInput[];
+  prefersReducedMotion: boolean;
+  inaccessibleStylesheets: number;
+};
+
+async function collectMotionDeclarations(locator: Locator): Promise<CollectedMotion | null> {
+  return locator.evaluate((root: Element) => {
+    const MAX_ELEMENTS = 50;
+    const MOTION_PROPS = [
+      "transitionDuration", "transitionProperty", "transitionDelay", "transitionTimingFunction",
+      "animationDuration", "animationName", "animationIterationCount", "animationDelay",
+      "animationTimingFunction",
+    ] as const;
+    const interactiveSel =
+      "button, a, input, select, textarea, [role='button'], [role='link'], [role='tab'], [onclick], details, summary";
+    const selectorHint = (el: Element): string => {
+      const tag = el.tagName.toLowerCase();
+      const role = el.getAttribute("role");
+      const testId = el.getAttribute("data-testid");
+      return `${tag}${role ? `[role=${role}]` : ""}${testId ? `[data-testid=${testId}]` : ""}`;
+    };
+
+    // Gather authored rules once (page-wide). Matching rule.selectorText against
+    // each element later scopes the evidence to the capture root.
+    let inaccessibleStylesheets = 0;
+    const ruleStyles: { selectorText: string; style: Record<string, string> }[] = [];
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        for (const rule of Array.from(sheet.cssRules)) {
+          const r = rule as unknown as { selectorText?: string; style?: CSSStyleDeclaration };
+          if (r.style && r.selectorText) {
+            const styleRec: Record<string, string> = {};
+            for (const prop of MOTION_PROPS) {
+              const v = (r.style as unknown as Record<string, string>)[prop];
+              if (v) styleRec[prop] = v;
+            }
+            if (Object.keys(styleRec).length > 0) ruleStyles.push({ selectorText: r.selectorText, style: styleRec });
+          }
+        }
+      } catch {
+        // SecurityError on cross-origin sheets — can't read rules.
+        inaccessibleStylesheets++;
+      }
+    }
+
+    const elements = Array.from(root.querySelectorAll(interactiveSel)).slice(0, MAX_ELEMENTS);
+    const inputs: DomMotionInput[] = [];
+    for (const el of elements) {
+      // Merge authored declarations in document order (later rule wins), then
+      // apply inline style overrides (inline has higher specificity). This is a
+      // best-effort approximation of the cascade for motion longhands — enough
+      // for signal detection, not a full cascade resolver.
+      const acc: Record<string, string> = {};
+      for (const { selectorText, style } of ruleStyles) {
+        try { if (!el.matches(selectorText)) continue; } catch { continue; }
+        for (const prop of MOTION_PROPS) {
+          const v = style[prop];
+          if (v) acc[prop] = v;
+        }
+      }
+      const inline = (el as HTMLElement).style;
+      for (const prop of MOTION_PROPS) {
+        const v = (inline as unknown as Record<string, string>)[prop];
+        if (v) acc[prop] = v;
+      }
+      if (Object.keys(acc).length === 0) continue; // no motion declared → skip
+      inputs.push({ selector: selectorHint(el), ...acc });
+    }
+
+    const prefersReducedMotion =
+      typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    return { inputs, prefersReducedMotion, inaccessibleStylesheets } as CollectedMotion;
+  }).catch((err: unknown) => {
+    console.warn("[dom-motion] collection failed:", err instanceof Error ? err.message : err);
+    return null;
+  });
+}
+
 async function captureLocator(
   locator: Locator,
   batchDir: string,
   batchId: string,
   info: { id: string; sourceUrl: string; sourceName: string; captureMode: CaptureMode; selectorPath: string; viewport: string },
   signalsMap?: Map<string, DomSignals>,
+  motionRaw?: CollectedMotion | null,
 ): Promise<CaptureMeta | null> {
   const raw = await locator.screenshot({ timeout: 8000 }).catch(() => null);
   if (!raw) return null;
@@ -740,7 +841,19 @@ async function captureLocator(
   // deletes the entry (along with the PNG) when dedup rejects the capture.
   if (signalsMap) {
     const signals = await extractDomSignals(locator);
-    if (signals) signalsMap.set(info.id, signals);
+    if (signals) {
+      // Attach motion signals. motionRaw is collected pre-freeze (authored
+      // stylesheet rules are cascade-independent, so reading them before/after
+      // the freeze styleTag doesn't matter — but collection must run before the
+      // freeze so the in-page evaluate isn't racing the motion-suppressing CSS).
+      if (motionRaw) {
+        signals.motion = normalizeMotionDeclarations(motionRaw.inputs, {
+          inaccessibleStylesheets: motionRaw.inaccessibleStylesheets,
+          prefersReducedMotion: motionRaw.prefersReducedMotion,
+        });
+      }
+      signalsMap.set(info.id, signals);
+    }
   }
 
   return {
@@ -833,7 +946,7 @@ async function captureSource(
 
     try {
       await page.goto(source.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      await settlePage(page);
+      await waitAndLazyLoadPage(page);
 
       if (!source.skipAutoConsent) {
         await captureAndDismissConsent(page, batchDir, batchId, source, viewport, pushIfNew);
@@ -841,34 +954,57 @@ async function captureSource(
 
       const anchorIds = await anchorSectionIds(page);
 
+      // Build the full list of capture targets BEFORE any screenshotting, so the
+      // ordering can be: (1) collect motion from every root while motion is still
+      // running, (2) freeze motion, (3) screenshot each root while frozen. Motion
+      // collection reads AUTHORED stylesheet rules (cascade-independent), so it's
+      // unaffected by the freeze — but running it first is the safe, documented
+      // contract and keeps the in-page evaluate from racing the suppress CSS.
+      type CaptureTarget = {
+        locator: Locator;
+        info: {
+          id: string;
+          sourceUrl: string;
+          sourceName: string;
+          captureMode: CaptureMode;
+          selectorPath: string;
+          viewport: string;
+        };
+      };
+      const targets: CaptureTarget[] = [];
+
       const collectFrom = async (rootSelector: string, mode: "section" | "recursive") => {
         const { sections, groups, oversized } = await detect(page, rootSelector);
         for (const sec of sections) {
           const loc = page.locator(sec.selector).first();
           if (!(await loc.isVisible().catch(() => false))) continue;
-          const meta = await captureLocator(loc, batchDir, batchId, {
-            id: safeId(source.sourceName, mode, selectorFingerprint(sec.selector), viewport.name),
-            sourceUrl: source.url,
-            sourceName: source.sourceName,
-            captureMode: mode,
-            selectorPath: sec.selector,
-            viewport: viewport.name,
-          }, signalsMap).catch(() => null);
-          if (meta) pushIfNew(meta);
+          targets.push({
+            locator: loc,
+            info: {
+              id: safeId(source.sourceName, mode, selectorFingerprint(sec.selector), viewport.name),
+              sourceUrl: source.url,
+              sourceName: source.sourceName,
+              captureMode: mode,
+              selectorPath: sec.selector,
+              viewport: viewport.name,
+            },
+          });
         }
         for (const group of groups) {
           const rep = group[0];
           const loc = page.locator(rep.selector).first();
           if (!(await loc.isVisible().catch(() => false))) continue;
-          const meta = await captureLocator(loc, batchDir, batchId, {
-            id: safeId(source.sourceName, "group", selectorFingerprint(rep.selector), viewport.name),
-            sourceUrl: source.url,
-            sourceName: source.sourceName,
-            captureMode: "group-member",
-            selectorPath: rep.selector,
-            viewport: viewport.name,
-          }, signalsMap).catch(() => null);
-          if (meta) pushIfNew(meta);
+          targets.push({
+            locator: loc,
+            info: {
+              id: safeId(source.sourceName, "group", selectorFingerprint(rep.selector), viewport.name),
+              sourceUrl: source.url,
+              sourceName: source.sourceName,
+              captureMode: "group-member",
+              selectorPath: rep.selector,
+              viewport: viewport.name,
+            },
+          });
         }
         for (const bigSelector of oversized) {
           if (bigSelector === rootSelector) continue;
@@ -881,18 +1017,45 @@ async function captureSource(
         // here. See escapeCssId's doc comment for why.
         const loc = page.locator(`#${escapeCssId(id)}`).first();
         if (!(await loc.isVisible().catch(() => false))) continue;
-        const meta = await captureLocator(loc, batchDir, batchId, {
-          id: safeId(source.sourceName, "anchor", id, viewport.name),
-          sourceUrl: source.url,
-          sourceName: source.sourceName,
-          captureMode: "section",
-          selectorPath: `#${id}`,
-          viewport: viewport.name,
-        }, signalsMap).catch(() => null);
-        if (meta) pushIfNew(meta);
+        targets.push({
+          locator: loc,
+          info: {
+            id: safeId(source.sourceName, "anchor", id, viewport.name),
+            sourceUrl: source.url,
+            sourceName: source.sourceName,
+            captureMode: "section",
+            selectorPath: `#${id}`,
+            viewport: viewport.name,
+          },
+        });
       }
 
       await collectFrom("body", "section");
+
+      // Pass 1 — collect motion declarations per root (pre-freeze). Keyed by the
+      // same capture id captureLocator will use, so the normalized signal can be
+      // attached at screenshot time. Best-effort: a null entry just means no
+      // motion evidence for that root.
+      const motionByRoot = new Map<string, CollectedMotion>();
+      for (const target of targets) {
+        const motion = await collectMotionDeclarations(target.locator);
+        if (motion) motionByRoot.set(target.info.id, motion);
+      }
+
+      // Freeze motion now — AFTER all motion collection, BEFORE any screenshot,
+      // so screenshots land on a static frame for deterministic color quantization.
+      await freezePageMotion(page);
+
+      // Pass 2 — capture each root while frozen. Motion data (collected pre-freeze)
+      // is threaded into captureLocator, which normalizes it and attaches it to the
+      // signals sidecar entry.
+      for (const target of targets) {
+        const meta = await captureLocator(
+          target.locator, batchDir, batchId, target.info,
+          signalsMap, motionByRoot.get(target.info.id) ?? null,
+        ).catch(() => null);
+        if (meta) pushIfNew(meta);
+      }
 
       for (const interaction of source.interactions ?? []) {
         const meta = await runInteraction(page, interaction, batchDir, batchId, source, viewport);

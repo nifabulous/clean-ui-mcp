@@ -1,32 +1,64 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import { retrieveCritiqueEvidence } from "./critique-retrieval.js";
+import type { CorpusReader } from "./corpus-reader.js";
 
-// Mock corpus + embeddings to test retrieval in isolation.
-vi.mock("./corpus.js", () => ({
-  searchRanked: vi.fn(async () => {
-    return [
-      { entry: { id: "e1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Dashboard A" }, score: 0.9 },
-      { entry: { id: "e2", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Dashboard B" }, score: 0.85 },
-    ];
-  }),
-  loadCorpus: vi.fn(() => [
-    { id: "e1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Dashboard A" },
-    { id: "e2", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Dashboard B" },
-  ]),
-}));
-
+/**
+ * Mock image-index module — retrieval uses `cosine` to rank image-index
+ * vectors against the query vector. Still module-mocked because retrieval
+ * depends on the index shape, not on corpus access (which now comes through
+ * the injected reader).
+ */
 vi.mock("./image-index.js", () => ({
   loadImageIndex: vi.fn(() => null),
   cosine: vi.fn((a: number[], b: number[]) => 0.5),
 }));
 
-afterEach(() => {
-  vi.clearAllMocks();
-});
+/**
+ * Build a fresh mock CorpusReader for each test. The reader's methods are
+ * vi.fn()s so individual tests can override return values (mirroring the old
+ * per-test vi.mocked(loadCorpus).mockReturnValue pattern). Default returns
+ * mirror the old top-of-file mock: a 2-entry approved corpus + 2 ranked
+ * results.
+ */
+function makeReader(overrides: { corpus?: any[]; ranked?: any[] } = {}): CorpusReader & {
+  searchRanked: ReturnType<typeof vi.fn>;
+  entriesForAggregation: ReturnType<typeof vi.fn>;
+} {
+  const corpus = overrides.corpus ?? [
+    { id: "e1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Dashboard A" },
+    { id: "e2", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Dashboard B" },
+  ];
+  const ranked = overrides.ranked ?? [
+    { entry: { id: "e1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Dashboard A" }, score: 0.9 },
+    { entry: { id: "e2", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Dashboard B" }, score: 0.85 },
+  ];
+  return {
+    search: vi.fn(async () => ranked.map((r) => r.entry)) as never,
+    searchRanked: vi.fn(async () => ranked) as never,
+    getById: vi.fn((id: string) => corpus.find((e) => e.id === id)) as never,
+    findSimilar: vi.fn(() => []) as never,
+    listCategories: vi.fn(() => []) as never,
+    listStyleTags: vi.fn(() => []) as never,
+    listDomainTags: vi.fn(() => []) as never,
+    indexStatus: vi.fn(() => ({ indexed: 0, total: corpus.length, hasIndex: false, missing: corpus.length, stale: 0, contentStale: 0 })) as never,
+    entriesForAggregation: vi.fn(() => corpus) as never,
+    resolveImagePath: vi.fn(() => null) as never,
+  } as never;
+}
 
 describe("retrieveCritiqueEvidence", () => {
+  let reader: ReturnType<typeof makeReader>;
+
+  beforeEach(() => {
+    reader = makeReader();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("falls back to structured retrieval when no image provider", async () => {
     const result = await retrieveCritiqueEvidence({
+      reader,
       imageProvider: null,
       imageData: null,
       extraction: { patternType: "dashboard" },
@@ -41,6 +73,7 @@ describe("retrieveCritiqueEvidence", () => {
 
   it("falls back when image provider exists but index is empty", async () => {
     const result = await retrieveCritiqueEvidence({
+      reader,
       imageProvider: { name: "voyage", model: "voyage-multimodal-3", embedImage: async () => [1] },
       imageData: Buffer.from("fake"),
       extraction: { patternType: "dashboard" },
@@ -54,6 +87,7 @@ describe("retrieveCritiqueEvidence", () => {
 
   it("uses image retrieval when provider + index are available", async () => {
     const result = await retrieveCritiqueEvidence({
+      reader,
       imageProvider: { name: "voyage", model: "voyage-multimodal-3", embedImage: async () => [0.1, 0.2] },
       imageData: Buffer.from("fake"),
       extraction: { patternType: "dashboard" },
@@ -76,6 +110,7 @@ describe("retrieveCritiqueEvidence", () => {
 
   it("never returns more than 5 entries", async () => {
     const result = await retrieveCritiqueEvidence({
+      reader,
       imageProvider: null,
       imageData: null,
       extraction: { patternType: "dashboard" },
@@ -87,12 +122,14 @@ describe("retrieveCritiqueEvidence", () => {
   });
 
   it("filters stale drafts before limiting image candidates", async () => {
-    const { loadCorpus } = await import("./corpus.js");
-    vi.mocked(loadCorpus).mockReturnValue([
-      ...Array.from({ length: 12 }, (_, i) => ({ id: `draft-${i}`, patternType: "dashboard", platform: "web", reviewStatus: "draft", title: `Draft ${i}` })),
-      { id: "approved-1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Approved" },
-    ] as never);
+    reader = makeReader({
+      corpus: [
+        ...Array.from({ length: 12 }, (_, i) => ({ id: `draft-${i}`, patternType: "dashboard", platform: "web", reviewStatus: "draft", title: `Draft ${i}` })),
+        { id: "approved-1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Approved" },
+      ],
+    });
     const result = await retrieveCritiqueEvidence({
+      reader,
       imageProvider: { name: "voyage", model: "m", embedImage: async () => [1] },
       imageData: Buffer.from("fake"),
       imageMimeType: "image/png",
@@ -113,9 +150,9 @@ describe("retrieveCritiqueEvidence", () => {
   // ─── Edge-case tests (proportional to bug classes) ──────────────────────────
 
   it("returns empty entries with coverage 'none' when searchRanked has no matches", async () => {
-    const { searchRanked } = await import("./corpus.js");
-    vi.mocked(searchRanked).mockResolvedValueOnce([]);
+    reader = makeReader({ ranked: [] });
     const result = await retrieveCritiqueEvidence({
+      reader,
       imageProvider: null,
       imageData: null,
       extraction: { patternType: "nonexistent" },
@@ -130,6 +167,7 @@ describe("retrieveCritiqueEvidence", () => {
 
   it("falls back to structured when image index has no entries", async () => {
     const result = await retrieveCritiqueEvidence({
+      reader,
       imageProvider: { name: "voyage", model: "m", embedImage: async () => [1] },
       imageData: Buffer.from("fake"),
       imageMimeType: "image/png",
@@ -143,6 +181,7 @@ describe("retrieveCritiqueEvidence", () => {
 
   it("falls back to structured when embedImage throws", async () => {
     const result = await retrieveCritiqueEvidence({
+      reader,
       imageProvider: { name: "voyage", model: "m", embedImage: async () => { throw new Error("API timeout"); } },
       imageData: Buffer.from("fake"),
       imageMimeType: "image/png",
@@ -158,11 +197,13 @@ describe("retrieveCritiqueEvidence", () => {
   });
 
   it("filters orphaned image-index entries (id not in corpus)", async () => {
-    const { loadCorpus } = await import("./corpus.js");
-    vi.mocked(loadCorpus).mockReturnValueOnce([
-      { id: "real-1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Real" },
-    ] as never);
+    reader = makeReader({
+      corpus: [
+        { id: "real-1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Real" },
+      ],
+    });
     const result = await retrieveCritiqueEvidence({
+      reader,
       imageProvider: { name: "voyage", model: "m", embedImage: async () => [1] },
       imageData: Buffer.from("fake"),
       imageMimeType: "image/png",
@@ -182,12 +223,14 @@ describe("retrieveCritiqueEvidence", () => {
   });
 
   it("filters entries demoted from approved to draft after indexing", async () => {
-    const { loadCorpus } = await import("./corpus.js");
-    vi.mocked(loadCorpus).mockReturnValueOnce([
-      { id: "demoted", patternType: "dashboard", platform: "web", reviewStatus: "draft", title: "Was Approved" },
-      { id: "still-approved", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Still Good" },
-    ] as never);
+    reader = makeReader({
+      corpus: [
+        { id: "demoted", patternType: "dashboard", platform: "web", reviewStatus: "draft", title: "Was Approved" },
+        { id: "still-approved", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Still Good" },
+      ],
+    });
     const result = await retrieveCritiqueEvidence({
+      reader,
       imageProvider: { name: "voyage", model: "m", embedImage: async () => [1] },
       imageData: Buffer.from("fake"),
       imageMimeType: "image/png",
@@ -207,10 +250,9 @@ describe("retrieveCritiqueEvidence", () => {
   });
 
   it("falls back gracefully with empty corpus", async () => {
-    const { loadCorpus, searchRanked } = await import("./corpus.js");
-    vi.mocked(loadCorpus).mockReturnValueOnce([] as never);
-    vi.mocked(searchRanked).mockResolvedValueOnce([]);
+    reader = makeReader({ corpus: [], ranked: [] });
     const result = await retrieveCritiqueEvidence({
+      reader,
       imageProvider: { name: "voyage", model: "m", embedImage: async () => [1] },
       imageData: Buffer.from("fake"),
       imageMimeType: "image/png",
@@ -227,11 +269,12 @@ describe("retrieveCritiqueEvidence", () => {
   });
 
   it("applies platform penalty after approved filtering", async () => {
-    const { loadCorpus } = await import("./corpus.js");
-    vi.mocked(loadCorpus).mockReturnValueOnce([
-      { id: "web-1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Web A" },
-      { id: "mobile-1", patternType: "dashboard", platform: "mobile", reviewStatus: "approved", title: "Mobile A" },
-    ] as never);
+    reader = makeReader({
+      corpus: [
+        { id: "web-1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Web A" },
+        { id: "mobile-1", patternType: "dashboard", platform: "mobile", reviewStatus: "approved", title: "Mobile A" },
+      ],
+    });
     // Override the cosine mock to return distinct scores per entry vector so the
     // platform penalty has real differentiation to work with.
     const { cosine } = await import("./image-index.js");
@@ -241,6 +284,7 @@ describe("retrieveCritiqueEvidence", () => {
     });
 
     const result = await retrieveCritiqueEvidence({
+      reader,
       imageProvider: { name: "voyage", model: "m", embedImage: async () => [1] },
       imageData: Buffer.from("fake"),
       imageMimeType: "image/png",
@@ -265,6 +309,7 @@ describe("retrieveCritiqueEvidence", () => {
 
   it("falls back when query vector dimension doesn't match index dimension", async () => {
     const result = await retrieveCritiqueEvidence({
+      reader,
       imageProvider: { name: "voyage", model: "m", embedImage: async () => [1, 2, 3] }, // dim 3
       imageData: Buffer.from("fake"),
       imageMimeType: "image/png",

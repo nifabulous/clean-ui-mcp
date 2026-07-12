@@ -26,10 +26,10 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { execSync } from "node:child_process";
-import { Corpus, CorpusEntry, findDraftMarkers } from "../schema.js";
+import { CorpusEntry, findDraftMarkers } from "../schema.js";
 import { findVagueAntiPatterns } from "../content-lint.js";
 import { findDuplicateAtCommit } from "../dedup.js";
-import { ENTRIES_PATH, persistEntries } from "../persistence.js";
+import { persistEntries, loadCorpusSafe } from "../persistence.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_ROOT  = resolve(__dirname, "..", "..", "corpus");
@@ -68,9 +68,16 @@ async function main() {
     process.exit(0);
   }
 
-  // Load + parse existing corpus
-  const corpusRaw = JSON.parse(readFileSync(ENTRIES_PATH, "utf-8"));
-  const corpus    = Corpus.parse(corpusRaw);
+  // Load + parse existing corpus via the hardened path so persistEntries can
+  // enforce write protection. A read-only corpus (missing primary → seed/empty)
+  // means there's nothing to commit INTO — refuse rather than bootstrap a real
+  // corpus from a 1-entry seed via the commit path.
+  const loaded = loadCorpusSafe();
+  if (!loaded.writable) {
+    console.error(`Refusing to commit: corpus is READ-ONLY (source: ${loaded.source}). Restore the primary first (npm run restore-corpus -- --latest).`);
+    process.exit(1);
+  }
+  const corpus = { version: loaded.version, entries: loaded.entries };
   const existingIds = new Set(corpus.entries.map((e) => e.id));
 
   // Validate each approved entry against the full schema before writing anything
@@ -160,7 +167,7 @@ async function main() {
 
   // Write to corpus via the durability layer (snapshot + atomic write).
   corpus.entries.push(...clean);
-  persistEntries(corpus.entries);
+  persistEntries(loaded, corpus.entries);
 
   // Mark committed in draft (idempotent re-runs won't double-commit)
   const committedIds = new Set(clean.map((e) => e.id));

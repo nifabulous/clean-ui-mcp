@@ -9,6 +9,13 @@ export const PROJECT_ROOT = resolve(__dirname, "..");
 export const CORPUS_ROOT = resolve(PROJECT_ROOT, "corpus");
 export const PRIVATE_IMAGE_DIR = resolve(CORPUS_ROOT, "images-private");
 export const PUBLIC_IMAGE_DIR = resolve(CORPUS_ROOT, "images-public");
+/**
+ * Public snapshots — the directory-atomic export target. Each snapshot lives in
+ * its own subdirectory (`<snapshot-id>/`) containing manifest.json, entries.json,
+ * and the images-public/ tree. Snapshots are produced by the exporter
+ * (src/publication/exporter.ts) and consumed by the PublicCorpusReader (Task 4b).
+ */
+export const PUBLIC_SNAPSHOT_DIR = resolve(CORPUS_ROOT, "public-snapshots");
 
 /**
  * Recursively list image files under a directory, returning corpus-relative

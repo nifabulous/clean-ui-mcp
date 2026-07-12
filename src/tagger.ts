@@ -125,6 +125,15 @@ export interface TaggerInput {
   extractionOverride?: EndpointOverride;
   critiqueOverride?: EndpointOverride;
   /**
+   * Image visibility for the output entry's ImageRef. Defaults to "private"
+   * (the safe historical default — local research copy, never published).
+   * Set to "public-own" when capturing an image you hold rights to, or
+   * "public-thumb" for a low-res thumbnail defensible as fair use. The
+   * publication policy evaluator gates on this separately from the entry's
+   * `publication` block — both must permit redistribution.
+   */
+  imageVisibility?: "private" | "public-thumb" | "public-own";
+  /**
    * DOM signals from the capture pipeline (dom-signals.json sidecar). When
    * present, injected into the extraction prompt as VERIFIED GROUND TRUTH so
    * the model gets real computed styles/a11y/structure instead of guessing
@@ -165,7 +174,7 @@ export interface TaggerOutput {
     capturedBy:  "self" | "automated-collection";
   };
   image: {
-    visibility: "private";
+    visibility: "private" | "public-thumb" | "public-own";
     path:       string;
     width:      number | null;
     height:     number | null;
@@ -2118,6 +2127,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
 
   const corpusPath = toCorpusRelativePath(input.imagePath);
   const today = new Date().toISOString().slice(0, 10);
+  const imageVisibility = input.imageVisibility ?? "private";
   const { width: imgWidth, height: imgHeight } = await readImageDimensions(input.imagePath);
   const platform = detectPlatform(imgWidth, imgHeight);
 
@@ -2309,7 +2319,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         capturedBy:  "self",
       },
       image: {
-        visibility: "private",
+        visibility: imageVisibility,
         path:       corpusPath,
         width:      imgWidth,
         height:     imgHeight,
@@ -2429,7 +2439,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       capturedBy:  "self",
     },
     image: {
-      visibility: "private",
+      visibility: imageVisibility,
       path:       corpusPath,
       width:      imgWidth,
       height:     imgHeight,

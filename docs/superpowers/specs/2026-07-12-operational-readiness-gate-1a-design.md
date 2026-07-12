@@ -427,8 +427,23 @@ marker strings.
   unrestricted loaders; and
 - new production exports remain covered by wiring verification.
 
-Static tests inspect the TypeScript import graph or explicit allowed imports.
-They do not scan compiled JavaScript for the string `loadCorpus`.
+Leak enforcement runs in two layers:
+
+1. **Source import graph (developer feedback).** Static analysis of the
+   TypeScript import graph verifies that no public tool-registration module
+   imports the unrestricted working-corpus loader. This gives fast feedback
+   during development and catches direct imports.
+2. **Built-artifact scan (enforceable gate).** After `npm run build`, scan the
+   compiled `dist/` output transitively reachable from the public reader's entry
+   point and assert it does not reference the unrestricted loader — by symbol,
+   re-export, or dynamic import. Source-graph analysis alone cannot see through
+   barrel re-exports, renamed bindings, or future dynamic imports; the
+   artifact scan is the gate that catches what survives the build, matching
+   design principle 6 (physical isolation beats filtering).
+
+Both layers run in CI. The artifact scan is the one that matters for the npm
+package boundary; the source graph exists to fail fast in the editor before a
+build is needed.
 
 ## 8. Delivery Order
 

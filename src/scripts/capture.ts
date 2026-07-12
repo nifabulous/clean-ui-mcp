@@ -1271,4 +1271,8 @@ export {
   captureSource as captureCandidatesForSource,
   isAllowedByRobots, slug as captureSlug, escapeCssId, selectorFingerprint,
   MIN_GROUP_DIM, MAX_GROUP_ASPECT, MIN_VH_FRAC, DEDUP_HAMMING_THRESHOLD, VIEWPORTS,
+  // Capture seam: collect authored motion declarations from a locator, then
+  // freeze motion on a page. Exported for the dom-motion integration test,
+  // which validates the collect-before-freeze ordering against a real browser.
+  collectMotionDeclarations, freezePageMotion,
 };

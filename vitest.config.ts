@@ -18,5 +18,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     testTimeout: 15_000,
+    // Exclude git worktrees — they contain stale copies of tests that vitest
+    // picks up and double-counts (e.g. .worktrees/reference-synthesis/ still
+    // has the deleted grok-eval.mjs tests).
+    exclude: ["**/node_modules/**", "**/dist/**", "**/.worktrees/**"],
   },
 });

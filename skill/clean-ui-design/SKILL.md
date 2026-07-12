@@ -41,15 +41,15 @@ Then add to their MCP client config:
 ## Tool catalog (14 tools — three tiers)
 
 ### Retrieval — find and read entries
-- **`search_ui_examples(query?, category?, styleTag?, qualityTier?, minQuality?, reviewStatus?, limit?)`** — primary entry point. Free-text + structural filters. Returns metadata + critique per match. `qualityTier:"cautionary"` for bad examples; `reviewStatus:"draft"` to see WIP entries (hidden by default).
+- **`search_ui_examples(query?, category?, styleTag?, qualityTier?, minQuality?, reviewStatus?, platform?, limit?, responseFormat?)`** — primary entry point. Free-text + structural filters. Returns metadata + critique per match. `qualityTier:"cautionary"` for bad examples; `reviewStatus:"draft"` to see WIP entries (hidden by default).
 - **`get_ui_example(id)`** — full record for one entry: critique, what to steal, anti-patterns, color roles, layout, voice, image (if available).
 - **`get_similar_ui_examples(id, limit?)`** — cosine-similarity ranking against one entry. For "more like this."
 - **`compare_ui_examples(ids)`** — side-by-side structured comparison across 2-3 entries (pattern, density, critique angle, top steal, anti-patterns). For choosing between approaches.
-- **`list_categories()` / `list_style_tags()`** — enumerate the corpus's vocab. Call before searching if unsure what filters exist.
+- **`list_categories()` / `list_style_tags()` / `list_domain_tags()`** — enumerate the corpus's vocab. Call before searching if unsure what filters exist.
 - **`browse_ui_examples(styleTag?)`** — discovery: what's in the corpus grouped by patternType (count, top products, exemplar). Use when you don't yet know what to search for.
 
 ### Synthesis — generate a design direction
-- **`recommend_ui_direction(productContext, count?, category?, qualityTier?, framework?)`** — the "design advisor." Describe what you're building; it embeds the description, finds 3-5 relevant entries with product diversity, and synthesizes a brief. **Use this when the user has a description but no specific ids.** Pass `qualityTier:"cautionary"` to recommend what to AVOID.
+- **`recommend_ui_direction(productContext, count?, category?, qualityTier?, platform?, framework?)`** — the "design advisor." Describe what you're building; it embeds the description, finds 3-5 relevant entries with product diversity, and synthesizes a brief. **Use this when the user has a description but no specific ids.** Pass `qualityTier:"cautionary"` to recommend what to AVOID.
 - **`generate_design_prompt(ids, framework?, context?)`** — synthesize a brief across 2-5 specific entry ids the user already knows. Returns paste-ready color tokens, typography, layout, voice, techniques, anti-patterns. **Use this when the user has ids** (e.g. "build me a pricing page like Stripe + Linear").
 
 **When to use which:** `recommend_ui_direction` searches for you (description in, direction out); `generate_design_prompt` synthesizes from entries you've already read and chosen (ids in, brief out). If a `recommend` result is strong, you can pass its cited ids into `generate_design_prompt` to re-synthesize with a different `context` or `framework`.
@@ -59,6 +59,9 @@ Then add to their MCP client config:
 - **`get_color_palette(patternType?, styleTag?, limit?)`** — paste-ready color token sets from entries with `colorRoles`, grouped by accent hue band. For "give me real palettes for a dashboard."
 - **`get_stealable_techniques(patternType?, styleTag?, limit?)`** — concrete techniques across a category, deduped by theme. For "what can I steal for a dense data table?"
 - **`browse_ui_examples(styleTag?)`** — (also in retrieval) discovery by pattern.
+
+### Screenshot critique
+- **`critique_ui(image_data, image_mime_type, product_context?, platform?, framework?)`** — upload a UI screenshot and receive a grounded critique with cited recommendations. Falls back to structured retrieval when image embeddings are unavailable.
 
 ## The workflow
 

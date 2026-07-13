@@ -185,13 +185,16 @@ describe("evaluatePublication — image-axis reason codes", () => {
     if (!decision.eligible) expect(decision.reasons).toContain("image-private");
   });
 
-  it("image-path-missing: image.path is null", () => {
+  it("link-only entry (image.path is null) is ELIGIBLE — no image bytes to redistribute", () => {
+    // Metadata-only distribution model: the entry's value is its structured
+    // analysis (critique, color roles, type pairings), not the raster pixels.
+    // A null-path entry ships no image bytes; source.url links to the original.
+    // This is the safest distribution state — no third-party redistribution.
     const entry = eligibleEntry({
-      image: { visibility: "public-own", path: null, width: 1440, height: 900 },
+      image: { visibility: "private", path: null, width: null, height: null },
     });
     const decision = evaluatePublication(entry, { now: NOW, imageExists: alwaysExists });
-    expect(decision.eligible).toBe(false);
-    if (!decision.eligible) expect(decision.reasons).toContain("image-path-missing");
+    expect(decision.eligible).toBe(true);
   });
 
   it("image-path-not-public: path does not start with images-public/", () => {
@@ -333,7 +336,7 @@ describe("evaluatePublication — full reason-code coverage matrix", () => {
     "entry-private", "clearance-unreviewed", "clearance-rejected",
     "missing-rights-basis", "missing-evidence", "missing-reviewer",
     "missing-review-date", "clearance-expired",
-    "image-private", "image-path-missing", "image-path-not-public",
+    "image-private", "image-path-not-public",
     "image-file-missing", "image-metadata-missing",
   ] as const satisfies readonly PublicationReason[];
 
@@ -367,9 +370,6 @@ describe("evaluatePublication — full reason-code coverage matrix", () => {
       exists: alwaysExists },
     { name: "image-private", reason: "image-private",
       build: () => eligibleEntry({ image: { visibility: "private", path: "images-private/example.png", width: 1440, height: 900 } }),
-      exists: alwaysExists },
-    { name: "image-path-missing", reason: "image-path-missing",
-      build: () => eligibleEntry({ image: { visibility: "public-own", path: null, width: 1440, height: 900 } }),
       exists: alwaysExists },
     { name: "image-path-not-public", reason: "image-path-not-public",
       build: () => eligibleEntry({ image: { visibility: "public-own", path: "images-private/example.png", width: 1440, height: 900 } }),

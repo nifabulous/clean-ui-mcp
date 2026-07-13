@@ -39,6 +39,7 @@ const CORPUS_ROOT = resolve(__dirname, "..", "..", "corpus");
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 const KEEP = process.argv.includes("--keep");
+const METADATA_ONLY = process.argv.includes("--metadata-only");
 
 const today = new Date().toISOString().slice(0, 10);
 
@@ -53,13 +54,27 @@ const PLACEHOLDER_PUBLICATION = {
 
 /**
  * Transform an entry for the validation workspace: add a placeholder
- * publication block and rewrite the image path to images-public/.
+ * publication block and rewrite the image path. In metadata-only mode,
+ * the path is nulled (no image bytes ship — link-only entry). In raster
+ * mode, the path is rewritten to images-public/.
  * This transform is applied to a COPY — the original entry is never touched.
  */
-export function transformForValidation(entry: Record<string, unknown>): Record<string, unknown> {
+export function transformForValidation(
+  entry: Record<string, unknown>,
+  metadataOnly = false,
+): Record<string, unknown> {
   // DEEP-copy the image sub-object so the original entry's image is not
   // mutated (the shallow {...entry} spread shares the image reference).
   const oldImage = entry.image as { visibility: string; path: string | null; width: number | null; height: number | null };
+  if (metadataOnly) {
+    // Link-only: null the path so no image bytes ship. The entry's value
+    // is its structured analysis; source.url links to the original.
+    return {
+      ...entry,
+      publication: { ...PLACEHOLDER_PUBLICATION },
+      image: { visibility: "private", path: null, width: null, height: null },
+    };
+  }
   const oldPath = oldImage.path;
   let newPath = oldPath;
   if (oldPath && oldPath.startsWith("images-private/")) {
@@ -110,39 +125,45 @@ if (isMain) {
 
   try {
     // ── 3. Copy images + transform entries IN THE WORKSPACE ──────────────
-    // ALWAYS copy regardless of --keep (which only controls cleanup). Skipping
-    // the copy would cause the exporter to exclude every entry (missing image
-    // → image-file-missing reason), producing a 0-entry snapshot that
-    // trivially passes the count checks.
+    // In metadata-only mode, entries get null paths (no image bytes). No copy
+    // needed. In raster mode, ALWAYS copy regardless of --keep (which only
+    // controls cleanup). Skipping the copy would cause the exporter to exclude
+    // every entry (missing image → image-file-missing reason), producing a
+    // 0-entry snapshot that trivially passes the count checks.
     let copied = 0;
     const missingSources: string[] = [];
     const transformedEntries = entries.map((entry) => {
-      const transformed = transformForValidation(entry);
-      const oldPath = (entry.image as { path: string | null }).path;
-      if (oldPath && oldPath.startsWith("images-private/")) {
-        const filename = oldPath.replace(/^images-private\//, "");
-        const src = resolve(CORPUS_ROOT, "images-private", filename);
-        const dst = resolve(workspaceImages, filename);
-        if (existsSync(src)) {
-          mkdirSync(dirname(dst), { recursive: true });
-          copyFileSync(src, dst);
-          copied++;
-        } else {
-          missingSources.push(oldPath);
+      const transformed = transformForValidation(entry, METADATA_ONLY);
+      if (!METADATA_ONLY) {
+        const oldPath = (entry.image as { path: string | null }).path;
+        if (oldPath && oldPath.startsWith("images-private/")) {
+          const filename = oldPath.replace(/^images-private\//, "");
+          const src = resolve(CORPUS_ROOT, "images-private", filename);
+          const dst = resolve(workspaceImages, filename);
+          if (existsSync(src)) {
+            mkdirSync(dirname(dst), { recursive: true });
+            copyFileSync(src, dst);
+            copied++;
+          } else {
+            missingSources.push(oldPath);
+          }
         }
       }
       return transformed;
     });
 
-    if (missingSources.length > 0) {
-      throw new Error(
-        `${missingSources.length} source image(s) missing from images-private/ (expected ${entries.length}, `
-        + `found ${copied}). Pipeline validation requires ALL entries to have their source images present. `
-        + `First few missing: ${missingSources.slice(0, 5).join(", ")}${missingSources.length > 5 ? " ..." : ""}`,
-      );
+    if (!METADATA_ONLY) {
+      if (missingSources.length > 0) {
+        throw new Error(
+          `${missingSources.length} source image(s) missing from images-private/ (expected ${entries.length}, `
+          + `found ${copied}). Pipeline validation requires ALL entries to have their source images present. `
+          + `First few missing: ${missingSources.slice(0, 5).join(", ")}${missingSources.length > 5 ? " ..." : ""}`,
+        );
+      }
+      console.log(`Copied ${copied} images to workspace.`);
+    } else {
+      console.log(`Metadata-only mode: no images to copy (${entries.length} link-only entries).`);
     }
-
-    console.log(`Copied ${copied} images to workspace.`);
 
     // ── 4. Export a public snapshot from the workspace ───────────────────
     const { exportPublicSnapshot } = await import("../publication/exporter.js");

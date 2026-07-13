@@ -37,9 +37,9 @@ export type PublicationReason =
   | "missing-reviewer"
   | "missing-review-date"
   | "clearance-expired"
-  // ── image axis ──
+  // ── image axis (only for entries that ship a raster; link-only entries with
+  // path null bypass these — no bytes to redistribute) ──
   | "image-private"
-  | "image-path-missing"
   | "image-path-not-public"
   | "image-file-missing"
   | "image-metadata-missing";
@@ -116,34 +116,41 @@ export function evaluatePublication(
   }
 
   // ── image axis ────────────────────────────────────────────────────────────
-  // Mirrors the cascade in ImageRef.superRefine (schema.ts): a private image is
-  // the terminal reason for this axis — its path correctly lives under
-  // images-private/ and flagging that as "not public" would be noise. So the
-  // path/metadata/file checks only apply to images that are at least trying to
-  // be public. This keeps the reasons list focused: a private image reports
-  // exactly `image-private`, not a cascade of secondary failures.
+  // The image axis gates whether image BYTES may ship. But the corpus's value
+  // is the structured analysis (critique, color roles, type pairings, anti-
+  // patterns), not the raster pixels. An entry with image.path === null is a
+  // LINK-ONLY entry: no image bytes ship, the entry's value is its metadata +
+  // critique, and source.url links to the original design. This is the safest
+  // distribution model — no third-party image redistribution, just knowledge.
+  //
+  // So the image axis has TWO paths:
+  //   1. Link-only (path null): no image-axis checks. Nothing to redistribute.
+  //   2. Has a raster path: the original checks apply (visibility, path prefix,
+  //      dimensions, file existence). These catch an entry that claims to ship
+  //      an image but can't (private visibility, wrong path, missing file).
   const image = entry.image;
-  const isPublicVisibility = image.visibility === "public-thumb" || image.visibility === "public-own";
 
-  if (!isPublicVisibility) {
-    reasons.push("image-private");
+  if (image.path === null) {
+    // Link-only entry: no image bytes to redistribute. No image-axis reasons.
+    // The entry is eligible on the image axis by default (subject to entry-axis
+    // checks above). This is the metadata-only distribution model.
   } else {
-    const path = image.path;
-    if (path === null) {
-      reasons.push("image-path-missing");
-    } else if (!path.startsWith("images-public/")) {
-      reasons.push("image-path-not-public");
-    }
+    const isPublicVisibility = image.visibility === "public-thumb" || image.visibility === "public-own";
+    if (!isPublicVisibility) {
+      reasons.push("image-private");
+    } else {
+      if (!image.path.startsWith("images-public/")) {
+        reasons.push("image-path-not-public");
+      }
 
-    if (image.width === null || image.height === null) {
-      reasons.push("image-metadata-missing");
-    }
+      if (image.width === null || image.height === null) {
+        reasons.push("image-metadata-missing");
+      }
 
-    // File existence: only meaningful when there's a resolvable public path.
-    // If the path is missing or mis-prefixed, the path reason already explains
-    // the failure; naming a file that can't be resolved would be noise.
-    if (path !== null && path.startsWith("images-public/") && !ctx.imageExists(path)) {
-      reasons.push("image-file-missing");
+      // File existence: only meaningful when there's a resolvable public path.
+      if (image.path.startsWith("images-public/") && !ctx.imageExists(image.path)) {
+        reasons.push("image-file-missing");
+      }
     }
   }
 

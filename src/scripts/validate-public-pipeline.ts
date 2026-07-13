@@ -110,30 +110,39 @@ if (isMain) {
 
   try {
     // ── 3. Copy images + transform entries IN THE WORKSPACE ──────────────
+    // ALWAYS copy regardless of --keep (which only controls cleanup). Skipping
+    // the copy would cause the exporter to exclude every entry (missing image
+    // → image-file-missing reason), producing a 0-entry snapshot that
+    // trivially passes the count checks.
     let copied = 0;
-    let missing = 0;
+    const missingSources: string[] = [];
     const transformedEntries = entries.map((entry) => {
       const transformed = transformForValidation(entry);
-      if (!KEEP) {
-        // Copy the real image into the workspace (not move — real corpus is untouched).
-        const oldPath = (entry.image as { path: string | null }).path;
-        if (oldPath && oldPath.startsWith("images-private/")) {
-          const filename = oldPath.replace(/^images-private\//, "");
-          const src = resolve(CORPUS_ROOT, "images-private", filename);
-          const dst = resolve(workspaceImages, filename);
-          if (existsSync(src)) {
-            mkdirSync(dirname(dst), { recursive: true });
-            copyFileSync(src, dst);
-            copied++;
-          } else {
-            missing++;
-          }
+      const oldPath = (entry.image as { path: string | null }).path;
+      if (oldPath && oldPath.startsWith("images-private/")) {
+        const filename = oldPath.replace(/^images-private\//, "");
+        const src = resolve(CORPUS_ROOT, "images-private", filename);
+        const dst = resolve(workspaceImages, filename);
+        if (existsSync(src)) {
+          mkdirSync(dirname(dst), { recursive: true });
+          copyFileSync(src, dst);
+          copied++;
+        } else {
+          missingSources.push(oldPath);
         }
       }
       return transformed;
     });
 
-    console.log(`Copied ${copied} images to workspace${missing > 0 ? ` (${missing} source files missing — those entries will fail image-exists)` : ""}.`);
+    if (missingSources.length > 0) {
+      throw new Error(
+        `${missingSources.length} source image(s) missing from images-private/ (expected ${entries.length}, `
+        + `found ${copied}). Pipeline validation requires ALL entries to have their source images present. `
+        + `First few missing: ${missingSources.slice(0, 5).join(", ")}${missingSources.length > 5 ? " ..." : ""}`,
+      );
+    }
+
+    console.log(`Copied ${copied} images to workspace.`);
 
     // ── 4. Export a public snapshot from the workspace ───────────────────
     const { exportPublicSnapshot } = await import("../publication/exporter.js");
@@ -152,20 +161,39 @@ if (isMain) {
     console.log(`PublicCorpusReader loaded: ${loaded.length} entries.`);
     console.log(`indexStatus: ${JSON.stringify(reader.indexStatus())}`);
 
-    // ── 6. Verify ────────────────────────────────────────────────────────
-    const expectedEligible = result.entryCount;
-    if (loaded.length !== expectedEligible) {
-      throw new Error(`Reader loaded ${loaded.length} but exporter produced ${expectedEligible} — mismatch.`);
+    // ── 6. Verify (compare against INPUT, not the exporter's filtered output) ─
+    // The exporter may silently exclude entries (image-missing, policy fail).
+    // Comparing exporter-count to reader-count (0 === 0) is a false positive.
+    // Instead: every input entry must survive export AND load.
+    if (result.entryCount !== entries.length) {
+      throw new Error(
+        `Exporter produced ${result.entryCount} entries but the input corpus has ${entries.length}. `
+        + `Some entries were excluded — investigate the exporter's policy evaluation.`,
+      );
+    }
+    if (loaded.length !== entries.length) {
+      throw new Error(
+        `Reader loaded ${loaded.length} but the input corpus has ${entries.length} entries. `
+        + `The snapshot may have been corrupted or entries filtered at load time.`,
+      );
     }
 
-    // Spot-check: resolveImagePath on the first entry
-    if (loaded.length > 0 && loaded[0].image.path) {
-      const resolved = reader.resolveImagePath(loaded[0].image.path);
-      console.log(`resolveImagePath('${loaded[0].image.path}'): ${resolved ? "OK" : "NULL"}`);
+    // Verify every loaded entry's image actually resolves (no NULL paths).
+    for (const entry of loaded) {
+      if (entry.image.path) {
+        const resolved = reader.resolveImagePath(entry.image.path);
+        if (!resolved) {
+          throw new Error(
+            `resolveImagePath returned null for entry ${entry.id} (${entry.image.path}). `
+            + `The image file is missing from the snapshot.`,
+          );
+        }
+      }
     }
 
-    console.log(`\n✅ Pipeline validation PASSED: ${loaded.length} entries served from a public snapshot, non-destructively.`);
-    console.log(`   The real corpus was not modified. The workspace is ${KEEP ? "preserved" : "cleaned up"}.`);
+    console.log(`\n✅ Pipeline validation PASSED: ${loaded.length}/${entries.length} entries served from a public snapshot.`);
+    console.log(`   All ${result.assetCount} assets resolve. The real corpus was not modified.`);
+    console.log(`   The workspace is ${KEEP ? "preserved" : "cleaned up"}.`);
   } catch (err) {
     console.error(`\n❌ Pipeline validation FAILED: ${err instanceof Error ? err.message : err}`);
     console.error(`   The real corpus was not modified. Workspace: ${workspace}`);

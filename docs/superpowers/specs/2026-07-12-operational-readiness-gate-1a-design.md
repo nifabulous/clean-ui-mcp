@@ -272,7 +272,29 @@ Eligibility requires all of the following:
     is `null` (no image bytes ship), with a non-null `source.url` linking to
     the original design. The entry's value is its structured analysis (critique,
     color roles, type pairings, anti-patterns) — no per-image raster
-    redistribution clearance required. This is the default distribution model.
+    redistribution clearance required.
+
+**Link-only limitations (tracked for Gate 2 planning):**
+
+- *Link rot:* `source.url` points to the live product, which may change or
+  disappear. In raster mode the packaged image is the snapshot-in-time record;
+  in link-only mode the analysis may outlive the design it describes. Consider
+  capturing an archive.org snapshot URL at curation time (future schema field).
+- *Entry-level clearance still required:* metadata-only eliminates per-image
+  raster redistribution clearance, but each entry still needs a human-reviewed
+  `publication` block (`clearance: "approved"`, evidence, reviewer, date). The
+  derived metadata (`whatToSteal`, critique) describes third-party designs — the
+  derivative-work question on those descriptions is a low-but-nonzero risk that
+  entry-level review addresses, not the raster exclusion alone.
+- *`critique_ui` quality regression:* in public (keyword-only) mode,
+  `critique_ui` finds tag-similar entries via structured fallback, not
+  visually-similar entries via image embeddings. This is a real quality loss
+  for the tool whose value proposition is visual similarity. A snapshot-specific
+  embedding index (deferred to a future gate) restores full fidelity.
+- *`source.url` coverage:* ~54% of the current corpus (422/787) has a
+  `source.url`; the rest are rejected by `link-source-missing`. A metadata-only
+  snapshot of the real corpus is smaller than the full corpus until the missing
+  URLs are backfilled.
 
 The evaluator receives the current date and image-resolution capability through
 an explicit context, making expiry and file checks deterministic in tests. It

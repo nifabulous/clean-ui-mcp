@@ -15,9 +15,16 @@ output/
 corpus/images-private/*
 !corpus/images-private/.gitkeep
 
-# Public-corpus images — cleared for redistribution but still gitignored
-# (the curator controls what ships in a Gate 2 npm tarball or Gate 3 host,
-# not what's tracked in git). The .gitkeep is tracked so the dir exists.
+# Public-corpus images — currently uncleared (placeholder rights only).
+# Gitignored so they're never accidentally committed/published. Before Gate 2
+# (npm publish) or Gate 3 (hosted), one of two things must happen:
+#   (a) A reviewed, rights-cleared subset is explicitly tracked in git so a
+#       CI/GitHub Actions OIDC release can reproduce the npm artifact. Use
+#       `git add -f corpus/images-public/<cleared-file>` per reviewed asset.
+#   (b) An authenticated, integrity-checked asset-fetch step downloads
+#       reviewed assets at build time from a secured source.
+# Either way, blanket-ignoring is correct NOW (the content is uncleared) but
+# must be resolved before real distribution — not deferred indefinitely.
 corpus/images-public/*
 !corpus/images-public/.gitkeep
 

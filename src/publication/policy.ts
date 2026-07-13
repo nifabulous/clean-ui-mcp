@@ -43,9 +43,7 @@ export type PublicationReason =
   | "image-path-missing"
   | "image-path-not-public"
   | "image-file-missing"
-  | "image-metadata-missing"
-  // ── link-only axis (private visibility + null path) ──
-  | "link-source-missing";
+  | "image-metadata-missing";
 
 /**
  * The eligibility decision. `{eligible: true}` when an entry may ship in the
@@ -139,11 +137,12 @@ export function evaluatePublication(
   const image = entry.image;
 
   if (image.visibility === "private" && image.path === null) {
-    // Link-only entry: no image bytes to redistribute. Require source.url
-    // so users can find the original design.
-    if (!entry.source.url) {
-      reasons.push("link-source-missing");
-    }
+    // Link-only entry: no image bytes to redistribute. The entry's value is
+    // its structured analysis. source.url is RECOMMENDED (links to the original
+    // design) but not required — some entries may lack a URL (captured from
+    // apps with no public web presence, or from now-defunct products). The
+    // metadata itself (critique, color roles, type pairings, anti-patterns) is
+    // still valuable to an agent building a UI even without the source link.
   } else if (image.path === null) {
     // Non-private visibility with null path: schema-invalid, caught here
     // independently (the evaluator must not assume schema enforcement).

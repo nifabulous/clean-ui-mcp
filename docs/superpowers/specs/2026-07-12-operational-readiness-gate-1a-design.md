@@ -269,10 +269,11 @@ Eligibility requires all of the following:
     height are present, and the resolved image file exists under the public
     image root; OR
   - **Link-only mode:** `image.visibility` is `"private"` AND `image.path`
-    is `null` (no image bytes ship), with a non-null `source.url` linking to
-    the original design. The entry's value is its structured analysis (critique,
-    color roles, type pairings, anti-patterns) — no per-image raster
-    redistribution clearance required.
+    is `null` (no image bytes ship). The entry's value is its structured analysis
+    (critique, color roles, type pairings, anti-patterns) — no per-image raster
+    redistribution clearance required. `source.url` is recommended (links to the
+    original design) but not required; some entries lack a URL (apps with no
+    public web presence, defunct products).
 
 **Link-only limitations (tracked for Gate 2 planning):**
 
@@ -291,10 +292,6 @@ Eligibility requires all of the following:
   visually-similar entries via image embeddings. This is a real quality loss
   for the tool whose value proposition is visual similarity. A snapshot-specific
   embedding index (deferred to a future gate) restores full fidelity.
-- *`source.url` coverage:* ~54% of the current corpus (422/787) has a
-  `source.url`; the rest are rejected by `link-source-missing`. A metadata-only
-  snapshot of the real corpus is smaller than the full corpus until the missing
-  URLs are backfilled.
 
 The evaluator receives the current date and image-resolution capability through
 an explicit context, making expiry and file checks deterministic in tests. It

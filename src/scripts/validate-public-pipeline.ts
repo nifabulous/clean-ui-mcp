@@ -182,14 +182,35 @@ if (isMain) {
     console.log(`PublicCorpusReader loaded: ${loaded.length} entries.`);
     console.log(`indexStatus: ${JSON.stringify(reader.indexStatus())}`);
 
-    // ── 6. Verify (compare against INPUT, not the exporter's filtered output) ─
-    // The exporter may silently exclude entries (image-missing, policy fail).
-    // Comparing exporter-count to reader-count (0 === 0) is a false positive.
-    // Instead: every input entry must survive export AND load.
-    if (result.entryCount !== entries.length) {
+    // ── 6. Verify ────────────────────────────────────────────────────────
+    // Derive the EXPECTED eligible set using the same policy evaluator the
+    // exporter uses. In raster mode, every transformed entry should be eligible
+    // (all have images-public/ paths). In metadata-only mode, entries without
+    // source.url were previously excluded — but source.url is now optional, so
+    // all entries should still be eligible. If the exporter's count differs
+    // from the expected set, something is wrong with the pipeline.
+    const { evaluatePublication } = await import("../publication/policy.js");
+    const expectedEligibleIds = new Set(
+      transformedEntries
+        .filter((e: Record<string, unknown>) => {
+          const decision = evaluatePublication(e as never, {
+            now: new Date().toISOString().slice(0, 10),
+            imageExists: METADATA_ONLY ? () => false : (p: string) => {
+              const prefix = "images-public/";
+              if (!p.startsWith(prefix)) return false;
+              return existsSync(resolve(workspaceImages, p.slice(prefix.length)));
+            },
+          });
+          return decision.eligible;
+        })
+        .map((e: Record<string, unknown>) => e.id as string),
+    );
+
+    if (result.entryCount !== expectedEligibleIds.size) {
       throw new Error(
-        `Exporter produced ${result.entryCount} entries but the input corpus has ${entries.length}. `
-        + `Some entries were excluded — investigate the exporter's policy evaluation.`,
+        `Exporter produced ${result.entryCount} entries but the policy evaluator expected `
+        + `${expectedEligibleIds.size} eligible entries (out of ${entries.length} input). `
+        + `The exporter's policy evaluation may differ from the evaluator.`,
       );
     }
     if (loaded.length !== entries.length) {

@@ -195,16 +195,16 @@ describe("evaluatePublication — image-axis reason codes", () => {
     expect(decision.eligible).toBe(true);
   });
 
-  it("link-only entry WITHOUT source.url → link-source-missing", () => {
-    // A link-only entry with no source.url is an orphan — users can't find
-    // the original design. Require the link.
+  it("link-only entry WITHOUT source.url is still ELIGIBLE — source.url is recommended, not required", () => {
+    // source.url is recommended (links to the original design) but not required.
+    // Some entries lack a URL (apps with no public web presence, defunct products).
+    // The metadata itself is still valuable to an agent building a UI.
     const entry = eligibleEntry({
       image: { visibility: "private", path: null, width: null, height: null },
       source: { productName: "Example", url: null, capturedAt: "2026-07-01", capturedBy: "self" },
     });
     const decision = evaluatePublication(entry, { now: NOW, imageExists: alwaysExists });
-    expect(decision.eligible).toBe(false);
-    if (!decision.eligible) expect(decision.reasons).toContain("link-source-missing");
+    expect(decision.eligible).toBe(true);
   });
 
   it("image-path-missing: public-own with null path (schema-invalid, caught independently)", () => {
@@ -359,7 +359,6 @@ describe("evaluatePublication — full reason-code coverage matrix", () => {
     "missing-review-date", "clearance-expired",
     "image-private", "image-path-missing", "image-path-not-public",
     "image-file-missing", "image-metadata-missing",
-    "link-source-missing",
   ] as const satisfies readonly PublicationReason[];
 
   const cases: Array<{ name: string; reason: PublicationReason; build: () => CorpusEntryT; exists: (p: string) => boolean }> = [
@@ -395,12 +394,6 @@ describe("evaluatePublication — full reason-code coverage matrix", () => {
       exists: alwaysExists },
     { name: "image-path-missing (public visibility, null path — schema-invalid)", reason: "image-path-missing",
       build: () => eligibleEntry({ image: { visibility: "public-own", path: null, width: 1440, height: 900 } }),
-      exists: alwaysExists },
-    { name: "link-source-missing (link-only entry, no source.url)", reason: "link-source-missing",
-      build: () => eligibleEntry({
-        image: { visibility: "private", path: null, width: null, height: null },
-        source: { productName: "Example", url: null, capturedAt: "2026-07-01", capturedBy: "self" },
-      }),
       exists: alwaysExists },
     { name: "image-path-not-public", reason: "image-path-not-public",
       build: () => eligibleEntry({ image: { visibility: "public-own", path: "images-private/example.png", width: 1440, height: 900 } }),

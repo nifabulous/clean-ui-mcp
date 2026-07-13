@@ -37,7 +37,8 @@ export type PublicationReason =
   | "missing-reviewer"
   | "missing-review-date"
   | "clearance-expired"
-  // ── image axis ──
+  // ── image axis (only for entries that ship a raster; link-only entries with
+  // private visibility + null path bypass these — no bytes to redistribute) ──
   | "image-private"
   | "image-path-missing"
   | "image-path-not-public"
@@ -116,34 +117,53 @@ export function evaluatePublication(
   }
 
   // ── image axis ────────────────────────────────────────────────────────────
-  // Mirrors the cascade in ImageRef.superRefine (schema.ts): a private image is
-  // the terminal reason for this axis — its path correctly lives under
-  // images-private/ and flagging that as "not public" would be noise. So the
-  // path/metadata/file checks only apply to images that are at least trying to
-  // be public. This keeps the reasons list focused: a private image reports
-  // exactly `image-private`, not a cascade of secondary failures.
+  // The image axis gates whether image BYTES may ship. But the corpus's value
+  // is the structured analysis (critique, color roles, type pairings, anti-
+  // patterns), not the raster pixels. An entry with image.path === null AND
+  // image.visibility === "private" is a LINK-ONLY entry: no image bytes ship,
+  // the entry's value is its metadata + critique, and source.url links to the
+  // original design. This is the safest distribution model — no third-party
+  // image redistribution, just knowledge.
+  //
+  // The link-only exception is restricted to private visibility + null path.
+  // A public-own/public-thumb entry with a null path is schema-invalid
+  // (ImageRef.superRefine rejects it) — the evaluator is mode-agnostic and
+  // must not depend on schema validation, so it catches this independently
+  // via image-path-missing.
+  //
+  // Link-only entries MUST have a non-null source.url — it's the only way
+  // users can find the original design when no image ships. A null source.url
+  // on a link-only entry makes it an orphan with no reference.
   const image = entry.image;
-  const isPublicVisibility = image.visibility === "public-thumb" || image.visibility === "public-own";
 
-  if (!isPublicVisibility) {
-    reasons.push("image-private");
+  if (image.visibility === "private" && image.path === null) {
+    // Link-only entry: no image bytes to redistribute. The entry's value is
+    // its structured analysis. source.url is RECOMMENDED (links to the original
+    // design) but not required — some entries may lack a URL (captured from
+    // apps with no public web presence, or from now-defunct products). The
+    // metadata itself (critique, color roles, type pairings, anti-patterns) is
+    // still valuable to an agent building a UI even without the source link.
+  } else if (image.path === null) {
+    // Non-private visibility with null path: schema-invalid, caught here
+    // independently (the evaluator must not assume schema enforcement).
+    reasons.push("image-path-missing");
   } else {
-    const path = image.path;
-    if (path === null) {
-      reasons.push("image-path-missing");
-    } else if (!path.startsWith("images-public/")) {
-      reasons.push("image-path-not-public");
-    }
+    const isPublicVisibility = image.visibility === "public-thumb" || image.visibility === "public-own";
+    if (!isPublicVisibility) {
+      reasons.push("image-private");
+    } else {
+      if (!image.path.startsWith("images-public/")) {
+        reasons.push("image-path-not-public");
+      }
 
-    if (image.width === null || image.height === null) {
-      reasons.push("image-metadata-missing");
-    }
+      if (image.width === null || image.height === null) {
+        reasons.push("image-metadata-missing");
+      }
 
-    // File existence: only meaningful when there's a resolvable public path.
-    // If the path is missing or mis-prefixed, the path reason already explains
-    // the failure; naming a file that can't be resolved would be noise.
-    if (path !== null && path.startsWith("images-public/") && !ctx.imageExists(path)) {
-      reasons.push("image-file-missing");
+      // File existence: only meaningful when there's a resolvable public path.
+      if (image.path.startsWith("images-public/") && !ctx.imageExists(image.path)) {
+        reasons.push("image-file-missing");
+      }
     }
   }
 

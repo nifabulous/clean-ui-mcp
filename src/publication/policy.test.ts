@@ -185,7 +185,31 @@ describe("evaluatePublication — image-axis reason codes", () => {
     if (!decision.eligible) expect(decision.reasons).toContain("image-private");
   });
 
-  it("image-path-missing: image.path is null", () => {
+  it("link-only entry (private + null path) with source.url is ELIGIBLE — metadata-only distribution", () => {
+    // The entry's value is its structured analysis; source.url links to the
+    // original design. No image bytes ship — no third-party redistribution.
+    const entry = eligibleEntry({
+      image: { visibility: "private", path: null, width: null, height: null },
+    });
+    const decision = evaluatePublication(entry, { now: NOW, imageExists: alwaysExists });
+    expect(decision.eligible).toBe(true);
+  });
+
+  it("link-only entry WITHOUT source.url is still ELIGIBLE — source.url is recommended, not required", () => {
+    // source.url is recommended (links to the original design) but not required.
+    // Some entries lack a URL (apps with no public web presence, defunct products).
+    // The metadata itself is still valuable to an agent building a UI.
+    const entry = eligibleEntry({
+      image: { visibility: "private", path: null, width: null, height: null },
+      source: { productName: "Example", url: null, capturedAt: "2026-07-01", capturedBy: "self" },
+    });
+    const decision = evaluatePublication(entry, { now: NOW, imageExists: alwaysExists });
+    expect(decision.eligible).toBe(true);
+  });
+
+  it("image-path-missing: public-own with null path (schema-invalid, caught independently)", () => {
+    // The evaluator must not assume schema enforcement. A public visibility
+    // with a null path is schema-invalid AND policy-invalid.
     const entry = eligibleEntry({
       image: { visibility: "public-own", path: null, width: 1440, height: 900 },
     });
@@ -368,7 +392,7 @@ describe("evaluatePublication — full reason-code coverage matrix", () => {
     { name: "image-private", reason: "image-private",
       build: () => eligibleEntry({ image: { visibility: "private", path: "images-private/example.png", width: 1440, height: 900 } }),
       exists: alwaysExists },
-    { name: "image-path-missing", reason: "image-path-missing",
+    { name: "image-path-missing (public visibility, null path — schema-invalid)", reason: "image-path-missing",
       build: () => eligibleEntry({ image: { visibility: "public-own", path: null, width: 1440, height: 900 } }),
       exists: alwaysExists },
     { name: "image-path-not-public", reason: "image-path-not-public",

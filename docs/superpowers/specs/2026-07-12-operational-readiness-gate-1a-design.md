@@ -263,10 +263,35 @@ Eligibility requires all of the following:
 - `publication.clearance === "approved"`;
 - a rights basis, evidence reference, reviewer, and review date exist;
 - `expiresAt` is absent or not earlier than the evaluator's injected date;
-- `image.visibility` is `public-thumb` or `public-own`;
-- the image path is non-null and starts with `images-public/`;
-- width and height are present; and
-- the resolved image file exists under the public image root.
+- **one of two image modes:**
+  - **Raster mode:** `image.visibility` is `public-thumb` or `public-own`,
+    the image path is non-null and starts with `images-public/`, width and
+    height are present, and the resolved image file exists under the public
+    image root; OR
+  - **Link-only mode:** `image.visibility` is `"private"` AND `image.path`
+    is `null` (no image bytes ship). The entry's value is its structured analysis
+    (critique, color roles, type pairings, anti-patterns) — no per-image raster
+    redistribution clearance required. `source.url` is recommended (links to the
+    original design) but not required; some entries lack a URL (apps with no
+    public web presence, defunct products).
+
+**Link-only limitations (tracked for Gate 2 planning):**
+
+- *Link rot:* `source.url` points to the live product, which may change or
+  disappear. In raster mode the packaged image is the snapshot-in-time record;
+  in link-only mode the analysis may outlive the design it describes. Consider
+  capturing an archive.org snapshot URL at curation time (future schema field).
+- *Entry-level clearance still required:* metadata-only eliminates per-image
+  raster redistribution clearance, but each entry still needs a human-reviewed
+  `publication` block (`clearance: "approved"`, evidence, reviewer, date). The
+  derived metadata (`whatToSteal`, critique) describes third-party designs — the
+  derivative-work question on those descriptions is a low-but-nonzero risk that
+  entry-level review addresses, not the raster exclusion alone.
+- *`critique_ui` quality regression:* in public (keyword-only) mode,
+  `critique_ui` finds tag-similar entries via structured fallback, not
+  visually-similar entries via image embeddings. This is a real quality loss
+  for the tool whose value proposition is visual similarity. A snapshot-specific
+  embedding index (deferred to a future gate) restores full fidelity.
 
 The evaluator receives the current date and image-resolution capability through
 an explicit context, making expiry and file checks deterministic in tests. It

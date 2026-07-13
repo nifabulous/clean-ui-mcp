@@ -125,6 +125,15 @@ export interface TaggerInput {
   extractionOverride?: EndpointOverride;
   critiqueOverride?: EndpointOverride;
   /**
+   * Image visibility for the output entry's ImageRef. Defaults to "private"
+   * (the safe historical default — local research copy, never published).
+   * Set to "public-own" when capturing an image you hold rights to, or
+   * "public-thumb" for a low-res thumbnail defensible as fair use. The
+   * publication policy evaluator gates on this separately from the entry's
+   * `publication` block — both must permit redistribution.
+   */
+  imageVisibility?: "private" | "public-thumb" | "public-own";
+  /**
    * DOM signals from the capture pipeline (dom-signals.json sidecar). When
    * present, injected into the extraction prompt as VERIFIED GROUND TRUTH so
    * the model gets real computed styles/a11y/structure instead of guessing
@@ -165,7 +174,7 @@ export interface TaggerOutput {
     capturedBy:  "self" | "automated-collection";
   };
   image: {
-    visibility: "private";
+    visibility: "private" | "public-thumb" | "public-own";
     path:       string;
     width:      number | null;
     height:     number | null;
@@ -2111,6 +2120,26 @@ export async function callTextModel(
   );
 }
 
+/**
+ * Assert that `imageVisibility` is compatible with the corpus-relative image
+ * path. Public visibility (public-own, public-thumb) requires the path to
+ * start with images-public/; otherwise the entry is schema-invalid
+ * (ImageRef.superRefine rejects a public visibility with an images-private/
+ * path). Exported for unit testing.
+ */
+export function assertVisibilityPathCompatible(
+  visibility: "private" | "public-thumb" | "public-own",
+  corpusPath: string,
+): void {
+  if (visibility !== "private" && !corpusPath.startsWith("images-public/")) {
+    throw new Error(
+      `imageVisibility "${visibility}" requires the image to live under images-public/, `
+      + `but the path is "${corpusPath}". Move the file to images-public/ before tagging, `
+      + `or use imageVisibility "private".`,
+    );
+  }
+}
+
 // ─── core two-pass orchestration ─────────────────────────────────────────────
 
 export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
@@ -2118,6 +2147,14 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
 
   const corpusPath = toCorpusRelativePath(input.imagePath);
   const today = new Date().toISOString().slice(0, 10);
+  const imageVisibility = input.imageVisibility ?? "private";
+
+  // Guard: public visibility requires the image to physically live under
+  // images-public/. A public-own/public-thumb entry with an images-private/
+  // path is schema-invalid (ImageRef.superRefine rejects it) and would fail
+  // at save time with a confusing error. Reject early with a clear message.
+  assertVisibilityPathCompatible(imageVisibility, corpusPath);
+
   const { width: imgWidth, height: imgHeight } = await readImageDimensions(input.imagePath);
   const platform = detectPlatform(imgWidth, imgHeight);
 
@@ -2309,7 +2346,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         capturedBy:  "self",
       },
       image: {
-        visibility: "private",
+        visibility: imageVisibility,
         path:       corpusPath,
         width:      imgWidth,
         height:     imgHeight,
@@ -2429,7 +2466,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       capturedBy:  "self",
     },
     image: {
-      visibility: "private",
+      visibility: imageVisibility,
       path:       corpusPath,
       width:      imgWidth,
       height:     imgHeight,

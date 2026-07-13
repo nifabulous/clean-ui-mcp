@@ -185,16 +185,37 @@ describe("evaluatePublication — image-axis reason codes", () => {
     if (!decision.eligible) expect(decision.reasons).toContain("image-private");
   });
 
-  it("link-only entry (image.path is null) is ELIGIBLE — no image bytes to redistribute", () => {
-    // Metadata-only distribution model: the entry's value is its structured
-    // analysis (critique, color roles, type pairings), not the raster pixels.
-    // A null-path entry ships no image bytes; source.url links to the original.
-    // This is the safest distribution state — no third-party redistribution.
+  it("link-only entry (private + null path) with source.url is ELIGIBLE — metadata-only distribution", () => {
+    // The entry's value is its structured analysis; source.url links to the
+    // original design. No image bytes ship — no third-party redistribution.
     const entry = eligibleEntry({
       image: { visibility: "private", path: null, width: null, height: null },
     });
     const decision = evaluatePublication(entry, { now: NOW, imageExists: alwaysExists });
     expect(decision.eligible).toBe(true);
+  });
+
+  it("link-only entry WITHOUT source.url → link-source-missing", () => {
+    // A link-only entry with no source.url is an orphan — users can't find
+    // the original design. Require the link.
+    const entry = eligibleEntry({
+      image: { visibility: "private", path: null, width: null, height: null },
+      source: { productName: "Example", url: null, capturedAt: "2026-07-01", capturedBy: "self" },
+    });
+    const decision = evaluatePublication(entry, { now: NOW, imageExists: alwaysExists });
+    expect(decision.eligible).toBe(false);
+    if (!decision.eligible) expect(decision.reasons).toContain("link-source-missing");
+  });
+
+  it("image-path-missing: public-own with null path (schema-invalid, caught independently)", () => {
+    // The evaluator must not assume schema enforcement. A public visibility
+    // with a null path is schema-invalid AND policy-invalid.
+    const entry = eligibleEntry({
+      image: { visibility: "public-own", path: null, width: 1440, height: 900 },
+    });
+    const decision = evaluatePublication(entry, { now: NOW, imageExists: alwaysExists });
+    expect(decision.eligible).toBe(false);
+    if (!decision.eligible) expect(decision.reasons).toContain("image-path-missing");
   });
 
   it("image-path-not-public: path does not start with images-public/", () => {
@@ -336,8 +357,9 @@ describe("evaluatePublication — full reason-code coverage matrix", () => {
     "entry-private", "clearance-unreviewed", "clearance-rejected",
     "missing-rights-basis", "missing-evidence", "missing-reviewer",
     "missing-review-date", "clearance-expired",
-    "image-private", "image-path-not-public",
+    "image-private", "image-path-missing", "image-path-not-public",
     "image-file-missing", "image-metadata-missing",
+    "link-source-missing",
   ] as const satisfies readonly PublicationReason[];
 
   const cases: Array<{ name: string; reason: PublicationReason; build: () => CorpusEntryT; exists: (p: string) => boolean }> = [
@@ -370,6 +392,15 @@ describe("evaluatePublication — full reason-code coverage matrix", () => {
       exists: alwaysExists },
     { name: "image-private", reason: "image-private",
       build: () => eligibleEntry({ image: { visibility: "private", path: "images-private/example.png", width: 1440, height: 900 } }),
+      exists: alwaysExists },
+    { name: "image-path-missing (public visibility, null path — schema-invalid)", reason: "image-path-missing",
+      build: () => eligibleEntry({ image: { visibility: "public-own", path: null, width: 1440, height: 900 } }),
+      exists: alwaysExists },
+    { name: "link-source-missing (link-only entry, no source.url)", reason: "link-source-missing",
+      build: () => eligibleEntry({
+        image: { visibility: "private", path: null, width: null, height: null },
+        source: { productName: "Example", url: null, capturedAt: "2026-07-01", capturedBy: "self" },
+      }),
       exists: alwaysExists },
     { name: "image-path-not-public", reason: "image-path-not-public",
       build: () => eligibleEntry({ image: { visibility: "public-own", path: "images-private/example.png", width: 1440, height: 900 } }),

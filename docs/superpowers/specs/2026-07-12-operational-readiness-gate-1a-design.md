@@ -263,10 +263,16 @@ Eligibility requires all of the following:
 - `publication.clearance === "approved"`;
 - a rights basis, evidence reference, reviewer, and review date exist;
 - `expiresAt` is absent or not earlier than the evaluator's injected date;
-- `image.visibility` is `public-thumb` or `public-own`;
-- the image path is non-null and starts with `images-public/`;
-- width and height are present; and
-- the resolved image file exists under the public image root.
+- **one of two image modes:**
+  - **Raster mode:** `image.visibility` is `public-thumb` or `public-own`,
+    the image path is non-null and starts with `images-public/`, width and
+    height are present, and the resolved image file exists under the public
+    image root; OR
+  - **Link-only mode:** `image.visibility` is `"private"` AND `image.path`
+    is `null` (no image bytes ship), with a non-null `source.url` linking to
+    the original design. The entry's value is its structured analysis (critique,
+    color roles, type pairings, anti-patterns) — no per-image raster
+    redistribution clearance required. This is the default distribution model.
 
 The evaluator receives the current date and image-resolution capability through
 an explicit context, making expiry and file checks deterministic in tests. It

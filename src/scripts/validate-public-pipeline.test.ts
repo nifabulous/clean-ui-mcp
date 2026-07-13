@@ -127,9 +127,10 @@ describe("validate-public-pipeline — integration", () => {
     const { PublicCorpusReader } = await import("../corpus-reader.js");
     const { readFileSync, copyFileSync, mkdirSync: mkdir } = await import("node:fs");
 
-    // Read + transform
+    // Read + transform (explicit metadataOnly=false — .map's index arg must
+    // not leak into metadataOnly as a truthy value)
     const raw = JSON.parse(readFileSync(resolve(root, "corpus/entries.json"), "utf-8"));
-    const transformed = raw.entries.map(transformForValidation);
+    const transformed = raw.entries.map((e: Record<string, unknown>) => transformForValidation(e, false));
 
     // Copy images to a temp workspace
     const ws = resolve(tmpdir(), `pipeline-test-${Date.now()}`);
@@ -145,7 +146,7 @@ describe("validate-public-pipeline — integration", () => {
       now: new Date().toISOString(),
     });
     expect(result.entryCount).toBe(2);
-    expect(result.assetCount).toBeGreaterThanOrEqual(1); // distinct image paths
+    expect(result.assetCount).toBe(2);
 
     // Load + verify
     const reader = new PublicCorpusReader(result.snapshotPath);

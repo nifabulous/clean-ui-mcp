@@ -38,11 +38,14 @@ export type PublicationReason =
   | "missing-review-date"
   | "clearance-expired"
   // ── image axis (only for entries that ship a raster; link-only entries with
-  // path null bypass these — no bytes to redistribute) ──
+  // private visibility + null path bypass these — no bytes to redistribute) ──
   | "image-private"
+  | "image-path-missing"
   | "image-path-not-public"
   | "image-file-missing"
-  | "image-metadata-missing";
+  | "image-metadata-missing"
+  // ── link-only axis (private visibility + null path) ──
+  | "link-source-missing";
 
 /**
  * The eligibility decision. `{eligible: true}` when an entry may ship in the
@@ -118,22 +121,33 @@ export function evaluatePublication(
   // ── image axis ────────────────────────────────────────────────────────────
   // The image axis gates whether image BYTES may ship. But the corpus's value
   // is the structured analysis (critique, color roles, type pairings, anti-
-  // patterns), not the raster pixels. An entry with image.path === null is a
-  // LINK-ONLY entry: no image bytes ship, the entry's value is its metadata +
-  // critique, and source.url links to the original design. This is the safest
-  // distribution model — no third-party image redistribution, just knowledge.
+  // patterns), not the raster pixels. An entry with image.path === null AND
+  // image.visibility === "private" is a LINK-ONLY entry: no image bytes ship,
+  // the entry's value is its metadata + critique, and source.url links to the
+  // original design. This is the safest distribution model — no third-party
+  // image redistribution, just knowledge.
   //
-  // So the image axis has TWO paths:
-  //   1. Link-only (path null): no image-axis checks. Nothing to redistribute.
-  //   2. Has a raster path: the original checks apply (visibility, path prefix,
-  //      dimensions, file existence). These catch an entry that claims to ship
-  //      an image but can't (private visibility, wrong path, missing file).
+  // The link-only exception is restricted to private visibility + null path.
+  // A public-own/public-thumb entry with a null path is schema-invalid
+  // (ImageRef.superRefine rejects it) — the evaluator is mode-agnostic and
+  // must not depend on schema validation, so it catches this independently
+  // via image-path-missing.
+  //
+  // Link-only entries MUST have a non-null source.url — it's the only way
+  // users can find the original design when no image ships. A null source.url
+  // on a link-only entry makes it an orphan with no reference.
   const image = entry.image;
 
-  if (image.path === null) {
-    // Link-only entry: no image bytes to redistribute. No image-axis reasons.
-    // The entry is eligible on the image axis by default (subject to entry-axis
-    // checks above). This is the metadata-only distribution model.
+  if (image.visibility === "private" && image.path === null) {
+    // Link-only entry: no image bytes to redistribute. Require source.url
+    // so users can find the original design.
+    if (!entry.source.url) {
+      reasons.push("link-source-missing");
+    }
+  } else if (image.path === null) {
+    // Non-private visibility with null path: schema-invalid, caught here
+    // independently (the evaluator must not assume schema enforcement).
+    reasons.push("image-path-missing");
   } else {
     const isPublicVisibility = image.visibility === "public-thumb" || image.visibility === "public-own";
     if (!isPublicVisibility) {

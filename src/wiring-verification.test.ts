@@ -171,6 +171,14 @@ const ALLOWLIST = new Set<string>([
   // excludes the scripts/ dir and server.ts is the executable entry, so the
   // symbol appears unreferenced from the scanned production set.
   "PUBLIC_SNAPSHOT_DIR",
+  // readiness/contracts.ts — consumed by the validator script
+  // (src/scripts/validate-readiness-artifacts.ts, created in Task 3).
+  // These are the canonical helpers the validator calls directly.
+  "computeTaxonomyDigest",
+  "buildCheckpointTarget",
+  "computeCheckpointTargetSha256",
+  "validateRegistry",
+  "validateLedgerAppendOnly",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

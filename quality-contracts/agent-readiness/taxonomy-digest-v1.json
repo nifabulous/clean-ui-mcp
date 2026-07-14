@@ -3,7 +3,9 @@
   "artifactType": "taxonomy-digest",
   "artifactId": "taxonomy-20260714",
   "createdAt": "2026-07-14T07:33:59Z",
-  "sourceGitSha": "44e182ebaa392c377b1b0b06c0165de178e0bdfa",
+  "createdByRole": "repository-maintainer",
+  "sourceGitSha": "374f72073c81ea7901696333cd875fe75b348e6b",
+  "inputHashes": {},
   "taxonomies": {
     "PatternType": {
       "count": 21,
@@ -144,5 +146,5 @@
       "serialization": "JSON array, compact, no whitespace"
     }
   },
-  "aggregateSha256": "7df563dcfb864d62876a3ef648f58b60e03959b5cb59a08dd40c89c499c43bc4"
+  "aggregateSha256": "a96fa56eed0aadb8be618ea2cb54a1be2943e58feaed31e8aba12d7d6059c2bf"
 }

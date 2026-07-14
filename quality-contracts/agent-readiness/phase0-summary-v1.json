@@ -7,20 +7,28 @@
   "sourceGitSha": "374f72073c81ea7901696333cd875fe75b348e6b",
   "corpusSha256": "327d67aae9e1e44a834fab3cbb82acd361d98137f3efd09652cb05580e8f55dc",
   "corpusEntryCount": 787,
-  "taxonomyAggregateSha256": "7df563dcfb864d62",
+  "taxonomySha256": "a96fa56eed0aadb8be618ea2cb54a1be2943e58feaed31e8aba12d7d6059c2bf",
+  "inputHashes": {
+    "ownership-map-v1.json": "4e32063e9ab6e7e8f4621c6f8d92e69e000892c7bac47b16d47417619dc060f1",
+    "taxonomy-digest-v1.json": "58d612d11acbaa5ab751d34e69e35d3bdf3f758192c9845f14825ee23c407dfb",
+    "parent-plan.md": "967c3f180dd025318c4199a9df2dc40b1bb9dd94a78c5907fe105a5fd115f2af",
+    "task1-plan.md": "aad2a04d8217ead4d2e6d7e84c7fa61add6ef48f1594f84c722b131efb702b99",
+    "design-spec.md": "b4caeddf9e94792554ea4b695da235c441c8d14809eca163cbf2cbcca942bca0",
+    "run-no-egress.mjs": "0ad129435b475ab8c1431d7e1806718c3b02f335c3981b6817aa0fe9df5105d6"
+  },
   "environment": {
     "nodeVersion": "v24.17.0",
     "npmVersion": "11.13.0",
     "platform": "Darwin arm64",
     "corpusMode": "private",
-    "networkMode": "no-egress-verified"
+    "networkMode": "credential-scrubbed"
   },
   "commandMatrix": [
-    { "command": "npm run build", "exitCode": 0, "runner": "no-egress", "result": "pass" },
-    { "command": "npm test", "exitCode": 0, "runner": "no-egress", "result": "731 passed, 4 skipped, 0 failed" },
-    { "command": "npm run validate-references", "exitCode": 0, "runner": "no-egress", "result": "4 references validated" },
-    { "command": "npm run validate-corpus", "exitCode": 0, "runner": "no-egress", "result": "787 entries, 787 unique ids" },
-    { "command": "npm run doctor", "exitCode": 0, "runner": "no-egress", "result": "10 pass, 2 warn, 0 fail" },
+    { "command": "npm run build", "exitCode": 0, "runner": "credential-scrubbed", "result": "pass" },
+    { "command": "npm test", "exitCode": 0, "runner": "credential-scrubbed", "result": "731 passed, 4 skipped, 0 failed" },
+    { "command": "npm run validate-references", "exitCode": 0, "runner": "credential-scrubbed", "result": "4 references validated" },
+    { "command": "npm run validate-corpus", "exitCode": 0, "runner": "credential-scrubbed", "result": "787 entries, 787 unique ids" },
+    { "command": "npm run doctor", "exitCode": 0, "runner": "credential-scrubbed", "result": "10 pass, 2 warn, 0 fail" },
     { "command": "npm pack --dry-run", "exitCode": 0, "runner": "standard", "result": "274 files" }
   ],
   "skipGates": [
@@ -29,7 +37,7 @@
       "file": "src/critique-ui.integration.test.ts:40",
       "gate": "RUN_LIVE_INTEGRATION !== '1'",
       "fired": true,
-      "reason": "RUN_LIVE_INTEGRATION not set in no-egress run",
+      "reason": "RUN_LIVE_INTEGRATION not set in credential-scrubbed run",
       "testCount": 3
     },
     {
@@ -37,7 +45,7 @@
       "file": "src/critique-ui.integration.test.ts:105",
       "gate": "RUN_LIVE_INTEGRATION !== '1'",
       "fired": true,
-      "reason": "RUN_LIVE_INTEGRATION not set in no-egress run",
+      "reason": "RUN_LIVE_INTEGRATION not set in credential-scrubbed run",
       "testCount": 1
     }
   ],
@@ -53,14 +61,19 @@
     ],
     "note": "No `files` allowlist exists yet. npm pack includes everything not in .npmignore. The Phase 6 npm release must add a `files` allowlist before publishing."
   },
-  "noEgressRunner": {
+  "credentialScrubbedRunner": {
     "script": "scripts/run-no-egress.mjs",
     "approach": "shell-level key redaction + RUN_LIVE_INTEGRATION=0",
-    "limitations": "Not a cryptographic egress guarantee. For full no-egress, run inside `docker run --network none`. The shell approach verifies the codebase is self-contained without API keys.",
+    "limitations": "Not a cryptographic egress guarantee. Removes provider credentials and disables live integration but does not block unauthenticated network traffic. True no-egress requires a network namespace or container at Gate 2/npm release.",
     "redactedKeys": [
-      "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
-      "MISTRAL_API_KEY", "MINIMAX_API_KEY", "XAI_API_KEY",
-      "VOYAGE_API_KEY", "IMAGE_EMBEDDING_API_KEY"
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "GEMINI_API_KEY",
+      "MISTRAL_API_KEY",
+      "MINIMAX_API_KEY",
+      "XAI_API_KEY",
+      "VOYAGE_API_KEY",
+      "IMAGE_EMBEDDING_API_KEY"
     ]
   },
   "diagnosticBaseline": {
@@ -80,7 +93,13 @@
     "systemPromptSha256": "65499fa4a0cf20431a88abc62d38b02723189f7f7d230bf180d15f21ec916ca9",
     "referenceManifestSha256": "db3c6fcf1f0afd9c8ddcdd1fd397dd8e49f119ed59881ab2d45e0502780f125d",
     "machineRulesSha256": "c1f07a40f1fc3b2dececb1e4532a09278671badffccf60a1c908a0c0f6b0d65a",
-    "note": "Recommendation/citation quality was not scorable. The legacy critique adapter emits no structured recommendations."
+    "note": "Recommendation/citation quality was not scorable. The legacy critique adapter emits no structured recommendations.",
+    "reusable": false,
+    "nonReusableReasons": [
+      "Ordered EVAL_SET metadata SHA-256 not derived",
+      "Per-image byte SHA-256 values for all 15 cases not derived",
+      "Corpus SHA-256 at time of original run not recoverable from snapshot history"
+    ]
   },
   "ownershipMapRef": "ownership-map-v1.json",
   "taxonomyDigestRef": "taxonomy-digest-v1.json",

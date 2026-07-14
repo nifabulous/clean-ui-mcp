@@ -3,7 +3,9 @@
   "artifactType": "ownership-map",
   "artifactId": "ownership-20260714",
   "createdAt": "2026-07-14T09:30:00Z",
+  "createdByRole": "repository-maintainer",
   "sourceGitSha": "374f72073c81ea7901696333cd875fe75b348e6b",
+  "inputHashes": {},
   "entries": [
     {
       "path": "src/GBP movement.xlsx",

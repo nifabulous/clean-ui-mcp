@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "ownership-map",
+  "artifactId": "ownership-20260714",
+  "createdAt": "2026-07-14T09:30:00Z",
+  "sourceGitSha": "374f72073c81ea7901696333cd875fe75b348e6b",
+  "entries": [
+    {
+      "path": "src/GBP movement.xlsx",
+      "classification": "needs-user-decision",
+      "decision": "Stray 1.8MB spreadsheet accidentally placed in src/. Not project code. Must be removed before any npm publish. Not touched by this increment.",
+      "sha256": "fe0f3a0df7106a1f164943a464be37df776658ee3b849fc1c6e2df0c1a80a359"
+    },
+    {
+      "path": "CLAUDE.md",
+      "classification": "owned-by-other-work",
+      "decision": "ZCode/gstack skill routing docs. Modified outside this increment by a separate workstream. Not touched by this increment.",
+      "sha256": "e9cbc0a89335c087a4ba081435c55ff1d5058a9bd71db70bc9a77ff7fdd68553"
+    },
+    {
+      "path": "scripts/run-exporter.mts",
+      "classification": "owned-by-current-increment",
+      "decision": "Temp runner script from Gate 1A-content work. Will be removed in this task.",
+      "sha256": "596070f6e8faf7df7da333fa54108c097fd5cc3820e42b8f65ac83304f6e26e4"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-07-10-decision-lab-ui-redesign.md",
+      "classification": "owned-by-other-work",
+      "decision": "Decision Lab design plan, unrelated to agent-readiness. Not touched by this increment.",
+      "sha256": "c0c639088e25e91aa13bf71876010d0656a46de3a5646d8678b7f026005dc7b8"
+    }
+  ],
+  "critiqueQualityBranchDisposition": {
+    "branch": "feat/critique-quality-wiring",
+    "status": "merged via PR #23 (db73cdd)",
+    "note": "All eval-scorer changes are on main. No uncommitted eval-scorer work remains."
+  }
+}

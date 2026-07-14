@@ -2,8 +2,7 @@ import { describe, expect, it, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { transformForValidation } from "./validate-public-pipeline.js";
-import { execFileSync } from "node:child_process";
+import { transformForValidation, verifyPublicPipeline } from "./validate-public-pipeline.js";
 
 describe("validate-public-pipeline — transformForValidation", () => {
   it("adds a placeholder publication block to an entry without one", () => {
@@ -45,14 +44,30 @@ describe("validate-public-pipeline — transformForValidation", () => {
   });
 });
 
+describe("validate-public-pipeline — verifyPublicPipeline", () => {
+  it("accepts a policy-eligible subset of the input corpus", () => {
+    expect(() => verifyPublicPipeline({
+      expectedEligibleIds: new Set(["entry-a"]),
+      exportedEntryCount: 1,
+      loadedEntries: [{ id: "entry-a" }],
+      inputEntryCount: 2,
+    })).not.toThrow();
+  });
+
+  it("rejects loaded IDs that differ from eligibility even when counts match", () => {
+    expect(() => verifyPublicPipeline({
+      expectedEligibleIds: new Set(["entry-a"]),
+      exportedEntryCount: 1,
+      loadedEntries: [{ id: "entry-b" }],
+      inputEntryCount: 2,
+    })).toThrow(/entry-a.*entry-b|entry-b.*entry-a/);
+  });
+});
+
 /**
- * Integration test: run the full harness end-to-end against a small temporary
- * corpus (2 entries, real tiny PNGs). Verifies the harness succeeds, reports
- * the correct count, and cleans up (or preserves with --keep).
- *
- * Uses execFileSync to invoke `npx tsx src/scripts/validate-public-pipeline.ts`
- * as a child process — the harness uses process.argv and top-level await,
- * so it can't be imported and called directly.
+ * Component integration test: exercise transformation, snapshot export, and
+ * PublicCorpusReader together against a small temporary corpus with real tiny
+ * PNGs. CLI-specific argument handling and cleanup are not exercised here.
  */
 describe("validate-public-pipeline — integration", () => {
   // Minimal 1x1 PNG (67 bytes).
@@ -162,7 +177,7 @@ describe("validate-public-pipeline — integration", () => {
     rmSync(ws, { recursive: true, force: true });
   });
 
-  it("fails when a source image is missing (not a silent false-pass)", async () => {
+  it("exporter excludes an entry whose source image is missing", async () => {
     const root = setupTempCorpus();
     // Delete one image — the exporter should exclude that entry (image-file-missing).
     rmSync(resolve(root, "corpus/images-private/entry-b.png"));
@@ -185,9 +200,8 @@ describe("validate-public-pipeline — integration", () => {
       imageRoot: resolve(ws, "images-public"),
       now: new Date().toISOString(),
     });
-    // The exporter excludes entry-b (missing image) → fewer entries exported
-    // than the input. The harness's count check (result.entryCount !== entries.length)
-    // would catch this and throw.
+    // Exporter-only coverage: entry-b is excluded because its rewritten public
+    // image path has no corresponding file in the snapshot image root.
     expect(result.entryCount).toBeLessThan(raw.entries.length);
     expect(result.entryCount).toBe(1); // only entry-a has its image
 

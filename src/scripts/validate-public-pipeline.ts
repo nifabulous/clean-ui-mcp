@@ -89,6 +89,57 @@ export function transformForValidation(
   return transformed;
 }
 
+export interface PublicPipelineVerificationInput {
+  expectedEligibleIds: ReadonlySet<string>;
+  exportedEntryCount: number;
+  loadedEntries: ReadonlyArray<{ id: string }>;
+  inputEntryCount: number;
+}
+
+/**
+ * Verify that export and reader output agree with publication policy.
+ *
+ * Policy may intentionally accept only a subset of the input corpus, so the
+ * expected eligible ID set — never the raw input count — is authoritative.
+ */
+export function verifyPublicPipeline({
+  expectedEligibleIds,
+  exportedEntryCount,
+  loadedEntries,
+  inputEntryCount,
+}: PublicPipelineVerificationInput): void {
+  if (exportedEntryCount !== expectedEligibleIds.size) {
+    throw new Error(
+      `Exporter produced ${exportedEntryCount} entries but the policy evaluator expected `
+      + `${expectedEligibleIds.size} eligible entries (out of ${inputEntryCount} input). `
+      + `The exporter's policy evaluation may differ from the evaluator.`,
+    );
+  }
+
+  const loadedIds = new Set(loadedEntries.map((entry) => entry.id));
+  const missingIds = [...expectedEligibleIds].filter((id) => !loadedIds.has(id));
+  const unexpectedIds = [...loadedIds].filter((id) => !expectedEligibleIds.has(id));
+  const hasDuplicateIds = loadedIds.size !== loadedEntries.length;
+
+  if (
+    loadedEntries.length !== expectedEligibleIds.size
+    || missingIds.length > 0
+    || unexpectedIds.length > 0
+    || hasDuplicateIds
+  ) {
+    const details = [
+      missingIds.length > 0 ? `missing IDs: ${missingIds.join(", ")}` : null,
+      unexpectedIds.length > 0 ? `unexpected IDs: ${unexpectedIds.join(", ")}` : null,
+      hasDuplicateIds ? "duplicate loaded IDs" : null,
+    ].filter(Boolean).join("; ");
+    throw new Error(
+      `Reader loaded ${loadedEntries.length} entries but policy expected `
+      + `${expectedEligibleIds.size} eligible entries (out of ${inputEntryCount} input)`
+      + `${details ? `; ${details}` : ""}. The snapshot may have been corrupted or entries filtered at load time.`,
+    );
+  }
+}
+
 if (isMain) {
   if (!existsSync(CORPUS_PATH)) {
     console.error(`entries.json not found at ${CORPUS_PATH}`);
@@ -206,19 +257,12 @@ if (isMain) {
         .map((e: Record<string, unknown>) => e.id as string),
     );
 
-    if (result.entryCount !== expectedEligibleIds.size) {
-      throw new Error(
-        `Exporter produced ${result.entryCount} entries but the policy evaluator expected `
-        + `${expectedEligibleIds.size} eligible entries (out of ${entries.length} input). `
-        + `The exporter's policy evaluation may differ from the evaluator.`,
-      );
-    }
-    if (loaded.length !== entries.length) {
-      throw new Error(
-        `Reader loaded ${loaded.length} but the input corpus has ${entries.length} entries. `
-        + `The snapshot may have been corrupted or entries filtered at load time.`,
-      );
-    }
+    verifyPublicPipeline({
+      expectedEligibleIds,
+      exportedEntryCount: result.entryCount,
+      loadedEntries: loaded,
+      inputEntryCount: entries.length,
+    });
 
     // Verify every loaded entry's image actually resolves (no NULL paths).
     for (const entry of loaded) {
@@ -233,7 +277,10 @@ if (isMain) {
       }
     }
 
-    console.log(`\n✅ Pipeline validation PASSED: ${loaded.length}/${entries.length} entries served from a public snapshot.`);
+    console.log(
+      `\n✅ Pipeline validation PASSED: ${loaded.length}/${expectedEligibleIds.size} policy-eligible entries `
+      + `served from a public snapshot (${entries.length} input).`,
+    );
     console.log(`   All ${result.assetCount} assets resolve. The real corpus was not modified.`);
     console.log(`   The workspace is ${KEEP ? "preserved" : "cleaned up"}.`);
   } catch (err) {

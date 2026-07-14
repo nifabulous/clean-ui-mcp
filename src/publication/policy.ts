@@ -13,9 +13,11 @@ import type { CorpusEntryT } from "../schema.js";
  *
  *   1. ENTRY axis  — visibility, clearance, and the evidence of that clearance
  *      (rights basis, evidence ref, reviewer, review date, expiry).
- *   2. IMAGE axis  — the raster's visibility, path, path prefix, dimensions,
- *      and on-disk existence. An approved entry with a private image is still
- *      ineligible; a public image does not rescue a private entry.
+ *   2. IMAGE axis  — when raster bytes ship, their visibility, path, path
+ *      prefix, dimensions, and on-disk existence. Private images normally make
+ *      an entry ineligible, except that private + null is a link-only entry:
+ *      no raster ships and source.url is recommended but optional. A public
+ *      image does not rescue a private entry.
  *
  * On failure, ALL applicable reasons are returned in the stable order declared
  * by {@link PublicationReason} (entry-axis reasons first, then image-axis). This
@@ -121,28 +123,26 @@ export function evaluatePublication(
   // is the structured analysis (critique, color roles, type pairings, anti-
   // patterns), not the raster pixels. An entry with image.path === null AND
   // image.visibility === "private" is a LINK-ONLY entry: no image bytes ship,
-  // the entry's value is its metadata + critique, and source.url links to the
-  // original design. This is the safest distribution model — no third-party
-  // image redistribution, just knowledge.
+  // the entry's value is its metadata + critique. source.url is recommended
+  // when available, but it is optional because some sources have no stable
+  // public URL. This is the safest distribution model — no third-party image
+  // redistribution, just knowledge.
   //
   // The link-only exception is restricted to private visibility + null path.
   // A public-own/public-thumb entry with a null path is schema-invalid
   // (ImageRef.superRefine rejects it) — the evaluator is mode-agnostic and
   // must not depend on schema validation, so it catches this independently
   // via image-path-missing.
-  //
-  // Link-only entries MUST have a non-null source.url — it's the only way
-  // users can find the original design when no image ships. A null source.url
-  // on a link-only entry makes it an orphan with no reference.
   const image = entry.image;
 
   if (image.visibility === "private" && image.path === null) {
     // Link-only entry: no image bytes to redistribute. The entry's value is
-    // its structured analysis. source.url is RECOMMENDED (links to the original
-    // design) but not required — some entries may lack a URL (captured from
-    // apps with no public web presence, or from now-defunct products). The
-    // metadata itself (critique, color roles, type pairings, anti-patterns) is
-    // still valuable to an agent building a UI even without the source link.
+    // its structured analysis. source.url is RECOMMENDED and can provide an
+    // original-design reference, but it is not required — some entries may
+    // lack a URL (captured from apps with no public web presence, or from
+    // now-defunct products). The metadata itself (critique, color roles, type
+    // pairings, anti-patterns) is still valuable to an agent building a UI even
+    // without the source link.
   } else if (image.path === null) {
     // Non-private visibility with null path: schema-invalid, caught here
     // independently (the evaluator must not assume schema enforcement).

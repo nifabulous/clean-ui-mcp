@@ -145,6 +145,35 @@ After the review returns, write the artifact so the git gate passes:
   --reviewer agent --base-sha <base> --head-sha <head> --branch <branch>
 ```
 
+### Cross-model review with /codex (and /claude)
+
+The `/review` skill uses the host model. For an independent second opinion from a
+different model, use **`/codex`** (OpenAI Codex CLI, `gstack-codex` skill) or
+**`/claude`** (Anthropic Claude CLI, `gstack-claude` skill). Both wrap their
+respective CLI in three read-only modes: review, challenge, consult. Neither can
+mutate files.
+
+**Codex review gate.** `/codex review` produces a PASS/FAIL gate:
+- `[P1]` markers in the output → **FAIL** → write `--result changes-requested`.
+- No `[P1]` (only `[P2]` or nothing) → **PASS** → write `--result approved`.
+
+After a `/codex` (or `/claude`) review, write the review artifact the same way
+as `/review` so the git hooks pass — the `reviewer` field stays `agent`:
+
+```bash
+# Task review via codex/claude (PASS gate):
+.zcode/scripts/write-review-artifact --type task --result approved \
+  --reviewer agent --base-sha <base> --head-sha <head> --branch <branch>
+
+# Branch review via codex/claude (PASS gate, before push):
+.zcode/scripts/write-review-artifact --type branch --result approved \
+  --reviewer agent --base-sha <base> --head-sha <head> --branch <branch>
+```
+
+If codex/claude flags Critical (`[P1]`) issues, do NOT write an `approved`
+artifact — fix the issues first, then re-review, or write
+`--result changes-requested`.
+
 ### Acting on feedback
 
 - Fix Critical issues immediately.

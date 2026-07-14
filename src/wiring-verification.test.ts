@@ -179,6 +179,12 @@ const ALLOWLIST = new Set<string>([
   "computeCheckpointTargetSha256",
   "validateRegistry",
   "validateLedgerAppendOnly",
+  // tool-catalog.ts — consumed by tool-contracts.ts, checkpoint policy,
+  // and the readiness validator (all created in C1 Steps 3-8).
+  "TOOL_CATALOG",
+  "REMOVED_TOOL_NAMES",
+  "LEGACY_TO_BETA_MAP",
+  "CATALOG_DIGEST",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

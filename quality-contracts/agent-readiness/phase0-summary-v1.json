@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "phase0-summary",
+  "artifactId": "phase0-20260714",
+  "createdAt": "2026-07-14T07:33:59Z",
+  "createdByRole": "repository-maintainer",
+  "sourceGitSha": "374f72073c81ea7901696333cd875fe75b348e6b",
+  "corpusSha256": "327d67aae9e1e44a834fab3cbb82acd361d98137f3efd09652cb05580e8f55dc",
+  "corpusEntryCount": 787,
+  "taxonomySha256": "cfd52121c119b7e519d2bbbe7727d36ccfe8fc42ce0a7ee74f86ceb202447664",
+  "environment": {
+    "nodeVersion": "v24.17.0",
+    "npmVersion": "11.13.0",
+    "platform": "Darwin arm64",
+    "corpusMode": "private",
+    "networkMode": "live"
+  },
+  "buildResult": "pass",
+  "testResult": {
+    "passed": 728,
+    "skipped": 4,
+    "failed": 0,
+    "skipGates": [
+      {"gate": "corpus.test.ts:real-corpus", "fired": false, "reason": "corpus/entries.json present"},
+      {"gate": "critique-ui.integration.test.ts:live-integration", "fired": true, "reason": "RUN_LIVE_INTEGRATION not set"}
+    ]
+  },
+  "doctorResult": {"pass": 10, "warn": 2, "fail": 0},
+  "validateCorpusResult": {"valid": true, "entryCount": 787, "uniqueIds": 787},
+  "diagnosticBaseline": {
+    "gitSha": "fdd74d1",
+    "date": "2026-07-14",
+    "imageCount": 15,
+    "patternTypeAccuracy": 0.80,
+    "rawBannedPhrases": 0,
+    "rawIconOnlyClaims": 0,
+    "meanExtractionLatencyMs": 6553,
+    "citationScorable": false,
+    "note": "Recommendation/citation quality was not scorable. The legacy critique adapter emits no structured recommendations."
+  }
+}

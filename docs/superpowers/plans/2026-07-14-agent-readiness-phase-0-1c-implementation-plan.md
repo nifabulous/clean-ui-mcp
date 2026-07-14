@@ -115,10 +115,9 @@ The artifact index indexes evidence artifacts but does not hash the mutable appr
 - Create: `quality-contracts/agent-readiness/phase0-summary-v1.json`
 - Create: `quality-contracts/agent-readiness/diagnostic-summary-v1.json`
 - Create: `quality-contracts/agent-readiness/approval-actor-registry-v1.json`
-- Create private: `eval/agent-readiness/runs/<run-id>/ownership-map.json`
+- Create: `quality-contracts/agent-readiness/ownership-map-v1.json`
 - Create: `scripts/run-no-egress.mjs`
 - Create: `scripts/run-no-egress.test.mjs`
-- Create: `infra/no-egress/Dockerfile`
 - Modify: none of the currently dirty or untracked user files
 
 **Produces:** Checkpoint C0 with a frozen SHA and separate clean-clone/private-workspace evidence.
@@ -127,9 +126,9 @@ The artifact index indexes evidence artifacts but does not hash the mutable appr
 
 The Repository Maintainer records each dirty path in the private ownership map as `{ path, classification, ownerOrDecision }`, where classification is `owned-by-current-increment`, `owned-by-other-work`, or `needs-user-decision`. The tracked Phase-0 summary contains only its SHA-256. Explicitly record whether every `feat/critique-quality-wiring` change is merged into the frozen base or deliberately deferred. Do not delete, stash, relocate, stage, or commit `CLAUDE.md`, `src/GBP movement.xlsx`, `scripts/run-exporter.mts`, the design spec, or any other existing change as part of this task.
 
-Before C0, use a separate clean temporary worktree from `origin/main` to apply only the reviewed plan, authoritative spec, and the TDD-built no-egress harness, verify their hashes, and land them through a foundation-only commit/PR. The harness uses a digest-pinned container image and a `--network none` execution path; it fails closed when its container runtime is unavailable. Fetch the resulting commit and assert the plan/spec/harness hashes at `FROZEN_SHA` exactly match the reviewed hashes. Never bootstrap these files by staging from the dirty implementation workspace.
+Before C0, use a separate clean temporary worktree from `origin/main` to apply only the reviewed plan, authoritative spec, and the TDD-built credential-scrubbed harness, verify their hashes, and land them through a foundation-only commit/PR. The harness (`scripts/run-no-egress.mjs`) removes provider credentials and sets `RUN_LIVE_INTEGRATION=0`, but does not block unauthenticated network traffic; true network isolation remains a Gate 2/npm-release prerequisite, not a C0 claim. Fetch the resulting commit and assert the plan/spec/harness hashes at `FROZEN_SHA` exactly match the reviewed hashes. Never bootstrap these files by staging from the dirty implementation workspace.
 
-The Repository Admin also bootstraps `approval-actor-registry-v1.json`: opaque actor IDs, allowed roles, and Ed25519 public keys, signed by an admin root key whose fingerprint is supplied out of band (a protected CI environment for CI, explicit operator input locally), never read from the registry itself. Record the registry hash/version in the frozen foundation. Rotation requires an append-only record containing previous/new registry hashes and an admin-root signature; history is never overwritten.
+The Repository Maintainer creates `approval-actor-registry-v1.json` mapping opaque actor IDs to allowed roles (with an `actorKind` of `"human"` or `"agent"`). No cryptographic keys are stored. The registry is an immutable versioned snapshot: a role addition or removal creates the next ordinal snapshot (e.g., `approval-actor-registry-v2.json`); the previous file is never overwritten. Each new snapshot records its `previousRegistry` (version + SHA-256 of the prior file). Approvals resolve the exact registry version and file SHA-256 they recorded. Identity mapping remains private; only opaque IDs, roles, and actor kinds are tracked. Record the registry hash/version in the frozen foundation.
 
 - [ ] **Step 2: establish the real base**
 
@@ -148,7 +147,7 @@ test "$(shasum -a 256 docs/superpowers/specs/2026-07-13-agent-readiness-and-reta
 
 Do not describe historical diagnostic SHA `fdd74d1` as `main`; retain it only as provenance for the already-recorded 15-image diagnostic.
 
-- [ ] **Step 3: verify a network-scrubbed clean clone**
+- [ ] **Step 3: verify a credential-scrubbed clean clone**
 
 ```bash
 (
@@ -157,35 +156,35 @@ Do not describe historical diagnostic SHA `fdd74d1` as `main`; retain it only as
   unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY MISTRAL_API_KEY
   unset MINIMAX_API_KEY XAI_API_KEY VOYAGE_API_KEY IMAGE_EMBEDDING_API_KEY
   export RUN_LIVE_INTEGRATION=0
-  : "${NO_EGRESS_RUNNER:?absolute fail-closed no-egress runner required}"
+  : "${CREDENTIAL_SCRUBBED_RUNNER:?absolute fail-closed credential-scrubbed runner required}"
   : "${SMOKE_MATRIX:?checkpoint-specific tool smoke matrix required}"
-  export NO_EGRESS_RUNNER SMOKE_MATRIX
+  export CREDENTIAL_SCRUBBED_RUNNER SMOKE_MATRIX
   git clone --no-local "$REPO_ROOT" "$ROOT/repo"
   git -C "$ROOT/repo" checkout --detach "$FROZEN_SHA"
   cd "$ROOT/repo"
   test ! -e corpus/entries.json
   npm ci
-  "$NO_EGRESS_RUNNER" --self-test # loopback must succeed; controlled external HTTP/DNS must fail
-  # The helper must use a network namespace or container with no egress;
-  # loopback remains available for fake provider servers. It fails closed
-  # when the platform has no supported enforcement mechanism.
-  "$NO_EGRESS_RUNNER" npm run build
-  "$NO_EGRESS_RUNNER" npm test
-  "$NO_EGRESS_RUNNER" npm run validate-references
-  "$NO_EGRESS_RUNNER" npm run validate-corpus
-  "$NO_EGRESS_RUNNER" npm run doctor
-  "$NO_EGRESS_RUNNER" npm pack --dry-run --json
+  "$CREDENTIAL_SCRUBBED_RUNNER" --self-test # removes provider credentials and disables live integration
+  # The helper removes API keys and sets RUN_LIVE_INTEGRATION=0. It does not
+  # block unauthenticated network traffic; true no-egress requires a network
+  # namespace or container at Gate 2/npm release.
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm run build
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm test
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm run validate-references
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm run validate-corpus
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm run doctor
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm pack --dry-run --json
   PACK_DIR="$(mktemp -d)"
   INSTALL_DIR="$(mktemp -d)"
-  PACK_JSON="$("$NO_EGRESS_RUNNER" npm pack --pack-destination "$PACK_DIR" --json)"
+  PACK_JSON="$("$CREDENTIAL_SCRUBBED_RUNNER" npm pack --pack-destination "$PACK_DIR" --json)"
   TARBALL="$(node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync(0,"utf8")); process.stdout.write(x[0].filename)' <<<"$PACK_JSON")"
   cp "$PACK_DIR/$TARBALL" "$INSTALL_DIR/package.tgz"
   cp "$SMOKE_MATRIX" "$INSTALL_DIR/smoke-matrix.json"
   cd "$INSTALL_DIR"
   export SMOKE_MATRIX="$INSTALL_DIR/smoke-matrix.json"
-  "$NO_EGRESS_RUNNER" npm init -y >/dev/null
-  "$NO_EGRESS_RUNNER" npm install --offline --no-audit --no-fund ./package.tgz
-  "$NO_EGRESS_RUNNER" node --input-type=module <<'NODE'
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm init -y >/dev/null
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm install --offline --no-audit --no-fund ./package.tgz
+  "$CREDENTIAL_SCRUBBED_RUNNER" node --input-type=module <<'NODE'
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -210,7 +209,7 @@ NODE
 )
 ```
 
-Record each command, exit code, per-tool outcome, named skips, Node/npm versions, absence of `.env`/private corpus, the pinned runner/container hashes, and the successful no-egress preflight. The frozen C0 matrix names the exact legacy catalog; the final branch-HEAD matrix names the exact 12-tool catalog, requires non-null output schemas, rejects removed names, and invokes every offline-safe tool class. Do not reduce this to a skip count.
+Record each command, exit code, per-tool outcome, named skips, Node/npm versions, absence of `.env`/private corpus, the runner SHA-256, and the successful credential-scrubbed preflight. The frozen C0 matrix names the exact legacy catalog; the final branch-HEAD matrix names the exact 12-tool catalog, requires non-null output schemas, rejects removed names, and invokes every offline-safe tool class. Do not reduce this to a skip count.
 
 - [ ] **Step 4: verify the authorized private workspace offline**
 
@@ -264,24 +263,21 @@ Do not stage unvalidated summaries. Task 1 supplies their schemas and validator,
 Tests cover required header fields, SHA-256 format, immutable artifact IDs, predecessor hashes, environment/network mode, private-path/URL/prompt rejection in tracked files, and public versus private validation modes.
 
 ```ts
-export const ArtifactHeader = z.object({
+export const BaseArtifactHeader = z.object({
   schemaVersion: z.literal("1.0"),
   artifactType: z.string().min(1),
   artifactId: z.string().min(1),
   createdAt: z.string().datetime(),
   createdByRole: z.string().min(1),
   sourceGitSha: z.string().regex(/^[a-f0-9]{40}$/),
+  inputHashes: z.record(z.string().min(1), z.string().regex(/^[a-f0-9]{64}$/)),
+}).strict();
+
+export const CorpusBoundHeader = BaseArtifactHeader.extend({
   corpusSha256: z.string().regex(/^[a-f0-9]{64}$/),
   corpusEntryCount: z.number().int().nonnegative(),
   taxonomySha256: z.string().regex(/^[a-f0-9]{64}$/),
-  inputHashes: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)),
-  environment: z.object({
-    nodeVersion: z.string(),
-    platform: z.string(),
-    corpusMode: z.enum(["seed", "private", "public-snapshot", "metadata-only-fixture"]),
-    networkMode: z.enum(["denied", "fixture-http", "live"]),
-  }),
-});
+}).strict();
 
 export const CheckpointApproval = z.object({
   approvalId: z.string().min(1),
@@ -290,26 +286,26 @@ export const CheckpointApproval = z.object({
   decision: z.enum(["approved", "rejected"]),
   actorId: z.string().min(1), // stable opaque pseudonym; identity map stays private
   role: z.string().min(1),
+  actorKind: z.enum(["human", "agent"]),
   actorRegistryVersion: z.string().min(1),
   actorRegistrySha256: z.string().regex(/^[a-f0-9]{64}$/),
+  checkpointTargetSha256: z.string().regex(/^[a-f0-9]{64}$/),
   approvedArtifacts: z.array(z.object({
     artifactId: z.string().min(1),
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
   })).min(1),
   planSha256: z.string().regex(/^[a-f0-9]{64}$/),
   specSha256: z.string().regex(/^[a-f0-9]{64}$/),
-  contractHashes: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)),
+  contractHashes: z.record(z.string().min(1), z.string().regex(/^[a-f0-9]{64}$/)),
   decidedAt: z.string().datetime(),
   rationale: z.string().optional(),
-  signingKeyId: z.string().min(1),
-  signatureBase64: z.string().min(1),
-  attestationSha256: z.string().regex(/^[a-f0-9]{64}$/),
-});
+}).strict();
 
 export const LiveCostApproval = z.object({
   approvalId: z.string().min(1),
   actorId: z.string().min(1),
   role: z.literal("Budget Owner"),
+  actorKind: z.literal("human"),
   actorRegistryVersion: z.string().min(1),
   actorRegistrySha256: z.string().regex(/^[a-f0-9]{64}$/),
   runId: z.string().min(1),
@@ -318,15 +314,12 @@ export const LiveCostApproval = z.object({
   model: z.string().min(1),
   maxCostUsd: z.number().positive(),
   decidedAt: z.string().datetime(),
-  signingKeyId: z.string().min(1),
-  signatureBase64: z.string().min(1),
-  attestationSha256: z.string().regex(/^[a-f0-9]{64}$/),
 });
 ```
 
-Approvals live in a separate append-only ledger so the artifact being approved never embeds its own signature. Canonicalize the unsigned fields, compute `attestationSha256`, and verify the detached Ed25519 signature against the exact hash-pinned actor registry. Before trusting that registry, verify its admin-root signature against the out-of-band root fingerprint. `artifact-review` records attest one prerequisite; only `checkpoint` records bound to the complete checkpoint artifact set can close C0–C5. Live-cost approvals remain private and are referenced by hash. The validator recomputes every approved hash, requires the exact role set for C0–C5, rejects an untrusted/rotated-without-chain registry, invalid signatures, duplicate/conflicting approvals, role/key mismatches, and prevents one `actorId`—including the implementation worker—from satisfying roles declared independent. Real identity mapping remains private; opaque actor IDs, roles, and public keys are tracked.
+Approvals live in a separate append-only ledger. The validator recomputes every approved artifact hash, requires the exact role set for C0–C5, rejects duplicate/conflicting approvals, and prevents one `actorId` — including the implementation worker — from satisfying roles declared independent. Every checkpoint approval must bind one identical `checkpointTargetSha256` so all required approvers attest the same evidence/plan/spec/registry/contract/input set. `artifact-review` records attest one prerequisite; only `checkpoint` records bound to the complete checkpoint artifact set can close C0–C5. `actorKind: "human"` is required for Budget Owner and final disposition roles; other checkpoint roles may be independent human or agent actors. Live-cost approvals remain private and are referenced by hash. Real identity mapping remains private; opaque actor IDs, roles, and actor kinds are tracked.
 
-`ArtifactHeader` is only the common header. Implement a discriminated union keyed by `artifactType`; do not treat `inputHashes` as a substitute for type-specific provenance:
+`BaseArtifactHeader` is the common header; `CorpusBoundHeader` extends it with corpus identity. Implement a discriminated union keyed by `artifactType`; do not treat `inputHashes` as a substitute for type-specific provenance:
 
 - Phase-0 summaries require every command/exit pair, named skip IDs, environment versions, and corpus/network mode; command fields do not appear on artifact types that do not execute commands.
 - Selection and gold artifacts require algorithm/rubric versions plus selection and annotation/adjudication hashes; label-owner approvals bind through the ledger.
@@ -344,7 +337,7 @@ Approvals live in a separate append-only ledger so the artifact being approved n
 "validate-readiness-artifacts": "tsc && node dist/scripts/validate-readiness-artifacts.js"
 ```
 
-Run tests with a missing private artifact, hash mismatch, corpus mismatch, taxonomy mismatch, leaked private path, mutated approved artifact, invalid signature, untrusted root, registry hash mismatch, unsigned/broken rotation chain, duplicate actor, role/key mismatch, implementation-worker self-approval, and incomplete checkpoint role set; each must fail with a specific reason.
+Run tests with a missing private artifact, hash mismatch, corpus mismatch, taxonomy mismatch, leaked private path, mutated approved artifact, registry hash mismatch, stale registry version, duplicate actor, actor role mismatch, divergent checkpoint targets, implementer self-approval, prior-ledger mutation/deletion, and incomplete checkpoint role set; each must fail with a specific reason.
 
 - [ ] **Step 4: validate and commit the C0 contract**
 

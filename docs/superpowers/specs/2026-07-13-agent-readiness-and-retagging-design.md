@@ -314,8 +314,19 @@ interface CleanUiToolResult<T> {
   referenceIds: string[];     // stable corpus entry IDs in the result
   evidence?: Evidence[];      // required for plan/spec/critique; forbidden otherwise
   retrieval: RetrievalState;  // truthful operation metadata
-  warnings: string[];         // typed warnings (insufficiency, sparse, fallback)
-  error?: { code: string; message: string; retryable: boolean }; // present only on error
+  warnings: Warning[];        // typed warnings: { code, message } with per-tool code enums
+  error?: ToolError;          // discriminated union; present only on error
+}
+
+interface Warning {
+  code: string;               // per-tool enum (sparseCoverage, insufficientCorpusEvidence, etc.)
+  message: string;
+}
+
+interface ToolError {
+  code: "NOT_FOUND" | "INDEX_UNAVAILABLE" | "PROVIDER_ERROR" | "INVALID_INPUT";
+  message: string;
+  retryable: boolean;         // bound to code: NOT_FOUND/INVALID_INPUT → false, others → true
 }
 
 interface RetrievalState {
@@ -323,8 +334,9 @@ interface RetrievalState {
   modality: "text" | "image" | "metadata" | "none";
   resultCount: number;        // must equal actual result count in data
   fallbackUsed: boolean;      // true only when an alternate path produced results
+  attemptedCount: number;     // must equal attemptedModes.length; 0 when no fallback
   fallbackReason?: "missing-index" | "incompatible-index" | "missing-provider-key" | "community-edition" | "provider-error" | "no-image-evidence";
-  attemptedModes?: RetrievalMode[]; // required when fallbackUsed; non-empty, no "none", no duplicates
+  attemptedModes: RetrievalMode[]; // empty when fallbackUsed=false; non-empty, no "none", no current mode, no duplicates when fallbackUsed=true
 }
 
 interface Evidence {
@@ -506,10 +518,10 @@ These tables are the authoritative source for executable Zod schemas. The design
 | Input | productContext (required, min 8), category?, styleTag?, platform?, qualityTier? (default exceptional), framework? (brief/tokens), count (1-5, default 3)? |
 | Success data | `direction`, `rejectedDefaults`, `recommendation`, `rationale`, `evidenceContributions`, `structuredDecisions` |
 | Partial | sparse results → typed warning |
-| Errors | no index → NOT_FOUND (non-retryable) |
+| Errors | PROVIDER_ERROR (retryable); absence of index is not an error (degrades through fallback) |
 | Retrieval | hybrid/keyword + text; structured-fallback + metadata; none (plan: no direct vector) |
 | Evidence | required (may be empty with insufficiency warning) |
-| resultCount | number of grounding entries found |
+| resultCount | 1 when a complete plan artifact exists, otherwise 0 |
 | referenceIds | grounding entry IDs |
 
 #### `create_ui_spec`
@@ -564,7 +576,7 @@ See §5.4 for the complete UiSpec contract. Evidence is required (may be empty w
 | Errors | INVALID_INPUT (non-retryable), PROVIDER_ERROR (retryable) |
 | Retrieval | vector + image; structured-fallback + metadata; none (no vector+text) |
 | Evidence | required (may be empty with insufficiency warning); may include screen-observation and dom-signal |
-| resultCount | number of retrieved references |
+| resultCount | 1 when a complete critique artifact exists, otherwise 0 |
 | referenceIds | appliedReference IDs |
 
 ## 6. Companion Skill

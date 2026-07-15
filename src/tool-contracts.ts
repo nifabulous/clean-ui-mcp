@@ -53,8 +53,9 @@ export const RetrievalState = z.object({
   modality: RetrievalModality,
   resultCount: z.number().int().nonnegative(),
   fallbackUsed: z.boolean(),
+  attemptedCount: z.number().int().nonnegative(),
   fallbackReason: FallbackReason.optional(),
-  attemptedModes: z.array(RetrievalMode).optional(),
+  attemptedModes: z.array(RetrievalMode),
 }).strict().superRefine((val, ctx) => {
   const allowed = ALLOWED_MODE_MODALITY[val.mode];
   if (allowed && !allowed.includes(val.modality))
@@ -69,8 +70,14 @@ export const RetrievalState = z.object({
     ctx.addIssue({ code: "custom", message: "'vector' with 'missing-index' is contradictory", path: ["mode"] });
   if (val.mode === "structured-fallback" && !val.fallbackUsed)
     ctx.addIssue({ code: "custom", message: "'structured-fallback' requires fallbackUsed", path: ["fallbackUsed"] });
+  // attemptedCount must equal attemptedModes length
+  if (val.attemptedCount !== val.attemptedModes.length)
+    ctx.addIssue({ code: "custom", message: `attemptedCount (${val.attemptedCount}) must equal attemptedModes length (${val.attemptedModes.length})`, path: ["attemptedCount"] });
+  // When fallbackUsed is false, attemptedModes must be empty (nothing was attempted-and-failed)
+  if (!val.fallbackUsed && val.attemptedModes.length > 0)
+    ctx.addIssue({ code: "custom", message: "attemptedModes must be empty when fallbackUsed is false", path: ["attemptedModes"] });
   if (val.fallbackUsed) {
-    if (!val.attemptedModes || val.attemptedModes.length === 0)
+    if (val.attemptedModes.length === 0)
       ctx.addIssue({ code: "custom", message: "fallback requires non-empty attemptedModes", path: ["attemptedModes"] });
     else {
       if (val.attemptedModes.includes("none"))
@@ -686,6 +693,8 @@ export interface ToolDescriptor {
   extractRefs: (data: unknown) => string[];
   countResults: (data: unknown) => number;
   refineData?: (data: unknown, ctx: z.RefinementCtx) => void;
+  /** Envelope-level refinement — has access to warnings, evidence, referenceIds. */
+  refineEnvelope?: (val: { data: unknown; warnings: unknown[]; referenceIds: string[]; evidence?: unknown[] }, ctx: z.RefinementCtx) => void;
 }
 
 export const TOOL_DESCRIPTORS = [
@@ -703,10 +712,10 @@ export const TOOL_DESCRIPTORS = [
     ],
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage", "keywordFallback"]),
-    errorSchema: makeErrorSchema(["NOT_FOUND"]),
+    errorSchema: makeErrorSchema(["NOT_FOUND", "PROVIDER_ERROR"]),
     extractRefs: (d) => {
       const r = (d as { results?: Array<{ id?: string }> })?.results ?? [];
-      return [...new Set(r.map(e => e.id).filter((x): x is string => !!x))];
+      return r.map(e => e.id).filter((x): x is string => !!x);
     },
     countResults: (d) => (d as { results?: unknown[] })?.results?.length ?? 0,
   },
@@ -738,10 +747,10 @@ export const TOOL_DESCRIPTORS = [
     ],
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["keywordFallback", "sparseCoverage"]),
-    errorSchema: makeErrorSchema(["NOT_FOUND", "INDEX_UNAVAILABLE"]),
+    errorSchema: makeErrorSchema(["NOT_FOUND", "PROVIDER_ERROR"]),
     extractRefs: (d) => {
       const r = (d as { results?: Array<{ id?: string }> })?.results ?? [];
-      return [...new Set(r.map(e => e.id).filter((x): x is string => !!x))];
+      return r.map(e => e.id).filter((x): x is string => !!x);
     },
     countResults: (d) => (d as { results?: unknown[] })?.results?.length ?? 0,
   },
@@ -769,18 +778,29 @@ export const TOOL_DESCRIPTORS = [
       // Unique foundIds
       if (new Set(found).size !== found.length)
         ctx.addIssue({ code: "custom", message: "foundIds must be unique", path: ["foundIds"] });
+      // Unique missingIds
+      if (new Set(missing).size !== missing.length)
+        ctx.addIssue({ code: "custom", message: "missingIds must be unique", path: ["missingIds"] });
       // Disjoint
       const overlap = found.filter(id => missing.includes(id));
       if (overlap.length > 0)
         ctx.addIssue({ code: "custom", message: `IDs in both foundIds and missingIds: ${overlap.join(", ")}`, path: ["foundIds"] });
-      // entries length must equal foundIds length (exact match)
-      if ((data.entries ?? []).length !== found.length)
-        ctx.addIssue({ code: "custom", message: "entries length must equal foundIds length", path: ["entries"] });
-      // Every entry id must be in foundIds
-      for (const entry of data.entries ?? []) {
-        if (entry.id && !found.includes(entry.id))
-          ctx.addIssue({ code: "custom", message: `entry id "${entry.id}" not in foundIds`, path: ["entries"] });
-      }
+      // entries IDs must exactly equal foundIds (same set, same count)
+      const entryIds = (data.entries ?? []).map(e => e.id).filter((x): x is string => !!x);
+      if (entryIds.length !== found.length || !entryIds.every(id => found.includes(id)))
+        ctx.addIssue({ code: "custom", message: "entries IDs must exactly match foundIds", path: ["entries"] });
+      // partialResult warning required when missingIds is nonempty
+      // (checked at envelope level via refineEnvelope)
+    },
+    refineEnvelope: (val, ctx) => {
+      const data = val.data as { missingIds?: string[] };
+      const missing = data?.missingIds ?? [];
+      const warnings = val.warnings as Array<{ code?: string }>;
+      const hasPartial = warnings.some(w => w.code === "partialResult");
+      if (missing.length > 0 && !hasPartial)
+        ctx.addIssue({ code: "custom", message: "missingIds nonempty requires partialResult warning", path: ["warnings"] });
+      if (missing.length === 0 && hasPartial)
+        ctx.addIssue({ code: "custom", message: "partialResult warning requires nonempty missingIds", path: ["warnings"] });
     },
   },
   {
@@ -827,7 +847,7 @@ export const TOOL_DESCRIPTORS = [
     errorSchema: makeErrorSchema([]),
     extractRefs: (d) => {
       const p = (d as { patterns?: Array<{ exemplar?: { id?: string } }> })?.patterns ?? [];
-      return [...new Set(p.map(g => g.exemplar?.id).filter((x): x is string => !!x))];
+      return p.map(g => g.exemplar?.id).filter((x): x is string => !!x);
     },
     countResults: (d) => (d as { patterns?: unknown[] })?.patterns?.length ?? 0,
   },
@@ -845,8 +865,8 @@ export const TOOL_DESCRIPTORS = [
     ],
     evidenceKinds: [...ALL_SYNTHESIS_KINDS],
     warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "noCorpusIndex"]),
-    errorSchema: makeErrorSchema(["INDEX_UNAVAILABLE"]),
-    extractRefs: (d) => [...new Set((d as { evidenceContributions?: string[] })?.evidenceContributions ?? [])],
+    errorSchema: makeErrorSchema(["PROVIDER_ERROR"]),
+    extractRefs: (d) => (d as { evidenceContributions?: string[] })?.evidenceContributions ?? [],
     countResults: (d) => (d as { direction?: unknown })?.direction ? 1 : 0,
   },
   {
@@ -860,7 +880,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [...ALL_SYNTHESIS_KINDS],
     warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "motionEvidenceUnavailable"]),
     errorSchema: makeErrorSchema(["INVALID_INPUT"]),
-    extractRefs: (d) => [...new Set((d as { citedReferences?: string[] })?.citedReferences ?? [])],
+    extractRefs: (d) => (d as { citedReferences?: string[] })?.citedReferences ?? [],
     countResults: (d) => (d as { specVersion?: unknown })?.specVersion ? 1 : 0,
   },
   {
@@ -876,7 +896,7 @@ export const TOOL_DESCRIPTORS = [
     errorSchema: makeErrorSchema([]),
     extractRefs: (d) => {
       const r = (d as { results?: Array<{ sourceIds?: string[] }> })?.results ?? [];
-      return [...new Set(r.flatMap(e => e.sourceIds ?? []))];
+      return r.flatMap(e => e.sourceIds ?? []);
     },
     countResults: (d) => (d as { results?: unknown[] })?.results?.length ?? 0,
   },
@@ -893,7 +913,7 @@ export const TOOL_DESCRIPTORS = [
     errorSchema: makeErrorSchema([]),
     extractRefs: (d) => {
       const r = (d as { results?: Array<{ sourceId?: string }> })?.results ?? [];
-      return [...new Set(r.map(e => e.sourceId).filter((x): x is string => !!x))];
+      return r.map(e => e.sourceId).filter((x): x is string => !!x);
     },
     countResults: (d) => (d as { results?: unknown[] })?.results?.length ?? 0,
   },
@@ -910,7 +930,7 @@ export const TOOL_DESCRIPTORS = [
     errorSchema: makeErrorSchema([]),
     extractRefs: (d) => {
       const r = (d as { results?: Array<{ source?: { id?: string } }> })?.results ?? [];
-      return [...new Set(r.map(e => e.source?.id).filter((x): x is string => !!x))];
+      return r.map(e => e.source?.id).filter((x): x is string => !!x);
     },
     countResults: (d) => (d as { results?: unknown[] })?.results?.length ?? 0,
   },
@@ -929,7 +949,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [...CRITIQUE_KINDS],
     warningSchema: makeWarningSchema(["insufficientCorpusEvidence", "providerDegraded", "keywordFallback"]),
     errorSchema: makeErrorSchema(["PROVIDER_ERROR", "INVALID_INPUT"]),
-    extractRefs: (d) => [...new Set(((d as { appliedReferences?: Array<{ id?: string }> })?.appliedReferences ?? []).map(r => r.id).filter((x): x is string => !!x))],
+    extractRefs: (d) => ((d as { appliedReferences?: Array<{ id?: string }> })?.appliedReferences ?? []).map(r => r.id).filter((x): x is string => !!x),
     countResults: (d) => (d as { summary?: unknown })?.summary ? 1 : 0,
   },
 ] as const satisfies readonly ToolDescriptor[];
@@ -1068,6 +1088,12 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
 
       // 12. per-tool data refinement
       if (desc.refineData) desc.refineData(val.data, ctx);
+
+      // 13. per-tool envelope refinement (warnings, evidence cross-checks)
+      if (desc.refineEnvelope) desc.refineEnvelope(
+        { data: val.data, warnings: val.warnings as unknown[], referenceIds: val.referenceIds, evidence: val.evidence as unknown[] | undefined },
+        ctx,
+      );
     }
   });
 }

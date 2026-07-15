@@ -76,18 +76,18 @@ export function isAllowedRetrievalState(s: Record<string, unknown>): boolean {
 
 // Per-tool allowed retrieval (mode × modality pairs)
 export const ALLOWED_RETRIEVAL_STATES: Readonly<Record<string, readonly { mode: string; modality: string }[]>> = Object.freeze({
-  search_ui_references: [{mode:"hybrid",modality:"text"},{mode:"vector",modality:"text"},{mode:"keyword",modality:"text"},{mode:"keyword",modality:"metadata"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
+  search_ui_references: [{mode:"hybrid",modality:"text"},{mode:"vector",modality:"text"},{mode:"keyword",modality:"text"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
   get_ui_reference: [{mode:"none",modality:"none"}],
-  find_similar_ui_references: [{mode:"vector",modality:"text"},{mode:"keyword",modality:"metadata"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
+  find_similar_ui_references: [{mode:"vector",modality:"text"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
   compare_ui_references: [{mode:"none",modality:"none"}],
-  get_ui_taxonomy: [{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
-  browse_ui_patterns: [{mode:"keyword",modality:"metadata"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
-  plan_ui_direction: [{mode:"hybrid",modality:"text"},{mode:"vector",modality:"text"},{mode:"keyword",modality:"text"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
+  get_ui_taxonomy: [{mode:"none",modality:"none"}],
+  browse_ui_patterns: [{mode:"none",modality:"none"}],
+  plan_ui_direction: [{mode:"hybrid",modality:"text"},{mode:"keyword",modality:"text"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
   create_ui_spec: [{mode:"none",modality:"none"}],
-  research_ui_anti_patterns: [{mode:"keyword",modality:"metadata"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
-  research_ui_palettes: [{mode:"keyword",modality:"metadata"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
-  research_ui_techniques: [{mode:"keyword",modality:"metadata"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
-  critique_ui: [{mode:"vector",modality:"image"},{mode:"vector",modality:"text"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
+  research_ui_anti_patterns: [{mode:"none",modality:"none"}],
+  research_ui_palettes: [{mode:"none",modality:"none"}],
+  research_ui_techniques: [{mode:"none",modality:"none"}],
+  critique_ui: [{mode:"vector",modality:"image"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
 });
 
 function isRetrievalAllowedForTool(tool: string, mode: string, modality: string): boolean {
@@ -118,8 +118,8 @@ export const Evidence = z.object({
     ctx.addIssue({ code: "custom", message: "dom-signal basis must be dom-grounded or visible", path: ["basis"] });
   if (val.kind === "editorial-guidance" && val.basis !== "editorial")
     ctx.addIssue({ code: "custom", message: "editorial-guidance basis must be editorial", path: ["basis"] });
-  if (val.kind === "machine-rule" && val.basis === "visible")
-    ctx.addIssue({ code: "custom", message: "machine-rule basis cannot be visible", path: ["basis"] });
+  if (val.kind === "machine-rule" && (val.basis === "visible" || val.basis === "dom-grounded"))
+    ctx.addIssue({ code: "custom", message: "machine-rule basis must be inferred or editorial", path: ["basis"] });
 });
 
 // ===========================================================================
@@ -224,17 +224,36 @@ const ReferenceSummary = z.object({
 }).strict();
 
 const TaxonomyList = z.object({ count: z.number().int().nonnegative(), values: z.array(z.string().min(1)) }).strict();
-const AcceptanceCriterion = z.object({
-  id: z.string().min(1), subject: z.string().min(1), assertion: z.string().min(1),
-  expectedOutcome: z.string().min(1),
-  verifier: z.enum(["manual", "playwright", "static", "axe"]),
-  priority: z.enum(["must", "should", "could"]),
+const AcceptanceAssertion = z.enum([
+  "exists", "equals", "uses-token", "meets-contrast",
+  "keyboard-operable", "has-accessible-name", "responsive-at", "motion-respects-preference",
+]);
+const AcceptanceVerifier = z.enum(["axe", "playwright", "static-analysis", "manual"]);
+const AcceptancePriority = z.enum(["must", "should"]);
+
+export const AcceptanceCriterion = z.object({
+  id: z.string().min(1).trim(),
+  subject: z.string().min(1).trim(),
+  assertion: AcceptanceAssertion,
+  expectedOutcome: z.string().min(1).trim(),
+  verifier: AcceptanceVerifier,
+  priority: AcceptancePriority,
   evidenceIds: z.array(z.string()),
-  manualSteps: z.array(z.string()).optional(),
+  manualSteps: z.array(z.string().min(1)).optional(),
   selector: z.string().optional(),
   command: z.string().optional(),
-}).strict();
-const CitedDecision = z.object({
+}).strict().superRefine((val, ctx) => {
+  // Manual criteria require explicit steps
+  if (val.verifier === "manual" && (!val.manualSteps || val.manualSteps.length === 0))
+    ctx.addIssue({ code: "custom", message: "manual verifier requires non-empty manualSteps", path: ["manualSteps"] });
+  // Playwright criteria require selector
+  if (val.verifier === "playwright" && !val.selector)
+    ctx.addIssue({ code: "custom", message: "playwright verifier requires selector", path: ["selector"] });
+  // Static-analysis criteria require command
+  if (val.verifier === "static-analysis" && !val.command)
+    ctx.addIssue({ code: "custom", message: "static-analysis verifier requires command", path: ["command"] });
+});
+export const CitedDecision = z.object({
   id: z.string().min(1), field: z.string().min(1),
   authority: z.enum(["team-design-system", "project-constraint", "corpus-evidence", "editorial"]),
   evidenceIds: z.array(z.string()),
@@ -246,7 +265,7 @@ const ColorTokens = z.object({
   ink: z.string().min(1), muted: z.string().min(1), accent: z.string().min(1),
 }).strict();
 const TypographyTokens = z.object({ heading: z.string().min(1), body: z.string().min(1), mono: z.string().min(1) }).strict();
-const TokenAuthority = z.enum(["team-design-system", "project-constraint", "corpus-evidence", "editorial"]);
+const TokenAuthority = z.enum(["team-design-system", "project-constraint", "corpus-evidence", "editorial", "mixed"]);
 const MotionGuidance = z.object({ notes: z.array(z.string()), evidenceUnavailable: z.boolean() }).strict();
 const AuthorityLanes = z.object({
   corpusEvidence: z.array(z.string()), machineRules: z.array(z.string()), editorialGuidance: z.array(z.string()),
@@ -482,8 +501,11 @@ export function parseToolResult(raw: unknown): ParseResult {
   if (!env || typeof env !== "object") return { ok: false, errors: ["not an object"] };
 
   const tool = env.tool as string;
-  // 1. Per-tool schema
-  if (tool && tool in ToolResultSchemas) {
+  // 1. Reject missing or unknown tool discriminator
+  if (!tool) return { ok: false, errors: ["tool: missing discriminator"] };
+  if (!(tool in ToolResultSchemas)) return { ok: false, errors: [`tool: unknown tool "${tool}"`] };
+  // Validate via per-tool schema
+  {
     const schema = ToolResultSchemas[tool as ToolName];
     const parse = schema.safeParse(raw);
     if (!parse.success)
@@ -540,12 +562,16 @@ export function parseToolResult(raw: unknown): ParseResult {
     }
   }
 
-  // 9. Result row IDs must be in referenceIds (HIGH integrity)
+  // 9. Result data IDs must EXACTLY match referenceIds
   if (status === "ok" && data && referenceIds && tool) {
     const dataIds = extractDataIds(tool, data);
-    for (const id of dataIds) {
-      if (!referenceIds.includes(id))
-        errors.push(`referenceIds: data contains id "${id}" not in referenceIds`);
+    const dataSet = new Set(dataIds);
+    const refSet = new Set(referenceIds);
+    if (dataSet.size !== refSet.size || ![...dataSet].every(id => refSet.has(id))) {
+      const inDataNotRef = dataIds.filter(id => !refSet.has(id));
+      const inRefNotData = referenceIds.filter(id => !dataSet.has(id));
+      if (inDataNotRef.length) errors.push(`referenceIds: data IDs not in referenceIds: ${inDataNotRef.join(", ")}`);
+      if (inRefNotData.length) errors.push(`referenceIds: referenceIds not in data: ${inRefNotData.join(", ")}`);
     }
   }
 
@@ -569,20 +595,68 @@ export function parseToolResult(raw: unknown): ParseResult {
   return { ok: errors.length === 0, errors };
 }
 
-/** Extract ID values from tool data for referenceIds cross-checking. */
+/** Extract ALL ID values from tool data for referenceIds exact-match checking. */
 function extractDataIds(tool: string, data: Record<string, unknown>): string[] {
-  const listTools = ["search_ui_references", "find_similar_ui_references", "research_ui_anti_patterns", "research_ui_palettes", "research_ui_techniques"];
-  if (listTools.includes(tool)) {
+  const ids: string[] = [];
+  // Search/similar: results[].id
+  if (tool === "search_ui_references" || tool === "find_similar_ui_references") {
     const r = data.results as Array<Record<string, unknown>> | undefined;
-    return r ? r.map(e => e.id as string).filter(Boolean) : [];
+    if (r) for (const e of r) if (e.id) ids.push(e.id as string);
   }
-  if (tool === "compare_ui_references") return (data.foundIds as string[]) || [];
-  if (tool === "browse_ui_patterns") {
+  // Compare: foundIds
+  else if (tool === "compare_ui_references") {
+    const f = data.foundIds as string[] | undefined;
+    if (f) ids.push(...f);
+  }
+  // Browse: exemplar IDs
+  else if (tool === "browse_ui_patterns") {
     const p = data.patterns as Array<Record<string, unknown>> | undefined;
-    return p ? p.map(g => (g.exemplar as Record<string, unknown>)?.id as string).filter(Boolean) : [];
+    if (p) for (const g of p) {
+      const ex = g.exemplar as Record<string, unknown> | undefined;
+      if (ex?.id) ids.push(ex.id as string);
+    }
   }
-  if (tool === "get_ui_reference") return data.id ? [data.id as string] : [];
-  return [];
+  // get_ui_reference: data.id
+  else if (tool === "get_ui_reference") {
+    if (data.id) ids.push(data.id as string);
+  }
+  // Anti-patterns: results[].sourceIds
+  else if (tool === "research_ui_anti_patterns") {
+    const r = data.results as Array<Record<string, unknown>> | undefined;
+    if (r) for (const e of r) {
+      const sids = e.sourceIds as string[] | undefined;
+      if (sids) ids.push(...sids);
+    }
+  }
+  // Palettes: results[].sourceId
+  else if (tool === "research_ui_palettes") {
+    const r = data.results as Array<Record<string, unknown>> | undefined;
+    if (r) for (const e of r) if (e.sourceId) ids.push(e.sourceId as string);
+  }
+  // Techniques: results[].source.id
+  else if (tool === "research_ui_techniques") {
+    const r = data.results as Array<Record<string, unknown>> | undefined;
+    if (r) for (const e of r) {
+      const src = e.source as Record<string, unknown> | undefined;
+      if (src?.id) ids.push(src.id as string);
+    }
+  }
+  // Plan: evidenceContributions
+  else if (tool === "plan_ui_direction") {
+    const ec = data.evidenceContributions as string[] | undefined;
+    if (ec) ids.push(...ec);
+  }
+  // create_ui_spec: citedReferences
+  else if (tool === "create_ui_spec") {
+    const cr = data.citedReferences as string[] | undefined;
+    if (cr) ids.push(...cr);
+  }
+  // Critique: appliedReferences[].id
+  else if (tool === "critique_ui") {
+    const ar = data.appliedReferences as Array<Record<string, unknown>> | undefined;
+    if (ar) for (const r of ar) if (r.id) ids.push(r.id as string);
+  }
+  return [...new Set(ids)]; // deduplicate within data
 }
 
 function countResults(tool: string, data: Record<string, unknown>): number | null {
@@ -590,14 +664,14 @@ function countResults(tool: string, data: Record<string, unknown>): number | nul
   if (listTools.includes(tool)) {
     const r = data.results as unknown[]; return r ? r.length : null;
   }
-  // Compare: resultCount = foundIds.length per spec §5.5
   if (tool === "compare_ui_references") { const f = data.foundIds as unknown[]; return f ? f.length : null; }
   if (tool === "browse_ui_patterns") { const p = data.patterns as unknown[]; return p ? p.length : null; }
   if (tool === "get_ui_reference") return data.id ? 1 : 0;
-  if (tool === "plan_ui_direction") { const ec = data.evidenceContributions as unknown[]; return ec ? ec.length : 0; }
-  if (tool === "create_ui_spec") { const cr = data.citedReferences as unknown[]; return cr ? cr.length : 0; }
-  if (tool === "critique_ui") { const ar = data.appliedReferences as unknown[]; return ar ? ar.length : 0; }
-  if (tool === "get_ui_taxonomy") return 0; // not count-based
+  if (tool === "get_ui_taxonomy") return 0;
+  // plan/spec/critique: 1 when a complete artifact exists, 0 otherwise
+  if (tool === "plan_ui_direction") return data.direction ? 1 : 0;
+  if (tool === "create_ui_spec") return data.specVersion ? 1 : 0;
+  if (tool === "critique_ui") return data.summary ? 1 : 0;
   return null;
 }
 
@@ -632,3 +706,6 @@ export type EvidenceT = z.infer<typeof Evidence>;
 export type ToolErrorT = z.infer<typeof ToolError>;
 export type UiSpecT = z.infer<typeof UiSpec>;
 export type ToolResultEnvelopeT = z.infer<typeof ToolResultEnvelope>;
+export type CreateUiSpecInputT = z.infer<typeof CreateUiSpecInput>;
+export type AcceptanceCriterionT = z.infer<typeof AcceptanceCriterion>;
+export type CitedDecisionT = z.infer<typeof CitedDecision>;

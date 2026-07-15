@@ -190,6 +190,11 @@ const ALLOWLIST = new Set<string>([
   "isAllowedRetrievalState",
   "getToolDataSchema",
   "ToolInputSchemas",
+  "AcceptanceCriterion",
+  "CitedDecision",
+  "CreateUiSpecInputT",
+  "AcceptanceCriterionT",
+  "CitedDecisionT",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

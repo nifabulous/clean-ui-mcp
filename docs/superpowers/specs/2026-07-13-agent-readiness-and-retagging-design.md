@@ -351,22 +351,19 @@ interface Evidence {
 
 `create_ui_spec` and `plan_ui_direction` may not emit `screen-observation` or `dom-signal` evidence — they synthesize from corpus references, not screenshots.
 
-**Retrieval truth:**
+**Retrieval truth (authoritative — follows the implementation plan §Task 7 Step 2):**
 
 Retrieval metadata originates at the CorpusReader boundary as a `RetrievalOutcome<T>`. Handlers copy it unchanged into the envelope. Missing index, missing key, missing image, provider failure, zero results, and fallback success are all distinguishable states.
 
-| Tool | Allowed retrieval |
+| Tool | Mode/basis |
 |---|---|
-| `search_ui_references` | hybrid/vector/keyword + text; structured-fallback + metadata; none |
-| `get_ui_reference` | none |
-| `find_similar_ui_references` | vector + text/image; structured-fallback + metadata; none |
-| `compare_ui_references` | none |
-| `get_ui_taxonomy` | structured-fallback + metadata; none |
-| `browse_ui_patterns` | keyword/structured-fallback + metadata; none |
-| `plan_ui_direction` | hybrid/vector/keyword + text; structured-fallback + metadata; none |
-| `create_ui_spec` | none |
-| `research_ui_*` (3 tools) | keyword/structured-fallback + metadata; none |
-| `critique_ui` | vector + image/text; structured-fallback + metadata; none |
+| taxonomy, get, compare, browse, research aggregations, create spec | `none`; direct/aggregation details live in data |
+| search | `hybrid` when combined path runs; otherwise `vector`, `keyword`, or `structured-fallback` |
+| similar | `vector` + text; otherwise structured-fallback—never "visually similar" or image |
+| plan | `hybrid` preferred; keyword/structured fallback; absence of index is not an error |
+| critique | `vector` + `image` modality when available; otherwise `structured-fallback` with caller-screen evidence kept separate |
+
+`resultCount` is defined per primary payload: taxonomy `0`; get `0|1`; search/similar the number of references; compare the number of requested IDs found; browse the number of pattern groups; each research aggregation the number of aggregate rows; plan/spec/critique `1` only when a complete primary artifact exists, otherwise `0`. `referenceIds` are unique stable IDs represented in data/evidence and must exactly match the IDs in the result data.
 
 Workflow routing and next-tool suggestions belong to the skill layer, not MCP responses.
 

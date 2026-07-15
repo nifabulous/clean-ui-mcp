@@ -112,7 +112,14 @@ export function validateEnvelopeRetrieval(
         message: "fallbackUsed requires fallbackReason",
         path: ["retrieval", "fallbackReason"],
       });
-    } else if (matchingState.fallbackReasons.length > 0 && !matchingState.fallbackReasons.includes(retrieval.fallbackReason as FallbackReason)) {
+    } else if (matchingState.fallbackReasons.length === 0) {
+      // Primary modes (empty fallbackReasons) cannot be fallback states
+      ctx.addIssue({
+        code: "custom",
+        message: `fallback not allowed for primary state ${retrieval.mode}/${retrieval.modality}`,
+        path: ["retrieval", "fallbackUsed"],
+      });
+    } else if (!matchingState.fallbackReasons.includes(retrieval.fallbackReason as FallbackReason)) {
       ctx.addIssue({
         code: "custom",
         message: `fallbackReason "${retrieval.fallbackReason}" not allowed for ${retrieval.mode}/${retrieval.modality}`,

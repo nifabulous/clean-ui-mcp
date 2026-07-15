@@ -336,7 +336,7 @@ interface RetrievalState {
   fallbackUsed: boolean;      // true only when an alternate path produced results
   attemptedCount: number;     // must equal attemptedModes.length; 0 when no fallback
   fallbackReason?: "missing-index" | "incompatible-index" | "missing-provider-key" | "community-edition" | "provider-error" | "no-image-evidence";
-  attemptedModes: RetrievalMode[]; // empty when fallbackUsed=false; non-empty, no "none", no current mode, no duplicates when fallbackUsed=true
+  attemptedModes: RetrievalMode[]; // empty on ok+non-fallback; non-empty on ok+fallback or error+terminal-failure; no "none", no current mode, no duplicates always
 }
 
 interface Evidence {
@@ -478,7 +478,7 @@ These tables are the authoritative source for executable Zod schemas. The design
 | Aspect | Contract |
 |---|---|
 | Input | ids (required, 2-3 unique), responseFormat? |
-| Success data | `entries: ComparisonRow[]`, `foundIds`, `missingIds` — each row with id, product, patternType, categories, styleTags, platform, layout, accent, density, corners, quality, critique angle, top technique, antiPatterns, accessibility |
+| Success data | `entries: ComparisonRow[]`, `foundIds`, `missingIds` — each row with id, title, product, patternType, categories, styleTags, platform, layout, accent, density, corners, quality, critiqueAngle, topTechnique, antiPatterns, whereItFails, accessibility |
 | Partial | `missingIds` non-empty + typed partial warning when some IDs not found |
 | Errors | all IDs missing → NOT_FOUND (non-retryable) |
 | Retrieval | none |

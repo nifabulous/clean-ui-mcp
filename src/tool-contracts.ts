@@ -76,17 +76,18 @@ export const RetrievalState = z.object({
     ctx.addIssue({ code: "custom", message: `attemptedCount (${val.attemptedCount}) must equal attemptedModes length (${val.attemptedModes.length})`, path: ["attemptedCount"] });
   // NOTE: attemptedModes MAY be non-empty when fallbackUsed is false — terminal errors
   // record failed attempts without claiming a fallback produced results.
+  // Duplicate/none/current-mode checks run ALWAYS (not just on fallback)
+  if (val.attemptedModes.length > 0) {
+    if (val.attemptedModes.includes("none"))
+      ctx.addIssue({ code: "custom", message: "attemptedModes cannot contain 'none'", path: ["attemptedModes"] });
+    if (val.attemptedModes.includes(val.mode))
+      ctx.addIssue({ code: "custom", message: "attemptedModes cannot contain current mode", path: ["attemptedModes"] });
+    if (new Set(val.attemptedModes).size !== val.attemptedModes.length)
+      ctx.addIssue({ code: "custom", message: "attemptedModes cannot have duplicates", path: ["attemptedModes"] });
+  }
   if (val.fallbackUsed) {
     if (val.attemptedModes.length === 0)
       ctx.addIssue({ code: "custom", message: "fallback requires non-empty attemptedModes", path: ["attemptedModes"] });
-    else {
-      if (val.attemptedModes.includes("none"))
-        ctx.addIssue({ code: "custom", message: "attemptedModes cannot contain 'none'", path: ["attemptedModes"] });
-      if (val.attemptedModes.includes(val.mode))
-        ctx.addIssue({ code: "custom", message: "attemptedModes cannot contain current mode", path: ["attemptedModes"] });
-      if (new Set(val.attemptedModes).size !== val.attemptedModes.length)
-        ctx.addIssue({ code: "custom", message: "attemptedModes cannot have duplicates", path: ["attemptedModes"] });
-    }
   }
 });
 
@@ -558,6 +559,10 @@ export const UiSpec = z.object({
     evidenceIds: z.array(z.string()),
   }).strict(),
 }).strict().superRefine((val, ctx) => {
+  // Unique unavailableDecisions fields
+  const decisionFields = val.unavailableDecisions.map(d => d.field);
+  if (new Set(decisionFields).size !== decisionFields.length)
+    ctx.addIssue({ code: "custom", message: "unavailableDecisions fields must be unique", path: ["unavailableDecisions"] });
   // Null colorTokens requires colorTokenAuthority "editorial" and an exact unavailableDecision
   if (val.colorTokens === null) {
     if (val.colorTokenAuthority !== "editorial")
@@ -939,7 +944,15 @@ export const TOOL_DESCRIPTORS = [
         techniques?: Array<{ sourceIds?: string[] }>;
         antiPatterns?: Array<{ sourceIds?: string[] }>;
         componentInventory?: Array<{ source?: string }>;
+        motionGuidance?: { evidenceUnavailable?: boolean };
       };
+      // Motion warning coupling: evidenceUnavailable ↔ motionEvidenceUnavailable
+      const motionUnavailable = data.motionGuidance?.evidenceUnavailable === true;
+      const hasMotionWarn = (val.warnings as Array<{ code?: string }>).some(w => w.code === "motionEvidenceUnavailable");
+      if (motionUnavailable && !hasMotionWarn)
+        ctx.addIssue({ code: "custom", message: "motionGuidance.evidenceUnavailable requires motionEvidenceUnavailable warning", path: ["warnings"] });
+      if (!motionUnavailable && hasMotionWarn)
+        ctx.addIssue({ code: "custom", message: "motionEvidenceUnavailable warning requires motionGuidance.evidenceUnavailable", path: ["warnings"] });
       // Authoritative evidence set: envelope evidence ONLY (not provenance)
       const knownEvidence = new Set<string>();
       for (const e of (val.evidence as Array<{ id?: string }> | undefined) ?? [])
@@ -1082,7 +1095,7 @@ export const TOOL_DESCRIPTORS = [
     ],
     allowedAttemptedModes: ["vector", "structured-fallback"],
     evidenceKinds: [...CRITIQUE_KINDS],
-    warningSchema: makeWarningSchema(["insufficientCorpusEvidence", "providerDegraded", "keywordFallback"]),
+    warningSchema: makeWarningSchema(["insufficientCorpusEvidence", "providerDegraded"]),
     errorSchema: makeErrorSchema(["PROVIDER_ERROR", "INVALID_INPUT"]),
     extractRefs: (d) => ((d as { appliedReferences?: Array<{ id?: string }> })?.appliedReferences ?? []).map(r => r.id).filter((x): x is string => !!x),
     countResults: (d) => (d as { summary?: unknown })?.summary ? 1 : 0,

@@ -62,6 +62,8 @@ export const RetrievalState = z.object({
     else {
       if (val.attemptedModes.includes("none"))
         ctx.addIssue({ code: "custom", message: "attemptedModes cannot contain 'none'", path: ["attemptedModes"] });
+      if (val.attemptedModes.includes(val.mode))
+        ctx.addIssue({ code: "custom", message: "attemptedModes cannot contain the current mode", path: ["attemptedModes"] });
       if (new Set(val.attemptedModes).size !== val.attemptedModes.length)
         ctx.addIssue({ code: "custom", message: "attemptedModes cannot have duplicates", path: ["attemptedModes"] });
     }
@@ -76,7 +78,7 @@ export function isAllowedRetrievalState(s: Record<string, unknown>): boolean {
 export const ALLOWED_RETRIEVAL_STATES: Readonly<Record<string, readonly { mode: string; modality: string }[]>> = Object.freeze({
   search_ui_references: [{mode:"hybrid",modality:"text"},{mode:"vector",modality:"text"},{mode:"keyword",modality:"text"},{mode:"keyword",modality:"metadata"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
   get_ui_reference: [{mode:"none",modality:"none"}],
-  find_similar_ui_references: [{mode:"vector",modality:"text"},{mode:"vector",modality:"image"},{mode:"keyword",modality:"metadata"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
+  find_similar_ui_references: [{mode:"vector",modality:"text"},{mode:"keyword",modality:"metadata"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
   compare_ui_references: [{mode:"none",modality:"none"}],
   get_ui_taxonomy: [{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
   browse_ui_patterns: [{mode:"keyword",modality:"metadata"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
@@ -108,6 +110,8 @@ export const Evidence = z.object({
 }).strict().superRefine((val, ctx) => {
   if (val.kind === "corpus-observation" && !val.referenceId)
     ctx.addIssue({ code: "custom", message: "corpus-observation requires referenceId", path: ["referenceId"] });
+  if (val.kind === "corpus-observation" && (val.basis === "editorial" || val.basis === "dom-grounded"))
+    ctx.addIssue({ code: "custom", message: "corpus-observation basis must be visible or inferred", path: ["basis"] });
   if (val.kind === "screen-observation" && (val.basis === "editorial" || val.basis === "dom-grounded"))
     ctx.addIssue({ code: "custom", message: "screen-observation basis must be visible or inferred", path: ["basis"] });
   if (val.kind === "dom-signal" && (val.basis === "editorial" || val.basis === "inferred"))
@@ -143,7 +147,12 @@ const SearchInput = z.object({
 }).strict();
 
 const IdInput = z.object({ id: z.string().min(1) }).strict();
-const CompareInput = z.object({ ids: z.array(z.string().min(1)).min(2).max(3), responseFormat: z.enum(["concise", "detailed"]).optional() }).strict();
+const CompareInput = z.object({
+  ids: z.array(z.string().min(1)).min(2).max(3).refine(
+    (a) => new Set(a).size === a.length, "ids must be unique",
+  ),
+  responseFormat: z.enum(["concise", "detailed"]).optional(),
+}).strict();
 
 const PlanInput = z.object({
   productContext: z.string().min(8),
@@ -156,7 +165,9 @@ const PlanInput = z.object({
 
 const CreateUiSpecInput = z.object({
   productContext: z.string().min(8),
-  referenceIds: z.array(z.string().min(1)).max(5).default([]),
+  referenceIds: z.array(z.string().min(1)).max(5).default([]).refine(
+    (a) => new Set(a).size === a.length, "referenceIds must be unique",
+  ),
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
   implementationFramework: z.string().optional(),
   serializationFormat: z.enum(["brief", "tokens"]).optional(),
@@ -166,6 +177,11 @@ const CreateUiSpecInput = z.object({
 
 const ResearchInput = z.object({
   patternType: PatternType.optional(), category: Category.optional(), styleTag: StyleTag.optional(),
+  limit: z.number().int().min(1).max(20).optional(),
+}).strict();
+
+const PaletteResearchInput = z.object({
+  patternType: PatternType.optional(), styleTag: StyleTag.optional(),
   limit: z.number().int().min(1).max(20).optional(),
 }).strict();
 
@@ -188,7 +204,7 @@ export const ToolInputSchemas = {
   plan_ui_direction: PlanInput,
   create_ui_spec: CreateUiSpecInput,
   research_ui_anti_patterns: ResearchInput,
-  research_ui_palettes: ResearchInput,
+  research_ui_palettes: PaletteResearchInput,
   research_ui_techniques: ResearchTechniquesInput,
   critique_ui: CRITIQUE_UI_INPUT_SCHEMA,
 } satisfies Record<ToolName, z.ZodType>;
@@ -198,12 +214,13 @@ export const ToolInputSchemas = {
 // ===========================================================================
 
 // Shared sub-schemas
-const SourceRef = z.object({ productName: z.string(), url: z.string().nullable() }).strict();
+const SourceRef = z.object({ productName: z.string(), url: z.string().nullable(), imageAvailable: z.boolean() }).strict();
 const ReferenceSummary = z.object({
   id: z.string().min(1), product: z.string(), patternType: z.string(),
   categories: z.array(z.string()), styleTags: z.array(z.string()),
   qualityScore: z.number().int(), qualityTier: z.string(),
   source: SourceRef, critique: z.string(), topTechniques: z.array(z.string()),
+  antiPatterns: z.array(z.string()).default([]),
 }).strict();
 
 const TaxonomyList = z.object({ count: z.number().int().nonnegative(), values: z.array(z.string().min(1)) }).strict();
@@ -283,43 +300,10 @@ export const UiSpec = z.object({
   provenance: z.object({ generatedAt: z.string().datetime(), toolVersion: z.string().min(1) }).strict(),
 }).strict();
 
-// Critique data — reuses StructuredCritique minus schemaVersion
-const StructuredRec = z.object({
-  observation: z.string(), impact: z.string(), recommendation: z.string(),
-  evidence: z.array(z.string()).min(1), basis: z.enum(["visible", "inferred", "dom-grounded", "editorial"]).default("visible"),
-}).strict();
-const AccessibilityRisk = z.object({
-  element: z.string(), risk: z.string(), evidence: z.string(),
-  wcag: z.array(z.string()).min(1), basis: z.enum(["visible", "inferred", "dom-grounded", "editorial"]).default("visible"),
-}).strict();
-const VisualSlop = z.object({
-  pattern: z.string(), basis: z.enum(["visible", "inferred", "dom-grounded"]),
-  evidence: z.array(z.string()).min(1), exception: z.string().optional(),
-}).strict();
-const MotionGuide = z.object({
-  basis: z.enum(["visible", "inferred", "dom-grounded", "editorial"]),
-  evidence: z.array(z.string()).min(1), note: z.string(), reference: z.string().optional(),
-}).strict();
-const AppliedRef = z.object({ id: z.string(), version: z.number().int(), purpose: z.string() }).strict();
-
-const CritiqueDataSchema = z.object({
-  critique: z.string().min(1),
-  observations: z.array(z.string()),
-  recommendations: z.array(StructuredRec),
-  accessibilityRisks: z.array(AccessibilityRisk),
-  visualSlop: z.array(VisualSlop).default([]),
-  motion: z.array(MotionGuide).default([]),
-  appliedReferences: z.array(AppliedRef).default([]),
-  evidenceIds: z.array(z.string()),
-  confidence: z.enum(["high", "medium", "low"]),
-  md3: z.object({
-    classification: z.enum(["supported", "insufficient-evidence", "conflicting"]),
-    matchedCategories: z.array(z.string()),
-    conflictingSignals: z.array(z.object({ category: z.string(), evidenceId: z.string(), detail: z.string() }).strict()).default([]),
-    evidenceIds: z.array(z.string()),
-    confidence: z.number(),
-  }).strict().optional(),
-}).strict();
+// Critique data — reuses StructuredCritique from synthesis/contracts.ts
+// minus schemaVersion (which lives in the envelope)
+import { StructuredCritique } from "./synthesis/contracts.js";
+const CritiqueDataSchema = StructuredCritique.omit({ schemaVersion: true });
 
 // Compare row
 const ComparisonRow = z.object({
@@ -338,33 +322,64 @@ const PatternGroup = z.object({
   exemplar: z.object({ id: z.string().min(1), product: z.string(), critique: z.string() }).strict(),
 }).strict();
 
-// Plan data
+// Plan data — complete recommendation with structured decisions
+const PlanDecision = z.object({
+  field: z.string().min(1), value: z.string(),
+  authority: z.enum(["team-design-system", "project-constraint", "corpus-evidence", "editorial"]),
+  evidenceIds: z.array(z.string()),
+}).strict();
 const PlanDataSchema = z.object({
   direction: z.string().min(1),
   rejectedDefaults: z.array(z.string()),
   recommendation: z.string(),
   rationale: z.string(),
   evidenceContributions: z.array(z.string()),
+  structuredDecisions: z.array(PlanDecision),
 }).strict();
 
 // Research rows
 const AntiPatternRow = z.object({ text: z.string().min(1), sourceIds: z.array(z.string()), count: z.number().int() }).strict();
+
+// Palette tokens use canvas (not primary) to match runtime aggregations
+const PaletteTokens = z.object({
+  canvas: z.string().min(1), surface: z.string().min(1),
+  ink: z.string().min(1), muted: z.string().nullable(), accent: z.string().min(1),
+}).strict();
 const PaletteRecord = z.object({
-  tokens: ColorTokens, accentHue: z.string(), product: z.string(), sourceId: z.string().min(1),
+  tokens: PaletteTokens, accentHue: z.number(), product: z.string(), sourceId: z.string().min(1),
 }).strict();
 const TechniqueRow = z.object({ text: z.string().min(1), source: z.object({ id: z.string().min(1), product: z.string() }).strict() }).strict();
 const SimilarReference = z.object({
   id: z.string().min(1), product: z.string(), patternType: z.string(),
-  score: z.number(), basis: z.string(),
+  categories: z.array(z.string()), styleTags: z.array(z.string()),
+  score: z.number(), critique: z.string(), techniques: z.array(z.string()),
 }).strict();
 
-// Full reference record (get_ui_reference)
+// Full reference record (get_ui_reference) — represents all fields the legacy handler renders
 const FullReference = z.object({
   id: z.string().min(1), title: z.string(), product: z.string(),
   patternType: z.string(), categories: z.array(z.string()), styleTags: z.array(z.string()),
   qualityScore: z.number().int(), qualityTier: z.string(), platform: z.string(),
-  layout: z.string(), accent: z.string(), density: z.string(), corners: z.string(),
-  critique: z.string(), techniques: z.array(z.string()), antiPatterns: z.array(z.string()),
+  layout: z.string(),
+  accentColor: z.string().nullable(), dominantColors: z.array(z.string()),
+  colorRoles: z.object({
+    canvas: z.string().nullable(), surface: z.string().nullable(),
+    ink: z.string().nullable(), muted: z.string().nullable(), accent: z.string().nullable(),
+  }).nullable(),
+  typePairing: z.object({
+    display: z.string().nullable(), body: z.string().nullable(), notes: z.string().optional(),
+  }).nullable(),
+  spacingDensity: z.string(), cornerStyle: z.string(),
+  usesShadows: z.boolean(), usesBorders: z.boolean(),
+  critique: z.string(), techniques: z.array(z.string()),
+  antiPatterns: z.array(z.string()),
+  whereThisFails: z.array(z.string()).default([]),
+  accessibility: z.array(z.object({
+    element: z.string(), risk: z.string(), wcag: z.array(z.string()),
+  }).strict()).default([]),
+  voice: z.object({
+    tone: z.string().nullable(), examples: z.array(z.string()), avoid: z.array(z.string()),
+  }).nullable().optional(),
   source: SourceRef, imageAvailable: z.boolean(),
 }).strict();
 
@@ -402,7 +417,7 @@ export function getToolEvidenceRequired(tool: string): boolean {
 const SCREEN_TOOLS = new Set(["critique_ui"]);
 
 function envelopeSuperRefine(tool: string) {
-  return (val: { status: string; data: unknown; error?: unknown; evidence?: unknown[]; warnings: string[] }, ctx: z.RefinementCtx) => {
+  return (val: { status: string; data: unknown; error?: unknown; evidence?: unknown[]; warnings: string[]; retrieval: { resultCount: number } }, ctx: z.RefinementCtx) => {
     const evRequired = getToolEvidenceRequired(tool);
     if (val.status === "ok") {
       if (val.data === null) ctx.addIssue({ code: "custom", message: 'status "ok" requires non-null data', path: ["data"] });
@@ -412,6 +427,7 @@ function envelopeSuperRefine(tool: string) {
     if (val.status === "error") {
       if (val.data !== null) ctx.addIssue({ code: "custom", message: 'status "error" requires null data', path: ["data"] });
       if (val.error === undefined) ctx.addIssue({ code: "custom", message: 'status "error" requires error', path: ["error"] });
+      if (val.retrieval.resultCount !== 0) ctx.addIssue({ code: "custom", message: 'status "error" requires resultCount 0', path: ["retrieval", "resultCount"] });
     }
     if (val.evidence !== undefined && !evRequired)
       ctx.addIssue({ code: "custom", message: `tool is not an evidence tool`, path: ["evidence"] });
@@ -510,12 +526,63 @@ export function parseToolResult(raw: unknown): ParseResult {
     }
   }
 
-  // 7. Empty evidence requires warning (broadened — any non-empty warnings array)
+  // 7. Empty evidence requires warning
   if (status === "ok" && tool && getToolEvidenceRequired(tool) && evidence !== undefined && evidence.length === 0) {
     if (!warnings || warnings.length === 0) errors.push("evidence: empty array requires warning");
   }
 
+  // 8. Evidence referenceId must be in referenceIds (HIGH integrity)
+  if (referenceIds && evidence) {
+    for (const ev of evidence) {
+      const refId = ev.referenceId as string | undefined;
+      if (refId && !referenceIds.includes(refId))
+        errors.push(`evidence: referenceId "${refId}" not in referenceIds`);
+    }
+  }
+
+  // 9. Result row IDs must be in referenceIds (HIGH integrity)
+  if (status === "ok" && data && referenceIds && tool) {
+    const dataIds = extractDataIds(tool, data);
+    for (const id of dataIds) {
+      if (!referenceIds.includes(id))
+        errors.push(`referenceIds: data contains id "${id}" not in referenceIds`);
+    }
+  }
+
+  // 10. Compare: foundIds/missingIds consistency
+  if (status === "ok" && data && tool === "compare_ui_references") {
+    const foundIds = data.foundIds as string[] | undefined;
+    const missingIds = data.missingIds as string[] | undefined;
+    const entries = data.entries as Array<Record<string, unknown>> | undefined;
+    if (foundIds && missingIds) {
+      const overlap = foundIds.filter(id => missingIds.includes(id));
+      if (overlap.length > 0) errors.push(`compare: IDs in both foundIds and missingIds: ${overlap.join(", ")}`);
+    }
+    if (foundIds && entries) {
+      for (const entry of entries) {
+        if (!foundIds.includes(entry.id as string))
+          errors.push(`compare: entry id "${entry.id}" not in foundIds`);
+      }
+    }
+  }
+
   return { ok: errors.length === 0, errors };
+}
+
+/** Extract ID values from tool data for referenceIds cross-checking. */
+function extractDataIds(tool: string, data: Record<string, unknown>): string[] {
+  const listTools = ["search_ui_references", "find_similar_ui_references", "research_ui_anti_patterns", "research_ui_palettes", "research_ui_techniques"];
+  if (listTools.includes(tool)) {
+    const r = data.results as Array<Record<string, unknown>> | undefined;
+    return r ? r.map(e => e.id as string).filter(Boolean) : [];
+  }
+  if (tool === "compare_ui_references") return (data.foundIds as string[]) || [];
+  if (tool === "browse_ui_patterns") {
+    const p = data.patterns as Array<Record<string, unknown>> | undefined;
+    return p ? p.map(g => (g.exemplar as Record<string, unknown>)?.id as string).filter(Boolean) : [];
+  }
+  if (tool === "get_ui_reference") return data.id ? [data.id as string] : [];
+  return [];
 }
 
 function countResults(tool: string, data: Record<string, unknown>): number | null {
@@ -523,9 +590,14 @@ function countResults(tool: string, data: Record<string, unknown>): number | nul
   if (listTools.includes(tool)) {
     const r = data.results as unknown[]; return r ? r.length : null;
   }
-  if (tool === "compare_ui_references") { const e = data.entries as unknown[]; return e ? e.length : null; }
+  // Compare: resultCount = foundIds.length per spec §5.5
+  if (tool === "compare_ui_references") { const f = data.foundIds as unknown[]; return f ? f.length : null; }
   if (tool === "browse_ui_patterns") { const p = data.patterns as unknown[]; return p ? p.length : null; }
   if (tool === "get_ui_reference") return data.id ? 1 : 0;
+  if (tool === "plan_ui_direction") { const ec = data.evidenceContributions as unknown[]; return ec ? ec.length : 0; }
+  if (tool === "create_ui_spec") { const cr = data.citedReferences as unknown[]; return cr ? cr.length : 0; }
+  if (tool === "critique_ui") { const ar = data.appliedReferences as unknown[]; return ar ? ar.length : 0; }
+  if (tool === "get_ui_taxonomy") return 0; // not count-based
   return null;
 }
 

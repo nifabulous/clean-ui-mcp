@@ -29,6 +29,8 @@ function successEnvelope(
   data: JsonObject,
   referenceIds: string[],
   resultCount: number,
+  mode = "none",
+  modality = "none",
 ): JsonObject {
   return {
     tool,
@@ -38,8 +40,8 @@ function successEnvelope(
     data,
     referenceIds,
     retrieval: {
-      mode: "none",
-      modality: "none",
+      mode,
+      modality,
       resultCount,
       fallbackUsed: false,
       attemptedCount: 0,
@@ -145,13 +147,13 @@ const planEvidence = [
 export function makeValidSuccess(tool: ToolName): JsonObject {
   switch (tool) {
     case "search_ui_references":
-      return successEnvelope(tool, { results: [refSummary("ref-a")] }, ["ref-a"], 1);
+      return successEnvelope(tool, { results: [refSummary("ref-a")] }, ["ref-a"], 1, "hybrid", "text");
 
     case "get_ui_reference":
       return successEnvelope(tool, fullRef("ref-a"), ["ref-a"], 1);
 
     case "find_similar_ui_references":
-      return successEnvelope(tool, { results: [similarRef("ref-b")] }, ["ref-b"], 1);
+      return successEnvelope(tool, { results: [similarRef("ref-b")] }, ["ref-b"], 1, "vector", "text");
 
     case "compare_ui_references": {
       const env = successEnvelope(tool, {
@@ -184,7 +186,7 @@ export function makeValidSuccess(tool: ToolName): JsonObject {
           field: "color-primary", value: "#3b82f6",
           authority: "corpus-evidence", evidenceIds: ["evidence-corpus-a"],
         }],
-      }, ["ref-a"], 1);
+      }, ["ref-a"], 1, "hybrid", "text");
       (env as JsonObject).evidence = planEvidence;
       return env;
     }
@@ -252,7 +254,7 @@ export function makeValidSuccess(tool: ToolName): JsonObject {
     case "critique_ui": {
       const env = successEnvelope(tool, {
         platform: "web",
-        retrievalMode: "none",
+        retrievalMode: "vector",
         fallbackUsed: false,
         coverage: "full",
         summary: "Good design with minor accessibility concerns.",
@@ -270,7 +272,7 @@ export function makeValidSuccess(tool: ToolName): JsonObject {
         appliedReferences: [{ id: "ref-a", version: 1, purpose: "Similar dashboard pattern" }],
         evidenceIds: ["evidence-screen-a", "evidence-corpus-a"],
         confidence: "medium",
-      }, ["ref-a"], 1);
+      }, ["ref-a"], 1, "vector", "image");
       (env as JsonObject).evidence = [
         { id: "evidence-screen-a", kind: "screen-observation", summary: "Low contrast on secondary text.", basis: "visible" },
         { id: "evidence-corpus-a", referenceId: "ref-a", kind: "corpus-observation", summary: "Uses a sidebar layout.", basis: "visible" },

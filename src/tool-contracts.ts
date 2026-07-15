@@ -1291,6 +1291,11 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
       if (val.referenceIds.length > 0)
         ctx.addIssue({ code: "custom", message: 'status "error" requires empty referenceIds', path: ["referenceIds"] });
     }
+    // 2b. Retrieval-capable tools: mode "none" on success requires resultCount 0
+    // (none-only tools like get/compare/taxonomy legitimately have none+count 1)
+    const isRetrievalCapable = desc.retrieval.length > 1 || (desc.retrieval.length === 1 && desc.retrieval[0]!.mode !== "none");
+    if (val.status === "ok" && isRetrievalCapable && val.retrieval.mode === "none" && val.retrieval.resultCount > 0)
+      ctx.addIssue({ code: "custom", message: "retrieval-capable tool cannot have mode none with positive resultCount on success", path: ["retrieval"] });
     // 3. Retrieval eligibility + fallback truth + attempted-mode policy
     // Delegate to the shared integrity validator for complete checks
     validateEnvelopeRetrieval(

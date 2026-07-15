@@ -3,6 +3,9 @@
  *
  * This module is canonical: TypeScript types use `z.infer`, the design spec
  * documents these schemas, and Tasks 6–9 consume them rather than redefining.
+ *
+ * Every tool has descriptor-keyed input, data, and complete envelope schemas
+ * so the MCP outputSchema can advertise the real contract, not z.unknown().
  */
 import { z } from "zod";
 import {
@@ -38,9 +41,6 @@ const ALLOWED_MODE_MODALITY: Record<string, readonly string[]> = {
   "structured-fallback": ["metadata"],
 };
 
-/**
- * The retrieval state of a tool result.
- */
 export const RetrievalState = z
   .object({
     mode: RetrievalMode,
@@ -52,31 +52,25 @@ export const RetrievalState = z
   })
   .strict()
   .superRefine((val, ctx) => {
-    // Mode × modality matrix
     const allowed = ALLOWED_MODE_MODALITY[val.mode];
     if (allowed && !allowed.includes(val.modality)) {
       ctx.addIssue({ code: "custom", message: `mode "${val.mode}" cannot have modality "${val.modality}"`, path: ["modality"] });
     }
-    // fallbackUsed ↔ fallbackReason
     if (val.fallbackUsed && val.fallbackReason === undefined) {
       ctx.addIssue({ code: "custom", message: "fallbackUsed true requires fallbackReason", path: ["fallbackReason"] });
     }
     if (!val.fallbackUsed && val.fallbackReason !== undefined) {
       ctx.addIssue({ code: "custom", message: "fallbackReason requires fallbackUsed true", path: ["fallbackUsed"] });
     }
-    // none mode cannot have fallback
     if (val.mode === "none" && val.fallbackUsed) {
       ctx.addIssue({ code: "custom", message: "'none' mode cannot have fallbackUsed", path: ["mode"] });
     }
-    // vector + missing-index is contradictory
     if (val.mode === "vector" && val.fallbackReason === "missing-index") {
       ctx.addIssue({ code: "custom", message: "'vector' mode with 'missing-index' is contradictory", path: ["mode"] });
     }
-    // structured-fallback requires reason
-    if (val.mode === "structured-fallback" && val.fallbackReason === undefined) {
-      ctx.addIssue({ code: "custom", message: "'structured-fallback' requires a fallbackReason", path: ["fallbackReason"] });
+    if (val.mode === "structured-fallback" && val.fallbackReason === undefined && val.fallbackUsed) {
+      ctx.addIssue({ code: "custom", message: "'structured-fallback' fallback requires a fallbackReason", path: ["fallbackReason"] });
     }
-    // Fallback requires non-empty attemptedModes without 'none' or duplicates
     if (val.fallbackUsed) {
       if (val.attemptedModes === undefined) {
         ctx.addIssue({ code: "custom", message: "fallbackUsed true requires attemptedModes", path: ["attemptedModes"] });
@@ -87,15 +81,13 @@ export const RetrievalState = z
         if (val.attemptedModes.includes("none")) {
           ctx.addIssue({ code: "custom", message: "attemptedModes must not contain 'none'", path: ["attemptedModes"] });
         }
-        const uniq = new Set(val.attemptedModes);
-        if (uniq.size !== val.attemptedModes.length) {
+        if (new Set(val.attemptedModes).size !== val.attemptedModes.length) {
           ctx.addIssue({ code: "custom", message: "attemptedModes must not contain duplicates", path: ["attemptedModes"] });
         }
       }
     }
   });
 
-/** Pure check. */
 export function isAllowedRetrievalState(state: {
   mode: string; modality: string; fallbackUsed: boolean;
   resultCount?: number; fallbackReason?: string; attemptedModes?: string[];
@@ -107,15 +99,11 @@ export function isAllowedRetrievalState(state: {
 // Per-tool allowed retrieval states
 // ===========================================================================
 
-export interface ToolRetrievalState {
-  mode: string;
-  modality: string;
-}
+export interface ToolRetrievalState { mode: string; modality: string }
 
 /**
- * Allowed retrieval states per tool. Each tool may only produce retrieval
- * states appropriate to its function. This prevents e.g. get_ui_taxonomy
- * claiming image-vector retrieval.
+ * Allowed retrieval states per tool. Critique_ui includes vector+image
+ * because it has an image-embedding retrieval path for the uploaded screenshot.
  */
 export const ALLOWED_RETRIEVAL_STATES: Readonly<Record<string, readonly ToolRetrievalState[]>> = Object.freeze({
   search_ui_references: [
@@ -132,6 +120,7 @@ export const ALLOWED_RETRIEVAL_STATES: Readonly<Record<string, readonly ToolRetr
   ],
   find_similar_ui_references: [
     { mode: "vector", modality: "text" },
+    { mode: "vector", modality: "image" },
     { mode: "keyword", modality: "metadata" },
     { mode: "structured-fallback", modality: "metadata" },
     { mode: "none", modality: "none" },
@@ -176,6 +165,8 @@ export const ALLOWED_RETRIEVAL_STATES: Readonly<Record<string, readonly ToolRetr
     { mode: "none", modality: "none" },
   ],
   critique_ui: [
+    { mode: "vector", modality: "image" },
+    { mode: "vector", modality: "text" },
     { mode: "structured-fallback", modality: "metadata" },
     { mode: "none", modality: "none" },
   ],
@@ -187,8 +178,13 @@ function isRetrievalAllowedForTool(tool: string, state: { mode: string; modality
   return allowed.some((a) => a.mode === state.mode && a.modality === state.modality);
 }
 
+/** Tools that operate on a screenshot and can emit screen/DOM evidence. */
+const SCREEN_TOOLS = new Set(["critique_ui"]);
+/** Tools that synthesize from corpus references and emit corpus/editorial evidence. */
+const SYNTHESIS_TOOLS = new Set(["plan_ui_direction", "create_ui_spec", "critique_ui"]);
+
 // ===========================================================================
-// Evidence — approved model with semantic constraints
+// Evidence — approved model with discriminated lanes
 // ===========================================================================
 
 export const EvidenceKind = z.enum([
@@ -201,10 +197,12 @@ export const EvidenceBasis = z.enum([
 ]);
 
 /**
- * Claim-level evidence with semantic constraints:
+ * Claim-level evidence with discriminated semantic constraints:
  * - corpus-observation requires referenceId
- * - dom-signal basis must be dom-grounded or visible (not editorial/inferred)
- * - editorial-guidance basis must be editorial (not visible)
+ * - screen-observation requires visible or inferred basis (not editorial/dom-grounded)
+ * - dom-signal requires dom-grounded or visible basis
+ * - editorial-guidance requires editorial basis
+ * - machine-rule requires editorial basis (rules come from references, not observation)
  */
 export const Evidence = z
   .object({
@@ -216,21 +214,20 @@ export const Evidence = z
   })
   .strict()
   .superRefine((val, ctx) => {
-    // corpus-observation requires referenceId
     if (val.kind === "corpus-observation" && val.referenceId === undefined) {
       ctx.addIssue({ code: "custom", message: "corpus-observation requires referenceId", path: ["referenceId"] });
     }
-    // dom-signal must be dom-grounded or visible (not editorial)
+    if (val.kind === "screen-observation" && (val.basis === "editorial" || val.basis === "dom-grounded")) {
+      ctx.addIssue({ code: "custom", message: "screen-observation basis must be 'visible' or 'inferred'", path: ["basis"] });
+    }
     if (val.kind === "dom-signal" && (val.basis === "editorial" || val.basis === "inferred")) {
       ctx.addIssue({ code: "custom", message: "dom-signal basis must be 'dom-grounded' or 'visible'", path: ["basis"] });
     }
-    // editorial-guidance basis must be editorial (not visible)
     if (val.kind === "editorial-guidance" && val.basis !== "editorial") {
       ctx.addIssue({ code: "custom", message: "editorial-guidance basis must be 'editorial'", path: ["basis"] });
     }
-    // machine-rule basis must be editorial (rules come from reference, not observation)
     if (val.kind === "machine-rule" && val.basis === "visible") {
-      ctx.addIssue({ code: "custom", message: "machine-rule basis cannot be 'visible' (rules are not directly observed)", path: ["basis"] });
+      ctx.addIssue({ code: "custom", message: "machine-rule basis cannot be 'visible'", path: ["basis"] });
     }
   });
 
@@ -247,7 +244,7 @@ export const ToolError = z
   .strict();
 
 // ===========================================================================
-// UiSpec — complete create_ui_spec output (§5.4)
+// UiSpec — complete versioned create_ui_spec output (§5.4)
 // ===========================================================================
 
 const ColorTokens = z.object({
@@ -263,6 +260,14 @@ const TypographyTokens = z.object({
   mono: z.string().min(1),
 }).strict();
 
+/** Authority for token decisions. */
+const TokenAuthority = z.enum([
+  "team-design-system",   // existing team design system
+  "project-constraint",   // explicit approved project constraints
+  "corpus-evidence",      // cited corpus proposals
+  "editorial",            // editorial defaults
+]).describe("Decision authority for token values — higher wins per §5.4");
+
 const MotionGuidance = z.object({
   notes: z.array(z.string()),
   evidenceUnavailable: z.boolean(),
@@ -274,28 +279,53 @@ const AuthorityLanes = z.object({
   editorialGuidance: z.array(z.string()),
 }).strict();
 
+const AcceptanceCriterion = z.object({
+  criterion: z.string().min(1),
+  type: z.enum(["visual", "accessibility", "behavioral", "content"]),
+}).strict();
+
+/** Context identity for the spec — what was asked for. */
+const SpecContext = z.object({
+  productContext: z.string().min(1),
+  platform: z.enum(["web", "mobile", "tablet"]).optional(),
+  framework: z.string().optional(),
+  designSystem: z.string().optional(),
+}).strict();
+
 /**
  * The complete versioned UiSpec returned by create_ui_spec.
- * Encodes all approved fields: design direction, layout, tokens, motion,
- * accessibility, evidence lanes, authority separation, and testable
- * acceptance criteria.
+ * Spec version allows evolution without breaking existing artifacts.
  */
 export const UiSpec = z.object({
+  specVersion: z.literal("1.0"),
+  context: SpecContext,
   designDirection: z.string().min(1),
   rejectedDefaults: z.array(z.string()),
   layoutRegions: z.array(z.unknown()),
+  responsiveBehavior: z.array(z.string()).default([]),
   componentInventory: z.array(z.unknown()),
   colorTokens: ColorTokens,
+  colorTokenAuthority: TokenAuthority,
   typographyTokens: TypographyTokens,
+  typographyTokenAuthority: TokenAuthority,
+  interactions: z.array(z.string()).default([]),
   motionGuidance: MotionGuidance,
   accessibilityConstraints: z.array(z.string()),
   contentVoiceGuidance: z.string().optional(),
   techniques: z.array(z.unknown()),
   antiPatterns: z.array(z.unknown()),
   frameworkNotes: z.string().optional(),
-  acceptanceCriteria: z.array(z.string().min(1)).min(1),
+  unavailableDecisions: z.array(z.object({
+    field: z.string().min(1),
+    reason: z.string().min(1),
+  }).strict()).default([]),
+  acceptanceCriteria: z.array(AcceptanceCriterion).min(1),
   citedReferences: z.array(z.string()),
   authorityLanes: AuthorityLanes,
+  provenance: z.object({
+    generatedAt: z.string().datetime(),
+    toolVersion: z.string().min(1),
+  }).strict(),
 }).strict();
 
 // ===========================================================================
@@ -316,24 +346,25 @@ const SearchInput = z.object({
 }).strict();
 
 const IdInput = z.object({ id: z.string().min(1) }).strict();
-
-const CompareInput = z.object({
-  ids: z.array(z.string().min(1)).min(2).max(3),
-  responseFormat: z.enum(["concise", "detailed"]).optional(),
-}).strict();
-
+const CompareInput = z.object({ ids: z.array(z.string().min(1)).min(2).max(3), responseFormat: z.enum(["concise", "detailed"]).optional() }).strict();
 const EmptyInput = z.object({}).strict();
 
 const PlanInput = z.object({
   productContext: z.string().min(1),
   category: Category.optional(),
   styleTag: StyleTag.optional(),
+  platform: z.enum(["web", "mobile", "tablet"]).optional(),
+  framework: z.string().optional(),
   count: z.number().int().min(1).max(5).optional(),
 }).strict();
 
+/** create_ui_spec allows zero references for the sparse/editorial-only case. */
 const CreateUiSpecInput = z.object({
   productContext: z.string().min(1),
-  references: z.array(z.string().min(1)).min(1),
+  references: z.array(z.string().min(1)).default([]),
+  platform: z.enum(["web", "mobile", "tablet"]).optional(),
+  framework: z.string().optional(),
+  designSystem: z.string().optional(),
   constraints: z.array(z.string()).optional(),
 }).strict();
 
@@ -344,11 +375,13 @@ const ResearchInput = z.object({
   limit: z.number().int().min(1).max(20).optional(),
 }).strict();
 
+/** Critique input matches the existing CRITIQUE_UI_INPUT_SCHEMA including framework. */
 const CritiqueInput = z.object({
   image_data: z.string().min(1),
   image_mime_type: z.enum(["image/png", "image/jpeg", "image/webp"]),
   product_context: z.string().optional(),
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
+  framework: z.string().optional().describe("Design framework hint (e.g. 'md3')"),
 }).strict();
 
 export const ToolInputSchemas = {
@@ -357,9 +390,7 @@ export const ToolInputSchemas = {
   find_similar_ui_references: IdInput.extend({ limit: z.number().int().min(1).max(20).optional() }).strict(),
   compare_ui_references: CompareInput,
   get_ui_taxonomy: EmptyInput,
-  browse_ui_patterns: z.object({
-    styleTag: StyleTag.optional(),
-  }).strict(),
+  browse_ui_patterns: z.object({ styleTag: StyleTag.optional() }).strict(),
   plan_ui_direction: PlanInput,
   create_ui_spec: CreateUiSpecInput,
   research_ui_anti_patterns: ResearchInput,
@@ -372,37 +403,15 @@ export const ToolInputSchemas = {
 // Per-tool data schemas
 // ===========================================================================
 
-const SearchResultEntry = z.object({
-  id: z.string().min(1),
-  product: z.string().optional(),
-  patternType: z.string().optional(),
-  score: z.number().optional(),
-}).strict();
-
+const SearchResultEntry = z.object({ id: z.string().min(1), product: z.string().optional(), patternType: z.string().optional(), score: z.number().optional() }).strict();
 const SearchData = z.object({ results: z.array(SearchResultEntry) }).strict();
 const ReferenceData = z.object({ id: z.string().min(1) }).catchall(z.unknown()).strict();
 const SimilarData = z.object({ results: z.array(SearchResultEntry) }).strict();
 const ComparisonEntry = z.object({ id: z.string().min(1) }).catchall(z.unknown()).strict();
 const CompareData = z.object({ entries: z.array(ComparisonEntry) }).strict();
-
-const TaxonomyList = z.object({
-  count: z.number().int().nonnegative(),
-  values: z.array(z.string().min(1)),
-}).strict();
-
-const TaxonomyData = z.object({
-  patternTypes: TaxonomyList,
-  categories: TaxonomyList,
-  styleTags: TaxonomyList,
-  components: TaxonomyList.optional(),
-  domainTags: TaxonomyList.optional(),
-}).strict();
-
-const PatternGroupEntry = z.object({
-  patternType: z.string().min(1),
-  count: z.number().int().nonnegative(),
-}).strict();
-
+const TaxonomyList = z.object({ count: z.number().int().nonnegative(), values: z.array(z.string().min(1)) }).strict();
+const TaxonomyData = z.object({ patternTypes: TaxonomyList, categories: TaxonomyList, styleTags: TaxonomyList, components: TaxonomyList.optional(), domainTags: TaxonomyList.optional() }).strict();
+const PatternGroupEntry = z.object({ patternType: z.string().min(1), count: z.number().int().nonnegative() }).strict();
 const BrowseData = z.object({ patterns: z.array(PatternGroupEntry) }).strict();
 const PlanData = z.object({ direction: z.string().min(1) }).catchall(z.unknown()).strict();
 const ResearchEntry = z.object({ id: z.string().min(1) }).catchall(z.unknown()).strict();
@@ -424,72 +433,136 @@ export const ToolDataSchemas = {
   critique_ui: CritiqueData,
 } satisfies Record<ToolName, z.ZodType>;
 
-/** Get the data schema for a tool. */
 export function getToolDataSchema(tool: string): z.ZodType | undefined {
   return ToolDataSchemas[tool as keyof typeof ToolDataSchemas];
 }
 
-/** Whether this tool must include an evidence array. */
 export function getToolEvidenceRequired(tool: string): boolean {
   const def = TOOL_DEFINITIONS.find((d) => d.name === tool);
   return def?.hasEvidence ?? false;
 }
 
 // ===========================================================================
-// parseToolResult — validates an envelope + per-tool data + evidence + retrieval
+// Descriptor-keyed complete envelope schemas (for MCP outputSchema)
 // ===========================================================================
 
-export interface ParseResult {
-  ok: boolean;
-  errors: string[];
+/**
+ * Build a complete per-tool envelope schema with typed data.
+ * This is what the MCP outputSchema should advertise.
+ */
+function makeToolEnvelopeSchema(tool: ToolName, dataSchema: z.ZodType) {
+  const evidenceRequired = getToolEvidenceRequired(tool);
+  return z.object({
+    tool: z.literal(tool),
+    schemaVersion: z.literal("1.0"),
+    status: z.enum(["ok", "error"]),
+    summary: z.string(),
+    data: dataSchema.nullable(),
+    referenceIds: z.array(z.string()),
+    retrieval: RetrievalState,
+    warnings: z.array(z.string()),
+    evidence: evidenceRequired ? z.array(Evidence) : z.array(Evidence).optional(),
+    error: ToolError.optional(),
+  }).strict();
 }
 
-/**
- * Validate a complete tool result including per-tool data schema enforcement,
- * evidence eligibility, retrieval state, and per-tool retrieval constraints.
- */
+export const ToolResultSchemas = {
+  search_ui_references: makeToolEnvelopeSchema("search_ui_references", SearchData),
+  get_ui_reference: makeToolEnvelopeSchema("get_ui_reference", ReferenceData),
+  find_similar_ui_references: makeToolEnvelopeSchema("find_similar_ui_references", SimilarData),
+  compare_ui_references: makeToolEnvelopeSchema("compare_ui_references", CompareData),
+  get_ui_taxonomy: makeToolEnvelopeSchema("get_ui_taxonomy", TaxonomyData),
+  browse_ui_patterns: makeToolEnvelopeSchema("browse_ui_patterns", BrowseData),
+  plan_ui_direction: makeToolEnvelopeSchema("plan_ui_direction", PlanData),
+  create_ui_spec: makeToolEnvelopeSchema("create_ui_spec", UiSpec),
+  research_ui_anti_patterns: makeToolEnvelopeSchema("research_ui_anti_patterns", ResearchData),
+  research_ui_palettes: makeToolEnvelopeSchema("research_ui_palettes", ResearchData),
+  research_ui_techniques: makeToolEnvelopeSchema("research_ui_techniques", ResearchData),
+  critique_ui: makeToolEnvelopeSchema("critique_ui", CritiqueData),
+} satisfies Record<ToolName, z.ZodType>;
+
+// ===========================================================================
+// parseToolResult — full validation with result integrity
+// ===========================================================================
+
+export interface ParseResult { ok: boolean; errors: string[] }
+
 export function parseToolResult(raw: unknown): ParseResult {
   const errors: string[] = [];
 
-  // 1. Parse the common envelope shape (without per-tool data)
-  const envelopeParse = ToolResultEnvelope.safeParse(raw);
-  if (!envelopeParse.success) {
-    return {
-      ok: false,
-      errors: envelopeParse.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`),
-    };
+  const env = raw as Record<string, unknown> | null;
+  if (!env || typeof env !== "object") {
+    return { ok: false, errors: ["not an object"] };
   }
 
-  const env = envelopeParse.data;
+  const tool = env.tool as string | undefined;
 
-  // 2. For success results, validate data against the per-tool schema
-  if (env.status === "ok" && env.data !== null) {
-    const dataSchema = getToolDataSchema(env.tool);
-    if (dataSchema) {
-      const dataParse = dataSchema.safeParse(env.data);
-      if (!dataParse.success) {
-        errors.push(
-          ...dataParse.error.issues.map((i) => `data.${i.path.join(".")}: ${i.message}`),
-        );
+  // 1. Use descriptor-keyed schema for structural validation
+  if (tool && tool in ToolResultSchemas) {
+    const schema = ToolResultSchemas[tool as ToolName];
+    const parse = schema.safeParse(raw);
+    if (!parse.success) {
+      return { ok: false, errors: parse.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) };
+    }
+  } else {
+    // Fall back to generic envelope for unknown tools
+    const parse = ToolResultEnvelope.safeParse(raw);
+    if (!parse.success) {
+      return { ok: false, errors: parse.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) };
+    }
+  }
+
+  const status = env.status as string;
+  const data = env.data as Record<string, unknown> | null;
+  const retrieval = env.retrieval as Record<string, unknown> | undefined;
+  const referenceIds = env.referenceIds as string[] | undefined;
+  const evidence = env.evidence as Array<Record<string, unknown>> | undefined;
+
+  // 2. Per-tool retrieval state
+  if (tool && retrieval && !isRetrievalAllowedForTool(tool, { mode: retrieval.mode as string, modality: retrieval.modality as string })) {
+    errors.push(`retrieval: tool "${tool}" cannot use mode "${retrieval.mode}" + modality "${retrieval.modality}"`);
+  }
+
+  // 3. resultCount must match actual data length (for list-returning tools)
+  if (status === "ok" && data && retrieval && tool) {
+    const claimedCount = retrieval.resultCount as number;
+    const actualCount = countResults(tool, data);
+    if (actualCount !== null && actualCount !== claimedCount) {
+      errors.push(`resultCount: claims ${claimedCount} but data has ${actualCount} results`);
+    }
+  }
+
+  // 4. referenceIds must be unique
+  if (referenceIds && new Set(referenceIds).size !== referenceIds.length) {
+    errors.push("referenceIds: contains duplicates");
+  }
+
+  // 5. Evidence IDs must be unique
+  if (evidence) {
+    const evIds = evidence.map((e) => e.id);
+    if (new Set(evIds).size !== evIds.length) {
+      errors.push("evidence: IDs must be unique");
+    }
+  }
+
+  // 6. Evidence kind constraints per tool
+  if (tool && evidence) {
+    for (const ev of evidence) {
+      const kind = ev.kind as string;
+      // Only screen tools (critique_ui) can emit screen-observation or dom-signal
+      if ((kind === "screen-observation" || kind === "dom-signal") && !SCREEN_TOOLS.has(tool)) {
+        errors.push(`evidence: tool "${tool}" cannot emit ${kind} evidence (only critique_ui can)`);
       }
     }
   }
 
-  // 3. Validate per-tool retrieval state
-  if (!isRetrievalAllowedForTool(env.tool, { mode: env.retrieval.mode, modality: env.retrieval.modality })) {
-    errors.push(
-      `retrieval: tool "${env.tool}" cannot use mode "${env.retrieval.mode}" + modality "${env.retrieval.modality}"`,
-    );
-  }
-
-  // 4. Evidence insufficiency: empty evidence on an evidence tool requires a warning
-  if (env.status === "ok" && getToolEvidenceRequired(env.tool)) {
-    if (env.evidence !== undefined && env.evidence.length === 0) {
-      const hasInsufficiencyWarning = env.warnings.some((w) =>
-        w.toLowerCase().includes("insufficient") || w.toLowerCase().includes("evidence"),
-      );
-      if (!hasInsufficiencyWarning) {
-        errors.push("evidence: empty evidence array requires an insufficiency warning");
+  // 7. Empty evidence insufficiency warning
+  if (status === "ok" && tool && getToolEvidenceRequired(tool)) {
+    if (evidence !== undefined && evidence.length === 0) {
+      const warnings = (env.warnings as string[]) || [];
+      const hasWarning = warnings.length > 0;
+      if (!hasWarning) {
+        errors.push("evidence: empty evidence array requires at least one warning");
       }
     }
   }
@@ -497,8 +570,31 @@ export function parseToolResult(raw: unknown): ParseResult {
   return { ok: errors.length === 0, errors };
 }
 
+/** Count actual results in tool data for resultCount verification. */
+function countResults(tool: string, data: Record<string, unknown>): number | null {
+  if (tool === "search_ui_references" || tool === "find_similar_ui_references" ||
+      tool === "research_ui_anti_patterns" || tool === "research_ui_palettes" ||
+      tool === "research_ui_techniques") {
+    const results = data.results as unknown[] | undefined;
+    return results ? results.length : null;
+  }
+  if (tool === "compare_ui_references") {
+    const entries = data.entries as unknown[] | undefined;
+    return entries ? entries.length : null;
+  }
+  if (tool === "browse_ui_patterns") {
+    const patterns = data.patterns as unknown[] | undefined;
+    return patterns ? patterns.length : null;
+  }
+  // Single-reference tools: count is 0 or 1
+  if (tool === "get_ui_reference") return data.id ? 1 : 0;
+  if (tool === "get_ui_taxonomy" || tool === "plan_ui_direction" ||
+      tool === "create_ui_spec" || tool === "critique_ui") return null; // not count-based
+  return null;
+}
+
 // ===========================================================================
-// Common envelope (shape only — per-tool enforcement via parseToolResult)
+// Generic envelope (for internal validation without per-tool data)
 // ===========================================================================
 
 export const ToolResultEnvelope = z
@@ -517,27 +613,18 @@ export const ToolResultEnvelope = z
   .strict()
   .superRefine((val, ctx) => {
     if (val.status === "ok") {
-      if (val.data === null) {
-        ctx.addIssue({ code: "custom", message: 'status "ok" requires non-null data', path: ["data"] });
-      }
-      if (val.error !== undefined) {
-        ctx.addIssue({ code: "custom", message: 'status "ok" must not have an error', path: ["error"] });
-      }
+      if (val.data === null) ctx.addIssue({ code: "custom", message: 'status "ok" requires non-null data', path: ["data"] });
+      if (val.error !== undefined) ctx.addIssue({ code: "custom", message: 'status "ok" must not have an error', path: ["error"] });
     }
     if (val.status === "error") {
-      if (val.data !== null) {
-        ctx.addIssue({ code: "custom", message: 'status "error" requires null data', path: ["data"] });
-      }
-      if (val.error === undefined) {
-        ctx.addIssue({ code: "custom", message: 'status "error" requires an error object', path: ["error"] });
-      }
+      if (val.data !== null) ctx.addIssue({ code: "custom", message: 'status "error" requires null data', path: ["data"] });
+      if (val.error === undefined) ctx.addIssue({ code: "custom", message: 'status "error" requires an error object', path: ["error"] });
     }
-    // Evidence eligibility
-    const evidenceRequired = getToolEvidenceRequired(val.tool);
-    if (val.evidence !== undefined && !evidenceRequired) {
+    const evRequired = getToolEvidenceRequired(val.tool);
+    if (val.evidence !== undefined && !evRequired) {
       ctx.addIssue({ code: "custom", message: `tool "${val.tool}" is not an evidence tool`, path: ["evidence"] });
     }
-    if (evidenceRequired && val.status === "ok" && val.evidence === undefined) {
+    if (evRequired && val.status === "ok" && val.evidence === undefined) {
       ctx.addIssue({ code: "custom", message: `tool "${val.tool}" requires an evidence array`, path: ["evidence"] });
     }
   });

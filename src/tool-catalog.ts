@@ -150,6 +150,13 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
   },
 ] as const;
 
+// Deep-freeze: the catalog and digest are one-time snapshots.
+Object.freeze(TOOL_DEFINITIONS);
+for (const def of TOOL_DEFINITIONS) {
+  Object.freeze(def);
+  Object.freeze(def.legacyNames);
+}
+
 // ---------------------------------------------------------------------------
 // Derived values
 // ---------------------------------------------------------------------------

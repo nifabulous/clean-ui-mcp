@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import {
   TOOL_DEFINITIONS,
   TOOL_CATALOG,
@@ -36,6 +37,14 @@ describe("TOOL_DEFINITIONS", () => {
     const names = TOOL_DEFINITIONS.map((d) => d.name);
     expect(new Set(names).size).toBe(names.length);
   });
+
+  it("TOOL_DEFINITIONS is deep-frozen", () => {
+    expect(Object.isFrozen(TOOL_DEFINITIONS)).toBe(true);
+    for (const def of TOOL_DEFINITIONS) {
+      expect(Object.isFrozen(def)).toBe(true);
+      expect(Object.isFrozen(def.legacyNames)).toBe(true);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -72,9 +81,8 @@ describe("TOOL_CATALOG", () => {
 // ---------------------------------------------------------------------------
 
 describe("REMOVED_TOOL_NAMES", () => {
-  it("contains exactly the 11 legacy names not carried forward", () => {
-    // 14 legacy tools - 3 consolidated into get_ui_taxonomy + 0 carried = 11 removed
-    // (critique_ui stays the same name, so it's not in removed)
+  it("contains exactly the 13 legacy names not carried forward unchanged", () => {
+    // 14 legacy tools - 1 kept (critique_ui) = 13 removed/renamed
     expect([...REMOVED_TOOL_NAMES].sort()).toEqual(
       [
         "search_ui_examples",
@@ -142,11 +150,20 @@ describe("CATALOG_DIGEST", () => {
     expect(CATALOG_DIGEST).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("is deterministic — derived from the catalog, not hand-written", () => {
-    // The digest must be SHA-256 of the canonical catalog representation.
-    // Re-computing it must yield the same value.
-    // (We test this by importing and checking it's stable.)
-    expect(CATALOG_DIGEST).toBe(CATALOG_DIGEST);
+  it("matches independently recomputed SHA-256 of the canonical descriptor representation", () => {
+    // Recompute the digest from the descriptor table, independent of the
+    // production code's own computation. If the serialization changes,
+    // this test catches the drift.
+    const canonicalRep = JSON.stringify(
+      TOOL_DEFINITIONS.map((d) => ({
+        name: d.name,
+        rendererKey: d.rendererKey,
+        hasEvidence: d.hasEvidence,
+        legacyNames: [...d.legacyNames],
+      })),
+    );
+    const expected = createHash("sha256").update(canonicalRep).digest("hex");
+    expect(CATALOG_DIGEST).toBe(expected);
   });
 });
 

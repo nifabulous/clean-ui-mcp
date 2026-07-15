@@ -188,6 +188,7 @@ const ALLOWLIST = new Set<string>([
   // tool-contracts.ts — consumed by handlers, renderers, and the readiness
   // validator (created in C1 Steps 5-8 and Task 7).
   "isAllowedRetrievalState",
+  "getToolDataSchema",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

@@ -6,6 +6,9 @@ import {
   ALLOWED_RETRIEVAL_STATES, CATALOG_DIGEST, LEGACY_TO_BETA_MAP,
   REMOVED_TOOL_NAMES,
 } from "./tool-contracts.js";
+import {
+  VALID_TOOL_INPUTS, makeValidSuccess, makeValidError, cloneToolResult,
+} from "./__fixtures__/tool-contract-fixtures.js";
 
 // ---------------------------------------------------------------------------
 // Descriptor completeness
@@ -129,6 +132,28 @@ describe("parseToolResult dispatcher", () => {
   it("rejects empty object", () => { expect(parseToolResult({}).ok).toBe(false); });
   it("rejects unknown tool", () => { expect(parseToolResult({ tool: "unknown" }).ok).toBe(false); });
   it("rejects missing tool", () => { expect(parseToolResult({ status: "ok" }).ok).toBe(false); });
+});
+
+// ---------------------------------------------------------------------------
+// Valid fixtures for all 12 tools
+// ---------------------------------------------------------------------------
+
+describe.each(TOOL_CATALOG)("valid fixtures: %s", (tool) => {
+  it("accepts its representative input", () => {
+    expect(ToolInputSchemas[tool].safeParse(VALID_TOOL_INPUTS[tool as keyof typeof VALID_TOOL_INPUTS]).success).toBe(true);
+  });
+
+  it("accepts its representative success result", () => {
+    const result = ToolResultSchemas[tool].safeParse(makeValidSuccess(tool as ToolName));
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts its representative application error when supported", () => {
+    const fixture = makeValidError(tool as ToolName);
+    if (fixture !== null) {
+      expect(ToolResultSchemas[tool].safeParse(fixture).success).toBe(true);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

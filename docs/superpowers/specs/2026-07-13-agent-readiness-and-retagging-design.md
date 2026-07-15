@@ -441,7 +441,7 @@ These tables are the authoritative source for executable Zod schemas. The design
 | Input | query?, category?, styleTag?, patternType?, minQuality (1-5)?, qualityTier?, reviewStatus?, platform?, limit (1-20, default 5)?, responseFormat? |
 | Success data | `results: ReferenceSummary[]` — each with id, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url?, imageAvailable), critique excerpt, topTechniques |
 | Empty | `results: []`, retrieval none, resultCount 0, summary guidance |
-| Errors | NOT_FOUND (non-retryable) — not currently used; empty is success with 0 results |
+| Errors | NOT_FOUND (non-retryable), PROVIDER_ERROR (retryable) |
 | Retrieval | hybrid/vector/keyword + text; structured-fallback + metadata; none |
 | Evidence | forbidden |
 | resultCount | `results.length` |
@@ -467,7 +467,7 @@ These tables are the authoritative source for executable Zod schemas. The design
 | Input | id (required), limit (1-20, default 5)? |
 | Success data | `results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques |
 | Empty | `results: []` when no index or source not found |
-| Errors | NOT_FOUND if source id missing (non-retryable) |
+| Errors | NOT_FOUND if source id missing (non-retryable), PROVIDER_ERROR (retryable) |
 | Retrieval | vector + text; structured-fallback + metadata; none (text embeddings only, no image) |
 | Evidence | forbidden |
 | resultCount | `results.length` |

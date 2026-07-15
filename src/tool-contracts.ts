@@ -584,21 +584,21 @@ export const UiSpec = z.object({
     if (val.unavailableDecisions.some(d => d.field === "typographyTokens"))
       ctx.addIssue({ code: "custom", message: "available typographyTokens must not have an unavailableDecision for 'typographyTokens'", path: ["unavailableDecisions"] });
   }
-  // mixed authority for color requires >1 distinct non-editorial authority among color-related citedDecisions
+  // mixed authority for color requires >1 distinct non-editorial authority among color-token citedDecisions
   if (val.colorTokenAuthority === "mixed") {
     const colorAuthorities = new Set(
       val.citedDecisions
-        .filter(d => d.field.includes("color") && d.authority !== "editorial")
+        .filter(d => (d.field === "colorTokens" || d.field.startsWith("color-")) && d.authority !== "editorial")
         .map(d => d.authority),
     );
     if (colorAuthorities.size < 2)
       ctx.addIssue({ code: "custom", message: "'mixed' color authority requires color citedDecisions with >1 distinct non-editorial authority", path: ["colorTokenAuthority"] });
   }
-  // mixed authority for typography (scoped)
+  // mixed authority for typography (scoped to exact field identifiers)
   if (val.typographyTokenAuthority === "mixed") {
     const typeAuthorities = new Set(
       val.citedDecisions
-        .filter(d => (d.field.includes("typography") || d.field.includes("type")) && d.authority !== "editorial")
+        .filter(d => (d.field === "typographyTokens" || d.field.startsWith("typography-")) && d.authority !== "editorial")
         .map(d => d.authority),
     );
     if (typeAuthorities.size < 2)
@@ -687,7 +687,8 @@ const TechniqueInput = z.object({
 
 const PlanDecision = z.object({
   field: z.string().min(1).trim(), value: z.string().min(1).trim(),
-  authority: z.enum(["team-design-system", "project-constraint", "corpus-evidence", "editorial"]),
+  // plan has no designSystem context, so team-design-system authority is not available here
+  authority: z.enum(["project-constraint", "corpus-evidence", "editorial"]),
   evidenceIds: z.array(z.string()),
 }).strict();
 

@@ -1192,16 +1192,27 @@ export const ALLOWED_RETRIEVAL_STATES: Readonly<Record<string, readonly { mode: 
   Object.fromEntries(TOOL_DESCRIPTORS.map(d => [d.name, d.retrieval] as const)),
 );
 
+// Exact-keyed schema maps — preserve per-tool literal type inference
+type DescriptorEntry = (typeof TOOL_DESCRIPTORS)[number];
+type DescriptorFor<N extends ToolName> = Extract<DescriptorEntry, { name: N }>;
+
+export type ToolInputSchemaMap = { [N in ToolName]: DescriptorFor<N>["inputSchema"] };
+export type ToolDataSchemaMap = { [N in ToolName]: DescriptorFor<N>["dataSchema"] };
+
 export const ToolInputSchemas = Object.fromEntries(
   TOOL_DESCRIPTORS.map(d => [d.name, d.inputSchema]),
-) as Record<string, z.ZodType>;
+) as ToolInputSchemaMap;
 
 export const ToolDataSchemas = Object.fromEntries(
   TOOL_DESCRIPTORS.map(d => [d.name, d.dataSchema]),
-) as Record<string, z.ZodType>;
+) as ToolDataSchemaMap;
+
+export type ToolInputByName<N extends ToolName> = z.infer<ToolInputSchemaMap[N]>;
+export type ToolDataByName<N extends ToolName> = z.infer<ToolDataSchemaMap[N]>;
+export type ToolResultByName<N extends ToolName> = z.infer<(typeof ToolResultSchemas)[N]>;
 
 export function getToolDataSchema(tool: string): z.ZodType | undefined {
-  return ToolDataSchemas[tool];
+  return (ToolDataSchemas as Record<string, z.ZodType>)[tool];
 }
 
 export function getToolEvidenceRequired(tool: string): boolean {
@@ -1351,7 +1362,7 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
 
 export const ToolResultSchemas = Object.fromEntries(
   TOOL_DESCRIPTORS.map(d => [d.name, makeEnvelope(d)]),
-) as Record<string, z.ZodType>;
+) as { [N in ToolName]: z.ZodType };
 
 // ===========================================================================
 // 9. parseToolResult — thin dispatcher
@@ -1363,10 +1374,11 @@ export function parseToolResult(raw: unknown): ParseResult {
   const tool = (raw as Record<string, unknown> | null)?.tool;
   if (!tool || typeof tool !== "string" || !(tool in ToolResultSchemas))
     return { ok: false, errors: [`unknown tool "${tool ?? ""}"`] };
-  const parse = ToolResultSchemas[tool]!.safeParse(raw);
+  const schema = (ToolResultSchemas as Record<string, z.ZodType>)[tool]!;
+  const parse = schema.safeParse(raw);
   return parse.success
     ? { ok: true, errors: [] }
-    : { ok: false, errors: parse.error.issues.map(i => `${i.path.join(".")}: ${i.message}`) };
+    : { ok: false, errors: parse.error.issues.map((i: { path: PropertyKey[]; message: string }) => `${i.path.join(".")}: ${i.message}`) };
 }
 
 // ===========================================================================

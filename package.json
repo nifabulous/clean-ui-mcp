@@ -41,7 +41,8 @@
     "benchmark-image-embeddings": "tsc && node scripts/benchmark-image-embeddings.mjs",
     "build-image-index": "tsc && node dist/scripts/build-image-index.js",
     "test:critique-quality": "vitest run scripts/critique-quality-scorer.test.mjs scripts/eval-scorer.test.mjs",
-    "validate-readiness-artifacts": "tsc && node dist/scripts/validate-readiness-artifacts.js"
+    "validate-readiness-artifacts": "tsc && node dist/scripts/validate-readiness-artifacts.js",
+    "typecheck:contracts": "tsc --noEmit"
   },
   "keywords": [
     "mcp",

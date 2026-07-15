@@ -237,30 +237,32 @@ describe.each(TOOL_DESCRIPTORS)("tool: $name", (desc) => {
 // UiSpec
 // ---------------------------------------------------------------------------
 
+function validUiSpec(): Record<string, unknown> {
+  return {
+    specVersion: "1.0",
+    context: { productContext: "A fintech dashboard" },
+    designDirection: "Calm layout",
+    rejectedDefaults: [], layoutRegions: [], responsiveBehavior: [],
+    componentInventory: [],
+    colorTokens: { primary: "#3b82f6", surface: "#fff", ink: "#1e293b", muted: "#64748b", accent: "#3b82f6" },
+    colorTokenAuthority: "corpus-evidence",
+    typographyTokens: { heading: "Inter", body: "Inter", mono: "JetBrains Mono" },
+    typographyTokenAuthority: "corpus-evidence",
+    interactions: [], motionGuidance: { notes: [], evidenceUnavailable: true },
+    accessibilityConstraints: [], techniques: [], antiPatterns: [],
+    unavailableDecisions: [{ field: "motion", reason: "no DOM evidence" }],
+    acceptanceCriteria: [{
+      id: "ac1", subject: "contrast", assertion: "meets-contrast",
+      expectedOutcome: "4.5:1", verifier: "axe", priority: "must", evidenceIds: [],
+    }],
+    citedReferences: [], citedDecisions: [],
+    authorityLanes: { corpusEvidence: [], machineRules: [], editorialGuidance: [] },
+    provenance: { generatedAt: "2026-07-15T00:00:00Z", toolVersion: "0.2.0", sourceReferences: [], evidenceIds: [] },
+  };
+}
+
 describe("UiSpec", () => {
-  function valid(): Record<string, unknown> {
-    return {
-      specVersion: "1.0",
-      context: { productContext: "A fintech dashboard" },
-      designDirection: "Calm layout",
-      rejectedDefaults: [], layoutRegions: [], responsiveBehavior: [],
-      componentInventory: [],
-      colorTokens: { primary: "#3b82f6", surface: "#fff", ink: "#1e293b", muted: "#64748b", accent: "#3b82f6" },
-      colorTokenAuthority: "corpus-evidence",
-      typographyTokens: { heading: "Inter", body: "Inter", mono: "JetBrains Mono" },
-      typographyTokenAuthority: "corpus-evidence",
-      interactions: [], motionGuidance: { notes: [], evidenceUnavailable: true },
-      accessibilityConstraints: [], techniques: [], antiPatterns: [],
-      unavailableDecisions: [],
-      acceptanceCriteria: [{
-        id: "ac1", subject: "contrast", assertion: "meets-contrast",
-        expectedOutcome: "4.5:1", verifier: "axe", priority: "must", evidenceIds: [],
-      }],
-      citedReferences: [], citedDecisions: [],
-      authorityLanes: { corpusEvidence: [], machineRules: [], editorialGuidance: [] },
-      provenance: { generatedAt: "2026-07-15T00:00:00Z", toolVersion: "0.2.0", sourceReferences: [], evidenceIds: [] },
-    };
-  }
+  const valid = validUiSpec;
   it("accepts complete spec", () => {
     // The valid fixture has motionGuidance.evidenceUnavailable: true, so it needs a motion unavailableDecision
     const b = valid();
@@ -571,5 +573,109 @@ describe("adversarial probe matrix", () => {
 
   it("25: parseToolResult rejects unknown tool", () => {
     expect(parseToolResult({ tool: "not_a_tool", schemaVersion: "1.0" }).ok).toBe(false);
+  });
+
+  // --- Bypass probes (26-40): one-property mutations for every reproduced bypass ---
+
+  it("26: ghost authorityLanes evidence rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    const lanes = data.authorityLanes as Record<string, unknown>;
+    (lanes.corpusEvidence as string[]).push("evidence-ghost");
+    assertRejectsAt(p, "data");
+  });
+
+  it("27: ghost technique sourceId rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    (data.techniques as Array<Record<string, unknown>>)[0]!.sourceIds = ["ref-ghost"];
+    assertRejectsAt(p, "data");
+  });
+
+  it("28: ghost antiPattern sourceId rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    (data.antiPatterns as Array<Record<string, unknown>>).push({ text: "bad", sourceIds: ["ref-ghost"] });
+    assertRejectsAt(p, "data");
+  });
+
+  it("29: duplicate citedReferences rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    data.citedReferences = ["ref-a", "ref-a"];
+    // provenance.sourceReferences must also match — set them too
+    (data.provenance as Record<string, unknown>).sourceReferences = ["ref-a", "ref-a"];
+    assertRejectsAt(p, "data");
+  });
+
+  it("30: duplicate provenance evidenceIds rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    (data.provenance as Record<string, unknown>).evidenceIds = ["evidence-corpus-a", "evidence-corpus-a"];
+    assertRejectsAt(p, "data");
+  });
+
+  it("31: team-design-system authority without identified design system rejected", () => {
+    const b = validUiSpec();
+    b.colorTokenAuthority = "team-design-system";
+    b.citedDecisions = [{ id: "d1", field: "color-primary", authority: "team-design-system", evidenceIds: [], readiness: "available" }];
+    expect(UiSpec.safeParse(b).success).toBe(false);
+  });
+
+  it("32: motion evidence unavailable without exact unavailableDecision rejected", () => {
+    const b = validUiSpec();
+    b.unavailableDecisions = [];
+    expect(UiSpec.safeParse(b).success).toBe(false);
+  });
+
+  it("33: contradictory unavailableDecision for available tokens rejected", () => {
+    const b = validUiSpec();
+    b.unavailableDecisions = [{ field: "motion", reason: "x" }, { field: "colorTokens", reason: "should not be here" }];
+    expect(UiSpec.safeParse(b).success).toBe(false);
+  });
+
+  it("34: substring-based unavailable field (not-color-really) no longer accepted", () => {
+    const b = validUiSpec();
+    b.colorTokens = null;
+    b.colorTokenAuthority = "editorial";
+    b.unavailableDecisions = [{ field: "not-color-really", reason: "x" }, { field: "motion", reason: "x" }];
+    expect(UiSpec.safeParse(b).success).toBe(false);
+  });
+
+  it("35: critique data.retrievalMode disagrees with envelope rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("critique_ui")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    data.retrievalMode = "keyword"; // envelope says "none"
+    assertRejectsAt(p, "data");
+  });
+
+  it("36: duplicate appliedReferences rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("critique_ui")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    const refs = data.appliedReferences as Array<Record<string, unknown>>;
+    refs.push({ ...refs[0] }); // duplicate id
+    assertRejectsAt(p, "data");
+  });
+
+  it("37: critique motion.reference ref:ghost rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("critique_ui")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    (data.motion as Array<Record<string, unknown>>).push({
+      basis: "editorial", evidence: [], note: "test", reference: "ref:ghost",
+    });
+    assertRejectsAt(p, "data");
+  });
+
+  it("38: default search limit is 5", () => {
+    expect(ToolInputSchemas["search_ui_references"].parse({}).limit).toBe(5);
+  });
+
+  it("39: default plan qualityTier is exceptional and count is 3", () => {
+    const parsed = ToolInputSchemas["plan_ui_direction"].parse({ productContext: "A dashboard" });
+    expect(parsed).toMatchObject({ qualityTier: "exceptional", count: 3 });
+  });
+
+  it("40: default techniques limit is 15", () => {
+    expect(ToolInputSchemas["research_ui_techniques"].parse({}).limit).toBe(15);
   });
 });

@@ -194,7 +194,7 @@ export function makeValidSuccess(tool: ToolName): JsonObject {
     case "create_ui_spec": {
       const env = successEnvelope(tool, {
         specVersion: "1.0",
-        context: { productContext: "A synthetic analytics dashboard" },
+        context: { productContext: "A synthetic analytics dashboard", constraints: ["WCAG AA contrast"] },
         designDirection: "Calm, data-dense layout",
         rejectedDefaults: [],
         layoutRegions: [{ name: "Main", type: "content", components: ["chart"], responsive: [] }],

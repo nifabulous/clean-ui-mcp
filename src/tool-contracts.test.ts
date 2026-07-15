@@ -309,11 +309,12 @@ describe("UiSpec", () => {
     const b = valid();
     b.colorTokenAuthority = "mixed";
     b.unavailableDecisions = [{ field: "motion", reason: "no DOM evidence" }];
-    b.context = { productContext: "A fintech dashboard", designSystem: { status: "identified", library: "M3" } };
+    b.context = { productContext: "A fintech dashboard", designSystem: { status: "identified", library: "M3" }, constraints: ["WCAG AA"] };
     b.citedDecisions = [
-      { id: "d1", field: "color-primary", authority: "corpus-evidence", evidenceIds: [], readiness: "available" },
+      { id: "d1", field: "color-primary", authority: "corpus-evidence", evidenceIds: ["ev-corpus"], readiness: "available" },
       { id: "d2", field: "color-accent", authority: "team-design-system", evidenceIds: [], readiness: "available" },
     ];
+    b.authorityLanes = { corpusEvidence: ["ev-corpus"], machineRules: [], editorialGuidance: [] };
     expect(UiSpec.safeParse(b).success).toBe(true);
   });
 });

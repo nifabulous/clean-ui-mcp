@@ -503,7 +503,7 @@ const LayoutRegion = z.object({
 const ComponentEntry = z.object({
   name: z.string().min(1).trim(),
   pattern: z.string().min(1).trim(),
-  source: z.string().optional(),
+  sourceId: z.string().optional(),
 }).strict();
 
 const TechniqueEntry = z.object({
@@ -526,6 +526,7 @@ const SpecContext = z.object({
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
   implementationFramework: z.string().optional(),
   designSystem: DesignSystemIdentity.optional(),
+  constraints: z.array(z.string().min(1).trim()).default([]),
 }).strict();
 
 export const UiSpec = z.object({
@@ -612,11 +613,28 @@ export const UiSpec = z.object({
     if (val.unavailableDecisions.some(d => d.field === "motion"))
       ctx.addIssue({ code: "custom", message: "available motion must not have an unavailableDecision for 'motion'", path: ["unavailableDecisions"] });
   }
-  // Authority prerequisites: team-design-system requires identified design system
-  const hasTeamAuthority = val.colorTokenAuthority === "team-design-system" || val.typographyTokenAuthority === "team-design-system"
-    || val.citedDecisions.some(d => d.authority === "team-design-system");
-  if (hasTeamAuthority && val.context.designSystem?.status !== "identified")
-    ctx.addIssue({ code: "custom", message: "team-design-system authority requires context.designSystem.status 'identified'", path: ["context", "designSystem"] });
+  // Authority prerequisites for each citedDecision
+  const hasConstraints = (val.context as Record<string, unknown>)?.constraints !== undefined
+    && Array.isArray((val.context as Record<string, unknown>)?.constraints)
+    && ((val.context as Record<string, unknown>).constraints as unknown[]).length > 0;
+  for (const cd of val.citedDecisions) {
+    if (cd.authority === "team-design-system" && val.context.designSystem?.status !== "identified")
+      ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has team-design-system authority but designSystem is not identified`, path: ["citedDecisions"] });
+    if (cd.authority === "project-constraint" && !hasConstraints)
+      ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has project-constraint authority but context has no constraints`, path: ["citedDecisions"] });
+    if (cd.authority === "corpus-evidence" && !cd.evidenceIds.some(eid => val.authorityLanes.corpusEvidence.includes(eid)))
+      ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has corpus-evidence authority but no evidence in corpusEvidence lane`, path: ["citedDecisions"] });
+    if (cd.authority === "editorial" && !cd.evidenceIds.some(eid => val.authorityLanes.editorialGuidance.includes(eid)))
+      ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has editorial authority but no evidence in editorialGuidance lane`, path: ["citedDecisions"] });
+  }
+  // Token-level team-design-system requires identified design system
+  const hasTeamToken = val.colorTokenAuthority === "team-design-system" || val.typographyTokenAuthority === "team-design-system";
+  if (hasTeamToken && val.context.designSystem?.status !== "identified")
+    ctx.addIssue({ code: "custom", message: "team-design-system token authority requires context.designSystem.status 'identified'", path: ["context", "designSystem"] });
+  // Token-level project-constraint requires context constraints
+  const hasConstraintToken = val.colorTokenAuthority === "project-constraint" || val.typographyTokenAuthority === "project-constraint";
+  if (hasConstraintToken && !hasConstraints)
+    ctx.addIssue({ code: "custom", message: "project-constraint token authority requires context.constraints to be non-empty", path: ["context", "constraints"] });
   // citedDecision.sourceId must be in citedReferences
   const refSet = new Set(val.citedReferences);
   for (const cd of val.citedDecisions) {
@@ -654,7 +672,7 @@ export const CreateUiSpecInput = z.object({
   implementationFramework: z.string().optional(),
   serializationFormat: z.enum(["brief", "tokens"]).default("brief"),
   designSystem: DesignSystemIdentity.optional(),
-  constraints: z.array(z.string()).optional(),
+  constraints: z.array(z.string().min(1).trim()).default([]),
 }).strict();
 
 const PlanInput = z.object({
@@ -716,7 +734,7 @@ export interface ToolDescriptor {
   readonly legacyNames: readonly string[];
   readonly inputSchema: z.ZodType;
   readonly dataSchema: z.ZodType;
-  readonly retrieval: readonly { mode: string; modality: string }[];
+  readonly retrieval: readonly { mode: string; modality: string; fallbackReasons?: readonly string[] }[];
   /** Allowed attempted-mode values for terminal errors and fallback records. */
   readonly allowedAttemptedModes: readonly string[];
   readonly evidenceKinds: readonly string[];
@@ -738,9 +756,12 @@ export const TOOL_DESCRIPTORS = [
     inputSchema: SearchInput,
     dataSchema: z.object({ results: z.array(ReferenceSummary) }).strict(),
     retrieval: [
-      { mode: "hybrid", modality: "text" }, { mode: "vector", modality: "text" },
-      { mode: "keyword", modality: "text" }, { mode: "keyword", modality: "metadata" },
-      { mode: "structured-fallback", modality: "metadata" }, { mode: "none", modality: "none" },
+      { mode: "hybrid", modality: "text" },
+      { mode: "vector", modality: "text" },
+      { mode: "keyword", modality: "text", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
+      { mode: "keyword", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
+      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "community-edition", "provider-error"] },
+      { mode: "none", modality: "none" },
     ],
     allowedAttemptedModes: ["hybrid", "vector", "keyword", "structured-fallback"],
     evidenceKinds: [],
@@ -776,7 +797,7 @@ export const TOOL_DESCRIPTORS = [
     dataSchema: z.object({ results: z.array(SimilarReference) }).strict(),
     retrieval: [
       { mode: "vector", modality: "text" },
-      { mode: "structured-fallback", modality: "metadata" },
+      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
       { mode: "none", modality: "none" },
     ],
     allowedAttemptedModes: ["vector", "structured-fallback"],
@@ -900,8 +921,10 @@ export const TOOL_DESCRIPTORS = [
     inputSchema: PlanInput,
     dataSchema: PlanDataSchema,
     retrieval: [
-      { mode: "hybrid", modality: "text" }, { mode: "keyword", modality: "text" },
-      { mode: "keyword", modality: "metadata" }, { mode: "structured-fallback", modality: "metadata" },
+      { mode: "hybrid", modality: "text" },
+      { mode: "keyword", modality: "text", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
+      { mode: "keyword", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
+      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
       { mode: "none", modality: "none" },
     ],
     allowedAttemptedModes: ["hybrid", "keyword", "structured-fallback"],
@@ -944,7 +967,7 @@ export const TOOL_DESCRIPTORS = [
         authorityLanes?: { corpusEvidence?: string[]; machineRules?: string[]; editorialGuidance?: string[] };
         techniques?: Array<{ sourceIds?: string[] }>;
         antiPatterns?: Array<{ sourceIds?: string[] }>;
-        componentInventory?: Array<{ source?: string }>;
+        componentInventory?: Array<{ sourceId?: string }>;
         motionGuidance?: { evidenceUnavailable?: boolean };
       };
       // Motion warning coupling: evidenceUnavailable ↔ motionEvidenceUnavailable
@@ -1010,10 +1033,10 @@ export const TOOL_DESCRIPTORS = [
             ctx.addIssue({ code: "custom", message: `antiPattern sourceId "${sid}" not in citedReferences`, path: ["data", "antiPatterns"] });
         }
       }
-      // Check componentInventory source against citedReferences
+      // Check componentInventory sourceId against citedReferences
       for (const comp of data?.componentInventory ?? []) {
-        if (comp.source !== undefined && !citedSet.has(comp.source))
-          ctx.addIssue({ code: "custom", message: `component source "${comp.source}" not in citedReferences`, path: ["data", "componentInventory"] });
+        if (comp.sourceId !== undefined && !citedSet.has(comp.sourceId))
+          ctx.addIssue({ code: "custom", message: `component sourceId "${comp.sourceId}" not in citedReferences`, path: ["data", "componentInventory"] });
       }
       // provenance.evidenceIds must match envelope evidence IDs exactly (derived echo, not authority)
       const provEvIds = data?.provenance?.evidenceIds ?? [];
@@ -1091,7 +1114,7 @@ export const TOOL_DESCRIPTORS = [
     dataSchema: CritiqueDataSchema,
     retrieval: [
       { mode: "vector", modality: "image" },
-      { mode: "structured-fallback", modality: "metadata" },
+      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error", "no-image-evidence"] },
       { mode: "none", modality: "none" },
     ],
     allowedAttemptedModes: ["vector", "structured-fallback"],
@@ -1227,28 +1250,15 @@ export const CATALOG_DIGEST: string = createHash("sha256").update(
 
 /**
  * Build a RetrievalPolicy from a descriptor's retrieval array + allowedAttemptedModes.
- * Per-state fallback reasons are determined by the tool name and returned state.
+ * Per-state fallback reasons are descriptor-owned (each retrieval entry carries its own
+ * fallbackReasons array). Primary states have no fallbackReasons (undefined/empty).
  */
 function buildRetrievalPolicy(desc: ToolDescriptor): RetrievalPolicy {
-  const allReasons: IntegrityFallbackReason[] = [
-    "missing-index", "incompatible-index", "missing-provider-key",
-    "community-edition", "provider-error",
-  ];
-  const critiqueReasons: IntegrityFallbackReason[] = [...allReasons, "no-image-evidence"];
-
-  const getReasons = (mode: string): readonly IntegrityFallbackReason[] => {
-    if (mode === "none") return [];
-    if (mode === "structured-fallback" || mode === "keyword") {
-      return desc.name === "critique_ui" ? critiqueReasons : allReasons;
-    }
-    return [];
-  };
-
   return {
     states: desc.retrieval.map(r => ({
       mode: r.mode as never,
       modality: r.modality as never,
-      fallbackReasons: getReasons(r.mode),
+      fallbackReasons: (r.fallbackReasons ?? []) as never[],
     })),
     attemptedModes: desc.allowedAttemptedModes as never[],
   };

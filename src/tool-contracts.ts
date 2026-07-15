@@ -22,6 +22,7 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { PatternType, Category, StyleTag } from "./schema.js";
 import { CRITIQUE_UI_INPUT_SCHEMA, StructuredCritique } from "./synthesis/contracts.js";
+import { validateEnvelopeRetrieval } from "./tool-contract-integrity.js";
 
 // ===========================================================================
 // 1. Shared building blocks
@@ -698,6 +699,8 @@ export interface ToolDescriptor {
   readonly inputSchema: z.ZodType;
   readonly dataSchema: z.ZodType;
   readonly retrieval: readonly { mode: string; modality: string }[];
+  /** Allowed attempted-mode values for terminal errors and fallback records. */
+  readonly allowedAttemptedModes: readonly string[];
   readonly evidenceKinds: readonly string[];
   readonly warningSchema: z.ZodType;
   readonly errorSchema: z.ZodType;
@@ -721,6 +724,7 @@ export const TOOL_DESCRIPTORS = [
       { mode: "keyword", modality: "text" }, { mode: "keyword", modality: "metadata" },
       { mode: "structured-fallback", modality: "metadata" }, { mode: "none", modality: "none" },
     ],
+    allowedAttemptedModes: ["hybrid", "vector", "keyword", "structured-fallback"],
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage", "keywordFallback"]),
     errorSchema: makeErrorSchema(["NOT_FOUND", "PROVIDER_ERROR"]),
@@ -738,6 +742,7 @@ export const TOOL_DESCRIPTORS = [
     inputSchema: IdInput,
     dataSchema: FullReference,
     retrieval: [{ mode: "none", modality: "none" }],
+    allowedAttemptedModes: [],
     evidenceKinds: [],
     warningSchema: makeWarningSchema([]),
     errorSchema: makeErrorSchema(["NOT_FOUND"]),
@@ -756,6 +761,7 @@ export const TOOL_DESCRIPTORS = [
       { mode: "structured-fallback", modality: "metadata" },
       { mode: "none", modality: "none" },
     ],
+    allowedAttemptedModes: ["vector", "structured-fallback"],
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["keywordFallback", "sparseCoverage"]),
     errorSchema: makeErrorSchema(["NOT_FOUND", "PROVIDER_ERROR"]),
@@ -777,6 +783,7 @@ export const TOOL_DESCRIPTORS = [
       missingIds: z.array(z.string()),
     }).strict(),
     retrieval: [{ mode: "none", modality: "none" }],
+    allowedAttemptedModes: [],
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["partialResult"]),
     errorSchema: makeErrorSchema(["NOT_FOUND"]),
@@ -828,6 +835,7 @@ export const TOOL_DESCRIPTORS = [
       components: TaxonomyList.optional(), domainTags: TaxonomyList.optional(),
     }).strict(),
     retrieval: [{ mode: "none", modality: "none" }],
+    allowedAttemptedModes: [],
     evidenceKinds: [],
     warningSchema: makeWarningSchema([]),
     errorSchema: makeErrorSchema([]),
@@ -856,6 +864,7 @@ export const TOOL_DESCRIPTORS = [
     inputSchema: z.object({ styleTag: StyleTag.optional() }).strict(),
     dataSchema: z.object({ patterns: z.array(PatternGroup) }).strict(),
     retrieval: [{ mode: "none", modality: "none" }],
+    allowedAttemptedModes: [],
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage"]),
     errorSchema: makeErrorSchema([]),
@@ -877,11 +886,22 @@ export const TOOL_DESCRIPTORS = [
       { mode: "keyword", modality: "metadata" }, { mode: "structured-fallback", modality: "metadata" },
       { mode: "none", modality: "none" },
     ],
+    allowedAttemptedModes: ["hybrid", "keyword", "structured-fallback"],
     evidenceKinds: [...ALL_SYNTHESIS_KINDS],
     warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "noCorpusIndex"]),
     errorSchema: makeErrorSchema(["PROVIDER_ERROR"]),
     extractRefs: (d) => (d as { evidenceContributions?: string[] })?.evidenceContributions ?? [],
     countResults: (d) => (d as { direction?: unknown })?.direction ? 1 : 0,
+    refineEnvelope: (val, ctx) => {
+      const evidenceIds = new Set((val.evidence as Array<{ id?: string }> | undefined)?.map(e => e.id).filter(Boolean) ?? []);
+      const data = val.data as { structuredDecisions?: Array<{ evidenceIds?: string[] }> };
+      for (const sd of data.structuredDecisions ?? []) {
+        for (const eid of sd.evidenceIds ?? []) {
+          if (!evidenceIds.has(eid))
+            ctx.addIssue({ code: "custom", message: `structuredDecision evidenceId "${eid}" not in envelope evidence`, path: ["data", "structuredDecisions"] });
+        }
+      }
+    },
   },
   {
     name: "create_ui_spec",
@@ -891,6 +911,7 @@ export const TOOL_DESCRIPTORS = [
     inputSchema: CreateUiSpecInput,
     dataSchema: UiSpec,
     retrieval: [{ mode: "none", modality: "none" }],
+    allowedAttemptedModes: [],
     evidenceKinds: [...ALL_SYNTHESIS_KINDS],
     warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "motionEvidenceUnavailable"]),
     errorSchema: makeErrorSchema(["INVALID_INPUT"]),
@@ -940,6 +961,7 @@ export const TOOL_DESCRIPTORS = [
     inputSchema: AntiPatternInput,
     dataSchema: z.object({ results: z.array(AntiPatternRow) }).strict(),
     retrieval: [{ mode: "none", modality: "none" }],
+    allowedAttemptedModes: [],
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage"]),
     errorSchema: makeErrorSchema([]),
@@ -957,6 +979,7 @@ export const TOOL_DESCRIPTORS = [
     inputSchema: PaletteInput,
     dataSchema: z.object({ results: z.array(PaletteRecord) }).strict(),
     retrieval: [{ mode: "none", modality: "none" }],
+    allowedAttemptedModes: [],
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage"]),
     errorSchema: makeErrorSchema([]),
@@ -974,6 +997,7 @@ export const TOOL_DESCRIPTORS = [
     inputSchema: TechniqueInput,
     dataSchema: z.object({ results: z.array(TechniqueRow) }).strict(),
     retrieval: [{ mode: "none", modality: "none" }],
+    allowedAttemptedModes: [],
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage"]),
     errorSchema: makeErrorSchema([]),
@@ -995,11 +1019,64 @@ export const TOOL_DESCRIPTORS = [
       { mode: "structured-fallback", modality: "metadata" },
       { mode: "none", modality: "none" },
     ],
+    allowedAttemptedModes: ["vector", "structured-fallback"],
     evidenceKinds: [...CRITIQUE_KINDS],
     warningSchema: makeWarningSchema(["insufficientCorpusEvidence", "providerDegraded", "keywordFallback"]),
     errorSchema: makeErrorSchema(["PROVIDER_ERROR", "INVALID_INPUT"]),
     extractRefs: (d) => ((d as { appliedReferences?: Array<{ id?: string }> })?.appliedReferences ?? []).map(r => r.id).filter((x): x is string => !!x),
     countResults: (d) => (d as { summary?: unknown })?.summary ? 1 : 0,
+    refineEnvelope: (val, ctx) => {
+      const evidenceIds = new Set((val.evidence as Array<{ id?: string }> | undefined)?.map(e => e.id).filter(Boolean) ?? []);
+      const data = val.data as {
+        evidenceIds?: string[];
+        recommendations?: Array<{ evidence?: string[] }>;
+        accessibilityRisks?: Array<{ evidence?: string }>;
+        visualSlop?: Array<{ evidence?: string[] }>;
+        motion?: Array<{ evidence?: string[] }>;
+        md3?: { evidenceIds?: string[]; conflictingSignals?: Array<{ evidenceId?: string }> };
+      };
+      // Check top-level evidenceIds
+      for (const eid of data.evidenceIds ?? []) {
+        if (!evidenceIds.has(eid))
+          ctx.addIssue({ code: "custom", message: `critique evidenceId "${eid}" not in envelope evidence`, path: ["data"] });
+      }
+      // Check recommendations evidence
+      for (const rec of data.recommendations ?? []) {
+        for (const eid of rec.evidence ?? []) {
+          if (!evidenceIds.has(eid))
+            ctx.addIssue({ code: "custom", message: `recommendation evidence "${eid}" not in envelope evidence`, path: ["data", "recommendations"] });
+        }
+      }
+      // Check accessibilityRisks evidence
+      for (const risk of data.accessibilityRisks ?? []) {
+        if (risk.evidence && !evidenceIds.has(risk.evidence))
+          ctx.addIssue({ code: "custom", message: `accessibilityRisk evidence "${risk.evidence}" not in envelope evidence`, path: ["data", "accessibilityRisks"] });
+      }
+      // Check visualSlop evidence
+      for (const vs of data.visualSlop ?? []) {
+        for (const eid of vs.evidence ?? []) {
+          if (!evidenceIds.has(eid))
+            ctx.addIssue({ code: "custom", message: `visualSlop evidence "${eid}" not in envelope evidence`, path: ["data", "visualSlop"] });
+        }
+      }
+      // Check motion evidence
+      for (const m of data.motion ?? []) {
+        for (const eid of m.evidence ?? []) {
+          if (!evidenceIds.has(eid))
+            ctx.addIssue({ code: "custom", message: `motion evidence "${eid}" not in envelope evidence`, path: ["data", "motion"] });
+        }
+      }
+      // Check md3 evidenceIds
+      for (const eid of data.md3?.evidenceIds ?? []) {
+        if (!evidenceIds.has(eid))
+          ctx.addIssue({ code: "custom", message: `md3 evidenceId "${eid}" not in envelope evidence`, path: ["data", "md3"] });
+      }
+      // Check md3 conflictingSignals evidenceId
+      for (const cs of data.md3?.conflictingSignals ?? []) {
+        if (cs.evidenceId && !evidenceIds.has(cs.evidenceId))
+          ctx.addIssue({ code: "custom", message: `md3 conflictingSignal evidenceId "${cs.evidenceId}" not in envelope evidence`, path: ["data", "md3"] });
+      }
+    },
   },
 ] as const satisfies readonly ToolDescriptor[];
 
@@ -1091,9 +1168,29 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
       if (val.referenceIds.length > 0)
         ctx.addIssue({ code: "custom", message: 'status "error" requires empty referenceIds', path: ["referenceIds"] });
     }
-    // 3. Retrieval eligibility
+    // 3. Retrieval eligibility + fallback truth + attempted-mode policy
+    // Check retrieval mode/modality is allowed for this tool
     if (!desc.retrieval.some(r => r.mode === val.retrieval.mode && r.modality === val.retrieval.modality))
       ctx.addIssue({ code: "custom", message: `retrieval ${val.retrieval.mode}/${val.retrieval.modality} not allowed for ${desc.name}`, path: ["retrieval"] });
+    // Error status: no fallback
+    if (val.status === "error" && val.retrieval.fallbackUsed)
+      ctx.addIssue({ code: "custom", message: "error status cannot have fallbackUsed true", path: ["retrieval", "fallbackUsed"] });
+    // Success + fallback: requires positive resultCount
+    if (val.status === "ok" && val.retrieval.fallbackUsed && val.retrieval.resultCount === 0)
+      ctx.addIssue({ code: "custom", message: "fallback with zero results is not a successful fallback", path: ["retrieval", "resultCount"] });
+    // Per-tool fallback reason scoping: no-image-evidence is only valid for critique_ui
+    if (val.retrieval.fallbackUsed && val.retrieval.fallbackReason === "no-image-evidence" && desc.name !== "critique_ui")
+      ctx.addIssue({ code: "custom", message: `fallbackReason "no-image-evidence" not allowed for ${desc.name}`, path: ["retrieval", "fallbackReason"] });
+    // Forbidden attempted mode: every attempted mode must be in the tool's allowed list
+    if (desc.allowedAttemptedModes.length === 0 && val.retrieval.attemptedModes.length > 0)
+      ctx.addIssue({ code: "custom", message: "attemptedModes not allowed for this tool", path: ["retrieval", "attemptedModes"] });
+    for (const am of val.retrieval.attemptedModes) {
+      if (!desc.allowedAttemptedModes.includes(am))
+        ctx.addIssue({ code: "custom", message: `attemptedMode "${am}" not allowed for ${desc.name}`, path: ["retrieval", "attemptedModes"] });
+    }
+    // ok + non-fallback: attemptedModes must be empty
+    if (val.status === "ok" && !val.retrieval.fallbackUsed && val.retrieval.attemptedModes.length > 0)
+      ctx.addIssue({ code: "custom", message: "attemptedModes must be empty on success without fallback", path: ["retrieval", "attemptedModes"] });
 
     if (val.status === "ok" && val.data !== null) {
       // 4. resultCount

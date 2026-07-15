@@ -337,3 +337,238 @@ describe("CreateUiSpecInput", () => {
     }).success).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 8: 25 adversarial probes — each mutates ONE property from a valid fixture
+// and asserts rejection at the intended issue path.
+// ---------------------------------------------------------------------------
+
+describe("adversarial probe matrix", () => {
+  // Helper: parse and assert failure at a specific top-level path
+  function assertRejectsAt(payload: unknown, pathSegment: PropertyKey) {
+    const result = ToolResultSchemas[(payload as Record<string, unknown>).tool as string]?.safeParse(payload);
+    expect(result?.success).toBe(false);
+    if (!result?.success) {
+      expect(result.error.issues.some(i => i.path[0] === pathSegment)).toBe(true);
+    }
+  }
+
+  // --- Retrieval metadata probes (1-5) ---
+
+  it("1: wrong per-tool fallback reason rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("search_ui_references")) as Record<string, unknown>;
+    const r = p.retrieval as Record<string, unknown>;
+    r.mode = "keyword"; r.modality = "text"; r.fallbackUsed = true;
+    r.fallbackReason = "no-image-evidence"; // only valid for critique
+    r.attemptedCount = 1; r.attemptedModes = ["vector"];
+    (p.retrieval as Record<string, unknown>).resultCount = 1;
+    const result = ToolResultSchemas["search_ui_references"].safeParse(p);
+    expect(result.success).toBe(false);
+  });
+
+  it("2: fallback with zero results rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("search_ui_references")) as Record<string, unknown>;
+    const r = p.retrieval as Record<string, unknown>;
+    r.mode = "keyword"; r.modality = "text"; r.fallbackUsed = true;
+    r.fallbackReason = "missing-index"; r.attemptedCount = 1; r.attemptedModes = ["vector"];
+    (p.data as Record<string, unknown>).results = [];
+    r.resultCount = 0;
+    p.referenceIds = [];
+    const result = ToolResultSchemas["search_ui_references"].safeParse(p);
+    expect(result.success).toBe(false);
+  });
+
+  it("3: terminal error records attempted paths without fallback (accepted)", () => {
+    const p = makeValidError("search_ui_references");
+    if (!p) return;
+    const r = p.retrieval as Record<string, unknown>;
+    r.attemptedCount = 1; r.attemptedModes = ["vector"];
+    const result = ToolResultSchemas["search_ui_references"].safeParse(p);
+    expect(result.success).toBe(true);
+  });
+
+  it("4: forbidden attempted mode rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("plan_ui_direction")) as Record<string, unknown>;
+    const r = p.retrieval as Record<string, unknown>;
+    r.mode = "keyword"; r.modality = "text"; r.fallbackUsed = true;
+    r.fallbackReason = "missing-index"; r.attemptedCount = 1; r.attemptedModes = ["vector"]; // plan doesn't allow direct vector
+    const result = ToolResultSchemas["plan_ui_direction"].safeParse(p);
+    expect(result.success).toBe(false);
+  });
+
+  it("5: error claims fallback rejected", () => {
+    const p = makeValidError("plan_ui_direction");
+    if (!p) return;
+    const r = p.retrieval as Record<string, unknown>;
+    r.fallbackUsed = true; r.fallbackReason = "missing-index";
+    r.attemptedCount = 1; r.attemptedModes = ["hybrid"];
+    const result = ToolResultSchemas["plan_ui_direction"].safeParse(p);
+    expect(result.success).toBe(false);
+  });
+
+  // --- Duplicate and partial-result probes (6-8) ---
+
+  it("6: repeated aggregation source accepted (not duplicate)", () => {
+    const p = cloneToolResult(makeValidSuccess("research_ui_anti_patterns")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    data.results = [
+      { text: "Avoid A", sourceIds: ["ref-a"], count: 1 },
+      { text: "Avoid B", sourceIds: ["ref-a"], count: 1 },
+    ];
+    // resultCount must match the new 2-row data
+    (p.retrieval as Record<string, unknown>).resultCount = 2;
+    // referenceIds stays ["ref-a"] — one reference, two rows. Must pass.
+    const result = ToolResultSchemas["research_ui_anti_patterns"].safeParse(p);
+    expect(result.success).toBe(true);
+  });
+
+  it("7: duplicate primary search row rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("search_ui_references")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    const results = data.results as Array<Record<string, unknown>>;
+    results.push({ ...results[0] }); // duplicate id "ref-a"
+    const result = ToolResultSchemas["search_ui_references"].safeParse(p);
+    expect(result.success).toBe(false);
+  });
+
+  it("8: compare all-missing as success rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("compare_ui_references")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    data.entries = []; data.foundIds = []; data.missingIds = ["ref-a", "ref-b"];
+    p.referenceIds = [];
+    (p.retrieval as Record<string, unknown>).resultCount = 0;
+    (p as Record<string, unknown>).warnings = [];
+    const result = ToolResultSchemas["compare_ui_references"].safeParse(p);
+    expect(result.success).toBe(false);
+  });
+
+  // --- Evidence graph probes (9-13) ---
+
+  it("9: ghost plan evidence rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("plan_ui_direction")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    const decisions = data.structuredDecisions as Array<Record<string, unknown>>;
+    decisions[0]!.evidenceIds = ["evidence-ghost"];
+    assertRejectsAt(p, "data");
+  });
+
+  it("10: ghost UiSpec evidence self-authorized through provenance rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    // Add ghost to provenance — must NOT authorize it elsewhere
+    const prov = data.provenance as Record<string, unknown>;
+    (prov.evidenceIds as string[]).push("evidence-ghost");
+    // Use ghost in an acceptance criterion
+    const ac = data.acceptanceCriteria as Array<Record<string, unknown>>;
+    ac[0]!.evidenceIds = ["evidence-ghost"];
+    assertRejectsAt(p, "data");
+  });
+
+  it("11: one-way provenance omission rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    const prov = data.provenance as Record<string, unknown>;
+    // Remove an evidence ID from provenance that exists in envelope
+    prov.evidenceIds = [];
+    assertRejectsAt(p, "data");
+  });
+
+  it("12: ghost critique evidence in recommendations rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("critique_ui")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    const recs = data.recommendations as Array<Record<string, unknown>>;
+    recs[0]!.evidence = ["evidence-ghost"];
+    assertRejectsAt(p, "data");
+  });
+
+  it("13: non-evidence tool carrying evidence:[] rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("search_ui_references")) as Record<string, unknown>;
+    p.evidence = [];
+    assertRejectsAt(p, "evidence");
+  });
+
+  // --- Envelope integrity probes (14-18) ---
+
+  it("14: error with non-empty referenceIds rejected", () => {
+    const p = makeValidError("get_ui_reference");
+    if (!p) return;
+    p.referenceIds = ["ghost"];
+    assertRejectsAt(p, "referenceIds");
+  });
+
+  it("15: error with resultCount > 0 rejected", () => {
+    const p = makeValidError("search_ui_references");
+    if (!p) return;
+    (p.retrieval as Record<string, unknown>).resultCount = 5;
+    assertRejectsAt(p, "retrieval");
+  });
+
+  it("16: mismatched resultCount rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("search_ui_references")) as Record<string, unknown>;
+    (p.retrieval as Record<string, unknown>).resultCount = 99;
+    assertRejectsAt(p, "retrieval");
+  });
+
+  it("17: dangling referenceIds (extra) rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("search_ui_references")) as Record<string, unknown>;
+    p.referenceIds = ["ref-a", "ghost"];
+    assertRejectsAt(p, "referenceIds");
+  });
+
+  it("18: empty evidence without insufficiency warning rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("plan_ui_direction")) as Record<string, unknown>;
+    (p.evidence as unknown[]) = [];
+    p.warnings = [];
+    assertRejectsAt(p, "warnings");
+  });
+
+  // --- QA-identified missing probes (19-25) ---
+
+  it("19: wrong evidence kind for tool rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("plan_ui_direction")) as Record<string, unknown>;
+    const ev = p.evidence as Array<Record<string, unknown>>;
+    ev[0]!.kind = "screen-observation"; // plan can't emit screen evidence
+    delete ev[0]!.referenceId;
+    assertRejectsAt(p, "evidence");
+  });
+
+  it("20: evidence referenceId not in referenceIds rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("plan_ui_direction")) as Record<string, unknown>;
+    const ev = p.evidence as Array<Record<string, unknown>>;
+    ev[0]!.referenceId = "ref-ghost";
+    assertRejectsAt(p, "evidence");
+  });
+
+  it("21: unknown top-level field rejected (.strict)", () => {
+    const p = cloneToolResult(makeValidSuccess("search_ui_references")) as Record<string, unknown>;
+    p.unexpectedField = true;
+    const result = ToolResultSchemas["search_ui_references"].safeParse(p);
+    expect(result.success).toBe(false);
+  });
+
+  it("22: duplicate referenceIds rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("search_ui_references")) as Record<string, unknown>;
+    p.referenceIds = ["ref-a", "ref-a"];
+    assertRejectsAt(p, "referenceIds");
+  });
+
+  it("23: duplicate evidence IDs rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("plan_ui_direction")) as Record<string, unknown>;
+    const ev = p.evidence as Array<Record<string, unknown>>;
+    ev.push({ ...ev[0] }); // duplicate id
+    assertRejectsAt(p, "evidence");
+  });
+
+  it("24: compare partialResult warning without missingIds rejected", () => {
+    const p = cloneToolResult(makeValidSuccess("compare_ui_references")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    data.missingIds = []; // no missing but has partialResult warning
+    p.warnings = [{ code: "partialResult", message: "x" }];
+    const result = ToolResultSchemas["compare_ui_references"].safeParse(p);
+    expect(result.success).toBe(false);
+  });
+
+  it("25: parseToolResult rejects unknown tool", () => {
+    expect(parseToolResult({ tool: "not_a_tool", schemaVersion: "1.0" }).ok).toBe(false);
+  });
+});

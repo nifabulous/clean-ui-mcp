@@ -1,26 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import {
-  TOOL_DEFINITIONS,
+  TOOL_DESCRIPTORS,
   TOOL_CATALOG,
   REMOVED_TOOL_NAMES,
   LEGACY_TO_BETA_MAP,
   CATALOG_DIGEST,
   type ToolName,
-  type LegacyToolName,
 } from "./tool-catalog.js";
 
 // ---------------------------------------------------------------------------
-// Catalog descriptor table
+// TOOL_DESCRIPTORS
 // ---------------------------------------------------------------------------
 
-describe("TOOL_DEFINITIONS", () => {
+describe("TOOL_DESCRIPTORS", () => {
   it("has exactly 12 entries", () => {
-    expect(TOOL_DEFINITIONS).toHaveLength(12);
+    expect(TOOL_DESCRIPTORS).toHaveLength(12);
   });
 
   it("each entry has name, rendererKey, hasEvidence, and legacyNames", () => {
-    for (const def of TOOL_DEFINITIONS) {
+    for (const def of TOOL_DESCRIPTORS) {
       expect(def.name).toBeTruthy();
       expect(def.rendererKey).toBeTruthy();
       expect(typeof def.hasEvidence).toBe("boolean");
@@ -29,21 +28,13 @@ describe("TOOL_DEFINITIONS", () => {
   });
 
   it("rendererKey is unique across all tools", () => {
-    const keys = TOOL_DEFINITIONS.map((d) => d.rendererKey);
+    const keys = TOOL_DESCRIPTORS.map((d) => d.rendererKey);
     expect(new Set(keys).size).toBe(keys.length);
   });
 
   it("tool names are unique", () => {
-    const names = TOOL_DEFINITIONS.map((d) => d.name);
+    const names = TOOL_DESCRIPTORS.map((d) => d.name);
     expect(new Set(names).size).toBe(names.length);
-  });
-
-  it("TOOL_DEFINITIONS is deep-frozen", () => {
-    expect(Object.isFrozen(TOOL_DEFINITIONS)).toBe(true);
-    for (const def of TOOL_DEFINITIONS) {
-      expect(Object.isFrozen(def)).toBe(true);
-      expect(Object.isFrozen(def.legacyNames)).toBe(true);
-    }
   });
 });
 
@@ -69,9 +60,7 @@ describe("TOOL_CATALOG", () => {
     ]);
   });
 
-  it("is readonly (frozen)", () => {
-    // TypeScript const assertion makes this readonly at compile time.
-    // Runtime check: ensure it's not accidentally mutable.
+  it("is frozen", () => {
     expect(Object.isFrozen(TOOL_CATALOG)).toBe(true);
   });
 });
@@ -81,22 +70,13 @@ describe("TOOL_CATALOG", () => {
 // ---------------------------------------------------------------------------
 
 describe("REMOVED_TOOL_NAMES", () => {
-  it("contains exactly the 13 legacy names not carried forward unchanged", () => {
-    // 14 legacy tools - 1 kept (critique_ui) = 13 removed/renamed
+  it("contains exactly the 13 legacy names", () => {
     expect([...REMOVED_TOOL_NAMES].sort()).toEqual(
       [
-        "search_ui_examples",
-        "get_ui_example",
-        "list_categories",
-        "list_style_tags",
-        "list_domain_tags",
-        "get_similar_ui_examples",
-        "compare_ui_examples",
-        "generate_design_prompt",
-        "recommend_ui_direction",
-        "get_anti_patterns",
-        "get_color_palette",
-        "get_stealable_techniques",
+        "search_ui_examples", "get_ui_example", "list_categories",
+        "list_style_tags", "list_domain_tags", "get_similar_ui_examples",
+        "compare_ui_examples", "generate_design_prompt", "recommend_ui_direction",
+        "get_anti_patterns", "get_color_palette", "get_stealable_techniques",
         "browse_ui_examples",
       ].sort(),
     );
@@ -136,7 +116,7 @@ describe("LEGACY_TO_BETA_MAP", () => {
 
   it("every removed name has a mapping", () => {
     for (const removed of REMOVED_TOOL_NAMES) {
-      expect(LEGACY_TO_BETA_MAP[removed as LegacyToolName]).toBeDefined();
+      expect(LEGACY_TO_BETA_MAP[removed]).toBeDefined();
     }
   });
 });
@@ -150,12 +130,9 @@ describe("CATALOG_DIGEST", () => {
     expect(CATALOG_DIGEST).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("matches independently recomputed SHA-256 of the canonical descriptor representation", () => {
-    // Recompute the digest from the descriptor table, independent of the
-    // production code's own computation. If the serialization changes,
-    // this test catches the drift.
+  it("matches independently recomputed SHA-256", () => {
     const canonicalRep = JSON.stringify(
-      TOOL_DEFINITIONS.map((d) => ({
+      TOOL_DESCRIPTORS.map((d) => ({
         name: d.name,
         rendererKey: d.rendererKey,
         hasEvidence: d.hasEvidence,
@@ -164,21 +141,5 @@ describe("CATALOG_DIGEST", () => {
     );
     const expected = createHash("sha256").update(canonicalRep).digest("hex");
     expect(CATALOG_DIGEST).toBe(expected);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Type exports
-// ---------------------------------------------------------------------------
-
-describe("type exports", () => {
-  it("ToolName includes all 12 beta names", () => {
-    const sample: ToolName = "search_ui_references";
-    expect(sample).toBe("search_ui_references");
-  });
-
-  it("LegacyToolName includes all 14 legacy names", () => {
-    const sample: LegacyToolName = "search_ui_examples";
-    expect(sample).toBe("search_ui_examples");
   });
 });

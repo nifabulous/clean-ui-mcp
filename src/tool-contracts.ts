@@ -1,26 +1,40 @@
 /**
- * Executable Zod contracts for the 12-tool MCP surface.
+ * Canonical tool contracts — descriptor-driven architecture.
  *
- * Canonical source: §5.3–5.5 of the design spec.
- * This module is the single executable definition; Tasks 6–9 consume it.
+ * Governing invariant: Every accepted or rejected MCP result is determined by
+ * one canonical per-tool Zod schema. Documentation, types, validation,
+ * reference extraction, counts, warnings and errors derive from the same
+ * descriptor. parseToolResult() is a thin dispatcher with no independent
+ * integrity logic.
  *
- * Architecture:
- * - TOOL_DEFINITIONS is the descriptor (from tool-catalog.ts)
- * - Input/data/result/retrieval/evidence schemas are all derived from or
- *   colocated with the descriptor
- * - One canonical envelope factory enforces all cross-field invariants
- * - No z.unknown() placeholder remains in externally visible contracts
+ * Build order in this file:
+ * 1. Shared Zod building blocks (enums, retrieval, evidence, warnings, errors)
+ * 2. Shared result-row sub-schemas
+ * 3. UiSpec sub-schemas + complete UiSpec
+ * 4. Per-tool input schemas (12)
+ * 5. Per-tool data schemas (12)
+ * 6. Per-tool warning/error schemas
+ * 7. TOOL_DESCRIPTORS array (one entry per tool)
+ * 8. Derived: TOOL_CATALOG, ToolName, schema maps, ToolResultSchemas (via makeEnvelope)
+ * 9. parseToolResult — thin dispatcher
  */
 import { z } from "zod";
-import { TOOL_CATALOG, TOOL_DEFINITIONS, type ToolName } from "./tool-catalog.js";
+import { createHash } from "node:crypto";
 import { PatternType, Category, StyleTag } from "./schema.js";
+import { CRITIQUE_UI_INPUT_SCHEMA, StructuredCritique } from "./synthesis/contracts.js";
 
 // ===========================================================================
-// Retrieval state matrix
+// 1. Shared building blocks
 // ===========================================================================
 
-export const RetrievalMode = z.enum(["hybrid", "vector", "keyword", "structured-fallback", "none"]);
-export const RetrievalModality = z.enum(["text", "image", "metadata", "none"]);
+// --- Retrieval state ---
+
+export const RetrievalMode = z.enum([
+  "hybrid", "vector", "keyword", "structured-fallback", "none",
+]);
+export const RetrievalModality = z.enum([
+  "text", "image", "metadata", "none",
+]);
 export const FallbackReason = z.enum([
   "missing-index", "incompatible-index", "missing-provider-key",
   "community-edition", "provider-error", "no-image-evidence",
@@ -53,7 +67,6 @@ export const RetrievalState = z.object({
     ctx.addIssue({ code: "custom", message: "'none' cannot have fallback", path: ["mode"] });
   if (val.mode === "vector" && val.fallbackReason === "missing-index")
     ctx.addIssue({ code: "custom", message: "'vector' with 'missing-index' is contradictory", path: ["mode"] });
-  // structured-fallback is inherently a fallback mode — requires fallbackUsed=true
   if (val.mode === "structured-fallback" && !val.fallbackUsed)
     ctx.addIssue({ code: "custom", message: "'structured-fallback' requires fallbackUsed", path: ["fallbackUsed"] });
   if (val.fallbackUsed) {
@@ -63,7 +76,7 @@ export const RetrievalState = z.object({
       if (val.attemptedModes.includes("none"))
         ctx.addIssue({ code: "custom", message: "attemptedModes cannot contain 'none'", path: ["attemptedModes"] });
       if (val.attemptedModes.includes(val.mode))
-        ctx.addIssue({ code: "custom", message: "attemptedModes cannot contain the current mode", path: ["attemptedModes"] });
+        ctx.addIssue({ code: "custom", message: "attemptedModes cannot contain current mode", path: ["attemptedModes"] });
       if (new Set(val.attemptedModes).size !== val.attemptedModes.length)
         ctx.addIssue({ code: "custom", message: "attemptedModes cannot have duplicates", path: ["attemptedModes"] });
     }
@@ -74,38 +87,21 @@ export function isAllowedRetrievalState(s: Record<string, unknown>): boolean {
   return RetrievalState.safeParse(s).success;
 }
 
-// Per-tool allowed retrieval (mode × modality pairs)
-export const ALLOWED_RETRIEVAL_STATES: Readonly<Record<string, readonly { mode: string; modality: string }[]>> = Object.freeze({
-  search_ui_references: [{mode:"hybrid",modality:"text"},{mode:"vector",modality:"text"},{mode:"keyword",modality:"text"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
-  get_ui_reference: [{mode:"none",modality:"none"}],
-  find_similar_ui_references: [{mode:"vector",modality:"text"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
-  compare_ui_references: [{mode:"none",modality:"none"}],
-  get_ui_taxonomy: [{mode:"none",modality:"none"}],
-  browse_ui_patterns: [{mode:"none",modality:"none"}],
-  plan_ui_direction: [{mode:"hybrid",modality:"text"},{mode:"keyword",modality:"text"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
-  create_ui_spec: [{mode:"none",modality:"none"}],
-  research_ui_anti_patterns: [{mode:"none",modality:"none"}],
-  research_ui_palettes: [{mode:"none",modality:"none"}],
-  research_ui_techniques: [{mode:"none",modality:"none"}],
-  critique_ui: [{mode:"vector",modality:"image"},{mode:"structured-fallback",modality:"metadata"},{mode:"none",modality:"none"}],
-});
+// --- Evidence ---
 
-function isRetrievalAllowedForTool(tool: string, mode: string, modality: string): boolean {
-  return ALLOWED_RETRIEVAL_STATES[tool]?.some(a => a.mode === mode && a.modality === modality) ?? false;
-}
-
-// ===========================================================================
-// Evidence — discriminated lanes
-// ===========================================================================
-
-export const EvidenceKind = z.enum(["corpus-observation", "screen-observation", "dom-signal", "machine-rule", "editorial-guidance"]);
-export const EvidenceBasis = z.enum(["visible", "inferred", "dom-grounded", "editorial"]);
+export const EvidenceKind = z.enum([
+  "corpus-observation", "screen-observation", "dom-signal",
+  "machine-rule", "editorial-guidance",
+]);
+export const EvidenceBasis = z.enum([
+  "visible", "inferred", "dom-grounded", "editorial",
+]);
 
 export const Evidence = z.object({
-  id: z.string().min(1),
-  referenceId: z.string().min(1).optional(),
+  id: z.string().min(1).trim(),
+  referenceId: z.string().min(1).trim().optional(),
   kind: EvidenceKind,
-  summary: z.string().min(1),
+  summary: z.string().min(1).trim(),
   basis: EvidenceBasis,
 }).strict().superRefine((val, ctx) => {
   if (val.kind === "corpus-observation" && !val.referenceId)
@@ -122,187 +118,408 @@ export const Evidence = z.object({
     ctx.addIssue({ code: "custom", message: "machine-rule basis must be inferred or editorial", path: ["basis"] });
 });
 
-// ===========================================================================
-// Tool error
-// ===========================================================================
+// Evidence array with unique-ID enforcement
+const EvidenceArray = z.array(Evidence).superRefine((arr, ctx) => {
+  const seen = new Set<string>();
+  arr.forEach((e, i) => {
+    if (seen.has(e.id))
+      ctx.addIssue({ code: "custom", message: `duplicate evidence id "${e.id}"`, path: [i, "id"] });
+    seen.add(e.id);
+  });
+});
 
-export const ToolError = z.object({
+// --- Typed warnings ---
+
+const WarningBase = z.object({
   code: z.string().min(1),
-  message: z.string().min(1),
-  retryable: z.boolean(),
+  message: z.string().min(1).trim(),
 }).strict();
+
+function makeWarningSchema<const T extends readonly string[]>(codes: T) {
+  return z.array(z.object({
+    code: z.enum(codes),
+    message: z.string().min(1).trim(),
+  }).strict());
+}
+
+// --- Typed errors (discriminated union with code↔retryable binding) ---
+
+export const ToolErrorUnion = z.discriminatedUnion("code", [
+  z.object({ code: z.literal("NOT_FOUND"), message: z.string().min(1).trim(), retryable: z.literal(false) }).strict(),
+  z.object({ code: z.literal("INDEX_UNAVAILABLE"), message: z.string().min(1).trim(), retryable: z.literal(true) }).strict(),
+  z.object({ code: z.literal("PROVIDER_ERROR"), message: z.string().min(1).trim(), retryable: z.literal(true) }).strict(),
+  z.object({ code: z.literal("INVALID_INPUT"), message: z.string().min(1).trim(), retryable: z.literal(false) }).strict(),
+]);
+
+function makeErrorSchema<const T extends readonly string[]>(codes: T) {
+  // Build a superRefine-based error schema with code↔retryable binding
+  const retryMap: Record<string, boolean> = {
+    NOT_FOUND: false, INVALID_INPUT: false,
+    INDEX_UNAVAILABLE: true, PROVIDER_ERROR: true,
+  };
+  return z.object({
+    code: z.enum(codes),
+    message: z.string().min(1).trim(),
+    retryable: z.boolean(),
+  }).strict().superRefine((val, ctx) => {
+    const expected = retryMap[val.code];
+    if (expected !== undefined && val.retryable !== expected)
+      ctx.addIssue({ code: "custom", message: `error code "${val.code}" must have retryable: ${expected}`, path: ["retryable"] });
+  });
+}
 
 // ===========================================================================
-// Per-tool input schemas
+// 2. Shared result-row sub-schemas
 // ===========================================================================
 
-const SearchInput = z.object({
-  query: z.string().optional(), category: Category.optional(), styleTag: StyleTag.optional(),
-  patternType: PatternType.optional(), minQuality: z.number().min(1).max(5).optional(),
-  qualityTier: z.enum(["exceptional", "cautionary"]).optional(),
-  reviewStatus: z.enum(["approved", "draft", "any"]).optional(),
-  platform: z.enum(["web", "mobile", "tablet"]).optional(),
-  limit: z.number().int().min(1).max(20).optional(),
-  responseFormat: z.enum(["concise", "detailed"]).optional(),
+const SourceRef = z.object({
+  productName: z.string().min(1).trim(),
+  url: z.string().nullable(),
+  imageAvailable: z.boolean(),
 }).strict();
 
-const IdInput = z.object({ id: z.string().min(1) }).strict();
-const CompareInput = z.object({
-  ids: z.array(z.string().min(1)).min(2).max(3).refine(
-    (a) => new Set(a).size === a.length, "ids must be unique",
-  ),
-  responseFormat: z.enum(["concise", "detailed"]).optional(),
-}).strict();
-
-const PlanInput = z.object({
-  productContext: z.string().min(8),
-  category: Category.optional(), styleTag: StyleTag.optional(),
-  platform: z.enum(["web", "mobile", "tablet"]).optional(),
-  qualityTier: z.enum(["exceptional", "cautionary"]).optional(),
-  framework: z.enum(["brief", "tokens"]).optional(),
-  count: z.number().int().min(1).max(5).optional(),
-}).strict();
-
-const CreateUiSpecInput = z.object({
-  productContext: z.string().min(8),
-  referenceIds: z.array(z.string().min(1)).max(5).default([]).refine(
-    (a) => new Set(a).size === a.length, "referenceIds must be unique",
-  ),
-  platform: z.enum(["web", "mobile", "tablet"]).optional(),
-  implementationFramework: z.string().optional(),
-  serializationFormat: z.enum(["brief", "tokens"]).optional(),
-  designSystem: z.string().optional(),
-  constraints: z.array(z.string()).optional(),
-}).strict();
-
-const ResearchInput = z.object({
-  patternType: PatternType.optional(), category: Category.optional(), styleTag: StyleTag.optional(),
-  limit: z.number().int().min(1).max(20).optional(),
-}).strict();
-
-const PaletteResearchInput = z.object({
-  patternType: PatternType.optional(), styleTag: StyleTag.optional(),
-  limit: z.number().int().min(1).max(20).optional(),
-}).strict();
-
-const ResearchTechniquesInput = z.object({
-  patternType: PatternType.optional(), styleTag: StyleTag.optional(),
-  limit: z.number().int().min(1).max(30).optional(), // legacy default 15
-}).strict();
-
-// Critique reuses the canonical schema from synthesis/contracts.ts
-// Importing it here to avoid maintaining a duplicate
-import { CRITIQUE_UI_INPUT_SCHEMA } from "./synthesis/contracts.js";
-
-export const ToolInputSchemas = {
-  search_ui_references: SearchInput,
-  get_ui_reference: IdInput,
-  find_similar_ui_references: IdInput.extend({ limit: z.number().int().min(1).max(20).optional() }).strict(),
-  compare_ui_references: CompareInput,
-  get_ui_taxonomy: z.object({}).strict(),
-  browse_ui_patterns: z.object({ styleTag: StyleTag.optional() }).strict(),
-  plan_ui_direction: PlanInput,
-  create_ui_spec: CreateUiSpecInput,
-  research_ui_anti_patterns: ResearchInput,
-  research_ui_palettes: PaletteResearchInput,
-  research_ui_techniques: ResearchTechniquesInput,
-  critique_ui: CRITIQUE_UI_INPUT_SCHEMA,
-} satisfies Record<ToolName, z.ZodType>;
-
-// ===========================================================================
-// Per-tool data schemas — complete typed, no z.unknown()
-// ===========================================================================
-
-// Shared sub-schemas
-const SourceRef = z.object({ productName: z.string(), url: z.string().nullable(), imageAvailable: z.boolean() }).strict();
 const ReferenceSummary = z.object({
-  id: z.string().min(1), product: z.string(), patternType: z.string(),
-  categories: z.array(z.string()), styleTags: z.array(z.string()),
-  qualityScore: z.number().int(), qualityTier: z.string(),
-  source: SourceRef, critique: z.string(), topTechniques: z.array(z.string()),
-  antiPatterns: z.array(z.string()).default([]),
+  id: z.string().min(1).trim(),
+  title: z.string().min(1).trim(),
+  product: z.string().min(1).trim(),
+  patternType: z.string().min(1),
+  categories: z.array(z.string()),
+  styleTags: z.array(z.string()),
+  qualityScore: z.number().int(),
+  qualityTier: z.string(),
+  source: SourceRef,
+  critique: z.string(),
+  topTechniques: z.array(z.string()),
+  antiPatterns: z.array(z.string()),
 }).strict();
 
-const TaxonomyList = z.object({ count: z.number().int().nonnegative(), values: z.array(z.string().min(1)) }).strict();
+const SimilarReference = z.object({
+  id: z.string().min(1).trim(),
+  title: z.string().min(1).trim(),
+  product: z.string().min(1).trim(),
+  patternType: z.string().min(1),
+  categories: z.array(z.string()),
+  styleTags: z.array(z.string()),
+  score: z.number(),
+  critique: z.string(),
+  techniques: z.array(z.string()),
+}).strict();
+
+const ComparisonRow = z.object({
+  id: z.string().min(1).trim(),
+  title: z.string().min(1).trim(),
+  product: z.string().min(1).trim(),
+  patternType: z.string(),
+  categories: z.array(z.string()),
+  styleTags: z.array(z.string()),
+  platform: z.string(),
+  layout: z.string(),
+  accent: z.string(),
+  density: z.string(),
+  corners: z.string(),
+  quality: z.string(),
+  critiqueAngle: z.string(),
+  topTechnique: z.string(),
+  antiPatterns: z.array(z.string()),
+  whereItFails: z.string(),
+  accessibility: z.string(),
+}).strict();
+
+const TaxonomyList = z.object({
+  count: z.number().int().nonnegative(),
+  values: z.array(z.string().min(1)),
+}).strict();
+
+const PatternGroupExemplar = z.object({
+  id: z.string().min(1).trim(),
+  title: z.string().min(1).trim(),
+  product: z.string().min(1).trim(),
+  qualityScore: z.number().int(),
+}).strict();
+
+const PatternGroup = z.object({
+  patternType: z.string().min(1),
+  count: z.number().int().nonnegative(),
+  products: z.array(z.string()),
+  exemplar: PatternGroupExemplar,
+}).strict();
+
+const PaletteTokens = z.object({
+  canvas: z.string().min(1),
+  surface: z.string().min(1),
+  ink: z.string().min(1),
+  muted: z.string().nullable(),
+  accent: z.string().min(1),
+}).strict();
+
+const PaletteRecord = z.object({
+  tokens: PaletteTokens,
+  accentHue: z.number(),
+  product: z.string().min(1).trim(),
+  sourceId: z.string().min(1).trim(),
+  patternType: z.string().min(1),
+}).strict();
+
+const TechniqueRow = z.object({
+  text: z.string().min(1).trim(),
+  source: z.object({ id: z.string().min(1).trim(), product: z.string().min(1).trim() }).strict(),
+}).strict();
+
+const AntiPatternRow = z.object({
+  text: z.string().min(1).trim(),
+  sourceIds: z.array(z.string().min(1)),
+  count: z.number().int(),
+}).strict();
+
+const FullReference = z.object({
+  id: z.string().min(1).trim(),
+  title: z.string().min(1).trim(),
+  product: z.string().min(1).trim(),
+  patternType: z.string(),
+  categories: z.array(z.string()),
+  styleTags: z.array(z.string()),
+  qualityScore: z.number().int(),
+  qualityTier: z.string(),
+  platform: z.string(),
+  layout: z.string(),
+  accentColor: z.string().nullable(),
+  dominantColors: z.array(z.string()),
+  colorRoles: z.object({
+    canvas: z.string().nullable(),
+    surface: z.string().nullable(),
+    ink: z.string().nullable(),
+    muted: z.string().nullable(),
+    accent: z.string().nullable(),
+  }).nullable(),
+  typePairing: z.object({
+    display: z.string().nullable(),
+    body: z.string().nullable(),
+    notes: z.string().optional(),
+  }).nullable(),
+  spacingDensity: z.string(),
+  cornerStyle: z.string(),
+  usesShadows: z.boolean(),
+  usesBorders: z.boolean(),
+  critique: z.string(),
+  techniques: z.array(z.string()),
+  antiPatterns: z.array(z.string()),
+  whereThisFails: z.array(z.string()),
+  accessibility: z.array(z.object({
+    element: z.string(),
+    risk: z.string(),
+    wcag: z.array(z.string()),
+  }).strict()),
+  businessRationale: z.object({
+    businessGoal: z.string().nullable(),
+    targetUser: z.string().nullable(),
+    rationale: z.string().nullable(),
+    confirmed: z.boolean(),
+  }).nullable().optional(),
+  voice: z.object({
+    tone: z.string().nullable(),
+    examples: z.array(z.string()),
+    avoid: z.array(z.string()),
+  }).nullable().optional(),
+  source: SourceRef,
+  imageAvailable: z.boolean(),
+}).strict();
+
+// Critique data — strict mirror of StructuredCritique minus schemaVersion
+const CritiqueDataSchema = z.object({
+  platform: z.string(),
+  retrievalMode: z.string(),
+  fallbackUsed: z.boolean(),
+  coverage: z.string(),
+  summary: z.string(),
+  observations: z.array(z.string()),
+  recommendations: z.array(z.object({
+    observation: z.string(),
+    impact: z.string(),
+    recommendation: z.string(),
+    evidence: z.array(z.string()).min(1),
+    basis: z.enum(["visible", "inferred", "dom-grounded", "editorial"]),
+  }).strict()),
+  accessibilityRisks: z.array(z.object({
+    element: z.string(),
+    risk: z.string(),
+    evidence: z.string(),
+    wcag: z.array(z.string()).min(1),
+    basis: z.enum(["visible", "inferred", "dom-grounded", "editorial"]),
+  }).strict()),
+  visualSlop: z.array(z.object({
+    pattern: z.string(),
+    basis: z.enum(["visible", "inferred", "dom-grounded"]),
+    evidence: z.array(z.string()).min(1),
+    exception: z.string().optional(),
+  }).strict()),
+  motion: z.array(z.object({
+    basis: z.enum(["visible", "inferred", "dom-grounded", "editorial"]),
+    evidence: z.array(z.string()).min(1),
+    note: z.string(),
+    reference: z.string().optional(),
+  }).strict()),
+  appliedReferences: z.array(z.object({
+    id: z.string(),
+    version: z.number().int(),
+    purpose: z.string(),
+  }).strict()),
+  evidenceIds: z.array(z.string()),
+  confidence: z.enum(["high", "medium", "low"]),
+  md3: z.object({
+    classification: z.enum(["supported", "insufficient-evidence", "conflicting"]),
+    matchedCategories: z.array(z.string()),
+    conflictingSignals: z.array(z.object({
+      category: z.string(),
+      evidenceId: z.string(),
+      detail: z.string(),
+    }).strict()),
+    evidenceIds: z.array(z.string()),
+    confidence: z.number(),
+  }).strict().optional(),
+}).strict();
+
+// ===========================================================================
+// 3. UiSpec sub-schemas + complete UiSpec
+// ===========================================================================
+
+const TokenAuthority = z.enum([
+  "team-design-system", "project-constraint", "corpus-evidence", "editorial", "mixed",
+]);
+
 const AcceptanceAssertion = z.enum([
   "exists", "equals", "uses-token", "meets-contrast",
   "keyboard-operable", "has-accessible-name", "responsive-at", "motion-respects-preference",
 ]);
-const AcceptanceVerifier = z.enum(["axe", "playwright", "static-analysis", "manual"]);
 const AcceptancePriority = z.enum(["must", "should"]);
 
-export const AcceptanceCriterion = z.object({
+const AcceptanceCriterion = z.discriminatedUnion("verifier", [
+  z.object({
+    id: z.string().min(1).trim(),
+    subject: z.string().min(1).trim(),
+    assertion: AcceptanceAssertion,
+    expectedOutcome: z.string().min(1).trim(),
+    verifier: z.literal("axe"),
+    priority: AcceptancePriority,
+    evidenceIds: z.array(z.string()),
+  }).strict(),
+  z.object({
+    id: z.string().min(1).trim(),
+    subject: z.string().min(1).trim(),
+    assertion: AcceptanceAssertion,
+    expectedOutcome: z.string().min(1).trim(),
+    verifier: z.literal("playwright"),
+    priority: AcceptancePriority,
+    evidenceIds: z.array(z.string()),
+    selector: z.string().min(1),
+  }).strict(),
+  z.object({
+    id: z.string().min(1).trim(),
+    subject: z.string().min(1).trim(),
+    assertion: AcceptanceAssertion,
+    expectedOutcome: z.string().min(1).trim(),
+    verifier: z.literal("static-analysis"),
+    priority: AcceptancePriority,
+    evidenceIds: z.array(z.string()),
+    command: z.string().min(1),
+  }).strict(),
+  z.object({
+    id: z.string().min(1).trim(),
+    subject: z.string().min(1).trim(),
+    assertion: AcceptanceAssertion,
+    expectedOutcome: z.string().min(1).trim(),
+    verifier: z.literal("manual"),
+    priority: AcceptancePriority,
+    evidenceIds: z.array(z.string()),
+    manualSteps: z.array(z.string().min(1)).min(1),
+  }).strict(),
+]);
+
+const CitedDecision = z.object({
   id: z.string().min(1).trim(),
-  subject: z.string().min(1).trim(),
-  assertion: AcceptanceAssertion,
-  expectedOutcome: z.string().min(1).trim(),
-  verifier: AcceptanceVerifier,
-  priority: AcceptancePriority,
-  evidenceIds: z.array(z.string()),
-  manualSteps: z.array(z.string().min(1)).optional(),
-  selector: z.string().optional(),
-  command: z.string().optional(),
-}).strict().superRefine((val, ctx) => {
-  // Manual criteria require explicit steps
-  if (val.verifier === "manual" && (!val.manualSteps || val.manualSteps.length === 0))
-    ctx.addIssue({ code: "custom", message: "manual verifier requires non-empty manualSteps", path: ["manualSteps"] });
-  // Playwright criteria require selector
-  if (val.verifier === "playwright" && !val.selector)
-    ctx.addIssue({ code: "custom", message: "playwright verifier requires selector", path: ["selector"] });
-  // Static-analysis criteria require command
-  if (val.verifier === "static-analysis" && !val.command)
-    ctx.addIssue({ code: "custom", message: "static-analysis verifier requires command", path: ["command"] });
-});
-export const CitedDecision = z.object({
-  id: z.string().min(1), field: z.string().min(1),
+  field: z.string().min(1).trim(),
   authority: z.enum(["team-design-system", "project-constraint", "corpus-evidence", "editorial"]),
   evidenceIds: z.array(z.string()),
   readiness: z.enum(["available", "proposed", "unavailable"]),
   sourceId: z.string().optional(),
 }).strict();
-const ColorTokens = z.object({
-  primary: z.string().min(1), surface: z.string().min(1),
-  ink: z.string().min(1), muted: z.string().min(1), accent: z.string().min(1),
-}).strict();
-const TypographyTokens = z.object({ heading: z.string().min(1), body: z.string().min(1), mono: z.string().min(1) }).strict();
-const TokenAuthority = z.enum(["team-design-system", "project-constraint", "corpus-evidence", "editorial", "mixed"]);
-const MotionGuidance = z.object({ notes: z.array(z.string()), evidenceUnavailable: z.boolean() }).strict();
-const AuthorityLanes = z.object({
-  corpusEvidence: z.array(z.string()), machineRules: z.array(z.string()), editorialGuidance: z.array(z.string()),
-}).strict();
-const LayoutRegion = z.object({
-  name: z.string().min(1), type: z.string().min(1),
-  components: z.array(z.string()), responsive: z.array(z.string()).default([]),
-}).strict();
-const ComponentEntry = z.object({
-  name: z.string().min(1), pattern: z.string().min(1), source: z.string().optional(),
-}).strict();
-const TechniqueEntry = z.object({
-  text: z.string().min(1), sourceIds: z.array(z.string()),
-}).strict();
-const AntiPatternEntry = z.object({
-  text: z.string().min(1), sourceIds: z.array(z.string()),
-}).strict();
-const UnavailableDecision = z.object({ field: z.string().min(1), reason: z.string().min(1) }).strict();
-const SpecContext = z.object({
-  productContext: z.string().min(1),
-  platform: z.enum(["web", "mobile", "tablet"]).optional(),
-  implementationFramework: z.string().optional(),
-  designSystem: z.string().optional(),
+
+const DesignSystemIdentity = z.object({
+  status: z.enum(["none", "identified"]),
+  registry: z.string().optional(),
+  library: z.string().optional(),
 }).strict();
 
-// UiSpec — the complete versioned artifact
+const ColorTokens = z.object({
+  primary: z.string().min(1),
+  surface: z.string().min(1),
+  ink: z.string().min(1),
+  muted: z.string().min(1),
+  accent: z.string().min(1),
+}).strict();
+
+const TypographyTokens = z.object({
+  heading: z.string().min(1),
+  body: z.string().min(1),
+  mono: z.string().min(1),
+}).strict();
+
+const MotionGuidance = z.object({
+  notes: z.array(z.string()),
+  evidenceUnavailable: z.boolean(),
+}).strict();
+
+const AuthorityLanes = z.object({
+  corpusEvidence: z.array(z.string()),
+  machineRules: z.array(z.string()),
+  editorialGuidance: z.array(z.string()),
+}).strict();
+
+const LayoutRegion = z.object({
+  name: z.string().min(1).trim(),
+  type: z.string().min(1).trim(),
+  components: z.array(z.string()),
+  responsive: z.array(z.string()),
+}).strict();
+
+const ComponentEntry = z.object({
+  name: z.string().min(1).trim(),
+  pattern: z.string().min(1).trim(),
+  source: z.string().optional(),
+}).strict();
+
+const TechniqueEntry = z.object({
+  text: z.string().min(1).trim(),
+  sourceIds: z.array(z.string()),
+}).strict();
+
+const AntiPatternEntry = z.object({
+  text: z.string().min(1).trim(),
+  sourceIds: z.array(z.string()),
+}).strict();
+
+const UnavailableDecision = z.object({
+  field: z.string().min(1).trim(),
+  reason: z.string().min(1).trim(),
+}).strict();
+
+const SpecContext = z.object({
+  productContext: z.string().min(1).trim(),
+  platform: z.enum(["web", "mobile", "tablet"]).optional(),
+  implementationFramework: z.string().optional(),
+  designSystem: DesignSystemIdentity.optional(),
+}).strict();
+
 export const UiSpec = z.object({
   specVersion: z.literal("1.0"),
   context: SpecContext,
-  designDirection: z.string().min(1),
+  designDirection: z.string().min(1).trim(),
   rejectedDefaults: z.array(z.string()),
   layoutRegions: z.array(LayoutRegion),
   responsiveBehavior: z.array(z.string()),
   componentInventory: z.array(ComponentEntry),
-  colorTokens: ColorTokens,
+  colorTokens: ColorTokens.nullable(),
   colorTokenAuthority: TokenAuthority,
-  typographyTokens: TypographyTokens,
+  typographyTokens: TypographyTokens.nullable(),
   typographyTokenAuthority: TokenAuthority,
   interactions: z.array(z.string()),
   motionGuidance: MotionGuidance,
@@ -316,381 +533,503 @@ export const UiSpec = z.object({
   citedReferences: z.array(z.string()),
   citedDecisions: z.array(CitedDecision),
   authorityLanes: AuthorityLanes,
-  provenance: z.object({ generatedAt: z.string().datetime(), toolVersion: z.string().min(1) }).strict(),
+  provenance: z.object({
+    generatedAt: z.string().datetime(),
+    toolVersion: z.string().min(1),
+    sourceReferences: z.array(z.string()),
+    evidenceIds: z.array(z.string()),
+  }).strict(),
+}).strict().superRefine((val, ctx) => {
+  // mixed authority requires multiple distinct non-editorial authority lanes in citedDecisions
+  if (val.colorTokenAuthority === "mixed" || val.typographyTokenAuthority === "mixed") {
+    const authorities = new Set(
+      val.citedDecisions
+        .filter(d => d.authority !== "editorial")
+        .map(d => d.authority),
+    );
+    if (authorities.size < 2)
+      ctx.addIssue({ code: "custom", message: "'mixed' authority requires citedDecisions with >1 distinct non-editorial authority", path: ["citedDecisions"] });
+  }
+});
+
+// ===========================================================================
+// 4. Per-tool input schemas
+// ===========================================================================
+
+export const SearchInput = z.object({
+  query: z.string().optional(), category: Category.optional(), styleTag: StyleTag.optional(),
+  patternType: PatternType.optional(), minQuality: z.number().min(1).max(5).optional(),
+  qualityTier: z.enum(["exceptional", "cautionary"]).optional(),
+  reviewStatus: z.enum(["approved", "draft", "any"]).optional(),
+  platform: z.enum(["web", "mobile", "tablet"]).optional(),
+  limit: z.number().int().min(1).max(20).optional(),
+  responseFormat: z.enum(["concise", "detailed"]).optional(),
 }).strict();
 
-// Critique data — reuses StructuredCritique from synthesis/contracts.ts
-// minus schemaVersion (which lives in the envelope)
-import { StructuredCritique } from "./synthesis/contracts.js";
-const CritiqueDataSchema = StructuredCritique.omit({ schemaVersion: true });
-
-// Compare row
-const ComparisonRow = z.object({
-  id: z.string().min(1), product: z.string(), patternType: z.string(),
-  categories: z.array(z.string()), styleTags: z.array(z.string()),
-  platform: z.string(), layout: z.string(), accent: z.string(),
-  density: z.string(), corners: z.string(), quality: z.string(),
-  critiqueAngle: z.string(), topTechnique: z.string(),
-  antiPatterns: z.array(z.string()), accessibility: z.string(),
+const IdInput = z.object({ id: z.string().min(1).trim() }).strict();
+const SimilarInput = z.object({ id: z.string().min(1).trim(), limit: z.number().int().min(1).max(20).optional() }).strict();
+const CompareInput = z.object({
+  ids: z.array(z.string().min(1).trim()).min(2).max(3).refine(a => new Set(a).size === a.length, "ids must be unique"),
+  responseFormat: z.enum(["concise", "detailed"]).optional(),
 }).strict();
 
-// Pattern group (browse)
-const PatternGroup = z.object({
-  patternType: z.string().min(1), count: z.number().int().nonnegative(),
-  topProducts: z.array(z.string()),
-  exemplar: z.object({ id: z.string().min(1), product: z.string(), critique: z.string() }).strict(),
+export const CreateUiSpecInput = z.object({
+  productContext: z.string().min(8).trim(),
+  referenceIds: z.array(z.string().min(1).trim()).max(5).default([])
+    .refine(a => new Set(a).size === a.length, "referenceIds must be unique"),
+  platform: z.enum(["web", "mobile", "tablet"]).optional(),
+  implementationFramework: z.string().optional(),
+  serializationFormat: z.enum(["brief", "tokens"]).optional(),
+  designSystem: DesignSystemIdentity.optional(),
+  constraints: z.array(z.string()).optional(),
 }).strict();
 
-// Plan data — complete recommendation with structured decisions
+const PlanInput = z.object({
+  productContext: z.string().min(8).trim(),
+  category: Category.optional(), styleTag: StyleTag.optional(),
+  platform: z.enum(["web", "mobile", "tablet"]).optional(),
+  qualityTier: z.enum(["exceptional", "cautionary"]).optional(),
+  framework: z.enum(["brief", "tokens"]).optional(),
+  count: z.number().int().min(1).max(5).optional(),
+}).strict();
+
+const AntiPatternInput = z.object({
+  patternType: PatternType.optional(), category: Category.optional(),
+  limit: z.number().int().min(1).max(20).optional(),
+}).strict();
+
+const PaletteInput = z.object({
+  patternType: PatternType.optional(), styleTag: StyleTag.optional(),
+  limit: z.number().int().min(1).max(20).optional(),
+}).strict();
+
+const TechniqueInput = z.object({
+  patternType: PatternType.optional(), styleTag: StyleTag.optional(),
+  limit: z.number().int().min(1).max(30).optional(),
+}).strict();
+
+// ===========================================================================
+// 5. Per-tool data schemas
+// ===========================================================================
+
 const PlanDecision = z.object({
-  field: z.string().min(1), value: z.string(),
+  field: z.string().min(1).trim(), value: z.string().min(1).trim(),
   authority: z.enum(["team-design-system", "project-constraint", "corpus-evidence", "editorial"]),
   evidenceIds: z.array(z.string()),
 }).strict();
+
 const PlanDataSchema = z.object({
-  direction: z.string().min(1),
+  direction: z.string().min(1).trim(),
   rejectedDefaults: z.array(z.string()),
-  recommendation: z.string(),
-  rationale: z.string(),
+  recommendation: z.string().min(1).trim(),
+  rationale: z.string().min(1).trim(),
   evidenceContributions: z.array(z.string()),
   structuredDecisions: z.array(PlanDecision),
 }).strict();
 
-// Research rows
-const AntiPatternRow = z.object({ text: z.string().min(1), sourceIds: z.array(z.string()), count: z.number().int() }).strict();
+// ===========================================================================
+// 6-7. TOOL_DESCRIPTORS — one colocated entry per tool
+// ===========================================================================
 
-// Palette tokens use canvas (not primary) to match runtime aggregations
-const PaletteTokens = z.object({
-  canvas: z.string().min(1), surface: z.string().min(1),
-  ink: z.string().min(1), muted: z.string().nullable(), accent: z.string().min(1),
-}).strict();
-const PaletteRecord = z.object({
-  tokens: PaletteTokens, accentHue: z.number(), product: z.string(), sourceId: z.string().min(1),
-}).strict();
-const TechniqueRow = z.object({ text: z.string().min(1), source: z.object({ id: z.string().min(1), product: z.string() }).strict() }).strict();
-const SimilarReference = z.object({
-  id: z.string().min(1), product: z.string(), patternType: z.string(),
-  categories: z.array(z.string()), styleTags: z.array(z.string()),
-  score: z.number(), critique: z.string(), techniques: z.array(z.string()),
-}).strict();
+// Helper: all evidence kinds for synthesis tools
+const ALL_SYNTHESIS_KINDS = ["corpus-observation", "machine-rule", "editorial-guidance"] as const;
+const CRITIQUE_KINDS = ["corpus-observation", "screen-observation", "dom-signal", "machine-rule", "editorial-guidance"] as const;
 
-// Full reference record (get_ui_reference) — represents all fields the legacy handler renders
-const FullReference = z.object({
-  id: z.string().min(1), title: z.string(), product: z.string(),
-  patternType: z.string(), categories: z.array(z.string()), styleTags: z.array(z.string()),
-  qualityScore: z.number().int(), qualityTier: z.string(), platform: z.string(),
-  layout: z.string(),
-  accentColor: z.string().nullable(), dominantColors: z.array(z.string()),
-  colorRoles: z.object({
-    canvas: z.string().nullable(), surface: z.string().nullable(),
-    ink: z.string().nullable(), muted: z.string().nullable(), accent: z.string().nullable(),
-  }).nullable(),
-  typePairing: z.object({
-    display: z.string().nullable(), body: z.string().nullable(), notes: z.string().optional(),
-  }).nullable(),
-  spacingDensity: z.string(), cornerStyle: z.string(),
-  usesShadows: z.boolean(), usesBorders: z.boolean(),
-  critique: z.string(), techniques: z.array(z.string()),
-  antiPatterns: z.array(z.string()),
-  whereThisFails: z.array(z.string()).default([]),
-  accessibility: z.array(z.object({
-    element: z.string(), risk: z.string(), wcag: z.array(z.string()),
-  }).strict()).default([]),
-  voice: z.object({
-    tone: z.string().nullable(), examples: z.array(z.string()), avoid: z.array(z.string()),
-  }).nullable().optional(),
-  source: SourceRef, imageAvailable: z.boolean(),
-}).strict();
+export interface ToolDescriptor {
+  readonly name: string;
+  readonly rendererKey: string;
+  readonly hasEvidence: boolean;
+  readonly legacyNames: readonly string[];
+  readonly inputSchema: z.ZodType;
+  readonly dataSchema: z.ZodType;
+  readonly retrieval: readonly { mode: string; modality: string }[];
+  readonly evidenceKinds: readonly string[];
+  readonly warningSchema: z.ZodType;
+  readonly errorSchema: z.ZodType;
+  extractRefs: (data: unknown) => string[];
+  countResults: (data: unknown) => number;
+  refineData?: (data: unknown, ctx: z.RefinementCtx) => void;
+}
 
-export const ToolDataSchemas = {
-  search_ui_references: z.object({ results: z.array(ReferenceSummary) }).strict(),
-  get_ui_reference: FullReference,
-  find_similar_ui_references: z.object({ results: z.array(SimilarReference) }).strict(),
-  compare_ui_references: z.object({
-    entries: z.array(ComparisonRow), foundIds: z.array(z.string()), missingIds: z.array(z.string()),
-  }).strict(),
-  get_ui_taxonomy: z.object({
-    patternTypes: TaxonomyList, categories: TaxonomyList, styleTags: TaxonomyList,
-    components: TaxonomyList.optional(), domainTags: TaxonomyList.optional(),
-  }).strict(),
-  browse_ui_patterns: z.object({ patterns: z.array(PatternGroup) }).strict(),
-  plan_ui_direction: PlanDataSchema,
-  create_ui_spec: UiSpec,
-  research_ui_anti_patterns: z.object({ results: z.array(AntiPatternRow) }).strict(),
-  research_ui_palettes: z.object({ results: z.array(PaletteRecord) }).strict(),
-  research_ui_techniques: z.object({ results: z.array(TechniqueRow) }).strict(),
-  critique_ui: CritiqueDataSchema,
-} satisfies Record<ToolName, z.ZodType>;
+export const TOOL_DESCRIPTORS: readonly ToolDescriptor[] = [
+  {
+    name: "search_ui_references",
+    rendererKey: "search",
+    hasEvidence: false,
+    legacyNames: ["search_ui_examples"],
+    inputSchema: SearchInput,
+    dataSchema: z.object({ results: z.array(ReferenceSummary) }).strict(),
+    retrieval: [
+      { mode: "hybrid", modality: "text" }, { mode: "vector", modality: "text" },
+      { mode: "keyword", modality: "text" }, { mode: "keyword", modality: "metadata" },
+      { mode: "structured-fallback", modality: "metadata" }, { mode: "none", modality: "none" },
+    ],
+    evidenceKinds: [],
+    warningSchema: makeWarningSchema(["sparseCoverage", "keywordFallback"]),
+    errorSchema: makeErrorSchema(["NOT_FOUND"]),
+    extractRefs: (d) => {
+      const r = (d as { results?: Array<{ id?: string }> })?.results ?? [];
+      return [...new Set(r.map(e => e.id).filter((x): x is string => !!x))];
+    },
+    countResults: (d) => (d as { results?: unknown[] })?.results?.length ?? 0,
+  },
+  {
+    name: "get_ui_reference",
+    rendererKey: "reference",
+    hasEvidence: false,
+    legacyNames: ["get_ui_example"],
+    inputSchema: IdInput,
+    dataSchema: FullReference,
+    retrieval: [{ mode: "none", modality: "none" }],
+    evidenceKinds: [],
+    warningSchema: makeWarningSchema([]),
+    errorSchema: makeErrorSchema(["NOT_FOUND"]),
+    extractRefs: (d) => { const id = (d as { id?: string })?.id; return id ? [id] : []; },
+    countResults: (d) => (d as { id?: unknown })?.id ? 1 : 0,
+  },
+  {
+    name: "find_similar_ui_references",
+    rendererKey: "similar",
+    hasEvidence: false,
+    legacyNames: ["get_similar_ui_examples"],
+    inputSchema: SimilarInput,
+    dataSchema: z.object({ results: z.array(SimilarReference) }).strict(),
+    retrieval: [
+      { mode: "vector", modality: "text" },
+      { mode: "structured-fallback", modality: "metadata" },
+      { mode: "none", modality: "none" },
+    ],
+    evidenceKinds: [],
+    warningSchema: makeWarningSchema(["keywordFallback", "sparseCoverage"]),
+    errorSchema: makeErrorSchema(["NOT_FOUND", "INDEX_UNAVAILABLE"]),
+    extractRefs: (d) => {
+      const r = (d as { results?: Array<{ id?: string }> })?.results ?? [];
+      return [...new Set(r.map(e => e.id).filter((x): x is string => !!x))];
+    },
+    countResults: (d) => (d as { results?: unknown[] })?.results?.length ?? 0,
+  },
+  {
+    name: "compare_ui_references",
+    rendererKey: "compare",
+    hasEvidence: false,
+    legacyNames: ["compare_ui_examples"],
+    inputSchema: CompareInput,
+    dataSchema: z.object({
+      entries: z.array(ComparisonRow),
+      foundIds: z.array(z.string()),
+      missingIds: z.array(z.string()),
+    }).strict(),
+    retrieval: [{ mode: "none", modality: "none" }],
+    evidenceKinds: [],
+    warningSchema: makeWarningSchema(["partialResult"]),
+    errorSchema: makeErrorSchema(["NOT_FOUND"]),
+    extractRefs: (d) => (d as { foundIds?: string[] })?.foundIds ?? [],
+    countResults: (d) => (d as { foundIds?: unknown[] })?.foundIds?.length ?? 0,
+    refineData: (d, ctx) => {
+      const data = d as { foundIds?: string[]; missingIds?: string[]; entries?: Array<{ id?: string }> };
+      const found = data.foundIds ?? [];
+      const missing = data.missingIds ?? [];
+      // Disjoint
+      const overlap = found.filter(id => missing.includes(id));
+      if (overlap.length > 0)
+        ctx.addIssue({ code: "custom", message: `IDs in both foundIds and missingIds: ${overlap.join(", ")}`, path: ["foundIds"] });
+      // Every entry id must be in foundIds
+      for (const entry of data.entries ?? []) {
+        if (entry.id && !found.includes(entry.id))
+          ctx.addIssue({ code: "custom", message: `entry id "${entry.id}" not in foundIds`, path: ["entries"] });
+      }
+    },
+  },
+  {
+    name: "get_ui_taxonomy",
+    rendererKey: "taxonomy",
+    hasEvidence: false,
+    legacyNames: ["list_categories", "list_style_tags", "list_domain_tags"],
+    inputSchema: z.object({}).strict(),
+    dataSchema: z.object({
+      patternTypes: TaxonomyList, categories: TaxonomyList, styleTags: TaxonomyList,
+      components: TaxonomyList.optional(), domainTags: TaxonomyList.optional(),
+    }).strict(),
+    retrieval: [{ mode: "none", modality: "none" }],
+    evidenceKinds: [],
+    warningSchema: makeWarningSchema([]),
+    errorSchema: makeErrorSchema([]),
+    extractRefs: () => [],
+    countResults: () => 0,
+  },
+  {
+    name: "browse_ui_patterns",
+    rendererKey: "browse",
+    hasEvidence: false,
+    legacyNames: ["browse_ui_examples"],
+    inputSchema: z.object({ styleTag: StyleTag.optional() }).strict(),
+    dataSchema: z.object({ patterns: z.array(PatternGroup) }).strict(),
+    retrieval: [{ mode: "none", modality: "none" }],
+    evidenceKinds: [],
+    warningSchema: makeWarningSchema(["sparseCoverage"]),
+    errorSchema: makeErrorSchema([]),
+    extractRefs: (d) => {
+      const p = (d as { patterns?: Array<{ exemplar?: { id?: string } }> })?.patterns ?? [];
+      return [...new Set(p.map(g => g.exemplar?.id).filter((x): x is string => !!x))];
+    },
+    countResults: (d) => (d as { patterns?: unknown[] })?.patterns?.length ?? 0,
+  },
+  {
+    name: "plan_ui_direction",
+    rendererKey: "plan",
+    hasEvidence: true,
+    legacyNames: ["recommend_ui_direction"],
+    inputSchema: PlanInput,
+    dataSchema: PlanDataSchema,
+    retrieval: [
+      { mode: "hybrid", modality: "text" }, { mode: "keyword", modality: "text" },
+      { mode: "keyword", modality: "metadata" }, { mode: "structured-fallback", modality: "metadata" },
+      { mode: "none", modality: "none" },
+    ],
+    evidenceKinds: [...ALL_SYNTHESIS_KINDS],
+    warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "noCorpusIndex"]),
+    errorSchema: makeErrorSchema(["INDEX_UNAVAILABLE"]),
+    extractRefs: (d) => [...new Set((d as { evidenceContributions?: string[] })?.evidenceContributions ?? [])],
+    countResults: (d) => (d as { direction?: unknown })?.direction ? 1 : 0,
+  },
+  {
+    name: "create_ui_spec",
+    rendererKey: "spec",
+    hasEvidence: true,
+    legacyNames: ["generate_design_prompt"],
+    inputSchema: CreateUiSpecInput,
+    dataSchema: UiSpec,
+    retrieval: [{ mode: "none", modality: "none" }],
+    evidenceKinds: [...ALL_SYNTHESIS_KINDS],
+    warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "motionEvidenceUnavailable"]),
+    errorSchema: makeErrorSchema(["INVALID_INPUT"]),
+    extractRefs: (d) => [...new Set((d as { citedReferences?: string[] })?.citedReferences ?? [])],
+    countResults: (d) => (d as { specVersion?: unknown })?.specVersion ? 1 : 0,
+  },
+  {
+    name: "research_ui_anti_patterns",
+    rendererKey: "anti-patterns",
+    hasEvidence: false,
+    legacyNames: ["get_anti_patterns"],
+    inputSchema: AntiPatternInput,
+    dataSchema: z.object({ results: z.array(AntiPatternRow) }).strict(),
+    retrieval: [{ mode: "none", modality: "none" }],
+    evidenceKinds: [],
+    warningSchema: makeWarningSchema(["sparseCoverage"]),
+    errorSchema: makeErrorSchema([]),
+    extractRefs: (d) => {
+      const r = (d as { results?: Array<{ sourceIds?: string[] }> })?.results ?? [];
+      return [...new Set(r.flatMap(e => e.sourceIds ?? []))];
+    },
+    countResults: (d) => (d as { results?: unknown[] })?.results?.length ?? 0,
+  },
+  {
+    name: "research_ui_palettes",
+    rendererKey: "palettes",
+    hasEvidence: false,
+    legacyNames: ["get_color_palette"],
+    inputSchema: PaletteInput,
+    dataSchema: z.object({ results: z.array(PaletteRecord) }).strict(),
+    retrieval: [{ mode: "none", modality: "none" }],
+    evidenceKinds: [],
+    warningSchema: makeWarningSchema(["sparseCoverage"]),
+    errorSchema: makeErrorSchema([]),
+    extractRefs: (d) => {
+      const r = (d as { results?: Array<{ sourceId?: string }> })?.results ?? [];
+      return [...new Set(r.map(e => e.sourceId).filter((x): x is string => !!x))];
+    },
+    countResults: (d) => (d as { results?: unknown[] })?.results?.length ?? 0,
+  },
+  {
+    name: "research_ui_techniques",
+    rendererKey: "techniques",
+    hasEvidence: false,
+    legacyNames: ["get_stealable_techniques"],
+    inputSchema: TechniqueInput,
+    dataSchema: z.object({ results: z.array(TechniqueRow) }).strict(),
+    retrieval: [{ mode: "none", modality: "none" }],
+    evidenceKinds: [],
+    warningSchema: makeWarningSchema(["sparseCoverage"]),
+    errorSchema: makeErrorSchema([]),
+    extractRefs: (d) => {
+      const r = (d as { results?: Array<{ source?: { id?: string } }> })?.results ?? [];
+      return [...new Set(r.map(e => e.source?.id).filter((x): x is string => !!x))];
+    },
+    countResults: (d) => (d as { results?: unknown[] })?.results?.length ?? 0,
+  },
+  {
+    name: "critique_ui",
+    rendererKey: "critique",
+    hasEvidence: true,
+    legacyNames: [],
+    inputSchema: CRITIQUE_UI_INPUT_SCHEMA,
+    dataSchema: CritiqueDataSchema,
+    retrieval: [
+      { mode: "vector", modality: "image" },
+      { mode: "structured-fallback", modality: "metadata" },
+      { mode: "none", modality: "none" },
+    ],
+    evidenceKinds: [...CRITIQUE_KINDS],
+    warningSchema: makeWarningSchema(["insufficientCorpusEvidence", "providerDegraded", "keywordFallback"]),
+    errorSchema: makeErrorSchema(["PROVIDER_ERROR", "INVALID_INPUT"]),
+    extractRefs: (d) => [...new Set(((d as { appliedReferences?: Array<{ id?: string }> })?.appliedReferences ?? []).map(r => r.id).filter((x): x is string => !!x))],
+    countResults: (d) => (d as { summary?: unknown })?.summary ? 1 : 0,
+  },
+];
+
+// ===========================================================================
+// 8. Derived values
+// ===========================================================================
+
+export const TOOL_CATALOG = Object.freeze(TOOL_DESCRIPTORS.map(d => d.name)) as readonly string[];
+
+export type ToolName = (typeof TOOL_DESCRIPTORS)[number]["name"];
+
+export const LEGACY_TO_BETA_MAP: Readonly<Record<string, string>> = Object.freeze(
+  Object.fromEntries(
+    TOOL_DESCRIPTORS.flatMap(d => d.legacyNames.map(l => [l, d.name] as const)),
+  ),
+);
+
+export const REMOVED_TOOL_NAMES: readonly string[] = Object.freeze(
+  Array.from(new Set(TOOL_DESCRIPTORS.flatMap(d => d.legacyNames))).sort(),
+);
+
+export const ALLOWED_RETRIEVAL_STATES: Readonly<Record<string, readonly { mode: string; modality: string }[]>> = Object.freeze(
+  Object.fromEntries(TOOL_DESCRIPTORS.map(d => [d.name, d.retrieval] as const)),
+);
+
+export const ToolInputSchemas = Object.fromEntries(
+  TOOL_DESCRIPTORS.map(d => [d.name, d.inputSchema]),
+) as Record<string, z.ZodType>;
+
+export const ToolDataSchemas = Object.fromEntries(
+  TOOL_DESCRIPTORS.map(d => [d.name, d.dataSchema]),
+) as Record<string, z.ZodType>;
 
 export function getToolDataSchema(tool: string): z.ZodType | undefined {
-  return ToolDataSchemas[tool as keyof typeof ToolDataSchemas];
+  return ToolDataSchemas[tool];
 }
+
 export function getToolEvidenceRequired(tool: string): boolean {
-  return TOOL_DEFINITIONS.find(d => d.name === tool)?.hasEvidence ?? false;
+  return TOOL_DESCRIPTORS.find(d => d.name === tool)?.hasEvidence ?? false;
 }
 
+// --- Canonical catalog digest ---
+
+export const CATALOG_DIGEST: string = createHash("sha256").update(
+  JSON.stringify(
+    TOOL_DESCRIPTORS.map(d => ({
+      name: d.name, rendererKey: d.rendererKey, hasEvidence: d.hasEvidence,
+      legacyNames: [...d.legacyNames],
+    })),
+  ),
+).digest("hex");
+
 // ===========================================================================
-// Canonical envelope factory — one source of cross-field invariants
+// makeEnvelope — ONE canonical per-tool Zod schema with ALL refinements
 // ===========================================================================
 
-const SCREEN_TOOLS = new Set(["critique_ui"]);
+function makeEnvelope(desc: ToolDescriptor): z.ZodType {
+  const evidenceField = desc.hasEvidence
+    ? EvidenceArray
+    : z.array(Evidence).max(0); // non-evidence tools reject any evidence
 
-function envelopeSuperRefine(tool: string) {
-  return (val: { status: string; data: unknown; error?: unknown; evidence?: unknown[]; warnings: string[]; retrieval: { resultCount: number } }, ctx: z.RefinementCtx) => {
-    const evRequired = getToolEvidenceRequired(tool);
-    if (val.status === "ok") {
-      if (val.data === null) ctx.addIssue({ code: "custom", message: 'status "ok" requires non-null data', path: ["data"] });
-      if (val.error !== undefined) ctx.addIssue({ code: "custom", message: 'status "ok" must not have error', path: ["error"] });
-      if (evRequired && val.evidence === undefined) ctx.addIssue({ code: "custom", message: `tool requires evidence array`, path: ["evidence"] });
-    }
-    if (val.status === "error") {
-      if (val.data !== null) ctx.addIssue({ code: "custom", message: 'status "error" requires null data', path: ["data"] });
-      if (val.error === undefined) ctx.addIssue({ code: "custom", message: 'status "error" requires error', path: ["error"] });
-      if (val.retrieval.resultCount !== 0) ctx.addIssue({ code: "custom", message: 'status "error" requires resultCount 0', path: ["retrieval", "resultCount"] });
-    }
-    if (val.evidence !== undefined && !evRequired)
-      ctx.addIssue({ code: "custom", message: `tool is not an evidence tool`, path: ["evidence"] });
-    // Empty evidence requires insufficiency warning
-    if (evRequired && val.status === "ok" && val.evidence !== undefined && val.evidence.length === 0) {
-      if (val.warnings.length === 0)
-        ctx.addIssue({ code: "custom", message: "empty evidence requires at least one warning", path: ["warnings"] });
-    }
-  };
-}
-
-function makeToolEnvelope(tool: ToolName, dataSchema: z.ZodType) {
-  const evRequired = getToolEvidenceRequired(tool);
   return z.object({
-    tool: z.literal(tool),
+    tool: z.literal(desc.name),
     schemaVersion: z.literal("1.0"),
     status: z.enum(["ok", "error"]),
-    summary: z.string(),
-    data: dataSchema.nullable(),
-    referenceIds: z.array(z.string()),
+    summary: z.string().min(1).trim(),
+    data: desc.dataSchema.nullable(),
+    referenceIds: z.array(z.string().min(1)),
     retrieval: RetrievalState,
-    warnings: z.array(z.string()),
-    evidence: evRequired ? z.array(Evidence) : z.array(Evidence).optional(),
-    error: ToolError.optional(),
-  }).strict().superRefine(envelopeSuperRefine(tool));
+    warnings: desc.warningSchema,
+    evidence: desc.hasEvidence ? evidenceField : evidenceField.optional(),
+    error: desc.errorSchema.optional(),
+  }).strict().superRefine((val, ctx) => {
+    // 1. status ok → non-null data, no error
+    if (val.status === "ok") {
+      if (val.data === null)
+        ctx.addIssue({ code: "custom", message: 'status "ok" requires non-null data', path: ["data"] });
+      if (val.error !== undefined)
+        ctx.addIssue({ code: "custom", message: 'status "ok" must not have error', path: ["error"] });
+    }
+    // 2. status error → null data, error present, resultCount 0
+    if (val.status === "error") {
+      if (val.data !== null)
+        ctx.addIssue({ code: "custom", message: 'status "error" requires null data', path: ["data"] });
+      if (val.error === undefined)
+        ctx.addIssue({ code: "custom", message: 'status "error" requires error', path: ["error"] });
+      if (val.retrieval.resultCount !== 0)
+        ctx.addIssue({ code: "custom", message: 'status "error" requires resultCount 0', path: ["retrieval", "resultCount"] });
+    }
+    // 3. Retrieval eligibility
+    if (!desc.retrieval.some(r => r.mode === val.retrieval.mode && r.modality === val.retrieval.modality))
+      ctx.addIssue({ code: "custom", message: `retrieval ${val.retrieval.mode}/${val.retrieval.modality} not allowed for ${desc.name}`, path: ["retrieval"] });
+
+    if (val.status === "ok" && val.data !== null) {
+      // 4. resultCount
+      const expected = desc.countResults(val.data);
+      if (val.retrieval.resultCount !== expected)
+        ctx.addIssue({ code: "custom", message: `resultCount: claims ${val.retrieval.resultCount}, actual ${expected}`, path: ["retrieval", "resultCount"] });
+
+      // 5. unique referenceIds
+      if (new Set(val.referenceIds).size !== val.referenceIds.length)
+        ctx.addIssue({ code: "custom", message: "referenceIds must be unique", path: ["referenceIds"] });
+
+      // 6. exact reference set equality
+      const dataRefs = desc.extractRefs(val.data);
+      const dataSet = new Set(dataRefs);
+      const refSet = new Set(val.referenceIds);
+      if (dataSet.size !== refSet.size || ![...dataSet].every(id => refSet.has(id))) {
+        ctx.addIssue({ code: "custom", message: "referenceIds must exactly match data IDs", path: ["referenceIds"] });
+      }
+
+      // 7. evidence eligibility already enforced by schema shape
+      // 8. unique evidence IDs already enforced by EvidenceArray
+      // 9. evidence kind per tool
+      if (desc.hasEvidence && val.evidence) {
+        for (let i = 0; i < val.evidence.length; i++) {
+          const ev = val.evidence[i]!;
+          if (!desc.evidenceKinds.includes(ev.kind))
+            ctx.addIssue({ code: "custom", message: `evidence kind "${ev.kind}" not allowed for ${desc.name}`, path: ["evidence", i, "kind"] });
+          // 10. evidence referenceId membership
+          if (ev.referenceId && !val.referenceIds.includes(ev.referenceId))
+            ctx.addIssue({ code: "custom", message: `evidence referenceId "${ev.referenceId}" not in referenceIds`, path: ["evidence", i, "referenceId"] });
+        }
+        // 11. empty evidence requires insufficientCorpusEvidence warning
+        if (val.evidence.length === 0) {
+          const hasInsufficiency = (val.warnings as Array<{ code?: string }>).some(w => w.code === "insufficientCorpusEvidence" || w.code === "sparseCoverage");
+          if (!hasInsufficiency)
+            ctx.addIssue({ code: "custom", message: "empty evidence requires insufficientCorpusEvidence or sparseCoverage warning", path: ["warnings"] });
+        }
+      }
+
+      // 12. per-tool data refinement
+      if (desc.refineData) desc.refineData(val.data, ctx);
+    }
+  });
 }
 
-export const ToolResultSchemas = {
-  search_ui_references: makeToolEnvelope("search_ui_references", ToolDataSchemas.search_ui_references),
-  get_ui_reference: makeToolEnvelope("get_ui_reference", ToolDataSchemas.get_ui_reference),
-  find_similar_ui_references: makeToolEnvelope("find_similar_ui_references", ToolDataSchemas.find_similar_ui_references),
-  compare_ui_references: makeToolEnvelope("compare_ui_references", ToolDataSchemas.compare_ui_references),
-  get_ui_taxonomy: makeToolEnvelope("get_ui_taxonomy", ToolDataSchemas.get_ui_taxonomy),
-  browse_ui_patterns: makeToolEnvelope("browse_ui_patterns", ToolDataSchemas.browse_ui_patterns),
-  plan_ui_direction: makeToolEnvelope("plan_ui_direction", ToolDataSchemas.plan_ui_direction),
-  create_ui_spec: makeToolEnvelope("create_ui_spec", ToolDataSchemas.create_ui_spec),
-  research_ui_anti_patterns: makeToolEnvelope("research_ui_anti_patterns", ToolDataSchemas.research_ui_anti_patterns),
-  research_ui_palettes: makeToolEnvelope("research_ui_palettes", ToolDataSchemas.research_ui_palettes),
-  research_ui_techniques: makeToolEnvelope("research_ui_techniques", ToolDataSchemas.research_ui_techniques),
-  critique_ui: makeToolEnvelope("critique_ui", ToolDataSchemas.critique_ui),
-} satisfies Record<ToolName, z.ZodType>;
+export const ToolResultSchemas = Object.fromEntries(
+  TOOL_DESCRIPTORS.map(d => [d.name, makeEnvelope(d)]),
+) as Record<string, z.ZodType>;
 
 // ===========================================================================
-// parseToolResult — full integrity validation
+// 9. parseToolResult — thin dispatcher
 // ===========================================================================
 
 export interface ParseResult { ok: boolean; errors: string[] }
 
 export function parseToolResult(raw: unknown): ParseResult {
-  const errors: string[] = [];
-  const env = raw as Record<string, unknown> | null;
-  if (!env || typeof env !== "object") return { ok: false, errors: ["not an object"] };
-
-  const tool = env.tool as string;
-  // 1. Reject missing or unknown tool discriminator
-  if (!tool) return { ok: false, errors: ["tool: missing discriminator"] };
-  if (!(tool in ToolResultSchemas)) return { ok: false, errors: [`tool: unknown tool "${tool}"`] };
-  // Validate via per-tool schema
-  {
-    const schema = ToolResultSchemas[tool as ToolName];
-    const parse = schema.safeParse(raw);
-    if (!parse.success)
-      return { ok: false, errors: parse.error.issues.map(i => `${i.path.join(".")}: ${i.message}`) };
-  }
-
-  const status = env.status, data = env.data as Record<string, unknown> | null;
-  const retrieval = env.retrieval as Record<string, unknown> | undefined;
-  const referenceIds = env.referenceIds as string[] | undefined;
-  const evidence = env.evidence as Array<Record<string, unknown>> | undefined;
-  const warnings = env.warnings as string[] | undefined;
-
-  // 2. Per-tool retrieval
-  if (tool && retrieval && !isRetrievalAllowedForTool(tool, retrieval.mode as string, retrieval.modality as string))
-    errors.push(`retrieval: tool "${tool}" cannot use ${retrieval.mode}/${retrieval.modality}`);
-
-  // 3. resultCount vs actual
-  if (status === "ok" && data && retrieval) {
-    const actual = countResults(tool, data);
-    if (actual !== null && actual !== retrieval.resultCount)
-      errors.push(`resultCount: claims ${retrieval.resultCount}, actual ${actual}`);
-  }
-
-  // 4. Unique referenceIds
-  if (referenceIds && new Set(referenceIds).size !== referenceIds.length)
-    errors.push("referenceIds: contains duplicates");
-
-  // 5. Unique evidence IDs
-  if (evidence) {
-    const ids = evidence.map(e => e.id);
-    if (new Set(ids).size !== ids.length) errors.push("evidence: IDs must be unique");
-  }
-
-  // 6. Evidence kind per tool
-  if (tool && evidence) {
-    for (const ev of evidence) {
-      const kind = ev.kind as string;
-      if ((kind === "screen-observation" || kind === "dom-signal") && !SCREEN_TOOLS.has(tool))
-        errors.push(`evidence: "${tool}" cannot emit ${kind}`);
-    }
-  }
-
-  // 7. Empty evidence requires warning
-  if (status === "ok" && tool && getToolEvidenceRequired(tool) && evidence !== undefined && evidence.length === 0) {
-    if (!warnings || warnings.length === 0) errors.push("evidence: empty array requires warning");
-  }
-
-  // 8. Evidence referenceId must be in referenceIds (HIGH integrity)
-  if (referenceIds && evidence) {
-    for (const ev of evidence) {
-      const refId = ev.referenceId as string | undefined;
-      if (refId && !referenceIds.includes(refId))
-        errors.push(`evidence: referenceId "${refId}" not in referenceIds`);
-    }
-  }
-
-  // 9. Result data IDs must EXACTLY match referenceIds
-  if (status === "ok" && data && referenceIds && tool) {
-    const dataIds = extractDataIds(tool, data);
-    const dataSet = new Set(dataIds);
-    const refSet = new Set(referenceIds);
-    if (dataSet.size !== refSet.size || ![...dataSet].every(id => refSet.has(id))) {
-      const inDataNotRef = dataIds.filter(id => !refSet.has(id));
-      const inRefNotData = referenceIds.filter(id => !dataSet.has(id));
-      if (inDataNotRef.length) errors.push(`referenceIds: data IDs not in referenceIds: ${inDataNotRef.join(", ")}`);
-      if (inRefNotData.length) errors.push(`referenceIds: referenceIds not in data: ${inRefNotData.join(", ")}`);
-    }
-  }
-
-  // 10. Compare: foundIds/missingIds consistency
-  if (status === "ok" && data && tool === "compare_ui_references") {
-    const foundIds = data.foundIds as string[] | undefined;
-    const missingIds = data.missingIds as string[] | undefined;
-    const entries = data.entries as Array<Record<string, unknown>> | undefined;
-    if (foundIds && missingIds) {
-      const overlap = foundIds.filter(id => missingIds.includes(id));
-      if (overlap.length > 0) errors.push(`compare: IDs in both foundIds and missingIds: ${overlap.join(", ")}`);
-    }
-    if (foundIds && entries) {
-      for (const entry of entries) {
-        if (!foundIds.includes(entry.id as string))
-          errors.push(`compare: entry id "${entry.id}" not in foundIds`);
-      }
-    }
-  }
-
-  return { ok: errors.length === 0, errors };
+  const tool = (raw as Record<string, unknown> | null)?.tool;
+  if (!tool || typeof tool !== "string" || !(tool in ToolResultSchemas))
+    return { ok: false, errors: [`unknown tool "${tool ?? ""}"`] };
+  const parse = ToolResultSchemas[tool]!.safeParse(raw);
+  return parse.success
+    ? { ok: true, errors: [] }
+    : { ok: false, errors: parse.error.issues.map(i => `${i.path.join(".")}: ${i.message}`) };
 }
-
-/** Extract ALL ID values from tool data for referenceIds exact-match checking. */
-function extractDataIds(tool: string, data: Record<string, unknown>): string[] {
-  const ids: string[] = [];
-  // Search/similar: results[].id
-  if (tool === "search_ui_references" || tool === "find_similar_ui_references") {
-    const r = data.results as Array<Record<string, unknown>> | undefined;
-    if (r) for (const e of r) if (e.id) ids.push(e.id as string);
-  }
-  // Compare: foundIds
-  else if (tool === "compare_ui_references") {
-    const f = data.foundIds as string[] | undefined;
-    if (f) ids.push(...f);
-  }
-  // Browse: exemplar IDs
-  else if (tool === "browse_ui_patterns") {
-    const p = data.patterns as Array<Record<string, unknown>> | undefined;
-    if (p) for (const g of p) {
-      const ex = g.exemplar as Record<string, unknown> | undefined;
-      if (ex?.id) ids.push(ex.id as string);
-    }
-  }
-  // get_ui_reference: data.id
-  else if (tool === "get_ui_reference") {
-    if (data.id) ids.push(data.id as string);
-  }
-  // Anti-patterns: results[].sourceIds
-  else if (tool === "research_ui_anti_patterns") {
-    const r = data.results as Array<Record<string, unknown>> | undefined;
-    if (r) for (const e of r) {
-      const sids = e.sourceIds as string[] | undefined;
-      if (sids) ids.push(...sids);
-    }
-  }
-  // Palettes: results[].sourceId
-  else if (tool === "research_ui_palettes") {
-    const r = data.results as Array<Record<string, unknown>> | undefined;
-    if (r) for (const e of r) if (e.sourceId) ids.push(e.sourceId as string);
-  }
-  // Techniques: results[].source.id
-  else if (tool === "research_ui_techniques") {
-    const r = data.results as Array<Record<string, unknown>> | undefined;
-    if (r) for (const e of r) {
-      const src = e.source as Record<string, unknown> | undefined;
-      if (src?.id) ids.push(src.id as string);
-    }
-  }
-  // Plan: evidenceContributions
-  else if (tool === "plan_ui_direction") {
-    const ec = data.evidenceContributions as string[] | undefined;
-    if (ec) ids.push(...ec);
-  }
-  // create_ui_spec: citedReferences
-  else if (tool === "create_ui_spec") {
-    const cr = data.citedReferences as string[] | undefined;
-    if (cr) ids.push(...cr);
-  }
-  // Critique: appliedReferences[].id
-  else if (tool === "critique_ui") {
-    const ar = data.appliedReferences as Array<Record<string, unknown>> | undefined;
-    if (ar) for (const r of ar) if (r.id) ids.push(r.id as string);
-  }
-  return [...new Set(ids)]; // deduplicate within data
-}
-
-function countResults(tool: string, data: Record<string, unknown>): number | null {
-  const listTools = ["search_ui_references", "find_similar_ui_references", "research_ui_anti_patterns", "research_ui_palettes", "research_ui_techniques"];
-  if (listTools.includes(tool)) {
-    const r = data.results as unknown[]; return r ? r.length : null;
-  }
-  if (tool === "compare_ui_references") { const f = data.foundIds as unknown[]; return f ? f.length : null; }
-  if (tool === "browse_ui_patterns") { const p = data.patterns as unknown[]; return p ? p.length : null; }
-  if (tool === "get_ui_reference") return data.id ? 1 : 0;
-  if (tool === "get_ui_taxonomy") return 0;
-  // plan/spec/critique: 1 when a complete artifact exists, 0 otherwise
-  if (tool === "plan_ui_direction") return data.direction ? 1 : 0;
-  if (tool === "create_ui_spec") return data.specVersion ? 1 : 0;
-  if (tool === "critique_ui") return data.summary ? 1 : 0;
-  return null;
-}
-
-// ===========================================================================
-// Generic envelope (for internal validation)
-// ===========================================================================
-
-export const ToolResultEnvelope = z.object({
-  tool: z.enum(TOOL_CATALOG as [string, ...string[]]),
-  schemaVersion: z.literal("1.0"),
-  status: z.enum(["ok", "error"]),
-  summary: z.string(),
-  data: z.unknown().nullable(),
-  referenceIds: z.array(z.string()),
-  retrieval: RetrievalState,
-  warnings: z.array(z.string()),
-  evidence: z.array(Evidence).optional(),
-  error: ToolError.optional(),
-}).strict();
 
 // ===========================================================================
 // Types
@@ -703,9 +1042,8 @@ export type RetrievalStateT = z.infer<typeof RetrievalState>;
 export type EvidenceKindT = z.infer<typeof EvidenceKind>;
 export type EvidenceBasisT = z.infer<typeof EvidenceBasis>;
 export type EvidenceT = z.infer<typeof Evidence>;
-export type ToolErrorT = z.infer<typeof ToolError>;
+export type ToolErrorT = z.infer<typeof ToolErrorUnion>;
 export type UiSpecT = z.infer<typeof UiSpec>;
-export type ToolResultEnvelopeT = z.infer<typeof ToolResultEnvelope>;
 export type CreateUiSpecInputT = z.infer<typeof CreateUiSpecInput>;
 export type AcceptanceCriterionT = z.infer<typeof AcceptanceCriterion>;
 export type CitedDecisionT = z.infer<typeof CitedDecision>;

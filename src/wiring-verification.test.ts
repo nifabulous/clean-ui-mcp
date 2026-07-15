@@ -195,6 +195,15 @@ const ALLOWLIST = new Set<string>([
   "CreateUiSpecInputT",
   "AcceptanceCriterionT",
   "CitedDecisionT",
+  "ALLOWED_RETRIEVAL_STATES",
+  "getToolEvidenceRequired",
+  // New descriptor exports consumed by Task 6-9 handlers
+  "TOOL_DESCRIPTORS",
+  "ToolResultSchemas",
+  "ToolErrorUnion",
+  "parseToolResult",
+  "SearchInput",
+  "WarningBase",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

@@ -22,7 +22,7 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { PatternType, Category, StyleTag } from "./schema.js";
 import { CRITIQUE_UI_INPUT_SCHEMA, StructuredCritique } from "./synthesis/contracts.js";
-import { validateEnvelopeRetrieval, type RetrievalPolicy, type FallbackReason as IntegrityFallbackReason } from "./tool-contract-integrity.js";
+import { validateEnvelopeRetrieval, validateEvidenceReferences, type RetrievalPolicy, type FallbackReason as IntegrityFallbackReason } from "./tool-contract-integrity.js";
 
 // ===========================================================================
 // 1. Shared building blocks
@@ -934,7 +934,7 @@ export const TOOL_DESCRIPTORS = [
     extractRefs: (d) => (d as { evidenceContributions?: string[] })?.evidenceContributions ?? [],
     countResults: (d) => (d as { direction?: unknown })?.direction ? 1 : 0,
     refineEnvelope: (val, ctx) => {
-      const evidenceIds = new Set((val.evidence as Array<{ id?: string }> | undefined)?.map(e => e.id).filter(Boolean) ?? []);
+      const evidenceIds = new Set<string>(((val.evidence as Array<{ id?: string }> | undefined)?.map(e => e.id).filter((x): x is string => !!x)) ?? []);
       const data = val.data as { structuredDecisions?: Array<{ evidenceIds?: string[] }> };
       for (const sd of data.structuredDecisions ?? []) {
         for (const eid of sd.evidenceIds ?? []) {
@@ -987,37 +987,28 @@ export const TOOL_DESCRIPTORS = [
       const citedRefs = data?.citedReferences ?? [];
       if (new Set(citedRefs).size !== citedRefs.length)
         ctx.addIssue({ code: "custom", message: "citedReferences must be unique", path: ["data", "citedReferences"] });
-      // Check acceptance criteria evidenceIds against envelope evidence only
-      for (const ac of data?.acceptanceCriteria ?? []) {
-        for (const eid of ac.evidenceIds ?? []) {
-          if (!knownEvidence.has(eid))
-            ctx.addIssue({ code: "custom", message: `acceptance criterion "${ac.id}" evidenceId "${eid}" not found in envelope evidence`, path: ["data", "acceptanceCriteria"] });
-        }
-      }
-      // Check citedDecisions evidenceIds + sourceId
+      // Check acceptance criteria evidenceIds (membership + dedup)
+      const acRefs = (data?.acceptanceCriteria ?? []).flatMap((ac, i) =>
+        (ac.evidenceIds ?? []).map(eid => ({ path: ["data", "acceptanceCriteria", i, "evidenceIds"] as PropertyKey[], ids: [eid] })),
+      );
+      validateEvidenceReferences(knownEvidence, acRefs, ctx);
+      // Check citedDecisions evidenceIds (membership + dedup) + sourceId
+      const cdRefs = (data?.citedDecisions ?? []).flatMap((cd, i) =>
+        (cd.evidenceIds ?? []).map(eid => ({ path: ["data", "citedDecisions", i, "evidenceIds"] as PropertyKey[], ids: [eid] })),
+      );
+      validateEvidenceReferences(knownEvidence, cdRefs, ctx);
       for (const cd of data?.citedDecisions ?? []) {
-        for (const eid of cd.evidenceIds ?? []) {
-          if (!knownEvidence.has(eid))
-            ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" evidenceId "${eid}" not found in envelope evidence`, path: ["data", "citedDecisions"] });
-        }
         if (cd.sourceId !== undefined && !citedSet.has(cd.sourceId))
           ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" sourceId "${cd.sourceId}" not in citedReferences`, path: ["data", "citedDecisions"] });
       }
-      // Check authorityLanes evidence IDs
+      // Check authorityLanes evidence IDs (membership + dedup)
       const lanes = data?.authorityLanes;
       if (lanes) {
-        for (const eid of lanes.corpusEvidence ?? []) {
-          if (!knownEvidence.has(eid))
-            ctx.addIssue({ code: "custom", message: `authorityLanes.corpusEvidence "${eid}" not found in envelope evidence`, path: ["data", "authorityLanes"] });
-        }
-        for (const eid of lanes.machineRules ?? []) {
-          if (!knownEvidence.has(eid))
-            ctx.addIssue({ code: "custom", message: `authorityLanes.machineRules "${eid}" not found in envelope evidence`, path: ["data", "authorityLanes"] });
-        }
-        for (const eid of lanes.editorialGuidance ?? []) {
-          if (!knownEvidence.has(eid))
-            ctx.addIssue({ code: "custom", message: `authorityLanes.editorialGuidance "${eid}" not found in envelope evidence`, path: ["data", "authorityLanes"] });
-        }
+        validateEvidenceReferences(knownEvidence, [
+          { path: ["data", "authorityLanes", "corpusEvidence"], ids: lanes.corpusEvidence ?? [] },
+          { path: ["data", "authorityLanes", "machineRules"], ids: lanes.machineRules ?? [] },
+          { path: ["data", "authorityLanes", "editorialGuidance"], ids: lanes.editorialGuidance ?? [] },
+        ], ctx);
       }
       // Check techniques sourceIds against citedReferences
       for (const tech of data?.techniques ?? []) {
@@ -1124,7 +1115,7 @@ export const TOOL_DESCRIPTORS = [
     extractRefs: (d) => ((d as { appliedReferences?: Array<{ id?: string }> })?.appliedReferences ?? []).map(r => r.id).filter((x): x is string => !!x),
     countResults: (d) => (d as { summary?: unknown })?.summary ? 1 : 0,
     refineEnvelope: (val, ctx) => {
-      const evidenceIds = new Set((val.evidence as Array<{ id?: string }> | undefined)?.map(e => e.id).filter(Boolean) ?? []);
+      const evidenceIds = new Set<string>(((val.evidence as Array<{ id?: string }> | undefined)?.map(e => e.id).filter((x): x is string => !!x)) ?? []);
       const data = val.data as {
         retrievalMode?: string;
         fallbackUsed?: boolean;
@@ -1150,48 +1141,28 @@ export const TOOL_DESCRIPTORS = [
       const critiqueEvIds = new Set(data.evidenceIds ?? []);
       if (critiqueEvIds.size !== evidenceIds.size || ![...critiqueEvIds].every(id => evidenceIds.has(id)))
         ctx.addIssue({ code: "custom", message: "data.evidenceIds must exactly match envelope evidence IDs", path: ["data"] });
-      // Check recommendations evidence
-      for (const rec of data.recommendations ?? []) {
-        for (const eid of rec.evidence ?? []) {
-          if (!evidenceIds.has(eid))
-            ctx.addIssue({ code: "custom", message: `recommendation evidence "${eid}" not in envelope evidence`, path: ["data", "recommendations"] });
-        }
-      }
-      // Check accessibilityRisks evidence
-      for (const risk of data.accessibilityRisks ?? []) {
-        if (risk.evidence && !evidenceIds.has(risk.evidence))
-          ctx.addIssue({ code: "custom", message: `accessibilityRisk evidence "${risk.evidence}" not in envelope evidence`, path: ["data", "accessibilityRisks"] });
-      }
-      // Check visualSlop evidence
-      for (const vs of data.visualSlop ?? []) {
-        for (const eid of vs.evidence ?? []) {
-          if (!evidenceIds.has(eid))
-            ctx.addIssue({ code: "custom", message: `visualSlop evidence "${eid}" not in envelope evidence`, path: ["data", "visualSlop"] });
-        }
-      }
-      // Check motion evidence + reference
+      // Check all nested evidence paths (membership + dedup) via shared validator
+      validateEvidenceReferences(evidenceIds, [
+        ...(data.recommendations ?? []).flatMap((rec, i) =>
+          [{ path: ["data", "recommendations", i, "evidence"] as PropertyKey[], ids: rec.evidence ?? [] }]),
+        ...(data.accessibilityRisks ?? []).map((risk, i) =>
+          ({ path: ["data", "accessibilityRisks", i, "evidence"] as PropertyKey[], ids: risk.evidence ? [risk.evidence] : [] })),
+        ...(data.visualSlop ?? []).flatMap((vs, i) =>
+          [{ path: ["data", "visualSlop", i, "evidence"] as PropertyKey[], ids: vs.evidence ?? [] }]),
+        ...(data.motion ?? []).flatMap((m, i) =>
+          [{ path: ["data", "motion", i, "evidence"] as PropertyKey[], ids: m.evidence ?? [] }]),
+        { path: ["data", "md3", "evidenceIds"] as PropertyKey[], ids: data.md3?.evidenceIds ?? [] },
+        ...(data.md3?.conflictingSignals ?? []).map((cs, i) =>
+          ({ path: ["data", "md3", "conflictingSignals", i, "evidenceId"] as PropertyKey[], ids: cs.evidenceId ? [cs.evidenceId] : [] })),
+      ], ctx);
+      // Check motion.reference ref:<id> form
       const refIds = new Set(val.referenceIds);
       for (const m of data.motion ?? []) {
-        for (const eid of m.evidence ?? []) {
-          if (!evidenceIds.has(eid))
-            ctx.addIssue({ code: "custom", message: `motion evidence "${eid}" not in envelope evidence`, path: ["data", "motion"] });
-        }
-        // motion.reference in ref:<id> form must resolve to an applied reference
         if (m.reference && m.reference.startsWith("ref:")) {
           const refId = m.reference.slice(4);
           if (!refIds.has(refId))
             ctx.addIssue({ code: "custom", message: `motion reference "${m.reference}" not found in referenceIds`, path: ["data", "motion"] });
         }
-      }
-      // Check md3 evidenceIds
-      for (const eid of data.md3?.evidenceIds ?? []) {
-        if (!evidenceIds.has(eid))
-          ctx.addIssue({ code: "custom", message: `md3 evidenceId "${eid}" not in envelope evidence`, path: ["data", "md3"] });
-      }
-      // Check md3 conflictingSignals evidenceId
-      for (const cs of data.md3?.conflictingSignals ?? []) {
-        if (cs.evidenceId && !evidenceIds.has(cs.evidenceId))
-          ctx.addIssue({ code: "custom", message: `md3 conflictingSignal evidenceId "${cs.evidenceId}" not in envelope evidence`, path: ["data", "md3"] });
       }
     },
   },

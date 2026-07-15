@@ -22,7 +22,7 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { PatternType, Category, StyleTag } from "./schema.js";
 import { CRITIQUE_UI_INPUT_SCHEMA, StructuredCritique } from "./synthesis/contracts.js";
-import { validateEnvelopeRetrieval } from "./tool-contract-integrity.js";
+import { validateEnvelopeRetrieval, type RetrievalPolicy, type FallbackReason as IntegrityFallbackReason } from "./tool-contract-integrity.js";
 
 // ===========================================================================
 // 1. Shared building blocks
@@ -558,21 +558,26 @@ export const UiSpec = z.object({
     evidenceIds: z.array(z.string()),
   }).strict(),
 }).strict().superRefine((val, ctx) => {
-  // Null colorTokens requires colorTokenAuthority "editorial" and an unavailableDecision for "color"
+  // Null colorTokens requires colorTokenAuthority "editorial" and an exact unavailableDecision
   if (val.colorTokens === null) {
     if (val.colorTokenAuthority !== "editorial")
       ctx.addIssue({ code: "custom", message: "null colorTokens requires colorTokenAuthority 'editorial'", path: ["colorTokenAuthority"] });
-    const hasUnavailableColor = val.unavailableDecisions.some(d => d.field.includes("color"));
-    if (!hasUnavailableColor)
-      ctx.addIssue({ code: "custom", message: "null colorTokens requires an unavailableDecision for color", path: ["unavailableDecisions"] });
+    if (!val.unavailableDecisions.some(d => d.field === "colorTokens"))
+      ctx.addIssue({ code: "custom", message: "null colorTokens requires an unavailableDecision with field 'colorTokens'", path: ["unavailableDecisions"] });
+  } else {
+    // Non-null colorTokens must NOT have an unavailableDecision for colorTokens
+    if (val.unavailableDecisions.some(d => d.field === "colorTokens"))
+      ctx.addIssue({ code: "custom", message: "available colorTokens must not have an unavailableDecision for 'colorTokens'", path: ["unavailableDecisions"] });
   }
-  // Null typographyTokens requires typographyTokenAuthority "editorial" and unavailableDecision for typography
+  // Null typographyTokens requires typographyTokenAuthority "editorial" and exact unavailableDecision
   if (val.typographyTokens === null) {
     if (val.typographyTokenAuthority !== "editorial")
       ctx.addIssue({ code: "custom", message: "null typographyTokens requires typographyTokenAuthority 'editorial'", path: ["typographyTokenAuthority"] });
-    const hasUnavailableType = val.unavailableDecisions.some(d => d.field.includes("typography") || d.field.includes("type"));
-    if (!hasUnavailableType)
-      ctx.addIssue({ code: "custom", message: "null typographyTokens requires an unavailableDecision for typography", path: ["unavailableDecisions"] });
+    if (!val.unavailableDecisions.some(d => d.field === "typographyTokens"))
+      ctx.addIssue({ code: "custom", message: "null typographyTokens requires an unavailableDecision with field 'typographyTokens'", path: ["unavailableDecisions"] });
+  } else {
+    if (val.unavailableDecisions.some(d => d.field === "typographyTokens"))
+      ctx.addIssue({ code: "custom", message: "available typographyTokens must not have an unavailableDecision for 'typographyTokens'", path: ["unavailableDecisions"] });
   }
   // mixed authority for color requires >1 distinct non-editorial authority among color-related citedDecisions
   if (val.colorTokenAuthority === "mixed") {
@@ -594,12 +599,19 @@ export const UiSpec = z.object({
     if (typeAuthorities.size < 2)
       ctx.addIssue({ code: "custom", message: "'mixed' typography authority requires typography citedDecisions with >1 distinct non-editorial authority", path: ["typographyTokenAuthority"] });
   }
-  // motionEvidenceUnavailable: if motionGuidance.evidenceUnavailable, require matching unavailableDecision
+  // motion: exact field identifier, not substring
   if (val.motionGuidance.evidenceUnavailable) {
-    const hasMotionUnavailable = val.unavailableDecisions.some(d => d.field.includes("motion"));
-    if (!hasMotionUnavailable)
-      ctx.addIssue({ code: "custom", message: "motionGuidance.evidenceUnavailable requires an unavailableDecision for motion", path: ["unavailableDecisions"] });
+    if (!val.unavailableDecisions.some(d => d.field === "motion"))
+      ctx.addIssue({ code: "custom", message: "motionGuidance.evidenceUnavailable requires an unavailableDecision with field 'motion'", path: ["unavailableDecisions"] });
+  } else {
+    if (val.unavailableDecisions.some(d => d.field === "motion"))
+      ctx.addIssue({ code: "custom", message: "available motion must not have an unavailableDecision for 'motion'", path: ["unavailableDecisions"] });
   }
+  // Authority prerequisites: team-design-system requires identified design system
+  const hasTeamAuthority = val.colorTokenAuthority === "team-design-system" || val.typographyTokenAuthority === "team-design-system"
+    || val.citedDecisions.some(d => d.authority === "team-design-system");
+  if (hasTeamAuthority && val.context.designSystem?.status !== "identified")
+    ctx.addIssue({ code: "custom", message: "team-design-system authority requires context.designSystem.status 'identified'", path: ["context", "designSystem"] });
   // citedDecision.sourceId must be in citedReferences
   const refSet = new Set(val.citedReferences);
   for (const cd of val.citedDecisions) {
@@ -618,12 +630,12 @@ export const SearchInput = z.object({
   qualityTier: z.enum(["exceptional", "cautionary"]).optional(),
   reviewStatus: z.enum(["approved", "draft", "any"]).optional(),
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
-  limit: z.number().int().min(1).max(20).optional(),
+  limit: z.number().int().min(1).max(20).default(5),
   responseFormat: z.enum(["concise", "detailed"]).optional(),
 }).strict();
 
 const IdInput = z.object({ id: z.string().min(1).trim() }).strict();
-const SimilarInput = z.object({ id: z.string().min(1).trim(), limit: z.number().int().min(1).max(20).optional() }).strict();
+const SimilarInput = z.object({ id: z.string().min(1).trim(), limit: z.number().int().min(1).max(20).default(5) }).strict();
 const CompareInput = z.object({
   ids: z.array(z.string().min(1).trim()).min(2).max(3).refine(a => new Set(a).size === a.length, "ids must be unique"),
   responseFormat: z.enum(["concise", "detailed"]).optional(),
@@ -644,24 +656,24 @@ const PlanInput = z.object({
   productContext: z.string().min(8).trim(),
   category: Category.optional(), styleTag: StyleTag.optional(),
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
-  qualityTier: z.enum(["exceptional", "cautionary"]).optional(),
+  qualityTier: z.enum(["exceptional", "cautionary"]).default("exceptional"),
   framework: z.enum(["brief", "tokens"]).optional(),
-  count: z.number().int().min(1).max(5).optional(),
+  count: z.number().int().min(1).max(5).default(3),
 }).strict();
 
 const AntiPatternInput = z.object({
   patternType: PatternType.optional(), category: Category.optional(),
-  limit: z.number().int().min(1).max(20).optional(),
+  limit: z.number().int().min(1).max(20).default(10),
 }).strict();
 
 const PaletteInput = z.object({
   patternType: PatternType.optional(), styleTag: StyleTag.optional(),
-  limit: z.number().int().min(1).max(20).optional(),
+  limit: z.number().int().min(1).max(20).default(10),
 }).strict();
 
 const TechniqueInput = z.object({
   patternType: PatternType.optional(), styleTag: StyleTag.optional(),
-  limit: z.number().int().min(1).max(30).optional(),
+  limit: z.number().int().min(1).max(30).default(15),
 }).strict();
 
 // ===========================================================================
@@ -708,7 +720,7 @@ export interface ToolDescriptor {
   countResults: (data: unknown) => number;
   refineData?: (data: unknown, ctx: z.RefinementCtx) => void;
   /** Envelope-level refinement — has access to warnings, evidence, referenceIds. */
-  refineEnvelope?: (val: { data: unknown; warnings: unknown[]; referenceIds: string[]; evidence?: unknown[] }, ctx: z.RefinementCtx) => void;
+  refineEnvelope?: (val: { data: unknown; warnings: unknown[]; referenceIds: string[]; evidence?: unknown[]; retrievalInfo?: { mode: string; fallbackUsed: boolean } }, ctx: z.RefinementCtx) => void;
 }
 
 export const TOOL_DESCRIPTORS = [
@@ -920,14 +932,24 @@ export const TOOL_DESCRIPTORS = [
     refineEnvelope: (val, ctx) => {
       const data = val.data as {
         acceptanceCriteria?: Array<{ id?: string; evidenceIds?: string[] }>;
-        citedDecisions?: Array<{ id?: string; evidenceIds?: string[] }>;
+        citedDecisions?: Array<{ id?: string; evidenceIds?: string[]; sourceId?: string }>;
         provenance?: { evidenceIds?: string[]; sourceReferences?: string[] };
         citedReferences?: string[];
+        authorityLanes?: { corpusEvidence?: string[]; machineRules?: string[]; editorialGuidance?: string[] };
+        techniques?: Array<{ sourceIds?: string[] }>;
+        antiPatterns?: Array<{ sourceIds?: string[] }>;
+        componentInventory?: Array<{ source?: string }>;
       };
       // Authoritative evidence set: envelope evidence ONLY (not provenance)
       const knownEvidence = new Set<string>();
       for (const e of (val.evidence as Array<{ id?: string }> | undefined) ?? [])
         if (e.id) knownEvidence.add(e.id);
+      // Cited references set
+      const citedSet = new Set(data?.citedReferences ?? []);
+      // Check duplicate citedReferences
+      const citedRefs = data?.citedReferences ?? [];
+      if (new Set(citedRefs).size !== citedRefs.length)
+        ctx.addIssue({ code: "custom", message: "citedReferences must be unique", path: ["data", "citedReferences"] });
       // Check acceptance criteria evidenceIds against envelope evidence only
       for (const ac of data?.acceptanceCriteria ?? []) {
         for (const eid of ac.evidenceIds ?? []) {
@@ -935,21 +957,60 @@ export const TOOL_DESCRIPTORS = [
             ctx.addIssue({ code: "custom", message: `acceptance criterion "${ac.id}" evidenceId "${eid}" not found in envelope evidence`, path: ["data", "acceptanceCriteria"] });
         }
       }
-      // Check citedDecisions evidenceIds against envelope evidence only
+      // Check citedDecisions evidenceIds + sourceId
       for (const cd of data?.citedDecisions ?? []) {
         for (const eid of cd.evidenceIds ?? []) {
           if (!knownEvidence.has(eid))
             ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" evidenceId "${eid}" not found in envelope evidence`, path: ["data", "citedDecisions"] });
         }
+        if (cd.sourceId !== undefined && !citedSet.has(cd.sourceId))
+          ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" sourceId "${cd.sourceId}" not in citedReferences`, path: ["data", "citedDecisions"] });
+      }
+      // Check authorityLanes evidence IDs
+      const lanes = data?.authorityLanes;
+      if (lanes) {
+        for (const eid of lanes.corpusEvidence ?? []) {
+          if (!knownEvidence.has(eid))
+            ctx.addIssue({ code: "custom", message: `authorityLanes.corpusEvidence "${eid}" not found in envelope evidence`, path: ["data", "authorityLanes"] });
+        }
+        for (const eid of lanes.machineRules ?? []) {
+          if (!knownEvidence.has(eid))
+            ctx.addIssue({ code: "custom", message: `authorityLanes.machineRules "${eid}" not found in envelope evidence`, path: ["data", "authorityLanes"] });
+        }
+        for (const eid of lanes.editorialGuidance ?? []) {
+          if (!knownEvidence.has(eid))
+            ctx.addIssue({ code: "custom", message: `authorityLanes.editorialGuidance "${eid}" not found in envelope evidence`, path: ["data", "authorityLanes"] });
+        }
+      }
+      // Check techniques sourceIds against citedReferences
+      for (const tech of data?.techniques ?? []) {
+        for (const sid of tech.sourceIds ?? []) {
+          if (!citedSet.has(sid))
+            ctx.addIssue({ code: "custom", message: `technique sourceId "${sid}" not in citedReferences`, path: ["data", "techniques"] });
+        }
+      }
+      // Check antiPatterns sourceIds against citedReferences
+      for (const ap of data?.antiPatterns ?? []) {
+        for (const sid of ap.sourceIds ?? []) {
+          if (!citedSet.has(sid))
+            ctx.addIssue({ code: "custom", message: `antiPattern sourceId "${sid}" not in citedReferences`, path: ["data", "antiPatterns"] });
+        }
+      }
+      // Check componentInventory source against citedReferences
+      for (const comp of data?.componentInventory ?? []) {
+        if (comp.source !== undefined && !citedSet.has(comp.source))
+          ctx.addIssue({ code: "custom", message: `component source "${comp.source}" not in citedReferences`, path: ["data", "componentInventory"] });
       }
       // provenance.evidenceIds must match envelope evidence IDs exactly (derived echo, not authority)
-      const provenanceEvIds = new Set(data?.provenance?.evidenceIds ?? []);
+      const provEvIds = data?.provenance?.evidenceIds ?? [];
+      if (new Set(provEvIds).size !== provEvIds.length)
+        ctx.addIssue({ code: "custom", message: "provenance.evidenceIds must be unique", path: ["data", "provenance"] });
+      const provenanceEvIds = new Set(provEvIds);
       if (provenanceEvIds.size !== knownEvidence.size || ![...provenanceEvIds].every(id => knownEvidence.has(id)))
         ctx.addIssue({ code: "custom", message: "provenance.evidenceIds must exactly match envelope evidence IDs", path: ["data", "provenance"] });
       // provenance.sourceReferences must match citedReferences exactly
-      const cited = new Set(data?.citedReferences ?? []);
       const sourceRefs = new Set(data?.provenance?.sourceReferences ?? []);
-      if (sourceRefs.size !== cited.size || ![...sourceRefs].every(id => cited.has(id)))
+      if (sourceRefs.size !== citedSet.size || ![...sourceRefs].every(id => citedSet.has(id)))
         ctx.addIssue({ code: "custom", message: "provenance.sourceReferences must exactly match citedReferences", path: ["data", "provenance"] });
     },
   },
@@ -1028,18 +1089,30 @@ export const TOOL_DESCRIPTORS = [
     refineEnvelope: (val, ctx) => {
       const evidenceIds = new Set((val.evidence as Array<{ id?: string }> | undefined)?.map(e => e.id).filter(Boolean) ?? []);
       const data = val.data as {
+        retrievalMode?: string;
+        fallbackUsed?: boolean;
         evidenceIds?: string[];
+        appliedReferences?: Array<{ id?: string; version?: number; purpose?: string }>;
         recommendations?: Array<{ evidence?: string[] }>;
         accessibilityRisks?: Array<{ evidence?: string }>;
         visualSlop?: Array<{ evidence?: string[] }>;
-        motion?: Array<{ evidence?: string[] }>;
+        motion?: Array<{ evidence?: string[]; reference?: string }>;
         md3?: { evidenceIds?: string[]; conflictingSignals?: Array<{ evidenceId?: string }> };
       };
-      // Check top-level evidenceIds
-      for (const eid of data.evidenceIds ?? []) {
-        if (!evidenceIds.has(eid))
-          ctx.addIssue({ code: "custom", message: `critique evidenceId "${eid}" not in envelope evidence`, path: ["data"] });
-      }
+      // Reconcile data.retrievalMode with envelope retrieval.mode
+      if (data.retrievalMode !== undefined && data.retrievalMode !== val.retrievalInfo?.mode)
+        ctx.addIssue({ code: "custom", message: `data.retrievalMode "${data.retrievalMode}" must match envelope retrieval mode`, path: ["data"] });
+      // Reconcile data.fallbackUsed with envelope fallback
+      if (data.fallbackUsed !== undefined && data.fallbackUsed !== val.retrievalInfo?.fallbackUsed)
+        ctx.addIssue({ code: "custom", message: "data.fallbackUsed must match envelope fallback state", path: ["data"] });
+      // Check duplicate appliedReferences IDs
+      const appliedIds = (data.appliedReferences ?? []).map(r => r.id).filter(Boolean) as string[];
+      if (new Set(appliedIds).size !== appliedIds.length)
+        ctx.addIssue({ code: "custom", message: "appliedReferences must have unique IDs", path: ["data", "appliedReferences"] });
+      // Check top-level evidenceIds match envelope evidence exactly
+      const critiqueEvIds = new Set(data.evidenceIds ?? []);
+      if (critiqueEvIds.size !== evidenceIds.size || ![...critiqueEvIds].every(id => evidenceIds.has(id)))
+        ctx.addIssue({ code: "custom", message: "data.evidenceIds must exactly match envelope evidence IDs", path: ["data"] });
       // Check recommendations evidence
       for (const rec of data.recommendations ?? []) {
         for (const eid of rec.evidence ?? []) {
@@ -1059,11 +1132,18 @@ export const TOOL_DESCRIPTORS = [
             ctx.addIssue({ code: "custom", message: `visualSlop evidence "${eid}" not in envelope evidence`, path: ["data", "visualSlop"] });
         }
       }
-      // Check motion evidence
+      // Check motion evidence + reference
+      const refIds = new Set(val.referenceIds);
       for (const m of data.motion ?? []) {
         for (const eid of m.evidence ?? []) {
           if (!evidenceIds.has(eid))
             ctx.addIssue({ code: "custom", message: `motion evidence "${eid}" not in envelope evidence`, path: ["data", "motion"] });
+        }
+        // motion.reference in ref:<id> form must resolve to an applied reference
+        if (m.reference && m.reference.startsWith("ref:")) {
+          const refId = m.reference.slice(4);
+          if (!refIds.has(refId))
+            ctx.addIssue({ code: "custom", message: `motion reference "${m.reference}" not found in referenceIds`, path: ["data", "motion"] });
         }
       }
       // Check md3 evidenceIds
@@ -1131,6 +1211,35 @@ export const CATALOG_DIGEST: string = createHash("sha256").update(
   ),
 ).digest("hex");
 
+/**
+ * Build a RetrievalPolicy from a descriptor's retrieval array + allowedAttemptedModes.
+ * Per-state fallback reasons are determined by the tool name and returned state.
+ */
+function buildRetrievalPolicy(desc: ToolDescriptor): RetrievalPolicy {
+  const allReasons: IntegrityFallbackReason[] = [
+    "missing-index", "incompatible-index", "missing-provider-key",
+    "community-edition", "provider-error",
+  ];
+  const critiqueReasons: IntegrityFallbackReason[] = [...allReasons, "no-image-evidence"];
+
+  const getReasons = (mode: string): readonly IntegrityFallbackReason[] => {
+    if (mode === "none") return [];
+    if (mode === "structured-fallback" || mode === "keyword") {
+      return desc.name === "critique_ui" ? critiqueReasons : allReasons;
+    }
+    return [];
+  };
+
+  return {
+    states: desc.retrieval.map(r => ({
+      mode: r.mode as never,
+      modality: r.modality as never,
+      fallbackReasons: getReasons(r.mode),
+    })),
+    attemptedModes: desc.allowedAttemptedModes as never[],
+  };
+}
+
 // ===========================================================================
 // makeEnvelope — ONE canonical per-tool Zod schema with ALL refinements
 // ===========================================================================
@@ -1169,28 +1278,21 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
         ctx.addIssue({ code: "custom", message: 'status "error" requires empty referenceIds', path: ["referenceIds"] });
     }
     // 3. Retrieval eligibility + fallback truth + attempted-mode policy
-    // Check retrieval mode/modality is allowed for this tool
-    if (!desc.retrieval.some(r => r.mode === val.retrieval.mode && r.modality === val.retrieval.modality))
-      ctx.addIssue({ code: "custom", message: `retrieval ${val.retrieval.mode}/${val.retrieval.modality} not allowed for ${desc.name}`, path: ["retrieval"] });
-    // Error status: no fallback
-    if (val.status === "error" && val.retrieval.fallbackUsed)
-      ctx.addIssue({ code: "custom", message: "error status cannot have fallbackUsed true", path: ["retrieval", "fallbackUsed"] });
-    // Success + fallback: requires positive resultCount
-    if (val.status === "ok" && val.retrieval.fallbackUsed && val.retrieval.resultCount === 0)
-      ctx.addIssue({ code: "custom", message: "fallback with zero results is not a successful fallback", path: ["retrieval", "resultCount"] });
-    // Per-tool fallback reason scoping: no-image-evidence is only valid for critique_ui
-    if (val.retrieval.fallbackUsed && val.retrieval.fallbackReason === "no-image-evidence" && desc.name !== "critique_ui")
-      ctx.addIssue({ code: "custom", message: `fallbackReason "no-image-evidence" not allowed for ${desc.name}`, path: ["retrieval", "fallbackReason"] });
-    // Forbidden attempted mode: every attempted mode must be in the tool's allowed list
-    if (desc.allowedAttemptedModes.length === 0 && val.retrieval.attemptedModes.length > 0)
-      ctx.addIssue({ code: "custom", message: "attemptedModes not allowed for this tool", path: ["retrieval", "attemptedModes"] });
-    for (const am of val.retrieval.attemptedModes) {
-      if (!desc.allowedAttemptedModes.includes(am))
-        ctx.addIssue({ code: "custom", message: `attemptedMode "${am}" not allowed for ${desc.name}`, path: ["retrieval", "attemptedModes"] });
-    }
-    // ok + non-fallback: attemptedModes must be empty
-    if (val.status === "ok" && !val.retrieval.fallbackUsed && val.retrieval.attemptedModes.length > 0)
-      ctx.addIssue({ code: "custom", message: "attemptedModes must be empty on success without fallback", path: ["retrieval", "attemptedModes"] });
+    // Delegate to the shared integrity validator for complete checks
+    validateEnvelopeRetrieval(
+      val.status,
+      {
+        mode: val.retrieval.mode,
+        modality: val.retrieval.modality,
+        resultCount: val.retrieval.resultCount,
+        fallbackUsed: val.retrieval.fallbackUsed,
+        attemptedCount: val.retrieval.attemptedCount,
+        fallbackReason: val.retrieval.fallbackReason,
+        attemptedModes: val.retrieval.attemptedModes,
+      },
+      buildRetrievalPolicy(desc),
+      ctx,
+    );
 
     if (val.status === "ok" && val.data !== null) {
       // 4. resultCount
@@ -1240,7 +1342,7 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
 
       // 13. per-tool envelope refinement (warnings, evidence cross-checks)
       if (desc.refineEnvelope) desc.refineEnvelope(
-        { data: val.data, warnings: val.warnings as unknown[], referenceIds: val.referenceIds, evidence: val.evidence as unknown[] | undefined },
+        { data: val.data, warnings: val.warnings as unknown[], referenceIds: val.referenceIds, evidence: val.evidence as unknown[] | undefined, retrievalInfo: { mode: val.retrieval.mode, fallbackUsed: val.retrieval.fallbackUsed } },
         ctx,
       );
     }

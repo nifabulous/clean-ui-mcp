@@ -189,6 +189,7 @@ const ALLOWLIST = new Set<string>([
   // validator (created in C1 Steps 5-8 and Task 7).
   "isAllowedRetrievalState",
   "getToolDataSchema",
+  "ToolInputSchemas",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

@@ -210,6 +210,7 @@ const SimilarReference = z.object({
   categories: z.array(z.string()),
   styleTags: z.array(z.string()),
   score: z.number(),
+  basis: z.string().min(1),
   critique: z.string(),
   techniques: z.array(z.string()),
 }).strict();
@@ -244,12 +245,13 @@ const PatternGroupExemplar = z.object({
   title: z.string().min(1).trim(),
   product: z.string().min(1).trim(),
   qualityScore: z.number().int(),
+  critique: z.string(),
 }).strict();
 
 const PatternGroup = z.object({
   patternType: z.string().min(1),
   count: z.number().int().nonnegative(),
-  products: z.array(z.string()),
+  topProducts: z.array(z.string()),
   exemplar: PatternGroupExemplar,
 }).strict();
 
@@ -633,7 +635,7 @@ export const CreateUiSpecInput = z.object({
     .refine(a => new Set(a).size === a.length, "referenceIds must be unique"),
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
   implementationFramework: z.string().optional(),
-  serializationFormat: z.enum(["brief", "tokens"]).optional(),
+  serializationFormat: z.enum(["brief", "tokens"]).default("brief"),
   designSystem: DesignSystemIdentity.optional(),
   constraints: z.array(z.string()).optional(),
 }).strict();

@@ -416,7 +416,7 @@ Workflow routing and next-tool suggestions belong to the skill layer, not MCP re
 - `techniques` and `antiPatterns` (typed, evidence-backed)
 - `frameworkNotes`
 - `unavailableDecisions` (field + reason) — sparse evidence must produce unavailable/proposed decisions with typed warnings, never fabricated values
-- `acceptanceCriteria` — structured `{id, subject, assertion, expectedOutcome, verifier: manual|playwright|static|axe, priority, evidenceIds, manualSteps?, selector?, command?}`
+- `acceptanceCriteria` — structured `{id, subject, assertion, expectedOutcome, verifier: axe|playwright|static-analysis|manual, priority, evidenceIds, manualSteps?, selector?, command?}`
 - `citedReferences` and `citedDecisions` (with authority lane, evidence IDs, readiness, provenance)
 - `authorityLanes` (corpusEvidence, machineRules, editorialGuidance)
 - `provenance` (generatedAt, toolVersion)
@@ -465,7 +465,7 @@ These tables are the authoritative source for executable Zod schemas. The design
 | Aspect | Contract |
 |---|---|
 | Input | id (required), limit (1-20, default 5)? |
-| Success data | `results: SimilarReference[]` — each with id, product, patternType, score, basis |
+| Success data | `results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques |
 | Empty | `results: []` when no index or source not found |
 | Errors | NOT_FOUND if source id missing (non-retryable) |
 | Retrieval | vector + text; structured-fallback + metadata; none (text embeddings only, no image) |
@@ -503,7 +503,7 @@ These tables are the authoritative source for executable Zod schemas. The design
 | Aspect | Contract |
 |---|---|
 | Input | styleTag? |
-| Success data | `patterns: PatternGroup[]` — each with patternType, count, topProducts (array), exemplar (id, product, critique excerpt) |
+| Success data | `patterns: PatternGroup[]` — each with patternType, count, topProducts (array), exemplar (id, title, product, qualityScore, critique) |
 | Empty | `patterns: []` |
 | Errors | none |
 | Retrieval | none (aggregation scan, no retrieval) |

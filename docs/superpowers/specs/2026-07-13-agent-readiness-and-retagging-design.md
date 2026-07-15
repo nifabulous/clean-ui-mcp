@@ -297,6 +297,13 @@ Targeted aggregation tools support research but do not replace `plan_ui_directio
 
 Every tool returns complete human-readable `content[0]` plus matching `structuredContent`. The structured envelope is the source of truth; `content[0].text` is rendered exclusively from it. No fact may exist only in handwritten text.
 
+**Two validation levels (derived from the same descriptor):**
+
+- **`outputSchema` (MCP-advertised JSON Schema):** structural contract — fields, types, enums, required properties. MCP converts the Zod schema to JSON Schema; `.superRefine()` semantics are not expressible in JSON Schema.
+- **Canonical Zod parsing (`safeParse`):** semantic contract — counts, cross-references, conditional integrity, code↔retryable binding, exact reference-set equality, evidence membership. These are enforced at runtime but not fully representable in JSON Schema.
+
+Both levels derive from `TOOL_DESCRIPTORS`. No handwritten second authority exists.
+
 ```ts
 interface CleanUiToolResult<T> {
   schemaVersion: "1.0";
@@ -380,7 +387,7 @@ Workflow routing and next-tool suggestions belong to the skill layer, not MCP re
 | `platform` | enum web/mobile/tablet | optional | — |
 | `implementationFramework` | string | optional | e.g. "react", "swiftui" |
 | `serializationFormat` | enum brief/tokens | optional | default "brief" |
-| `designSystem` | string | optional | e.g. "Material 3" |
+| `designSystem` | `{ status: "none"\|"identified", registry?, library? }` | optional | Design-system identity; "identified" requires registry or library |
 | `constraints` | string[] | optional | explicit project constraints |
 
 **Output sections (each is a typed schema, not `z.unknown()`):**
@@ -449,7 +456,7 @@ These tables are the authoritative source for executable Zod schemas. The design
 | Success data | `results: SimilarReference[]` — each with id, product, patternType, score, basis |
 | Empty | `results: []` when no index or source not found |
 | Errors | NOT_FOUND if source id missing (non-retryable) |
-| Retrieval | vector + text/image; structured-fallback + metadata; none |
+| Retrieval | vector + text; structured-fallback + metadata; none (text embeddings only, no image) |
 | Evidence | forbidden |
 | resultCount | `results.length` |
 | referenceIds | unique `result.id` values |
@@ -474,7 +481,7 @@ These tables are the authoritative source for executable Zod schemas. The design
 | Input | none |
 | Success data | `patternTypes`, `categories`, `styleTags` (each `{count, values}`), optional `components`, `domainTags` |
 | Errors | none |
-| Retrieval | structured-fallback + metadata; none |
+| Retrieval | none |
 | Evidence | forbidden |
 | resultCount | 0 (not a search tool) |
 | referenceIds | `[]` |
@@ -487,7 +494,7 @@ These tables are the authoritative source for executable Zod schemas. The design
 | Success data | `patterns: PatternGroup[]` — each with patternType, count, topProducts (array), exemplar (id, product, critique excerpt) |
 | Empty | `patterns: []` |
 | Errors | none |
-| Retrieval | keyword/structured-fallback + metadata; none |
+| Retrieval | none (aggregation scan, no retrieval) |
 | Evidence | forbidden |
 | resultCount | `patterns.length` |
 | referenceIds | exemplar IDs |
@@ -500,7 +507,7 @@ These tables are the authoritative source for executable Zod schemas. The design
 | Success data | `direction`, `rejectedDefaults`, `recommendation`, `rationale`, `evidenceContributions`, `structuredDecisions` |
 | Partial | sparse results → typed warning |
 | Errors | no index → NOT_FOUND (non-retryable) |
-| Retrieval | hybrid/vector/keyword + text; structured-fallback + metadata; none |
+| Retrieval | hybrid/keyword + text; structured-fallback + metadata; none (plan: no direct vector) |
 | Evidence | required (may be empty with insufficiency warning) |
 | resultCount | number of grounding entries found |
 | referenceIds | grounding entry IDs |
@@ -517,7 +524,7 @@ See §5.4 for the complete UiSpec contract. Evidence is required (may be empty w
 | Success data | `results: AntiPatternRow[]` — each with text, sourceIds, count |
 | Empty | `results: []` |
 | Errors | none |
-| Retrieval | keyword/structured-fallback + metadata; none |
+| Retrieval | none (aggregation scan, no retrieval) |
 | Evidence | forbidden |
 | resultCount | `results.length` |
 | referenceIds | unique sourceIds across all rows |
@@ -530,7 +537,7 @@ See §5.4 for the complete UiSpec contract. Evidence is required (may be empty w
 | Success data | `results: PaletteRecord[]` — each with tokens (canvas, surface, ink, muted, accent), accentHue, product, sourceId |
 | Empty | `results: []` |
 | Errors | none |
-| Retrieval | keyword/structured-fallback + metadata; none |
+| Retrieval | none (aggregation scan, no retrieval) |
 | Evidence | forbidden |
 | resultCount | `results.length` |
 | referenceIds | unique sourceId values |
@@ -543,7 +550,7 @@ See §5.4 for the complete UiSpec contract. Evidence is required (may be empty w
 | Success data | `results: TechniqueRow[]` — each with text, source (id, product) |
 | Empty | `results: []` |
 | Errors | none |
-| Retrieval | keyword/structured-fallback + metadata; none |
+| Retrieval | none (aggregation scan, no retrieval) |
 | Evidence | forbidden |
 | resultCount | `results.length` |
 | referenceIds | unique source IDs |
@@ -555,7 +562,7 @@ See §5.4 for the complete UiSpec contract. Evidence is required (may be empty w
 | Input | image_data (required), image_mime_type (required), product_context?, platform?, framework? — reuses `CRITIQUE_UI_INPUT_SCHEMA` from `synthesis/contracts.ts` |
 | Success data | reuses `StructuredCritique` fields: observations, recommendations, accessibilityRisks, visualSlop, motion, appliedReferences, evidenceIds, confidence, md3? |
 | Errors | INVALID_INPUT (non-retryable), PROVIDER_ERROR (retryable) |
-| Retrieval | vector + image/text; structured-fallback + metadata; none |
+| Retrieval | vector + image; structured-fallback + metadata; none (no vector+text) |
 | Evidence | required (may be empty with insufficiency warning); may include screen-observation and dom-signal |
 | resultCount | number of retrieved references |
 | referenceIds | appliedReference IDs |

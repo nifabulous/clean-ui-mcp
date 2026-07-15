@@ -232,12 +232,20 @@ describe("UiSpec", () => {
       provenance: { generatedAt: "2026-07-15T00:00:00Z", toolVersion: "0.2.0", sourceReferences: [], evidenceIds: [] },
     };
   }
-  it("accepts complete spec", () => { expect(UiSpec.safeParse(valid()).success).toBe(true); });
+  it("accepts complete spec", () => {
+    // The valid fixture has motionGuidance.evidenceUnavailable: true, so it needs a motion unavailableDecision
+    const b = valid();
+    b.unavailableDecisions = [{ field: "motion", reason: "no DOM evidence" }];
+    expect(UiSpec.safeParse(b).success).toBe(true);
+  });
   it("accepts null tokens (sparse)", () => {
     const b = valid();
     b.colorTokens = null;
     b.colorTokenAuthority = "editorial";
-    b.unavailableDecisions = [{ field: "colorTokens", reason: "no corpus evidence" }];
+    b.unavailableDecisions = [
+      { field: "colorTokens", reason: "no corpus evidence" },
+      { field: "motion", reason: "no DOM evidence" },
+    ];
     expect(UiSpec.safeParse(b).success).toBe(true);
   });
   it("manual verifier requires manualSteps", () => {
@@ -269,9 +277,10 @@ describe("UiSpec", () => {
   it("accepts mixed authority with >1 distinct non-editorial child lanes", () => {
     const b = valid();
     b.colorTokenAuthority = "mixed";
+    b.unavailableDecisions = [{ field: "motion", reason: "no DOM evidence" }];
     b.citedDecisions = [
-      { id: "d1", field: "color", authority: "corpus-evidence", evidenceIds: [], readiness: "available" },
-      { id: "d2", field: "color", authority: "team-design-system", evidenceIds: [], readiness: "available" },
+      { id: "d1", field: "color-primary", authority: "corpus-evidence", evidenceIds: [], readiness: "available" },
+      { id: "d2", field: "color-accent", authority: "team-design-system", evidenceIds: [], readiness: "available" },
     ];
     expect(UiSpec.safeParse(b).success).toBe(true);
   });

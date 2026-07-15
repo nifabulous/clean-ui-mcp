@@ -151,18 +151,20 @@ export const ToolErrorUnion = z.discriminatedUnion("code", [
   z.object({ code: z.literal("INVALID_INPUT"), message: z.string().min(1).trim(), retryable: z.literal(false) }).strict(),
 ]);
 
+const ERROR_RETRYABLE: Record<string, boolean> = {
+  NOT_FOUND: false, INVALID_INPUT: false,
+  INDEX_UNAVAILABLE: true, PROVIDER_ERROR: true,
+};
+
 function makeErrorSchema<const T extends readonly string[]>(codes: T) {
-  // Build a superRefine-based error schema with code↔retryable binding
-  const retryMap: Record<string, boolean> = {
-    NOT_FOUND: false, INVALID_INPUT: false,
-    INDEX_UNAVAILABLE: true, PROVIDER_ERROR: true,
-  };
+  // Build error schema with code↔retryable binding via superRefine
+  // (Zod discriminatedUnion with mapped variants loses literal types; superRefine is cleaner)
   return z.object({
     code: z.enum(codes),
     message: z.string().min(1).trim(),
     retryable: z.boolean(),
   }).strict().superRefine((val, ctx) => {
-    const expected = retryMap[val.code];
+    const expected = ERROR_RETRYABLE[val.code];
     if (expected !== undefined && val.retryable !== expected)
       ctx.addIssue({ code: "custom", message: `error code "${val.code}" must have retryable: ${expected}`, path: ["retryable"] });
   });
@@ -447,7 +449,14 @@ const DesignSystemIdentity = z.object({
   status: z.enum(["none", "identified"]),
   registry: z.string().optional(),
   library: z.string().optional(),
-}).strict();
+}).strict().superRefine((val, ctx) => {
+  // status "identified" requires at least registry or library
+  if (val.status === "identified" && !val.registry && !val.library)
+    ctx.addIssue({ code: "custom", message: "status 'identified' requires registry or library", path: ["status"] });
+  // status "none" must not carry registry/library
+  if (val.status === "none" && (val.registry || val.library))
+    ctx.addIssue({ code: "custom", message: "status 'none' must not include registry or library", path: ["status"] });
+});
 
 const ColorTokens = z.object({
   primary: z.string().min(1),
@@ -540,15 +549,43 @@ export const UiSpec = z.object({
     evidenceIds: z.array(z.string()),
   }).strict(),
 }).strict().superRefine((val, ctx) => {
-  // mixed authority requires multiple distinct non-editorial authority lanes in citedDecisions
-  if (val.colorTokenAuthority === "mixed" || val.typographyTokenAuthority === "mixed") {
-    const authorities = new Set(
+  // Null colorTokens requires colorTokenAuthority "editorial" and an unavailableDecision for "color"
+  if (val.colorTokens === null) {
+    const hasUnavailableColor = val.unavailableDecisions.some(d => d.field.includes("color"));
+    if (!hasUnavailableColor)
+      ctx.addIssue({ code: "custom", message: "null colorTokens requires an unavailableDecision for color", path: ["unavailableDecisions"] });
+  }
+  // Null typographyTokens requires unavailableDecision for typography
+  if (val.typographyTokens === null) {
+    const hasUnavailableType = val.unavailableDecisions.some(d => d.field.includes("typography") || d.field.includes("type"));
+    if (!hasUnavailableType)
+      ctx.addIssue({ code: "custom", message: "null typographyTokens requires an unavailableDecision for typography", path: ["unavailableDecisions"] });
+  }
+  // mixed authority for color requires >1 distinct non-editorial authority among color-related citedDecisions
+  if (val.colorTokenAuthority === "mixed") {
+    const colorAuthorities = new Set(
       val.citedDecisions
-        .filter(d => d.authority !== "editorial")
+        .filter(d => d.field.includes("color") && d.authority !== "editorial")
         .map(d => d.authority),
     );
-    if (authorities.size < 2)
-      ctx.addIssue({ code: "custom", message: "'mixed' authority requires citedDecisions with >1 distinct non-editorial authority", path: ["citedDecisions"] });
+    if (colorAuthorities.size < 2)
+      ctx.addIssue({ code: "custom", message: "'mixed' color authority requires color citedDecisions with >1 distinct non-editorial authority", path: ["colorTokenAuthority"] });
+  }
+  // mixed authority for typography (scoped)
+  if (val.typographyTokenAuthority === "mixed") {
+    const typeAuthorities = new Set(
+      val.citedDecisions
+        .filter(d => (d.field.includes("typography") || d.field.includes("type")) && d.authority !== "editorial")
+        .map(d => d.authority),
+    );
+    if (typeAuthorities.size < 2)
+      ctx.addIssue({ code: "custom", message: "'mixed' typography authority requires typography citedDecisions with >1 distinct non-editorial authority", path: ["typographyTokenAuthority"] });
+  }
+  // motionEvidenceUnavailable: if motionGuidance.evidenceUnavailable, require matching unavailableDecision
+  if (val.motionGuidance.evidenceUnavailable) {
+    const hasMotionUnavailable = val.unavailableDecisions.some(d => d.field.includes("motion"));
+    if (!hasMotionUnavailable)
+      ctx.addIssue({ code: "custom", message: "motionGuidance.evidenceUnavailable requires an unavailableDecision for motion", path: ["unavailableDecisions"] });
   }
 });
 
@@ -651,7 +688,7 @@ export interface ToolDescriptor {
   refineData?: (data: unknown, ctx: z.RefinementCtx) => void;
 }
 
-export const TOOL_DESCRIPTORS: readonly ToolDescriptor[] = [
+export const TOOL_DESCRIPTORS = [
   {
     name: "search_ui_references",
     rendererKey: "search",
@@ -729,10 +766,16 @@ export const TOOL_DESCRIPTORS: readonly ToolDescriptor[] = [
       const data = d as { foundIds?: string[]; missingIds?: string[]; entries?: Array<{ id?: string }> };
       const found = data.foundIds ?? [];
       const missing = data.missingIds ?? [];
+      // Unique foundIds
+      if (new Set(found).size !== found.length)
+        ctx.addIssue({ code: "custom", message: "foundIds must be unique", path: ["foundIds"] });
       // Disjoint
       const overlap = found.filter(id => missing.includes(id));
       if (overlap.length > 0)
         ctx.addIssue({ code: "custom", message: `IDs in both foundIds and missingIds: ${overlap.join(", ")}`, path: ["foundIds"] });
+      // entries length must equal foundIds length (exact match)
+      if ((data.entries ?? []).length !== found.length)
+        ctx.addIssue({ code: "custom", message: "entries length must equal foundIds length", path: ["entries"] });
       // Every entry id must be in foundIds
       for (const entry of data.entries ?? []) {
         if (entry.id && !found.includes(entry.id))
@@ -756,6 +799,20 @@ export const TOOL_DESCRIPTORS: readonly ToolDescriptor[] = [
     errorSchema: makeErrorSchema([]),
     extractRefs: () => [],
     countResults: () => 0,
+    refineData: (d, ctx) => {
+      const data = d as Record<string, { count?: number; values?: string[] } | undefined>;
+      for (const [key, list] of Object.entries(data)) {
+        if (!list) continue;
+        // count must equal unique values length
+        if (list.count !== undefined && list.values !== undefined) {
+          const unique = new Set(list.values);
+          if (list.count !== unique.size)
+            ctx.addIssue({ code: "custom", message: `${key}.count (${list.count}) must equal unique values length (${unique.size})`, path: [key, "count"] });
+          if (unique.size !== list.values.length)
+            ctx.addIssue({ code: "custom", message: `${key}.values contains duplicates`, path: [key, "values"] });
+        }
+      }
+    },
   },
   {
     name: "browse_ui_patterns",
@@ -875,13 +932,15 @@ export const TOOL_DESCRIPTORS: readonly ToolDescriptor[] = [
     extractRefs: (d) => [...new Set(((d as { appliedReferences?: Array<{ id?: string }> })?.appliedReferences ?? []).map(r => r.id).filter((x): x is string => !!x))],
     countResults: (d) => (d as { summary?: unknown })?.summary ? 1 : 0,
   },
-];
+] as const satisfies readonly ToolDescriptor[];
 
 // ===========================================================================
 // 8. Derived values
 // ===========================================================================
 
-export const TOOL_CATALOG = Object.freeze(TOOL_DESCRIPTORS.map(d => d.name)) as readonly string[];
+export const TOOL_CATALOG = Object.freeze(
+  TOOL_DESCRIPTORS.map(d => d.name),
+) as readonly ToolName[];
 
 export type ToolName = (typeof TOOL_DESCRIPTORS)[number]["name"];
 
@@ -931,10 +990,6 @@ export const CATALOG_DIGEST: string = createHash("sha256").update(
 // ===========================================================================
 
 function makeEnvelope(desc: ToolDescriptor): z.ZodType {
-  const evidenceField = desc.hasEvidence
-    ? EvidenceArray
-    : z.array(Evidence).max(0); // non-evidence tools reject any evidence
-
   return z.object({
     tool: z.literal(desc.name),
     schemaVersion: z.literal("1.0"),
@@ -944,7 +999,8 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
     referenceIds: z.array(z.string().min(1)),
     retrieval: RetrievalState,
     warnings: desc.warningSchema,
-    evidence: desc.hasEvidence ? evidenceField : evidenceField.optional(),
+    // Non-evidence tools must not include the evidence property at all (not even [])
+    evidence: desc.hasEvidence ? EvidenceArray : z.never().optional(),
     error: desc.errorSchema.optional(),
   }).strict().superRefine((val, ctx) => {
     // 1. status ok → non-null data, no error
@@ -962,6 +1018,9 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
         ctx.addIssue({ code: "custom", message: 'status "error" requires error', path: ["error"] });
       if (val.retrieval.resultCount !== 0)
         ctx.addIssue({ code: "custom", message: 'status "error" requires resultCount 0', path: ["retrieval", "resultCount"] });
+      // Error envelopes must have empty referenceIds
+      if (val.referenceIds.length > 0)
+        ctx.addIssue({ code: "custom", message: 'status "error" requires empty referenceIds', path: ["referenceIds"] });
     }
     // 3. Retrieval eligibility
     if (!desc.retrieval.some(r => r.mode === val.retrieval.mode && r.modality === val.retrieval.modality))
@@ -977,9 +1036,11 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
       if (new Set(val.referenceIds).size !== val.referenceIds.length)
         ctx.addIssue({ code: "custom", message: "referenceIds must be unique", path: ["referenceIds"] });
 
-      // 6. exact reference set equality
+      // 6. exact reference set equality (data IDs must also be unique)
       const dataRefs = desc.extractRefs(val.data);
       const dataSet = new Set(dataRefs);
+      if (dataSet.size !== dataRefs.length)
+        ctx.addIssue({ code: "custom", message: "data contains duplicate IDs", path: ["data"] });
       const refSet = new Set(val.referenceIds);
       if (dataSet.size !== refSet.size || ![...dataSet].every(id => refSet.has(id))) {
         ctx.addIssue({ code: "custom", message: "referenceIds must exactly match data IDs", path: ["referenceIds"] });

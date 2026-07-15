@@ -13,28 +13,11 @@ export {
   type ToolName,
 } from "./tool-contracts.js";
 
-// Re-export type aliases for backward compatibility with existing imports
-import type { ToolName } from "./tool-contracts.js";
+// Derive LegacyToolName and RendererKey from the descriptor literals
+import type { TOOL_DESCRIPTORS } from "./tool-contracts.js";
 
-/** Legacy tool names (union of all legacyNames across descriptors). */
-export type LegacyToolName =
-  | "search_ui_examples"
-  | "get_ui_example"
-  | "list_categories"
-  | "list_style_tags"
-  | "list_domain_tags"
-  | "get_similar_ui_examples"
-  | "compare_ui_examples"
-  | "generate_design_prompt"
-  | "recommend_ui_direction"
-  | "get_anti_patterns"
-  | "get_color_palette"
-  | "get_stealable_techniques"
-  | "browse_ui_examples"
-  | "critique_ui";
+/** Legacy tool names — derived from all legacyNames across descriptors. */
+export type LegacyToolName = (typeof TOOL_DESCRIPTORS)[number]["legacyNames"][number];
 
-/** Renderer key union derived from descriptor rendererKey values. */
-export type RendererKey =
-  | "search" | "reference" | "similar" | "compare" | "taxonomy"
-  | "browse" | "plan" | "spec" | "anti-patterns" | "palettes"
-  | "techniques" | "critique";
+/** Renderer key union — derived from descriptor rendererKey values. */
+export type RendererKey = (typeof TOOL_DESCRIPTORS)[number]["rendererKey"];

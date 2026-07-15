@@ -204,6 +204,11 @@ const ALLOWLIST = new Set<string>([
   "parseToolResult",
   "SearchInput",
   "WarningBase",
+  // tool-contract-integrity.ts — consumed by makeEnvelope in tool-contracts.ts
+  "validateEnvelopeRetrieval",
+  "validateEvidenceReferences",
+  "sameSet",
+  "unique",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

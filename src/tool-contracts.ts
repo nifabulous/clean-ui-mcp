@@ -73,9 +73,8 @@ export const RetrievalState = z.object({
   // attemptedCount must equal attemptedModes length
   if (val.attemptedCount !== val.attemptedModes.length)
     ctx.addIssue({ code: "custom", message: `attemptedCount (${val.attemptedCount}) must equal attemptedModes length (${val.attemptedModes.length})`, path: ["attemptedCount"] });
-  // When fallbackUsed is false, attemptedModes must be empty (nothing was attempted-and-failed)
-  if (!val.fallbackUsed && val.attemptedModes.length > 0)
-    ctx.addIssue({ code: "custom", message: "attemptedModes must be empty when fallbackUsed is false", path: ["attemptedModes"] });
+  // NOTE: attemptedModes MAY be non-empty when fallbackUsed is false — terminal errors
+  // record failed attempts without claiming a fallback produced results.
   if (val.fallbackUsed) {
     if (val.attemptedModes.length === 0)
       ctx.addIssue({ code: "custom", message: "fallback requires non-empty attemptedModes", path: ["attemptedModes"] });
@@ -795,6 +794,9 @@ export const TOOL_DESCRIPTORS = [
         ctx.addIssue({ code: "custom", message: "missingIds must be unique", path: ["missingIds"] });
       // Disjoint
       const overlap = found.filter(id => missing.includes(id));
+      // foundIds must be non-empty (all-missing is an error, not a success)
+      if (found.length === 0)
+        ctx.addIssue({ code: "custom", message: "foundIds must be non-empty (all-missing must be an error)", path: ["foundIds"] });
       if (overlap.length > 0)
         ctx.addIssue({ code: "custom", message: `IDs in both foundIds and missingIds: ${overlap.join(", ")}`, path: ["foundIds"] });
       // entries IDs must exactly equal foundIds (same set, same count)
@@ -901,32 +903,33 @@ export const TOOL_DESCRIPTORS = [
         provenance?: { evidenceIds?: string[]; sourceReferences?: string[] };
         citedReferences?: string[];
       };
-      // Collect all known evidence IDs from envelope evidence + provenance
+      // Authoritative evidence set: envelope evidence ONLY (not provenance)
       const knownEvidence = new Set<string>();
       for (const e of (val.evidence as Array<{ id?: string }> | undefined) ?? [])
         if (e.id) knownEvidence.add(e.id);
-      for (const eid of data?.provenance?.evidenceIds ?? [])
-        knownEvidence.add(eid);
-      // Check acceptance criteria evidenceIds
+      // Check acceptance criteria evidenceIds against envelope evidence only
       for (const ac of data?.acceptanceCriteria ?? []) {
         for (const eid of ac.evidenceIds ?? []) {
           if (!knownEvidence.has(eid))
-            ctx.addIssue({ code: "custom", message: `acceptance criterion "${ac.id}" evidenceId "${eid}" not found in evidence`, path: ["data", "acceptanceCriteria"] });
+            ctx.addIssue({ code: "custom", message: `acceptance criterion "${ac.id}" evidenceId "${eid}" not found in envelope evidence`, path: ["data", "acceptanceCriteria"] });
         }
       }
-      // Check citedDecisions evidenceIds
+      // Check citedDecisions evidenceIds against envelope evidence only
       for (const cd of data?.citedDecisions ?? []) {
         for (const eid of cd.evidenceIds ?? []) {
           if (!knownEvidence.has(eid))
-            ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" evidenceId "${eid}" not found in evidence`, path: ["data", "citedDecisions"] });
+            ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" evidenceId "${eid}" not found in envelope evidence`, path: ["data", "citedDecisions"] });
         }
       }
-      // provenance.sourceReferences must match citedReferences
+      // provenance.evidenceIds must match envelope evidence IDs exactly (derived echo, not authority)
+      const provenanceEvIds = new Set(data?.provenance?.evidenceIds ?? []);
+      if (provenanceEvIds.size !== knownEvidence.size || ![...provenanceEvIds].every(id => knownEvidence.has(id)))
+        ctx.addIssue({ code: "custom", message: "provenance.evidenceIds must exactly match envelope evidence IDs", path: ["data", "provenance"] });
+      // provenance.sourceReferences must match citedReferences exactly
       const cited = new Set(data?.citedReferences ?? []);
-      for (const sr of data?.provenance?.sourceReferences ?? []) {
-        if (!cited.has(sr))
-          ctx.addIssue({ code: "custom", message: `provenance.sourceReferences "${sr}" not in citedReferences`, path: ["data", "provenance"] });
-      }
+      const sourceRefs = new Set(data?.provenance?.sourceReferences ?? []);
+      if (sourceRefs.size !== cited.size || ![...sourceRefs].every(id => cited.has(id)))
+        ctx.addIssue({ code: "custom", message: "provenance.sourceReferences must exactly match citedReferences", path: ["data", "provenance"] });
     },
   },
   {
@@ -1102,14 +1105,17 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
       if (new Set(val.referenceIds).size !== val.referenceIds.length)
         ctx.addIssue({ code: "custom", message: "referenceIds must be unique", path: ["referenceIds"] });
 
-      // 6. exact reference set equality (data IDs must also be unique)
+      // 6. reference set equality (allow repeated referenced IDs in data, compare as sets)
       const dataRefs = desc.extractRefs(val.data);
       const dataSet = new Set(dataRefs);
-      if (dataSet.size !== dataRefs.length)
-        ctx.addIssue({ code: "custom", message: "data contains duplicate IDs", path: ["data"] });
+      // Do NOT reject duplicate dataRefs — aggregation rows may share source IDs.
+      // Only reject duplicates for primary-ID tools (search/similar results, get id, compare entries)
+      const primaryIdTools = ["search_ui_references", "find_similar_ui_references", "get_ui_reference", "compare_ui_references"];
+      if (primaryIdTools.includes(desc.name) && dataSet.size !== dataRefs.length)
+        ctx.addIssue({ code: "custom", message: "data contains duplicate primary IDs", path: ["data"] });
       const refSet = new Set(val.referenceIds);
       if (dataSet.size !== refSet.size || ![...dataSet].every(id => refSet.has(id))) {
-        ctx.addIssue({ code: "custom", message: "referenceIds must exactly match data IDs", path: ["referenceIds"] });
+        ctx.addIssue({ code: "custom", message: "referenceIds must exactly match data IDs (as sets)", path: ["referenceIds"] });
       }
 
       // 7. evidence eligibility already enforced by schema shape

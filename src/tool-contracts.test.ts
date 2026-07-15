@@ -219,13 +219,17 @@ describe.each(TOOL_DESCRIPTORS)("tool: $name", (desc) => {
     }).success).toBe(false);
   });
 
-  it("non-evidence tool rejects evidence", () => {
+  it("non-evidence tool rejects evidence property", () => {
     if (desc.hasEvidence) return; // skip for evidence tools
-    // We can't easily build a valid success payload for every tool here,
-    // but we can verify the schema shape rejects evidence in the field definition
-    // by checking that evidence is optional/max(0)
-    // For a full test, we'd need tool-specific valid data
-    expect(desc.hasEvidence).toBe(false);
+    const payload = cloneToolResult(makeValidSuccess(desc.name));
+    (payload as Record<string, unknown>).evidence = [
+      { id: "e1", kind: "corpus-observation", referenceId: "ref-a", summary: "x", basis: "visible" },
+    ];
+    const result = schema.safeParse(payload);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(i => i.path[0] === "evidence")).toBe(true);
+    }
   });
 });
 

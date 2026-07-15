@@ -558,12 +558,16 @@ export const UiSpec = z.object({
 }).strict().superRefine((val, ctx) => {
   // Null colorTokens requires colorTokenAuthority "editorial" and an unavailableDecision for "color"
   if (val.colorTokens === null) {
+    if (val.colorTokenAuthority !== "editorial")
+      ctx.addIssue({ code: "custom", message: "null colorTokens requires colorTokenAuthority 'editorial'", path: ["colorTokenAuthority"] });
     const hasUnavailableColor = val.unavailableDecisions.some(d => d.field.includes("color"));
     if (!hasUnavailableColor)
       ctx.addIssue({ code: "custom", message: "null colorTokens requires an unavailableDecision for color", path: ["unavailableDecisions"] });
   }
-  // Null typographyTokens requires unavailableDecision for typography
+  // Null typographyTokens requires typographyTokenAuthority "editorial" and unavailableDecision for typography
   if (val.typographyTokens === null) {
+    if (val.typographyTokenAuthority !== "editorial")
+      ctx.addIssue({ code: "custom", message: "null typographyTokens requires typographyTokenAuthority 'editorial'", path: ["typographyTokenAuthority"] });
     const hasUnavailableType = val.unavailableDecisions.some(d => d.field.includes("typography") || d.field.includes("type"));
     if (!hasUnavailableType)
       ctx.addIssue({ code: "custom", message: "null typographyTokens requires an unavailableDecision for typography", path: ["unavailableDecisions"] });
@@ -593,6 +597,12 @@ export const UiSpec = z.object({
     const hasMotionUnavailable = val.unavailableDecisions.some(d => d.field.includes("motion"));
     if (!hasMotionUnavailable)
       ctx.addIssue({ code: "custom", message: "motionGuidance.evidenceUnavailable requires an unavailableDecision for motion", path: ["unavailableDecisions"] });
+  }
+  // citedDecision.sourceId must be in citedReferences
+  const refSet = new Set(val.citedReferences);
+  for (const cd of val.citedDecisions) {
+    if (cd.sourceId !== undefined && !refSet.has(cd.sourceId))
+      ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" sourceId "${cd.sourceId}" not in citedReferences`, path: ["citedDecisions"] });
   }
 });
 
@@ -882,6 +892,40 @@ export const TOOL_DESCRIPTORS = [
     errorSchema: makeErrorSchema(["INVALID_INPUT"]),
     extractRefs: (d) => (d as { citedReferences?: string[] })?.citedReferences ?? [],
     countResults: (d) => (d as { specVersion?: unknown })?.specVersion ? 1 : 0,
+    refineEnvelope: (val, ctx) => {
+      const data = val.data as {
+        acceptanceCriteria?: Array<{ id?: string; evidenceIds?: string[] }>;
+        citedDecisions?: Array<{ id?: string; evidenceIds?: string[] }>;
+        provenance?: { evidenceIds?: string[]; sourceReferences?: string[] };
+        citedReferences?: string[];
+      };
+      // Collect all known evidence IDs from envelope evidence + provenance
+      const knownEvidence = new Set<string>();
+      for (const e of (val.evidence as Array<{ id?: string }> | undefined) ?? [])
+        if (e.id) knownEvidence.add(e.id);
+      for (const eid of data?.provenance?.evidenceIds ?? [])
+        knownEvidence.add(eid);
+      // Check acceptance criteria evidenceIds
+      for (const ac of data?.acceptanceCriteria ?? []) {
+        for (const eid of ac.evidenceIds ?? []) {
+          if (!knownEvidence.has(eid))
+            ctx.addIssue({ code: "custom", message: `acceptance criterion "${ac.id}" evidenceId "${eid}" not found in evidence`, path: ["data", "acceptanceCriteria"] });
+        }
+      }
+      // Check citedDecisions evidenceIds
+      for (const cd of data?.citedDecisions ?? []) {
+        for (const eid of cd.evidenceIds ?? []) {
+          if (!knownEvidence.has(eid))
+            ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" evidenceId "${eid}" not found in evidence`, path: ["data", "citedDecisions"] });
+        }
+      }
+      // provenance.sourceReferences must match citedReferences
+      const cited = new Set(data?.citedReferences ?? []);
+      for (const sr of data?.provenance?.sourceReferences ?? []) {
+        if (!cited.has(sr))
+          ctx.addIssue({ code: "custom", message: `provenance.sourceReferences "${sr}" not in citedReferences`, path: ["data", "provenance"] });
+      }
+    },
   },
   {
     name: "research_ui_anti_patterns",

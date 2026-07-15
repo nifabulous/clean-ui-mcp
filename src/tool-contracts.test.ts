@@ -142,7 +142,7 @@ describe.each(TOOL_DESCRIPTORS)("tool: $name", (desc) => {
     const errorPayload = {
       tool: desc.name, schemaVersion: "1.0", status: "error" as const,
       summary: "test error", data: null, referenceIds: [],
-      retrieval: { mode: "none", modality: "none", resultCount: 5, fallbackUsed: false },
+      retrieval: { mode: "none", modality: "none", resultCount: 5, fallbackUsed: false, attemptedCount: 0, attemptedModes: [] },
       warnings: [],
       error: { code: "NOT_FOUND", message: "x", retryable: false },
     };
@@ -154,7 +154,7 @@ describe.each(TOOL_DESCRIPTORS)("tool: $name", (desc) => {
     const payload: Record<string, unknown> = {
       tool: desc.name, schemaVersion: "1.0", status: "error",
       summary: "x", data: null, referenceIds: [],
-      retrieval: { mode: "none", modality: "none", resultCount: 0, fallbackUsed: false },
+      retrieval: { mode: "none", modality: "none", resultCount: 0, fallbackUsed: false, attemptedCount: 0, attemptedModes: [] },
       warnings: [], error: { code: "NOT_FOUND", message: "x", retryable: false },
       unexpectedField: true,
     };
@@ -179,7 +179,7 @@ describe.each(TOOL_DESCRIPTORS)("tool: $name", (desc) => {
       const testParse = schema.safeParse({
         tool: desc.name, schemaVersion: "1.0", status: "error",
         summary: "x", data: null, referenceIds: [],
-        retrieval: { mode: "none", modality: "none", resultCount: 0, fallbackUsed: false },
+        retrieval: { mode: "none", modality: "none", resultCount: 0, fallbackUsed: false, attemptedCount: 0, attemptedModes: [] },
         warnings: [], error: { code: c, message: "x", retryable: c === "NOT_FOUND" || c === "INVALID_INPUT" ? false : true },
       });
       // Check if this error code passes (meaning it's valid for this tool)
@@ -189,7 +189,7 @@ describe.each(TOOL_DESCRIPTORS)("tool: $name", (desc) => {
     expect(schema.safeParse({
       tool: desc.name, schemaVersion: "1.0", status: "error",
       summary: "x", data: null, referenceIds: [],
-      retrieval: { mode: wrongMode, modality: wrongModality, resultCount: 0, fallbackUsed: false },
+      retrieval: { mode: wrongMode, modality: wrongModality, resultCount: 0, fallbackUsed: false, attemptedCount: 0, attemptedModes: [] },
       warnings: [], error: { code: validCode, message: "x", retryable },
     }).success).toBe(false);
   });

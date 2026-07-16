@@ -690,3 +690,37 @@ describe("adversarial probe matrix", () => {
     expect(ToolInputSchemas["research_ui_techniques"].parse({}).limit).toBe(15);
   });
 });
+
+// ---------------------------------------------------------------------------
+// R1: string min-length must run AFTER trim (whitespace-only inputs must fail)
+// ---------------------------------------------------------------------------
+
+describe("R1: trim-before-min ordering", () => {
+  it("plan_ui_direction rejects whitespace-only productContext (8 spaces)", () => {
+    // min(8) must run on the TRIMMED value, so 8 spaces → "" fails the check.
+    const r = ToolInputSchemas["plan_ui_direction"].safeParse({ productContext: "        " });
+    expect(r.success).toBe(false);
+  });
+
+  it("get_ui_reference rejects whitespace-only id (min 1)", () => {
+    const r = ToolInputSchemas["get_ui_reference"].safeParse({ id: "   " });
+    expect(r.success).toBe(false);
+  });
+
+  it("valid productContext passes and is trimmed", () => {
+    const r = ToolInputSchemas["plan_ui_direction"].safeParse({ productContext: "  analytics  " });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.productContext).toBe("analytics");
+  });
+
+  it("valid id passes and is trimmed", () => {
+    const r = ToolInputSchemas["get_ui_reference"].safeParse({ id: "  ref-a  " });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.id).toBe("ref-a");
+  });
+
+  it("productContext at exact min length (8 chars) passes", () => {
+    const r = ToolInputSchemas["plan_ui_direction"].safeParse({ productContext: "x".repeat(8) });
+    expect(r.success).toBe(true);
+  });
+});

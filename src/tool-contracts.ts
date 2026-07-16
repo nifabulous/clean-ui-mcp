@@ -106,10 +106,10 @@ export const EvidenceBasis = z.enum([
 ]);
 
 export const Evidence = z.object({
-  id: z.string().min(1).trim(),
-  referenceId: z.string().min(1).trim().optional(),
+  id: z.string().trim().min(1),
+  referenceId: z.string().trim().min(1).optional(),
   kind: EvidenceKind,
-  summary: z.string().min(1).trim(),
+  summary: z.string().trim().min(1),
   basis: EvidenceBasis,
 }).strict().superRefine((val, ctx) => {
   if (val.kind === "corpus-observation" && !val.referenceId)
@@ -140,23 +140,23 @@ const EvidenceArray = z.array(Evidence).superRefine((arr, ctx) => {
 
 const WarningBase = z.object({
   code: z.string().min(1),
-  message: z.string().min(1).trim(),
+  message: z.string().trim().min(1),
 }).strict();
 
 function makeWarningSchema<const T extends readonly string[]>(codes: T) {
   return z.array(z.object({
     code: z.enum(codes),
-    message: z.string().min(1).trim(),
+    message: z.string().trim().min(1),
   }).strict());
 }
 
 // --- Typed errors (discriminated union with code↔retryable binding) ---
 
 export const ToolErrorUnion = z.discriminatedUnion("code", [
-  z.object({ code: z.literal("NOT_FOUND"), message: z.string().min(1).trim(), retryable: z.literal(false) }).strict(),
-  z.object({ code: z.literal("INDEX_UNAVAILABLE"), message: z.string().min(1).trim(), retryable: z.literal(true) }).strict(),
-  z.object({ code: z.literal("PROVIDER_ERROR"), message: z.string().min(1).trim(), retryable: z.literal(true) }).strict(),
-  z.object({ code: z.literal("INVALID_INPUT"), message: z.string().min(1).trim(), retryable: z.literal(false) }).strict(),
+  z.object({ code: z.literal("NOT_FOUND"), message: z.string().trim().min(1), retryable: z.literal(false) }).strict(),
+  z.object({ code: z.literal("INDEX_UNAVAILABLE"), message: z.string().trim().min(1), retryable: z.literal(true) }).strict(),
+  z.object({ code: z.literal("PROVIDER_ERROR"), message: z.string().trim().min(1), retryable: z.literal(true) }).strict(),
+  z.object({ code: z.literal("INVALID_INPUT"), message: z.string().trim().min(1), retryable: z.literal(false) }).strict(),
 ]);
 
 const ERROR_RETRYABLE: Record<string, boolean> = {
@@ -170,7 +170,7 @@ function makeErrorSchema<const T extends readonly string[]>(codes: T) {
   // (Zod discriminatedUnion with mapped variants loses literal types; superRefine is cleaner)
   return z.object({
     code: z.enum(codes),
-    message: z.string().min(1).trim(),
+    message: z.string().trim().min(1),
     retryable: z.boolean(),
   }).strict().superRefine((val, ctx) => {
     const expected = ERROR_RETRYABLE[val.code];
@@ -184,15 +184,15 @@ function makeErrorSchema<const T extends readonly string[]>(codes: T) {
 // ===========================================================================
 
 const SourceRef = z.object({
-  productName: z.string().min(1).trim(),
+  productName: z.string().trim().min(1),
   url: z.string().nullable(),
   imageAvailable: z.boolean(),
 }).strict();
 
 const ReferenceSummary = z.object({
-  id: z.string().min(1).trim(),
-  title: z.string().min(1).trim(),
-  product: z.string().min(1).trim(),
+  id: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  product: z.string().trim().min(1),
   patternType: z.string().min(1),
   categories: z.array(z.string()),
   styleTags: z.array(z.string()),
@@ -205,9 +205,9 @@ const ReferenceSummary = z.object({
 }).strict();
 
 const SimilarReference = z.object({
-  id: z.string().min(1).trim(),
-  title: z.string().min(1).trim(),
-  product: z.string().min(1).trim(),
+  id: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  product: z.string().trim().min(1),
   patternType: z.string().min(1),
   categories: z.array(z.string()),
   styleTags: z.array(z.string()),
@@ -218,9 +218,9 @@ const SimilarReference = z.object({
 }).strict();
 
 const ComparisonRow = z.object({
-  id: z.string().min(1).trim(),
-  title: z.string().min(1).trim(),
-  product: z.string().min(1).trim(),
+  id: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  product: z.string().trim().min(1),
   patternType: z.string(),
   categories: z.array(z.string()),
   styleTags: z.array(z.string()),
@@ -243,9 +243,9 @@ const TaxonomyList = z.object({
 }).strict();
 
 const PatternGroupExemplar = z.object({
-  id: z.string().min(1).trim(),
-  title: z.string().min(1).trim(),
-  product: z.string().min(1).trim(),
+  id: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  product: z.string().trim().min(1),
   qualityScore: z.number().int(),
   critique: z.string(),
 }).strict();
@@ -268,26 +268,26 @@ const PaletteTokens = z.object({
 const PaletteRecord = z.object({
   tokens: PaletteTokens,
   accentHue: z.number(),
-  product: z.string().min(1).trim(),
-  sourceId: z.string().min(1).trim(),
+  product: z.string().trim().min(1),
+  sourceId: z.string().trim().min(1),
   patternType: z.string().min(1),
 }).strict();
 
 const TechniqueRow = z.object({
-  text: z.string().min(1).trim(),
-  source: z.object({ id: z.string().min(1).trim(), product: z.string().min(1).trim() }).strict(),
+  text: z.string().trim().min(1),
+  source: z.object({ id: z.string().trim().min(1), product: z.string().trim().min(1) }).strict(),
 }).strict();
 
 const AntiPatternRow = z.object({
-  text: z.string().min(1).trim(),
+  text: z.string().trim().min(1),
   sourceIds: z.array(z.string().min(1)),
   count: z.number().int(),
 }).strict();
 
 const FullReference = z.object({
-  id: z.string().min(1).trim(),
-  title: z.string().min(1).trim(),
-  product: z.string().min(1).trim(),
+  id: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  product: z.string().trim().min(1),
   patternType: z.string(),
   categories: z.array(z.string()),
   styleTags: z.array(z.string()),
@@ -407,39 +407,39 @@ const AcceptancePriority = z.enum(["must", "should"]);
 
 const AcceptanceCriterion = z.discriminatedUnion("verifier", [
   z.object({
-    id: z.string().min(1).trim(),
-    subject: z.string().min(1).trim(),
+    id: z.string().trim().min(1),
+    subject: z.string().trim().min(1),
     assertion: AcceptanceAssertion,
-    expectedOutcome: z.string().min(1).trim(),
+    expectedOutcome: z.string().trim().min(1),
     verifier: z.literal("axe"),
     priority: AcceptancePriority,
     evidenceIds: z.array(z.string()),
   }).strict(),
   z.object({
-    id: z.string().min(1).trim(),
-    subject: z.string().min(1).trim(),
+    id: z.string().trim().min(1),
+    subject: z.string().trim().min(1),
     assertion: AcceptanceAssertion,
-    expectedOutcome: z.string().min(1).trim(),
+    expectedOutcome: z.string().trim().min(1),
     verifier: z.literal("playwright"),
     priority: AcceptancePriority,
     evidenceIds: z.array(z.string()),
     selector: z.string().min(1),
   }).strict(),
   z.object({
-    id: z.string().min(1).trim(),
-    subject: z.string().min(1).trim(),
+    id: z.string().trim().min(1),
+    subject: z.string().trim().min(1),
     assertion: AcceptanceAssertion,
-    expectedOutcome: z.string().min(1).trim(),
+    expectedOutcome: z.string().trim().min(1),
     verifier: z.literal("static-analysis"),
     priority: AcceptancePriority,
     evidenceIds: z.array(z.string()),
     command: z.string().min(1),
   }).strict(),
   z.object({
-    id: z.string().min(1).trim(),
-    subject: z.string().min(1).trim(),
+    id: z.string().trim().min(1),
+    subject: z.string().trim().min(1),
     assertion: AcceptanceAssertion,
-    expectedOutcome: z.string().min(1).trim(),
+    expectedOutcome: z.string().trim().min(1),
     verifier: z.literal("manual"),
     priority: AcceptancePriority,
     evidenceIds: z.array(z.string()),
@@ -448,8 +448,8 @@ const AcceptanceCriterion = z.discriminatedUnion("verifier", [
 ]);
 
 const CitedDecision = z.object({
-  id: z.string().min(1).trim(),
-  field: z.string().min(1).trim(),
+  id: z.string().trim().min(1),
+  field: z.string().trim().min(1),
   authority: z.enum(["team-design-system", "project-constraint", "corpus-evidence", "editorial"]),
   evidenceIds: z.array(z.string()),
   readiness: z.enum(["available", "proposed", "unavailable"]),
@@ -495,45 +495,45 @@ const AuthorityLanes = z.object({
 }).strict();
 
 const LayoutRegion = z.object({
-  name: z.string().min(1).trim(),
-  type: z.string().min(1).trim(),
+  name: z.string().trim().min(1),
+  type: z.string().trim().min(1),
   components: z.array(z.string()),
   responsive: z.array(z.string()),
 }).strict();
 
 const ComponentEntry = z.object({
-  name: z.string().min(1).trim(),
-  pattern: z.string().min(1).trim(),
+  name: z.string().trim().min(1),
+  pattern: z.string().trim().min(1),
   sourceId: z.string().optional(),
 }).strict();
 
 const TechniqueEntry = z.object({
-  text: z.string().min(1).trim(),
+  text: z.string().trim().min(1),
   sourceIds: z.array(z.string()),
 }).strict();
 
 const AntiPatternEntry = z.object({
-  text: z.string().min(1).trim(),
+  text: z.string().trim().min(1),
   sourceIds: z.array(z.string()),
 }).strict();
 
 const UnavailableDecision = z.object({
-  field: z.string().min(1).trim(),
-  reason: z.string().min(1).trim(),
+  field: z.string().trim().min(1),
+  reason: z.string().trim().min(1),
 }).strict();
 
 const SpecContext = z.object({
-  productContext: z.string().min(1).trim(),
+  productContext: z.string().trim().min(1),
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
   implementationFramework: z.string().optional(),
   designSystem: DesignSystemIdentity.optional(),
-  constraints: z.array(z.string().min(1).trim()).default([]),
+  constraints: z.array(z.string().trim().min(1)).default([]),
 }).strict();
 
 export const UiSpec = z.object({
   specVersion: z.literal("1.0"),
   context: SpecContext,
-  designDirection: z.string().min(1).trim(),
+  designDirection: z.string().trim().min(1),
   rejectedDefaults: z.array(z.string()),
   layoutRegions: z.array(LayoutRegion),
   responsiveBehavior: z.array(z.string()),
@@ -658,26 +658,26 @@ export const SearchInput = z.object({
   responseFormat: z.enum(["concise", "detailed"]).optional(),
 }).strict();
 
-const IdInput = z.object({ id: z.string().min(1).trim() }).strict();
-const SimilarInput = z.object({ id: z.string().min(1).trim(), limit: z.number().int().min(1).max(20).default(5) }).strict();
+const IdInput = z.object({ id: z.string().trim().min(1) }).strict();
+const SimilarInput = z.object({ id: z.string().trim().min(1), limit: z.number().int().min(1).max(20).default(5) }).strict();
 const CompareInput = z.object({
-  ids: z.array(z.string().min(1).trim()).min(2).max(3).refine(a => new Set(a).size === a.length, "ids must be unique"),
+  ids: z.array(z.string().trim().min(1)).min(2).max(3).refine(a => new Set(a).size === a.length, "ids must be unique"),
   responseFormat: z.enum(["concise", "detailed"]).optional(),
 }).strict();
 
 export const CreateUiSpecInput = z.object({
-  productContext: z.string().min(8).trim(),
-  referenceIds: z.array(z.string().min(1).trim()).max(5).default([])
+  productContext: z.string().trim().min(8),
+  referenceIds: z.array(z.string().trim().min(1)).max(5).default([])
     .refine(a => new Set(a).size === a.length, "referenceIds must be unique"),
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
   implementationFramework: z.string().optional(),
   serializationFormat: z.enum(["brief", "tokens"]).default("brief"),
   designSystem: DesignSystemIdentity.optional(),
-  constraints: z.array(z.string().min(1).trim()).default([]),
+  constraints: z.array(z.string().trim().min(1)).default([]),
 }).strict();
 
 const PlanInput = z.object({
-  productContext: z.string().min(8).trim(),
+  productContext: z.string().trim().min(8),
   category: Category.optional(), styleTag: StyleTag.optional(),
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
   qualityTier: z.enum(["exceptional", "cautionary"]).default("exceptional"),
@@ -705,17 +705,17 @@ const TechniqueInput = z.object({
 // ===========================================================================
 
 const PlanDecision = z.object({
-  field: z.string().min(1).trim(), value: z.string().min(1).trim(),
+  field: z.string().trim().min(1), value: z.string().trim().min(1),
   // plan has no designSystem context, so team-design-system authority is not available here
   authority: z.enum(["project-constraint", "corpus-evidence", "editorial"]),
   evidenceIds: z.array(z.string()),
 }).strict();
 
 const PlanDataSchema = z.object({
-  direction: z.string().min(1).trim(),
+  direction: z.string().trim().min(1),
   rejectedDefaults: z.array(z.string()),
-  recommendation: z.string().min(1).trim(),
-  rationale: z.string().min(1).trim(),
+  recommendation: z.string().trim().min(1),
+  rationale: z.string().trim().min(1),
   evidenceContributions: z.array(z.string()),
   structuredDecisions: z.array(PlanDecision),
 }).strict();
@@ -1375,7 +1375,7 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
     tool: z.literal(desc.name),
     schemaVersion: z.literal("1.0"),
     status: z.enum(["ok", "error"]),
-    summary: z.string().min(1).trim(),
+    summary: z.string().trim().min(1),
     data: desc.dataSchema.nullable(),
     referenceIds: z.array(z.string().min(1)),
     retrieval: RetrievalState,

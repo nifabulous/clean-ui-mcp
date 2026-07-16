@@ -9,6 +9,7 @@ import {
 import {
   VALID_TOOL_INPUTS, makeValidSuccess, makeValidError, cloneToolResult,
 } from "./__fixtures__/tool-contract-fixtures.js";
+import type { JsonObject } from "./__fixtures__/tool-contract-fixtures.js";
 
 // ---------------------------------------------------------------------------
 // Descriptor completeness
@@ -849,5 +850,183 @@ describe("R3 anti-regression: search dup primary row still fails", () => {
     payload.retrieval.resultCount = 2;
     const r = ToolResultSchemas.search_ui_references.safeParse(payload);
     expect(r.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R4: evidence-kind authority prerequisites.
+// Bug: the create_ui_spec authority prerequisite checks verified ONLY lane
+// membership (authorityLanes.corpusEvidence / editorialGuidance). A lying lane
+// assignment — e.g. an editorial-guidance-kind evidence item placed in the
+// corpusEvidence lane and cited by a corpus-evidence decision — was accepted.
+// The fix verifies the actual envelope evidence kind backing each citedDecision.
+// ---------------------------------------------------------------------------
+
+describe("R4: evidence-kind authority prerequisites", () => {
+  // Helper: add an editorial-guidance evidence item to the create_ui_spec fixture.
+  function addEditorialEvidence(p: ReturnType<typeof cloneToolResult<JsonObject>>) {
+    const env = p as unknown as {
+      evidence: Array<Record<string, unknown>>;
+      data: {
+        provenance: { evidenceIds: string[] };
+        citedDecisions: Array<Record<string, unknown>>;
+        authorityLanes: { corpusEvidence: string[]; machineRules: string[]; editorialGuidance: string[] };
+      };
+    };
+    env.evidence.push({
+      id: "evidence-edit-lie", kind: "editorial-guidance",
+      summary: "Editorial opinion about accent color", basis: "editorial",
+    });
+    // provenance.evidenceIds must exactly match envelope evidence IDs
+    env.data.provenance.evidenceIds = ["evidence-corpus-a", "evidence-edit-lie"];
+    return env;
+  }
+
+  it("rejects corpus-evidence decision backed only by editorial-guidance-kind evidence (lying lane)", () => {
+    const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as unknown as ReturnType<typeof cloneToolResult<JsonObject>>;
+    const env = addEditorialEvidence(p);
+    // corpus-evidence decision backed ONLY by the editorial-guidance evidence
+    env.data.citedDecisions = [{
+      id: "cd-lie", field: "color-accent", authority: "corpus-evidence",
+      evidenceIds: ["evidence-edit-lie"], readiness: "available", sourceId: "ref-a",
+    }];
+    // Lying partition: editorial evidence placed in the corpus lane
+    env.data.authorityLanes = {
+      corpusEvidence: ["evidence-corpus-a", "evidence-edit-lie"],
+      machineRules: [], editorialGuidance: [],
+    };
+    // colorTokenAuthority is corpus-evidence in the fixture; the valid corpus decision
+    // (cd1) was removed above, so add a corpus-observation-backed color decision to
+    // keep colorTokenAuthority valid and isolate the failure to cd-lie.
+    env.data.citedDecisions.unshift({
+      id: "cd-color", field: "color-primary", authority: "corpus-evidence",
+      evidenceIds: ["evidence-corpus-a"], readiness: "available", sourceId: "ref-a",
+    });
+    const r = ToolResultSchemas.create_ui_spec.safeParse(p);
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some(i => /cd-lie.*corpus-evidence/i.test(i.message) || /authority.*evidence.*kind/i.test(i.message))).toBe(true);
+    }
+  });
+
+  it("anti-regression: corpus-evidence decision backed by corpus-observation-kind evidence passes", () => {
+    // The valid fixture already models this (cd1 cites evidence-corpus-a, kind corpus-observation).
+    const p = cloneToolResult(makeValidSuccess("create_ui_spec"));
+    const r = ToolResultSchemas.create_ui_spec.safeParse(p);
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects editorial decision backed only by corpus-observation-kind evidence", () => {
+    const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as unknown as ReturnType<typeof cloneToolResult<JsonObject>>;
+    const data = (p as unknown as { data: {
+      citedDecisions: Array<Record<string, unknown>>;
+      authorityLanes: { corpusEvidence: string[]; machineRules: string[]; editorialGuidance: string[] };
+    } }).data;
+    // editorial decision backed ONLY by the corpus-observation evidence
+    data.citedDecisions = [{
+      id: "cd-bad-edit", field: "color-accent", authority: "editorial",
+      evidenceIds: ["evidence-corpus-a"], readiness: "available",
+    }];
+    // Place the corpus-observation evidence in the editorial lane (lying partition)
+    data.authorityLanes = {
+      corpusEvidence: [], machineRules: [],
+      editorialGuidance: ["evidence-corpus-a"],
+    };
+    const r = ToolResultSchemas.create_ui_spec.safeParse(p);
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some(i => /cd-bad-edit.*editorial/i.test(i.message) || /authority.*evidence.*kind/i.test(i.message))).toBe(true);
+    }
+  });
+
+  it("rejects kind/lane disagreement: corpus-observation evidence in editorial lane cited by corpus-evidence decision", () => {
+    const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as unknown as ReturnType<typeof cloneToolResult<JsonObject>>;
+    const data = (p as unknown as { data: {
+      citedDecisions: Array<Record<string, unknown>>;
+      authorityLanes: { corpusEvidence: string[]; machineRules: string[]; editorialGuidance: string[] };
+    } }).data;
+    // corpus-evidence decision backed by corpus-observation evidence (kind is correct)
+    data.citedDecisions = [{
+      id: "cd-disagree", field: "color-primary", authority: "corpus-evidence",
+      evidenceIds: ["evidence-corpus-a"], readiness: "available", sourceId: "ref-a",
+    }];
+    // BUT place that corpus-observation evidence in the WRONG (editorial) lane
+    data.authorityLanes = {
+      corpusEvidence: [], machineRules: [],
+      editorialGuidance: ["evidence-corpus-a"],
+    };
+    const r = ToolResultSchemas.create_ui_spec.safeParse(p);
+    expect(r.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R4 Part C: authorityConflict warning for same-field conflicting authorities.
+// Two citedDecisions for the SAME exact field but DIFFERENT authority lanes is a
+// conflict; the artifact must declare an authorityConflict warning. If absent,
+// the spec is rejected. If present, it is accepted.
+// ---------------------------------------------------------------------------
+
+describe("R4 Part C: authorityConflict warning", () => {
+  // Build a spec with two decisions for field "color-accent" with conflicting
+  // authorities, each backed by the correct evidence kind/lane.
+  function conflictingSpec(): JsonObject {
+    const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as JsonObject;
+    const env = p as unknown as {
+      evidence: Array<Record<string, unknown>>;
+      data: {
+        provenance: { evidenceIds: string[] };
+        citedDecisions: Array<Record<string, unknown>>;
+        authorityLanes: { corpusEvidence: string[]; machineRules: string[]; editorialGuidance: string[] };
+      };
+    };
+    // Add an editorial-guidance evidence item alongside the existing corpus-observation one.
+    env.evidence.push({
+      id: "evidence-edit", kind: "editorial-guidance",
+      summary: "Editorial accent guidance", basis: "editorial",
+    });
+    env.data.provenance.evidenceIds = ["evidence-corpus-a", "evidence-edit"];
+    // Two decisions for the SAME exact field with different authorities.
+    env.data.citedDecisions = [
+      { id: "cd-corpus", field: "color-accent", authority: "corpus-evidence", evidenceIds: ["evidence-corpus-a"], readiness: "available", sourceId: "ref-a" },
+      { id: "cd-edit", field: "color-accent", authority: "editorial", evidenceIds: ["evidence-edit"], readiness: "available" },
+    ];
+    env.data.authorityLanes = {
+      corpusEvidence: ["evidence-corpus-a"], machineRules: [],
+      editorialGuidance: ["evidence-edit"],
+    };
+    return p;
+  }
+
+  it("rejects same-field conflicting authorities without authorityConflict warning", () => {
+    const p = conflictingSpec();
+    const r = ToolResultSchemas.create_ui_spec.safeParse(p);
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some(i => /authorityConflict/i.test(i.message))).toBe(true);
+    }
+  });
+
+  it("accepts same-field conflicting authorities WITH authorityConflict warning", () => {
+    const p = conflictingSpec();
+    (p as unknown as { warnings: Array<Record<string, unknown>> }).warnings.push({
+      code: "authorityConflict", message: "Conflicting authority lanes for field color-accent",
+    });
+    const r = ToolResultSchemas.create_ui_spec.safeParse(p);
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects authorityConflict warning without an actual conflict (no false conflicts)", () => {
+    // The valid fixture has a single color-primary decision (no conflict), so
+    // emitting authorityConflict should be rejected.
+    const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as JsonObject;
+    (p as unknown as { warnings: Array<Record<string, unknown>> }).warnings.push({
+      code: "authorityConflict", message: "bogus conflict",
+    });
+    const r = ToolResultSchemas.create_ui_spec.safeParse(p);
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some(i => /authorityConflict/i.test(i.message))).toBe(true);
+    }
   });
 });

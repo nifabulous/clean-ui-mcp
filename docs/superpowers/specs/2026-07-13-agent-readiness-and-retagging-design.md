@@ -556,7 +556,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 | Empty | n/a — synthesis produces one spec artifact or errors |
 | Partial | sparseCoverage / insufficientCorpusEvidence / motionEvidenceUnavailable typed warnings; null tokens require editorial authority + unavailableDecision |
 | Errors | INVALID_INPUT (non-retryable) |
-| Warnings | sparseCoverage, insufficientCorpusEvidence, motionEvidenceUnavailable |
+| Warnings | sparseCoverage, insufficientCorpusEvidence, motionEvidenceUnavailable, authorityConflict |
 | Retrieval | none/none |
 | Evidence | required (plan/spec/critique) (corpus-observation, machine-rule, editorial-guidance) |
 | resultCount | 1 when a complete spec artifact exists, otherwise 0 |

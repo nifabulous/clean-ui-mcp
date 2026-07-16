@@ -1061,7 +1061,7 @@ export const TOOL_DESCRIPTORS = [
     retrieval: [{ mode: "none", modality: "none" }],
     allowedAttemptedModes: [],
     evidenceKinds: [...ALL_SYNTHESIS_KINDS],
-    warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "motionEvidenceUnavailable"]),
+    warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "motionEvidenceUnavailable", "authorityConflict"]),
     errorSchema: makeErrorSchema(["INVALID_INPUT"]),
     contractDocs: {
       input: "productContext (required, min 8), referenceIds? (max 5), platform?, implementationFramework?, serializationFormat (default brief)?, designSystem?, constraints?",
@@ -1126,6 +1126,70 @@ export const TOOL_DESCRIPTORS = [
           { path: ["data", "authorityLanes", "editorialGuidance"], ids: lanes.editorialGuidance ?? [] },
         ], ctx);
       }
+      // --- R4: Evidence-kind authority prerequisites. ---
+      // The envelope evidence[] array is the authority for evidence KINDS. The
+      // authorityLanes are a partition of evidence IDs, but a lying partition
+      // (e.g. an editorial-guidance-kind evidence item placed in the corpusEvidence
+      // lane) must NOT authorize a corpus-evidence decision. For each citedDecision,
+      // verify BOTH that at least one referenced evidence item has the kind matching
+      // the claimed authority AND that the referenced evidence ID sits in the lane
+      // matching that authority. The lane-membership checks in UiSpec.superRefine
+      // cover the lane side; here we verify the kind side and the lane/kind agreement
+      // (a corpus-observation item placed in the editorial lane is an inconsistency).
+      const evidenceKindById = new Map<string, string>();
+      for (const e of (val.evidence as Array<{ id?: string; kind?: string }> | undefined) ?? [])
+        if (e.id) evidenceKindById.set(e.id, e.kind ?? "");
+      const corpusLane = new Set(lanes?.corpusEvidence ?? []);
+      const editorialLane = new Set(lanes?.editorialGuidance ?? []);
+      for (const cd of (data?.citedDecisions as Array<{ id?: string; authority?: string; evidenceIds?: string[] }> | undefined) ?? []) {
+        const evIds = cd.evidenceIds ?? [];
+        if (cd.authority === "corpus-evidence") {
+          // At least one referenced evidence item must be kind corpus-observation.
+          const hasCorpusKind = evIds.some(eid => evidenceKindById.get(eid) === "corpus-observation");
+          if (!hasCorpusKind)
+            ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has corpus-evidence authority but no referenced evidence of kind corpus-observation`, path: ["data", "citedDecisions"] });
+          // Lane/kind consistency: every referenced corpus-observation evidence must
+          // sit in the corpusEvidence lane (a corpus item in the editorial lane is an
+          // inconsistent partition).
+          for (const eid of evIds) {
+            if (evidenceKindById.get(eid) === "corpus-observation" && !corpusLane.has(eid))
+              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" references corpus-observation evidence "${eid}" but it is not in the corpusEvidence lane`, path: ["data", "citedDecisions"] });
+          }
+        } else if (cd.authority === "editorial") {
+          // At least one referenced evidence item must be kind editorial-guidance.
+          const hasEditorialKind = evIds.some(eid => evidenceKindById.get(eid) === "editorial-guidance");
+          if (!hasEditorialKind)
+            ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has editorial authority but no referenced evidence of kind editorial-guidance`, path: ["data", "citedDecisions"] });
+          // Lane/kind consistency: every referenced editorial-guidance evidence must
+          // sit in the editorialGuidance lane.
+          for (const eid of evIds) {
+            if (evidenceKindById.get(eid) === "editorial-guidance" && !editorialLane.has(eid))
+              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" references editorial-guidance evidence "${eid}" but it is not in the editorialGuidance lane`, path: ["data", "citedDecisions"] });
+          }
+        }
+      }
+      // --- R4 Part C: same-field conflicting authority lanes require an
+      // authorityConflict warning. Two citedDecisions for the SAME exact field
+      // but DIFFERENT authority constitute a conflict; the artifact must declare
+      // an authorityConflict warning. A spurious authorityConflict warning with no
+      // underlying conflict is also rejected. ---
+      const conflictFields = new Set<string>();
+      const fieldAuthorities = new Map<string, Set<string>>();
+      for (const cd of (data?.citedDecisions as Array<{ field?: string; authority?: string }> | undefined) ?? []) {
+        if (!cd.field || !cd.authority) continue;
+        let auths = fieldAuthorities.get(cd.field);
+        if (!auths) { auths = new Set<string>(); fieldAuthorities.set(cd.field, auths); }
+        auths.add(cd.authority);
+      }
+      for (const [field, auths] of fieldAuthorities) {
+        if (auths.size > 1) conflictFields.add(field);
+      }
+      const warnings = val.warnings as Array<{ code?: string }>;
+      const hasConflictWarn = warnings.some(w => w.code === "authorityConflict");
+      if (conflictFields.size > 0 && !hasConflictWarn)
+        ctx.addIssue({ code: "custom", message: `citedDecisions have conflicting authority lanes for field(s): ${[...conflictFields].join(", ")} — requires authorityConflict warning`, path: ["warnings"] });
+      if (conflictFields.size === 0 && hasConflictWarn)
+        ctx.addIssue({ code: "custom", message: "authorityConflict warning present but no citedDecisions have conflicting authority lanes", path: ["warnings"] });
       // Check techniques sourceIds against citedReferences
       for (const tech of data?.techniques ?? []) {
         for (const sid of tech.sourceIds ?? []) {

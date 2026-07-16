@@ -150,13 +150,29 @@ function makeWarningSchema<const T extends readonly string[]>(codes: T) {
   }).strict());
 }
 
-// --- Typed errors (discriminated union with code↔retryable binding) ---
+// --- Typed errors (literal-variant union with code↔retryable binding) ---
+//
+// Each application error code is a single Zod object variant where BOTH `code`
+// and `retryable` are literal — so the binding is enforced at the TYPE level
+// (a `NOT_FOUND` with `retryable:true` is a compile error) AND at runtime (the
+// literal schema rejects it during parse). makeErrorSchema(codes) selects the
+// requested variants and returns a Zod union over them. Tools with no
+// application errors use z.never().optional().
+
+const NonEmptyText = z.string().trim().min(1);
+
+const ERROR_VARIANTS = {
+  NOT_FOUND: z.object({ code: z.literal("NOT_FOUND"), message: NonEmptyText, retryable: z.literal(false) }).strict(),
+  INDEX_UNAVAILABLE: z.object({ code: z.literal("INDEX_UNAVAILABLE"), message: NonEmptyText, retryable: z.literal(true) }).strict(),
+  PROVIDER_ERROR: z.object({ code: z.literal("PROVIDER_ERROR"), message: NonEmptyText, retryable: z.literal(true) }).strict(),
+  INVALID_INPUT: z.object({ code: z.literal("INVALID_INPUT"), message: NonEmptyText, retryable: z.literal(false) }).strict(),
+} as const;
 
 export const ToolErrorUnion = z.discriminatedUnion("code", [
-  z.object({ code: z.literal("NOT_FOUND"), message: z.string().trim().min(1), retryable: z.literal(false) }).strict(),
-  z.object({ code: z.literal("INDEX_UNAVAILABLE"), message: z.string().trim().min(1), retryable: z.literal(true) }).strict(),
-  z.object({ code: z.literal("PROVIDER_ERROR"), message: z.string().trim().min(1), retryable: z.literal(true) }).strict(),
-  z.object({ code: z.literal("INVALID_INPUT"), message: z.string().trim().min(1), retryable: z.literal(false) }).strict(),
+  ERROR_VARIANTS.NOT_FOUND,
+  ERROR_VARIANTS.INDEX_UNAVAILABLE,
+  ERROR_VARIANTS.PROVIDER_ERROR,
+  ERROR_VARIANTS.INVALID_INPUT,
 ]);
 
 const ERROR_RETRYABLE: Record<string, boolean> = {
@@ -165,18 +181,21 @@ const ERROR_RETRYABLE: Record<string, boolean> = {
 };
 export { ERROR_RETRYABLE };
 
-function makeErrorSchema<const T extends readonly string[]>(codes: T) {
-  // Build error schema with code↔retryable binding via superRefine
-  // (Zod discriminatedUnion with mapped variants loses literal types; superRefine is cleaner)
-  return z.object({
-    code: z.enum(codes),
-    message: z.string().trim().min(1),
-    retryable: z.boolean(),
-  }).strict().superRefine((val, ctx) => {
-    const expected = ERROR_RETRYABLE[val.code];
-    if (expected !== undefined && val.retryable !== expected)
-      ctx.addIssue({ code: "custom", message: `error code "${val.code}" must have retryable: ${expected}`, path: ["retryable"] });
-  });
+// Union of all error code literals — used to constrain makeErrorSchema's input.
+type ErrorCode = keyof typeof ERROR_VARIANTS;
+
+/**
+ * Build a per-tool error schema as a literal-variant union. `code` AND
+ * `retryable` are literal per variant, so the inferred TS type is a precise
+ * discriminated union (e.g. `{ code: "NOT_FOUND"; retryable: false } | ...`).
+ * Codes appear in the union in the order given, preserving deterministic docs
+ * output. A single code yields that variant directly (no union wrapper).
+ */
+function makeErrorSchema<const T extends readonly ErrorCode[]>(codes: T) {
+  if (codes.length === 0) return z.never().optional();
+  const variants = codes.map(c => ERROR_VARIANTS[c]);
+  if (variants.length === 1) return variants[0]!;
+  return z.union([variants[0]!, variants[1]!, ...variants.slice(2)]);
 }
 
 // ===========================================================================
@@ -762,6 +781,13 @@ export interface ToolDescriptor {
   readonly evidenceKinds: readonly string[];
   readonly warningSchema: z.ZodType;
   readonly errorSchema: z.ZodType;
+  /**
+   * The literal error codes this tool may emit, as a readonly tuple. This is
+   * the TYPE-LEVEL source for per-tool error inference (the `errorSchema`
+   * field is typed `z.ZodType` for structural use and would widen the literal
+   * `retryable` binding). Order is preserved for deterministic docs output.
+   */
+  readonly errorCodes: readonly ErrorCode[];
   /** Authoritative §5.5 prose rows — drives renderToolContractReference(). */
   readonly contractDocs: ToolContractDocs;
   /**
@@ -804,6 +830,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage", "keywordFallback"]),
     errorSchema: makeErrorSchema(["NOT_FOUND", "PROVIDER_ERROR"]),
+    errorCodes: ["NOT_FOUND", "PROVIDER_ERROR"],
     contractDocs: {
       input: "query?, category?, styleTag?, patternType?, minQuality (1-5)?, qualityTier?, reviewStatus?, platform?, limit (1-20, default 5)?, responseFormat?",
       successData: "`results: ReferenceSummary[]` — each with id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url required-but-nullable, imageAvailable), critique excerpt, topTechniques, antiPatterns",
@@ -834,6 +861,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema([]),
     errorSchema: makeErrorSchema(["NOT_FOUND"]),
+    errorCodes: ["NOT_FOUND"],
     contractDocs: {
       input: "id (required)",
       successData: "full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability",
@@ -862,6 +890,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["keywordFallback", "sparseCoverage"]),
     errorSchema: makeErrorSchema(["NOT_FOUND", "PROVIDER_ERROR"]),
+    errorCodes: ["NOT_FOUND", "PROVIDER_ERROR"],
     contractDocs: {
       input: "id (required), limit (1-20, default 5)?",
       successData: "`results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques",
@@ -896,6 +925,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["partialResult"]),
     errorSchema: makeErrorSchema(["NOT_FOUND"]),
+    errorCodes: ["NOT_FOUND"],
     contractDocs: {
       input: "ids (required, 2-3 unique), responseFormat?",
       successData: "`entries: ComparisonRow[]`, `foundIds`, `missingIds` — each row with id, title, product, patternType, categories, styleTags, platform, layout, accent, density, corners, quality, critiqueAngle, topTechnique, antiPatterns, whereItFails, accessibility",
@@ -957,6 +987,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema([]),
     errorSchema: makeErrorSchema([]),
+    errorCodes: [],
     contractDocs: {
       input: "none",
       successData: "`patternTypes`, `categories`, `styleTags` (each `{count, values}`), optional `components`, `domainTags`",
@@ -995,6 +1026,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage"]),
     errorSchema: makeErrorSchema([]),
+    errorCodes: [],
     contractDocs: {
       input: "styleTag?",
       successData: "`patterns: PatternGroup[]` — each with patternType, count, topProducts (array), exemplar (id, title, product, qualityScore, critique)",
@@ -1031,6 +1063,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [...ALL_SYNTHESIS_KINDS],
     warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "noCorpusIndex"]),
     errorSchema: makeErrorSchema(["PROVIDER_ERROR"]),
+    errorCodes: ["PROVIDER_ERROR"],
     contractDocs: {
       input: "productContext (required, min 8), category?, styleTag?, platform?, qualityTier? (default exceptional), framework? (brief/tokens), count (1-5, default 3)?",
       successData: "`direction`, `rejectedDefaults`, `recommendation`, `rationale`, `evidenceContributions`, `structuredDecisions`",
@@ -1063,6 +1096,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [...ALL_SYNTHESIS_KINDS],
     warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "motionEvidenceUnavailable", "authorityConflict"]),
     errorSchema: makeErrorSchema(["INVALID_INPUT"]),
+    errorCodes: ["INVALID_INPUT"],
     contractDocs: {
       input: "productContext (required, min 8), referenceIds? (max 5), platform?, implementationFramework?, serializationFormat (default brief)?, designSystem?, constraints?",
       successData: "see §5.4 — UiSpec with layoutRegions, colorTokens, typographyTokens, acceptanceCriteria (verifiers: axe, playwright, static-analysis, manual), citedReferences, citedDecisions, authorityLanes, provenance",
@@ -1239,6 +1273,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage"]),
     errorSchema: makeErrorSchema([]),
+    errorCodes: [],
     contractDocs: {
       input: "patternType?, category?, limit (1-20, default 10)?",
       successData: "`results: AntiPatternRow[]` — each with text, sourceIds, count",
@@ -1266,6 +1301,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage"]),
     errorSchema: makeErrorSchema([]),
+    errorCodes: [],
     contractDocs: {
       input: "patternType?, styleTag?, limit (1-20, default 10)?",
       successData: "`results: PaletteRecord[]` — each with tokens (canvas, surface, ink, muted, accent), accentHue, product, sourceId, patternType",
@@ -1293,6 +1329,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage"]),
     errorSchema: makeErrorSchema([]),
+    errorCodes: [],
     contractDocs: {
       input: "patternType?, styleTag?, limit (1-30, default 15)?",
       successData: "`results: TechniqueRow[]` — each with text, source (id, product)",
@@ -1324,6 +1361,7 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [...CRITIQUE_KINDS],
     warningSchema: makeWarningSchema(["insufficientCorpusEvidence", "providerDegraded"]),
     errorSchema: makeErrorSchema(["PROVIDER_ERROR", "INVALID_INPUT"]),
+    errorCodes: ["PROVIDER_ERROR", "INVALID_INPUT"],
     contractDocs: {
       input: "image_data (required), image_mime_type (required), product_context?, platform?, framework? — reuses `CRITIQUE_UI_INPUT_SCHEMA` from `synthesis/contracts.ts`",
       successData: "reuses `StructuredCritique` fields: observations, recommendations, accessibilityRisks, visualSlop, motion, appliedReferences, evidenceIds, confidence, md3?",
@@ -1430,7 +1468,33 @@ export const ToolDataSchemas = Object.fromEntries(
 
 export type ToolInputByName<N extends ToolName> = z.infer<ToolInputSchemaMap[N]>;
 export type ToolDataByName<N extends ToolName> = z.infer<ToolDataSchemaMap[N]>;
-export type ToolResultByName<N extends ToolName> = z.infer<(typeof ToolResultSchemas)[N]>;
+
+/**
+ * Per-tool error variant map. Each tool's literal `errorCodes` tuple selects
+ * the precise discriminated-union of `{ code, message, retryable }` variants,
+ * with `code` AND `retryable` as literals (e.g. NOT_FOUND ⇒ retryable:false).
+ * Derived from `DescriptorFor<N>["errorCodes"]` (the type-level source) rather
+ * than the `z.ZodType`-widened `errorSchema`, so the literal binding survives.
+ */
+type ErrorVariantForCode<C extends ErrorCode> = z.infer<(typeof ERROR_VARIANTS)[C]>;
+type ErrorVariantUnion<N extends ToolName> =
+  DescriptorFor<N>["errorCodes"] extends readonly [infer Only extends ErrorCode]
+    ? ErrorVariantForCode<Only>
+    : DescriptorFor<N>["errorCodes"] extends readonly [infer A extends ErrorCode, ...infer Rest extends ErrorCode[]]
+      ? ErrorVariantForCode<A | Rest[number]>
+      : never;
+export type ToolErrorByName<N extends ToolName> = ErrorVariantUnion<N>;
+
+/**
+ * Per-tool result type. The `error` field is overridden with the literal
+ * `ToolErrorByName<N>` union (optional) so that, e.g.,
+ * `ToolResultByName<"get_ui_reference">["error"]` carries `retryable: false`
+ * for NOT_FOUND — `retryable: true` is a compile error. The rest of the
+ * envelope (status/data/retrieval/warnings/evidence) comes from the
+ * descriptor-derived `ToolResultSchemaMap[N]`.
+ */
+export type ToolResultByName<N extends ToolName> =
+  Omit<z.infer<ToolResultSchemaMap[N]>, "error"> & { error?: ToolErrorByName<N> };
 
 export function getToolDataSchema(tool: string): z.ZodType | undefined {
   return (ToolDataSchemas as Record<string, z.ZodType>)[tool];
@@ -1471,7 +1535,7 @@ function buildRetrievalPolicy(desc: ToolDescriptor): RetrievalPolicy {
 // makeEnvelope — ONE canonical per-tool Zod schema with ALL refinements
 // ===========================================================================
 
-function makeEnvelope(desc: ToolDescriptor): z.ZodType {
+function makeEnvelope<const D extends ToolDescriptor>(desc: D) {
   return z.object({
     tool: z.literal(desc.name),
     schemaVersion: z.literal("1.0"),
@@ -1584,9 +1648,16 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
   });
 }
 
+// Exact-keyed result-schema map — each entry carries its per-tool literal
+// envelope type (makeEnvelope is generic over the descriptor). This preserves
+// per-tool inference of `data`, `error`, `warnings`, etc., so
+// ToolResultByName<N> resolves to the REAL envelope instead of collapsing to
+// `unknown` (the prior bug from annotating makeEnvelope's return as z.ZodType).
+export type ToolResultSchemaMap = { [N in ToolName]: ReturnType<typeof makeEnvelope<DescriptorFor<N>>> };
+
 export const ToolResultSchemas = Object.fromEntries(
   TOOL_DESCRIPTORS.map(d => [d.name, makeEnvelope(d)]),
-) as { [N in ToolName]: ReturnType<typeof makeEnvelope> };
+) as ToolResultSchemaMap;
 
 // ===========================================================================
 // 9. parseToolResult — thin dispatcher

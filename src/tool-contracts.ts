@@ -987,14 +987,14 @@ export const TOOL_DESCRIPTORS = [
       const citedRefs = data?.citedReferences ?? [];
       if (new Set(citedRefs).size !== citedRefs.length)
         ctx.addIssue({ code: "custom", message: "citedReferences must be unique", path: ["data", "citedReferences"] });
-      // Check acceptance criteria evidenceIds (membership + dedup)
-      const acRefs = (data?.acceptanceCriteria ?? []).flatMap((ac, i) =>
-        (ac.evidenceIds ?? []).map(eid => ({ path: ["data", "acceptanceCriteria", i, "evidenceIds"] as PropertyKey[], ids: [eid] })),
+      // Check acceptance criteria evidenceIds (membership + dedup) — whole-array form
+      const acRefs = (data?.acceptanceCriteria ?? []).map((ac, i) =>
+        ({ path: ["data", "acceptanceCriteria", i, "evidenceIds"] as PropertyKey[], ids: ac.evidenceIds ?? [] }),
       );
       validateEvidenceReferences(knownEvidence, acRefs, ctx);
-      // Check citedDecisions evidenceIds (membership + dedup) + sourceId
-      const cdRefs = (data?.citedDecisions ?? []).flatMap((cd, i) =>
-        (cd.evidenceIds ?? []).map(eid => ({ path: ["data", "citedDecisions", i, "evidenceIds"] as PropertyKey[], ids: [eid] })),
+      // Check citedDecisions evidenceIds (membership + dedup) — whole-array form
+      const cdRefs = (data?.citedDecisions ?? []).map((cd, i) =>
+        ({ path: ["data", "citedDecisions", i, "evidenceIds"] as PropertyKey[], ids: cd.evidenceIds ?? [] }),
       );
       validateEvidenceReferences(knownEvidence, cdRefs, ctx);
       for (const cd of data?.citedDecisions ?? []) {
@@ -1362,7 +1362,7 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
 
 export const ToolResultSchemas = Object.fromEntries(
   TOOL_DESCRIPTORS.map(d => [d.name, makeEnvelope(d)]),
-) as { [N in ToolName]: z.ZodType };
+) as { [N in ToolName]: ReturnType<typeof makeEnvelope> };
 
 // ===========================================================================
 // 9. parseToolResult — thin dispatcher

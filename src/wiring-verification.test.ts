@@ -209,6 +209,8 @@ const ALLOWLIST = new Set<string>([
   "validateEvidenceReferences",
   "sameSet",
   "unique",
+  // tool-contract-docs.ts — consumed by the drift test
+  "extractGeneratedBlock",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ import {
   OwnershipMap,
   TaxonomyDigestArtifact,
   ApprovalActorRegistry,
+  CheckpointApproval,
   CheckpointApprovals,
   ArtifactIndex,
   validateRegistry,
@@ -23,6 +24,11 @@ import {
   canonicalJsonStringify,
   sha256Hex,
 } from "./contracts.js";
+import type {
+  CheckpointRecipe,
+  GitSourceResolver,
+} from "./checkpoint-policy.js";
+import { CHECKPOINT_RECIPES } from "./checkpoint-policy.js";
 import type { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -35,6 +41,18 @@ export interface ValidateReadinessOptions {
   corpusPath?: string;
   privateArtifactRoot?: string;
   previousLedgerPath?: string;
+  /**
+   * Repository toplevel (git rev-parse --show-toplevel). Used only for
+   * artifact-index path containment. The artifact root is a subdirectory of
+   * the repo (quality-contracts/agent-readiness), NOT the repo root.
+   */
+  repoRoot?: string;
+  /**
+   * Pure resolver for git-bound historical bytes. REQUIRED — this gate is a
+   * security boundary, so there is no back-compat "skip recomputation" path.
+   * Callers without git must surface the failure rather than trust the ledger.
+   */
+  gitSourceResolver: GitSourceResolver;
 }
 
 export interface ValidationIssue {
@@ -70,6 +88,56 @@ const CHECKPOINT_ROLES: Record<string, string[]> = {
 
 function fileSha256(filePath: string): string {
   return sha256Hex(readFileSync(filePath));
+}
+
+/** Normalize to forward-slash repo-relative path (no leading slash). */
+function normalizeRepoPath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+/**
+ * Repo-relative path of an artifact file. Index paths are recorded relative
+ * to the repo toplevel (e.g. "quality-contracts/agent-readiness/foo.json"),
+ * NOT relative to the artifact root. When `repoRoot` is known we compute the
+ * true repo-relative path; otherwise we fall back to joining the conventional
+ * artifact-root suffix with the file basename.
+ */
+function repoRelativePath(
+  filePath: string,
+  absArtifactRoot: string,
+  opts: ValidateReadinessOptions,
+): string {
+  if (opts.repoRoot) {
+    // realpath both sides: on macOS the artifact root is resolved via
+    // realpathSync (resolving /tmp → /private/tmp), so the repoRoot must be
+    // resolved the same way or relative() produces an upward-climbing path.
+    const realRepo = realpathSync(resolve(opts.repoRoot));
+    const rel = relative(realRepo, realpathSync(filePath));
+    return normalizeRepoPath(rel);
+  }
+  // Fallback (no repoRoot): conventional artifact-root prefix + basename.
+  const base = filePath.split(sep).pop() ?? "";
+  return normalizeRepoPath(join("quality-contracts/agent-readiness", base));
+}
+
+/** True if `recordedPath` lives under the artifact root (forward slashes). */
+function isUnderArtifactRoot(
+  recordedPath: string,
+  opts: ValidateReadinessOptions,
+): boolean {
+  const normalized = normalizeRepoPath(recordedPath);
+  // The artifact root's repo-relative location is quality-contracts/agent-readiness.
+  // Index paths must be contained under it. When repoRoot is known we use it;
+  // otherwise we accept the conventional prefix.
+  const artifactRootSuffix = "quality-contracts/agent-readiness/";
+  if (opts.repoRoot) {
+    // Containment under repoRoot + artifact suffix is the strong check.
+    return (
+      normalized.startsWith(artifactRootSuffix) ||
+      normalized.startsWith(normalizeRepoPath(relative(opts.repoRoot, opts.artifactRoot)) + "/")
+    );
+  }
+  return normalized.startsWith(artifactRootSuffix);
 }
 
 const FORBIDDEN_KEYS = new Set([
@@ -202,6 +270,17 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
       continue;
     }
 
+    // Reject duplicate parsed artifactIds across files. Detected here (during
+    // parsing) rather than after, because the Map below would otherwise
+    // silently overwrite the earlier file.
+    if (artifacts.has(artifactId)) {
+      issues.push({
+        code: "duplicate-artifact-id",
+        artifactId,
+        path: file,
+        message: `duplicate artifactId ${artifactId} in ${file} (already seen)`,
+      });
+    }
     artifacts.set(artifactId, { type: artifactType, data: record, filePath, sha });
   }
 
@@ -224,6 +303,7 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
     );
 
     // Check that indexed artifacts exist and hashes match
+    const seenIndexPaths = new Set<string>();
     for (const row of indexedRows) {
       const entry = artifacts.get(row.artifactId);
       if (!entry) {
@@ -249,6 +329,37 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
           message: `type mismatch for ${row.artifactId}: index says ${row.artifactType}, file is ${entry.type}`,
         });
       }
+
+      // Index path integrity: must match the recorded repo-relative path,
+      // must be contained under the artifact root, and no two rows may share
+      // a path. Paths use forward slashes; normalize before comparison.
+      const recordedPath = normalizeRepoPath(row.path);
+      const relFilePath = repoRelativePath(entry.filePath, absRoot, opts);
+      if (recordedPath !== relFilePath) {
+        issues.push({
+          code: "index-path-mismatch",
+          artifactId: row.artifactId,
+          path: row.path,
+          message: `index path for ${row.artifactId} (${row.path}) does not match resolved path (${relFilePath})`,
+        });
+      }
+      if (!isUnderArtifactRoot(recordedPath, opts)) {
+        issues.push({
+          code: "index-path-mismatch",
+          artifactId: row.artifactId,
+          path: row.path,
+          message: `index path for ${row.artifactId} (${row.path}) is not contained under the artifact root`,
+        });
+      }
+      if (seenIndexPaths.has(recordedPath)) {
+        issues.push({
+          code: "index-duplicate-path",
+          artifactId: row.artifactId,
+          path: row.path,
+          message: `duplicate index path: ${row.path}`,
+        });
+      }
+      seenIndexPaths.add(recordedPath);
     }
 
     // Check that every non-index, non-ledger artifact is indexed
@@ -321,6 +432,8 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
         registry,
         implementationActorIds,
         artifacts,
+        absRoot,
+        opts,
         issues,
         checkpointStatus,
       );
@@ -406,6 +519,8 @@ function validateApprovalsAndCheckpoint(
   registry: ParsedArtifact,
   implementationActorIds: Set<string>,
   artifacts: Map<string, ParsedArtifact>,
+  absRoot: string,
+  opts: ValidateReadinessOptions,
   issues: ValidationIssue[],
   checkpointStatus: Record<string, "open" | "closed">,
 ): void {
@@ -419,17 +534,39 @@ function validateApprovalsAndCheckpoint(
   const registryData = registry.data as z.infer<typeof ApprovalActorRegistry>;
   const registryActorMap = new Map(registryData.actors.map((a) => [a.actorId, a]));
 
-  // Validate each approval
-  const targetShas = new Map<string, Set<string>>(); // checkpoint → set of target SHAs
+  // ------------------------------------------------------------------
+  // Git-bound recomputation of the canonical checkpoint target(s).
+  // Only checkpoints with a known recipe are recomputed; others fall back
+  // to the legacy presence-only closure check.
+  // ------------------------------------------------------------------
+  const recompute = computeCanonicalTargets(artifacts, absRoot, opts);
+
+  // Per-approval set of issue codes that this approval produced. An approval
+  // with any issue cannot contribute to closure.
+  const approvalIssueCodes = new Map<string, Set<string>>();
+  const noteApprovalIssue = (approvalId: string, code: string) => {
+    let set = approvalIssueCodes.get(approvalId);
+    if (!set) {
+      set = new Set();
+      approvalIssueCodes.set(approvalId, set);
+    }
+    set.add(code);
+  };
+
+  // Track target SHAs per checkpoint (for divergent-target detection)
+  const targetShas = new Map<string, Set<string>>();
 
   for (const approval of approvals) {
+    const iid = approval.approvalId;
+
     // Implementer cannot approve (checked first — no continue, all checks run)
     if (implementationActorIds.has(approval.actorId)) {
       issues.push({
         code: "implementer-self-approval",
-        artifactId: approval.approvalId,
-        message: `approval ${approval.approvalId}: implementer ${approval.actorId} cannot approve`,
+        artifactId: iid,
+        message: `approval ${iid}: implementer ${approval.actorId} cannot approve`,
       });
+      noteApprovalIssue(iid, "implementer-self-approval");
     }
 
     // Actor must exist in registry
@@ -437,9 +574,10 @@ function validateApprovalsAndCheckpoint(
     if (!actor) {
       issues.push({
         code: "actor-not-found",
-        artifactId: approval.approvalId,
-        message: `approval ${approval.approvalId}: actor ${approval.actorId} not in registry`,
+        artifactId: iid,
+        message: `approval ${iid}: actor ${approval.actorId} not in registry`,
       });
+      noteApprovalIssue(iid, "actor-not-found");
       continue;
     }
 
@@ -447,18 +585,104 @@ function validateApprovalsAndCheckpoint(
     if (!actor.roles.includes(approval.role)) {
       issues.push({
         code: "actor-role-mismatch",
-        artifactId: approval.approvalId,
-        message: `approval ${approval.approvalId}: actor ${approval.actorId} not authorized for role ${approval.role}`,
+        artifactId: iid,
+        message: `approval ${iid}: actor ${approval.actorId} not authorized for role ${approval.role}`,
       });
+      noteApprovalIssue(iid, "actor-role-mismatch");
+    }
+
+    // Actor kind must match registry
+    if (actor.actorKind !== approval.actorKind) {
+      issues.push({
+        code: "actor-kind-mismatch",
+        artifactId: iid,
+        message: `approval ${iid}: actorKind ${approval.actorKind} does not match registry ${actor.actorKind}`,
+      });
+      noteApprovalIssue(iid, "actor-kind-mismatch");
     }
 
     // Registry hash must match actual file
     if (approval.actorRegistrySha256 !== registry.sha) {
       issues.push({
         code: "registry-hash-mismatch",
-        artifactId: approval.approvalId,
-        message: `approval ${approval.approvalId}: registry hash ${approval.actorRegistrySha256} does not match file ${registry.sha}`,
+        artifactId: iid,
+        message: `approval ${iid}: registry hash ${approval.actorRegistrySha256} does not match file ${registry.sha}`,
       });
+      noteApprovalIssue(iid, "registry-hash-mismatch");
+    }
+
+    // Git-bound recomputation checks. When a recipe exists, recomputation is
+    // MANDATORY and fail-closed: a resolved target must compare against the
+    // approval, or — if resolution threw — the approval is disqualified and the
+    // checkpoint cannot close. There is no skip path; the resolver is required.
+    const recipe = recompute.recipes[approval.checkpoint];
+    const recomputeError = recompute.recomputeFailures.get(approval.checkpoint);
+    if (recipe && recomputeError !== undefined) {
+      issues.push({
+        code: "checkpoint-recompute-failed",
+        artifactId: iid,
+        message: `approval ${iid}: checkpoint ${approval.checkpoint} target could not be recomputed (${recomputeError}); approval cannot contribute to closure`,
+      });
+      noteApprovalIssue(iid, "checkpoint-recompute-failed");
+    } else if (recipe && recompute.canonical[approval.checkpoint]) {
+      const canonical = recompute.canonical[approval.checkpoint]!;
+
+      // checkpointTargetSha256 must equal the recomputed canonical target.
+      if (approval.checkpointTargetSha256 !== canonical.targetSha256) {
+        issues.push({
+          code: "checkpoint-target-mismatch",
+          artifactId: iid,
+          message: `approval ${iid}: checkpointTargetSha256 ${approval.checkpointTargetSha256} does not match recomputed ${canonical.targetSha256}`,
+        });
+        noteApprovalIssue(iid, "checkpoint-target-mismatch");
+      }
+
+      // planSha256 / specSha256 must match resolved historical bytes.
+      if (approval.planSha256 !== canonical.planSha256) {
+        issues.push({
+          code: "plan-hash-mismatch",
+          artifactId: iid,
+          message: `approval ${iid}: planSha256 ${approval.planSha256} does not match resolved ${canonical.planSha256}`,
+        });
+        noteApprovalIssue(iid, "plan-hash-mismatch");
+      }
+      if (approval.specSha256 !== canonical.specSha256) {
+        issues.push({
+          code: "spec-hash-mismatch",
+          artifactId: iid,
+          message: `approval ${iid}: specSha256 ${approval.specSha256} does not match resolved ${canonical.specSha256}`,
+        });
+        noteApprovalIssue(iid, "spec-hash-mismatch");
+      }
+
+      // contractHashes: exact key set + per-key value match.
+      const expectedContractKeys = new Set(recipe.contractBindings.map((b) => b.key));
+      const actualContractKeys = new Set(Object.keys(approval.contractHashes));
+      const contractKeyMismatch =
+        expectedContractKeys.size !== actualContractKeys.size ||
+        [...expectedContractKeys].some((k) => !actualContractKeys.has(k));
+      if (contractKeyMismatch) {
+        issues.push({
+          code: "contract-hash-mismatch",
+          artifactId: iid,
+          message: `approval ${iid}: contractHashes keys (${[...actualContractKeys].sort().join(",")}) do not match expected (${[...expectedContractKeys].sort().join(",")})`,
+        });
+        noteApprovalIssue(iid, "contract-hash-mismatch");
+      } else {
+        for (const b of recipe.contractBindings) {
+          if (approval.contractHashes[b.key] !== canonical.contractHashes[b.key]) {
+            issues.push({
+              code: "contract-hash-mismatch",
+              artifactId: iid,
+              message: `approval ${iid}: contractHashes[${b.key}] ${approval.contractHashes[b.key]} does not match resolved ${canonical.contractHashes[b.key]}`,
+            });
+            noteApprovalIssue(iid, "contract-hash-mismatch");
+          }
+        }
+      }
+
+      // approvedArtifacts must exactly equal the recipe artifact set.
+      verifyApprovedArtifactSet(approval, recipe, artifacts, issues, noteApprovalIssue);
     }
 
     // Track target SHAs per checkpoint
@@ -478,14 +702,22 @@ function validateApprovalsAndCheckpoint(
     }
   }
 
-  // Determine checkpoint closure for C0–C5
+  // Verify phase0-summary inputHashes against resolved historical bytes.
+  verifySummaryInputHashes(artifacts, recompute, issues);
+
+  // Determine checkpoint closure for C0–C5. Only approvals that are
+  // (decision:"approved" + approvalKind:"checkpoint") AND produced no issue
+  // can contribute to closure.
   for (const cp of ["C0", "C1", "C2", "C3", "C4", "C5"]) {
     const required = CHECKPOINT_ROLES[cp] || [];
     const cpApprovals = approvals.filter(
-      (a) => a.checkpoint === cp && a.decision === "approved" && a.approvalKind === "checkpoint",
+      (a) =>
+        a.checkpoint === cp &&
+        a.decision === "approved" &&
+        a.approvalKind === "checkpoint" &&
+        !approvalIssueCodes.has(a.approvalId),
     );
 
-    // Check distinct actors for required roles
     const approvedRoles = new Set<string>();
     const approvedActors = new Set<string>();
     for (const a of cpApprovals) {
@@ -493,14 +725,268 @@ function validateApprovalsAndCheckpoint(
       approvedActors.add(a.actorId);
     }
 
-    // All required roles present
     const allRolesPresent = required.every((r) => approvedRoles.has(r));
-
-    // All approvers are distinct actors (no one actor satisfying two independent roles)
     const distinctActors = approvedActors.size === cpApprovals.length;
 
     if (allRolesPresent && distinctActors) {
       checkpointStatus[cp] = "closed";
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Canonical checkpoint-target recomputation
+// ---------------------------------------------------------------------------
+
+interface CanonicalTarget {
+  targetSha256: string;
+  planSha256: string;
+  specSha256: string;
+  contractHashes: Record<string, string>;
+}
+
+interface RecomputeState {
+  recipes: Partial<Record<string, CheckpointRecipe>>;
+  canonical: Partial<Record<string, CanonicalTarget>>;
+  /** Checkpoints whose recomputation threw — every approval must fail closed. */
+  recomputeFailures: Map<string, string>;
+  /** Resolved git-file inputHashes for phase0-summary verification (key → sha). */
+  inputHashes: Record<string, string>;
+}
+
+/**
+ * Recompute the canonical checkpoint target for every checkpoint with a known
+ * recipe. The resolver is REQUIRED (validated by the caller). Resolver throws
+ * are recorded in `recomputeFailures` so the per-approval loop can emit a
+ * blocking issue and disqualify every affected approval — this is fail-closed.
+ */
+function computeCanonicalTargets(
+  artifacts: Map<string, ParsedArtifact>,
+  _absRoot: string,
+  opts: ValidateReadinessOptions,
+): RecomputeState {
+  const resolver = opts.gitSourceResolver;
+
+  const recipes: Partial<Record<string, CheckpointRecipe>> = {};
+  const canonical: Partial<Record<string, CanonicalTarget>> = {};
+  const recomputeFailures = new Map<string, string>();
+  const inputHashes: Record<string, string> = {};
+
+  for (const [cp, recipe] of Object.entries(CHECKPOINT_RECIPES)) {
+    recipes[cp] = recipe;
+
+    try {
+      const planSha256 = sha256Hex(resolver.resolve(recipe.planBinding.gitCommit, recipe.planBinding.repositoryPath));
+      const specSha256 = sha256Hex(resolver.resolve(recipe.specBinding.gitCommit, recipe.specBinding.repositoryPath));
+      const contractHashes: Record<string, string> = {};
+      for (const b of recipe.contractBindings) {
+        contractHashes[b.key] = sha256Hex(resolver.resolve(b.gitCommit, b.repositoryPath));
+      }
+
+      // Resolve artifact-root inputHash aliases from in-memory parsed
+      // artifacts (already integrity-pinned by the index hash check).
+      // Resolve git-file inputHash aliases via the resolver.
+      const fullInputHashes: Record<string, string> = {};
+      for (const b of recipe.inputHashBindings) {
+        fullInputHashes[b.key] = sha256Hex(resolver.resolve(b.gitCommit, b.repositoryPath));
+      }
+      // Artifact-root aliases: find the parsed artifact whose filename matches
+      // the alias key and use its in-memory .sha.
+      for (const key of recipe.inputHashKeys) {
+        if (fullInputHashes[key] !== undefined) continue;
+        const entry = findArtifactByFilename(artifacts, key);
+        if (entry) {
+          fullInputHashes[key] = entry.sha;
+        }
+      }
+      Object.assign(inputHashes, fullInputHashes);
+
+      // Build the artifact set for the target. The artifact shas come from
+      // the in-memory parsed artifacts (the same values the index pins).
+      const targetArtifacts = recipe.artifacts.map((a) => {
+        const entry = [...artifacts.values()].find(
+          (e) => e.data.artifactId === a.artifactId,
+        );
+        return {
+          artifactId: a.artifactId,
+          artifactType: a.artifactType,
+          sha256: entry?.sha ?? "",
+        };
+      });
+
+      // Registry version + sha from the in-memory registry artifact.
+      const registryEntry = [...artifacts.values()].find(
+        (e) => e.type === "approval-actor-registry",
+      );
+      const registryVersion =
+        (registryEntry?.data.registryVersion as string | undefined) ?? "";
+      const registrySha = registryEntry?.sha ?? "";
+
+      const targetInputHashes = recipe.targetIncludesInputHashes ? fullInputHashes : {};
+
+      const target = buildCheckpointTarget({
+        checkpoint: recipe.checkpoint,
+        baselineGitSha: recipe.baselineGitSha,
+        artifacts: targetArtifacts,
+        planSha256,
+        specSha256,
+        actorRegistryVersion: registryVersion,
+        actorRegistrySha256: registrySha,
+        contractHashes,
+        inputHashes: targetInputHashes,
+      });
+
+      canonical[cp] = {
+        targetSha256: computeCheckpointTargetSha256(target),
+        planSha256,
+        specSha256,
+        contractHashes,
+      };
+    } catch (e) {
+      // Fail closed: record the failure so the per-approval loop emits a
+      // blocking issue for every approval of this checkpoint and disqualifies
+      // them from closure. Resolution failure must NEVER silently close a
+      // checkpoint — that would reintroduce the fabricated-approval exploit.
+      recomputeFailures.set(cp, (e as Error).message ?? String(e));
+    }
+  }
+
+  return { recipes, canonical, recomputeFailures, inputHashes };
+}
+
+/** Find a parsed artifact whose filePath basename matches `filename`. */
+function findArtifactByFilename(
+  artifacts: Map<string, ParsedArtifact>,
+  filename: string,
+): ParsedArtifact | undefined {
+  for (const entry of artifacts.values()) {
+    const base = entry.filePath.split(sep).pop() ?? "";
+    if (base === filename) return entry;
+  }
+  return undefined;
+}
+
+/**
+ * Verify an approval's approvedArtifacts[] exactly equals the recipe artifact
+ * set: same IDs, no missing/extra/duplicate, each sha matches the in-memory
+ * artifact, and every ID is known.
+ */
+function verifyApprovedArtifactSet(
+  approval: z.infer<typeof CheckpointApproval>,
+  recipe: CheckpointRecipe,
+  artifacts: Map<string, ParsedArtifact>,
+  issues: ValidationIssue[],
+  note: (approvalId: string, code: string) => void,
+): void {
+  const iid = approval.approvalId;
+  const expectedIds = recipe.artifacts.map((a) => a.artifactId).sort();
+  const actualIds = approval.approvedArtifacts.map((a) => a.artifactId).sort();
+
+  // Duplicate artifactId within the approval's list
+  const seen = new Set<string>();
+  for (const a of approval.approvedArtifacts) {
+    if (seen.has(a.artifactId)) {
+      issues.push({
+        code: "approved-artifact-set-mismatch",
+        artifactId: iid,
+        message: `approval ${iid}: duplicate approvedArtifact ${a.artifactId}`,
+      });
+      note(iid, "approved-artifact-set-mismatch");
+    }
+    seen.add(a.artifactId);
+  }
+
+  const expectedSet = new Set(expectedIds);
+  const actualSet = new Set(actualIds);
+
+  // Missing / extra
+  const missing = expectedIds.filter((id) => !actualSet.has(id));
+  const extra = actualIds.filter((id) => !expectedSet.has(id));
+  if (missing.length > 0 || extra.length > 0 || expectedIds.length !== actualIds.length) {
+    issues.push({
+      code: "approved-artifact-set-mismatch",
+      artifactId: iid,
+      message: `approval ${iid}: approvedArtifacts set mismatch (missing=[${missing.join(",")}], extra=[${extra.join(",")}])`,
+    });
+    note(iid, "approved-artifact-set-mismatch");
+  }
+
+  // Per-artifact: unknown id and hash mismatch
+  for (const a of approval.approvedArtifacts) {
+    if (!expectedSet.has(a.artifactId)) {
+      issues.push({
+        code: "approved-artifact-unknown",
+        artifactId: iid,
+        message: `approval ${iid}: approvedArtifact ${a.artifactId} is not in the recipe artifact set`,
+      });
+      note(iid, "approved-artifact-unknown");
+      continue;
+    }
+    const entry = [...artifacts.values()].find((e) => e.data.artifactId === a.artifactId);
+    if (!entry) continue; // already reported elsewhere
+    if (entry.sha !== a.sha256) {
+      issues.push({
+        code: "approved-artifact-hash-mismatch",
+        artifactId: iid,
+        message: `approval ${iid}: approvedArtifact ${a.artifactId} sha256 ${a.sha256} does not match in-memory ${entry.sha}`,
+      });
+      note(iid, "approved-artifact-hash-mismatch");
+    }
+  }
+}
+
+/**
+ * Verify the phase0-summary inputHashes: keys must equal the recipe's
+ * inputHashKeys, and each value must match the resolved historical hash.
+ */
+function verifySummaryInputHashes(
+  artifacts: Map<string, ParsedArtifact>,
+  recompute: RecomputeState,
+  issues: ValidationIssue[],
+): void {
+  const phase0 = [...artifacts.values()].find((a) => a.type === "phase0-summary");
+  if (!phase0) return;
+
+  // Use the C0 recipe's inputHashKeys (the only recipe today).
+  const recipe = recompute.recipes["C0"];
+  if (!recipe) return;
+
+  const summaryHashes = (phase0.data.inputHashes as Record<string, string>) || {};
+  const expectedKeys = new Set(recipe.inputHashKeys);
+  const actualKeys = new Set(Object.keys(summaryHashes));
+
+  const missing = [...expectedKeys].filter((k) => !actualKeys.has(k));
+  const extra = [...actualKeys].filter((k) => !expectedKeys.has(k));
+
+  if (missing.length > 0 || extra.length > 0) {
+    issues.push({
+      code: "summary-input-hash-mismatch",
+      artifactId: phase0.data.artifactId as string,
+      message: `phase0-summary inputHashes keys mismatch (missing=[${missing.join(",")}], extra=[${extra.join(",")}])`,
+    });
+    return;
+  }
+
+  for (const key of recipe.inputHashKeys) {
+    const claimed = summaryHashes[key];
+    const resolved = recompute.inputHashes[key];
+    // Fail closed: an unresolvable input-hash binding is a mismatch, not a skip.
+    // (Resolver failures are also surfaced per-checkpoint as checkpoint-recompute-failed;
+    // reaching here with undefined means the recipe declared a key we could not resolve.)
+    if (resolved === undefined) {
+      issues.push({
+        code: "summary-input-hash-mismatch",
+        artifactId: phase0.data.artifactId as string,
+        message: `phase0-summary inputHashes[${key}] has no resolved historical hash`,
+      });
+      continue;
+    }
+    if (claimed !== resolved) {
+      issues.push({
+        code: "summary-input-hash-mismatch",
+        artifactId: phase0.data.artifactId as string,
+        message: `phase0-summary inputHashes[${key}] ${claimed} does not match resolved ${resolved}`,
+      });
     }
   }
 }

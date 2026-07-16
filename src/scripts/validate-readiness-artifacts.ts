@@ -11,7 +11,9 @@
  */
 import { parseArgs } from "node:util";
 import { resolve } from "node:path";
+import { execFileSync } from "node:child_process";
 import { validateReadinessArtifacts } from "../readiness/validator.js";
+import type { GitSourceResolver } from "../readiness/checkpoint-policy.js";
 
 const CHECKPOINTS = ["C0", "C1", "C2", "C3", "C4", "C5"] as const;
 
@@ -67,12 +69,52 @@ const artifactRoot = args["artifact-root"]
   ? resolve(args["artifact-root"])
   : resolve(process.cwd(), "quality-contracts", "agent-readiness");
 
+// Resolve the git repo toplevel once. The artifact root is a subdirectory of
+// the repo (quality-contracts/agent-readiness), NOT the repo root — do not
+// repeat the prior mistake of treating the parent of artifactRoot as the
+// repo root. The git-bound resolver is REQUIRED for the checkpoint security
+// gate: if git is unavailable or this is not a git checkout, we must fail
+// hard rather than silently trust the ledger.
+let repoRoot: string;
+try {
+  repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: artifactRoot,
+    encoding: "utf-8",
+  }).trim();
+} catch (e) {
+  console.error(
+    `error: could not resolve git repository root from ${artifactRoot} (${(e as Error).message}). ` +
+      `The readiness gate requires git to recompute checkpoint targets; it will not run without it.`,
+  );
+  process.exit(1);
+}
+
+/**
+ * Git-backed resolver: returns the exact file bytes at (commit, repoPath) by
+ * shelling out to `git show <commit>:<path>`. The validator itself never
+ * shells out — only this injected resolver does. Repository root is fixed at
+ * call time (the repo containing the artifact root) so historical bytes are
+ * always resolved from the same repo, regardless of the working-tree state.
+ */
+function makeGitSourceResolver(repoCwd: string): GitSourceResolver {
+  return {
+    resolve(commit: string, repositoryPath: string): Uint8Array {
+      return execFileSync("git", ["show", `${commit}:${repositoryPath}`], {
+        cwd: repoCwd,
+        maxBuffer: 64 * 1024 * 1024,
+      });
+    },
+  };
+}
+
 const result = validateReadinessArtifacts({
   artifactRoot,
   mode: args.mode as "public" | "private",
   corpusPath: args["corpus-path"] ? resolve(args["corpus-path"]) : undefined,
   privateArtifactRoot: args["private-artifact-root"] ? resolve(args["private-artifact-root"]) : undefined,
   previousLedgerPath: args["previous-ledger"] ? resolve(args["previous-ledger"]) : undefined,
+  repoRoot,
+  gitSourceResolver: makeGitSourceResolver(repoRoot),
 });
 
 if (args.json) {

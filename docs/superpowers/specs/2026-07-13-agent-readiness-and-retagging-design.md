@@ -477,7 +477,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 | Partial | keywordFallback / sparseCoverage typed warnings on degraded retrieval |
 | Errors | NOT_FOUND (non-retryable), PROVIDER_ERROR (retryable) |
 | Warnings | keywordFallback, sparseCoverage |
-| Retrieval | vector/text; structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); none/none |
+| Retrieval | vector/text; structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, community-edition, provider-error); none/none |
 | Evidence | forbidden (none) |
 | resultCount | `results.length` |
 | referenceIds | unique `result.id` values |
@@ -541,7 +541,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 | Partial | sparseCoverage / insufficientCorpusEvidence / noCorpusIndex typed warnings on sparse results |
 | Errors | PROVIDER_ERROR (retryable) |
 | Warnings | sparseCoverage, insufficientCorpusEvidence, noCorpusIndex |
-| Retrieval | hybrid/text; keyword/text (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); keyword/metadata (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); none/none |
+| Retrieval | hybrid/text; keyword/text (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); keyword/metadata (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, community-edition, provider-error); none/none |
 | Evidence | required (plan/spec/critique) (corpus-observation, machine-rule, editorial-guidance) |
 | resultCount | 1 when a complete plan artifact exists, otherwise 0 |
 | referenceIds | grounding entry IDs (`evidenceContributions`) |
@@ -621,7 +621,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 | Partial | insufficientCorpusEvidence / providerDegraded typed warnings; may include screen-observation and dom-signal evidence |
 | Errors | PROVIDER_ERROR (retryable), INVALID_INPUT (non-retryable) |
 | Warnings | insufficientCorpusEvidence, providerDegraded |
-| Retrieval | vector/image; structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, provider-error, no-image-evidence); none/none |
+| Retrieval | vector/image; structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, community-edition, provider-error, no-image-evidence); none/none |
 | Evidence | required (plan/spec/critique) (corpus-observation, screen-observation, dom-signal, machine-rule, editorial-guidance) |
 | resultCount | 1 when a complete critique artifact exists, otherwise 0 |
 | referenceIds | appliedReference IDs |

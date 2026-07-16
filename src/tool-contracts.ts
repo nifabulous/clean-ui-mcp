@@ -837,7 +837,7 @@ export const TOOL_DESCRIPTORS = [
     dataSchema: z.object({ results: z.array(SimilarReference) }).strict(),
     retrieval: [
       { mode: "vector", modality: "text" },
-      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
+      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "community-edition", "provider-error"] },
       { mode: "none", modality: "none" },
     ],
     allowedAttemptedModes: ["vector", "structured-fallback"],
@@ -996,7 +996,7 @@ export const TOOL_DESCRIPTORS = [
       { mode: "hybrid", modality: "text" },
       { mode: "keyword", modality: "text", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
       { mode: "keyword", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
-      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
+      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "community-edition", "provider-error"] },
       { mode: "none", modality: "none" },
     ],
     allowedAttemptedModes: ["hybrid", "keyword", "structured-fallback"],
@@ -1217,7 +1217,7 @@ export const TOOL_DESCRIPTORS = [
     dataSchema: CritiqueDataSchema,
     retrieval: [
       { mode: "vector", modality: "image" },
-      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error", "no-image-evidence"] },
+      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "community-edition", "provider-error", "no-image-evidence"] },
       { mode: "none", modality: "none" },
     ],
     allowedAttemptedModes: ["vector", "structured-fallback"],

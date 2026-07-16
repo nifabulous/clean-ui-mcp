@@ -724,3 +724,51 @@ describe("R1: trim-before-min ordering", () => {
     expect(r.success).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// R2: community-edition fallback reason for similar/plan/critique
+// Per the plan Task 2 Step 2 table, structured-fallback for similar, plan, and
+// critique must accept "community-edition" (search already did; critique keeps
+// "no-image-evidence" too). An undocumented reason must still be rejected.
+// ---------------------------------------------------------------------------
+
+describe("R2: community-edition structured-fallback reason", () => {
+  // Build a valid structured-fallback success with community-edition for each tool.
+  const tools = ["find_similar_ui_references", "plan_ui_direction", "critique_ui"] as const;
+  for (const tool of tools) {
+    it(`${tool}: accepts structured-fallback + community-edition`, () => {
+      const payload = cloneToolResult(makeValidSuccess(tool));
+      payload.retrieval = {
+        mode: "structured-fallback",
+        modality: "metadata",
+        resultCount: payload.retrieval.resultCount,
+        fallbackUsed: true,
+        attemptedCount: 1,
+        fallbackReason: "community-edition",
+        attemptedModes: tool === "plan_ui_direction" ? ["keyword"] : ["vector"],
+      };
+      // critique carries legacy nested retrieval fields that must agree with the envelope.
+      if (tool === "critique_ui") {
+        (payload.data as { retrievalMode?: string }).retrievalMode = "structured-fallback";
+        (payload.data as { fallbackUsed?: boolean }).fallbackUsed = true;
+      }
+      const r = ToolResultSchemas[tool].safeParse(payload);
+      expect(r.success).toBe(true);
+    });
+  }
+
+  it("similar: rejects an undocumented fallback reason", () => {
+    const payload = cloneToolResult(makeValidSuccess("find_similar_ui_references"));
+    payload.retrieval = {
+      mode: "structured-fallback",
+      modality: "metadata",
+      resultCount: payload.retrieval.resultCount,
+      fallbackUsed: true,
+      attemptedCount: 1,
+      fallbackReason: "totally-fabricated-reason",
+      attemptedModes: ["vector"],
+    };
+    const r = ToolResultSchemas.find_similar_ui_references.safeParse(payload);
+    expect(r.success).toBe(false);
+  });
+});

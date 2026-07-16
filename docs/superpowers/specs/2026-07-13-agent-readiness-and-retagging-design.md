@@ -432,20 +432,24 @@ Motion guidance obeys the available evidence boundary:
 
 ### 5.5 Per-tool contract reference
 
-These tables are the authoritative source for executable Zod schemas. The design spec, implementation plan, and code must agree.
+These tables are the authoritative source for executable Zod schemas. The block below is generated from `TOOL_DESCRIPTORS` by `renderToolContractReference()`; the drift test in `src/tool-contract-docs.test.ts` locks it byte-for-byte. Do not edit by hand.
 
+<!-- GENERATED_TOOL_CONTRACTS_START -->
 #### `search_ui_references`
 
 | Aspect | Contract |
 |---|---|
 | Input | query?, category?, styleTag?, patternType?, minQuality (1-5)?, qualityTier?, reviewStatus?, platform?, limit (1-20, default 5)?, responseFormat? |
-| Success data | `results: ReferenceSummary[]` — each with id, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url?, imageAvailable), critique excerpt, topTechniques |
+| Success data | `results: ReferenceSummary[]` — each with id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url required-but-nullable, imageAvailable), critique excerpt, topTechniques, antiPatterns |
 | Empty | `results: []`, retrieval none, resultCount 0, summary guidance |
+| Partial | sparseCoverage / keywordFallback typed warnings on degraded retrieval |
 | Errors | NOT_FOUND (non-retryable), PROVIDER_ERROR (retryable) |
-| Retrieval | hybrid/vector/keyword + text; structured-fallback + metadata; none |
-| Evidence | forbidden |
+| Warnings | sparseCoverage, keywordFallback |
+| Retrieval | hybrid/text; vector/text; keyword/text (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); keyword/metadata (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, community-edition, provider-error); none/none |
+| Evidence | forbidden (none) |
 | resultCount | `results.length` |
 | referenceIds | unique `result.id` values |
+| Legacy names | search_ui_examples |
 
 #### `get_ui_reference`
 
@@ -454,11 +458,14 @@ These tables are the authoritative source for executable Zod schemas. The design
 | Input | id (required) |
 | Success data | full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability |
 | Empty | n/a — single-id lookup |
+| Partial | n/a — single-id lookup |
 | Errors | NOT_FOUND (non-retryable) |
-| Retrieval | none |
-| Evidence | forbidden |
+| Warnings | none |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
 | resultCount | 1 on success, 0 on error |
 | referenceIds | `[id]` on success, `[]` on error |
+| Legacy names | get_ui_example |
 
 #### `find_similar_ui_references`
 
@@ -467,11 +474,14 @@ These tables are the authoritative source for executable Zod schemas. The design
 | Input | id (required), limit (1-20, default 5)? |
 | Success data | `results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques |
 | Empty | `results: []` when no index or source not found |
-| Errors | NOT_FOUND if source id missing (non-retryable), PROVIDER_ERROR (retryable) |
-| Retrieval | vector + text; structured-fallback + metadata; none (text embeddings only, no image) |
-| Evidence | forbidden |
+| Partial | keywordFallback / sparseCoverage typed warnings on degraded retrieval |
+| Errors | NOT_FOUND (non-retryable), PROVIDER_ERROR (retryable) |
+| Warnings | keywordFallback, sparseCoverage |
+| Retrieval | vector/text; structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); none/none |
+| Evidence | forbidden (none) |
 | resultCount | `results.length` |
 | referenceIds | unique `result.id` values |
+| Legacy names | get_similar_ui_examples |
 
 #### `compare_ui_references`
 
@@ -479,12 +489,15 @@ These tables are the authoritative source for executable Zod schemas. The design
 |---|---|
 | Input | ids (required, 2-3 unique), responseFormat? |
 | Success data | `entries: ComparisonRow[]`, `foundIds`, `missingIds` — each row with id, title, product, patternType, categories, styleTags, platform, layout, accent, density, corners, quality, critiqueAngle, topTechnique, antiPatterns, whereItFails, accessibility |
-| Partial | `missingIds` non-empty + typed partial warning when some IDs not found |
-| Errors | all IDs missing → NOT_FOUND (non-retryable) |
-| Retrieval | none |
-| Evidence | forbidden |
+| Empty | n/a — all IDs missing is an error (NOT_FOUND), not an empty success |
+| Partial | `missingIds` non-empty + typed partialResult warning when some IDs not found |
+| Errors | NOT_FOUND (non-retryable) |
+| Warnings | partialResult |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
 | resultCount | `foundIds.length` |
 | referenceIds | `foundIds` |
+| Legacy names | compare_ui_examples |
 
 #### `get_ui_taxonomy`
 
@@ -492,11 +505,15 @@ These tables are the authoritative source for executable Zod schemas. The design
 |---|---|
 | Input | none |
 | Success data | `patternTypes`, `categories`, `styleTags` (each `{count, values}`), optional `components`, `domainTags` |
+| Empty | n/a — always returns the taxonomy |
+| Partial | n/a |
 | Errors | none |
-| Retrieval | none |
-| Evidence | forbidden |
+| Warnings | none |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
 | resultCount | 0 (not a search tool) |
 | referenceIds | `[]` |
+| Legacy names | list_categories, list_style_tags, list_domain_tags |
 
 #### `browse_ui_patterns`
 
@@ -505,11 +522,14 @@ These tables are the authoritative source for executable Zod schemas. The design
 | Input | styleTag? |
 | Success data | `patterns: PatternGroup[]` — each with patternType, count, topProducts (array), exemplar (id, title, product, qualityScore, critique) |
 | Empty | `patterns: []` |
+| Partial | sparseCoverage typed warning on thin coverage |
 | Errors | none |
-| Retrieval | none (aggregation scan, no retrieval) |
-| Evidence | forbidden |
-| resultCount | `patterns.length` |
+| Warnings | sparseCoverage |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
+| resultCount | number of rows returned (`patterns.length`) |
 | referenceIds | exemplar IDs |
+| Legacy names | browse_ui_examples |
 
 #### `plan_ui_direction`
 
@@ -517,16 +537,31 @@ These tables are the authoritative source for executable Zod schemas. The design
 |---|---|
 | Input | productContext (required, min 8), category?, styleTag?, platform?, qualityTier? (default exceptional), framework? (brief/tokens), count (1-5, default 3)? |
 | Success data | `direction`, `rejectedDefaults`, `recommendation`, `rationale`, `evidenceContributions`, `structuredDecisions` |
-| Partial | sparse results → typed warning |
-| Errors | PROVIDER_ERROR (retryable); absence of index is not an error (degrades through fallback) |
-| Retrieval | hybrid/keyword + text; structured-fallback + metadata; none (plan: no direct vector) |
-| Evidence | required (may be empty with insufficiency warning) |
+| Empty | n/a — absence of index degrades through fallback, not an empty success |
+| Partial | sparseCoverage / insufficientCorpusEvidence / noCorpusIndex typed warnings on sparse results |
+| Errors | PROVIDER_ERROR (retryable) |
+| Warnings | sparseCoverage, insufficientCorpusEvidence, noCorpusIndex |
+| Retrieval | hybrid/text; keyword/text (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); keyword/metadata (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); none/none |
+| Evidence | required (plan/spec/critique) (corpus-observation, machine-rule, editorial-guidance) |
 | resultCount | 1 when a complete plan artifact exists, otherwise 0 |
-| referenceIds | grounding entry IDs |
+| referenceIds | grounding entry IDs (`evidenceContributions`) |
+| Legacy names | recommend_ui_direction |
 
 #### `create_ui_spec`
 
-See §5.4 for the complete UiSpec contract. Evidence is required (may be empty with warning). Retrieval is none. `create_ui_spec` may not emit `screen-observation` or `dom-signal` evidence.
+| Aspect | Contract |
+|---|---|
+| Input | productContext (required, min 8), referenceIds? (max 5), platform?, implementationFramework?, serializationFormat (default brief)?, designSystem?, constraints? |
+| Success data | see §5.4 — UiSpec with layoutRegions, colorTokens, typographyTokens, acceptanceCriteria (verifiers: axe, playwright, static-analysis, manual), citedReferences, citedDecisions, authorityLanes, provenance |
+| Empty | n/a — synthesis produces one spec artifact or errors |
+| Partial | sparseCoverage / insufficientCorpusEvidence / motionEvidenceUnavailable typed warnings; null tokens require editorial authority + unavailableDecision |
+| Errors | INVALID_INPUT (non-retryable) |
+| Warnings | sparseCoverage, insufficientCorpusEvidence, motionEvidenceUnavailable |
+| Retrieval | none/none |
+| Evidence | required (plan/spec/critique) (corpus-observation, machine-rule, editorial-guidance) |
+| resultCount | 1 when a complete spec artifact exists, otherwise 0 |
+| referenceIds | `citedReferences` |
+| Legacy names | generate_design_prompt |
 
 #### `research_ui_anti_patterns`
 
@@ -535,24 +570,30 @@ See §5.4 for the complete UiSpec contract. Evidence is required (may be empty w
 | Input | patternType?, category?, limit (1-20, default 10)? |
 | Success data | `results: AntiPatternRow[]` — each with text, sourceIds, count |
 | Empty | `results: []` |
+| Partial | sparseCoverage typed warning on thin coverage |
 | Errors | none |
-| Retrieval | none (aggregation scan, no retrieval) |
-| Evidence | forbidden |
-| resultCount | `results.length` |
+| Warnings | sparseCoverage |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
+| resultCount | number of rows returned (`results.length`) |
 | referenceIds | unique sourceIds across all rows |
+| Legacy names | get_anti_patterns |
 
 #### `research_ui_palettes`
 
 | Aspect | Contract |
 |---|---|
 | Input | patternType?, styleTag?, limit (1-20, default 10)? |
-| Success data | `results: PaletteRecord[]` — each with tokens (canvas, surface, ink, muted, accent), accentHue, product, sourceId |
+| Success data | `results: PaletteRecord[]` — each with tokens (canvas, surface, ink, muted, accent), accentHue, product, sourceId, patternType |
 | Empty | `results: []` |
+| Partial | sparseCoverage typed warning on thin coverage |
 | Errors | none |
-| Retrieval | none (aggregation scan, no retrieval) |
-| Evidence | forbidden |
-| resultCount | `results.length` |
+| Warnings | sparseCoverage |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
+| resultCount | number of rows returned (`results.length`) |
 | referenceIds | unique sourceId values |
+| Legacy names | get_color_palette |
 
 #### `research_ui_techniques`
 
@@ -561,11 +602,14 @@ See §5.4 for the complete UiSpec contract. Evidence is required (may be empty w
 | Input | patternType?, styleTag?, limit (1-30, default 15)? |
 | Success data | `results: TechniqueRow[]` — each with text, source (id, product) |
 | Empty | `results: []` |
+| Partial | sparseCoverage typed warning on thin coverage |
 | Errors | none |
-| Retrieval | none (aggregation scan, no retrieval) |
-| Evidence | forbidden |
-| resultCount | `results.length` |
+| Warnings | sparseCoverage |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
+| resultCount | number of rows returned (`results.length`) |
 | referenceIds | unique source IDs |
+| Legacy names | get_stealable_techniques |
 
 #### `critique_ui`
 
@@ -573,11 +617,16 @@ See §5.4 for the complete UiSpec contract. Evidence is required (may be empty w
 |---|---|
 | Input | image_data (required), image_mime_type (required), product_context?, platform?, framework? — reuses `CRITIQUE_UI_INPUT_SCHEMA` from `synthesis/contracts.ts` |
 | Success data | reuses `StructuredCritique` fields: observations, recommendations, accessibilityRisks, visualSlop, motion, appliedReferences, evidenceIds, confidence, md3? |
-| Errors | INVALID_INPUT (non-retryable), PROVIDER_ERROR (retryable) |
-| Retrieval | vector + image; structured-fallback + metadata; none (no vector+text) |
-| Evidence | required (may be empty with insufficiency warning); may include screen-observation and dom-signal |
+| Empty | n/a — synthesis produces one critique artifact or errors |
+| Partial | insufficientCorpusEvidence / providerDegraded typed warnings; may include screen-observation and dom-signal evidence |
+| Errors | PROVIDER_ERROR (retryable), INVALID_INPUT (non-retryable) |
+| Warnings | insufficientCorpusEvidence, providerDegraded |
+| Retrieval | vector/image; structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, provider-error, no-image-evidence); none/none |
+| Evidence | required (plan/spec/critique) (corpus-observation, screen-observation, dom-signal, machine-rule, editorial-guidance) |
 | resultCount | 1 when a complete critique artifact exists, otherwise 0 |
 | referenceIds | appliedReference IDs |
+| Legacy names | (none — critique_ui unchanged) |
+<!-- GENERATED_TOOL_CONTRACTS_END -->
 
 ## 6. Companion Skill
 

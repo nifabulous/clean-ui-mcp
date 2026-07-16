@@ -163,6 +163,7 @@ const ERROR_RETRYABLE: Record<string, boolean> = {
   NOT_FOUND: false, INVALID_INPUT: false,
   INDEX_UNAVAILABLE: true, PROVIDER_ERROR: true,
 };
+export { ERROR_RETRYABLE };
 
 function makeErrorSchema<const T extends readonly string[]>(codes: T) {
   // Build error schema with code↔retryable binding via superRefine
@@ -727,6 +728,27 @@ const PlanDataSchema = z.object({
 const ALL_SYNTHESIS_KINDS = ["corpus-observation", "machine-rule", "editorial-guidance"] as const;
 const CRITIQUE_KINDS = ["corpus-observation", "screen-observation", "dom-signal", "machine-rule", "editorial-guidance"] as const;
 
+/**
+ * Prose rows for the §5.5 per-tool contract reference. These mirror the
+ * authoritative human wording in the design spec; the mechanical renderer in
+ * tool-contract-docs.ts emits them verbatim. Keep concise and factual — do not
+ * invent contract facts not already stated by the schema or spec.
+ */
+export interface ToolContractDocs {
+  /** Human-readable input field summary (e.g. "query?, category?, ..."). */
+  readonly input: string;
+  /** Shape of the success `data` payload, naming the key fields. */
+  readonly successData: string;
+  /** Empty-result contract (n/a for single-id lookups). */
+  readonly empty: string;
+  /** Partial-result contract (warnings / degraded coverage). */
+  readonly partial: string;
+  /** resultCount semantics, as prose. */
+  readonly resultCount: string;
+  /** referenceIds semantics, as prose. */
+  readonly referenceIds: string;
+}
+
 export interface ToolDescriptor {
   readonly name: string;
   readonly rendererKey: string;
@@ -740,6 +762,8 @@ export interface ToolDescriptor {
   readonly evidenceKinds: readonly string[];
   readonly warningSchema: z.ZodType;
   readonly errorSchema: z.ZodType;
+  /** Authoritative §5.5 prose rows — drives renderToolContractReference(). */
+  readonly contractDocs: ToolContractDocs;
   extractRefs: (data: unknown) => string[];
   countResults: (data: unknown) => number;
   refineData?: (data: unknown, ctx: z.RefinementCtx) => void;
@@ -767,6 +791,14 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage", "keywordFallback"]),
     errorSchema: makeErrorSchema(["NOT_FOUND", "PROVIDER_ERROR"]),
+    contractDocs: {
+      input: "query?, category?, styleTag?, patternType?, minQuality (1-5)?, qualityTier?, reviewStatus?, platform?, limit (1-20, default 5)?, responseFormat?",
+      successData: "`results: ReferenceSummary[]` — each with id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url required-but-nullable, imageAvailable), critique excerpt, topTechniques, antiPatterns",
+      empty: "`results: []`, retrieval none, resultCount 0, summary guidance",
+      partial: "sparseCoverage / keywordFallback typed warnings on degraded retrieval",
+      resultCount: "`results.length`",
+      referenceIds: "unique `result.id` values",
+    },
     extractRefs: (d) => {
       const r = (d as { results?: Array<{ id?: string }> })?.results ?? [];
       return r.map(e => e.id).filter((x): x is string => !!x);
@@ -785,6 +817,14 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema([]),
     errorSchema: makeErrorSchema(["NOT_FOUND"]),
+    contractDocs: {
+      input: "id (required)",
+      successData: "full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability",
+      empty: "n/a — single-id lookup",
+      partial: "n/a — single-id lookup",
+      resultCount: "1 on success, 0 on error",
+      referenceIds: "`[id]` on success, `[]` on error",
+    },
     extractRefs: (d) => { const id = (d as { id?: string })?.id; return id ? [id] : []; },
     countResults: (d) => (d as { id?: unknown })?.id ? 1 : 0,
   },
@@ -804,6 +844,14 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["keywordFallback", "sparseCoverage"]),
     errorSchema: makeErrorSchema(["NOT_FOUND", "PROVIDER_ERROR"]),
+    contractDocs: {
+      input: "id (required), limit (1-20, default 5)?",
+      successData: "`results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques",
+      empty: "`results: []` when no index or source not found",
+      partial: "keywordFallback / sparseCoverage typed warnings on degraded retrieval",
+      resultCount: "`results.length`",
+      referenceIds: "unique `result.id` values",
+    },
     extractRefs: (d) => {
       const r = (d as { results?: Array<{ id?: string }> })?.results ?? [];
       return r.map(e => e.id).filter((x): x is string => !!x);
@@ -826,6 +874,14 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["partialResult"]),
     errorSchema: makeErrorSchema(["NOT_FOUND"]),
+    contractDocs: {
+      input: "ids (required, 2-3 unique), responseFormat?",
+      successData: "`entries: ComparisonRow[]`, `foundIds`, `missingIds` — each row with id, title, product, patternType, categories, styleTags, platform, layout, accent, density, corners, quality, critiqueAngle, topTechnique, antiPatterns, whereItFails, accessibility",
+      empty: "n/a — all IDs missing is an error (NOT_FOUND), not an empty success",
+      partial: "`missingIds` non-empty + typed partialResult warning when some IDs not found",
+      resultCount: "`foundIds.length`",
+      referenceIds: "`foundIds`",
+    },
     extractRefs: (d) => (d as { foundIds?: string[] })?.foundIds ?? [],
     countResults: (d) => (d as { foundIds?: unknown[] })?.foundIds?.length ?? 0,
     refineData: (d, ctx) => {
@@ -878,6 +934,14 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema([]),
     errorSchema: makeErrorSchema([]),
+    contractDocs: {
+      input: "none",
+      successData: "`patternTypes`, `categories`, `styleTags` (each `{count, values}`), optional `components`, `domainTags`",
+      empty: "n/a — always returns the taxonomy",
+      partial: "n/a",
+      resultCount: "0 (not a search tool)",
+      referenceIds: "`[]`",
+    },
     extractRefs: () => [],
     countResults: () => 0,
     refineData: (d, ctx) => {
@@ -907,6 +971,14 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage"]),
     errorSchema: makeErrorSchema([]),
+    contractDocs: {
+      input: "styleTag?",
+      successData: "`patterns: PatternGroup[]` — each with patternType, count, topProducts (array), exemplar (id, title, product, qualityScore, critique)",
+      empty: "`patterns: []`",
+      partial: "sparseCoverage typed warning on thin coverage",
+      resultCount: "number of rows returned (`patterns.length`)",
+      referenceIds: "exemplar IDs",
+    },
     extractRefs: (d) => {
       const p = (d as { patterns?: Array<{ exemplar?: { id?: string } }> })?.patterns ?? [];
       return p.map(g => g.exemplar?.id).filter((x): x is string => !!x);
@@ -931,6 +1003,14 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [...ALL_SYNTHESIS_KINDS],
     warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "noCorpusIndex"]),
     errorSchema: makeErrorSchema(["PROVIDER_ERROR"]),
+    contractDocs: {
+      input: "productContext (required, min 8), category?, styleTag?, platform?, qualityTier? (default exceptional), framework? (brief/tokens), count (1-5, default 3)?",
+      successData: "`direction`, `rejectedDefaults`, `recommendation`, `rationale`, `evidenceContributions`, `structuredDecisions`",
+      empty: "n/a — absence of index degrades through fallback, not an empty success",
+      partial: "sparseCoverage / insufficientCorpusEvidence / noCorpusIndex typed warnings on sparse results",
+      resultCount: "1 when a complete plan artifact exists, otherwise 0",
+      referenceIds: "grounding entry IDs (`evidenceContributions`)",
+    },
     extractRefs: (d) => (d as { evidenceContributions?: string[] })?.evidenceContributions ?? [],
     countResults: (d) => (d as { direction?: unknown })?.direction ? 1 : 0,
     refineEnvelope: (val, ctx) => {
@@ -956,6 +1036,14 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [...ALL_SYNTHESIS_KINDS],
     warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "motionEvidenceUnavailable"]),
     errorSchema: makeErrorSchema(["INVALID_INPUT"]),
+    contractDocs: {
+      input: "productContext (required, min 8), referenceIds? (max 5), platform?, implementationFramework?, serializationFormat (default brief)?, designSystem?, constraints?",
+      successData: "see §5.4 — UiSpec with layoutRegions, colorTokens, typographyTokens, acceptanceCriteria (verifiers: axe, playwright, static-analysis, manual), citedReferences, citedDecisions, authorityLanes, provenance",
+      empty: "n/a — synthesis produces one spec artifact or errors",
+      partial: "sparseCoverage / insufficientCorpusEvidence / motionEvidenceUnavailable typed warnings; null tokens require editorial authority + unavailableDecision",
+      resultCount: "1 when a complete spec artifact exists, otherwise 0",
+      referenceIds: "`citedReferences`",
+    },
     extractRefs: (d) => (d as { citedReferences?: string[] })?.citedReferences ?? [],
     countResults: (d) => (d as { specVersion?: unknown })?.specVersion ? 1 : 0,
     refineEnvelope: (val, ctx) => {
@@ -1054,6 +1142,14 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage"]),
     errorSchema: makeErrorSchema([]),
+    contractDocs: {
+      input: "patternType?, category?, limit (1-20, default 10)?",
+      successData: "`results: AntiPatternRow[]` — each with text, sourceIds, count",
+      empty: "`results: []`",
+      partial: "sparseCoverage typed warning on thin coverage",
+      resultCount: "number of rows returned (`results.length`)",
+      referenceIds: "unique sourceIds across all rows",
+    },
     extractRefs: (d) => {
       const r = (d as { results?: Array<{ sourceIds?: string[] }> })?.results ?? [];
       return r.flatMap(e => e.sourceIds ?? []);
@@ -1072,6 +1168,14 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage"]),
     errorSchema: makeErrorSchema([]),
+    contractDocs: {
+      input: "patternType?, styleTag?, limit (1-20, default 10)?",
+      successData: "`results: PaletteRecord[]` — each with tokens (canvas, surface, ink, muted, accent), accentHue, product, sourceId, patternType",
+      empty: "`results: []`",
+      partial: "sparseCoverage typed warning on thin coverage",
+      resultCount: "number of rows returned (`results.length`)",
+      referenceIds: "unique sourceId values",
+    },
     extractRefs: (d) => {
       const r = (d as { results?: Array<{ sourceId?: string }> })?.results ?? [];
       return r.map(e => e.sourceId).filter((x): x is string => !!x);
@@ -1090,6 +1194,14 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [],
     warningSchema: makeWarningSchema(["sparseCoverage"]),
     errorSchema: makeErrorSchema([]),
+    contractDocs: {
+      input: "patternType?, styleTag?, limit (1-30, default 15)?",
+      successData: "`results: TechniqueRow[]` — each with text, source (id, product)",
+      empty: "`results: []`",
+      partial: "sparseCoverage typed warning on thin coverage",
+      resultCount: "number of rows returned (`results.length`)",
+      referenceIds: "unique source IDs",
+    },
     extractRefs: (d) => {
       const r = (d as { results?: Array<{ source?: { id?: string } }> })?.results ?? [];
       return r.map(e => e.source?.id).filter((x): x is string => !!x);
@@ -1112,6 +1224,14 @@ export const TOOL_DESCRIPTORS = [
     evidenceKinds: [...CRITIQUE_KINDS],
     warningSchema: makeWarningSchema(["insufficientCorpusEvidence", "providerDegraded"]),
     errorSchema: makeErrorSchema(["PROVIDER_ERROR", "INVALID_INPUT"]),
+    contractDocs: {
+      input: "image_data (required), image_mime_type (required), product_context?, platform?, framework? — reuses `CRITIQUE_UI_INPUT_SCHEMA` from `synthesis/contracts.ts`",
+      successData: "reuses `StructuredCritique` fields: observations, recommendations, accessibilityRisks, visualSlop, motion, appliedReferences, evidenceIds, confidence, md3?",
+      empty: "n/a — synthesis produces one critique artifact or errors",
+      partial: "insufficientCorpusEvidence / providerDegraded typed warnings; may include screen-observation and dom-signal evidence",
+      resultCount: "1 when a complete critique artifact exists, otherwise 0",
+      referenceIds: "appliedReference IDs",
+    },
     extractRefs: (d) => ((d as { appliedReferences?: Array<{ id?: string }> })?.appliedReferences ?? []).map(r => r.id).filter((x): x is string => !!x),
     countResults: (d) => (d as { summary?: unknown })?.summary ? 1 : 0,
     refineEnvelope: (val, ctx) => {

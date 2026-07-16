@@ -44,12 +44,12 @@ describe("tool-contract-docs", () => {
     }
   });
 
-  it("generated block in spec matches descriptor output (if markers exist)", () => {
+  it("generated block in spec is present and matches descriptor output byte-for-byte", () => {
     const specText = readFileSync(SPEC_PATH, "utf-8");
     const generated = extractGeneratedBlock(specText);
-    if (generated !== null) {
-      expect(generated).toBe(renderToolContractReference());
-    }
-    // If markers don't exist yet, this test is a no-op
+    // The drift gate is now unconditional: markers MUST be present and the
+    // marker-delimited block MUST equal the descriptor-driven renderer output.
+    expect(generated, "GENERATED_TOOL_CONTRACTS markers must be present in the spec").not.toBeNull();
+    expect(generated).toBe(renderToolContractReference());
   });
 });

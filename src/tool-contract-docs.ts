@@ -5,37 +5,64 @@
  * the design spec. A drift test compares the marker-delimited block against
  * renderToolContractReference() output byte-for-byte.
  */
-import { TOOL_DESCRIPTORS } from "./tool-contracts.js";
+import { TOOL_DESCRIPTORS, ERROR_RETRYABLE } from "./tool-contracts.js";
 
-/** Extract field names from a Zod object schema via Zod 4 internal shape. */
-function extractFieldNames(schema: unknown): string[] {
-  const zodObj = schema as { _zod?: { def?: { shape?: Record<string, unknown> } } };
-  const shape = zodObj?._zod?.def?.shape;
-  if (shape && typeof shape === "object") {
-    return Object.keys(shape);
-  }
-  return [];
-}
-
-/** Extract enum values from a Zod schema that wraps an enum (possibly through object/refine layers). */
+/**
+ * Extract the `code` enum values from a schema. Errors and warnings are both
+ * object/array schemas whose `code` field is a Zod enum. Zod 4 stores enum
+ * values at `_zod.def.entries` (an object map like `{NOT_FOUND:"NOT_FOUND"}`);
+ * older/other forms use `_zod.def.values` (an array). We handle both, walking
+ * through object and array element wrappers to reach the `code` field.
+ */
 function extractEnumValues(schema: unknown): readonly string[] {
-  // Try various Zod 4 internal paths for enum values
-  const s = schema as Record<string, unknown>;
-  // Direct enum
-  const directEnum = (s as { _zod?: { def?: { values?: readonly string[] } } })?._zod?.def?.values;
-  if (Array.isArray(directEnum)) return directEnum;
-  // Object with code field that's an enum
-  const objShape = (s as { _zod?: { def?: { shape?: { code?: { _zod?: { def?: { values?: readonly string[] } } } } } } })?._zod?.def?.shape;
-  if (objShape?.code?._zod?.def?.values) return objShape.code._zod.def.values;
-  // Array of objects with code field
-  const arrElem = (s as { _zod?: { def?: { element?: { _zod?: { def?: { shape?: { code?: { _zod?: { def?: { values?: readonly string[] } } } } } } } } } })?._zod?.def?.element;
-  if (arrElem?._zod?.def?.shape?.code?._zod?.def?.values) return arrElem._zod.def.shape.code._zod.def.values;
+  const s = schema as { _zod?: { def?: Record<string, unknown> } };
+
+  // Helper: given the `code` field's _zod.def, pull values from entries (Zod 4) or values (array).
+  const codesFromDef = (codeDef: unknown): readonly string[] => {
+    const def = codeDef as { entries?: Record<string, unknown>; values?: readonly string[] } | undefined;
+    // Zod 4 enum form: { entries: { NOT_FOUND: "NOT_FOUND", ... } }.
+    // Guard against arrays (typeof [] === "object") so they fall through to `values`.
+    if (def?.entries && typeof def.entries === "object" && !Array.isArray(def.entries)) {
+      return Object.keys(def.entries);
+    }
+    // Array form (older/alternate): { values: ["NOT_FOUND", ...] }
+    if (Array.isArray(def?.values)) return def.values!;
+    return [];
+  };
+
+  // 1. Direct enum schema (no object wrapper).
+  const directEntries = s?._zod?.def?.entries;
+  if (directEntries && typeof directEntries === "object" && !Array.isArray(directEntries)) return Object.keys(directEntries);
+  const directValues = s?._zod?.def?.values;
+  if (Array.isArray(directValues)) return directValues;
+
+  // 2. Object schema with a `code` field (error schemas).
+  const objShape = (s?._zod?.def?.shape) as { code?: { _zod?: { def?: unknown } } } | undefined;
+  if (objShape?.code?._zod?.def) {
+    const codes = codesFromDef(objShape.code._zod.def);
+    if (codes.length > 0) return codes;
+  }
+
+  // 3. Array of objects with a `code` field (warning schemas).
+  const arrElem = (s?._zod?.def?.element) as { _zod?: { def?: { shape?: { code?: { _zod?: { def?: unknown } } } } } } | undefined;
+  const arrCodeDef = arrElem?._zod?.def?.shape?.code?._zod?.def;
+  if (arrCodeDef) {
+    const codes = codesFromDef(arrCodeDef);
+    if (codes.length > 0) return codes;
+  }
+
   return [];
 }
 
 /**
  * Render the complete §5.5 contract reference block for all 12 tools.
- * Output is deterministic and stable across runs for the same descriptors.
+ *
+ * Row order per tool (authoritative — the drift test locks this byte-for-byte):
+ *   Input, Success data, Empty, Partial, Errors, Warnings,
+ *   Retrieval, Evidence, resultCount, referenceIds, Legacy names.
+ *
+ * Prose rows come from `desc.contractDocs`. Errors/Warnings/Retrieval/Evidence
+ * are auto-derived from the descriptor schemas. Output is deterministic.
  */
 export function renderToolContractReference(): string {
   const lines: string[] = [];
@@ -46,11 +73,34 @@ export function renderToolContractReference(): string {
     lines.push("| Aspect | Contract |");
     lines.push("|---|---|");
 
-    // Input
-    const inputFields = extractFieldNames(desc.inputSchema);
-    lines.push(`| Input | ${inputFields.length > 0 ? inputFields.join(", ") : "(none)"} |`);
+    // Input (prose from contractDocs)
+    lines.push(`| Input | ${desc.contractDocs.input} |`);
 
-    // Retrieval
+    // Success data (prose)
+    lines.push(`| Success data | ${desc.contractDocs.successData} |`);
+
+    // Empty (prose)
+    lines.push(`| Empty | ${desc.contractDocs.empty} |`);
+
+    // Partial (prose)
+    lines.push(`| Partial | ${desc.contractDocs.partial} |`);
+
+    // Errors — auto-derived codes with retryability from ERROR_RETRYABLE
+    const errorCodes = extractEnumValues(desc.errorSchema);
+    const errorsStr = errorCodes.length > 0
+      ? errorCodes.map(code => {
+          const retryable = ERROR_RETRYABLE[code];
+          const tag = retryable === true ? "retryable" : retryable === false ? "non-retryable" : "retryability unknown";
+          return `${code} (${tag})`;
+        }).join(", ")
+      : "none";
+    lines.push(`| Errors | ${errorsStr} |`);
+
+    // Warnings — auto-derived codes
+    const warningValues = extractEnumValues(desc.warningSchema);
+    lines.push(`| Warnings | ${warningValues.length > 0 ? warningValues.join(", ") : "none"} |`);
+
+    // Retrieval — auto-derived
     const retrievalStr = desc.retrieval.map((r: { mode: string; modality: string; fallbackReasons?: readonly string[] }) => {
       const base = `${r.mode}/${r.modality}`;
       if (r.fallbackReasons && r.fallbackReasons.length > 0) {
@@ -60,36 +110,33 @@ export function renderToolContractReference(): string {
     }).join("; ");
     lines.push(`| Retrieval | ${retrievalStr} |`);
 
-    // Evidence
+    // Evidence — auto-derived
     lines.push(`| Evidence | ${desc.hasEvidence ? "required (plan/spec/critique)" : "forbidden"} (${desc.evidenceKinds.length > 0 ? desc.evidenceKinds.join(", ") : "none"}) |`);
 
-    // Errors
-    const errorCodes = extractEnumValues(desc.errorSchema);
-    lines.push(`| Errors | ${errorCodes.length > 0 ? errorCodes.join(", ") : "none"} |`);
+    // resultCount (prose)
+    lines.push(`| resultCount | ${desc.contractDocs.resultCount} |`);
 
-    // Warnings
-    const warningValues = extractEnumValues(desc.warningSchema);
-    lines.push(`| Warnings | ${warningValues.length > 0 ? warningValues.join(", ") : "none"} |`);
+    // referenceIds (prose)
+    lines.push(`| referenceIds | ${desc.contractDocs.referenceIds} |`);
 
-    // Result count semantics
-    const isRetrievalCapable = desc.retrieval.length > 1;
-    let countStr: string;
-    if (desc.name === "get_ui_taxonomy") countStr = "0";
-    else if (isRetrievalCapable) countStr = "number of results returned";
-    else if (["browse_ui_patterns", "research_ui_anti_patterns", "research_ui_palettes", "research_ui_techniques"].includes(desc.name)) countStr = "number of rows returned";
-    else countStr = "1 when artifact exists, 0 otherwise";
-    lines.push(`| resultCount | ${countStr} |`);
-
-    // Reference IDs
-    lines.push(`| referenceIds | unique stable IDs exactly matching data IDs |`);
-
-    // Legacy names
+    // Legacy names — auto-derived
     lines.push(`| Legacy names | ${desc.legacyNames.length > 0 ? desc.legacyNames.join(", ") : "(none — critique_ui unchanged)"} |`);
 
+    // Blank separator between tools (also after the last; trimmed below).
     lines.push("");
   }
 
-  return lines.join("\n");
+  // Join and strip the single trailing blank line so the block has no
+  // dangling newline — this keeps it byte-stable against extractGeneratedBlock,
+  // which trims the marker-delimited region.
+  //
+  // Trim contract: extractGeneratedBlock() uses `.trim()` (strips both ends)
+  // while this renderer uses `.trimEnd()` (trailing only). The two stay
+  // byte-equal ONLY because the renderer emits no leading whitespace. If a
+  // future change ever introduces leading whitespace/newline, the extractor's
+  // leading `.trim()` would mask it and the drift gate would pass while the
+  // rendered spec diverged — so keep this output leading-whitespace-free.
+  return lines.join("\n").trimEnd();
 }
 
 /**

@@ -1013,10 +1013,16 @@ Lane A must remain sequential because contracts, policy, validator, and spec sha
 
 Synthesized from the C1 engineering review. Execute through Task 2 and its named downstream handoffs.
 
-- [ ] **T1 (P1, human: ~1 day / Codex: ~75 min)** — readiness integrity — Recompute checkpoints from immutable Git-bound recipes under closed-world C0/C1 policies.
+- [~] **T1 (P1, human: ~1 day / Codex: ~75 min)** — readiness integrity — Recompute checkpoints from immutable Git-bound recipes under closed-world C0/C1 policies.
   - Surfaced by: Architecture and outside review — current validation compares claimed target strings without resolving approved bytes.
   - Files: `src/readiness/contracts.ts`, `src/readiness/checkpoint-policy.ts`, `src/readiness/validator.ts`, readiness CLI/tests.
   - Verify: C0 stays closed after C1 live-file edits; historical source and policy mutations fail.
+  - **Status (2026-07-16): C0-recipe core delivered by R0** (`dbcb06e`, see
+    [`docs/AGENT_READINESS_STATUS.md`](../../AGENT_READINESS_STATUS.md)). The
+    validator recomputes the canonical C0 target from Git-bound recorded-commit
+    bytes, verifies every approval claim, and is fail-closed; C1 live-file edits
+    leave C0 closed and tampered history reopens it. The broader closed-world
+    C0/C1 policies and registry v2 chains remain under T2.
 - [ ] **T2 (P1, human: ~1 day / Codex: ~75 min)** — governance chains — Add deterministic registry/index/ledger snapshot chains and per-approval registry resolution.
   - Surfaced by: Architecture and outside review — `.find()`/enumeration order cannot select version authority.
   - Files: readiness schemas/validator and `quality-contracts/agent-readiness/` v2 artifacts.

@@ -5,6 +5,22 @@ Prioritized by leverage and cost. Items marked ✅ are shipped; 🟡 are next;
 
 ---
 
+## Agent readiness (Phases 0–1C)
+
+A separate workstream to freeze a trustworthy baseline and lock the agent-facing
+MCP contract behind independent checkpoints (C0–C5). **C0 (foundation freeze) is
+closed**; **C1 (agent contract lock) is in progress** on
+`feat/agent-readiness-phase-0-1c`. The runtime continues to advertise the legacy
+14-tool surface until Phase 1B by design.
+
+Status, the per-checkpoint state, and the C1 executable-contract rework
+scorecard live in [`docs/AGENT_READINESS_STATUS.md`](docs/AGENT_READINESS_STATUS.md).
+Governing plans are under `docs/superpowers/plans/` (agent-readiness phase 0–1C,
+C1 contract closure, readiness contracts); design authority is
+`docs/superpowers/specs/2026-07-13-agent-readiness-and-retagging-design.md`.
+
+---
+
 ## ✅ Shipped
 
 ### Schema v2

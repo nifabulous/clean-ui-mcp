@@ -1029,6 +1029,20 @@ Record the exact result as `C1_CONTRACT_SHA` in the subsequent governance task. 
 
 ## Completion criteria
 
+> **Rework progress (2026-07-16):** An external adversarial review reproduced seven
+> holes in the initial closure and the branch is being reworked as R0–R7 (see
+> [`docs/AGENT_READINESS_STATUS.md`](../../AGENT_READINESS_STATUS.md) for the full
+> scorecard). R0–R5 are complete and committed on
+> `feat/agent-readiness-phase-0-1c` (`dbcb06e` → `fb34e13`): the readiness
+> validator is now Git-bound and fail-closed (R0), trim/min ordering fixed (R1),
+> `community-edition` allowed (R2), primary/reference ID semantics split and
+> nested-evidence dedup closed (R3), UiSpec authority verifies evidence kind
+> (R4), and per-tool result/error type inference is literal-bound (R5).
+> **R6** (derive docs input/default rows from `z.toJSONSchema`) and **R7**
+> (full-range holistic review + final gate) remain. The checkboxes below are the
+> C1-closure gate and stay unchecked until R7's final independent review reports
+> zero Critical / zero Important.
+
 C1 executable contracts are closed only when all of these are true:
 
 - [ ] Every tool has a valid input, success, and supported error fixture.

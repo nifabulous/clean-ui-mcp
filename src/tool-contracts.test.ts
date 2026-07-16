@@ -366,8 +366,7 @@ describe("adversarial probe matrix", () => {
     r.fallbackReason = "no-image-evidence"; // only valid for critique
     r.attemptedCount = 1; r.attemptedModes = ["vector"];
     (p.retrieval as Record<string, unknown>).resultCount = 1;
-    const result = ToolResultSchemas["search_ui_references"].safeParse(p);
-    expect(result.success).toBe(false);
+    assertRejectsAt(p, "retrieval");
   });
 
   it("2: fallback with zero results rejected", () => {
@@ -378,8 +377,7 @@ describe("adversarial probe matrix", () => {
     (p.data as Record<string, unknown>).results = [];
     r.resultCount = 0;
     p.referenceIds = [];
-    const result = ToolResultSchemas["search_ui_references"].safeParse(p);
-    expect(result.success).toBe(false);
+    assertRejectsAt(p, "retrieval");
   });
 
   it("3: terminal error records attempted paths without fallback (accepted)", () => {
@@ -396,8 +394,7 @@ describe("adversarial probe matrix", () => {
     const r = p.retrieval as Record<string, unknown>;
     r.mode = "keyword"; r.modality = "text"; r.fallbackUsed = true;
     r.fallbackReason = "missing-index"; r.attemptedCount = 1; r.attemptedModes = ["vector"]; // plan doesn't allow direct vector
-    const result = ToolResultSchemas["plan_ui_direction"].safeParse(p);
-    expect(result.success).toBe(false);
+    assertRejectsAt(p, "retrieval");
   });
 
   it("5: error claims fallback rejected", () => {
@@ -431,19 +428,18 @@ describe("adversarial probe matrix", () => {
     const data = p.data as Record<string, unknown>;
     const results = data.results as Array<Record<string, unknown>>;
     results.push({ ...results[0] }); // duplicate id "ref-a"
-    const result = ToolResultSchemas["search_ui_references"].safeParse(p);
-    expect(result.success).toBe(false);
+    assertRejectsAt(p, "data");
   });
 
   it("8: compare all-missing as success rejected", () => {
     const p = cloneToolResult(makeValidSuccess("compare_ui_references")) as Record<string, unknown>;
     const data = p.data as Record<string, unknown>;
-    data.entries = []; data.foundIds = []; data.missingIds = ["ref-a", "ref-b"];
-    p.referenceIds = [];
-    (p.retrieval as Record<string, unknown>).resultCount = 0;
-    (p as Record<string, unknown>).warnings = [];
+    data.foundIds = []; // ONE mutation: empty foundIds
     const result = ToolResultSchemas["compare_ui_references"].safeParse(p);
     expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(i => i.path[0] === "data" || i.path[0] === "foundIds")).toBe(true);
+    }
   });
 
   // --- Evidence graph probes (9-13) ---
@@ -566,10 +562,8 @@ describe("adversarial probe matrix", () => {
   it("24: compare partialResult warning without missingIds rejected", () => {
     const p = cloneToolResult(makeValidSuccess("compare_ui_references")) as Record<string, unknown>;
     const data = p.data as Record<string, unknown>;
-    data.missingIds = []; // no missing but has partialResult warning
-    p.warnings = [{ code: "partialResult", message: "x" }];
-    const result = ToolResultSchemas["compare_ui_references"].safeParse(p);
-    expect(result.success).toBe(false);
+    data.missingIds = []; // ONE mutation: remove missingIds but keep partialResult warning
+    assertRejectsAt(p, "warnings");
   });
 
   it("25: parseToolResult rejects unknown tool", () => {
@@ -618,29 +612,45 @@ describe("adversarial probe matrix", () => {
 
   it("31: team-design-system authority without identified design system rejected", () => {
     const b = validUiSpec();
-    b.colorTokenAuthority = "team-design-system";
-    b.citedDecisions = [{ id: "d1", field: "color-primary", authority: "team-design-system", evidenceIds: [], readiness: "available" }];
-    expect(UiSpec.safeParse(b).success).toBe(false);
+    b.colorTokenAuthority = "team-design-system"; // ONE mutation
+    const result = UiSpec.safeParse(b);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(i => i.path[0] === "context" || i.path[0] === "citedDecisions")).toBe(true);
+    }
   });
 
   it("32: motion evidence unavailable without exact unavailableDecision rejected", () => {
     const b = validUiSpec();
-    b.unavailableDecisions = [];
-    expect(UiSpec.safeParse(b).success).toBe(false);
+    b.unavailableDecisions = []; // ONE mutation: remove the motion unavailableDecision
+    const result = UiSpec.safeParse(b);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(i => i.path[0] === "unavailableDecisions")).toBe(true);
+    }
   });
 
   it("33: contradictory unavailableDecision for available tokens rejected", () => {
     const b = validUiSpec();
-    b.unavailableDecisions = [{ field: "motion", reason: "x" }, { field: "colorTokens", reason: "should not be here" }];
-    expect(UiSpec.safeParse(b).success).toBe(false);
+    // ONE mutation: add a colorTokens unavailableDecision when tokens are present
+    (b.unavailableDecisions as Array<Record<string, unknown>>).push({ field: "colorTokens", reason: "should not be here" });
+    const result = UiSpec.safeParse(b);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(i => i.path[0] === "unavailableDecisions")).toBe(true);
+    }
   });
 
-  it("34: substring-based unavailable field (not-color-really) no longer accepted", () => {
+  it("34: substring-based unavailable field (not-color-really) rejected", () => {
     const b = validUiSpec();
-    b.colorTokens = null;
-    b.colorTokenAuthority = "editorial";
-    b.unavailableDecisions = [{ field: "not-color-really", reason: "x" }, { field: "motion", reason: "x" }];
-    expect(UiSpec.safeParse(b).success).toBe(false);
+    b.colorTokens = null; // mutation 1 (required to set up the test)
+    b.colorTokenAuthority = "editorial"; // mutation 2 (required by null-tokens rule)
+    (b.unavailableDecisions as Array<Record<string, unknown>>)[0]!.field = "not-color-really"; // THE mutation under test
+    const result = UiSpec.safeParse(b);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(i => i.path[0] === "unavailableDecisions")).toBe(true);
+    }
   });
 
   it("35: critique data.retrievalMode disagrees with envelope rejected", () => {

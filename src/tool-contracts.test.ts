@@ -27,7 +27,8 @@ describe("TOOL_DESCRIPTORS", () => {
       expect(d.inputSchema).toBeDefined();
       expect(d.dataSchema).toBeDefined();
       expect(d.retrieval.length).toBeGreaterThan(0);
-      expect(typeof d.extractRefs).toBe("function");
+      expect(typeof d.extractPrimaryIds).toBe("function");
+      expect(typeof d.extractReferenceIds).toBe("function");
       expect(typeof d.countResults).toBe("function");
       expect(d.warningSchema).toBeDefined();
       expect(d.errorSchema).toBeDefined();
@@ -769,6 +770,84 @@ describe("R2: community-edition structured-fallback reason", () => {
       attemptedModes: ["vector"],
     };
     const r = ToolResultSchemas.find_similar_ui_references.safeParse(payload);
+    expect(r.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3: descriptor-driven primary/reference IDs and closed nested evidence.
+// Bug 1: primary vs reference ID separation was hard-coded and incomplete
+//   (browse patternType is a primary key but wasn't in the list; compare's
+//   foundIds were mis-classified as primary).
+// Bug 2: nested evidence lists had no within-list dedup.
+// ---------------------------------------------------------------------------
+
+describe("R3: browse dup patternType fails (primary key)", () => {
+  it("rejects two pattern groups with the SAME patternType but different exemplar IDs", () => {
+    const payload = cloneToolResult(makeValidSuccess("browse_ui_patterns"));
+    const g = (payload.data as { patterns: object[] }).patterns[0] as Record<string, unknown>;
+    const g2 = { ...g, exemplar: { ...(g.exemplar as Record<string, unknown>), id: "ref-zzz" } };
+    (payload.data as { patterns: unknown[] }).patterns = [g, g2];
+    payload.retrieval.resultCount = 2;
+    payload.referenceIds = ["ref-a", "ref-zzz"];
+    const r = ToolResultSchemas.browse_ui_patterns.safeParse(payload);
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some(i => /duplicate primary/i.test(i.message))).toBe(true);
+    }
+  });
+});
+
+describe("R3: plan dup structuredDecisions evidenceIds fails", () => {
+  it("rejects structuredDecisions[0].evidenceIds = [id, id] (same id twice)", () => {
+    const payload = cloneToolResult(makeValidSuccess("plan_ui_direction"));
+    const sds = (payload.data as { structuredDecisions: Array<{ evidenceIds: string[] }> }).structuredDecisions;
+    sds[0].evidenceIds = ["evidence-corpus-a", "evidence-corpus-a"];
+    const r = ToolResultSchemas.plan_ui_direction.safeParse(payload);
+    expect(r.success).toBe(false);
+  });
+});
+
+describe("R3: spec dup provenance.sourceReferences fails", () => {
+  it("rejects provenance.sourceReferences = [ref, ref] while citedReferences stays valid", () => {
+    const payload = cloneToolResult(makeValidSuccess("create_ui_spec"));
+    const data = payload.data as {
+      provenance: { sourceReferences: string[] };
+      citedReferences: string[];
+    };
+    // Duplicate ONLY provenance.sourceReferences; keep citedReferences valid.
+    // The Set-based sameSet compare collapses the dup, so the bug accepted this.
+    data.provenance.sourceReferences = ["ref-a", "ref-a"];
+    // citedReferences remains ["ref-a"] (the valid fixture value).
+    const r = ToolResultSchemas.create_ui_spec.safeParse(payload);
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some(i => /sourceReferences must be unique/i.test(i.message))).toBe(true);
+    }
+  });
+});
+
+describe("R3 anti-regression: shared referenced ID across aggregation rows passes", () => {
+  it("research_ui_anti_patterns with two rows BOTH citing sourceIds: [\"ref-a\"] is valid", () => {
+    const payload = cloneToolResult(makeValidSuccess("research_ui_anti_patterns"));
+    (payload.data as { results: Array<{ text: string; sourceIds: string[]; count: number }> }).results = [
+      { text: "Avoid centering everything", sourceIds: ["ref-a"], count: 2 },
+      { text: "Avoid low contrast", sourceIds: ["ref-a"], count: 1 },
+    ];
+    payload.retrieval.resultCount = 2;
+    payload.referenceIds = ["ref-a"];
+    const r = ToolResultSchemas.research_ui_anti_patterns.safeParse(payload);
+    expect(r.success).toBe(true);
+  });
+});
+
+describe("R3 anti-regression: search dup primary row still fails", () => {
+  it("rejects search results = [r, r] (same id twice)", () => {
+    const payload = cloneToolResult(makeValidSuccess("search_ui_references"));
+    const results = (payload.data as { results: object[] }).results;
+    (payload.data as { results: unknown[] }).results = [results[0], results[0]];
+    payload.retrieval.resultCount = 2;
+    const r = ToolResultSchemas.search_ui_references.safeParse(payload);
     expect(r.success).toBe(false);
   });
 });

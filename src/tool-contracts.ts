@@ -22,7 +22,7 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { PatternType, Category, StyleTag } from "./schema.js";
 import { CRITIQUE_UI_INPUT_SCHEMA, StructuredCritique } from "./synthesis/contracts.js";
-import { validateEnvelopeRetrieval, validateEvidenceReferences, type RetrievalPolicy, type FallbackReason as IntegrityFallbackReason } from "./tool-contract-integrity.js";
+import { validateEnvelopeRetrieval, validateEvidenceReferences, unique, sameSet, type RetrievalPolicy, type FallbackReason as IntegrityFallbackReason } from "./tool-contract-integrity.js";
 
 // ===========================================================================
 // 1. Shared building blocks
@@ -764,7 +764,20 @@ export interface ToolDescriptor {
   readonly errorSchema: z.ZodType;
   /** Authoritative §5.5 prose rows — drives renderToolContractReference(). */
   readonly contractDocs: ToolContractDocs;
-  extractRefs: (data: unknown) => string[];
+  /**
+   * Extract PRIMARY IDs from `data` — keys that must be unique across the
+   * result (e.g. search result row IDs, browse patternType, compare entry IDs).
+   * Duplicate non-empty primary IDs are rejected by the envelope validator.
+   * Return `[]` for tools whose rows only reference (not own) their IDs.
+   */
+  extractPrimaryIds: (data: unknown) => readonly string[];
+  /**
+   * Extract REFERENCED IDs from `data` — IDs that rows cite but do not own
+   * (e.g. sourceIds across aggregation rows). A single referenced ID MAY
+   * legitimately appear in multiple rows; duplicates are collapsed before the
+   * reference-set-equality check. Compared as a set against `referenceIds`.
+   */
+  extractReferenceIds: (data: unknown) => readonly string[];
   countResults: (data: unknown) => number;
   refineData?: (data: unknown, ctx: z.RefinementCtx) => void;
   /** Envelope-level refinement — has access to warnings, evidence, referenceIds. */
@@ -799,7 +812,11 @@ export const TOOL_DESCRIPTORS = [
       resultCount: "`results.length`",
       referenceIds: "unique `result.id` values",
     },
-    extractRefs: (d) => {
+    extractPrimaryIds: (d) => {
+      const r = (d as { results?: Array<{ id?: string }> })?.results ?? [];
+      return r.map(e => e.id).filter((x): x is string => !!x);
+    },
+    extractReferenceIds: (d) => {
       const r = (d as { results?: Array<{ id?: string }> })?.results ?? [];
       return r.map(e => e.id).filter((x): x is string => !!x);
     },
@@ -825,7 +842,8 @@ export const TOOL_DESCRIPTORS = [
       resultCount: "1 on success, 0 on error",
       referenceIds: "`[id]` on success, `[]` on error",
     },
-    extractRefs: (d) => { const id = (d as { id?: string })?.id; return id ? [id] : []; },
+    extractPrimaryIds: (d) => { const id = (d as { id?: string })?.id; return id ? [id] : []; },
+    extractReferenceIds: (d) => { const id = (d as { id?: string })?.id; return id ? [id] : []; },
     countResults: (d) => (d as { id?: unknown })?.id ? 1 : 0,
   },
   {
@@ -852,7 +870,11 @@ export const TOOL_DESCRIPTORS = [
       resultCount: "`results.length`",
       referenceIds: "unique `result.id` values",
     },
-    extractRefs: (d) => {
+    extractPrimaryIds: (d) => {
+      const r = (d as { results?: Array<{ id?: string }> })?.results ?? [];
+      return r.map(e => e.id).filter((x): x is string => !!x);
+    },
+    extractReferenceIds: (d) => {
       const r = (d as { results?: Array<{ id?: string }> })?.results ?? [];
       return r.map(e => e.id).filter((x): x is string => !!x);
     },
@@ -882,7 +904,8 @@ export const TOOL_DESCRIPTORS = [
       resultCount: "`foundIds.length`",
       referenceIds: "`foundIds`",
     },
-    extractRefs: (d) => (d as { foundIds?: string[] })?.foundIds ?? [],
+    extractPrimaryIds: (d) => (d as { entries?: Array<{ id?: string }> })?.entries?.map(e => e.id).filter((x): x is string => !!x) ?? [],
+    extractReferenceIds: (d) => (d as { foundIds?: string[] })?.foundIds ?? [],
     countResults: (d) => (d as { foundIds?: unknown[] })?.foundIds?.length ?? 0,
     refineData: (d, ctx) => {
       const data = d as { foundIds?: string[]; missingIds?: string[]; entries?: Array<{ id?: string }> };
@@ -942,7 +965,8 @@ export const TOOL_DESCRIPTORS = [
       resultCount: "0 (not a search tool)",
       referenceIds: "`[]`",
     },
-    extractRefs: () => [],
+    extractPrimaryIds: () => [],
+    extractReferenceIds: () => [],
     countResults: () => 0,
     refineData: (d, ctx) => {
       const data = d as Record<string, { count?: number; values?: string[] } | undefined>;
@@ -979,7 +1003,11 @@ export const TOOL_DESCRIPTORS = [
       resultCount: "number of rows returned (`patterns.length`)",
       referenceIds: "exemplar IDs",
     },
-    extractRefs: (d) => {
+    extractPrimaryIds: (d) => {
+      const p = (d as { patterns?: Array<{ patternType?: string }> })?.patterns ?? [];
+      return p.map(g => g.patternType).filter((x): x is string => !!x);
+    },
+    extractReferenceIds: (d) => {
       const p = (d as { patterns?: Array<{ exemplar?: { id?: string } }> })?.patterns ?? [];
       return p.map(g => g.exemplar?.id).filter((x): x is string => !!x);
     },
@@ -1011,17 +1039,16 @@ export const TOOL_DESCRIPTORS = [
       resultCount: "1 when a complete plan artifact exists, otherwise 0",
       referenceIds: "grounding entry IDs (`evidenceContributions`)",
     },
-    extractRefs: (d) => (d as { evidenceContributions?: string[] })?.evidenceContributions ?? [],
+    extractPrimaryIds: () => [],
+    extractReferenceIds: (d) => (d as { evidenceContributions?: string[] })?.evidenceContributions ?? [],
     countResults: (d) => (d as { direction?: unknown })?.direction ? 1 : 0,
     refineEnvelope: (val, ctx) => {
-      const evidenceIds = new Set<string>(((val.evidence as Array<{ id?: string }> | undefined)?.map(e => e.id).filter((x): x is string => !!x)) ?? []);
+      const knownEvidence = new Set<string>(((val.evidence as Array<{ id?: string }> | undefined)?.map(e => e.id).filter((x): x is string => !!x)) ?? []);
       const data = val.data as { structuredDecisions?: Array<{ evidenceIds?: string[] }> };
-      for (const sd of data.structuredDecisions ?? []) {
-        for (const eid of sd.evidenceIds ?? []) {
-          if (!evidenceIds.has(eid))
-            ctx.addIssue({ code: "custom", message: `structuredDecision evidenceId "${eid}" not in envelope evidence`, path: ["data", "structuredDecisions"] });
-        }
-      }
+      // Membership + within-list dedup + empty/whitespace checks in one call.
+      const sdRefs = (data.structuredDecisions ?? []).flatMap((sd, i) =>
+        [{ path: ["data", "structuredDecisions", i, "evidenceIds"] as PropertyKey[], ids: sd.evidenceIds ?? [] }]);
+      validateEvidenceReferences(knownEvidence, sdRefs, ctx);
     },
   },
   {
@@ -1044,7 +1071,8 @@ export const TOOL_DESCRIPTORS = [
       resultCount: "1 when a complete spec artifact exists, otherwise 0",
       referenceIds: "`citedReferences`",
     },
-    extractRefs: (d) => (d as { citedReferences?: string[] })?.citedReferences ?? [],
+    extractPrimaryIds: () => [],
+    extractReferenceIds: (d) => (d as { citedReferences?: string[] })?.citedReferences ?? [],
     countResults: (d) => (d as { specVersion?: unknown })?.specVersion ? 1 : 0,
     refineEnvelope: (val, ctx) => {
       const data = val.data as {
@@ -1124,8 +1152,13 @@ export const TOOL_DESCRIPTORS = [
       const provenanceEvIds = new Set(provEvIds);
       if (provenanceEvIds.size !== knownEvidence.size || ![...provenanceEvIds].every(id => knownEvidence.has(id)))
         ctx.addIssue({ code: "custom", message: "provenance.evidenceIds must exactly match envelope evidence IDs", path: ["data", "provenance"] });
-      // provenance.sourceReferences must match citedReferences exactly
-      const sourceRefs = new Set(data?.provenance?.sourceReferences ?? []);
+      // provenance.sourceReferences must be unique AND match citedReferences exactly.
+      // The explicit dedup check runs BEFORE the set compare — the Set-based sameSet
+      // below collapses duplicates, so without this it would silently accept [ref, ref].
+      const sourceRefsRaw = data?.provenance?.sourceReferences ?? [];
+      if (new Set(sourceRefsRaw).size !== sourceRefsRaw.length)
+        ctx.addIssue({ code: "custom", message: "provenance.sourceReferences must be unique", path: ["data", "provenance"] });
+      const sourceRefs = new Set(sourceRefsRaw);
       if (sourceRefs.size !== citedSet.size || ![...sourceRefs].every(id => citedSet.has(id)))
         ctx.addIssue({ code: "custom", message: "provenance.sourceReferences must exactly match citedReferences", path: ["data", "provenance"] });
     },
@@ -1150,7 +1183,8 @@ export const TOOL_DESCRIPTORS = [
       resultCount: "number of rows returned (`results.length`)",
       referenceIds: "unique sourceIds across all rows",
     },
-    extractRefs: (d) => {
+    extractPrimaryIds: () => [],
+    extractReferenceIds: (d) => {
       const r = (d as { results?: Array<{ sourceIds?: string[] }> })?.results ?? [];
       return r.flatMap(e => e.sourceIds ?? []);
     },
@@ -1176,7 +1210,8 @@ export const TOOL_DESCRIPTORS = [
       resultCount: "number of rows returned (`results.length`)",
       referenceIds: "unique sourceId values",
     },
-    extractRefs: (d) => {
+    extractPrimaryIds: () => [],
+    extractReferenceIds: (d) => {
       const r = (d as { results?: Array<{ sourceId?: string }> })?.results ?? [];
       return r.map(e => e.sourceId).filter((x): x is string => !!x);
     },
@@ -1202,7 +1237,8 @@ export const TOOL_DESCRIPTORS = [
       resultCount: "number of rows returned (`results.length`)",
       referenceIds: "unique source IDs",
     },
-    extractRefs: (d) => {
+    extractPrimaryIds: () => [],
+    extractReferenceIds: (d) => {
       const r = (d as { results?: Array<{ source?: { id?: string } }> })?.results ?? [];
       return r.map(e => e.source?.id).filter((x): x is string => !!x);
     },
@@ -1232,7 +1268,8 @@ export const TOOL_DESCRIPTORS = [
       resultCount: "1 when a complete critique artifact exists, otherwise 0",
       referenceIds: "appliedReference IDs",
     },
-    extractRefs: (d) => ((d as { appliedReferences?: Array<{ id?: string }> })?.appliedReferences ?? []).map(r => r.id).filter((x): x is string => !!x),
+    extractPrimaryIds: () => [],
+    extractReferenceIds: (d) => ((d as { appliedReferences?: Array<{ id?: string }> })?.appliedReferences ?? []).map(r => r.id).filter((x): x is string => !!x),
     countResults: (d) => (d as { summary?: unknown })?.summary ? 1 : 0,
     refineEnvelope: (val, ctx) => {
       const evidenceIds = new Set<string>(((val.evidence as Array<{ id?: string }> | undefined)?.map(e => e.id).filter((x): x is string => !!x)) ?? []);
@@ -1435,16 +1472,19 @@ function makeEnvelope(desc: ToolDescriptor): z.ZodType {
       if (new Set(val.referenceIds).size !== val.referenceIds.length)
         ctx.addIssue({ code: "custom", message: "referenceIds must be unique", path: ["referenceIds"] });
 
-      // 6. reference set equality (allow repeated referenced IDs in data, compare as sets)
-      const dataRefs = desc.extractRefs(val.data);
-      const dataSet = new Set(dataRefs);
-      // Do NOT reject duplicate dataRefs — aggregation rows may share source IDs.
-      // Only reject duplicates for primary-ID tools (search/similar results, get id, compare entries)
-      const primaryIdTools = ["search_ui_references", "find_similar_ui_references", "get_ui_reference", "compare_ui_references"];
-      if (primaryIdTools.includes(desc.name) && dataSet.size !== dataRefs.length)
+      // 6. Descriptor-driven primary/reference ID separation.
+      // PRIMARY IDs are keys owned by rows (search result ids, browse patternType,
+      // compare entry ids, get record id) and must be unique across the result.
+      // REFERENCED IDs are cited-but-not-owned (sourceIds across aggregation rows);
+      // a single referenced ID MAY legitimately appear in multiple rows, so dups
+      // are collapsed via unique() before the set comparison against referenceIds.
+      const primaryIds = desc.extractPrimaryIds(val.data);
+      const primarySet = new Set(primaryIds);
+      if (primarySet.size !== primaryIds.length)
         ctx.addIssue({ code: "custom", message: "data contains duplicate primary IDs", path: ["data"] });
-      const refSet = new Set(val.referenceIds);
-      if (dataSet.size !== refSet.size || ![...dataSet].every(id => refSet.has(id))) {
+
+      const dataRefs = unique([...desc.extractReferenceIds(val.data)]);
+      if (!sameSet(dataRefs, val.referenceIds)) {
         ctx.addIssue({ code: "custom", message: "referenceIds must exactly match data IDs (as sets)", path: ["referenceIds"] });
       }
 

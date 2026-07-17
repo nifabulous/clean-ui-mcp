@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPrivateAddress, assertSafeCaptureTarget } from "./ssrf.js";
+import { isPrivateAddress, assertSafeCaptureTarget, assertSafeNavigationTarget } from "./ssrf.js";
 import { captureSlug, isAllowedByRobots, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT, MIN_VH_FRAC, VIEWPORTS } from "./scripts/capture.js";
 
 // ============================================================
@@ -41,6 +41,27 @@ describe("SSRF guard: isPrivateAddress", () => {
     // Public v6 (Cloudflare)
     expect(isPrivateAddress("2606:4700:4700::1111")).toBe(false);
   });
+
+  // --- extended ranges (Task 3, Production Hardening) ---------------------
+  // Three non-public CIDRs the prefix checks originally missed:
+  //   - CGNAT        100.64.0.0/10  (octet2 in 64..127)
+  //   - Benchmarking 198.18.0.0/15  (octet2 in {18,19})
+  //   - IETF proto   192.0.0.0/24   (octet2=0 AND octet3=0)
+  // The boundary cases (100.128 / 198.20) prove the range is exact, not wide.
+  it("rejects CGNAT, benchmarking, and IETF-protocol ranges (extended ranges)", () => {
+    // CGNAT 100.64.0.0/10 — first/last in range, then first OUT of range.
+    expect(isPrivateAddress("100.64.0.1")).toBe(true);
+    expect(isPrivateAddress("100.127.255.254")).toBe(true);
+    expect(isPrivateAddress("100.128.0.1")).toBe(false);
+    // Benchmarking 198.18.0.0/15 — both octet2 values 18 and 19, then 20 is out.
+    expect(isPrivateAddress("198.18.0.1")).toBe(true);
+    expect(isPrivateAddress("198.19.255.254")).toBe(true);
+    expect(isPrivateAddress("198.20.0.1")).toBe(false);
+    // IETF protocol assignments 192.0.0.0/24 — octet2=0 AND octet3=0.
+    expect(isPrivateAddress("192.0.0.1")).toBe(true);
+    // 192.0.1.x is OUT of /24 (octet3 != 0) — must stay public.
+    expect(isPrivateAddress("192.0.1.1")).toBe(false);
+  });
 });
 
 describe("SSRF guard: assertSafeCaptureTarget", () => {
@@ -64,6 +85,29 @@ describe("SSRF guard: assertSafeCaptureTarget", () => {
     // the same machine are a real workflow.
     await expect(assertSafeCaptureTarget("http://localhost:3000/")).resolves.toBeInstanceOf(URL);
     await expect(assertSafeCaptureTarget("http://127.0.0.1:8080/")).resolves.toBeInstanceOf(URL);
+  });
+});
+
+// ============================================================
+// Per-hop navigation guard (Task 3). assertSafeCaptureTarget only
+// validates the initial URL; page.goto follows server redirects
+// unchecked, so a public URL that 302s to http://169.254.169.254
+// sailed through. assertSafeNavigationTarget is the single rule the
+// per-hop route handler calls on every main-frame navigation.
+// ============================================================
+
+describe("SSRF guard: assertSafeNavigationTarget", () => {
+  it("rejects the cloud-metadata endpoint (the redirect-bypass target)", async () => {
+    // This is the exact URL a public page's 302 would point at. Must throw —
+    // if it didn't, the per-hop guard would let the redirect through.
+    await expect(assertSafeNavigationTarget("http://169.254.169.254/latest/meta-data/")).rejects.toThrow(/blocked metadata/);
+  });
+
+  it("accepts a public target (mirrors assertSafeCaptureTarget's real-DNS test)", async () => {
+    // Same tradeoff as the existing assertSafeCaptureTarget tests: a real DNS
+    // lookup against example.com. If CI is offline this is flaky, but the
+    // existing tests accept that — we match the pattern rather than mock DNS.
+    await expect(assertSafeNavigationTarget("https://example.com/")).resolves.toBeUndefined();
   });
 });
 

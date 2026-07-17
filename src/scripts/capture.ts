@@ -56,7 +56,7 @@ import { parseArgs } from "node:util";
 import { createHash } from "node:crypto";
 import { chromium, type Browser, type BrowserContext, type Page, type Locator } from "playwright";
 import sharp from "sharp";
-import { assertSafeCaptureTarget } from "../ssrf.js";
+import { assertSafeCaptureTarget, assertSafeNavigationTarget, installSsrfGuard } from "../ssrf.js";
 import { normalizeMotionDeclarations, type DomMotionInput } from "../dom-motion.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -331,7 +331,31 @@ async function isAllowedByRobots(targetUrl: string): Promise<boolean> {
   const robotsUrl = `${u.protocol}//${u.host}/robots.txt`;
   let body = "";
   try {
-    const res = await fetch(robotsUrl, { redirect: "follow" });
+    // SSRF: follow redirects MANUALLY and re-run the navigation guard against
+    // each Location header before fetching it. redirect:"follow" previously let
+    // a robots.txt 302 to http://169.254.169.254/... through unchecked. We cap
+    // at 3 hops; beyond that we treat robots as missing (return true — the
+    // existing fail-open default for transient/odd servers). A redirect whose
+    // target fails SSRF policy also bails to fail-open: we never fetch it, and
+    // the caller's own assertSafeCaptureTarget already gated the capture URL.
+    let currentUrl = robotsUrl;
+    let res = await fetch(currentUrl, { redirect: "manual" });
+    let hops = 0;
+    while (res.status >= 300 && res.status < 400 && hops < 3) {
+      const location = res.headers.get("location");
+      if (!location) break;
+      const nextUrl = new URL(location, currentUrl).toString();
+      try {
+        await assertSafeNavigationTarget(nextUrl);
+      } catch {
+        // Redirect points at a blocked/private target — refuse to follow.
+        return true;
+      }
+      currentUrl = nextUrl;
+      res = await fetch(currentUrl, { redirect: "manual" });
+      hops++;
+    }
+    if (res.status >= 300 && res.status < 400) return true; // too many hops — fail-open
     if (!res.ok) return true;
     body = await res.text();
   } catch {
@@ -955,6 +979,10 @@ async function captureSource(
     if (source.authStatePath) contextOpts.storageState = source.authStatePath;
     const context: BrowserContext = await browser.newContext(contextOpts);
     const page = await context.newPage();
+    // SSRF per-hop guard — installed BEFORE page.goto so server redirects
+    // (302→169.254.169.254 etc.) are intercepted and aborted. assertSafeCaptureTarget
+    // above only checked the initial URL; this closes the redirect bypass.
+    await installSsrfGuard(page);
 
     try {
       await page.goto(source.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
@@ -1168,6 +1196,9 @@ async function runSingleCapture(opts: {
       reducedMotion: "reduce",
     });
     const page = await context.newPage();
+    // SSRF per-hop guard — installed BEFORE page.goto so server redirects are
+    // intercepted and aborted (same protection as the batch path above).
+    await installSsrfGuard(page);
     await page.goto(opts.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await settlePage(page);
     if (opts.delay > 0) await page.waitForTimeout(opts.delay);

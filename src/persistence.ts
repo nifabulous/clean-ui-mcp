@@ -58,7 +58,7 @@ function corpusRoot(): string {
   return corpusRootOverride ?? DEFAULT_CORPUS_ROOT;
 }
 
-function entriesPath(): string { return resolve(corpusRoot(), "entries.json"); }
+export function entriesPath(): string { return resolve(corpusRoot(), "entries.json"); }
 function seedPath(): string { return resolve(corpusRoot(), "seed.json"); }
 function snapshotDir(): string { return resolve(corpusRoot(), ".snapshots"); }
 

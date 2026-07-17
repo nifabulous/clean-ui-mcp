@@ -1,10 +1,26 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync, writeFileSync, utimesSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Corpus } from "./schema.js";
-import { getEntryById, listCategories, listStyleTags, searchEntries, findSimilarEntries, setCorpusForTesting, indexStatus } from "./corpus.js";
+import { getEntryById, listCategories, listStyleTags, searchEntries, findSimilarEntries, loadCorpus, setCorpusForTesting, indexStatus } from "./corpus.js";
 import { fixtures } from "./scripts/__fixtures__/corpus-fixtures.js";
+import { setCorpusRootForTesting } from "./persistence.js";
+
+// Two real fixture entries reused from src/scripts/__fixtures__/corpus-fixtures.ts.
+// Using existing fixtures keeps the cache-invalidation test aligned with the
+// corpus shape and avoids inventing a parallel fixture set. The fixtures are
+// cast `as CorpusEntryT` in their own file, and image.path there is "" — which
+// the hardened schema (image paths must live under images-private/ or
+// images-public/) rejects on disk load. Normalize the path here so the tmp
+// entries.json parses via loadCorpusSafe's strict validator.
+function diskValidFixture(id: string) {
+  const e = fixtures.find((f) => f.id === id)!;
+  return { ...e, image: { ...e.image, path: `images-private/${e.id}.png` } };
+}
+const FIXTURE_ENTRY_A = diskValidFixture("linear-board");
+const FIXTURE_ENTRY_B = diskValidFixture("stripe-pricing");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(__dirname, "..", "corpus", "entries.json");
@@ -182,5 +198,39 @@ describe("findSimilarEntries", () => {
 
   it("returns empty for an id that's not in the index", () => {
     expect(findSimilarEntries("nonexistent-id", 3)).toEqual([]);
+  });
+});
+
+// ── cache invalidation: loadCorpus must re-read entries.json when its mtime ───
+// changes. Previously loadCorpus cached forever per process, so a long-running
+// MCP server never saw curator/CLI edits. The fix: stat entries.json via the
+// test-overridable entriesPath() accessor (NOT the ENTRIES_PATH module-load
+// constant, which setCorpusRootForTesting does NOT redirect), and invalidate
+// the cache when the mtime advances.
+describe("loadCorpus cache invalidation", () => {
+  it("re-reads entries.json when its mtime changes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "corpus-cache-"));
+    setCorpusRootForTesting(dir);
+    setCorpusForTesting(null); // clear any fixture override so we read disk
+    try {
+      writeFileSync(
+        join(dir, "entries.json"),
+        JSON.stringify({ version: 2, entries: [FIXTURE_ENTRY_A] }),
+      );
+      expect(loadCorpus()).toHaveLength(1);
+
+      // Simulate an external edit (curator/CLI) with a newer mtime.
+      writeFileSync(
+        join(dir, "entries.json"),
+        JSON.stringify({ version: 2, entries: [FIXTURE_ENTRY_A, FIXTURE_ENTRY_B] }),
+      );
+      // Bump mtime well past the first write — many filesystems have coarse
+      // mtime granularity (1s on some), so +5s guarantees a detectable change.
+      utimesSync(join(dir, "entries.json"), new Date(), new Date(Date.now() + 5000));
+      expect(loadCorpus()).toHaveLength(2);
+    } finally {
+      setCorpusRootForTesting(null);
+      setCorpusForTesting(null);
+    }
   });
 });

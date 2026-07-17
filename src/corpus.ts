@@ -1,23 +1,58 @@
+import { statSync } from "node:fs";
 import { type CorpusEntryT } from "./schema.js";
 import { loadIndex, embedQuery, cosine, entryToDocument, hashForDocument, indexExists, voyageRerank } from "./embeddings.js";
-import { loadCorpusSafe } from "./persistence.js";
+import { loadCorpusSafe, entriesPath } from "./persistence.js";
 
 let cached: CorpusEntryT[] | null = null;
+// mtime (in ms) of entries.json at the time `cached` was populated. Used to
+// detect external edits (curator save, CLI tool, restore) so a long-running
+// process — the MCP server — re-reads instead of serving stale entries forever.
+let cachedMtimeMs: number | null = null;
+// True ONLY when a fixture array was injected via setCorpusForTesting. Fixture
+// overrides must never be invalidated by the real corpus's mtime — that would
+// make fixture-based tests flaky depending on whether entries.json happens to
+// exist on disk on the dev machine running them.
+let testOverride = false;
 
 /**
- * Load + validate the corpus once per process, via the hardened persistence
- * path (loadCorpusSafe). This consolidation (Gate 1A) means the MCP server —
- * every tool here calls loadCorpus — gets the SAME safety property as the
- * curator UI: missing/corrupt files fall back read-only to snapshot/seed
- * rather than silently rewriting the primary, and an unsupported-newer version
- * fails visibly instead of being masked as a parse error.
+ * Stat entries.json's mtime. Returns null when the file can't be stat'd
+ * (missing/unreadable); in that case the cache can't be validated against a
+ * concrete mtime and the load below falls through to loadCorpusSafe, whose
+ * own fallback chain decides what to serve.
  *
- * Caching is preserved so a single process doesn't re-read disk on every tool
- * call; the test seam (setCorpusForTesting) overrides the cache for fixtures.
+ * Uses the test-overridable `entriesPath()` accessor (NOT the ENTRIES_PATH
+ * module-load constant) so setCorpusRootForTesting redirects this stat too.
+ */
+function entriesMtimeMs(): number | null {
+  try { return statSync(entriesPath()).mtimeMs; } catch { return null; }
+}
+
+/**
+ * Load + validate the corpus via the hardened persistence path (loadCorpusSafe),
+ * with an mtime-based cache. This consolidation (Gate 1A) means the MCP server —
+ * every tool here calls loadCorpus — gets the SAME safety property as the
+ * curator UI: missing/corrupt files fall back read-only to snapshot/seed rather
+ * than silently rewriting the primary, and an unsupported-newer version fails
+ * visibly instead of being masked as a parse error.
+ *
+ * Caching: the result is memoized per process, BUT the memo is invalidated when
+ * entries.json's mtime advances. This fixes the bug where a long-running MCP
+ * server never saw curator/CLI edits — the cache used to live forever. A single
+ * stat() per call is negligible compared to the JSON parse it avoids on a hit.
+ *
+ * Fixture overrides (setCorpusForTesting with a non-null array) bypass the disk
+ * entirely and are never invalidated by mtime — tests that inject fixtures need
+ * stability, not disk re-reads.
  */
 export function loadCorpus(): CorpusEntryT[] {
-  if (cached) return cached;
+  // Fixture override: never invalidated by disk mtimes. This keeps the existing
+  // fixture-based test suite stable regardless of whether the dev machine has
+  // a real corpus/entries.json on disk.
+  if (testOverride && cached) return cached;
+  const mtime = entriesMtimeMs();
+  if (cached && mtime !== null && mtime === cachedMtimeMs) return cached;
   cached = loadCorpusSafe().entries;
+  cachedMtimeMs = mtime;
   return cached;
 }
 
@@ -25,9 +60,17 @@ export function loadCorpus(): CorpusEntryT[] {
  * Test-only injection point. Overrides the corpus cache so tests can exercise
  * getEntryById/listCategories/etc. against fixtures instead of the mutable
  * production entries.json. Never call this from production code.
+ *
+ * Passing a non-null array enables `testOverride` — subsequent loadCorpus()
+ * calls return the fixture array without re-reading disk or checking mtimes,
+ * so fixture-based tests stay deterministic even when a real entries.json
+ * exists on disk. Passing null clears the override and returns to disk-backed
+ * loading (used by the cache-invalidation test, which writes to a tmp dir).
  */
 export function setCorpusForTesting(entries: CorpusEntryT[] | null): void {
   cached = entries;
+  cachedMtimeMs = null;
+  testOverride = entries !== null;
 }
 
 export interface SearchOptions {

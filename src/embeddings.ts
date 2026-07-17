@@ -17,7 +17,7 @@ import "./env.js";
  * fully stale on load and rebuilt. Gitignored — regenerate with `npm run build-index`.
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -139,7 +139,43 @@ export function indexExists(): boolean {
   return existsSync(INDEX_PATH);
 }
 
+// ─── loadIndex cache ─────────────────────────────────────────────────────────
+// embeddings.json is a 1024-dim float array per entry — re-parsing it on every
+// query (the old behavior) burned CPU proportional to corpus size on each
+// vector/hybrid search. Cache the parsed result per process, invalidated by
+// mtime so a rebuild (build-index) or external edit is picked up without a
+// server restart.
+//
+// Both positive (a valid index) and negative (missing/stale/incompatible →
+// null, triggering keyword fallback) results are cached against the mtime they
+// were computed at, so we neither re-parse a valid index nor re-attempt a
+// failing parse on every query. saveIndex() writes through and bumps the file's
+// mtime, so an in-process rebuild is reflected on the next loadIndex() call.
+let cachedIndex: EmbeddingIndex | null = null;
+let cachedIndexMtimeMs: number | null = null;
+let cachedIndexLoaded = false; // true once we've resolved (index or null) at cachedIndexMtimeMs
+
+function indexMtimeMs(): number | null {
+  try { return statSync(INDEX_PATH).mtimeMs; } catch { return null; }
+}
+
 export function loadIndex(): EmbeddingIndex | null {
+  const mtime = indexMtimeMs();
+
+  // Cache hit (positive OR negative): we already resolved at this mtime.
+  if (cachedIndexLoaded && mtime !== null && mtime === cachedIndexMtimeMs) {
+    return cachedIndex;
+  }
+
+  const resolved = readIndexFromDisk();
+  cachedIndex = resolved;
+  cachedIndexMtimeMs = mtime;
+  cachedIndexLoaded = true;
+  return resolved;
+}
+
+/** Pure disk read — no cache. Factored out so loadIndex can wrap it with caching. */
+function readIndexFromDisk(): EmbeddingIndex | null {
   if (!existsSync(INDEX_PATH)) return null;
   let parsed: unknown;
   try {

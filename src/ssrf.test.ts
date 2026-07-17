@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPrivateAddress, assertSafeCaptureTarget, assertSafeNavigationTarget } from "./ssrf.js";
+import { isPrivateAddress, assertSafeCaptureTarget, assertSafeNavigationTarget, localOriginIfLocal } from "./ssrf.js";
 import { captureSlug, isAllowedByRobots, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT, MIN_VH_FRAC, VIEWPORTS } from "./scripts/capture.js";
 import { parseOpenAIResetHeader } from "./tagger.js";
 
@@ -131,6 +131,49 @@ describe("SSRF guard: assertSafeNavigationTarget", () => {
   it("allows data: and blob: URLs (inline subresources that make no network request)", async () => {
     await expect(assertSafeNavigationTarget("data:image/png;base64,iVBOR")).resolves.toBeUndefined();
     await expect(assertSafeNavigationTarget("blob:https://example.com/abc-123")).resolves.toBeUndefined();
+  });
+});
+
+// ============================================================
+// localOriginIfLocal — derives the allowed local origin for installSsrfGuard
+// so local-dev capture of localhost works (the initial page.goto + same-origin
+// assets load) without re-opening the public-to-localhost redirect bypass.
+// ============================================================
+describe("SSRF guard: localOriginIfLocal", () => {
+  it("returns the exact origin for a localhost target", () => {
+    expect(localOriginIfLocal("http://localhost:3000/app")).toBe("http://localhost:3000");
+    expect(localOriginIfLocal("http://127.0.0.1:8080/")).toBe("http://127.0.0.1:8080");
+    expect(localOriginIfLocal("https://localhost/")).toBe("https://localhost");
+  });
+
+  it("returns undefined for a public target (no local origin to allow)", () => {
+    expect(localOriginIfLocal("https://example.com/")).toBeUndefined();
+    expect(localOriginIfLocal("http://10.0.0.5/")).toBeUndefined();
+  });
+
+  it("returns undefined for an unparseable URL", () => {
+    expect(localOriginIfLocal("not-a-url")).toBeUndefined();
+  });
+
+  it("accepts a URL object as well as a string", () => {
+    expect(localOriginIfLocal(new URL("http://localhost:5173/"))).toBe("http://localhost:5173");
+  });
+
+  // The decisive local-dev-capture regression test: with the allowed origin
+  // passed to the guard, the initial localhost target and its same-origin
+  // subresources are permitted (the guard continues them); but a request to a
+  // DIFFERENT localhost port still falls through to assertSafeNavigationTarget
+  // and is rejected. This is the workflow the prior fix broke.
+  it("local-dev capture: same-origin localhost passes, different-port localhost rejected", async () => {
+    const allowed = localOriginIfLocal("http://localhost:3000/app");
+    expect(allowed).toBe("http://localhost:3000");
+    // The guard permits the exact origin (same scheme+host+port):
+    //   new URL("http://localhost:3000/assets/style.css").origin === allowed
+    expect(new URL("http://localhost:3000/assets/style.css").origin).toBe(allowed);
+    // A different port is NOT the allowed origin → falls through to the full
+    // assertSafeNavigationTarget check → rejected (localhost not bypassed there).
+    expect(new URL("http://localhost:3001/admin").origin).not.toBe(allowed);
+    await expect(assertSafeNavigationTarget("http://localhost:3001/admin")).rejects.toThrow(/blocked|private/);
   });
 });
 

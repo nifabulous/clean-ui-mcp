@@ -56,7 +56,7 @@ import { parseArgs } from "node:util";
 import { createHash } from "node:crypto";
 import { chromium, type Browser, type BrowserContext, type Page, type Locator } from "playwright";
 import sharp from "sharp";
-import { assertSafeCaptureTarget, assertSafeNavigationTarget, installSsrfGuard } from "../ssrf.js";
+import { assertSafeCaptureTarget, assertSafeNavigationTarget, installSsrfGuard, localOriginIfLocal } from "../ssrf.js";
 import { normalizeMotionDeclarations, type DomMotionInput } from "../dom-motion.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -982,7 +982,8 @@ async function captureSource(
     // SSRF per-hop guard — installed BEFORE page.goto so server redirects
     // (302→169.254.169.254 etc.) are intercepted and aborted. assertSafeCaptureTarget
     // above only checked the initial URL; this closes the redirect bypass.
-    await installSsrfGuard(page);
+    // Pass the local origin so local-dev captures of localhost load.
+    await installSsrfGuard(page, localOriginIfLocal(source.url));
 
     try {
       await page.goto(source.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
@@ -1198,7 +1199,8 @@ async function runSingleCapture(opts: {
     const page = await context.newPage();
     // SSRF per-hop guard — installed BEFORE page.goto so server redirects are
     // intercepted and aborted (same protection as the batch path above).
-    await installSsrfGuard(page);
+    // Pass the local origin so local-dev captures of localhost load.
+    await installSsrfGuard(page, localOriginIfLocal(opts.url));
     await page.goto(opts.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await settlePage(page);
     if (opts.delay > 0) await page.waitForTimeout(opts.delay);

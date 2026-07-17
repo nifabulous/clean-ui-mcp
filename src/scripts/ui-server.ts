@@ -696,7 +696,7 @@ function mimeFor(path: string): string {
  * preserves the UI's friendlier "Use a valid source URL" parse-error wording.
  */
 export { isPrivateAddress } from "../ssrf.js";
-import { assertSafeCaptureTarget as assertSafeCaptureTargetShared, installSsrfGuard } from "../ssrf.js";
+import { assertSafeCaptureTarget as assertSafeCaptureTargetShared, installSsrfGuard, localOriginIfLocal } from "../ssrf.js";
 
 async function assertSafeCaptureTarget(rawUrl: string): Promise<URL> {
   try {
@@ -802,7 +802,9 @@ async function handleCaptureUrl(req: IncomingMessage, res: ServerResponse) {
     // SSRF per-hop guard — installed BEFORE page.goto so server redirects are
     // intercepted and aborted. assertSafeCaptureTarget above only checked the
     // initial URL; this closes the public-URL-302-to-metadata redirect bypass.
-    await installSsrfGuard(page);
+    // When the initial target was localhost (local-dev capture), pass its exact
+    // origin so the guard permits that one local origin's same-origin requests.
+    await installSsrfGuard(page, localOriginIfLocal(sourceUrl));
     await page.goto(sourceUrl.toString(), { waitUntil: "networkidle", timeout: 45_000 });
     await page.screenshot({ path: absolutePath, fullPage: false });
   } finally {

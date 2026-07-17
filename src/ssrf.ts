@@ -50,6 +50,27 @@ export function isPrivateAddress(ip: string): boolean {
 }
 
 /**
+ * If a validated capture URL points at localhost, return its exact origin
+ * (`http://localhost:3000`) so installSsrfGuard can permit that one local
+ * origin for same-origin requests. Returns undefined for public targets (no
+ * local origin to allow). This preserves the local-dev capture workflow: the
+ * operator's initial localhost target and its same-origin assets load, while
+ * redirects/subresources to other private targets are still rejected.
+ */
+export function localOriginIfLocal(rawUrl: string | URL): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = typeof rawUrl === "string" ? new URL(rawUrl) : rawUrl;
+  } catch {
+    return undefined;
+  }
+  if (EXPLICIT_LOCALHOST.test(parsed.hostname)) {
+    return parsed.origin;
+  }
+  return undefined;
+}
+
+/**
  * Cloud-metadata hostnames blocked regardless of what they resolve to —
  * Google's metadata.google.internal and AWS/Azure's 169.254.169.254 are
  * the canonical SSRF targets.
@@ -163,11 +184,30 @@ export async function assertSafeNavigationTarget(url: string): Promise<void> {
  * that requires pinning the resolved IP at the socket layer, which is out of
  * scope for this task. Documented for the next hardening pass.
  */
-export async function installSsrfGuard(page: import("playwright").Page): Promise<void> {
+export async function installSsrfGuard(
+  page: import("playwright").Page,
+  allowedLocalOrigin?: string,
+): Promise<void> {
+  // Normalize the allowed local origin once: when the operator's initial
+  // capture target was localhost (permitted by assertSafeCaptureTarget), pass
+  // its exact origin here so the guard can let the initial page.goto and its
+  // same-origin subresources through. A redirect to a DIFFERENT localhost port,
+  // a different private IP, or metadata is still rejected — the origin match
+  // is exact (scheme+host+port), so http://localhost:3001 ≠ http://localhost:3000.
+  const allowed = allowedLocalOrigin ?? null;
   await page.route("**/*", async (route) => {
     const req = route.request();
     try {
-      await assertSafeNavigationTarget(req.url());
+      const target = req.url();
+      // Permit the exact approved local origin (local-dev capture workflow).
+      // This lets the initial page.goto(localhost) and its same-origin assets
+      // load, without opening the door to other private targets.
+      if (allowed) {
+        try {
+          if (new URL(target).origin === allowed) return route.continue();
+        } catch { /* not a parseable URL — fall through to the full check */ }
+      }
+      await assertSafeNavigationTarget(target);
       return route.continue();
     } catch {
       // Abort as blockedbyclient so the caller sees a clear failure rather than

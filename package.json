@@ -19,7 +19,6 @@
     "add-entry": "tsc && node dist/scripts/add-entry.js",
     "capture": "tsc && node dist/scripts/capture.js",
     "capture-batch": "tsc && node dist/scripts/capture.js",
-    "workflow": "tsc && node dist/scripts/capture.js $CAPTURE_ARGS && node dist/scripts/add-entry.js",
     "test": "vitest run",
     "build-index": "tsc && node dist/scripts/build-index.js",
     "bulk-import": "tsc && node dist/scripts/bulk-import.js",

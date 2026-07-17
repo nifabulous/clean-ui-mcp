@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanupBatch, findDuplicateAtCommit, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload } from "./ui-server.js";
+import { cleanupBatch, findDuplicateAtCommit, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
 import type { IncomingMessage } from "node:http";
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -238,6 +238,18 @@ describe("same-origin guard", () => {
 
   it("rejects when Origin is present but Host is missing", () => {
     expect(sameOrigin(req({ origin: "http://localhost:3131" }))).toBe(false);
+  });
+});
+
+describe("listen address", () => {
+  it("binds loopback only — never a routable interface", async () => {
+    const server = await startServer(0);
+    const addr = server.address();
+    expect(addr && typeof addr === "object").toBe(true);
+    if (addr && typeof addr === "object") {
+      expect(["127.0.0.1", "::1"]).toContain(addr.address);
+    }
+    await new Promise<void>((r) => server.close(() => r()));
   });
 });
 

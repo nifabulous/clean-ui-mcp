@@ -1471,7 +1471,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   sendJson(res, 404, { error: "Not found" });
 }
 
-const server = createServer(async (req, res) => {
+async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
     // Same-origin guard. The app is served from this server; no legitimate
     // caller is cross-origin. A missing Origin (non-browser clients) is allowed
@@ -1545,28 +1545,39 @@ const server = createServer(async (req, res) => {
     console.error(error);
     sendJson(res, 500, { error: error instanceof Error ? error.message : "Internal server error" });
   }
-});
+}
+
+// SECURITY: loopback only. The curator app has no auth and several mutating
+// endpoints; binding a routable interface would expose them to the LAN.
+// "127.0.0.1" (not "localhost") so the OS resolver can't rebind it.
+// This is the ONLY listen site — the bootstrap below and the tests both go
+// through it, so the loopback-bind test covers the real production bind.
+export function startServer(port: number): Promise<import("node:http").Server> {
+  return new Promise((resolvePromise, reject) => {
+    const srv = createServer(handleUiRequest);
+    srv.once("error", reject);
+    srv.listen(port, "127.0.0.1", () => {
+      srv.removeListener("error", reject);
+      resolvePromise(srv);
+    });
+  });
+}
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   // Eagerly load the dHash cache so the first duplicate check doesn't pay the
   // rehash cost. Rebuilds async if missing/stale; non-blocking.
   loadDHashCache();
 
-  server.on("error", (error: NodeJS.ErrnoException) => {
-    if (error.code === "EADDRINUSE") {
-      console.error(`Port ${PORT} is already in use. The curator may already be running at http://localhost:${PORT}.`);
-      console.error(`Stop the old process or set CLEAN_UI_PORT in .env to use another port.`);
-      process.exit(1);
-    }
-    throw error;
-  });
-
-  // Bind to the IPv6 wildcard so the listener accepts BOTH stacks — ::1 AND
-  // 127.0.0.1 (via IPv4-mapped addresses, since ipv6only defaults to false).
-  // Pinning 127.0.0.1 caused "page won't load" on hosts where the browser
-  // resolves localhost to ::1 first and gets connection-refused with no IPv4
-  // fallback. Outbound SSRF protection (the corpus's own guard) is unaffected.
-  server.listen(PORT, "::", () => {
-    console.log(`clean-ui curator running at http://localhost:${PORT}`);
-  });
+  startServer(PORT)
+    .then(() => {
+      console.log(`clean-ui curator running at http://localhost:${PORT}`);
+    })
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") {
+        console.error(`Port ${PORT} is already in use. The curator may already be running at http://localhost:${PORT}.`);
+        console.error(`Stop the old process or set CLEAN_UI_PORT in .env to use another port.`);
+        process.exit(1);
+      }
+      throw error;
+    });
 }

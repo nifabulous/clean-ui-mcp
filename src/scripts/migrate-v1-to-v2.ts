@@ -19,10 +19,11 @@
  *   npm run build-index -- --force  # patternType + antiPatterns added to embeddings
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { writeAtomic, writeRawSnapshot } from "../persistence.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
@@ -93,6 +94,60 @@ function migrateEntry(entry: V1Entry): V2Entry {
 // Only run the CLI body when invoked directly, not when imported (e.g. by tests).
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
+/**
+ * Run the v1→v2 migration against the corpus at `corpusPath` and persist the
+ * result. Exported (not inlined in the CLI body) so the regression test can
+ * exercise the full read → migrate → snapshot → atomic-write path against an
+ * isolated temp corpus, proving a snapshot of the PRE-migration bytes lands in
+ * the durability layer's .snapshots/ dir before the primary is overwritten.
+ *
+ * - Reads the raw original bytes first so they can be snapshotted verbatim
+ *   (a v1 envelope is a legacy shape the snapshot must preserve byte-for-byte).
+ * - Snapshots via writeRawSnapshot (resolved from the test-overridable corpus
+ *   root), then atomic-writes the migrated v2 document.
+ * - Returns the migrated entries so callers/tests can assert on them.
+ */
+export function runV1ToV2Migration(corpusPath: string, opts: { dryRun?: boolean } = {}): V2Entry[] {
+  if (!existsSync(corpusPath)) {
+    throw new Error(`Corpus not found: ${corpusPath}`);
+  }
+
+  const originalRaw = readFileSync(corpusPath, "utf-8");
+  const raw = JSON.parse(originalRaw) as { version: number; entries: V1Entry[] };
+
+  if (raw.version === 2) {
+    console.log("Corpus is already v2 — nothing to migrate.");
+    return raw.entries as V2Entry[];
+  }
+
+  if (raw.version !== 1) {
+    throw new Error(`Unexpected corpus version ${raw.version} — expected 1.`);
+  }
+
+  const migrated: V2Entry[] = raw.entries.map(migrateEntry);
+  const todoCount = migrated.filter((e) => e.antiPatterns.antiPatterns.includes(TODO_PLACEHOLDER)).length;
+
+  console.log(`Migrating ${migrated.length} entries: v1 → v2`);
+  console.log("  patternType inference + whatToAvoidHere → antiPatterns restructure");
+  migrated.forEach((e) => console.log(`  ${e.id}: patternType=${e.patternType} | antiPatterns=${e.antiPatterns.antiPatterns.length} item(s)${e.antiPatterns.antiPatterns.includes(TODO_PLACEHOLDER) ? " [TODO placeholder]" : ""}`));
+  console.log(`\n  ${todoCount} entr${todoCount === 1 ? "y" : "ies"} need anti-pattern backfill (marked [TODO]).`);
+
+  if (opts.dryRun) {
+    console.log("\nDry run — no changes written.");
+    return migrated;
+  }
+
+  // Preserve the exact original document before overwrite. The migration begins
+  // with a v1 legacy shape, so the snapshot is raw serialized JSON (not typed
+  // entries) — same pattern as migrate-wcag-ids. Snapshot first, then the
+  // atomic primary write.
+  writeRawSnapshot(originalRaw);
+  writeAtomic(corpusPath, JSON.stringify({ version: 2, entries: migrated }, null, 2) + "\n");
+  console.log(`\n✅ Wrote v2 corpus: ${corpusPath}`);
+  console.log("Next: backfill [TODO] anti-patterns, then `npm run validate-corpus` and `npm run build-index -- --force`.");
+  return migrated;
+}
+
 if (isMain) {
 const { values } = parseArgs({
   args: process.argv.slice(2),
@@ -107,37 +162,10 @@ if (values.help) {
   process.exit(0);
 }
 
-if (!existsSync(CORPUS_PATH)) {
-  console.error(`Corpus not found: ${CORPUS_PATH}`);
+try {
+  runV1ToV2Migration(CORPUS_PATH, { dryRun: values["dry-run"] });
+} catch (err) {
+  console.error(err instanceof Error ? err.message : err);
   process.exit(1);
 }
-
-const raw = JSON.parse(readFileSync(CORPUS_PATH, "utf-8")) as { version: number; entries: V1Entry[] };
-
-if (raw.version === 2) {
-  console.log("Corpus is already v2 — nothing to migrate.");
-  process.exit(0);
-}
-
-if (raw.version !== 1) {
-  console.error(`Unexpected corpus version ${raw.version} — expected 1.`);
-  process.exit(1);
-}
-
-const migrated: V2Entry[] = raw.entries.map(migrateEntry);
-const todoCount = migrated.filter((e) => e.antiPatterns.antiPatterns.includes(TODO_PLACEHOLDER)).length;
-
-console.log(`Migrating ${migrated.length} entries: v1 → v2`);
-console.log("  patternType inference + whatToAvoidHere → antiPatterns restructure");
-migrated.forEach((e) => console.log(`  ${e.id}: patternType=${e.patternType} | antiPatterns=${e.antiPatterns.antiPatterns.length} item(s)${e.antiPatterns.antiPatterns.includes(TODO_PLACEHOLDER) ? " [TODO placeholder]" : ""}`));
-console.log(`\n  ${todoCount} entr${todoCount === 1 ? "y" : "ies"} need anti-pattern backfill (marked [TODO]).`);
-
-if (values["dry-run"]) {
-  console.log("\nDry run — no changes written.");
-  process.exit(0);
-}
-
-writeFileSync(CORPUS_PATH, JSON.stringify({ version: 2, entries: migrated }, null, 2) + "\n", "utf-8");
-console.log(`\n✅ Wrote v2 corpus: ${CORPUS_PATH}`);
-console.log("Next: backfill [TODO] anti-patterns, then `npm run validate-corpus` and `npm run build-index -- --force`.");
 } // end if (isMain)

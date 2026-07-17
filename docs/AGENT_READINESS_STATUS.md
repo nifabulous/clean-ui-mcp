@@ -18,7 +18,7 @@ locations.
 | Checkpoint | Status | Notes |
 |---|---|---|
 | **C0** Foundation freeze | ✅ Closed | Validated by a Git-bound checkpoint recipe that recomputes the canonical target from recorded-commit bytes (see R0). C1 working-tree edits to the live spec/plan do **not** reopen C0. |
-| **C1** Agent contract lock | 🟡 In progress | Executable contract closure rework (R0–R5 complete, R6–R7 remaining). Runtime still advertises the legacy 14-tool surface by design until Phase 1B. |
+| **C1** Agent contract lock | 🟡 In progress | Executable contract closure rework (R0–R6 complete, R7 remaining). Runtime still advertises the legacy 14-tool surface by design until Phase 1B. |
 | C2 Gold readiness | ⬜ Open | Not started (gated on C1). |
 | C3 MCP + create_ui_spec + skill | ⬜ Open | Not started (gated on C1). |
 | C4 Terminal 1A outcome + dogfood | ⬜ Open | Not started. |
@@ -63,7 +63,7 @@ in every review.
 
 ### What "done" requires for C1 closure
 
-R6 + R7 remain. After they land, the final gate must show:
+R7 remains. After it lands, the final gate must show:
 - `typecheck:contracts`, `build`, full offline suite, doctor, corpus/reference/readiness validation all green;
 - the P0 fabrication exploit re-run reports `ok:false` + the new issue codes, **and** historical working-tree drift leaves C0 **closed**;
 - runtime still advertises the legacy 14 tools;

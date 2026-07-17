@@ -81,9 +81,9 @@ function slugify(s: string): string {
  *       two different months could collide even with no concurrency.
  *  Pass the set of ids already in the store so the check is exact. Exported
  *  for direct unit testing of the disambiguation contract. */
-export function generateDecisionId(title: string, existing: ReadonlySet<string> = new Set()): string {
+export function generateDecisionId(title: string, existing: ReadonlySet<string> = new Set(), now: number = Date.now()): string {
   const slug = slugify(title);
-  const stamp = Date.now().toString(36).slice(-6);
+  const stamp = now.toString(36).slice(-6);
   let id = `${slug}-${stamp}`;
   for (let n = 2; existing.has(id); n++) id = `${slug}-${stamp}-${n}`;
   return id;

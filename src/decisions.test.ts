@@ -236,18 +236,17 @@ describe("generateDecisionId collision-proof", () => {
   });
 
   it("appends a counter when the would-be id is already in the existing set", () => {
-    // Deterministic collision: seed the existing set with the exact id the
-    // generator would otherwise produce for this title+stamp, then assert the
-    // generator disambiguates with -2, -3, ... instead of returning a dup.
-    const slug = "same-title";
-    const stamp = Date.now().toString(36).slice(-6);
-    const baseId = `${slug}-${stamp}`;
+    // Freeze the timestamp so the test is deterministic — no Date.now() TOCTOU.
+    // The `now` parameter (injected for testability) fixes the stamp inside the
+    // generator, so the seeded collision set always matches.
+    const now = 1752800000000;
+    const baseId = generateDecisionId("Same Title", new Set(), now);
 
     // First collision -> appends -2.
-    expect(generateDecisionId("Same Title", new Set([baseId]))).toBe(`${baseId}-2`);
+    expect(generateDecisionId("Same Title", new Set([baseId]), now)).toBe(`${baseId}-2`);
     // Multiple prior collisions -> walks the counter forward.
-    expect(generateDecisionId("Same Title", new Set([baseId, `${baseId}-2`, `${baseId}-3`]))).toBe(`${baseId}-4`);
+    expect(generateDecisionId("Same Title", new Set([baseId, `${baseId}-2`, `${baseId}-3`]), now)).toBe(`${baseId}-4`);
     // No collision -> returns the bare base id.
-    expect(generateDecisionId("Same Title", new Set())).toBe(baseId);
+    expect(generateDecisionId("Same Title", new Set(), now)).toBe(baseId);
   });
 });

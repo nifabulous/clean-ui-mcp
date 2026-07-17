@@ -13,6 +13,7 @@ import { chromium } from "playwright";
 import { CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT, type DirectionT } from "../schema.js";
 import { findVagueAntiPatterns } from "../content-lint.js";
 import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
+import { safeOrphanPaths, type SafeOrphanResult } from "../orphans.js";
 import { checkDuplicateUpload, clearDuplicateBatch, computeDHash, loadDHashCache, rebuildDHashCache, findDuplicateAtCommit } from "../dedup.js";
 import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../tagger.js";
 import type { CaptureMeta, DomSignals } from "./capture.js";
@@ -376,16 +377,32 @@ export function prepareNewEntryPayload(payload: unknown, entries: CorpusEntryT[]
 // import path is ../dedup.js; new code should import from there directly.
 export { findDuplicateAtCommit } from "../dedup.js";
 
+/**
+ * Shared orphan scan — reads corpus/decisions.json and corpus/entries-draft.json
+ * raw (if present) and delegates to the pure safeOrphanPaths() in ../orphans.js.
+ *
+ * Both raw manifests are read here so the UI server and the clean-orphans CLI
+ * share one fail-closed decision: capture batches are never deletable, Decision
+ * Lab screenshots are protected when decisions.json references them (or when it
+ * was supplied but is corrupt), and staged-draft images are protected likewise.
+ * Earlier this server only subtracted corpus-entry refs, so it unlink'd live
+ * Decision Lab screenshots and un-triaged capture batches.
+ */
+function scanOrphans(entries: CorpusEntryT[]): SafeOrphanResult {
+  const decisionsPath = resolve(CORPUS_ROOT, "decisions.json");
+  const draftPath = resolve(CORPUS_ROOT, "entries-draft.json");
+  const decisionsRaw = existsSync(decisionsPath) ? readFileSync(decisionsPath, "utf-8") : null;
+  const draftRaw = existsSync(draftPath) ? readFileSync(draftPath, "utf-8") : null;
+  return safeOrphanPaths({ entries, privateFiles: privateImagePaths(), decisionsRaw, draftRaw });
+}
+
+/**
+ * Backward-compat wrapper kept for the existing ui-server.test.ts suite. It
+ * returns only the orphan list (the test asserts the deletable set, not the
+ * protection breakdown). New call sites should use scanOrphans() directly.
+ */
 export function orphanedPrivateImagePaths(files: string[], entries: CorpusEntryT[]): string[] {
-  const referenced = new Set(
-    entries
-      .map((entry) => entry.image.path)
-      .filter((path): path is string => !!path && path.startsWith("images-private/")),
-  );
-  return files
-    .filter((path) => path.startsWith("images-private/"))
-    .filter((path) => !referenced.has(path))
-    .sort();
+  return safeOrphanPaths({ entries, privateFiles: files }).orphans;
 }
 
 function privateImagePaths(): string[] {
@@ -1074,13 +1091,16 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/orphans") {
-    const orphans = orphanedPrivateImagePaths(privateImagePaths(), entries);
-    sendJson(res, 200, { orphans, count: orphans.length });
+    // scanOrphans reads decisions.json + entries-draft.json and applies the
+    // fail-closed rules, so capture batches, Decision Lab screenshots, and
+    // staged-draft images are never listed as deletable here.
+    const { orphans, protectedCounts } = scanOrphans(entries);
+    sendJson(res, 200, { orphans, count: orphans.length, protectedCounts });
     return;
   }
 
   if (req.method === "DELETE" && url.pathname === "/api/orphans") {
-    const orphans = orphanedPrivateImagePaths(privateImagePaths(), entries);
+    const { orphans } = scanOrphans(entries);
     for (const path of orphans) {
       unlinkSync(fromCorpusRelativeImagePath(path));
     }

@@ -6,6 +6,7 @@
  * renderToolContractReference() output byte-for-byte.
  */
 import { TOOL_DESCRIPTORS, ERROR_RETRYABLE } from "./tool-contracts.js";
+import { z, type ZodType } from "zod";
 
 /**
  * Extract the `code` enum values from a schema. Errors and warnings are both
@@ -55,6 +56,58 @@ function extractEnumValues(schema: unknown): readonly string[] {
 }
 
 /**
+ * Derive the Input contract row from the Zod input schema via the public
+ * `z.toJSONSchema` API. This replaces the handwritten `contractDocs.input`
+ * prose with mechanically-derived field names, optionality, defaults, and
+ * bounds — so a schema change is reflected in the docs automatically and the
+ * drift test catches any divergence.
+ *
+ * Format: `query?, category, styleTag?, patternType?, minQuality (1-5)?, ...`
+ *   - `?` suffix if the field is optional (not in `required`)
+ *   - `(default X)` if the field has a default value
+ *   - `(min-max)` if the field has numeric bounds
+ */
+function deriveInputRow(inputSchema: ZodType): string {
+  const jsonSchema = z.toJSONSchema(inputSchema as unknown as Parameters<typeof z.toJSONSchema>[0]) as {
+    properties?: Record<string, {
+      default?: unknown;
+      minimum?: number;
+      maximum?: number;
+    }>;
+    required?: string[];
+  };
+  const props = jsonSchema.properties ?? {};
+  const required = new Set(jsonSchema.required ?? []);
+  const parts: string[] = [];
+  for (const [name, def] of Object.entries(props)) {
+    let part = name;
+    if (!required.has(name)) part += "?";
+    if (def.minimum !== undefined && def.maximum !== undefined) {
+      part += ` (${def.minimum}-${def.maximum})`;
+    }
+    if (def.default !== undefined) {
+      part += `, default ${JSON.stringify(def.default)}`;
+    }
+    parts.push(part);
+  }
+  return parts.length > 0 ? parts.join(", ") : "(none)";
+}
+
+/**
+ * Derive the Success data field names from the Zod data schema. The top-level
+ * property keys come from z.toJSONSchema; the per-field shape prose (e.g.
+ * "each with id, title, product...") stays in contractDocs.successData as
+ * supplementary description Zod can't express.
+ */
+function deriveSuccessDataFields(dataSchema: ZodType): string {
+  const jsonSchema = z.toJSONSchema(dataSchema as unknown as Parameters<typeof z.toJSONSchema>[0]) as {
+    properties?: Record<string, unknown>;
+  };
+  const fields = Object.keys(jsonSchema.properties ?? {});
+  return fields.length > 0 ? fields.join(", ") : "(none)";
+}
+
+/**
  * Render the complete §5.5 contract reference block for all 12 tools.
  *
  * Row order per tool (authoritative — the drift test locks this byte-for-byte):
@@ -73,11 +126,13 @@ export function renderToolContractReference(): string {
     lines.push("| Aspect | Contract |");
     lines.push("|---|---|");
 
-    // Input (prose from contractDocs)
-    lines.push(`| Input | ${desc.contractDocs.input} |`);
+    // Input — derived from the Zod schema via z.toJSONSchema (field names,
+    // optionality, defaults, bounds). No longer handwritten prose.
+    lines.push(`| Input | ${deriveInputRow(desc.inputSchema)} |`);
 
-    // Success data (prose)
-    lines.push(`| Success data | ${desc.contractDocs.successData} |`);
+    // Success data — derived field names + supplementary prose from contractDocs
+    const successFields = deriveSuccessDataFields(desc.dataSchema);
+    lines.push(`| Success data | ${successFields} — ${desc.contractDocs.successData} |`);
 
     // Empty (prose)
     lines.push(`| Empty | ${desc.contractDocs.empty} |`);

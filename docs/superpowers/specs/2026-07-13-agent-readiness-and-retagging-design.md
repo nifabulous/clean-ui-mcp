@@ -439,8 +439,8 @@ These tables are the authoritative source for executable Zod schemas. The block 
 
 | Aspect | Contract |
 |---|---|
-| Input | query?, category?, styleTag?, patternType?, minQuality (1-5)?, qualityTier?, reviewStatus?, platform?, limit (1-20, default 5)?, responseFormat? |
-| Success data | `results: ReferenceSummary[]` — each with id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url required-but-nullable, imageAvailable), critique excerpt, topTechniques, antiPatterns |
+| Input | query?, category?, styleTag?, patternType?, minQuality? (1-5), qualityTier?, reviewStatus?, platform?, limit (1-20), default 5, responseFormat? |
+| Success data | results — `results: ReferenceSummary[]` — each with id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url required-but-nullable, imageAvailable), critique excerpt, topTechniques, antiPatterns |
 | Empty | `results: []`, retrieval none, resultCount 0, summary guidance |
 | Partial | sparseCoverage / keywordFallback typed warnings on degraded retrieval |
 | Errors | none |
@@ -455,8 +455,8 @@ These tables are the authoritative source for executable Zod schemas. The block 
 
 | Aspect | Contract |
 |---|---|
-| Input | id (required) |
-| Success data | full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability |
+| Input | id |
+| Success data | id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, accentColor, dominantColors, colorRoles, typePairing, spacingDensity, cornerStyle, usesShadows, usesBorders, critique, techniques, antiPatterns, whereThisFails, accessibility, businessRationale, voice, source, imageAvailable — full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability |
 | Empty | n/a — single-id lookup |
 | Partial | n/a — single-id lookup |
 | Errors | NOT_FOUND (non-retryable) |
@@ -471,8 +471,8 @@ These tables are the authoritative source for executable Zod schemas. The block 
 
 | Aspect | Contract |
 |---|---|
-| Input | id (required), limit (1-20, default 5)? |
-| Success data | `results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques |
+| Input | id, limit (1-20), default 5 |
+| Success data | results — `results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques |
 | Empty | `results: []` when no index or source not found |
 | Partial | keywordFallback / sparseCoverage typed warnings on degraded retrieval |
 | Errors | none |
@@ -487,8 +487,8 @@ These tables are the authoritative source for executable Zod schemas. The block 
 
 | Aspect | Contract |
 |---|---|
-| Input | ids (required, 2-3 unique), responseFormat? |
-| Success data | `entries: ComparisonRow[]`, `foundIds`, `missingIds` — each row with id, title, product, patternType, categories, styleTags, platform, layout, accent, density, corners, quality, critiqueAngle, topTechnique, antiPatterns, whereItFails, accessibility |
+| Input | ids, responseFormat? |
+| Success data | entries, foundIds, missingIds — `entries: ComparisonRow[]`, `foundIds`, `missingIds` — each row with id, title, product, patternType, categories, styleTags, platform, layout, accent, density, corners, quality, critiqueAngle, topTechnique, antiPatterns, whereItFails, accessibility |
 | Empty | n/a — all IDs missing is an error (NOT_FOUND), not an empty success |
 | Partial | `missingIds` non-empty + typed partialResult warning when some IDs not found |
 | Errors | NOT_FOUND (non-retryable) |
@@ -503,8 +503,8 @@ These tables are the authoritative source for executable Zod schemas. The block 
 
 | Aspect | Contract |
 |---|---|
-| Input | none |
-| Success data | `patternTypes`, `categories`, `styleTags` (each `{count, values}`), optional `components`, `domainTags` |
+| Input | (none) |
+| Success data | patternTypes, categories, styleTags, components, domainTags — `patternTypes`, `categories`, `styleTags` (each `{count, values}`), optional `components`, `domainTags` |
 | Empty | n/a — always returns the taxonomy |
 | Partial | n/a |
 | Errors | none |
@@ -520,7 +520,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 | Aspect | Contract |
 |---|---|
 | Input | styleTag? |
-| Success data | `patterns: PatternGroup[]` — each with patternType, count, topProducts (array), exemplar (id, title, product, qualityScore, critique) |
+| Success data | patterns — `patterns: PatternGroup[]` — each with patternType, count, topProducts (array), exemplar (id, title, product, qualityScore, critique) |
 | Empty | `patterns: []` |
 | Partial | sparseCoverage typed warning on thin coverage |
 | Errors | none |
@@ -535,8 +535,8 @@ These tables are the authoritative source for executable Zod schemas. The block 
 
 | Aspect | Contract |
 |---|---|
-| Input | productContext (required, min 8), category?, styleTag?, platform?, qualityTier? (default exceptional), framework? (brief/tokens), count (1-5, default 3)? |
-| Success data | `direction`, `rejectedDefaults`, `recommendation`, `rationale`, `evidenceContributions`, `structuredDecisions` |
+| Input | productContext, category?, styleTag?, platform?, qualityTier, default "exceptional", framework?, count (1-5), default 3 |
+| Success data | direction, rejectedDefaults, recommendation, rationale, evidenceContributions, structuredDecisions — `direction`, `rejectedDefaults`, `recommendation`, `rationale`, `evidenceContributions`, `structuredDecisions` |
 | Empty | n/a — absence of index degrades through fallback, not an empty success |
 | Partial | sparseCoverage / insufficientCorpusEvidence / noCorpusIndex typed warnings on sparse results |
 | Errors | PROVIDER_ERROR (retryable) |
@@ -551,8 +551,8 @@ These tables are the authoritative source for executable Zod schemas. The block 
 
 | Aspect | Contract |
 |---|---|
-| Input | productContext (required, min 8), referenceIds? (max 5), platform?, implementationFramework?, serializationFormat (default brief)?, designSystem?, constraints? |
-| Success data | see §5.4 — UiSpec with layoutRegions, colorTokens, typographyTokens, acceptanceCriteria (verifiers: axe, playwright, static-analysis, manual), citedReferences, citedDecisions, authorityLanes, provenance |
+| Input | productContext, referenceIds, default [], platform?, implementationFramework?, serializationFormat, default "brief", designSystem?, constraints, default [] |
+| Success data | specVersion, context, designDirection, rejectedDefaults, layoutRegions, responsiveBehavior, componentInventory, colorTokens, colorTokenAuthority, typographyTokens, typographyTokenAuthority, interactions, motionGuidance, accessibilityConstraints, contentVoiceGuidance, techniques, antiPatterns, frameworkNotes, unavailableDecisions, acceptanceCriteria, citedReferences, citedDecisions, authorityLanes, provenance — see §5.4 — UiSpec with layoutRegions, colorTokens, typographyTokens, acceptanceCriteria (verifiers: axe, playwright, static-analysis, manual), citedReferences, citedDecisions, authorityLanes, provenance |
 | Empty | n/a — synthesis produces one spec artifact or errors |
 | Partial | sparseCoverage / insufficientCorpusEvidence / motionEvidenceUnavailable typed warnings; null tokens require editorial authority + unavailableDecision |
 | Errors | INVALID_INPUT (non-retryable) |
@@ -567,8 +567,8 @@ These tables are the authoritative source for executable Zod schemas. The block 
 
 | Aspect | Contract |
 |---|---|
-| Input | patternType?, category?, limit (1-20, default 10)? |
-| Success data | `results: AntiPatternRow[]` — each with text, sourceIds, count |
+| Input | patternType?, category?, limit (1-20), default 10 |
+| Success data | results — `results: AntiPatternRow[]` — each with text, sourceIds, count |
 | Empty | `results: []` |
 | Partial | sparseCoverage typed warning on thin coverage |
 | Errors | none |
@@ -583,8 +583,8 @@ These tables are the authoritative source for executable Zod schemas. The block 
 
 | Aspect | Contract |
 |---|---|
-| Input | patternType?, styleTag?, limit (1-20, default 10)? |
-| Success data | `results: PaletteRecord[]` — each with tokens (canvas, surface, ink, muted, accent), accentHue, product, sourceId, patternType |
+| Input | patternType?, styleTag?, limit (1-20), default 10 |
+| Success data | results — `results: PaletteRecord[]` — each with tokens (canvas, surface, ink, muted, accent), accentHue, product, sourceId, patternType |
 | Empty | `results: []` |
 | Partial | sparseCoverage typed warning on thin coverage |
 | Errors | none |
@@ -599,8 +599,8 @@ These tables are the authoritative source for executable Zod schemas. The block 
 
 | Aspect | Contract |
 |---|---|
-| Input | patternType?, styleTag?, limit (1-30, default 15)? |
-| Success data | `results: TechniqueRow[]` — each with text, source (id, product) |
+| Input | patternType?, styleTag?, limit (1-30), default 15 |
+| Success data | results — `results: TechniqueRow[]` — each with text, source (id, product) |
 | Empty | `results: []` |
 | Partial | sparseCoverage typed warning on thin coverage |
 | Errors | none |
@@ -615,8 +615,8 @@ These tables are the authoritative source for executable Zod schemas. The block 
 
 | Aspect | Contract |
 |---|---|
-| Input | image_data (required), image_mime_type (required), product_context?, platform?, framework? — reuses `CRITIQUE_UI_INPUT_SCHEMA` from `synthesis/contracts.ts` |
-| Success data | reuses `StructuredCritique` fields: observations, recommendations, accessibilityRisks, visualSlop, motion, appliedReferences, evidenceIds, confidence, md3? |
+| Input | image_data, image_mime_type, product_context?, platform?, framework? |
+| Success data | platform, retrievalMode, fallbackUsed, coverage, summary, observations, recommendations, accessibilityRisks, visualSlop, motion, appliedReferences, evidenceIds, confidence, md3 — reuses `StructuredCritique` fields: observations, recommendations, accessibilityRisks, visualSlop, motion, appliedReferences, evidenceIds, confidence, md3? |
 | Empty | n/a — synthesis produces one critique artifact or errors |
 | Partial | insufficientCorpusEvidence / providerDegraded typed warnings; may include screen-observation and dom-signal evidence |
 | Errors | none |

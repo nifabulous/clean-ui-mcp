@@ -1,3 +1,101 @@
+# Working instructions
+
+## Running review agents and collating their findings
+
+### When to use a multi-perspective panel
+For high-stakes plans (money movement, compliance, routing, security), run a
+review panel with distinct personas (engineers, QA, PMs, EM, users). Each
+catches a different class of defect. For low-risk work, a single reviewer is
+fine — don't burn a panel on a one-line fix.
+
+### Dispatch in parallel, collate by convergence
+Fan out review agents in a **single message** (parallel tool calls) — one per
+issue or persona. Don't serialize them. When results return, collate by
+**convergence**: findings raised independently by multiple personas are almost
+always real; single-persona findings are worth checking but lower confidence.
+Lead the summary with the converged findings.
+
+### Code verification before review
+Before reviewing a plan, verify its concrete claims (file:line refs, branch
+structure, enum values, retry semantics) against the real code. Plans
+accumulate claims across rounds and a line-number drift or wrong namespace
+propagates silently. Fan out parallel verifiers (one per issue) for large plans.
+**Do not** review a plan whose code claims haven't been verified — you'll be
+reviewing fiction.
+
+### Re-review after every change — but check the coherence first
+Each fix round can introduce new defects. After applying review findings, do a
+**whole-ticket coherence check** before re-running the panel (this catches most
+regressions without another full review round). See below.
+
+## Whole-ticket coherence check (the thing that prevents endless review rounds)
+
+The most common failure mode in multi-round plan review: each AC is correct in
+isolation, but the ACs collectively violate an unstated invariant. This causes
+review rounds to keep finding "one more thing" because the invariant was never
+pinned down. Run this check once per round, **after** per-AC review:
+
+### 1. State the governing invariant before reviewing ACs
+Write down the invariant the ticket must satisfy. Examples:
+- "Flag off = current behavior, byte-for-byte"
+- "A delivered transaction is never re-routed or re-credited"
+- "Rollback restores the pre-deploy state with no external side effects"
+Then check EVERY AC against it. If you can't state the invariant, the ticket
+isn't ready to review — you'll just keep finding coherence gaps.
+
+### 2. Ask the three whole-ticket questions
+After per-AC review, answer:
+1. Is there a flag state / retry sequence / error path under which a completed
+   transaction could be re-routed, re-credited, or double-processed?
+2. Does any new code run under the "off" / default / rollback state that
+   wasn't running before?
+3. Do the ACs collectively satisfy the governing invariant?
+If any answer is "yes" or "unclear," the ticket is not ready. Fix the invariant
+violation before requesting another review round — don't ship it to the panel
+and don't ask "is this ok now."
+
+### 3. Stop the review loop
+If you've done 3+ review rounds on the same ticket and are still finding
+money-movement or correctness defects, **stop**. The plan is wrong at the
+design level, not the AC level. Rewrite the ticket around the governing
+invariant rather than patching ACs. More review rounds on a structurally-flawed
+ticket just finds more symptoms; it doesn't fix the cause.
+
+## Feature-flagged changes: flag-off = current behavior, byte-for-byte
+
+For any ticket gated by a feature flag:
+- **No new code path runs when the flag is off.** Gate the resolution calls,
+  validation, AND branch entry — not just the persisted outcome. Don't run a
+  new resolver and discard the result; skip the resolver.
+- **A transaction already delivered is never re-routed or re-credited**
+  regardless of flag state. Use a routing-independent terminal check placed
+  BEFORE the branch divergence, not a check inside one branch.
+- **Test BOTH flag-flip directions:** off→on→retry AND on→off→retry.
+
+## Money-movement changes: trace the full retry/idempotency path
+
+- Verify what happens on retry/duplicate AFTER the flag changes state. Retries
+  often read persisted values, not recompute them.
+- Confirm where the idempotency guard lives: inside one branch (cannot protect
+  the other) or before the branch divergence (protects both)?
+- Distinguish reversible vs irreversible in the rollback story. A flag flip
+  reverts routing; it does NOT un-credit an account, un-send an AML signal, or
+  un-apply a pricing row. Pre-deploy gates are the control for irreversible
+  changes, not revert.
+
+## Code verification discipline
+
+- **Verify file:line claims** against the real repo before trusting them.
+- **Watch for enum/version drift.** If a fix depends on an enum value, confirm
+  which compiled artifact the runtime references (e.g. a V4 DLL vs V2 source).
+  Decompile the deployed DLL to confirm member values before merge.
+- **Folder/namespace mismatches** (common in C#): cite both the file path and
+  the declared namespace.
+
+---
+
+# Repo-specific notes
+
 # Project conventions for clean-ui-mcp
 
 These conventions govern agent behavior on this repository. They override

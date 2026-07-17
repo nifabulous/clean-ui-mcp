@@ -48,9 +48,21 @@ export function resetDecisionsPathsForTesting(): void {
 /** Module-level cache (mirrors corpus.ts). */
 let cached: DecisionT[] | null = null;
 
+/**
+ * Write-protection gate. Set false when corrupt-file recovery could NOT rename
+ * the primary aside (read-only FS, permissions). In that state the corrupt
+ * primary is still at `decisionsPath`, so persistDecisions must refuse rather
+ * than overwrite it — overwriting would destroy the forensic evidence the
+ * recovery exists to preserve. Mirrors persistence.ts's `writable` field on
+ * LoadedCorpus. Reset to true on a successful load (parsed primary or missing
+ * primary) and by the test seam.
+ */
+let writable = true;
+
 /** Test-only override of the cache (mirrors setCorpusForTesting). */
 export function setDecisionsForTesting(decisions: DecisionT[] | null): void {
   cached = decisions;
+  writable = true;
 }
 
 /** Slugify a title into a kebab-case id prefix. */
@@ -139,25 +151,42 @@ export function loadDecisionsSafe(): DecisionT[] {
   if (cached) return cached;
   if (!existsSync(decisionsPath)) {
     cached = [];
+    writable = true;
     return cached;
   }
   const parsed = parseDecisions(readFileSync(decisionsPath, "utf-8"));
   if (parsed) {
     cached = parsed;
+    writable = true;
     return cached;
   }
 
   // Primary is present but corrupt — preserve it for forensics before any
-  // recovery write can clobber the path. Best-effort: a failed rename must
-  // not prevent snapshot recovery or crash the caller.
+  // recovery write can clobber the path. If the rename FAILS (read-only FS,
+  // permissions), the corrupt primary stays at decisionsPath: mark the store
+  // read-only so persistDecisions refuses to overwrite it. This is the gate
+  // the corpus-side recovery (writable:false on LoadedCorpus) has and the
+  // decisions module previously lacked — without it, the next save would
+  // destroy the exact evidence this recovery exists to protect.
+  let renamed = false;
   try {
     renameSync(decisionsPath, `${decisionsPath}.corrupt-${Date.now()}`);
+    renamed = true;
   } catch {
-    /* best-effort — continue to snapshot recovery regardless */
+    /* rename failed — corrupt primary is still at decisionsPath */
   }
-  console.error(
-    `[decisions] decisions.json was corrupt — renamed aside for forensics and attempting snapshot recovery.`,
-  );
+  if (renamed) {
+    writable = true;
+    console.error(
+      `[decisions] decisions.json was corrupt — renamed aside for forensics and attempting snapshot recovery.`,
+    );
+  } else {
+    writable = false;
+    console.error(
+      `[decisions] decisions.json was corrupt AND could not be renamed aside (read-only filesystem or permissions). ` +
+        `Recovering read-only from snapshot; persist is BLOCKED until the corrupt primary at ${decisionsPath} is resolved by hand.`,
+    );
+  }
 
   cached = newestValidSnapshot() ?? [];
   if (cached.length > 0) {
@@ -186,8 +215,20 @@ function writeDecisionSnapshot(decisions: DecisionT[]): void {
   } catch { /* snapshots are best-effort */ }
 }
 
-/** Persist the full decisions array to disk atomically + snapshot. */
+/** Persist the full decisions array to disk atomically + snapshot.
+ *
+ *  Refuses (throws) when the store is read-only — i.e. corrupt-file recovery
+ *  could not rename the primary aside. Overwriting in that state would destroy
+ *  the corrupt primary that is still at `decisionsPath`, the exact forensic
+ *  evidence the recovery exists to preserve. The operator must resolve the
+ *  filesystem (permissions, free the read-only lock, or move the corrupt file
+ *  aside by hand) before saves can resume. */
 export function persistDecisions(decisions: DecisionT[]): void {
+  if (!writable) {
+    throw new Error(
+      `decisions store is read-only: the corrupt primary at ${decisionsPath} could not be renamed aside, so persist is blocked to preserve forensic evidence. Resolve the file (permissions / free the lock / move it aside) and reload.`,
+    );
+  }
   writeDecisionSnapshot(decisions);
   writeAtomic(decisionsPath, JSON.stringify({ version: 1, decisions }, null, 2));
   cached = decisions;

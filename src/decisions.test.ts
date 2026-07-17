@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, readdirSync, chmodSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { createDecision, generateDecisionId, getDecisionById, listDecisions, loadDecisionsSafe, persistDecisions, saveDecision, setDecisionsForTesting, setDecisionsPathsForTesting, resetDecisionsPathsForTesting } from "./decisions.js";
 import type { DecisionT } from "./schema.js";
@@ -170,6 +170,32 @@ describe("corrupt decisions.json recovery", () => {
     const reloaded = loadDecisionsSafe();
     expect(reloaded.map((d) => d.id)).toContain("snap-decision");
     expect(reloaded.map((d) => d.id)).toContain(fresh.id);
+  });
+
+  it("write-protects the store when the corrupt primary cannot be renamed aside", () => {
+    // Simulate a rename failure: make the parent directory read-only so
+    // renameSync (which needs write permission on the directory) fails.
+    writeSnapshotFile(1000, [fixtureDecision("snap-decision")]);
+    writeFileSync(TMP_DECISIONS_PATH, "{corrupt", "utf-8");
+    chmodSync(TMP_DIR, 0o555); // read+execute, no write
+
+    try {
+      // Recovery still returns snapshot data (read-only)...
+      const recovered = loadDecisionsSafe();
+      expect(recovered).toHaveLength(1);
+      expect(recovered[0].id).toBe("snap-decision");
+
+      // ...but the corrupt primary is STILL at decisionsPath (rename failed),
+      // so persistDecisions must refuse — overwriting would destroy evidence.
+      expect(existsSync(TMP_DECISIONS_PATH)).toBe(true);
+      expect(() => persistDecisions([fixtureDecision("would-destroy-evidence")])).toThrow(/read-only/);
+
+      // And the corrupt bytes are untouched.
+      expect(readFileSync(TMP_DECISIONS_PATH, "utf-8")).toBe("{corrupt");
+    } finally {
+      // Restore write permission so afterEach cleanup (rmSync) can run.
+      chmodSync(TMP_DIR, 0o755);
+    }
   });
 });
 

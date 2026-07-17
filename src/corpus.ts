@@ -8,6 +8,11 @@ let cached: CorpusEntryT[] | null = null;
 // detect external edits (curator save, CLI tool, restore) so a long-running
 // process — the MCP server — re-reads instead of serving stale entries forever.
 let cachedMtimeMs: number | null = null;
+// File size of entries.json at the time `cached` was populated. Paired with
+// cachedMtimeMs as a two-part cache key so a restore-corpus that sets an OLDER
+// mtime (or two saves in the same mtime tick) still invalidates the cache —
+// the bytes differ, so the size differs.
+let cachedSize: number | null = null;
 // True ONLY when a fixture array was injected via setCorpusForTesting. Fixture
 // overrides must never be invalidated by the real corpus's mtime — that would
 // make fixture-based tests flaky depending on whether entries.json happens to
@@ -22,9 +27,15 @@ let testOverride = false;
  *
  * Uses the test-overridable `entriesPath()` accessor (NOT the ENTRIES_PATH
  * module-load constant) so setCorpusRootForTesting redirects this stat too.
+ *
+ * Cache key is mtimeMs + size, not mtimeMs alone: a `restore-corpus` that
+ * copies an older file can set an mtime older than the cached one (stale
+ * cache served indefinitely under mtime-only equality), and two saves in the
+ * same mtime tick have the same mtimeMs. Size disambiguates both — a restored
+ * older file differs in size, and a same-tick second save changes the bytes.
  */
-function entriesMtimeMs(): number | null {
-  try { return statSync(entriesPath()).mtimeMs; } catch { return null; }
+function entriesCacheKey(): { mtimeMs: number; size: number } | null {
+  try { const s = statSync(entriesPath()); return { mtimeMs: s.mtimeMs, size: s.size }; } catch { return null; }
 }
 
 /**
@@ -49,10 +60,11 @@ export function loadCorpus(): CorpusEntryT[] {
   // fixture-based test suite stable regardless of whether the dev machine has
   // a real corpus/entries.json on disk.
   if (testOverride && cached) return cached;
-  const mtime = entriesMtimeMs();
-  if (cached && mtime !== null && mtime === cachedMtimeMs) return cached;
+  const key = entriesCacheKey();
+  if (cached && key !== null && key.mtimeMs === cachedMtimeMs && key.size === cachedSize) return cached;
   cached = loadCorpusSafe().entries;
-  cachedMtimeMs = mtime;
+  cachedMtimeMs = key?.mtimeMs ?? null;
+  cachedSize = key?.size ?? null;
   return cached;
 }
 
@@ -70,6 +82,7 @@ export function loadCorpus(): CorpusEntryT[] {
 export function setCorpusForTesting(entries: CorpusEntryT[] | null): void {
   cached = entries;
   cachedMtimeMs = null;
+  cachedSize = null;
   testOverride = entries !== null;
 }
 

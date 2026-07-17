@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isPrivateAddress, assertSafeCaptureTarget, assertSafeNavigationTarget } from "./ssrf.js";
 import { captureSlug, isAllowedByRobots, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT, MIN_VH_FRAC, VIEWPORTS } from "./scripts/capture.js";
+import { parseOpenAIResetHeader } from "./tagger.js";
 
 // ============================================================
 // SSRF guard — the lint that prevents the capture pipeline from
@@ -197,27 +198,14 @@ describe("escapeCssId (Node-side CSS.escape replacement)", () => {
 // OpenAI 429 reset-header parsing — the bug that caused "Vision provider
 // rate limit reached" to surface as a hard error instead of retrying.
 // OpenAI sends x-ratelimit-reset-requests / x-ratelimit-reset-tokens (NOT
-// Retry-After); the parser below mirrors parseOpenAIResetHeader in tagger.ts.
+// Retry-After); the parser under test is the real parseOpenAIResetHeader
+// imported from tagger.js.
 // ============================================================
 
 describe("OpenAI x-ratelimit-reset-* header parsing", () => {
-  // Mirror of parseOpenAIResetHeader in src/tagger.ts. Kept in sync manually
-  // (same as the group-member sliver predicate above) — the real function is
-  // module-private, so we test the parsing logic via this port.
-  function parseOpenAIResetHeader(value: string | null): number | null {
-    if (!value) return null;
-    const v = value.trim().toLowerCase();
-    if (/^[≤<]=?\s*1s$/.test(v)) return 1000;
-    const msMatch = v.match(/^(\d+(?:\.\d+)?)ms$/);
-    if (msMatch) return Math.ceil(parseFloat(msMatch[1]));
-    const sMatch = v.match(/^(\d+(?:\.\d+)?)s$/);
-    if (sMatch) return Math.ceil(parseFloat(sMatch[1]) * 1000);
-    const mMatch = v.match(/^(\d+(?:\.\d+)?)m$/);
-    if (mMatch) return Math.ceil(parseFloat(mMatch[1]) * 60_000);
-    const hMatch = v.match(/^(\d+(?:\.\d+)?)h$/);
-    if (hMatch) return Math.ceil(parseFloat(hMatch[1]) * 3_600_000);
-    return null;
-  }
+  // parseOpenAIResetHeader is imported from src/tagger.js (the production copy).
+  // Previously this was a hand-maintained mirror that drifted from the real
+  // function — now we exercise the actual implementation.
 
   it("parses seconds: '1s' → 1000ms", () => {
     expect(parseOpenAIResetHeader("1s")).toBe(1000);

@@ -5,7 +5,7 @@ import type { IncomingMessage } from "node:http";
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PRIVATE_IMAGE_DIR } from "../paths.js";
+import { privateImageDir, setPrivateImageDirForTesting } from "../paths.js";
 import type { CorpusEntryT } from "../schema.js";
 
 function req(headers: Record<string, string | undefined>): IncomingMessage {
@@ -445,10 +445,16 @@ describe("capture cleanup safety gate", () => {
   // POST /api/capture-cleanup must refuse to delete a batch dir while any item
   // is still pending — otherwise future cleanup eats private screenshots the
   // curator hasn't reviewed. cleanupBatch is the handler core.
-  const capturesRoot = join(PRIVATE_IMAGE_DIR, "captures");
+  //
+  // Isolation: the override redirects privateImageDir() (and thus capturesDir()
+  // in ui-server.ts) to a tmp dir, so these writes never touch the real
+  // corpus/images-private/captures/.
+  let capturesRoot: string;
   const batchId = "cleanup-test-batch";
 
   beforeEach(() => {
+    setPrivateImageDirForTesting(mkdtempSync(join(tmpdir(), "ui-server-cleanup-")));
+    capturesRoot = join(privateImageDir(), "captures");
     const batchDir = join(capturesRoot, batchId);
     mkdirSync(batchDir, { recursive: true });
     writeFileSync(join(batchDir, "manifest.json"), JSON.stringify([
@@ -456,8 +462,8 @@ describe("capture cleanup safety gate", () => {
     ]));
   });
   afterEach(() => {
-    const batchDir = join(capturesRoot, batchId);
-    if (existsSync(batchDir)) rmSync(batchDir, { recursive: true, force: true });
+    if (existsSync(privateImageDir())) rmSync(privateImageDir(), { recursive: true, force: true });
+    setPrivateImageDirForTesting(null);
   });
 
   it("refuses (409) and keeps the directory when items are pending", () => {
@@ -500,32 +506,32 @@ describe("promote-on-save: temp → permanent image copy", () => {
   // and returns the new path. Critical properties: (1) source must be under
   // captures/add-*, (2) the copy exists at the permanent path, (3) temp is NOT
   // deleted (other candidates still reference it), (4) non-add-* paths pass through.
-  const capturesRoot = join(PRIVATE_IMAGE_DIR, "captures");
+  //
+  // Isolation: privateImageDir() override redirects both capturesDir() and the
+  // permanent-flat-path writes to a tmp dir; fromCorpusRelativeImagePath honors
+  // the same override so source resolution matches.
+  let capturesRoot: string;
   const batchId = "add-promotetest-20260706";
   const capId = "stripe-section-abc-desktop";
   const tempRel = `images-private/captures/${batchId}/${capId}.png`;
 
   beforeEach(() => {
+    setPrivateImageDirForTesting(mkdtempSync(join(tmpdir(), "ui-server-promote-")));
+    capturesRoot = join(privateImageDir(), "captures");
     const batchDir = join(capturesRoot, batchId);
     mkdirSync(batchDir, { recursive: true });
     // 1x1 PNG bytes — smallest valid PNG.
     writeFileSync(join(batchDir, `${capId}.png`), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC", "base64"));
   });
   afterEach(() => {
-    const batchDir = join(capturesRoot, batchId);
-    if (existsSync(batchDir)) rmSync(batchDir, { recursive: true, force: true });
-    // Clean any promoted permanent files we created (slug "promote-perm-test").
-    for (const name of readdirSync(PRIVATE_IMAGE_DIR)) {
-      if (name.startsWith("promote-perm-test")) {
-        rmSync(join(PRIVATE_IMAGE_DIR, name), { force: true });
-      }
-    }
+    if (existsSync(privateImageDir())) rmSync(privateImageDir(), { recursive: true, force: true });
+    setPrivateImageDirForTesting(null);
   });
 
   it("copies a temp add-* image to a permanent flat path and returns the new path", () => {
     const result = promoteTempImage(tempRel, "promote-perm-test");
     expect(result.path).toMatch(/^images-private\/promote-perm-test(-\d+)?\.png$/);
-    expect(existsSync(join(PRIVATE_IMAGE_DIR, result.path.replace(/^images-private\//, "")))).toBe(true);
+    expect(existsSync(join(privateImageDir(), result.path.replace(/^images-private\//, "")))).toBe(true);
   });
 
   it("does NOT delete the temp source (other candidates still reference it)", () => {
@@ -560,11 +566,16 @@ describe("listCaptureBatches ignores add-* temp dirs (manifest gate)", () => {
   // triage page. listCaptureBatches requires manifest.json, and the Add flow
   // never writes one — so add-* dirs are invisible by construction. This test
   // pins that property so a future change can't regress it.
-  const capturesRoot = join(PRIVATE_IMAGE_DIR, "captures");
+  //
+  // Isolation: tmp privateImageDir() so the batch dirs never reach the real
+  // corpus/images-private/captures/.
+  let capturesRoot: string;
   const tempBatchId = "add-listtest-20260706";
   const realBatchId = "listtest-real-20260706";
 
   beforeEach(() => {
+    setPrivateImageDirForTesting(mkdtempSync(join(tmpdir(), "ui-server-listcap-")));
+    capturesRoot = join(privateImageDir(), "captures");
     mkdirSync(join(capturesRoot, tempBatchId), { recursive: true });
     // No manifest.json — simulates the Add flow exactly.
     writeFileSync(join(capturesRoot, tempBatchId, "foo.png"), Buffer.from([]));
@@ -577,10 +588,8 @@ describe("listCaptureBatches ignores add-* temp dirs (manifest gate)", () => {
     writeFileSync(join(realDir, "triage.json"), JSON.stringify({ "cap-1": "pending" }));
   });
   afterEach(() => {
-    for (const id of [tempBatchId, realBatchId]) {
-      const d = join(capturesRoot, id);
-      if (existsSync(d)) rmSync(d, { recursive: true, force: true });
-    }
+    if (existsSync(privateImageDir())) rmSync(privateImageDir(), { recursive: true, force: true });
+    setPrivateImageDirForTesting(null);
   });
 
   it("returns the real batch but NOT the add-* temp batch", () => {
@@ -644,9 +653,9 @@ describe("concurrent mutation serialization", () => {
   let base: string;
   let baseUrl: string;
 
-  // Images for the dedup gate live under the REAL corpus images-private dir
-  // (fromCorpusRelativeImagePath resolves against the static CORPUS_ROOT, not
-  // the test override). We isolate them under a unique temp subdir and clean up.
+  // Images for the dedup gate are written under a tmp privateImageDir() override.
+  // fromCorpusRelativeImagePath honors the same override (see paths.ts), so the
+  // server's dedup fingerprint reader resolves these tmp paths correctly.
   // Each fixture is a distinct high-entropy noise PNG: its dHash differs from
   // every sibling's by well over the DHASH_THRESHOLD of 8, so the commit-time
   // dedup gate lets each through (this test is about id/write collisions, not
@@ -654,7 +663,7 @@ describe("concurrent mutation serialization", () => {
   // computeDHash (sharp), which yields to the event loop — that is the async
   // gap that lets two un-serialized POSTs interleave and lose an update.
   const imgSubdir = `concurrency-test-${Date.now()}`;
-  const imgDirAbs = join(PRIVATE_IMAGE_DIR, imgSubdir);
+  let imgDirAbs: string;
 
   /** Generate a deterministic-but-distinct noise PNG (raw 32x32 → png). */
   async function noisePng(seed: number): Promise<Buffer> {
@@ -700,7 +709,10 @@ describe("concurrent mutation serialization", () => {
     base = mkdtempSync(join(tmpdir(), "ui-server-concurrency-"));
     writeFileSync(join(base, "entries.json"), JSON.stringify({ version: 2, entries: [] }));
     setCorpusRootForTesting(base);
-    // Real (static-CORPUS_ROOT) image dir for the dedup fingerprints.
+    // Tmp private-image dir for the dedup fingerprints — keeps all image writes
+    // out of the real corpus/images-private/.
+    setPrivateImageDirForTesting(mkdtempSync(join(tmpdir(), "ui-server-concurrency-img-")));
+    imgDirAbs = join(privateImageDir(), imgSubdir);
     mkdirSync(imgDirAbs, { recursive: true });
     server = await startServer(0);
     const addr = server.address();
@@ -712,7 +724,11 @@ describe("concurrent mutation serialization", () => {
     await new Promise<void>((r) => server.close(() => r()));
     setCorpusRootForTesting(null);
     if (base && existsSync(base)) rmSync(base, { recursive: true, force: true });
-    if (existsSync(imgDirAbs)) rmSync(imgDirAbs, { recursive: true, force: true });
+    // The override dir is tmp; clear it and the override together. Read the path
+    // BEFORE clearing the override so we don't accidentally rm the real dir.
+    const overrideDir = privateImageDir();
+    setPrivateImageDirForTesting(null);
+    if (existsSync(overrideDir)) rmSync(overrideDir, { recursive: true, force: true });
   });
 
   it("serializes concurrent mutating requests — no lost update", async () => {
@@ -775,10 +791,10 @@ describe("orphan endpoints (T-REV-2)", () => {
   let baseUrl: string;
   let base: string;
   const imgSubdir = `orphan-test-${Date.now()}`;
-  const imgDirAbs = join(PRIVATE_IMAGE_DIR, imgSubdir);
+  let imgDirAbs: string;
   // Captures must live directly under images-private/captures/ (the real
   // capture-batch layout) — that is the prefix safeOrphanPaths protects.
-  const capturesDirAbs = join(PRIVATE_IMAGE_DIR, "captures", imgSubdir);
+  let capturesDirAbs: string;
 
   beforeAll(async () => {
     base = mkdtempSync(join(tmpdir(), "ui-server-orphans-"));
@@ -791,6 +807,11 @@ describe("orphan endpoints (T-REV-2)", () => {
       }],
     }));
     setCorpusRootForTesting(base);
+    // Redirect the private-image dir to a tmp location so all image writes and
+    // the orphan walker stay out of the real corpus/images-private/.
+    setPrivateImageDirForTesting(mkdtempSync(join(tmpdir(), "ui-server-orphans-img-")));
+    imgDirAbs = join(privateImageDir(), imgSubdir);
+    capturesDirAbs = join(privateImageDir(), "captures", imgSubdir);
     mkdirSync(imgDirAbs, { recursive: true });
     // kept.png is referenced by the entry; orphan.png is not.
     writeFileSync(join(imgDirAbs, "kept.png"), Buffer.from("fake-png-kept"));
@@ -809,8 +830,10 @@ describe("orphan endpoints (T-REV-2)", () => {
     await new Promise<void>((r) => server.close(() => r()));
     setCorpusRootForTesting(null);
     rmSync(base, { recursive: true, force: true });
-    rmSync(imgDirAbs, { recursive: true, force: true });
-    rmSync(capturesDirAbs, { recursive: true, force: true });
+    // Clear the override and rm the tmp dir — read path BEFORE clearing.
+    const overrideDir = privateImageDir();
+    setPrivateImageDirForTesting(null);
+    if (existsSync(overrideDir)) rmSync(overrideDir, { recursive: true, force: true });
   });
 
   it("GET /api/orphans returns the orphan and protectedCounts", async () => {

@@ -12,7 +12,7 @@ import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT, type DirectionT } from "../schema.js";
 import { findVagueAntiPatterns } from "../content-lint.js";
-import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
+import { CORPUS_ROOT, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, privateImageDir, toCorpusRelativePath } from "../paths.js";
 import { safeOrphanPaths, type SafeOrphanResult } from "../orphans.js";
 import { checkDuplicateUpload, clearDuplicateBatch, computeDHash, loadDHashCache, rebuildDHashCache, findDuplicateAtCommit } from "../dedup.js";
 import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../tagger.js";
@@ -432,7 +432,7 @@ function privateImagePaths(): string[] {
   // Recursively walk private dir so nested bulk-import batches
   // (images-private/new-products-batch/Mercury Web Screens/…) are visible to
   // the orphan check. The earlier flat readdirSync missed nested files.
-  return listImageFilesRecursive(PRIVATE_IMAGE_DIR, "images-private/");
+  return listImageFilesRecursive(privateImageDir(), "images-private/");
 }
 
 // ─── capture-batch triage ──────────────────────────────────────────────────
@@ -445,7 +445,15 @@ function privateImagePaths(): string[] {
 // hop is gated through the helpers below so untrusted batchId/captureId can't
 // escape the captures root (the safety gate the plan review flagged).
 
-const CAPTURES_DIR = resolve(PRIVATE_IMAGE_DIR, "captures");
+/**
+ * Use-time resolution of the captures root. Tests override the parent dir via
+ * setPrivateImageDirForTesting(), and this function reads the override at call
+ * time — the previous module-load `const CAPTURES_DIR` bound the path at import
+ * so the test seam never reached it (T-REV-4).
+ */
+function capturesDir(): string {
+  return resolve(privateImageDir(), "captures");
+}
 const TRIAGE_STATUSES = ["pending", "promoted", "rejected"] as const;
 type TriageStatus = (typeof TRIAGE_STATUSES)[number];
 
@@ -468,7 +476,7 @@ function resolveBatchDir(batchId: string): string {
   if (!isSlugSafe(batchId)) {
     throw Object.assign(new Error("Invalid batchId"), { statusCode: 400 });
   }
-  const root = resolve(CAPTURES_DIR);
+  const root = resolve(capturesDir());
   const batchDir = resolve(root, batchId);
   // Reject anything that escapes the captures root (defence-in-depth on top of
   // the slug check — covers symlink edge cases the regex alone wouldn't catch).
@@ -511,11 +519,12 @@ type CaptureBatchSummary = {
  * their manifest are skipped — they're not from this pipeline.
  */
 export function listCaptureBatches(): CaptureBatchSummary[] {
-  if (!existsSync(CAPTURES_DIR)) return [];
+  const root = capturesDir();
+  if (!existsSync(root)) return [];
   const out: CaptureBatchSummary[] = [];
-  for (const name of readdirSync(CAPTURES_DIR, { withFileTypes: true })) {
+  for (const name of readdirSync(root, { withFileTypes: true })) {
     if (!name.isDirectory() || !isSlugSafe(name.name)) continue;
-    const batchDir = join(CAPTURES_DIR, name.name);
+    const batchDir = join(root, name.name);
     const manifestPath = join(batchDir, "manifest.json");
     const triagePath = join(batchDir, "triage.json");
     if (!existsSync(manifestPath)) continue;
@@ -721,14 +730,15 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse) {
     return;
   }
 
-  mkdirSync(PRIVATE_IMAGE_DIR, { recursive: true });
+  const imgDir = privateImageDir();
+  mkdirSync(imgDir, { recursive: true });
   const originalExt = extname(payload.filename).toLowerCase();
   const ext = [".png", ".jpg", ".jpeg", ".webp"].includes(originalExt) ? originalExt : ".png";
   const base = slugify(payload.slug || payload.filename.replace(/\.[^.]+$/, ""));
-  let absolutePath = resolve(PRIVATE_IMAGE_DIR, `${base}${ext}`);
+  let absolutePath = resolve(imgDir, `${base}${ext}`);
   let counter = 2;
   while (existsSync(absolutePath)) {
-    absolutePath = resolve(PRIVATE_IMAGE_DIR, `${base}-${counter}${ext}`);
+    absolutePath = resolve(imgDir, `${base}-${counter}${ext}`);
     counter++;
   }
 
@@ -770,12 +780,13 @@ async function handleCaptureUrl(req: IncomingMessage, res: ServerResponse) {
     return;
   }
 
-  mkdirSync(PRIVATE_IMAGE_DIR, { recursive: true });
+  const imgDir = privateImageDir();
+  mkdirSync(imgDir, { recursive: true });
   const base = slugify(payload.slug || sourceUrl.hostname);
-  let absolutePath = resolve(PRIVATE_IMAGE_DIR, `${base}.png`);
+  let absolutePath = resolve(imgDir, `${base}.png`);
   let counter = 2;
   while (existsSync(absolutePath)) {
-    absolutePath = resolve(PRIVATE_IMAGE_DIR, `${base}-${counter}.png`);
+    absolutePath = resolve(imgDir, `${base}-${counter}.png`);
     counter++;
   }
 
@@ -840,7 +851,7 @@ async function handleCaptureCandidates(req: IncomingMessage, res: ServerResponse
   // (which only deletes add-* dirs) can distinguish them from real CLI batches,
   // and so listCaptureBatches (which requires manifest.json) ignores them.
   const batchId = `add-${new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14)}`;
-  const batchDir = resolve(CAPTURES_DIR, batchId);
+  const batchDir = resolve(capturesDir(), batchId);
   mkdirSync(batchDir, { recursive: true });
 
   const sourceName = slugify(payload.slug || sourceUrl.hostname);
@@ -874,9 +885,9 @@ async function handleCaptureCandidates(req: IncomingMessage, res: ServerResponse
  * saveEntries. Throws with .statusCode on path-traversal or missing source.
  */
 export function promoteTempImage(tempPath: string, permanentSlug: string): { path: string; width: number; height: number } {
-  // Source must live under CAPTURES_DIR and start with captures/add-.
+  // Source must live under capturesDir() and start with captures/add-.
   const absTemp = fromCorpusRelativeImagePath(tempPath);
-  const capturesRoot = resolve(CAPTURES_DIR);
+  const capturesRoot = resolve(capturesDir());
   if (!absTemp.startsWith(capturesRoot + "/")) {
     throw Object.assign(new Error("Temp image must live under captures/"), { statusCode: 400 });
   }
@@ -892,10 +903,10 @@ export function promoteTempImage(tempPath: string, permanentSlug: string): { pat
   // Destination: flat images-private/{slug}.png, collision-avoided.
   const ext = extname(absTemp).toLowerCase() || ".png";
   let base = slugify(permanentSlug) || "capture";
-  let destAbs = resolve(PRIVATE_IMAGE_DIR, `${base}${ext}`);
+  let destAbs = resolve(privateImageDir(), `${base}${ext}`);
   let n = 2;
   while (existsSync(destAbs)) {
-    destAbs = resolve(PRIVATE_IMAGE_DIR, `${base}-${n}${ext}`);
+    destAbs = resolve(privateImageDir(), `${base}-${n}${ext}`);
     n++;
   }
   const data = readFileSync(absTemp);

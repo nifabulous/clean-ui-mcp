@@ -150,14 +150,27 @@ describe("corpus search (fixtures)", () => {
 // right call: the file's absence there isn't a regression, it's the expected
 // state for a public checkout.
 const REAL_CORPUS_PRESENT = existsSync(CORPUS_PATH);
+// Live-integration gate: the searchEntries() path can issue a real Voyage API
+// call when VOYAGE_API_KEY is set and embeddings are stale/missing. That must
+// NOT happen during the default `npm test` run — only when the developer
+// explicitly opts in via RUN_LIVE_INTEGRATION=1. Structural tests that don't
+// touch the network stay gated only on REAL_CORPUS_PRESENT.
+const RUN_LIVE_INTEGRATION = process.env.RUN_LIVE_INTEGRATION === "1";
 (REAL_CORPUS_PRESENT ? describe : describe.skip)("real corpus contracts", () => {
   it("the real corpus validates against the schema", () => {
-    // This is the ONLY test allowed to depend on entries.json existing. If the
-    // file is corrupt/overwritten, this catches it — that's its purpose.
+    // Pure file read — no API call. This is the ONLY test allowed to depend on
+    // entries.json existing. If the file is corrupt/overwritten, this catches
+    // it — that's its purpose.
     const raw = readFileSync(CORPUS_PATH, "utf-8");
     expect(() => Corpus.parse(JSON.parse(raw))).not.toThrow();
   });
+});
 
+// searchEntries can trigger a live Voyage API call (when VOYAGE_API_KEY is set
+// and embeddings need refreshing). Gate the whole block on BOTH the corpus
+// being present AND an explicit RUN_LIVE_INTEGRATION=1 opt-in so the default
+// `npm test` never reaches the network.
+(REAL_CORPUS_PRESENT && RUN_LIVE_INTEGRATION ? describe : describe.skip)("real corpus search (live integration)", () => {
   it("finds entries with search (vector or keyword — resilient to Voyage rate limits)", async () => {
     let results: Awaited<ReturnType<typeof searchEntries>> = [];
     try {

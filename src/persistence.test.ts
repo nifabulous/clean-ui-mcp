@@ -12,11 +12,11 @@
  *   - the test seam (setCorpusForTesting) still works after consolidation.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { CorpusEntryT } from "./schema.js";
-import { setCorpusRootForTesting, loadCorpusSafe, persistEntries } from "./persistence.js";
+import { setCorpusRootForTesting, loadCorpusSafe, persistEntries, writeAtomic } from "./persistence.js";
 import { setCorpusForTesting, getEntryById } from "./corpus.js";
 import { fixtures } from "./scripts/__fixtures__/corpus-fixtures.js";
 
@@ -200,5 +200,44 @@ describe("setCorpusForTesting — consolidation regression", () => {
     setCorpusForTesting([validEntry("seam-only-entry")]);
     expect(getEntryById("seam-only-entry")).toBeDefined();
     expect(getEntryById("real-anything-else")).toBeUndefined();
+  });
+});
+
+describe("writeAtomic — atomicity primitive (T-REV-1)", () => {
+  // writeAtomic is the load-bearing primitive for Task 5 (decisions recovery)
+  // and Task 6 (all entries.json writers). It writes a temp file then renames
+  // it over the target. These tests pin the guarantee directly — previously it
+  // was only exercised transitively via persistEntries.
+  let dir: string;
+  let target: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "writeatomic-"));
+    target = join(dir, "out.json");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("writes the exact content to the target path", () => {
+    writeAtomic(target, "hello-world\n");
+    expect(readFileSync(target, "utf-8")).toBe("hello-world\n");
+  });
+
+  it("leaves no temp file behind after a successful write", () => {
+    writeAtomic(target, "{\"x\":1}\n");
+    const leftovers = readdirSync(dir).filter((f) => f.includes(".tmp-"));
+    expect(leftovers).toEqual([]);
+  });
+
+  it("overwrites existing content atomically (no partial/truncated state)", () => {
+    writeFileSync(target, "OLD-CONTENT-that-is-longer-than-new", "utf-8");
+    writeAtomic(target, "new\n");
+    // The target holds exactly the new content — not a splice of old + new.
+    expect(readFileSync(target, "utf-8")).toBe("new\n");
+  });
+
+  it("creates the target when it does not yet exist", () => {
+    expect(existsSync(target)).toBe(false);
+    writeAtomic(target, "fresh\n");
+    expect(readFileSync(target, "utf-8")).toBe("fresh\n");
   });
 });

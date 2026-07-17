@@ -229,6 +229,35 @@ if (entries) {
   checks.push(publicationCheck(entries, { now: today, imageExists }));
 }
 
+// ── 11. Review-gate git hooks installed ──────────────────────────────────────
+// .git/hooks/ is not version-controlled (and in a worktree .git is a file
+// pointing at the main repo's git dir), so the review-gate hooks ship under
+// .zcode/git-hooks/ and are copied into place by .zcode/scripts/install-git-hooks.
+// Warn when the source hooks exist but pre-push is missing — the gate won't run
+// on push, so review-blocked commits could slip through. Uses `git rev-parse
+// --git-path hooks` (the same resolution install-git-hooks uses) so worktrees
+// and core.hooksPath are handled correctly.
+const PROJECT_ROOT = resolve(__dirname, "..", "..");
+const hookSrc = resolve(PROJECT_ROOT, ".zcode", "git-hooks");
+let gitHooksDir = resolve(PROJECT_ROOT, "..", ".git", "hooks");
+try {
+  gitHooksDir = execFileSync("git", ["rev-parse", "--git-path", "hooks"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+    cwd: PROJECT_ROOT,
+  }).trim();
+} catch { /* git unavailable — fall back to the static path */ }
+if (existsSync(hookSrc)) {
+  const prePushMissing = !existsSync(resolve(gitHooksDir, "pre-push"));
+  const prepareMissing = !existsSync(resolve(gitHooksDir, "prepare-commit-msg"));
+  if (prePushMissing || prepareMissing) {
+    const missing = [prePushMissing && "pre-push", prepareMissing && "prepare-commit-msg"].filter(Boolean).join(" + ");
+    checks.push({ name: "Review-gate git hooks", status: "WARN", detail: `${missing} not installed — run \`.zcode/scripts/install-git-hooks\`` });
+  } else {
+    checks.push({ name: "Review-gate git hooks", status: "PASS", detail: "pre-push + prepare-commit-msg installed" });
+  }
+}
+
 // ── report ───────────────────────────────────────────────────────────────────
 const failed = checks.filter((c) => c.status === "FAIL");
 const warned = checks.filter((c) => c.status === "WARN");

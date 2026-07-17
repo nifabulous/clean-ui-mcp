@@ -11,61 +11,58 @@
  *   npm run clean-orphans -- --confirm       # delete the orphans
  *   npm run clean-orphans -- --confirm --json # delete, report as json
  */
-import { rmSync, readFileSync } from "node:fs";
+import { rmSync, readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { Corpus, Decisions } from "../schema.js";
+import { Corpus } from "../schema.js";
 import { CORPUS_ROOT, listImageFilesRecursive, PRIVATE_IMAGE_DIR, PUBLIC_IMAGE_DIR } from "../paths.js";
+import { safeOrphanPaths } from "../orphans.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
 const DECISIONS_PATH = resolve(__dirname, "..", "..", "corpus", "decisions.json");
+const DRAFT_PATH = resolve(__dirname, "..", "..", "corpus", "entries-draft.json");
 const args = process.argv.slice(2);
 const confirm = args.includes("--confirm");
 const asJson = args.includes("--json");
 
-/** List files referenced by entries, plus files on disk in both image dirs. */
+/** List files referenced by entries/decisions/draft, plus files on disk in both
+ *  image dirs. The "what's referenced + fail-closed" decision lives in
+ *  ../orphans.ts (safeOrphanPaths) so this CLI and the UI server share it.
+ *  This function keeps the corpus-validation precondition (refuse to run
+ *  against an invalid entries.json) and the reporting shape the CLI's output
+ *  depends on. */
 function orphanInventory() {
   const raw = JSON.parse(readFileSync(CORPUS_PATH, "utf-8"));
   const entries = Corpus.safeParse(raw);
   if (!entries.success) {
     throw new Error(`Corpus validation failed — fix entries.json before cleaning orphans.`);
   }
-  const referenced = new Set(
-    entries.data.entries
-      .map((e) => e.image.path)
-      .filter((p): p is string => !!p && p.startsWith("images-private/")),
-  );
-  // Decision Lab screenshots live under images-private/decisions/ — they're not
-  // referenced by corpus entries, so without this they'd be treated as orphans.
-  // Parse leniently: if decisions.json is missing/corrupt, just skip (no images
-  // to protect).
-  try {
-    const rawDecisions = readFileSync(DECISIONS_PATH, "utf-8");
-    const parsed = Decisions.safeParse(JSON.parse(rawDecisions));
-    if (parsed.success) {
-      for (const d of parsed.data.decisions) {
-        for (const dir of d.directions) {
-          for (const screen of dir.screens) {
-            if (screen.imageRef?.startsWith("images-private/")) {
-              referenced.add(screen.imageRef);
-            }
-          }
-        }
-      }
-    }
-  } catch {
-    // decisions.json missing or unreadable — no Decision Lab images to protect.
-  }
+  // Read the raw manifests (if present) and let safeOrphanPaths parse them with
+  // fail-closed semantics. Earlier this CLI protected decisions but still
+  // deleted capture batches and images referenced only by entries-draft.json.
+  const decisionsRaw = existsSync(DECISIONS_PATH) ? readFileSync(DECISIONS_PATH, "utf-8") : null;
+  const draftRaw = existsSync(DRAFT_PATH) ? readFileSync(DRAFT_PATH, "utf-8") : null;
   // Recursively walk private + public dirs so nested bulk-import batches
   // (images-private/new-products-batch/Mercury Web Screens/…) are accounted
   // for. The earlier flat readdirSync missed these and would have deleted
   // files that were actually referenced via nested paths.
   const privateFiles = listImageFilesRecursive(PRIVATE_IMAGE_DIR, "images-private/");
   const publicFiles = listImageFilesRecursive(PUBLIC_IMAGE_DIR, "images-public/");
-  // Only private orphans are deletable (public images may be hot-linked).
-  const orphans = privateFiles.filter((f) => !referenced.has(f)).sort();
-  return { orphans, referencedCount: referenced.size, privateTotal: privateFiles.length, publicTotal: publicFiles.length };
+  const result = safeOrphanPaths({ entries: entries.data.entries, privateFiles, decisionsRaw, draftRaw });
+  // referencedCount = distinct private files kept off the orphan list by an
+  // entry/decision/draft reference. Sum the per-layer counts (each on-disk file
+  // is attributed to exactly one layer in safeOrphanPaths, so no double-count).
+  const referencedCount =
+    result.protectedCounts.entries +
+    result.protectedCounts.decisions +
+    result.protectedCounts.draft;
+  return {
+    orphans: result.orphans,
+    referencedCount,
+    privateTotal: privateFiles.length,
+    publicTotal: publicFiles.length,
+  };
 }
 
 const inv = orphanInventory();

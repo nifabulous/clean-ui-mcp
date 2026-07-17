@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, existsSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, existsSync, writeFileSync, rmSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PRIVATE_IMAGE_DIR } from "./paths.js";
+import { privateImageDir, setPrivateImageDirForTesting } from "./paths.js";
 import { checkDuplicateUpload, clearDuplicateBatch, findDuplicateAtCommit } from "./dedup.js";
 import { completenessScore } from "./scripts/dedup-cleanup.js";
 import type { CorpusEntryT } from "./schema.js";
@@ -32,7 +33,12 @@ describe("commit-time duplicate gate (moved from ui-server.test.ts)", () => {
   // passed upload-time dedup could still commit a duplicate if a sibling landed
   // first or a near-identical shot existed from a prior batch. findDuplicateAtCommit
   // is the authoritative gate, so test it directly with real image bytes.
-  const testDir = join(PRIVATE_IMAGE_DIR, "__dedup-test");
+  //
+  // Isolation: image fixtures live under a tmp privateImageDir() override, and
+  // fromCorpusRelativeImagePath honors the same override (see paths.ts) so the
+  // dedup fingerprint reader resolves the tmp paths. Nothing touches the real
+  // corpus/images-private/.
+  let testDir: string;
   // 64x64 solid-blue PNGs that sharp can definitely decode (1x1s fail sharp's
   // libpng). a and b are byte-identical (exact dup); c is byte-distinct.
   const pngBlue = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAn0lEQVRoge2SQQkAQRDDqqTqTmxkrYh7hIFCBKSh6cdpoht0A9ArdhfiLtENugHoFbsLcZfoBt0A9IrdhbhLdINuAHrF7kLcJbpBNwC9Ynch7hLdoBuAXrG7EHeJbtANQK/YXYi7RDfoBqBX7C7EXaIbdAPQK3YX4i7RDboB6BW7C3GX6AbdAPSK3YW4S3SDbgB6xe5C3CW6QTcAveIfHrj6oS2wXLsiAAAAAElFTkSuQmCC";
@@ -43,6 +49,8 @@ describe("commit-time duplicate gate (moved from ui-server.test.ts)", () => {
   }
 
   beforeEach(() => {
+    setPrivateImageDirForTesting(mkdtempSync(join(tmpdir(), "dedup-test-")));
+    testDir = join(privateImageDir(), "__dedup-test");
     mkdirSync(testDir, { recursive: true });
     writeFileSync(join(testDir, "a.png"), Buffer.from(pngBlue, "base64"));
     writeFileSync(join(testDir, "b.png"), Buffer.from(pngBlue, "base64")); // byte-identical to a
@@ -50,7 +58,10 @@ describe("commit-time duplicate gate (moved from ui-server.test.ts)", () => {
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
+    // Read path BEFORE clearing the override so we rm the tmp dir, not the real one.
+    const overrideDir = privateImageDir();
+    setPrivateImageDirForTesting(null);
+    if (existsSync(overrideDir)) rmSync(overrideDir, { recursive: true, force: true });
   });
 
   it("flags an exact byte-identical image as a duplicate", async () => {

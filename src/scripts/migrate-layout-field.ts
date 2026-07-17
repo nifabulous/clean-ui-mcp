@@ -18,11 +18,12 @@
  *   npm run migrate-layout -- --dry-run
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { Corpus } from "../schema.js";
+import { writeAtomic, writeRawSnapshot } from "../persistence.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
@@ -99,7 +100,8 @@ if (isMain) {
     process.exit(1);
   }
 
-  const raw = JSON.parse(readFileSync(CORPUS_PATH, "utf-8"));
+  const originalRaw = readFileSync(CORPUS_PATH, "utf-8");
+  const raw = JSON.parse(originalRaw);
   const corpus = Corpus.parse(raw); // validates before we mutate
 
   let populated = 0;
@@ -127,7 +129,8 @@ if (isMain) {
     process.exit(0);
   }
 
-  writeFileSync(CORPUS_PATH, JSON.stringify({ version: 2, entries: corpus.entries }, null, 2) + "\n", "utf-8");
+  writeRawSnapshot(originalRaw);
+  writeAtomic(CORPUS_PATH, JSON.stringify({ version: 2, entries: corpus.entries }, null, 2) + "\n");
   console.log(`\n✅ Wrote layouts to ${CORPUS_PATH}`);
 }
 

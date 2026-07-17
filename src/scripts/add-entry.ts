@@ -18,7 +18,7 @@ import "../env.js";
  *   5. Run the corpus validator
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { resolve, dirname } from "node:path";
@@ -32,6 +32,7 @@ import type { CorpusEntryT } from "../schema.js";
 import { findVagueAntiPatterns } from "../content-lint.js";
 import { toCorpusRelativePath } from "../paths.js";
 import { hasVisionKey, tagImage } from "../tagger.js";
+import { writeAtomic, writeRawSnapshot } from "../persistence.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
@@ -433,7 +434,11 @@ if (gateError) {
 
 // ─── append to corpus ─────────────────────────────────────────────────────────
 
-const raw = JSON.parse(readFileSync(CORPUS_PATH, "utf-8"));
+// Keep the raw original bytes so we can snapshot them before overwriting. A
+// crash mid-write would otherwise leave a torn entries.json; the snapshot
+// gives the durability layer (loadCorpusSafe) a recoverable prior state.
+const originalRaw = readFileSync(CORPUS_PATH, "utf-8");
+const raw = JSON.parse(originalRaw);
 const corpus = Corpus.parse(raw);
 
 if (corpus.entries.some((e) => e.id === id)) {
@@ -443,7 +448,8 @@ if (corpus.entries.some((e) => e.id === id)) {
 }
 
 corpus.entries.push(newEntry);
-writeFileSync(CORPUS_PATH, JSON.stringify(corpus, null, 2) + "\n", "utf-8");
+writeRawSnapshot(originalRaw);
+writeAtomic(CORPUS_PATH, JSON.stringify(corpus, null, 2) + "\n");
 
 console.log(`\n  ✅ Added "${title}" (${id}) to corpus.`);
 console.log(`     Total entries: ${corpus.entries.length}`);

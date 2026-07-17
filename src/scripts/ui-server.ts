@@ -12,7 +12,8 @@ import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT, type DirectionT } from "../schema.js";
 import { findVagueAntiPatterns } from "../content-lint.js";
-import { CORPUS_ROOT, PRIVATE_IMAGE_DIR, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, toCorpusRelativePath } from "../paths.js";
+import { CORPUS_ROOT, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, privateImageDir, toCorpusRelativePath } from "../paths.js";
+import { safeOrphanPaths, type SafeOrphanResult } from "../orphans.js";
 import { checkDuplicateUpload, clearDuplicateBatch, computeDHash, loadDHashCache, rebuildDHashCache, findDuplicateAtCommit } from "../dedup.js";
 import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../tagger.js";
 import type { CaptureMeta, DomSignals } from "./capture.js";
@@ -70,6 +71,29 @@ function saveEntries(entries: CorpusEntryT[]): void {
   // The corpus changed — rebuild the dHash cache so stale/removed entries don't
   // poison future duplicate checks, and new entries are matched immediately.
   void rebuildDHashCache(entries);
+}
+
+// ─── mutation serialization (Task 7: lost-update fix) ─────────────────────────
+// Every corpus-mutating handler follows a load → await (sharp dedup, vision
+// retag I/O) → save-whole-array pattern. Two such requests running concurrently
+// both snapshot `entries` before either saves, so the second save overwrites the
+// first (lost update) and uniqueEntryId/findDuplicateAtCommit mint duplicates
+// against a stale snapshot. A serialized promise chain closes the race: request
+// B's loadEntries cannot run until request A's saveEntries has resolved.
+//
+// Single-process, single-operator tool → a promise chain is sufficient; no need
+// for a cross-process lock. GET/read handlers are NOT serialized — they don't
+// mutate and stay fully concurrent (see isMutatingMethod gate in handleUiRequest).
+let mutationChain: Promise<unknown> = Promise.resolve();
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const next = mutationChain.then(fn, fn);
+  mutationChain = next.catch(() => undefined);
+  return next;
+}
+
+/** HTTP methods that mutate corpus/decision state — serialized end-to-end. */
+function isMutatingMethod(method: string | undefined): boolean {
+  return method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
 }
 
 // ─── provider allowlist (shared by auto-tag, auto-critique, auto-retag) ──────
@@ -376,23 +400,39 @@ export function prepareNewEntryPayload(payload: unknown, entries: CorpusEntryT[]
 // import path is ../dedup.js; new code should import from there directly.
 export { findDuplicateAtCommit } from "../dedup.js";
 
+/**
+ * Shared orphan scan — reads corpus/decisions.json and corpus/entries-draft.json
+ * raw (if present) and delegates to the pure safeOrphanPaths() in ../orphans.js.
+ *
+ * Both raw manifests are read here so the UI server and the clean-orphans CLI
+ * share one fail-closed decision: capture batches are never deletable, Decision
+ * Lab screenshots are protected when decisions.json references them (or when it
+ * was supplied but is corrupt), and staged-draft images are protected likewise.
+ * Earlier this server only subtracted corpus-entry refs, so it unlink'd live
+ * Decision Lab screenshots and un-triaged capture batches.
+ */
+function scanOrphans(entries: CorpusEntryT[]): SafeOrphanResult {
+  const decisionsPath = resolve(CORPUS_ROOT, "decisions.json");
+  const draftPath = resolve(CORPUS_ROOT, "entries-draft.json");
+  const decisionsRaw = existsSync(decisionsPath) ? readFileSync(decisionsPath, "utf-8") : null;
+  const draftRaw = existsSync(draftPath) ? readFileSync(draftPath, "utf-8") : null;
+  return safeOrphanPaths({ entries, privateFiles: privateImagePaths(), decisionsRaw, draftRaw });
+}
+
+/**
+ * Backward-compat wrapper kept for the existing ui-server.test.ts suite. It
+ * returns only the orphan list (the test asserts the deletable set, not the
+ * protection breakdown). New call sites should use scanOrphans() directly.
+ */
 export function orphanedPrivateImagePaths(files: string[], entries: CorpusEntryT[]): string[] {
-  const referenced = new Set(
-    entries
-      .map((entry) => entry.image.path)
-      .filter((path): path is string => !!path && path.startsWith("images-private/")),
-  );
-  return files
-    .filter((path) => path.startsWith("images-private/"))
-    .filter((path) => !referenced.has(path))
-    .sort();
+  return safeOrphanPaths({ entries, privateFiles: files }).orphans;
 }
 
 function privateImagePaths(): string[] {
   // Recursively walk private dir so nested bulk-import batches
   // (images-private/new-products-batch/Mercury Web Screens/…) are visible to
   // the orphan check. The earlier flat readdirSync missed nested files.
-  return listImageFilesRecursive(PRIVATE_IMAGE_DIR, "images-private/");
+  return listImageFilesRecursive(privateImageDir(), "images-private/");
 }
 
 // ─── capture-batch triage ──────────────────────────────────────────────────
@@ -405,7 +445,15 @@ function privateImagePaths(): string[] {
 // hop is gated through the helpers below so untrusted batchId/captureId can't
 // escape the captures root (the safety gate the plan review flagged).
 
-const CAPTURES_DIR = resolve(PRIVATE_IMAGE_DIR, "captures");
+/**
+ * Use-time resolution of the captures root. Tests override the parent dir via
+ * setPrivateImageDirForTesting(), and this function reads the override at call
+ * time — the previous module-load `const CAPTURES_DIR` bound the path at import
+ * so the test seam never reached it (T-REV-4).
+ */
+function capturesDir(): string {
+  return resolve(privateImageDir(), "captures");
+}
 const TRIAGE_STATUSES = ["pending", "promoted", "rejected"] as const;
 type TriageStatus = (typeof TRIAGE_STATUSES)[number];
 
@@ -428,7 +476,7 @@ function resolveBatchDir(batchId: string): string {
   if (!isSlugSafe(batchId)) {
     throw Object.assign(new Error("Invalid batchId"), { statusCode: 400 });
   }
-  const root = resolve(CAPTURES_DIR);
+  const root = resolve(capturesDir());
   const batchDir = resolve(root, batchId);
   // Reject anything that escapes the captures root (defence-in-depth on top of
   // the slug check — covers symlink edge cases the regex alone wouldn't catch).
@@ -471,11 +519,12 @@ type CaptureBatchSummary = {
  * their manifest are skipped — they're not from this pipeline.
  */
 export function listCaptureBatches(): CaptureBatchSummary[] {
-  if (!existsSync(CAPTURES_DIR)) return [];
+  const root = capturesDir();
+  if (!existsSync(root)) return [];
   const out: CaptureBatchSummary[] = [];
-  for (const name of readdirSync(CAPTURES_DIR, { withFileTypes: true })) {
+  for (const name of readdirSync(root, { withFileTypes: true })) {
     if (!name.isDirectory() || !isSlugSafe(name.name)) continue;
-    const batchDir = join(CAPTURES_DIR, name.name);
+    const batchDir = join(root, name.name);
     const manifestPath = join(batchDir, "manifest.json");
     const triagePath = join(batchDir, "triage.json");
     if (!existsSync(manifestPath)) continue;
@@ -647,7 +696,7 @@ function mimeFor(path: string): string {
  * preserves the UI's friendlier "Use a valid source URL" parse-error wording.
  */
 export { isPrivateAddress } from "../ssrf.js";
-import { assertSafeCaptureTarget as assertSafeCaptureTargetShared } from "../ssrf.js";
+import { assertSafeCaptureTarget as assertSafeCaptureTargetShared, installSsrfGuard, localOriginIfLocal } from "../ssrf.js";
 
 async function assertSafeCaptureTarget(rawUrl: string): Promise<URL> {
   try {
@@ -681,14 +730,15 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse) {
     return;
   }
 
-  mkdirSync(PRIVATE_IMAGE_DIR, { recursive: true });
+  const imgDir = privateImageDir();
+  mkdirSync(imgDir, { recursive: true });
   const originalExt = extname(payload.filename).toLowerCase();
   const ext = [".png", ".jpg", ".jpeg", ".webp"].includes(originalExt) ? originalExt : ".png";
   const base = slugify(payload.slug || payload.filename.replace(/\.[^.]+$/, ""));
-  let absolutePath = resolve(PRIVATE_IMAGE_DIR, `${base}${ext}`);
+  let absolutePath = resolve(imgDir, `${base}${ext}`);
   let counter = 2;
   while (existsSync(absolutePath)) {
-    absolutePath = resolve(PRIVATE_IMAGE_DIR, `${base}-${counter}${ext}`);
+    absolutePath = resolve(imgDir, `${base}-${counter}${ext}`);
     counter++;
   }
 
@@ -730,12 +780,13 @@ async function handleCaptureUrl(req: IncomingMessage, res: ServerResponse) {
     return;
   }
 
-  mkdirSync(PRIVATE_IMAGE_DIR, { recursive: true });
+  const imgDir = privateImageDir();
+  mkdirSync(imgDir, { recursive: true });
   const base = slugify(payload.slug || sourceUrl.hostname);
-  let absolutePath = resolve(PRIVATE_IMAGE_DIR, `${base}.png`);
+  let absolutePath = resolve(imgDir, `${base}.png`);
   let counter = 2;
   while (existsSync(absolutePath)) {
-    absolutePath = resolve(PRIVATE_IMAGE_DIR, `${base}-${counter}.png`);
+    absolutePath = resolve(imgDir, `${base}-${counter}.png`);
     counter++;
   }
 
@@ -748,6 +799,12 @@ async function handleCaptureUrl(req: IncomingMessage, res: ServerResponse) {
       },
       deviceScaleFactor: 1,
     });
+    // SSRF per-hop guard — installed BEFORE page.goto so server redirects are
+    // intercepted and aborted. assertSafeCaptureTarget above only checked the
+    // initial URL; this closes the public-URL-302-to-metadata redirect bypass.
+    // When the initial target was localhost (local-dev capture), pass its exact
+    // origin so the guard permits that one local origin's same-origin requests.
+    await installSsrfGuard(page, localOriginIfLocal(sourceUrl));
     await page.goto(sourceUrl.toString(), { waitUntil: "networkidle", timeout: 45_000 });
     await page.screenshot({ path: absolutePath, fullPage: false });
   } finally {
@@ -796,7 +853,7 @@ async function handleCaptureCandidates(req: IncomingMessage, res: ServerResponse
   // (which only deletes add-* dirs) can distinguish them from real CLI batches,
   // and so listCaptureBatches (which requires manifest.json) ignores them.
   const batchId = `add-${new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14)}`;
-  const batchDir = resolve(CAPTURES_DIR, batchId);
+  const batchDir = resolve(capturesDir(), batchId);
   mkdirSync(batchDir, { recursive: true });
 
   const sourceName = slugify(payload.slug || sourceUrl.hostname);
@@ -830,9 +887,9 @@ async function handleCaptureCandidates(req: IncomingMessage, res: ServerResponse
  * saveEntries. Throws with .statusCode on path-traversal or missing source.
  */
 export function promoteTempImage(tempPath: string, permanentSlug: string): { path: string; width: number; height: number } {
-  // Source must live under CAPTURES_DIR and start with captures/add-.
+  // Source must live under capturesDir() and start with captures/add-.
   const absTemp = fromCorpusRelativeImagePath(tempPath);
-  const capturesRoot = resolve(CAPTURES_DIR);
+  const capturesRoot = resolve(capturesDir());
   if (!absTemp.startsWith(capturesRoot + "/")) {
     throw Object.assign(new Error("Temp image must live under captures/"), { statusCode: 400 });
   }
@@ -848,10 +905,10 @@ export function promoteTempImage(tempPath: string, permanentSlug: string): { pat
   // Destination: flat images-private/{slug}.png, collision-avoided.
   const ext = extname(absTemp).toLowerCase() || ".png";
   let base = slugify(permanentSlug) || "capture";
-  let destAbs = resolve(PRIVATE_IMAGE_DIR, `${base}${ext}`);
+  let destAbs = resolve(privateImageDir(), `${base}${ext}`);
   let n = 2;
   while (existsSync(destAbs)) {
-    destAbs = resolve(PRIVATE_IMAGE_DIR, `${base}-${n}${ext}`);
+    destAbs = resolve(privateImageDir(), `${base}-${n}${ext}`);
     n++;
   }
   const data = readFileSync(absTemp);
@@ -1074,13 +1131,16 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/orphans") {
-    const orphans = orphanedPrivateImagePaths(privateImagePaths(), entries);
-    sendJson(res, 200, { orphans, count: orphans.length });
+    // scanOrphans reads decisions.json + entries-draft.json and applies the
+    // fail-closed rules, so capture batches, Decision Lab screenshots, and
+    // staged-draft images are never listed as deletable here.
+    const { orphans, protectedCounts } = scanOrphans(entries);
+    sendJson(res, 200, { orphans, count: orphans.length, protectedCounts });
     return;
   }
 
   if (req.method === "DELETE" && url.pathname === "/api/orphans") {
-    const orphans = orphanedPrivateImagePaths(privateImagePaths(), entries);
+    const { orphans } = scanOrphans(entries);
     for (const path of orphans) {
       unlinkSync(fromCorpusRelativeImagePath(path));
     }
@@ -1471,7 +1531,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   sendJson(res, 404, { error: "Not found" });
 }
 
-const server = createServer(async (req, res) => {
+async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
     // Same-origin guard. The app is served from this server; no legitimate
     // caller is cross-origin. A missing Origin (non-browser clients) is allowed
@@ -1502,7 +1562,17 @@ const server = createServer(async (req, res) => {
 
     const url = parseUrl(req);
     if (url.pathname.startsWith("/api/")) {
-      await handleApi(req, res, url);
+      // Mutating requests run end-to-end inside `serialized` so their
+      // loadEntries() → await (dedup/vision) → saveEntries sequence cannot
+      // interleave with another mutation. loadEntries() is the FIRST statement
+      // of handleApi, so wrapping the call here guarantees request B cannot load
+      // its snapshot until request A's saveEntries has resolved — closing the
+      // lost-update / duplicate-id race. GET/read requests stay concurrent.
+      if (isMutatingMethod(req.method)) {
+        await serialized(() => handleApi(req, res, url));
+      } else {
+        await handleApi(req, res, url);
+      }
       return;
     }
 
@@ -1545,28 +1615,39 @@ const server = createServer(async (req, res) => {
     console.error(error);
     sendJson(res, 500, { error: error instanceof Error ? error.message : "Internal server error" });
   }
-});
+}
+
+// SECURITY: loopback only. The curator app has no auth and several mutating
+// endpoints; binding a routable interface would expose them to the LAN.
+// "127.0.0.1" (not "localhost") so the OS resolver can't rebind it.
+// This is the ONLY listen site — the bootstrap below and the tests both go
+// through it, so the loopback-bind test covers the real production bind.
+export function startServer(port: number): Promise<import("node:http").Server> {
+  return new Promise((resolvePromise, reject) => {
+    const srv = createServer(handleUiRequest);
+    srv.once("error", reject);
+    srv.listen(port, "127.0.0.1", () => {
+      srv.removeListener("error", reject);
+      resolvePromise(srv);
+    });
+  });
+}
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   // Eagerly load the dHash cache so the first duplicate check doesn't pay the
   // rehash cost. Rebuilds async if missing/stale; non-blocking.
   loadDHashCache();
 
-  server.on("error", (error: NodeJS.ErrnoException) => {
-    if (error.code === "EADDRINUSE") {
-      console.error(`Port ${PORT} is already in use. The curator may already be running at http://localhost:${PORT}.`);
-      console.error(`Stop the old process or set CLEAN_UI_PORT in .env to use another port.`);
-      process.exit(1);
-    }
-    throw error;
-  });
-
-  // Bind to the IPv6 wildcard so the listener accepts BOTH stacks — ::1 AND
-  // 127.0.0.1 (via IPv4-mapped addresses, since ipv6only defaults to false).
-  // Pinning 127.0.0.1 caused "page won't load" on hosts where the browser
-  // resolves localhost to ::1 first and gets connection-refused with no IPv4
-  // fallback. Outbound SSRF protection (the corpus's own guard) is unaffected.
-  server.listen(PORT, "::", () => {
-    console.log(`clean-ui curator running at http://localhost:${PORT}`);
-  });
+  startServer(PORT)
+    .then(() => {
+      console.log(`clean-ui curator running at http://localhost:${PORT}`);
+    })
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") {
+        console.error(`Port ${PORT} is already in use. The curator may already be running at http://localhost:${PORT}.`);
+        console.error(`Stop the old process or set CLEAN_UI_PORT in .env to use another port.`);
+        process.exit(1);
+      }
+      throw error;
+    });
 }

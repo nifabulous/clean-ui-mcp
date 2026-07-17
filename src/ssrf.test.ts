@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { isPrivateAddress, assertSafeCaptureTarget } from "./ssrf.js";
+import { isPrivateAddress, assertSafeCaptureTarget, assertSafeNavigationTarget, localOriginIfLocal } from "./ssrf.js";
 import { captureSlug, isAllowedByRobots, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT, MIN_VH_FRAC, VIEWPORTS } from "./scripts/capture.js";
+import { parseOpenAIResetHeader } from "./tagger.js";
 
 // ============================================================
 // SSRF guard — the lint that prevents the capture pipeline from
@@ -41,6 +42,27 @@ describe("SSRF guard: isPrivateAddress", () => {
     // Public v6 (Cloudflare)
     expect(isPrivateAddress("2606:4700:4700::1111")).toBe(false);
   });
+
+  // --- extended ranges (Task 3, Production Hardening) ---------------------
+  // Three non-public CIDRs the prefix checks originally missed:
+  //   - CGNAT        100.64.0.0/10  (octet2 in 64..127)
+  //   - Benchmarking 198.18.0.0/15  (octet2 in {18,19})
+  //   - IETF proto   192.0.0.0/24   (octet2=0 AND octet3=0)
+  // The boundary cases (100.128 / 198.20) prove the range is exact, not wide.
+  it("rejects CGNAT, benchmarking, and IETF-protocol ranges (extended ranges)", () => {
+    // CGNAT 100.64.0.0/10 — first/last in range, then first OUT of range.
+    expect(isPrivateAddress("100.64.0.1")).toBe(true);
+    expect(isPrivateAddress("100.127.255.254")).toBe(true);
+    expect(isPrivateAddress("100.128.0.1")).toBe(false);
+    // Benchmarking 198.18.0.0/15 — both octet2 values 18 and 19, then 20 is out.
+    expect(isPrivateAddress("198.18.0.1")).toBe(true);
+    expect(isPrivateAddress("198.19.255.254")).toBe(true);
+    expect(isPrivateAddress("198.20.0.1")).toBe(false);
+    // IETF protocol assignments 192.0.0.0/24 — octet2=0 AND octet3=0.
+    expect(isPrivateAddress("192.0.0.1")).toBe(true);
+    // 192.0.1.x is OUT of /24 (octet3 != 0) — must stay public.
+    expect(isPrivateAddress("192.0.1.1")).toBe(false);
+  });
 });
 
 describe("SSRF guard: assertSafeCaptureTarget", () => {
@@ -64,6 +86,94 @@ describe("SSRF guard: assertSafeCaptureTarget", () => {
     // the same machine are a real workflow.
     await expect(assertSafeCaptureTarget("http://localhost:3000/")).resolves.toBeInstanceOf(URL);
     await expect(assertSafeCaptureTarget("http://127.0.0.1:8080/")).resolves.toBeInstanceOf(URL);
+  });
+});
+
+// ============================================================
+// Per-hop navigation guard (Task 3). assertSafeCaptureTarget only
+// validates the initial URL; page.goto follows server redirects
+// unchecked, so a public URL that 302s to http://169.254.169.254
+// sailed through. assertSafeNavigationTarget is the single rule the
+// per-hop route handler calls on every main-frame navigation.
+// ============================================================
+
+describe("SSRF guard: assertSafeNavigationTarget", () => {
+  it("rejects the cloud-metadata endpoint (the redirect-bypass target)", async () => {
+    // This is the exact URL a public page's 302 would point at. Must throw —
+    // if it didn't, the per-hop guard would let the redirect through.
+    await expect(assertSafeNavigationTarget("http://169.254.169.254/latest/meta-data/")).rejects.toThrow(/blocked metadata/);
+  });
+
+  it("accepts a public target (mirrors assertSafeCaptureTarget's real-DNS test)", async () => {
+    // Same tradeoff as the existing assertSafeCaptureTarget tests: a real DNS
+    // lookup against example.com. If CI is offline this is flaky, but the
+    // existing tests accept that — we match the pattern rather than mock DNS.
+    await expect(assertSafeNavigationTarget("https://example.com/")).resolves.toBeUndefined();
+  });
+
+  // P1 bypass-closure #1: redirects to localhost must be rejected. The initial
+  // assertSafeCaptureTarget allows localhost for local-dev capture, but a per-hop
+  // redirect (or subresource) landing on localhost is an SSRF vector. This test
+  // proves assertSafeNavigationTarget does NOT carry the localhost bypass.
+  it("rejects localhost even though assertSafeCaptureTarget allows it (redirect bypass)", async () => {
+    await expect(assertSafeNavigationTarget("http://127.0.0.1:8080/admin")).rejects.toThrow(/blocked metadata|private/);
+    await expect(assertSafeNavigationTarget("http://localhost:3000/")).rejects.toThrow(/blocked metadata|private/);
+  });
+
+  // P1 bypass-closure #2: subresource URLs are validated by the same rule. A
+  // public page embedding <img src="http://169.254.169.254/..."> must be blocked.
+  // assertSafeNavigationTarget is now called for EVERY request (not just main-
+  // frame navigations), so this function rejecting the metadata IP is the proof.
+  it("rejects metadata IP as a subresource target (subresource bypass)", async () => {
+    await expect(assertSafeNavigationTarget("http://169.254.169.254/latest/meta-data/iam/security-credentials/")).rejects.toThrow(/blocked metadata/);
+  });
+
+  it("allows data: and blob: URLs (inline subresources that make no network request)", async () => {
+    await expect(assertSafeNavigationTarget("data:image/png;base64,iVBOR")).resolves.toBeUndefined();
+    await expect(assertSafeNavigationTarget("blob:https://example.com/abc-123")).resolves.toBeUndefined();
+  });
+});
+
+// ============================================================
+// localOriginIfLocal — derives the allowed local origin for installSsrfGuard
+// so local-dev capture of localhost works (the initial page.goto + same-origin
+// assets load) without re-opening the public-to-localhost redirect bypass.
+// ============================================================
+describe("SSRF guard: localOriginIfLocal", () => {
+  it("returns the exact origin for a localhost target", () => {
+    expect(localOriginIfLocal("http://localhost:3000/app")).toBe("http://localhost:3000");
+    expect(localOriginIfLocal("http://127.0.0.1:8080/")).toBe("http://127.0.0.1:8080");
+    expect(localOriginIfLocal("https://localhost/")).toBe("https://localhost");
+  });
+
+  it("returns undefined for a public target (no local origin to allow)", () => {
+    expect(localOriginIfLocal("https://example.com/")).toBeUndefined();
+    expect(localOriginIfLocal("http://10.0.0.5/")).toBeUndefined();
+  });
+
+  it("returns undefined for an unparseable URL", () => {
+    expect(localOriginIfLocal("not-a-url")).toBeUndefined();
+  });
+
+  it("accepts a URL object as well as a string", () => {
+    expect(localOriginIfLocal(new URL("http://localhost:5173/"))).toBe("http://localhost:5173");
+  });
+
+  // The decisive local-dev-capture regression test: with the allowed origin
+  // passed to the guard, the initial localhost target and its same-origin
+  // subresources are permitted (the guard continues them); but a request to a
+  // DIFFERENT localhost port still falls through to assertSafeNavigationTarget
+  // and is rejected. This is the workflow the prior fix broke.
+  it("local-dev capture: same-origin localhost passes, different-port localhost rejected", async () => {
+    const allowed = localOriginIfLocal("http://localhost:3000/app");
+    expect(allowed).toBe("http://localhost:3000");
+    // The guard permits the exact origin (same scheme+host+port):
+    //   new URL("http://localhost:3000/assets/style.css").origin === allowed
+    expect(new URL("http://localhost:3000/assets/style.css").origin).toBe(allowed);
+    // A different port is NOT the allowed origin → falls through to the full
+    // assertSafeNavigationTarget check → rejected (localhost not bypassed there).
+    expect(new URL("http://localhost:3001/admin").origin).not.toBe(allowed);
+    await expect(assertSafeNavigationTarget("http://localhost:3001/admin")).rejects.toThrow(/blocked|private/);
   });
 });
 
@@ -153,27 +263,14 @@ describe("escapeCssId (Node-side CSS.escape replacement)", () => {
 // OpenAI 429 reset-header parsing — the bug that caused "Vision provider
 // rate limit reached" to surface as a hard error instead of retrying.
 // OpenAI sends x-ratelimit-reset-requests / x-ratelimit-reset-tokens (NOT
-// Retry-After); the parser below mirrors parseOpenAIResetHeader in tagger.ts.
+// Retry-After); the parser under test is the real parseOpenAIResetHeader
+// imported from tagger.js.
 // ============================================================
 
 describe("OpenAI x-ratelimit-reset-* header parsing", () => {
-  // Mirror of parseOpenAIResetHeader in src/tagger.ts. Kept in sync manually
-  // (same as the group-member sliver predicate above) — the real function is
-  // module-private, so we test the parsing logic via this port.
-  function parseOpenAIResetHeader(value: string | null): number | null {
-    if (!value) return null;
-    const v = value.trim().toLowerCase();
-    if (/^[≤<]=?\s*1s$/.test(v)) return 1000;
-    const msMatch = v.match(/^(\d+(?:\.\d+)?)ms$/);
-    if (msMatch) return Math.ceil(parseFloat(msMatch[1]));
-    const sMatch = v.match(/^(\d+(?:\.\d+)?)s$/);
-    if (sMatch) return Math.ceil(parseFloat(sMatch[1]) * 1000);
-    const mMatch = v.match(/^(\d+(?:\.\d+)?)m$/);
-    if (mMatch) return Math.ceil(parseFloat(mMatch[1]) * 60_000);
-    const hMatch = v.match(/^(\d+(?:\.\d+)?)h$/);
-    if (hMatch) return Math.ceil(parseFloat(hMatch[1]) * 3_600_000);
-    return null;
-  }
+  // parseOpenAIResetHeader is imported from src/tagger.js (the production copy).
+  // Previously this was a hand-maintained mirror that drifted from the real
+  // function — now we exercise the actual implementation.
 
   it("parses seconds: '1s' → 1000ms", () => {
     expect(parseOpenAIResetHeader("1s")).toBe(1000);

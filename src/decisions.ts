@@ -12,7 +12,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { readFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, rmSync, renameSync } from "node:fs";
 import { writeAtomic } from "./persistence.js";
 import {
   Decisions,
@@ -48,9 +48,21 @@ export function resetDecisionsPathsForTesting(): void {
 /** Module-level cache (mirrors corpus.ts). */
 let cached: DecisionT[] | null = null;
 
+/**
+ * Write-protection gate. Set false when corrupt-file recovery could NOT rename
+ * the primary aside (read-only FS, permissions). In that state the corrupt
+ * primary is still at `decisionsPath`, so persistDecisions must refuse rather
+ * than overwrite it — overwriting would destroy the forensic evidence the
+ * recovery exists to preserve. Mirrors persistence.ts's `writable` field on
+ * LoadedCorpus. Reset to true on a successful load (parsed primary or missing
+ * primary) and by the test seam.
+ */
+let writable = true;
+
 /** Test-only override of the cache (mirrors setCorpusForTesting). */
 export function setDecisionsForTesting(decisions: DecisionT[] | null): void {
   cached = decisions;
+  writable = true;
 }
 
 /** Slugify a title into a kebab-case id prefix. */
@@ -58,32 +70,130 @@ function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "decision";
 }
 
-/** Generate a unique id from title + timestamp. */
-function generateDecisionId(title: string): string {
+/** Generate a unique id from title + timestamp.
+ *
+ *  Uniqueness is explicit: the bare form is `<slug>-<6-char base36 stamp>`. If
+ *  that id is already in `existing`, a `-<n>` counter is appended (starting at
+ *  2) and walked forward until a free slot is found. This closes two collision
+ *  windows the previous stamp-only scheme had:
+ *    1. Two same-title creates within the same millisecond (same stamp).
+ *    2. The 6-char base36 stamp wraps every ~25 days, so a title created in
+ *       two different months could collide even with no concurrency.
+ *  Pass the set of ids already in the store so the check is exact. Exported
+ *  for direct unit testing of the disambiguation contract. */
+export function generateDecisionId(title: string, existing: ReadonlySet<string> = new Set()): string {
   const slug = slugify(title);
   const stamp = Date.now().toString(36).slice(-6);
-  return `${slug}-${stamp}`;
+  let id = `${slug}-${stamp}`;
+  for (let n = 2; existing.has(id); n++) id = `${slug}-${stamp}-${n}`;
+  return id;
 }
 
-/** Parse and validate the decisions.json sidecar. Returns [] if missing/corrupt. */
-function parseDecisions(raw: string): DecisionT[] {
+/** Parse and validate the decisions.json sidecar.
+ *  Returns the decisions array on success, or null if the file is missing,
+ *  unreadable, or fails schema validation. Returning null (not []) lets the
+ *  caller distinguish "corrupt — try snapshot recovery" from "legitimately
+ *  empty", mirroring corpus.ts's tryReadCorpus → null contract. */
+function parseDecisions(raw: string): DecisionT[] | null {
   try {
     const parsed = Decisions.parse(JSON.parse(raw));
     return parsed.decisions;
   } catch {
-    return [];
+    return null;
   }
 }
 
-/** Load decisions from disk with fallback to []. Mirrors loadCorpusSafe but
- *  simpler — decisions are regenerable from re-analysis, no seed fallback. */
+/** Return the newest parseable decision snapshot, or null if none exist.
+ *  Mirrors persistence.ts's listSnapshots: filters `^decisions-(\d+)\.json$`,
+ *  sorts by the embedded epoch descending, and returns the first one that
+ *  parses. Older/corrupt snapshots are skipped, not fatal. */
+function newestValidSnapshot(): DecisionT[] | null {
+  let snaps: { name: string; epoch: number }[];
+  try {
+    snaps = readdirSync(decisionSnapshotDir)
+      .filter((f) => /^decisions-(\d+)\.json$/.test(f))
+      .map((f) => ({ name: f, epoch: Number(f.match(/^decisions-(\d+)\.json$/)?.[1] ?? 0) }))
+      .sort((a, b) => b.epoch - a.epoch);
+  } catch {
+    return null; // snapshot dir missing/unreadable
+  }
+  for (const snap of snaps) {
+    try {
+      const raw = readFileSync(resolve(decisionSnapshotDir, snap.name), "utf-8");
+      const parsed = Decisions.parse(JSON.parse(raw));
+      return parsed.decisions;
+    } catch {
+      continue; // this snapshot is corrupt/unreadable — try the next older one
+    }
+  }
+  return null;
+}
+
+/** Load decisions from disk with a corrupt-file recovery chain. Mirrors the
+ *  corpus hardening (loadCorpusSafe): a corrupt primary must NOT silently wipe
+ *  Decision Lab data.
+ *
+ *   1. cached                       → return cached.
+ *   2. primary missing              → cached=[], return.
+ *   3. primary parses               → cache, return.
+ *   4. primary corrupt (parse fail) → rename the primary aside as
+ *      `decisions.json.corrupt-<epoch>` (best-effort, never throws) to
+ *      preserve forensic evidence, then recover from the newest valid
+ *      snapshot. If no snapshot exists either (true cold start), return [].
+ *
+ *  The rename happens BEFORE recovery so the corrupt bytes are never
+ *  overwritten: persistDecisions writes the primary via writeAtomic, which
+ *  would clobber the corrupt file if it were still in place. By the time
+ *  persistDecisions runs, the primary path is free (renamed aside) and the
+ *  cache holds the recovered set, so the next save persists the recovered
+ *  data — not []. */
 export function loadDecisionsSafe(): DecisionT[] {
   if (cached) return cached;
   if (!existsSync(decisionsPath)) {
     cached = [];
+    writable = true;
     return cached;
   }
-  cached = parseDecisions(readFileSync(decisionsPath, "utf-8"));
+  const parsed = parseDecisions(readFileSync(decisionsPath, "utf-8"));
+  if (parsed) {
+    cached = parsed;
+    writable = true;
+    return cached;
+  }
+
+  // Primary is present but corrupt — preserve it for forensics before any
+  // recovery write can clobber the path. If the rename FAILS (read-only FS,
+  // permissions), the corrupt primary stays at decisionsPath: mark the store
+  // read-only so persistDecisions refuses to overwrite it. This is the gate
+  // the corpus-side recovery (writable:false on LoadedCorpus) has and the
+  // decisions module previously lacked — without it, the next save would
+  // destroy the exact evidence this recovery exists to protect.
+  let renamed = false;
+  try {
+    renameSync(decisionsPath, `${decisionsPath}.corrupt-${Date.now()}`);
+    renamed = true;
+  } catch {
+    /* rename failed — corrupt primary is still at decisionsPath */
+  }
+  if (renamed) {
+    writable = true;
+    console.error(
+      `[decisions] decisions.json was corrupt — renamed aside for forensics and attempting snapshot recovery.`,
+    );
+  } else {
+    writable = false;
+    console.error(
+      `[decisions] decisions.json was corrupt AND could not be renamed aside (read-only filesystem or permissions). ` +
+        `Recovering read-only from snapshot; persist is BLOCKED until the corrupt primary at ${decisionsPath} is resolved by hand.`,
+    );
+  }
+
+  cached = newestValidSnapshot() ?? [];
+  if (cached.length > 0) {
+    console.error(`[decisions] recovered ${cached.length} decision(s) from a snapshot.`);
+  } else {
+    console.error(`[decisions] no valid snapshot found — starting empty.`);
+  }
   return cached;
 }
 
@@ -105,8 +215,20 @@ function writeDecisionSnapshot(decisions: DecisionT[]): void {
   } catch { /* snapshots are best-effort */ }
 }
 
-/** Persist the full decisions array to disk atomically + snapshot. */
+/** Persist the full decisions array to disk atomically + snapshot.
+ *
+ *  Refuses (throws) when the store is read-only — i.e. corrupt-file recovery
+ *  could not rename the primary aside. Overwriting in that state would destroy
+ *  the corrupt primary that is still at `decisionsPath`, the exact forensic
+ *  evidence the recovery exists to preserve. The operator must resolve the
+ *  filesystem (permissions, free the read-only lock, or move the corrupt file
+ *  aside by hand) before saves can resume. */
 export function persistDecisions(decisions: DecisionT[]): void {
+  if (!writable) {
+    throw new Error(
+      `decisions store is read-only: the corrupt primary at ${decisionsPath} could not be renamed aside, so persist is blocked to preserve forensic evidence. Resolve the file (permissions / free the lock / move it aside) and reload.`,
+    );
+  }
   writeDecisionSnapshot(decisions);
   writeAtomic(decisionsPath, JSON.stringify({ version: 1, decisions }, null, 2));
   cached = decisions;
@@ -133,7 +255,7 @@ export function createDecision(input: {
     ...(input.constraints ? { constraints: input.constraints } : {}),
   };
   return {
-    id: generateDecisionId(input.title),
+    id: generateDecisionId(input.title, new Set(loadDecisionsSafe().map((d) => d.id))),
     title: input.title,
     createdAt: today,
     updatedAt: today,

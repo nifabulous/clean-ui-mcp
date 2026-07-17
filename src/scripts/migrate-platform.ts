@@ -13,11 +13,12 @@
  *   npm run migrate-platform
  *   npm run migrate-platform -- --dry-run
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { Corpus, detectPlatform } from "../schema.js";
+import { writeAtomic, writeRawSnapshot } from "../persistence.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
@@ -36,7 +37,8 @@ if (values.help) {
   process.exit(0);
 }
 
-const raw = JSON.parse(readFileSync(CORPUS_PATH, "utf-8"));
+const originalRaw = readFileSync(CORPUS_PATH, "utf-8");
+const raw = JSON.parse(originalRaw);
 const parsed = Corpus.safeParse(raw);
 if (!parsed.success) {
   console.error("Corpus validation failed — fix entries.json before migrating.");
@@ -69,5 +71,6 @@ if (!recheck.success) {
   console.error("Post-migration validation failed — aborting write:", recheck.error.issues.slice(0, 3));
   process.exit(1);
 }
-writeFileSync(CORPUS_PATH, JSON.stringify({ version: 2, entries }, null, 2) + "\n", "utf-8");
+writeRawSnapshot(originalRaw);
+writeAtomic(CORPUS_PATH, JSON.stringify({ version: 2, entries }, null, 2) + "\n");
 console.log(`\n✅ Wrote ${entries.length} entries to ${CORPUS_PATH}.`);

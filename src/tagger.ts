@@ -587,7 +587,7 @@ function extract429Wait(headers: Headers, body: string): number | null {
  * sentinel OpenAI uses when the window resets in under a second). Returns
  * null for unrecognized/absent values — the caller treats null as "no hint."
  */
-function parseOpenAIResetHeader(value: string | null): number | null {
+export function parseOpenAIResetHeader(value: string | null): number | null {
   if (!value) return null;
   const v = value.trim().toLowerCase();
   // Sub-second sentinel: "≤1s" or "<=1s" — treat as 1s minimum wait.

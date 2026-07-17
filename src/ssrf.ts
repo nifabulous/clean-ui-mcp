@@ -103,28 +103,59 @@ export async function assertSafeCaptureTarget(rawUrl: string): Promise<URL> {
 }
 
 /**
- * Per-hop navigation check. Same policy as assertSafeCaptureTarget but returns
- * void (throw-or-pass) — the contract every caller in the navigation path needs.
+ * Per-hop navigation/resource check. Validates a URL the browser is about to
+ * fetch during a capture — used for redirect hops AND subresource requests.
  *
- * assertSafeCaptureTarget validates only the URL a capture was *initiated* with.
- * Playwright's page.goto follows server redirects (302/301/307/308) without
- * re-checking, so a public URL that 302s to http://169.254.169.254/... would
- * sail through. installSsrfGuard (below) calls this on every main-frame
- * navigation hop to close that gap.
+ * Unlike assertSafeCaptureTarget (the INITIAL user-supplied target), this does
+ * NOT apply the EXPLICIT_LOCALHOST bypass. Rationale: the localhost allowance
+ * exists for legitimate local-dev capture (operator points capture at their own
+ * sandbox). But a redirect FROM a public URL TO localhost, or a public page
+ * embedding a localhost subresource, is an SSRF vector — the operator did not
+ * intend to capture their local service. So per-hop/per-request checks reject
+ * ALL private addresses including localhost, regardless of the original target.
  */
 export async function assertSafeNavigationTarget(url: string): Promise<void> {
-  await assertSafeCaptureTarget(url);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Invalid URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    // Allow data:/blob: subresources (inline images, fonts) — they don't make
+    // network requests and can't be an SSRF vector. They pass without DNS check.
+    if (parsed.protocol === "data:" || parsed.protocol === "blob:") return;
+    throw new Error("Only http and https URLs can be captured");
+  }
+  if (METADATA_HOSTNAMES.test(parsed.hostname)) {
+    throw new Error("Capture target resolves to a blocked metadata or private address");
+  }
+  // NO EXPLICIT_LOCALHOST bypass here — see the doc comment above.
+  let addresses: Array<{ address: string }>;
+  try {
+    addresses = await lookupAll(parsed.hostname, { all: true });
+  } catch {
+    throw new Error(`Could not resolve host: ${parsed.hostname}`);
+  }
+  const bad = addresses.map((a) => a.address).find(isPrivateAddress);
+  if (bad) {
+    throw new Error("Capture target resolves to a blocked metadata or private address");
+  }
 }
 
 /**
- * Intercept every main-frame navigation (including server redirects) and abort
- * any hop whose target fails SSRF policy. Closes the public-URL-302-to-metadata
- * bypass that page.goto's unchecked redirect-following opened.
+ * Intercept EVERY network request the page makes (navigations, redirects,
+ * subresources — images, stylesheets, scripts, iframes, XHR/fetch) and abort
+ * any whose target fails SSRF policy. Closes two bypasses:
+ *   1. public-URL-302-to-metadata/localhost via page.goto's redirect-following;
+ *   2. a public page embedding an internal URL as a subresource (e.g.
+ *      <img src="http://169.254.169.254/...">) whose response leaks into the
+ *      captured screenshot or DOM.
  *
- * The route handler runs for every request Playwright issues from the page; we
- * narrow to main-frame navigation requests only (subresource fetches, XHRs, and
- * iframe navigations are out of scope — those don't move the captured page to a
- * new origin) and re-run the same hostname/address check on each hop's URL.
+ * Every request is validated (not just main-frame navigations) because any
+ * subresource response can disclose internal-service data in the screenshot or
+ * via page.evaluate. Public CDNs and assets pass normally — the guard only
+ * blocks private/metadata/localhost targets.
  *
  * KNOWN RESIDUAL: DNS rebinding between our dns.lookup and Chromium's own
  * resolution is NOT closed here. A host that flips its A record from public to
@@ -135,17 +166,12 @@ export async function assertSafeNavigationTarget(url: string): Promise<void> {
 export async function installSsrfGuard(page: import("playwright").Page): Promise<void> {
   await page.route("**/*", async (route) => {
     const req = route.request();
-    // Only main-frame navigations move the captured page; subresources and
-    // child-frame navs are left to continue normally.
-    if (!req.isNavigationRequest() || req.frame() !== page.mainFrame()) {
-      return route.continue();
-    }
     try {
       await assertSafeNavigationTarget(req.url());
       return route.continue();
     } catch {
       // Abort as blockedbyclient so the caller sees a clear failure rather than
-      // a silent redirect to an internal target.
+      // a silent fetch of an internal target.
       return route.abort("blockedbyclient");
     }
   });

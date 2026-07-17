@@ -110,6 +110,28 @@ describe("SSRF guard: assertSafeNavigationTarget", () => {
     // existing tests accept that — we match the pattern rather than mock DNS.
     await expect(assertSafeNavigationTarget("https://example.com/")).resolves.toBeUndefined();
   });
+
+  // P1 bypass-closure #1: redirects to localhost must be rejected. The initial
+  // assertSafeCaptureTarget allows localhost for local-dev capture, but a per-hop
+  // redirect (or subresource) landing on localhost is an SSRF vector. This test
+  // proves assertSafeNavigationTarget does NOT carry the localhost bypass.
+  it("rejects localhost even though assertSafeCaptureTarget allows it (redirect bypass)", async () => {
+    await expect(assertSafeNavigationTarget("http://127.0.0.1:8080/admin")).rejects.toThrow(/blocked metadata|private/);
+    await expect(assertSafeNavigationTarget("http://localhost:3000/")).rejects.toThrow(/blocked metadata|private/);
+  });
+
+  // P1 bypass-closure #2: subresource URLs are validated by the same rule. A
+  // public page embedding <img src="http://169.254.169.254/..."> must be blocked.
+  // assertSafeNavigationTarget is now called for EVERY request (not just main-
+  // frame navigations), so this function rejecting the metadata IP is the proof.
+  it("rejects metadata IP as a subresource target (subresource bypass)", async () => {
+    await expect(assertSafeNavigationTarget("http://169.254.169.254/latest/meta-data/iam/security-credentials/")).rejects.toThrow(/blocked metadata/);
+  });
+
+  it("allows data: and blob: URLs (inline subresources that make no network request)", async () => {
+    await expect(assertSafeNavigationTarget("data:image/png;base64,iVBOR")).resolves.toBeUndefined();
+    await expect(assertSafeNavigationTarget("blob:https://example.com/abc-123")).resolves.toBeUndefined();
+  });
 });
 
 // ============================================================

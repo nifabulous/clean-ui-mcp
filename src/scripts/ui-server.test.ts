@@ -765,3 +765,77 @@ describe("concurrent mutation serialization", () => {
     expect(b.length).toBe(c.length);
   });
 });
+
+// T-REV-2: HTTP-level coverage for the /api/orphans endpoints. The pure
+// orphanedPrivateImagePaths function is unit-tested above; this closes the
+// wiring gap — proving GET returns protectedCounts and DELETE uses scanOrphans
+// (so captures/decisions/drafts are protected end-to-end through HTTP).
+describe("orphan endpoints (T-REV-2)", () => {
+  let server: import("node:http").Server;
+  let baseUrl: string;
+  let base: string;
+  const imgSubdir = `orphan-test-${Date.now()}`;
+  const imgDirAbs = join(PRIVATE_IMAGE_DIR, imgSubdir);
+  // Captures must live directly under images-private/captures/ (the real
+  // capture-batch layout) — that is the prefix safeOrphanPaths protects.
+  const capturesDirAbs = join(PRIVATE_IMAGE_DIR, "captures", imgSubdir);
+
+  beforeAll(async () => {
+    base = mkdtempSync(join(tmpdir(), "ui-server-orphans-"));
+    writeFileSync(join(base, "entries.json"), JSON.stringify({
+      version: 2,
+      entries: [{
+        ...baseEntry,
+        id: "kept-entry",
+        image: { ...baseEntry.image, path: `images-private/${imgSubdir}/kept.png`, width: 32, height: 32 },
+      }],
+    }));
+    setCorpusRootForTesting(base);
+    mkdirSync(imgDirAbs, { recursive: true });
+    // kept.png is referenced by the entry; orphan.png is not.
+    writeFileSync(join(imgDirAbs, "kept.png"), Buffer.from("fake-png-kept"));
+    writeFileSync(join(imgDirAbs, "orphan.png"), Buffer.from("fake-png-orphan"));
+    // A captures/ file must NEVER be deletable, referenced or not. Placed under
+    // images-private/captures/ to match the protection rule's prefix check.
+    mkdirSync(capturesDirAbs, { recursive: true });
+    writeFileSync(join(capturesDirAbs, "shot.png"), Buffer.from("capture"));
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+    setCorpusRootForTesting(null);
+    rmSync(base, { recursive: true, force: true });
+    rmSync(imgDirAbs, { recursive: true, force: true });
+    rmSync(capturesDirAbs, { recursive: true, force: true });
+  });
+
+  it("GET /api/orphans returns the orphan and protectedCounts", async () => {
+    const res = await fetch(`${baseUrl}/api/orphans`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { orphans: string[]; count: number; protectedCounts?: { captures?: number } };
+    // The genuine orphan is listed...
+    expect(body.orphans).toContain(`images-private/${imgSubdir}/orphan.png`);
+    // ...the referenced image is NOT an orphan...
+    expect(body.orphans).not.toContain(`images-private/${imgSubdir}/kept.png`);
+    // ...and captures are protected (protectedCounts.captures >= 1 proves the
+    // fail-closed rule ran end-to-end through the HTTP wiring).
+    expect(body.protectedCounts?.captures).toBeGreaterThanOrEqual(1);
+  });
+
+  it("DELETE /api/orphans deletes the orphan but not captures or referenced images", async () => {
+    const res = await fetch(`${baseUrl}/api/orphans`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { deleted: string[]; count: number };
+    expect(body.deleted).toContain(`images-private/${imgSubdir}/orphan.png`);
+    // The capture file must survive the delete.
+    expect(existsSync(join(capturesDirAbs, "shot.png"))).toBe(true);
+    // The referenced image must survive too.
+    expect(existsSync(join(imgDirAbs, "kept.png"))).toBe(true);
+    // The orphan is gone.
+    expect(existsSync(join(imgDirAbs, "orphan.png"))).toBe(false);
+  });
+});

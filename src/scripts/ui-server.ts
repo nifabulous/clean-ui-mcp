@@ -73,6 +73,29 @@ function saveEntries(entries: CorpusEntryT[]): void {
   void rebuildDHashCache(entries);
 }
 
+// ─── mutation serialization (Task 7: lost-update fix) ─────────────────────────
+// Every corpus-mutating handler follows a load → await (sharp dedup, vision
+// retag I/O) → save-whole-array pattern. Two such requests running concurrently
+// both snapshot `entries` before either saves, so the second save overwrites the
+// first (lost update) and uniqueEntryId/findDuplicateAtCommit mint duplicates
+// against a stale snapshot. A serialized promise chain closes the race: request
+// B's loadEntries cannot run until request A's saveEntries has resolved.
+//
+// Single-process, single-operator tool → a promise chain is sufficient; no need
+// for a cross-process lock. GET/read handlers are NOT serialized — they don't
+// mutate and stay fully concurrent (see isMutatingMethod gate in handleUiRequest).
+let mutationChain: Promise<unknown> = Promise.resolve();
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const next = mutationChain.then(fn, fn);
+  mutationChain = next.catch(() => undefined);
+  return next;
+}
+
+/** HTTP methods that mutate corpus/decision state — serialized end-to-end. */
+function isMutatingMethod(method: string | undefined): boolean {
+  return method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
+}
+
 // ─── provider allowlist (shared by auto-tag, auto-critique, auto-retag) ──────
 // Must include "minimax" — the auto-retag handler previously omitted it,
 // silently dropping a UI-selected MiniMax critique provider.
@@ -1526,7 +1549,17 @@ async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promi
 
     const url = parseUrl(req);
     if (url.pathname.startsWith("/api/")) {
-      await handleApi(req, res, url);
+      // Mutating requests run end-to-end inside `serialized` so their
+      // loadEntries() → await (dedup/vision) → saveEntries sequence cannot
+      // interleave with another mutation. loadEntries() is the FIRST statement
+      // of handleApi, so wrapping the call here guarantees request B cannot load
+      // its snapshot until request A's saveEntries has resolved — closing the
+      // lost-update / duplicate-id race. GET/read requests stay concurrent.
+      if (isMutatingMethod(req.method)) {
+        await serialized(() => handleApi(req, res, url));
+      } else {
+        await handleApi(req, res, url);
+      }
       return;
     }
 

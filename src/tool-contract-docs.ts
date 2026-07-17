@@ -140,8 +140,12 @@ export function renderToolContractReference(): string {
     // Partial (prose)
     lines.push(`| Partial | ${desc.contractDocs.partial} |`);
 
-    // Errors — auto-derived codes with retryability from ERROR_RETRYABLE
-    const errorCodes = extractEnumValues(desc.errorSchema);
+    // Errors — derived from desc.errorCodes (the type-level source) + ERROR_RETRYABLE.
+    // NOT extractEnumValues(desc.errorSchema): multi-code error schemas are z.union
+    // which extractEnumValues can't walk, so it would return [] and render "none"
+    // for tools like search/similar/critique. desc.errorCodes is the authoritative
+    // tuple the descriptor declares; rendering from it avoids Zod internals.
+    const errorCodes = desc.errorCodes as readonly string[];
     const errorsStr = errorCodes.length > 0
       ? errorCodes.map(code => {
           const retryable = ERROR_RETRYABLE[code];

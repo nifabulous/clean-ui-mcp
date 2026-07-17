@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
 import { renderToolContractReference, extractGeneratedBlock } from "./tool-contract-docs.js";
-import { TOOL_DESCRIPTORS, ToolInputSchemas } from "./tool-contracts.js";
+import { TOOL_DESCRIPTORS, ToolInputSchemas, ERROR_RETRYABLE } from "./tool-contracts.js";
 
 const SPEC_PATH = resolve(__dirname, "..", "docs", "superpowers", "specs", "2026-07-13-agent-readiness-and-retagging-design.md");
 
@@ -95,5 +95,32 @@ describe("tool-contract-docs", () => {
       properties?: { limit?: { default?: unknown } };
     }).properties?.limit;
     expect(limitProp?.default).toBe(5);
+  });
+
+  // Errors-row content guard: the rendered | Errors | row must contain every
+  // code from desc.errorCodes with the correct retryability tag, and no extras.
+  // This catches the z.union rendering bug where multi-error-code tools
+  // (search/similar/critique) rendered "none" because extractEnumValues
+  // couldn't walk z.union — now fixed by rendering from desc.errorCodes directly.
+  it("Errors row contains every errorCodes entry with correct retryability (content guard)", () => {
+    const output = renderToolContractReference();
+    for (const desc of TOOL_DESCRIPTORS) {
+      const block = output.split(`#### \`${desc.name}\``)[1]?.split("####")[0] ?? "";
+      const errorsRow = block.match(/\| Errors \|(.+?)\|/)?.[1]?.trim() ?? "";
+      const codes = desc.errorCodes as readonly string[];
+      if (codes.length === 0) {
+        expect(errorsRow).toBe("none");
+      } else {
+        for (const code of codes) {
+          expect(errorsRow, `tool ${desc.name}: error code "${code}" missing from Errors row`).toContain(code);
+        }
+        // Spot-check retryability for known codes.
+        for (const code of codes) {
+          const tag = (ERROR_RETRYABLE as Record<string, boolean | undefined>)[code];
+          if (tag === true) expect(errorsRow).toContain(`${code} (retryable)`);
+          if (tag === false) expect(errorsRow).toContain(`${code} (non-retryable)`);
+        }
+      }
+    }
   });
 });

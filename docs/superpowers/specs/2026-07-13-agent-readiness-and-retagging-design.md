@@ -443,7 +443,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 | Success data | results — `results: ReferenceSummary[]` — each with id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url required-but-nullable, imageAvailable), critique excerpt, topTechniques, antiPatterns |
 | Empty | `results: []`, retrieval none, resultCount 0, summary guidance |
 | Partial | sparseCoverage / keywordFallback typed warnings on degraded retrieval |
-| Errors | none |
+| Errors | NOT_FOUND (non-retryable), PROVIDER_ERROR (retryable) |
 | Warnings | sparseCoverage, keywordFallback |
 | Retrieval | hybrid/text; vector/text; keyword/text (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); keyword/metadata (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, community-edition, provider-error); none/none |
 | Evidence | forbidden (none) |
@@ -475,7 +475,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 | Success data | results — `results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques |
 | Empty | `results: []` when no index or source not found |
 | Partial | keywordFallback / sparseCoverage typed warnings on degraded retrieval |
-| Errors | none |
+| Errors | NOT_FOUND (non-retryable), PROVIDER_ERROR (retryable) |
 | Warnings | keywordFallback, sparseCoverage |
 | Retrieval | vector/text; structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, community-edition, provider-error); none/none |
 | Evidence | forbidden (none) |
@@ -619,7 +619,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 | Success data | platform, retrievalMode, fallbackUsed, coverage, summary, observations, recommendations, accessibilityRisks, visualSlop, motion, appliedReferences, evidenceIds, confidence, md3 — reuses `StructuredCritique` fields: observations, recommendations, accessibilityRisks, visualSlop, motion, appliedReferences, evidenceIds, confidence, md3? |
 | Empty | n/a — synthesis produces one critique artifact or errors |
 | Partial | insufficientCorpusEvidence / providerDegraded typed warnings; may include screen-observation and dom-signal evidence |
-| Errors | none |
+| Errors | PROVIDER_ERROR (retryable), INVALID_INPUT (non-retryable) |
 | Warnings | insufficientCorpusEvidence, providerDegraded |
 | Retrieval | vector/image; structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, community-edition, provider-error, no-image-evidence); none/none |
 | Evidence | required (plan/spec/critique) (corpus-observation, screen-observation, dom-signal, machine-rule, editorial-guidance) |

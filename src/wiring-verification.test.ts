@@ -155,9 +155,6 @@ const ALLOWLIST = new Set<string>([
   "LayoutRegion",              // schema.ts — Zod schema, consumed by schema.parse
   "LayoutStructure",           // schema.ts — Zod schema
   "BusinessRationale",         // schema.ts — Zod schema
-  "renderBriefTokens",         // design-prompt.ts — used by generate_design_prompt tool
-  "renderDecisionBrief",       // decision-lab.ts — used by decision-lab UI
-  "pickDiverse",               // recommend.ts — used by recommend_ui_direction
   "registerVisualEvidence",    // synthesis/context.ts — exported for test use, called by buildSynthesisContext
   // Zod schema consts — consumed by Zod composition (.extend, .parse) not by name reference:
   "ImageRef", "SourceAttribution", "TypePairing", "ColorRoles", "VisualAttributes",
@@ -210,4 +207,15 @@ describe("wiring verification — no orphaned exports", () => {
     // Sanity: verify we actually checked a meaningful number of exports
     expect(allExports.length).toBeGreaterThan(50);
   });
+
+  // NOTE on allowlist hygiene: the scan's regex-based isReferencedInProduction
+  // cannot cleanly distinguish a real CODE call from a comment/string match, so
+  // a "no allowlisted symbol may be wired" invariant produces false positives
+  // (e.g. ImageRef appears in comments, "Publication pipeline" is a string).
+  // Allowlist truthiness is therefore a manual review concern, not an automated
+  // invariant. The three inert entries removed in the hardening pass
+  // (renderBriefTokens, renderDecisionBrief, pickDiverse — exported functions
+  // with real call sites in their own defining file) were identified by hand.
+  // The orphaned selectReferences was deleted outright. Re-audit the allowlist
+  // manually when adding new entries.
 });

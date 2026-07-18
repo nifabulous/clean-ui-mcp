@@ -4,6 +4,19 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>clean-ui · corpus console</title>
+<!-- Pre-paint theme resolution — runs synchronously BEFORE the stylesheet so
+     there is no flash of the wrong theme. Mirrors the public site's resolver
+     (site/index.html) and the shared contract in docs/design-system.md §2.4.
+     An explicit localStorage choice wins; otherwise OS prefers-color-scheme. -->
+<script>
+  (() => {
+    const saved = localStorage.getItem("clean-ui-theme");
+    const theme = saved === "light" || saved === "dark"
+      ? saved
+      : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.dataset.theme = theme;
+  })();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -53,6 +66,12 @@
         </div>
         <button class="icon-btn" id="rebuildBtn" title="Rebuild index">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0115-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 01-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+        </button>
+        <!-- Theme toggle — accessible name reflects the theme it will switch
+             TO (updated by the controller in app.js). id="themeToggle" is the
+             stable hook the controller binds to. -->
+        <button class="icon-btn" id="themeToggle" aria-label="Switch to dark theme" title="Toggle theme">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
         </button>
         <button class="btn primary" id="addEntryBtn">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>

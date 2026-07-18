@@ -2602,6 +2602,95 @@ function initSidebar(){
 window._mcp = { toast };
 
 /* ============================================================
+   THEME CONTROLLER — shared light/dark token contract
+   The pre-paint resolver in index-2.html already set
+   documentElement.dataset.theme before this runs, so getTheme()
+   reads the value that was applied pre-paint (no FOUC). This
+   module owns the runtime contract:
+     - getTheme()  — pure read of the active theme
+     - setTheme(t) — persist + apply + update toggle label
+     - clearTheme()— drop the explicit choice, re-follow the OS
+   OS prefers-color-scheme is followed ONLY while no explicit
+   localStorage choice exists; once a choice is made we
+   unsubscribe, and clearTheme() re-subscribes. Mirrors the public
+   site's contract (docs/design-system.md §2.4).
+   ============================================================ */
+const THEME_KEY = 'clean-ui-theme';
+const THEME_VALUES = ['light','dark'];
+
+function getTheme(){
+  const t = document.documentElement.dataset.theme;
+  return THEME_VALUES.indexOf(t) >= 0 ? t : 'light';
+}
+
+function labelFor(next){
+  // The toggle's accessible name describes the action it performs (switch TO).
+  return next === 'dark' ? 'Switch to dark theme' : 'Switch to light theme';
+}
+
+function syncToggle(){
+  const btn = document.getElementById('themeToggle');
+  if (!btn) return;
+  const next = getTheme() === 'dark' ? 'light' : 'dark';
+  btn.setAttribute('aria-label', labelFor(next));
+  btn.setAttribute('title', labelFor(next));
+}
+
+let mqListener = null; // active only while no explicit choice exists
+
+function stopOsListener(){
+  if (!mqListener) return;
+  matchMedia('(prefers-color-scheme: dark)').removeEventListener('change', mqListener);
+  mqListener = null;
+}
+
+function startOsListener(){
+  if (mqListener) return;
+  const mq = matchMedia('(prefers-color-scheme: dark)');
+  mqListener = (e) => {
+    // Only honored while no explicit choice exists (clearTheme re-enables this).
+    if (localStorage.getItem(THEME_KEY)) return;
+    const t = e.matches ? 'dark' : 'light';
+    document.documentElement.dataset.theme = t;
+    syncToggle();
+  };
+  mq.addEventListener('change', mqListener);
+}
+
+function setTheme(theme){
+  if (THEME_VALUES.indexOf(theme) < 0) return;
+  localStorage.setItem(THEME_KEY, theme);
+  document.documentElement.dataset.theme = theme;
+  stopOsListener(); // an explicit choice overrides the OS from now on
+  syncToggle();
+}
+
+function clearTheme(){
+  localStorage.removeItem(THEME_KEY);
+  // Re-resolve from the OS immediately so the UI reflects the cleared state.
+  const t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  document.documentElement.dataset.theme = t;
+  startOsListener();
+  syncToggle();
+}
+
+function initThemeToggle(){
+  const btn = document.getElementById('themeToggle');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    setTheme(getTheme() === 'dark' ? 'light' : 'dark');
+  });
+  syncToggle();
+  // Follow the OS only when the user hasn't picked explicitly. The pre-paint
+  // resolver already handled the initial paint; this keeps it live afterward.
+  if (!localStorage.getItem(THEME_KEY)) startOsListener();
+}
+
+// Exposed for tests + external scripting. Pure getters/setters only — no DOM
+// side effects beyond applying the theme (which the pre-paint script also did).
+window.cleanUiTheme = { getTheme, setTheme, clearTheme };
+
+/* ============================================================
    BOOT
    ============================================================ */
 (async function boot(){
@@ -2614,6 +2703,7 @@ window._mcp = { toast };
   }
   renderNav();
   initSidebar();
+  initThemeToggle();
   window.addEventListener('hashchange',route);
   // Delegated image-error fallback — single registration, survives re-renders.
   // MUST use capture phase: `error` on <img> does not bubble. When an image

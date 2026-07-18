@@ -1,24 +1,52 @@
 /* ============================================================
    CLEAN-UI CORPUS CONSOLE — SPA, hash-routed
-   Direction: "Specimen ledger" — a curator's catalog, not a
-   generic indigo SaaS dashboard. Paper canvas, editorial serif
-   headings, one reserved ink accent, and a real rubber-stamp
-   mark for the tier system (exceptional / cautionary) — because
-   that distinction is this product's entire reason to exist.
+   Shares the SAME neutral token contract as the public React app
+   (docs/design-system.md §2). Light = pale cool canvas; dark =
+   true neutral charcoal (NO navy/violet/green/neon tint). Action
+   emphasis maps to --ink; focus/links to --focus. The legacy teal
+   --accent is kept ONLY as a deprecated alias so incremental
+   module migration (Tasks 2-5) doesn't break — prefer --ink/--focus.
    ============================================================ */
 :root{
-  --canvas:#faf7f2; --surface:#ffffff; --surface-2:#f2eee4;
-  --ink:#18150f; --ink-2:#57503f; --muted:#948a76;
-  --hairline:#e9e2d2; --hairline-2:#d9cfb8;
-  --accent:#2f5d62; --accent-soft:#e6edec; --accent-2:#3d7176;
-  --pos:#3f7d52; --pos-soft:#eef6ee;
-  --warn:#a9762f; --warn-soft:#faf3e7;
-  --neg:#a8402f; --neg-soft:#faeeea;
+  /* ── Shared neutral source-of-truth tokens (light) ────────────
+     These EXACT values mirror site/src/styles/tokens.css and are
+     the canonical cross-app values (design-system.md §2.2). */
+  --canvas:#f3f6fb; --surface:#ffffff; --surface-2:#f8fafc;
+  --ink:#0b2348; --ink-2:#637089; --muted:#7b879a;
+  --hairline:#e5eaf1; --hairline-2:#dbe3ef;
+  --focus:#2457d6; --pos:#287a4d; --warn:#986515; --neg:#b33a2b;
+  /* Semantic status soft fills — neutral, paired with text/icon. */
+  --pos-soft:#eaf3ee; --warn-soft:#f7f0e3; --neg-soft:#f7e9e6;
+  /* DEPRECATED: --accent was the warm-editorial teal brand color.
+     It now aliases --focus (the shared interactive/link/focus token),
+     which is the single safest mapping for the legacy CSS — `--accent`
+     is used for BOTH emphasis (nav/score bars) AND focus rings, so
+     aliasing to --focus preserves WCAG-visible focus everywhere it
+     appeared. New code MUST use --ink for emphasis or --focus for
+     links/focus; do not reference --accent in new selectors. */
+  --accent:var(--focus);
+  --accent-soft:var(--surface-2);   /* neutral soft highlight */
+  --accent-2:var(--focus);          /* deprecated darker-accent alias */
   --rail-w:240px; --rail-collapsed:52px; --detail-w:300px;
   --radius:6px; --pad:18px;
   --font:'Archivo',-apple-system,BlinkMacSystemFont,sans-serif;
   --display:'Fraunces',Georgia,serif;
   --mono:'IBM Plex Mono','SF Mono',Menlo,monospace;
+}
+:root[data-theme="dark"]{
+  /* ── Shared neutral source-of-truth tokens (dark) ─────────────
+     True neutral charcoal — no navy/violet/green/neon tint on the
+     base theme (design-system.md §2.3, spec §5.3). The browser
+     test asserts --canvas === #111113 exactly to catch any drift. */
+  --canvas:#111113; --surface:#19191c; --surface-2:#222226;
+  --ink:#f4f4f5; --ink-2:#c4c4ca; --muted:#a1a1aa;
+  --hairline:#2b2b30; --hairline-2:#34343a;
+  --focus:#a8c7ff; --pos:#78a887; --warn:#d2a455; --neg:#e17a6b;
+  --pos-soft:#1f2a24; --warn-soft:#2a2418; --neg-soft:#2c1f1d;
+  /* Deprecated aliases follow the same mapping in dark. */
+  --accent:var(--focus);
+  --accent-soft:var(--surface-2);
+  --accent-2:var(--focus);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
@@ -115,6 +143,17 @@ a{color:inherit;text-decoration:none}
 .icon-btn{width:32px;height:32px;border-radius:7px;border:1px solid var(--hairline-2);background:var(--surface);
   display:grid;place-items:center;cursor:pointer;color:var(--ink-2)}
 .icon-btn:hover{background:var(--surface-2)}
+/* Visible keyboard focus ring — the shared contract expression
+   (docs/design-system.md §6.1). Applied to every interactive control so focus
+   is visible in BOTH themes. The translucent --focus mix stays legible without
+   overpowering adjacent content. Mouse clicks don't trigger it (:focus-visible
+   only). Inputs/selects keep their own focus styles above. */
+.btn:focus-visible,.icon-btn:focus-visible,.chip:focus-visible,
+.nav-item:focus-visible,.pg:focus-visible,.seg:focus-visible,
+.toggle:focus-visible,.view-toggle button:focus-visible{
+  outline:none;
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--focus) 35%,transparent);
+}
 
 /* page content */
 .page{padding:22px 24px 80px;display:none}

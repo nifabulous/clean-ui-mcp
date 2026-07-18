@@ -628,6 +628,105 @@ describe("specimen-ledger SPA", () => {
   });
 });
 
+// ─── Shared theme tokens + true dark/light behavior ──────────────────────────
+// The curator dashboard must now sit on the SAME neutral token contract the
+// public site uses (docs/design-system.md §2): light = pale cool canvas
+// #f3f6fb, dark = TRUE neutral charcoal #111113 (no navy/violet/green/neon
+// tint), an explicit choice persists across reload, and the resolved theme is
+// applied before first paint so there's no flash. These tests pin all four.
+describe("curator shared theme tokens", () => {
+  it("defaults to light theme and the pale cool canvas when the OS prefers light", async () => {
+    const page = await browser!.newPage({ colorScheme: "light" });
+    await page.goto(baseUrl + "/");
+    // Wait for the SPA shell to mount before asserting on <html>.
+    await page.waitForSelector("#app");
+    expect(await page.locator("html").getAttribute("data-theme")).toBe("light");
+    const canvas = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim().toLowerCase(),
+    );
+    expect(canvas).toBe("#f3f6fb");
+    await page.close();
+  });
+
+  it("defaults to dark theme when the OS prefers dark and no explicit choice exists", async () => {
+    const page = await browser!.newPage({ colorScheme: "dark" });
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector("#app");
+    expect(await page.locator("html").getAttribute("data-theme")).toBe("dark");
+    const canvas = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim().toLowerCase(),
+    );
+    expect(canvas).toBe("#111113");
+    await page.close();
+  });
+
+  it("persists an explicit neutral dark theme across reload", async () => {
+    const page = await browser!.newPage({ colorScheme: "light" });
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector("#app");
+    // The toggle's accessible name reflects the theme it will switch TO.
+    await page.getByRole("button", { name: /switch to dark theme/i }).click();
+    expect(await page.locator("html").getAttribute("data-theme")).toBe("dark");
+    // After the choice, the label must flip to offer switching back to light.
+    await page.reload();
+    await page.waitForSelector("#app");
+    expect(await page.locator("html").getAttribute("data-theme")).toBe("dark");
+    const canvas = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim().toLowerCase(),
+    );
+    expect(canvas).toBe("#111113");
+    // The toggle's name now offers the inverse action.
+    expect(await page.getByRole("button", { name: /switch to light theme/i }).isVisible()).toBe(true);
+    await page.close();
+  });
+
+  it("persists an explicit neutral light theme when chosen from a dark OS", async () => {
+    const page = await browser!.newPage({ colorScheme: "dark" });
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector("#app");
+    await page.getByRole("button", { name: /switch to light theme/i }).click();
+    await page.reload();
+    await page.waitForSelector("#app");
+    expect(await page.locator("html").getAttribute("data-theme")).toBe("light");
+    const canvas = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim().toLowerCase(),
+    );
+    expect(canvas).toBe("#f3f6fb");
+    await page.close();
+  });
+
+  it("dark canvas is exactly the neutral charcoal with no blue/green tint", async () => {
+    // Spec §5.3: "No navy, violet, green, or neon tint applied to the base
+    // theme." The dark --canvas MUST equal #111113 exactly — assert the
+    // computed value rather than a substring so any tint (e.g. #111118, #121318)
+    // fails loudly.
+    const page = await browser!.newPage({ colorScheme: "dark" });
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector("#app");
+    const canvas = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim().toLowerCase(),
+    );
+    expect(canvas).toBe("#111113");
+    await page.close();
+  });
+
+  it("exposes a testable window.cleanUiTheme controller", async () => {
+    const page = await browser!.newPage({ colorScheme: "light" });
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector("#app");
+    const api = await page.evaluate(() => {
+      const t = (window as any).cleanUiTheme;
+      if (!t) return null;
+      return { hasGet: typeof t.getTheme === "function", hasSet: typeof t.setTheme === "function", hasClear: typeof t.clearTheme === "function" };
+    });
+    expect(api).not.toBeNull();
+    expect(api?.hasGet).toBe(true);
+    expect(api?.hasSet).toBe(true);
+    expect(api?.hasClear).toBe(true);
+    await page.close();
+  });
+});
+
 // Module-level teardown: runs once after all describe blocks finish, so the
 // shared browser/server (launched in the first block's beforeAll) survive for
 // every test that follows it.

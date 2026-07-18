@@ -1,0 +1,304 @@
+/*
+ * Site shell styles: skip link, header, navigation, mobile disclosure menu,
+ * main landmark, footer, theme toggle, and the shared focus-ring rule.
+ *
+ * Token values are documented in docs/design-system.md and defined in
+ * tokens.css. This file consumes the custom properties; it does not redefine
+ * theme colors.
+ */
+
+/* --- Focus ring (normative, per design-system.md §6.1) ---------------------- */
+
+/*
+ * The visible keyboard-focus indicator for interactive controls. Applies the
+ * documented 3px translucent halo tinted by --focus. The UA outline is removed
+ * only because this ring replaces it. Reduced motion does not affect focus
+ * visibility (focus is essential, not decorative).
+ */
+.site-header :focus-visible,
+.site-nav :focus-visible,
+.site-footer :focus-visible,
+.site-main :focus-visible,
+.skip-link:focus-visible,
+.theme-toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 35%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+/* --- Skip link -------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: -48px;
+  z-index: 1000;
+  padding: 12px 16px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  font-weight: 600;
+  transition: top 150ms ease;
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+  top: 8px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 35%, transparent);
+}
+
+/* --- Header ----------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: saturate(1.1) blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+
+.site-header__inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.site-brand {
+  font-weight: 700;
+  color: var(--ink);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+  padding: 8px 4px;
+  margin-right: auto;
+}
+
+.site-brand:hover {
+  color: var(--focus);
+}
+
+/* --- Navigation -------------------------------------------------------------
+
+   Mobile-first. The base styles describe the mobile disclosure state: the
+   toggle button is visible, and the list collapses into a panel that is hidden
+   when `aria-expanded="false"`. A `min-width: 768px` media query upgrades to
+   the desktop state: the toggle is hidden and the list is shown as a
+   horizontal row. jsdom (which evaluates no media queries) keeps the base
+   mobile state, so component tests exercise the disclosure behavior directly. */
+
+.site-nav {
+  min-width: 0;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+.site-nav__list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+/* Collapsed state: hide the panel from sighted users AND from assistive tech
+   that honors display:none. The toggle's aria-expanded conveys the state. */
+.site-nav__list[data-open="false"] {
+  display: none;
+}
+
+.site-nav__item {
+  margin: 0;
+}
+
+.site-nav__item--control {
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.site-nav__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  min-width: 44px;
+  width: 100%;
+  padding: 14px 12px;
+  color: var(--ink);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.site-nav__link:hover {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--ink);
+}
+
+.site-nav__link[aria-current="page"] {
+  color: var(--focus);
+  font-weight: 600;
+}
+
+/* External link affordance (kept subtle). */
+.site-nav__link--external::after {
+  content: " ↗";
+  font-size: 0.85em;
+  color: var(--ink-muted);
+}
+
+/* --- Mobile disclosure toggle --------------------------------------------- */
+
+.nav-menu-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 10px 14px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.nav-menu-toggle[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+/* --- Desktop upgrade ------------------------------------------------------ */
+
+@media (min-width: 768px) {
+  /* The toggle is not needed when the full nav row is visible. */
+  .nav-menu-toggle {
+    display: none;
+  }
+
+  .site-nav {
+    position: static;
+    background: transparent;
+    border-bottom: none;
+    box-shadow: none;
+  }
+
+  .site-nav__list {
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    padding: 0;
+    /* Always visible on desktop regardless of disclosure state. */
+    display: flex;
+  }
+
+  .site-nav__link {
+    width: auto;
+    padding: 10px 12px;
+  }
+
+  .site-nav__item--control {
+    padding-top: 0;
+    border-top: none;
+    margin-top: 0;
+  }
+}
+
+/* --- Main ------------------------------------------------------------------ */
+
+.site-main {
+  display: block;
+  min-height: calc(100vh - 160px);
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+  width: 100%;
+}
+
+/* Remove the default outline on the programmatically-focused main; the skip
+   link's target is still discoverable to assistive tech via its id and role.
+   Visible focus returns the moment a real control inside main is focused. */
+.site-main:focus {
+  outline: none;
+}
+
+/* --- Footer ---------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-muted);
+}
+
+.site-footer__inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+.site-footer__note {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+/* --- Theme toggle ---------------------------------------------------------- */
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 12px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.theme-toggle:hover {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.theme-toggle[aria-pressed="true"] {
+  /* Subtle indication of the pressed/dark state without relying on color
+     alone — the accessible name carries the meaning. */
+  border-color: color-mix(in srgb, var(--focus) 40%, var(--border));
+}
+
+.theme-toggle__icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.theme-toggle__label {
+  font-size: 0.875rem;
+}
+
+/* --- Reduced motion (per design-system.md §8.1) ---------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

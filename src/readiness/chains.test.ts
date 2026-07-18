@@ -47,4 +47,22 @@ describe("selectChain", () => {
     const b = node("b", 2, sha("b"), { key: 1, sha256: sha("a") });
     expect(selectChain("ledger", [a, b]).issues.some((i) => i.code === "chain-cycle")).toBe(true);
   });
+
+  it("rejects a non-genesis numeric ordinal without a predecessor", () => {
+    // An attacker strips the v1 ledger and the predecessor link from v2,
+    // presenting a single-node v2 chain. This must be rejected: ordinal > 1
+    // without a predecessor means the append-only history is bypassed.
+    const lone = node("v2-stripped", 2, sha("b"), null);
+    const result = selectChain("ledger", [lone]);
+    expect(result.issues.some((i) => i.code === "chain-missing-predecessor")).toBe(true);
+    expect(result.head).toBeUndefined();
+  });
+
+  it("accepts a single-node numeric chain at ordinal 1", () => {
+    // A lone v1 artifact (no predecessor) is valid — ordinal 1 is the genesis root.
+    const lone = node("v1-only", 1, sha("a"), null);
+    const result = selectChain("ledger", [lone]);
+    expect(result.issues).toEqual([]);
+    expect(result.head?.id).toBe("v1-only");
+  });
 });

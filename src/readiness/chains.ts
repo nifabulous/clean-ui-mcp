@@ -76,9 +76,23 @@ export function selectChain<T>(family: string, nodes: readonly ChainNode<T>[]): 
 
   // 3. resolve every predecessor by key and digest, and 4. enforce numeric
   //    ordinal succession (predecessor ordinal + 1).
+  //    A numeric ordinal > 1 WITHOUT a predecessor is rejected — an attacker
+  //    could strip the v1 ledger, remove the predecessor link, and present a
+  //    single-node v2 chain that bypasses append-only validation entirely.
   for (const n of nodes) {
     const predecessor = n.predecessor;
-    if (!predecessor) continue;
+    if (!predecessor) {
+      // For numeric ordinal chains, only ordinal 1 is a valid root.
+      if (typeof n.key === "number" && n.key !== 1) {
+        issues.push({
+          code: "chain-missing-predecessor",
+          family,
+          nodeId: n.id,
+          message: `ordinal ${n.key} has no predecessor (only ordinal 1 may be a root)`,
+        });
+      }
+      continue;
+    }
     const predToken = keyToken(predecessor.key);
     const predNode = byKey.get(predToken);
     if (!predNode) {

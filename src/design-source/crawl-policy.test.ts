@@ -244,6 +244,19 @@ describe("planRepresentativeCrawl: budget enforcement", () => {
     expect(plan.maxRoutes).toBe(5);
     expect(plan.routes).toHaveLength(5);
   });
+
+  it("treats a NaN maxRoutes as the default (25), not unbounded", () => {
+    // NaN would otherwise make `routes.length >= NaN` always false, so the
+    // budget never fires and 40 discovered URLs would ALL route. After the
+    // Number.isFinite guard, NaN falls back to the default of 25.
+    const plan = planRepresentativeCrawl({
+      startUrl: "https://example.com",
+      discoveredUrls: Array.from({ length: 40 }, (_, i) => `https://example.com/p${i}`),
+      maxRoutes: NaN,
+    });
+    expect(plan.maxRoutes).toBe(25);
+    expect(plan.routes).toHaveLength(25);
+  });
 });
 
 describe("planRepresentativeCrawl: include/exclude", () => {
@@ -310,6 +323,37 @@ describe("planRepresentativeCrawl: credential rejection", () => {
       planRepresentativeCrawl({ startUrl: "https://example.com", discoveredUrls: [], cookie: "" }),
     ).not.toThrow();
     expect(() => planRepresentativeCrawl({ startUrl: "https://example.com", discoveredUrls: [] })).not.toThrow();
+  });
+});
+
+describe("planRepresentativeCrawl: percent-encoded bypass", () => {
+  it("decodes percent-encoded destructive/api/non-html paths before filtering", () => {
+    // WHATWG URL.pathname does NOT decode percent-encoding, so without a
+    // decode step these would slip past the filters (under-block). After the
+    // fix, the decoded form is what the destructive/api/extension regexes see.
+    const plan = planRepresentativeCrawl({
+      startUrl: "https://example.com",
+      discoveredUrls: [
+        "https://example.com/%61dmin", // decodes to /admin → destructive
+        "https://example.com/%64elete", // decodes to /delete → destructive
+        "https://example.com/%61pi/users", // decodes to /api/users → non-html
+      ],
+    });
+    // All three must be SKIPPED (none routed). startUrl is the only route.
+    expect(plan.routes.map((r) => r.url)).toEqual(["https://example.com/"]);
+    expect(plan.skipped.map((s) => s.url)).toEqual([
+      "https://example.com/%61dmin",
+      "https://example.com/%64elete",
+      "https://example.com/%61pi/users",
+    ]);
+    for (const skip of plan.skipped) {
+      expect(skip.reason === "destructive" || skip.reason === "non-html").toBe(true);
+    }
+    // Specifically: the two destructive-word paths get 'destructive', the
+    // /api/ path gets 'non-html'.
+    expect(plan.skipped[0].reason).toBe("destructive");
+    expect(plan.skipped[1].reason).toBe("destructive");
+    expect(plan.skipped[2].reason).toBe("non-html");
   });
 });
 

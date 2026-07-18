@@ -94,8 +94,19 @@ type Verdict = { kind: "route" } | { kind: "skip"; reason: SkipReason };
  */
 function classify(parsed: URL, startOrigin: string, excludeSet: Set<string>): Verdict {
   if (parsed.origin !== startOrigin) return { kind: "skip", reason: "cross-origin" };
-  if (DESTRUCTIVE_PATH.test(parsed.pathname)) return { kind: "skip", reason: "destructive" };
-  if (parsed.pathname.includes("/api/") || NON_HTML_EXTENSION.test(parsed.pathname)) {
+  // WHATWG URL.pathname does NOT decode percent-encoding, so a discovered URL
+  // like /%61dmin (which decodes to /admin) would bypass the destructive-path
+  // regex. Discovered URLs come from crawled pages (attacker-controllable), so
+  // decode before applying the destructive / non-html / api filters.
+  let pathForFilter = parsed.pathname;
+  try {
+    pathForFilter = decodeURIComponent(pathForFilter);
+  } catch {
+    // leave raw on malformed encoding — it will be filtered on the raw form,
+    // fail-safe.
+  }
+  if (DESTRUCTIVE_PATH.test(pathForFilter)) return { kind: "skip", reason: "destructive" };
+  if (pathForFilter.includes("/api/") || NON_HTML_EXTENSION.test(pathForFilter)) {
     return { kind: "skip", reason: "non-html" };
   }
   if (excludeSet.has(parsed.toString())) return { kind: "skip", reason: "excluded" };
@@ -116,7 +127,12 @@ export function planRepresentativeCrawl(input: CrawlPlanInput): CrawlPlan {
 
   // Cap the budget. The caller can lower it (down to 1); they cannot raise it
   // past the hard cap of 30 — that's the bound the crawl is guaranteed to fit.
-  const requested = input.maxRoutes ?? DEFAULT_MAX_ROUTES;
+  // A non-finite value (NaN from parseInt("garbage") or JSON, ±Infinity) must
+  // fall back to default rather than produce NaN, which would silently unbound
+  // the plan (routes.length >= NaN is always false, so the budget never fires).
+  // Number.isFinite(undefined) returns false, so the undefined case (no field
+  // provided) is also routed to the default.
+  const requested = Number.isFinite(input.maxRoutes) ? (input.maxRoutes as number) : DEFAULT_MAX_ROUTES;
   const maxRoutes = Math.min(Math.max(HARD_MIN_ROUTES, requested), HARD_MAX_ROUTES);
 
   // startUrl is the user's explicit entry — it defines the origin every route

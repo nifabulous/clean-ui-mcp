@@ -1025,7 +1025,32 @@ function resolveApprovalRegistry(
     note(approval.approvalId, "registry-hash-mismatch");
     return undefined;
   }
-  return ApprovalActorRegistry.parse(entry.data);
+  const parsed = ApprovalActorRegistry.safeParse(entry.data);
+  if (!parsed.success) {
+    issues.push({
+      code: "registry-error",
+      artifactId: approval.approvalId,
+      message: `registry ${approval.actorRegistryVersion} failed schema validation for approval ${approval.approvalId}`,
+    });
+    note(approval.approvalId, "registry-error");
+    return undefined;
+  }
+  // Semantic validation: governance mode, bootstrap owner, actor integrity.
+  // An approval pinned to a semantically invalid registry cannot contribute
+  // to closure even if it uses distinct actors — its authority is corrupt.
+  const semanticIssues = validateRegistry(parsed.data);
+  if (semanticIssues.length > 0) {
+    for (const msg of semanticIssues) {
+      issues.push({
+        code: "registry-error",
+        artifactId: approval.approvalId,
+        message: `registry ${approval.actorRegistryVersion} (${approval.approvalId}): ${msg}`,
+      });
+    }
+    note(approval.approvalId, "registry-error");
+    return undefined;
+  }
+  return parsed.data;
 }
 
 /**

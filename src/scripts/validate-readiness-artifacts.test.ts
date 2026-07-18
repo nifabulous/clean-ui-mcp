@@ -1712,4 +1712,27 @@ describe("per-approval registry resolution and closed-world policy", () => {
     const result = validate(fixture);
     expect(result.issues.some((i) => i.code === "registry-error")).toBe(true);
   });
+
+  it("disqualifies approvals pinned to an invalid registry even with distinct actors", () => {
+    // The P1 fix: a malformed v2 registry must prevent C1 closure even when
+    // the C1 approvals use distinct actors (so cardinality would pass). The
+    // fix runs validateRegistry() inside resolveApprovalRegistry() and calls
+    // note() to taint the approval.
+    fixture = buildValidGraph({ withApprovals: true });
+    // Create C1 with distinct actors (default mode — no shared actor)
+    const c1 = addValidSyntheticC1Approvals(fixture);
+    // Corrupt the v2 registry so it's semantically invalid:
+    // separation-of-duties is fine, but add a forbidden bootstrapOwnerActorId.
+    mutateJson<{
+      governanceMode?: string;
+      bootstrapOwnerActorId?: string;
+    }>(c1.registryPath, (reg) => {
+      reg.governanceMode = "separation-of-duties";
+      reg.bootstrapOwnerActorId = "product-1";
+      return reg;
+    });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "registry-error")).toBe(true);
+    expect(result.checkpointStatus.C1).toBe("open");
+  });
 });

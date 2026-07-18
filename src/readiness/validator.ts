@@ -455,13 +455,16 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
       }
     }
 
-    // 7. Validate registry (head selected via chain engine in section 3)
-    if (registry) {
-      const registryIssues = validateRegistry(registry.data as z.infer<typeof ApprovalActorRegistry>);
+    // 7. Validate EVERY registry in the sound chain, not just the head.
+    //    Approvals resolve pinned historical versions; a malformed historical
+    //    registry (e.g. separation-of-duties with a forbidden bootstrap owner)
+    //    must not remain authoritative without producing a registry-error.
+    for (const reg of chains.registries) {
+      const registryIssues = validateRegistry(reg.data as z.infer<typeof ApprovalActorRegistry>);
       for (const msg of registryIssues) {
         issues.push({
           code: "registry-error",
-          artifactId: registry.data.artifactId as string,
+          artifactId: reg.data.artifactId as string,
           message: msg,
         });
       }

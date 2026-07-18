@@ -1684,4 +1684,32 @@ describe("per-approval registry resolution and closed-world policy", () => {
     expect(result.issues).toEqual([]);
     expect(result.checkpointStatus.C1).toBe("closed");
   });
+
+  it("rejects a malformed historical registry even when a valid v3 is the head", () => {
+    // A v2 registry declares separation-of-duties but illegally carries a
+    // bootstrapOwnerActorId. Without per-snapshot validation this slips through
+    // because only the head (v3, clean) is validated. The fix validates every
+    // registry in the sound chain, so the malformed v2 produces a registry-error.
+    fixture = buildValidGraph({ withApprovals: true });
+    const c1 = addValidSyntheticC1Approvals(fixture, {
+      governanceMode: "sole-maintainer-bootstrap",
+      bootstrapOwnerActorId: "repo-maintainer-1",
+      sharedApprovalActorId: "repo-maintainer-1",
+    });
+    // Corrupt the v2 registry: it's bootstrap mode but keep the owner,
+    // then add an illegal bootstrapOwnerActorId to make it separation-of-duties + owner
+    // (the semantic validator rejects this combination).
+    mutateJson<{
+      governanceMode?: string;
+      bootstrapOwnerActorId?: string;
+    }>(c1.registryPath, (reg) => {
+      reg.governanceMode = "separation-of-duties";
+      // bootstrapOwnerActorId is now illegal under separation-of-duties
+      return reg;
+    });
+    // Advance the head to a clean v3 so the chain is sound but v2 is malformed.
+    writeRegistryAndIndexV3(fixture, c1.registryPath);
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "registry-error")).toBe(true);
+  });
 });

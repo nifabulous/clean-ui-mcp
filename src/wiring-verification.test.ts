@@ -171,6 +171,15 @@ const ALLOWLIST = new Set<string>([
   // excludes the scripts/ dir and server.ts is the executable entry, so the
   // symbol appears unreferenced from the scanned production set.
   "PUBLIC_SNAPSHOT_DIR",
+  // Grounded-design pre-C2 foundation modules — pure contracts/policies created
+  // in the grounded-design plan (Tasks 2–3). Consumed only by their tests today;
+  // they gain production callers in later, separately-reviewed plans (UiSpec
+  // generator consumes renderSourceDesign + DesignSourceSnapshot; hosted capture
+  // consumes planRepresentativeCrawl + assertSafeHostedCaptureTarget). Listed
+  // here rather than wired to a placeholder caller to avoid fake coupling.
+  "renderSourceDesign",
+  "planRepresentativeCrawl",
+  "assertSafeHostedCaptureTarget",
   // readiness/contracts.ts — consumed by the validator script
   // (src/scripts/validate-readiness-artifacts.ts, created in Task 3).
   // These are the canonical helpers the validator calls directly.

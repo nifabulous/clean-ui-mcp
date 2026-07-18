@@ -19,7 +19,7 @@ locations.
 |---|---|---|
 | **C0** Foundation freeze | ✅ Closed | Validated by a Git-bound checkpoint recipe that recomputes the canonical target from recorded-commit bytes (see R0). C1 working-tree edits to the live spec/plan do **not** reopen C0. |
 | **C1** Agent contract lock | ✅ Closed | Closed by registry/index/ledger v2 (`quality-contracts/agent-readiness/checkpoint-approvals-v2.json`). The registry v2 declares `sole-maintainer-bootstrap` governance with owner `repo-maintainer-1`; Product and Engineering are two role-specific approvals by that single human identity (not two independent people). C0 prefix remains closed and byte-identical. Runtime still advertises the legacy 14-tool surface by design until Phase 1B. |
-| C2 Gold readiness | ⬜ Open | Not started (gated on C1). |
+| C2 Gold readiness | ⬜ Open | Pre-C2 grounded-design foundations have landed (see "Pre-C2 grounded-design foundations" below); C2 itself remains open pending gold execution and Gold Label Owner + QA approval. |
 | C3 MCP + create_ui_spec + skill | ⬜ Open | Not started (gated on C1). |
 | C4 Terminal 1A outcome + dogfood | ⬜ Open | Not started. |
 | C5 Corpus disposition | ⬜ Open | Not started. |
@@ -79,3 +79,39 @@ registry v2 snapshot chains remain parent-plan T1/T2 follow-on work.
 ## Lane B governance infrastructure
 
 The governance pass is complete and C1 is closed: C0/C1 closed-world policies, the Git-bound C1 recipe, deterministic registry/index/ledger chains, per-approval registry resolution, and automatic append-only ledger validation are implemented. The registry v2 (`approval-actor-registry-v2.json`) declares `sole-maintainer-bootstrap` governance with owner `repo-maintainer-1`. The C1 ledger v2 (`checkpoint-approvals-v2.json`) appends two role-specific approvals — Product and Engineering — by that one human identity against the reviewed C1 manifest; it is **not** two independent people. C0 remains closed via its byte-identical ledger prefix. Lane C (MCP/create_ui_spec/skill) and Lane D remain deferred, gated on this C1 closure.
+
+## Pre-C2 grounded-design foundations
+
+The following grounded-design workspace tasks landed on
+`feat/grounded-design-pre-c2` as **pre-C2 foundation work** — they are
+foundations for the C2 (Gold readiness) checkpoint, **not** C2 completion. C2
+itself remains open pending gold execution and the Gold Label Owner + QA
+approvals named in the parent plan. The design authority for this foundation
+work is `docs/superpowers/specs/2026-07-18-grounded-design-workspace-design.md`.
+
+| # | Commit | Description |
+|---|---|---|
+| Task 2 | `93654f9` (+ fix `703f0b5`) | `DesignSourceSnapshotSchema` and the deterministic `SOURCE-DESIGN.md` renderer; hardened cell escaping and determinism. |
+| Task 3 | `caaa1b6` (+ fix `6cf01f8`) | `planRepresentativeCrawl` and `assertSafeHostedCaptureTarget` hosted SSRF guard; percent-encoded destructive-path and NaN-budget hardening. |
+| Task 4 | `a65b8c0` | Ephemeral session policy: `decideCookie` + `chooseConsentAction`. |
+| Task 5 | `e183297` (+ fix `162a875`) | Deterministic grounded design-handoff gold gate scorer with 12 briefs and 12 labels; required declared blueprints and null-entry guards. |
+
+Note: Task 1 (public-site static-asset boundary: removing the uncleared
+`site/public/entries/` corpus bundle and wiring `checkPublicSiteBoundary` into
+the build) is **not** in this branch — it depends on the public-site
+reconstruction that is not yet on `main` and will land in a separate PR. The
+boundary checker module itself ships here so the allowlist enforcement is in
+place; the corpus removal + build wiring follow with the public-site PR.
+
+### Explicitly future plans (NOT completed work)
+
+The following are explicitly **future plans** and are not claimed as completed or
+as part of C2 completion:
+
+- the hosted design-source generator;
+- Playground conversion;
+- Decision Lab integration;
+- Curator Scout;
+- authenticated capture;
+- BYOK (bring-your-own-key);
+- framework adapters.

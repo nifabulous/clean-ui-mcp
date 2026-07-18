@@ -23,9 +23,18 @@
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+<!-- Skip link — first focusable element. Jumps straight to #main so keyboard +
+     screen-reader users bypass the sidebar/top bar on every route (WCAG 2.4.1).
+     Visually hidden until focused. -->
+<a class="skip-link" href="#main">Skip to content</a>
+<!-- Route-announcement live region — screen readers hear the new page when the
+     hash router swaps content without a full reload (WCAG 4.1.3-style for SPA
+     route changes). Politely waits for in-flight speech to finish. -->
+<div id="routeAnnounce" class="visually-hidden" aria-live="polite" aria-atomic="true" role="status"></div>
+
 <div class="app" id="app">
 
-  <!-- ============ SIDEBAR ============ -->
+  <!-- ============ SIDEBAR (primary navigation landmark) ============ -->
   <aside class="sidebar">
     <div class="sidebar-head">
       <div class="brand">
@@ -40,31 +49,47 @@
       </button>
     </div>
 
-    <div class="nav-scroll" id="navScroll"><!-- nav injected --></div>
+    <!-- nav-scroll IS the navigation landmark. role="navigation" + aria-label
+         distinguish it from the mobile bottom-bar <nav> so AT users can
+         landmark-jump to "Primary". It becomes a modal dialog on mobile
+         (aria-modal + role set by openSidebar()/closeSidebar() in app.js). -->
+    <nav class="nav-scroll" id="navScroll" aria-label="Primary"><!-- nav injected --></nav>
 
     <div class="sidebar-foot">
       <div class="row"><span><span class="live"></span> stdio transport</span><span>v0.1.0</span></div>
       <div class="row"><span>index</span><span id="footIndex">— / —</span></div>
       <div class="recovery" id="footRecovery">snapshots: —</div>
+      <!-- Concise health access lives in the shell as a link to settings (spec
+           §7.1: "System-health access"), not a duplicate status display. -->
+      <a class="foot-health" href="#/settings">System health &amp; settings</a>
     </div>
   </aside>
 
-  <!-- ============ MAIN ============ -->
-  <main class="main">
-    <div class="topbar">
-      <button class="icon-btn" id="mobileMenuBtn" style="display:none" aria-label="Menu">
+  <!-- ============ MAIN (main landmark) ============ -->
+  <main class="main" id="main" tabindex="-1">
+    <!-- topbar is the banner/header landmark (workspace identity + search +
+         quick add + theme control). -->
+    <header class="topbar">
+      <button class="icon-btn" id="mobileMenuBtn" style="display:none" aria-label="Menu" aria-expanded="false" aria-controls="navScroll">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
       </button>
       <div class="page-titles">
-        <h1 id="pageTitle">Overview</h1>
+        <h1 id="pageTitle">Dashboard</h1>
         <div class="crumb" id="pageCrumb">clean-ui-mcp · v0.1.0 · stdio transport</div>
+        <!-- Visible per-route description (mirrors the crumb; the live region
+             also announces it for AT). Visually subdued, read by SR. -->
+        <p class="page-desc visually-hidden" id="pageDesc">Dashboard</p>
       </div>
       <div class="actions">
         <div class="search">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-          <input type="text" id="globalSearch" placeholder="search entries…" />
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <!-- Visible <label> gives the input an accessible name. The input
+               keeps its stable #globalSearch id (bound by the entries page and
+               the '/' keyboard shortcut). -->
+          <label class="visually-hidden" for="globalSearch">Search entries</label>
+          <input type="search" id="globalSearch" placeholder="search entries…" autocomplete="off" />
         </div>
-        <button class="icon-btn" id="rebuildBtn" title="Rebuild index">
+        <button class="icon-btn" id="rebuildBtn" title="Rebuild index" aria-label="Rebuild index">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0115-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 01-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
         </button>
         <!-- Theme toggle — accessible name reflects the theme it will switch
@@ -78,17 +103,10 @@
           <span class="lbl">Add entry</span>
         </button>
       </div>
-    </div>
+    </header>
 
     <!-- pages injected here -->
     <div id="pages"></div>
-
-    <div class="statusbar">
-      <span class="seg"><span class="live"></span> stdio transport</span>
-      <span class="seg" id="footLatency">index latency: —</span>
-      <span class="seg" id="footEmbeddings">embeddings: —</span>
-      <span class="seg" style="margin-left:auto" id="footStatus">clean-ui-mcp@0.1.0</span>
-    </div>
   </main>
 
   <!-- resizer gutter between main canvas and detail rail -->
@@ -105,43 +123,45 @@
     <div id="detailBody"><div class="detail-empty">Select an entry to inspect.</div></div>
   </aside>
 
-  <!-- drawer backdrop (mobile) — tap to close -->
+  <!-- drawer backdrop (mobile) — click closes the open drawer -->
   <div class="backdrop" id="backdrop"></div>
 </div>
 
-  <!-- bulk selection action bar — shown only when ≥1 entry is selected -->
-  <div class="bulk-bar" id="bulkBar" style="display:none">
-    <span class="bulk-count" id="bulkCount">0 selected</span>
-    <span class="bulk-divider" aria-hidden="true"></span>
-    <button class="btn primary" id="bulkPromote">Promote</button>
-    <button class="btn" id="bulkReject">Reject</button>
-    <span class="bulk-divider" aria-hidden="true"></span>
-    <label class="bulk-provider">
-      <span class="bulk-provider-label">Provider</span>
-      <select id="bulkProvider" title="Provider for Re-tag (vision extraction + critique)"></select>
-    </label>
-    <button class="btn" id="bulkRetag" title="Re-run vision extraction + critique on selected entries">Re-tag</button>
-    <span class="bulk-progress" id="bulkProgress" style="display:none"></span>
-    <button class="btn ghost" id="bulkClear">Clear</button>
-  </div>
+<!-- bulk selection action bar — shown only when ≥1 entry is selected -->
+<div class="bulk-bar" id="bulkBar" style="display:none">
+  <span class="bulk-count" id="bulkCount">0 selected</span>
+  <span class="bulk-divider" aria-hidden="true"></span>
+  <button class="btn primary" id="bulkPromote">Promote</button>
+  <button class="btn" id="bulkReject">Reject</button>
+  <span class="bulk-divider" aria-hidden="true"></span>
+  <label class="bulk-provider">
+    <span class="bulk-provider-label">Provider</span>
+    <select id="bulkProvider" title="Provider for Re-tag (vision extraction + critique)"></select>
+  </label>
+  <button class="btn" id="bulkRetag" title="Re-run vision extraction + critique on selected entries">Re-tag</button>
+  <span class="bulk-progress" id="bulkProgress" style="display:none"></span>
+  <button class="btn ghost" id="bulkClear">Clear</button>
+</div>
 
-  <!-- mobile bottom action bar -->
+<!-- mobile bottom action bar — spec §7.5: limited to Dashboard, Entries, Add,
+     and a "More" button that opens the full drawer. Distinct aria-label from
+     the primary <nav> so AT lists both landmarks by name. -->
 <nav class="bottom-bar" aria-label="Quick actions">
-  <button id="bbMenu" aria-label="Menu">
+  <button id="bbDash" aria-label="Dashboard" data-bb-route="overview">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+    Dashboard
+  </button>
+  <button id="bbEntries" aria-label="Entries" data-bb-route="entries">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
-    Menu
+    Entries
   </button>
-  <button id="bbSearch" aria-label="Search">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-    Search
-  </button>
-  <button id="bbFavs" aria-label="Favorites">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>
-    Stars
-  </button>
-  <button id="bbAdd" aria-label="Add entry">
+  <button id="bbAdd" aria-label="Add entry" data-bb-route="add">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
     Add
+  </button>
+  <button id="bbMore" aria-label="More navigation" aria-expanded="false" aria-controls="navScroll">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+    More
   </button>
 </nav>
 

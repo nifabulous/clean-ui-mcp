@@ -56,6 +56,27 @@ body{font-family:var(--font);background:var(--canvas);color:var(--ink);
 .eyebrow{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
 a{color:inherit;text-decoration:none}
 
+/* Visually hidden but available to AT (the standardized sr-only pattern).
+   Used by the skip link's target label, the live region, and the per-route
+   description. NOT display:none — that would remove it from the a11y tree. */
+.visually-hidden{
+  position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;
+  overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;
+}
+/* Skip link — visually hidden until focused, then revealed at top-left so
+   keyboard users can bypass the chrome (WCAG 2.4.1). */
+.skip-link{
+  position:fixed;top:8px;left:8px;z-index:200;
+  padding:8px 14px;border-radius:7px;
+  background:var(--ink);color:#fff;font-size:12px;font-weight:600;
+  transform:translateY(-200%);transition:transform .15s;
+}
+.skip-link:focus{transform:translateY(0);outline:none;
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--focus) 35%,transparent);}
+/* When the skip link targets #main, give main a visible focus ring so the
+   destination is obvious after the jump. */
+#main:focus{outline:none;box-shadow:inset 0 0 0 3px color-mix(in srgb,var(--focus) 30%,transparent);}
+
 /* ============================================================
    LAYOUT — expandable sidebar + main + detail rail
    ============================================================ */
@@ -104,20 +125,36 @@ a{color:inherit;text-decoration:none}
 .group-count{font-family:var(--mono);font-size:10px;color:var(--muted);font-weight:500}
 .nav-group:not(.open) .nav-children{display:none}
 .nav-children{padding-left:6px}
+/* The Dashboard group renders header-less — its items sit directly under the
+   brand with a little breathing room before the first labeled group. */
+.nav-group--bare{margin-bottom:6px}
+.nav-group--bare .nav-children{padding-left:0}
 
 /* nav item */
 .nav-item{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:6px;
-  color:var(--ink-2);font-size:12.5px;font-weight:500;cursor:pointer;transition:.12s;white-space:nowrap}
+  color:var(--ink-2);font-size:12.5px;font-weight:500;cursor:pointer;transition:.12s;white-space:nowrap;
+  text-decoration:none}
 .nav-item:hover{background:var(--surface-2);color:var(--ink)}
 .nav-item.active{background:var(--accent-soft);color:var(--accent)}
+/* aria-current="page" is the AT-friendly "you are here". The shared focus ring
+   (below) applies on keyboard focus; the active fill applies regardless of how
+   focus arrived. */
+.nav-item[aria-current="page"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.nav-item[aria-current="page"]::before{
+  content:'';position:absolute;margin-left:-18px;width:3px;height:18px;border-radius:2px;background:var(--accent)}
+.nav-item{position:relative}
 .nav-item .ic{width:16px;height:16px;flex-shrink:0;display:grid;place-items:center}
 .nav-item .lbl{flex:1;overflow:hidden;text-overflow:ellipsis}
 .nav-item .count{font-family:var(--mono);font-size:10.5px;color:var(--muted);font-weight:500}
-.nav-item.active .count{color:var(--accent)}
+.nav-item.active .count,.nav-item[aria-current="page"] .count{color:var(--accent)}
 
 .sidebar-foot{padding:10px 14px;border-top:1px solid var(--hairline);font-size:10.5px;color:var(--muted)}
 .sidebar-foot .row{display:flex;align-items:center;justify-content:space-between;margin:3px 0;font-family:var(--mono)}
 .sidebar-foot .live{width:7px;height:7px;border-radius:50%;background:var(--pos);animation:pulse 2s infinite}
+/* Concise health access link (spec §7.1) — sits under the recovery row. */
+.sidebar-foot .foot-health{display:block;margin-top:6px;padding:6px 8px;border-radius:6px;
+  font-size:11px;font-weight:500;color:var(--ink-2)}
+.sidebar-foot .foot-health:hover{background:var(--surface-2);color:var(--ink)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
 /* ---------- MAIN ---------- */
@@ -724,10 +761,14 @@ tbody tr:hover .row-actions{opacity:1}
   }
   .app.mobile-open .sidebar{transform:translateX(0)}
   .topbar{padding:12px 16px}
-  .topbar .search{display:none}      /* search moves to bottom bar */
-  .topbar .search.mobile-show{display:block;position:fixed;left:8px;right:8px;top:56px;z-index:9}
-  .topbar .search.mobile-show input{width:100%}
+  /* Global search stays in the top bar on mobile (spec §7.5: mobile
+     prioritizes search). Shrink it so it shares the row with the menu/add
+     buttons; the label is visually-hidden but still names the input. */
+  .topbar .search input{width:140px}
   #mobileMenuBtn{display:grid!important}
+  /* The rebuild control is desktop-only on mobile (it just toasts a hint); hide
+     it so search + add + theme fit the top row. */
+  #rebuildBtn{display:none}
   #addEntryBtn .lbl,.topbar .btn .lbl{display:none}      /* icon-only buttons */
   #addEntryBtn{width:32px;padding:0;justify-content:center}
   .page{padding:16px 16px 90px}
@@ -738,6 +779,9 @@ tbody tr:hover .row-actions{opacity:1}
   .statusbar{display:none}
   .bottom-bar{display:flex}
   .bottom-bar button{min-height:44px;min-width:44px;padding:6px 4px}
+  /* The open drawer is a modal dialog: keep it above the bottom bar and
+     inert-sibling content. The backdrop already sits beneath #navScroll. */
+  .app.mobile-open .nav-scroll[aria-modal="true"]{z-index:40}
   .card{padding:14px}
   /* entries controls wrap so chips + sort + view-toggle don't overflow on touch */
   .card-head{flex-wrap:wrap;gap:10px}

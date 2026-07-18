@@ -1718,20 +1718,21 @@ describe("per-approval registry resolution and closed-world policy", () => {
     // the C1 approvals use distinct actors (so cardinality would pass). The
     // fix runs validateRegistry() inside resolveApprovalRegistry() and calls
     // note() to taint the approval.
+    //
+    // The malformed registry is created BEFORE the approvals so their
+    // actorRegistrySha256 matches the (malformed) bytes — this exercises the
+    // semantic-validation path, not the hash-mismatch path.
     fixture = buildValidGraph({ withApprovals: true });
-    // Create C1 with distinct actors (default mode — no shared actor)
-    const c1 = addValidSyntheticC1Approvals(fixture);
-    // Corrupt the v2 registry so it's semantically invalid:
-    // separation-of-duties is fine, but add a forbidden bootstrapOwnerActorId.
-    mutateJson<{
-      governanceMode?: string;
-      bootstrapOwnerActorId?: string;
-    }>(c1.registryPath, (reg) => {
-      reg.governanceMode = "separation-of-duties";
-      reg.bootstrapOwnerActorId = "product-1";
-      return reg;
+    // Create C1 with a malformed registry from the start: separation-of-duties
+    // with a forbidden bootstrapOwnerActorId (validateRegistry rejects this).
+    const c1 = addValidSyntheticC1Approvals(fixture, {
+      governanceMode: "separation-of-duties",
+      bootstrapOwnerActorId: "product-1",
     });
     const result = validate(fixture);
+    // The approvals' pinned registry digest matches (no hash mismatch) but
+    // the registry is semantically invalid → registry-error taints each.
+    expect(result.issues.some((i) => i.code === "registry-hash-mismatch")).toBe(false);
     expect(result.issues.some((i) => i.code === "registry-error")).toBe(true);
     expect(result.checkpointStatus.C1).toBe("open");
   });

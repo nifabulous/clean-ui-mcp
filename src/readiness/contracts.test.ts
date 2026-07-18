@@ -866,3 +866,69 @@ describe("validateLedgerAppendOnly", () => {
     expect(issues.length).toBeGreaterThan(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Versioned readiness snapshot schemas (backward-compatible chain metadata)
+// ---------------------------------------------------------------------------
+
+describe("versioned readiness snapshot schemas", () => {
+  const header = {
+    schemaVersion: "1.0" as const,
+    createdAt: "2026-07-18T00:00:00Z",
+    createdByRole: "repository-maintainer",
+    sourceGitSha: "a".repeat(40),
+    inputHashes: {},
+  };
+
+  it("keeps v1 index and ledger shapes valid", () => {
+    expect(ArtifactIndex.safeParse({
+      ...header,
+      artifactType: "artifact-index",
+      artifactId: "index-v1",
+      artifacts: [],
+      implementationActorIds: ["impl-1"],
+    }).success).toBe(true);
+    expect(CheckpointApprovals.safeParse({
+      ...header,
+      artifactType: "checkpoint-approvals",
+      artifactId: "ledger-v1",
+      approvals: [],
+    }).success).toBe(true);
+  });
+
+  it("accepts v2 chain metadata", () => {
+    const predecessor = { version: "1", sha256: "b".repeat(64) };
+    expect(ArtifactIndex.safeParse({
+      ...header,
+      artifactType: "artifact-index",
+      artifactId: "index-v2",
+      ordinalVersion: 2,
+      predecessor,
+      artifacts: [],
+      implementationActorIds: ["impl-1"],
+    }).success).toBe(true);
+    expect(CheckpointApprovals.safeParse({
+      ...header,
+      artifactType: "checkpoint-approvals",
+      artifactId: "ledger-v2",
+      ordinalVersion: 2,
+      predecessor,
+      approvals: [],
+    }).success).toBe(true);
+  });
+
+  it("rejects invalid ordinals and predecessor digests", () => {
+    const base = {
+      ...header,
+      artifactType: "checkpoint-approvals" as const,
+      artifactId: "ledger-v2",
+      approvals: [],
+    };
+    expect(CheckpointApprovals.safeParse({ ...base, ordinalVersion: 0 }).success).toBe(false);
+    expect(CheckpointApprovals.safeParse({
+      ...base,
+      ordinalVersion: 2,
+      predecessor: { version: "1", sha256: "bad" },
+    }).success).toBe(false);
+  });
+});

@@ -352,13 +352,48 @@ export const ApprovalActorRegistry = BaseArtifactHeader.extend({
     ),
 }).strict();
 
+// ---------------------------------------------------------------------------
+// Backward-compatible snapshot chain metadata
+// ---------------------------------------------------------------------------
+
+/**
+ * Reference to the previous snapshot in an append-only chain.
+ *
+ * `version` is the human-readable predecessor identifier (e.g. registry-style
+ * version string); `sha256` is its canonical-content digest. Both fields are
+ * required when a predecessor is present. A `null`/absent predecessor marks a
+ * genesis (first) snapshot. Schemas consume this via `VersionedSnapshotFields`.
+ */
+export const SnapshotPredecessor = z.object({
+  version: z.string().trim().min(1),
+  sha256: Sha256,
+}).strict();
+
+/**
+ * Optional, backward-compatible chain metadata shared by versioned snapshot
+ * artifacts (`CheckpointApprovals`, `ArtifactIndex`).
+ *
+ * - `ordinalVersion`: 1-based ordinal of the snapshot in its chain.
+ * - `predecessor`: reference to the prior snapshot, or `null` for genesis.
+ *
+ * Absence (rather than a default) is how historical v1 snapshots stay
+ * distinguishable from v2+ snapshots that explicitly declare `ordinalVersion: 1`
+ * with a `null` predecessor.
+ */
+const VersionedSnapshotFields = {
+  ordinalVersion: z.number().int().min(1).optional(),
+  predecessor: SnapshotPredecessor.nullable().optional(),
+};
+
 export const CheckpointApprovals = BaseArtifactHeader.extend({
   artifactType: z.literal("checkpoint-approvals"),
+  ...VersionedSnapshotFields,
   approvals: z.array(CheckpointApproval),
 }).strict();
 
 export const ArtifactIndex = BaseArtifactHeader.extend({
   artifactType: z.literal("artifact-index"),
+  ...VersionedSnapshotFields,
   artifacts: z.array(
     z
       .object({
@@ -532,4 +567,5 @@ export type TaxonomyDigestArtifactT = z.infer<typeof TaxonomyDigestArtifact>;
 export type ApprovalActorRegistryT = z.infer<typeof ApprovalActorRegistry>;
 export type CheckpointApprovalsT = z.infer<typeof CheckpointApprovals>;
 export type ArtifactIndexT = z.infer<typeof ArtifactIndex>;
+export type SnapshotPredecessorT = z.infer<typeof SnapshotPredecessor>;
 export type TrackedArtifactT = z.infer<typeof TrackedArtifact>;

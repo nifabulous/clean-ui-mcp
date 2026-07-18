@@ -727,6 +727,231 @@ describe("curator shared theme tokens", () => {
   });
 });
 
+// ─── Dashboard shell + navigation (Task 2) ──────────────────────────────────
+// Spec §7.1 (persistent application shell): semantic landmarks, a skip link,
+// the active route's aria-current, a global search + quick Add, and a mobile
+// drawer with the full focus-management contract. These tests pin the shell
+// contract WITHOUT touching dashboard home content (Task 3), library detail
+// (Task 4), or curation modules (Task 5). All 12 route IDs are preserved.
+describe("dashboard shell and navigation", () => {
+  it("renders semantic header, nav, and main landmarks", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector("#app main");
+    // Three required landmarks (header wraps the top bar; nav is the primary
+    // navigation; main holds #pages).
+    expect(await page.locator("header").count()).toBeGreaterThanOrEqual(1);
+    expect(await page.locator("nav").count()).toBeGreaterThanOrEqual(1);
+    expect(await page.locator("main").count()).toBeGreaterThanOrEqual(1);
+    await page.close();
+  });
+
+  it("exposes a skip link to #main as the first focusable element", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector("#app main");
+    // The first Tab-reachable element must be the skip link.
+    await page.keyboard.press("Tab");
+    const active = await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null;
+      return { tag: el?.tagName ?? "", href: el?.getAttribute("href") ?? "", text: el?.textContent?.trim() ?? "" };
+    });
+    expect(active.tag.toLowerCase()).toBe("a");
+    expect(active.href).toBe("#main");
+    expect(/skip/i.test(active.text)).toBe(true);
+    await page.close();
+  });
+
+  it("marks the active route's nav link with aria-current=page", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/entries");
+    await page.waitForSelector("#pageTitle");
+    const current = await page
+      .locator('#navScroll a[aria-current="page"]')
+      .getAttribute("data-route");
+    expect(current).toBe("entries");
+    // Navigate to a different route and confirm the marker moves with it.
+    await page.evaluate(() => { location.hash = "/sources"; });
+    await page.waitForFunction(
+      () => document.querySelector('#navScroll a[aria-current="page"]')?.getAttribute("data-route") === "sources",
+      null,
+      { timeout: 3000 },
+    );
+    await page.close();
+  });
+
+  it("shows a visible Dashboard label while keeping the overview route id", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/overview");
+    await page.waitForSelector("#pageTitle");
+    // The display label reads "Dashboard" but the link still targets #/overview.
+    const navLink = page.locator('#navScroll a[data-route="overview"]');
+    expect(await navLink.getAttribute("href")).toBe("#/overview");
+    expect((await navLink.textContent())?.toLowerCase()).toContain("dashboard");
+    await page.close();
+  });
+
+  it("preserves all twelve route ids in the navigation", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector("#navScroll");
+    const ids = await page.locator('#navScroll a[data-route]').evaluateAll((els) =>
+      els.map((e) => (e as HTMLElement).dataset.route),
+    );
+    // The hash router, links, and existing state depend on these EXACT ids.
+    expect(ids.sort()).toEqual(
+      ["overview", "entries", "add", "bulk", "sources", "capture", "search", "embeddings", "compare", "quality", "settings", "decision-lab"].sort(),
+    );
+    await page.close();
+  });
+
+  it("exposes a global search control with an accessible label", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector("#globalSearch");
+    // Accessible name via <label for> or aria-label/aria-labelledby.
+    const input = page.locator("#globalSearch");
+    const labelled = await input.evaluate((el) => {
+      const i = el as HTMLInputElement;
+      const byId = i.id ? !!document.querySelector(`label[for="${i.id}"]`) : false;
+      return byId || !!i.getAttribute("aria-label") || !!i.getAttribute("aria-labelledby");
+    });
+    expect(labelled).toBe(true);
+    await page.close();
+  });
+
+  it("surfaces a quick Add entry action in the shell", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector("#app");
+    expect(await page.getByRole("button", { name: /add entry/i }).first().isVisible()).toBe(true);
+    await page.close();
+  });
+
+  it("announces route changes via a live region", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/overview");
+    await page.waitForSelector("#pageTitle");
+    const live = await page.evaluate(() => {
+      const el = document.getElementById("routeAnnounce");
+      if (!el) return null;
+      return { aria: el.getAttribute("aria-live"), atomic: el.getAttribute("aria-atomic") };
+    });
+    expect(live).not.toBeNull();
+    expect(["polite", "assertive"]).toContain(live!.aria);
+    // Navigate and confirm the live region reflects the new route.
+    await page.evaluate(() => { location.hash = "/entries"; });
+    await page.waitForFunction(
+      () => /entri/i.test(document.getElementById("routeAnnounce")?.textContent || ""),
+      null,
+      { timeout: 3000 },
+    );
+    await page.close();
+  });
+
+  it("makes the sidebar a modal drawer on a narrow viewport with the full focus contract", async () => {
+    const page = await browser!.newPage();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector("#app");
+
+    const drawer = page.locator("#navScroll");
+    // Closed by default: not modal.
+    expect(await drawer.getAttribute("aria-modal")).toBeNull();
+
+    // Open via the mobile menu trigger.
+    await page.getByRole("button", { name: /^menu$/i }).first().click();
+    await page.waitForFunction(
+      () => document.getElementById("navScroll")?.getAttribute("aria-modal") === "true",
+      null,
+      { timeout: 3000 },
+    );
+    expect(await drawer.getAttribute("role")).toBe("dialog");
+
+    // Focus is contained within the drawer while open.
+    await page.keyboard.press("Tab");
+    const focusInside = await page.evaluate(() => {
+      const d = document.getElementById("navScroll")!;
+      return d.contains(document.activeElement);
+    });
+    expect(focusInside).toBe(true);
+
+    // Escape closes and returns focus to the menu trigger.
+    const trigger = page.getByRole("button", { name: /^menu$/i }).first();
+    await trigger.evaluate((el) => el.setAttribute("data-test-trigger", "true"));
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(
+      () => document.getElementById("navScroll")?.getAttribute("aria-modal") !== "true",
+      null,
+      { timeout: 3000 },
+    );
+    // Focus must have moved back to the trigger that opened the drawer.
+    const focusOnTrigger = await page.evaluate(
+      () => (document.activeElement as HTMLElement | null)?.getAttribute("data-test-trigger") === "true",
+    );
+    expect(focusOnTrigger).toBe(true);
+    await page.close();
+  });
+
+  it("closes the drawer on backdrop click and on route change", async () => {
+    const page = await browser!.newPage();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector("#app");
+    await page.getByRole("button", { name: /^menu$/i }).first().click();
+    await page.waitForFunction(
+      () => document.getElementById("navScroll")?.getAttribute("aria-modal") === "true",
+      null,
+      { timeout: 3000 },
+    );
+    // Backdrop click closes.
+    await page.locator("#backdrop").click();
+    await page.waitForFunction(
+      () => document.getElementById("navScroll")?.getAttribute("aria-modal") !== "true",
+      null,
+      { timeout: 3000 },
+    );
+    // Re-open, then a route change must also close it.
+    await page.getByRole("button", { name: /^menu$/i }).first().click();
+    await page.waitForFunction(
+      () => document.getElementById("navScroll")?.getAttribute("aria-modal") === "true",
+      null,
+      { timeout: 3000 },
+    );
+    await page.evaluate(() => { location.hash = "/entries"; });
+    await page.waitForFunction(
+      () => document.getElementById("navScroll")?.getAttribute("aria-modal") !== "true",
+      null,
+      { timeout: 3000 },
+    );
+    await page.close();
+  });
+
+  it("keeps a mobile bottom nav limited to Dashboard, Entries, Add, and More", async () => {
+    const page = await browser!.newPage();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector(".bottom-bar");
+    const labels = await page.locator(".bottom-bar button").evaluateAll((els) =>
+      els.map((e) => (e.textContent || "").trim().toLowerCase()),
+    );
+    // Exactly four quick actions: dashboard, entries, add, more.
+    expect(labels).toEqual(["dashboard", "entries", "add", "more"]);
+    await page.close();
+  });
+
+  it("updates the top-bar page title and description per route", async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/#/overview");
+    await page.waitForSelector("#pageTitle");
+    const overviewTitle = await page.locator("#pageTitle").textContent();
+    expect(overviewTitle?.toLowerCase()).toContain("dashboard");
+    const overviewDesc = await page.locator("#pageDesc").textContent();
+    expect(overviewDesc!.length).toBeGreaterThan(0);
+    await page.close();
+  });
+});
+
 // Module-level teardown: runs once after all describe blocks finish, so the
 // shared browser/server (launched in the first block's beforeAll) survive for
 // every test that follows it.

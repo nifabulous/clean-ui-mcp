@@ -44,7 +44,12 @@ class TestMediaQueryList extends EventTarget implements MediaQueryList {
   }
 }
 
-if (typeof window.matchMedia !== "function") {
+// Guard against the node environment. setupFiles runs for every test file,
+// including the end-to-end browser suite (site/tests/site-browser.test.ts) which
+// opts into `@vitest-environment node` so it can spawn Playwright + vite preview.
+// That file has no DOM, so window is undefined here — skip the matchMedia
+// polyfill (it only matters under jsdom, where the component tests run).
+if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
   // @ts-expect-error — installing the polyfill onto window.
   window.matchMedia = (media: string): MediaQueryList => {
     let cached = registry.get(media);

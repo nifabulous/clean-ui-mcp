@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Static route discovery for clean-ui-mcp. Evidence detail routes
+     (/clean-ui-mcp/evidence/<id>) are client-routed from snapshot.json and are
+     not enumerated here until the build generates per-entry static pages. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://nifabulous.github.io/clean-ui-mcp/</loc>
+  </url>
+  <url>
+    <loc>https://nifabulous.github.io/clean-ui-mcp/playground</loc>
+  </url>
+  <url>
+    <loc>https://nifabulous.github.io/clean-ui-mcp/install</loc>
+  </url>
+</urlset>

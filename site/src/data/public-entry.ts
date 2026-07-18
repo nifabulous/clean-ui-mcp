@@ -12,7 +12,13 @@
 /** Provenance exposed to public users. Only the fields the UI renders. */
 export interface PublicSource {
   readonly productName: string;
-  readonly url: string;
+  /**
+   * Optional source URL. The curator publication pipeline treats source.url as
+   * optional (a product captured without a recorded origin link still ships),
+   * so the adapter must tolerate its absence. The evidence page renders the
+   * provenance link only when this is a non-empty string.
+   */
+  readonly url?: string;
 }
 
 /** Color-role mapping (optional on the source data). */
@@ -147,17 +153,33 @@ function assertSafePublicImagePath(value: unknown): asserts value is string {
 
 function parsePublicSource(value: unknown): PublicSource {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("source must be an object with productName and url");
+    throw new Error("source must be an object with productName");
   }
   const record = value as Record<string, unknown>;
   if (!isNonEmptyString(record.productName)) {
     throw new Error("source.productName must be a non-empty string");
   }
-  if (!isNonEmptyString(record.url)) {
-    throw new Error("source.url must be a non-empty string");
+  // source.url is OPTIONAL. The curator publication pipeline (see
+  // validate-public-pipeline.ts + publication/policy.ts) treats source.url as
+  // optional: a product captured without a recorded origin link still ships, so
+  // the tracked snapshot legitimately contains rows with url: "" or url: null.
+  // Missing/empty/null url is normalized to undefined (the evidence page then
+  // skips the provenance link). A value that is the WRONG TYPE (number, object,
+  // array, boolean) is still a structural error and is rejected — mirroring the
+  // colorRoles "non-empty string when present" contract.
+  if (record.url !== undefined && record.url !== null) {
+    if (typeof record.url !== "string") {
+      throw new Error("source.url must be a string when present");
+    }
+    if (record.url.length === 0) {
+      // empty string → treat as "no url" rather than a hard error, since the
+      // exporter emits "" for captures without a recorded origin.
+      return { productName: record.productName };
+    }
+    return { productName: record.productName, url: record.url };
   }
   // Narrow on purpose — extra curator-only fields are dropped.
-  return { productName: record.productName, url: record.url };
+  return { productName: record.productName };
 }
 
 function parseColorRoles(value: unknown): PublicColorRoles | undefined {
@@ -169,11 +191,19 @@ function parseColorRoles(value: unknown): PublicColorRoles | undefined {
   const out: PublicColorRoles = {};
   for (const key of ["canvas", "surface", "ink", "muted", "accent"] as const) {
     const candidate = record[key];
-    if (candidate === undefined) continue;
-    if (!isNonEmptyString(candidate)) {
-      throw new Error(`colorRoles.${key} must be a non-empty string when present`);
+    // The curator emits `null` for color roles it could not extract (e.g.
+    // muted: null when no distinct muted color was found), and omits a key
+    // entirely when the role does not apply. Both are "absent": skip them.
+    if (candidate === undefined || candidate === null) continue;
+    // An empty string is likewise treated as absent (some exporters normalize
+    // missing values to ""). A value that is the WRONG TYPE (number, object,
+    // array, boolean) is still a structural error and is rejected.
+    if (typeof candidate !== "string") {
+      throw new Error(`colorRoles.${key} must be a string when present`);
     }
-    out[key] = candidate;
+    if (candidate.length > 0) {
+      out[key] = candidate;
+    }
   }
   return out;
 }

@@ -1,0 +1,173 @@
+{
+  "_comment": "Synthetic design-handoff briefs for C2 evaluation. 12 stratified briefs, matched 1:1 by id to labels in eval/design-handoff-labels.json. Every product name is fictitious and every URL uses example.com — no real product names or real domains appear here.",
+  "briefVersion": 1,
+  "briefs": [
+    {
+      "id": "marketing-northwind",
+      "stratum": "marketing",
+      "product": "Northwind",
+      "kind": "Public marketing site for a fictional B2B SaaS brand.",
+      "goal": "Convey the value proposition above the fold and route visitors to a single primary call to action.",
+      "platform": "web",
+      "sourceMaterial": [
+        { "id": "src:hero:layout", "kind": "observation", "note": "Source hero pairs a headline left of a product screenshot." },
+        { "id": "src:nav:structure", "kind": "observation", "note": "Source nav uses a single top bar with a trailing CTA." }
+      ],
+      "references": ["https://example.com/northwind/home", "https://example.com/northwind/pricing"],
+      "constraints": ["No third-party tracking on the landing route.", "Primary CTA must be reachable without scrolling on a 1280px viewport."]
+    },
+    {
+      "id": "saas-dashboard-pulsegrid",
+      "stratum": "saas-dashboard",
+      "product": "Pulsegrid",
+      "kind": "Analytics dashboard for a fictional operations team.",
+      "goal": "Surface three KPIs and a recent-activity feed without overwhelming first-time users.",
+      "platform": "web",
+      "sourceMaterial": [
+        { "id": "src:dashboard:kpi-cards", "kind": "observation", "note": "Source KPI cards use 16px gutters and a fixed 240px sidebar." },
+        { "id": "src:dashboard:chart-region", "kind": "observation", "note": "Source chart region reserves 320px of vertical space." }
+      ],
+      "references": ["https://example.com/pulsegrid/overview", "https://example.com/pulsegrid/activity"],
+      "constraints": ["Sidebar must collapse on viewports under 1024px.", "KPI cards must degrade to a single column on narrow viewports."]
+    },
+    {
+      "id": "fintech-ledgerly",
+      "stratum": "fintech",
+      "product": "Ledgerly",
+      "kind": "Consumer money-movement surface for a fictional fintech.",
+      "goal": "Let a user review and confirm a transfer with full clarity on amount, recipient, and timing.",
+      "platform": "web",
+      "sourceMaterial": [
+        { "id": "src:transfer:amount", "kind": "observation", "note": "Source amount field is right-aligned with a currency prefix." },
+        { "id": "src:transfer:summary", "kind": "observation", "note": "Source confirm step surfaces a plain-language summary before submit." }
+      ],
+      "references": ["https://example.com/ledgerly/transfer", "https://example.com/ledgerly/confirm"],
+      "constraints": ["Every monetary value must show its currency.", "The confirm action must be visually distinct from a destructive one."]
+    },
+    {
+      "id": "mobile-fieldnote",
+      "stratum": "mobile",
+      "product": "Fieldnote",
+      "kind": "Mobile-only capture flow for a fictional field-research app.",
+      "goal": "Let a user capture a note in under three taps from a cold start.",
+      "platform": "mobile",
+      "sourceMaterial": [
+        { "id": "src:capture:fab", "kind": "observation", "note": "Source capture entry is a floating action button within thumb reach." },
+        { "id": "src:capture:form", "kind": "observation", "note": "Source form uses large tap targets and no horizontal scrolling." }
+      ],
+      "references": ["https://example.com/fieldnote/capture"],
+      "constraints": ["Primary action must sit in the bottom thumb zone.", "Inputs must remain usable in a single-handed portrait grip."]
+    },
+    {
+      "id": "onboarding-tidemark",
+      "stratum": "onboarding",
+      "product": "Tidemark",
+      "kind": "First-run onboarding flow for a fictional planning tool.",
+      "goal": "Collect three setup answers without losing the user before the first useful screen.",
+      "platform": "web",
+      "sourceMaterial": [
+        { "id": "src:onboarding:steps", "kind": "observation", "note": "Source onboarding breaks setup into three single-purpose steps." },
+        { "id": "src:onboarding:progress", "kind": "observation", "note": "Source progress indicator reflects completed steps only." }
+      ],
+      "references": ["https://example.com/tidemark/start", "https://example.com/tidemark/workspace"],
+      "constraints": ["Each step must have exactly one primary action.", "Progress may not imply a step is complete before it is."]
+    },
+    {
+      "id": "operations-ironhall",
+      "stratum": "dense-operations",
+      "product": "Ironhall",
+      "kind": "Dense operations console for a fictional incident-response team.",
+      "goal": "Let an operator triage a live incident from a single screen without losing context.",
+      "platform": "web",
+      "sourceMaterial": [
+        { "id": "src:console:table", "kind": "observation", "note": "Source table packs 12 columns with sticky headers." },
+        { "id": "src:console:detail", "kind": "observation", "note": "Source detail panel docks to the right and persists across row selection." }
+      ],
+      "references": ["https://example.com/ironhall/incidents", "https://example.com/ironhall/runbook"],
+      "constraints": ["Density must not come at the cost of a 4.5:1 contrast floor.", "Sticky headers must remain legible over long row sets."]
+    },
+    {
+      "id": "sparse-glimmerlake",
+      "stratum": "sparse-evidence",
+      "product": "Glimmerlake",
+      "kind": "Early-concept surface with deliberately thin source evidence.",
+      "goal": "Propose a defensible direction while being explicit about what is not yet grounded.",
+      "platform": "web",
+      "sourceMaterial": [
+        { "id": "src:concept:palette", "kind": "observation", "note": "Only one sourced observation exists for this brief; the rest must be flagged as assumptions." }
+      ],
+      "references": ["https://example.com/glimmerlake/concept"],
+      "constraints": ["Every non-sourced direction must be recorded as an explicit assumption.", "Source coverage is expected to be low."]
+    },
+    {
+      "id": "conflict-bramblestone",
+      "stratum": "conflicting-references",
+      "product": "Bramblestone",
+      "kind": "Surface where two source references disagree about a layout decision.",
+      "goal": "Reconcile the conflict with a stated authority lane rather than silently picking one.",
+      "platform": "web",
+      "sourceMaterial": [
+        { "id": "src:layout:option-a", "kind": "observation", "note": "Reference A places the primary action at the top of the form." },
+        { "id": "src:layout:option-b", "kind": "observation", "note": "Reference B places the primary action at the bottom of the form." }
+      ],
+      "references": ["https://example.com/bramblestone/variant-a", "https://example.com/bramblestone/variant-b"],
+      "constraints": ["The chosen placement must be recorded as a retain/adapt/reject decision.", "The rejected option must carry a rationale."]
+    },
+    {
+      "id": "inaccessible-summitry",
+      "stratum": "inaccessible-url",
+      "product": "Summitry",
+      "kind": "Surface whose only archived reference is no longer reachable.",
+      "goal": "Ground the direction in reachable evidence and explicitly mark the unreachable reference as not inspected.",
+      "platform": "web",
+      "sourceMaterial": [
+        { "id": "src:archive:legacy", "kind": "observation", "note": "A legacy archive URL exists but is no longer reachable." }
+      ],
+      "references": ["https://example.com/summitry/current", "https://example.com/inaccessible-archive"],
+      "constraints": ["The unreachable URL must not be claimed under inspectedUrls.", "Direction must be supported by the reachable reference alone."]
+    },
+    {
+      "id": "publicsite-meadowloop",
+      "stratum": "multi-page-public-site",
+      "product": "Meadowloop",
+      "kind": "Multi-page public site for a fictional sustainability nonprofit.",
+      "goal": "Keep navigation, footer, and heading rhythm consistent across five top-level pages.",
+      "platform": "web",
+      "sourceMaterial": [
+        { "id": "src:site:nav", "kind": "observation", "note": "Source nav repeats across every page with the same item order." },
+        { "id": "src:site:footer", "kind": "observation", "note": "Source footer is identical across pages." },
+        { "id": "src:site:headings", "kind": "observation", "note": "Source pages use a shared H1/H2 rhythm." }
+      ],
+      "references": ["https://example.com/meadowloop/about", "https://example.com/meadowloop/programs", "https://example.com/meadowloop/impact", "https://example.com/meadowloop/blog", "https://example.com/meadowloop/contact"],
+      "constraints": ["Each top-level page must declare its own blueprint sharing the global direction.", "Nav order must not drift between pages."]
+    },
+    {
+      "id": "cookie-candorly",
+      "stratum": "cookie-banner",
+      "product": "Candorly",
+      "kind": "Consent surface for a fictional productivity app.",
+      "goal": "Obtain explicit consent while keeping 'reject all' as easy to reach as 'accept all'.",
+      "platform": "web",
+      "sourceMaterial": [
+        { "id": "src:consent:parity", "kind": "observation", "note": "Source consent surface keeps accept and reject at the same visual weight." },
+        { "id": "src:consent:categories", "kind": "observation", "note": "Source surface separates strictly-necessary from optional categories." }
+      ],
+      "references": ["https://example.com/candorly/consent"],
+      "constraints": ["'Reject all' must be a single action.", "Optional categories must default to off."]
+    },
+    {
+      "id": "derivative-stipplecraft",
+      "stratum": "derivative-named-reference",
+      "product": "Stipplecraft",
+      "kind": "Surface where the stakeholder explicitly asks to copy a named external reference.",
+      "goal": "Honor the named-reference request only where it is safe and lawful to do so, and flag the rest as assumptions.",
+      "platform": "web",
+      "sourceMaterial": [
+        { "id": "src:reference:layout", "kind": "observation", "note": "The named reference is a generic layout pattern (safe to adapt)." },
+        { "id": "src:reference:brand", "kind": "observation", "note": "The named reference's wordmark and palette are proprietary (must not be copied)." }
+      ],
+      "references": ["https://example.com/stipplecraft/home"],
+      "constraints": ["Proprietary identifiers from the reference must not appear in the handoff.", "The adaptation must be recorded under an adapt lane with a rationale."]
+    }
+  ]
+}

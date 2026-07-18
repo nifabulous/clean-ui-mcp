@@ -211,6 +211,12 @@ const ALLOWLIST = new Set<string>([
   "unique",
   // tool-contract-docs.ts — consumed by the drift test
   "extractGeneratedBlock",
+  // readiness/checkpoint-policy.ts — CHECKPOINT_POLICIES is a configuration
+  // constant consumed by the validator at runtime via the import
+  // (CHECKPOINT_POLICIES[cp].requiredRoles / CHECKPOINT_POLICIES[recipe.checkpoint]).
+  // The regex-based scan may not detect the dynamic `CHECKPOINT_POLICIES[cp]`
+  // access pattern, so it is allowlisted here defensively.
+  "CHECKPOINT_POLICIES",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

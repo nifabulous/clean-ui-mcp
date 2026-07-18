@@ -696,6 +696,16 @@ function validateApprovalsAndCheckpoint(
     set.add(code);
   };
 
+  // Each approval pins the exact registry version + digest it was issued
+  // against. Retain the resolved registry for every approval so the actor-
+  // cardinality check can consult each approval's own pinned registry rather
+  // than only the chain head (a newer head that reverts governance mode must
+  // not retroactively change an older approval's separation rules).
+  const resolvedRegistryByApprovalId = new Map<
+    string,
+    z.infer<typeof ApprovalActorRegistry>
+  >();
+
   // Track target SHAs per checkpoint (for divergent-target detection)
   const targetShas = new Map<string, Set<string>>();
 
@@ -723,6 +733,10 @@ function validateApprovalsAndCheckpoint(
       issues,
       noteApprovalIssue,
     );
+
+    if (resolvedRegistry) {
+      resolvedRegistryByApprovalId.set(iid, resolvedRegistry);
+    }
 
     // Actor existence / role / kind checks use the approval's resolved
     // registry. When the registry cannot be resolved we still run the
@@ -897,16 +911,83 @@ function validateApprovalsAndCheckpoint(
       (a) => !approvalIssueCodes.has(a.approvalId),
     );
     const cleanRoles = new Set<string>(cpApprovals.map((a) => a.role));
-    const cleanActors = new Set<string>(cpApprovals.map((a) => a.actorId));
 
     const allRolesPresent = required.every((r) => cleanRoles.has(r));
-    const distinctActors =
-      cleanActors.size === cpApprovals.length && cpApprovals.length > 0;
 
-    if (allRolesPresent && distinctActors) {
+    // Actor separation is enforced per approval against its OWN pinned registry.
+    // Distinct actors always satisfy separation; a single shared actor is valid
+    // only when every contributing approval's pinned registry declares
+    // sole-maintainer-bootstrap with that actor as the human owner.
+    const actorCardinalityValid = approvalsSatisfyActorCardinality(
+      cpApprovals,
+      resolvedRegistryByApprovalId,
+      implementationActorIds,
+    );
+
+    if (allRolesPresent && cpApprovals.length > 0 && !actorCardinalityValid) {
+      const code = "checkpoint-actor-separation-violation";
+      issues.push({
+        code,
+        artifactId: cp,
+        message: `checkpoint ${cp} approvals do not satisfy the actor-separation mode of their pinned registries`,
+      });
+      for (const approval of cpApprovals) {
+        noteApprovalIssue(approval.approvalId, code);
+      }
+    }
+
+    if (allRolesPresent && actorCardinalityValid) {
       checkpointStatus[cp] = "closed";
     }
   }
+}
+
+/**
+ * Decide whether a set of (already issue-free) checkpoint approvals satisfies
+ * the actor-separation rule of each approval's pinned registry.
+ *
+ * - Distinct actors always satisfy separation.
+ * - A single shared actor is valid only when EVERY contributing approval's
+ *   resolved pinned registry declares `sole-maintainer-bootstrap` with that
+ *   shared actor as the human owner, and the owner is authorized for each
+ *   approval's role. Implementation actors can never bootstrap.
+ *
+ * The resolved registry comes from each approval's recorded
+ * `actorRegistryVersion` / `actorRegistrySha256`; do NOT substitute the chain
+ * head, since a newer head may have reverted governance mode.
+ */
+function approvalsSatisfyActorCardinality(
+  approvals: readonly z.infer<typeof CheckpointApproval>[],
+  resolvedRegistryByApprovalId: ReadonlyMap<
+    string,
+    z.infer<typeof ApprovalActorRegistry>
+  >,
+  implementationActorIds: ReadonlySet<string>,
+): boolean {
+  if (approvals.length === 0) return false;
+
+  const actorIds = new Set(approvals.map((approval) => approval.actorId));
+  if (actorIds.size === approvals.length) return true;
+  if (actorIds.size !== 1) return false;
+
+  const [sharedActorId] = actorIds;
+  if (!sharedActorId || implementationActorIds.has(sharedActorId)) return false;
+
+  return approvals.every((approval) => {
+    const registry = resolvedRegistryByApprovalId.get(approval.approvalId);
+    if (!registry) return false;
+    if (registry.governanceMode !== "sole-maintainer-bootstrap") return false;
+    if (registry.bootstrapOwnerActorId !== sharedActorId) return false;
+
+    const owner = registry.actors.find(
+      (actor) => actor.actorId === sharedActorId,
+    );
+    return (
+      owner?.actorKind === "human" &&
+      approval.actorKind === "human" &&
+      owner.roles.includes(approval.role)
+    );
+  });
 }
 
 /**

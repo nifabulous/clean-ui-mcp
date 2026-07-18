@@ -48,7 +48,6 @@ export interface ValidateReadinessOptions {
   mode: "public" | "private";
   corpusPath?: string;
   privateArtifactRoot?: string;
-  previousLedgerPath?: string;
   /**
    * Repository toplevel (git rev-parse --show-toplevel). Used only for
    * artifact-index path containment. The artifact root is a subdirectory of

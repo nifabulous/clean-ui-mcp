@@ -25,7 +25,6 @@ Options:
   --corpus-path <path>          Path to corpus/entries.json (required for --mode private)
   --artifact-root <path>        Path to quality-contracts/agent-readiness/ (default: inferred)
   --private-artifact-root <path> Path to eval/agent-readiness/ (optional)
-  --previous-ledger <path>      Path to a prior checkpoint-approvals ledger (optional)
   --json                        Output machine-readable JSON to stdout`);
   process.exit(2);
 }
@@ -37,7 +36,6 @@ const { values: args } = parseArgs({
     "corpus-path": { type: "string" },
     "artifact-root": { type: "string" },
     "private-artifact-root": { type: "string" },
-    "previous-ledger": { type: "string" },
     json: { type: "boolean", default: false },
   },
   allowPositionals: false,
@@ -112,7 +110,6 @@ const result = validateReadinessArtifacts({
   mode: args.mode as "public" | "private",
   corpusPath: args["corpus-path"] ? resolve(args["corpus-path"]) : undefined,
   privateArtifactRoot: args["private-artifact-root"] ? resolve(args["private-artifact-root"]) : undefined,
-  previousLedgerPath: args["previous-ledger"] ? resolve(args["previous-ledger"]) : undefined,
   repoRoot,
   gitSourceResolver: makeGitSourceResolver(repoRoot),
 });

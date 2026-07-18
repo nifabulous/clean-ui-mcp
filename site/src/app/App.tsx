@@ -1,14 +1,8 @@
 import type { ReactElement } from "react";
 import { Link, Route, Routes } from "react-router-dom";
+import { HomePage } from "../pages/HomePage";
+import { InstallPage } from "../pages/InstallPage";
 import { SiteShell } from "./SiteShell";
-
-function HomePage(): ReactElement {
-  return (
-    <section>
-      <h1>Design judgment grounded in real interfaces</h1>
-    </section>
-  );
-}
 
 function NotFoundPage(): ReactElement {
   return (
@@ -33,6 +27,7 @@ export function AppRoutes(): ReactElement {
     <SiteShell>
       <Routes>
         <Route path="/" element={<HomePage />} />
+        <Route path="/install" element={<InstallPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </SiteShell>

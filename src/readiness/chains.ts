@@ -91,6 +91,21 @@ export function selectChain<T>(family: string, nodes: readonly ChainNode<T>[]): 
           message: `ordinal ${n.key} has no predecessor (only ordinal 1 may be a root)`,
         });
       }
+      // For string-version chains (registry), reject self-declaring non-first
+      // versions without a predecessor. A version like "2.0" or "3.1" with
+      // no predecessor link is a stripped successor — an attacker removed the
+      // v1 file and the predecessor field to bypass chain integrity.
+      if (typeof n.key === "string") {
+        const majorVersion = n.key.match(/^(\d+)\./);
+        if (majorVersion && Number(majorVersion[1]) > 1) {
+          issues.push({
+            code: "chain-missing-predecessor",
+            family,
+            nodeId: n.id,
+            message: `version ${n.key} has no predecessor (major version > 1 implies a prior snapshot exists)`,
+          });
+        }
+      }
       continue;
     }
     const predToken = keyToken(predecessor.key);

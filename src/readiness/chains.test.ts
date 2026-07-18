@@ -65,4 +65,21 @@ describe("selectChain", () => {
     expect(result.issues).toEqual([]);
     expect(result.head?.id).toBe("v1-only");
   });
+
+  it("rejects a registry string version > 1 without a predecessor", () => {
+    // Same bypass class as the numeric case, but for string-version registry
+    // chains: an attacker strips previousRegistry from a v2 registry and
+    // removes the v1 file, presenting a single-node "2.0" chain.
+    const lone = node("registry-v2-stripped", "2.0", sha("b"), null);
+    const result = selectChain("registry", [lone]);
+    expect(result.issues.some((i) => i.code === "chain-missing-predecessor")).toBe(true);
+    expect(result.head).toBeUndefined();
+  });
+
+  it("accepts a single-node registry at version 1.0 (genesis root)", () => {
+    const lone = node("registry-v1-only", "1.0", sha("a"), null);
+    const result = selectChain("registry", [lone]);
+    expect(result.issues).toEqual([]);
+    expect(result.head?.id).toBe("registry-v1-only");
+  });
 });

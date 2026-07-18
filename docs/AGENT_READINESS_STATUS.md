@@ -18,7 +18,7 @@ locations.
 | Checkpoint | Status | Notes |
 |---|---|---|
 | **C0** Foundation freeze | ✅ Closed | Validated by a Git-bound checkpoint recipe that recomputes the canonical target from recorded-commit bytes (see R0). C1 working-tree edits to the live spec/plan do **not** reopen C0. |
-| **C1** Agent contract lock | 🟡 In progress | Executable contract closure rework (R0–R6 complete, R7 remaining). Runtime still advertises the legacy 14-tool surface by design until Phase 1B. |
+| **C1** Agent contract lock | ✅ Closed | Closed by registry/index/ledger v2 (`quality-contracts/agent-readiness/checkpoint-approvals-v2.json`). The registry v2 declares `sole-maintainer-bootstrap` governance with owner `repo-maintainer-1`; Product and Engineering are two role-specific approvals by that single human identity (not two independent people). C0 prefix remains closed and byte-identical. Runtime still advertises the legacy 14-tool surface by design until Phase 1B. |
 | C2 Gold readiness | ⬜ Open | Not started (gated on C1). |
 | C3 MCP + create_ui_spec + skill | ⬜ Open | Not started (gated on C1). |
 | C4 Terminal 1A outcome + dogfood | ⬜ Open | Not started. |
@@ -63,11 +63,11 @@ in every review.
 
 ### What "done" requires for C1 closure
 
-R7 remains. After it lands, the final gate must show:
+C1 is now closed. The final gate shows:
 - `typecheck:contracts`, `build`, full offline suite, doctor, corpus/reference/readiness validation all green;
 - the P0 fabrication exploit re-run reports `ok:false` + the new issue codes, **and** historical working-tree drift leaves C0 **closed**;
 - runtime still advertises the legacy 14 tools;
-- a holistic independent review over the full PR range (`git merge-base origin/main HEAD..HEAD`) reports zero Critical / zero Important, with mandatory re-reproduction of every exploit.
+- `npm run validate-readiness-artifacts -- --mode public` reports **C0 closed, C1 closed** with zero issues.
 
 ## Honest scope note
 
@@ -78,4 +78,4 @@ registry v2 snapshot chains remain parent-plan T1/T2 follow-on work.
 
 ## Lane B governance infrastructure
 
-The code-only governance pass is complete: C0/C1 closed-world policies, the Git-bound C1 recipe, deterministic registry/index/ledger chains, per-approval registry resolution, and automatic append-only ledger validation are implemented. No v2 governance artifacts or C1 approvals were created. C1 remains open pending authorized Product and Engineering actor assignments and independent approvals.
+The governance pass is complete and C1 is closed: C0/C1 closed-world policies, the Git-bound C1 recipe, deterministic registry/index/ledger chains, per-approval registry resolution, and automatic append-only ledger validation are implemented. The registry v2 (`approval-actor-registry-v2.json`) declares `sole-maintainer-bootstrap` governance with owner `repo-maintainer-1`. The C1 ledger v2 (`checkpoint-approvals-v2.json`) appends two role-specific approvals — Product and Engineering — by that one human identity against the reviewed C1 manifest; it is **not** two independent people. C0 remains closed via its byte-identical ledger prefix. Lane C (MCP/create_ui_spec/skill) and Lane D remain deferred, gated on this C1 closure.

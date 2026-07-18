@@ -1,0 +1,156 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "checkpoint-approvals",
+  "artifactId": "approvals-c1-v2",
+  "createdAt": "2026-07-18T16:07:03.716Z",
+  "createdByRole": "repository-maintainer",
+  "sourceGitSha": "bff60918470a5d59707380b5e23e1ae9fcbe7585",
+  "inputHashes": {},
+  "approvals": [
+    {
+      "approvalId": "c0-repo-maintainer",
+      "approvalKind": "checkpoint",
+      "checkpoint": "C0",
+      "decision": "approved",
+      "actorId": "repo-maintainer-1",
+      "role": "Repository Maintainer",
+      "actorKind": "human",
+      "actorRegistryVersion": "1.0",
+      "actorRegistrySha256": "7e849be131f34928e8191bea8ebefe5fb8e690a7e9f64b103e434767acafa45d",
+      "checkpointTargetSha256": "fc74e54da3d6f597c5f04d88aee57ad8dbd4e18e3b985f1e7e58b9dbd7e2b2b3",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-20260714",
+          "sha256": "7e849be131f34928e8191bea8ebefe5fb8e690a7e9f64b103e434767acafa45d"
+        },
+        {
+          "artifactId": "ownership-20260714",
+          "sha256": "4e32063e9ab6e7e8f4621c6f8d92e69e000892c7bac47b16d47417619dc060f1"
+        },
+        {
+          "artifactId": "phase0-20260714",
+          "sha256": "cbaafd09f35ca4aff3842a8a1bc2ab20aafe82130a5af095556684e570cac1dd"
+        },
+        {
+          "artifactId": "taxonomy-20260714",
+          "sha256": "58d612d11acbaa5ab751d34e69e35d3bdf3f758192c9845f14825ee23c407dfb"
+        }
+      ],
+      "planSha256": "aad2a04d8217ead4d2e6d7e84c7fa61add6ef48f1594f84c722b131efb702b99",
+      "specSha256": "b4caeddf9e94792554ea4b695da235c441c8d14809eca163cbf2cbcca942bca0",
+      "contractHashes": {
+        "parent-plan.md": "967c3f180dd025318c4199a9df2dc40b1bb9dd94a78c5907fe105a5fd115f2af",
+        "src/readiness/contracts.ts": "ed22eeed3eea99be979992109db16f3e51cea7b5103d45fdf0d2c2c6244f5f5f"
+      },
+      "decidedAt": "2026-07-14T10:05:00Z",
+      "rationale": "Phase 0 evidence validated against readiness schemas. Strict schemas pass, cross-artifact hashes match, taxonomy recomputes correctly, no private data leaks in tracked artifacts."
+    },
+    {
+      "approvalId": "c0-pm",
+      "approvalKind": "checkpoint",
+      "checkpoint": "C0",
+      "decision": "approved",
+      "actorId": "pm-1",
+      "role": "PM",
+      "actorKind": "human",
+      "actorRegistryVersion": "1.0",
+      "actorRegistrySha256": "7e849be131f34928e8191bea8ebefe5fb8e690a7e9f64b103e434767acafa45d",
+      "checkpointTargetSha256": "fc74e54da3d6f597c5f04d88aee57ad8dbd4e18e3b985f1e7e58b9dbd7e2b2b3",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-20260714",
+          "sha256": "7e849be131f34928e8191bea8ebefe5fb8e690a7e9f64b103e434767acafa45d"
+        },
+        {
+          "artifactId": "ownership-20260714",
+          "sha256": "4e32063e9ab6e7e8f4621c6f8d92e69e000892c7bac47b16d47417619dc060f1"
+        },
+        {
+          "artifactId": "phase0-20260714",
+          "sha256": "cbaafd09f35ca4aff3842a8a1bc2ab20aafe82130a5af095556684e570cac1dd"
+        },
+        {
+          "artifactId": "taxonomy-20260714",
+          "sha256": "58d612d11acbaa5ab751d34e69e35d3bdf3f758192c9845f14825ee23c407dfb"
+        }
+      ],
+      "planSha256": "aad2a04d8217ead4d2e6d7e84c7fa61add6ef48f1594f84c722b131efb702b99",
+      "specSha256": "b4caeddf9e94792554ea4b695da235c441c8d14809eca163cbf2cbcca942bca0",
+      "contractHashes": {
+        "parent-plan.md": "967c3f180dd025318c4199a9df2dc40b1bb9dd94a78c5907fe105a5fd115f2af",
+        "src/readiness/contracts.ts": "ed22eeed3eea99be979992109db16f3e51cea7b5103d45fdf0d2c2c6244f5f5f"
+      },
+      "decidedAt": "2026-07-14T10:06:00Z",
+      "rationale": "Approving C0 checkpoint. Evidence artifacts are schema-valid and hash-linked. Approvals, registry, and index are correct."
+    },
+    {
+      "approvalKind": "checkpoint",
+      "checkpoint": "C1",
+      "decision": "approved",
+      "actorId": "repo-maintainer-1",
+      "actorKind": "human",
+      "actorRegistryVersion": "2.0",
+      "actorRegistrySha256": "8244c15689a30a8dfc4405a028d8b00e799153d6bb0a0c9a97488533b4a4a286",
+      "checkpointTargetSha256": "39c94de4ec22ead40dfa4831db0095f5bfebce337bb81dc57406e2aede3de73b",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-c1-v2",
+          "sha256": "8244c15689a30a8dfc4405a028d8b00e799153d6bb0a0c9a97488533b4a4a286"
+        },
+        {
+          "artifactId": "index-c1-v2",
+          "sha256": "a2d0c874bc8d336ebd6a65bfcbfd3dfdd6a09cfab8494d430380b8ebfbf05898"
+        }
+      ],
+      "planSha256": "155787b5f48b449829e2b472bbcb53fbd52ac998b19fecd9cceb607799c3f6fd",
+      "specSha256": "19333f40a53a9fc03fc1f3c72ce45171ee4bcd2ecaec8d2d84d315854c0b4d39",
+      "contractHashes": {
+        "tool-contracts.ts": "856ec8360c67c1c2a030ce54c48756985f90973d8f1ea57aebae19817dd47f5d",
+        "tool-contract-integrity.ts": "cf3289931f011d9705840483254b10974544aeb17d28d421f6d77e9605bc1483",
+        "tool-contract-docs.ts": "7d42063b52dd19ca37b321a240a79f9f73e9e7efd111f4f5b5887186b5e985f2",
+        "tool-catalog.ts": "1b4d3126ce8fb06ae46c26a7ac2fea02774c215c7d0ca8ac90173e511eef23f2"
+      },
+      "approvalId": "c1-product-repo-maintainer",
+      "role": "Product",
+      "decidedAt": "2026-07-18T16:06:05Z",
+      "rationale": "I approve the C1 product contract represented by this immutable manifest for the sole-maintainer bootstrap phase."
+    },
+    {
+      "approvalKind": "checkpoint",
+      "checkpoint": "C1",
+      "decision": "approved",
+      "actorId": "repo-maintainer-1",
+      "actorKind": "human",
+      "actorRegistryVersion": "2.0",
+      "actorRegistrySha256": "8244c15689a30a8dfc4405a028d8b00e799153d6bb0a0c9a97488533b4a4a286",
+      "checkpointTargetSha256": "39c94de4ec22ead40dfa4831db0095f5bfebce337bb81dc57406e2aede3de73b",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-c1-v2",
+          "sha256": "8244c15689a30a8dfc4405a028d8b00e799153d6bb0a0c9a97488533b4a4a286"
+        },
+        {
+          "artifactId": "index-c1-v2",
+          "sha256": "a2d0c874bc8d336ebd6a65bfcbfd3dfdd6a09cfab8494d430380b8ebfbf05898"
+        }
+      ],
+      "planSha256": "155787b5f48b449829e2b472bbcb53fbd52ac998b19fecd9cceb607799c3f6fd",
+      "specSha256": "19333f40a53a9fc03fc1f3c72ce45171ee4bcd2ecaec8d2d84d315854c0b4d39",
+      "contractHashes": {
+        "tool-contracts.ts": "856ec8360c67c1c2a030ce54c48756985f90973d8f1ea57aebae19817dd47f5d",
+        "tool-contract-integrity.ts": "cf3289931f011d9705840483254b10974544aeb17d28d421f6d77e9605bc1483",
+        "tool-contract-docs.ts": "7d42063b52dd19ca37b321a240a79f9f73e9e7efd111f4f5b5887186b5e985f2",
+        "tool-catalog.ts": "1b4d3126ce8fb06ae46c26a7ac2fea02774c215c7d0ca8ac90173e511eef23f2"
+      },
+      "approvalId": "c1-engineering-repo-maintainer",
+      "role": "Engineering",
+      "decidedAt": "2026-07-18T16:06:06Z",
+      "rationale": "I approve the C1 engineering contract and governance evidence represented by this immutable manifest for the sole-maintainer bootstrap phase."
+    }
+  ],
+  "ordinalVersion": 2,
+  "predecessor": {
+    "version": "1",
+    "sha256": "bb9c417ae8b42d87673ad56b62784e6f46736ba15585be479fa106783b961145"
+  }
+}

@@ -147,6 +147,7 @@ export function scoreDesignHandoff(output, label) {
   //       (mutation 8)
   let unsupported = 0;
   for (const decision of sourceDecisions) {
+    if (!decision || typeof decision !== "object") continue;
     const laneOk = typeof decision.lane === "string" && VALID_LANES.has(decision.lane);
     const rationaleOk =
       typeof decision.rationale === "string" && decision.rationale.trim().length > 0;
@@ -157,12 +158,14 @@ export function scoreDesignHandoff(output, label) {
     ? output.sourceObservations
     : [];
   for (const obs of sourceObservations) {
+    if (!obs || typeof obs !== "object") continue;
     const laneOk = typeof obs.lane === "string" && VALID_LANES.has(obs.lane);
     if (!laneOk) unsupported++;
   }
   const inaccessibleUrls = new Set(Array.isArray(label.inaccessibleUrls) ? label.inaccessibleUrls : []);
   const blueprints = Array.isArray(output.screenBlueprints) ? output.screenBlueprints : [];
   for (const bp of blueprints) {
+    if (!bp || typeof bp !== "object") continue;
     const urls = Array.isArray(bp.inspectedUrls) ? bp.inspectedUrls : [];
     for (const url of urls) {
       if (typeof url === "string" && inaccessibleUrls.has(url)) unsupported++;
@@ -191,6 +194,7 @@ export function scoreDesignHandoff(output, label) {
   // so mutation 6 flips complete even when the decision itself is "supported".)
   let unresolved = 0;
   for (const decision of sourceDecisions) {
+    if (!decision || typeof decision !== "object") continue;
     const evidence = Array.isArray(decision.evidence) ? decision.evidence : [];
     for (const id of evidence) {
       if (!validEvidenceSet.has(id)) unresolved++;
@@ -259,9 +263,18 @@ function sectionPresent(output, section, label) {
       const requiredMobileRules = Array.isArray(label.requiredMobileRules)
         ? label.requiredMobileRules
         : [];
-      // Every declared blueprint must satisfy its required states, and every
-      // required mobile rule must appear on at least one blueprint.
+      // Every required blueprint id must be declared, and each declared blueprint
+      // must satisfy its required states. Every required mobile rule must appear
+      // on at least one blueprint. If a label requires states for a blueprint id
+      // that the output never declares, the section is incomplete (I1).
+      const declaredBlueprintIds = new Set(
+        blueprints.map((bp) => bp && bp.id).filter((id) => id !== undefined && id !== null),
+      );
+      for (const requiredId of Object.keys(requiredStates)) {
+        if (!declaredBlueprintIds.has(requiredId)) return false; // required screen entirely missing
+      }
       for (const bp of blueprints) {
+        if (!bp || typeof bp !== "object") continue;
         const states = Array.isArray(bp.requiredStates) ? bp.requiredStates : [];
         const needed = requiredStates[bp.id] || [];
         const hasAllStates = needed.every((s) => states.includes(s));

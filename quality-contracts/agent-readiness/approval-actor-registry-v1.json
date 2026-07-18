@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "approval-actor-registry",
+  "artifactId": "actors-20260714",
+  "createdAt": "2026-07-14T10:00:00Z",
+  "createdByRole": "repository-maintainer",
+  "sourceGitSha": "853151cc2b2edbc444f33100bde91dd97911638c",
+  "inputHashes": {},
+  "registryVersion": "1.0",
+  "previousRegistry": null,
+  "actors": [
+    {
+      "actorId": "impl-agent-1",
+      "actorKind": "agent",
+      "roles": ["Engineering"]
+    },
+    {
+      "actorId": "repo-maintainer-1",
+      "actorKind": "human",
+      "roles": ["Repository Maintainer"]
+    },
+    {
+      "actorId": "pm-1",
+      "actorKind": "human",
+      "roles": ["PM"]
+    }
+  ]
+}

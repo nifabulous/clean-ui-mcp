@@ -295,55 +295,133 @@ Targeted aggregation tools support research but do not replace `plan_ui_directio
 
 ### 5.3 Standard response envelope
 
-The redesign makes every tool return complete human-readable `content[0]` plus matching `structuredContent`. This is a cross-catalog refactor: today only `critique_ui` has structured content.
+Every tool returns complete human-readable `content[0]` plus matching `structuredContent`. The structured envelope is the source of truth; `content[0].text` is rendered exclusively from it. No fact may exist only in handwritten text.
+
+**Two validation levels (derived from the same descriptor):**
+
+- **`outputSchema` (MCP-advertised JSON Schema):** structural contract — fields, types, enums, required properties. MCP converts the Zod schema to JSON Schema; `.superRefine()` semantics are not expressible in JSON Schema.
+- **Canonical Zod parsing (`safeParse`):** semantic contract — counts, cross-references, conditional integrity, code↔retryable binding, exact reference-set equality, evidence membership. These are enforced at runtime but not fully representable in JSON Schema.
+
+Both levels derive from `TOOL_DESCRIPTORS`. No handwritten second authority exists.
 
 ```ts
 interface CleanUiToolResult<T> {
   schemaVersion: "1.0";
+  tool: string;               // discriminator matching the catalog name
+  status: "ok" | "error";     // success vs application error
   summary: string;
-  data: T;
-  referenceIds: string[];
-  evidence?: Array<{
-    id: string;
-    referenceId?: string;
-    kind:
-      | "corpus-observation"
-      | "screen-observation"
-      | "dom-signal"
-      | "machine-rule"
-      | "editorial-guidance";
-    summary: string;
-    basis: "visible" | "inferred" | "dom-grounded" | "editorial";
-  }>;
-  retrieval: {
-    mode: "vector" | "keyword" | "structured-fallback" | "none";
-    resultCount: number;
-    fallbackUsed: boolean;
-  };
-  warnings: string[];
+  data: T | null;             // typed per-tool; null only on error
+  referenceIds: string[];     // stable corpus entry IDs in the result
+  evidence?: Evidence[];      // required for plan/spec/critique; forbidden otherwise
+  retrieval: RetrievalState;  // truthful operation metadata
+  warnings: Warning[];        // typed warnings: { code, message } with per-tool code enums
+  error?: ToolError;          // discriminated union; present only on error
+}
+
+interface Warning {
+  code: string;               // per-tool enum (sparseCoverage, insufficientCorpusEvidence, etc.)
+  message: string;
+}
+
+interface ToolError {
+  code: "NOT_FOUND" | "INDEX_UNAVAILABLE" | "PROVIDER_ERROR" | "INVALID_INPUT";
+  message: string;
+  retryable: boolean;         // bound to code: NOT_FOUND/INVALID_INPUT → false, others → true
+}
+
+interface RetrievalState {
+  mode: "hybrid" | "vector" | "keyword" | "structured-fallback" | "none";
+  modality: "text" | "image" | "metadata" | "none";
+  resultCount: number;        // must equal actual result count in data
+  fallbackUsed: boolean;      // true only when an alternate path produced results
+  attemptedCount: number;     // must equal attemptedModes.length; 0 when no fallback
+  fallbackReason?: "missing-index" | "incompatible-index" | "missing-provider-key" | "community-edition" | "provider-error" | "no-image-evidence";
+  attemptedModes: RetrievalMode[]; // empty on ok+non-fallback; non-empty on ok+fallback or error+terminal-failure; no "none", no current mode, no duplicates always
+}
+
+interface Evidence {
+  id: string;                 // response-scoped, unique within the result
+  referenceId?: string;       // required for corpus-observation; must appear in referenceIds
+  kind: "corpus-observation" | "screen-observation" | "dom-signal" | "machine-rule" | "editorial-guidance";
+  summary: string;
+  basis: "visible" | "inferred" | "dom-grounded" | "editorial";
 }
 ```
 
-`referenceIds` are stable corpus entry IDs. `evidence` is present only for synthesis and critique responses that register claim-level evidence during that response. Evidence IDs are response-scoped. Tools do not emit a global confidence label.
+**Envelope invariants:**
+
+- `status: "ok"` requires non-null typed `data`, no `error`.
+- `status: "error"` requires `data: null`, a typed `error`, `resultCount: 0`, and MCP `isError: true`.
+- `resultCount` must equal the actual number of items in `data` for list-returning tools.
+- `referenceIds` must be unique and must exactly match the IDs represented in `data`/`evidence`.
+- `evidence` IDs must be unique. Only `plan_ui_direction`, `create_ui_spec`, and `critique_ui` include evidence; all other tools reject it.
+- `fallbackUsed` ↔ `fallbackReason` consistency: fallback requires a reason; a reason requires fallback.
+- `fallbackUsed` requires `attemptedModes` (non-empty, no `"none"`, no duplicates).
+
+**Evidence lane discrimination:**
+
+| Kind | Allowed basis | referenceId | Allowed tools |
+|---|---|---|---|
+| `corpus-observation` | visible, inferred | required (must be in `referenceIds`) | plan, spec, critique |
+| `screen-observation` | visible, inferred | optional | critique only |
+| `dom-signal` | dom-grounded, visible | optional | critique only |
+| `machine-rule` | inferred, editorial | optional | plan, spec, critique |
+| `editorial-guidance` | editorial | optional | plan, spec, critique |
+
+`create_ui_spec` and `plan_ui_direction` may not emit `screen-observation` or `dom-signal` evidence — they synthesize from corpus references, not screenshots.
+
+**Retrieval truth (authoritative — follows the implementation plan §Task 7 Step 2):**
+
+Retrieval metadata originates at the CorpusReader boundary as a `RetrievalOutcome<T>`. Handlers copy it unchanged into the envelope. Missing index, missing key, missing image, provider failure, zero results, and fallback success are all distinguishable states.
+
+| Tool | Mode/basis |
+|---|---|
+| taxonomy, get, compare, browse, research aggregations, create spec | `none`; direct/aggregation details live in data |
+| search | `hybrid` when combined path runs; otherwise `vector`, `keyword`, or `structured-fallback` |
+| similar | `vector` + text; otherwise structured-fallback—never "visually similar" or image |
+| plan | `hybrid` preferred; keyword/structured fallback; absence of index is not an error |
+| critique | `vector` + `image` modality when available; otherwise `structured-fallback` with caller-screen evidence kept separate |
+
+`resultCount` is defined per primary payload: taxonomy `0`; get `0|1`; search/similar the number of references; compare the number of requested IDs found; browse the number of pattern groups; each research aggregation the number of aggregate rows; plan/spec/critique `1` only when a complete primary artifact exists, otherwise `0`. `referenceIds` are unique stable IDs represented in data/evidence and must exactly match the IDs in the result data.
 
 Workflow routing and next-tool suggestions belong to the skill layer, not MCP responses.
 
 ### 5.4 `create_ui_spec`
 
-`create_ui_spec` becomes the primary implementation handoff. It returns:
+`create_ui_spec` becomes the primary implementation handoff. The versioned `UiSpec` artifact encodes:
 
-- design direction and rejected defaults;
-- layout regions and responsive behavior;
-- component inventory;
-- color and typography tokens;
-- interaction and motion guidance;
-- accessibility constraints;
-- content and voice guidance;
-- evidence-backed techniques and anti-patterns;
-- framework-specific implementation notes;
-- testable acceptance criteria;
-- cited corpus references;
-- separate corpus-evidence, machine-rule, and editorial-guidance lanes.
+**Input (`CreateUiSpecInput`):**
+
+| Field | Type | Required | Bounds |
+|---|---|---|---|
+| `productContext` | string | required | min 8 chars |
+| `referenceIds` | string[] | optional | 0–5 unique non-empty IDs (0 = sparse/editorial-only) |
+| `platform` | enum web/mobile/tablet | optional | — |
+| `implementationFramework` | string | optional | e.g. "react", "swiftui" |
+| `serializationFormat` | enum brief/tokens | optional | default "brief" |
+| `designSystem` | `{ status: "none"\|"identified", registry?, library? }` | optional | Design-system identity; "identified" requires registry or library |
+| `constraints` | string[] | optional | explicit project constraints |
+
+**Output sections (each is a typed schema, not `z.unknown()`):**
+
+- `specVersion: "1.0"` and `context` (productContext, platform, framework, designSystem)
+- `designDirection` and `rejectedDefaults`
+- `layoutRegions` (typed) and `responsiveBehavior`
+- `componentInventory` (typed)
+- `colorTokens` (primary/surface/ink/muted/accent) with `colorTokenAuthority`
+- `typographyTokens` (heading/body/mono) with `typographyTokenAuthority`
+- `interactions` and `motionGuidance` (with `evidenceUnavailable` flag)
+- `accessibilityConstraints`
+- `contentVoiceGuidance`
+- `techniques` and `antiPatterns` (typed, evidence-backed)
+- `frameworkNotes`
+- `unavailableDecisions` (field + reason) — sparse evidence must produce unavailable/proposed decisions with typed warnings, never fabricated values
+- `acceptanceCriteria` — structured `{id, subject, assertion, expectedOutcome, verifier: axe|playwright|static-analysis|manual, priority, evidenceIds, manualSteps?, selector?, command?}`
+- `citedReferences` and `citedDecisions` (with authority lane, evidence IDs, readiness, provenance)
+- `authorityLanes` (corpusEvidence, machineRules, editorialGuidance)
+- `provenance` (generatedAt, toolVersion)
+
+Token authority precedence: `team-design-system` > `project-constraint` > `corpus-evidence` > `editorial`. Mixed authority is derived from actual child decisions.
 
 Motion guidance obeys the available evidence boundary:
 
@@ -351,6 +429,204 @@ Motion guidance obeys the available evidence boundary:
 - metadata-only corpus references do not prove that motion occurred and must not be described as observed motion;
 - when no DOM or persistent corpus motion evidence exists, `create_ui_spec` may provide clearly labeled `editorial` guidance from the design-engineering reference lane and must emit a `motionEvidenceUnavailable` warning;
 - adding persistent corpus motion metadata is a separate, evidence-driven schema decision, not a prerequisite for the npm edition.
+
+### 5.5 Per-tool contract reference
+
+These tables are the authoritative source for executable Zod schemas. The block below is generated from `TOOL_DESCRIPTORS` by `renderToolContractReference()`; the drift test in `src/tool-contract-docs.test.ts` locks it byte-for-byte. Do not edit by hand.
+
+<!-- GENERATED_TOOL_CONTRACTS_START -->
+#### `search_ui_references`
+
+| Aspect | Contract |
+|---|---|
+| Input | query?, category?, styleTag?, patternType?, minQuality? (1-5), qualityTier?, reviewStatus?, platform?, limit (1-20), default 5, responseFormat? |
+| Success data | results — `results: ReferenceSummary[]` — each with id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url required-but-nullable, imageAvailable), critique excerpt, topTechniques, antiPatterns |
+| Empty | `results: []`, retrieval none, resultCount 0, summary guidance |
+| Partial | sparseCoverage / keywordFallback typed warnings on degraded retrieval |
+| Errors | NOT_FOUND (non-retryable), PROVIDER_ERROR (retryable) |
+| Warnings | sparseCoverage, keywordFallback |
+| Retrieval | hybrid/text; vector/text; keyword/text (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); keyword/metadata (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, community-edition, provider-error); none/none |
+| Evidence | forbidden (none) |
+| resultCount | `results.length` |
+| referenceIds | unique `result.id` values |
+| Legacy names | search_ui_examples |
+
+#### `get_ui_reference`
+
+| Aspect | Contract |
+|---|---|
+| Input | id |
+| Success data | id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, accentColor, dominantColors, colorRoles, typePairing, spacingDensity, cornerStyle, usesShadows, usesBorders, critique, techniques, antiPatterns, whereThisFails, accessibility, businessRationale, voice, source, imageAvailable — full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability |
+| Empty | n/a — single-id lookup |
+| Partial | n/a — single-id lookup |
+| Errors | NOT_FOUND (non-retryable) |
+| Warnings | none |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
+| resultCount | 1 on success, 0 on error |
+| referenceIds | `[id]` on success, `[]` on error |
+| Legacy names | get_ui_example |
+
+#### `find_similar_ui_references`
+
+| Aspect | Contract |
+|---|---|
+| Input | id, limit (1-20), default 5 |
+| Success data | results — `results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques |
+| Empty | `results: []` when no index or source not found |
+| Partial | keywordFallback / sparseCoverage typed warnings on degraded retrieval |
+| Errors | NOT_FOUND (non-retryable), PROVIDER_ERROR (retryable) |
+| Warnings | keywordFallback, sparseCoverage |
+| Retrieval | vector/text; structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, community-edition, provider-error); none/none |
+| Evidence | forbidden (none) |
+| resultCount | `results.length` |
+| referenceIds | unique `result.id` values |
+| Legacy names | get_similar_ui_examples |
+
+#### `compare_ui_references`
+
+| Aspect | Contract |
+|---|---|
+| Input | ids, responseFormat? |
+| Success data | entries, foundIds, missingIds — `entries: ComparisonRow[]`, `foundIds`, `missingIds` — each row with id, title, product, patternType, categories, styleTags, platform, layout, accent, density, corners, quality, critiqueAngle, topTechnique, antiPatterns, whereItFails, accessibility |
+| Empty | n/a — all IDs missing is an error (NOT_FOUND), not an empty success |
+| Partial | `missingIds` non-empty + typed partialResult warning when some IDs not found |
+| Errors | NOT_FOUND (non-retryable) |
+| Warnings | partialResult |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
+| resultCount | `foundIds.length` |
+| referenceIds | `foundIds` |
+| Legacy names | compare_ui_examples |
+
+#### `get_ui_taxonomy`
+
+| Aspect | Contract |
+|---|---|
+| Input | (none) |
+| Success data | patternTypes, categories, styleTags, components, domainTags — `patternTypes`, `categories`, `styleTags` (each `{count, values}`), optional `components`, `domainTags` |
+| Empty | n/a — always returns the taxonomy |
+| Partial | n/a |
+| Errors | none |
+| Warnings | none |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
+| resultCount | 0 (not a search tool) |
+| referenceIds | `[]` |
+| Legacy names | list_categories, list_style_tags, list_domain_tags |
+
+#### `browse_ui_patterns`
+
+| Aspect | Contract |
+|---|---|
+| Input | styleTag? |
+| Success data | patterns — `patterns: PatternGroup[]` — each with patternType, count, topProducts (array), exemplar (id, title, product, qualityScore, critique) |
+| Empty | `patterns: []` |
+| Partial | sparseCoverage typed warning on thin coverage |
+| Errors | none |
+| Warnings | sparseCoverage |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
+| resultCount | number of rows returned (`patterns.length`) |
+| referenceIds | exemplar IDs |
+| Legacy names | browse_ui_examples |
+
+#### `plan_ui_direction`
+
+| Aspect | Contract |
+|---|---|
+| Input | productContext, category?, styleTag?, platform?, qualityTier, default "exceptional", framework?, count (1-5), default 3 |
+| Success data | direction, rejectedDefaults, recommendation, rationale, evidenceContributions, structuredDecisions — `direction`, `rejectedDefaults`, `recommendation`, `rationale`, `evidenceContributions`, `structuredDecisions` |
+| Empty | n/a — absence of index degrades through fallback, not an empty success |
+| Partial | sparseCoverage / insufficientCorpusEvidence / noCorpusIndex typed warnings on sparse results |
+| Errors | PROVIDER_ERROR (retryable) |
+| Warnings | sparseCoverage, insufficientCorpusEvidence, noCorpusIndex |
+| Retrieval | hybrid/text; keyword/text (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); keyword/metadata (reasons: missing-index, incompatible-index, missing-provider-key, provider-error); structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, community-edition, provider-error); none/none |
+| Evidence | required (plan/spec/critique) (corpus-observation, machine-rule, editorial-guidance) |
+| resultCount | 1 when a complete plan artifact exists, otherwise 0 |
+| referenceIds | grounding entry IDs (`evidenceContributions`) |
+| Legacy names | recommend_ui_direction |
+
+#### `create_ui_spec`
+
+| Aspect | Contract |
+|---|---|
+| Input | productContext, referenceIds, default [], platform?, implementationFramework?, serializationFormat, default "brief", designSystem?, constraints, default [] |
+| Success data | specVersion, context, designDirection, rejectedDefaults, layoutRegions, responsiveBehavior, componentInventory, colorTokens, colorTokenAuthority, typographyTokens, typographyTokenAuthority, interactions, motionGuidance, accessibilityConstraints, contentVoiceGuidance, techniques, antiPatterns, frameworkNotes, unavailableDecisions, acceptanceCriteria, citedReferences, citedDecisions, authorityLanes, provenance — see §5.4 — UiSpec with layoutRegions, colorTokens, typographyTokens, acceptanceCriteria (verifiers: axe, playwright, static-analysis, manual), citedReferences, citedDecisions, authorityLanes, provenance |
+| Empty | n/a — synthesis produces one spec artifact or errors |
+| Partial | sparseCoverage / insufficientCorpusEvidence / motionEvidenceUnavailable typed warnings; null tokens require editorial authority + unavailableDecision |
+| Errors | INVALID_INPUT (non-retryable) |
+| Warnings | sparseCoverage, insufficientCorpusEvidence, motionEvidenceUnavailable, authorityConflict |
+| Retrieval | none/none |
+| Evidence | required (plan/spec/critique) (corpus-observation, machine-rule, editorial-guidance) |
+| resultCount | 1 when a complete spec artifact exists, otherwise 0 |
+| referenceIds | `citedReferences` |
+| Legacy names | generate_design_prompt |
+
+#### `research_ui_anti_patterns`
+
+| Aspect | Contract |
+|---|---|
+| Input | patternType?, category?, limit (1-20), default 10 |
+| Success data | results — `results: AntiPatternRow[]` — each with text, sourceIds, count |
+| Empty | `results: []` |
+| Partial | sparseCoverage typed warning on thin coverage |
+| Errors | none |
+| Warnings | sparseCoverage |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
+| resultCount | number of rows returned (`results.length`) |
+| referenceIds | unique sourceIds across all rows |
+| Legacy names | get_anti_patterns |
+
+#### `research_ui_palettes`
+
+| Aspect | Contract |
+|---|---|
+| Input | patternType?, styleTag?, limit (1-20), default 10 |
+| Success data | results — `results: PaletteRecord[]` — each with tokens (canvas, surface, ink, muted, accent), accentHue, product, sourceId, patternType |
+| Empty | `results: []` |
+| Partial | sparseCoverage typed warning on thin coverage |
+| Errors | none |
+| Warnings | sparseCoverage |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
+| resultCount | number of rows returned (`results.length`) |
+| referenceIds | unique sourceId values |
+| Legacy names | get_color_palette |
+
+#### `research_ui_techniques`
+
+| Aspect | Contract |
+|---|---|
+| Input | patternType?, styleTag?, limit (1-30), default 15 |
+| Success data | results — `results: TechniqueRow[]` — each with text, source (id, product) |
+| Empty | `results: []` |
+| Partial | sparseCoverage typed warning on thin coverage |
+| Errors | none |
+| Warnings | sparseCoverage |
+| Retrieval | none/none |
+| Evidence | forbidden (none) |
+| resultCount | number of rows returned (`results.length`) |
+| referenceIds | unique source IDs |
+| Legacy names | get_stealable_techniques |
+
+#### `critique_ui`
+
+| Aspect | Contract |
+|---|---|
+| Input | image_data, image_mime_type, product_context?, platform?, framework? |
+| Success data | platform, retrievalMode, fallbackUsed, coverage, summary, observations, recommendations, accessibilityRisks, visualSlop, motion, appliedReferences, evidenceIds, confidence, md3 — reuses `StructuredCritique` fields: observations, recommendations, accessibilityRisks, visualSlop, motion, appliedReferences, evidenceIds, confidence, md3? |
+| Empty | n/a — synthesis produces one critique artifact or errors |
+| Partial | insufficientCorpusEvidence / providerDegraded typed warnings; may include screen-observation and dom-signal evidence |
+| Errors | PROVIDER_ERROR (retryable), INVALID_INPUT (non-retryable) |
+| Warnings | insufficientCorpusEvidence, providerDegraded |
+| Retrieval | vector/image; structured-fallback/metadata (reasons: missing-index, incompatible-index, missing-provider-key, community-edition, provider-error, no-image-evidence); none/none |
+| Evidence | required (plan/spec/critique) (corpus-observation, screen-observation, dom-signal, machine-rule, editorial-guidance) |
+| resultCount | 1 when a complete critique artifact exists, otherwise 0 |
+| referenceIds | appliedReference IDs |
+| Legacy names | (none — critique_ui unchanged) |
+<!-- GENERATED_TOOL_CONTRACTS_END -->
 
 ## 6. Companion Skill
 

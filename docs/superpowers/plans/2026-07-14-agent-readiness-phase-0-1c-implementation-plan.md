@@ -34,7 +34,7 @@ C1 Agent contract lock
   ├───────────────┐
 C2 Gold readiness │  C3 MCP + create_ui_spec + skill
   ↓               │   ↓
-C4 terminal 1A outcome + signed 1B dogfood
+C4 terminal 1A outcome + approved/hash-bound 1B dogfood
   ↓
 C5 corpus disposition (Replacement | Fill-only | Deferred)
 ```
@@ -90,7 +90,7 @@ eval/agent-readiness/runs/<run-id>/
 
 Tracked manifests reference private artifacts by SHA-256, schema version, and opaque artifact ID—never by private path, screenshot, URL, prompt, or entry ID. Clean-clone CI validates tracked contracts and synthetic fixtures. The authorized private gate additionally verifies referenced private artifacts.
 
-The artifact index indexes evidence artifacts but does not hash the mutable approval ledger, and approval records do not approve the index or ledger itself. They bind the immutable evidence artifact set directly, avoiding any signing/hash cycle.
+The artifact index indexes evidence artifacts but does not hash the mutable approval ledger, and approval records do not approve the index or ledger itself. They bind the immutable evidence artifact set directly, avoiding any approval/hash cycle.
 
 ## File map
 
@@ -115,10 +115,9 @@ The artifact index indexes evidence artifacts but does not hash the mutable appr
 - Create: `quality-contracts/agent-readiness/phase0-summary-v1.json`
 - Create: `quality-contracts/agent-readiness/diagnostic-summary-v1.json`
 - Create: `quality-contracts/agent-readiness/approval-actor-registry-v1.json`
-- Create private: `eval/agent-readiness/runs/<run-id>/ownership-map.json`
+- Create: `quality-contracts/agent-readiness/ownership-map-v1.json`
 - Create: `scripts/run-no-egress.mjs`
 - Create: `scripts/run-no-egress.test.mjs`
-- Create: `infra/no-egress/Dockerfile`
 - Modify: none of the currently dirty or untracked user files
 
 **Produces:** Checkpoint C0 with a frozen SHA and separate clean-clone/private-workspace evidence.
@@ -127,9 +126,9 @@ The artifact index indexes evidence artifacts but does not hash the mutable appr
 
 The Repository Maintainer records each dirty path in the private ownership map as `{ path, classification, ownerOrDecision }`, where classification is `owned-by-current-increment`, `owned-by-other-work`, or `needs-user-decision`. The tracked Phase-0 summary contains only its SHA-256. Explicitly record whether every `feat/critique-quality-wiring` change is merged into the frozen base or deliberately deferred. Do not delete, stash, relocate, stage, or commit `CLAUDE.md`, `src/GBP movement.xlsx`, `scripts/run-exporter.mts`, the design spec, or any other existing change as part of this task.
 
-Before C0, use a separate clean temporary worktree from `origin/main` to apply only the reviewed plan, authoritative spec, and the TDD-built no-egress harness, verify their hashes, and land them through a foundation-only commit/PR. The harness uses a digest-pinned container image and a `--network none` execution path; it fails closed when its container runtime is unavailable. Fetch the resulting commit and assert the plan/spec/harness hashes at `FROZEN_SHA` exactly match the reviewed hashes. Never bootstrap these files by staging from the dirty implementation workspace.
+Before C0, use a separate clean temporary worktree from `origin/main` to apply only the reviewed plan, authoritative spec, and the TDD-built credential-scrubbed harness, verify their hashes, and land them through a foundation-only commit/PR. The harness (`scripts/run-no-egress.mjs`) removes provider credentials and sets `RUN_LIVE_INTEGRATION=0`, but does not block unauthenticated network traffic; true network isolation remains a Gate 2/npm-release prerequisite, not a C0 claim. Fetch the resulting commit and assert the plan/spec/harness hashes at `FROZEN_SHA` exactly match the reviewed hashes. Never bootstrap these files by staging from the dirty implementation workspace.
 
-The Repository Admin also bootstraps `approval-actor-registry-v1.json`: opaque actor IDs, allowed roles, and Ed25519 public keys, signed by an admin root key whose fingerprint is supplied out of band (a protected CI environment for CI, explicit operator input locally), never read from the registry itself. Record the registry hash/version in the frozen foundation. Rotation requires an append-only record containing previous/new registry hashes and an admin-root signature; history is never overwritten.
+The Repository Maintainer creates `approval-actor-registry-v1.json` mapping opaque actor IDs to allowed roles (with an `actorKind` of `"human"` or `"agent"`). No cryptographic keys are stored. The registry is an immutable versioned snapshot: a role addition or removal creates the next ordinal snapshot (e.g., `approval-actor-registry-v2.json`); the previous file is never overwritten. Each new snapshot records its `previousRegistry` (version + SHA-256 of the prior file). Approvals resolve the exact registry version and file SHA-256 they recorded. Identity mapping remains private; only opaque IDs, roles, and actor kinds are tracked. Record the registry hash/version in the frozen foundation.
 
 - [ ] **Step 2: establish the real base**
 
@@ -148,7 +147,7 @@ test "$(shasum -a 256 docs/superpowers/specs/2026-07-13-agent-readiness-and-reta
 
 Do not describe historical diagnostic SHA `fdd74d1` as `main`; retain it only as provenance for the already-recorded 15-image diagnostic.
 
-- [ ] **Step 3: verify a network-scrubbed clean clone**
+- [ ] **Step 3: verify a credential-scrubbed clean clone**
 
 ```bash
 (
@@ -157,35 +156,35 @@ Do not describe historical diagnostic SHA `fdd74d1` as `main`; retain it only as
   unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY MISTRAL_API_KEY
   unset MINIMAX_API_KEY XAI_API_KEY VOYAGE_API_KEY IMAGE_EMBEDDING_API_KEY
   export RUN_LIVE_INTEGRATION=0
-  : "${NO_EGRESS_RUNNER:?absolute fail-closed no-egress runner required}"
+  : "${CREDENTIAL_SCRUBBED_RUNNER:?absolute fail-closed credential-scrubbed runner required}"
   : "${SMOKE_MATRIX:?checkpoint-specific tool smoke matrix required}"
-  export NO_EGRESS_RUNNER SMOKE_MATRIX
+  export CREDENTIAL_SCRUBBED_RUNNER SMOKE_MATRIX
   git clone --no-local "$REPO_ROOT" "$ROOT/repo"
   git -C "$ROOT/repo" checkout --detach "$FROZEN_SHA"
   cd "$ROOT/repo"
   test ! -e corpus/entries.json
   npm ci
-  "$NO_EGRESS_RUNNER" --self-test # loopback must succeed; controlled external HTTP/DNS must fail
-  # The helper must use a network namespace or container with no egress;
-  # loopback remains available for fake provider servers. It fails closed
-  # when the platform has no supported enforcement mechanism.
-  "$NO_EGRESS_RUNNER" npm run build
-  "$NO_EGRESS_RUNNER" npm test
-  "$NO_EGRESS_RUNNER" npm run validate-references
-  "$NO_EGRESS_RUNNER" npm run validate-corpus
-  "$NO_EGRESS_RUNNER" npm run doctor
-  "$NO_EGRESS_RUNNER" npm pack --dry-run --json
+  "$CREDENTIAL_SCRUBBED_RUNNER" --self-test # removes provider credentials and disables live integration
+  # The helper removes API keys and sets RUN_LIVE_INTEGRATION=0. It does not
+  # block unauthenticated network traffic; true no-egress requires a network
+  # namespace or container at Gate 2/npm release.
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm run build
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm test
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm run validate-references
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm run validate-corpus
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm run doctor
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm pack --dry-run --json
   PACK_DIR="$(mktemp -d)"
   INSTALL_DIR="$(mktemp -d)"
-  PACK_JSON="$("$NO_EGRESS_RUNNER" npm pack --pack-destination "$PACK_DIR" --json)"
+  PACK_JSON="$("$CREDENTIAL_SCRUBBED_RUNNER" npm pack --pack-destination "$PACK_DIR" --json)"
   TARBALL="$(node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync(0,"utf8")); process.stdout.write(x[0].filename)' <<<"$PACK_JSON")"
   cp "$PACK_DIR/$TARBALL" "$INSTALL_DIR/package.tgz"
   cp "$SMOKE_MATRIX" "$INSTALL_DIR/smoke-matrix.json"
   cd "$INSTALL_DIR"
   export SMOKE_MATRIX="$INSTALL_DIR/smoke-matrix.json"
-  "$NO_EGRESS_RUNNER" npm init -y >/dev/null
-  "$NO_EGRESS_RUNNER" npm install --offline --no-audit --no-fund ./package.tgz
-  "$NO_EGRESS_RUNNER" node --input-type=module <<'NODE'
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm init -y >/dev/null
+  "$CREDENTIAL_SCRUBBED_RUNNER" npm install --offline --no-audit --no-fund ./package.tgz
+  "$CREDENTIAL_SCRUBBED_RUNNER" node --input-type=module <<'NODE'
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -210,7 +209,7 @@ NODE
 )
 ```
 
-Record each command, exit code, per-tool outcome, named skips, Node/npm versions, absence of `.env`/private corpus, the pinned runner/container hashes, and the successful no-egress preflight. The frozen C0 matrix names the exact legacy catalog; the final branch-HEAD matrix names the exact 12-tool catalog, requires non-null output schemas, rejects removed names, and invokes every offline-safe tool class. Do not reduce this to a skip count.
+Record each command, exit code, per-tool outcome, named skips, Node/npm versions, absence of `.env`/private corpus, the runner SHA-256, and the successful credential-scrubbed preflight. The frozen C0 matrix names the exact legacy catalog; the final branch-HEAD matrix names the exact 12-tool catalog, requires non-null output schemas, rejects removed names, and invokes every offline-safe tool class. Do not reduce this to a skip count.
 
 - [ ] **Step 4: verify the authorized private workspace offline**
 
@@ -264,24 +263,21 @@ Do not stage unvalidated summaries. Task 1 supplies their schemas and validator,
 Tests cover required header fields, SHA-256 format, immutable artifact IDs, predecessor hashes, environment/network mode, private-path/URL/prompt rejection in tracked files, and public versus private validation modes.
 
 ```ts
-export const ArtifactHeader = z.object({
+export const BaseArtifactHeader = z.object({
   schemaVersion: z.literal("1.0"),
   artifactType: z.string().min(1),
   artifactId: z.string().min(1),
   createdAt: z.string().datetime(),
   createdByRole: z.string().min(1),
   sourceGitSha: z.string().regex(/^[a-f0-9]{40}$/),
+  inputHashes: z.record(z.string().min(1), z.string().regex(/^[a-f0-9]{64}$/)),
+}).strict();
+
+export const CorpusBoundHeader = BaseArtifactHeader.extend({
   corpusSha256: z.string().regex(/^[a-f0-9]{64}$/),
   corpusEntryCount: z.number().int().nonnegative(),
   taxonomySha256: z.string().regex(/^[a-f0-9]{64}$/),
-  inputHashes: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)),
-  environment: z.object({
-    nodeVersion: z.string(),
-    platform: z.string(),
-    corpusMode: z.enum(["seed", "private", "public-snapshot", "metadata-only-fixture"]),
-    networkMode: z.enum(["denied", "fixture-http", "live"]),
-  }),
-});
+}).strict();
 
 export const CheckpointApproval = z.object({
   approvalId: z.string().min(1),
@@ -290,26 +286,26 @@ export const CheckpointApproval = z.object({
   decision: z.enum(["approved", "rejected"]),
   actorId: z.string().min(1), // stable opaque pseudonym; identity map stays private
   role: z.string().min(1),
+  actorKind: z.enum(["human", "agent"]),
   actorRegistryVersion: z.string().min(1),
   actorRegistrySha256: z.string().regex(/^[a-f0-9]{64}$/),
+  checkpointTargetSha256: z.string().regex(/^[a-f0-9]{64}$/),
   approvedArtifacts: z.array(z.object({
     artifactId: z.string().min(1),
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
   })).min(1),
   planSha256: z.string().regex(/^[a-f0-9]{64}$/),
   specSha256: z.string().regex(/^[a-f0-9]{64}$/),
-  contractHashes: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)),
+  contractHashes: z.record(z.string().min(1), z.string().regex(/^[a-f0-9]{64}$/)),
   decidedAt: z.string().datetime(),
   rationale: z.string().optional(),
-  signingKeyId: z.string().min(1),
-  signatureBase64: z.string().min(1),
-  attestationSha256: z.string().regex(/^[a-f0-9]{64}$/),
-});
+}).strict();
 
 export const LiveCostApproval = z.object({
   approvalId: z.string().min(1),
   actorId: z.string().min(1),
   role: z.literal("Budget Owner"),
+  actorKind: z.literal("human"),
   actorRegistryVersion: z.string().min(1),
   actorRegistrySha256: z.string().regex(/^[a-f0-9]{64}$/),
   runId: z.string().min(1),
@@ -318,15 +314,12 @@ export const LiveCostApproval = z.object({
   model: z.string().min(1),
   maxCostUsd: z.number().positive(),
   decidedAt: z.string().datetime(),
-  signingKeyId: z.string().min(1),
-  signatureBase64: z.string().min(1),
-  attestationSha256: z.string().regex(/^[a-f0-9]{64}$/),
 });
 ```
 
-Approvals live in a separate append-only ledger so the artifact being approved never embeds its own signature. Canonicalize the unsigned fields, compute `attestationSha256`, and verify the detached Ed25519 signature against the exact hash-pinned actor registry. Before trusting that registry, verify its admin-root signature against the out-of-band root fingerprint. `artifact-review` records attest one prerequisite; only `checkpoint` records bound to the complete checkpoint artifact set can close C0–C5. Live-cost approvals remain private and are referenced by hash. The validator recomputes every approved hash, requires the exact role set for C0–C5, rejects an untrusted/rotated-without-chain registry, invalid signatures, duplicate/conflicting approvals, role/key mismatches, and prevents one `actorId`—including the implementation worker—from satisfying roles declared independent. Real identity mapping remains private; opaque actor IDs, roles, and public keys are tracked.
+Approvals live in a separate append-only ledger. The validator recomputes every approved artifact hash, requires the exact role set for C0–C5, rejects duplicate/conflicting approvals, and prevents one `actorId` — including the implementation worker — from satisfying roles declared independent. Every checkpoint approval must bind one identical `checkpointTargetSha256` so all required approvers attest the same evidence/plan/spec/registry/contract/input set. `artifact-review` records attest one prerequisite; only `checkpoint` records bound to the complete checkpoint artifact set can close C0–C5. `actorKind: "human"` is required for Budget Owner and final disposition roles; other checkpoint roles may be independent human or agent actors. Live-cost approvals remain private and are referenced by hash. Real identity mapping remains private; opaque actor IDs, roles, and actor kinds are tracked.
 
-`ArtifactHeader` is only the common header. Implement a discriminated union keyed by `artifactType`; do not treat `inputHashes` as a substitute for type-specific provenance:
+`BaseArtifactHeader` is the common header; `CorpusBoundHeader` extends it with corpus identity. Implement a discriminated union keyed by `artifactType`; do not treat `inputHashes` as a substitute for type-specific provenance:
 
 - Phase-0 summaries require every command/exit pair, named skip IDs, environment versions, and corpus/network mode; command fields do not appear on artifact types that do not execute commands.
 - Selection and gold artifacts require algorithm/rubric versions plus selection and annotation/adjudication hashes; label-owner approvals bind through the ledger.
@@ -336,7 +329,7 @@ Approvals live in a separate append-only ledger so the artifact being approved n
 
 - [ ] **Step 2: implement schemas and public/private validation modes**
 
-`--public` validates tracked schemas and hashes without requiring private files. `--private` additionally resolves opaque private artifact IDs through an operator-supplied root and verifies every referenced hash.
+`--mode public` validates tracked schemas and hashes without requiring private files. `--mode private --corpus-path <path>` additionally verifies the supplied private corpus identity; `--private-artifact-root <path>` resolves opaque private artifact IDs when present.
 
 - [ ] **Step 3: add the command and prove failures are visible**
 
@@ -344,7 +337,7 @@ Approvals live in a separate append-only ledger so the artifact being approved n
 "validate-readiness-artifacts": "tsc && node dist/scripts/validate-readiness-artifacts.js"
 ```
 
-Run tests with a missing private artifact, hash mismatch, corpus mismatch, taxonomy mismatch, leaked private path, mutated approved artifact, invalid signature, untrusted root, registry hash mismatch, unsigned/broken rotation chain, duplicate actor, role/key mismatch, implementation-worker self-approval, and incomplete checkpoint role set; each must fail with a specific reason.
+Run tests with a missing private artifact, hash mismatch, corpus mismatch, taxonomy mismatch, leaked private path, mutated approved artifact, registry hash mismatch, stale registry version, duplicate actor, actor role mismatch, divergent checkpoint targets, implementer self-approval, prior-ledger mutation/deletion, and incomplete checkpoint role set; each must fail with a specific reason.
 
 - [ ] **Step 4: validate and commit the C0 contract**
 
@@ -360,10 +353,50 @@ Validate the two Task 0 summaries in public mode, update the artifact index, col
 - Modify: `docs/superpowers/specs/2026-07-13-agent-readiness-and-retagging-design.md`
 - Create: `src/tool-catalog.ts`
 - Create: `src/tool-catalog.test.ts`
+- Create: `src/tool-contracts.ts`
+- Create: `src/tool-contracts.test.ts`
+- Create: `src/readiness/checkpoint-policy.ts`
+- Create: `src/readiness/checkpoint-policy.test.ts`
+- Modify: `src/readiness/contracts.ts`
+- Modify: `src/readiness/contracts.test.ts`
+- Modify: `src/readiness/validator.ts`
+- Modify: `src/scripts/validate-readiness-artifacts.ts`
+- Modify: `src/scripts/validate-readiness-artifacts.test.ts`
+- Create: `quality-contracts/agent-readiness/checkpoint-recipe-c0-v1.json`
+- Create: `quality-contracts/agent-readiness/checkpoint-recipe-c1-v1.json`
+- Create: `quality-contracts/agent-readiness/approval-actor-registry-v2.json`
+- Create: `quality-contracts/agent-readiness/artifact-index-v2.json`
+- Create: `quality-contracts/agent-readiness/checkpoint-approvals-v2.json`
 
-**Produces:** Checkpoint C1 and one canonical catalog.
+**Produces:** Checkpoint C1, one executable 12-tool contract, and historically reproducible C0/C1 approval chains.
 
-- [ ] **Step 1: retain the approved names**
+- [ ] **Step 1: write the failing C1 integrity matrix first**
+
+Extend the readiness fixtures from one valid C0 graph into a C0→C1 history. Tests must fail before implementation and cover:
+
+- exact 12-name order, uniqueness, legacy-name mapping, and removed-name derivation;
+- every catalog descriptor has exactly one strict input schema, output-data schema, and renderer key;
+- one valid and representative invalid input/output for all 12 tools;
+- unknown-field rejection for every persisted and MCP contract object;
+- every allowed retrieval state and representative impossible combinations;
+- success/error envelope invariants, evidence eligibility, tool discriminator, and `UiSpec` completeness/sparse states;
+- recomputation of checkpoint targets from resolved bytes rather than approval claims;
+- one-byte mutations to catalog, contracts, parent plan, design spec, recipes, registries, indexes, and ledgers;
+- C0 remains closed after the working-tree parent plan/spec change for C1;
+- C0 fails when its recorded historical Git source, path, or content hash is changed;
+- registry/index/ledger fork, duplicate head, skipped ordinal, missing predecessor, predecessor-hash mismatch, renamed-path mismatch, and stale-head cases;
+- each approval resolves its own recorded registry version/hash;
+- missing and unexpected C0/C1 policy keys both fail;
+- ledger v2 preserves every canonical v1 approval byte-for-byte and cannot validate without its predecessor;
+- Product and Engineering use distinct authorized actors outside `implementationActorIds` and bind one identical target;
+- public/private CLI output reports both C0 and C1 accurately;
+- the runtime still advertises the legacy 14-tool catalog at C1, proving the checkpoint did not prematurely perform Task 6.
+
+- [ ] **Step 2: define one catalog descriptor table**
+
+`TOOL_DEFINITIONS` is an ordered readonly descriptor array. Derive `TOOL_CATALOG`, `REMOVED_TOOL_NAMES`, the legacy→beta map, tool-name types, schema maps, renderer-key coverage, and the canonical catalog digest from it. Never maintain a second hand-written name or removed-name list.
+
+Retain these approved beta names:
 
 ```ts
 export const TOOL_CATALOG = [
@@ -384,24 +417,43 @@ export const TOOL_CATALOG = [
 
 No `aggregate_*`, `browse_ui_references`, or compatibility aliases. A future pre-1.0 revision requires a new design decision and coordinated skill migration.
 
-- [ ] **Step 2: make the factual retrieval amendment explicit**
+- [ ] **Step 3: make C1 the executable Zod contract**
 
-Amend §5.3 so `retrieval.mode` is:
+`src/tool-contracts.ts` is canonical. TypeScript types use `z.infer`; the design spec documents these schemas and Tasks 6–9 consume them rather than redefining them. Define:
+
+- strict input and output-data schemas for all 12 tools;
+- the complete versioned `UiSpec` schema, including sparse/unavailable states, evidence lanes, acceptance criteria, and authority precedence;
+- a common envelope with canonical `tool`, `schemaVersion`, `status`, `summary`, `data`, `referenceIds`, `retrieval`, `warnings`, optional typed `evidence`, and optional typed `error`;
+- `status: "ok"` requiring non-null tool data and no error;
+- `status: "error"` requiring `data: null`, `{ code, message, retryable }`, and MCP `isError: true` at the runtime boundary;
+- SDK argument/schema failures as protocol errors, distinct from application errors such as `NOT_FOUND`;
+- claim-level evidence only for tools whose descriptor declares it; `plan_ui_direction`, `create_ui_spec`, and `critique_ui` always include an evidence array, with insufficiency warnings when empty.
+
+Every result also preserves complete human-readable `content[0]`; runtime rendering is implemented later by the exhaustive descriptor-keyed registry in Task 7.
+
+- [ ] **Step 4: define retrieval as a strict state matrix**
+
+Amend §5.3 and encode the same matrix in Zod:
 
 ```ts
 type RetrievalMode = "hybrid" | "vector" | "keyword" | "structured-fallback" | "none";
 type RetrievalModality = "text" | "image" | "metadata" | "none";
 type FallbackReason =
   | "missing-index"
+  | "incompatible-index"
   | "missing-provider-key"
   | "community-edition"
   | "provider-error"
   | "no-image-evidence";
 ```
 
-Add `retrieval.modality` and optional `fallbackReason`; enforce `fallbackUsed === (fallbackReason !== undefined)`. Image retrieval is expressed as `mode: "vector", modality: "image"`, not an undeclared `image-vector` mode. Preserve the approved uniform envelope—do not introduce a success-only discriminated union.
+`modality` describes the query modality, not every internal candidate source. Image retrieval is `mode: "vector", modality: "image"`, never an undeclared `image-vector` mode. `fallbackUsed` is true only when an alternate path produced the returned result; the reason records why the preferred path was unavailable or failed. Attempted-but-unsuccessful paths remain in `attemptedModes`; terminal failure belongs in `error`, not `fallbackReason`.
 
-- [ ] **Step 3: lock workflow behavior**
+Define allowed combinations per tool. At minimum, reject `none` with fallback, `vector` with `missing-index`, `structured-fallback` without a reason, and impossible modality/mode pairs. Distinguish intentional keyword operation from degraded keyword operation.
+
+- [ ] **Step 5: lock exact per-tool and workflow behavior in the design spec**
+
+For every tool, document exact inputs, defaults, constraints, output-data fields, evidence eligibility, empty behavior, partial behavior, application errors, retrieval states, and legacy behavior intentionally changed or retained. Explicitly define the three-list consolidation input/output for `get_ui_taxonomy`, all renamed argument compatibility, and the versioned `create_ui_spec` artifact.
 
 - Research: taxonomy/browse as useful → search → inspect → compare/research aggregations.
 - Build: `plan_ui_direction` → inspect cited references → `create_ui_spec` → implement.
@@ -410,9 +462,58 @@ Add `retrieval.modality` and optional `fallbackReason`; enforce `fallbackUsed ==
 - Build requires `create_ui_spec` unless an existing versioned artifact satisfies the same section/evidence/acceptance schema.
 - Never require Search + two Gets before screenshot critique. If fewer than two relevant references exist, continue and disclose sparse coverage.
 
-- [ ] **Step 4: approve C1 before handler changes**
+- [ ] **Step 6: add immutable checkpoint recipes and closed-world policies**
 
-Product and Engineering create separate C1 ledger records bound to the catalog, retrieval amendment, uniform envelope, plan, and spec hashes. C1 remains closed until both records validate.
+`CHECKPOINT_POLICIES` is code-owned and strict. Implement C0 and C1 now; Tasks 3–11 add C2–C5 policies with their schemas. Each policy enumerates exact required artifact types, source keys, contract keys, input keys, and approval roles. Missing, duplicate, and unexpected entries fail.
+
+Each persisted checkpoint recipe records:
+
+```ts
+interface CheckpointSourceBinding {
+  key: string;
+  repositoryPath: string; // normalized repository-relative path
+  gitCommit: string;      // exact 40-hex commit containing approved bytes
+  sha256: string;         // SHA-256 of bytes resolved from that commit/path
+}
+```
+
+The CLI supplies a Git-source resolver; the pure validator receives an injected resolver and never shells out. Resolution must use the exact recorded commit/path bytes, not the working tree. The validator then rebuilds the canonical target under the checkpoint policy and compares its SHA-256 with every approval.
+
+Create a C0 recipe that reproduces the already-approved C0 target from its original Git-bound inputs. Prove that C1 edits to the live parent plan/spec do not reopen C0, while altered historical identity does fail.
+
+- [ ] **Step 7: implement deterministic registry, index, and ledger chains**
+
+Add explicit ordinal version and predecessor version/source/hash fields to registry, index, and ledger snapshots. Require exact `v1 → v2` progression, resolve predecessor bytes, reject forks, and require exactly one terminal head for each chain. Filenames never select authority.
+
+- Preserve registry v1 for C0. Create registry v2 only after independent Product and Engineering actor assignments are supplied; neither may be an implementation actor.
+- Resolve every approval against the exact registry version and SHA it records, never a global selected registry.
+- Preserve index v1. Index v2 becomes the unique head and inventories all required evidence and registry snapshots under the v2 schema.
+- Preserve ledger v1. Ledger v2 contains canonical byte-equivalent copies of every v1 approval plus the new C1 approvals and binds the exact v1 predecessor. Normal validation always verifies the full ledger chain; remove optional prior-ledger behavior.
+
+- [ ] **Step 8: harden target and approval verification**
+
+For every approval, validate the exact approved-artifact set, plan/spec/source/contract/input hashes, actor ID/kind/role, registry version/hash, checkpoint policy, common target SHA, and implementer independence. Only `decision: "approved"` plus `approvalKind: "checkpoint"` counts toward closure. Invalid approvals produce issues and cannot contribute roles.
+
+Hash each resolved file/blob once per validation run. JSON and human CLI output must report the same checkpoint states. Exit codes remain `0` valid, `1` integrity failure, and `2` usage/configuration failure.
+
+- [ ] **Step 9: review and commit the executable contract before approvals**
+
+Run focused tests, the full suite, build, doctor, corpus/reference validation, and public/private readiness validation. Request the required task review, write its review artifact, and commit the spec, catalog, executable contracts, policy, validator, CLI, and tests. Record this commit as `C1_CONTRACT_SHA`; every C1 source binding resolves from it.
+
+- [ ] **Step 10: create and approve the C1 history**
+
+Pause for actor assignments and independent decisions. Create registry/index/ledger v2 and the C0/C1 recipes. Product and Engineering create separate C1 records bound to the exact catalog, tool-contract schemas, retrieval matrix, parent plan, design spec, readiness policy/validator, and `C1_CONTRACT_SHA`. The implementation worker may prepare draft records but may not create approved decisions for either actor.
+
+Run both modes:
+
+```bash
+npm run validate-readiness-artifacts -- --mode public
+npm run validate-readiness-artifacts -- --mode private --corpus-path corpus/entries.json
+```
+
+Expected: C0 and C1 both report `closed`; the private run also verifies corpus identity. Request a second task review over the governance artifacts, write its artifact, and commit only the owned C1 quality-contract files.
+
+**C1 gate:** exact 12-tool executable contracts and workflows are approved; C0 remains historically reproducible; registry, index, and ledger chains have unique validated heads; Product and Engineering independently bind the same closed-world C1 target; runtime handlers still expose the legacy catalog until the atomic Phase 1B branch begins.
 
 ---
 
@@ -600,12 +701,20 @@ Descriptions state “use when,” “do not use when,” output, fallback, and 
 **Files:**
 - Create: `src/tool-result.ts`
 - Create: `src/tool-result.test.ts`
+- Create: `src/tool-renderers.ts`
+- Create: `src/tool-renderers.test.ts`
 - Create: `src/mcp-contract-matrix.test.ts`
 - Modify: `src/corpus-reader.ts`
+- Modify: `src/corpus-reader.test.ts`
 - Modify: `src/corpus.ts`
+- Modify: `src/corpus.test.ts`
+- Modify: `src/critique-retrieval.ts`
+- Modify: `src/critique-retrieval.test.ts`
 - Modify: `src/server-factory.ts`
+- Modify: `src/mcp-smoke.test.ts`
+- Modify: `src/public-mcp-contract.test.ts`
 
-**Interfaces:** Zod is canonical; TypeScript types are inferred with `z.infer`, never the reverse.
+**Interfaces:** Import the approved schemas from `src/tool-contracts.ts`; Task 7 must not redefine them. Zod remains canonical and TypeScript types use `z.infer`.
 
 The retrieval layer—not the handler—owns operation metadata, including empty and failure paths:
 
@@ -613,6 +722,7 @@ The retrieval layer—not the handler—owns operation metadata, including empty
 interface RetrievalMeta {
   mode: RetrievalMode;
   modality: RetrievalModality;
+  resultCount: number;
   fallbackUsed: boolean;
   fallbackReason?: FallbackReason;
   attemptedModes: RetrievalMode[];
@@ -629,13 +739,13 @@ type RetrievalOutcome<T> =
     };
 ```
 
-Search, similarity, plan retrieval, and critique retrieval return this shape from every reader. Terminal failure cause lives in `error`, never in `fallbackReason`. `fallbackUsed` is true only when an alternate path actually produced the returned outcome; attempted-but-failed paths remain in `attemptedModes`. Handlers copy `meta` and `error` unchanged into the envelope; they never infer mode from the first result or fabricate it after an empty result/provider failure.
+Each reader exposes one ranked, metadata-bearing search operation rather than parallel `search()` and `searchRanked()` outcome builders. MCP callers derive plain entries from its items when needed; lower-level corpus scoring stays internal for Decision Lab and other non-MCP consumers. Similarity, plan, and critique retrieval return the same shape. Terminal failure cause lives in `error`, never in `fallbackReason`. `fallbackUsed` is true only when an alternate path actually produced the returned outcome; attempted-but-failed paths remain in `attemptedModes`. Handlers copy `meta` and `error` unchanged into the envelope; they never infer mode from the first result or fabricate it after an empty result/provider failure.
 
-- [ ] **Step 1: define the uniform schema**
+- [ ] **Step 1: implement the pre-approved uniform schema**
 
-Every result includes `schemaVersion`, `summary`, `data`, `referenceIds`, `retrieval`, and `warnings`; synthesis results may add typed `evidence`. Register the matching non-null MCP `outputSchema` for all 12 tools.
+Use the exact C1 tool discriminator, success/error envelope, per-tool data schemas, retrieval matrix, and evidence rules. Register the matching non-null MCP `outputSchema` for all 12 tools. Any desired schema change reopens C1 rather than drifting here.
 
-Use a schema-level success/error union with the same common envelope fields. SDK argument-validation failures remain protocol errors. Search with no matches is a successful empty result with a typed warning. An unknown single `get_ui_reference` ID is a typed non-retryable `NOT_FOUND` application error. Compare returns `foundIds`, `missingIds`, and a warning for partial success; when every requested ID is missing it returns `NOT_FOUND`. An exhausted provider failure returns `data: null`, `isError: true`, and `{ code, retryable }`; it must not fabricate a partial artifact. `plan_ui_direction`, `create_ui_spec`, and `critique_ui` always include an `evidence` array, which may be empty only with an explicit insufficiency warning.
+SDK argument-validation failures remain protocol errors. Search with no matches is a successful empty result with a typed warning. An unknown single `get_ui_reference` ID is a typed non-retryable `NOT_FOUND` application error. Compare returns `foundIds`, `missingIds`, and a warning for partial success; when every requested ID is missing it returns `NOT_FOUND`. An exhausted provider failure returns `data: null`, `isError: true`, and the approved typed error; it must not fabricate a partial artifact.
 
 - [ ] **Step 2: implement the per-tool truth matrix**
 
@@ -647,17 +757,17 @@ Use a schema-level success/error union with the same common envelope fields. SDK
 | plan | `hybrid` preferred; keyword/structured fallback; absence of index is not an error |
 | critique | `vector` + `image` modality when available; otherwise `structured-fallback` with caller-screen evidence kept separate |
 
-`resultCount` is defined per primary payload: taxonomy `0`; get `0|1`; search/similar the number of references; compare the number of requested IDs found; browse the number of pattern groups; each research aggregation the number of aggregate rows; plan/spec/critique `1` only when a complete primary artifact exists, otherwise `0`. `referenceIds` are unique stable IDs represented in data/evidence, and `fallbackUsed` exactly matches presence of `fallbackReason`.
+`resultCount` is defined per primary payload: taxonomy `0`; get `0|1`; search/similar the number of references; compare the number of requested IDs found; browse the number of pattern groups; each research aggregation the number of aggregate rows; plan/spec/critique `1` only when a complete primary artifact exists, otherwise `0`. `referenceIds` are unique stable IDs represented in data/evidence. The C1 state matrix decides whether a fallback reason is allowed or required; do not reduce validation to a boolean-presence check.
 
-- [ ] **Step 3: render legacy text from structured data**
+- [ ] **Step 3: render legacy text through an exhaustive registry**
 
-Handlers parse structured output, then set:
+Every structured result carries its canonical tool discriminator. Implement a `Record<ToolName, ToolRenderer>` so TypeScript fails when a catalog entry lacks a renderer. Handlers parse structured output, then set:
 
 ```ts
-content[0].text = renderToolResult(parsedStructuredContent);
+content[0].text = renderToolResult(parsedStructuredContent.tool, parsedStructuredContent);
 ```
 
-Tests assert exact renderer equality and that summary, every warning, reference ID, acceptance criterion, and externally relevant fact appears in text.
+Tests cover every tool's success, empty, warning, partial, and error variants. Assert exact renderer equality and that summary, error, every warning, reference ID, acceptance criterion, and externally relevant fact appears in text. A client that ignores `structuredContent` must receive the complete experience.
 
 - [ ] **Step 4: run the same matrix against three readers**
 
@@ -675,86 +785,13 @@ Use private fixture, asset-bearing public snapshot fixture, and metadata-only fi
 
 **Produces:** Checkpoint C3 acceptance model and complete handoff.
 
-- [ ] **Step 1: approve the input and output schemas before implementation**
+- [ ] **Step 1: implement the C1-approved input and output schemas**
 
 Input: 0–5 `referenceIds`, required `productContext`, optional platform, `implementationFramework`, constraints, and design-system status/registry/library. Keep serialization format separate from implementation framework. With zero or one reference, return a schema-valid evidence-limited spec, emit typed `sparseCoverage`/`insufficientCorpusEvidence` warnings, mark unsupported decisions `unavailable`, and never invent corpus-backed claims.
 
 Output sections: version/context; direction plus rejected defaults; layout regions and responsive rules; component inventory; tokens with authority; interactions; motion; accessibility; content/voice; techniques; anti-patterns; framework notes; acceptance criteria; source provenance.
 
-Make Zod the executable source of truth and infer these TypeScript shapes from it:
-
-```ts
-interface CreateUiSpecInput {
-  referenceIds: string[];                      // Zod max(5)
-  productContext: string;                     // Zod min(8)
-  platform?: string;
-  implementationFramework?: string;          // Zod max(80)
-  constraints?: string[];
-  designSystem?: {
-    status: "none" | "partial" | "established";
-    registry?: string;
-    componentLibrary?: string;
-    tokenSource?: string;
-  };
-}
-
-type DecisionStatus = "required" | "recommended" | "unavailable";
-type DecisionAuthority =
-  | "machine-rule"
-  | "team-design-system"
-  | "project-constraint"
-  | "corpus-evidence"
-  | "editorial";
-
-interface CitedDecision {
-  id: string;
-  summary: string;
-  status: DecisionStatus;
-  authority: DecisionAuthority;
-  evidenceIds: string[];
-}
-
-interface AcceptanceCriterion {
-  id: string;
-  subject: string;
-  assertion:
-    | "exists" | "equals" | "uses-token" | "meets-contrast"
-    | "keyboard-operable" | "has-accessible-name"
-    | "responsive-at" | "motion-respects-preference";
-  expected: string | number | boolean;
-  verifier: "axe" | "playwright" | "static-analysis" | "manual";
-  selector?: string;
-  command?: string;
-  steps?: string[];
-  priority: "must" | "should";
-  evidenceIds: string[];
-}
-
-interface UiSpec {
-  specVersion: "1.0";
-  productContext: string;
-  direction: { summary: CitedDecision; rejectedDefaults: CitedDecision[] };
-  layout: { regions: CitedDecision[]; responsiveRules: CitedDecision[] };
-  components: CitedDecision[];
-  tokens: {
-    authority: "team" | "mixed" | "proposed" | "unavailable";
-    colors: CitedDecision[];
-    typography: CitedDecision[];
-    spacing: CitedDecision[];
-  };
-  interactions: CitedDecision[];
-  motion: CitedDecision[];
-  accessibility: CitedDecision[];
-  contentAndVoice: CitedDecision[];
-  techniques: CitedDecision[];
-  antiPatterns: CitedDecision[];
-  frameworkNotes: CitedDecision[];
-  acceptanceCriteria: AcceptanceCriterion[];
-  sources: Array<{ referenceId: string; provenance: "auto" | "auto-reviewed" | "human" }>;
-}
-```
-
-Constrain every array and string in Zod; reject unknown keys. A manual criterion requires non-empty `steps`; automated criteria require the applicable selector or command. `tokens.authority: "mixed"` is valid only when the child decisions contain more than one actual authority lane.
+Import `CreateUiSpecInput`, `UiSpec`, `CitedDecision`, and `AcceptanceCriterion` from `src/tool-contracts.ts`. Do not restate or widen them in `src/ui-spec.ts`. Task 8 implements the producer, authority resolver, and acceptance-criteria builder behind those schemas. Any contract change requires a revised catalog contract and C1 approval. The existing strict constraints remain: a manual criterion requires non-empty steps; automated criteria require the applicable selector or command; and `tokens.authority: "mixed"` is valid only when child decisions contain multiple actual authority lanes.
 
 - [ ] **Step 2: define executable criteria**
 
@@ -892,9 +929,9 @@ This plan ends at approval, not corpus completion:
 
 Never route Deferred directly from Phase 1C to Phase 5.
 
-**C4 gate:** terminal quality contract, signed dogfood, Phase 1B bundle, and identity joins are validated and indexed; Eval Owner, Product, and QA approvals bind the combined record.
+**C4 gate:** terminal quality contract, approved/hash-bound dogfood, Phase 1B bundle, and identity joins are validated and indexed; Eval Owner, Product, and QA approvals bind the combined record.
 
-**C5 gate:** 1A is terminal; atomic 1B contracts and dogfood pass; exactly one disposition validates; PM and Corpus Owner sign; no corpus mutation occurred.
+**C5 gate:** 1A is terminal; atomic 1B contracts and dogfood pass; exactly one disposition validates; PM and Corpus Owner approve the exact target; no corpus mutation occurred.
 
 ---
 
@@ -910,8 +947,11 @@ npx vitest run \
   scripts/eval-gold-baseline.test.mjs \
   scripts/dogfood-agent-harness.test.mjs \
   src/tool-catalog.test.ts \
+  src/tool-contracts.test.ts \
   src/tool-result.test.ts \
+  src/tool-renderers.test.ts \
   src/mcp-contract-matrix.test.ts \
+  src/readiness/checkpoint-policy.test.ts \
   src/ui-spec.test.ts \
   src/skill-catalog-wiring.test.ts \
   src/readiness/dogfood.test.ts \
@@ -920,14 +960,100 @@ npm test
 npm run validate-references
 npm run validate-corpus
 npm run doctor
-npm run validate-readiness-artifacts -- --public
-npm run validate-readiness-artifacts -- --private "$PRIVATE_ARTIFACT_ROOT"
+npm run validate-readiness-artifacts -- --mode public
+npm run validate-readiness-artifacts -- --mode private --corpus-path corpus/entries.json --private-artifact-root "$PRIVATE_ARTIFACT_ROOT"
 ```
 
 Then run the C0 clean-clone matrix again at branch HEAD, request holistic review against this plan and the design spec, and write the branch review artifact before push.
 
+## What already exists
+
+- `src/readiness/contracts.ts` already provides strict artifact headers, canonical JSON/SHA-256 helpers, checkpoint-target construction, registry validation, and append-only comparison. Task 2 extends these rather than creating a second integrity system.
+- `src/readiness/validator.ts` and the readiness CLI already parse the artifact graph, support public/private modes, validate C0 roles, and report checkpoint states. Task 2 hardens this shared boundary for C0–C1.
+- Registry v1, artifact index v1, approval ledger v1, and the four C0 evidence artifacts already exist and remain immutable historical inputs.
+- `src/server-factory.ts` registers the current 14 handlers through one injected `CorpusReader`; Task 6 renames those registrations after C1.
+- `src/synthesis/contracts.ts` and `critique_ui` already prove MCP `outputSchema` plus `structuredContent` and complete legacy text. C1 generalizes that pattern without discarding the working critique path.
+- `PrivateCorpusReader` and `PublicCorpusReader` already enforce corpus isolation and keyword-only public behavior. Task 7 adds truthful operation metadata at that boundary.
+- `searchRanked`, keyword, vector, hybrid, and critique structured-fallback paths already exist. The work is to expose their actual outcomes, not invent another retrieval engine.
+- `src/wiring-verification.test.ts`, `src/mcp-smoke.test.ts`, and `src/public-mcp-contract.test.ts` already enforce production wiring, catalog visibility, and public leak safety; the new tests extend these patterns.
+- `skill/clean-ui-design/SKILL.md` is already the single discoverable skill. Task 9 rewrites its internal workflows in the same release as the runtime migration.
+- Git-native task and branch review gates already enforce per-task and holistic review artifacts.
+
+## C1 failure modes
+
+| Failure | Handling | Required proof |
+|---|---|---|
+| C1 edits a plan/spec previously approved by C0 | Resolve C0 bytes from its recorded Git commit/path, never the working tree | C0 stays closed after a live-file edit |
+| Historical Git object is unavailable in a shallow clone | Fail with the missing commit/path and remediation; CI checkout uses history deep enough to resolve every active recipe | shallow/missing-object fixture plus clean-clone CI |
+| Approval omits the catalog or adds an unrelated contract | Closed-world checkpoint policy rejects missing and extra keys | one mutation per required key class |
+| Registry, index, or ledger has two terminal heads | Reject the entire chain; filenames never choose authority | fork and duplicate-head fixtures |
+| Predecessor file is renamed, missing, or altered | Resolve exact recorded version/source/hash and fail specifically | rename/missing/hash mutation tests |
+| Ledger v2 deletes or changes a C0 approval | Reject v2 before any checkpoint can close | deletion and byte-mutation tests |
+| Approver uses the wrong registry snapshot | Resolve that approval's recorded version/hash and reject mismatch | mixed v1/v2 approval fixture |
+| Tool schema changes after C1 approval | Catalog/contract source hash and checkpoint target change; C1 reopens | one-byte contract mutation |
+| Retrieval metadata expresses an impossible state | Strict Zod state matrix rejects it before response construction | allowed/forbidden combination table |
+| Legacy-only client loses facts or errors | Exhaustive per-tool renderer includes all externally relevant structured fields | content/structured parity for every result variant |
+| Runtime names change during contract-only C1 | Transitional MCP assertion fails | `tools/list` remains the legacy 14 at C1 |
+| Implementation worker supplies an approval | Actor/implementation-set intersection rejects it | Product and Engineering self-approval fixtures |
+
+No failure mode above may degrade silently. Integrity/configuration failures name the checkpoint, source key, expected identity, actual identity when safe, and recovery action.
+
+## Worktree parallelization
+
+| Lane | Work | Modules | Depends on |
+|---|---|---|---|
+| A | C1 executable contract and historical validator hardening | `docs/superpowers/specs/`, `src/tool-*`, `src/readiness/`, `src/scripts/` | C0 |
+| B | C1 recipes, registry/index/ledger v2, independent approvals | `quality-contracts/agent-readiness/` | Lane A committed as `C1_CONTRACT_SHA` |
+| C | Gold selection and labels | `src/scripts/`, `src/readiness/`, private eval artifacts | C1 |
+| D | Atomic MCP/skill migration | `src/server-factory.ts`, readers/retrieval, tool result/renderers, `skill/` | C1 |
+
+Lane A must remain sequential because contracts, policy, validator, and spec share hashes and interfaces. Lane B starts only after Lane A's reviewed commit supplies immutable Git source identities. After C1 closes, launch C and D in parallel worktrees; they share no primary module until later disposition/dogfood joins. Tasks 6–9 remain sequential inside Lane D because the unreleased runtime, envelope, `UiSpec`, and skill form one atomic release unit.
+
+## Implementation Tasks
+
+Synthesized from the C1 engineering review. Execute through Task 2 and its named downstream handoffs.
+
+- [~] **T1 (P1, human: ~1 day / Codex: ~75 min)** — readiness integrity — Recompute checkpoints from immutable Git-bound recipes under closed-world C0/C1 policies.
+  - Surfaced by: Architecture and outside review — current validation compares claimed target strings without resolving approved bytes.
+  - Files: `src/readiness/contracts.ts`, `src/readiness/checkpoint-policy.ts`, `src/readiness/validator.ts`, readiness CLI/tests.
+  - Verify: C0 stays closed after C1 live-file edits; historical source and policy mutations fail.
+  - **Status (2026-07-16): C0-recipe core delivered by R0** (`dbcb06e`, see
+    [`docs/AGENT_READINESS_STATUS.md`](../../AGENT_READINESS_STATUS.md)). The
+    validator recomputes the canonical C0 target from Git-bound recorded-commit
+    bytes, verifies every approval claim, and is fail-closed; C1 live-file edits
+    leave C0 closed and tampered history reopens it. The broader closed-world
+    C0/C1 policies and registry v2 chains remain under T2.
+- [ ] **T2 (P1, human: ~1 day / Codex: ~75 min)** — governance chains — Add deterministic registry/index/ledger snapshot chains and per-approval registry resolution.
+  - Surfaced by: Architecture and outside review — `.find()`/enumeration order cannot select version authority.
+  - Files: readiness schemas/validator and `quality-contracts/agent-readiness/` v2 artifacts.
+  - Verify: fork, duplicate-head, missing-predecessor, stale-head, ledger deletion, and mixed-registry tests.
+- [ ] **T3 (P1, human: ~1.5 days / Codex: ~2 h)** — MCP contracts — Create one descriptor table and strict Zod input/output contracts for all 12 tools.
+  - Surfaced by: Architecture/code quality — names alone do not lock behavior and three prose/schema copies had drifted.
+  - Files: `src/tool-catalog.ts`, `src/tool-contracts.ts`, design spec, tests.
+  - Verify: exact catalog, strict per-tool fixtures, success/error invariants, and catalog digest tests.
+- [ ] **T4 (P1, human: ~5 h / Codex: ~45 min)** — retrieval truth — Encode the complete mode/modality/fallback state matrix.
+  - Surfaced by: Architecture — independent enums permit contradictory retrieval claims.
+  - Files: `src/tool-contracts.ts`, design spec, contract tests.
+  - Verify: table-driven allowed and forbidden combination tests.
+- [ ] **T5 (P2, human: ~1 day / Codex: ~75 min)** — reader boundary — Replace duplicate MCP reader search outcomes with one metadata-bearing operation.
+  - Surfaced by: Code quality — parallel search wrappers would duplicate and drift metadata.
+  - Files: Task 7 reader, corpus, critique retrieval, handler, and test files.
+  - Verify: private/public/metadata-only contract matrix preserves exact retrieval metadata.
+- [ ] **T6 (P2, human: ~1 day / Codex: ~60 min)** — compatibility rendering — Add the tool discriminator and exhaustive renderer registry.
+  - Surfaced by: Code quality — a generic renderer cannot format twelve unrelated payloads.
+  - Files: `src/tool-renderers.ts`, `src/tool-result.ts`, handlers/tests.
+  - Verify: every success/empty/warning/partial/error result has exact text/structured parity.
+- [ ] **T7 (P1, human: ~1.5 days / Codex: ~2 h)** — C1 test gate — Implement the complete catalog, contract, history, CLI, and C0-regression matrix before approval.
+  - Surfaced by: Test review — the original Task 2 named only one catalog test.
+  - Files: catalog/contracts/readiness unit and integration tests.
+  - Verify: focused C1 matrix, full suite, build, doctor, corpus/reference checks, and both readiness modes.
+
 ## Explicitly out of scope
 
+- Handler renaming, runtime envelope wiring, and skill migration during C1; Tasks 6–9 ship these atomically after contract approval.
+- Compatibility aliases for the removed 14-tool names.
+- A second retrieval engine, vector index, reranker, or persistent corpus motion schema.
+- Cryptographic signatures, public keys, admin-root trust, or key rotation.
 - Phase 2 shadow runs, direct-write route retirement, promotion, rollback, canary, and staged corpus mutation;
 - Phase 4 Deferred 787-ID artifact execution;
 - publication curation, `CommunityCorpusReader`, npm projection/publishing, and hosted infrastructure; the later Gate-2 release plan must use manual 2FA for the first `next` publish, then configure trusted-publishing/OIDC for subsequent publishes and promote the exact tested artifact;
@@ -938,4 +1064,20 @@ Then run the C0 clean-clone matrix again at branch HEAD, request holistic review
 
 ## Execution handoff
 
-Tasks 0–1 execute inside the isolated worktree and jointly close C0; Tasks 2 onward begin only after C0. Recommended execution is subagent-driven, one task at a time, with the repository-required review between tasks. The worker must pause for the named human labelers, adjudicator, and checkpoint approvers—it may prepare evidence but may not self-approve or impersonate independent roles. Do not start Task 3 or Task 6 until C1 is signed; do not run live gold calls until C2 is signed and explicit cost approval is present.
+Tasks 0–1 execute inside the isolated worktree and jointly close C0; Tasks 2 onward begin only after C0. Recommended execution is subagent-driven, one task at a time, with the repository-required review between tasks. The worker must pause for the named human labelers, adjudicator, and checkpoint approvers—it may prepare evidence but may not self-approve or impersonate independent roles. Do not start Task 3 or Task 6 until C1 is independently approved; do not run live gold calls until C2 is independently approved and explicit cost approval is present.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|---|---|---|---:|---|---|
+| CEO Review | `/plan-ceo-review` | Scope and strategy | 0 | — | Not required for this contract-hardening increment |
+| Codex Review | `/codex review` | Independent second opinion | 0 | — | Independent engineering subagent reviewed C1 instead |
+| Eng Review | `/plan-eng-review` | Architecture and tests (required) | 1 | CLEAR | 10 engineering issues resolved; 0 critical gaps remain |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | No UI implementation in C1 |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | Not required for this internal contract gate |
+
+**OUTSIDE VOICE:** Approved the ten engineering decisions and added four accepted mechanics: immutable historical byte resolution, deterministic registry/index heads, closed-world checkpoint policies, and mandatory versioned ledger history.
+
+**VERDICT:** ENG CLEARED — C1 is implementation-ready after all accepted findings were incorporated.
+
+NO UNRESOLVED DECISIONS

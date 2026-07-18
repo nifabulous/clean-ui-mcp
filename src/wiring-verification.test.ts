@@ -171,6 +171,46 @@ const ALLOWLIST = new Set<string>([
   // excludes the scripts/ dir and server.ts is the executable entry, so the
   // symbol appears unreferenced from the scanned production set.
   "PUBLIC_SNAPSHOT_DIR",
+  // readiness/contracts.ts — consumed by the validator script
+  // (src/scripts/validate-readiness-artifacts.ts, created in Task 3).
+  // These are the canonical helpers the validator calls directly.
+  "computeTaxonomyDigest",
+  "buildCheckpointTarget",
+  "computeCheckpointTargetSha256",
+  "validateRegistry",
+  "validateLedgerAppendOnly",
+  // tool-catalog.ts — consumed by tool-contracts.ts, checkpoint policy,
+  // and the readiness validator (all created in C1 Steps 3-8).
+  "TOOL_CATALOG",
+  "REMOVED_TOOL_NAMES",
+  "LEGACY_TO_BETA_MAP",
+  "CATALOG_DIGEST",
+  // tool-contracts.ts — consumed by handlers, renderers, and the readiness
+  // validator (created in C1 Steps 5-8 and Task 7).
+  "isAllowedRetrievalState",
+  "getToolDataSchema",
+  "ToolInputSchemas",
+  "AcceptanceCriterion",
+  "CitedDecision",
+  "CreateUiSpecInputT",
+  "AcceptanceCriterionT",
+  "CitedDecisionT",
+  "ALLOWED_RETRIEVAL_STATES",
+  "getToolEvidenceRequired",
+  // New descriptor exports consumed by Task 6-9 handlers
+  "TOOL_DESCRIPTORS",
+  "ToolResultSchemas",
+  "ToolErrorUnion",
+  "parseToolResult",
+  "SearchInput",
+  "WarningBase",
+  // tool-contract-integrity.ts — consumed by makeEnvelope in tool-contracts.ts
+  "validateEnvelopeRetrieval",
+  "validateEvidenceReferences",
+  "sameSet",
+  "unique",
+  // tool-contract-docs.ts — consumed by the drift test
+  "extractGeneratedBlock",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

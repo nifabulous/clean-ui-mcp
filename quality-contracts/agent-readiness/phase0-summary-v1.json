@@ -1,0 +1,108 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "phase0-summary",
+  "artifactId": "phase0-20260714",
+  "createdAt": "2026-07-14T09:30:00Z",
+  "createdByRole": "repository-maintainer",
+  "sourceGitSha": "374f72073c81ea7901696333cd875fe75b348e6b",
+  "corpusSha256": "327d67aae9e1e44a834fab3cbb82acd361d98137f3efd09652cb05580e8f55dc",
+  "corpusEntryCount": 787,
+  "taxonomySha256": "a96fa56eed0aadb8be618ea2cb54a1be2943e58feaed31e8aba12d7d6059c2bf",
+  "inputHashes": {
+    "ownership-map-v1.json": "4e32063e9ab6e7e8f4621c6f8d92e69e000892c7bac47b16d47417619dc060f1",
+    "taxonomy-digest-v1.json": "58d612d11acbaa5ab751d34e69e35d3bdf3f758192c9845f14825ee23c407dfb",
+    "parent-plan.md": "967c3f180dd025318c4199a9df2dc40b1bb9dd94a78c5907fe105a5fd115f2af",
+    "task1-plan.md": "aad2a04d8217ead4d2e6d7e84c7fa61add6ef48f1594f84c722b131efb702b99",
+    "design-spec.md": "b4caeddf9e94792554ea4b695da235c441c8d14809eca163cbf2cbcca942bca0",
+    "run-no-egress.mjs": "0ad129435b475ab8c1431d7e1806718c3b02f335c3981b6817aa0fe9df5105d6"
+  },
+  "environment": {
+    "nodeVersion": "v24.17.0",
+    "npmVersion": "11.13.0",
+    "platform": "Darwin arm64",
+    "corpusMode": "private",
+    "networkMode": "credential-scrubbed"
+  },
+  "commandMatrix": [
+    { "command": "npm run build", "exitCode": 0, "runner": "credential-scrubbed", "result": "pass" },
+    { "command": "npm test", "exitCode": 0, "runner": "credential-scrubbed", "result": "731 passed, 4 skipped, 0 failed" },
+    { "command": "npm run validate-references", "exitCode": 0, "runner": "credential-scrubbed", "result": "4 references validated" },
+    { "command": "npm run validate-corpus", "exitCode": 0, "runner": "credential-scrubbed", "result": "787 entries, 787 unique ids" },
+    { "command": "npm run doctor", "exitCode": 0, "runner": "credential-scrubbed", "result": "10 pass, 2 warn, 0 fail" },
+    { "command": "npm pack --dry-run", "exitCode": 0, "runner": "standard", "result": "274 files" }
+  ],
+  "skipGates": [
+    {
+      "test": "critique-ui.integration.test.ts > Voyage multimodal embeddings API contract (3 tests)",
+      "file": "src/critique-ui.integration.test.ts:40",
+      "gate": "RUN_LIVE_INTEGRATION !== '1'",
+      "fired": true,
+      "reason": "RUN_LIVE_INTEGRATION not set in credential-scrubbed run",
+      "testCount": 3
+    },
+    {
+      "test": "critique-ui.integration.test.ts > critique_ui end-to-end (hermetic fixtures) (1 test)",
+      "file": "src/critique-ui.integration.test.ts:105",
+      "gate": "RUN_LIVE_INTEGRATION !== '1'",
+      "fired": true,
+      "reason": "RUN_LIVE_INTEGRATION not set in credential-scrubbed run",
+      "testCount": 1
+    }
+  ],
+  "doctorResult": { "pass": 10, "warn": 2, "fail": 0 },
+  "validateCorpusResult": { "valid": true, "entryCount": 787, "uniqueIds": 787 },
+  "packAnalysis": {
+    "totalFiles": 274,
+    "potentialLeaks": [
+      { "path": ".env.example", "risk": "low", "note": "Template file, no real secrets" },
+      { "path": "CLAUDE.md", "risk": "medium", "note": "Agent config, should be excluded by files allowlist in Phase 6" },
+      { "path": "src/GBP movement.xlsx", "risk": "high", "note": "Stray 1.8MB spreadsheet, must be removed before any npm publish" },
+      { "path": "quality-contracts/agent-readiness/*", "risk": "medium", "note": "Curator evidence, should be excluded by files allowlist" }
+    ],
+    "note": "No `files` allowlist exists yet. npm pack includes everything not in .npmignore. The Phase 6 npm release must add a `files` allowlist before publishing."
+  },
+  "credentialScrubbedRunner": {
+    "script": "scripts/run-no-egress.mjs",
+    "approach": "shell-level key redaction + RUN_LIVE_INTEGRATION=0",
+    "limitations": "Not a cryptographic egress guarantee. Removes provider credentials and disables live integration but does not block unauthenticated network traffic. True no-egress requires a network namespace or container at Gate 2/npm release.",
+    "redactedKeys": [
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "GEMINI_API_KEY",
+      "MISTRAL_API_KEY",
+      "MINIMAX_API_KEY",
+      "XAI_API_KEY",
+      "VOYAGE_API_KEY",
+      "IMAGE_EMBEDDING_API_KEY"
+    ]
+  },
+  "diagnosticBaseline": {
+    "gitSha": "fdd74d1",
+    "date": "2026-07-14",
+    "imageCount": 15,
+    "patternTypeAccuracy": 0.80,
+    "rawBannedPhrases": 0,
+    "rawIconOnlyClaims": 0,
+    "meanExtractionLatencyMs": 6553,
+    "citationScorable": false,
+    "extractionProvider": "MiniMax",
+    "extractionModel": "MiniMax-M3",
+    "critiqueProvider": "OpenAI",
+    "critiqueModel": "deepseek-chat",
+    "modelPinned": true,
+    "systemPromptSha256": "65499fa4a0cf20431a88abc62d38b02723189f7f7d230bf180d15f21ec916ca9",
+    "referenceManifestSha256": "db3c6fcf1f0afd9c8ddcdd1fd397dd8e49f119ed59881ab2d45e0502780f125d",
+    "machineRulesSha256": "c1f07a40f1fc3b2dececb1e4532a09278671badffccf60a1c908a0c0f6b0d65a",
+    "note": "Recommendation/citation quality was not scorable. The legacy critique adapter emits no structured recommendations.",
+    "reusable": false,
+    "nonReusableReasons": [
+      "Ordered EVAL_SET metadata SHA-256 not derived",
+      "Per-image byte SHA-256 values for all 15 cases not derived",
+      "Corpus SHA-256 at time of original run not recoverable from snapshot history"
+    ]
+  },
+  "ownershipMapRef": "ownership-map-v1.json",
+  "taxonomyDigestRef": "taxonomy-digest-v1.json",
+  "c0Status": "evidence-gathered-pending-validation",
+  "c0Note": "C0 is not closed until Task 1 validates this artifact against the readiness schemas and the checkpoint approval is recorded."
+}

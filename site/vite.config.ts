@@ -12,5 +12,11 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     css: true,
     globals: true,
+    // jsdom + React 19 + MiniSearch cold-starts are CPU-heavy; under parallel
+    // file execution the default 5s budget is not enough for the snapshot-load
+    // waitFor polls (especially the Playground/Evidence pages). 15s gives the
+    // whole suite headroom on cold/loaded CI runners without masking genuine
+    // hangs (which would still blow past this).
+    testTimeout: 15_000,
   },
 });

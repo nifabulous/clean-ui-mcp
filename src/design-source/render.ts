@@ -25,9 +25,9 @@ const FOUNDATION_GROUPS = [
   "layout",
 ] as const;
 
-/** Escape pipe characters and collapse CR/CRLF so table cells stay single-line. */
+/** Escape pipe characters and collapse newlines so table cells stay single-line. */
 function escapeCell(value: string): string {
-  return value.replace(/\r\n?/g, " ").replace(/\|/g, "\\|");
+  return value.replace(/\r\n|\r|\n/g, " ").replace(/\|/g, "\\|");
 }
 
 /** Format a finding's evidence refs as a stable, space-separated list. */
@@ -131,7 +131,9 @@ export function renderSourceDesign(input: unknown): string {
   for (const limitation of snapshot.limitations) {
     lines.push(`- ${escapeCell(limitation)}`);
   }
-  lines.push("");
+  if (snapshot.limitations.length > 0) {
+    lines.push("");
+  }
 
   // --- Evidence Index ---
   lines.push("## Evidence Index");

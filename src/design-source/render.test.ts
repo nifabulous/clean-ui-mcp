@@ -12,4 +12,13 @@ describe("renderSourceDesign", () => {
     expect(first).toContain("https://example.com/");
     expect(first).toContain("#ffffff");
   });
+
+  it("is byte-deterministic regardless of input array order", () => {
+    const canonical = renderSourceDesign(validSourceSnapshot);
+    const reordered = structuredClone(validSourceSnapshot);
+    reordered.coverage = [...reordered.coverage].reverse();
+    reordered.evidence = [...reordered.evidence].reverse();
+    reordered.foundations.colors = [...reordered.foundations.colors].reverse();
+    expect(renderSourceDesign(reordered)).toBe(canonical);
+  });
 });

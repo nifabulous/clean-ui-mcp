@@ -352,13 +352,48 @@ export const ApprovalActorRegistry = BaseArtifactHeader.extend({
     ),
 }).strict();
 
+// ---------------------------------------------------------------------------
+// Backward-compatible snapshot chain metadata
+// ---------------------------------------------------------------------------
+
+/**
+ * Reference to the previous snapshot in an append-only chain.
+ *
+ * `version` is the human-readable predecessor identifier (e.g. registry-style
+ * version string); `sha256` is its canonical-content digest. Both fields are
+ * required when a predecessor is present. A `null`/absent predecessor marks a
+ * genesis (first) snapshot. Schemas consume this via `VersionedSnapshotFields`.
+ */
+export const SnapshotPredecessor = z.object({
+  version: z.string().trim().min(1),
+  sha256: Sha256,
+}).strict();
+
+/**
+ * Optional, backward-compatible chain metadata shared by versioned snapshot
+ * artifacts (`CheckpointApprovals`, `ArtifactIndex`).
+ *
+ * - `ordinalVersion`: 1-based ordinal of the snapshot in its chain.
+ * - `predecessor`: reference to the prior snapshot, or `null` for genesis.
+ *
+ * Absence (rather than a default) is how historical v1 snapshots stay
+ * distinguishable from v2+ snapshots that explicitly declare `ordinalVersion: 1`
+ * with a `null` predecessor.
+ */
+const VersionedSnapshotFields = {
+  ordinalVersion: z.number().int().min(1).optional(),
+  predecessor: SnapshotPredecessor.nullable().optional(),
+};
+
 export const CheckpointApprovals = BaseArtifactHeader.extend({
   artifactType: z.literal("checkpoint-approvals"),
+  ...VersionedSnapshotFields,
   approvals: z.array(CheckpointApproval),
 }).strict();
 
 export const ArtifactIndex = BaseArtifactHeader.extend({
   artifactType: z.literal("artifact-index"),
+  ...VersionedSnapshotFields,
   artifacts: z.array(
     z
       .object({
@@ -493,24 +528,40 @@ export function validateRegistry(
   return issues;
 }
 
-/** Validate that a current ledger is an append-only superset of a previous one. Returns issues. */
+/**
+ * Validate that a current ledger is an append-only successor of a previous one.
+ *
+ * The previous ledger's approvals must survive as an UNCHANGED PREFIX of the
+ * current ledger: each prior approval must occupy the same index with the same
+ * canonical bytes. Removing one, rewriting one, or reordering them are all
+ * violations. New approvals appended after the prefix are permitted (that is
+ * the append-only growth the chain allows).
+ *
+ * Returns human-readable messages; the caller maps the stable prefixes
+ * ("prior approval deleted:", "prior approval mutated:", "prior approval
+ * reordered:") to `ledger-approval-*` issue codes.
+ */
 export function validateLedgerAppendOnly(
   current: { approvals: z.infer<typeof CheckpointApproval>[] },
   previous: { approvals: z.infer<typeof CheckpointApproval>[] },
 ): string[] {
   const issues: string[] = [];
 
-  const currentMap = new Map(
-    current.approvals.map((a) => [a.approvalId, canonicalJsonStringify(a)]),
-  );
-
-  for (const prevApproval of previous.approvals) {
-    const currentCanonical = currentMap.get(prevApproval.approvalId);
-    const prevCanonical = canonicalJsonStringify(prevApproval);
-    if (currentCanonical === undefined) {
-      issues.push(`prior approval deleted: ${prevApproval.approvalId}`);
-    } else if (currentCanonical !== prevCanonical) {
-      issues.push(`prior approval mutated: ${prevApproval.approvalId}`);
+  for (let i = 0; i < previous.approvals.length; i++) {
+    const prior = previous.approvals[i]!;
+    const next = current.approvals[i];
+    if (!next) {
+      issues.push(`prior approval deleted: ${prior.approvalId}`);
+    } else if (next.approvalId !== prior.approvalId) {
+      // The slot no longer holds the same approval. If the prior approval still
+      // exists somewhere later in the current list, it was reordered; otherwise
+      // it was deleted and a different approval took its place.
+      const moved = current.approvals.some((a) => a.approvalId === prior.approvalId);
+      issues.push(
+        `${moved ? "prior approval reordered" : "prior approval deleted"}: ${prior.approvalId}`,
+      );
+    } else if (canonicalJsonStringify(next) !== canonicalJsonStringify(prior)) {
+      issues.push(`prior approval mutated: ${prior.approvalId}`);
     }
   }
 
@@ -532,4 +583,5 @@ export type TaxonomyDigestArtifactT = z.infer<typeof TaxonomyDigestArtifact>;
 export type ApprovalActorRegistryT = z.infer<typeof ApprovalActorRegistry>;
 export type CheckpointApprovalsT = z.infer<typeof CheckpointApprovals>;
 export type ArtifactIndexT = z.infer<typeof ArtifactIndex>;
+export type SnapshotPredecessorT = z.infer<typeof SnapshotPredecessor>;
 export type TrackedArtifactT = z.infer<typeof TrackedArtifact>;

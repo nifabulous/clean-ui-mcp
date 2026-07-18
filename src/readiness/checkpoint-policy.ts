@@ -51,6 +51,9 @@ export interface GitSourceResolver {
 // Recipe
 // ---------------------------------------------------------------------------
 
+/** Identifier for a checkpoint whose recipe and policy are declared in code. */
+export type CheckpointId = "C0" | "C1";
+
 /**
  * The complete recipe for recomputing a checkpoint's canonical target.
  *
@@ -58,14 +61,26 @@ export interface GitSourceResolver {
  * is the commit at which the approved plan/spec/inputHashes bytes live. The
  * `contracts` binding may legitimately point at a later commit when the file
  * did not exist at `sourceGitSha` — see C0_RECIPE for the single such case.
+ *
+ * `integrationGitSha`, when set, records the merge commit at which the reviewed
+ * source bytes were integrated. C1 sets this so the validator can prove the
+ * reviewed commit and the merged tree carry identical bytes for every binding
+ * (reviewed != merged would mean the merge changed content after review). C0
+ * leaves it unset because its approvals predate this provenance check.
  */
 export interface CheckpointRecipe {
-  readonly checkpoint: "C0";
+  readonly checkpoint: CheckpointId;
   /** Frozen Phase-0 baseline commit. */
   readonly baselineGitSha: string;
   /** Commit whose tree holds the approved plan / spec / inputHashes bytes. */
   readonly sourceGitSha: string;
-  /** Artifact set that every C0 approval must approve exactly. */
+  /**
+   * Merge commit whose tree must carry byte-identical copies of every bound
+   * source file. Optional: only C1 (and later checkpoints with merge
+   * provenance) set this.
+   */
+  readonly integrationGitSha?: string;
+  /** Artifact set that every approval for this checkpoint must approve exactly. */
   readonly artifacts: ReadonlyArray<{ artifactId: string; artifactType: string }>;
   /** Binding for the task plan (approval.planSha256 source). */
   readonly planBinding: CheckpointSourceBinding;
@@ -102,6 +117,25 @@ export interface CheckpointRecipe {
    * `summary-input-hash-mismatch` check, so coverage is not weakened.
    */
   readonly targetIncludesInputHashes: boolean;
+}
+
+/**
+ * Closed-world policy for a checkpoint. Every field is an exact set: an
+ * approval is valid only when its observed values match the set with no
+ * missing and no extra members. Derived from the corresponding recipe so the
+ * policy never drifts from the declared bindings.
+ */
+export interface CheckpointPolicy {
+  /** Artifact types every approval's approvedArtifacts must cover exactly. */
+  readonly requiredArtifactTypes: readonly string[];
+  /** Source binding keys (plan + spec) every approval must carry exactly. */
+  readonly requiredSourceKeys: readonly string[];
+  /** Contract hash keys every approval's contractHashes must carry exactly. */
+  readonly requiredContractKeys: readonly string[];
+  /** phase0-summary inputHashes keys that must be present exactly. */
+  readonly requiredInputHashKeys: readonly string[];
+  /** Roles that must approve this checkpoint, each by a distinct actor. */
+  readonly requiredRoles: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -237,7 +271,138 @@ export const C0_RECIPE: CheckpointRecipe = {
   targetIncludesInputHashes: false,
 };
 
+// ---------------------------------------------------------------------------
+// C1 recipe — declared ahead of any approvals; activates only on C1 approval
+// ---------------------------------------------------------------------------
+
+/**
+ * The commit at which the C1 contract sources were reviewed/approved. This is
+ * `022a3f2` ("fix: deterministic decision-id collision test + ..."), the
+ * head of the reviewed content. The C1 recipe resolves every plan/spec/contract
+ * binding at this commit.
+ */
+export const C1_CONTRACT_SHA = "022a3f229a4aeba74b9b140142fd2d3a0aa6c4be";
+
+/**
+ * The merge commit (`7609e3c`) that integrated `C1_CONTRACT_SHA` into main via
+ * PR #30. Recorded separately from the reviewed commit so the validator can
+ * prove the reviewed bytes and the merged tree are byte-identical for every
+ * C1 binding — i.e. the merge did not alter reviewed content.
+ */
+export const C1_MERGE_SHA = "7609e3c14daddd4448d6bdf37c9a6a337a7241d0";
+
+/**
+ * Semantic artifact IDs for the future C1 governance artifacts. These names
+ * pin the contract for the deferred artifact plan: actor identity remains
+ * unassigned and no v2 JSON files are created by this recipe.
+ */
+export const C1_ARTIFACTS = [
+  { artifactId: "actors-c1-v2", artifactType: "approval-actor-registry" },
+  { artifactId: "index-c1-v2", artifactType: "artifact-index" },
+] as const;
+
+/** Plan binding: the phase-0/1c implementation plan, reviewed at C1_CONTRACT_SHA. */
+const C1_PLAN_BINDING: CheckpointSourceBinding = {
+  key: "task1-plan.md",
+  repositoryPath:
+    "docs/superpowers/plans/2026-07-14-agent-readiness-phase-0-1c-implementation-plan.md",
+  gitCommit: C1_CONTRACT_SHA,
+};
+
+/** Spec binding: the agent-readiness design spec, reviewed at C1_CONTRACT_SHA. */
+const C1_SPEC_BINDING: CheckpointSourceBinding = {
+  key: "design-spec.md",
+  repositoryPath:
+    "docs/superpowers/specs/2026-07-13-agent-readiness-and-retagging-design.md",
+  gitCommit: C1_CONTRACT_SHA,
+};
+
+/**
+ * Contract bindings: the four tool-contract sources introduced for C1. Every
+ * binding resolves at C1_CONTRACT_SHA (the reviewed commit); the
+ * `integrationGitSha` check additionally proves each is byte-identical at
+ * C1_MERGE_SHA.
+ */
+const C1_CONTRACT_BINDINGS: readonly CheckpointSourceBinding[] = [
+  { key: "tool-contracts.ts", repositoryPath: "src/tool-contracts.ts", gitCommit: C1_CONTRACT_SHA },
+  { key: "tool-contract-integrity.ts", repositoryPath: "src/tool-contract-integrity.ts", gitCommit: C1_CONTRACT_SHA },
+  { key: "tool-contract-docs.ts", repositoryPath: "src/tool-contract-docs.ts", gitCommit: C1_CONTRACT_SHA },
+  { key: "tool-catalog.ts", repositoryPath: "src/tool-catalog.ts", gitCommit: C1_CONTRACT_SHA },
+];
+
+/**
+ * The canonical C1 checkpoint recipe. Declared now so policy is closed-world
+ * before any C1 approval exists. With no C1 approvals in the ledger, the
+ * validator skips C1 target recomputation and C1 remains open without an
+ * issue; the recipe activates only when a C1 approval appears.
+ */
+export const C1_RECIPE: CheckpointRecipe = {
+  checkpoint: "C1",
+  baselineGitSha: C0_BASELINE_GIT_SHA,
+  sourceGitSha: C1_CONTRACT_SHA,
+  integrationGitSha: C1_MERGE_SHA,
+  artifacts: C1_ARTIFACTS,
+  planBinding: C1_PLAN_BINDING,
+  specBinding: C1_SPEC_BINDING,
+  contractBindings: C1_CONTRACT_BINDINGS,
+  inputHashKeys: [
+    "task1-plan.md",
+    "design-spec.md",
+    "tool-contracts.ts",
+    "tool-contract-integrity.ts",
+    "tool-contract-docs.ts",
+    "tool-catalog.ts",
+  ],
+  inputHashBindings: [C1_PLAN_BINDING, C1_SPEC_BINDING, ...C1_CONTRACT_BINDINGS],
+  // C1 targets are recomputed with inputHashes populated (no legacy ledger to
+  // reproduce byte-for-byte).
+  targetIncludesInputHashes: true,
+};
+
+// ---------------------------------------------------------------------------
+// Closed-world policies — derived from recipes, no duplicated keys
+// ---------------------------------------------------------------------------
+
+/** Source binding keys (plan + spec) declared by a recipe. */
+const sourceKeys = (recipe: CheckpointRecipe): readonly string[] => [
+  recipe.planBinding.key,
+  recipe.specBinding.key,
+];
+
+/** Contract hash keys declared by a recipe's contract bindings. */
+const contractKeys = (recipe: CheckpointRecipe): readonly string[] =>
+  recipe.contractBindings.map((b) => b.key);
+
+/** Unique artifact types a recipe's approvals must cover. */
+const artifactTypes = (recipe: CheckpointRecipe): readonly string[] => [
+  ...new Set(recipe.artifacts.map((a) => a.artifactType)),
+];
+
+/**
+ * Exact-set policies for every declared checkpoint. C0 reproduces the
+ * historically approved closure; C1 declares the roles and artifact/contract
+ * sets required for a future authorized C1 approval. Both are derived from
+ * their recipes so policy cannot drift from the declared bindings.
+ */
+export const CHECKPOINT_POLICIES: Record<CheckpointId, CheckpointPolicy> = {
+  C0: {
+    requiredArtifactTypes: artifactTypes(C0_RECIPE),
+    requiredSourceKeys: sourceKeys(C0_RECIPE),
+    requiredContractKeys: contractKeys(C0_RECIPE),
+    requiredInputHashKeys: C0_RECIPE.inputHashKeys,
+    requiredRoles: ["Repository Maintainer", "PM"],
+  },
+  C1: {
+    requiredArtifactTypes: artifactTypes(C1_RECIPE),
+    requiredSourceKeys: sourceKeys(C1_RECIPE),
+    requiredContractKeys: contractKeys(C1_RECIPE),
+    requiredInputHashKeys: C1_RECIPE.inputHashKeys,
+    requiredRoles: ["Product", "Engineering"],
+  },
+};
+
 /** All known recipes keyed by checkpoint id. */
-export const CHECKPOINT_RECIPES: Record<"C0", CheckpointRecipe> = {
+export const CHECKPOINT_RECIPES: Record<CheckpointId, CheckpointRecipe> = {
   C0: C0_RECIPE,
+  C1: C1_RECIPE,
 };

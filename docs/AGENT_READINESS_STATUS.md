@@ -75,3 +75,7 @@ R0 makes C0 validation **Git-bound for the C0 recipe** — it resolves approved
 bytes from the recorded commit so later C1 edits do not reopen C0. This is the
 parent-plan Task T1 design in miniature. The broader closed-world policies and
 registry v2 snapshot chains remain parent-plan T1/T2 follow-on work.
+
+## Lane B governance infrastructure
+
+The code-only governance pass is complete: C0/C1 closed-world policies, the Git-bound C1 recipe, deterministic registry/index/ledger chains, per-approval registry resolution, and automatic append-only ledger validation are implemented. No v2 governance artifacts or C1 approvals were created. C1 remains open pending authorized Product and Engineering actor assignments and independent approvals.

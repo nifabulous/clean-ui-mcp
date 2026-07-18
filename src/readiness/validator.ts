@@ -28,8 +28,16 @@ import type {
   CheckpointRecipe,
   GitSourceResolver,
 } from "./checkpoint-policy.js";
-import { CHECKPOINT_RECIPES } from "./checkpoint-policy.js";
+import { CHECKPOINT_RECIPES, CHECKPOINT_POLICIES } from "./checkpoint-policy.js";
 import type { z } from "zod";
+import {
+  selectChain,
+  registryChainNode,
+  ordinalChainNode,
+  type ChainIssue,
+  type ChainNode,
+  type ChainNodeResult,
+} from "./chains.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,7 +48,6 @@ export interface ValidateReadinessOptions {
   mode: "public" | "private";
   corpusPath?: string;
   privateArtifactRoot?: string;
-  previousLedgerPath?: string;
   /**
    * Repository toplevel (git rev-parse --show-toplevel). Used only for
    * artifact-index path containment. The artifact root is a subdirectory of
@@ -69,13 +76,48 @@ export interface ValidationResult {
   issues: ValidationIssue[];
 }
 
+/**
+ * A parsed artifact with its computed content digest, file path, and the
+ * raw record. Used throughout validation and chain construction.
+ */
+interface ParsedArtifact {
+  type: string;
+  data: Record<string, unknown>;
+  filePath: string;
+  sha: string;
+}
+
+/**
+ * Resolved governance snapshot chains for the three versioned artifact
+ * families (registries, indexes, ledgers). `registryHead` / `indexHead` /
+ * `ledgerHead` are the unique terminal heads selected by the chain engine,
+ * or `undefined` when the family has issues (e.g. fork, missing predecessor).
+ * `registryByVersion` maps every validated registry version to its artifact;
+ * `orderedLedgers` is the root-to-head ledger order when sound.
+ */
+interface GovernanceChains {
+  registries: readonly ParsedArtifact[];
+  indexes: readonly ParsedArtifact[];
+  ledgers: readonly ParsedArtifact[];
+  registryHead?: ParsedArtifact;
+  indexHead?: ParsedArtifact;
+  ledgerHead?: ParsedArtifact;
+  registryByVersion: ReadonlyMap<string, ParsedArtifact>;
+  orderedLedgers: readonly ParsedArtifact[];
+}
+
 // ---------------------------------------------------------------------------
 // Required role sets per checkpoint
 // ---------------------------------------------------------------------------
 
-const CHECKPOINT_ROLES: Record<string, string[]> = {
-  C0: ["Repository Maintainer", "PM"],
-  C1: ["Product", "Engineering"],
+/**
+ * Role requirements for checkpoints without a declared closed-world policy
+ * (C2–C5). C0 and C1 derive their required roles from `CHECKPOINT_POLICIES`
+ * (consumed at runtime via `CHECKPOINT_POLICIES[cp].requiredRoles`); this table
+ * only covers the future checkpoints that still use the legacy presence-only
+ * closure check.
+ */
+const FUTURE_CHECKPOINT_ROLES: Record<string, string[]> = {
   C2: ["Gold Label Owner", "QA"],
   C3: ["Product", "QA", "Engineering"],
   C4: ["Evaluation Owner", "Product", "QA"],
@@ -284,13 +326,14 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
     artifacts.set(artifactId, { type: artifactType, data: record, filePath, sha });
   }
 
-  // 3. Validate the artifact index
-  let indexEntry: ParsedArtifact | undefined;
-  let ledgerEntry: ParsedArtifact | undefined;
-  for (const [, entry] of artifacts) {
-    if (entry.type === "artifact-index") indexEntry = entry;
-    if (entry.type === "checkpoint-approvals") ledgerEntry = entry;
-  }
+  // 3. Resolve governance snapshot chains (registries, indexes, ledgers).
+  //    The chain engine selects a unique terminal head per family and reports
+  //    structural issues (forks, missing predecessors, duplicate keys). This
+  //    replaces the former enumeration-order `.find()` selection.
+  const chains = resolveGovernanceChains(artifacts, issues);
+  const indexEntry = chains.indexHead;
+  const ledgerEntry = chains.ledgerHead;
+  const registry = chains.registryHead;
 
   if (!indexEntry) {
     issues.push({ code: "missing-index", message: "artifact-index not found" });
@@ -412,8 +455,7 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
       }
     }
 
-    // 7. Validate registry
-    const registry = [...artifacts.values()].find((a) => a.type === "approval-actor-registry");
+    // 7. Validate registry (head selected via chain engine in section 3)
     if (registry) {
       const registryIssues = validateRegistry(registry.data as z.infer<typeof ApprovalActorRegistry>);
       for (const msg of registryIssues) {
@@ -425,11 +467,33 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
       }
     }
 
+    // 7b. Append-only verification across every adjacent root-to-head ledger
+    //     edge. Each predecessor approval list must survive unchanged (same
+    //     approvalId, same canonical bytes, same order) in its successor.
+    for (let i = 1; i < chains.orderedLedgers.length; i++) {
+      const previous = CheckpointApprovals.safeParse(chains.orderedLedgers[i - 1]!.data);
+      const current = CheckpointApprovals.safeParse(chains.orderedLedgers[i]!.data);
+      if (!previous.success || !current.success) continue; // schema errors already recorded
+      for (const message of validateLedgerAppendOnly(current.data, previous.data)) {
+        const deleted = message.startsWith("prior approval deleted:");
+        const reordered = message.startsWith("prior approval reordered:");
+        issues.push({
+          code: deleted
+            ? "ledger-approval-deleted"
+            : reordered
+              ? "ledger-approval-reordered"
+              : "ledger-approval-mutated",
+          artifactId: String(chains.orderedLedgers[i]!.data.artifactId),
+          message,
+        });
+      }
+    }
+
     // 8. Approvals and checkpoint closure
     if (ledgerEntry && registry) {
       validateApprovalsAndCheckpoint(
         ledgerEntry,
-        registry,
+        chains.registryByVersion,
         implementationActorIds,
         artifacts,
         absRoot,
@@ -504,19 +568,97 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
 }
 
 // ---------------------------------------------------------------------------
+// Governance chain resolution
+// ---------------------------------------------------------------------------
+
+/** Map a structural ChainIssue to a ValidationIssue (codes preserved). */
+function chainIssueToValidationIssue(issue: ChainIssue): ValidationIssue {
+  return {
+    code: issue.code,
+    artifactId: issue.nodeId,
+    message: issue.message,
+  };
+}
+
+/**
+ * Collect every registry/index/ledger artifact, adapt each to its chain node
+ * representation, and run `selectChain` per family. Chain issues (forks,
+ * missing predecessors, duplicate keys, etc.) are pushed onto `issues`. Heads
+ * are left undefined for any family with issues.
+ *
+ * A family with a single artifact and no chain metadata forms a degenerate
+ * chain of one node whose head is that node — this keeps the existing v1-only
+ * real repo validating.
+ */
+function resolveGovernanceChains(
+  artifacts: Map<string, ParsedArtifact>,
+  issues: ValidationIssue[],
+): GovernanceChains {
+  const registries = [...artifacts.values()].filter((a) => a.type === "approval-actor-registry");
+  const indexes = [...artifacts.values()].filter((a) => a.type === "artifact-index");
+  const ledgers = [...artifacts.values()].filter((a) => a.type === "checkpoint-approvals");
+
+  // Registries use string version keys via registryChainNode.
+  const registryAdapted: ChainNode<ParsedArtifact>[] = registries.map(registryChainNode);
+  const registrySelection = selectChain("registry", registryAdapted);
+
+  // Indexes and ledgers use ordinal keys via ordinalChainNode. An adaptation
+  // failure (e.g. malformed predecessor) is itself a chain issue.
+  const indexAdapted: ChainNodeResult<ParsedArtifact>[] = indexes.map(ordinalChainNode);
+  const ledgerAdapted: ChainNodeResult<ParsedArtifact>[] = ledgers.map(ordinalChainNode);
+
+  const indexValid: ChainNode<ParsedArtifact>[] = [];
+  const ledgerValid: ChainNode<ParsedArtifact>[] = [];
+  for (const result of indexAdapted) {
+    if (result.ok) {
+      indexValid.push(result.node);
+    } else {
+      issues.push(chainIssueToValidationIssue(result.issue));
+    }
+  }
+  for (const result of ledgerAdapted) {
+    if (result.ok) {
+      ledgerValid.push(result.node);
+    } else {
+      issues.push(chainIssueToValidationIssue(result.issue));
+    }
+  }
+
+  const indexSelection = selectChain("index", indexValid);
+  const ledgerSelection = selectChain("ledger", ledgerValid);
+
+  // Surface structural issues from every family.
+  for (const issue of [...registrySelection.issues, ...indexSelection.issues, ...ledgerSelection.issues]) {
+    issues.push(chainIssueToValidationIssue(issue));
+  }
+
+  // registryByVersion spans every validated registry node (not only the head),
+  // keyed by its version string. Built from the adapted nodes so the key set
+  // matches what the chain engine actually considered.
+  const registryByVersion = new Map<string, ParsedArtifact>();
+  for (const node of registryAdapted) {
+    registryByVersion.set(String(node.key), node.value);
+  }
+
+  return {
+    registries,
+    indexes,
+    ledgers,
+    registryHead: registrySelection.head?.value,
+    indexHead: indexSelection.head?.value,
+    ledgerHead: ledgerSelection.head?.value,
+    registryByVersion,
+    orderedLedgers: ledgerSelection.ordered.map((n) => n.value),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Approval validation
 // ---------------------------------------------------------------------------
 
-interface ParsedArtifact {
-  type: string;
-  data: Record<string, unknown>;
-  filePath: string;
-  sha: string;
-}
-
 function validateApprovalsAndCheckpoint(
   ledgerEntry: ParsedArtifact,
-  registry: ParsedArtifact,
+  registryByVersion: ReadonlyMap<string, ParsedArtifact>,
   implementationActorIds: Set<string>,
   artifacts: Map<string, ParsedArtifact>,
   absRoot: string,
@@ -531,15 +673,16 @@ function validateApprovalsAndCheckpoint(
   }
 
   const approvals = ledgerData.data.approvals;
-  const registryData = registry.data as z.infer<typeof ApprovalActorRegistry>;
-  const registryActorMap = new Map(registryData.actors.map((a) => [a.actorId, a]));
 
   // ------------------------------------------------------------------
   // Git-bound recomputation of the canonical checkpoint target(s).
-  // Only checkpoints with a known recipe are recomputed; others fall back
-  // to the legacy presence-only closure check.
+  // Only checkpoints with ACTIVE approvals are recomputed; recipes for
+  // checkpoints with no approval are declared but skipped, so a future
+  // checkpoint (e.g. C1) stays open without producing spurious issues
+  // from unresolved sources.
   // ------------------------------------------------------------------
-  const recompute = computeCanonicalTargets(artifacts, absRoot, opts);
+  const activeCheckpoints = new Set(approvals.map((a) => a.checkpoint));
+  const recompute = computeCanonicalTargets(artifacts, absRoot, opts, activeCheckpoints, approvals, registryByVersion);
 
   // Per-approval set of issue codes that this approval produced. An approval
   // with any issue cannot contribute to closure.
@@ -559,7 +702,8 @@ function validateApprovalsAndCheckpoint(
   for (const approval of approvals) {
     const iid = approval.approvalId;
 
-    // Implementer cannot approve (checked first — no continue, all checks run)
+    // Implementer cannot approve (checked first — independent of registry
+    // resolution so all applicable errors are reported).
     if (implementationActorIds.has(approval.actorId)) {
       issues.push({
         code: "implementer-self-approval",
@@ -569,62 +713,70 @@ function validateApprovalsAndCheckpoint(
       noteApprovalIssue(iid, "implementer-self-approval");
     }
 
-    // Actor must exist in registry
-    const actor = registryActorMap.get(approval.actorId);
-    if (!actor) {
-      issues.push({
-        code: "actor-not-found",
-        artifactId: iid,
-        message: `approval ${iid}: actor ${approval.actorId} not in registry`,
-      });
-      noteApprovalIssue(iid, "actor-not-found");
-      continue;
+    // Resolve the registry matching THIS approval's recorded version. Each
+    // approval pins the exact registry version + digest it was issued
+    // against; an older approval must resolve against its own version even
+    // when a newer registry is the chain head.
+    const resolvedRegistry = resolveApprovalRegistry(
+      approval,
+      registryByVersion,
+      issues,
+      noteApprovalIssue,
+    );
+
+    // Actor existence / role / kind checks use the approval's resolved
+    // registry. When the registry cannot be resolved we still run the
+    // remaining recomputation/policy checks below; actor checks are skipped
+    // only because there is no authoritative actor list to consult.
+    if (resolvedRegistry) {
+      const actorMap = new Map(resolvedRegistry.actors.map((a) => [a.actorId, a]));
+      const actor = actorMap.get(approval.actorId);
+      if (!actor) {
+        issues.push({
+          code: "actor-not-found",
+          artifactId: iid,
+          message: `approval ${iid}: actor ${approval.actorId} not in registry`,
+        });
+        noteApprovalIssue(iid, "actor-not-found");
+      } else {
+        // Actor must be authorized for the claimed role
+        if (!actor.roles.includes(approval.role)) {
+          issues.push({
+            code: "actor-role-mismatch",
+            artifactId: iid,
+            message: `approval ${iid}: actor ${approval.actorId} not authorized for role ${approval.role}`,
+          });
+          noteApprovalIssue(iid, "actor-role-mismatch");
+        }
+
+        // Actor kind must match registry
+        if (actor.actorKind !== approval.actorKind) {
+          issues.push({
+            code: "actor-kind-mismatch",
+            artifactId: iid,
+            message: `approval ${iid}: actorKind ${approval.actorKind} does not match registry ${actor.actorKind}`,
+          });
+          noteApprovalIssue(iid, "actor-kind-mismatch");
+        }
+      }
     }
 
-    // Actor must be authorized for the claimed role
-    if (!actor.roles.includes(approval.role)) {
-      issues.push({
-        code: "actor-role-mismatch",
-        artifactId: iid,
-        message: `approval ${iid}: actor ${approval.actorId} not authorized for role ${approval.role}`,
-      });
-      noteApprovalIssue(iid, "actor-role-mismatch");
-    }
-
-    // Actor kind must match registry
-    if (actor.actorKind !== approval.actorKind) {
-      issues.push({
-        code: "actor-kind-mismatch",
-        artifactId: iid,
-        message: `approval ${iid}: actorKind ${approval.actorKind} does not match registry ${actor.actorKind}`,
-      });
-      noteApprovalIssue(iid, "actor-kind-mismatch");
-    }
-
-    // Registry hash must match actual file
-    if (approval.actorRegistrySha256 !== registry.sha) {
-      issues.push({
-        code: "registry-hash-mismatch",
-        artifactId: iid,
-        message: `approval ${iid}: registry hash ${approval.actorRegistrySha256} does not match file ${registry.sha}`,
-      });
-      noteApprovalIssue(iid, "registry-hash-mismatch");
-    }
-
-    // Git-bound recomputation checks. When a recipe exists, recomputation is
-    // MANDATORY and fail-closed: a resolved target must compare against the
-    // approval, or — if resolution threw — the approval is disqualified and the
-    // checkpoint cannot close. There is no skip path; the resolver is required.
+    // Git-bound recomputation checks. When a recipe exists for an ACTIVE
+    // checkpoint, recomputation is MANDATORY and fail-closed: a resolved
+    // target must compare against the approval, or — if resolution threw —
+    // the approval is disqualified and the checkpoint cannot close. There
+    // is no skip path; the resolver is required.
     const recipe = recompute.recipes[approval.checkpoint];
-    const recomputeError = recompute.recomputeFailures.get(approval.checkpoint);
-    if (recipe && recomputeError !== undefined) {
+    const recomputeFailure = recompute.recomputeFailures.get(approval.checkpoint);
+    if (recipe && activeCheckpoints.has(approval.checkpoint) && recomputeFailure !== undefined) {
+      const code = recomputeFailure.code;
       issues.push({
-        code: "checkpoint-recompute-failed",
+        code,
         artifactId: iid,
-        message: `approval ${iid}: checkpoint ${approval.checkpoint} target could not be recomputed (${recomputeError}); approval cannot contribute to closure`,
+        message: `approval ${iid}: checkpoint ${approval.checkpoint} target could not be recomputed (${recomputeFailure.message}); approval cannot contribute to closure`,
       });
-      noteApprovalIssue(iid, "checkpoint-recompute-failed");
-    } else if (recipe && recompute.canonical[approval.checkpoint]) {
+      noteApprovalIssue(iid, code);
+    } else if (recipe && activeCheckpoints.has(approval.checkpoint) && recompute.canonical[approval.checkpoint]) {
       const canonical = recompute.canonical[approval.checkpoint]!;
 
       // checkpointTargetSha256 must equal the recomputed canonical target.
@@ -655,34 +807,25 @@ function validateApprovalsAndCheckpoint(
         noteApprovalIssue(iid, "spec-hash-mismatch");
       }
 
-      // contractHashes: exact key set + per-key value match.
-      const expectedContractKeys = new Set(recipe.contractBindings.map((b) => b.key));
-      const actualContractKeys = new Set(Object.keys(approval.contractHashes));
-      const contractKeyMismatch =
-        expectedContractKeys.size !== actualContractKeys.size ||
-        [...expectedContractKeys].some((k) => !actualContractKeys.has(k));
-      if (contractKeyMismatch) {
-        issues.push({
-          code: "contract-hash-mismatch",
-          artifactId: iid,
-          message: `approval ${iid}: contractHashes keys (${[...actualContractKeys].sort().join(",")}) do not match expected (${[...expectedContractKeys].sort().join(",")})`,
-        });
-        noteApprovalIssue(iid, "contract-hash-mismatch");
-      } else {
-        for (const b of recipe.contractBindings) {
-          if (approval.contractHashes[b.key] !== canonical.contractHashes[b.key]) {
-            issues.push({
-              code: "contract-hash-mismatch",
-              artifactId: iid,
-              message: `approval ${iid}: contractHashes[${b.key}] ${approval.contractHashes[b.key]} does not match resolved ${canonical.contractHashes[b.key]}`,
-            });
-            noteApprovalIssue(iid, "contract-hash-mismatch");
-          }
+      // contractHashes per-key value match (set membership is enforced by the
+      // closed-world policy check below).
+      for (const b of recipe.contractBindings) {
+        if (approval.contractHashes[b.key] !== canonical.contractHashes[b.key]) {
+          issues.push({
+            code: "contract-hash-mismatch",
+            artifactId: iid,
+            message: `approval ${iid}: contractHashes[${b.key}] ${approval.contractHashes[b.key]} does not match resolved ${canonical.contractHashes[b.key]}`,
+          });
+          noteApprovalIssue(iid, "contract-hash-mismatch");
         }
       }
 
       // approvedArtifacts must exactly equal the recipe artifact set.
       verifyApprovedArtifactSet(approval, recipe, artifacts, issues, noteApprovalIssue);
+
+      // Closed-world policy: exact-set equality for every category against
+      // the declared C0/C1 policy. Missing AND unexpected members are errors.
+      verifyCheckpointPolicy(approval, recipe, artifacts, issues, noteApprovalIssue);
     }
 
     // Track target SHAs per checkpoint
@@ -707,29 +850,179 @@ function validateApprovalsAndCheckpoint(
 
   // Determine checkpoint closure for C0–C5. Only approvals that are
   // (decision:"approved" + approvalKind:"checkpoint") AND produced no issue
-  // can contribute to closure.
+  // can contribute to closure. For policy-backed checkpoints (C0/C1) the
+  // required roles come from CHECKPOINT_POLICIES and the approved-role set is
+  // itself closed-world (extra roles are rejected); future checkpoints use
+  // the FUTURE_CHECKPOINT_ROLES table with the legacy presence-only check.
   for (const cp of ["C0", "C1", "C2", "C3", "C4", "C5"]) {
-    const required = CHECKPOINT_ROLES[cp] || [];
-    const cpApprovals = approvals.filter(
+    const policy = CHECKPOINT_POLICIES[cp as keyof typeof CHECKPOINT_POLICIES];
+    const required = policy ? policy.requiredRoles : (FUTURE_CHECKPOINT_ROLES[cp] || []);
+
+    // ALL approved checkpoint-kind approvals for this checkpoint — used for
+    // the closed-world role-set check (duplicates/extras are structural and
+    // must be visible even when an approval is tainted by another issue).
+    const allCpApproved = approvals.filter(
       (a) =>
         a.checkpoint === cp &&
         a.decision === "approved" &&
-        a.approvalKind === "checkpoint" &&
-        !approvalIssueCodes.has(a.approvalId),
+        a.approvalKind === "checkpoint",
     );
+    const allRoles = allCpApproved.map((a) => a.role);
 
-    const approvedRoles = new Set<string>();
-    const approvedActors = new Set<string>();
-    for (const a of cpApprovals) {
-      approvedRoles.add(a.role);
-      approvedActors.add(a.actorId);
+    // Closed-world role check for policy-backed checkpoints WITH approvals.
+    // When a checkpoint has no approvals it stays open silently (the future-
+    // checkpoint invariant: e.g. C1 unresolved until a C1 approval appears).
+    // When approvals exist, the approved role multiset must exactly equal the
+    // required set (no missing, no extra, no duplicates); comparePolicySet
+    // records any mismatch and taints the checkpoint's approvals.
+    if (policy && allCpApproved.length > 0) {
+      comparePolicySet(
+        cp,
+        "role",
+        required,
+        allRoles,
+        issues,
+        (id, code) => {
+          // Attach to the checkpoint (not a single approval); mark every
+          // approval of this checkpoint as tainted so closure is blocked.
+          for (const a of allCpApproved) noteApprovalIssue(a.approvalId, code);
+          void id;
+        },
+      );
     }
 
-    const allRolesPresent = required.every((r) => approvedRoles.has(r));
-    const distinctActors = approvedActors.size === cpApprovals.length;
+    // Closure contribution: only approvals that produced NO issue. Re-derive
+    // the clean set AFTER the role check may have tainted approvals.
+    const cpApprovals = allCpApproved.filter(
+      (a) => !approvalIssueCodes.has(a.approvalId),
+    );
+    const cleanRoles = new Set<string>(cpApprovals.map((a) => a.role));
+    const cleanActors = new Set<string>(cpApprovals.map((a) => a.actorId));
+
+    const allRolesPresent = required.every((r) => cleanRoles.has(r));
+    const distinctActors =
+      cleanActors.size === cpApprovals.length && cpApprovals.length > 0;
 
     if (allRolesPresent && distinctActors) {
       checkpointStatus[cp] = "closed";
+    }
+  }
+}
+
+/**
+ * Resolve the registry matching an approval's recorded `actorRegistryVersion`.
+ * Returns the parsed registry when the version exists AND its content digest
+ * matches the approval's recorded `actorRegistrySha256`; otherwise records a
+ * `registry-version-not-found` or `registry-hash-mismatch` issue and returns
+ * undefined.
+ */
+function resolveApprovalRegistry(
+  approval: z.infer<typeof CheckpointApproval>,
+  registryByVersion: ReadonlyMap<string, ParsedArtifact>,
+  issues: ValidationIssue[],
+  note: (approvalId: string, code: string) => void,
+): z.infer<typeof ApprovalActorRegistry> | undefined {
+  const entry = registryByVersion.get(approval.actorRegistryVersion);
+  if (!entry) {
+    issues.push({
+      code: "registry-version-not-found",
+      artifactId: approval.approvalId,
+      message: `registry version ${approval.actorRegistryVersion} not found`,
+    });
+    note(approval.approvalId, "registry-version-not-found");
+    return undefined;
+  }
+  if (entry.sha !== approval.actorRegistrySha256) {
+    issues.push({
+      code: "registry-hash-mismatch",
+      artifactId: approval.approvalId,
+      message: `registry ${approval.actorRegistryVersion} digest does not match recorded digest`,
+    });
+    note(approval.approvalId, "registry-hash-mismatch");
+    return undefined;
+  }
+  return ApprovalActorRegistry.parse(entry.data);
+}
+
+/**
+ * Closed-world policy enforcement for a single approval. Compares the
+ * approval's observed artifact types, source keys, contract keys, input-hash
+ * keys against the declared policy using exact set equality (missing AND
+ * unexpected members are both errors). Duplicate declarations on either side
+ * are also errors.
+ */
+function verifyCheckpointPolicy(
+  approval: z.infer<typeof CheckpointApproval>,
+  recipe: CheckpointRecipe,
+  artifacts: Map<string, ParsedArtifact>,
+  issues: ValidationIssue[],
+  note: (approvalId: string, code: string) => void,
+): void {
+  const policy = CHECKPOINT_POLICIES[recipe.checkpoint];
+  if (!policy) return; // future checkpoint — no closed-world policy yet
+  const iid = approval.approvalId;
+
+  // artifact-type: resolve each approved artifact to its parsed type. Unknown
+  // approved artifact IDs do NOT collapse to an empty type — they keep being
+  // reported by verifyApprovedArtifactSet as approved-artifact-unknown, and
+  // are excluded here so they cannot mask a type mismatch.
+  const actualArtifactTypes: string[] = [];
+  for (const a of approval.approvedArtifacts) {
+    const entry = [...artifacts.values()].find((e) => e.data.artifactId === a.artifactId);
+    if (entry) actualArtifactTypes.push(entry.type);
+  }
+  comparePolicySet(iid, "artifact-type", policy.requiredArtifactTypes, actualArtifactTypes, issues, note);
+
+  // source-key (plan + spec)
+  const actualSourceKeys = [recipe.planBinding.key, recipe.specBinding.key];
+  comparePolicySet(iid, "source-key", policy.requiredSourceKeys, actualSourceKeys, issues, note);
+
+  // contract-key
+  const actualContractKeys = Object.keys(approval.contractHashes);
+  comparePolicySet(iid, "contract-key", policy.requiredContractKeys, actualContractKeys, issues, note);
+
+  // input-hash-key
+  comparePolicySet(iid, "input-hash-key", policy.requiredInputHashKeys, recipe.inputHashKeys, issues, note);
+}
+
+/**
+ * Exact set equality comparison for one policy category. Emits a distinct
+ * issue code per kind of mismatch: `policy-missing-<category>`,
+ * `policy-unexpected-<category>`, and `policy-duplicate-<category>` when
+ * either side declares a duplicate member.
+ */
+function comparePolicySet(
+  approvalId: string,
+  category: "artifact-type" | "source-key" | "contract-key" | "input-hash-key" | "role",
+  expected: readonly string[],
+  actual: readonly string[],
+  issues: ValidationIssue[],
+  note: (approvalId: string, code: string) => void,
+): void {
+  const expectedSet = new Set(expected);
+  const actualSet = new Set(actual);
+  if (expectedSet.size !== expected.length) {
+    const code = `policy-duplicate-${category}`;
+    issues.push({ code, artifactId: approvalId, message: `policy declares duplicate ${category}` });
+    note(approvalId, code);
+  }
+  if (actualSet.size !== actual.length) {
+    const code = `policy-duplicate-${category}`;
+    issues.push({ code, artifactId: approvalId, message: `approval contains duplicate ${category}` });
+    note(approvalId, code);
+  }
+  for (const value of expectedSet) {
+    if (!actualSet.has(value)) {
+      const code = `policy-missing-${category}`;
+      issues.push({ code, artifactId: approvalId, message: `missing ${category}: ${value}` });
+      note(approvalId, code);
+    }
+  }
+  for (const value of actualSet) {
+    if (!expectedSet.has(value)) {
+      const code = `policy-unexpected-${category}`;
+      issues.push({ code, artifactId: approvalId, message: `unexpected ${category}: ${value}` });
+      note(approvalId, code);
     }
   }
 }
@@ -738,6 +1031,21 @@ function validateApprovalsAndCheckpoint(
 // Canonical checkpoint-target recomputation
 // ---------------------------------------------------------------------------
 
+/**
+ * Typed failure carrier for checkpoint recomputation. A provenance mismatch
+ * (reviewed vs merged bytes differ) keeps its specific issue code so the
+ * per-approval loop can surface `checkpoint-provenance-mismatch`; all other
+ * resolver/parsing exceptions map to `checkpoint-recompute-failed`.
+ */
+class CheckpointRecomputeError extends Error {
+  constructor(
+    readonly issueCode: "checkpoint-provenance-mismatch",
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 interface CanonicalTarget {
   targetSha256: string;
   planSha256: string;
@@ -745,37 +1053,81 @@ interface CanonicalTarget {
   contractHashes: Record<string, string>;
 }
 
+interface RecomputeFailure {
+  code: string;
+  message: string;
+}
+
 interface RecomputeState {
   recipes: Partial<Record<string, CheckpointRecipe>>;
   canonical: Partial<Record<string, CanonicalTarget>>;
   /** Checkpoints whose recomputation threw — every approval must fail closed. */
-  recomputeFailures: Map<string, string>;
+  recomputeFailures: Map<string, RecomputeFailure>;
   /** Resolved git-file inputHashes for phase0-summary verification (key → sha). */
   inputHashes: Record<string, string>;
 }
 
 /**
  * Recompute the canonical checkpoint target for every checkpoint with a known
- * recipe. The resolver is REQUIRED (validated by the caller). Resolver throws
- * are recorded in `recomputeFailures` so the per-approval loop can emit a
- * blocking issue and disqualify every affected approval — this is fail-closed.
+ * recipe AND at least one active approval. Recipes for checkpoints with no
+ * approval are declared (so policy is closed-world) but their sources are NOT
+ * resolved — a future checkpoint (e.g. C1) stays open without producing
+ * spurious issues from unresolved bytes.
+ *
+ * The resolver is REQUIRED (validated by the caller). Resolver throws are
+ * recorded in `recomputeFailures` so the per-approval loop can emit a blocking
+ * issue and disqualify every affected approval — this is fail-closed. A
+ * `CheckpointRecomputeError` (provenance mismatch) keeps its specific code;
+ * all other exceptions map to `checkpoint-recompute-failed`.
+ *
+ * The registry version + digest used to build each target comes from that
+ * checkpoint's approvals (all valid approvals for one checkpoint must bind the
+ * same target, hence the same registry version/digest pair). When a checkpoint
+ * has approvals and `registryByVersion` is supplied, the unique pair is
+ * resolved from there; otherwise the legacy single-registry fallback applies.
  */
 function computeCanonicalTargets(
   artifacts: Map<string, ParsedArtifact>,
   _absRoot: string,
   opts: ValidateReadinessOptions,
+  activeCheckpoints: Set<string>,
+  approvals: z.infer<typeof CheckpointApproval>[] = [],
+  registryByVersion: ReadonlyMap<string, ParsedArtifact> = new Map(),
 ): RecomputeState {
   const resolver = opts.gitSourceResolver;
 
   const recipes: Partial<Record<string, CheckpointRecipe>> = {};
   const canonical: Partial<Record<string, CanonicalTarget>> = {};
-  const recomputeFailures = new Map<string, string>();
+  const recomputeFailures = new Map<string, RecomputeFailure>();
   const inputHashes: Record<string, string> = {};
 
   for (const [cp, recipe] of Object.entries(CHECKPOINT_RECIPES)) {
     recipes[cp] = recipe;
 
+    // Skip recomputation for checkpoints with no approval. The recipe stays
+    // declared (closed-world policy), but its sources are not resolved, so a
+    // future checkpoint does not produce spurious unresolved-byte issues.
+    if (!activeCheckpoints.has(cp)) continue;
+
     try {
+      // --- Integration provenance: for recipes that declare an
+      // integrationGitSha, every bound source file must be byte-identical at
+      // the reviewed commit and the merge commit. A divergence means the
+      // merge altered reviewed content after review.
+      const allBindings = [recipe.planBinding, recipe.specBinding, ...recipe.contractBindings];
+      if (recipe.integrationGitSha) {
+        for (const binding of allBindings) {
+          const reviewed = resolver.resolve(binding.gitCommit, binding.repositoryPath);
+          const merged = resolver.resolve(recipe.integrationGitSha, binding.repositoryPath);
+          if (sha256Hex(reviewed) !== sha256Hex(merged)) {
+            throw new CheckpointRecomputeError(
+              "checkpoint-provenance-mismatch",
+              `${binding.repositoryPath} differs between ${binding.gitCommit} and ${recipe.integrationGitSha}`,
+            );
+          }
+        }
+      }
+
       const planSha256 = sha256Hex(resolver.resolve(recipe.planBinding.gitCommit, recipe.planBinding.repositoryPath));
       const specSha256 = sha256Hex(resolver.resolve(recipe.specBinding.gitCommit, recipe.specBinding.repositoryPath));
       const contractHashes: Record<string, string> = {};
@@ -799,7 +1151,14 @@ function computeCanonicalTargets(
           fullInputHashes[key] = entry.sha;
         }
       }
-      Object.assign(inputHashes, fullInputHashes);
+      // Only C0's inputHashes feed the phase0-summary verification. Other
+      // recipes may share keys (e.g. task1-plan.md) that resolve at different
+      // commits; writing them would overwrite C0's resolved values. C0 is
+      // always the phase0-summary source of truth, so prefer NOT to overwrite
+      // an already-resolved key.
+      for (const [k, v] of Object.entries(fullInputHashes)) {
+        if (inputHashes[k] === undefined) inputHashes[k] = v;
+      }
 
       // Build the artifact set for the target. The artifact shas come from
       // the in-memory parsed artifacts (the same values the index pins).
@@ -814,13 +1173,39 @@ function computeCanonicalTargets(
         };
       });
 
-      // Registry version + sha from the in-memory registry artifact.
-      const registryEntry = [...artifacts.values()].find(
-        (e) => e.type === "approval-actor-registry",
+      // Registry version + sha. Prefer the unique pair recorded by this
+      // checkpoint's approvals (resolved via registryByVersion); fall back to
+      // the legacy single-registry lookup when no approval pins a version.
+      const cpApprovals = approvals.filter((a) => a.checkpoint === cp);
+      const versionDigestPairs = new Set(
+        cpApprovals.map((a) => `${a.actorRegistryVersion}@${a.actorRegistrySha256}`),
       );
-      const registryVersion =
-        (registryEntry?.data.registryVersion as string | undefined) ?? "";
-      const registrySha = registryEntry?.sha ?? "";
+      let registryVersion = "";
+      let registrySha = "";
+      if (versionDigestPairs.size === 1) {
+        const [version, digest] = [...versionDigestPairs][0]!.split("@");
+        registryVersion = version!;
+        // Confirm the version resolves and its digest matches; if not, leave
+        // the target's registry fields empty so the recomputed target cannot
+        // match a fabricated approval (per-approval resolution reports the
+        // precise registry-hash-mismatch / registry-version-not-found code).
+        const entry = registryByVersion.get(registryVersion);
+        if (entry && entry.sha === digest) {
+          registrySha = entry.sha;
+        } else {
+          registrySha = digest!;
+        }
+      } else {
+        // Divergent pairs (or no approvals): legacy fallback to the single
+        // in-memory registry artifact. Divergent approvals are caught by the
+        // divergent-targets check in the caller.
+        const registryEntry = [...artifacts.values()].find(
+          (e) => e.type === "approval-actor-registry",
+        );
+        registryVersion =
+          (registryEntry?.data.registryVersion as string | undefined) ?? "";
+        registrySha = registryEntry?.sha ?? "";
+      }
 
       const targetInputHashes = recipe.targetIncludesInputHashes ? fullInputHashes : {};
 
@@ -847,7 +1232,14 @@ function computeCanonicalTargets(
       // blocking issue for every approval of this checkpoint and disqualifies
       // them from closure. Resolution failure must NEVER silently close a
       // checkpoint — that would reintroduce the fabricated-approval exploit.
-      recomputeFailures.set(cp, (e as Error).message ?? String(e));
+      if (e instanceof CheckpointRecomputeError) {
+        recomputeFailures.set(cp, { code: e.issueCode, message: e.message });
+      } else {
+        recomputeFailures.set(cp, {
+          code: "checkpoint-recompute-failed",
+          message: (e as Error).message ?? String(e),
+        });
+      }
     }
   }
 

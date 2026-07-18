@@ -11,6 +11,9 @@ import {
 } from "../readiness/contracts.js";
 import {
   C0_RECIPE,
+  C1_RECIPE,
+  C1_CONTRACT_SHA,
+  C1_MERGE_SHA,
   type GitSourceResolver,
 } from "../readiness/checkpoint-policy.js";
 
@@ -87,6 +90,51 @@ function writeArtifact(dir: string, filename: string, obj: unknown) {
 
 function fileSha(filePath: string): string {
   return sha256Hex(readFileSync(filePath));
+}
+
+function readJson<T>(path: string): T {
+  return JSON.parse(readFileSync(path, "utf-8")) as T;
+}
+
+function writeRegistryV2(fixture: ReturnType<typeof buildValidGraph>, overrides: Record<string, unknown> = {}) {
+  const previous = readJson<{ registryVersion: string }>(fixture.registryPath);
+  const registry = {
+    ...previous,
+    artifactId: "actors-c1-v2",
+    registryVersion: "2.0",
+    previousRegistry: { registryVersion: "1.0", sha256: fileSha(fixture.registryPath) },
+    actors: [
+      ...previous.actors,
+      { actorId: "product-1", actorKind: "human", roles: ["Product"] },
+      { actorId: "engineering-1", actorKind: "human", roles: ["Engineering"] },
+    ],
+    ...overrides,
+  };
+  // Derive the filename from the artifactId so a second v2 registry with a
+  // distinct id lands in its own file (otherwise the fixed name would
+  // silently overwrite the first and defeat the duplicate-key/fork tests).
+  const filename = `${registry.artifactId}.json`;
+  const path = join(fixture.artifactRoot, filename);
+  writeArtifact(fixture.artifactRoot, filename, registry);
+  return { path, data: registry };
+}
+
+function writeLedgerV2(fixture: ReturnType<typeof buildValidGraph>, approvals: unknown[], overrides: Record<string, unknown> = {}) {
+  const v1 = readJson<Record<string, unknown>>(fixture.ledgerPath!);
+  const ledger = {
+    ...v1,
+    artifactId: "approvals-c1-v2",
+    ordinalVersion: 2,
+    predecessor: { version: "1", sha256: fileSha(fixture.ledgerPath!) },
+    approvals,
+    ...overrides,
+  };
+  // Derive the filename from the artifactId so a second v2 ledger with a
+  // distinct id lands in its own file (see writeRegistryV2).
+  const filename = `${ledger.artifactId}.json`;
+  const path = join(fixture.artifactRoot, filename);
+  writeArtifact(fixture.artifactRoot, filename, ledger);
+  return { path, data: ledger };
 }
 
 interface SyntheticSources {
@@ -410,6 +458,172 @@ function buildValidGraph(opts?: {
 function mutateJson<T = unknown>(path: string, fn: (data: T) => T): void {
   const data = JSON.parse(readFileSync(path, "utf-8"));
   writeFileSync(path, JSON.stringify(fn(data), null, 2) + "\n", "utf-8");
+}
+
+// ---------------------------------------------------------------------------
+// Test-only C1 fixture builder (Task 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Write a complete, valid v2 governance snapshot (registry + index + ledger)
+ * carrying synthetic C1 approvals, and register every C1 source binding at
+ * both the reviewed commit (C1_CONTRACT_SHA) and the merge commit
+ * (C1_MERGE_SHA) so integration provenance passes. The C0 approvals already
+ * in the fixture's v1 ledger are carried forward unchanged into the v2 ledger
+ * (append-only), and both v1 and v2 registries remain on disk so per-approval
+ * registry resolution finds each version.
+ *
+ * Files are created ONLY below the fixture's temp root; the tracked repository
+ * receives no v2 artifact files. Returns the three v2 paths so mutation tests
+ * can edit one property without rebuilding the whole graph.
+ */
+function addValidSyntheticC1Approvals(
+  fixture: ReturnType<typeof buildValidGraph>,
+): { registryPath: string; indexPath: string; ledgerPath: string } {
+  // 1. Register synthetic C1 source bytes at BOTH the reviewed commit and the
+  //    merge commit so the integration-provenance check (reviewed == merged)
+  //    passes. Distinct, deterministic content per file.
+  const c1Sources: Record<string, string> = {
+    [C1_RECIPE.planBinding.repositoryPath]: "# C1 reviewed parent plan (synthetic)\n",
+    [C1_RECIPE.specBinding.repositoryPath]: "# C1 reviewed design spec (synthetic)\n",
+  };
+  for (const b of C1_RECIPE.contractBindings) {
+    c1Sources[b.repositoryPath] = `// C1 reviewed ${b.key} (synthetic)\nexport const X = 1;\n`;
+  }
+  for (const [repoPath, content] of Object.entries(c1Sources)) {
+    fixture.resolver.put(C1_CONTRACT_SHA, repoPath, content);
+    fixture.resolver.put(C1_MERGE_SHA, repoPath, content);
+  }
+
+  const planSha = sha256Hex(Buffer.from(c1Sources[C1_RECIPE.planBinding.repositoryPath]!, "utf-8"));
+  const specSha = sha256Hex(Buffer.from(c1Sources[C1_RECIPE.specBinding.repositoryPath]!, "utf-8"));
+  const contractHashes: Record<string, string> = {};
+  const inputHashes: Record<string, string> = {};
+  for (const b of C1_RECIPE.contractBindings) {
+    const h = sha256Hex(Buffer.from(c1Sources[b.repositoryPath]!, "utf-8"));
+    contractHashes[b.key] = h;
+    inputHashes[b.key] = h;
+  }
+  inputHashes[C1_RECIPE.planBinding.key] = planSha;
+  inputHashes[C1_RECIPE.specBinding.key] = specSha;
+
+  // 2. Write the v2 actor registry (head). Adds Product and Engineering
+  //    actors authorized for C1. previousRegistry pins the v1 registry.
+  const v1Registry = readJson<{ actors: unknown[] }>(fixture.registryPath);
+  const v2Registry = {
+    ...v1Registry,
+    artifactId: "actors-c1-v2",
+    registryVersion: "2.0",
+    previousRegistry: { registryVersion: "1.0", sha256: fileSha(fixture.registryPath) },
+    actors: [
+      ...v1Registry.actors,
+      { actorId: "product-1", actorKind: "human", roles: ["Product"] },
+      { actorId: "engineering-1", actorKind: "human", roles: ["Engineering"] },
+    ],
+  };
+  const v2RegistryFilename = "approval-actor-registry-v2.json";
+  const v2RegistryPath = join(fixture.artifactRoot, v2RegistryFilename);
+  writeArtifact(fixture.artifactRoot, v2RegistryFilename, v2Registry);
+  const v2RegistrySha = fileSha(v2RegistryPath);
+
+  // 3. Write the v2 artifact index (head). Lists every non-index/non-ledger
+  //    artifact so the head-index completeness check passes, including both
+  //    the v1 and v2 registries.
+  const v2IndexArtifacts = [
+    { artifactId: "phase0-20260714", artifactType: "phase0-summary", sha256: fileSha(fixture.phase0Path), path: "quality-contracts/agent-readiness/phase0-summary-v1.json" },
+    { artifactId: "ownership-20260714", artifactType: "ownership-map", sha256: fileSha(fixture.ownershipPath), path: "quality-contracts/agent-readiness/ownership-map-v1.json" },
+    { artifactId: "taxonomy-20260714", artifactType: "taxonomy-digest", sha256: fileSha(fixture.taxonomyPath), path: "quality-contracts/agent-readiness/taxonomy-digest-v1.json" },
+    { artifactId: "actors-20260714", artifactType: "approval-actor-registry", sha256: fileSha(fixture.registryPath), path: "quality-contracts/agent-readiness/approval-actor-registry-v1.json" },
+    { artifactId: "actors-c1-v2", artifactType: "approval-actor-registry", sha256: v2RegistrySha, path: `quality-contracts/agent-readiness/${v2RegistryFilename}` },
+  ];
+  const v1Index = readJson<Record<string, unknown>>(fixture.indexPath);
+  const v2Index = {
+    ...v1Index,
+    artifactId: "index-c1-v2",
+    ordinalVersion: 2,
+    predecessor: { version: "1", sha256: fileSha(fixture.indexPath) },
+    artifacts: v2IndexArtifacts,
+  };
+  const v2IndexFilename = "artifact-index-v2.json";
+  const v2IndexPath = join(fixture.artifactRoot, v2IndexFilename);
+  writeArtifact(fixture.artifactRoot, v2IndexFilename, v2Index);
+  const v2IndexSha = fileSha(v2IndexPath);
+
+  // 4. Compute the REAL canonical C1 target over synthetic-resolved bytes.
+  //    C1 approvals reference the v2 registry, so the target uses version
+  //    "2.0" and the v2 registry sha.
+  const c1TargetArtifacts = [
+    { artifactId: "actors-c1-v2", artifactType: "approval-actor-registry", sha256: v2RegistrySha },
+    { artifactId: "index-c1-v2", artifactType: "artifact-index", sha256: v2IndexSha },
+  ];
+  const c1Target = buildCheckpointTarget({
+    checkpoint: "C1",
+    baselineGitSha: C1_RECIPE.baselineGitSha,
+    artifacts: c1TargetArtifacts,
+    planSha256: planSha,
+    specSha256: specSha,
+    actorRegistryVersion: "2.0",
+    actorRegistrySha256: v2RegistrySha,
+    contractHashes,
+    inputHashes, // C1_RECIPE.targetIncludesInputHashes === true
+  });
+  const c1TargetSha = computeCheckpointTargetSha256(c1Target);
+
+  // 5. Write the v2 ledger (head). Carries the v1 C0 approvals unchanged
+  //    (append-only) plus two distinct C1 approvals (Product + Engineering).
+  const v1Ledger = readJson<{ approvals: unknown[]; schemaVersion?: string; createdAt?: string; createdByRole?: string; sourceGitSha?: string }>(fixture.ledgerPath!);
+  const c1ApprovedArtifacts = c1TargetArtifacts.map((a) => ({
+    artifactId: a.artifactId,
+    sha256: a.sha256,
+  }));
+  const c1Approvals = [
+    {
+      approvalId: "c1-product",
+      approvalKind: "checkpoint",
+      checkpoint: "C1",
+      decision: "approved",
+      actorId: "product-1",
+      role: "Product",
+      actorKind: "human",
+      actorRegistryVersion: "2.0",
+      actorRegistrySha256: v2RegistrySha,
+      checkpointTargetSha256: c1TargetSha,
+      approvedArtifacts: c1ApprovedArtifacts,
+      planSha256: planSha,
+      specSha256: specSha,
+      contractHashes,
+      decidedAt: "2026-07-15T10:00:00Z",
+    },
+    {
+      approvalId: "c1-engineering",
+      approvalKind: "checkpoint",
+      checkpoint: "C1",
+      decision: "approved",
+      actorId: "engineering-1",
+      role: "Engineering",
+      actorKind: "human",
+      actorRegistryVersion: "2.0",
+      actorRegistrySha256: v2RegistrySha,
+      checkpointTargetSha256: c1TargetSha,
+      approvedArtifacts: c1ApprovedArtifacts,
+      planSha256: planSha,
+      specSha256: specSha,
+      contractHashes,
+      decidedAt: "2026-07-15T10:01:00Z",
+    },
+  ];
+  const v2Ledger = {
+    ...v1Ledger,
+    artifactId: "approvals-c1-v2",
+    ordinalVersion: 2,
+    predecessor: { version: "1", sha256: fileSha(fixture.ledgerPath!) },
+    approvals: [...v1Ledger.approvals, ...c1Approvals],
+  };
+  const v2LedgerFilename = "checkpoint-approvals-v2.json";
+  const v2LedgerPath = join(fixture.artifactRoot, v2LedgerFilename);
+  writeArtifact(fixture.artifactRoot, v2LedgerFilename, v2Ledger);
+
+  return { registryPath: v2RegistryPath, indexPath: v2IndexPath, ledgerPath: v2LedgerPath };
 }
 
 // ---------------------------------------------------------------------------
@@ -1069,5 +1283,178 @@ describe("validateReadinessArtifacts — private mode", () => {
       corpusPath,
     });
     expect(result.issues.some((i) => i.code === "corpus-count-mismatch")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — governance snapshot chains (Task 4 integration)
+// ---------------------------------------------------------------------------
+
+describe("governance snapshot chains", () => {
+  let fixture: ReturnType<typeof buildValidGraph>;
+
+  afterEach(() => {
+    if (fixture) cleanup(fixture.root);
+  });
+
+  function validate(f: ReturnType<typeof buildValidGraph>) {
+    return validateReadinessArtifacts({
+      artifactRoot: f.artifactRoot,
+      repoRoot: f.repoRoot,
+      gitSourceResolver: f.resolver,
+      mode: "public",
+    });
+  }
+
+  it("rejects two registry snapshots with the same version", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    writeRegistryV2(fixture);
+    writeRegistryV2(fixture, { artifactId: "actors-c1-v2-fork" });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "chain-duplicate-key")).toBe(true);
+  });
+
+  it("rejects a ledger successor whose predecessor is missing", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
+    writeLedgerV2(fixture, v1.approvals, {
+      predecessor: { version: "1", sha256: "f".repeat(64) },
+    });
+    rmSync(fixture.ledgerPath!);
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "chain-missing-predecessor")).toBe(true);
+  });
+
+  it("rejects a ledger fork with two terminal successors", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
+    writeLedgerV2(fixture, v1.approvals);
+    writeLedgerV2(fixture, v1.approvals, { artifactId: "approvals-c1-v2-fork" });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "chain-duplicate-key" || i.code === "chain-fork")).toBe(true);
+  });
+
+  it.each([
+    ["deletion", (approvals: unknown[]) => approvals.slice(1), "ledger-approval-deleted"],
+    ["mutation", (approvals: { rationale?: string }[]) => [{ ...approvals[0]!, rationale: "rewritten" }, ...approvals.slice(1)], "ledger-approval-mutated"],
+    ["reordering", (approvals: unknown[]) => [...approvals].reverse(), "ledger-approval-reordered"],
+  ])("rejects predecessor approval %s", (_label, mutate, code) => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
+    writeLedgerV2(fixture, mutate(v1.approvals));
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === code)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — per-approval registry resolution and closed-world policy (Task 5)
+// ---------------------------------------------------------------------------
+
+describe("per-approval registry resolution and closed-world policy", () => {
+  let fixture: ReturnType<typeof buildValidGraph>;
+
+  afterEach(() => {
+    if (fixture) cleanup(fixture.root);
+  });
+
+  function validate(f: ReturnType<typeof buildValidGraph>) {
+    return validateReadinessArtifacts({
+      artifactRoot: f.artifactRoot,
+      repoRoot: f.repoRoot,
+      gitSourceResolver: f.resolver,
+      mode: "public",
+    });
+  }
+
+  it("resolves an older approval against the registry version it recorded", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const v1Ledger = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
+    writeRegistryV2(fixture);
+    writeLedgerV2(fixture, v1Ledger.approvals);
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "registry-hash-mismatch")).toBe(false);
+    expect(result.checkpointStatus.C0).toBe("closed");
+  });
+
+  it("rejects an approval whose recorded registry digest does not match that version", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const v1Ledger = readJson<any>(fixture.ledgerPath!);
+    v1Ledger.approvals[0].actorRegistrySha256 = "f".repeat(64);
+    writeRegistryV2(fixture);
+    writeLedgerV2(fixture, v1Ledger.approvals);
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "registry-hash-mismatch")).toBe(true);
+  });
+
+  it("rejects an extra C0 contract key", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    mutateJson<any>(fixture.ledgerPath!, (ledger) => {
+      ledger.approvals[0].contractHashes.unexpected = "a".repeat(64);
+      return ledger;
+    });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "policy-unexpected-contract-key")).toBe(true);
+  });
+
+  it("does not resolve C1 recipe bytes when no C1 approval exists", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const resolver: GitSourceResolver = {
+      resolve(commit, path) {
+        if (commit === C1_RECIPE.sourceGitSha) throw new Error(`C1 should not resolve: ${path}`);
+        return fixture.resolver.resolve(commit, path);
+      },
+    };
+    const result = validateReadinessArtifacts({
+      artifactRoot: fixture.artifactRoot,
+      repoRoot: fixture.repoRoot,
+      gitSourceResolver: resolver,
+      mode: "public",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.checkpointStatus).toMatchObject({ C0: "closed", C1: "open" });
+  });
+
+  it("fails when reviewed and merged C1 source bytes differ", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    addValidSyntheticC1Approvals(fixture);
+    fixture.resolver.put(
+      C1_MERGE_SHA,
+      C1_RECIPE.contractBindings[0]!.repositoryPath,
+      "tampered merge bytes",
+    );
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "checkpoint-provenance-mismatch")).toBe(true);
+    expect(result.checkpointStatus.C1).toBe("open");
+  });
+
+  it("rejects a missing C1 contract key", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const c1 = addValidSyntheticC1Approvals(fixture);
+    mutateJson<any>(c1.ledgerPath, (ledger) => {
+      delete ledger.approvals.find((a: any) => a.checkpoint === "C1").contractHashes["tool-catalog.ts"];
+      return ledger;
+    });
+    expect(validate(fixture).issues.some((i) => i.code === "policy-missing-contract-key")).toBe(true);
+  });
+
+  it("rejects duplicate checkpoint roles", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const c1 = addValidSyntheticC1Approvals(fixture);
+    mutateJson<any>(c1.ledgerPath, (ledger) => {
+      const product = ledger.approvals.find((a: any) => a.checkpoint === "C1" && a.role === "Product");
+      ledger.approvals.push({ ...product, approvalId: "c1-product-duplicate", actorId: "product-2" });
+      return ledger;
+    });
+    expect(validate(fixture).issues.some((i) => i.code === "policy-duplicate-role")).toBe(true);
+  });
+
+  it("closes C1 when valid synthetic C1 approvals are present", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    addValidSyntheticC1Approvals(fixture);
+    const result = validate(fixture);
+    expect(result.issues).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.checkpointStatus).toMatchObject({ C0: "closed", C1: "closed" });
   });
 });

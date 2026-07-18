@@ -769,6 +769,14 @@ Bad immutable versions are deprecated; dist-tags roll back to the prior known-go
 
 **Gate:** reproducible baseline artifact, independent labels, versioned thresholds, and a terminal quality outcome. No corpus mutation is authorized yet.
 
+## Amendment (2026-07-18): C2 grounded-design-handoff authority
+
+This amendment references `docs/superpowers/specs/2026-07-18-grounded-design-workspace-design.md` and refines what the C2 (Gold readiness) checkpoint authorizes. It does not edit, reopen, or rewrite the C1 sections of this design; any executable contract change follows the repository checkpoint process rather than editing prior approvals.
+
+C2 evaluates whether gold evidence supports safe, coherent, implementation-ready UiSpec decisions and live-source migration decisions. C2 does not implement hosted synthesis, persist customer projects, publish the private corpus, or permit project inspection to ingest corpus entries. Existing C1 tool-contract bytes remain historical authority; any executable contract change follows the repository checkpoint process rather than editing prior approvals.
+
+The grounded-design workspace (source snapshot artifact, bounded public-crawl planner, hosted SSRF capture guard, ephemeral session/consent policy, and the deterministic design-handoff scorer with its briefs and labels) lands as **pre-C2 foundation work** only. The hosted generator, Playground conversion, Decision Lab integration, Curator Scout, authenticated capture, BYOK, and framework adapters are explicitly future plans and are not authorized by, or claimed as, C2 completion. C2 itself remains open pending gold execution and independent approval.
+
 ### Phase 1B: MCP and skill contract migration
 
 This lane may run in parallel with Phases 1A and 2.

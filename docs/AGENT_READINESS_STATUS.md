@@ -19,7 +19,7 @@ locations.
 |---|---|---|
 | **C0** Foundation freeze | ✅ Closed | Validated by a Git-bound checkpoint recipe that recomputes the canonical target from recorded-commit bytes (see R0). C1 working-tree edits to the live spec/plan do **not** reopen C0. |
 | **C1** Agent contract lock | 🟡 In progress | Executable contract closure rework (R0–R6 complete, R7 remaining). Runtime still advertises the legacy 14-tool surface by design until Phase 1B. |
-| C2 Gold readiness | ⬜ Open | Not started (gated on C1). |
+| C2 Gold readiness | ⬜ Open | Pre-C2 grounded-design foundations have landed (see "Pre-C2 grounded-design foundations" below); C2 itself remains open pending gold execution and Gold Label Owner + QA approval. |
 | C3 MCP + create_ui_spec + skill | ⬜ Open | Not started (gated on C1). |
 | C4 Terminal 1A outcome + dogfood | ⬜ Open | Not started. |
 | C5 Corpus disposition | ⬜ Open | Not started. |
@@ -75,3 +75,33 @@ R0 makes C0 validation **Git-bound for the C0 recipe** — it resolves approved
 bytes from the recorded commit so later C1 edits do not reopen C0. This is the
 parent-plan Task T1 design in miniature. The broader closed-world policies and
 registry v2 snapshot chains remain parent-plan T1/T2 follow-on work.
+
+## Pre-C2 grounded-design foundations
+
+The following grounded-design workspace tasks landed on
+`feat/agent-readiness-phase-0-1c` as **pre-C2 foundation work** — they are
+foundations for the C2 (Gold readiness) checkpoint, **not** C2 completion. C2
+itself remains open pending gold execution and the Gold Label Owner + QA
+approvals named in the parent plan. The design authority for this foundation
+work is `docs/superpowers/specs/2026-07-18-grounded-design-workspace-design.md`.
+
+| # | Commit | Description |
+|---|---|---|
+| Task 1 | `3c1ec17` | Public site boundary checker + synthetic snapshot; removed 787 uncleared public corpus entries from `site/public/entries/`. |
+| Task 2 | `93654f9` (+ fix `703f0b5`) | `DesignSourceSnapshotSchema` and the deterministic `SOURCE-DESIGN.md` renderer; hardened cell escaping and determinism. |
+| Task 3 | `caaa1b6` (+ fix `6cf01f8`) | `planRepresentativeCrawl` and `assertSafeHostedCaptureTarget` hosted SSRF guard; percent-encoded destructive-path and NaN-budget hardening. |
+| Task 4 | `a65b8c0` | Ephemeral session policy: `decideCookie` + `chooseConsentAction`. |
+| Task 5 | `e183297` (+ fix `162a875`) | Deterministic grounded design-handoff gold gate scorer with 12 briefs and 12 labels; required declared blueprints and null-entry guards. |
+
+### Explicitly future plans (NOT completed work)
+
+The following are explicitly **future plans** and are not claimed as completed or
+as part of C2 completion:
+
+- the hosted design-source generator;
+- Playground conversion;
+- Decision Lab integration;
+- Curator Scout;
+- authenticated capture;
+- BYOK (bring-your-own-key);
+- framework adapters.

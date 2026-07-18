@@ -590,6 +590,14 @@ Report scalar exact agreement and multi-label Jaccard/F1 agreement. Below 0.80 s
 
 **C2 gate:** selection and rubric frozen; two blinded annotations complete; adjudication and reliability report validated; Gold Label Owner and QA approval records validate against the exact artifacts; only hashes/aggregates tracked.
 
+## Amendment (2026-07-18): C2 grounded-design-handoff authority
+
+This amendment references `docs/superpowers/specs/2026-07-18-grounded-design-workspace-design.md` and refines what the C2 (Gold readiness) checkpoint authorizes. It does not edit or rewrite the existing C1 sections of this plan; C1 tool-contract bytes remain historical authority.
+
+C2 evaluates whether gold evidence supports safe, coherent, implementation-ready UiSpec decisions and live-source migration decisions. C2 does not implement hosted synthesis, persist customer projects, publish the private corpus, or permit project inspection to ingest corpus entries. Existing C1 tool-contract bytes remain historical authority; any executable contract change follows the repository checkpoint process rather than editing prior approvals.
+
+The grounded-design workspace (source snapshot artifact at Task 2, bounded public-crawl planner and hosted SSRF guard at Task 3, ephemeral session/consent policy at Task 4, and the deterministic design-handoff scorer with its 12 briefs and 12 labels at Task 5) lands as **pre-C2 foundation work** only. The hosted generator, Playground conversion, Decision Lab integration, Curator Scout, authenticated capture, BYOK, and framework adapters are explicitly future plans and are not part of C2 completion. C2 itself remains open pending gold execution and the Gold Label Owner + QA approvals named above.
+
 ---
 
 ## Task 5: Implement dual-channel scoring and the live-safe runner

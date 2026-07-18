@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-const Url = z.string().url().refine((value) => ["http:", "https:"].includes(new URL(value).protocol));
+const Url = z.string().url().refine(
+  (value) => ["http:", "https:"].includes(new URL(value).protocol),
+  { message: "URL must use http or https protocol" },
+);
 const Confidence = z.enum(["low", "medium", "high"]);
 const EvidenceId = z.string().min(1);
 const EvidenceRef = z.object({

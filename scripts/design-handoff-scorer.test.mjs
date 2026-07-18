@@ -187,7 +187,9 @@ describe("scoreDesignHandoff", () => {
   });
 
   // Mutation 4: unsupported source claim — a source decision whose id is not in
-  // the permitted source-evidence set (validEvidenceIds).
+  // the permitted source-evidence set (validEvidenceIds). The invented decision
+  // carries an EMPTY evidence array so it trips ONLY unsupportedClaimCount,
+  // leaving unresolvedEvidenceCount at 0 (M1: isolate the mutation to one count).
   it("mutation 4: an unsupported source claim flips complete to false", () => {
     const output = makeOutput({
       sourceDecisions: [
@@ -196,13 +198,14 @@ describe("scoreDesignHandoff", () => {
           id: "src:home:invented-claim", // not in validEvidenceIds
           lane: "retain",
           rationale: "Made up with no source backing.",
-          evidence: ["src:home:invented-claim"],
+          evidence: [],
         },
       ],
     });
     const result = scoreDesignHandoff(output, GOLD_LABEL);
     expect(result.complete).toBe(false);
     expect(result.unsupportedClaimCount).toBeGreaterThan(0);
+    expect(result.unresolvedEvidenceCount).toBe(0);
   });
 
   // Mutation 5: private marker — inject a forbidden private identifier.
@@ -263,5 +266,39 @@ describe("scoreDesignHandoff", () => {
     const result = scoreDesignHandoff(output, GOLD_LABEL);
     expect(result.complete).toBe(false);
     expect(result.unsupportedClaimCount).toBeGreaterThan(0);
+  });
+
+  // Regression for I1: a label that requires states for a blueprint id the
+  // output never declares must fail the section gate. Previously the scorer
+  // silently skipped the missing blueprint and returned success.
+  it("regression I1: a required blueprint id that the output omits fails section coverage", () => {
+    const output = makeOutput({
+      screenBlueprints: [
+        {
+          id: "detail",
+          name: "Detail",
+          requiredStates: ["empty", "loading", "populated"],
+          mobileRules: ["stack-to-single-column", "sticky-primary-action"],
+          inspectedUrls: ["https://example.com/detail"],
+        },
+      ],
+    });
+    const result = scoreDesignHandoff(output, GOLD_LABEL);
+    expect(result.complete).toBe(false);
+    expect(result.requiredSectionCoverage).toBeLessThan(1);
+  });
+
+  // Regression for I2: a null entry inside sourceDecisions must not crash the
+  // scorer; valid entries are still counted normally.
+  it("regression I2: a null entry in sourceDecisions does not crash and scores normally", () => {
+    const valid = makeOutput().sourceDecisions;
+    const output = makeOutput({
+      sourceDecisions: [null, ...valid],
+    });
+    const result = scoreDesignHandoff(output, GOLD_LABEL);
+    expect(result.complete).toBe(true);
+    expect(result.requiredDecisionCoverage).toBe(1);
+    expect(result.unsupportedClaimCount).toBe(0);
+    expect(result.unresolvedEvidenceCount).toBe(0);
   });
 });

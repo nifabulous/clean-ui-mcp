@@ -18,5 +18,17 @@ export default defineConfig({
     // whole suite headroom on cold/loaded CI runners without masking genuine
     // hangs (which would still blow past this).
     testTimeout: 15_000,
+    // The end-to-end browser suite (tests/site-browser.test.ts) spawns a real
+    // Chromium + `vite preview` server against a BUILT site/dist, so it must run
+    // AFTER `site:build` and only via the dedicated `site:test:browser` script
+    // (which uses the root vitest config + an explicit file path, so this exclude
+    // does not affect it). Excluding it here keeps `site:test` self-contained —
+    // it can run before the build in the gate (site:test → site:build →
+    // site:test:browser) without failing on a missing/ stale dist.
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "tests/site-browser.test.ts",
+    ],
   },
 });

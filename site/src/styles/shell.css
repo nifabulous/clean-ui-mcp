@@ -195,12 +195,18 @@
     box-shadow: none;
   }
 
-  .site-nav__list {
+  .site-nav__list,
+  .site-nav__list[data-open="false"] {
     flex-direction: row;
     align-items: center;
     gap: 4px;
     padding: 0;
-    /* Always visible on desktop regardless of disclosure state. */
+    /* Always visible on desktop regardless of disclosure state. The
+       [data-open="false"] selector carries the same specificity as the
+       collapsed-state rule above, so listing it here ensures the desktop
+       `display: flex` wins the cascade at widths >= 768px (without it, the
+       higher-specificity `[data-open="false"] { display: none }` would hide the
+       whole primary nav — including the theme toggle — on desktop too). */
     display: flex;
   }
 

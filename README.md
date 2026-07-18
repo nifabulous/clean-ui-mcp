@@ -840,6 +840,10 @@ keys + `RUN_LIVE_INTEGRATION=1`).
 | `npm run eval-matrix` | Provider/model matrix: loop over config triples, emit per-config baselines + comparison table |
 | `npm run build-image-index` | Embed approved corpus images into the image-embedding index (requires image-embedding provider configured) |
 | `npm run benchmark-image-embeddings` | Benchmark the configured image-embedding provider against the critique fixtures |
+| `npm run site:dev` | Vite dev server for the public site (`site/`) at the production base path |
+| `npm run site:build` | Production build of the public site into `site/dist` |
+| `npm run site:test` | Public-site unit/component tests (jsdom); excludes the e2e browser suite |
+| `npm run site:test:browser` | End-to-end Playwright suite against a built `site/dist` served by `vite preview` |
 
 ---
 
@@ -858,6 +862,33 @@ npx vitest run           # unit tests only
 ```
 
 CI runs on every PR: `npm ci` → Playwright install → `build` → `validate-corpus` → `test`.
+
+---
+
+## Public site (`site/`)
+
+The tracked public application is a Vite + React SPA shipped at the base path
+`/clean-ui-mcp/` (for GitHub Pages). It consumes a publication-safe
+`site/public/snapshot.json` (never the curator corpus directly) and lazy-loads
+the Playground and Evidence routes so the initial JS budget stays small.
+
+The public-site quality gate mirrors the curator gate and runs in CI after
+`npm test`:
+
+```bash
+npm run site:test            # jsdom unit/component tests (excludes e2e)
+npm run site:build           # production build → site/dist
+npm run site:test:browser    # Playwright e2e against `vite preview` (base-path routing + a11y)
+node scripts/check-site-budget.mjs   # initial-JS gzip budget (≤ 150 KB, lazy chunks excluded)
+```
+
+The browser suite (`site/tests/site-browser.test.ts`) spawns one shared Chromium
+instance + one `vite preview` server and asserts base-path routing, no 404s on
+assets/snapshot/images across a full navigation journey, and the accessibility
+contract (skip-link order, mobile-menu focus return, live-region announcement,
+theme persistence, reduced-motion respect, no 320px overflow). It requires a
+built `site/dist`, so it runs after `site:build` and is excluded from
+`site:test` (which must be able to run before a build).
 
 ---
 

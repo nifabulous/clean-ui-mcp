@@ -401,9 +401,9 @@ function snapshotPlatforms(snapshot: PublicSnapshot): string[] {
   return Array.from(set).sort();
 }
 
-function hostnameOf(url: string): string {
+function hostnameOf(url: string | undefined): string {
   try {
-    return new URL(url).hostname;
+    return new URL(url ?? "").hostname;
   } catch {
     return "";
   }

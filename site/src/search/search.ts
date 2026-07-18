@@ -82,9 +82,9 @@ function toDocument(entry: PublicEntry): IndexedDocument {
   };
 }
 
-function hostnameOf(url: string): string {
+function hostnameOf(url: string | undefined): string {
   try {
-    return new URL(url).hostname;
+    return new URL(url ?? "").hostname;
   } catch {
     return "";
   }

@@ -132,6 +132,61 @@ describe("parsePublicEntry", () => {
     (withFragment as Record<string, unknown>).imagePath = "sample.png#x";
     expect(() => parsePublicEntry(withFragment)).toThrow(/safe public image path/i);
   });
+
+  it("tolerates a missing/empty source.url (optional provenance link)", () => {
+    // The curator publication pipeline treats source.url as optional: a product
+    // captured without a recorded origin link still ships, so the tracked
+    // snapshot legitimately contains rows with url: "" / null / undefined. The
+    // adapter must accept these and normalize url to undefined (the evidence
+    // page then skips the provenance link). productName stays required.
+    for (const badUrl of ["", null, undefined]) {
+      const row = baseFixture();
+      if (badUrl === undefined) {
+        delete (row.source as Record<string, unknown>).url;
+      } else {
+        (row.source as Record<string, unknown>).url = badUrl;
+      }
+      const entry = parsePublicEntry(row);
+      expect(entry.source.productName).toBe("Origin");
+      expect(entry.source.url).toBeUndefined();
+    }
+  });
+
+  it("rejects a non-string source.url", () => {
+    // A non-empty string is accepted; a wrong TYPE (number/object) is still a
+    // structural error and must be rejected, not silently dropped.
+    const row = baseFixture();
+    (row.source as Record<string, unknown>).url = 42;
+    expect(() => parsePublicEntry(row)).toThrow(/source\.url/);
+  });
+
+  it("tolerates null/empty colorRoles values (curator emits null for unextracted colors)", () => {
+    // The curator sets e.g. colorRoles.muted = null when no distinct muted color
+    // was extracted, and the exporter faithfully forwards that. Each role key is
+    // independently optional: null/undefined/"" are treated as absent, and only
+    // non-empty string values are kept.
+    const row = baseFixture();
+    row.colorRoles = {
+      canvas: "#a8b4cf",
+      surface: "#5573ac",
+      ink: "#384c67",
+      muted: null,
+      accent: "",
+    };
+    const entry = parsePublicEntry(row);
+    expect(entry.colorRoles).toEqual({
+      canvas: "#a8b4cf",
+      surface: "#5573ac",
+      ink: "#384c67",
+    });
+  });
+
+  it("rejects a non-string colorRoles value", () => {
+    // A wrong-TYPE color role (number/object) is a structural error.
+    const row = baseFixture();
+    row.colorRoles = { canvas: 42 };
+    expect(() => parsePublicEntry(row)).toThrow(/colorRoles\.canvas/);
+  });
 });
 
 describe("parsePublicSnapshot", () => {

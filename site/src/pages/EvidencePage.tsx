@@ -100,7 +100,10 @@ function EvidenceDetail({
   const agentPrompt = buildAgentPrompt(entry);
   const backHref = backTarget(search);
   const platform = typeof entry.platform === "string" ? entry.platform : null;
-  const sourceHost = hostnameOf(entry.source.url);
+  // source.url is optional in the tracked snapshot (some captures have no
+  // recorded origin link). Render the provenance link only when it is present.
+  const sourceUrl = typeof entry.source.url === "string" ? entry.source.url : null;
+  const sourceHost = sourceUrl ? hostnameOf(sourceUrl) : "";
 
   return (
     <div className="evidence">
@@ -194,14 +197,17 @@ function EvidenceDetail({
         <section className="evidence__section" aria-labelledby="evidence-provenance">
           <h2 id="evidence-provenance">Provenance</h2>
           <p>
-            Captured from <strong>{entry.source.productName}</strong>.{" "}
-            <a
-              href={entry.source.url}
-              rel="noreferrer noopener"
-              target="_blank"
-            >
-              {sourceHost || entry.source.url}
-            </a>
+            Captured from <strong>{entry.source.productName}</strong>
+            {sourceUrl ? (
+              <>
+                .{" "}
+                <a href={sourceUrl} rel="noreferrer noopener" target="_blank">
+                  {sourceHost || sourceUrl}
+                </a>
+              </>
+            ) : (
+              "."
+            )}
           </p>
         </section>
       </div>

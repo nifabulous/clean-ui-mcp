@@ -89,6 +89,51 @@ function fileSha(filePath: string): string {
   return sha256Hex(readFileSync(filePath));
 }
 
+function readJson<T>(path: string): T {
+  return JSON.parse(readFileSync(path, "utf-8")) as T;
+}
+
+function writeRegistryV2(fixture: ReturnType<typeof buildValidGraph>, overrides: Record<string, unknown> = {}) {
+  const previous = readJson<{ registryVersion: string }>(fixture.registryPath);
+  const registry = {
+    ...previous,
+    artifactId: "actors-c1-v2",
+    registryVersion: "2.0",
+    previousRegistry: { registryVersion: "1.0", sha256: fileSha(fixture.registryPath) },
+    actors: [
+      ...previous.actors,
+      { actorId: "product-1", actorKind: "human", roles: ["Product"] },
+      { actorId: "engineering-1", actorKind: "human", roles: ["Engineering"] },
+    ],
+    ...overrides,
+  };
+  // Derive the filename from the artifactId so a second v2 registry with a
+  // distinct id lands in its own file (otherwise the fixed name would
+  // silently overwrite the first and defeat the duplicate-key/fork tests).
+  const filename = `${registry.artifactId}.json`;
+  const path = join(fixture.artifactRoot, filename);
+  writeArtifact(fixture.artifactRoot, filename, registry);
+  return { path, data: registry };
+}
+
+function writeLedgerV2(fixture: ReturnType<typeof buildValidGraph>, approvals: unknown[], overrides: Record<string, unknown> = {}) {
+  const v1 = readJson<Record<string, unknown>>(fixture.ledgerPath!);
+  const ledger = {
+    ...v1,
+    artifactId: "approvals-c1-v2",
+    ordinalVersion: 2,
+    predecessor: { version: "1", sha256: fileSha(fixture.ledgerPath!) },
+    approvals,
+    ...overrides,
+  };
+  // Derive the filename from the artifactId so a second v2 ledger with a
+  // distinct id lands in its own file (see writeRegistryV2).
+  const filename = `${ledger.artifactId}.json`;
+  const path = join(fixture.artifactRoot, filename);
+  writeArtifact(fixture.artifactRoot, filename, ledger);
+  return { path, data: ledger };
+}
+
 interface SyntheticSources {
   resolver: FakeGitResolver;
   planSha: string;
@@ -1069,5 +1114,66 @@ describe("validateReadinessArtifacts — private mode", () => {
       corpusPath,
     });
     expect(result.issues.some((i) => i.code === "corpus-count-mismatch")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — governance snapshot chains (Task 4 integration)
+// ---------------------------------------------------------------------------
+
+describe("governance snapshot chains", () => {
+  let fixture: ReturnType<typeof buildValidGraph>;
+
+  afterEach(() => {
+    if (fixture) cleanup(fixture.root);
+  });
+
+  function validate(f: ReturnType<typeof buildValidGraph>) {
+    return validateReadinessArtifacts({
+      artifactRoot: f.artifactRoot,
+      repoRoot: f.repoRoot,
+      gitSourceResolver: f.resolver,
+      mode: "public",
+    });
+  }
+
+  it("rejects two registry snapshots with the same version", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    writeRegistryV2(fixture);
+    writeRegistryV2(fixture, { artifactId: "actors-c1-v2-fork" });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "chain-duplicate-key")).toBe(true);
+  });
+
+  it("rejects a ledger successor whose predecessor is missing", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
+    writeLedgerV2(fixture, v1.approvals, {
+      predecessor: { version: "1", sha256: "f".repeat(64) },
+    });
+    rmSync(fixture.ledgerPath!);
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "chain-missing-predecessor")).toBe(true);
+  });
+
+  it("rejects a ledger fork with two terminal successors", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
+    writeLedgerV2(fixture, v1.approvals);
+    writeLedgerV2(fixture, v1.approvals, { artifactId: "approvals-c1-v2-fork" });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "chain-duplicate-key" || i.code === "chain-fork")).toBe(true);
+  });
+
+  it.each([
+    ["deletion", (approvals: unknown[]) => approvals.slice(1), "ledger-approval-deleted"],
+    ["mutation", (approvals: { rationale?: string }[]) => [{ ...approvals[0]!, rationale: "rewritten" }, ...approvals.slice(1)], "ledger-approval-mutated"],
+    ["reordering", (approvals: unknown[]) => [...approvals].reverse(), "ledger-approval-reordered"],
+  ])("rejects predecessor approval %s", (_label, mutate, code) => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
+    writeLedgerV2(fixture, mutate(v1.approvals));
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === code)).toBe(true);
   });
 });

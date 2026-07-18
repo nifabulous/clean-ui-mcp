@@ -30,6 +30,14 @@ import type {
 } from "./checkpoint-policy.js";
 import { CHECKPOINT_RECIPES } from "./checkpoint-policy.js";
 import type { z } from "zod";
+import {
+  selectChain,
+  registryChainNode,
+  ordinalChainNode,
+  type ChainIssue,
+  type ChainNode,
+  type ChainNodeResult,
+} from "./chains.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -67,6 +75,36 @@ export interface ValidationResult {
   checkpointStatus: Record<string, "open" | "closed">;
   checkedArtifacts: number;
   issues: ValidationIssue[];
+}
+
+/**
+ * A parsed artifact with its computed content digest, file path, and the
+ * raw record. Used throughout validation and chain construction.
+ */
+interface ParsedArtifact {
+  type: string;
+  data: Record<string, unknown>;
+  filePath: string;
+  sha: string;
+}
+
+/**
+ * Resolved governance snapshot chains for the three versioned artifact
+ * families (registries, indexes, ledgers). `registryHead` / `indexHead` /
+ * `ledgerHead` are the unique terminal heads selected by the chain engine,
+ * or `undefined` when the family has issues (e.g. fork, missing predecessor).
+ * `registryByVersion` maps every validated registry version to its artifact;
+ * `orderedLedgers` is the root-to-head ledger order when sound.
+ */
+interface GovernanceChains {
+  registries: readonly ParsedArtifact[];
+  indexes: readonly ParsedArtifact[];
+  ledgers: readonly ParsedArtifact[];
+  registryHead?: ParsedArtifact;
+  indexHead?: ParsedArtifact;
+  ledgerHead?: ParsedArtifact;
+  registryByVersion: ReadonlyMap<string, ParsedArtifact>;
+  orderedLedgers: readonly ParsedArtifact[];
 }
 
 // ---------------------------------------------------------------------------
@@ -284,13 +322,14 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
     artifacts.set(artifactId, { type: artifactType, data: record, filePath, sha });
   }
 
-  // 3. Validate the artifact index
-  let indexEntry: ParsedArtifact | undefined;
-  let ledgerEntry: ParsedArtifact | undefined;
-  for (const [, entry] of artifacts) {
-    if (entry.type === "artifact-index") indexEntry = entry;
-    if (entry.type === "checkpoint-approvals") ledgerEntry = entry;
-  }
+  // 3. Resolve governance snapshot chains (registries, indexes, ledgers).
+  //    The chain engine selects a unique terminal head per family and reports
+  //    structural issues (forks, missing predecessors, duplicate keys). This
+  //    replaces the former enumeration-order `.find()` selection.
+  const chains = resolveGovernanceChains(artifacts, issues);
+  const indexEntry = chains.indexHead;
+  const ledgerEntry = chains.ledgerHead;
+  const registry = chains.registryHead;
 
   if (!indexEntry) {
     issues.push({ code: "missing-index", message: "artifact-index not found" });
@@ -412,8 +451,7 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
       }
     }
 
-    // 7. Validate registry
-    const registry = [...artifacts.values()].find((a) => a.type === "approval-actor-registry");
+    // 7. Validate registry (head selected via chain engine in section 3)
     if (registry) {
       const registryIssues = validateRegistry(registry.data as z.infer<typeof ApprovalActorRegistry>);
       for (const msg of registryIssues) {
@@ -421,6 +459,28 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
           code: "registry-error",
           artifactId: registry.data.artifactId as string,
           message: msg,
+        });
+      }
+    }
+
+    // 7b. Append-only verification across every adjacent root-to-head ledger
+    //     edge. Each predecessor approval list must survive unchanged (same
+    //     approvalId, same canonical bytes, same order) in its successor.
+    for (let i = 1; i < chains.orderedLedgers.length; i++) {
+      const previous = CheckpointApprovals.safeParse(chains.orderedLedgers[i - 1]!.data);
+      const current = CheckpointApprovals.safeParse(chains.orderedLedgers[i]!.data);
+      if (!previous.success || !current.success) continue; // schema errors already recorded
+      for (const message of validateLedgerAppendOnly(current.data, previous.data)) {
+        const deleted = message.startsWith("prior approval deleted:");
+        const reordered = message.startsWith("prior approval reordered:");
+        issues.push({
+          code: deleted
+            ? "ledger-approval-deleted"
+            : reordered
+              ? "ledger-approval-reordered"
+              : "ledger-approval-mutated",
+          artifactId: String(chains.orderedLedgers[i]!.data.artifactId),
+          message,
         });
       }
     }
@@ -504,15 +564,93 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
 }
 
 // ---------------------------------------------------------------------------
-// Approval validation
+// Governance chain resolution
 // ---------------------------------------------------------------------------
 
-interface ParsedArtifact {
-  type: string;
-  data: Record<string, unknown>;
-  filePath: string;
-  sha: string;
+/** Map a structural ChainIssue to a ValidationIssue (codes preserved). */
+function chainIssueToValidationIssue(issue: ChainIssue): ValidationIssue {
+  return {
+    code: issue.code,
+    artifactId: issue.nodeId,
+    message: issue.message,
+  };
 }
+
+/**
+ * Collect every registry/index/ledger artifact, adapt each to its chain node
+ * representation, and run `selectChain` per family. Chain issues (forks,
+ * missing predecessors, duplicate keys, etc.) are pushed onto `issues`. Heads
+ * are left undefined for any family with issues.
+ *
+ * A family with a single artifact and no chain metadata forms a degenerate
+ * chain of one node whose head is that node — this keeps the existing v1-only
+ * real repo validating.
+ */
+function resolveGovernanceChains(
+  artifacts: Map<string, ParsedArtifact>,
+  issues: ValidationIssue[],
+): GovernanceChains {
+  const registries = [...artifacts.values()].filter((a) => a.type === "approval-actor-registry");
+  const indexes = [...artifacts.values()].filter((a) => a.type === "artifact-index");
+  const ledgers = [...artifacts.values()].filter((a) => a.type === "checkpoint-approvals");
+
+  // Registries use string version keys via registryChainNode.
+  const registryAdapted: ChainNode<ParsedArtifact>[] = registries.map(registryChainNode);
+  const registrySelection = selectChain("registry", registryAdapted);
+
+  // Indexes and ledgers use ordinal keys via ordinalChainNode. An adaptation
+  // failure (e.g. malformed predecessor) is itself a chain issue.
+  const indexAdapted: ChainNodeResult<ParsedArtifact>[] = indexes.map(ordinalChainNode);
+  const ledgerAdapted: ChainNodeResult<ParsedArtifact>[] = ledgers.map(ordinalChainNode);
+
+  const indexValid: ChainNode<ParsedArtifact>[] = [];
+  const ledgerValid: ChainNode<ParsedArtifact>[] = [];
+  for (const result of indexAdapted) {
+    if (result.ok) {
+      indexValid.push(result.node);
+    } else {
+      issues.push(chainIssueToValidationIssue(result.issue));
+    }
+  }
+  for (const result of ledgerAdapted) {
+    if (result.ok) {
+      ledgerValid.push(result.node);
+    } else {
+      issues.push(chainIssueToValidationIssue(result.issue));
+    }
+  }
+
+  const indexSelection = selectChain("index", indexValid);
+  const ledgerSelection = selectChain("ledger", ledgerValid);
+
+  // Surface structural issues from every family.
+  for (const issue of [...registrySelection.issues, ...indexSelection.issues, ...ledgerSelection.issues]) {
+    issues.push(chainIssueToValidationIssue(issue));
+  }
+
+  // registryByVersion spans every validated registry node (not only the head),
+  // keyed by its version string. Built from the adapted nodes so the key set
+  // matches what the chain engine actually considered.
+  const registryByVersion = new Map<string, ParsedArtifact>();
+  for (const node of registryAdapted) {
+    registryByVersion.set(String(node.key), node.value);
+  }
+
+  return {
+    registries,
+    indexes,
+    ledgers,
+    registryHead: registrySelection.head?.value,
+    indexHead: indexSelection.head?.value,
+    ledgerHead: ledgerSelection.head?.value,
+    registryByVersion,
+    orderedLedgers: ledgerSelection.ordered.map((n) => n.value),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Approval validation
+// ---------------------------------------------------------------------------
 
 function validateApprovalsAndCheckpoint(
   ledgerEntry: ParsedArtifact,

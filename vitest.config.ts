@@ -21,6 +21,11 @@ export default defineConfig({
     // Exclude git worktrees — they contain stale copies of tests that vitest
     // picks up and double-counts (e.g. .worktrees/reference-synthesis/ still
     // has the deleted grok-eval.mjs tests).
-    exclude: ["**/node_modules/**", "**/dist/**", "**/.worktrees/**"],
+    //
+    // Exclude site/ — the public React app ships its own tests under
+    // site/vite.config.ts (jsdom environment + site-specific setup), run via
+    // `npm run site:test`. The root config uses the node environment, so
+    // picking up site/**/*.test.ts(x) here fails with "document is not defined".
+    exclude: ["**/node_modules/**", "**/dist/**", "**/.worktrees/**", "site/**"],
   },
 });

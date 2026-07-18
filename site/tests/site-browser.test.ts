@@ -27,26 +27,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const SITE_ROOT = resolve(__dirname, "..");
 const DIST_INDEX = resolve(SITE_ROOT, "dist", "index.html");
 
-// A real entry id from the shipped snapshot. Resolved synchronously at module
-// load so the evidence-route assertion has a concrete target without a network
-// round-trip. The snapshot is committed to the repo, so this id is stable.
-const SAMPLE_EVIDENCE_ID = readFirstEntryId();
-
-function readFirstEntryId(): string {
-  // Read the source snapshot (same bytes the build copies into dist/) so the id
-  // is correct even before a fresh build. The parser in public-entry.ts rejects
-  // malformed entries, so any shipped entry is safe to deep-link.
-  const snapshotPath = resolve(SITE_ROOT, "public", "snapshot.json");
-  const payload = JSON.parse(readFileSync(snapshotPath, "utf-8")) as {
-    entries?: Array<{ id?: unknown }>;
-  };
-  const entries = Array.isArray(payload.entries) ? payload.entries : [];
-  const found = entries.find((entry) => typeof entry?.id === "string" && entry.id.length > 0);
-  if (!found || typeof found.id !== "string") {
-    throw new Error("site-browser test setup: snapshot has no usable entry id");
-  }
-  return found.id;
-}
+// The public corpus bundle is intentionally empty (see
+// scripts/check-public-site-boundary.mjs): no entry images or per-entry evidence
+// routes are served until a separately cleared collection exists. The browser
+// suite therefore no longer deep-links a sample evidence id or asserts that a
+// real entry image loads; instead it asserts the safe empty state and that NO
+// observed request path escapes into /entries/.
+const ENTRIES_PREFIX = "/entries/";
 
 /**
  * Launch `vite preview` on an ephemeral port and resolve once it prints the URL.
@@ -195,30 +182,10 @@ describe("public site — base-path deployment", () => {
     await ctx.close();
   }, 30_000);
 
-  it("serves an evidence route (/clean-ui-mcp/evidence/<id>) without 404", async () => {
-    const ctx = await newTracingContext();
-    const page = await ctx.newPage();
-    const response = await page.goto(`${baseUrl}evidence/${SAMPLE_EVIDENCE_ID}`);
-    expect(response?.status()).toBe(200);
-    // Wait for the lazy Evidence chunk + the snapshot (2.4MB) to parse. The
-    // evidence header H1 carries the entry title; the screenshot <img> must also
-    // resolve (no 404 on the image asset). Give a generous timeout: the snapshot
-    // fetch + parse + MiniSearch-free lookup can take several seconds cold.
-    await page.waitForSelector("h1", { timeout: 30_000 });
-    await page.waitForSelector("figure img", { timeout: 15_000 });
-    // Confirm the image actually loaded (network status, not just present).
-    const imgOk = await page.evaluate(() => {
-      const img = document.querySelector("figure img") as HTMLImageElement | null;
-      return img ? img.complete && img.naturalWidth > 0 : false;
-    });
-    expect(imgOk).toBe(true);
-    expect(failedOf(ctx)).toEqual([]);
-    await ctx.close();
-  }, 45_000);
-
-  it("does not 404 on any script, style, snapshot, or image across a navigation journey", async () => {
-    // Drive a full journey: home -> playground -> evidence. All asset classes
-    // (entry JS, lazy chunks, snapshot.json, the entry PNG) must resolve.
+  it("never serves a corpus entry asset (no /entries/ request across the journey)", async () => {
+    // The public corpus bundle is intentionally empty until a separately cleared
+    // collection exists. Across a home -> playground journey, NO observed request
+    // path may start with /entries/ — that prefix is the disclosure boundary.
     const ctx = await newTracingContext();
     const page = await ctx.newPage();
     await page.goto(baseUrl);
@@ -227,9 +194,15 @@ describe("public site — base-path deployment", () => {
     await page.goto(`${baseUrl}playground`);
     await rootH1Text(page);
 
-    await page.goto(`${baseUrl}evidence/${SAMPLE_EVIDENCE_ID}`);
-    await page.waitForSelector("figure img", { timeout: 30_000 });
-
+    const observed = await page.evaluate(() =>
+      performance
+        .getEntriesByType("resource")
+        .map((entry) => entry.name),
+    );
+    const leaking = observed.filter((url) =>
+      url.includes(ENTRIES_PREFIX),
+    );
+    expect(leaking).toEqual([]);
     expect(failedOf(ctx)).toEqual([]);
     await ctx.close();
   }, 60_000);

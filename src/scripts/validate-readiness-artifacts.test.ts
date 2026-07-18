@@ -465,6 +465,27 @@ function mutateJson<T = unknown>(path: string, fn: (data: T) => T): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * Options that mutate the synthetic C1 governance snapshot. When omitted the
+ * fixture produces the original separation-of-duties graph (two distinct
+ * human actors Product + Engineering), preserving the regression test.
+ *
+ * - `governanceMode` / `bootstrapOwnerActorId` add the corresponding fields to
+ *   registry v2 so a pinned bootstrap declaration can be exercised.
+ * - `sharedApprovalActorId`, when present, collapses both C1 approvals onto a
+ *   single actor (still authorized for both Product and Engineering) so the
+ *   actor-cardinality check is the only thing that decides closure.
+ * - `bootstrapOwnerKind` controls the actorKind of the shared actor (default
+ *   "human"); used to exercise the implementer-self-approval path with an
+ *   agent actor.
+ */
+type SyntheticC1Options = {
+  governanceMode?: "separation-of-duties" | "sole-maintainer-bootstrap";
+  bootstrapOwnerActorId?: string;
+  sharedApprovalActorId?: string;
+  bootstrapOwnerKind?: "human" | "agent";
+};
+
+/**
  * Write a complete, valid v2 governance snapshot (registry + index + ledger)
  * carrying synthetic C1 approvals, and register every C1 source binding at
  * both the reviewed commit (C1_CONTRACT_SHA) and the merge commit
@@ -479,7 +500,14 @@ function mutateJson<T = unknown>(path: string, fn: (data: T) => T): void {
  */
 function addValidSyntheticC1Approvals(
   fixture: ReturnType<typeof buildValidGraph>,
+  options: SyntheticC1Options = {},
 ): { registryPath: string; indexPath: string; ledgerPath: string } {
+  const {
+    governanceMode,
+    bootstrapOwnerActorId,
+    sharedApprovalActorId,
+    bootstrapOwnerKind = "human",
+  } = options;
   // 1. Register synthetic C1 source bytes at BOTH the reviewed commit and the
   //    merge commit so the integration-provenance check (reviewed == merged)
   //    passes. Distinct, deterministic content per file.
@@ -509,17 +537,65 @@ function addValidSyntheticC1Approvals(
 
   // 2. Write the v2 actor registry (head). Adds Product and Engineering
   //    actors authorized for C1. previousRegistry pins the v1 registry.
-  const v1Registry = readJson<{ actors: unknown[] }>(fixture.registryPath);
+  //    When `sharedApprovalActorId` is present, collapse both roles onto a
+  //    single shared actor; otherwise emit the two distinct actors so the
+  //    default separation-of-duties regression test stays intact.
+  const v1Registry = readJson<{ actors: Array<{ actorId: string; actorKind: string; roles: string[] }> }>(fixture.registryPath);
+  // Build the v2 actor list. In the default separation-of-duties case we append
+  // distinct Product + Engineering actors. When a shared bootstrap actor is
+  // requested we collapse both C1 roles onto that single actor; if it already
+  // exists in v1 (e.g. repo-maintainer-1) we merge Product + Engineering into
+  // its existing entry rather than duplicating it, so the registry stays
+  // duplicate-free.
+  let v2Actors: Array<{ actorId: string; actorKind: string; roles: string[] }>;
+  if (sharedApprovalActorId !== undefined) {
+    const sharedRoles = ["Product", "Engineering"];
+    const existing = v1Registry.actors.find((a) => a.actorId === sharedApprovalActorId);
+    if (existing) {
+      v2Actors = v1Registry.actors.map((a) =>
+        a.actorId === sharedApprovalActorId
+          ? {
+              actorId: sharedApprovalActorId,
+              actorKind: bootstrapOwnerKind,
+              roles: Array.from(new Set([...a.roles, ...sharedRoles])),
+            }
+          : a,
+      );
+    } else {
+      v2Actors = [
+        ...v1Registry.actors,
+        { actorId: sharedApprovalActorId, actorKind: bootstrapOwnerKind, roles: sharedRoles },
+      ];
+    }
+    // When a distinct bootstrap owner is declared (e.g. to prove a shared
+    // actor that is NOT the owner is rejected) ensure it exists as a human
+    // actor in the registry so the registry itself stays valid and the
+    // actor-cardinality check is the deciding rule.
+    if (
+      bootstrapOwnerActorId !== undefined &&
+      bootstrapOwnerActorId !== sharedApprovalActorId &&
+      !v2Actors.some((a) => a.actorId === bootstrapOwnerActorId)
+    ) {
+      v2Actors = [
+        ...v2Actors,
+        { actorId: bootstrapOwnerActorId, actorKind: "human", roles: ["Product", "Engineering"] },
+      ];
+    }
+  } else {
+    v2Actors = [
+      ...v1Registry.actors,
+      { actorId: "product-1", actorKind: "human", roles: ["Product"] },
+      { actorId: "engineering-1", actorKind: "human", roles: ["Engineering"] },
+    ];
+  }
   const v2Registry = {
     ...v1Registry,
     artifactId: "actors-c1-v2",
     registryVersion: "2.0",
     previousRegistry: { registryVersion: "1.0", sha256: fileSha(fixture.registryPath) },
-    actors: [
-      ...v1Registry.actors,
-      { actorId: "product-1", actorKind: "human", roles: ["Product"] },
-      { actorId: "engineering-1", actorKind: "human", roles: ["Engineering"] },
-    ],
+    actors: v2Actors,
+    ...(governanceMode !== undefined ? { governanceMode } : {}),
+    ...(bootstrapOwnerActorId !== undefined ? { bootstrapOwnerActorId } : {}),
   };
   const v2RegistryFilename = "approval-actor-registry-v2.json";
   const v2RegistryPath = join(fixture.artifactRoot, v2RegistryFilename);
@@ -536,13 +612,26 @@ function addValidSyntheticC1Approvals(
     { artifactId: "actors-20260714", artifactType: "approval-actor-registry", sha256: fileSha(fixture.registryPath), path: "quality-contracts/agent-readiness/approval-actor-registry-v1.json" },
     { artifactId: "actors-c1-v2", artifactType: "approval-actor-registry", sha256: v2RegistrySha, path: `quality-contracts/agent-readiness/${v2RegistryFilename}` },
   ];
-  const v1Index = readJson<Record<string, unknown>>(fixture.indexPath);
+  const v1Index = readJson<{ implementationActorIds?: string[] } & Record<string, unknown>>(fixture.indexPath);
+  // When exercising the implementer-self-approval path with an agent bootstrap
+  // owner, register the shared actor as an implementation actor in the v2
+  // index so the validator's implementationActorIds set contains it. Human
+  // owners are left untouched.
+  const v1Implementers = v1Index.implementationActorIds ?? [];
+  const extraImplementers =
+    bootstrapOwnerKind === "agent" && sharedApprovalActorId !== undefined
+      ? [sharedApprovalActorId]
+      : [];
+  const implementationActorIds = Array.from(new Set([...v1Implementers, ...extraImplementers]));
+  const { implementationActorIds: _drop, ...v1IndexRest } = v1Index;
+  void _drop;
   const v2Index = {
-    ...v1Index,
+    ...v1IndexRest,
     artifactId: "index-c1-v2",
     ordinalVersion: 2,
     predecessor: { version: "1", sha256: fileSha(fixture.indexPath) },
     artifacts: v2IndexArtifacts,
+    implementationActorIds,
   };
   const v2IndexFilename = "artifact-index-v2.json";
   const v2IndexPath = join(fixture.artifactRoot, v2IndexFilename);
@@ -570,21 +659,37 @@ function addValidSyntheticC1Approvals(
   const c1TargetSha = computeCheckpointTargetSha256(c1Target);
 
   // 5. Write the v2 ledger (head). Carries the v1 C0 approvals unchanged
-  //    (append-only) plus two distinct C1 approvals (Product + Engineering).
+  //    (append-only) plus two C1 approvals. By default the approvals come
+  //    from distinct Product + Engineering actors; when `sharedApprovalActorId`
+  //    is present both approvals reuse the single shared actor (still with
+  //    the two required roles) so actor-cardinality is the deciding check.
   const v1Ledger = readJson<{ approvals: unknown[]; schemaVersion?: string; createdAt?: string; createdByRole?: string; sourceGitSha?: string }>(fixture.ledgerPath!);
   const c1ApprovedArtifacts = c1TargetArtifacts.map((a) => ({
     artifactId: a.artifactId,
     sha256: a.sha256,
   }));
+  const productActor =
+    sharedApprovalActorId !== undefined
+      ? {
+          approvalId: "c1-product",
+          actorId: sharedApprovalActorId,
+          actorKind: bootstrapOwnerKind,
+        }
+      : { approvalId: "c1-product", actorId: "product-1", actorKind: "human" as const };
+  const engineeringActor =
+    sharedApprovalActorId !== undefined
+      ? {
+          approvalId: "c1-engineering",
+          actorId: sharedApprovalActorId,
+          actorKind: bootstrapOwnerKind,
+        }
+      : { approvalId: "c1-engineering", actorId: "engineering-1", actorKind: "human" as const };
   const c1Approvals = [
     {
-      approvalId: "c1-product",
       approvalKind: "checkpoint",
       checkpoint: "C1",
       decision: "approved",
-      actorId: "product-1",
       role: "Product",
-      actorKind: "human",
       actorRegistryVersion: "2.0",
       actorRegistrySha256: v2RegistrySha,
       checkpointTargetSha256: c1TargetSha,
@@ -593,15 +698,13 @@ function addValidSyntheticC1Approvals(
       specSha256: specSha,
       contractHashes,
       decidedAt: "2026-07-15T10:00:00Z",
+      ...productActor,
     },
     {
-      approvalId: "c1-engineering",
       approvalKind: "checkpoint",
       checkpoint: "C1",
       decision: "approved",
-      actorId: "engineering-1",
       role: "Engineering",
-      actorKind: "human",
       actorRegistryVersion: "2.0",
       actorRegistrySha256: v2RegistrySha,
       checkpointTargetSha256: c1TargetSha,
@@ -610,6 +713,7 @@ function addValidSyntheticC1Approvals(
       specSha256: specSha,
       contractHashes,
       decidedAt: "2026-07-15T10:01:00Z",
+      ...engineeringActor,
     },
   ];
   const v2Ledger = {
@@ -624,6 +728,68 @@ function addValidSyntheticC1Approvals(
   writeArtifact(fixture.artifactRoot, v2LedgerFilename, v2Ledger);
 
   return { registryPath: v2RegistryPath, indexPath: v2IndexPath, ledgerPath: v2LedgerPath };
+}
+
+/**
+ * Append a registry v3 + index v3 pair on top of an existing v2 governance
+ * snapshot. Registry v3 declares `governanceMode: "separation-of-duties"` and
+ * pins registry v2 as its predecessor; index v3 carries ordinal `3`, pins
+ * index v2 as its predecessor, and adds a row indexing registry v3.
+ *
+ * This advances the chain head to the separation-of-duties registry WITHOUT
+ * touching the ledger, so existing C1 approvals remain pinned to registry v2.
+ * Used to prove actor-cardinality is evaluated against each approval's pinned
+ * registry rather than the current head.
+ *
+ * `v2RegistryPath` is the path returned by `addValidSyntheticC1Approvals`.
+ */
+function writeRegistryAndIndexV3(
+  fixture: ReturnType<typeof buildValidGraph>,
+  v2RegistryPath: string,
+): void {
+  // The v2 index path by sibling filename convention. The v2 snapshot was
+  // written as artifact-index-v2.json next to the v2 registry.
+  const v2IndexPath = join(fixture.artifactRoot, "artifact-index-v2.json");
+
+  const v2Registry = readJson<Record<string, unknown>>(v2RegistryPath);
+  // Strip any bootstrapOwnerActorId carried over from v2 so v3 is a clean
+  // separation-of-duties declaration (bootstrapOwnerActorId is only valid in
+  // sole-maintainer-bootstrap mode per validateRegistry).
+  const { bootstrapOwnerActorId: _omit, ...v2RegistryRest } = v2Registry;
+  void _omit;
+  const v3Registry = {
+    ...v2RegistryRest,
+    artifactId: "actors-c1-v3",
+    registryVersion: "3.0",
+    previousRegistry: { registryVersion: "2.0", sha256: fileSha(v2RegistryPath) },
+    // v3 reverts to separation-of-duties so the head registry no longer
+    // authorizes a sole maintainer.
+    governanceMode: "separation-of-duties",
+  };
+  const v3RegistryFilename = "approval-actor-registry-v3.json";
+  const v3RegistryPath = join(fixture.artifactRoot, v3RegistryFilename);
+  writeArtifact(fixture.artifactRoot, v3RegistryFilename, v3Registry);
+  const v3RegistrySha = fileSha(v3RegistryPath);
+
+  const v2Index = readJson<{ artifacts: unknown[] }>(v2IndexPath);
+  const v3IndexArtifacts = [
+    ...v2Index.artifacts,
+    {
+      artifactId: "actors-c1-v3",
+      artifactType: "approval-actor-registry",
+      sha256: v3RegistrySha,
+      path: `quality-contracts/agent-readiness/${v3RegistryFilename}`,
+    },
+  ];
+  const v3Index = {
+    ...v2Index,
+    artifactId: "index-c1-v3",
+    ordinalVersion: 3,
+    predecessor: { version: "2", sha256: fileSha(v2IndexPath) },
+    artifacts: v3IndexArtifacts,
+  };
+  const v3IndexFilename = "artifact-index-v3.json";
+  writeArtifact(fixture.artifactRoot, v3IndexFilename, v3Index);
 }
 
 // ---------------------------------------------------------------------------
@@ -1456,5 +1622,118 @@ describe("per-approval registry resolution and closed-world policy", () => {
     expect(result.issues).toEqual([]);
     expect(result.ok).toBe(true);
     expect(result.checkpointStatus).toMatchObject({ C0: "closed", C1: "closed" });
+  });
+
+  it("closes C1 for the human owner of a pinned bootstrap registry", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    addValidSyntheticC1Approvals(fixture, {
+      governanceMode: "sole-maintainer-bootstrap",
+      bootstrapOwnerActorId: "repo-maintainer-1",
+      sharedApprovalActorId: "repo-maintainer-1",
+    });
+    const result = validate(fixture);
+    expect(result.issues).toEqual([]);
+    expect(result.checkpointStatus.C1).toBe("closed");
+  });
+
+  it("rejects the same actor outside bootstrap mode", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    addValidSyntheticC1Approvals(fixture, {
+      governanceMode: "separation-of-duties",
+      sharedApprovalActorId: "repo-maintainer-1",
+    });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "checkpoint-actor-separation-violation")).toBe(true);
+    expect(result.checkpointStatus.C1).toBe("open");
+  });
+
+  it("rejects a shared actor that is not the pinned bootstrap owner", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    addValidSyntheticC1Approvals(fixture, {
+      governanceMode: "sole-maintainer-bootstrap",
+      bootstrapOwnerActorId: "product-1",
+      sharedApprovalActorId: "repo-maintainer-1",
+    });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "checkpoint-actor-separation-violation")).toBe(true);
+    expect(result.checkpointStatus.C1).toBe("open");
+  });
+
+  it("rejects an implementation actor as bootstrap approver", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    addValidSyntheticC1Approvals(fixture, {
+      governanceMode: "sole-maintainer-bootstrap",
+      bootstrapOwnerActorId: "impl-agent-1",
+      sharedApprovalActorId: "impl-agent-1",
+      bootstrapOwnerKind: "agent",
+    });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "implementer-self-approval")).toBe(true);
+    expect(result.checkpointStatus.C1).toBe("open");
+  });
+
+  it("uses each approval's pinned registry mode instead of the current head", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const c1 = addValidSyntheticC1Approvals(fixture, {
+      governanceMode: "sole-maintainer-bootstrap",
+      bootstrapOwnerActorId: "repo-maintainer-1",
+      sharedApprovalActorId: "repo-maintainer-1",
+    });
+    writeRegistryAndIndexV3(fixture, c1.registryPath);
+    const result = validate(fixture);
+    expect(result.issues).toEqual([]);
+    expect(result.checkpointStatus.C1).toBe("closed");
+  });
+
+  it("rejects a malformed historical registry even when a valid v3 is the head", () => {
+    // A v2 registry declares separation-of-duties but illegally carries a
+    // bootstrapOwnerActorId. Without per-snapshot validation this slips through
+    // because only the head (v3, clean) is validated. The fix validates every
+    // registry in the sound chain, so the malformed v2 produces a registry-error.
+    fixture = buildValidGraph({ withApprovals: true });
+    const c1 = addValidSyntheticC1Approvals(fixture, {
+      governanceMode: "sole-maintainer-bootstrap",
+      bootstrapOwnerActorId: "repo-maintainer-1",
+      sharedApprovalActorId: "repo-maintainer-1",
+    });
+    // Corrupt the v2 registry: it's bootstrap mode but keep the owner,
+    // then add an illegal bootstrapOwnerActorId to make it separation-of-duties + owner
+    // (the semantic validator rejects this combination).
+    mutateJson<{
+      governanceMode?: string;
+      bootstrapOwnerActorId?: string;
+    }>(c1.registryPath, (reg) => {
+      reg.governanceMode = "separation-of-duties";
+      // bootstrapOwnerActorId is now illegal under separation-of-duties
+      return reg;
+    });
+    // Advance the head to a clean v3 so the chain is sound but v2 is malformed.
+    writeRegistryAndIndexV3(fixture, c1.registryPath);
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "registry-error")).toBe(true);
+  });
+
+  it("disqualifies approvals pinned to an invalid registry even with distinct actors", () => {
+    // The P1 fix: a malformed v2 registry must prevent C1 closure even when
+    // the C1 approvals use distinct actors (so cardinality would pass). The
+    // fix runs validateRegistry() inside resolveApprovalRegistry() and calls
+    // note() to taint the approval.
+    //
+    // The malformed registry is created BEFORE the approvals so their
+    // actorRegistrySha256 matches the (malformed) bytes — this exercises the
+    // semantic-validation path, not the hash-mismatch path.
+    fixture = buildValidGraph({ withApprovals: true });
+    // Create C1 with a malformed registry from the start: separation-of-duties
+    // with a forbidden bootstrapOwnerActorId (validateRegistry rejects this).
+    const c1 = addValidSyntheticC1Approvals(fixture, {
+      governanceMode: "separation-of-duties",
+      bootstrapOwnerActorId: "product-1",
+    });
+    const result = validate(fixture);
+    // The approvals' pinned registry digest matches (no hash mismatch) but
+    // the registry is semantically invalid → registry-error taints each.
+    expect(result.issues.some((i) => i.code === "registry-hash-mismatch")).toBe(false);
+    expect(result.issues.some((i) => i.code === "registry-error")).toBe(true);
+    expect(result.checkpointStatus.C1).toBe("open");
   });
 });

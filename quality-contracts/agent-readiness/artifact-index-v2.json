@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "artifact-index",
+  "artifactId": "index-c1-v2",
+  "createdAt": "2026-07-18T15:42:59.328Z",
+  "createdByRole": "repository-maintainer",
+  "sourceGitSha": "bff60918470a5d59707380b5e23e1ae9fcbe7585",
+  "inputHashes": {},
+  "artifacts": [
+    {
+      "artifactId": "actors-20260714",
+      "artifactType": "approval-actor-registry",
+      "sha256": "7e849be131f34928e8191bea8ebefe5fb8e690a7e9f64b103e434767acafa45d",
+      "path": "quality-contracts/agent-readiness/approval-actor-registry-v1.json"
+    },
+    {
+      "artifactId": "ownership-20260714",
+      "artifactType": "ownership-map",
+      "sha256": "4e32063e9ab6e7e8f4621c6f8d92e69e000892c7bac47b16d47417619dc060f1",
+      "path": "quality-contracts/agent-readiness/ownership-map-v1.json"
+    },
+    {
+      "artifactId": "phase0-20260714",
+      "artifactType": "phase0-summary",
+      "sha256": "cbaafd09f35ca4aff3842a8a1bc2ab20aafe82130a5af095556684e570cac1dd",
+      "path": "quality-contracts/agent-readiness/phase0-summary-v1.json"
+    },
+    {
+      "artifactId": "taxonomy-20260714",
+      "artifactType": "taxonomy-digest",
+      "sha256": "58d612d11acbaa5ab751d34e69e35d3bdf3f758192c9845f14825ee23c407dfb",
+      "path": "quality-contracts/agent-readiness/taxonomy-digest-v1.json"
+    },
+    {
+      "artifactId": "actors-c1-v2",
+      "artifactType": "approval-actor-registry",
+      "sha256": "8244c15689a30a8dfc4405a028d8b00e799153d6bb0a0c9a97488533b4a4a286",
+      "path": "quality-contracts/agent-readiness/approval-actor-registry-v2.json"
+    }
+  ],
+  "implementationActorIds": [
+    "impl-agent-1"
+  ],
+  "ordinalVersion": 2,
+  "predecessor": {
+    "version": "1",
+    "sha256": "e678fff48035e5b1aff6c65bbbc5a02da5d7fe3b8deaec7ea5d33bea6712562f"
+  }
+}

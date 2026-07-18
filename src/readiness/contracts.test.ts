@@ -600,6 +600,38 @@ describe("ApprovalActorRegistry", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("accepts an explicit sole-maintainer bootstrap registry", () => {
+    const result = ApprovalActorRegistry.safeParse({
+      ...baseHeader("approval-actor-registry", "actors-c1-v2"),
+      registryVersion: "2.0",
+      previousRegistry: { registryVersion: "1.0", sha256: VALID_SHA256 },
+      governanceMode: "sole-maintainer-bootstrap",
+      bootstrapOwnerActorId: "repo-maintainer-1",
+      actors: [
+        {
+          actorId: "repo-maintainer-1",
+          actorKind: "human",
+          roles: ["Repository Maintainer", "Product", "Engineering"],
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts explicit separation of duties without a bootstrap owner", () => {
+    const result = ApprovalActorRegistry.safeParse({
+      ...baseHeader("approval-actor-registry", "actors-v2"),
+      registryVersion: "2.0",
+      previousRegistry: { registryVersion: "1.0", sha256: VALID_SHA256 },
+      governanceMode: "separation-of-duties",
+      actors: [
+        { actorId: "product-1", actorKind: "human", roles: ["Product"] },
+        { actorId: "engineering-1", actorKind: "human", roles: ["Engineering"] },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
 });
 
 describe("CheckpointApprovals", () => {
@@ -816,6 +848,52 @@ describe("validateRegistry", () => {
       actors: [{ actorId: "x", actorKind: "human", roles: [] }],
     });
     expect(issues.length).toBeGreaterThan(0);
+  });
+
+  it("treats omitted governance mode as separation of duties", () => {
+    expect(validateRegistry(validRegistry())).toEqual([]);
+  });
+
+  it("accepts a human bootstrap owner present in the registry", () => {
+    const registry = {
+      ...validRegistry(),
+      registryVersion: "2.0",
+      previousRegistry: { registryVersion: "1.0", sha256: VALID_SHA256 },
+      governanceMode: "sole-maintainer-bootstrap" as const,
+      bootstrapOwnerActorId: "repo-maintainer-1",
+    };
+    expect(validateRegistry(registry)).toEqual([]);
+  });
+
+  it.each([
+    ["missing owner", { governanceMode: "sole-maintainer-bootstrap" as const }],
+    ["unknown owner", { governanceMode: "sole-maintainer-bootstrap" as const, bootstrapOwnerActorId: "missing" }],
+    ["owner outside bootstrap", { governanceMode: "separation-of-duties" as const, bootstrapOwnerActorId: "repo-maintainer-1" }],
+  ])("rejects malformed governance declaration: %s", (_label, fields) => {
+    const registry = {
+      ...validRegistry(),
+      registryVersion: "2.0",
+      previousRegistry: { registryVersion: "1.0", sha256: VALID_SHA256 },
+      ...fields,
+    };
+    expect(validateRegistry(registry as any).length).toBeGreaterThan(0);
+  });
+
+  it("rejects an agent as bootstrap owner", () => {
+    const registry = {
+      ...validRegistry(),
+      registryVersion: "2.0",
+      previousRegistry: { registryVersion: "1.0", sha256: VALID_SHA256 },
+      governanceMode: "sole-maintainer-bootstrap" as const,
+      bootstrapOwnerActorId: "impl-agent-1",
+      actors: [
+        ...validRegistry().actors,
+        { actorId: "impl-agent-1", actorKind: "agent" as const, roles: ["Engineering" as const] },
+      ],
+    };
+    expect(validateRegistry(registry)).toContain(
+      "bootstrap owner impl-agent-1 must be human",
+    );
   });
 });
 

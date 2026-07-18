@@ -330,12 +330,19 @@ export const TaxonomyDigestArtifact = BaseArtifactHeader.extend({
   aggregateSha256: Sha256,
 }).strict();
 
+export const GovernanceMode = z.enum([
+  "separation-of-duties",
+  "sole-maintainer-bootstrap",
+]);
+
 export const ApprovalActorRegistry = BaseArtifactHeader.extend({
   artifactType: z.literal("approval-actor-registry"),
   registryVersion: z.string().min(1),
   previousRegistry: z
     .object({ registryVersion: z.string().min(1), sha256: Sha256 }).strict()
     .nullable(),
+  governanceMode: GovernanceMode.optional(),
+  bootstrapOwnerActorId: z.string().min(1).optional(),
   actors: z
     .array(
       z
@@ -525,6 +532,28 @@ export function validateRegistry(
     }
   }
 
+  // Governance mode: optional for v1 backward compat. Absence is treated as
+  // separation-of-duties; only sole-maintainer-bootstrap may declare an owner.
+  const governanceMode = registry.governanceMode ?? "separation-of-duties";
+  const bootstrapOwnerActorId = registry.bootstrapOwnerActorId;
+
+  if (governanceMode === "sole-maintainer-bootstrap") {
+    if (!bootstrapOwnerActorId) {
+      issues.push("sole-maintainer-bootstrap requires bootstrapOwnerActorId");
+    } else {
+      const owner = registry.actors.find(
+        (actor) => actor.actorId === bootstrapOwnerActorId,
+      );
+      if (!owner) {
+        issues.push(`bootstrap owner ${bootstrapOwnerActorId} not found in registry`);
+      } else if (owner.actorKind !== "human") {
+        issues.push(`bootstrap owner ${bootstrapOwnerActorId} must be human`);
+      }
+    }
+  } else if (bootstrapOwnerActorId !== undefined) {
+    issues.push("bootstrapOwnerActorId is only valid in sole-maintainer-bootstrap mode");
+  }
+
   return issues;
 }
 
@@ -581,6 +610,7 @@ export type Phase0SummaryT = z.infer<typeof Phase0Summary>;
 export type OwnershipMapT = z.infer<typeof OwnershipMap>;
 export type TaxonomyDigestArtifactT = z.infer<typeof TaxonomyDigestArtifact>;
 export type ApprovalActorRegistryT = z.infer<typeof ApprovalActorRegistry>;
+export type GovernanceModeT = z.infer<typeof GovernanceMode>;
 export type CheckpointApprovalsT = z.infer<typeof CheckpointApprovals>;
 export type ArtifactIndexT = z.infer<typeof ArtifactIndex>;
 export type SnapshotPredecessorT = z.infer<typeof SnapshotPredecessor>;

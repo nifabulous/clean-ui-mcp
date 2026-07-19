@@ -226,6 +226,12 @@ const ALLOWLIST = new Set<string>([
   // The regex-based scan may not detect the dynamic `CHECKPOINT_POLICIES[cp]`
   // access pattern, so it is allowlisted here defensively.
   "CHECKPOINT_POLICIES",
+  // c2/primitives.ts — C2ControlConditionSchema is defined in C2 Pass 1 Task 1
+  // (control conditions: brief-only, current-grounded, gold-evidence,
+  // corrected-label-shadow) and consumed by the Task 2 label-integrity contracts
+  // (condition: C2ControlConditionSchema). Allowlisted transitively until Task 2
+  // lands; remove this entry once Task 2 wires the symbol.
+  "C2ControlConditionSchema",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

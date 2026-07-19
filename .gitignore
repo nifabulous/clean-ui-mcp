@@ -50,7 +50,16 @@ corpus/query-log.jsonl
 
 # Eval baselines — machine/provider-specific (latency, model, private images).
 # Regenerate with `npm run eval-baseline`. Not portable across machines.
-eval/
+# Tracked C2 design-handoff gold contracts are an exception: synthetic, portable
+# (no provider data), and required deliverables of the grounded-design pre-C2
+# plan. Un-ignore the directory so git descends into it, re-ignore everything,
+# then carve the two tracked files back out.
+eval/*
+!eval/design-handoff-labels.json
+!eval/design-handoff-fixtures/
+eval/design-handoff-fixtures/*
+!eval/design-handoff-fixtures/briefs.json
+!eval/design-handoff-fixtures.test.mjs
 # Durability — rolling snapshots of entries.json, written on every UI save.
 # Gitignored because they're large, derivable, and purely a local safety net.
 corpus/.snapshots/

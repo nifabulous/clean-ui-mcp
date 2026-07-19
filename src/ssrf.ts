@@ -45,7 +45,12 @@ export function isPrivateAddress(ip: string): boolean {
   if (/^192\.0\.0\./.test(normalized)) return true;
   // IPv6
   if (normalized === "::1" || normalized === "::") return true;
-  if (normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
+  // Codex P1 #7: link-local is fe80::/10, not fe80::/16. The /10 prefix covers
+  // fe80 through febf (the first 10 bits span 0xfe8??–0xfeb??), so fe90::1,
+  // fea0::1, feb0::1 etc. are all link-local and must be blocked. The prior
+  // `startsWith("fe80:")` only caught the /16 slice. Match the full /10.
+  if (/^fe[89ab][0-9a-f]:/i.test(normalized)) return true;
+  if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
   return false;
 }
 
@@ -119,6 +124,57 @@ export async function assertSafeCaptureTarget(rawUrl: string): Promise<URL> {
     if (bad) {
       throw new Error("Capture target resolves to a blocked metadata or private address");
     }
+  }
+  return parsed;
+}
+
+/**
+ * Validate a URL is safe to launch a browser at FROM A HOSTED/MULTI-TENANT
+ * PATH. Mirrors assertSafeCaptureTarget's structure but removes the
+ * EXPLICIT_LOCALHOST bypass entirely.
+ *
+ * assertSafeCaptureTarget (above) keeps a localhost allowance because the
+ * local-curator CLI workflow legitimately points capture at an operator's own
+ * sandbox running on the same machine. A HOSTED path (target chosen by an
+ * untrusted caller rather than a trusted operator) must NOT carry that
+ * allowance: otherwise an untrusted caller could point hosted capture at
+ * http://localhost:3000, http://127.0.0.1, a private RFC1918 address, or the
+ * cloud-metadata endpoint and read the result back. So this function rejects
+ * localhost, loopback, every private range, link-local, CGNAT, benchmarking,
+ * IETF-protocol, and metadata hostnames — by name first, then by resolved IP.
+ *
+ * Private-range intent (be explicit): 10/8, 172.16/12, 192.168/16 (RFC1918);
+ * 169.254/16 including the cloud-metadata host 169.254.169.254; 100.64/10
+ * (CGNAT, RFC 6598); 198.18/15 (benchmarking, RFC 2544); 192.0.0/24 (IETF
+ * protocol assignments, RFC 6890). The actual CIDR matching lives in
+ * isPrivateAddress above and is shared with the navigation guard.
+ */
+export async function assertSafeHostedCaptureTarget(rawUrl: string): Promise<URL> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("Invalid URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Only http and https URLs can be captured");
+  }
+  if (METADATA_HOSTNAMES.test(parsed.hostname)) {
+    throw new Error("Capture target resolves to a blocked metadata or private address");
+  }
+  // NO EXPLICIT_LOCALHOST bypass here — localhost and loopback hostnames are
+  // rejected outright by the resolved-address check below. (On most systems
+  // "localhost" resolves to 127.0.0.1 and/or ::1, both private per
+  // isPrivateAddress; we do not rely on hostname spelling alone.)
+  let addresses: Array<{ address: string }>;
+  try {
+    addresses = await lookupAll(parsed.hostname, { all: true });
+  } catch {
+    throw new Error(`Could not resolve host: ${parsed.hostname}`);
+  }
+  const bad = addresses.map((a) => a.address).find(isPrivateAddress);
+  if (bad) {
+    throw new Error("Capture target resolves to a blocked metadata or private address");
   }
   return parsed;
 }

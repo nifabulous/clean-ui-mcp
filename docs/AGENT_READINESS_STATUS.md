@@ -19,7 +19,7 @@ locations.
 |---|---|---|
 | **C0** Foundation freeze | ✅ Closed | Validated by a Git-bound checkpoint recipe that recomputes the canonical target from recorded-commit bytes (see R0). C1 working-tree edits to the live spec/plan do **not** reopen C0. |
 | **C1** Agent contract lock | ✅ Closed | Closed by registry/index/ledger v2 (`quality-contracts/agent-readiness/checkpoint-approvals-v2.json`). The registry v2 declares `sole-maintainer-bootstrap` governance with owner `repo-maintainer-1`; Product and Engineering are two role-specific approvals by that single human identity (not two independent people). C0 prefix remains closed and byte-identical. Runtime still advertises the legacy 14-tool surface by design until Phase 1B. |
-| C2 Gold readiness | ⬜ Open | Not started (gated on C1). |
+| C2 Gold readiness | ⬜ Open | Pre-C2 grounded-design foundations have landed (see "Pre-C2 grounded-design foundations" below); C2 itself remains open pending gold execution and Gold Label Owner + QA approval. |
 | C3 MCP + create_ui_spec + skill | ⬜ Open | Not started (gated on C1). |
 | C4 Terminal 1A outcome + dogfood | ⬜ Open | Not started. |
 | C5 Corpus disposition | ⬜ Open | Not started. |
@@ -79,3 +79,41 @@ registry v2 snapshot chains remain parent-plan T1/T2 follow-on work.
 ## Lane B governance infrastructure
 
 The governance pass is complete and C1 is closed: C0/C1 closed-world policies, the Git-bound C1 recipe, deterministic registry/index/ledger chains, per-approval registry resolution, and automatic append-only ledger validation are implemented. The registry v2 (`approval-actor-registry-v2.json`) declares `sole-maintainer-bootstrap` governance with owner `repo-maintainer-1`. The C1 ledger v2 (`checkpoint-approvals-v2.json`) appends two role-specific approvals — Product and Engineering — by that one human identity against the reviewed C1 manifest; it is **not** two independent people. C0 remains closed via its byte-identical ledger prefix. Lane C (MCP/create_ui_spec/skill) and Lane D remain deferred, gated on this C1 closure.
+
+## Pre-C2 grounded-design foundations
+
+The following grounded-design workspace tasks landed on
+`feat/grounded-design-pre-c2` as **pre-C2 foundation work** — they are
+foundations for the C2 (Gold readiness) checkpoint, **not** C2 completion. C2
+itself remains open pending gold execution and the Gold Label Owner + QA
+approvals named in the parent plan. The design authority for this foundation
+work is `docs/superpowers/specs/2026-07-18-grounded-design-workspace-design.md`.
+
+| # | Commit | Description |
+|---|---|---|
+| Task 1 (boundary only) | `36baa83` (+ `e1ed968` symlink rejection) | Allowlist-based public-asset boundary checker (`check-public-site-boundary.mjs`) wired into `npm run build`; symlink exfiltration vector closed. The corpus removal + public-site sanctioned assets land with the public-site reconstruction PR (see note below). |
+| Task 2 | `651dfae` (+ fixes `bde63c9`, `e94f826`) | `DesignSourceSnapshotSchema` and the deterministic `SOURCE-DESIGN.md` renderer; hardened cell escaping and determinism; recomputed same-origin and rejected duplicate evidence IDs (`e94f826`). |
+| Task 3 | `fcad588` (+ fixes `2dcb0ab`, `55ba144`, `e1ed968`) | `planRepresentativeCrawl` and `assertSafeHostedCaptureTarget` hosted SSRF guard; percent-encoded destructive-path, NaN-budget, fractional-budget, start-URL safety, non-http(s)/userinfo rejection (`55ba144`), full `fe80::/10` IPv6 link-local (`e1ed968`), and `/api` case-insensitive matching. |
+| Task 4 | `b2b8248` (+ `e1ed968`) | Ephemeral session policy: `decideCookie` + `chooseConsentAction`; bare-public-suffix parent-domain rejection (`e1ed968`). |
+| Task 5 | `0118452` (+ fixes `925096e`, `e94f826`, `e1ed968`, `be6ac93`, `6bf545a`) | Deterministic grounded design-handoff gold gate scorer with 12 briefs and 12 labels; required declared blueprints, null-entry guards (`925096e`); strict malformed-label fail-closed + real fixture gating (`e94f826`); evidence-required decisions + canonicalized inaccessible-URL matching + symlink-aware boundary + label-permitted lane authority (`e1ed968`); empty-but-present-label rejection and label-specific lane enforcement (re-review, this commit); isolated evidence:[] regression test (`be6ac93`). |
+
+Note: Task 1 split across two PRs. The **boundary checker module and its
+`npm run build` wiring ship here** (`36baa83`) with a narrow allowlist (just the
+corpus-free `snapshot.json`). The **corpus removal** (deleting the 787 uncleared
+`site/public/entries/` images), the synthetic snapshot installation, and the
+**allowlist extension** to cover the real public-site sanctioned assets
+(`robots.txt`, `sitemap.xml`, the generated bundle) land with the public-site
+reconstruction PR, because those assets are not on `main` yet.
+
+### Explicitly future plans (NOT completed work)
+
+The following are explicitly **future plans** and are not claimed as completed or
+as part of C2 completion:
+
+- the hosted design-source generator;
+- Playground conversion;
+- Decision Lab integration;
+- Curator Scout;
+- authenticated capture;
+- BYOK (bring-your-own-key);
+- framework adapters.

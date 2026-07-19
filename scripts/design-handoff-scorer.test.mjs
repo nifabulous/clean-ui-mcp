@@ -1,0 +1,506 @@
+import { describe, expect, it } from "vitest";
+import { scoreDesignHandoff } from "./design-handoff-scorer.mjs";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OUTPUT SHAPE (the design-handoff artifact the scorer evaluates).
+// This shape is the test's own coherent, deterministic design. It exercises all
+// eight mutation cases below. The scorer reads these fields:
+//
+//   {
+//     globalDirection: { tone, primaryTypography, motionApproach },
+//     screenBlueprints: [
+//       {
+//         id,                       // stable screen id (matches label.requiredScreenStates keys)
+//         name,                     // human label
+//         requiredStates: [ "empty", "loading", "populated" ],  // required screen states (per label)
+//         mobileRules: [ "stack-to-single-column", ... ],       // required mobile-responsive rules
+//         inspectedUrls: [ "https://example.com/..." ],         // URLs claimed as directly inspected
+//       },
+//     ],
+//     acceptanceCriteria: [ { id, statement } ],   // id matches label.requiredAcceptanceCriteria ids
+//     assumptions: [ "Assume dark mode is out of scope." ],
+//     authorityLanes: {
+//       retain: [ { id, rationale } ],
+//       adapt:  [ { id, rationale } ],
+//       reject: [ { id, rationale } ],
+//     },
+//     sourceDecisions: [
+//       { id, lane: "retain" | "adapt" | "reject", rationale, evidence: [ "src:..." ] },
+//     ],
+//     sourceObservations: [
+//       // An observation drawn from the source material. Each MUST carry a lane
+//       // so it is not mistaken for a target decision (mutation 7).
+//       { id, note, lane: "retain" | "adapt" | "reject" },
+//     ],
+//     evidenceIds: [ "src:home:layout", ... ],   // the valid evidence set; references outside it are unresolved (mutation 6)
+//   }
+//
+// No field may carry a private product name, entry id, or image path — the label
+// declares `privateMarkers` and the scorer scans the serialized output (mutation 5).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Minimal valid output for the GOLD_LABEL. Meets every required section,
+// decision, screen state, acceptance criterion, and contains no private
+// identifiers, no forbidden claims, and no unresolved evidence.
+function makeOutput(overrides = {}) {
+  return {
+    globalDirection: {
+      tone: "calm and confident",
+      primaryTypography: "humanist sans",
+      motionApproach: "DOM-grounded micro-interactions only",
+    },
+    screenBlueprints: [
+      {
+        id: "home",
+        name: "Home",
+        requiredStates: ["empty", "loading", "populated"],
+        mobileRules: ["stack-to-single-column", "collapse-secondary-nav"],
+        inspectedUrls: ["https://example.com/home"],
+      },
+      {
+        id: "detail",
+        name: "Detail",
+        requiredStates: ["empty", "loading", "populated"],
+        mobileRules: ["stack-to-single-column", "sticky-primary-action"],
+        inspectedUrls: ["https://example.com/detail"],
+      },
+    ],
+    acceptanceCriteria: [
+      { id: "ac-empty-state", statement: "Every list view ships an empty state." },
+      { id: "ac-loading-skeleton", statement: "Async transitions show a loading skeleton." },
+    ],
+    assumptions: [
+      "Assume dark mode is out of scope for this pass.",
+      "Assume the analytics event schema is stable.",
+    ],
+    authorityLanes: {
+      retain: [{ id: "src:home:layout", rationale: "Grid reads cleanly on desktop." }],
+      adapt: [{ id: "src:detail:typography", rationale: "Promote the secondary weight for hierarchy." }],
+      reject: [{ id: "src:home:color", rationale: "Sourced palette fails our 4.5:1 contrast floor." }],
+    },
+    sourceDecisions: [
+      {
+        id: "src:home:layout",
+        lane: "retain",
+        rationale: "Grid reads cleanly on desktop.",
+        evidence: ["src:home:layout"],
+      },
+      {
+        id: "src:detail:typography",
+        lane: "adapt",
+        rationale: "Promote the secondary weight for hierarchy.",
+        evidence: ["src:detail:typography"],
+      },
+      {
+        id: "src:home:color",
+        lane: "reject",
+        rationale: "Sourced palette fails our 4.5:1 contrast floor.",
+        evidence: ["src:home:color"],
+      },
+    ],
+    sourceObservations: [
+      { id: "src:home:layout", note: "Source home uses a 12-col grid.", lane: "retain" },
+    ],
+    evidenceIds: [
+      "src:home:layout",
+      "src:detail:typography",
+      "src:home:color",
+    ],
+    ...overrides,
+  };
+}
+
+const GOLD_LABEL = {
+  id: "design-handoff-fixture",
+  labelVersion: 1,
+  requiredSections: ["globalDirection", "screenBlueprints", "acceptanceCriteria", "assumptions", "authorityLanes", "sourceDecisions"],
+  requiredDecisions: ["src:home:layout", "src:detail:typography", "src:home:color"],
+  requiredScreenStates: { home: ["empty", "loading", "populated"], detail: ["empty", "loading", "populated"] },
+  requiredAcceptanceCriteria: ["ac-empty-state", "ac-loading-skeleton"],
+  requiredMobileRules: ["stack-to-single-column", "collapse-secondary-nav", "sticky-primary-action"],
+  permittedAuthorityLanes: ["retain", "adapt", "reject"],
+  forbiddenClaims: ["icon-only", "pixel-perfect"],
+  privateMarkers: ["acme-corp-secret", "entry-9f3a2b", "/corpus/secret/asset.png"],
+  validEvidenceIds: ["src:home:layout", "src:detail:typography", "src:home:color"],
+  inaccessibleUrls: ["https://example.com/inaccessible-archive"],
+  sourceCoverageExpectation: "well-supported",
+  motionDomGrounded: true,
+};
+
+describe("scoreDesignHandoff", () => {
+  it("scores a perfect output with complete: true and all zeroes", () => {
+    expect(scoreDesignHandoff(makeOutput(), GOLD_LABEL)).toEqual({
+      complete: true,
+      requiredSectionCoverage: 1,
+      requiredDecisionCoverage: 1,
+      acceptanceCriterionCoverage: 1,
+      unsupportedClaimCount: 0,
+      forbiddenDisclosureCount: 0,
+      unresolvedEvidenceCount: 0,
+    });
+  });
+
+  // Mutation 1: missing screen state — remove a required state from one blueprint.
+  it("mutation 1: a missing required screen state flips complete to false", () => {
+    const output = makeOutput({
+      screenBlueprints: [
+        {
+          ...makeOutput().screenBlueprints[0],
+          requiredStates: ["empty", "loading"], // "populated" dropped
+        },
+        makeOutput().screenBlueprints[1],
+      ],
+    });
+    const result = scoreDesignHandoff(output, GOLD_LABEL);
+    expect(result.complete).toBe(false);
+    // State coverage collapses into the section gate — section coverage drops.
+    expect(result.requiredSectionCoverage).toBeLessThan(1);
+  });
+
+  // Mutation 2: missing mobile rule — omit a required mobile-responsive rule.
+  it("mutation 2: a missing required mobile rule flips complete to false", () => {
+    const output = makeOutput({
+      screenBlueprints: [
+        {
+          ...makeOutput().screenBlueprints[0],
+          mobileRules: ["stack-to-single-column"], // "collapse-secondary-nav" dropped
+        },
+        makeOutput().screenBlueprints[1],
+      ],
+    });
+    const result = scoreDesignHandoff(output, GOLD_LABEL);
+    expect(result.complete).toBe(false);
+    expect(result.requiredSectionCoverage).toBeLessThan(1);
+  });
+
+  // Mutation 3: absent acceptance criterion — drop a required acceptance criterion.
+  it("mutation 3: a dropped acceptance criterion flips complete to false", () => {
+    const output = makeOutput({
+      acceptanceCriteria: [
+        { id: "ac-empty-state", statement: "Every list view ships an empty state." },
+        // "ac-loading-skeleton" dropped
+      ],
+    });
+    const result = scoreDesignHandoff(output, GOLD_LABEL);
+    expect(result.complete).toBe(false);
+    expect(result.acceptanceCriterionCoverage).toBeLessThan(1);
+  });
+
+  // Mutation 4: unsupported source claim — a source decision whose id is not in
+  // the permitted source-evidence set (validEvidenceIds). The invented decision
+  // carries an EMPTY evidence array so it trips ONLY unsupportedClaimCount,
+  // leaving unresolvedEvidenceCount at 0 (M1: isolate the mutation to one count).
+  it("mutation 4: an unsupported source claim flips complete to false", () => {
+    const output = makeOutput({
+      sourceDecisions: [
+        ...makeOutput().sourceDecisions,
+        {
+          id: "src:home:invented-claim", // not in validEvidenceIds
+          lane: "retain",
+          rationale: "Made up with no source backing.",
+          evidence: [],
+        },
+      ],
+    });
+    const result = scoreDesignHandoff(output, GOLD_LABEL);
+    expect(result.complete).toBe(false);
+    expect(result.unsupportedClaimCount).toBeGreaterThan(0);
+    expect(result.unresolvedEvidenceCount).toBe(0);
+  });
+
+  // Mutation 5: private marker — inject a forbidden private identifier.
+  it("mutation 5: a private marker flips complete to false", () => {
+    const output = makeOutput({
+      globalDirection: {
+        ...makeOutput().globalDirection,
+        tone: "matches the acme-corp-secret brand", // private marker
+      },
+    });
+    const result = scoreDesignHandoff(output, GOLD_LABEL);
+    expect(result.complete).toBe(false);
+    expect(result.forbiddenDisclosureCount).toBeGreaterThan(0);
+  });
+
+  // Mutation 6: unresolved evidence ID — reference an evidence id outside the valid set.
+  it("mutation 6: an unresolved evidence id flips complete to false", () => {
+    const output = makeOutput({
+      sourceDecisions: [
+        {
+          id: "src:home:layout",
+          lane: "retain",
+          rationale: "Grid reads cleanly on desktop.",
+          evidence: ["src:home:layout", "src:home:ghost-evidence"], // ghost id
+        },
+        ...makeOutput().sourceDecisions.slice(1),
+      ],
+    });
+    const result = scoreDesignHandoff(output, GOLD_LABEL);
+    expect(result.complete).toBe(false);
+    expect(result.unresolvedEvidenceCount).toBeGreaterThan(0);
+  });
+
+  // Mutation 7: source observation phrased as target authority (no lane).
+  it("mutation 7: a source observation without a lane flips complete to false", () => {
+    const output = makeOutput({
+      sourceObservations: [
+        // Presented as a target decision but carries no retain/adapt/reject lane.
+        { id: "src:home:layout", note: "We will rebuild the home grid." },
+      ],
+    });
+    const result = scoreDesignHandoff(output, GOLD_LABEL);
+    expect(result.complete).toBe(false);
+    expect(result.unsupportedClaimCount).toBeGreaterThan(0);
+  });
+
+  // Mutation 8: an inaccessible URL described as inspected.
+  it("mutation 8: an inaccessible url claimed as inspected flips complete to false", () => {
+    const output = makeOutput({
+      screenBlueprints: [
+        {
+          ...makeOutput().screenBlueprints[0],
+          inspectedUrls: ["https://example.com/home", "https://example.com/inaccessible-archive"],
+        },
+        makeOutput().screenBlueprints[1],
+      ],
+    });
+    const result = scoreDesignHandoff(output, GOLD_LABEL);
+    expect(result.complete).toBe(false);
+    expect(result.unsupportedClaimCount).toBeGreaterThan(0);
+  });
+
+  // Regression for I1: a label that requires states for a blueprint id the
+  // output never declares must fail the section gate. Previously the scorer
+  // silently skipped the missing blueprint and returned success.
+  it("regression I1: a required blueprint id that the output omits fails section coverage", () => {
+    const output = makeOutput({
+      screenBlueprints: [
+        {
+          id: "detail",
+          name: "Detail",
+          requiredStates: ["empty", "loading", "populated"],
+          mobileRules: ["stack-to-single-column", "sticky-primary-action"],
+          inspectedUrls: ["https://example.com/detail"],
+        },
+      ],
+    });
+    const result = scoreDesignHandoff(output, GOLD_LABEL);
+    expect(result.complete).toBe(false);
+    expect(result.requiredSectionCoverage).toBeLessThan(1);
+  });
+
+  // Regression for I2: a null entry inside sourceDecisions must not crash the
+  // scorer; valid entries are still counted normally.
+  it("regression I2: a null entry in sourceDecisions does not crash and scores normally", () => {
+    const valid = makeOutput().sourceDecisions;
+    const output = makeOutput({
+      sourceDecisions: [null, ...valid],
+    });
+    const result = scoreDesignHandoff(output, GOLD_LABEL);
+    expect(result.complete).toBe(true);
+    expect(result.requiredDecisionCoverage).toBe(1);
+    expect(result.unsupportedClaimCount).toBe(0);
+    expect(result.unresolvedEvidenceCount).toBe(0);
+  });
+});
+
+// ─── P1 #1: malformed label must fail closed, not certify empty output ──────
+// A missing, `{}`, or partially-formed gold label previously defaulted every
+// requirement array to `[]`, each empty requirement set was awarded coverage
+// 1, and `scoreDesignHandoff({}, {})` returned `complete: true`. A damaged or
+// mis-loaded label would silently certify an empty handoff. The scorer must
+// validate the label shape strictly and return the zeroed result.
+describe("scoreDesignHandoff: malformed-label fail-closed (P1 #1)", () => {
+  it("rejects an empty-object label without certifying the output", () => {
+    const result = scoreDesignHandoff({}, {});
+    expect(result.complete).toBe(false);
+    expect(result.requiredSectionCoverage).toBe(0);
+    expect(result.requiredDecisionCoverage).toBe(0);
+    expect(result.acceptanceCriterionCoverage).toBe(0);
+  });
+
+  it("rejects a null/undefined label", () => {
+    expect(scoreDesignHandoff({}, null).complete).toBe(false);
+    expect(scoreDesignHandoff({}, undefined).complete).toBe(false);
+  });
+
+  it("rejects a label missing required array fields (forbiddenClaims absent)", () => {
+    const partial = { ...GOLD_LABEL };
+    delete partial.forbiddenClaims;
+    const result = scoreDesignHandoff(makeOutput(), partial);
+    expect(result.complete).toBe(false);
+    expect(result.requiredSectionCoverage).toBe(0);
+  });
+
+  it("rejects a label whose required array field is a non-array (string)", () => {
+    const malformed = { ...GOLD_LABEL, requiredSections: "globalDirection" };
+    expect(scoreDesignHandoff(makeOutput(), malformed).complete).toBe(false);
+  });
+
+  it("rejects a label with an out-of-enum sourceCoverageExpectation", () => {
+    const malformed = { ...GOLD_LABEL, sourceCoverageExpectation: "bogus" };
+    expect(scoreDesignHandoff(makeOutput(), malformed).complete).toBe(false);
+  });
+
+  it("rejects a label with a non-boolean motionDomGrounded", () => {
+    const malformed = { ...GOLD_LABEL, motionDomGrounded: "yes" };
+    expect(scoreDesignHandoff(makeOutput(), malformed).complete).toBe(false);
+  });
+});
+
+// ─── Codex review P1s: evidence-required decisions, full label shape, URL canon ─
+describe("scoreDesignHandoff: codex review hardening", () => {
+  it("a required decision with empty evidence does NOT yield complete (P1 #1)", () => {
+    // Provide ALL three required decisions; only one carries evidence: [].
+    // This isolates the empty-evidence variable — if the fix were reverted,
+    // all three would count as covered and decCov would be 1 (test fails).
+    // (The earlier form supplied only one decision, so decCov was 1/3 for the
+    // unrelated reason that the other two were missing — the test passed
+    // whether or not the fix was present, guarding nothing.)
+    const out = makeOutput({
+      sourceDecisions: [
+        { id: "src:home:layout", lane: "retain", rationale: "ok", evidence: [] },
+        { id: "src:detail:typography", lane: "adapt", rationale: "ok", evidence: ["src:detail:typography"] },
+        { id: "src:home:color", lane: "reject", rationale: "ok", evidence: ["src:home:color"] },
+      ],
+    });
+    const r = scoreDesignHandoff(out, GOLD_LABEL);
+    expect(r.complete).toBe(false);
+    expect(r.requiredDecisionCoverage).toBeLessThan(1);
+  });
+
+  it("rejects a label missing requiredMobileRules (P1 #2)", () => {
+    const partial = { ...GOLD_LABEL };
+    delete partial.requiredMobileRules;
+    expect(scoreDesignHandoff(makeOutput(), partial).complete).toBe(false);
+  });
+
+  it("rejects a label missing permittedAuthorityLanes (P1 #2)", () => {
+    const partial = { ...GOLD_LABEL };
+    delete partial.permittedAuthorityLanes;
+    expect(scoreDesignHandoff(makeOutput(), partial).complete).toBe(false);
+  });
+
+  it("rejects a label missing inaccessibleUrls (P1 #2)", () => {
+    const partial = { ...GOLD_LABEL };
+    delete partial.inaccessibleUrls;
+    expect(scoreDesignHandoff(makeOutput(), partial).complete).toBe(false);
+  });
+
+  it("rejects a label whose requiredScreenStates is missing or an array (P1 #2)", () => {
+    const noStates = { ...GOLD_LABEL };
+    delete noStates.requiredScreenStates;
+    expect(scoreDesignHandoff(makeOutput(), noStates).complete).toBe(false);
+    const arrayStates = { ...GOLD_LABEL, requiredScreenStates: [["empty"]] };
+    expect(scoreDesignHandoff(makeOutput(), arrayStates).complete).toBe(false);
+  });
+
+  it("catches an inaccessible URL claimed under an equivalent form (P1 #3)", () => {
+    // The label marks https://example.com/inaccessible-archive as inaccessible.
+    // The output claims it with :443 + trailing slash + fragment — all
+    // semantically equivalent and previously evaded raw string equality.
+    const out = makeOutput({
+      screenBlueprints: [
+        {
+          id: "home",
+          name: "Home",
+          requiredStates: ["empty", "populated"],
+          mobileRules: GOLD_LABEL.requiredMobileRules,
+          inspectedUrls: ["https://example.com:443/inaccessible-archive/#x"],
+        },
+      ],
+    });
+    const r = scoreDesignHandoff(out, GOLD_LABEL);
+    expect(r.unsupportedClaimCount).toBeGreaterThan(0);
+  });
+});
+
+// ─── Re-review P1s: empty-but-present label + label-specific lane authority ──
+describe("scoreDesignHandoff: re-review fail-open hardening", () => {
+  // P1 #1: a label whose required fields are all present-but-empty arrays (and
+  // an empty requiredScreenStates map) previously passed validation — every
+  // empty requirement set was then awarded coverage 1, so `({}, emptyButPresent)`
+  // returned complete:true. The validator now enforces non-empty contents.
+  it("rejects a structurally-complete-but-empty label (P1 #1)", () => {
+    const emptyButPresent = {
+      ...GOLD_LABEL,
+      requiredSections: [],
+      requiredDecisions: [],
+      requiredAcceptanceCriteria: [],
+      requiredMobileRules: [],
+      permittedAuthorityLanes: [],
+      requiredScreenStates: {},
+      forbiddenClaims: [],
+      privateMarkers: [],
+      validEvidenceIds: [],
+      inaccessibleUrls: [],
+    };
+    expect(scoreDesignHandoff({}, emptyButPresent).complete).toBe(false);
+    // Specifically, coverage must NOT be awarded 1 for empty requirement sets.
+    const r = scoreDesignHandoff({}, emptyButPresent);
+    expect(r.requiredSectionCoverage).toBe(0);
+    expect(r.requiredDecisionCoverage).toBe(0);
+    expect(r.acceptanceCriterionCoverage).toBe(0);
+  });
+
+  it("rejects a label with labelVersion !== 1 (P1 #1: literal version)", () => {
+    expect(scoreDesignHandoff({}, { ...GOLD_LABEL, labelVersion: 2 }).complete).toBe(false);
+    expect(scoreDesignHandoff({}, { ...GOLD_LABEL, labelVersion: "1" }).complete).toBe(false);
+  });
+
+  it("rejects a label with a duplicate in validEvidenceIds (P1 #1: uniqueness)", () => {
+    const dup = { ...GOLD_LABEL, validEvidenceIds: ["src:home:layout", "src:home:layout"] };
+    expect(scoreDesignHandoff(makeOutput(), dup).complete).toBe(false);
+  });
+
+  it("rejects a label whose permittedAuthorityLanes has a non-lane value (P1 #1)", () => {
+    const bad = { ...GOLD_LABEL, permittedAuthorityLanes: ["retain", "invent"] };
+    expect(scoreDesignHandoff(makeOutput(), bad).complete).toBe(false);
+  });
+
+  it("rejects a label whose requiredDecisions are not a subset of validEvidenceIds (P1 #1)", () => {
+    const unsatisfiable = { ...GOLD_LABEL, requiredDecisions: ["src:does-not-exist"] };
+    expect(scoreDesignHandoff(makeOutput(), unsatisfiable).complete).toBe(false);
+  });
+
+  // P1 #2: permittedAuthorityLanes was validated but never consulted — decision
+  // and observation lane checks used the global VALID_LANES. A label permitting
+  // only `adapt` accepted a `retain` decision. The label-specific permitted set
+  // now constrains decisions and observations.
+  it("rejects a decision using a lane the label does not permit (P1 #2)", () => {
+    const adaptOnly = { ...GOLD_LABEL, permittedAuthorityLanes: ["adapt"] };
+    // GOLD_LABEL.requiredDecisions includes src:home:layout; give it lane retain
+    // (forbidden by this label) — coverage must drop AND unsupported must bump.
+    const out = makeOutput({
+      sourceDecisions: GOLD_LABEL.requiredDecisions.map((id) => ({
+        id,
+        lane: "retain",
+        rationale: "uses a forbidden lane",
+        evidence: [id],
+      })),
+    });
+    const r = scoreDesignHandoff(out, adaptOnly);
+    expect(r.requiredDecisionCoverage).toBeLessThan(1);
+    expect(r.unsupportedClaimCount).toBeGreaterThan(0);
+  });
+
+  it("accepts a decision using a lane the label permits (P1 #2 regression guard)", () => {
+    const adaptOnly = { ...GOLD_LABEL, permittedAuthorityLanes: ["adapt"] };
+    // Override BOTH sourceDecisions and sourceObservations — makeOutput's
+    // default observation uses lane "retain", which adapt-only forbids, so it
+    // must be replaced for the "permitted" case to be clean.
+    const out = makeOutput({
+      sourceDecisions: GOLD_LABEL.requiredDecisions.map((id) => ({
+        id,
+        lane: "adapt",
+        rationale: "permitted by this label",
+        evidence: [id],
+      })),
+      sourceObservations: [
+        { id: "src:home:layout", note: "Source home uses a 12-col grid.", lane: "adapt" },
+      ],
+    });
+    const r = scoreDesignHandoff(out, adaptOnly);
+    expect(r.requiredDecisionCoverage).toBe(1);
+    expect(r.unsupportedClaimCount).toBe(0);
+  });
+});

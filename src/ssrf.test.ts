@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPrivateAddress, assertSafeCaptureTarget, assertSafeNavigationTarget, localOriginIfLocal } from "./ssrf.js";
+import { isPrivateAddress, assertSafeCaptureTarget, assertSafeHostedCaptureTarget, assertSafeNavigationTarget, localOriginIfLocal } from "./ssrf.js";
 import { captureSlug, isAllowedByRobots, escapeCssId, selectorFingerprint, MIN_GROUP_DIM, MAX_GROUP_ASPECT, MIN_VH_FRAC, VIEWPORTS } from "./scripts/capture.js";
 import { parseOpenAIResetHeader } from "./tagger.js";
 
@@ -87,6 +87,63 @@ describe("SSRF guard: assertSafeCaptureTarget", () => {
     await expect(assertSafeCaptureTarget("http://localhost:3000/")).resolves.toBeInstanceOf(URL);
     await expect(assertSafeCaptureTarget("http://127.0.0.1:8080/")).resolves.toBeInstanceOf(URL);
   });
+});
+
+// ============================================================
+// assertSafeHostedCaptureTarget — the STRICTER sibling used when the
+// capture target is chosen by a hosted/multi-tenant path (not the
+// local-curator CLI). It drops the EXPLICIT_LOCALHOST bypass entirely:
+// no localhost, no loopback, no private range, no metadata. The local
+// curator workflow keeps using assertSafeCaptureTarget (localhost still
+// allowed there); hosted paths use this one so an untrusted caller can
+// never point capture at an internal service.
+// ============================================================
+describe("SSRF guard: assertSafeHostedCaptureTarget", () => {
+  it("rejects localhost (NO bypass, unlike assertSafeCaptureTarget)", async () => {
+    await expect(assertSafeHostedCaptureTarget("http://localhost:3000")).rejects.toThrow(/blocked|private|localhost/i);
+  });
+
+  it("rejects 127.0.0.1 loopback", async () => {
+    await expect(assertSafeHostedCaptureTarget("http://127.0.0.1")).rejects.toThrow(/blocked|private|loopback/i);
+  });
+
+  it("rejects RFC1918 private ranges (10/8 and 192.168/16)", async () => {
+    await expect(assertSafeHostedCaptureTarget("http://10.0.0.1")).rejects.toThrow(/blocked|private/i);
+    await expect(assertSafeHostedCaptureTarget("http://192.168.1.1")).rejects.toThrow(/blocked|private/i);
+  });
+
+  it("rejects the cloud-metadata / link-local endpoint (169.254.169.254)", async () => {
+    await expect(assertSafeHostedCaptureTarget("http://169.254.169.254")).rejects.toThrow(/blocked|private|metadata/i);
+  });
+
+  it("rejects CGNAT (100.64.0.0/10) and benchmarking (198.18.0.0/15) ranges", async () => {
+    await expect(assertSafeHostedCaptureTarget("http://100.64.0.1")).rejects.toThrow(/blocked|private/i);
+    await expect(assertSafeHostedCaptureTarget("http://198.18.0.1")).rejects.toThrow(/blocked|private/i);
+  });
+
+  it("accepts a normal public URL", async () => {
+    // example.com resolves to a public address; same real-DNS tradeoff as the
+    // other tests in this file. If CI is offline this is flaky, matching the
+    // existing pattern — we don't mock DNS here.
+    await expect(assertSafeHostedCaptureTarget("https://example.com")).resolves.toBeInstanceOf(URL);
+  });
+
+  it("rejects non-http(s) protocols (mirrors assertSafeCaptureTarget)", async () => {
+    await expect(assertSafeHostedCaptureTarget("file:///etc/passwd")).rejects.toThrow(/http and https/);
+  });
+
+  it("rejects malformed URLs", async () => {
+    await expect(assertSafeHostedCaptureTarget("not-a-url")).rejects.toThrow(/Invalid URL/);
+  });
+
+  // Codex P1 #7: IPv6 link-local is fe80::/10 (fe80–febf), not fe80::/16.
+  // fe90::1, fea0::1, feb0::1 are all link-local and previously bypassed.
+  it.each(["fe80::1", "fe90::1", "fea0::1", "feb0::1"])(
+    "isPrivateAddress rejects the full fe80::/10 IPv6 link-local range (%s)",
+    (ip) => {
+      expect(isPrivateAddress(ip)).toBe(true);
+    },
+  );
 });
 
 // ============================================================

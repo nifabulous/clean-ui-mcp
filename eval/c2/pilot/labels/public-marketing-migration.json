@@ -103,6 +103,6 @@
     "The account route was blocked because the crawl was unauthenticated; any output claiming it was inspected fails evidence-discipline.",
     "retain/adapt/reject lanes are all permitted: generic layout principles may be retained or adapted, while proprietary identifiers must be rejected.",
     "Originality and evidence-discipline are co-equal here: an output that copies proprietary elements OR claims uninspected pages fails regardless of other strengths.",
-    "The placeholder sha256 in the brief's sourceSnapshotRef will be regenerated in Task 5; do not treat the all-zero digest as a content hash."
+    "The brief's sourceSnapshotRef.sha256 binds the exact on-disk snapshot bytes; the manifest generator verifies this binding on every build."
   ]
 }

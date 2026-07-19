@@ -159,8 +159,8 @@ export function assertAgreementMatchesSubmissions(
   report: z.infer<typeof C2LabelAgreementReportSchema>,
   resolvedHashes: { selectionSha256: string; goldOwnerSubmissionSha256: string; qaSubmissionSha256: string },
 ): void {
-  assertSubmissionMatchesSelection(selection, goldOwner);
-  assertSubmissionMatchesSelection(selection, qa);
+  assertSubmissionMatchesSelection(selection, goldOwner, resolvedHashes.selectionSha256);
+  assertSubmissionMatchesSelection(selection, qa, resolvedHashes.selectionSha256);
   if (goldOwner.reviewerRole !== "Gold Label Owner" || qa.reviewerRole !== "QA") throw new Error("submission role mismatch");
   if (goldOwner.actorId !== report.goldOwnerActorId || qa.actorId !== report.qaActorId) throw new Error("agreement actor mismatch");
   if (report.selectionRef.artifactId !== selection.artifactId) throw new Error("agreement selection reference mismatch");

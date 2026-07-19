@@ -249,6 +249,16 @@ describe("C2 evaluation and attribution contracts", () => {
     expect(() => assertSubmissionMatchesSelection(selection, swapped)).toThrow(/entry IDs do not match selection/);
   });
 
+  it("rejects a submission whose selectionSha256 differs from the resolved selection hash", () => {
+    const selection = makeSelection();
+    const goldOwner = makeSubmission("Gold Label Owner", "reviewer.gold-1");
+    // Matching hash: does not throw.
+    expect(() => assertSubmissionMatchesSelection(selection, goldOwner, goldOwner.selectionSha256)).not.toThrow();
+    // Mismatched hash: throws.
+    const wrongHash = "f".repeat(64);
+    expect(() => assertSubmissionMatchesSelection(selection, goldOwner, wrongHash)).toThrow(/selection hash does not match/);
+  });
+
   it("binds distinct Gold Label Owner and QA submissions in an agreement report", () => {
     const selection = makeSelection();
     const goldOwner = makeSubmission("Gold Label Owner", "reviewer.gold-1");

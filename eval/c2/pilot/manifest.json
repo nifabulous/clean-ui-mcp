@@ -44,7 +44,7 @@
       "label": {
         "artifactId": "c2-label-public-marketing-migration-v1",
         "path": "eval/c2/pilot/labels/public-marketing-migration.json",
-        "sha256": "46bba6f53a960939251b4adaa7cff10fa338605093acd6e32c38384f3461fb1e"
+        "sha256": "c79ddb69036b67ccc46acea275fb9113e683a93963c7952eac2ff7cc439c6049"
       },
       "sourceSnapshot": {
         "artifactId": "design-source-snapshot-public-marketing-migration-v1",

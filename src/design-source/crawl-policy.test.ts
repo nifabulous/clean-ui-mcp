@@ -257,6 +257,53 @@ describe("planRepresentativeCrawl: budget enforcement", () => {
     expect(plan.maxRoutes).toBe(25);
     expect(plan.routes).toHaveLength(25);
   });
+
+  it("floors a fractional maxRoutes to an integer before clamping (P2)", () => {
+    // A fractional budget like 1.5 must not report maxRoutes: 1.5 while letting
+    // two routes in (the budget comparison runs before insertion). The reported
+    // bound must be an integer to match DesignSourceSnapshotSchema's
+    // crawl.maxRoutes contract. Math.floor(1.5) = 1.
+    const plan = planRepresentativeCrawl({
+      startUrl: "https://example.com",
+      discoveredUrls: ["https://example.com/a", "https://example.com/b"],
+      maxRoutes: 1.5,
+    });
+    expect(plan.maxRoutes).toBe(1);
+    // Only the start URL fits — floor(1.5)=1, and startUrl occupies the slot.
+    expect(plan.routes).toHaveLength(1);
+    expect(plan.routes[0].reason).toBe("user-supplied");
+  });
+
+  it("rejects a destructive start URL rather than anchoring an unsafe crawl (P1)", () => {
+    // The start URL is the crawl's origin anchor. If it is itself destructive,
+    // API, or non-HTML, there is no valid safe entry route, so the whole request
+    // is rejected with a clear error rather than silently producing an empty or
+    // unsafe plan. User intent selects WHICH routes are crawled; it does not
+    // bypass the hosted-capture safety boundary.
+    expect(() =>
+      planRepresentativeCrawl({ startUrl: "https://example.com/logout", discoveredUrls: [] }),
+    ).toThrow(/destructive/);
+    expect(() =>
+      planRepresentativeCrawl({ startUrl: "https://example.com/admin", discoveredUrls: [] }),
+    ).toThrow(/destructive/);
+    expect(() =>
+      planRepresentativeCrawl({ startUrl: "https://example.com/api/delete", discoveredUrls: [] }),
+    ).toThrow(/destructive/);
+    expect(() =>
+      planRepresentativeCrawl({ startUrl: "https://example.com/api/users", discoveredUrls: [] }),
+    ).toThrow(/non-html/);
+    expect(() =>
+      planRepresentativeCrawl({ startUrl: "https://example.com/export.pdf", discoveredUrls: [] }),
+    ).toThrow(/non-html/);
+  });
+
+  it("accepts a safe (non-destructive, HTML) start URL unchanged (P1 regression guard)", () => {
+    // The normal case must still work: a safe start URL anchors the crawl and
+    // is route[0] with reason 'user-supplied'.
+    const plan = planRepresentativeCrawl({ startUrl: "https://example.com/app", discoveredUrls: [] });
+    expect(plan.routes).toHaveLength(1);
+    expect(plan.routes[0]).toEqual({ url: "https://example.com/app", reason: "user-supplied" });
+  });
 });
 
 describe("planRepresentativeCrawl: include/exclude", () => {

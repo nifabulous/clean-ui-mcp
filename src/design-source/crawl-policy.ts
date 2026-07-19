@@ -131,8 +131,12 @@ export function planRepresentativeCrawl(input: CrawlPlanInput): CrawlPlan {
   // fall back to default rather than produce NaN, which would silently unbound
   // the plan (routes.length >= NaN is always false, so the budget never fires).
   // Number.isFinite(undefined) returns false, so the undefined case (no field
-  // provided) is also routed to the default.
-  const requested = Number.isFinite(input.maxRoutes) ? (input.maxRoutes as number) : DEFAULT_MAX_ROUTES;
+  // provided) is also routed to the default. Fractional values are floored to
+  // an integer — the budget is a route COUNT, and `DesignSourceSnapshotSchema`
+  // requires `crawl.maxRoutes` to be an integer, so `1.5` must not leak through
+  // as a reported bound that lets two routes in (P2 fix).
+  const finiteRequested = Number.isFinite(input.maxRoutes) ? (input.maxRoutes as number) : DEFAULT_MAX_ROUTES;
+  const requested = Math.floor(finiteRequested);
   const maxRoutes = Math.min(Math.max(HARD_MIN_ROUTES, requested), HARD_MAX_ROUTES);
 
   // startUrl is the user's explicit entry — it defines the origin every route
@@ -140,6 +144,22 @@ export function planRepresentativeCrawl(input: CrawlPlanInput): CrawlPlan {
   const startParsed = canonicalize(input.startUrl) ?? new URL(input.startUrl);
   const startOrigin = startParsed.origin;
   const startCanonical = startParsed.toString();
+
+  // P1 fix: the start URL must pass the SAME non-destructive / non-API /
+  // non-HTML classification as every discovered URL. The prior implementation
+  // pushed startUrl unconditionally, so `/logout`, `/admin`, `/api/delete`, or
+  // `/export.pdf` supplied as the entry point entered a plan whose documented
+  // guarantee is that every route is safe and HTML-only. User intent should
+  // control WHICH routes are selected, not bypass the hosted-capture safety
+  // boundary. If the start URL fails classification, there is no valid
+  // origin-defining entry route, so reject the whole request with a clear
+  // error rather than silently producing an empty or unsafe plan.
+  const startVerdict = classify(startParsed, startOrigin, new Set());
+  if (startVerdict.kind === "skip") {
+    throw new Error(
+      `start URL is ${startVerdict.reason} and cannot anchor a safe public crawl: ${startCanonical}`,
+    );
+  }
 
   // Build the exclude-set from canonicalized excludeUrls. Only parseable
   // exclude entries participate (an unparseable exclude can't match a route).
@@ -153,9 +173,9 @@ export function planRepresentativeCrawl(input: CrawlPlanInput): CrawlPlan {
   const skipped: CrawlPlan["skipped"] = [];
   const seen = new Set<string>();
 
-  // startUrl is ALWAYS route[0]. It is same-origin to itself by definition and
-  // is the user's explicit choice of entry point, so the destructive/api/html
-  // filters do not gate it — only canonicalization (fragment/tracking strip).
+  // startUrl is ALWAYS route[0]. It has already passed `classify()` above
+  // (non-destructive, non-API, HTML) so it is a safe origin anchor as well as
+  // the user's explicit choice of entry point.
   routes.push({ url: startCanonical, reason: "user-supplied" });
   seen.add(startCanonical);
 

@@ -30,6 +30,15 @@ import { fileURLToPath } from "node:url";
  */
 const SANCTIONED_PUBLIC_FILES = new Set([
   "snapshot.json",
+  // Public-site infrastructure assets (the public-site reconstruction PR).
+  // These are static, non-corpus, browser-downloadable by design: robots.txt
+  // and sitemap.xml are crawl directives, not source material. The generated
+  // bundle (JS/CSS) is emitted under site/dist/, not site/public/, so it is
+  // not in scope for this allowlist. Any other file under site/public/ is
+  // rejected — corpus entries, screenshots, critiques, and source identities
+  // must never reach this directory.
+  "robots.txt",
+  "sitemap.xml",
 ]);
 
 /** Normalize a path to POSIX-style relative segments for allowlist matching. */

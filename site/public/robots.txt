@@ -1,0 +1,7 @@
+# clean-ui-mcp is a single-page application. The homepage, install page, and
+# playground are crawlable; evidence detail routes are client-rendered from the
+# snapshot, so we do not enumerate them here (no per-entry static pages exist).
+User-agent: *
+Allow: /
+
+Sitemap: https://nifabulous.github.io/clean-ui-mcp/sitemap.xml

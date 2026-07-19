@@ -1,0 +1,783 @@
+/*
+ * Homepage styles (spec §6.2 proof-led hybrid structure + §5.2 architectural
+ * light canvas). Consumes tokens from tokens.css; does not redefine theme colors.
+ */
+
+.home {
+  position: relative;
+}
+
+/* --- Architectural backdrop (spec §5.2) ------------------------------------ */
+
+.home__hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.arch-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  /* Decorative geometry is hidden from assistive tech via aria-hidden in the
+     component; this layer must never intercept pointer events on copy/controls. */
+}
+
+.arch-backdrop__svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.arch-backdrop__grid line {
+  stroke: color-mix(in srgb, var(--ink) 8%, transparent);
+  stroke-width: 1;
+}
+
+.arch-backdrop__flank rect,
+.arch-backdrop__center rect {
+  fill: color-mix(in srgb, var(--surface-raised) 70%, transparent);
+  stroke: color-mix(in srgb, var(--ink) 7%, transparent);
+  stroke-width: 1;
+}
+
+.arch-backdrop__flank polyline {
+  fill: none;
+  stroke: color-mix(in srgb, var(--focus) 28%, transparent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.arch-backdrop__center rect {
+  fill: none;
+  stroke: color-mix(in srgb, var(--ink) 6%, transparent);
+  stroke-dasharray: 4 8;
+}
+
+/* Reduce the backdrop on mid-width screens: drop opacity so the hero copy
+   dominates (spec §5.2 "simplifies or disappears on narrow screens"). */
+@media (max-width: 900px) {
+  .arch-backdrop {
+    opacity: 0.55;
+  }
+}
+
+/* Below 640px the large flank objects are removed entirely; only the faintest
+   center scaffolding remains so the hero stays legible and uncluttered. */
+@media (max-width: 640px) {
+  .arch-backdrop__flank {
+    display: none;
+  }
+  .arch-backdrop__center rect {
+    stroke: color-mix(in srgb, var(--ink) 4%, transparent);
+  }
+}
+
+/* --- Hero ------------------------------------------------------------------ */
+
+.home__hero-inner {
+  position: relative;
+  z-index: 1;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 64px 16px 40px;
+}
+
+.home__hero-eyebrow {
+  margin: 0 0 12px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.home__hero h1 {
+  margin: 0 0 16px;
+  font-size: clamp(2rem, 5vw, 3.25rem);
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+  color: var(--ink);
+  max-width: 18ch;
+}
+
+/* Restrained editorial italic ONLY for selected headline phrases (spec §5.1). */
+.home__hero h1 em {
+  font-style: italic;
+  font-weight: 600;
+}
+
+.home__hero-lede {
+  margin: 0 0 28px;
+  font-size: clamp(1rem, 2.2vw, 1.1875rem);
+  line-height: 1.55;
+  color: var(--ink-muted);
+  max-width: 52ch;
+}
+
+.home__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 32px;
+}
+
+.home__action--primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 12px 22px;
+  border-radius: var(--radius-md);
+  background: var(--ink);
+  color: var(--surface);
+  text-decoration: none;
+  font-weight: 600;
+  border: 1px solid var(--ink);
+  transition: transform 150ms ease, opacity 150ms ease;
+}
+
+.home__action--primary:hover {
+  opacity: 0.9;
+}
+
+.home__action--secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 12px 22px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.home__action--secondary:hover {
+  border-color: color-mix(in srgb, var(--ink) 25%, var(--border));
+  background: var(--surface-raised);
+}
+
+/* --- Product preview wrapper ---------------------------------------------- */
+
+.home__preview {
+  position: relative;
+  z-index: 1;
+  max-width: 760px;
+  margin: 0 auto 24px;
+  padding: 0 16px;
+}
+
+/* --- Proof region --------------------------------------------------------- */
+
+.home__proof {
+  position: relative;
+  z-index: 1;
+  max-width: 960px;
+  margin: 0 auto 64px;
+  padding: 0 16px;
+}
+
+.home__proof-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.home__proof-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.home__proof-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.home__proof-label {
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+  line-height: 1.4;
+}
+
+.home__proof-note {
+  margin-top: 12px;
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+/* --- Generic section scaffolding ------------------------------------------ */
+
+.home__section {
+  position: relative;
+  z-index: 1;
+  max-width: 960px;
+  margin: 0 auto 64px;
+  padding: 0 16px;
+}
+
+.home__section--wide {
+  max-width: 1040px;
+}
+
+.home__section h2 {
+  margin: 0 0 12px;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.home__section h2 em {
+  font-style: italic;
+  font-weight: 600;
+}
+
+.home__section > p {
+  margin: 0 0 16px;
+  color: var(--ink-muted);
+  font-size: 1rem;
+  line-height: 1.6;
+  max-width: 60ch;
+}
+
+/* --- Evidence model grid -------------------------------------------------- */
+
+.home__evidence-model {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.home__evidence-card {
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.home__evidence-card h3 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--ink);
+  text-transform: capitalize;
+}
+
+.home__evidence-card p {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--ink-muted);
+}
+
+/* --- Connection steps ----------------------------------------------------- */
+
+.home__steps {
+  list-style: none;
+  margin: 20px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  counter-reset: step;
+}
+
+.home__steps li {
+  position: relative;
+  padding: 20px 20px 20px 56px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  counter-increment: step;
+}
+
+.home__steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 16px;
+  top: 18px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--focus) 14%, transparent);
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.home__steps h3 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.home__steps p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--ink-muted);
+  line-height: 1.5;
+}
+
+/* --- Use cases ----------------------------------------------------------- */
+
+.home__use-cases {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.home__use-case {
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.home__use-case h3 {
+  margin: 0 0 8px;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.home__use-case ul {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  color: var(--ink-muted);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+/* --- Reliability proof --------------------------------------------------- */
+
+.home__reliability {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.home__reliability-item {
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.home__reliability-item h3 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.home__reliability-item p {
+  margin: 0;
+  font-size: 0.9375rem;
+  color: var(--ink-muted);
+  line-height: 1.55;
+}
+
+/* --- FAQ ----------------------------------------------------------------- */
+
+.home__faq {
+  margin-top: 20px;
+  display: grid;
+  gap: 12px;
+}
+
+.home__faq-item {
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.home__faq-item h3 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.home__faq-item p {
+  margin: 0;
+  font-size: 0.9375rem;
+  color: var(--ink-muted);
+  line-height: 1.6;
+}
+
+/* --- Final CTA ----------------------------------------------------------- */
+
+.home__cta {
+  position: relative;
+  z-index: 1;
+  max-width: 960px;
+  margin: 0 auto 80px;
+  padding: 40px;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.home__cta h2 {
+  margin: 0 0 12px;
+}
+
+.home__cta p {
+  margin: 0 auto 24px;
+  color: var(--ink-muted);
+  max-width: 52ch;
+}
+
+.home__cta-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+}
+
+/* --- Loading / error states (minimal local AsyncState until Task 5) ------ */
+
+.home__state {
+  position: relative;
+  z-index: 1;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 64px 16px;
+  text-align: center;
+  color: var(--ink-muted);
+}
+
+.home__state a {
+  color: var(--focus);
+}
+
+/* --- Product preview component ------------------------------------------- */
+
+.product-preview {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: 0 12px 40px color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+.product-preview__chrome {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.product-preview__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+}
+
+.product-preview__chrome-label {
+  margin-left: 10px;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  letter-spacing: 0.04em;
+}
+
+.product-preview__bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 16px 8px;
+}
+
+.product-preview__label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.product-preview__input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  font-size: 0.9375rem;
+  color: var(--ink);
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.product-preview__input:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 35%, transparent);
+  border-color: var(--focus);
+}
+
+.product-preview__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 16px 8px;
+}
+
+.product-preview__chip {
+  min-height: 32px;
+  padding: 6px 12px;
+  font-size: 0.8125rem;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.product-preview__chip:hover {
+  border-color: color-mix(in srgb, var(--ink) 25%, var(--border));
+}
+
+.product-preview__chip[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--focus) 14%, transparent);
+  border-color: color-mix(in srgb, var(--focus) 40%, var(--border));
+  font-weight: 600;
+}
+
+.product-preview__count {
+  margin: 4px 16px 8px;
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+.product-preview__results {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.preview-card {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.preview-card__image {
+  flex: 0 0 96px;
+  width: 96px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+}
+
+.preview-card__body {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.preview-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+}
+
+.preview-card__title {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 0.9375rem;
+}
+
+.preview-card__pattern {
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.preview-card__excerpt {
+  margin: 4px 0 6px;
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.preview-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.preview-card__meta div {
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
+}
+
+.preview-card__meta dt {
+  font-size: 0.6875rem;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0;
+}
+
+.preview-card__meta dd {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--ink);
+}
+
+.product-preview__footnote {
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.product-preview__more {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--focus);
+  text-decoration: none;
+}
+
+.product-preview__more:hover {
+  text-decoration: underline;
+}
+
+/* --- CopyAction --------------------------------------------------------- */
+
+.copy-action {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.copy-action__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 8px 14px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.copy-action__button:hover {
+  border-color: color-mix(in srgb, var(--ink) 25%, var(--border));
+  background: var(--surface-raised);
+}
+
+.copy-action__button[data-state="success"] {
+  border-color: color-mix(in srgb, var(--success) 50%, var(--border));
+  color: var(--success);
+}
+
+.copy-action__glyph {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.copy-action__fallback {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  max-width: 100%;
+}
+
+.copy-action__fallback-label {
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+
+.copy-action__fallback-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
+
+.copy-action__status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* --- Narrow screens: keep two primary actions visible, no horizontal scroll */
+@media (max-width: 480px) {
+  .home__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .home__action--primary,
+  .home__action--secondary {
+    width: 100%;
+  }
+  .home__cta {
+    padding: 24px 16px;
+  }
+  .home__cta-actions {
+    flex-direction: column;
+  }
+  .home__cta-actions .home__action--primary,
+  .home__cta-actions .home__action--secondary {
+    width: 100%;
+  }
+}

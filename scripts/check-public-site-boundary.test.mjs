@@ -37,6 +37,25 @@ describe("public site disclosure boundary", () => {
     expect(checkPublicSiteBoundary(root)).toEqual({ ok: true });
   });
 
+  it("accepts the public-site infrastructure assets (robots.txt, sitemap.xml)", () => {
+    // The reconstruction ships these static, non-corpus crawl directives.
+    // The synthetic snapshot is already sanctioned; adding the other two
+    // must not trip the allowlist.
+    const root = fixture();
+    writeFileSync(join(root, "site/public/robots.txt"), "User-agent: *\nDisallow: /\n");
+    writeFileSync(join(root, "site/public/sitemap.xml"), '<?xml version="1.0"?>\n<urlset/>');
+    expect(checkPublicSiteBoundary(root)).toEqual({ ok: true });
+  });
+
+  it("rejects an unsanctioned file even with the infra assets present", () => {
+    // robots/sitemap/snapshot are sanctioned; anything else under site/public/
+    // is not. A stray leak alongside the legit infra must still fail.
+    const root = fixture();
+    writeFileSync(join(root, "site/public/robots.txt"), "User-agent: *\n");
+    writeFileSync(join(root, "site/public/leak.json"), '{"private":"corpus"}');
+    expect(() => checkPublicSiteBoundary(root)).toThrow(/not on the sanctioned public-asset allowlist/);
+  });
+
   it("rejects public entry image directories (entries/private.png)", () => {
     const root = fixture();
     mkdirSync(join(root, "site/public/entries"));

@@ -1,0 +1,204 @@
+/*
+ * Install page styles. Consumes tokens from tokens.css.
+ */
+
+.install {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 40px 16px 80px;
+}
+
+.install__eyebrow {
+  margin: 0 0 12px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.install h1 {
+  margin: 0 0 12px;
+  font-size: clamp(1.875rem, 4vw, 2.5rem);
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.install h1 em {
+  font-style: italic;
+  font-weight: 600;
+}
+
+.install__lede {
+  margin: 0 0 32px;
+  font-size: 1.0625rem;
+  line-height: 1.55;
+  color: var(--ink-muted);
+  max-width: 60ch;
+}
+
+.install__step {
+  margin: 0 0 32px;
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.install__step-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 0 0 8px;
+}
+
+.install__step-num {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.install__step h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.install__step > p {
+  margin: 0 0 16px;
+  color: var(--ink-muted);
+  line-height: 1.6;
+}
+
+/* Code block with a copy affordance. */
+.install__code {
+  position: relative;
+  margin: 12px 0 4px;
+  padding: 16px 16px;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.install__code-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.875rem;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-all;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* The JSON config block wraps and scrolls only as a last resort. */
+.install__code--block {
+  display: block;
+}
+
+.install__code--block .install__code-text {
+  white-space: pre;
+  overflow-x: auto;
+  display: block;
+}
+
+.install__copy {
+  flex: 0 0 auto;
+}
+
+.install__note {
+  margin: 8px 0 0;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+.install__clients {
+  margin-top: 8px;
+  padding-left: 20px;
+  color: var(--ink-muted);
+  font-size: 0.9375rem;
+  line-height: 1.7;
+}
+
+.install__clients a {
+  color: var(--focus);
+}
+
+.install__next {
+  margin-top: 8px;
+  padding: 24px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.install__next h2 {
+  margin: 0 0 8px;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.install__next p {
+  margin: 0 0 16px;
+  color: var(--ink-muted);
+  line-height: 1.6;
+}
+
+.install__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.install__action--primary,
+.install__action--secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 12px 22px;
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.install__action--primary {
+  background: var(--ink);
+  color: var(--surface);
+  border: 1px solid var(--ink);
+}
+
+.install__action--primary:hover {
+  opacity: 0.9;
+}
+
+.install__action--secondary {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border);
+}
+
+.install__action--secondary:hover {
+  background: var(--surface-raised);
+}
+
+@media (max-width: 480px) {
+  .install__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .install__action--primary,
+  .install__action--secondary {
+    width: 100%;
+  }
+}

@@ -21,3 +21,12 @@ jobs:
       - run: npm run validate-corpus
       - run: npm test
       - run: npm run test:critique-quality
+      # Public-site gate (spec §12 + §13): unit tests for the site app, a
+      # production build (so .vite/manifest.json + hashed assets exist), the
+      # end-to-end base-path + accessibility browser suite against `vite preview`,
+      # and the gzip bundle-budget check (initial JS must stay under 150KB gz,
+      # excluding the lazy Playground/Evidence chunks).
+      - run: npm run site:test
+      - run: npm run site:build
+      - run: npm run site:test:browser
+      - run: node scripts/check-site-budget.mjs

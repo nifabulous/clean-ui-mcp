@@ -84,7 +84,10 @@ describe("build-c2-pilot-manifest", () => {
     const migration = manifest.packages.find((p) => p.family === "migration");
     expect(migration.sourceSnapshot).not.toBeNull();
     expect(migration.sourceSnapshot.sha256).toMatch(SHA256);
-    expect(migration.sourceSnapshot.artifactType).toBe("design-source-snapshot");
+    // Codex P1 fix: the package manifest's sourceSnapshot uses plain
+    // ArtifactFileRefSchema (no artifactType). The brief's sourceSnapshotRef
+    // carries artifactType, but the manifest does not — it's a strict schema.
+    expect(migration.sourceSnapshot.artifactType).toBeUndefined();
     expect(migration.sourceSnapshot.path).toMatch(
       /^eval\/c2\/pilot\/source-snapshots\//,
     );

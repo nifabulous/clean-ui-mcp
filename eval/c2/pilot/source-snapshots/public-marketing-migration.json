@@ -218,6 +218,13 @@
       "route": "https://example.com/c2-marketing-pilot/",
       "summary": "Vertical spacing between marketing sections follows a consistent rhythm.",
       "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:limitation:no-authenticated-screen",
+      "kind": "public-content",
+      "route": "https://example.com/c2-marketing-pilot/account",
+      "summary": "The account route was blocked and NOT inspected. No claim may rely on having observed an authenticated screen.",
+      "basis": "inferred"
     }
   ],
   "limitations": [

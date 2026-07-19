@@ -33,22 +33,22 @@
     "reject"
   ],
   "validEvidenceIds": [
-    "evidence:snapshot:home:hero-hierarchy",
-    "evidence:snapshot:home:hero-cta",
-    "evidence:snapshot:home:nav-consistency",
-    "evidence:snapshot:pricing:nav-consistency",
-    "evidence:snapshot:pricing:tier-hierarchy",
-    "evidence:snapshot:home:mobile-stack",
-    "evidence:snapshot:home:focus-visible",
-    "evidence:snapshot:limitation:no-authenticated-screen"
+    "evidence:home:hero-hierarchy",
+    "evidence:home:hero-cta",
+    "evidence:home:nav-consistency",
+    "evidence:pricing:nav-consistency",
+    "evidence:pricing:tier-hierarchy",
+    "evidence:home:mobile-stack",
+    "evidence:home:focus-visible",
+    "evidence:limitation:no-authenticated-screen"
   ],
   "goldEvidenceIds": [
-    "evidence:snapshot:home:hero-hierarchy",
-    "evidence:snapshot:home:nav-consistency",
-    "evidence:snapshot:pricing:nav-consistency",
-    "evidence:snapshot:home:mobile-stack",
-    "evidence:snapshot:home:focus-visible",
-    "evidence:snapshot:limitation:no-authenticated-screen"
+    "evidence:home:hero-hierarchy",
+    "evidence:home:nav-consistency",
+    "evidence:pricing:nav-consistency",
+    "evidence:home:mobile-stack",
+    "evidence:home:focus-visible",
+    "evidence:limitation:no-authenticated-screen"
   ],
   "forbiddenClaims": [
     "the account route at https://example.com/c2-marketing-pilot/account was inspected",

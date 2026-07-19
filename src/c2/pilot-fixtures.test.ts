@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { C2CaseBriefSchema, C2DecisionLabelSchema } from "./case-contracts.js";
+import { C2CaseBriefSchema, C2DecisionLabelSchema, C2PilotManifestSchema } from "./case-contracts.js";
 import { DesignSourceSnapshotSchema } from "../design-source/contracts.js";
 
 // Fixture-boundary test for the three separated C2 pilot case packages.
@@ -160,5 +160,39 @@ describe("C2 pilot fixtures (eval/c2/pilot)", () => {
     const snapshot = snapshots[0]!;
     expect(migration.data.sourceSnapshotRef!.artifactId).toBe(snapshot.data.artifactId);
     expect(migration.data.sourceSnapshotRef!.artifactType).toBe("design-source-snapshot");
+  });
+
+  it("the committed manifest parses against C2PilotManifestSchema (catches stale/extra fields)", () => {
+    // Codex P1 fix: the pilot-fixtures test never validated the manifest against
+    // the schema, so an extra artifactType on sourceSnapshot slipped through.
+    const manifestPath = resolve(PILOT_DIR, "manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const result = C2PilotManifestSchema.safeParse(manifest);
+    expect(result.success, `manifest schema validation failed: ${result.success ? "" : JSON.stringify(result.error.issues)}`).toBe(true);
+  });
+
+  it("the migration brief's sourceSnapshotRef.sha256 matches the actual snapshot file hash", () => {
+    // Codex P1 fix: the brief pinned an all-zero placeholder hash instead of the
+    // real file digest. Cross-check the declared hash against the actual bytes.
+    const migration = briefs.find((b) => b.data.family === "migration")!;
+    const snapshotFile = snapshots[0]!;
+    const snapshotPath = resolve(SNAPSHOTS_DIR, snapshotFile.name);
+    const { createHash } = require("node:crypto");
+    const actualHash = createHash("sha256").update(readFileSync(snapshotPath)).digest("hex");
+    expect(migration.data.sourceSnapshotRef!.sha256).toBe(actualHash);
+  });
+
+  it("every migration label evidence ID exists in the bound snapshot's evidence registry", () => {
+    // Codex P1 fix: the label used a different ID namespace (evidence:snapshot:...)
+    // from the snapshot (evidence:home:...). All valid+gold IDs must resolve.
+    const migration = labels.find((l) => l.data.caseId.includes("migration"))!;
+    const snapshot = snapshots[0]!;
+    const snapIds = new Set(snapshot.data.evidence.map((e) => e.id));
+    for (const id of migration.data.validEvidenceIds) {
+      expect(snapIds.has(id), `label evidence ${id} not in snapshot`).toBe(true);
+    }
+    for (const id of migration.data.goldEvidenceIds) {
+      expect(snapIds.has(id), `gold evidence ${id} not in snapshot`).toBe(true);
+    }
   });
 });

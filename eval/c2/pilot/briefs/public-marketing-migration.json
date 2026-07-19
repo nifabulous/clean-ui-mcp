@@ -54,7 +54,7 @@
   "sourceSnapshotRef": {
     "artifactId": "design-source-snapshot-public-marketing-migration-v1",
     "path": "eval/c2/pilot/source-snapshots/public-marketing-migration.json",
-    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "sha256": "4e3aa3d03a7e2cb1bdd8e0295aba82926ee192295fb47f7c54c936b2f324c846",
     "artifactType": "design-source-snapshot"
   }
 }

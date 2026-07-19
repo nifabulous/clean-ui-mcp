@@ -214,7 +214,6 @@ async function resolveSourceSnapshot(brief, snapshots) {
       artifactId: snap.parsed.artifactId,
       path: snap.relPath,
       sha256: snap.sha256,
-      artifactType: "design-source-snapshot",
     };
   }
 

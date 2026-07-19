@@ -39,18 +39,17 @@
       "brief": {
         "artifactId": "c2-brief-public-marketing-migration-v1",
         "path": "eval/c2/pilot/briefs/public-marketing-migration.json",
-        "sha256": "3ab352300db782fab6955f2d79a57c602c303962598af2b42273f28fe5c11316"
+        "sha256": "041207ef1804392fb535a3073dd08db22b4e85feebee329ce797a6a56d33d63f"
       },
       "label": {
         "artifactId": "c2-label-public-marketing-migration-v1",
         "path": "eval/c2/pilot/labels/public-marketing-migration.json",
-        "sha256": "c230142a5aff4e5f7c652cc8929f3e6f6d423afc7e4fb069480df12df5d37ee7"
+        "sha256": "46bba6f53a960939251b4adaa7cff10fa338605093acd6e32c38384f3461fb1e"
       },
       "sourceSnapshot": {
         "artifactId": "design-source-snapshot-public-marketing-migration-v1",
         "path": "eval/c2/pilot/source-snapshots/public-marketing-migration.json",
-        "sha256": "daebdeda0891825d42916492ac58bb29118d742fc7e817fbc61c350b995a7508",
-        "artifactType": "design-source-snapshot"
+        "sha256": "4e3aa3d03a7e2cb1bdd8e0295aba82926ee192295fb47f7c54c936b2f324c846"
       }
     },
     {

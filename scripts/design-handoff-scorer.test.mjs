@@ -413,3 +413,94 @@ describe("scoreDesignHandoff: codex review hardening", () => {
     expect(r.unsupportedClaimCount).toBeGreaterThan(0);
   });
 });
+
+// ─── Re-review P1s: empty-but-present label + label-specific lane authority ──
+describe("scoreDesignHandoff: re-review fail-open hardening", () => {
+  // P1 #1: a label whose required fields are all present-but-empty arrays (and
+  // an empty requiredScreenStates map) previously passed validation — every
+  // empty requirement set was then awarded coverage 1, so `({}, emptyButPresent)`
+  // returned complete:true. The validator now enforces non-empty contents.
+  it("rejects a structurally-complete-but-empty label (P1 #1)", () => {
+    const emptyButPresent = {
+      ...GOLD_LABEL,
+      requiredSections: [],
+      requiredDecisions: [],
+      requiredAcceptanceCriteria: [],
+      requiredMobileRules: [],
+      permittedAuthorityLanes: [],
+      requiredScreenStates: {},
+      forbiddenClaims: [],
+      privateMarkers: [],
+      validEvidenceIds: [],
+      inaccessibleUrls: [],
+    };
+    expect(scoreDesignHandoff({}, emptyButPresent).complete).toBe(false);
+    // Specifically, coverage must NOT be awarded 1 for empty requirement sets.
+    const r = scoreDesignHandoff({}, emptyButPresent);
+    expect(r.requiredSectionCoverage).toBe(0);
+    expect(r.requiredDecisionCoverage).toBe(0);
+    expect(r.acceptanceCriterionCoverage).toBe(0);
+  });
+
+  it("rejects a label with labelVersion !== 1 (P1 #1: literal version)", () => {
+    expect(scoreDesignHandoff({}, { ...GOLD_LABEL, labelVersion: 2 }).complete).toBe(false);
+    expect(scoreDesignHandoff({}, { ...GOLD_LABEL, labelVersion: "1" }).complete).toBe(false);
+  });
+
+  it("rejects a label with a duplicate in validEvidenceIds (P1 #1: uniqueness)", () => {
+    const dup = { ...GOLD_LABEL, validEvidenceIds: ["src:home:layout", "src:home:layout"] };
+    expect(scoreDesignHandoff(makeOutput(), dup).complete).toBe(false);
+  });
+
+  it("rejects a label whose permittedAuthorityLanes has a non-lane value (P1 #1)", () => {
+    const bad = { ...GOLD_LABEL, permittedAuthorityLanes: ["retain", "invent"] };
+    expect(scoreDesignHandoff(makeOutput(), bad).complete).toBe(false);
+  });
+
+  it("rejects a label whose requiredDecisions are not a subset of validEvidenceIds (P1 #1)", () => {
+    const unsatisfiable = { ...GOLD_LABEL, requiredDecisions: ["src:does-not-exist"] };
+    expect(scoreDesignHandoff(makeOutput(), unsatisfiable).complete).toBe(false);
+  });
+
+  // P1 #2: permittedAuthorityLanes was validated but never consulted — decision
+  // and observation lane checks used the global VALID_LANES. A label permitting
+  // only `adapt` accepted a `retain` decision. The label-specific permitted set
+  // now constrains decisions and observations.
+  it("rejects a decision using a lane the label does not permit (P1 #2)", () => {
+    const adaptOnly = { ...GOLD_LABEL, permittedAuthorityLanes: ["adapt"] };
+    // GOLD_LABEL.requiredDecisions includes src:home:layout; give it lane retain
+    // (forbidden by this label) — coverage must drop AND unsupported must bump.
+    const out = makeOutput({
+      sourceDecisions: GOLD_LABEL.requiredDecisions.map((id) => ({
+        id,
+        lane: "retain",
+        rationale: "uses a forbidden lane",
+        evidence: [id],
+      })),
+    });
+    const r = scoreDesignHandoff(out, adaptOnly);
+    expect(r.requiredDecisionCoverage).toBeLessThan(1);
+    expect(r.unsupportedClaimCount).toBeGreaterThan(0);
+  });
+
+  it("accepts a decision using a lane the label permits (P1 #2 regression guard)", () => {
+    const adaptOnly = { ...GOLD_LABEL, permittedAuthorityLanes: ["adapt"] };
+    // Override BOTH sourceDecisions and sourceObservations — makeOutput's
+    // default observation uses lane "retain", which adapt-only forbids, so it
+    // must be replaced for the "permitted" case to be clean.
+    const out = makeOutput({
+      sourceDecisions: GOLD_LABEL.requiredDecisions.map((id) => ({
+        id,
+        lane: "adapt",
+        rationale: "permitted by this label",
+        evidence: [id],
+      })),
+      sourceObservations: [
+        { id: "src:home:layout", note: "Source home uses a 12-col grid.", lane: "adapt" },
+      ],
+    });
+    const r = scoreDesignHandoff(out, adaptOnly);
+    expect(r.requiredDecisionCoverage).toBe(1);
+    expect(r.unsupportedClaimCount).toBe(0);
+  });
+});

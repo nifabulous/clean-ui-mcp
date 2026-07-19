@@ -91,11 +91,11 @@ work is `docs/superpowers/specs/2026-07-18-grounded-design-workspace-design.md`.
 
 | # | Commit | Description |
 |---|---|---|
-| Task 1 (boundary only) | `36baa83` | Allowlist-based public-asset boundary checker (`check-public-site-boundary.mjs`) wired into `npm run build`. The corpus removal + public-site sanctioned assets land with the public-site reconstruction PR (see note below). |
-| Task 2 | `651dfae` (+ fix `bde63c9`) | `DesignSourceSnapshotSchema` and the deterministic `SOURCE-DESIGN.md` renderer; hardened cell escaping and determinism; recomputed same-origin and rejected duplicate evidence IDs. |
-| Task 3 | `fcad588` (+ fixes `2dcb0ab`, `55ba144`) | `planRepresentativeCrawl` and `assertSafeHostedCaptureTarget` hosted SSRF guard; percent-encoded destructive-path, NaN-budget, fractional-budget, and start-URL safety hardening. |
-| Task 4 | `b2b8248` | Ephemeral session policy: `decideCookie` + `chooseConsentAction`. |
-| Task 5 | `0118452` (+ fix `925096e`) | Deterministic grounded design-handoff gold gate scorer with 12 briefs and 12 labels; required declared blueprints, null-entry guards, and strict malformed-label fail-closed. |
+| Task 1 (boundary only) | `36baa83` (+ `e1ed968` symlink rejection) | Allowlist-based public-asset boundary checker (`check-public-site-boundary.mjs`) wired into `npm run build`; symlink exfiltration vector closed. The corpus removal + public-site sanctioned assets land with the public-site reconstruction PR (see note below). |
+| Task 2 | `651dfae` (+ fixes `bde63c9`, `e94f826`) | `DesignSourceSnapshotSchema` and the deterministic `SOURCE-DESIGN.md` renderer; hardened cell escaping and determinism; recomputed same-origin and rejected duplicate evidence IDs (`e94f826`). |
+| Task 3 | `fcad588` (+ fixes `2dcb0ab`, `55ba144`, `e1ed968`) | `planRepresentativeCrawl` and `assertSafeHostedCaptureTarget` hosted SSRF guard; percent-encoded destructive-path, NaN-budget, fractional-budget, start-URL safety, non-http(s)/userinfo rejection (`55ba144`), full `fe80::/10` IPv6 link-local (`e1ed968`), and `/api` case-insensitive matching. |
+| Task 4 | `b2b8248` (+ `e1ed968`) | Ephemeral session policy: `decideCookie` + `chooseConsentAction`; bare-public-suffix parent-domain rejection (`e1ed968`). |
+| Task 5 | `0118452` (+ fixes `925096e`, `e94f826`, `e1ed968`, `be6ac93`, `<this commit>`) | Deterministic grounded design-handoff gold gate scorer with 12 briefs and 12 labels; required declared blueprints, null-entry guards (`925096e`); strict malformed-label fail-closed + real fixture gating (`e94f826`); evidence-required decisions + canonicalized inaccessible-URL matching + symlink-aware boundary + label-permitted lane authority (`e1ed968`); empty-but-present-label rejection and label-specific lane enforcement (re-review, this commit); isolated evidence:[] regression test (`be6ac93`). |
 
 Note: Task 1 split across two PRs. The **boundary checker module and its
 `npm run build` wiring ship here** (`36baa83`) with a narrow allowlist (just the

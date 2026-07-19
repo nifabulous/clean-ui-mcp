@@ -23,67 +23,92 @@
  */
 
 /**
- * Permitted authority lanes for source decisions and observations.
+ * Permitted authority lanes for source decisions and observations (the global
+ * universe). A label's `permittedAuthorityLanes` must be a subset of these.
  */
 const VALID_LANES = new Set(["retain", "adapt", "reject"]);
-
-/**
- * Required top-level fields on a GoldLabel. A label missing ANY of these — or
- * carrying a non-array where an array is required — is malformed and must NOT
- * be scored. Without this guard, a `{}` or partial label defaults every
- * requirement array to `[]`, each empty requirement set is awarded coverage 1,
- * and `scoreDesignHandoff({}, {})` returns `complete: true` (review P1 #1):
- * a damaged or missing gold label would silently certify an empty handoff.
- */
-const REQUIRED_LABEL_ARRAY_FIELDS = [
-  "requiredSections",
-  "requiredDecisions",
-  "requiredAcceptanceCriteria",
-  "forbiddenClaims",
-  "privateMarkers",
-  "validEvidenceIds",
-  // Codex P1 #2: these were omitted, so a partial label missing them defaulted
-  // to empty and the label still passed validation → fail-open. All three arrays
-  // are load-bearing for the scorer (requiredMobileRules feeds the section gate;
-  // permittedAuthorityLanes constrains lanes; inaccessibleUrls feeds the
-  // inaccessible-URL-inspected check). requiredScreenStates is a map, validated
-  // separately below.
-  "requiredMobileRules",
-  "permittedAuthorityLanes",
-  "inaccessibleUrls",
-];
-const REQUIRED_LABEL_SCALAR_FIELDS = ["id", "labelVersion", "sourceCoverageExpectation"];
 const VALID_COVERAGE_EXPECTATIONS = new Set(["low", "moderate", "well-supported"]);
 
 /**
- * Strict label-shape validator. Returns `true` only when `label` has every
- * required scalar field (non-empty) and every required array field (a real
- * Array). Enums must be in their allowed set. Fail-closed: anything malformed
- * → `false`, and the caller returns the zeroed ScoreResult rather than scoring.
+ * Strict semantic label validator (re-review P1 #1 + #2). Earlier versions only
+ * checked that required fields were *arrays* — so a label with every field
+ * present-but-empty (requiredSections: [], requiredDecisions: [], etc.) passed
+ * validation, every empty requirement set was awarded coverage 1, and
+ * `scoreDesignHandoff({}, emptyButPresentLabel)` returned `complete: true`.
+ * A damaged or placeholder gold label would silently certify an empty handoff.
+ *
+ * This validator enforces the label CONTRACT, not just its shape:
+ *   - `labelVersion === 1` (literal — the only supported version)
+ *   - `id` is a non-empty string
+ *   - every required array field is a non-empty array of non-empty unique strings
+ *   - `requiredScreenStates` is a non-empty map; each value is a non-empty
+ *     string array
+ *   - `permittedAuthorityLanes` is non-empty and every entry is in
+ *     retain|adapt|reject (and unique)
+ *   - `requiredDecisions ⊆ validEvidenceIds` (a required decision with no
+ *     backing evidence is unsatisfiable — the label itself would be broken)
+ *
+ * Fail-closed: anything malformed → `false`, and the caller returns the zeroed
+ * ScoreResult rather than scoring.
  */
+const REQUIRED_NONEMPTY_STRING_ARRAYS = [
+  "requiredSections",
+  "requiredDecisions",
+  "requiredAcceptanceCriteria",
+  "requiredMobileRules",
+  "forbiddenClaims",
+  "privateMarkers",
+  "validEvidenceIds",
+  "inaccessibleUrls",
+];
+
+/** True iff `arr` is a non-empty array of non-empty unique strings. */
+function isNonEmptyUniqueStringArray(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return false;
+  const seen = new Set();
+  for (const el of arr) {
+    if (typeof el !== "string" || el.length === 0) return false;
+    if (seen.has(el)) return false;
+    seen.add(el);
+  }
+  return true;
+}
+
 function isValidGoldLabel(label) {
   if (!label || typeof label !== "object") return false;
-  for (const field of REQUIRED_LABEL_SCALAR_FIELDS) {
-    const value = label[field];
-    if (value === undefined || value === null || value === "") return false;
+  // Scalar + enum checks.
+  if (typeof label.id !== "string" || label.id.length === 0) return false;
+  if (label.labelVersion !== 1) return false; // literal — only v1 is supported
+  if (!VALID_COVERAGE_EXPECTATIONS.has(label.sourceCoverageExpectation)) return false;
+  if (typeof label.motionDomGrounded !== "boolean") return false;
+  // Required non-empty string arrays.
+  for (const field of REQUIRED_NONEMPTY_STRING_ARRAYS) {
+    if (!isNonEmptyUniqueStringArray(label[field])) return false;
   }
-  for (const field of REQUIRED_LABEL_ARRAY_FIELDS) {
-    if (!Array.isArray(label[field])) return false;
+  // permittedAuthorityLanes: non-empty, unique, each in retain|adapt|reject.
+  if (!isNonEmptyUniqueStringArray(label.permittedAuthorityLanes)) return false;
+  for (const lane of label.permittedAuthorityLanes) {
+    if (!VALID_LANES.has(lane)) return false;
   }
-  // requiredScreenStates is Record<blueprintId, string[]> — a non-null object
-  // (NOT an array). Missing it defaulted the section-blueprint-state gate to
-  // empty, fail-open (Codex P1 #2).
+  // requiredScreenStates: non-empty map of blueprintId → non-empty string array.
+  const states = label.requiredScreenStates;
   if (
-    label.requiredScreenStates === null ||
-    typeof label.requiredScreenStates !== "object" ||
-    Array.isArray(label.requiredScreenStates)
+    states === null ||
+    typeof states !== "object" ||
+    Array.isArray(states) ||
+    Object.keys(states).length === 0
   ) {
     return false;
   }
-  // Enum checks.
-  if (!VALID_COVERAGE_EXPECTATIONS.has(label.sourceCoverageExpectation)) return false;
-  if (typeof label.motionDomGrounded !== "boolean") return false;
-  if (typeof label.labelVersion !== "number" || !Number.isFinite(label.labelVersion)) return false;
+  for (const key of Object.keys(states)) {
+    if (key.length === 0) return false;
+    if (!isNonEmptyUniqueStringArray(states[key])) return false;
+  }
+  // requiredDecisions ⊆ validEvidenceIds (else the label is unsatisfiable).
+  const validEvidence = new Set(label.validEvidenceIds);
+  for (const decisionId of label.requiredDecisions) {
+    if (!validEvidence.has(decisionId)) return false;
+  }
   return true;
 }
 
@@ -172,12 +197,24 @@ export function scoreDesignHandoff(output, label) {
   const validEvidenceSet = new Set(
     Array.isArray(label.validEvidenceIds) ? label.validEvidenceIds : [],
   );
+  // Re-review P1 #2: decision and observation lane validation used the GLOBAL
+  // VALID_LANES, ignoring label.permittedAuthorityLanes — so a label permitting
+  // only `adapt` accepted a `retain` decision. Derive the label-specific
+  // permitted set and use it everywhere a lane is checked. (The validator
+  // guarantees permittedAuthorityLanes is a non-empty subset of VALID_LANES,
+  // so this falls back to VALID_LANES only for a malformed label that slipped
+  // past validation — fail-safe, not fail-open.)
+  const permittedLaneSet =
+    Array.isArray(label.permittedAuthorityLanes) && label.permittedAuthorityLanes.length > 0
+      ? new Set(label.permittedAuthorityLanes)
+      : VALID_LANES;
   if (requiredDecisions.length > 0) {
     let covered = 0;
     for (const req of requiredDecisions) {
       const decision = sourceDecisions.find((d) => d && d.id === req);
       if (!decision) continue;
-      const laneOk = typeof decision.lane === "string" && VALID_LANES.has(decision.lane);
+      // Lane must be in the LABEL's permitted set, not the global universe.
+      const laneOk = typeof decision.lane === "string" && permittedLaneSet.has(decision.lane);
       const rationaleOk =
         typeof decision.rationale === "string" && decision.rationale.trim().length > 0;
       const evidence = Array.isArray(decision.evidence) ? decision.evidence : [];
@@ -219,7 +256,8 @@ export function scoreDesignHandoff(output, label) {
   let unsupported = 0;
   for (const decision of sourceDecisions) {
     if (!decision || typeof decision !== "object") continue;
-    const laneOk = typeof decision.lane === "string" && VALID_LANES.has(decision.lane);
+    // Re-review P1 #2: lane must be in the LABEL's permitted set.
+    const laneOk = typeof decision.lane === "string" && permittedLaneSet.has(decision.lane);
     const rationaleOk =
       typeof decision.rationale === "string" && decision.rationale.trim().length > 0;
     if (!laneOk || !rationaleOk) unsupported++;
@@ -230,7 +268,7 @@ export function scoreDesignHandoff(output, label) {
     : [];
   for (const obs of sourceObservations) {
     if (!obs || typeof obs !== "object") continue;
-    const laneOk = typeof obs.lane === "string" && VALID_LANES.has(obs.lane);
+    const laneOk = typeof obs.lane === "string" && permittedLaneSet.has(obs.lane);
     if (!laneOk) unsupported++;
   }
   // Codex P1 #3: inaccessible-URL matching used raw string equality, so an

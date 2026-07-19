@@ -148,21 +148,27 @@ The Gold Label Owner and external QA reviewer label the 40 entries independently
 
 This set measures whether canonical corpus labels are reproducible and trustworthy. The 25 decision cases measure whether those labels and evidence support useful product decisions. A decision-case failure may nominate entries for inspection, but it does not rewrite the independent 40-entry gold labels.
 
-## 5. Case contract
+## 5. Case package contracts
 
-Every case records:
+Every case package separates three artifacts so gold answers cannot leak into synthesis inputs:
+
+- A model-visible brief containing users, jobs, constraints, required journeys, platforms, and target context.
+- A reviewer-only decision label containing expected decisions, acceptance criteria, prohibitions, valid/gold evidence IDs, rubric anchors, and adjudication notes.
+- A manifest binding the exact brief, label, and optional source-snapshot hashes.
+
+The evaluation harness may expose only the model-visible brief and the evidence permitted for the selected control condition. It must never include reviewer-only expected decisions, rubric anchors, or adjudication notes in a provider request.
+
+The bound case package records:
 
 - Stable case ID, family, case version, author, and review status.
-- Normalized brief with users, jobs, constraints, required journeys, platforms, and target context.
-- Required screens, responsive rules, states, and failure/recovery behavior.
-- Expected design decisions without prescribing a pixel-identical layout.
-- Required acceptance criteria.
-- Prohibited assumptions and forbidden claims.
-- Permitted authority lanes and valid evidence IDs.
+- Normalized model-visible brief and required screens, responsive rules, states, and failure/recovery behavior.
+- Reviewer-only expected design decisions without prescribing a pixel-identical layout.
+- Reviewer-only required acceptance criteria, prohibited assumptions, and forbidden claims.
+- Reviewer-only permitted authority lanes and valid evidence IDs.
 - Source-access and source-coverage expectations.
 - Private markers that must not appear in outputs.
 - Gold-evidence packet and its rationale.
-- Human rubric anchors and adjudication notes.
+- Reviewer-only human rubric anchors and adjudication notes.
 
 Every live-site case binds an immutable `DesignSourceSnapshot` (including inspected routes, access outcomes, and content hashes) rather than trusting mutable live bytes at scoring time. A recapture creates a new case version.
 

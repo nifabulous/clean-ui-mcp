@@ -20,7 +20,7 @@
       "brief": {
         "artifactId": "c2-brief-named-inspiration-safety-v1",
         "path": "eval/c2/pilot/briefs/named-inspiration-safety.json",
-        "sha256": "82f6e3a0a28f588f5ee24deebdb0943986edb5dde43c8a54b100e314fa7dbae1"
+        "sha256": "f77d9da8aff0aeb3a5f9d055f7d2b1166efccc2804cb4af9a739ab52555278e1"
       },
       "label": {
         "artifactId": "c2-label-named-inspiration-safety-v1",

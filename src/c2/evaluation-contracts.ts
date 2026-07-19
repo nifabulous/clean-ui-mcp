@@ -63,8 +63,16 @@ export const C2IndependentLabelSubmissionSchema = z.object({
 export function assertSubmissionMatchesSelection(
   selection: z.infer<typeof C2LabelIntegritySelectionSchema>,
   submission: z.infer<typeof C2IndependentLabelSubmissionSchema>,
+  resolvedSelectionSha256?: string,
 ): void {
   if (submission.selectionArtifactId !== selection.artifactId) throw new Error("submission selection artifact does not match");
+  // P2 fix: verify the submission's recorded selection hash matches the actual
+  // selection bytes, so a submission cannot remain "valid" against a changed
+  // selection revision with the same artifact ID and entry IDs but different
+  // image hashes, cohorts, strata, or reasons.
+  if (resolvedSelectionSha256 !== undefined && submission.selectionSha256 !== resolvedSelectionSha256) {
+    throw new Error("submission selection hash does not match resolved selection");
+  }
   const expected = [...selection.entries.map((entry) => entry.entryId)].sort();
   const observed = [...submission.labels.map((label) => label.entryId)].sort();
   if (expected.length !== observed.length || expected.some((id, index) => id !== observed[index])) {

@@ -157,24 +157,16 @@ describe("build-c2-pilot-manifest", () => {
       rmSync(symDest, { recursive: true, force: true });
     }
 
-    // ── Orphan label: a label with no matching brief ──────────────────────
+    // ── Orphan label: a schema-VALID label with no matching brief ──────────
+    // The label must parse against C2DecisionLabelSchema so the strict-schema
+    // gate doesn't catch it first; the orphan check must be what fires.
     const orphanLabelDest = copyPilotIntoTemp("c2-pilot-ol-");
     try {
-      writeFileSync(
-        join(orphanLabelDest, "eval/c2/pilot/labels/ghost-case.json"),
-        `${JSON.stringify(
-          {
-            schemaVersion: "1.0",
-            artifactType: "c2-decision-label",
-            artifactId: "c2-label-ghost-case-v1",
-            caseId: "ghost-case",
-            caseVersion: 1,
-            labelVersion: 1,
-          },
-          null,
-          2,
-        )}\n`,
-      );
+      const validLabel = readJson(join(orphanLabelDest, "eval/c2/pilot/labels/named-inspiration-safety.json"));
+      validLabel.artifactId = "c2-label-ghost-case-v1";
+      validLabel.caseId = "ghost-case";
+      validLabel.caseVersion = 1;
+      writeJson(join(orphanLabelDest, "eval/c2/pilot/labels/ghost-case.json"), validLabel);
 
       await expect(buildPilotManifest(orphanLabelDest)).rejects.toThrow(/orphan label/);
     } finally {
@@ -217,8 +209,11 @@ describe("build-c2-pilot-manifest", () => {
       };
       writeJson(briefPath, brief);
 
+      // The strict C2CaseBriefSchema now catches this via superRefine
+      // ("only migration cases bind source snapshots") before the builder's
+      // own non-migration check runs. Both messages are valid rejections.
       await expect(buildPilotManifest(dest)).rejects.toThrow(
-        /must not bind a source snapshot|non-migration/i,
+        /must not bind a source snapshot|non-migration|only migration/i,
       );
     } finally {
       rmSync(dest, { recursive: true, force: true });

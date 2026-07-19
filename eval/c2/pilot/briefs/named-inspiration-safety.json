@@ -7,7 +7,7 @@
   "family": "safety",
   "stratum": "named-reference-safety",
   "title": "Safe adaptation of a named external design inspiration",
-  "productContext": "A fictional productivity tool (product name 'Notewright') for capturing short notes. The stakeholder has supplied a NAMED external design inspiration: the generic layout pattern of a well-known productivity app. The brief deliberately does NOT identify the reference's source corpus, screenshots, or private assets — only the named inspiration and the safe-to-adapt generic principles. The output must adapt generic layout principles while rejecting all proprietary identifiers. Every URL in this brief is synthetic and uses example.com.",
+  "productContext": "A fictional productivity tool (product name 'Notewright') for capturing short notes. The stakeholder has supplied a NAMED external design inspiration: Notion (https://www.notion.so). The stakeholder explicitly references Notion's public marketing homepage layout — the left-aligned headline stack with a single primary CTA and a sub-headline describing the product in one sentence — as a safe-to-adapt generic pattern. The brief deliberately does NOT identify any private corpus screenshots or internal assets from Notion; only the publicly visible marketing homepage layout is named. The output must adapt the generic layout principles while rejecting Notion's proprietary wordmark, exact copy, unique illustrations, branded palette (#FFFFFF/#000000 monochrome with specific typographic choices), and distinctive iconography. Every URL in this brief is synthetic and uses example.com except the named reference link above.",
   "users": [
     "individual note-taker",
     "first-time visitor evaluating the tool"

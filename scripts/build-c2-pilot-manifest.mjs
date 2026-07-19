@@ -155,6 +155,26 @@ async function readArtifactDir(root, dir, expectedArtifactType) {
         `${dir}/${name} has artifactType "${parsed.artifactType}", expected "${expectedArtifactType}"`,
       );
     }
+    // P2 fix: parse through the strict schema so reviewer-only fields in a
+    // brief (goldEvidenceIds, rubricAnchors, etc.) or malformed shapes are
+    // rejected by the build-facing validator itself, not just by the separate
+    // Vitest suite. Import is deferred so the .mjs script can run before tsc
+    // builds the .js output.
+    const schemaMap = {
+      "c2-case-brief": "C2CaseBriefSchema",
+      "c2-decision-label": "C2DecisionLabelSchema",
+    };
+    if (schemaMap[expectedArtifactType]) {
+      const schemaName = schemaMap[expectedArtifactType];
+      const mod = await import(`../dist/c2/case-contracts.js`).catch(() => null);
+      if (mod && mod[schemaName]) {
+        const result = mod[schemaName].safeParse(parsed);
+        if (!result.success) {
+          fail(`${dir}/${name} fails strict ${schemaName}: ${JSON.stringify(result.error.issues.map((i) => i.path.join(".") + ": " + i.message))}`);
+        }
+      }
+      // If dist isn't built yet (first build), the Vitest suite catches it.
+    }
     if (typeof parsed.artifactId !== "string" || parsed.artifactId.length === 0) {
       fail(`${dir}/${name} is missing artifactId`);
     }
@@ -286,6 +306,24 @@ export async function buildPilotManifest(root) {
   const briefs = await readArtifactDir(root, BRIEFS_DIR, DIR_TO_ARTIFACT_TYPE[BRIEFS_DIR]);
   const labels = await readArtifactDir(root, LABELS_DIR, DIR_TO_ARTIFACT_TYPE[LABELS_DIR]);
   const snapshots = await readArtifactDir(root, SNAPSHOTS_DIR, DIR_TO_ARTIFACT_TYPE[SNAPSHOTS_DIR]);
+
+  // ── Reject duplicate case IDs before pairing (P1 fix) ─────────────────────
+  // Maps silently overwrite duplicates, allowing two packages with the same
+  // case ID to be blessed. Reject explicitly.
+  const seenBriefIds = new Set();
+  for (const brief of briefs) {
+    if (seenBriefIds.has(brief.parsed.caseId)) {
+      fail(`duplicate brief caseId "${brief.parsed.caseId}" (files: ${briefs.filter((b) => b.parsed.caseId === brief.parsed.caseId).map((b) => b.name).join(", ")})`);
+    }
+    seenBriefIds.add(brief.parsed.caseId);
+  }
+  const seenLabelIds = new Set();
+  for (const label of labels) {
+    if (seenLabelIds.has(label.parsed.caseId)) {
+      fail(`duplicate label caseId "${label.parsed.caseId}" (files: ${labels.filter((l) => l.parsed.caseId === label.parsed.caseId).map((l) => l.name).join(", ")})`);
+    }
+    seenLabelIds.add(label.parsed.caseId);
+  }
 
   // ── Pair briefs ↔ labels by caseId ───────────────────────────────────────
   const briefByCaseId = new Map(briefs.map((b) => [b.parsed.caseId, b]));
@@ -422,23 +460,19 @@ function writeManifestAtomic(root, bytes) {
   const dir = resolve(root, PILOT_REL);
   const tmpPath = join(dir, `.manifest.${randomBytes(6).toString("hex")}.tmp`);
 
-  // openSync + writeFileSync + fsyncSync + renameSync keeps the whole sequence
-  // synchronous, so a crash mid-write can't interleave with another writer.
+  // P2 fix: wrap the ENTIRE write/fsync/close/rename sequence so the temp
+  // file is removed on ANY pre-rename failure (not just rename failure).
   const fd = openSync(tmpPath, "w");
   try {
     writeFileSync(tmpPath, bytes);
     fsyncSync(fd);
-  } finally {
     closeSync(fd);
-  }
-  try {
     renameSync(tmpPath, manifestAbs);
   } catch (cause) {
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      // ignore cleanup failure; the rename error is the real signal
-    }
+    // Close the fd if still open (closeSync is idempotent-safe to attempt).
+    try { closeSync(fd); } catch { /* already closed */ }
+    // Remove the temp file on every failure path.
+    try { unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
     throw cause;
   }
 }

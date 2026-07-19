@@ -927,6 +927,36 @@ describe("dashboard shell and navigation", () => {
     await page.close();
   });
 
+  it("preserves the navigation landmark's accessible name across an open→close cycle", async () => {
+    // closeSidebar previously removed aria-label entirely, so after one mobile
+    // open/close the nav landmark was unnamed on every subsequent desktop/tablet
+    // state. The label must be restored to its original "Primary" value.
+    const page = await browser!.newPage();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(baseUrl + "/");
+    await page.waitForSelector("#app");
+    // Sanity: starts named.
+    expect(await page.locator("#navScroll").getAttribute("aria-label")).toBe("Primary");
+    // Open → temporarily relabeled to "Primary navigation" (dialog context).
+    await page.getByRole("button", { name: /^menu$/i }).first().click();
+    await page.waitForFunction(
+      () => document.getElementById("navScroll")?.getAttribute("aria-modal") === "true",
+      null,
+      { timeout: 3000 },
+    );
+    expect(await page.locator("#navScroll").getAttribute("aria-label")).toBe("Primary navigation");
+    // Close → label MUST be restored, not removed.
+    await page.locator("#backdrop").click();
+    await page.waitForFunction(
+      () => document.getElementById("navScroll")?.getAttribute("aria-modal") !== "true",
+      null,
+      { timeout: 3000 },
+    );
+    const labelAfterClose = await page.locator("#navScroll").getAttribute("aria-label");
+    expect(labelAfterClose).toBe("Primary");
+    await page.close();
+  });
+
   it("keeps a mobile bottom nav limited to Dashboard, Entries, Add, and More", async () => {
     const page = await browser!.newPage();
     await page.setViewportSize({ width: 390, height: 844 });

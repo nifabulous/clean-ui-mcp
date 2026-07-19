@@ -2633,7 +2633,12 @@ function initSidebar(){
     app.classList.remove('mobile-open');
     nav.removeAttribute('role');
     nav.removeAttribute('aria-modal');
-    nav.removeAttribute('aria-label');
+    // Restore the primary-navigation landmark's accessible name. openSidebar
+    // temporarily relabels it to "Primary navigation" for the dialog context;
+    // removing the attribute here (the prior behavior) left the nav landmark
+    // unnamed on every subsequent desktop/tablet state. Restore the original
+    // "Primary" label that index-2.html ships.
+    nav.setAttribute('aria-label','Primary');
     const mb=document.getElementById('mobileMenuBtn'); if(mb) mb.setAttribute('aria-expanded','false');
     const more=document.getElementById('bbMore'); if(more) more.setAttribute('aria-expanded','false');
     if(trapHandler){ nav.removeEventListener('keydown',trapHandler); trapHandler=null; }

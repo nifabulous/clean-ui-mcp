@@ -1,24 +1,52 @@
 /* ============================================================
    CLEAN-UI CORPUS CONSOLE — SPA, hash-routed
-   Direction: "Specimen ledger" — a curator's catalog, not a
-   generic indigo SaaS dashboard. Paper canvas, editorial serif
-   headings, one reserved ink accent, and a real rubber-stamp
-   mark for the tier system (exceptional / cautionary) — because
-   that distinction is this product's entire reason to exist.
+   Shares the SAME neutral token contract as the public React app
+   (docs/design-system.md §2). Light = pale cool canvas; dark =
+   true neutral charcoal (NO navy/violet/green/neon tint). Action
+   emphasis maps to --ink; focus/links to --focus. The legacy teal
+   --accent is kept ONLY as a deprecated alias so incremental
+   module migration (Tasks 2-5) doesn't break — prefer --ink/--focus.
    ============================================================ */
 :root{
-  --canvas:#faf7f2; --surface:#ffffff; --surface-2:#f2eee4;
-  --ink:#18150f; --ink-2:#57503f; --muted:#948a76;
-  --hairline:#e9e2d2; --hairline-2:#d9cfb8;
-  --accent:#2f5d62; --accent-soft:#e6edec; --accent-2:#3d7176;
-  --pos:#3f7d52; --pos-soft:#eef6ee;
-  --warn:#a9762f; --warn-soft:#faf3e7;
-  --neg:#a8402f; --neg-soft:#faeeea;
+  /* ── Shared neutral source-of-truth tokens (light) ────────────
+     These EXACT values mirror site/src/styles/tokens.css and are
+     the canonical cross-app values (design-system.md §2.2). */
+  --canvas:#f3f6fb; --surface:#ffffff; --surface-2:#f8fafc;
+  --ink:#0b2348; --ink-2:#637089; --muted:#7b879a;
+  --hairline:#e5eaf1; --hairline-2:#dbe3ef;
+  --focus:#2457d6; --pos:#287a4d; --warn:#986515; --neg:#b33a2b;
+  /* Semantic status soft fills — neutral, paired with text/icon. */
+  --pos-soft:#eaf3ee; --warn-soft:#f7f0e3; --neg-soft:#f7e9e6;
+  /* DEPRECATED: --accent was the warm-editorial teal brand color.
+     It now aliases --focus (the shared interactive/link/focus token),
+     which is the single safest mapping for the legacy CSS — `--accent`
+     is used for BOTH emphasis (nav/score bars) AND focus rings, so
+     aliasing to --focus preserves WCAG-visible focus everywhere it
+     appeared. New code MUST use --ink for emphasis or --focus for
+     links/focus; do not reference --accent in new selectors. */
+  --accent:var(--focus);
+  --accent-soft:var(--surface-2);   /* neutral soft highlight */
+  --accent-2:var(--focus);          /* deprecated darker-accent alias */
   --rail-w:240px; --rail-collapsed:52px; --detail-w:300px;
   --radius:6px; --pad:18px;
   --font:'Archivo',-apple-system,BlinkMacSystemFont,sans-serif;
   --display:'Fraunces',Georgia,serif;
   --mono:'IBM Plex Mono','SF Mono',Menlo,monospace;
+}
+:root[data-theme="dark"]{
+  /* ── Shared neutral source-of-truth tokens (dark) ─────────────
+     True neutral charcoal — no navy/violet/green/neon tint on the
+     base theme (design-system.md §2.3, spec §5.3). The browser
+     test asserts --canvas === #111113 exactly to catch any drift. */
+  --canvas:#111113; --surface:#19191c; --surface-2:#222226;
+  --ink:#f4f4f5; --ink-2:#c4c4ca; --muted:#a1a1aa;
+  --hairline:#2b2b30; --hairline-2:#34343a;
+  --focus:#a8c7ff; --pos:#78a887; --warn:#d2a455; --neg:#e17a6b;
+  --pos-soft:#1f2a24; --warn-soft:#2a2418; --neg-soft:#2c1f1d;
+  /* Deprecated aliases follow the same mapping in dark. */
+  --accent:var(--focus);
+  --accent-soft:var(--surface-2);
+  --accent-2:var(--focus);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
@@ -27,6 +55,27 @@ body{font-family:var(--font);background:var(--canvas);color:var(--ink);
 .num,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums;font-feature-settings:'tnum'}
 .eyebrow{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
 a{color:inherit;text-decoration:none}
+
+/* Visually hidden but available to AT (the standardized sr-only pattern).
+   Used by the skip link's target label, the live region, and the per-route
+   description. NOT display:none — that would remove it from the a11y tree. */
+.visually-hidden{
+  position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;
+  overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;
+}
+/* Skip link — visually hidden until focused, then revealed at top-left so
+   keyboard users can bypass the chrome (WCAG 2.4.1). */
+.skip-link{
+  position:fixed;top:8px;left:8px;z-index:200;
+  padding:8px 14px;border-radius:7px;
+  background:var(--ink);color:#fff;font-size:12px;font-weight:600;
+  transform:translateY(-200%);transition:transform .15s;
+}
+.skip-link:focus{transform:translateY(0);outline:none;
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--focus) 35%,transparent);}
+/* When the skip link targets #main, give main a visible focus ring so the
+   destination is obvious after the jump. */
+#main:focus{outline:none;box-shadow:inset 0 0 0 3px color-mix(in srgb,var(--focus) 30%,transparent);}
 
 /* ============================================================
    LAYOUT — expandable sidebar + main + detail rail
@@ -76,20 +125,36 @@ a{color:inherit;text-decoration:none}
 .group-count{font-family:var(--mono);font-size:10px;color:var(--muted);font-weight:500}
 .nav-group:not(.open) .nav-children{display:none}
 .nav-children{padding-left:6px}
+/* The Dashboard group renders header-less — its items sit directly under the
+   brand with a little breathing room before the first labeled group. */
+.nav-group--bare{margin-bottom:6px}
+.nav-group--bare .nav-children{padding-left:0}
 
 /* nav item */
 .nav-item{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:6px;
-  color:var(--ink-2);font-size:12.5px;font-weight:500;cursor:pointer;transition:.12s;white-space:nowrap}
+  color:var(--ink-2);font-size:12.5px;font-weight:500;cursor:pointer;transition:.12s;white-space:nowrap;
+  text-decoration:none}
 .nav-item:hover{background:var(--surface-2);color:var(--ink)}
 .nav-item.active{background:var(--accent-soft);color:var(--accent)}
+/* aria-current="page" is the AT-friendly "you are here". The shared focus ring
+   (below) applies on keyboard focus; the active fill applies regardless of how
+   focus arrived. */
+.nav-item[aria-current="page"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.nav-item[aria-current="page"]::before{
+  content:'';position:absolute;margin-left:-18px;width:3px;height:18px;border-radius:2px;background:var(--accent)}
+.nav-item{position:relative}
 .nav-item .ic{width:16px;height:16px;flex-shrink:0;display:grid;place-items:center}
 .nav-item .lbl{flex:1;overflow:hidden;text-overflow:ellipsis}
 .nav-item .count{font-family:var(--mono);font-size:10.5px;color:var(--muted);font-weight:500}
-.nav-item.active .count{color:var(--accent)}
+.nav-item.active .count,.nav-item[aria-current="page"] .count{color:var(--accent)}
 
 .sidebar-foot{padding:10px 14px;border-top:1px solid var(--hairline);font-size:10.5px;color:var(--muted)}
 .sidebar-foot .row{display:flex;align-items:center;justify-content:space-between;margin:3px 0;font-family:var(--mono)}
 .sidebar-foot .live{width:7px;height:7px;border-radius:50%;background:var(--pos);animation:pulse 2s infinite}
+/* Concise health access link (spec §7.1) — sits under the recovery row. */
+.sidebar-foot .foot-health{display:block;margin-top:6px;padding:6px 8px;border-radius:6px;
+  font-size:11px;font-weight:500;color:var(--ink-2)}
+.sidebar-foot .foot-health:hover{background:var(--surface-2);color:var(--ink)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
 /* ---------- MAIN ---------- */
@@ -115,6 +180,17 @@ a{color:inherit;text-decoration:none}
 .icon-btn{width:32px;height:32px;border-radius:7px;border:1px solid var(--hairline-2);background:var(--surface);
   display:grid;place-items:center;cursor:pointer;color:var(--ink-2)}
 .icon-btn:hover{background:var(--surface-2)}
+/* Visible keyboard focus ring — the shared contract expression
+   (docs/design-system.md §6.1). Applied to every interactive control so focus
+   is visible in BOTH themes. The translucent --focus mix stays legible without
+   overpowering adjacent content. Mouse clicks don't trigger it (:focus-visible
+   only). Inputs/selects keep their own focus styles above. */
+.btn:focus-visible,.icon-btn:focus-visible,.chip:focus-visible,
+.nav-item:focus-visible,.pg:focus-visible,.seg:focus-visible,
+.toggle:focus-visible,.view-toggle button:focus-visible{
+  outline:none;
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--focus) 35%,transparent);
+}
 
 /* page content */
 .page{padding:22px 24px 80px;display:none}
@@ -685,10 +761,14 @@ tbody tr:hover .row-actions{opacity:1}
   }
   .app.mobile-open .sidebar{transform:translateX(0)}
   .topbar{padding:12px 16px}
-  .topbar .search{display:none}      /* search moves to bottom bar */
-  .topbar .search.mobile-show{display:block;position:fixed;left:8px;right:8px;top:56px;z-index:9}
-  .topbar .search.mobile-show input{width:100%}
+  /* Global search stays in the top bar on mobile (spec §7.5: mobile
+     prioritizes search). Shrink it so it shares the row with the menu/add
+     buttons; the label is visually-hidden but still names the input. */
+  .topbar .search input{width:140px}
   #mobileMenuBtn{display:grid!important}
+  /* The rebuild control is desktop-only on mobile (it just toasts a hint); hide
+     it so search + add + theme fit the top row. */
+  #rebuildBtn{display:none}
   #addEntryBtn .lbl,.topbar .btn .lbl{display:none}      /* icon-only buttons */
   #addEntryBtn{width:32px;padding:0;justify-content:center}
   .page{padding:16px 16px 90px}
@@ -699,6 +779,9 @@ tbody tr:hover .row-actions{opacity:1}
   .statusbar{display:none}
   .bottom-bar{display:flex}
   .bottom-bar button{min-height:44px;min-width:44px;padding:6px 4px}
+  /* The open drawer is a modal dialog: keep it above the bottom bar and
+     inert-sibling content. The backdrop already sits beneath #navScroll. */
+  .app.mobile-open .nav-scroll[aria-modal="true"]{z-index:40}
   .card{padding:14px}
   /* entries controls wrap so chips + sort + view-toggle don't overflow on touch */
   .card-head{flex-wrap:wrap;gap:10px}

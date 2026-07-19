@@ -339,27 +339,31 @@ function gscore(s){
 /* ============================================================
    NAV — expandable groups, hash route active state
    ============================================================ */
+// Navigation grouped by spec §7.1: Dashboard / Library / Curation / Insights /
+// System. The DISPLAY labels change (overview → "Dashboard", embeddings →
+// "Analytics", settings → "Health & settings") but the underlying route `id`s
+// do NOT — the hash router, links, tests, and existing state all depend on the
+// exact ids below. The first group carries an empty `group` string so its
+// items render header-less (the dashboard sits above the labeled groups).
 const NAV = [
-  { group:'Corpus', items:[
-    {id:'overview',  label:'Overview',     icon:'overview'},
-    {id:'entries',   label:'Entries',      icon:'entries'},
-    {id:'add',       label:'Add entry',    icon:'plus'},
-    {id:'bulk',      label:'Bulk import',  icon:'bulk'},
-    {id:'sources',   label:'Sources',      icon:'circle'},
-    {id:'capture',   label:'Capture triage', icon:'circle'},
-  ]},
-  { group:'Query layer', items:[
-    {id:'search',    label:'Search index',  icon:'search'},
-    {id:'embeddings',label:'Embeddings',    icon:'nodes'},
-    {id:'compare',   label:'Compare',       icon:'gitcompare'},
+  { group:'', items:[{ id:'overview', label:'Dashboard', icon:'overview' }] },
+  { group:'Library', items:[
+    { id:'entries', label:'Entries', icon:'entries' },
+    { id:'search',  label:'Search',  icon:'search' },
+    { id:'compare', label:'Compare', icon:'gitcompare' },
   ]},
   { group:'Curation', items:[
-    {id:'quality',   label:'Quality',       icon:'star'},
-    {id:'settings',  label:'Settings',      icon:'gear'},
+    { id:'add',     label:'Add entry',     icon:'plus' },
+    { id:'capture', label:'Capture triage',icon:'circle' },
+    { id:'quality', label:'Review queue',  icon:'star' },
+    { id:'bulk',    label:'Bulk import',   icon:'bulk' },
   ]},
-  { group:'Decision Lab', items:[
-    {id:'decision-lab', label:'Decision Lab', icon:'gitcompare'},
+  { group:'Insights', items:[
+    { id:'embeddings', label:'Analytics',    icon:'nodes' },
+    { id:'sources',    label:'Sources',      icon:'circle' },
+    { id:'decision-lab',label:'Decision Lab',icon:'gitcompare' },
   ]},
+  { group:'System', items:[{ id:'settings', label:'Health & settings', icon:'gear' }] },
 ];
 const IC = {
   overview:'<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
@@ -384,7 +388,14 @@ function renderNav(){
         <span class="lbl">${it.label}</span>${cnt}
       </a>`;
     }).join('');
-    return `<div class="nav-group ${gi===0?'open':''}" data-group="${gi}">
+    // The first group (Dashboard) has an empty label and renders header-less;
+    // labeled groups keep the collapsible group-head so dense sections can fold.
+    if(!g.group){
+      return `<div class="nav-group nav-group--bare open" data-group="${gi}">
+        <div class="nav-children">${items}</div>
+      </div>`;
+    }
+    return `<div class="nav-group open" data-group="${gi}">
       <div class="group-head">
         <svg class="group-chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
         <span class="group-label">${g.group}</span>
@@ -415,10 +426,26 @@ function route(){
   const h = location.hash.replace(/^#\/?/,'') || 'overview';
   const id = PAGES[h] ? h : 'overview';
   currentRoute = id;
-  document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.route===id));
+  // Active route indication: the matching nav link carries
+  // aria-current="page" (WCAG 2.4.8 / the AT-friendly way to say "you are
+  // here"). All other nav links drop the attribute. The bare group-head
+  // decision-lab items inside #decisionLabList also mirror this.
+  document.querySelectorAll('#navScroll .nav-item').forEach(n=>{
+    const on = n.dataset.route===id;
+    n.classList.toggle('active', on);
+    if(on) n.setAttribute('aria-current','page');
+    else n.removeAttribute('aria-current');
+  });
   const p = PAGES[id];
   document.getElementById('pageTitle').textContent = p.title;
   document.getElementById('pageCrumb').textContent = p.crumb;
+  const descEl = document.getElementById('pageDesc');
+  if(descEl) descEl.textContent = p.crumb;
+  // Route-announcement live region: screen readers hear the new page so SPA
+  // navigation is perceivable without a full page reload (WCAG 4.1.3-ish for
+  // route changes). aria-live=polite avoids interrupting in-flight speech.
+  const live = document.getElementById('routeAnnounce');
+  if(live) live.textContent = `${p.title} — ${p.crumb}`;
   document.getElementById('pages').innerHTML = `<div class="page active" id="page-${id}">${p.render()}</div>`;
   document.querySelector('.main').scrollTop = 0;
   if(p.after) p.after();
@@ -877,7 +904,7 @@ function esc(s){ return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&
    ============================================================ */
 
 /* -------- Overview -------- */
-page('overview','Overview','clean-ui-mcp · v0.1.0 · stdio transport', function(){
+page('overview','Dashboard','corpus control center · system health, queues, coverage', function(){
   const N=agg.N||0;
   const maxPat=Math.max(...(agg.topPatterns||[]).map(d=>d[1]),1);
   const maxSty=Math.max(...(agg.topStyles||[]).map(d=>d[1]),1);
@@ -2559,18 +2586,84 @@ function bindEntryRows(){
 
 function initSidebar(){
   const app=document.getElementById('app');
-  document.getElementById('collapseBtn').addEventListener('click',()=>app.classList.toggle('collapsed'));
+  const nav=document.getElementById('navScroll');
   const backdrop=document.getElementById('backdrop');
-  const close=()=>app.classList.remove('mobile-open');
-  document.getElementById('mobileMenuBtn').onclick=()=>app.classList.toggle('mobile-open');
-  document.getElementById('bbMenu').onclick=()=>app.classList.toggle('mobile-open');
-  backdrop.addEventListener('click',close);
+  document.getElementById('collapseBtn').addEventListener('click',()=>app.classList.toggle('collapsed'));
+
+  /* ---------- Modal drawer (mobile) ----------
+     At ≤900px the sidebar becomes a modal drawer (spec §7.5). While open it
+     carries role="dialog" + aria-modal="true", focus is trapped inside, Escape
+     closes, backdrop click closes, a route change closes, and focus returns to
+     the trigger that opened it. openSidebar()/closeSidebar() are the ONLY
+     sanctioned mutators so the contract stays consistent. */
+  let lastTrigger=null;             // element that opened the drawer (focus returns here)
+  let trapHandler=null;             // the focus-trap keydown listener (removed on close)
+  function isMobile(){return window.matchMedia('(max-width: 900px)').matches;}
+  function focusable(){
+    // Tab-reachable elements inside the drawer (links, buttons, inputs).
+    return Array.from(nav.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex="-1"])'))
+      .filter(el=>el.offsetParent!==null || el.getClientRects().length>0);
+  }
+  function openSidebar(trigger){
+    if(!isMobile() || app.classList.contains('mobile-open')) return;
+    lastTrigger = trigger || document.activeElement;
+    app.classList.add('mobile-open');
+    nav.setAttribute('role','dialog');
+    nav.setAttribute('aria-modal','true');
+    // The dialog needs an accessible name — use the brand label.
+    nav.setAttribute('aria-label','Primary navigation');
+    const mb=document.getElementById('mobileMenuBtn'); if(mb) mb.setAttribute('aria-expanded','true');
+    const more=document.getElementById('bbMore'); if(more) more.setAttribute('aria-expanded','true');
+    // Move focus into the drawer (first focusable, else the container).
+    const items=focusable();
+    (items[0]||nav).focus();
+    // Focus trap: Tab wraps to the last item, Shift+Tab wraps to the first.
+    trapHandler=(e)=>{
+      if(e.key!=='Tab') return;
+      const fs=focusable();
+      if(!fs.length) return;
+      const first=fs[0], last=fs[fs.length-1];
+      if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); }
+    };
+    nav.addEventListener('keydown',trapHandler);
+  }
+  function closeSidebar(){
+    if(!app.classList.contains('mobile-open')) return;
+    app.classList.remove('mobile-open');
+    nav.removeAttribute('role');
+    nav.removeAttribute('aria-modal');
+    // Restore the primary-navigation landmark's accessible name. openSidebar
+    // temporarily relabels it to "Primary navigation" for the dialog context;
+    // removing the attribute here (the prior behavior) left the nav landmark
+    // unnamed on every subsequent desktop/tablet state. Restore the original
+    // "Primary" label that index-2.html ships.
+    nav.setAttribute('aria-label','Primary');
+    const mb=document.getElementById('mobileMenuBtn'); if(mb) mb.setAttribute('aria-expanded','false');
+    const more=document.getElementById('bbMore'); if(more) more.setAttribute('aria-expanded','false');
+    if(trapHandler){ nav.removeEventListener('keydown',trapHandler); trapHandler=null; }
+    // Restore focus to the trigger so keyboard users resume where they left off.
+    if(lastTrigger && typeof lastTrigger.focus==='function'){ lastTrigger.focus(); lastTrigger=null; }
+  }
+  // Expose for tests + external scripting.
+  window.cleanUiDrawer={openSidebar,closeSidebar,isOpen:()=>app.classList.contains('mobile-open')};
+
+  // Triggers: the top-bar hamburger, the bottom-bar "More" button, and (when
+  // open) the same controls toggle back closed.
+  document.getElementById('mobileMenuBtn').addEventListener('click',function(){
+    if(app.classList.contains('mobile-open')) closeSidebar(); else openSidebar(this);
+  });
+  document.getElementById('bbMore').addEventListener('click',function(){
+    if(app.classList.contains('mobile-open')) closeSidebar(); else openSidebar(this);
+  });
+  // Bottom-bar quick routes (spec §7.5: Dashboard / Entries / Add on mobile).
+  document.getElementById('bbDash').addEventListener('click',()=>{ location.hash='/overview'; });
+  document.getElementById('bbEntries').addEventListener('click',()=>{ location.hash='/entries'; });
+  document.getElementById('bbAdd').addEventListener('click',()=>{ location.hash='/add'; });
+  backdrop.addEventListener('click',closeSidebar);
   document.getElementById('detailClose').addEventListener('click',closeDetail);
-  document.getElementById('bbSearch').onclick=()=>{document.querySelector('.topbar .search').classList.toggle('mobile-show');if(document.querySelector('.topbar .search').classList.contains('mobile-show'))document.getElementById('globalSearch').focus();};
-  document.getElementById('bbFavs').onclick=()=>{location.hash='/entries';setTimeout(()=>{const fc=document.querySelector('#entryFilters .chip[data-f="fav"]');if(fc)fc.click();},80);};
   document.getElementById('rebuildBtn').addEventListener('click',()=>toast('Run `npm run build-index` from the terminal'));
   document.getElementById('addEntryBtn').addEventListener('click',()=>location.hash='/add');
-  document.getElementById('bbAdd').onclick=()=>location.hash='/add';
   const gs=document.getElementById('globalSearch');
   gs.addEventListener('keydown',e=>{if(e.key==='Enter'&&gs.value.trim())location.hash='/entries';});
   document.addEventListener('keydown',e=>{
@@ -2580,13 +2673,15 @@ function initSidebar(){
     else if(e.key==='Escape'){
       const cp = document.getElementById('candPreview');
       if(cp && cp.style.display !== 'none'){ closeCandidatePreview(); }
-      else if(app.classList.contains('mobile-open'))close();
+      else if(app.classList.contains('mobile-open'))closeSidebar();
       else if(document.getElementById('detailRail').style.display==='block')closeDetail();
     }
     else if((e.metaKey||e.ctrlKey)&&e.key==='b'){e.preventDefault();app.classList.toggle('collapsed');}
   });
-  window.addEventListener('hashchange',close);
-  window.addEventListener('resize',()=>{if(window.innerWidth>900)close();});
+  // A route change closes an open drawer (the user picked a destination) and a
+  // resize back to desktop closes it (the off-canvas panel is no longer modal).
+  window.addEventListener('hashchange',closeSidebar);
+  window.addEventListener('resize',()=>{if(window.innerWidth>900)closeSidebar();});
   // resizer
   const resizer=document.getElementById('resizer');
   const DETAIL_KEY='clean-ui-detail-w',DEFAULT_W=320,MIN_W=240,MAX_W=640;
@@ -2602,6 +2697,95 @@ function initSidebar(){
 window._mcp = { toast };
 
 /* ============================================================
+   THEME CONTROLLER — shared light/dark token contract
+   The pre-paint resolver in index-2.html already set
+   documentElement.dataset.theme before this runs, so getTheme()
+   reads the value that was applied pre-paint (no FOUC). This
+   module owns the runtime contract:
+     - getTheme()  — pure read of the active theme
+     - setTheme(t) — persist + apply + update toggle label
+     - clearTheme()— drop the explicit choice, re-follow the OS
+   OS prefers-color-scheme is followed ONLY while no explicit
+   localStorage choice exists; once a choice is made we
+   unsubscribe, and clearTheme() re-subscribes. Mirrors the public
+   site's contract (docs/design-system.md §2.4).
+   ============================================================ */
+const THEME_KEY = 'clean-ui-theme';
+const THEME_VALUES = ['light','dark'];
+
+function getTheme(){
+  const t = document.documentElement.dataset.theme;
+  return THEME_VALUES.indexOf(t) >= 0 ? t : 'light';
+}
+
+function labelFor(next){
+  // The toggle's accessible name describes the action it performs (switch TO).
+  return next === 'dark' ? 'Switch to dark theme' : 'Switch to light theme';
+}
+
+function syncToggle(){
+  const btn = document.getElementById('themeToggle');
+  if (!btn) return;
+  const next = getTheme() === 'dark' ? 'light' : 'dark';
+  btn.setAttribute('aria-label', labelFor(next));
+  btn.setAttribute('title', labelFor(next));
+}
+
+let mqListener = null; // active only while no explicit choice exists
+
+function stopOsListener(){
+  if (!mqListener) return;
+  matchMedia('(prefers-color-scheme: dark)').removeEventListener('change', mqListener);
+  mqListener = null;
+}
+
+function startOsListener(){
+  if (mqListener) return;
+  const mq = matchMedia('(prefers-color-scheme: dark)');
+  mqListener = (e) => {
+    // Only honored while no explicit choice exists (clearTheme re-enables this).
+    if (localStorage.getItem(THEME_KEY)) return;
+    const t = e.matches ? 'dark' : 'light';
+    document.documentElement.dataset.theme = t;
+    syncToggle();
+  };
+  mq.addEventListener('change', mqListener);
+}
+
+function setTheme(theme){
+  if (THEME_VALUES.indexOf(theme) < 0) return;
+  localStorage.setItem(THEME_KEY, theme);
+  document.documentElement.dataset.theme = theme;
+  stopOsListener(); // an explicit choice overrides the OS from now on
+  syncToggle();
+}
+
+function clearTheme(){
+  localStorage.removeItem(THEME_KEY);
+  // Re-resolve from the OS immediately so the UI reflects the cleared state.
+  const t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  document.documentElement.dataset.theme = t;
+  startOsListener();
+  syncToggle();
+}
+
+function initThemeToggle(){
+  const btn = document.getElementById('themeToggle');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    setTheme(getTheme() === 'dark' ? 'light' : 'dark');
+  });
+  syncToggle();
+  // Follow the OS only when the user hasn't picked explicitly. The pre-paint
+  // resolver already handled the initial paint; this keeps it live afterward.
+  if (!localStorage.getItem(THEME_KEY)) startOsListener();
+}
+
+// Exposed for tests + external scripting. Pure getters/setters only — no DOM
+// side effects beyond applying the theme (which the pre-paint script also did).
+window.cleanUiTheme = { getTheme, setTheme, clearTheme };
+
+/* ============================================================
    BOOT
    ============================================================ */
 (async function boot(){
@@ -2614,6 +2798,7 @@ window._mcp = { toast };
   }
   renderNav();
   initSidebar();
+  initThemeToggle();
   window.addEventListener('hashchange',route);
   // Delegated image-error fallback — single registration, survives re-renders.
   // MUST use capture phase: `error` on <img> does not bubble. When an image

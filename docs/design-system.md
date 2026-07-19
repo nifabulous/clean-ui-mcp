@@ -90,6 +90,35 @@ Dark mode is a true neutral charcoal interface. The canvas is near-black; raised
 - Layout, information hierarchy, and semantic meaning are identical between themes.
 - Semantic status colors are validated independently in each theme; status is never communicated by color alone (always pair with text or icon).
 
+### 2.5 Curator dashboard implementation notes
+
+The curator dashboard (`index-2.html` + `ui/styles.css` + `ui/app.js`, a vanilla-JavaScript hash-routed SPA) consumes the §2.1 token contract via its own CSS custom properties. It does NOT share runtime code with the public React app; only the token names and per-theme values are shared. The notes below record how the curator maps its legacy token names onto the shared contract so incremental module migration (Tasks 2-5 of the redesign plan) does not break.
+
+**Token name mapping.** The curator CSS declares the §2.2/§2.3 values under both the canonical names and the legacy aliases its existing selectors already use:
+
+| Curator CSS token | Maps to (shared) | Notes |
+|---|---|---|
+| `--canvas`, `--surface`, `--ink`, `--focus`, `--pos`, `--warn`, `--neg` | same names | Identical name and value to the contract. |
+| `--surface-2` | `--surface-raised` | Legacy alias for the raised-surface fill. |
+| `--ink-2` | `--ink-muted` | Legacy alias for secondary text. |
+| `--muted` | `--ink-muted` | Legacy alias; retained because existing selectors read `--muted`. |
+| `--hairline`, `--hairline-2` | `--border` | Legacy aliases for 1px hairline borders. |
+| `--pos-soft`, `--warn-soft`, `--neg-soft` | semantic soft fills | Subtle tinted fills paired with the matching status text/icon (never the sole signal). |
+| `--accent` (DEPRECATED) | `--focus` | Was the warm-editorial teal brand color. Aliased to `--focus` for this task because the legacy CSS used `--accent` for BOTH emphasis and focus rings — aliasing to `--focus` preserves WCAG-visible focus everywhere it appeared. New selectors MUST use `--ink` (emphasis) or `--focus` (links/focus); do not reference `--accent`. |
+| `--accent-soft`, `--accent-2` (DEPRECATED) | `--surface-2`, `--focus` | Soft highlight and darker-accent aliases, retained only so un-migrated selectors keep rendering neutral. |
+
+The dark `--canvas` is asserted by browser test to equal `#111113` exactly, so any drift toward a navy/violet/green/neon tint fails loudly (spec §5.3).
+
+**Pre-paint resolver.** `index-2.html` carries the same synchronous resolver the public site uses (`site/index.html`), placed before the stylesheet link so there is no flash of the wrong theme. It reads the `clean-ui-theme` localStorage key and falls back to `prefers-color-scheme`.
+
+**Runtime controller — `window.cleanUiTheme`.** `ui/app.js` exposes a testable controller on `window`:
+
+- `getTheme()` — pure; returns the active `"light"` / `"dark"`.
+- `setTheme(theme)` — writes `clean-ui-theme` to localStorage, sets `documentElement.dataset.theme`, updates the toggle's accessible name, and unsubscribes from OS `prefers-color-scheme` changes (an explicit choice wins from then on).
+- `clearTheme()` — removes the localStorage key, re-resolves from the OS immediately, and re-subscribes to OS changes.
+
+The toggle button (`#themeToggle` in the top bar) has an accessible name that describes the action it performs ("Switch to dark theme" / "Switch to light theme"). OS preference is followed ONLY while no explicit local choice exists.
+
 ## 3. Typography
 
 Strong modern sans-serif hierarchy drives all surfaces. A restrained editorial italic is used ONLY for selected headline phrases — never for body copy or UI chrome.

@@ -399,7 +399,7 @@ git commit -m "feat(c2): define separated case package contracts"
 
 **Interfaces:**
 - Consumes: Task 1 primitives and case/control enums.
-- Produces: `C2LabelIntegritySelectionSchema`, `C2IndependentLabelSubmissionSchema`, `assertSubmissionMatchesSelection`, `C2_REPLACEMENT_METRIC_FLOORS`, `C2LabelAgreementReportSchema`, `C2EvaluationRunManifestSchema`, `C2HumanScorecardSchema`, `C2FailureReportSchema`, and inferred types.
+- Produces: `C2LabelIntegritySelectionSchema`, `C2IndependentLabelSubmissionSchema`, `assertSubmissionMatchesSelection`, `C2_REPLACEMENT_METRIC_FLOORS`, `C2LabelAgreementReportSchema`, `assertAgreementMatchesSubmissions`, `C2EvaluationRunManifestSchema`, `C2HumanScorecardSchema`, `C2FailureReportSchema`, and inferred types.
 
 - [ ] **Step 1: Write failing semantic tests**
 
@@ -434,6 +434,13 @@ it("binds distinct Gold Label Owner and QA submissions in an agreement report", 
   expect(C2LabelAgreementReportSchema.safeParse({ ...agreement, qaActorId: agreement.goldOwnerActorId }).success).toBe(false);
 });
 
+it("cross-checks agreement hashes, actors, roles, selection, and entry disagreements", () => {
+  expect(() => assertAgreementMatchesSubmissions(selection, goldOwnerSubmission, qaSubmission, agreement, resolvedHashes)).not.toThrow();
+  expect(() => assertAgreementMatchesSubmissions(selection, qaSubmission, goldOwnerSubmission, agreement, resolvedHashes)).toThrow(/role|actor|reference/);
+  expect(() => assertAgreementMatchesSubmissions(selection, goldOwnerSubmission, qaSubmission, agreement, { ...resolvedHashes, qaSubmissionSha256: "f".repeat(64) })).toThrow(/hash/);
+  expect(() => assertAgreementMatchesSubmissions(selection, goldOwnerSubmission, qaSubmission, { ...agreement, disagreementEntryIds: ["entry-unselected"] }, resolvedHashes)).toThrow(/disagreement/);
+});
+
 it("rejects a report that lowers a parent-authority metric floor", () => {
   const lowered = { ...agreement, metrics: agreement.metrics.map((metric) => metric.metricId === "categories-macro-f1" ? { ...metric, requiredFloor: 0.80 } : metric) };
   expect(C2LabelAgreementReportSchema.safeParse(lowered).success).toBe(false);
@@ -444,9 +451,20 @@ it("forbids gold evidence in a brief-only run and requires it in gold-evidence",
   expect(C2EvaluationRunManifestSchema.safeParse({ ...run, condition: "gold-evidence", evidenceIds: [] }).success).toBe(false);
 });
 
+it("enforces the run lifecycle as a closed state machine", () => {
+  expect(C2EvaluationRunManifestSchema.safeParse({ ...run, status: "running", finishedAt: new Date().toISOString() }).success).toBe(false);
+  expect(C2EvaluationRunManifestSchema.safeParse({ ...run, status: "succeeded", parsedOutputSha256: null }).success).toBe(false);
+  expect(C2EvaluationRunManifestSchema.safeParse({ ...run, status: "cost-blocked", promptTokens: 1 }).success).toBe(false);
+});
+
 it("requires six unique human-score dimensions with integer scores 1 through 5", () => {
   expect(C2HumanScorecardSchema.parse(scorecard).scores).toHaveLength(6);
   expect(C2HumanScorecardSchema.safeParse({ ...scorecard, scores: [{ ...scorecard.scores[0], score: 6 }] }).success).toBe(false);
+});
+
+it("derives implementation readiness from the frozen per-dimension floor", () => {
+  const belowFloor = { ...scorecard, implementationReady: true, scores: scorecard.scores.map((item, index) => index === 0 ? { ...item, score: 2 } : item) };
+  expect(C2HumanScorecardSchema.safeParse(belowFloor).success).toBe(false);
 });
 
 it("requires corrected-label evidence before classifying a label failure", () => {
@@ -613,6 +631,24 @@ export const C2LabelAgreementReportSchema = z.object({
   if (report.terminalOutcome === "Qualified" && (report.hardGates.some((gate) => !gate.passed) || report.metrics.some((metric) => !metric.passed))) ctx.addIssue({ code: "custom", path: ["terminalOutcome"], message: "Qualified requires all floors and hard gates" });
 });
 
+export function assertAgreementMatchesSubmissions(
+  selection: z.infer<typeof C2LabelIntegritySelectionSchema>,
+  goldOwner: z.infer<typeof C2IndependentLabelSubmissionSchema>,
+  qa: z.infer<typeof C2IndependentLabelSubmissionSchema>,
+  report: z.infer<typeof C2LabelAgreementReportSchema>,
+  resolvedHashes: { selectionSha256: string; goldOwnerSubmissionSha256: string; qaSubmissionSha256: string },
+): void {
+  assertSubmissionMatchesSelection(selection, goldOwner);
+  assertSubmissionMatchesSelection(selection, qa);
+  if (goldOwner.reviewerRole !== "Gold Label Owner" || qa.reviewerRole !== "QA") throw new Error("submission role mismatch");
+  if (goldOwner.actorId !== report.goldOwnerActorId || qa.actorId !== report.qaActorId) throw new Error("agreement actor mismatch");
+  if (report.selectionRef.artifactId !== selection.artifactId) throw new Error("agreement selection reference mismatch");
+  if (report.goldOwnerSubmissionRef.artifactId !== goldOwner.artifactId || report.qaSubmissionRef.artifactId !== qa.artifactId) throw new Error("agreement submission reference mismatch");
+  if (report.selectionRef.sha256 !== resolvedHashes.selectionSha256 || report.goldOwnerSubmissionRef.sha256 !== resolvedHashes.goldOwnerSubmissionSha256 || report.qaSubmissionRef.sha256 !== resolvedHashes.qaSubmissionSha256) throw new Error("agreement artifact hash mismatch");
+  const selected = new Set(selection.entries.map((entry) => entry.entryId));
+  if (report.disagreementEntryIds.some((entryId) => !selected.has(entryId))) throw new Error("agreement contains an unselected disagreement entry");
+}
+
 export const C2EvaluationRunManifestSchema = z.object({
   schemaVersion: z.literal("1.0"),
   artifactType: z.literal("c2-evaluation-run"),
@@ -642,6 +678,10 @@ export const C2EvaluationRunManifestSchema = z.object({
   if (run.condition === "brief-only" && run.evidenceIds.length !== 0) ctx.addIssue({ code: "custom", path: ["evidenceIds"], message: "brief-only run forbids evidence" });
   if (run.condition === "gold-evidence" && run.evidenceIds.length === 0) ctx.addIssue({ code: "custom", path: ["evidenceIds"], message: "gold-evidence run requires evidence" });
   if (run.status === "succeeded" && (!run.finishedAt || !run.rawOutputSha256 || !run.parsedOutputSha256)) ctx.addIssue({ code: "custom", message: "successful run requires finish time and output hashes" });
+  if (run.status === "running" && (run.finishedAt || run.rawOutputSha256 || run.parsedOutputSha256)) ctx.addIssue({ code: "custom", message: "running state forbids finish time and output hashes" });
+  if (run.status === "failed" && (!run.finishedAt || run.parsedOutputSha256)) ctx.addIssue({ code: "custom", message: "failed state requires finish time and forbids parsed output" });
+  if (run.status === "cost-blocked" && (run.finishedAt || run.rawOutputSha256 || run.parsedOutputSha256 || run.promptTokens !== 0 || run.completionTokens !== 0 || run.costUsd !== 0)) ctx.addIssue({ code: "custom", message: "cost-blocked state must record no execution or outputs" });
+  if (run.finishedAt && Date.parse(run.finishedAt) < Date.parse(run.startedAt)) ctx.addIssue({ code: "custom", path: ["finishedAt"], message: "finish time cannot precede start time" });
 });
 
 const DimensionSchema = z.enum(["product-appropriateness", "cross-screen-coherence", "implementation-clarity", "originality", "accessibility-and-failure-states", "evidence-discipline"]);
@@ -659,7 +699,10 @@ export const C2HumanScorecardSchema = z.object({
   scores: z.array(DimensionScoreSchema).length(6).refine((scores) => hasUniqueStrings(scores.map((score) => score.dimension)), "dimensions must be unique"),
   implementationReady: z.boolean(),
   scoredAt: z.string().datetime(),
-}).strict();
+}).strict().superRefine((scorecard, ctx) => {
+  const meetsFloor = scorecard.scores.every((item) => item.score >= 3);
+  if (scorecard.implementationReady !== meetsFloor) ctx.addIssue({ code: "custom", path: ["implementationReady"], message: "implementationReady must equal every dimension meeting the frozen score floor of 3" });
+});
 
 export const C2FailureReportSchema = z.object({
   schemaVersion: z.literal("1.0"),
@@ -671,12 +714,16 @@ export const C2FailureReportSchema = z.object({
   correctedLabelRunRef: ArtifactFileRefSchema.nullable(),
   classification: z.enum(["retrieval", "label", "coverage", "synthesis", "safety"]),
   affectedDecisionIds: UniqueNonEmptyStrings,
+  affectedEntryIds: z.array(StableId).refine(hasUniqueStrings, "affected entry IDs must be unique"),
+  affectedFieldPaths: z.array(NonEmptyText).refine(hasUniqueStrings, "affected field paths must be unique"),
   evidence: UniqueNonEmptyStrings,
   rationale: NonEmptyText,
   classifiedByActorId: StableId,
   classifiedAt: z.string().datetime(),
 }).strict().superRefine((failure, ctx) => {
   if (failure.classification === "label" && failure.correctedLabelRunRef === null) ctx.addIssue({ code: "custom", path: ["correctedLabelRunRef"], message: "label failure requires corrected-label shadow run" });
+  if (failure.classification === "label" && (failure.affectedEntryIds.length === 0 || failure.affectedFieldPaths.length === 0)) ctx.addIssue({ code: "custom", message: "label failure requires exact affected entries and fields" });
+  if (failure.classification !== "label" && (failure.affectedEntryIds.length !== 0 || failure.affectedFieldPaths.length !== 0)) ctx.addIssue({ code: "custom", message: "only label failures may identify retaggable entries and fields" });
   if (["retrieval", "synthesis"].includes(failure.classification) && failure.goldEvidenceRunRef === null) ctx.addIssue({ code: "custom", path: ["goldEvidenceRunRef"], message: `${failure.classification} failure requires gold-evidence run` });
 });
 
@@ -701,7 +748,7 @@ Expected: PASS with semantic negative cases rejected.
 
 - [ ] **Step 5: Review and commit Task 2**
 
-Review the 35/5 exact counts, selection/submission ID equality, distinct sealed roles, agreement outcome consistency, control-condition evidence rules, successful-run completeness, six-dimension scorecard, and failure-attribution prerequisites. Write the sanctioned review artifact, then commit:
+Review the 35/5 exact counts, selection/submission ID equality, agreement-to-submission actor/role/reference binding, distinct sealed roles, agreement outcome consistency, exact metric/hard-gate sets, the complete run-state machine, six-dimension scorecard/readiness consistency, and failure-attribution prerequisites. Write the sanctioned review artifact, then commit:
 
 ```bash
 git add src/c2/evaluation-contracts.ts src/c2/evaluation-contracts.test.ts src/c2/index.ts
@@ -733,6 +780,13 @@ it("requires exact entry, field, old value, new value, and pre-change hash", () 
   expect(C2RetagProposalSchema.safeParse({ ...proposal, preChangeEntrySha256: undefined }).success).toBe(false);
 });
 
+it("permits only label-failure proposals and rejects protected corpus fields", () => {
+  expect(C2RetagProposalSchema.safeParse({ ...proposal, failureClassification: "coverage" }).success).toBe(false);
+  for (const fieldPath of ["id", "source", "image", "addedAt", "capture.url"]) {
+    expect(C2RetagProposalSchema.safeParse({ ...proposal, fieldPath }).success).toBe(false);
+  }
+});
+
 it("allows promotion only after an approved human review", () => {
   expect(C2RetagReviewSchema.parse(review).decision).toBe("approved");
   expect(C2RetagReviewSchema.safeParse({ ...review, actorKind: "agent" }).success).toBe(false);
@@ -754,8 +808,9 @@ export const C2RetagProposalSchema = z.object({
   artifactId: StableId,
   proposalVersion: PositiveVersion,
   failureReport: ArtifactFileRefSchema,
+  failureClassification: z.literal("label"),
   entryId: StableId,
-  fieldPath: NonEmptyText,
+  fieldPath: z.string().trim().regex(/^(patternType|categories|components|domainTags|visualFields|groundedClaimIds|accessibilityEvidenceIds|critiqueQuality)(?:\.[a-zA-Z0-9_-]+)*$/),
   preChangeEntrySha256: Sha256,
   oldValueCanonicalSha256: Sha256,
   proposedValue: z.unknown(),
@@ -794,7 +849,9 @@ export const C2CanaryResultSchema = z.object({
 });
 ```
 
-Also reject `undefined`, functions, symbols, non-finite numbers, and cyclic values in `proposedValue` by calling `canonicalJsonStringify` in a `.superRefine()` and checking that its hash equals `proposedValueCanonicalSha256`.
+Also reject `undefined`, functions, symbols, non-finite numbers, and cyclic values in `proposedValue` by calling `canonicalJsonStringify` inside a `.superRefine()` and checking that `sha256Hex(canonicalJsonStringify(value.proposedValue)) === value.proposedValueCanonicalSha256`. Catch canonicalization errors and add a schema issue rather than throwing from parsing. The `fieldPath` allowlist is the enforcement boundary: identity, provenance, capture, image, publication, and source fields cannot be proposed for retagging.
+
+Export `assertProposalMatchesFailure(proposal, failure)` and require the referenced failure artifact ID to match, `failure.classification === "label"`, `failure.caseId` to appear in `proposal.affectedCaseIds`, `proposal.entryId` to appear in `failure.affectedEntryIds`, and `proposal.fieldPath` to appear in `failure.affectedFieldPaths`. The schema pins the classification; this cross-artifact assertion proves the proposal did not merely claim it.
 
 - [ ] **Step 3: Write failing governance-boundary tests**
 
@@ -862,7 +919,7 @@ Expected: PASS; `git diff -- src/readiness/checkpoint-policy.ts src/readiness/va
 
 - [ ] **Step 6: Review and commit Task 3**
 
-Review canonical-value hashing, exact-ID/pre-change binding, human-only review, rollback-before-expansion, provisional-only evidence state, and the non-activation boundary. Write the task-review artifact, then commit:
+Review canonical-value hashing without parser throws, the retaggable-field allowlist, label-failure cross-reference binding, exact-ID/pre-change binding, human-only review, rollback-before-expansion, provisional-only evidence state, and the non-activation boundary. Write the task-review artifact, then commit:
 
 ```bash
 git add src/c2/remediation-contracts.ts src/c2/remediation-contracts.test.ts src/c2/governance-contracts.ts src/c2/governance-contracts.test.ts src/c2/index.ts
@@ -1001,6 +1058,12 @@ it("fails when a brief and label disagree on caseVersion", async () => {
 it("check mode reports stale bytes without rewriting", async () => {
   await expect(checkPilotManifest(staleRoot)).rejects.toThrow(/pilot manifest is stale/);
 });
+
+it("rejects symlinks, orphan labels, orphan snapshots, and temporary-file residue", async () => {
+  await expect(buildPilotManifest(symlinkRoot)).rejects.toThrow(/symbolic link/);
+  await expect(buildPilotManifest(orphanLabelRoot)).rejects.toThrow(/orphan label/);
+  await expect(buildPilotManifest(orphanSnapshotRoot)).rejects.toThrow(/orphan snapshot/);
+});
 ```
 
 Include fixtures made in a temporary directory; never edit tracked pilot files in negative tests.
@@ -1016,6 +1079,8 @@ Expected: FAIL because the module does not exist.
 Implement `scripts/build-c2-pilot-manifest.mjs` using `readFile`, `readdir`, `writeFile`, `createHash`, and `pathToFileURL`. Requirements:
 
 - Read every `briefs/*.json` and matching `labels/<caseId>.json`.
+- Use `lstat` and reject symbolic links for the pilot root, artifact directories, manifest, and every input file; do not follow repository-external files.
+- Reject non-JSON entries, orphan labels, orphan snapshots, duplicate filenames after case normalization, and any extra case artifact not represented by the exact three briefs.
 - Require exactly three cases and exactly one `product`, `migration`, and `safety` family.
 - Require matching `caseId` and `caseVersion`.
 - Require migration to bind exactly one existing snapshot; forbid snapshots for other families.
@@ -1024,7 +1089,7 @@ Implement `scripts/build-c2-pilot-manifest.mjs` using `readFile`, `readdir`, `wr
 - Emit two-space-indented JSON plus one trailing newline.
 - Export `buildPilotManifest(root)` and `checkPilotManifest(root)`.
 - With `--check`, compare bytes and exit nonzero without writing.
-- Without `--check`, write `eval/c2/pilot/manifest.json` atomically through a sibling temporary file and rename.
+- Without `--check`, write `eval/c2/pilot/manifest.json` atomically through a uniquely named sibling temporary file, `fsync` the file, close it, rename it, and remove the temporary file on every failure path.
 
 Use this manifest envelope:
 
@@ -1074,7 +1139,7 @@ Expected: PASS; no public assets or v1 fixtures change.
 
 - [ ] **Step 6: Review and commit Task 5**
 
-Review exact-byte hashing, path normalization, atomic write, check-mode non-mutation, sorted output, and missing/extra file rejection. Write the task-review artifact, then commit:
+Review exact-byte hashing, path normalization, symlink refusal, orphan/extra-file rejection, crash-safe atomic write and cleanup, check-mode non-mutation, and sorted output. Write the task-review artifact, then commit:
 
 ```bash
 git add scripts/build-c2-pilot-manifest.mjs scripts/build-c2-pilot-manifest.test.mjs eval/c2/pilot/manifest.json package.json
@@ -1098,7 +1163,7 @@ git commit -m "build(c2): bind pilot packages in canonical manifest"
 Create `src/c2/pass1-boundary.test.ts` that asserts:
 
 ```ts
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CHECKPOINT_RECIPES, CHECKPOINT_POLICIES } from "../readiness/checkpoint-policy.js";
@@ -1112,8 +1177,13 @@ describe("C2 Pass 1 scope boundary", () => {
   });
 
   it("creates no C2 approval, registry, index, or ledger artifact", () => {
-    const tracked = readFileSync(resolve(root, "quality-contracts/agent-readiness/checkpoint-approvals-v2.json"), "utf8");
-    expect(tracked).not.toContain('"checkpoint": "C2"');
+    const governanceRoot = resolve(root, "quality-contracts/agent-readiness");
+    const files = readdirSync(governanceRoot, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"));
+    for (const entry of files) {
+      const tracked = readFileSync(resolve(entry.parentPath, entry.name), "utf8");
+      expect(tracked).not.toMatch(/"checkpoint"\s*:\s*"C2"|"artifactType"\s*:\s*"c2-/);
+    }
   });
 
   it("keeps pilot files outside browser-downloadable public assets", () => {
@@ -1181,10 +1251,15 @@ Review the complete diff from `git merge-base origin/main HEAD` and reproduce at
 4. Add a fourth case and confirm exact-family/count validation fails.
 5. Use 34/6 instead of 35/5 in a synthetic selection and confirm rejection.
 6. Classify a label failure without a corrected-label run and confirm rejection.
-7. Approve canary expansion with unverified rollback and confirm rejection.
-8. Add a private-corpus marker to a pilot artifact and confirm the fixture scan fails.
-9. Confirm default tests perform no network request and require no provider credential.
-10. Confirm no C2 policy, recipe, approval, registry, index, ledger, or corpus diff exists.
+7. Bind an agreement report to swapped-role or wrong-actor submissions and confirm cross-artifact validation rejects it.
+8. Construct contradictory `running`, `failed`, `succeeded`, and `cost-blocked` run states and confirm rejection.
+9. Mark a below-floor scorecard implementation-ready and confirm rejection.
+10. Propose a retag for a protected field or a non-label failure and confirm rejection.
+11. Approve canary expansion with unverified rollback and confirm rejection.
+12. Replace an input with a symlink or add an orphan label/snapshot and confirm manifest generation rejects it.
+13. Add a private-corpus marker to a pilot artifact and confirm the fixture scan fails.
+14. Confirm default tests perform no network request and require no provider credential.
+15. Confirm no C2 policy, recipe, approval, registry, index, ledger, or corpus diff exists.
 
 Record exact commands, observed failures, final SHAs, and any non-blocking follow-ups in the branch review artifact.
 
@@ -1218,3 +1293,55 @@ Pass 1 is complete only when:
 - Pass 4: evidence-backed failure adjudication and corrected-label shadows.
 - Pass 5: candidate generation, exact-ID canary promotion, acquisition for blocking coverage gaps, and rollback demonstration.
 - Pass 6: frozen rerun, C2 recipe/policy activation, v3 governance artifacts, Gold Label Owner approval, external QA approval, and checkpoint closure.
+
+## Reviewed Execution and Coverage Map
+
+```text
+AUTHORING / BUILD PATH                               FAILURE AND TEST PATHS
+
+pilot brief JSON                                    strict brief schema
+  -> reviewer-only label JSON                         -> unknown/reviewer fields rejected [UNIT]
+  -> optional immutable migration snapshot            -> missing/wrong snapshot rejected [UNIT]
+  -> manifest builder                                 -> symlink/orphan/extra file rejected [UNIT]
+       -> exact-byte SHA-256                           -> stale hash rejected in --check [INTEGRATION]
+       -> sorted canonical manifest                    -> two builds are byte-identical [INTEGRATION]
+
+35+5 frozen selection                               independent human submissions
+  -> exact entry-set assertion                        -> wrong count/set/role rejected [UNIT]
+  -> sealed Gold Label Owner submission               -> no cross-review before unseal [OPERATIONAL GATE]
+  -> sealed QA submission                             -> actor/role/hash mismatch rejected [UNIT]
+  -> agreement report                                 -> lowered floor/hard-gate failure cannot qualify [UNIT]
+
+case package + allowed evidence                     evaluation run state machine
+  -> brief-only/current/gold/shadow condition          -> forbidden/missing evidence rejected [UNIT]
+  -> running/succeeded/failed/cost-blocked             -> contradictory timestamps/hashes/cost rejected [UNIT]
+  -> blinded six-dimension scorecard                   -> score range/duplicates/readiness lie rejected [UNIT]
+  -> controlled failure report                         -> attribution prerequisites rejected [UNIT]
+
+confirmed label failure                            candidate-only remediation
+  -> exact entry + retaggable field allowlist          -> protected/non-label proposal rejected [UNIT]
+  -> canonical proposed-value hash                     -> invalid/cyclic/hash mismatch rejected [UNIT]
+  -> human review                                      -> agent/unbound review rejected [UNIT]
+  -> canary + rollback proof                           -> expansion without rollback rejected [UNIT]
+
+Pass 1 boundary                                    readiness/public boundaries
+  -> provisional evidence contract                    -> frozen/approval fields rejected [UNIT]
+  -> no C2 recipe, policy, or governance artifact      -> all governance JSON scanned [INTEGRATION]
+  -> eval/ only                                        -> public-site corpus boundary remains green [INTEGRATION]
+```
+
+Performance is deliberately bounded in Pass 1: three pilot packages, forty integrity records, and linear scans over small arrays and artifact directories. No provider, embedding, crawl, network, or corpus-index work executes. Manifest generation is `O(files + bytes)` and retains only parsed pilot artifacts in memory. Any later full-run concurrency, rate limiting, retries, provider cost, and large-corpus indexing belong to Pass 2 or later and must be measured there rather than guessed here.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | NOT RUN | Product scope was settled in the approved C2 design |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | NOT RUN | No external model review requested |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 6 issues found and folded; 0 critical gaps remain |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | NOT APPLICABLE | Pass 1 changes contracts and evaluation artifacts, not UI |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | NOT RUN | Generator CLI behavior is specified and tested in this plan |
+
+**VERDICT:** ENG CLEARED — ready to implement Pass 1 without activating or claiming C2 closure.
+
+NO UNRESOLVED DECISIONS

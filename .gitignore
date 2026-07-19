@@ -72,6 +72,10 @@ eval/c2/pilot/*
 !eval/c2/pilot/briefs/
 !eval/c2/pilot/labels/
 !eval/c2/pilot/source-snapshots/
+# C2 pilot manifest (Task 5): the canonical content-addressed binding of the
+# three pilot packages. Tracked because downstream gates validate against it
+# via `npm run validate:c2-pilot`.
+!eval/c2/pilot/manifest.json
 # Durability — rolling snapshots of entries.json, written on every UI save.
 # Gitignored because they're large, derivable, and purely a local safety net.
 corpus/.snapshots/

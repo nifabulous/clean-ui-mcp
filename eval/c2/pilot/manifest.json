@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-pilot-manifest",
+  "artifactId": "c2-pass1-pilot-v1",
+  "manifestVersion": 1,
+  "caseCount": 3,
+  "families": [
+    "migration",
+    "product",
+    "safety"
+  ],
+  "packages": [
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-named-inspiration-safety-v1",
+      "caseId": "named-inspiration-safety",
+      "caseVersion": 1,
+      "family": "safety",
+      "brief": {
+        "artifactId": "c2-brief-named-inspiration-safety-v1",
+        "path": "eval/c2/pilot/briefs/named-inspiration-safety.json",
+        "sha256": "82f6e3a0a28f588f5ee24deebdb0943986edb5dde43c8a54b100e314fa7dbae1"
+      },
+      "label": {
+        "artifactId": "c2-label-named-inspiration-safety-v1",
+        "path": "eval/c2/pilot/labels/named-inspiration-safety.json",
+        "sha256": "f280c076afafa3a11a9a96cb73df95b9aa79fdda38c9cb8c18c095df1f8b3f86"
+      },
+      "sourceSnapshot": null
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-public-marketing-migration-v1",
+      "caseId": "public-marketing-migration",
+      "caseVersion": 1,
+      "family": "migration",
+      "brief": {
+        "artifactId": "c2-brief-public-marketing-migration-v1",
+        "path": "eval/c2/pilot/briefs/public-marketing-migration.json",
+        "sha256": "3ab352300db782fab6955f2d79a57c602c303962598af2b42273f28fe5c11316"
+      },
+      "label": {
+        "artifactId": "c2-label-public-marketing-migration-v1",
+        "path": "eval/c2/pilot/labels/public-marketing-migration.json",
+        "sha256": "c230142a5aff4e5f7c652cc8929f3e6f6d423afc7e4fb069480df12df5d37ee7"
+      },
+      "sourceSnapshot": {
+        "artifactId": "design-source-snapshot-public-marketing-migration-v1",
+        "path": "eval/c2/pilot/source-snapshots/public-marketing-migration.json",
+        "sha256": "daebdeda0891825d42916492ac58bb29118d742fc7e817fbc61c350b995a7508",
+        "artifactType": "design-source-snapshot"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-stablecoin-home-v1",
+      "caseId": "stablecoin-home",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-stablecoin-home-v1",
+        "path": "eval/c2/pilot/briefs/stablecoin-home.json",
+        "sha256": "ee066c1a38fb864695d74be7ddc88d943926c75f4541029675176309430f94f9"
+      },
+      "label": {
+        "artifactId": "c2-label-stablecoin-home-v1",
+        "path": "eval/c2/pilot/labels/stablecoin-home.json",
+        "sha256": "6dc61b05704e60b69aa5b720924c25db660672508907eb95624bbc09ecbb7566"
+      },
+      "sourceSnapshot": null
+    }
+  ]
+}

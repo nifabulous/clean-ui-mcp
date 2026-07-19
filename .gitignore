@@ -59,6 +59,7 @@ eval/*
 !eval/design-handoff-fixtures/
 eval/design-handoff-fixtures/*
 !eval/design-handoff-fixtures/briefs.json
+!eval/design-handoff-fixtures.test.mjs
 # Durability — rolling snapshots of entries.json, written on every UI save.
 # Gitignored because they're large, derivable, and purely a local safety net.
 corpus/.snapshots/

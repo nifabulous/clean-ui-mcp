@@ -28,6 +28,47 @@
 const VALID_LANES = new Set(["retain", "adapt", "reject"]);
 
 /**
+ * Required top-level fields on a GoldLabel. A label missing ANY of these — or
+ * carrying a non-array where an array is required — is malformed and must NOT
+ * be scored. Without this guard, a `{}` or partial label defaults every
+ * requirement array to `[]`, each empty requirement set is awarded coverage 1,
+ * and `scoreDesignHandoff({}, {})` returns `complete: true` (review P1 #1):
+ * a damaged or missing gold label would silently certify an empty handoff.
+ */
+const REQUIRED_LABEL_ARRAY_FIELDS = [
+  "requiredSections",
+  "requiredDecisions",
+  "requiredAcceptanceCriteria",
+  "forbiddenClaims",
+  "privateMarkers",
+  "validEvidenceIds",
+];
+const REQUIRED_LABEL_SCALAR_FIELDS = ["id", "labelVersion", "sourceCoverageExpectation"];
+const VALID_COVERAGE_EXPECTATIONS = new Set(["low", "moderate", "well-supported"]);
+
+/**
+ * Strict label-shape validator. Returns `true` only when `label` has every
+ * required scalar field (non-empty) and every required array field (a real
+ * Array). Enums must be in their allowed set. Fail-closed: anything malformed
+ * → `false`, and the caller returns the zeroed ScoreResult rather than scoring.
+ */
+function isValidGoldLabel(label) {
+  if (!label || typeof label !== "object") return false;
+  for (const field of REQUIRED_LABEL_SCALAR_FIELDS) {
+    const value = label[field];
+    if (value === undefined || value === null || value === "") return false;
+  }
+  for (const field of REQUIRED_LABEL_ARRAY_FIELDS) {
+    if (!Array.isArray(label[field])) return false;
+  }
+  // Enum checks.
+  if (!VALID_COVERAGE_EXPECTATIONS.has(label.sourceCoverageExpectation)) return false;
+  if (typeof label.motionDomGrounded !== "boolean") return false;
+  if (typeof label.labelVersion !== "number" || !Number.isFinite(label.labelVersion)) return false;
+  return true;
+}
+
+/**
  * @typedef {Object} GoldLabel
  * @property {string} id
  * @property {number} labelVersion
@@ -76,7 +117,11 @@ export function scoreDesignHandoff(output, label) {
   };
 
   if (!output || typeof output !== "object") return result;
-  if (!label || typeof label !== "object") return result;
+  // Fail closed on a malformed gold label. A `{}` or partial label previously
+  // defaulted every requirement array to `[]`, each empty requirement set was
+  // awarded coverage 1, and the scorer returned `complete: true` for an empty
+  // handoff (review P1 #1). Strict validation refuses to score a damaged label.
+  if (!isValidGoldLabel(label)) return result;
 
   // ── Required-section coverage ───────────────────────────────────────────────
   // Each required section must be present AND structurally non-empty. Screen

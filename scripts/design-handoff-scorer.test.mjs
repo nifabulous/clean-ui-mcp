@@ -302,3 +302,47 @@ describe("scoreDesignHandoff", () => {
     expect(result.unresolvedEvidenceCount).toBe(0);
   });
 });
+
+// ─── P1 #1: malformed label must fail closed, not certify empty output ──────
+// A missing, `{}`, or partially-formed gold label previously defaulted every
+// requirement array to `[]`, each empty requirement set was awarded coverage
+// 1, and `scoreDesignHandoff({}, {})` returned `complete: true`. A damaged or
+// mis-loaded label would silently certify an empty handoff. The scorer must
+// validate the label shape strictly and return the zeroed result.
+describe("scoreDesignHandoff: malformed-label fail-closed (P1 #1)", () => {
+  it("rejects an empty-object label without certifying the output", () => {
+    const result = scoreDesignHandoff({}, {});
+    expect(result.complete).toBe(false);
+    expect(result.requiredSectionCoverage).toBe(0);
+    expect(result.requiredDecisionCoverage).toBe(0);
+    expect(result.acceptanceCriterionCoverage).toBe(0);
+  });
+
+  it("rejects a null/undefined label", () => {
+    expect(scoreDesignHandoff({}, null).complete).toBe(false);
+    expect(scoreDesignHandoff({}, undefined).complete).toBe(false);
+  });
+
+  it("rejects a label missing required array fields (forbiddenClaims absent)", () => {
+    const partial = { ...GOLD_LABEL };
+    delete partial.forbiddenClaims;
+    const result = scoreDesignHandoff(makeOutput(), partial);
+    expect(result.complete).toBe(false);
+    expect(result.requiredSectionCoverage).toBe(0);
+  });
+
+  it("rejects a label whose required array field is a non-array (string)", () => {
+    const malformed = { ...GOLD_LABEL, requiredSections: "globalDirection" };
+    expect(scoreDesignHandoff(makeOutput(), malformed).complete).toBe(false);
+  });
+
+  it("rejects a label with an out-of-enum sourceCoverageExpectation", () => {
+    const malformed = { ...GOLD_LABEL, sourceCoverageExpectation: "bogus" };
+    expect(scoreDesignHandoff(makeOutput(), malformed).complete).toBe(false);
+  });
+
+  it("rejects a label with a non-boolean motionDomGrounded", () => {
+    const malformed = { ...GOLD_LABEL, motionDomGrounded: "yes" };
+    expect(scoreDesignHandoff(makeOutput(), malformed).complete).toBe(false);
+  });
+});

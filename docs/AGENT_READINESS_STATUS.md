@@ -91,17 +91,19 @@ work is `docs/superpowers/specs/2026-07-18-grounded-design-workspace-design.md`.
 
 | # | Commit | Description |
 |---|---|---|
-| Task 2 | `93654f9` (+ fix `703f0b5`) | `DesignSourceSnapshotSchema` and the deterministic `SOURCE-DESIGN.md` renderer; hardened cell escaping and determinism. |
-| Task 3 | `caaa1b6` (+ fix `6cf01f8`) | `planRepresentativeCrawl` and `assertSafeHostedCaptureTarget` hosted SSRF guard; percent-encoded destructive-path and NaN-budget hardening. |
-| Task 4 | `a65b8c0` | Ephemeral session policy: `decideCookie` + `chooseConsentAction`. |
-| Task 5 | `e183297` (+ fix `162a875`) | Deterministic grounded design-handoff gold gate scorer with 12 briefs and 12 labels; required declared blueprints and null-entry guards. |
+| Task 1 (boundary only) | `36baa83` | Allowlist-based public-asset boundary checker (`check-public-site-boundary.mjs`) wired into `npm run build`. The corpus removal + public-site sanctioned assets land with the public-site reconstruction PR (see note below). |
+| Task 2 | `651dfae` (+ fix `bde63c9`) | `DesignSourceSnapshotSchema` and the deterministic `SOURCE-DESIGN.md` renderer; hardened cell escaping and determinism; recomputed same-origin and rejected duplicate evidence IDs. |
+| Task 3 | `fcad588` (+ fixes `2dcb0ab`, `55ba144`) | `planRepresentativeCrawl` and `assertSafeHostedCaptureTarget` hosted SSRF guard; percent-encoded destructive-path, NaN-budget, fractional-budget, and start-URL safety hardening. |
+| Task 4 | `b2b8248` | Ephemeral session policy: `decideCookie` + `chooseConsentAction`. |
+| Task 5 | `0118452` (+ fix `925096e`) | Deterministic grounded design-handoff gold gate scorer with 12 briefs and 12 labels; required declared blueprints, null-entry guards, and strict malformed-label fail-closed. |
 
-Note: Task 1 (public-site static-asset boundary: removing the uncleared
-`site/public/entries/` corpus bundle and wiring `checkPublicSiteBoundary` into
-the build) is **not** in this branch — it depends on the public-site
-reconstruction that is not yet on `main` and will land in a separate PR. The
-boundary checker module itself ships here so the allowlist enforcement is in
-place; the corpus removal + build wiring follow with the public-site PR.
+Note: Task 1 split across two PRs. The **boundary checker module and its
+`npm run build` wiring ship here** (`36baa83`) with a narrow allowlist (just the
+corpus-free `snapshot.json`). The **corpus removal** (deleting the 787 uncleared
+`site/public/entries/` images), the synthetic snapshot installation, and the
+**allowlist extension** to cover the real public-site sanctioned assets
+(`robots.txt`, `sitemap.xml`, the generated bundle) land with the public-site
+reconstruction PR, because those assets are not on `main` yet.
 
 ### Explicitly future plans (NOT completed work)
 

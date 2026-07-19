@@ -33,9 +33,49 @@ export const DesignSourceSnapshotSchema = z.object({
   evidence: z.array(EvidenceRef),
   limitations: z.array(z.string().min(1)),
 }).strict().superRefine((snapshot, ctx) => {
-  const ids = new Set(snapshot.evidence.map((item) => item.id));
+  // Reject duplicate evidence IDs BEFORE building the resolution set. Two
+  // evidence records sharing an ID collapse into a single Set entry, so a
+  // finding's evidenceIds reference would point ambiguously at two records
+  // and provenance becomes unreadable (review P1 #3).
+  const seenEvidenceIds = new Set<string>();
+  for (const item of snapshot.evidence) {
+    if (seenEvidenceIds.has(item.id)) {
+      ctx.addIssue({ code: "custom", message: `duplicate evidence ID: ${item.id}` });
+    } else {
+      seenEvidenceIds.add(item.id);
+    }
+  }
+
+  // Recompute same-origin from the declared source origin rather than trusting
+  // `crawl.sameOrigin: true`. Without this, a snapshot can claim same-origin
+  // while carrying starting/coverage/evidence URLs from unrelated origins
+  // (review P1 #3). WHATWG URL.origin is the canonical scheme+host+port tuple.
+  let originTuple: string;
+  try {
+    originTuple = new URL(snapshot.source.origin).origin;
+  } catch {
+    // origin already passed the Url schema, so this should not occur; if it
+    // somehow does, flag it explicitly rather than silently passing.
+    ctx.addIssue({ code: "custom", path: ["source", "origin"], message: "source.origin is not a parseable URL" });
+    return;
+  }
+  const offOrigin: Array<[string, string, string]> = [];
+  for (const [index, url] of snapshot.source.startingUrls.entries()) {
+    try { if (new URL(url).origin !== originTuple) offOrigin.push([`source.startingUrls.${index}`, url, originTuple]); } catch { /* Url schema already caught it */ }
+  }
+  for (const [index, entry] of snapshot.coverage.entries()) {
+    try { if (new URL(entry.url).origin !== originTuple) offOrigin.push([`coverage.${index}.url`, entry.url, originTuple]); } catch { /* caught upstream */ }
+  }
+  for (const [index, item] of snapshot.evidence.entries()) {
+    try { if (new URL(item.route).origin !== originTuple) offOrigin.push([`evidence.${index}.route`, item.route, originTuple]); } catch { /* caught upstream */ }
+  }
+  for (const [path, url, expected] of offOrigin) {
+    ctx.addIssue({ code: "custom", path: path.split("."), message: `URL ${url} is not same-origin with source.origin (expected ${expected})` });
+  }
+
+  // Resolve every finding's evidenceIds against the now-unique evidence set.
   const groups = [...Object.values(snapshot.foundations), snapshot.components, snapshot.responsiveFindings, snapshot.accessibility, snapshot.motion, snapshot.voice];
-  for (const finding of groups.flat()) for (const id of finding.evidenceIds) if (!ids.has(id)) ctx.addIssue({ code: "custom", message: `unresolved evidence ID: ${id}` });
+  for (const finding of groups.flat()) for (const id of finding.evidenceIds) if (!seenEvidenceIds.has(id)) ctx.addIssue({ code: "custom", message: `unresolved evidence ID: ${id}` });
 });
 
 export type DesignSourceSnapshot = z.infer<typeof DesignSourceSnapshotSchema>;

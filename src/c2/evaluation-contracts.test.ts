@@ -381,6 +381,23 @@ describe("C2 evaluation and attribution contracts", () => {
 
     const costBlockedWithTokens = { ...costBlocked, promptTokens: 1 };
     expect(C2EvaluationRunManifestSchema.safeParse(costBlockedWithTokens).success).toBe(false);
+
+    // failed state: requires finishedAt, forbids parsedOutputSha256, permits rawOutputSha256.
+    const failed = makeRunManifest({
+      artifactId: "c2-run-failed-v1",
+      runId: "run-failed",
+      status: "failed",
+      finishedAt: "2026-07-18T10:05:00.000Z",
+      rawOutputSha256: "a".repeat(64),
+      parsedOutputSha256: null,
+    });
+    expect(C2EvaluationRunManifestSchema.safeParse(failed).success).toBe(true);
+
+    const failedWithParsed = { ...failed, parsedOutputSha256: "b".repeat(64) };
+    expect(C2EvaluationRunManifestSchema.safeParse(failedWithParsed).success).toBe(false);
+
+    const failedNoFinish = { ...failed, finishedAt: null };
+    expect(C2EvaluationRunManifestSchema.safeParse(failedNoFinish).success).toBe(false);
   });
 
   it("requires six unique human-score dimensions with integer scores 1 through 5", () => {

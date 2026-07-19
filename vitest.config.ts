@@ -26,14 +26,20 @@ export default defineConfig({
     // site/vite.config.ts (jsdom + site-specific setup), run via `npm run
     // site:test`. The root config uses the node environment, so picking up
     // site/src/**/*.test.ts(x) here fails with "document is not defined".
-    // NOTE: site/tests/site-browser.test.ts is intentionally NOT excluded —
-    // it carries its own `// @vitest-environment node` override and runs under
-    // this root config via `npm run site:test:browser`.
+    //
+    // Exclude site/tests/ — the built-site browser suite
+    // (site/tests/site-browser.test.ts) reads site/dist/index.html in its
+    // beforeAll. The root `npm test` (`vitest run`) runs BEFORE `site:build`,
+    // so discovering it there fails with ENOENT in CI and skips the rest of
+    // the gates. The browser suite runs via the dedicated
+    // `npm run site:test:browser` script, which passes the file as an explicit
+    // include path and runs AFTER `site:build` in the gate sequence.
     exclude: [
       "**/node_modules/**",
       "**/dist/**",
       "**/.worktrees/**",
       "site/src/**",
+      "site/tests/**",
     ],
   },
 });

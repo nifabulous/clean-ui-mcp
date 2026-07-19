@@ -25,7 +25,7 @@
     "site:build": "vite build --config site/vite.config.ts",
     "site:preview": "vite preview --config site/vite.config.ts",
     "site:test": "vitest run --config site/vite.config.ts",
-    "site:test:browser": "vitest run site/tests/site-browser.test.ts",
+    "site:test:browser": "vitest run --config site/tests/vitest.browser.config.ts",
     "build-index": "tsc && node dist/scripts/build-index.js",
     "bulk-import": "tsc && node dist/scripts/bulk-import.js",
     "review-draft": "tsc && node dist/scripts/review-draft.js",

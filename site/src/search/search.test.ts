@@ -109,6 +109,23 @@ describe("createSearch — filters", () => {
     expect(results.map((r) => r.id)).toEqual(["pricing-mobile"]);
   });
 
+  it("does NOT match unrelated suffix domains (notacme.com is not acme.com)", () => {
+    // A bare endsWith check treats `notacme.com` as a match for `acme.com`.
+    // Enforce hostname label boundaries: exact match or a dot-delimited
+    // subdomain suffix only. Add a deceptive-suffix entry and confirm it is
+    // excluded when filtering for the real domain.
+    const withDeceptive = entries.concat([
+      entry({ id: "suffix-trap", source: { productName: "NotAcme", url: "https://notacme.com/dashboard" } }),
+      entry({ id: "real-subdomain", source: { productName: "AcmeSub", url: "https://shop.acme.com/dashboard" } }),
+    ]);
+    const search = createSearch(withDeceptive);
+    const results = search.search("", { ...noFilters, domains: ["acme.com"] });
+    const ids = results.map((r) => r.id);
+    expect(ids).toContain("pricing-web"); // the real https://acme.com/pricing entry
+    expect(ids).toContain("real-subdomain"); // shop.acme.com is a dot-delimited subdomain
+    expect(ids).not.toContain("suffix-trap"); // notacme.com must NOT match
+  });
+
   it("narrows by platform when the entry exposes one", () => {
     const withPlatform = entries.map((e) => ({
       ...e,

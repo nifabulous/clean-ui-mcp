@@ -106,10 +106,16 @@ function matchesFilters(entry: PublicEntry, filters: SearchFilters): boolean {
     if (!styles.has(wanted.toLowerCase())) return false;
   }
   if (filters.domains.length > 0) {
-    const host = hostnameOf(entry.source.url).toLowerCase();
+    const host = hostnameOf(entry.source.url).toLowerCase().replace(/\.+$/, "");
     if (!host) return false;
-    for (const wanted of filters.domains) {
-      if (!host.endsWith(wanted.toLowerCase())) return false;
+    for (const wantedRaw of filters.domains) {
+      // Enforce hostname label boundaries: a bare endsWith check treats
+      // unrelated hosts like `notacme.com` as a match for `acme.com`. Require
+      // either exact equality or a dot-delimited subdomain suffix. Normalize
+      // trailing dots on both sides (a fully-qualified `acme.com.` is the same
+      // host as `acme.com`).
+      const wanted = wantedRaw.toLowerCase().replace(/\.+$/, "");
+      if (host !== wanted && !host.endsWith(`.${wanted}`)) return false;
     }
   }
   if (filters.platform !== null) {

@@ -60,6 +60,18 @@ eval/*
 eval/design-handoff-fixtures/*
 !eval/design-handoff-fixtures/briefs.json
 !eval/design-handoff-fixtures.test.mjs
+# C2 separated pilot packages (Task 4): synthetic, portable gold contracts for
+# the product/migration/safety pilot cases. Same rationale as the design-handoff
+# carve-out above — required deliverables, no provider data, no private corpus.
+# Un-ignore each directory level so git descends into them, then carve the
+# tracked JSON back out at the leaves.
+!eval/c2/
+eval/c2/*
+!eval/c2/pilot/
+eval/c2/pilot/*
+!eval/c2/pilot/briefs/
+!eval/c2/pilot/labels/
+!eval/c2/pilot/source-snapshots/
 # Durability — rolling snapshots of entries.json, written on every UI save.
 # Gitignored because they're large, derivable, and purely a local safety net.
 corpus/.snapshots/

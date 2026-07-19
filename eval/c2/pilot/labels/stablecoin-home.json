@@ -1,0 +1,101 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-stablecoin-home-v1",
+  "caseId": "stablecoin-home",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:audience-hierarchy",
+    "decision:integrator-path",
+    "decision:primary-cta",
+    "decision:trust-without-unsupported-claims"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:business-is-primary-audience",
+    "ac:integrator-path-reachable-from-home",
+    "ac:exactly-one-primary-cta-above-the-fold",
+    "ac:no-licence-rate-corridor-settlement-claims"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:audience-hierarchy",
+    "evidence:brief:integrator-path",
+    "evidence:brief:primary-cta",
+    "evidence:brief:trust-without-unsupported-claims",
+    "evidence:brief:request-access-success-state",
+    "evidence:brief:developer-overview-screen"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:audience-hierarchy",
+    "evidence:brief:integrator-path",
+    "evidence:brief:primary-cta",
+    "evidence:brief:trust-without-unsupported-claims"
+  ],
+  "forbiddenClaims": [
+    "licensed in every market",
+    "published exchange rates",
+    "guaranteed settlement time",
+    "insured custody",
+    "specific supported corridors",
+    "partner or customer count not stated in the brief"
+  ],
+  "privateMarkers": [
+    "/corpus/private/stablecoin-home/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "Audience hierarchy is absent; business and integrator paths compete equally with no primary.",
+      "score3": "Both audiences are present but the primary call to action is visually ambiguous.",
+      "score5": "Business conversion leads above the fold and the integrator path remains clearly reachable as a secondary action."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "Home, developer-overview, and request-access share no common direction system.",
+      "score3": "Some shared tokens across the three screens but inconsistent application of layout or motion.",
+      "score5": "A single direction system unifies home, developer-overview, and request-access, including shared success and error states."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer structure, states, or responsive rules.",
+      "score3": "Partial blueprints with unresolved ambiguity about states or mobile rules.",
+      "score5": "Engineers can build the three screens directly from the blueprint, including all declared states and mobile rules."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of an existing stablecoin or fintech marketing site.",
+      "score3": "Derivative of common fintech patterns but visually distinguishable.",
+      "score5": "A distinct, defensible visual system appropriate to a pre-launch B2B infrastructure brand."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no error or success states for request-access.",
+      "score3": "Baseline contrast and focus handling with partial error states.",
+      "score5": "WCAG-aligned contrast and focus, with robust request-access-success and request-access-error states across all breakpoints."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "Claims about licences, rates, corridors, or settlement times appear unsupported.",
+      "score3": "Most claims trace to the brief but a few unsupported marketing claims slip in.",
+      "score5": "Every claim traces to the brief and no unsupported regulatory or commercial claim appears anywhere."
+    }
+  ],
+  "adjudicationNotes": [
+    "The primary conversion is request-access; do not prescribe a brand identity, exact copy, or pixel-level layout.",
+    "Integrator path must remain secondary; an output that promotes the integrator path above the business CTA fails the audience-hierarchy decision.",
+    "Trust must be earned through evidence discipline, not through unsupported regulatory or commercial claims; any forbidden claim is an automatic fail on evidence-discipline.",
+    "The product is pre-launch; treat the absence of rate/corridor/licence information as a constraint, not a gap to fill with speculation."
+  ]
+}

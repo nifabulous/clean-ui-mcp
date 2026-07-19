@@ -1,0 +1,71 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-stablecoin-home-v1",
+  "caseId": "stablecoin-home",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "stablecoin-marketing",
+  "title": "B2B stablecoin on/off-ramp homepage",
+  "productContext": "Fictional early-stage infrastructure provider (product name 'Stablebridge') that lets businesses move between fiat and stablecoins. The product is pre-launch: no public rate card, no published corridor list, no regulatory licences to advertise. Businesses are the primary audience; fintech integrators are the secondary audience. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "cross-border payments lead at a business",
+    "treasury operations lead at a business",
+    "fintech integration engineer"
+  ],
+  "jobs": [
+    "understand what the service does for businesses",
+    "request access for a business team",
+    "evaluate whether an integration is feasible",
+    "find developer-facing integration information"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "business visitor lands on home and reaches the request-access form",
+    "business visitor understands the value proposition above the fold",
+    "integrator follows a path from home to the developer overview"
+  ],
+  "constraints": [
+    "Do not claim regulatory licences, supported corridors, exchange rates, settlement times, or insurance coverage — none are supplied in this brief.",
+    "Businesses are the primary audience; the integrator path must remain available without competing with the primary call to action.",
+    "Exactly one primary call to action (request access) may appear above the fold; secondary actions must be visually subordinate.",
+    "All claims must be supportable from this brief; speculative market sizing, partner counts, or volume figures are forbidden.",
+    "The product name Stablebridge is fictional; do not imply affiliation with any real stablecoin issuer, exchange, or regulator."
+  ],
+  "requiredScreens": [
+    {
+      "id": "home",
+      "states": [
+        "default",
+        "request-access-success",
+        "request-access-error"
+      ],
+      "mobileRules": [
+        "single primary action above the fold",
+        "integrator link collapses into a secondary menu on narrow viewports"
+      ]
+    },
+    {
+      "id": "developer-overview",
+      "states": [
+        "default"
+      ],
+      "mobileRules": [
+        "code samples stack vertically and remain horizontally scrollable only within their container"
+      ]
+    },
+    {
+      "id": "request-access",
+      "states": [
+        "empty",
+        "validation-error",
+        "submitted"
+      ],
+      "mobileRules": [
+        "primary submit action sits in the bottom thumb zone",
+        "required fields remain usable in a single-handed portrait grip"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

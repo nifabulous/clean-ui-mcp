@@ -22,7 +22,12 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { chromium, type Browser, type Page } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type Page,
+} from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const SITE_ROOT = resolve(__dirname, "..");

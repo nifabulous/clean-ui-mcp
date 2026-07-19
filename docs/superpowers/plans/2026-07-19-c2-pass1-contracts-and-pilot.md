@@ -24,6 +24,23 @@
 - Use `.trim().min(1)` for non-empty strings; never use `.min(1).trim()`.
 - Every task ends with focused tests, a task-level review artifact, and a commit.
 
+## What already exists
+
+Reused, not rebuilt. Pass 1 layers the new `src/c2/` contract boundary **on top of** these existing systems rather than duplicating them.
+
+| Existing artifact | Reuse in Pass 1 | Not rebuilt |
+|---|---|---|
+| `src/readiness/checkpoint-policy.ts`, `src/readiness/validator.ts` | Read-only constraint — Pass 1 must not touch them (Global Constraints line 14) | C2 is intentionally *not* added to `CheckpointId`; readiness validator stays unchanged |
+| `quality-contracts/agent-readiness/` | Read-only — Pass 1 must not touch governance JSON | v3 governance artifacts are Pass 6, not Pass 1 |
+| `eval/design-handoff-fixtures/briefs.json`, `eval/design-handoff-labels.json` (12 `labelVersion: 1` fixtures) | Preserved byte-for-byte — the new C2 contracts live alongside, not on top | No migration of v1 fixtures into C2 schemas |
+| `scripts/design-handoff-scorer.test.mjs` + scorer | The scorer remains the structural/safety authority per C2 spec §8 | C2 does not define a competing scorer |
+| Canonical SHA-256 helpers (`canonicalJsonStringify`, `sha256Hex`) | Consumed by the manifest builder (`scripts/build-c2-pilot-manifest.mjs`) for deterministic hashing | No new hashing utility |
+| `npm run check-public-site-boundary` | Must stay green — pilot files must stay out of browser-downloadable assets | No new boundary check; Pass 1 piggybacks on the existing one |
+| 12-tool catalog descriptor table (`src/tool-catalog.ts`) | Untouched — C2 is an evaluation concern, not a tool-surface change | No catalog edits |
+| Public/private corpus readers | Untouched — Pass 1 uses synthetic evidence IDs only (e.g. `evidence:brief:audience-hierarchy`), never real corpus entries | No corpus reads in Pass 1 |
+
+**Reuse discipline:** the C2 contract layer is *purely additive* — new files under `src/c2/`, `eval/c2/pilot/`, and one manifest builder script. Every existing system the plan depends on is treated as a frozen input. The `git diff --exit-code origin/main -- ...protected files...` command in the verification matrix (Step 4) enforces this at gate time.
+
 ## File Structure
 
 | File | Responsibility |
@@ -1286,6 +1303,45 @@ Pass 1 is complete only when:
 - Focused, full, boundary, and adversarial gates pass.
 - A holistic review approves the complete branch diff.
 
+## Implementation Tasks
+
+Synthesized from the architecture, test, and scope findings above. Each task maps to a Task in this plan. Run with Claude Code or Codex; checkbox as you ship. (Backfilled 2026-07-19 to satisfy `/plan-eng-review`'s required outputs — the work itself shipped in PR #38.)
+
+- [x] **T1 (P1, human: ~6h / CC: ~30min)** — `src/c2/` — Add C2 primitives and separated case-package contracts (model-visible brief, reviewer-only label, source-snapshot, bound case package)
+  - Surfaced by: Architecture review — model/reviewer separation is the central design principle and must be enforced at schema level
+  - Files: `src/c2/primitives.ts`, `src/c2/case-contracts.ts`, `src/c2/case-contracts.test.ts`, `src/c2/index.ts`
+  - Verify: `npx vitest run src/c2/case-contracts.test.ts` — strict parsing rejects reviewer-only fields in briefs
+
+- [x] **T2 (P1, human: ~8h / CC: ~45min)** — `src/c2/` — Add label-integrity (35+5), run, scorecard, and failure contracts with agreement binding
+  - Surfaced by: Architecture review — independent sealed submissions + agreement report with frozen metric floors are the integrity backbone
+  - Files: `src/c2/evaluation-contracts.ts`, `src/c2/evaluation-contracts.test.ts`, `src/c2/index.ts`
+  - Verify: `npx vitest run src/c2/evaluation-contracts.test.ts` — wrong cohort counts, swapped roles, and contradictory run states all rejected
+
+- [x] **T3 (P1, human: ~5h / CC: ~25min)** — `src/c2/` — Add shadow-remediation + provisional-governance contracts (retag allowlist, canary rollback, provisional evidence manifest pinned to `state: "provisional"`)
+  - Surfaced by: Architecture review — remediation must be candidate-only with rollback-before-expansion; governance must be *provisional* with no closure schema
+  - Files: `src/c2/remediation-contracts.ts`, `src/c2/governance-contracts.ts`, `*.test.ts`, `src/c2/index.ts`
+  - Verify: `npx vitest run src/c2/remediation-contracts.test.ts src/c2/governance-contracts.test.ts` — protected-field retags, unverified rollback, frozen/approval fields all rejected
+
+- [x] **T4 (P1, human: ~3h / CC: ~15min)** — `eval/c2/pilot/` — Author three separated pilot packages (product `stablecoin-home`, migration `public-marketing-migration`, safety `named-inspiration-safety`)
+  - Surfaced by: Test review — Pass 1 needs at least one case per family to exercise the contracts; the spec mandates product/migration/safety coverage
+  - Files: `eval/c2/pilot/briefs/*.json`, `eval/c2/pilot/labels/*.json`, `eval/c2/pilot/source-snapshots/*.json`
+  - Verify: packages parse through `C2CaseBriefSchema` + `C2DecisionLabelSchema`; safety brief rejects proprietary references
+
+- [x] **T5 (P1, human: ~3h / CC: ~20min)** — `scripts/` — Deterministic pilot manifest generator with SHA-256 binding, symlink rejection, orphan detection, atomic write, stale-check mode
+  - Surfaced by: Architecture review — content-addressing the pilot prevents silent drift; symlink/orphan defense prevents path-traversal and dangling references
+  - Files: `scripts/build-c2-pilot-manifest.mjs`, `scripts/build-c2-pilot-manifest.test.mjs`, `package.json` (`generate:c2-pilot`, `validate:c2-pilot`)
+  - Verify: `npm run validate:c2-pilot` — 3 packages, up to date; `--check` mode rejects stale hashes; two builds byte-identical
+  - Determinism caveat: byte-identical builds hold because `canonicalJsonStringify` sorts keys. This is a present-tense property pinned to the current helper version, not a permanent guarantee — if the canonical-JSON helper or Node's serialization changes key ordering in a future pass, the manifest hash flips and `validate:c2-pilot` fails for everyone simultaneously with no code change. Worth a regression test that pins the canonical ordering if this ever becomes load-bearing across passes.
+
+- [x] **T6 (P1, human: ~2h / CC: ~15min)** — `src/c2/pass1-boundary.test.ts`, `docs/AGENT_READINESS_STATUS.md` — Lock Pass 1 scope boundary + record provisional readiness status
+  - Surfaced by: Scope review — Pass 1 must *provably* not close C2; the inverse gate asserts absence of checkpoint recipe/policy/registry/validator
+  - Files: `src/c2/pass1-boundary.test.ts`, `docs/AGENT_READINESS_STATUS.md`
+  - Verify: `npx vitest run src/c2/pass1-boundary.test.ts` — inverse gate passes; `npm run validate-readiness-artifacts -- --mode public` reports C0/C1 closed, C2 open (the `-- --mode public` is required — bare invocation exits 0 while printing only usage and validates nothing)
+
+**Severity rationale:** all six tasks are P1 because each blocks the Pass 1 completion gate. None is P2 (same-branch nice-to-have) or P3 (follow-up) — Pass 1 is intentionally minimal and every task is load-bearing for the boundary claim.
+
+**Effort labels:** human estimates assume a TypeScript engineer familiar with Zod; CC estimates assume Claude Code or Codex with the plan in hand. **These are retroactive approximations derived from reading the plan, not measurements from PR #38 commit timestamps or telemetry.** Treat as order-of-magnitude guidance for Pass 2–6 scoping, not as a calibrated baseline. If Pass 2 needs real numbers, instrument the next agentive run.
+
 ## Deferred to Later Passes
 
 - Pass 2: evaluation-only provider harness, cost approval, three-case controlled execution, material-benefit calibration, compatibility checklist, and rubric/budget freeze.
@@ -1345,3 +1401,62 @@ Performance is deliberately bounded in Pass 1: three pilot packages, forty integ
 **VERDICT:** ENG CLEARED — ready to implement Pass 1 without activating or claiming C2 closure.
 
 NO UNRESOLVED DECISIONS
+
+### Backfill note (2026-07-19, post-merge audit)
+
+A post-merge audit against `/plan-eng-review`'s required outputs found four gaps in the original plan bookkeeping. None reflects missing work — the code shipped in PR #38 with the full test suite green (the exact count drifts as tests land across passes; see commit `5dd1124` for the merge-time evidence rather than trusting any integer in a retrospective doc) — but they are documentation-debt the skill mandates:
+
+1. **"What already exists" section** — backfilled above (after Global Constraints). The reuse discipline was implicit in the Global Constraints; now explicit per the skill's required outputs.
+2. **`## Implementation Tasks` (T1..Tn with effort labels + source findings)** — backfilled above (before "Deferred to Later Passes"). The plan structured work as Task 1–6; this re-states it in the skill's `T1 (P1, human: ~X / CC: ~Y)` format with per-task source findings and verify commands.
+3. **`*-eng-review-test-plan-*.md` artifact** — was not written to `~/.gstack/projects/clean-ui-mcp/` for the C2 Pass 1 branch (only the Jul 14 agent-readiness artifacts exist). Written retroactively as `olaniyi.oladokun-codex-c2-gold-readiness-design-eng-review-test-plan-20260719-<ts>.md`.
+4. **`tasks-eng-review-*.jsonl`** — same: not written for the C2 branch. Written retroactively so `/autoplan` can aggregate it.
+
+**AskUserQuestion decision trail.** The "6 issues found and folded" claim in the Eng Review row is recorded as a count-level artifact at `.zcode/reviews/tasks/63464ae45dfb1ca09a65769bef1f7bd54e33abbe.json` (`{critical: 0, important: 6, minor: 0, resolvedInReviewedAmendment: 6}`), so the count itself has provenance. **What's missing is the detail**: the 6 issues are not surfaced as named findings with options + rationale — only their count and resolution status are recorded. The issues were absorbed directly into plan revisions during the interactive review rather than captured as decision briefs. **Forward commitment for Pass 2:** enrich the existing task-review artifact format so each finding carries issue text, options considered, the chosen option, and rationale — so the "N issues folded" claim is auditable from the artifact alone, not just re-countable.
+
+**Outside voice (Codex) skip.** The "Codex Review | NOT RUN" row predates `/plan-eng-review`'s default-on outside-voice behavior. The skip was treated as defensible because the C2 design spec was already approved, but the skill's current default is to run an independent challenge unless `gstack-config set codex_reviews disabled` is set explicitly. **Forward commitment for Pass 2:** run the outside voice (Codex if available, Claude subagent otherwise) and record any cross-model tension in the plan.
+
+## Worktree parallelization strategy
+
+Sequential implementation — no parallelization opportunity. Tasks 1–3 (primitives → evaluation → remediation contracts) form a strict dependency chain: each consumes schemas defined in the prior task. Tasks 4–5 (pilot packages → manifest) depend on the contracts being in place. Task 6 (boundary test + readiness status) depends on everything being committed. No two tasks touch disjoint module sets in a way that would benefit from worktree parallelism.
+
+## Failure modes
+
+For each new codepath in the test diagram above, one realistic production failure and its coverage:
+
+| Codepath | Failure mode | Test? | Error handling? | User-visible? |
+|---|---|---|---|---|
+| Brief parsing | Reviewer-only field leaks into brief | ✓ strict `.strict()` + cross-field `superRefine` | ✓ throws ZodError | Clear — build fails |
+| Manifest generation | Symlink substitution | ✓ `scripts/build-c2-pilot-manifest.test.mjs` | ✓ throws with path | Clear — generation aborts |
+| Manifest freshness | Stale hash after label edit | ✓ `--check` mode test | ✓ exit non-zero | Clear — `validate:c2-pilot` fails |
+| Migration snapshot | Missing or mismatched snapshot | ✓ orphan-label test | ✓ throws | Clear — fixture parse fails |
+| Label agreement | Swapped Gold/QA roles | ✓ `assertAgreementMatchesSubmissions` | ✓ throws | Clear — parse fails |
+| Run state machine | `status: "running"` with `finishedAt` set | ✓ `src/c2/evaluation-contracts.test.ts:364` | ✓ throws ZodError | Clear — parse fails |
+| Retag proposal | Protected field retag | ✓ remediation-contracts test | ✓ throws | Clear — parse fails |
+| Canary expansion | Unverified rollback | ✓ remediation-contracts test | ✓ throws | Clear — parse fails |
+| Scope boundary | C2 policy/recipe slips in | ✓ `pass1-boundary.test.ts` inverse gate | ✓ test fails | Clear — gate fails |
+
+**No critical gaps.** Every failure mode has both a test AND error handling AND would surface as a clear parse/gate failure rather than a silent corruption. No silent-failure path exists in the Pass 1 boundary.
+
+## NOT in scope
+
+- **40-entry gold selection, independent external labeling** — Pass 3. Pass 1's three packages are synthetic and internal.
+- **Provider/model run, paid execution, cost ceilings** — Pass 2. Pass 1 makes zero paid calls.
+- **Retag generation, corpus mutation, canary promotion** — Pass 5. Pass 1 defines the *contracts* for these but executes none.
+- **Failure adjudication, corrected-label shadows** — Pass 4. Pass 1 defines the failure-report schema but runs no shadows.
+- **C2 checkpoint recipe/policy/registry/index/ledger/approvals, validator activation** — Pass 6. Pass 1's governance contract is pinned to `state: "provisional"` and has no approvals field.
+- **Cross-artifact runtime validators** (submission↔selection binding enforcement, metric derivation, scorecard↔run resolution, retag hash verification) — Pass 2 activates the ones the harness exercises; Pass 1 only defines the schemas they will validate.
+
+## Completion summary (backfilled 2026-07-19)
+
+- Step 0: Scope Challenge — scope accepted as-is (3 pilot packages, 4 contract modules, 1 manifest builder, 1 boundary test; no scope reduction)
+- Architecture Review: 0 critical findings — module boundaries clean, dependency graph acyclic, model/reviewer separation enforced at schema level
+- Code Quality Review: 6 issues folded (per Eng Review row); all absorbed into plan revisions
+- Test Review: coverage diagram produced (Reviewed Execution and Coverage Map), 0 gaps — every branch in the test diagram has a corresponding `[UNIT]`/`[INTEGRATION]`/`[OPERATIONAL GATE]` test
+- Performance Review: 0 findings — bounded by design (linear scans, 3 packages, 40 records)
+- NOT in scope: written above
+- What already exists: written above
+- TODOS.md updates: 0 — all work captured as Pass 2–6 deferrals
+- Failure modes: 0 critical gaps (see table above)
+- Outside voice: skipped (see note above)
+- Parallelization: sequential, 0 parallel lanes
+- Lake Score: N/A — no completeness tradeoffs presented; Pass 1 is the complete version by design

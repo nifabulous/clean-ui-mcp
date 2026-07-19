@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { checkPublicSiteBoundary } from "./check-public-site-boundary.mjs";
@@ -81,5 +81,18 @@ describe("public site disclosure boundary", () => {
       }),
     );
     expect(() => checkPublicSiteBoundary(root)).toThrow(/entries must be empty/);
+  });
+
+  // Codex P1 #4: a symlink under site/public/ was skipped because Dirent.isFile()
+  // is false for symlinks — the bundler would still follow it and emit the leak.
+  it("rejects a symlink under site/public (P1 #4 exfiltration vector)", () => {
+    const root = mkdtempSync(join(tmpdir(), "clean-ui-public-boundary-symlink-"));
+    roots.push(root);
+    mkdirSync(join(root, "site/public"), { recursive: true });
+    // corpus file outside site/public
+    writeFileSync(join(root, "corpus.png"), "private-image");
+    // symlink inside site/public pointing at it
+    symlinkSync(join(root, "corpus.png"), join(root, "site/public/leak-link.png"));
+    expect(() => checkPublicSiteBoundary(root)).toThrow(/symlink/);
   });
 });

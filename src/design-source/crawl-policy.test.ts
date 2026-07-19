@@ -440,3 +440,35 @@ describe("planRepresentativeCrawl: plan-shape invariants", () => {
     expect(plan.maxRoutes).toBe(30);
   });
 });
+
+// ─── Codex review: non-http(s) rejection, userinfo stripping, /api variants ──
+describe("planRepresentativeCrawl: codex review hardening", () => {
+  it("rejects a non-http(s) start URL (P1 #5)", () => {
+    expect(() => planRepresentativeCrawl({ startUrl: "ftp://example.com/x", discoveredUrls: [] })).toThrow(/not a valid http\(s\) URL/);
+    expect(() => planRepresentativeCrawl({ startUrl: "file:///etc/passwd", discoveredUrls: [] })).toThrow(/not a valid http\(s\) URL/);
+  });
+
+  it("strips embedded userinfo from the start URL rather than carrying credentials (P1 #5)", () => {
+    const plan = planRepresentativeCrawl({ startUrl: "https://user:pass@example.com/", discoveredUrls: [] });
+    expect(plan.routes[0].url).toBe("https://example.com/");
+    expect(plan.routes[0].url).not.toMatch(/user|pass/);
+  });
+
+  it("skips discovered non-http(s) URLs as cross-origin (fail-safe) (P1 #5)", () => {
+    const plan = planRepresentativeCrawl({
+      startUrl: "https://example.com/",
+      discoveredUrls: ["ftp://example.com/x", "file:///etc/passwd"],
+    });
+    expect(plan.routes.map((r) => r.url)).toEqual(["https://example.com/"]);
+    expect(plan.skipped.every((s) => s.reason === "cross-origin")).toBe(true);
+  });
+
+  it("blocks /api case-insensitively and the exact /api path (P2)", () => {
+    const plan = planRepresentativeCrawl({
+      startUrl: "https://example.com/",
+      discoveredUrls: ["https://example.com/API/list", "https://example.com/api", "https://example.com/api/users"],
+    });
+    expect(plan.routes.map((r) => r.url)).toEqual(["https://example.com/"]);
+    expect(plan.skipped.filter((s) => s.reason === "non-html")).toHaveLength(3);
+  });
+});

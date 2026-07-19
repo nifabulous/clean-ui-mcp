@@ -42,6 +42,15 @@ const REQUIRED_LABEL_ARRAY_FIELDS = [
   "forbiddenClaims",
   "privateMarkers",
   "validEvidenceIds",
+  // Codex P1 #2: these were omitted, so a partial label missing them defaulted
+  // to empty and the label still passed validation → fail-open. All three arrays
+  // are load-bearing for the scorer (requiredMobileRules feeds the section gate;
+  // permittedAuthorityLanes constrains lanes; inaccessibleUrls feeds the
+  // inaccessible-URL-inspected check). requiredScreenStates is a map, validated
+  // separately below.
+  "requiredMobileRules",
+  "permittedAuthorityLanes",
+  "inaccessibleUrls",
 ];
 const REQUIRED_LABEL_SCALAR_FIELDS = ["id", "labelVersion", "sourceCoverageExpectation"];
 const VALID_COVERAGE_EXPECTATIONS = new Set(["low", "moderate", "well-supported"]);
@@ -60,6 +69,16 @@ function isValidGoldLabel(label) {
   }
   for (const field of REQUIRED_LABEL_ARRAY_FIELDS) {
     if (!Array.isArray(label[field])) return false;
+  }
+  // requiredScreenStates is Record<blueprintId, string[]> — a non-null object
+  // (NOT an array). Missing it defaulted the section-blueprint-state gate to
+  // empty, fail-open (Codex P1 #2).
+  if (
+    label.requiredScreenStates === null ||
+    typeof label.requiredScreenStates !== "object" ||
+    Array.isArray(label.requiredScreenStates)
+  ) {
+    return false;
   }
   // Enum checks.
   if (!VALID_COVERAGE_EXPECTATIONS.has(label.sourceCoverageExpectation)) return false;
@@ -140,9 +159,14 @@ export function scoreDesignHandoff(output, label) {
   }
 
   // ── Required-decision coverage ──────────────────────────────────────────────
-  // Each required decision id must appear in sourceDecisions with a valid lane
-  // AND a non-empty rationale. Missing lane / empty rationale both count as
-  // uncovered AND increment unsupportedClaimCount.
+  // Each required decision id must appear in sourceDecisions with a valid lane,
+  // a non-empty rationale, AND at least one evidence reference. Missing lane /
+  // empty rationale both count as uncovered AND increment unsupportedClaimCount.
+  // Codex P1 #1: a decision with `evidence: []` previously counted as covered,
+  // so an output could assert a decision with NO backing and still reach
+  // `complete: true` — certifying an unsupported handoff. An empty evidence
+  // array now means the decision is uncovered (claims authority with nothing
+  // behind it) and bumps unsupportedClaimCount.
   const requiredDecisions = Array.isArray(label.requiredDecisions) ? label.requiredDecisions : [];
   const sourceDecisions = Array.isArray(output.sourceDecisions) ? output.sourceDecisions : [];
   const validEvidenceSet = new Set(
@@ -156,7 +180,9 @@ export function scoreDesignHandoff(output, label) {
       const laneOk = typeof decision.lane === "string" && VALID_LANES.has(decision.lane);
       const rationaleOk =
         typeof decision.rationale === "string" && decision.rationale.trim().length > 0;
-      if (laneOk && rationaleOk) covered++;
+      const evidence = Array.isArray(decision.evidence) ? decision.evidence : [];
+      const hasEvidence = evidence.length > 0;
+      if (laneOk && rationaleOk && hasEvidence) covered++;
     }
     result.requiredDecisionCoverage = covered / requiredDecisions.length;
   } else {
@@ -207,13 +233,36 @@ export function scoreDesignHandoff(output, label) {
     const laneOk = typeof obs.lane === "string" && VALID_LANES.has(obs.lane);
     if (!laneOk) unsupported++;
   }
-  const inaccessibleUrls = new Set(Array.isArray(label.inaccessibleUrls) ? label.inaccessibleUrls : []);
+  // Codex P1 #3: inaccessible-URL matching used raw string equality, so an
+  // output could claim the same URL in an equivalent form (explicit :443, a
+  // fragment, a trailing slash, percent-cased path) and evade the gate. Match
+  // on a canonical form instead: parse via WHATWG URL (normalizes default
+  // ports, drops the fragment) and compare the href. Unparseable strings are
+  // kept as-is so a malformed inaccessible URL still matches its malformed twin.
+  const canonicalUrl = (raw) => {
+    if (typeof raw !== "string") return raw;
+    try {
+      const u = new URL(raw);
+      u.hash = "";
+      // Normalize a trailing slash on a non-root path so `/archived` and
+      // `/archived/` match — they are the same resource for gate purposes.
+      if (u.pathname.length > 1 && u.pathname.endsWith("/")) {
+        u.pathname = u.pathname.replace(/\/+$/, "");
+      }
+      return u.href;
+    } catch {
+      return raw;
+    }
+  };
+  const inaccessibleUrls = new Set(
+    (Array.isArray(label.inaccessibleUrls) ? label.inaccessibleUrls : []).map(canonicalUrl),
+  );
   const blueprints = Array.isArray(output.screenBlueprints) ? output.screenBlueprints : [];
   for (const bp of blueprints) {
     if (!bp || typeof bp !== "object") continue;
     const urls = Array.isArray(bp.inspectedUrls) ? bp.inspectedUrls : [];
     for (const url of urls) {
-      if (typeof url === "string" && inaccessibleUrls.has(url)) unsupported++;
+      if (typeof url === "string" && inaccessibleUrls.has(canonicalUrl(url))) unsupported++;
     }
   }
   result.unsupportedClaimCount = unsupported;

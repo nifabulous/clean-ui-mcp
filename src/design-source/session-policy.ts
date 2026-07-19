@@ -54,8 +54,17 @@ const SAFE_REJECTION_LABEL = /^(reject (?:all|non-essential)|necessary only|decl
  * `"." + cookieDomain`. This deliberately avoids bare-suffix matching so
  * that `xexample.com` is NOT treated as a child of `example.com`.
  */
-const isFirstParty = (hostname: string, cookieDomain: string): boolean =>
-  hostname === cookieDomain || hostname.endsWith("." + cookieDomain);
+const isFirstParty = (hostname: string, cookieDomain: string): boolean => {
+  // Codex P1 #6: a bare public suffix like `com` or `org` was accepted as a
+  // "parent domain" because `example.com`.endsWith(`.com`). That misclassifies
+  // a cross-site cookie (set for TLD `com`) as first-party. A real parent
+  // domain has at least one label-separating dot — bare TLDs and eTLDs
+  // (`com`, `org`, `co.uk`) are not first-party anchors. (A full public-suffix
+  // list would be more precise; this dot-presence check is the conservative
+  // fail-closed heuristic that catches the reported case without a dependency.)
+  if (!cookieDomain.includes(".")) return false;
+  return hostname === cookieDomain || hostname.endsWith("." + cookieDomain);
+};
 
 /**
  * Decide whether a cookie may live in the ephemeral first-party capture

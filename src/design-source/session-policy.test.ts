@@ -113,3 +113,24 @@ describe("chooseConsentAction: ambiguous buttons do NOT count as rejection", () 
     expect(chooseConsentAction([])).toEqual({ kind: "stop", reason: "no safe rejection action" });
   });
 });
+
+// ─── Codex review P1 #6: bare public suffixes are not first-party anchors ───
+describe("decideCookie: codex review hardening", () => {
+  it.each(["com", "org", "net", "io", "co"])(
+    "blocks a cookie whose domain is a bare public suffix (%s)",
+    (suffix) => {
+      // `example.com`.endsWith(`.com`) is true, so the prior check treated the
+      // TLD as a parent domain and allowed any cross-site cookie set for it.
+      // A real parent domain has at least one dot.
+      expect(
+        decideCookie({ requestOrigin: `https://shop.${suffix}`, cookieDomain: suffix, essential: true }),
+      ).toBe("block");
+    },
+  );
+
+  it("still allows a real parent domain (example.com for www.example.com)", () => {
+    expect(
+      decideCookie({ requestOrigin: "https://www.example.com", cookieDomain: "example.com", essential: true }),
+    ).toBe("allow-session-first-party");
+  });
+});

@@ -346,3 +346,62 @@ describe("scoreDesignHandoff: malformed-label fail-closed (P1 #1)", () => {
     expect(scoreDesignHandoff(makeOutput(), malformed).complete).toBe(false);
   });
 });
+
+// ─── Codex review P1s: evidence-required decisions, full label shape, URL canon ─
+describe("scoreDesignHandoff: codex review hardening", () => {
+  it("a required decision with empty evidence does NOT yield complete (P1 #1)", () => {
+    const out = makeOutput({
+      sourceDecisions: [
+        { id: "src:home:layout", lane: "retain", rationale: "ok", evidence: [] },
+      ],
+    });
+    const r = scoreDesignHandoff(out, GOLD_LABEL);
+    expect(r.complete).toBe(false);
+    expect(r.requiredDecisionCoverage).toBeLessThan(1);
+  });
+
+  it("rejects a label missing requiredMobileRules (P1 #2)", () => {
+    const partial = { ...GOLD_LABEL };
+    delete partial.requiredMobileRules;
+    expect(scoreDesignHandoff(makeOutput(), partial).complete).toBe(false);
+  });
+
+  it("rejects a label missing permittedAuthorityLanes (P1 #2)", () => {
+    const partial = { ...GOLD_LABEL };
+    delete partial.permittedAuthorityLanes;
+    expect(scoreDesignHandoff(makeOutput(), partial).complete).toBe(false);
+  });
+
+  it("rejects a label missing inaccessibleUrls (P1 #2)", () => {
+    const partial = { ...GOLD_LABEL };
+    delete partial.inaccessibleUrls;
+    expect(scoreDesignHandoff(makeOutput(), partial).complete).toBe(false);
+  });
+
+  it("rejects a label whose requiredScreenStates is missing or an array (P1 #2)", () => {
+    const noStates = { ...GOLD_LABEL };
+    delete noStates.requiredScreenStates;
+    expect(scoreDesignHandoff(makeOutput(), noStates).complete).toBe(false);
+    const arrayStates = { ...GOLD_LABEL, requiredScreenStates: [["empty"]] };
+    expect(scoreDesignHandoff(makeOutput(), arrayStates).complete).toBe(false);
+  });
+
+  it("catches an inaccessible URL claimed under an equivalent form (P1 #3)", () => {
+    // The label marks https://example.com/inaccessible-archive as inaccessible.
+    // The output claims it with :443 + trailing slash + fragment — all
+    // semantically equivalent and previously evaded raw string equality.
+    const out = makeOutput({
+      screenBlueprints: [
+        {
+          id: "home",
+          name: "Home",
+          requiredStates: ["empty", "populated"],
+          mobileRules: GOLD_LABEL.requiredMobileRules,
+          inspectedUrls: ["https://example.com:443/inaccessible-archive/#x"],
+        },
+      ],
+    });
+    const r = scoreDesignHandoff(out, GOLD_LABEL);
+    expect(r.unsupportedClaimCount).toBeGreaterThan(0);
+  });
+});

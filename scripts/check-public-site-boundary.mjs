@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,8 +50,22 @@ function assertOnlySanctionedFiles(publicRoot) {
   }
   const entries = readdirSync(publicRoot, { withFileTypes: true, recursive: true });
   for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const rel = toPosixRel(relative(publicRoot, resolve(publicRoot, entry.parentPath ?? "", entry.name)));
+    // Codex P1 #4: `entry.isFile()` is false for symlinks (Dirent reflects the
+    // lstat type), so a symlink placed under site/public/ pointing at a private
+    // corpus file was skipped entirely — the bundler would still follow it and
+    // emit the leak. A sanctioned public directory must not contain symlinks at
+    // all (they are an obvious exfiltration vector), so reject them explicitly.
+    const entryPath = resolve(publicRoot, entry.parentPath ?? "", entry.name);
+    const stat = lstatSync(entryPath);
+    if (stat.isSymbolicLink()) {
+      const rel = toPosixRel(relative(publicRoot, entryPath));
+      throw new Error(
+        `site/public/${rel} is a symlink — symlinks are not permitted in the public ` +
+          `asset directory (exfiltration vector for private corpus material)`,
+      );
+    }
+    if (!stat.isFile()) continue;
+    const rel = toPosixRel(relative(publicRoot, entryPath));
     if (!SANCTIONED_PUBLIC_FILES.has(rel)) {
       throw new Error(
         `site/public/${rel} is not on the sanctioned public-asset allowlist — ` +

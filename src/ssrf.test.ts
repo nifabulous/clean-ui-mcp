@@ -135,6 +135,15 @@ describe("SSRF guard: assertSafeHostedCaptureTarget", () => {
   it("rejects malformed URLs", async () => {
     await expect(assertSafeHostedCaptureTarget("not-a-url")).rejects.toThrow(/Invalid URL/);
   });
+
+  // Codex P1 #7: IPv6 link-local is fe80::/10 (fe80–febf), not fe80::/16.
+  // fe90::1, fea0::1, feb0::1 are all link-local and previously bypassed.
+  it.each(["fe80::1", "fe90::1", "fea0::1", "feb0::1"])(
+    "isPrivateAddress rejects the full fe80::/10 IPv6 link-local range (%s)",
+    (ip) => {
+      expect(isPrivateAddress(ip)).toBe(true);
+    },
+  );
 });
 
 // ============================================================

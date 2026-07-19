@@ -45,7 +45,12 @@ export function isPrivateAddress(ip: string): boolean {
   if (/^192\.0\.0\./.test(normalized)) return true;
   // IPv6
   if (normalized === "::1" || normalized === "::") return true;
-  if (normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
+  // Codex P1 #7: link-local is fe80::/10, not fe80::/16. The /10 prefix covers
+  // fe80 through febf (the first 10 bits span 0xfe8??–0xfeb??), so fe90::1,
+  // fea0::1, feb0::1 etc. are all link-local and must be blocked. The prior
+  // `startsWith("fe80:")` only caught the /16 slice. Match the full /10.
+  if (/^fe[89ab][0-9a-f]:/i.test(normalized)) return true;
+  if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
   return false;
 }
 

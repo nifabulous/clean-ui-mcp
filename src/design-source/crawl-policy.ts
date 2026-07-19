@@ -74,6 +74,18 @@ function canonicalize(raw: string): URL | null {
   } catch {
     return null;
   }
+  // Codex P1 #5: the public, credential-free inspection contract permits only
+  // http/https. A file:// or ftp:// URL (or any other scheme) would let local
+  // filesystem or non-web resources into the plan. Reject by returning null —
+  // callers then treat it as unparseable (cross-origin skip), fail-closed.
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  // Codex P1 #5: strip embedded userinfo (https://user:pass@host/). The planner
+  // already rejects raw credentials passed as separate fields, but a userinfo
+  // segment smuggles credentials into the URL itself — silently carrying them
+  // through canonicalization into a route. Clear it; the route keeps its origin
+  // but loses the embedded credential.
+  parsed.username = "";
+  parsed.password = "";
   parsed.hash = "";
   // searchParams.keys() returns each occurrence; delete() removes all values
   // for that key. Iterate over a snapshot so deletion during iteration is safe.
@@ -106,7 +118,12 @@ function classify(parsed: URL, startOrigin: string, excludeSet: Set<string>): Ve
     // fail-safe.
   }
   if (DESTRUCTIVE_PATH.test(pathForFilter)) return { kind: "skip", reason: "destructive" };
-  if (pathForFilter.includes("/api/") || NON_HTML_EXTENSION.test(pathForFilter)) {
+  // Codex P2: the /api/ substring check was case-sensitive and required a
+  // trailing slash, so `/API/list` and exact `/api` slipped through. Match
+  // case-insensitively and treat `/api` and `/api/...` as non-HTML.
+  const lowerPath = pathForFilter.toLowerCase();
+  const isApiPath = lowerPath === "/api" || lowerPath.startsWith("/api/") || lowerPath.includes("/api/");
+  if (isApiPath || NON_HTML_EXTENSION.test(pathForFilter)) {
     return { kind: "skip", reason: "non-html" };
   }
   if (excludeSet.has(parsed.toString())) return { kind: "skip", reason: "excluded" };
@@ -140,8 +157,17 @@ export function planRepresentativeCrawl(input: CrawlPlanInput): CrawlPlan {
   const maxRoutes = Math.min(Math.max(HARD_MIN_ROUTES, requested), HARD_MAX_ROUTES);
 
   // startUrl is the user's explicit entry — it defines the origin every route
-  // must share. Assumed parseable (the caller is providing their own URL).
-  const startParsed = canonicalize(input.startUrl) ?? new URL(input.startUrl);
+  // must share. Canonicalize also enforces the http/https-only contract and
+  // strips embedded userinfo (Codex P1 #5). The earlier `?? new URL(...)`
+  // fallback re-parsed a non-http URL that canonicalize had rejected (ftp://,
+  // file://), letting it through — so a non-canonicalizable start URL now
+  // throws rather than falling back to an unguarded parse.
+  const startParsed = canonicalize(input.startUrl);
+  if (!startParsed) {
+    throw new Error(
+      `start URL is not a valid http(s) URL and cannot anchor a public crawl: ${input.startUrl}`,
+    );
+  }
   const startOrigin = startParsed.origin;
   const startCanonical = startParsed.toString();
 

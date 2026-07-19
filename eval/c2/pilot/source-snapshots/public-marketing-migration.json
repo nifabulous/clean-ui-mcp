@@ -1,0 +1,236 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "design-source-snapshot",
+  "artifactId": "design-source-snapshot-public-marketing-migration-v1",
+  "projectId": "public-marketing-migration",
+  "source": {
+    "kind": "user-supplied-public-reference",
+    "origin": "https://example.com",
+    "startingUrls": [
+      "https://example.com/c2-marketing-pilot/"
+    ]
+  },
+  "capturedAt": "2026-07-18T00:00:00.000Z",
+  "crawl": {
+    "maxRoutes": 5,
+    "sameOrigin": true,
+    "authenticated": false,
+    "mutationAllowed": false
+  },
+  "coverage": [
+    {
+      "url": "https://example.com/c2-marketing-pilot/",
+      "status": "inspected",
+      "reason": "Public marketing home page; primary archetype for the migration.",
+      "archetype": "marketing-home",
+      "viewports": ["desktop", "tablet", "mobile"]
+    },
+    {
+      "url": "https://example.com/c2-marketing-pilot/pricing",
+      "status": "inspected",
+      "reason": "Public pricing page; carries the headline-tier hierarchy that must be preserved.",
+      "archetype": "marketing-pricing",
+      "viewports": ["desktop", "mobile"]
+    },
+    {
+      "url": "https://example.com/c2-marketing-pilot/account",
+      "status": "blocked",
+      "reason": "Authenticated account route; crawl is unauthenticated so this route was not inspected and must not be claimed as observed.",
+      "archetype": null,
+      "viewports": ["desktop"]
+    }
+  ],
+  "foundations": {
+    "colors": [
+      {
+        "id": "finding:color:primary-action",
+        "value": "single saturated accent reserved for the primary call-to-action",
+        "role": "primary-action-accent",
+        "confidence": "high",
+        "evidenceIds": ["evidence:home:hero-cta"]
+      },
+      {
+        "id": "finding:color:neutral-surface",
+        "value": "neutral surface palette with one accent; no branded gradient",
+        "role": "surface-palette",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:home:hero-cta", "evidence:pricing:tier-hierarchy"]
+      }
+    ],
+    "typography": [
+      {
+        "id": "finding:type:hero-scale",
+        "value": "hero headline roughly 3x the body scale on desktop",
+        "role": "hero-headline-scale",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:home:hero-hierarchy"]
+      }
+    ],
+    "spacing": [
+      {
+        "id": "finding:spacing:section-rhythm",
+        "value": "consistent vertical section rhythm on the inspected pages",
+        "role": "section-rhythm",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:home:section-rhythm", "evidence:pricing:tier-hierarchy"]
+      }
+    ],
+    "radii": [
+      {
+        "id": "finding:radii:card-radius",
+        "value": "moderate card radius reused on hero card and pricing tiers",
+        "role": "card-radius",
+        "confidence": "low",
+        "evidenceIds": ["evidence:pricing:tier-hierarchy"]
+      }
+    ],
+    "shadows": [
+      {
+        "id": "finding:shadow:elevation",
+        "value": "single elevation level on primary cards; no layered shadow system",
+        "role": "card-elevation",
+        "confidence": "low",
+        "evidenceIds": ["evidence:pricing:tier-hierarchy"]
+      }
+    ],
+    "layout": [
+      {
+        "id": "finding:layout:hero-stack",
+        "value": "hero pairs a left-aligned headline stack with a single primary CTA",
+        "role": "hero-layout",
+        "confidence": "high",
+        "evidenceIds": ["evidence:home:hero-hierarchy", "evidence:home:hero-cta"]
+      },
+      {
+        "id": "finding:layout:mobile-stack",
+        "value": "hero and pricing columns stack to a single column on mobile",
+        "role": "responsive-stacking",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:home:mobile-stack", "evidence:pricing:tier-hierarchy"]
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "finding:component:primary-nav",
+      "value": "single top navigation bar repeated on every inspected page",
+      "role": "primary-navigation",
+      "confidence": "high",
+      "evidenceIds": ["evidence:home:nav-consistency", "evidence:pricing:nav-consistency"]
+    },
+    {
+      "id": "finding:component:pricing-tiers",
+      "value": "three pricing tiers with the middle tier visually emphasized",
+      "role": "pricing-tier-card",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:pricing:tier-hierarchy"]
+    }
+  ],
+  "responsiveFindings": [
+    {
+      "id": "finding:responsive:column-stacking",
+      "value": "multi-column hero and pricing regions collapse to a single column at the mobile breakpoint",
+      "role": "mobile-stacking",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:home:mobile-stack"]
+    }
+  ],
+  "accessibility": [
+    {
+      "id": "finding:a11y:focus-visible",
+      "value": "visible focus outline present on interactive elements on the inspected pages",
+      "role": "focus-visibility",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:home:focus-visible"]
+    }
+  ],
+  "motion": [
+    {
+      "id": "finding:motion:None",
+      "value": "no meaningful motion observed on the inspected marketing pages",
+      "role": "motion-baseline",
+      "confidence": "low",
+      "evidenceIds": ["evidence:home:hero-hierarchy"]
+    }
+  ],
+  "voice": [
+    {
+      "id": "finding:voice:plain-language-marketing",
+      "value": "plain-language marketing copy with short imperative CTAs",
+      "role": "marketing-voice",
+      "confidence": "low",
+      "evidenceIds": ["evidence:home:hero-cta"]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "evidence:home:hero-hierarchy",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-marketing-pilot/",
+      "summary": "Hero region uses a left-aligned headline stack above a single primary CTA on desktop.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:home:hero-cta",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-marketing-pilot/",
+      "summary": "Exactly one primary call-to-action button carries the saturated accent color in the hero.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:home:nav-consistency",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-marketing-pilot/",
+      "summary": "Top navigation bar with a consistent item order on the home page.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:pricing:nav-consistency",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-marketing-pilot/pricing",
+      "summary": "Top navigation bar repeats with the same item order observed on the home page.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:pricing:tier-hierarchy",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-marketing-pilot/pricing",
+      "summary": "Three pricing tiers with the middle tier visually emphasized through scale and accent.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:home:mobile-stack",
+      "kind": "screenshot-observation",
+      "route": "https://example.com/c2-marketing-pilot/",
+      "summary": "At the mobile breakpoint the hero columns collapse into a single vertical stack.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:home:focus-visible",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-marketing-pilot/",
+      "summary": "A visible focus outline appears on keyboard focus for interactive elements in the hero and nav.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:home:section-rhythm",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-marketing-pilot/",
+      "summary": "Vertical spacing between marketing sections follows a consistent rhythm.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:limitation:no-authenticated-screen",
+      "kind": "public-content",
+      "route": "https://example.com/c2-marketing-pilot/account",
+      "summary": "The account route was blocked and NOT inspected. No claim may rely on having observed an authenticated screen.",
+      "basis": "inferred"
+    }
+  ],
+  "limitations": [
+    "The crawl was unauthenticated; the account route at https://example.com/c2-marketing-pilot/account was blocked and was NOT inspected, so no claim may rely on having observed it.",
+    "Only the home and pricing routes were inspected; no claim may rely on pages outside the inspected set.",
+    "No authenticated product screen was inspected; the migration covers public marketing surfaces only.",
+    "The snapshot is non-mutating; no form submission or state change was attempted during capture."
+  ]
+}

@@ -11,7 +11,7 @@
     "generate-references": "node scripts/generate-reference-artifacts.mjs",
     "validate-references": "node scripts/generate-reference-artifacts.mjs --check && tsc && node dist/references/loader.js",
     "check-public-site-boundary": "node scripts/check-public-site-boundary.mjs",
-    "build": "npm run check-public-site-boundary && npm run generate-references && tsc",
+    "build": "npm run check-public-site-boundary && npm run validate:c2-pilot && npm run generate-references && tsc",
     "start": "node dist/server.js",
     "dev": "tsc && node dist/server.js",
     "ui": "tsc && node dist/scripts/ui-server.js",
@@ -48,6 +48,8 @@
     "build-image-index": "tsc && node dist/scripts/build-image-index.js",
     "test:critique-quality": "vitest run scripts/critique-quality-scorer.test.mjs scripts/eval-scorer.test.mjs",
     "test:design-handoff-quality": "vitest run scripts/design-handoff-scorer.test.mjs",
+    "generate:c2-pilot": "node scripts/build-c2-pilot-manifest.mjs",
+    "validate:c2-pilot": "node scripts/build-c2-pilot-manifest.mjs --check",
     "validate-readiness-artifacts": "tsc && node dist/scripts/validate-readiness-artifacts.js",
     "typecheck:contracts": "tsc --noEmit && tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck src/tool-contract-types.test.ts"
   },

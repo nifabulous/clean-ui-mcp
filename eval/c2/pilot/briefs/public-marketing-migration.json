@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-public-marketing-migration-v1",
+  "caseId": "public-marketing-migration",
+  "caseVersion": 1,
+  "family": "migration",
+  "stratum": "public-marketing-migration",
+  "title": "Original B2B marketing adaptation of a public marketing site",
+  "productContext": "A fictional B2B brand is adapting a publicly accessible marketing site at https://example.com/c2-marketing-pilot/ into an original marketing surface. The adaptation must be grounded strictly in the inspected public routes captured in the bound design-source snapshot; the site is unauthenticated and the snapshot is non-mutating. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "B2B marketing site visitor",
+    "B2B evaluator comparing the brand to alternatives"
+  ],
+  "jobs": [
+    "understand the brand value proposition from the home page",
+    "compare pricing tiers on the pricing page",
+    "reach a single primary call to action from either inspected page"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "visitor lands on the migrated home and understands the value proposition above the fold",
+    "visitor moves from home to pricing and perceives a consistent navigation and hierarchy",
+    "visitor reaches the primary call to action from either inspected page"
+  ],
+  "constraints": [
+    "The adaptation must be ORIGINAL: it must not reproduce the source site's proprietary copy, wordmark, exact palette, or unique illustrations; only generic layout principles observed in the snapshot may be adapted.",
+    "Only the home and pricing routes were inspected; no claim may rely on the blocked account route or on any uninspected page.",
+    "Navigation item order, hero hierarchy, and mobile stacking behavior observed on the inspected pages must be retained as generic structural principles.",
+    "The migrated surface must keep a single primary call to action and must not invent pricing tiers, customer counts, or partner logos not present in the snapshot.",
+    "Focus visibility observed on the inspected pages must be preserved; the adaptation may not regress keyboard focus handling."
+  ],
+  "requiredScreens": [
+    {
+      "id": "home",
+      "states": [
+        "default"
+      ],
+      "mobileRules": [
+        "hero columns collapse to a single vertical stack at the mobile breakpoint",
+        "primary call to action remains reachable without horizontal scroll"
+      ]
+    },
+    {
+      "id": "pricing",
+      "states": [
+        "default"
+      ],
+      "mobileRules": [
+        "pricing tiers stack vertically and preserve their tier hierarchy at the mobile breakpoint"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": {
+    "artifactId": "design-source-snapshot-public-marketing-migration-v1",
+    "path": "eval/c2/pilot/source-snapshots/public-marketing-migration.json",
+    "sha256": "4e3aa3d03a7e2cb1bdd8e0295aba82926ee192295fb47f7c54c936b2f324c846",
+    "artifactType": "design-source-snapshot"
+  }
+}

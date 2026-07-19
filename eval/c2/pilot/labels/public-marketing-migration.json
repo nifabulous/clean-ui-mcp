@@ -1,0 +1,108 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-public-marketing-migration-v1",
+  "caseId": "public-marketing-migration",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:navigation-consistency",
+    "decision:hero-hierarchy",
+    "decision:mobile-stacking",
+    "decision:focus-visibility",
+    "decision:original-vs-proprietary"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:navigation-order-retained-as-generic-principle",
+    "ac:hero-hierarchy-retained",
+    "ac:mobile-stacking-preserved",
+    "ac:no-claim-that-account-route-was-inspected",
+    "ac:no-proprietary-copy-wordmark-or-palette-reproduced"
+  ],
+  "permittedAuthorityLanes": [
+    "retain",
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:home:hero-hierarchy",
+    "evidence:home:hero-cta",
+    "evidence:home:nav-consistency",
+    "evidence:pricing:nav-consistency",
+    "evidence:pricing:tier-hierarchy",
+    "evidence:home:mobile-stack",
+    "evidence:home:focus-visible",
+    "evidence:limitation:no-authenticated-screen"
+  ],
+  "goldEvidenceIds": [
+    "evidence:home:hero-hierarchy",
+    "evidence:home:nav-consistency",
+    "evidence:pricing:nav-consistency",
+    "evidence:home:mobile-stack",
+    "evidence:home:focus-visible",
+    "evidence:limitation:no-authenticated-screen"
+  ],
+  "forbiddenClaims": [
+    "the account route at https://example.com/c2-marketing-pilot/account was inspected",
+    "any authenticated product screen was observed",
+    "the source site's proprietary copy was reproduced",
+    "the source site's wordmark or logo was reproduced",
+    "the source site's exact branded palette was copied",
+    "customer counts, partner logos, or testimonials not present in the snapshot"
+  ],
+  "privateMarkers": [
+    "/corpus/private/public-marketing-migration/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "The adaptation ignores the inspected marketing hierarchy or invents an unsupported audience.",
+      "score3": "The adaptation follows the inspected hierarchy but adds an unsupported primary CTA or tier.",
+      "score5": "The adaptation preserves the inspected home and pricing hierarchy for the stated B2B audience with a single primary CTA."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "Home and pricing share no common navigation, hierarchy, or spacing system.",
+      "score3": "Navigation order is retained but hero or pricing hierarchy drifts between screens.",
+      "score5": "Navigation item order, hero hierarchy, and section rhythm are coherent across home and pricing."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer states, stacking, or focus behavior.",
+      "score3": "Partial blueprints with unresolved responsive or focus rules.",
+      "score5": "Engineers can build home and pricing directly, including mobile stacking and focus visibility, from the blueprint."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A verbatim copy of the source site's copy, wordmark, palette, or illustrations.",
+      "score3": "Generic layout principles adapted but some proprietary element slips through.",
+      "score5": "Only generic layout principles are adapted; proprietary copy, wordmark, palette, and illustrations are explicitly rejected."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "Focus visibility regressed and no handling of blocked or empty states.",
+      "score3": "Focus handling preserved on some interactive elements but inconsistent.",
+      "score5": "Visible focus is preserved on all interactive elements, with explicit handling of the blocked account route as not-inspected."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "Claims rely on the blocked account route or on uninspected pages.",
+      "score3": "Most claims trace to the inspected routes but one claim overreaches into uninspected territory.",
+      "score5": "Every claim traces to the inspected home or pricing route and the unauthenticated limitation is stated explicitly."
+    }
+  ],
+  "adjudicationNotes": [
+    "The account route was blocked because the crawl was unauthenticated; any output claiming it was inspected fails evidence-discipline.",
+    "retain/adapt/reject lanes are all permitted: generic layout principles may be retained or adapted, while proprietary identifiers must be rejected.",
+    "Originality and evidence-discipline are co-equal here: an output that copies proprietary elements OR claims uninspected pages fails regardless of other strengths.",
+    "The brief's sourceSnapshotRef.sha256 binds the exact on-disk snapshot bytes; the manifest generator verifies this binding on every build."
+  ]
+}

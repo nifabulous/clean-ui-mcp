@@ -117,3 +117,38 @@ as part of C2 completion:
 - authenticated capture;
 - BYOK (bring-your-own-key);
 - framework adapters.
+
+### C2 Pass 1 — contracts and pilot
+
+This records the **provisional** C2 Pass 1 boundary. It is foundation work that
+explicitly does **not** close C2.
+
+**What landed (provisional, schema-only):**
+- C2 contract schemas under `src/c2/` — case, evaluation, remediation, and
+  governance contracts — plus a *provisional* evidence-manifest schema whose
+  `state` is pinned to `"provisional"` and which has **no approvals field**
+  (promotion to frozen/approved happens in the readiness validator, never inline
+  in the artifact).
+- A three-package pilot under `eval/c2/pilot/` (one case each from the
+  `migration`, `product`, and `safety` families), bound into a single
+  content-addressed manifest (`eval/c2/pilot/manifest.json`) by
+  `scripts/build-c2-pilot-manifest.mjs`.
+- A Pass 1 scope-boundary test (`src/c2/pass1-boundary.test.ts`) that asserts the
+  *absence* of C2 readiness activation and that pilot files stay outside the
+  browser-downloadable public assets.
+
+**What did NOT happen in Pass 1 (these remain Pass 2+ work):**
+- No provider/model run was executed.
+- No 40-entry gold selection was produced (the pilot is exactly 3 packages).
+- No independent external labeling occurred (labels are synthetic, internal).
+- No retag generation ran.
+- No corpus mutation occurred.
+- No approval was issued.
+
+**Checkpoint state:** **C2 remains Open.** C0 remains Closed and C1 remains
+Closed; Pass 1 added no checkpoint recipe, policy, approval, registry, index, or
+ledger artifact for C2.
+
+**Pass 2:** is the evaluation-harness and pilot-calibration plan and must be
+designed from the Pass 1 evidence (the three pilot packages and the contract
+schemas), not from any pre-emptive gold claim.

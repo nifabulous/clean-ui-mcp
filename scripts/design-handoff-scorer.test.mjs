@@ -350,9 +350,17 @@ describe("scoreDesignHandoff: malformed-label fail-closed (P1 #1)", () => {
 // ─── Codex review P1s: evidence-required decisions, full label shape, URL canon ─
 describe("scoreDesignHandoff: codex review hardening", () => {
   it("a required decision with empty evidence does NOT yield complete (P1 #1)", () => {
+    // Provide ALL three required decisions; only one carries evidence: [].
+    // This isolates the empty-evidence variable — if the fix were reverted,
+    // all three would count as covered and decCov would be 1 (test fails).
+    // (The earlier form supplied only one decision, so decCov was 1/3 for the
+    // unrelated reason that the other two were missing — the test passed
+    // whether or not the fix was present, guarding nothing.)
     const out = makeOutput({
       sourceDecisions: [
         { id: "src:home:layout", lane: "retain", rationale: "ok", evidence: [] },
+        { id: "src:detail:typography", lane: "adapt", rationale: "ok", evidence: ["src:detail:typography"] },
+        { id: "src:home:color", lane: "reject", rationale: "ok", evidence: ["src:home:color"] },
       ],
     });
     const r = scoreDesignHandoff(out, GOLD_LABEL);

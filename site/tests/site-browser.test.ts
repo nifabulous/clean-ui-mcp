@@ -21,7 +21,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { stripVTControlCharacters } from "node:util";
+import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const SITE_ROOT = resolve(__dirname, "..");
@@ -62,7 +63,13 @@ async function startPreviewServer(): Promise<{ baseUrl: string; proc: ChildProce
     let settled = false;
     const onLine = (chunk: Buffer): void => {
       if (settled) return;
-      const text = chunk.toString();
+      // Vite emits colored output in CI (e.g. a green URL followed by a
+      // color-reset sequence). The raw \S+ match captures the trailing ANSI
+      // bytes, so endsWith("/clean-ui-mcp") fails and the base path gets
+      // appended twice — producing an invalid URL that sinks every browser
+      // test. Strip VT control characters before matching. (Node ≥16.20 exposes
+      // stripVTControlCharacters; CI runs Node 24.)
+      const text = stripVTControlCharacters(chunk.toString());
       // vite preview prints e.g. "  ➜  Local:   http://localhost:4321/clean-ui-mcp/"
       const match = text.match(/https?:\/\/\S+/i);
       if (match) {

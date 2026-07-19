@@ -234,6 +234,16 @@ const ALLOWLIST = new Set<string>([
   // here rather than wired to a placeholder caller to avoid fake coupling, per
   // the same precedent as renderSourceDesign / buildCheckpointTarget above.
   "assertAgreementMatchesSubmissions",
+  // c2/governance-contracts.ts — C2_REQUIRED_APPROVAL_ROLES declares the exact
+  // future closure-role set (Gold Label Owner + QA). Consumed by the C2 closure
+  // validator (Pass 6) and the provisional evidence manifest schema. Allowlisted
+  // until Pass 6 wires it.
+  "C2_REQUIRED_APPROVAL_ROLES",
+  // c2/remediation-contracts.ts — assertProposalMatchesFailure is a runtime
+  // cross-check binding a retag proposal to its source failure. Consumed by
+  // the C2 remediation validator (Pass 5). Same foundation-awaiting-caller
+  // pattern as the other C2 assertion exports.
+  "assertProposalMatchesFailure",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

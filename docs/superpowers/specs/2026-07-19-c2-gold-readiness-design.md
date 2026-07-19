@@ -12,7 +12,7 @@
 
 C2 must establish that the private corpus and its labels can support safe, coherent, implementation-ready design decisions. It does not ship the hosted generator, persist customer projects, expose the private corpus, convert Playground into the creation workspace, or integrate Decision Lab with `UiSpec` revisions. Those remain C3 or later work.
 
-C2 evaluates the evidence needed by the intended product before authorizing broad retagging. The work follows a diagnostic loop:
+C2 evaluates the evidence needed by the intended product before authorizing broad retagging. It preserves the parent authority's 35-entry reproducible plus 5-entry challenge label-integrity gate and adds a separate 25-case decision-quality gate. The work follows a diagnostic loop:
 
 ```text
 versioned cases and labels
@@ -49,6 +49,7 @@ C2 must determine whether grounded evidence supports:
 
 - Versioned C2 case, label, scorecard, run, failure, and approval contracts.
 - An evaluation-only synthesis harness with fixed budgets and immutable run evidence.
+- A 40-entry label-integrity set: 35 reproducible entries and 5 challenge entries.
 - A 25-case benchmark grounded in three real product families.
 - Controlled comparisons that isolate corpus, retrieval, label, and synthesis failures.
 - Deterministic contract and safety scoring.
@@ -68,9 +69,18 @@ C2 must determine whether grounded evidence supports:
 - Framework-specific implementation adapters.
 - Broad corpus-wide retagging without an approved disposition.
 
+### 3.3 Authority relationship
+
+This design supplements the C2 amendment in `2026-07-13-agent-readiness-and-retagging-design.md` and the grounded-design authority in `2026-07-18-grounded-design-workspace-design.md`. It does not rewrite C0 or C1 authority. Where the older C2 text requires the 35-plus-5 independent label baseline, this design preserves it explicitly rather than treating the newer 25 decision cases as a replacement. Any executable C2 policy or recipe is introduced through the repository's versioned governance process and binds exact reviewed bytes.
+
 ## 4. Evaluation-set structure
 
-The closure set contains exactly 25 deeply reviewed cases in three families. Each case has a stable ID and an immutable version. A published version may be superseded, but never edited in place.
+C2 has two linked but non-interchangeable datasets:
+
+- A 40-entry label-integrity set required by the parent readiness authority.
+- A 25-case decision-quality set required by this grounded-design amendment.
+
+Passing one set cannot compensate for failing the other. Each case, entry label, and dataset manifest has a stable ID and an immutable version. A published version may be superseded, but never edited in place.
 
 ### 4.1 Fifteen product-coherence cases
 
@@ -130,6 +140,14 @@ The safety family covers:
 
 All five safety cases are mandatory passes. Safety failures cannot be offset by averages elsewhere.
 
+### 4.4 Forty-entry label-integrity set
+
+The label-integrity set contains 35 reproducible entries plus 5 challenge entries selected using a documented stratification over product family, platform, pattern type, evidence quality, responsive/state coverage, accessibility signals, and known difficult or contradictory examples.
+
+The Gold Label Owner and external QA reviewer label the 40 entries independently before seeing each other's decisions. The resulting agreement report records exact-match and field-level multi-label metrics, disagreements, adjudication outcomes, and the parent authority's terminal outcome of either `Qualified` or `Replacement not justified`. The implementation plan must recover or define the field-specific thresholds from the governing C2 authority rather than inventing them during execution.
+
+This set measures whether canonical corpus labels are reproducible and trustworthy. The 25 decision cases measure whether those labels and evidence support useful product decisions. A decision-case failure may nominate entries for inspection, but it does not rewrite the independent 40-entry gold labels.
+
 ## 5. Case contract
 
 Every case records:
@@ -146,7 +164,11 @@ Every case records:
 - Gold-evidence packet and its rationale.
 - Human rubric anchors and adjudication notes.
 
+Every live-site case binds an immutable `DesignSourceSnapshot` (including inspected routes, access outcomes, and content hashes) rather than trusting mutable live bytes at scoring time. A recapture creates a new case version.
+
 The first pass authors only three pilot cases: one product, one migration, and one safety case. The contracts are calibrated against those pilots before all 25 closure cases are frozen.
+
+The existing 12 synthetic design-handoff briefs and `labelVersion: 1` labels remain regression fixtures. C2 introduces new versioned dataset contracts or a backward-compatible version transition; it must not silently rewrite the v1 fixtures or relax their fail-closed behavior.
 
 ## 6. Evaluation-only synthesis harness
 
@@ -170,7 +192,7 @@ Exact byte reproduction of model output is not assumed. Reproducibility means th
 
 ## 7. Controlled comparisons and failure attribution
 
-The primary model runs all 25 closure cases. A second independent model or implementation agent runs a stratified five-case challenge subset containing product, migration, sparse/conflicting-evidence, and safety cases. Independent outputs need not use identical prose; their critical decisions must be compatible with the evidence and constraints.
+The primary model runs all 25 closure cases. A second independent model or blinded human implementation agent runs a stratified five-case challenge subset containing product, migration, sparse/conflicting-evidence, and safety cases. Model independence requires a distinct provider or model family, not a renamed endpoint or second sampling pass from the primary model. Independent outputs need not use identical prose; their critical decisions must be compatible with the evidence and constraints.
 
 Each evaluated case supports these controlled conditions:
 
@@ -191,7 +213,7 @@ Only confirmed label failures authorize retag proposals. Retrieval and synthesis
 
 ## 8. Deterministic scoring
 
-The existing design-handoff scorer remains the structural and safety authority. Every closure candidate must have:
+The existing design-handoff scorer remains the structural and safety authority. Every **current-grounded closure candidate** must have:
 
 - Required-section coverage of `1.0`.
 - Required-decision coverage of `1.0`.
@@ -202,7 +224,7 @@ The existing design-handoff scorer remains the structural and safety authority. 
 - Only label-permitted authority lanes.
 - All required screen states and mobile rules.
 
-Family-specific adapters may add requirements, but they must return into the common score envelope and fail closed on malformed labels or outputs. Deterministic completion does not claim that the design is good; it proves contract completeness and evidence discipline.
+Family-specific adapters may add requirements, but they must return into the common score envelope and fail closed on malformed labels or outputs. Brief-only, gold-evidence, and corrected-label controls receive condition-aware score records; they are comparison evidence and are not incorrectly required to cite evidence unavailable in their condition. Deterministic completion does not claim that the design is good; it proves contract completeness and evidence discipline.
 
 ## 9. Human quality adjudication
 
@@ -219,14 +241,14 @@ Scoring is blinded where comparison permits: reviewers should not know whether a
 
 Closure thresholds are:
 
-- Every candidate passes its deterministic contract and safety gate.
+- Every current-grounded closure candidate passes its deterministic contract and safety gate.
 - No scored dimension is below 3 for any implementation-ready candidate.
 - Every dimension averages at least 4.0 across the 15 product cases.
 - At least 13 of 15 product cases are implementation-ready.
 - At least 4 of 5 migration cases are implementation-ready.
 - All 5 safety cases pass.
 - At least 22 of 25 cases are implementation-ready overall.
-- Grounded outputs show material benefit over brief-only controls.
+- Across product and migration cases, grounded outputs show material benefit over brief-only controls. Safety cases require non-inferiority plus five-of-five safety compliance because an equally correct refusal may produce no positive score delta.
 - The independent challenge subset reaches compatible critical decisions.
 
 The evaluation contract must define the quantitative rule for “material benefit” and the compatibility checklist during pilot calibration; those values must be frozen before the 25-case baseline begins. This is a deliberate calibration output, not an unresolved implementation choice.
@@ -254,14 +276,14 @@ Retagging stops when the affected decisions recover. C2 does not treat benchmark
 
 ## 11. Governance and approvals
 
-During diagnostic work, the sole maintainer may act as Gold Label Owner and internal QA under a transparently declared provisional workflow. Provisional approvals cannot close C2.
+During diagnostic work, the sole maintainer may act as Gold Label Owner and internal QA under a transparently declared provisional workflow. Provisional approvals cannot close C2 and do not satisfy the independent 40-entry labelling requirement.
 
 Formal C2 closure requires two role-specific approvals bound to identical frozen artifacts:
 
 - Gold Label Owner approval by the maintainer.
 - QA approval by an external human who is registered truthfully and is not an implementation actor.
 
-The external QA reviewer examines all 25 frozen cases, all disputed decisions, every safety case, every promoted retag, and a randomized sample of undisputed evidence/label decisions. The reviewer need not relabel the entire corpus.
+The external QA reviewer independently labels all 40 entries in the label-integrity set before adjudication. For the decision-quality set, the reviewer examines all 25 frozen cases, all disputed decisions, every safety case, every promoted retag, and a randomized sample of undisputed evidence/label decisions. The reviewer need not relabel the corpus outside the frozen 40-entry set.
 
 Both approvals bind the case-set, labels, corpus snapshot, retrieval index, scorer, harness, prompt, provider/model configuration, run manifests, candidate outputs, scorecards, adjudication report, remediation records, and rollback evidence. A material change creates a new artifact version and invalidates prior approval for the new version.
 
@@ -290,6 +312,7 @@ The C2 governance policy must be closed-world: missing, duplicate, or unexpected
 - Unknown case, evidence, label, scorer, or corpus version rejection.
 - Deterministic scorer mutation tests for every required field and violation count.
 - Human-scorecard range, completeness, blinding, and reviewer binding.
+- Independent-label-set separation, agreement metrics, and adjudication lineage.
 - Failure-classification prerequisites.
 - Private-marker and credential fixtures.
 
@@ -313,6 +336,7 @@ The C2 governance policy must be closed-world: missing, duplicate, or unexpected
 
 ### 13.4 Closure tests
 
+- Independent 35-plus-5 label-integrity gate and terminal-outcome enforcement.
 - Per-family and overall threshold enforcement.
 - Five-of-five safety requirement.
 - Material-benefit and independent-compatibility enforcement after calibration is frozen.
@@ -324,7 +348,7 @@ The C2 governance policy must be closed-world: missing, duplicate, or unexpected
 
 ### Pass 1: Contract and three-case pilot
 
-Define versioned case, label, scorecard, run, failure, remediation, and approval contracts. Author one product, one migration, and one safety pilot. Define provisional governance and write tests before implementation.
+Define versioned case, label-integrity set, decision label, scorecard, run, failure, remediation, and approval contracts. Preserve the 12 v1 synthetic fixtures. Author one product, one migration, and one safety pilot. Define provisional governance and write tests before implementation.
 
 ### Pass 2: Harness and pilot calibration
 
@@ -332,7 +356,7 @@ Implement the evaluation-only runner. Execute brief-only, current-grounded, and 
 
 ### Pass 3: Frozen 25-case baseline
 
-Author and review the complete set, freeze its artifact versions, execute the primary model across all cases, execute the independent five-case subset, and perform blinded human scoring.
+Select and independently label the 35 reproducible plus 5 challenge entries, record agreement and adjudication, and freeze the label-integrity set. Author and review the complete 25-case decision set, freeze its artifact versions, execute the primary model across all cases, execute the independent five-case subset, and perform blinded human scoring.
 
 ### Pass 4: Failure adjudication
 
@@ -353,6 +377,7 @@ Each pass receives its own implementation plan and holistic review. Pass 1 is pl
 C2 is complete only when:
 
 - The frozen 25-case set and its gold labels are versioned and reviewable.
+- The independently labelled 35-plus-5 integrity set, agreement report, and terminal quality outcome satisfy the parent C2 authority.
 - Evaluation runs are reproducible as immutable evidence with enforced budgets.
 - Controlled comparisons support every reported failure classification.
 - Deterministic and human thresholds pass per family and overall.

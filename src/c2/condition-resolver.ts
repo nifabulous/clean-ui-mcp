@@ -189,13 +189,22 @@ async function resolveCurrentGrounded(
 
   // 3. Run the pinned keyword-only retrieval. The shipped `searchRanked` makes
   //    ZERO Voyage requests under `searchMode: "keyword-only"` (Task 6 Step 3).
-  const ranked = await deps.reader.searchRanked({
-    query,
-    limit: C2_RETRIEVAL_LIMIT,
-    reviewStatus: "approved",
-    rerank: false,
-    searchMode: C2_RETRIEVAL_MODE,
-  });
+  //    `searchRanked` is a SHARED contract that returns the FULL ranked list
+  //    (other consumers — MCP tools, the critique pipeline — depend on that).
+  //    The resolver enforces its OWN C2-specific limit by slicing here, at the
+  //    boundary, so the shared method stays unchanged. Without this slice a
+  //    ranked list of N entries (the production corpus returned 787) would
+  //    balloon the current-grounded prompt's evidence section unboundedly and
+  //    get cost-blocked.
+  const ranked = (
+    await deps.reader.searchRanked({
+      query,
+      limit: C2_RETRIEVAL_LIMIT,
+      reviewStatus: "approved",
+      rerank: false,
+      searchMode: C2_RETRIEVAL_MODE,
+    })
+  ).slice(0, C2_RETRIEVAL_LIMIT);
 
   // 4. Re-hash `corpus/entries.json` AFTER ranking. If the corpus mutated
   //    during resolution, abort — the evidence would bind to a moving target.

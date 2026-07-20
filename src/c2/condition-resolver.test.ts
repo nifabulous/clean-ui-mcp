@@ -160,6 +160,50 @@ function makeCorpusResults(): SearchResult[] {
   ];
 }
 
+/**
+ * Generate N synthetic corpus entries returned in stable order by the fake
+ * reader. Used to exercise the resolver's retrieval-limit enforcement when
+ * `searchRanked` returns MORE than the C2 limit (Bug #4: the shared
+ * `searchRanked` contract returns the full ranked list; the resolver must
+ * enforce its OWN limit by slicing).
+ */
+function makeManyCorpusResults(count: number): SearchResult[] {
+  const base = {
+    categories: ["dashboard"],
+    styleTags: [],
+    components: [],
+    domainTags: [],
+    patternType: "dashboard",
+    critique: "alpha alpha alpha",
+    whatToSteal: [],
+    antiPatterns: { antiPatterns: [], whereThisFails: [] },
+    qualityScore: 7,
+    qualityTier: "strong",
+    platform: "web" as const,
+    reviewStatus: "approved" as const,
+    visual: {
+      dominantColors: [],
+      accentColor: null,
+      spacingDensity: null,
+      cornerStyle: null,
+      typePairing: { display: null, body: null, notes: null },
+    },
+    source: { productName: "Synthetic", url: "https://example.com/synthetic" },
+    image: { path: "images-private/synthetic.png", format: "png", width: 100, height: 100 },
+    businessRationale: null,
+    mood: null,
+    colorScheme: null,
+    industryVertical: null,
+    responsiveBehavior: null,
+  } as unknown as CorpusEntryT;
+  return Array.from({ length: count }, (_, i) => ({
+    entry: { ...base, id: `entry-${i}`, title: `Entry ${i}` } as unknown as CorpusEntryT,
+    // Strictly decreasing score so entry-0 is top-ranked, entry-N is last.
+    score: count - i,
+    searchMode: "keyword" as const,
+  }));
+}
+
 /** The deterministic query the resolver must produce from the brief fields. */
 function expectedBriefQuery(brief: C2CaseBrief): string {
   return [
@@ -436,6 +480,60 @@ describe("resolveConditionInput", () => {
       depsB,
     );
     expect(rB.metadata.inputSha256).toBe(rA.metadata.inputSha256);
+  });
+
+  it("current-grounded truncates retrieval to C2_RETRIEVAL_LIMIT when searchRanked returns MORE than the limit", async () => {
+    // Bug #4: `searchRanked` is a SHARED contract that returns the full ranked
+    // list (other consumers depend on that). The resolver must enforce its OWN
+    // limit by slicing the result, otherwise current-grounded prompts balloon
+    // unboundedly. This fake reader returns 15 entries — 5 over the C2 limit of
+    // 10 — so the resolver must retain exactly the top 10.
+    const brief = makeBrief();
+    const { deps, searchRanked } = makeDeps({ privateRoot, ranked: makeManyCorpusResults(15) });
+    const result = await resolveConditionInput(
+      makeRequest({ condition: "current-grounded", brief }),
+      deps,
+    ) as ResolvedConditionInput & { metadata: Extract<C2ConditionInput, { condition: "current-grounded" }> };
+
+    // The fake reader was called with the pinned limit, but returned 15 — the
+    // shared contract is unchanged. The truncation belongs at the resolver.
+    expect(searchRanked).toHaveBeenCalledTimes(1);
+    expect(searchRanked).toHaveBeenCalledWith({
+      query: expectedBriefQuery(brief),
+      limit: 10,
+      reviewStatus: "approved",
+      rerank: false,
+      searchMode: "keyword-only",
+    });
+
+    const retrieval = result.metadata.retrieval;
+    // The resolver MUST retain at most C2_RETRIEVAL_LIMIT (10) across every
+    // surface that downstream code reads: the full ranked result, the
+    // selected-entry IDs, and the evidence records.
+    expect(retrieval.rankedResult).toHaveLength(10);
+    expect(retrieval.selectedEntryIds).toHaveLength(10);
+    expect(result.metadata.evidence).toHaveLength(10);
+
+    // The retained entries are the FIRST 10 (top-ranked). Scores are strictly
+    // decreasing in the fixture, so entry-0 is rank 1 ... entry-9 is rank 10;
+    // entry-10 through entry-14 MUST be dropped.
+    expect(retrieval.rankedResult.map((r) => r.entryId)).toEqual(
+      Array.from({ length: 10 }, (_, i) => `entry-${i}`),
+    );
+    expect(retrieval.selectedEntryIds).toEqual(
+      Array.from({ length: 10 }, (_, i) => `entry-${i}`),
+    );
+    expect(result.metadata.evidence.map((e) => e.id)).toEqual(
+      Array.from({ length: 10 }, (_, i) => `corpus:entry-${i}`),
+    );
+    // entry-10+ MUST NOT leak into the prompt-bound evidence.
+    expect(result.metadata.evidence.some((e) => e.id === "corpus:entry-10")).toBe(false);
+    expect(result.metadata.evidence.some((e) => e.id === "corpus:entry-14")).toBe(false);
+    // Ranks are 1..10 (not 1..15) — the truncation happens BEFORE ranking is
+    // assigned to evidence records, so the rank counter restarts on the sliced
+    // list.
+    const ranks = retrieval.rankedResult.map((r) => r.rank);
+    expect(ranks).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
   it("current-grounded aborts when corpus/entries.json changes during resolution", async () => {

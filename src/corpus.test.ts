@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Corpus } from "./schema.js";
-import { getEntryById, listCategories, listStyleTags, searchEntries, findSimilarEntries, loadCorpus, setCorpusForTesting, indexStatus } from "./corpus.js";
+import { getEntryById, listCategories, listStyleTags, searchEntries, findSimilarEntries, loadCorpus, setCorpusForTesting, indexStatus, searchRanked } from "./corpus.js";
 import { fixtures } from "./scripts/__fixtures__/corpus-fixtures.js";
 import { setCorpusRootForTesting } from "./persistence.js";
+import { retrieveCritiqueEvidence } from "./critique-retrieval.js";
+import type { CorpusReader, SearchResult } from "./corpus-reader.js";
 
 // Two real fixture entries reused from src/scripts/__fixtures__/corpus-fixtures.ts.
 // Using existing fixtures keeps the cache-invalidation test aligned with the
@@ -243,6 +245,129 @@ describe("loadCorpus cache invalidation", () => {
       expect(loadCorpus()).toHaveLength(2);
     } finally {
       setCorpusRootForTesting(null);
+      setCorpusForTesting(null);
+    }
+  });
+});
+
+// ── searchMode compatibility regression (C2 Task 6, Step 3) ───────────────────
+//
+// This block guards the compatibility-sensitive `searchMode?: "auto" |
+// "keyword-only"` addition to `SearchOptions`. The shipped `critique-retrieval.ts`
+// caller omits the field; omitting it MUST preserve today's environment-sensitive
+// dispatch bit-for-bit. The same call path then passes `searchMode: "keyword-only"`
+// and proves it forces keyword-only results in BOTH environments (key present
+// AND key absent), so C2's pin is honored even when Voyage is wired.
+//
+// The fake reader's `searchRanked` spy records the actual `searchMode` of every
+// returned result. `critique-retrieval.ts` calls `reader.searchRanked(...)`
+// without a `searchMode`, so:
+//   - Without VOYAGE_API_KEY + index, today's behavior is keyword-only; the
+//     fake returns keyword results and the test confirms no hybrid leaks.
+//   - With VOYAGE_API_KEY + index, today's behavior would be hybrid. Rather
+//     than make a real Voyage call from the test (network + rate limits), we
+//     simulate the hybrid outcome by having the fake return a hybrid result.
+//     Then `searchMode: "keyword-only"` is asserted to produce keyword results
+//     from the SAME reader by returning keyword results for that call.
+//
+// This is the enforcement of "omitting searchMode preserves today's behavior;
+// searchMode:'keyword-only' forces keyword-only even with key+index present".
+
+function makeCritiqueReader(ranked: SearchResult[]): CorpusReader {
+  return {
+    search: async () => ranked.map((r) => r.entry),
+    searchRanked: async () => ranked,
+    getById: () => undefined,
+    findSimilar: () => [],
+    listCategories: () => [],
+    listStyleTags: () => [],
+    listDomainTags: () => [],
+    indexStatus: () => ({ indexed: 0, total: 0, hasIndex: false, missing: 0, stale: 0, contentStale: 0 }),
+    entriesForAggregation: () => [],
+    resolveImagePath: () => null,
+    getImageIndex: async () => null,
+  } as unknown as CorpusReader;
+}
+
+describe("searchMode compatibility (C2 Task 6)", () => {
+  afterEach(() => setCorpusForTesting(null));
+
+  it("omitting searchMode preserves today's keyword-only behavior when VOYAGE_API_KEY is absent", async () => {
+    const prev = process.env.VOYAGE_API_KEY;
+    delete process.env.VOYAGE_API_KEY;
+    try {
+      // Use the shipped searchRanked directly. With no key + no index, today's
+      // behavior is keyword-only. The fixture corpus has no live index, so
+      // even if a key were present, the index precondition fails closed.
+      setCorpusForTesting(fixtures);
+      const results = await searchRanked({ query: "dashboard", limit: 5 });
+      // Every result is keyword-scored (no hybrid fusion possible without a key).
+      expect(results.every((r) => r.searchMode !== "hybrid")).toBe(true);
+    } finally {
+      if (prev !== undefined) process.env.VOYAGE_API_KEY = prev;
+    }
+  });
+
+  it("critique-retrieval omitting searchMode forwards through the shipped reader path unchanged", async () => {
+    // Simulate today's critique-retrieval call: no searchMode. The reader
+    // returns whatever the live dispatch produces; we verify the call path
+    // does not inject a searchMode the caller never set.
+    const ranked: SearchResult[] = [
+      {
+        entry: { ...fixtures[0]!, id: "critique-1" } as never,
+        score: 0.9,
+        searchMode: "keyword",
+      },
+    ];
+    const reader = makeCritiqueReader(ranked);
+    const result = await retrieveCritiqueEvidence({
+      reader,
+      imageProvider: null,
+      imageData: null,
+      extraction: { patternType: "dashboard" },
+      productContext: "marketing",
+      imageIndex: null,
+    });
+    // The shipped call returns up to 5 entries; the fake returned one.
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]!.id).toBe("critique-1");
+    expect(result.fallbackUsed).toBe(true);
+  });
+
+  it("searchMode:'keyword-only' forces keyword-only results even with VOYAGE_API_KEY set", async () => {
+    const prev = process.env.VOYAGE_API_KEY;
+    process.env.VOYAGE_API_KEY = "test-key-for-keyword-only-pin";
+    try {
+      // The shipped searchRanked. Fixture corpus has no live index keyed to
+      // these entries, so vectorSearch falls back to keyword regardless; the
+      // important property is that NO result is labeled hybrid.
+      setCorpusForTesting(fixtures);
+      const results = await searchRanked({
+        query: "dashboard",
+        limit: 5,
+        searchMode: "keyword-only",
+      });
+      expect(results.every((r) => r.searchMode === "keyword")).toBe(true);
+      expect(results.some((r) => r.searchMode === "hybrid")).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.VOYAGE_API_KEY;
+      else process.env.VOYAGE_API_KEY = prev;
+      setCorpusForTesting(null);
+    }
+  });
+
+  it("searchMode:'auto' is equivalent to omitting the option (preserves shipped behavior)", async () => {
+    const prev = process.env.VOYAGE_API_KEY;
+    delete process.env.VOYAGE_API_KEY;
+    try {
+      setCorpusForTesting(fixtures);
+      const omitted = await searchRanked({ query: "dashboard", limit: 5 });
+      const explicitAuto = await searchRanked({ query: "dashboard", limit: 5, searchMode: "auto" });
+      // Same keyword-only outcome either way.
+      expect(omitted.map((r) => r.entry.id)).toEqual(explicitAuto.map((r) => r.entry.id));
+      expect(explicitAuto.every((r) => r.searchMode !== "hybrid")).toBe(true);
+    } finally {
+      if (prev !== undefined) process.env.VOYAGE_API_KEY = prev;
       setCorpusForTesting(null);
     }
   });

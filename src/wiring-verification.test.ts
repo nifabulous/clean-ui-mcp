@@ -266,6 +266,20 @@ const ALLOWLIST = new Set<string>([
   "assertRunBudget",
   "assertCampaignBudget",
   "preflightCampaignCosts",
+  // c2/condition-resolver.ts + c2/private-artifacts.ts — Task 6. The resolver
+  // converts a model-visible brief + control condition into an immutable,
+  // content-addressed condition input. The private-artifacts module supplies
+  // the atomic write + boundary-scan primitives. The production caller is the
+  // paid-call harness (Task 7), which resolves a condition input before every
+  // provider request and routes private vs. durable writes through these
+  // primitives. Listed here rather than wired to a placeholder caller to avoid
+  // fake coupling, per the same precedent as cost-policy above. Internal
+  // helpers (briefToQuery, resolveJsonPointer, computeInputSha256, C2_RETRIEVAL_*)
+  // are referenced by resolveConditionInput and so do not need allowlisting.
+  "resolveConditionInput",
+  "writePrivateArtifact",
+  "writeDurableArtifact",
+  "scanDurableArtifact",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

@@ -99,6 +99,14 @@ eval/c2/pilot/*
 # Gitignored because they're large, derivable, and purely a local safety net.
 corpus/.snapshots/
 
+# C2 Pass 2 private run directory (Task 6). Raw responses, parsed candidates,
+# detailed evidence payloads, full condition inputs, and corpus snapshots live
+# here. These are NEVER committable — only their hashes + metadata may reach a
+# durable artifact, and a boundary scanner enforces that before any write.
+# Tracked durable artifacts (deterministic scores, calibration proposals,
+# frozen calibration) live elsewhere and pass the scan.
+.c2-private/
+
 # Bulk-import working state. Draft files are the staged-but-uncommitted output
 # of `npm run bulk-import`; their .bak siblings come from the strip-and-approve
 # helper. Per-batch manifests (bulk-*-manifest.json) ARE kept — they record

@@ -202,3 +202,12 @@ export type C2CaseBrief = z.infer<typeof C2CaseBriefSchema>;
 export type C2DecisionLabel = z.infer<typeof C2DecisionLabelSchema>;
 export type C2CasePackageManifest = z.infer<typeof C2CasePackageManifestSchema>;
 export type C2PilotManifest = z.infer<typeof C2PilotManifestSchema>;
+// Gold-evidence descriptor + record types (Task 3). The descriptor maps every
+// reviewer-only goldEvidenceId to exact source JSON pointers; the condition
+// resolver (Task 6) consumes these to resolve model-visible bytes without
+// copying reviewer fields. Exported as inferred types so consumers (resolver,
+// manifest builder) share one canonical shape with the schema.
+export type C2GoldEvidenceRecord = z.infer<typeof C2GoldEvidenceRecordSchema>;
+export type C2GoldEvidenceDescriptor = z.infer<typeof C2GoldEvidenceDescriptorSchema>;
+export type C2GoldEvidenceRecordBinding = z.infer<typeof C2GoldEvidenceRecordBindingSchema>;
+export type C2PilotGoldEvidenceBinding = z.infer<typeof C2PilotGoldEvidenceBindingSchema>;

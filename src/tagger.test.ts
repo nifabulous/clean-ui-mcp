@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
-import { sanitizeTaggerPayload, tagImage, generateCritique, extractQuantizedColors, hasVisionKey, activeModelName, validateNoIconOnlyClaims, validateCritiqueComponentClaims, scrubProseIconOnly } from "./tagger.js";
+import { sanitizeTaggerPayload, tagImage, generateCritique, extractQuantizedColors, hasVisionKey, activeModelName, validateNoIconOnlyClaims, validateCritiqueComponentClaims, scrubProseIconOnly, callTextModelWithMetadata } from "./tagger.js";
 import { PRIVATE_IMAGE_DIR } from "./paths.js";
 
 describe("tagger sanitization", () => {
@@ -1607,5 +1607,101 @@ describe("endpoint-config override", () => {
 
     // No fetch should have been made — validation fails fast at the boundary
     expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Claude adaptive thinking (C2 path) ──────────────────────────────────────
+// Claude Sonnet 5+ runs with adaptive thinking ENABLED by default, and thinking
+// tokens count against max_tokens. The C2 harness calls Claude with
+// max_tokens:4096. Sonnet 5 spent tokens on `thinking` content blocks, leaving
+// little/no room for the visible `text` response → empty or truncated JSON.
+// Fix: when callClaudeWithMetadata is invoked from the C2 path (which pins
+// maxOutputTokens via callTextModelWithMetadata), disable thinking. Legacy
+// callers (no maxOutputTokens) keep the model default.
+describe("Claude adaptive thinking (C2 path)", () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY };
+
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (originalEnv.ANTHROPIC_API_KEY === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = originalEnv.ANTHROPIC_API_KEY;
+  });
+
+  it("disables thinking when maxOutputTokens is set (C2 path pins the budget)", async () => {
+    // C2 entry point callTextModelWithMetadata pins maxOutputTokens=4096 → the
+    // request body must include thinking:{type:"disabled"} so Sonnet 5 doesn't
+    // spend the output budget on internal reasoning.
+    const capturedBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      capturedBodies.push(body);
+      return new Response(JSON.stringify({
+        model: "claude-sonnet-5-20250929",
+        content: [{ type: "text", text: '{"hello":"world"}' }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    await callTextModelWithMetadata({
+      prompt: "say hi",
+      endpoint: { provider: "claude", model: "claude-sonnet-5-20250929", apiKey: "sk-ant-test" },
+      maxOutputTokens: 4096,
+      maxAttempts: 1,
+    });
+
+    expect(capturedBodies).toHaveLength(1);
+    expect(capturedBodies[0].thinking).toEqual({ type: "disabled" });
+  });
+
+  it("does NOT set thinking when maxOutputTokens is undefined (legacy path)", async () => {
+    // Legacy tagger callers (callClaude/callModel) omit maxOutputTokens and may
+    // want thinking at the model default — the field must be absent from the
+    // request body. We exercise this through callClaude via the routing layer
+    // (callTextModel with providerOverride="claude"), which dispatches to
+    // callClaudeWithMetadata with no options → no maxOutputTokens threaded.
+    const capturedBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      capturedBodies.push(body);
+      return new Response(JSON.stringify({
+        model: "claude-sonnet-5-20250929",
+        content: [{ type: "text", text: '{"hello":"world"}' }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    // callClaudeWithMetadata is internal; reach it via callTextModel with an
+    // explicit claude provider override. No options.maxOutputTokens is threaded,
+    // so thinking must NOT be set on the body.
+    const { callTextModel } = await import("./tagger.js");
+    await callTextModel("say hi", "claude");
+
+    expect(capturedBodies.length).toBeGreaterThanOrEqual(1);
+    for (const body of capturedBodies) {
+      expect(body.thinking).toBeUndefined();
+    }
+  });
+
+  it("throws a clear error when the response contains only thinking blocks (no text)", async () => {
+    // Defensive extraction: if content blocks are present but no text block was
+    // extracted (e.g. the model spent the whole budget on thinking), surface a
+    // clear error instead of silently returning an empty string.
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      model: "claude-sonnet-5-20250929",
+      content: [{ type: "thinking", thinking: "let me reason about this..." }],
+      usage: { input_tokens: 10, output_tokens: 4096 },
+    }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+
+    await expect(callTextModelWithMetadata({
+      prompt: "say hi",
+      endpoint: { provider: "claude", model: "claude-sonnet-5-20250929", apiKey: "sk-ant-test" },
+      maxOutputTokens: 4096,
+      maxAttempts: 1,
+    })).rejects.toThrow(/no text block was extracted|thinking/i);
   });
 });

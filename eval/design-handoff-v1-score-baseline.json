@@ -1,0 +1,1001 @@
+{
+  "labelVersion": 1,
+  "scores": {
+    "marketing-northwind": {
+      "satisfiable": {
+        "complete": true,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-required-state": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-mobile-rule": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-acceptance-criterion": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 0.5,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "unsupported-claim": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "private-marker": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 1,
+        "unresolvedEvidenceCount": 0
+      },
+      "unresolved-evidence": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 1
+      },
+      "observation-no-lane": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 2,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "inaccessible-url": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      }
+    },
+    "saas-dashboard-pulsegrid": {
+      "satisfiable": {
+        "complete": true,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-required-state": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-mobile-rule": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-acceptance-criterion": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 0.5,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "unsupported-claim": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "private-marker": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 1,
+        "unresolvedEvidenceCount": 0
+      },
+      "unresolved-evidence": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 1
+      },
+      "observation-no-lane": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 2,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "inaccessible-url": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      }
+    },
+    "fintech-ledgerly": {
+      "satisfiable": {
+        "complete": true,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-required-state": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-mobile-rule": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-acceptance-criterion": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 0.5,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "unsupported-claim": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "private-marker": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 1,
+        "unresolvedEvidenceCount": 0
+      },
+      "unresolved-evidence": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 1
+      },
+      "observation-no-lane": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 2,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "inaccessible-url": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      }
+    },
+    "mobile-fieldnote": {
+      "satisfiable": {
+        "complete": true,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-required-state": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-mobile-rule": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-acceptance-criterion": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 0.5,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "unsupported-claim": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "private-marker": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 1,
+        "unresolvedEvidenceCount": 0
+      },
+      "unresolved-evidence": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 1
+      },
+      "observation-no-lane": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 2,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "inaccessible-url": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      }
+    },
+    "onboarding-tidemark": {
+      "satisfiable": {
+        "complete": true,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-required-state": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-mobile-rule": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-acceptance-criterion": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 0.5,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "unsupported-claim": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "private-marker": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 1,
+        "unresolvedEvidenceCount": 0
+      },
+      "unresolved-evidence": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 1
+      },
+      "observation-no-lane": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 2,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "inaccessible-url": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      }
+    },
+    "operations-ironhall": {
+      "satisfiable": {
+        "complete": true,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-required-state": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-mobile-rule": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-acceptance-criterion": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 0.5,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "unsupported-claim": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "private-marker": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 1,
+        "unresolvedEvidenceCount": 0
+      },
+      "unresolved-evidence": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 1
+      },
+      "observation-no-lane": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 2,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "inaccessible-url": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      }
+    },
+    "sparse-glimmerlake": {
+      "satisfiable": {
+        "complete": true,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-required-state": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-mobile-rule": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-acceptance-criterion": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 0.5,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "unsupported-claim": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "private-marker": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 1,
+        "unresolvedEvidenceCount": 0
+      },
+      "unresolved-evidence": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 1
+      },
+      "observation-no-lane": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "inaccessible-url": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      }
+    },
+    "conflict-bramblestone": {
+      "satisfiable": {
+        "complete": true,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-required-state": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-mobile-rule": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-acceptance-criterion": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 0.5,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "unsupported-claim": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "private-marker": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 1,
+        "unresolvedEvidenceCount": 0
+      },
+      "unresolved-evidence": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 1
+      },
+      "observation-no-lane": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 2,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "inaccessible-url": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      }
+    },
+    "inaccessible-summitry": {
+      "satisfiable": {
+        "complete": true,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-required-state": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-mobile-rule": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-acceptance-criterion": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 0.5,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "unsupported-claim": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "private-marker": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 1,
+        "unresolvedEvidenceCount": 0
+      },
+      "unresolved-evidence": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 1
+      },
+      "observation-no-lane": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "inaccessible-url": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      }
+    },
+    "publicsite-meadowloop": {
+      "satisfiable": {
+        "complete": true,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-required-state": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-mobile-rule": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-acceptance-criterion": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 0.5,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "unsupported-claim": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "private-marker": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 1,
+        "unresolvedEvidenceCount": 0
+      },
+      "unresolved-evidence": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 1
+      },
+      "observation-no-lane": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 3,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "inaccessible-url": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      }
+    },
+    "cookie-candorly": {
+      "satisfiable": {
+        "complete": true,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-required-state": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-mobile-rule": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-acceptance-criterion": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 0.5,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "unsupported-claim": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "private-marker": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 1,
+        "unresolvedEvidenceCount": 0
+      },
+      "unresolved-evidence": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 1
+      },
+      "observation-no-lane": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 2,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "inaccessible-url": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      }
+    },
+    "derivative-stipplecraft": {
+      "satisfiable": {
+        "complete": true,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-required-state": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-mobile-rule": {
+        "complete": false,
+        "requiredSectionCoverage": 0.8333333333333334,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "missing-acceptance-criterion": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 0.5,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "unsupported-claim": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "private-marker": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 1,
+        "unresolvedEvidenceCount": 0
+      },
+      "unresolved-evidence": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 0,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 1
+      },
+      "observation-no-lane": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 2,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      },
+      "inaccessible-url": {
+        "complete": false,
+        "requiredSectionCoverage": 1,
+        "requiredDecisionCoverage": 1,
+        "acceptanceCriterionCoverage": 1,
+        "unsupportedClaimCount": 1,
+        "forbiddenDisclosureCount": 0,
+        "unresolvedEvidenceCount": 0
+      }
+    }
+  }
+}

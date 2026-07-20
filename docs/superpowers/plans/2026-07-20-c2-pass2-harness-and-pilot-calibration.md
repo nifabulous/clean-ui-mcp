@@ -1049,6 +1049,51 @@ Two theoretical parallel lanes (Tasks 2+3 vs Task 4) share no modules, but the c
 
 **PR 2 (Task 10) is strictly sequential after PR 1 merges** — by design.
 
+## Post-implementation amendments (2026-07-20, retroactive)
+
+A post-implementation `/plan-eng-review` against the shipped Tasks 1-9 (branch `codex/c2-pass2-harness-pr1`, commits `3db1a29`..`4e44f51`) found 8 places where the implementation diverged from the plan's described steps. None changes the architecture; all are correctness fixes, integration discoveries, or clarifications that Pass 3's planner needs. Backfilled here so the plan is an accurate standalone artifact.
+
+### P1 — correctness fixes caught by two-stage review
+
+1. **V2 manifest `terminalReason` is nullable.** Task 1 Step 5 says "Add V2 with explicit `terminalReason`" without specifying nullability. The shipped V2 schema (`src/c2/evaluation-contracts.ts:260`) makes `terminalReason: C2TerminalReasonSchema.nullable()` because running-state manifests (written before the provider call) have no terminal reason yet. The `statusReasonOk` check (`:273`) has a `run.status === "running" && run.terminalReason === null` branch. Without this, running manifests cannot parse as V2 and Task 7's lifecycle step 5 (write running manifest before egress) is impossible. Caught by code-quality review of Task 1.
+
+2. **Claude/Gemini model pinning threads `modelOverride` as a function argument.** Task 4 doesn't mention the env-mutation issue. The initial implementation used `process.env.CLAUDE_AUTO_TAG_MODEL = model` mutation, which was **dead code** — `callClaudeWithMetadata` reads the module-level constant captured at load (`CLAUDE_AUTO_TAG_MODEL` at `src/tagger.ts:560`), not the live `process.env` value. The shipped fix (`src/tagger.ts:2188`) adds `options?.modelOverride ?? CLAUDE_AUTO_TAG_MODEL` and removes the env mutation entirely. Same pattern for Gemini (`:2278`, `:2312`). Caught by code-quality review of Task 4; would have shipped a broken C2 pinning contract for 2 of 3 providers without the review.
+
+3. **OpenAI `apiKey` resolved from `apiKeyEnv` at the CLI layer.** Task 4 implies `endpoint.apiKey` is honored. The initial CLI implementation (`src/scripts/run-c2-pilot.ts:526`) constructed `endpoint: { provider, model }` with NO `apiKey`, causing `callTextModelWithMetadata` to throw `endpoint.apiKey is required for provider "openai"` before any fetch — every primary-lane live run would have failed with a misleading `provider-failed`. The shipped fix adds `buildModelEndpoint` (`:511`) which resolves `apiKey: process.env[req.apiKeyEnv] ?? ""`. Claude/Gemini documented as env-only (they read their own env vars inside the call functions). Caught by code-quality review of Task 7; invisible to the test suite because no test reaches a live provider.
+
+### P2 — integration fixes
+
+4. **Boundary scanner uses exact-name matching, not prefix matching.** Task 6 Step 6 describes the scanner but not the matching strategy. The initial implementation (`src/c2/private-artifacts.ts:144`) used a prefix regex `"prompt[A-Za-z0-9_]*"` which false-positive-matched legitimate V2 manifest fields (`promptSha256`, `promptTokens`). The shipped fix (`:144`) uses exact-name matching against `FORBIDDEN_CONTENT_FIELDS` so hash/count fields are not rejected. Required when Task 7 wired the scanner into `writeManifestDurable`.
+
+5. **CLI entry-point guard.** Task 7 doesn't mention module-load side effects. The initial `run-c2-pilot.ts` ran `parseArgs` + `main()` at module scope, so importing the module (which tests do for `buildModelEndpoint`) executed the CLI and called `process.exit(2)`. The shipped fix wraps the entry block in `if (import.meta.url === \`file://${process.argv[1]}\`)` and moves `parseArgs`/`subcommand` inside `main()`.
+
+6. **`C2_NO_DOTENV` escape hatch in `src/env.ts`.** Task 7 doesn't mention env auto-load. The repo's `src/env.ts` auto-loads `.env` with `override: true` (intentional per commit `04208fb`), which defeated the CLI's credential preflight in tests (the subprocess re-acquired real `OPENAI_API_KEY` from `.env` even when the test stripped it). The shipped fix adds `C2_NO_DOTENV=1` (`src/env.ts:63`) which skips the auto-load; the CLI's `spawnCli` test helper sets it. Production behavior unchanged (auto-load runs by default).
+
+7. **`cliSynthesized` marker on CLI-produced compatibility.** Task 8 describes `evaluateIndependentCompatibility` as a real evaluation. The CLI's `buildCompatibilityInput` (`src/scripts/run-c2-pilot.ts:760`) fabricates a "compatible" result from score-completeness signals because the run artifacts don't enumerate per-decision lanes. The shipped fix adds `cliSynthesized: z.boolean().optional()` to `IndependentCompatibilitySchema` (`src/c2/condition-contracts.ts:353`) so the proposal artifact is self-describing. The human-authored freeze authorization is the binding authority.
+
+### P3 — clarifications
+
+8. **Task 9 resolves 9 unique condition-input files, not 12.** The plan's Step 1 says "nine primary condition inputs plus the configured three Claude inputs." The implementation resolves 9 primary files (3 cases × 3 OpenAI conditions); the 3 Claude runs reuse the same `current-grounded` files because Claude's `independentConditions: ["current-grounded"]` is a subset of OpenAI's `conditions`. Total runs = 12, but only 9 unique condition-input files on disk. Plus: `entryToContent` (`src/c2/condition-resolver.ts:505`) was fixed to coerce `entry.platform ?? null` because 340/787 corpus entries omit the optional `platform` field — without this, `prepare` fails with `undefined is not canonical JSON`. Caught by the OV7 synthetic e2e test before any paid execution.
+
+### Deferred to PR 2 (10 Minor debt items)
+
+The holistic final reviewer captured 10 Minor items that are not blockers for PR 1 but should be addressed before PR 2 (Task 10, paid pilot):
+
+- **M1:** CLI `run` should re-parse the prepared condition input through `C2ConditionInputSchema` and verify `inputSha256` round-trips (currently loaded via `JSON.parse(...) as C2ConditionInput` cast).
+- **M2:** `freezeCalibration` should refuse an authorization whose `independentChecklist` carries `cliSynthesized: true` (require explicit human-authored compatibility at freeze time).
+- **M3:** `forecastUsd` is dead code on the manifest-build path (`void input.forecastUsd` at `harness.ts:726`) — either drop from `BuildManifestInput` or persist via a V2.1 schema extension.
+- **M4:** CLI uses plain `writeFileSync` in `prepare` and `makeFilesystemStore` rather than the atomic `writePrivateArtifact` primitive. Boundary scan still runs before durable writes; atomicity missing.
+- **M5:** `run-c2-pilot.test.ts`'s `prepare` test times out at 15s under parallel load (passes in 3.8s in isolation). Raise `testTimeout` for CLI-spawning describes.
+- **M6:** Harness pins literal `ceilingUsd: 0.5` / `5` rather than threading `campaign.maxRunCostUsd` / `maxCampaignCostUsd`. Duplicates the schema literals.
+- **M7:** `runId` template `c2-run-${caseId}-${condition}-${n}`.slice(0, 64)` could truncate mid-token for longer caseIds.
+- **M8:** `entryToContent` hardcodes the model-visible subset of a corpus entry. Consider deriving from a schema-driven projection.
+- **M9:** `wiring-verification.test.ts` allowlist grew by 6 entries for Task 6-8 symbols. PR 2 should wire real CLI callers and remove them from the allowlist.
+- **M10:** `roundPersistedCost` uses `Math.round` (half-up); the doc comment is more careful than the code.
+
+### OV7 proof caught a real bug
+
+The synthetic end-to-end calibration test (`src/c2/calibration.e2e.test.ts`, mandated by OV7) caught the `entry.platform ?? null` bug (delta #8) during Task 9's `npm run c2:pilot -- prepare` step. This is exactly the failure mode OV7 was designed to surface: an integration issue caught by the synthetic run before any paid execution. Without OV7, this bug would have surfaced during Task 10's paid pilot with real money spent.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |

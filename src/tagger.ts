@@ -325,6 +325,144 @@ export type EndpointOverride = {
   model?: string;
 };
 
+// ─── C2 Pass 2 telemetry types (additive) ────────────────────────────────────
+//
+// `TextModelRequest` / `ModelCallResult` are the additive telemetry contract for
+// the C2 run engine. `callTextModelWithMetadata` is the only consumer that
+// requires every field; the legacy `callTextModel` keeps its 4-arg signature and
+// returns only `string`. The legacy path shares the same internal HTTP plumbing
+// (the `call*WithMetadata` variants below) — it just discards the metadata.
+//
+// `endpoint` is `EndpointOverride & { model: string }` (NOT the optional
+// `model?: string` of the legacy triple): the C2 path REQUIRES an explicit,
+// pinned model — ambient env-driven model resolution is forbidden here.
+
+/**
+ * Pinned text-model call request. `endpoint` must carry an explicit provider,
+ * apiKey (for OpenAI-compatible providers), and model. No ambient fallback —
+ * the engine refuses to route to another provider on failure.
+ */
+export interface TextModelRequest {
+  prompt: string;
+  endpoint: EndpointOverride & { model: string };
+  maxOutputTokens: number;
+  maxAttempts: number;
+}
+
+/**
+ * Normalized model-call result. `usage.promptTokens`/`completionTokens` are the
+ * canonical C2 token fields; `usage.raw` preserves the provider-native field
+ * names for auditability (e.g. OpenAI Responses reports `input_tokens` while
+ * chat completions reports `prompt_tokens`). `providerRequestId` is null when
+ * the provider response carries no usable request id.
+ */
+export interface ModelCallResult {
+  content: string;
+  provider: Provider;
+  model: string;
+  usage: { promptTokens: number; completionTokens: number; raw: Record<string, number> };
+  attempts: number;
+  latencyMs: number;
+  providerRequestId: string | null;
+}
+
+/**
+ * Internal provider-response metadata surfaced by every `call*` HTTP path.
+ * Legacy callers discard this; `callTextModelWithMetadata` consumes it.
+ * `model` is null when the provider response omits identity (the C2 path then
+ * trusts the requested model). `usage` is null when the provider omits token
+ * accounting (the C2 path fails closed; the legacy path ignores it).
+ */
+interface ProviderResponseMetadata {
+  model: string | null;
+  usage: { promptTokens: number; completionTokens: number; raw: Record<string, number> } | null;
+  providerRequestId: string | null;
+}
+
+/**
+ * Internal outcome returned by every `call*WithMetadata` variant: the content
+ * the legacy string-returning callers consume, plus metadata the C2 telemetry
+ * path surfaces. `attempts` is the number of HTTP attempts actually made
+ * (including retries); `latencyMs` covers the whole fetchWithRetry span.
+ */
+interface ProviderCallOutcome {
+  content: string;
+  metadata: ProviderResponseMetadata;
+  attempts: number;
+  latencyMs: number;
+}
+
+/**
+ * Per-call overrides honored by the `call*WithMetadata` variants. All fields
+ * optional; when omitted, the provider's module-level default applies.
+ *  - `modelOverride`: pins the model for THIS call (used by the C2 path to pin
+ *    Claude/Gemini — there is no cfgOverride route for those providers, so the
+ *    model must be threaded in directly rather than via env mutation).
+ *  - `maxOutputTokens`: overrides `MAX_OUTPUT_TOKENS` for this call only.
+ *  - `maxAttempts`: caps fetchWithRetry's total HTTP attempts (1 = no retry).
+ */
+interface ProviderCallOptions {
+  modelOverride?: string;
+  maxOutputTokens?: number;
+  maxAttempts?: number;
+}
+
+/**
+ * Read a provider request id from response headers. OpenAI exposes it as
+ * `x-request-id`; Anthropic uses the same header on some gateways and `request-id`
+ * elsewhere. Returns null when no usable id is present.
+ */
+function readRequestId(headers: Headers): string | null {
+  const candidates = ["x-request-id", "request-id", "x-amzn-RequestId"];
+  for (const name of candidates) {
+    const value = headers.get(name);
+    if (value && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+/**
+ * Normalize OpenAI Responses usage (`input_tokens`/`output_tokens`) or
+ * OpenAI-compatible chat completions usage (`prompt_tokens`/`completion_tokens`)
+ * into the canonical { promptTokens, completionTokens, raw } triple. Returns
+ * null only when no token-bearing fields are present at all.
+ */
+function normalizeOpenAIUsage(
+  usage: {
+    input_tokens?: number; output_tokens?: number; total_tokens?: number;
+    prompt_tokens?: number; completion_tokens?: number;
+  } | undefined,
+): ProviderResponseMetadata["usage"] {
+  if (!usage) return null;
+  const raw: Record<string, number> = {};
+  for (const [k, v] of Object.entries(usage)) {
+    if (typeof v === "number" && Number.isFinite(v)) raw[k] = v;
+  }
+  const promptTokens = usage.input_tokens ?? usage.prompt_tokens;
+  const completionTokens = usage.output_tokens ?? usage.completion_tokens;
+  if (promptTokens === undefined || completionTokens === undefined) return null;
+  return { promptTokens, completionTokens, raw };
+}
+
+/**
+ * Normalize Anthropic Messages usage (`input_tokens`/`output_tokens`) into the
+ * canonical { promptTokens, completionTokens, raw } triple. Anthropic never
+ * reports a `total_tokens` field; the raw map captures exactly what the API
+ * returned so cost audits can verify the source. Returns null only when no
+ * token-bearing fields are present at all.
+ */
+function normalizeClaudeUsage(
+  usage: { input_tokens?: number; output_tokens?: number } | undefined,
+): ProviderResponseMetadata["usage"] {
+  if (!usage) return null;
+  const raw: Record<string, number> = {};
+  for (const [k, v] of Object.entries(usage)) {
+    if (typeof v === "number" && Number.isFinite(v)) raw[k] = v;
+  }
+  if (usage.input_tokens === undefined || usage.output_tokens === undefined) return null;
+  return { promptTokens: usage.input_tokens, completionTokens: usage.output_tokens, raw };
+}
+
 /**
  * Validate an endpoint override at the boundary — fail fast with a named-field
  * error before any fetch call. The eval matrix runner's primary input is these
@@ -473,17 +611,43 @@ const FALLBACK_429_WAIT_MS = 65_000;
  * Retries on: 502/503/504, network errors (ECONNRESET, fetch TypeError), and
  * provider bodies mentioning "overloaded"/"high demand"/"temporarily".
  * Does NOT retry 4xx (auth/validation/quota) — those are deterministic.
+ *
+ * `maxAttempts` caps the retry budget for the C2 path: it is the TOTAL number
+ * of HTTP attempts permitted (including the first). When undefined, the legacy
+ * default of `MAX_RETRIES + 1` (i.e. 4 attempts: 1 + 3 retries) is used. A
+ * caller passing `maxAttempts: 1` disables retry entirely (single attempt).
  */
-async function fetchWithRetry(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+async function fetchWithRetry(
+  input: string | URL | Request,
+  init?: RequestInit,
+  /**
+   * Optional telemetry collector. When provided, fetchWithRetry records every
+   * HTTP attempt (including retries) and the final returned Response's headers.
+   * Legacy callers omit it; the C2 `callTextModelWithMetadata` path passes one
+   * so it can surface `attempts` and `providerRequestId` in ModelCallResult.
+   */
+  meta?: { attempts: number },
+  /**
+   * Optional cap on the TOTAL number of HTTP attempts (1 = no retry). When
+   * omitted/undefined the loop runs up to `MAX_RETRIES + 1` times. The C2 path
+   * threads `TextModelRequest.maxAttempts` here so the run engine can pin a
+   * per-call transport budget without enabling provider fallback.
+   */
+  maxAttempts?: number,
+): Promise<Response> {
+  // Total attempts permitted: 1 = single attempt, 2 = one retry, etc. Default
+  // to MAX_RETRIES + 1 (= 4) to preserve the legacy retry envelope.
+  const attemptsCap = typeof maxAttempts === "number" && maxAttempts > 0 ? maxAttempts : MAX_RETRIES + 1;
   let lastError: unknown;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt < attemptsCap; attempt++) {
+    if (meta) meta.attempts = attempt + 1;
     try {
       const response = await fetch(input, init);
       // 429 with a retry hint (per-minute quota reset) — wait and retry. The
       // hint may be in the Retry-After header (OpenAI/Anthropic) or in the
       // error body (Gemini). Free-tier per-minute limits reset quickly, so this
       // turns a batch-killing rate-limit into a brief delay.
-      if (response.status === 429 && attempt < MAX_RETRIES) {
+      if (response.status === 429 && attempt < attemptsCap - 1) {
         const text = await response.text().catch(() => "");
         const wait = extract429Wait(response.headers, text);
         if (wait !== null) {
@@ -506,7 +670,7 @@ async function fetchWithRetry(input: string | URL | Request, init?: RequestInit)
         return new Response(text, { status: response.status, headers: response.headers });
       }
       // Peek at the body once for the transient check; re-wrap for the caller.
-      if (response.status >= 500 && response.status <= 599 && attempt < MAX_RETRIES) {
+      if (response.status >= 500 && response.status <= 599 && attempt < attemptsCap - 1) {
         const text = await response.text().catch(() => "");
         if (transientServerError(response.status, text)) {
           await sleep(RETRY_BASE_MS * 2 ** attempt);
@@ -519,7 +683,7 @@ async function fetchWithRetry(input: string | URL | Request, init?: RequestInit)
     } catch (error) {
       lastError = error;
       // Network-level errors (DNS, connection reset, abort) are transient.
-      if (attempt < MAX_RETRIES && isNetworkError(error)) {
+      if (attempt < attemptsCap - 1 && isNetworkError(error)) {
         await sleep(RETRY_BASE_MS * 2 ** attempt);
         continue;
       }
@@ -1764,14 +1928,38 @@ async function callOpenAI(
   detail: "low" | "high" = "high",
   pass: TaggerPass = "extraction",
   cfgOverride?: OpenAIConfig,
+  options?: ProviderCallOptions,
 ): Promise<string> {
+  // The legacy public API discards the metadata surfaced by the internal
+  // variant. This keeps callOpenAI's `Promise<string>` signature identical for
+  // every existing image/tagger caller while letting callTextModelWithMetadata
+  // consume the same HTTP path.
+  return (await callOpenAIWithMetadata(prompt, imagePath, retryFeedback, detail, pass, cfgOverride, options)).content;
+}
+
+/**
+ * Internal OpenAI Responses path that also surfaces provider identity, usage,
+ * attempts, latency, and request id. Legacy callOpenAI delegates here and
+ * discards the metadata. See `ProviderResponseMetadata` for the contract.
+ */
+async function callOpenAIWithMetadata(
+  prompt: string,
+  imagePath: string | null,
+  retryFeedback?: string,
+  detail: "low" | "high" = "high",
+  pass: TaggerPass = "extraction",
+  cfgOverride?: OpenAIConfig,
+  options?: ProviderCallOptions,
+): Promise<ProviderCallOutcome> {
   const cfg = cfgOverride ?? openaiConfigForPass(pass);
   if (!cfg.apiKey) throw new Error("OPENAI_API_KEY not set");
 
   // If a base URL is set for this pass, route to the universal OpenAI-compatible
   // chat completions path (NVIDIA NIM, OpenRouter, Together, Groq, vLLM, etc.).
   // Otherwise use OpenAI's native Responses API (untouched behavior).
-  if (cfg.baseUrl) return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, cfg);
+  if (cfg.baseUrl) return callOpenAICompatibleWithMetadata(prompt, imagePath, retryFeedback, detail, pass, cfg, options);
+
+  const resolvedMaxTokens = options?.maxOutputTokens ?? MAX_OUTPUT_TOKENS;
 
   const userContent: Array<Record<string, unknown>> = [{ type: "input_text", text: prompt }];
   if (imagePath) {
@@ -1779,30 +1967,53 @@ async function callOpenAI(
     userContent.push({ type: "input_image", image_url: `data:${mimeType};base64,${imageData}`, detail });
   }
 
+  const meta: { attempts: number } = { attempts: 0 };
+  const startedAt = Date.now();
   const response = await fetchWithRetry(OPENAI_RESPONSES_API, {
     method: "POST",
     headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: cfg.model,
-      max_output_tokens: MAX_OUTPUT_TOKENS,
+      max_output_tokens: resolvedMaxTokens,
       input: [
         { role: "system", content: [{ type: "input_text", text: SYSTEM }] },
         { role: "user", content: retryFeedback ? [...userContent, { type: "input_text", text: retryFeedback }] : userContent },
       ],
     }),
-  });
+  }, meta, options?.maxAttempts);
 
   if (!response.ok) throw new Error(`OpenAI API error ${response.status}: ${await response.text()}`);
 
   const data = await response.json() as {
+    model?: string;
     output_text?: string;
     output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+      prompt_tokens?: number;
+      completion_tokens?: number;
+    };
   };
-  return data.output_text
+  const content = data.output_text
     ?? data.output?.flatMap((item) => item.content ?? [])
       .filter((c) => c.type === "output_text" || c.type === "text")
       .map((c) => c.text ?? "").join("")
     ?? "";
+  return {
+    content,
+    metadata: {
+      model: typeof data.model === "string" ? data.model : null,
+      // OpenAI Responses reports input_tokens/output_tokens; chat completions
+      // (and some compat gateways proxied here) report prompt_tokens/completion_tokens.
+      // Accept either, prefer the Responses names when present.
+      usage: normalizeOpenAIUsage(data.usage),
+      providerRequestId: readRequestId(response.headers),
+    },
+    attempts: meta.attempts,
+    latencyMs: Date.now() - startedAt,
+  };
 }
 
 /**
@@ -1833,8 +2044,27 @@ async function callOpenAICompatible(
   detail: "low" | "high" = "high",
   pass: TaggerPass = "extraction",
   cfg: OpenAIConfig = openaiConfigForPass(pass),
+  options?: ProviderCallOptions,
 ): Promise<string> {
+  return (await callOpenAICompatibleWithMetadata(prompt, imagePath, retryFeedback, detail, pass, cfg, options)).content;
+}
+
+/**
+ * Internal OpenAI-compatible chat-completions variant that also surfaces
+ * provider identity, usage, attempts, latency, and request id. Same delegation
+ * pattern as callOpenAI → callOpenAIWithMetadata.
+ */
+async function callOpenAICompatibleWithMetadata(
+  prompt: string,
+  imagePath: string | null,
+  retryFeedback?: string,
+  detail: "low" | "high" = "high",
+  pass: TaggerPass = "extraction",
+  cfg: OpenAIConfig = openaiConfigForPass(pass),
+  options?: ProviderCallOptions,
+): Promise<ProviderCallOutcome> {
   if (!cfg.apiKey) throw new Error(`OPENAI_API_KEY${pass === "extraction" ? "" : `_${pass.toUpperCase()}`} not set`);
+  const resolvedMaxTokens = options?.maxOutputTokens ?? MAX_OUTPUT_TOKENS;
 
   // Build the user message. Vision via image_url part when the model supports
   // it (NIM endpoints generally do; OpenRouter routes it correctly). The
@@ -1856,7 +2086,7 @@ async function callOpenAICompatible(
       { role: "system", content: SYSTEM },
       { role: "user", content: userParts },
     ],
-    max_tokens: MAX_OUTPUT_TOKENS,
+    max_tokens: resolvedMaxTokens,
     // Modest temperature — the tagger's quality bar comes from the prompt +
     // banned-phrase gate, not from creative sampling. Matches NVIDIA's
     // documented default for DeepSeek V4 Pro.
@@ -1879,7 +2109,7 @@ async function callOpenAICompatible(
   const isMiniMax = cfg.baseUrl.includes("minimax");
   if (isMiniMax) {
     body.thinking = { type: "disabled" };
-    body.max_completion_tokens = MAX_OUTPUT_TOKENS;
+    body.max_completion_tokens = resolvedMaxTokens;
     delete body.max_tokens;
   }
 
@@ -1887,15 +2117,18 @@ async function callOpenAICompatible(
   if (DEBUG_TAGGER) {
     console.error(`[openai-compat] model=${cfg.model} pass=${pass} base=${cfg.baseUrl} thinking=${thinkingEnabled}`);
   }
+  const meta: { attempts: number } = { attempts: 0 };
+  const startedAt = Date.now();
   const response = await fetchWithRetry(endpoint, {
     method: "POST",
     headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }, meta, options?.maxAttempts);
 
   if (!response.ok) throw new Error(`OpenAI-compatible API error ${response.status}: ${await response.text()}`);
 
   const data = await response.json() as {
+    model?: string;
     choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>;
     usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
   };
@@ -1907,11 +2140,21 @@ async function callOpenAICompatible(
   // MiniMax M3 sometimes includes <think>...</think> tags in content even with
   // reasoning_split. Strip them so JSON parsing doesn't break.
   const stripThinkTags = (s: string) => s.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-  if (typeof content === "string") return stripThinkTags(content);
-  if (Array.isArray(content)) {
-    return stripThinkTags(content.filter((c) => typeof c.text === "string").map((c) => c.text ?? "").join(""));
-  }
-  return "";
+  let resolved: string;
+  if (typeof content === "string") resolved = stripThinkTags(content);
+  else if (Array.isArray(content)) {
+    resolved = stripThinkTags(content.filter((c) => typeof c.text === "string").map((c) => c.text ?? "").join(""));
+  } else resolved = "";
+  return {
+    content: resolved,
+    metadata: {
+      model: typeof data.model === "string" ? data.model : null,
+      usage: normalizeOpenAIUsage(data.usage as Parameters<typeof normalizeOpenAIUsage>[0]),
+      providerRequestId: readRequestId(response.headers),
+    },
+    attempts: meta.attempts,
+    latencyMs: Date.now() - startedAt,
+  };
 }
 
 async function callClaude(
@@ -1919,9 +2162,31 @@ async function callClaude(
   imagePath: string | null,
   retryFeedback?: string,
   detail: "low" | "high" = "high",
+  options?: ProviderCallOptions,
 ): Promise<string> {
+  return (await callClaudeWithMetadata(prompt, imagePath, retryFeedback, detail, options)).content;
+}
+
+/**
+ * Internal Claude Messages variant that also surfaces provider identity, usage,
+ * attempts, latency, and request id. `options.modelOverride` pins the model for
+ * this call (the C2 path threads `TextModelRequest.endpoint.model` here); when
+ * undefined, the module constant `CLAUDE_AUTO_TAG_MODEL` is used.
+ */
+async function callClaudeWithMetadata(
+  prompt: string,
+  imagePath: string | null,
+  retryFeedback?: string,
+  detail: "low" | "high" = "high",
+  options?: ProviderCallOptions,
+): Promise<ProviderCallOutcome> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+  // Resolve the pinned model + per-call budgets. Fall back to the module
+  // constants when the C2 path did not thread an override (preserves legacy
+  // callers that route through callClaude/callModel).
+  const resolvedModel = options?.modelOverride ?? CLAUDE_AUTO_TAG_MODEL;
+  const resolvedMaxTokens = options?.maxOutputTokens ?? MAX_OUTPUT_TOKENS;
 
   // Claude content blocks: image uses raw base64 (no data-URI prefix). Claude
   // has no detail knob, so "low" pre-resizes via sharp to cut token count.
@@ -1933,6 +2198,8 @@ async function callClaude(
   content.push({ type: "text", text: prompt });
   if (retryFeedback) content.push({ type: "text", text: retryFeedback });
 
+  const meta: { attempts: number } = { attempts: 0 };
+  const startedAt = Date.now();
   const response = await fetchWithRetry(ANTHROPIC_API, {
     method: "POST",
     headers: {
@@ -1941,19 +2208,32 @@ async function callClaude(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: CLAUDE_AUTO_TAG_MODEL,
-      max_tokens: MAX_OUTPUT_TOKENS,
+      model: resolvedModel,
+      max_tokens: resolvedMaxTokens,
       system: SYSTEM,
       messages: [{ role: "user", content }],
     }),
-  });
+  }, meta, options?.maxAttempts);
 
   if (!response.ok) throw new Error(`Claude API error ${response.status}: ${await response.text()}`);
 
-  const data = await response.json() as { content?: Array<{ type?: string; text?: string }> };
-  return (data.content ?? [])
-    .filter((b) => b.type === "text")
-    .map((b) => b.text ?? "").join("");
+  const data = await response.json() as {
+    model?: string;
+    content?: Array<{ type?: string; text?: string }>;
+    usage?: { input_tokens?: number; output_tokens?: number };
+  };
+  return {
+    content: (data.content ?? [])
+      .filter((b) => b.type === "text")
+      .map((b) => b.text ?? "").join(""),
+    metadata: {
+      model: typeof data.model === "string" ? data.model : null,
+      usage: normalizeClaudeUsage(data.usage),
+      providerRequestId: readRequestId(response.headers),
+    },
+    attempts: meta.attempts,
+    latencyMs: Date.now() - startedAt,
+  };
 }
 
 async function callGemini(
@@ -1969,9 +2249,34 @@ async function callGemini(
    * Only meaningful for 3.5 models; ignored on 2.5 (which uses thinkingBudget).
    */
   thinkingOverride?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH",
+  options?: ProviderCallOptions,
 ): Promise<string> {
+  return (await callGeminiWithMetadata(prompt, imagePath, retryFeedback, detail, pass, thinkingOverride, options)).content;
+}
+
+/**
+ * Internal Gemini variant that also surfaces provider identity, usage, attempts,
+ * latency, and request id. Gemini does not echo the requested model in the
+ * response body — metadata.model is null (the C2 path trusts the pinned model).
+ * `options.modelOverride` pins the model for this call (threaded in by the C2
+ * path); when undefined, the module constant `GEMINI_AUTO_TAG_MODEL` is used.
+ */
+async function callGeminiWithMetadata(
+  prompt: string,
+  imagePath: string | null,
+  retryFeedback?: string,
+  detail: "low" | "high" = "high",
+  pass: TaggerPass = "extraction",
+  thinkingOverride?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH",
+  options?: ProviderCallOptions,
+): Promise<ProviderCallOutcome> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not set");
+  // Resolve the pinned model + per-call budgets. The model is threaded through
+  // every read of GEMINI_AUTO_TAG_MODEL below (thinking-control branch, URL,
+  // debug log) so the C2 pinned model is actually honored end-to-end.
+  const resolvedModel = options?.modelOverride ?? GEMINI_AUTO_TAG_MODEL;
+  const resolvedMaxTokens = options?.maxOutputTokens ?? MAX_OUTPUT_TOKENS;
 
   // Gemini parts: inlineData uses raw base64 (no prefix), camelCase. Like
   // Claude, no detail knob — "low" pre-resizes via sharp to cut token count.
@@ -1995,8 +2300,8 @@ async function callGemini(
   //     reason over — preserves the speed/cost win the 2.5 disable wanted).
   //     Critique gets HIGH — this is the pass where deep reasoning most closes
   //     the gap on Claude Sonnet's writing quality.
-  const generationConfig: Record<string, unknown> = { maxOutputTokens: MAX_OUTPUT_TOKENS };
-  const is35Model = /3\.5|3-5/i.test(GEMINI_AUTO_TAG_MODEL);
+  const generationConfig: Record<string, unknown> = { maxOutputTokens: resolvedMaxTokens };
+  const is35Model = /3\.5|3-5/i.test(resolvedModel);
   if (is35Model) {
     const level = thinkingOverride ?? (pass === "extraction" ? "MINIMAL" : "HIGH");
     generationConfig.thinkingConfig = { thinkingLevel: level };
@@ -2004,11 +2309,13 @@ async function callGemini(
     generationConfig.thinkingConfig = { thinkingBudget: 0 };
   }
 
-  const endpoint = `${GEMINI_API_BASE}/${GEMINI_AUTO_TAG_MODEL}:generateContent`;
+  const endpoint = `${GEMINI_API_BASE}/${resolvedModel}:generateContent`;
   if (DEBUG_TAGGER) {
     const escalation = thinkingOverride ? ` (escalated from ${pass} default)` : "";
-    console.error(`[gemini] model=${GEMINI_AUTO_TAG_MODEL} pass=${pass}${escalation} thinkingConfig=${JSON.stringify(generationConfig.thinkingConfig)}`);
+    console.error(`[gemini] model=${resolvedModel} pass=${pass}${escalation} thinkingConfig=${JSON.stringify(generationConfig.thinkingConfig)}`);
   }
+  const meta: { attempts: number } = { attempts: 0 };
+  const startedAt = Date.now();
   const response = await fetchWithRetry(endpoint, {
     method: "POST",
     headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
@@ -2017,7 +2324,7 @@ async function callGemini(
       contents: [{ role: "user", parts }],
       generationConfig,
     }),
-  });
+  }, meta, options?.maxAttempts);
 
   if (!response.ok) throw new Error(`Gemini API error ${response.status}: ${await response.text()}`);
 
@@ -2053,7 +2360,30 @@ async function callGemini(
     const u = data.usageMetadata;
     console.error(`[gemini] pass=${pass} usage thoughts=${u?.thoughtsTokenCount ?? "?"} out=${u?.candidatesTokenCount ?? "?"} in=${u?.promptTokenCount ?? "?"}`);
   }
-  return parts_out.filter((p) => typeof p.text === "string").map((p) => p.text ?? "").join("");
+  const content = parts_out.filter((p) => typeof p.text === "string").map((p) => p.text ?? "").join("");
+  // Gemini reports usageMetadata.promptTokenCount / candidatesTokenCount. The
+  // model identity is NOT echoed in the response body — leave null (C2 trusts
+  // the pinned model, matching the design spec's "when the provider exposes
+  // identity" wording).
+  const usage = data.usageMetadata && data.usageMetadata.promptTokenCount !== undefined && data.usageMetadata.candidatesTokenCount !== undefined
+    ? {
+        promptTokens: data.usageMetadata.promptTokenCount,
+        completionTokens: data.usageMetadata.candidatesTokenCount,
+        raw: Object.fromEntries(
+          Object.entries(data.usageMetadata).filter(([, v]) => typeof v === "number"),
+        ) as Record<string, number>,
+      }
+    : null;
+  return {
+    content,
+    metadata: {
+      model: null,
+      usage,
+      providerRequestId: readRequestId(response.headers),
+    },
+    attempts: meta.attempts,
+    latencyMs: Date.now() - startedAt,
+  };
 }
 
 /** Route to the active provider. Auto-falls back if the preferred key is missing. */
@@ -2077,14 +2407,41 @@ async function callModel(
    *  applies to the "openai" provider branch. */
   cfgOverride?: OpenAIConfig,
 ): Promise<string> {
+  // The legacy string-returning router delegates to callModelWithMetadata and
+  // discards the metadata. Every existing image/tagger caller continues to see
+  // `Promise<string>` with identical behavior; only callTextModelWithMetadata
+  // surfaces the metadata downstream.
+  return (await callModelWithMetadata(
+    pass, prompt, imagePath, retryFeedback, detail, thinkingOverride, providerOverride, cfgOverride,
+  )).content;
+}
+
+/**
+ * Same dispatch as callModel but returns the full ProviderCallOutcome. The
+ * provider is resolved via resolveProvider (the same ambient + override + peak-
+ * hour routing the legacy path uses) — so the LEGACY path's fallback behavior
+ * is preserved unchanged. The C2 path does NOT use this resolver; it calls the
+ * specific `call*WithMetadata` variants directly via
+ * callTextModelWithMetadata (which refuses fallback).
+ */
+async function callModelWithMetadata(
+  pass: TaggerPass,
+  prompt: string,
+  imagePath: string | null,
+  retryFeedback?: string,
+  detail: "low" | "high" = "high",
+  thinkingOverride?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH",
+  providerOverride?: Provider,
+  cfgOverride?: OpenAIConfig,
+): Promise<ProviderCallOutcome> {
   const provider = resolveProvider(pass, providerOverride, cfgOverride !== undefined);
   switch (provider) {
-    case "claude":  return callClaude(prompt, imagePath, retryFeedback, detail);
-    case "gemini":  return callGemini(prompt, imagePath, retryFeedback, detail, pass, thinkingOverride);
-    case "mistral": return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, mistralConfigForPass(pass));
-    case "minimax": return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, minimaxConfigForPass(pass));
-    case "grok":    return callOpenAICompatible(prompt, imagePath, retryFeedback, detail, pass, grokConfigForPass(pass));
-    default:        return callOpenAI(prompt, imagePath, retryFeedback, detail, pass, cfgOverride);
+    case "claude":  return callClaudeWithMetadata(prompt, imagePath, retryFeedback, detail);
+    case "gemini":  return callGeminiWithMetadata(prompt, imagePath, retryFeedback, detail, pass, thinkingOverride);
+    case "mistral": return callOpenAICompatibleWithMetadata(prompt, imagePath, retryFeedback, detail, pass, mistralConfigForPass(pass));
+    case "minimax": return callOpenAICompatibleWithMetadata(prompt, imagePath, retryFeedback, detail, pass, minimaxConfigForPass(pass));
+    case "grok":    return callOpenAICompatibleWithMetadata(prompt, imagePath, retryFeedback, detail, pass, grokConfigForPass(pass));
+    default:        return callOpenAIWithMetadata(prompt, imagePath, retryFeedback, detail, pass, cfgOverride);
   }
 }
 
@@ -2118,6 +2475,151 @@ export async function callTextModel(
     endpointOverride?.provider ?? providerOverride,
     cfgOverride,
   );
+}
+
+/**
+ * C2 telemetry path. Requires an explicit endpoint+model (no ambient routing),
+ * surfaces normalized usage / identity / attempts / latency / request id, and
+ * fails closed when the provider omits usable token accounting or returns a
+ * different model identity than the one pinned in the request.
+ *
+ * Refuses to fall back to another provider on failure: a credentials error or
+ * quota error terminates the call rather than silently routing to a different
+ * provider (the legacy callTextModel/callModel path keeps its fallback
+ * behavior; this path does not). The only retry is fetchWithRetry's bounded
+ * transport-level retry (5xx/429/network) — exactly the same retry envelope the
+ * legacy path uses.
+ *
+ * `maxOutputTokens` and `maxAttempts` are accepted on the request so the C2
+ * run engine can pin per-run budgets. `maxOutputTokens` overrides the tagger's
+ * global MAX_OUTPUT_TOKENS for this call only — it is wired into the per-
+ * provider request body (`max_output_tokens` for OpenAI Responses,
+ * `max_tokens`/`max_completion_tokens` for OpenAI-compatible chat completions,
+ * `max_tokens` for Claude, `maxOutputTokens` in Gemini's generationConfig).
+ * `maxAttempts` is the TOTAL number of HTTP attempts permitted (1 = no retry):
+ * it caps fetchWithRetry's transport loop so the run engine can ride out
+ * transient 5xx/429/network errors while still forbidding provider fallback.
+ * When undefined, fetchWithRetry's default of 4 attempts (1 + 3 retries) is
+ * used.
+ *
+ * Credentials: `endpoint.apiKey` is honored ONLY for OpenAI-compatible
+ * providers (openai/mistral/minimax/grok). Claude and Gemini always read their
+ * credentials from the `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` environment
+ * variables — a caller-supplied `endpoint.apiKey` is silently ignored on those
+ * two providers. The C2 harness stores Claude/Gemini keys as env vars (not
+ * inline keys), so this matches the documented harness contract.
+ */
+export async function callTextModelWithMetadata(
+  request: TextModelRequest,
+): Promise<ModelCallResult> {
+  const { provider, baseUrl, apiKey, model } = request.endpoint;
+
+  // Validate the request shape at the boundary. C2 requires an explicit
+  // endpoint+model — refuse ambient routing by validating that the provider is
+  // one we know how to pin and that OpenAI-compatible providers carry an apiKey.
+  const VALID_PROVIDERS: Provider[] = ["openai", "claude", "gemini", "mistral", "minimax", "grok"];
+  if (!VALID_PROVIDERS.includes(provider)) {
+    throw new Error(`Invalid C2 request: provider "${String(provider)}" is not one of ${VALID_PROVIDERS.join(", ")}`);
+  }
+  if (!model || typeof model !== "string") {
+    throw new Error("Invalid C2 request: endpoint.model is required (no ambient model resolution)");
+  }
+  // OpenAI-compatible providers (and openai native) need an apiKey on the
+  // request; claude/gemini read their keys from env. Missing-key fails closed
+  // BEFORE any fetch is issued.
+  if (provider === "openai" || provider === "mistral" || provider === "minimax" || provider === "grok") {
+    if (!apiKey) {
+      throw new Error(`Invalid C2 request: endpoint.apiKey is required for provider "${provider}"`);
+    }
+  } else if (provider === "claude") {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      throw new Error("Invalid C2 request: ANTHROPIC_API_KEY is not set for provider \"claude\"");
+    }
+  } else if (provider === "gemini") {
+    if (!process.env.GEMINI_API_KEY) {
+      throw new Error("Invalid C2 request: GEMINI_API_KEY is not set for provider \"gemini\"");
+    }
+  }
+
+  // Pin the OpenAI-compatible triple. Even "openai" native (empty baseUrl) is
+  // pinned: we pass an explicit { baseUrl, apiKey, model } so openaiConfigForPass
+  // is NOT consulted. The C2 path must be reproducible from the request alone.
+  const cfg: OpenAIConfig = (provider === "openai" || provider === "mistral" || provider === "minimax" || provider === "grok")
+    ? { baseUrl: (baseUrl ?? "").replace(/\/+$/, ""), apiKey: apiKey ?? "", model }
+    : { baseUrl: "", apiKey: "", model };
+
+  // Resolve the correct per-provider config for OpenAI-compatible providers
+  // (mistral/minimax/grok default to their own base URLs when the request omits
+  // one). The request's explicit model always wins.
+  let resolvedCfg = cfg;
+  if (provider === "mistral" && !cfg.baseUrl) resolvedCfg = { ...mistralConfigForPass("critique"), model };
+  else if (provider === "minimax" && !cfg.baseUrl) resolvedCfg = { ...minimaxConfigForPass("critique"), model };
+  else if (provider === "grok" && !cfg.baseUrl) resolvedCfg = { ...grokConfigForPass("critique"), model };
+
+  // Dispatch directly to the pinned provider's WithMetadata variant. NO ambient
+  // fallback — a failure here surfaces to the caller. fetchWithRetry still
+  // rides out transient 5xx/429/network errors, but never switches providers.
+  //
+  // The pinned model + per-call budgets are threaded through `options` (NOT via
+  // process.env mutation). Earlier versions mutated process.env.CLAUDE_AUTO_TAG_MODEL /
+  // GEMINI_AUTO_TAG_MODEL transiently, but callClaudeWithMetadata /
+  // callGeminiWithMetadata captured those constants at module load — the
+  // mutation was dead code (the default model was always sent) AND unsafe under
+  // concurrency. Threading via argument fixes both: the pinned model reaches
+  // the request body, and concurrent C2 calls no longer race on shared env.
+  const callOptions: ProviderCallOptions = {
+    modelOverride: model,
+    maxOutputTokens: request.maxOutputTokens,
+    maxAttempts: request.maxAttempts,
+  };
+  let outcome: ProviderCallOutcome;
+  if (provider === "claude") {
+    // Claude reads its apiKey from ANTHROPIC_API_KEY inside callClaudeWithMetadata;
+    // there is no cfgOverride path, so model is threaded via callOptions.
+    outcome = await callClaudeWithMetadata(request.prompt, null, undefined, "high", callOptions);
+  } else if (provider === "gemini") {
+    outcome = await callGeminiWithMetadata(request.prompt, null, undefined, "high", "critique", undefined, callOptions);
+  } else {
+    // openai / mistral / minimax / grok all flow through callOpenAI(Compatible)
+    // via the cfg triple. Text-only (no image); critique pass for thinking.
+    outcome = await callOpenAIWithMetadata(
+      request.prompt, null, undefined, "high", "critique", resolvedCfg, callOptions,
+    );
+  }
+
+  // ── Fail-closed telemetry enforcement ─────────────────────────────────────
+  // 1. Usage MUST be present and non-zero. Missing/zero token accounting means
+  //    cost cannot be computed → refuse rather than emit a partial ModelCallResult.
+  if (!outcome.metadata.usage) {
+    throw new Error(`C2 model call failed closed: provider "${provider}" did not return usable token usage`);
+  }
+  if (outcome.metadata.usage.promptTokens <= 0 || outcome.metadata.usage.completionTokens <= 0) {
+    throw new Error(
+      `C2 model call failed closed: provider "${provider}" returned non-positive usage ` +
+      `(prompt=${outcome.metadata.usage.promptTokens}, completion=${outcome.metadata.usage.completionTokens})`,
+    );
+  }
+  // 2. Identity MUST match the pinned model WHEN the provider exposes identity.
+  //    OpenAI Responses / chat completions echo `model` in the body; Claude
+  //    Messages echoes `model`. Gemini does NOT echo identity — it's left null
+  //    and we trust the pinned model.
+  if (outcome.metadata.model !== null && outcome.metadata.model !== model) {
+    throw new Error(
+      `C2 model call failed closed: provider "${provider}" returned model ` +
+      `"${outcome.metadata.model}" but the request pinned "${model}" (silent model ` +
+      `substitution is forbidden in the C2 path)`,
+    );
+  }
+
+  return {
+    content: outcome.content,
+    provider,
+    model,
+    usage: outcome.metadata.usage,
+    attempts: outcome.attempts,
+    latencyMs: outcome.latencyMs,
+    providerRequestId: outcome.metadata.providerRequestId,
+  };
 }
 
 /**

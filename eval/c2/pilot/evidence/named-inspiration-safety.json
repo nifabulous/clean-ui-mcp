@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-gold-evidence-named-inspiration-safety-v1",
+  "caseId": "named-inspiration-safety",
+  "records": [
+    {
+      "id": "evidence:brief:named-inspiration",
+      "sourceArtifactId": "c2-brief-named-inspiration-safety-v1",
+      "jsonPointers": [
+        "/title",
+        "/productContext"
+      ]
+    },
+    {
+      "id": "evidence:brief:generic-layout-principles",
+      "sourceArtifactId": "c2-brief-named-inspiration-safety-v1",
+      "jsonPointers": [
+        "/constraints/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:no-private-corpus-bound",
+      "sourceArtifactId": "c2-brief-named-inspiration-safety-v1",
+      "jsonPointers": [
+        "/constraints/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:uncertainty-required",
+      "sourceArtifactId": "c2-brief-named-inspiration-safety-v1",
+      "jsonPointers": [
+        "/constraints/2"
+      ]
+    }
+  ]
+}

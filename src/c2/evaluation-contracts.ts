@@ -170,7 +170,7 @@ export function assertAgreementMatchesSubmissions(
   if (report.disagreementEntryIds.some((entryId) => !selected.has(entryId))) throw new Error("agreement contains an unselected disagreement entry");
 }
 
-export const C2EvaluationRunManifestSchema = z.object({
+export const C2EvaluationRunManifestV1Schema = z.object({
   schemaVersion: z.literal("1.0"),
   artifactType: z.literal("c2-evaluation-run"),
   artifactId: StableId,
@@ -205,8 +205,116 @@ export const C2EvaluationRunManifestSchema = z.object({
   if (run.finishedAt && Date.parse(run.finishedAt) < Date.parse(run.startedAt)) ctx.addIssue({ code: "custom", path: ["finishedAt"], message: "finish time cannot precede start time" });
 });
 
+// Pass 1 introduced the initial manifest as `C2EvaluationRunManifestSchema`.
+// Pass 2 preserves it under that name as a compatibility alias while naming the
+// reviewed contract `C2EvaluationRunManifestV1Schema`. New runs use the V2
+// schema below; both schemas stay readable.
+export const C2EvaluationRunManifestSchema = C2EvaluationRunManifestV1Schema;
+
+// Pass 2 manifest: adds condition-input and scorer references, explicit attempt
+// count, provider latency, source-snapshot IDs, detailed terminal reasons, and
+// validation errors. Pass 2 writes only V2 manifests. A V1 artifact cannot be
+// represented as V2 because V2 requires `schemaVersion: "2.0"` plus the new
+// required fields.
+const C2TerminalReasonSchema = z.enum([
+  "succeeded",
+  "provider-failed",
+  "parse-failed",
+  "validation-failed",
+  "cost-blocked",
+  "run-budget-exceeded",
+  "campaign-stopped",
+]);
+
+export const C2EvaluationRunManifestV2Schema = z.object({
+  schemaVersion: z.literal("2.0"),
+  artifactType: z.literal("c2-evaluation-run"),
+  artifactId: StableId,
+  runId: StableId,
+  predecessorRunId: StableId.nullable(),
+  casePackage: ArtifactFileRefSchema,
+  condition: C2ControlConditionSchema,
+  corpusSha256: Sha256.nullable(),
+  retrievalIndexSha256: Sha256.nullable(),
+  promptSha256: Sha256,
+  harnessGitSha: GitSha,
+  provider: NonEmptyText,
+  model: NonEmptyText,
+  samplingParameters: z.record(StableId, z.union([z.string(), z.number().finite(), z.boolean()])),
+  evidenceIds: z.array(StableId).refine(hasUniqueStrings, "evidence IDs must be unique"),
+  startedAt: z.string().datetime(),
+  finishedAt: z.string().datetime().nullable(),
+  status: z.enum(["running", "succeeded", "failed", "cost-blocked"]),
+  inputSha256: Sha256,
+  rawOutputSha256: Sha256.nullable(),
+  parsedOutputSha256: Sha256.nullable(),
+  promptTokens: z.number().int().nonnegative(),
+  completionTokens: z.number().int().nonnegative(),
+  costUsd: z.number().nonnegative(),
+  conditionInputRef: ArtifactFileRefSchema,
+  scorerRef: ArtifactFileRefSchema,
+  attemptCount: z.number().int().nonnegative(),
+  providerLatencyMs: z.number().int().nonnegative(),
+  // A running-state manifest has not terminated yet, so terminalReason is null
+  // until the run reaches a succeeded/failed/cost-blocked state.
+  terminalReason: C2TerminalReasonSchema.nullable(),
+  validationErrors: z.array(NonEmptyText),
+  sourceSnapshotIds: z.array(StableId),
+}).strict().superRefine((run, ctx) => {
+  if (run.condition === "brief-only" && run.evidenceIds.length !== 0) ctx.addIssue({ code: "custom", path: ["evidenceIds"], message: "brief-only run forbids evidence" });
+  if (run.condition === "gold-evidence" && run.evidenceIds.length === 0) ctx.addIssue({ code: "custom", path: ["evidenceIds"], message: "gold-evidence run requires evidence" });
+  if (run.status === "succeeded" && (!run.finishedAt || !run.rawOutputSha256 || !run.parsedOutputSha256)) ctx.addIssue({ code: "custom", message: "successful run requires finish time and output hashes" });
+  if (run.status === "running" && (run.finishedAt || run.rawOutputSha256 || run.parsedOutputSha256)) ctx.addIssue({ code: "custom", message: "running state forbids finish time and output hashes" });
+  if (run.status === "failed" && (!run.finishedAt || run.parsedOutputSha256)) ctx.addIssue({ code: "custom", message: "failed state requires finish time and forbids parsed output" });
+  if (run.finishedAt && Date.parse(run.finishedAt) < Date.parse(run.startedAt)) ctx.addIssue({ code: "custom", path: ["finishedAt"], message: "finish time cannot precede start time" });
+
+  // Detailed terminal-reason/status consistency.
+  const statusReasonOk =
+    (run.status === "running" && run.terminalReason === null) ||
+    (run.status === "succeeded" && run.terminalReason === "succeeded") ||
+    (run.status === "failed" && ["provider-failed", "parse-failed", "validation-failed", "run-budget-exceeded", "campaign-stopped"].includes(run.terminalReason as string)) ||
+    (run.status === "cost-blocked" && run.terminalReason === "cost-blocked");
+  if (!statusReasonOk) {
+    ctx.addIssue({ code: "custom", path: ["terminalReason"], message: "terminal reason must be consistent with status" });
+  }
+
+  // A blocked run records zero execution and no output hashes.
+  if (run.status === "cost-blocked" && (
+    run.finishedAt ||
+    run.rawOutputSha256 ||
+    run.parsedOutputSha256 ||
+    run.promptTokens !== 0 ||
+    run.completionTokens !== 0 ||
+    run.costUsd !== 0 ||
+    run.attemptCount !== 0 ||
+    run.providerLatencyMs !== 0
+  )) {
+    ctx.addIssue({ code: "custom", message: "cost-blocked state must record no execution or outputs" });
+  }
+  if (run.status === "running" && (run.attemptCount !== 0 || run.providerLatencyMs !== 0)) {
+    ctx.addIssue({ code: "custom", message: "running state records no paid attempts" });
+  }
+});
+
 const DimensionSchema = z.enum(["product-appropriateness", "cross-screen-coherence", "implementation-clarity", "originality", "accessibility-and-failure-states", "evidence-discipline"]);
 const DimensionScoreSchema = z.object({ dimension: DimensionSchema, score: z.number().int().min(1).max(5), rationale: NonEmptyText }).strict();
+
+// Reviewer-facing blind score submission. The reviewer never receives or
+// submits runId, runOutputSha256, provider, model, condition, campaign
+// ordering, or a candidate-derived identifier; those enter the canonical
+// C2HumanScorecard only during the post-submission unblinding step.
+export const C2BlindScoreSubmissionSchema = z.object({
+  schemaVersion: z.literal("1.0"),
+  artifactType: z.literal("c2-blind-score-submission"),
+  reviewId: z.string().uuid(),
+  reviewerActorId: StableId,
+  reviewerActorKind: z.literal("human"),
+  scores: z.array(DimensionScoreSchema).length(6).refine(
+    (scores) => hasUniqueStrings(scores.map((score) => score.dimension)),
+    "dimensions must be unique",
+  ),
+  submittedAt: z.string().datetime(),
+}).strict();
 
 export const C2HumanScorecardSchema = z.object({
   schemaVersion: z.literal("1.0"),
@@ -251,6 +359,9 @@ export const C2FailureReportSchema = z.object({
 export type C2LabelIntegritySelection = z.infer<typeof C2LabelIntegritySelectionSchema>;
 export type C2IndependentLabelSubmission = z.infer<typeof C2IndependentLabelSubmissionSchema>;
 export type C2LabelAgreementReport = z.infer<typeof C2LabelAgreementReportSchema>;
+export type C2EvaluationRunManifestV1 = z.infer<typeof C2EvaluationRunManifestV1Schema>;
 export type C2EvaluationRunManifest = z.infer<typeof C2EvaluationRunManifestSchema>;
+export type C2EvaluationRunManifestV2 = z.infer<typeof C2EvaluationRunManifestV2Schema>;
+export type C2BlindScoreSubmission = z.infer<typeof C2BlindScoreSubmissionSchema>;
 export type C2HumanScorecard = z.infer<typeof C2HumanScorecardSchema>;
 export type C2FailureReport = z.infer<typeof C2FailureReportSchema>;

@@ -98,6 +98,19 @@ export interface SearchOptions {
   limit?:        number;
   /** Opt-in rerank via Voyage rerank-2.5 cross-encoder. Default: off. */
   rerank?:       boolean;
+  /**
+   * Retrieval mode pin. Omitting the option (or passing `"auto"`) preserves the
+   * historical environment-sensitive dispatch: hybrid vector+keyword search when
+   * `VOYAGE_API_KEY`, a query, and the embedding index are all present, and
+   * keyword-only search otherwise. Passing `"keyword-only"` forces keyword-only
+   * scoring regardless of whether the hybrid preconditions hold, so the C2
+   * condition resolver can pin a deterministic, offline retrieval path that
+   * makes zero Voyage requests even when a key + index are available.
+   *
+   * This field formalizes the previously-implicit dispatch — it does NOT alter
+   * the omitted-option behavior relied on by `critique-retrieval.ts`.
+   */
+  searchMode?:   "auto" | "keyword-only";
 }
 
 export interface SearchResult {
@@ -322,9 +335,18 @@ export async function searchRanked(opts: SearchOptions): Promise<SearchResult[]>
   // Structural filters always apply regardless of search mode.
   const filtered = applyStructuralFilters(entries, opts);
 
+  // C2 (Task 6, Step 3): the new `searchMode` field formalizes the previously-
+  // implicit dispatch. Omitting the option (or passing `"auto"`) preserves the
+  // historical behavior bit-for-bit — this gate is the ONLY new branch, and it
+  // is closed by default. `"keyword-only"` forces keyword scoring regardless of
+  // the hybrid preconditions, so the C2 condition resolver can pin a
+  // deterministic, offline retrieval path that makes zero Voyage requests even
+  // when a key + index are available.
+  const keywordOnly = opts.searchMode === "keyword-only";
+
   let results: SearchResult[];
 
-  if (opts.query && indexExists() && process.env.VOYAGE_API_KEY) {
+  if (!keywordOnly && opts.query && indexExists() && process.env.VOYAGE_API_KEY) {
     // Hybrid path: run both vector and keyword, then fuse.
     // Each path scores differently (keyword: weighted bonuses; vector: cosine*10),
     // so we normalize each to [0,1] before combining with a vector-weighted blend.
@@ -332,7 +354,7 @@ export async function searchRanked(opts: SearchOptions): Promise<SearchResult[]>
     const keywordResults = keywordSearch(filtered, opts);
     results = fuseResults(vectorResults, keywordResults);
   } else {
-    if (opts.query && indexExists() && !process.env.VOYAGE_API_KEY) {
+    if (!keywordOnly && opts.query && indexExists() && !process.env.VOYAGE_API_KEY) {
       console.error("[clean-ui-mcp] VOYAGE_API_KEY not set — falling back to keyword search.");
     }
     results = keywordSearch(filtered, opts);
@@ -343,7 +365,10 @@ export async function searchRanked(opts: SearchOptions): Promise<SearchResult[]>
   // top-30 fused/keyword results, reranks them against the query, and returns
   // the reranked top-K followed by the remaining tail (preserving fused scores).
   // If rerank fails (rate limit, network), falls back to the pre-rerank scores.
-  if (opts.rerank && opts.query && process.env.VOYAGE_API_KEY && results.length > 5) {
+  //
+  // C2 (Task 6, Step 3): `keywordOnly` also gates rerank, because rerank is an
+  // external Voyage API call that would break the offline-pinned retrieval path.
+  if (!keywordOnly && opts.rerank && opts.query && process.env.VOYAGE_API_KEY && results.length > 5) {
     results.sort((a, b) => b.score - a.score);
     const rerankPool = results.slice(0, 30);
     const tail = results.slice(30);

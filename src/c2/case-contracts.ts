@@ -9,6 +9,7 @@ import {
   UniqueNonEmptyStrings,
   hasUniqueStrings,
 } from "./primitives.js";
+import { Sha256 } from "../readiness/contracts.js";
 
 const ScreenRequirementSchema = z.object({
   id: StableId,
@@ -111,6 +112,63 @@ export const C2CasePackageManifestSchema = z.object({
   }
 });
 
+// ---------------------------------------------------------------------------
+// Gold-evidence descriptors (Task 3)
+//
+// A descriptor maps every reviewer-only `goldEvidenceId` declared on a label
+// to exact source JSON pointers + the source artifact's hash — it does NOT
+// duplicate prose. The manifest builder resolves each pointer against the
+// bound source artifact, hashes the resolved bytes, rejects unknown
+// pointers/IDs, and binds a per-record `resolvedSha256` without copying any
+// reviewer field into the brief.
+//
+// The `C2GoldEvidenceRecordBinding` shape is the per-record binding the pilot
+// manifest carries: the descriptor record ID + its source artifact id + a
+// canonical SHA-256 over the resolved bytes at every declared pointer. The
+// manifest does NOT carry the resolved content itself (content stays private).
+// ---------------------------------------------------------------------------
+
+const JsonPointer = z
+  .string()
+  .min(1)
+  .refine((p) => p === "" || p.startsWith("/"), "JSON pointer must be empty or start with '/'")
+  .refine(
+    (p) => !p.includes("//"),
+    "JSON pointer must not contain empty segments",
+  );
+
+export const C2GoldEvidenceRecordSchema = z.object({
+  id: StableId,
+  sourceArtifactId: StableId,
+  jsonPointers: z.array(JsonPointer).min(1),
+}).strict();
+
+export const C2GoldEvidenceDescriptorSchema = z.object({
+  schemaVersion: z.literal("1.0"),
+  artifactType: z.literal("c2-gold-evidence-descriptor"),
+  artifactId: StableId,
+  caseId: StableId,
+  records: z.array(C2GoldEvidenceRecordSchema).min(1).refine(
+    (records) => hasUniqueStrings(records.map((r) => r.id)),
+    "gold evidence record IDs must be unique within a descriptor",
+  ),
+}).strict();
+
+export const C2GoldEvidenceRecordBindingSchema = z.object({
+  id: StableId,
+  sourceArtifactId: StableId,
+  resolvedSha256: Sha256,
+}).strict();
+
+export const C2PilotGoldEvidenceBindingSchema = z.object({
+  schemaVersion: z.literal("1.0"),
+  artifactType: z.literal("c2-gold-evidence-binding"),
+  artifactId: StableId,
+  caseId: StableId,
+  descriptor: ArtifactFileRefSchema,
+  records: z.array(C2GoldEvidenceRecordBindingSchema).min(1),
+}).strict();
+
 export const C2PilotManifestSchema = z.object({
   schemaVersion: z.literal("1.0"),
   artifactType: z.literal("c2-pilot-manifest"),
@@ -119,6 +177,7 @@ export const C2PilotManifestSchema = z.object({
   caseCount: z.literal(3),
   families: z.tuple([z.literal("migration"), z.literal("product"), z.literal("safety")]),
   packages: z.array(C2CasePackageManifestSchema).length(3),
+  goldEvidenceBindings: z.array(C2PilotGoldEvidenceBindingSchema).length(3),
 }).strict().superRefine((manifest, ctx) => {
   if (!hasUniqueStrings(manifest.packages.map((pkg) => pkg.caseId))) {
     ctx.addIssue({ code: "custom", path: ["packages"], message: "pilot case IDs must be unique" });
@@ -128,9 +187,27 @@ export const C2PilotManifestSchema = z.object({
       ctx.addIssue({ code: "custom", path: ["packages"], message: `exactly one ${family} package required` });
     }
   }
+  if (!hasUniqueStrings(manifest.goldEvidenceBindings.map((b) => b.caseId))) {
+    ctx.addIssue({ code: "custom", path: ["goldEvidenceBindings"], message: "gold-evidence binding case IDs must be unique" });
+  }
+  const packageCaseIds = new Set(manifest.packages.map((pkg) => pkg.caseId));
+  for (const binding of manifest.goldEvidenceBindings) {
+    if (!packageCaseIds.has(binding.caseId)) {
+      ctx.addIssue({ code: "custom", path: ["goldEvidenceBindings"], message: `gold-evidence binding caseId ${binding.caseId} has no matching package` });
+    }
+  }
 });
 
 export type C2CaseBrief = z.infer<typeof C2CaseBriefSchema>;
 export type C2DecisionLabel = z.infer<typeof C2DecisionLabelSchema>;
 export type C2CasePackageManifest = z.infer<typeof C2CasePackageManifestSchema>;
 export type C2PilotManifest = z.infer<typeof C2PilotManifestSchema>;
+// Gold-evidence descriptor + record types (Task 3). The descriptor maps every
+// reviewer-only goldEvidenceId to exact source JSON pointers; the condition
+// resolver (Task 6) consumes these to resolve model-visible bytes without
+// copying reviewer fields. Exported as inferred types so consumers (resolver,
+// manifest builder) share one canonical shape with the schema.
+export type C2GoldEvidenceRecord = z.infer<typeof C2GoldEvidenceRecordSchema>;
+export type C2GoldEvidenceDescriptor = z.infer<typeof C2GoldEvidenceDescriptorSchema>;
+export type C2GoldEvidenceRecordBinding = z.infer<typeof C2GoldEvidenceRecordBindingSchema>;
+export type C2PilotGoldEvidenceBinding = z.infer<typeof C2PilotGoldEvidenceBindingSchema>;

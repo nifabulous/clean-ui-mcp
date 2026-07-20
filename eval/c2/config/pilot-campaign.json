@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-campaign-config",
+  "artifactId": "c2-campaign-pilot-v1",
+  "primary": {
+    "provider": "openai",
+    "model": "gpt-5.4-mini",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "maxOutputTokens": 2048,
+    "samplingParameters": {
+      "temperature": 0.2,
+      "top_p": 0.95,
+      "seed": 7
+    }
+  },
+  "independent": {
+    "provider": "claude",
+    "model": "claude-sonnet-4-5",
+    "apiKeyEnv": "ANTHROPIC_API_KEY",
+    "maxOutputTokens": 2048,
+    "samplingParameters": {
+      "temperature": 0.2,
+      "top_p": 0.95
+    }
+  },
+  "maxRunCostUsd": 0.5,
+  "maxCampaignCostUsd": 5,
+  "maxAttempts": 3,
+  "cases": [
+    "named-inspiration-safety",
+    "public-marketing-migration",
+    "stablecoin-home"
+  ],
+  "conditions": [
+    "brief-only",
+    "current-grounded",
+    "gold-evidence"
+  ],
+  "independentConditions": [
+    "current-grounded"
+  ],
+  "plannedRunCount": 12,
+  "retrievalMode": "keyword-only"
+}

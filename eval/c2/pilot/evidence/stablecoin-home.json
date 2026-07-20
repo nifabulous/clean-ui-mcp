@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-gold-evidence-stablecoin-home-v1",
+  "caseId": "stablecoin-home",
+  "records": [
+    {
+      "id": "evidence:brief:audience-hierarchy",
+      "sourceArtifactId": "c2-brief-stablecoin-home-v1",
+      "jsonPointers": [
+        "/users",
+        "/constraints/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:integrator-path",
+      "sourceArtifactId": "c2-brief-stablecoin-home-v1",
+      "jsonPointers": [
+        "/users/2",
+        "/requiredJourneys/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:primary-cta",
+      "sourceArtifactId": "c2-brief-stablecoin-home-v1",
+      "jsonPointers": [
+        "/constraints/2",
+        "/requiredScreens/0/mobileRules/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:trust-without-unsupported-claims",
+      "sourceArtifactId": "c2-brief-stablecoin-home-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/constraints/3"
+      ]
+    }
+  ]
+}

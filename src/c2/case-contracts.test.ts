@@ -93,6 +93,36 @@ const safetyPackage = {
   sourceSnapshot: null,
 };
 
+function goldEvidenceBinding(caseId: string) {
+  return {
+    schemaVersion: "1.0",
+    artifactType: "c2-gold-evidence-binding",
+    artifactId: `c2-gold-binding-${caseId}-v1`,
+    caseId,
+    descriptor: fileRef(`c2-gold-evidence-${caseId}-v1`, `eval/c2/pilot/evidence/${caseId}.json`),
+    records: [
+      {
+        id: "evidence:gold-record",
+        sourceArtifactId: `c2-brief-${caseId}-v1`,
+        resolvedSha256: SHA,
+      },
+    ],
+  };
+}
+
+function pilotWithBindings(packages: unknown[]) {
+  return {
+    schemaVersion: "1.0",
+    artifactType: "c2-pilot-manifest",
+    artifactId: "c2-pilot-v1",
+    manifestVersion: 1,
+    caseCount: 3,
+    families: ["migration", "product", "safety"] as const,
+    packages,
+    goldEvidenceBindings: packages.map((pkg) => goldEvidenceBinding((pkg as { caseId: string }).caseId)),
+  };
+}
+
 describe("C2 separated case contracts", () => {
   it("accepts a separated model-visible brief and reviewer-only label", () => {
     const briefResult = C2CaseBriefSchema.safeParse(brief);
@@ -137,15 +167,7 @@ describe("C2 separated case contracts", () => {
   });
 
   it("requires exactly one pilot package per family", () => {
-    const validPilot = {
-      schemaVersion: "1.0",
-      artifactType: "c2-pilot-manifest",
-      artifactId: "c2-pilot-v1",
-      manifestVersion: 1,
-      caseCount: 3,
-      families: ["migration", "product", "safety"] as const,
-      packages: [migrationPackage, productPackage, safetyPackage],
-    };
+    const validPilot = pilotWithBindings([migrationPackage, productPackage, safetyPackage]);
     expect(C2PilotManifestSchema.safeParse(validPilot).success).toBe(true);
 
     const duplicateProductFamily = {
@@ -153,5 +175,22 @@ describe("C2 separated case contracts", () => {
       packages: [productPackage, { ...productPackage, artifactId: "c2-package-stablecoin-home-v2", caseId: "stablecoin-home-v2" }, safetyPackage],
     };
     expect(C2PilotManifestSchema.safeParse(duplicateProductFamily).success).toBe(false);
+  });
+
+  it("requires a gold-evidence binding for every package caseId", () => {
+    const validPilot = pilotWithBindings([migrationPackage, productPackage, safetyPackage]);
+    expect(C2PilotManifestSchema.safeParse(validPilot).success).toBe(true);
+    // Drop a binding → parse must fail (strict + required length-3 array).
+    const { goldEvidenceBindings, ...withoutBindings } = validPilot;
+    expect(C2PilotManifestSchema.safeParse(withoutBindings).success).toBe(false);
+    void goldEvidenceBindings;
+    // Mismatched caseId on a binding → fail.
+    const mismatched = {
+      ...validPilot,
+      goldEvidenceBindings: validPilot.goldEvidenceBindings.map((b, i) =>
+        i === 0 ? { ...b, caseId: "nonexistent-case" } : b,
+      ),
+    };
+    expect(C2PilotManifestSchema.safeParse(mismatched).success).toBe(false);
   });
 });

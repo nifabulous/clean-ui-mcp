@@ -244,6 +244,52 @@ const ALLOWLIST = new Set<string>([
   // the C2 remediation validator (Pass 5). Same foundation-awaiting-caller
   // pattern as the other C2 assertion exports.
   "assertProposalMatchesFailure",
+  // c2/case-contracts.ts — gold-evidence descriptor + binding schemas. These
+  // are consumed by the .mjs manifest builder (scripts/build-c2-pilot-manifest.mjs)
+  // via the deferred dist/c2/case-contracts.js import, the same pattern as the
+  // other dist-consumed symbols (MIN_WORDS, loadEnv, etc.) at the top of this
+  // allowlist. The regex scan over src/*.ts cannot see the .mjs caller.
+  "C2GoldEvidenceDescriptorSchema",
+  "C2GoldEvidenceRecordSchema",
+  "C2GoldEvidenceRecordBindingSchema",
+  "C2PilotGoldEvidenceBindingSchema",
+  // c2/cost-policy.ts — pure cost decisions consumed only by their tests today.
+  // The paid-call harness (Task 7) calls preflightCampaignCosts before every
+  // provider request and assertRunBudget/assertCampaignBudget after each call;
+  // the calibration reducer (Task 8) aggregates the resulting actual costs.
+  // Listed here rather than wired to a placeholder caller to avoid fake
+  // coupling, per the same precedent as renderSourceDesign /
+  // assertAgreementMatchesSubmissions above. The internal helpers
+  // (forecastRunCost, calculateActualCost, campaignReserveUsd, roundPersistedCost,
+  // findPricingEntry) are already referenced by preflightCampaignCosts and so
+  // do not need allowlisting.
+  "assertRunBudget",
+  "assertCampaignBudget",
+  "preflightCampaignCosts",
+  // c2/condition-resolver.ts + c2/private-artifacts.ts — Task 6. The resolver
+  // converts a model-visible brief + control condition into an immutable,
+  // content-addressed condition input. The private-artifacts module supplies
+  // the atomic write + boundary-scan primitives. The production caller is the
+  // paid-call harness (Task 7), which resolves a condition input before every
+  // provider request and routes private vs. durable writes through these
+  // primitives. Listed here rather than wired to a placeholder caller to avoid
+  // fake coupling, per the same precedent as cost-policy above. Internal
+  // helpers (briefToQuery, resolveJsonPointer, computeInputSha256, C2_RETRIEVAL_*)
+  // are referenced by resolveConditionInput and so do not need allowlisting.
+  "resolveConditionInput",
+  "writePrivateArtifact",
+  "writeDurableArtifact",
+  "scanDurableArtifact",
+  // c2/review-packets.ts — Task 8 foundation helpers for the operational
+  // review-batch flow (Task 10). `shufflePackets` is the spec §10 packet-order
+  // shuffle (crypto.randomInt + rejection sampling); `createFileBlindMapStore`
+  // is the file-backed reversible-map store under .c2-private/c2/blind-map.json.
+  // The CLI's runPropose/runFreeze/runValidate (already wired) do not call them
+  // yet — the batch packet emission is a Task 10 operational step during paid
+  // execution. Listed here rather than wired to a placeholder caller to avoid
+  // fake coupling, per the same precedent as cost-policy above.
+  "shufflePackets",
+  "createFileBlindMapStore",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

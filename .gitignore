@@ -56,6 +56,11 @@ corpus/query-log.jsonl
 # then carve the two tracked files back out.
 eval/*
 !eval/design-handoff-labels.json
+# C2 Pass 2 v1 regression matrix (Task 2): synthetic, portable v1 candidates
+# and their committed score baseline. Same rationale as the labels file —
+# required deliverables of the v1 scorer regression gate, no provider data.
+!eval/design-handoff-v1-candidates.json
+!eval/design-handoff-v1-score-baseline.json
 !eval/design-handoff-fixtures/
 eval/design-handoff-fixtures/*
 !eval/design-handoff-fixtures/briefs.json
@@ -72,6 +77,20 @@ eval/c2/pilot/*
 !eval/c2/pilot/briefs/
 !eval/c2/pilot/labels/
 !eval/c2/pilot/source-snapshots/
+!eval/c2/pilot/evidence/
+# C2 reviewed campaign + pricing config (Task 5): non-secret provider/model
+# pins, sampling parameters, output-token ceilings, fixed $0.50/$5 budgets,
+# and a versioned pricing table with provenance URLs + verification dates.
+# Stores apiKeyEnv NAMES only (OPENAI_API_KEY / ANTHROPIC_API_KEY), never key
+# values. Pricing values are placeholders that must be re-verified from
+# official provider sources immediately before the paid campaign. Tracked
+# because the paid-call harness and calibration reducer bind these hashes.
+!eval/c2/config/
+# C2 gold-evidence descriptors (Task 3): each descriptor maps every label
+# goldEvidenceId to exact source JSON pointers (brief fields or migration
+# snapshot fields). Tracked because the pilot manifest binds their resolved
+# hashes, and downstream gates validate the binding via
+# `npm run validate:c2-pilot`. No prose duplication, no reviewer fields.
 # C2 pilot manifest (Task 5): the canonical content-addressed binding of the
 # three pilot packages. Tracked because downstream gates validate against it
 # via `npm run validate:c2-pilot`.
@@ -79,6 +98,14 @@ eval/c2/pilot/*
 # Durability — rolling snapshots of entries.json, written on every UI save.
 # Gitignored because they're large, derivable, and purely a local safety net.
 corpus/.snapshots/
+
+# C2 Pass 2 private run directory (Task 6). Raw responses, parsed candidates,
+# detailed evidence payloads, full condition inputs, and corpus snapshots live
+# here. These are NEVER committable — only their hashes + metadata may reach a
+# durable artifact, and a boundary scanner enforces that before any write.
+# Tracked durable artifacts (deterministic scores, calibration proposals,
+# frozen calibration) live elsewhere and pass the scan.
+.c2-private/
 
 # Bulk-import working state. Draft files are the staged-but-uncommitted output
 # of `npm run bulk-import`; their .bak siblings come from the strip-and-approve

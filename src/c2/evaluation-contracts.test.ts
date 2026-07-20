@@ -4,6 +4,9 @@ import {
   C2IndependentLabelSubmissionSchema,
   C2LabelAgreementReportSchema,
   C2EvaluationRunManifestSchema,
+  C2EvaluationRunManifestV1Schema,
+  C2EvaluationRunManifestV2Schema,
+  C2BlindScoreSubmissionSchema,
   C2HumanScorecardSchema,
   C2FailureReportSchema,
   assertSubmissionMatchesSelection,
@@ -445,5 +448,244 @@ describe("C2 evaluation and attribution contracts", () => {
 
     const noCorrected = { ...valid, correctedLabelRunRef: null };
     expect(C2FailureReportSchema.safeParse(noCorrected).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pass 2: manifest versioning, blind submissions, and compat alias
+// ---------------------------------------------------------------------------
+
+describe("C2EvaluationRunManifest versioning", () => {
+  it("keeps the V1 schema and compat alias referring to the same schema", () => {
+    // The compatibility alias must be the exact same schema object so a V1
+    // artifact parses identically through both export names. This guards
+    // against the V1 body being accidentally forked during the rename.
+    expect(C2EvaluationRunManifestSchema).toBe(C2EvaluationRunManifestV1Schema);
+  });
+
+  it("parses a representative V1 run through both export names to identical results", () => {
+    const sample = makeRunManifest();
+    const viaV1 = C2EvaluationRunManifestV1Schema.safeParse(sample);
+    const viaAlias = C2EvaluationRunManifestSchema.safeParse(sample);
+    expect(viaV1.success).toBe(true);
+    expect(viaAlias.success).toBe(true);
+    if (viaV1.success && viaAlias.success) {
+      expect(viaV1.data).toEqual(viaAlias.data);
+    }
+
+    const invalid = makeRunManifest({ finishedAt: "2025-01-01T00:00:00.000Z" }); // precedes startedAt
+    const viaV1Bad = C2EvaluationRunManifestV1Schema.safeParse(invalid);
+    const viaAliasBad = C2EvaluationRunManifestSchema.safeParse(invalid);
+    expect(viaV1Bad.success).toBe(false);
+    expect(viaAliasBad.success).toBe(false);
+  });
+
+  it("rejects a V1 run through the V2 schema because V2 adds required fields", () => {
+    const v1Run = makeRunManifest();
+    expect(C2EvaluationRunManifestV1Schema.safeParse(v1Run).success).toBe(true);
+    expect(C2EvaluationRunManifestV2Schema.safeParse(v1Run).success).toBe(false);
+  });
+});
+
+function makeV2RunManifest(overrides: Partial<Record<string, unknown>> = {}) {
+  const base = makeRunManifest();
+  return {
+    ...base,
+    schemaVersion: "2.0",
+    conditionInputRef: fileRef("c2-condition-gold-evidence-stablecoin-home-v1", ".c2-private/c2/conditions/gold-stablecoin-home.json"),
+    scorerRef: fileRef("c2-score-stablecoin-home-v1", "eval/c2/scores/stablecoin-home.json"),
+    attemptCount: 1,
+    providerLatencyMs: 1240,
+    terminalReason: "succeeded",
+    validationErrors: [],
+    sourceSnapshotIds: [],
+    ...overrides,
+  };
+}
+
+describe("C2EvaluationRunManifestV2Schema", () => {
+  it("parses a complete V2 succeeded run", () => {
+    expect(C2EvaluationRunManifestV2Schema.safeParse(makeV2RunManifest()).success).toBe(true);
+  });
+
+  it("requires the V2 schemaVersion marker", () => {
+    expect(
+      C2EvaluationRunManifestV2Schema.safeParse({ ...makeV2RunManifest(), schemaVersion: "1.0" }).success,
+    ).toBe(false);
+  });
+
+  it("requires conditionInputRef, scorerRef, attemptCount, and providerLatencyMs", () => {
+    const { conditionInputRef: _a, ...noConditionRef } = makeV2RunManifest();
+    expect(C2EvaluationRunManifestV2Schema.safeParse(noConditionRef).success).toBe(false);
+
+    const { scorerRef: _b, ...noScorerRef } = makeV2RunManifest();
+    expect(C2EvaluationRunManifestV2Schema.safeParse(noScorerRef).success).toBe(false);
+
+    const { attemptCount: _c, ...noAttempts } = makeV2RunManifest();
+    expect(C2EvaluationRunManifestV2Schema.safeParse(noAttempts).success).toBe(false);
+
+    const { providerLatencyMs: _d, ...noLatency } = makeV2RunManifest();
+    expect(C2EvaluationRunManifestV2Schema.safeParse(noLatency).success).toBe(false);
+  });
+
+  it("records zero execution fields on a cost-blocked run", () => {
+    const blocked = makeV2RunManifest({
+      artifactId: "c2-run-v2-blocked",
+      runId: "run-v2-blocked",
+      condition: "brief-only",
+      evidenceIds: [],
+      status: "cost-blocked",
+      finishedAt: null,
+      rawOutputSha256: null,
+      parsedOutputSha256: null,
+      promptTokens: 0,
+      completionTokens: 0,
+      costUsd: 0,
+      attemptCount: 0,
+      providerLatencyMs: 0,
+      terminalReason: "cost-blocked",
+    });
+    expect(C2EvaluationRunManifestV2Schema.safeParse(blocked).success).toBe(true);
+
+    const blockedWithAttempt = { ...blocked, attemptCount: 1 };
+    expect(C2EvaluationRunManifestV2Schema.safeParse(blockedWithAttempt).success).toBe(false);
+  });
+
+  it("requires terminalReason consistent with the high-level status", () => {
+    const parseFailed = makeV2RunManifest({
+      status: "failed",
+      parsedOutputSha256: null,
+      terminalReason: "parse-failed",
+    });
+    expect(C2EvaluationRunManifestV2Schema.safeParse(parseFailed).success).toBe(true);
+
+    const succeededWithFailedReason = makeV2RunManifest({ terminalReason: "parse-failed" });
+    expect(C2EvaluationRunManifestV2Schema.safeParse(succeededWithFailedReason).success).toBe(false);
+  });
+
+  it("binds source-snapshot IDs for migration runs", () => {
+    const migration = makeV2RunManifest({
+      sourceSnapshotIds: ["snapshot.stablecoin-home-v1"],
+    });
+    expect(C2EvaluationRunManifestV2Schema.safeParse(migration).success).toBe(true);
+  });
+
+  it("records validation errors for a validation-failed run", () => {
+    const failed = makeV2RunManifest({
+      status: "failed",
+      parsedOutputSha256: null,
+      terminalReason: "validation-failed",
+      validationErrors: ["missing required screen blueprint"],
+    });
+    expect(C2EvaluationRunManifestV2Schema.safeParse(failed).success).toBe(true);
+  });
+
+  it("parses a running-state V2 manifest with no terminal reason yet", () => {
+    const running = makeV2RunManifest({
+      artifactId: "c2-run-v2-running",
+      runId: "run-v2-running",
+      status: "running",
+      finishedAt: null,
+      rawOutputSha256: null,
+      parsedOutputSha256: null,
+      promptTokens: 0,
+      completionTokens: 0,
+      costUsd: 0,
+      attemptCount: 0,
+      providerLatencyMs: 0,
+      terminalReason: null,
+    });
+    expect(C2EvaluationRunManifestV2Schema.safeParse(running).success).toBe(true);
+
+    // A running-state manifest MUST NOT carry a terminal reason — the run has
+    // not terminated yet.
+    const runningWithReason = { ...running, terminalReason: "succeeded" };
+    expect(C2EvaluationRunManifestV2Schema.safeParse(runningWithReason).success).toBe(false);
+  });
+
+  it("rejects a succeeded V2 manifest that has no terminal reason", () => {
+    const succeededNoReason = makeV2RunManifest({
+      status: "succeeded",
+      terminalReason: null,
+    });
+    expect(C2EvaluationRunManifestV2Schema.safeParse(succeededNoReason).success).toBe(false);
+  });
+
+  it("accepts every documented failed-state terminal reason", () => {
+    for (const reason of ["provider-failed", "run-budget-exceeded", "campaign-stopped"] as const) {
+      const failed = makeV2RunManifest({
+        status: "failed",
+        parsedOutputSha256: null,
+        terminalReason: reason,
+      });
+      expect(C2EvaluationRunManifestV2Schema.safeParse(failed).success).toBe(true);
+    }
+  });
+});
+
+describe("C2BlindScoreSubmissionSchema", () => {
+  function makeBlindSubmission(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      schemaVersion: "1.0",
+      artifactType: "c2-blind-score-submission",
+      reviewId: "11111111-1111-4111-8111-111111111111",
+      reviewerActorId: "reviewer.gold-1",
+      reviewerActorKind: "human",
+      scores: [
+        { dimension: "product-appropriateness", score: 4, rationale: "Appropriate." },
+        { dimension: "cross-screen-coherence", score: 4, rationale: "Coherent." },
+        { dimension: "implementation-clarity", score: 5, rationale: "Clear." },
+        { dimension: "originality", score: 3, rationale: "Original." },
+        { dimension: "accessibility-and-failure-states", score: 4, rationale: "Accessible." },
+        { dimension: "evidence-discipline", score: 5, rationale: "Disciplined." },
+      ],
+      submittedAt: "2026-07-18T12:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  it("parses a valid blind submission", () => {
+    expect(C2BlindScoreSubmissionSchema.safeParse(makeBlindSubmission()).success).toBe(true);
+  });
+
+  it("rejects a submission that smuggles in a runId", () => {
+    expect(
+      C2BlindScoreSubmissionSchema.safeParse({ ...makeBlindSubmission(), runId: "run-001" }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a submission that smuggles in an output hash", () => {
+    expect(
+      C2BlindScoreSubmissionSchema.safeParse({ ...makeBlindSubmission(), runOutputSha256: SHA_64 }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a submission that smuggles in a condition or provider", () => {
+    expect(
+      C2BlindScoreSubmissionSchema.safeParse({ ...makeBlindSubmission(), condition: "gold-evidence" }).success,
+    ).toBe(false);
+    expect(
+      C2BlindScoreSubmissionSchema.safeParse({ ...makeBlindSubmission(), provider: "openai" }).success,
+    ).toBe(false);
+  });
+
+  it("requires exactly six unique dimensions", () => {
+    const dup = makeBlindSubmission({
+      scores: [
+        { dimension: "product-appropriateness", score: 4, rationale: "x" },
+        { dimension: "product-appropriateness", score: 4, rationale: "x" },
+        { dimension: "implementation-clarity", score: 5, rationale: "x" },
+        { dimension: "originality", score: 3, rationale: "x" },
+        { dimension: "accessibility-and-failure-states", score: 4, rationale: "x" },
+        { dimension: "evidence-discipline", score: 5, rationale: "x" },
+      ],
+    });
+    expect(C2BlindScoreSubmissionSchema.safeParse(dup).success).toBe(false);
+  });
+
+  it("requires a canonical reviewId UUID", () => {
+    expect(
+      C2BlindScoreSubmissionSchema.safeParse({ ...makeBlindSubmission(), reviewId: "not-a-uuid" }).success,
+    ).toBe(false);
   });
 });

@@ -29,6 +29,7 @@ import {
   type CalibrationScorecard,
   type CompatibilityChecklistInput,
   type FreezeAuthorization,
+  type IndependentCompatibility,
 } from "./calibration.js";
 import { C2CalibrationProposalSchema, C2FrozenCalibrationSchema } from "./condition-contracts.js";
 import type { C2HumanScorecard } from "./evaluation-contracts.js";
@@ -750,5 +751,24 @@ describe("freezeCalibration", () => {
         artifactId: "c2-frozen-calibration-pilot-v1",
       }),
     ).toThrow(/reviewerActorId|required|authorization|human/i);
+  });
+
+  it("rejects CLI-synthesized compatibility at freeze time (fabricated placeholder)", () => {
+    const proposal = buildProposal();
+    // Build a compatibility marked cliSynthesized: true (the CLI's propose
+    // command fabricates this from score-completeness signals). The freeze gate
+    // must reject it because it's not a genuine independent evaluation.
+    const synthesizedCompatibility: IndependentCompatibility = {
+      ...evaluateIndependentCompatibility(makeCompatibilityInput()),
+      cliSynthesized: true,
+    };
+    expect(() =>
+      freezeCalibration({
+        proposal,
+        compatibility: synthesizedCompatibility,
+        authorization: makeMatchingAuthorization(proposal.proposalSha256),
+        artifactId: "c2-frozen-calibration-pilot-v1",
+      }),
+    ).toThrow(/cliSynthesized|fabricated|placeholder|genuine/i);
   });
 });

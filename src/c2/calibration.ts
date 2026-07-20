@@ -591,14 +591,24 @@ export function freezeCalibration(input: FreezeCalibrationInput): C2FrozenCalibr
     );
   }
 
-  // 6. Independent compatibility checklist must match the evaluated compatibility.
+  // 6. Reject CLI-synthesized compatibility. A `cliSynthesized: true` marker means
+  //    the compatibility was fabricated from score-completeness signals, not
+  //    measured against real independent evidence. The freeze gate requires a
+  //    genuine human-authored compatibility evaluation.
+  if (compatibility.cliSynthesized === true) {
+    throw new Error(
+      "[c2-freeze] rejected: compatibility carries cliSynthesized: true (a fabricated placeholder). The freeze gate requires a genuine independent-compatibility evaluation, not a CLI-synthesized one.",
+    );
+  }
+
+  // 7. Independent compatibility checklist must match the evaluated compatibility.
   if (!sameCompatibility(authorization.independentChecklist, compatibility)) {
     throw new Error(
       `[c2-freeze] authorization independentChecklist does not match the evaluated compatibility`,
     );
   }
 
-  // 7. Reviewer identity is non-empty.
+  // 8. Reviewer identity is non-empty.
   if (!authorization.reviewerActorId || authorization.reviewerActorId.trim().length === 0) {
     throw new Error("[c2-freeze] reviewerActorId is required for human authorization");
   }

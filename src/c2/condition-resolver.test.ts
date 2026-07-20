@@ -200,8 +200,22 @@ function makeDeps(opts: {
       writeFileSync(abs, bytes);
       writtenPrivate.push({ relPath, bytes });
     });
+  // Synthetic corpus bytes for tests. The real corpus/entries.json is gitignored
+  // (3.6 MB, absent on clean CI), so tests must NOT depend on it. This synthetic
+  // corpus provides stable bytes for the resolver's snapshot + re-hash checks.
+  const SYNTHETIC_CORPUS = Buffer.from(
+    JSON.stringify({ version: 2, entries: [
+      { id: "synthetic-1", title: "Synthetic Entry 1", reviewStatus: "approved", source: "synthetic", image: "synthetic/1.png", addedAt: "2026-01-01T00:00:00Z" },
+      { id: "synthetic-2", title: "Synthetic Entry 2", reviewStatus: "approved", source: "synthetic", image: "synthetic/2.png", addedAt: "2026-01-01T00:00:00Z" },
+    ] }),
+  );
   const readArtifact =
-    opts.readArtifact ?? ((path: string) => readFileSync(join(REPO_ROOT, path)));
+    opts.readArtifact ?? ((path: string) => {
+      // Route corpus/entries.json to synthetic bytes; everything else (committed
+      // pilot briefs/labels/snapshots/evidence) reads from the real repo tree.
+      if (path === "corpus/entries.json") return SYNTHETIC_CORPUS;
+      return readFileSync(join(REPO_ROOT, path));
+    });
   const deps: ResolveConditionDeps = {
     reader,
     readArtifact,
@@ -421,14 +435,15 @@ describe("resolveConditionInput", () => {
     const brief = makeBrief();
     // readArtifact returns entries.json bytes that DIFFER on the second read
     // (before vs. after ranking). The resolver must detect this and throw.
-    const realCorpusBytes = readFileSync(join(REPO_ROOT, "corpus", "entries.json"));
-    const altBytes = Buffer.concat([realCorpusBytes, Buffer.from("\n// mutated\n")]);
+    // Uses synthetic bytes — the real corpus is gitignored and absent on CI.
+    const baseBytes = Buffer.from(JSON.stringify({ version: 2, entries: [{ id: "x", title: "X", reviewStatus: "approved", source: "s", image: "s/x.png", addedAt: "2026-01-01T00:00:00Z" }] }));
+    const altBytes = Buffer.concat([baseBytes, Buffer.from("\n// mutated\n")]);
     let readCount = 0;
     const readArtifact = vi.fn((_path: string) => {
       readCount += 1;
       // The first read captures the pre-ranking snapshot, the second verifies
       // post-ranking. Returning different bytes forces the abort.
-      return readCount === 1 ? realCorpusBytes : altBytes;
+      return readCount === 1 ? baseBytes : altBytes;
     }) as never;
     const { deps } = makeDeps({ privateRoot, readArtifact });
     await expect(

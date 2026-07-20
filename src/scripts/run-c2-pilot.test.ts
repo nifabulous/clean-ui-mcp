@@ -410,4 +410,12 @@ describe("logicalConditionInputPath", () => {
       ),
     ).toBe("eval/c2/condition-inputs/stablecoin-home-current-grounded.json");
   });
+
+  it("normalizes a Windows backslash private path to the logical eval path", () => {
+    expect(
+      logicalConditionInputPath(
+        ".c2-private\\c2\\condition-inputs\\stablecoin-home-current-grounded.json",
+      ),
+    ).toBe("eval/c2/condition-inputs/stablecoin-home-current-grounded.json");
+  });
 });

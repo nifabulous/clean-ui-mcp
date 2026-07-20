@@ -51,6 +51,7 @@
     "test:c2-scoring": "vitest run src/c2/scorer.test.ts scripts/design-handoff-v1-regression.test.mjs scripts/design-handoff-scorer.test.mjs",
     "generate:c2-pilot": "node scripts/build-c2-pilot-manifest.mjs",
     "validate:c2-pilot": "node scripts/build-c2-pilot-manifest.mjs --check",
+    "c2:pilot": "tsc && node dist/scripts/run-c2-pilot.js",
     "validate-readiness-artifacts": "tsc && node dist/scripts/validate-readiness-artifacts.js",
     "typecheck:contracts": "tsc --noEmit && tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck src/tool-contract-types.test.ts"
   },

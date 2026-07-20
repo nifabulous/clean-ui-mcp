@@ -53,4 +53,13 @@ export function loadEnv(options: { path?: string; override?: boolean } = {}): En
   return getEnvStatus(envPath);
 }
 
-loadEnv();
+// Module-scope auto-load. Honors the 04208fb behavior (.env overrides stale
+// shell exports — operators rely on a fresh .env winning) UNLESS the caller
+// sets C2_NO_DOTENV=1. That escape hatch exists so the c2 pilot CLI can model
+// the "operator has no key in their shell" case for its credential preflight:
+// without it, .env's keys would always satisfy the preflight and a paid run
+// could reach a live provider even when the invoking shell has no credentials.
+// It is also what lets the no-egress test suite prove the preflight is real.
+if (process.env.C2_NO_DOTENV !== "1") {
+  loadEnv();
+}

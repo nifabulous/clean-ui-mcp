@@ -60,17 +60,26 @@ export interface BoundaryScanConfig {
   secretEnvNames: readonly string[];
 }
 
-// Field-name prefixes that mark prompt/evidence/raw content. A durable artifact
-// carries hashes and metadata only; any field whose name starts with one of
-// these prefixes (case-sensitive) is rejected. The prefixes are deliberately
-// narrow to avoid false positives on legitimate metadata field names.
-const FORBIDDEN_FIELD_PREFIXES = [
+// Exact field names that mark prompt/evidence/raw CONTENT (not hashes or
+// counts of them). A durable artifact carries hashes and metadata only; a
+// field literally named one of these carries the actual sensitive bytes.
+//
+// We match EXACT names rather than prefixes so that legitimate hash/count
+// fields on the V2 manifest — `promptSha256`, `promptTokens`, `rawOutputSha256`,
+// `parsedOutputSha256`, `completionTokens` — are NOT rejected. Those carry
+// hashes and integer counts, not content.
+const FORBIDDEN_CONTENT_FIELDS = [
   "prompt",
+  "promptText",
+  "promptContent",
+  "promptBody",
   "evidenceContent",
   "evidencePayload",
+  "evidenceBytes",
   "rawResponse",
-  "rawOutput",
+  "rawResponseBody",
   "rawRequest",
+  "rawRequestBody",
   "responseBody",
   "requestBody",
   "authorizationHeader",
@@ -137,15 +146,16 @@ export function scanDurableArtifact(jsonText: string, config: BoundaryScanConfig
     }
   }
 
-  // 3. Forbidden content field prefixes.
-  //    Parse-free scan: look for `"prefix...":` patterns. This avoids the cost
-  //    of a full JSON parse and the edge cases of parsing untrusted JSON.
-  for (const prefix of FORBIDDEN_FIELD_PREFIXES) {
-    const pattern = new RegExp(`"\\s*${escapeRegex(prefix)}[A-Za-z0-9_]*\\s*"\\s*:`, "g");
+  // 3. Forbidden content fields (exact-name match).
+  //    Parse-free scan: look for `"fieldName":` patterns. Exact match (not
+  //    prefix) so hash/count fields like `promptSha256` and `rawOutputSha256`
+  //    are not falsely rejected.
+  for (const fieldName of FORBIDDEN_CONTENT_FIELDS) {
+    const pattern = new RegExp(`"\\s*${escapeRegex(fieldName)}\\s*"\\s*:`, "g");
     if (pattern.test(jsonText)) {
       throw new Error(
         `[c2-boundary] durable artifact rejected: carries a forbidden content field `
-        + `('${prefix}...'). Durable artifacts carry hashes + metadata only, not prompt/`
+        + `('${fieldName}'). Durable artifacts carry hashes + metadata only, not prompt/`
         + `evidence/raw content.`,
       );
     }
@@ -270,7 +280,7 @@ function resolveUnder(root: string, relPath: string): string {
 
 // Re-export for tests that want to assert the temp-file cleanup via the
 // filesystem (no public consumers besides tests).
-export const __test = { resolveUnder, FORBIDDEN_FIELD_PREFIXES, FORBIDDEN_PATH_SUBSTRINGS };
+export const __test = { resolveUnder, FORBIDDEN_CONTENT_FIELDS, FORBIDDEN_PATH_SUBSTRINGS };
 
 // Avoid an unused-import warning when existsSync is tree-shaken out of
 // production builds that only use the scan function.

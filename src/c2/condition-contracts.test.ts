@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   C2ConditionInputSchema,
   C2EvidenceRecordSchema,
@@ -505,6 +506,20 @@ describe("C2CampaignConfigSchema", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("the production pilot-campaign.json pins maxOutputTokens at 4096 for both lanes", () => {
+    // Issue B (retry3): candidates were truncated at 2048 output tokens, producing
+    // unparseable JSON. The production config now pins 4096 for both lanes so the
+    // rich candidate schema (globalDirection + screenBlueprints + sourceDecisions
+    // + authorityLanes + acceptanceCriteria + assumptions) has room to complete.
+    // This test guards against an accidental revert to 2048.
+    const cfg = JSON.parse(
+      readFileSync("eval/c2/config/pilot-campaign.json", "utf-8"),
+    );
+    expect(C2CampaignConfigSchema.safeParse(cfg).success).toBe(true);
+    expect(cfg.primary.maxOutputTokens).toBe(4096);
+    expect(cfg.independent.maxOutputTokens).toBe(4096);
   });
 });
 

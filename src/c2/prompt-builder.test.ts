@@ -350,7 +350,20 @@ describe("buildC2Prompt — instruction invariants", () => {
     expect(prompt).toMatch(/No spaces/i);
     // authorityLanes specifically called out as ID-references, not prose.
     expect(prompt).toMatch(/authorityLanes.*stable ID/i);
-    expect(prompt).toMatch(/NOT.*descriptive phrase/i);
+    expect(prompt).toMatch(/NEVER use descriptive phrase/i);
+  });
+
+  it("surfaces the provenance hash on a dedicated, unmissable line", () => {
+    // Issue A (retry3): the model wrote "unknown" for provenance.conditionInputSha256
+    // because the hash was buried only inside the condition-input JSON block. The
+    // prompt now surfaces it on a dedicated PROVENANCE HASH line so the model
+    // cannot miss it.
+    const ci = briefOnlyConditionInput();
+    const { prompt } = buildC2Prompt({ brief: brief(), conditionInput: ci });
+    expect(prompt).toMatch(/PROVENANCE HASH/i);
+    expect(prompt).toContain(ci.inputSha256);
+    // The surfaced line must instruct the model to copy the exact value.
+    expect(prompt).toMatch(/copy this EXACT value/i);
   });
 
   it("clarifies that assumptions and accessibilityAndRecovery are plain strings, not objects", () => {

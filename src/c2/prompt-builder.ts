@@ -89,11 +89,11 @@ const CANDIDATE_SCHEMA_SUMMARY = [
   "- globalDirection: { summary, principles[] }",
   "- screenBlueprints[]: { id, summary, requiredStates[], mobileRules[], accessibility[], failureAndRecovery[], inspectedUrls[] } — one blueprint per brief-required screen, including every required state and mobile rule",
   "- sourceDecisions[]: { id, lane: retain|adapt|reject, rationale, evidenceIds[] } — cite only evidence IDs supplied below",
-  "- authorityLanes: { retain[], adapt[], reject[] } — each value is a stable ID referencing a retained/adapted/rejected concept (e.g. retain: [\"headline-stack\"], adapt: [\"branded-palette\"], reject: [\"decorative-gradient\"]), NOT a descriptive phrase",
+  "- authorityLanes: { retain: string[], adapt: string[], reject: string[] } — each array contains ONLY stable IDs (lowercase alphanumeric with . : _ - separators), referencing retained/adapted/rejected concepts. Example: retain: [\"headline-stack\"], adapt: [\"branded-palette\"], reject: [\"decorative-gradient\"]. NEVER use descriptive phrases, sentences, or multi-word labels with spaces — only valid stable IDs.",
   "- acceptanceCriteria[]: { id, statement }",
   "- assumptions[] — plain strings, one per assumption (e.g. \"The exact typography is not specified in the brief.\"). NOT objects.",
   "- accessibilityAndRecovery[] — plain strings, one per criterion. NOT objects.",
-  "- provenance: { conditionInputSha256 } — must equal the supplied conditionInput.inputSha256",
+  "- provenance: { conditionInputSha256 } — must be the EXACT 64-character lowercase hex string supplied in the 'PROVENANCE HASH' line below. Do NOT write \"unknown\" or invent a value; copy it verbatim.",
 ].join("\n");
 
 // ---------------------------------------------------------------------------
@@ -162,6 +162,10 @@ export function buildC2Prompt(input: BuildC2PromptInput): BuiltPrompt {
 
   // Deterministic assembly. Section order is fixed; section boundaries are
   // explicit markers so the model (and any byte-diff tooling) can locate them.
+  // The provenance hash is surfaced as its own final line so the model cannot
+  // miss it — earlier iterations saw the model write "unknown" when the hash
+  // was buried only inside the condition-input JSON block.
+  const provenanceLine = `PROVENANCE HASH (copy this EXACT value into provenance.conditionInputSha256): ${input.conditionInput.inputSha256}`;
   const prompt = [
     "### SYSTEM INSTRUCTION ###",
     SYSTEM_INSTRUCTION,
@@ -175,6 +179,7 @@ export function buildC2Prompt(input: BuildC2PromptInput): BuiltPrompt {
     "### CANDIDATE SCHEMA SUMMARY ###",
     CANDIDATE_SCHEMA_SUMMARY,
     "",
+    provenanceLine,
   ].join("\n");
 
   const promptSha256 = sha256Hex(Buffer.from(prompt, "utf-8"));

@@ -20,7 +20,7 @@
  * Exit codes: 0 = success, 1 = operational failure, 2 = usage/config error.
  */
 import { parseArgs } from "node:util";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, appendFileSync, readdirSync } from "node:fs";
 import { resolve, dirname, join, isAbsolute } from "node:path";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -30,6 +30,7 @@ import {
   C2PricingTableSchema,
   C2CalibrationProposalSchema,
   C2FrozenCalibrationSchema,
+  C2ConditionInputSchema,
   type C2CampaignConfig,
   type C2PricingTable,
   type C2ConditionInput,
@@ -40,6 +41,7 @@ import { C2CaseBriefSchema, C2DecisionLabelSchema, C2GoldEvidenceDescriptorSchem
 import { resolveConditionInput } from "../c2/condition-resolver.js";
 import { preflightCampaignCosts, findPricingEntry } from "../c2/cost-policy.js";
 import { executeC2Run, type CampaignState, type C2RunStore, type ExecuteC2RunRequest } from "../c2/harness.js";
+import { writePrivateArtifact, writeDurableArtifact, type BoundaryScanConfig } from "../c2/private-artifacts.js";
 import { callTextModelWithMetadata, type Provider } from "../tagger.js";
 import { sha256Hex, canonicalJsonStringify } from "../readiness/contracts.js";
 import { PrivateCorpusReader } from "../corpus-reader.js";
@@ -113,9 +115,9 @@ async function main(): Promise<number> {
     case "run":
       return runRun(args);
     case "propose":
-      return runPropose(args);
+      return await runPropose(args);
     case "freeze":
-      return runFreeze(args);
+      return await runFreeze(args);
     case "validate":
       return runValidate(args);
     default:
@@ -188,6 +190,32 @@ function fileSha256(path: string): string {
   return sha256Hex(readFileSync(path));
 }
 
+/**
+ * Load a prepared condition input from disk, validate it through the Zod schema
+ * (NOT a TypeScript cast), and verify the recomputed `inputSha256` matches the
+ * persisted value before returning. The condition input file lives under the
+ * gitignored `.c2-private/` tree, so the threat surface is operator/attacker
+ * editing it between `prepare` and `run`. The schema parse catches shape drift;
+ * the hash check catches any in-place mutation (including ones that preserve the
+ * shape). Throws an actionable error if the hash mismatches.
+ */
+function loadValidatedConditionInput(conditionInputPath: string): C2ConditionInput {
+  const raw = JSON.parse(readFileSync(conditionInputPath, "utf-8"));
+  const conditionInput = C2ConditionInputSchema.parse(raw) as C2ConditionInput;
+  // Recompute the canonical inputSha256 (over every model-visible field EXCEPT
+  // the hash itself) and refuse to run if it doesn't match the persisted value.
+  const { inputSha256: _omit, ...rest } = conditionInput;
+  void _omit;
+  const recomputed = sha256Hex(Buffer.from(canonicalJsonStringify(rest), "utf-8"));
+  if (recomputed !== conditionInput.inputSha256) {
+    throw new Error(
+      "condition input hash mismatch: the loaded inputSha256 does not match the recomputed hash. "
+      + "The condition input file may have been corrupted or tampered.",
+    );
+  }
+  return conditionInput;
+}
+
 // ---------------------------------------------------------------------------
 // prepare — offline condition input resolution
 // ---------------------------------------------------------------------------
@@ -250,21 +278,14 @@ async function runPrepare(args: Record<string, unknown>): Promise<number> {
         {
           reader,
           readArtifact: (p) => readFileSync(p),
-          writePrivate: (relPath, bytes) => {
-            const abs = join(privateRoot, relPath);
-            mkdirSync(dirname(abs), { recursive: true });
-            writeFileSync(abs, bytes);
-          },
+          writePrivate: async (relPath, bytes) => { await writePrivateArtifact(privateRoot, relPath, bytes); },
           now: () => new Date().toISOString(),
         },
       );
 
-      const outDir = join(privateRoot, "c2/condition-inputs");
-      mkdirSync(outDir, { recursive: true });
-      const outFile = join(outDir, `${pkg.caseId}-${condition}.json`);
-      writeFileSync(outFile, canonicalJsonStringify(r.metadata));
-      const payloadFile = join(outDir, `${pkg.caseId}-${condition}.private.json`);
-      writeFileSync(payloadFile, r.privatePayload);
+      const outRelDir = "c2/condition-inputs";
+      await writePrivateArtifact(privateRoot, join(outRelDir, `${pkg.caseId}-${condition}.json`), Buffer.from(canonicalJsonStringify(r.metadata), "utf-8"));
+      await writePrivateArtifact(privateRoot, join(outRelDir, `${pkg.caseId}-${condition}.private.json`), Buffer.from(r.privatePayload, "utf-8"));
       resolvedCount += 1;
     }
   }
@@ -410,7 +431,13 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
         console.error(`error: condition input not prepared. Run 'prepare' first. Missing: ${conditionInputPath}`);
         return 1;
       }
-      const conditionInput = JSON.parse(readFileSync(conditionInputPath, "utf-8")) as C2ConditionInput;
+      let conditionInput: C2ConditionInput;
+      try {
+        conditionInput = loadValidatedConditionInput(conditionInputPath);
+      } catch (err) {
+        console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
       const privatePayloadPath = join(privateRoot, "c2/condition-inputs", `${pkg.caseId}-${condition}.private.json`);
       const evidenceContent = loadEvidenceContent(conditionInput, privatePayloadPath);
 
@@ -436,6 +463,8 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
           maxOutputTokens: campaign.primary.maxOutputTokens,
           samplingParameters: campaign.primary.samplingParameters,
         },
+        maxRunCostUsd: campaign.maxRunCostUsd,
+        maxCampaignCostUsd: campaign.maxCampaignCostUsd,
         evidenceContent,
         harnessGitSha: gitSha,
         sourceSnapshotIds: pkg.sourceSnapshot ? [pkg.sourceSnapshot.artifactId] : [],
@@ -472,7 +501,13 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
         console.error(`error: condition input not prepared. Run 'prepare' first. Missing: ${conditionInputPath}`);
         return 1;
       }
-      const conditionInput = JSON.parse(readFileSync(conditionInputPath, "utf-8")) as C2ConditionInput;
+      let conditionInput: C2ConditionInput;
+      try {
+        conditionInput = loadValidatedConditionInput(conditionInputPath);
+      } catch (err) {
+        console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
       const privatePayloadPath = join(privateRoot, "c2/condition-inputs", `${pkg.caseId}-${condition}.private.json`);
       const evidenceContent = loadEvidenceContent(conditionInput, privatePayloadPath);
 
@@ -498,6 +533,8 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
           maxOutputTokens: campaign.independent.maxOutputTokens,
           samplingParameters: campaign.independent.samplingParameters,
         },
+        maxRunCostUsd: campaign.maxRunCostUsd,
+        maxCampaignCostUsd: campaign.maxCampaignCostUsd,
         evidenceContent,
         harnessGitSha: gitSha,
         sourceSnapshotIds: pkg.sourceSnapshot ? [pkg.sourceSnapshot.artifactId] : [],
@@ -604,6 +641,20 @@ function collectSecretValues(): string[] {
   return values;
 }
 
+/**
+ * Boundary-scan config for the proposal/freeze durable writes. Mirrors the
+ * config the harness threads into executeC2Run: the resolved API-key values +
+ * the secret env-var names. writeDurableArtifact runs this scan BEFORE the
+ * atomic write so a calibration artifact carrying any secret material, a
+ * forbidden content field, or a private path is rejected with no file on disk.
+ */
+function durableBoundaryScan(): BoundaryScanConfig {
+  return {
+    secretValues: collectSecretValues(),
+    secretEnvNames: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+  };
+}
+
 function loadEvidenceContent(conditionInput: C2ConditionInput, privatePayloadPath: string): Map<string, string> {
   const map = new Map<string, string>();
   if (!existsSync(privatePayloadPath)) return map;
@@ -623,20 +674,22 @@ function loadEvidenceContent(conditionInput: C2ConditionInput, privatePayloadPat
 
 function makeFilesystemStore(privateRoot: string, runsRoot: string): C2RunStore {
   return {
+    // Private writes (raw responses, private payloads) use the atomic
+    // fsync+rename primitive. No boundary scan — everything under the private
+    // root is private by construction.
     async writePrivate(relPath, bytes) {
-      const abs = join(privateRoot, relPath);
-      mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, bytes);
+      await writePrivateArtifact(privateRoot, relPath, bytes);
     },
+    // Durable writes (manifests, scores) are ALREADY boundary-scanned by the
+    // harness's writeManifestDurable / writeScoreDurable (scanDurableArtifact
+    // runs before the store is called). The store only needs the atomic
+    // fsync+rename lifecycle, so it routes through writePrivateArtifact against
+    // the durable root. The boundary scan config stays owned by the harness.
     async writeDurableManifest(runId, manifestJson) {
-      const abs = join(runsRoot, runId, "manifest.json");
-      mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, manifestJson, "utf-8");
+      await writePrivateArtifact(runsRoot, join(runId, "manifest.json"), Buffer.from(manifestJson, "utf-8"));
     },
     async writeDurableScore(runId, scoreJson) {
-      const abs = join(runsRoot, runId, "score.json");
-      mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, scoreJson, "utf-8");
+      await writePrivateArtifact(runsRoot, join(runId, "score.json"), Buffer.from(scoreJson, "utf-8"));
     },
     hasTerminalRun(runId) {
       return existsSync(join(runsRoot, runId, "manifest.json"));
@@ -794,7 +847,7 @@ function buildCompatibilityInput(runs: CalibrationRun[]): CompatibilityChecklist
   };
 }
 
-function runPropose(args: Record<string, unknown>): number {
+async function runPropose(args: Record<string, unknown>): Promise<number> {
   if (!args.runs) {
     console.error("error: propose requires --runs <dir>");
     return 2;
@@ -836,9 +889,11 @@ function runPropose(args: Record<string, unknown>): number {
       artifactId: "c2-calibration-proposal-pilot-v1",
     });
 
-    mkdirSync(CALIBRATION_DIR, { recursive: true });
+    // Durable write under eval/c2/calibration/ — runs the boundary scan FIRST
+    // (no secret values, no private paths, no content fields) then writes
+    // atomically with fsync+rename.
+    await writeDurableArtifact(CALIBRATION_DIR, "proposal.json", canonicalJsonStringify(proposal), durableBoundaryScan());
     const proposalPath = join(CALIBRATION_DIR, "proposal.json");
-    writeFileSync(proposalPath, canonicalJsonStringify(proposal), "utf-8");
     console.error(`[c2-propose] wrote ${proposalPath} (proposalSha256=${proposal.proposalSha256.slice(0, 12)}…)`);
     return 0;
   } catch (err) {
@@ -847,7 +902,7 @@ function runPropose(args: Record<string, unknown>): number {
   }
 }
 
-function runFreeze(args: Record<string, unknown>): number {
+async function runFreeze(args: Record<string, unknown>): Promise<number> {
   if (!args.proposal || !args.authorization) {
     console.error("error: freeze requires --proposal <proposal.json> --authorization <review.json>");
     return 2;
@@ -892,9 +947,10 @@ function runFreeze(args: Record<string, unknown>): number {
       artifactId: "c2-frozen-calibration-pilot-v1",
     });
 
-    mkdirSync(CALIBRATION_DIR, { recursive: true });
+    // Durable write under eval/c2/calibration/ — boundary scan FIRST, then
+    // atomic fsync+rename.
+    await writeDurableArtifact(CALIBRATION_DIR, "frozen.json", canonicalJsonStringify(frozen), durableBoundaryScan());
     const frozenPath = join(CALIBRATION_DIR, "frozen.json");
-    writeFileSync(frozenPath, canonicalJsonStringify(frozen), "utf-8");
     console.error(`[c2-freeze] wrote ${frozenPath} (frozenAt=${frozen.frozenAt})`);
     return 0;
   } catch (err) {

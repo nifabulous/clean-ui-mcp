@@ -114,6 +114,19 @@ export interface ExecuteC2RunRequest {
    * overwrites a terminal run — it always emits a new runId.
    */
   predecessorRunId: string | null;
+  /**
+   * Nominal per-run cost ceiling (`campaign.maxRunCostUsd`, pinned to $0.50 for
+   * the pilot). Bounds ACTUAL cost accounting after a call. Threaded through the
+   * request (instead of a hardcoded literal) so the harness's budget decisions
+   * reference the same source of truth the schema pins.
+   */
+  maxRunCostUsd: number;
+  /**
+   * Campaign-wide cost ceiling (`campaign.maxCampaignCostUsd`, pinned to $5.00
+   * for the pilot). Bounds the running `spent + forecast` total before each
+   * call. Threaded through the request for the same reason as `maxRunCostUsd`.
+   */
+  maxCampaignCostUsd: number;
 }
 
 /**
@@ -279,16 +292,16 @@ export async function executeC2Run(
 
   const runBudget = assertRunBudget({
     forecastUsd: forecast.rawForecastUsd,
-    ceilingUsd: 0.5, // pinned nominal per-run ceiling
+    ceilingUsd: request.maxRunCostUsd,
   });
   if (!runBudget.allowed) {
-    return await finalizeCostBlocked(request, deps, forecast.forecastUsd);
+    return await finalizeCostBlocked(request, deps);
   }
 
   const campaignBudget = assertCampaignBudget({
     spentUsd: deps.campaign.spentUsd,
     forecastUsd: forecast.rawForecastUsd,
-    ceilingUsd: 5, // pinned campaign ceiling
+    ceilingUsd: request.maxCampaignCostUsd,
   });
   if (!campaignBudget.allowed) {
     // A campaign-budget denial is also recorded as cost-blocked at the run
@@ -296,7 +309,7 @@ export async function executeC2Run(
     // CLI may revise the run matrix. (Spec §12 lists campaign-stopped
     // separately; a single forecast overage does not by itself stop the
     // campaign, it just blocks THIS run.)
-    return await finalizeCostBlocked(request, deps, forecast.forecastUsd);
+    return await finalizeCostBlocked(request, deps);
   }
 
   // ─── Step 5: build the prompt + write the RUNNING manifest ──────────────
@@ -337,7 +350,6 @@ export async function executeC2Run(
     attemptCount: 0,
     providerLatencyMs: 0,
     validationErrors: [],
-    forecastUsd: forecast.forecastUsd,
   });
 
   // Pre-egress durable write. A failure here propagates — no provider call.
@@ -383,11 +395,11 @@ export async function executeC2Run(
   // whether the candidate parses.
   deps.campaign.spentUsd = round6(deps.campaign.spentUsd + actual.rawActualUsd);
 
-  // run-budget-exceeded: actual > $0.50 after a successful response. Parsing
-  // is SKIPPED (parsedOutputSha256 stays null), the raw-output hash + actual
-  // usage are preserved for audit, and the campaign STOPS immediately so the
-  // next queued run performs no provider call.
-  if (actual.actualUsd > 0.5) {
+  // run-budget-exceeded: actual > the per-run ceiling after a successful
+  // response. Parsing is SKIPPED (parsedOutputSha256 stays null), the
+  // raw-output hash + actual usage are preserved for audit, and the campaign
+  // STOPS immediately so the next queued run performs no provider call.
+  if (actual.actualUsd > request.maxRunCostUsd) {
     return finalizeRunBudgetExceeded(request, deps, runId, startedAt, {
       promptSha256: builtPrompt.promptSha256,
       rawOutputSha256,
@@ -455,7 +467,6 @@ export async function executeC2Run(
     attemptCount: callResult.attempts,
     providerLatencyMs: callResult.latencyMs,
     validationErrors: [],
-    forecastUsd: forecast.forecastUsd,
   });
 
   // Persist the final manifest (replaces the running-state pre-egress write).
@@ -519,7 +530,6 @@ async function finalizeProviderFailed(
     attemptCount: 0,
     providerLatencyMs: 0,
     validationErrors: [err instanceof Error ? err.message : String(err)],
-    forecastUsd: null,
   });
   await writeManifestDurable(deps, runId, manifest);
   return manifest;
@@ -548,7 +558,6 @@ async function finalizeParseFailed(
     attemptCount: fields.attemptCount,
     providerLatencyMs: fields.providerLatencyMs,
     validationErrors: [fields.parseError],
-    forecastUsd: null,
   });
   await writeManifestDurable(deps, runId, manifest);
   return manifest;
@@ -577,7 +586,6 @@ async function finalizeValidationFailed(
     attemptCount: fields.attemptCount,
     providerLatencyMs: fields.providerLatencyMs,
     validationErrors: fields.validationErrors,
-    forecastUsd: null,
   });
   await writeManifestDurable(deps, runId, manifest);
   return manifest;
@@ -606,7 +614,6 @@ async function finalizeRunBudgetExceeded(
     attemptCount: fields.attemptCount,
     providerLatencyMs: fields.providerLatencyMs,
     validationErrors: [],
-    forecastUsd: null,
   });
   await writeManifestDurable(deps, runId, manifest);
   // Campaign stops immediately so the next queued run performs no provider call.
@@ -618,7 +625,6 @@ async function finalizeRunBudgetExceeded(
 async function finalizeCostBlocked(
   request: ExecuteC2RunRequest,
   deps: ExecuteC2RunDeps,
-  forecastUsd: number,
 ): Promise<C2EvaluationRunManifestV2> {
   // cost-blocked: zero execution. No attempts, no tokens, no cost, no output
   // hashes, finishedAt stays null. The runId is still assigned (the run was
@@ -648,7 +654,6 @@ async function finalizeCostBlocked(
     attemptCount: 0,
     providerLatencyMs: 0,
     validationErrors: [],
-    forecastUsd,
   });
   // Best-effort durable write — the manifest is also returned to the caller,
   // who may persist it. cost-blocked runs MUST be recorded so a blocked run
@@ -690,7 +695,6 @@ async function finalizeCampaignStopped(
     attemptCount: 0,
     providerLatencyMs: 0,
     validationErrors: [],
-    forecastUsd: null,
   });
   await writeManifestDurable(deps, runId, manifest);
   return manifest;
@@ -716,14 +720,10 @@ interface BuildManifestInput {
   attemptCount: number;
   providerLatencyMs: number;
   validationErrors: string[];
-  forecastUsd: number | null;
 }
 
 function buildManifest(input: BuildManifestInput): C2EvaluationRunManifestV2 {
   const r = input.request;
-  // `forecastUsd` is carried on the input for future audit enrichment but is
-  // not part of the V2 manifest schema, so it is intentionally not serialized.
-  void input.forecastUsd;
   const manifest: Record<string, unknown> = {
     schemaVersion: "2.0",
     artifactType: "c2-evaluation-run",

@@ -267,6 +267,8 @@ function makeBaseRequest(overrides: Partial<ExecuteC2RunRequest> = {}): ExecuteC
       maxOutputTokens: 2048,
       samplingParameters: { temperature: 0.2, seed: 7 },
     },
+    maxRunCostUsd: 0.5,
+    maxCampaignCostUsd: 5,
     evidenceContent: new Map(),
     harnessGitSha: HARNESS_GIT_SHA,
     sourceSnapshotIds: [],

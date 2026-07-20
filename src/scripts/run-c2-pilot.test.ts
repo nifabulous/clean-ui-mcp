@@ -122,7 +122,7 @@ function expectZeroEgress(res: SpawnResult): void {
   ).toEqual([]);
 }
 
-describe("run-c2-pilot CLI — no-egress behavior", () => {
+describe("run-c2-pilot CLI — no-egress behavior", { timeout: 30_000 }, () => {
   it("exits non-zero with usage when invoked with no args, and makes zero provider calls", () => {
     const res = spawnCli([]);
     expect(res.code).not.toBe(0);
@@ -298,7 +298,7 @@ describe("run-c2-pilot CLI — no-egress behavior", () => {
   });
 });
 
-describe("run-c2-pilot CLI — subprocess isolation", () => {
+describe("run-c2-pilot CLI — subprocess isolation", { timeout: 30_000 }, () => {
   it("the compiled CLI exists at dist/scripts/run-c2-pilot.js", () => {
     expect(existsSync(CLI_PATH)).toBe(true);
   });

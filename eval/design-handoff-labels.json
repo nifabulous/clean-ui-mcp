@@ -111,7 +111,7 @@
       "requiredSections": ["globalDirection", "screenBlueprints", "acceptanceCriteria", "assumptions", "authorityLanes", "sourceDecisions"],
       "requiredDecisions": ["src:concept:palette"],
       "requiredScreenStates": { "concept": ["empty", "populated"] },
-      "requiredAcceptanceCriteria": ["ac-unsourced-direction-is-assumption"],
+      "requiredAcceptanceCriteria": ["ac-unsourced-direction-is-assumption", "ac-low-source-coverage-explicit"],
       "requiredMobileRules": ["stack-to-single-column"],
       "permittedAuthorityLanes": ["retain", "adapt", "reject"],
       "forbiddenClaims": ["icon-only", "pixel-perfect"],

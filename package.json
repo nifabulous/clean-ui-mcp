@@ -48,6 +48,7 @@
     "build-image-index": "tsc && node dist/scripts/build-image-index.js",
     "test:critique-quality": "vitest run scripts/critique-quality-scorer.test.mjs scripts/eval-scorer.test.mjs",
     "test:design-handoff-quality": "vitest run scripts/design-handoff-scorer.test.mjs",
+    "test:c2-scoring": "vitest run src/c2/scorer.test.ts scripts/design-handoff-v1-regression.test.mjs scripts/design-handoff-scorer.test.mjs",
     "generate:c2-pilot": "node scripts/build-c2-pilot-manifest.mjs",
     "validate:c2-pilot": "node scripts/build-c2-pilot-manifest.mjs --check",
     "validate-readiness-artifacts": "tsc && node dist/scripts/validate-readiness-artifacts.js",

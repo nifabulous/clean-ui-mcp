@@ -56,6 +56,11 @@ corpus/query-log.jsonl
 # then carve the two tracked files back out.
 eval/*
 !eval/design-handoff-labels.json
+# C2 Pass 2 v1 regression matrix (Task 2): synthetic, portable v1 candidates
+# and their committed score baseline. Same rationale as the labels file —
+# required deliverables of the v1 scorer regression gate, no provider data.
+!eval/design-handoff-v1-candidates.json
+!eval/design-handoff-v1-score-baseline.json
 !eval/design-handoff-fixtures/
 eval/design-handoff-fixtures/*
 !eval/design-handoff-fixtures/briefs.json

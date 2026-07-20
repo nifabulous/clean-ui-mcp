@@ -126,17 +126,6 @@ async function main(): Promise<number> {
   }
 }
 
-// Run only when this module is the entry point (not when imported by tests).
-const isMainModule = import.meta.url === `file://${process.argv[1]}`;
-if (isMainModule) {
-  main()
-    .then((code) => process.exit(code))
-    .catch((err) => {
-      console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    });
-}
-
 export {};
 
 // ---------------------------------------------------------------------------
@@ -1019,4 +1008,22 @@ function runValidate(args: Record<string, unknown>): number {
     console.error(`[c2-validate] ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Entry point — MUST be at the end of the file, after all module-level const
+// declarations (PILOT_MANIFEST_PATH, SCORECARDS_DIR, CALIBRATION_DIR). Placing
+// this block earlier triggers a temporal-dead-zone error: main() calls
+// runPropose() → loadCalibrationRuns() → loadPilotPackages(), which references
+// PILOT_MANIFEST_PATH before its declaration is reached. The `import.meta.url`
+// guard ensures tests importing this module never trigger the auto-run.
+// ---------------------------------------------------------------------------
+const isMainModule = import.meta.url === `file://${process.argv[1]}`;
+if (isMainModule) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    });
 }

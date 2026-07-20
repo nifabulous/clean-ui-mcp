@@ -352,6 +352,13 @@ describe("resolveConditionInput", () => {
       "entry-a",
       "entry-b",
     ]);
+    // selectedEntryIds MUST use the same raw corpus entry IDs as rankedResult.
+    // The schema's superRefine checks `entry.entryId === id` — a `corpus:` prefix
+    // here would make every selected entry fail that check (787-mismatch bug).
+    expect(result.metadata.retrieval.selectedEntryIds).toEqual([
+      "entry-a",
+      "entry-b",
+    ]);
     // The literal retrieval mode is recorded in the private payload.
     expect(result.privatePayload).toContain('"retrievalMode":"keyword-only"');
     // The private payload carries the actual evidence content bytes.

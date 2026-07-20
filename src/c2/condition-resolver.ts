@@ -266,7 +266,7 @@ async function resolveCurrentGrounded(
   // resolver MUST NOT inject hand-curated results (spec §5.2). The schema's
   // `min(1)` constraint on current-grounded evidence will then reject the
   // input at validation time — surfacing the gap honestly.
-  const selectedEntryIds = ranked.map((r) => `corpus:${r.entry.id}`);
+  const selectedEntryIds = ranked.map((r) => r.entry.id);
 
   // 6. Assemble the metadata. Use the variant type directly so the discriminated
   //    union narrows correctly.

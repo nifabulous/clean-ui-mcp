@@ -152,3 +152,60 @@ ledger artifact for C2.
 **Pass 2:** is the evaluation-harness and pilot-calibration plan and must be
 designed from the Pass 1 evidence (the three pilot packages and the contract
 schemas), not from any pre-emptive gold claim.
+
+### C2 Pass 2 — harness readiness (PR 1)
+
+This records the **Pass 2 harness implementation** landing on the PR 1 branch
+(`codex/c2-pass2-harness-pr1`). It is the offline evaluation harness plus a
+synthetic end-to-end calibration proof; it explicitly does **not** close C2 and
+does **not** execute any paid provider call.
+
+**What landed (implementation, offline-only):**
+- The complete Tasks 1–8 harness under `src/c2/`: condition resolver
+  (`condition-resolver.ts`), prompt builder (`prompt-builder.ts`), model
+  telemetry (`model-telemetry.ts`), cost policy (`cost-policy.ts`), run-state
+  matrix + audit (`harness.ts`), private artifacts (`private-artifacts.ts`),
+  the metadata-blinding protocol (`review-packets.ts`:
+  `createBlindAssignment` / `buildBlindedReviewPacket` /
+  `finalizeBlindScorecard`), the calibration reducer
+  (`calibration.ts`: `buildCalibrationProposal` /
+  `evaluateIndependentCompatibility` / `freezeCalibration`), and the
+  `c2:pilot` CLI (`src/scripts/run-c2-pilot.ts`) with its `prepare` /
+  `run` / `propose` / `freeze` / `validate` subcommands.
+- The CLI `prepare` command resolves every campaign condition input offline
+  against the reviewed `eval/c2/config/pilot-campaign.json`: nine primary
+  condition inputs (3 cases × 3 OpenAI conditions) plus the configured three
+  Claude independent inputs (3 cases × `current-grounded`, reusing the same
+  prepared files), with **zero provider calls**. Current-grounded records
+  identify production corpus entries as `corpus:<entry-id>`; complete rankings
+  stay private under `.c2-private/`; gold records resolve every label gold ID
+  exactly; no reviewer-only sentinel appears in any prompt or retrieval query.
+- A synthetic end-to-end calibration proof
+  (`src/c2/calibration.e2e.test.ts`, OV7) that exercises the **real**
+  propose → blind-score → finalize → freeze flow against **fake** fixtures
+  (run manifests, candidate outputs, blind submissions, campaign/pricing refs)
+  and an injected in-memory private blind-map store. It makes **zero network
+  calls**, writes **only** under the injected store, and proves the three
+  freeze-negative cases fail closed (unknown/reused `reviewId`, proposal-hash
+  mismatch, changed scorecard output hash). This closes the loop the two-PR
+  split exists to protect: the first end-to-end exercise happens here, in PR 1,
+  not in PR 2 after paid runs.
+
+**What did NOT happen in PR 1 (these remain PR 2 / Task 10 work):**
+- No paid provider/model run was executed (`OPENAI_API_KEY` /
+  `ANTHROPIC_API_KEY` never read; the `run` subcommand was not invoked against
+  a real account).
+- No canonical human scorecard was produced from a real blinded review.
+- No `eval/c2/calibration/proposal.json` or `frozen.json` was authored; the
+  synthetic proof exercises the reducers in-memory only.
+- No approval or freeze authorization was issued against real evidence.
+- No retagging is authorized; the corpus is unchanged.
+
+**Checkpoint state:** **C2 remains Open.** C0 remains Closed and C1 remains
+Closed; PR 1 added no checkpoint recipe, policy, approval, registry, index, or
+ledger artifact for C2, and mutated no readiness-governance or corpus bytes.
+**Paid pilot calibration remains an explicit operational gate** (Task 10 / PR 2):
+it requires freshly verified official pricing, valid provider credentials, real
+human scorecards, and an explicit freeze authorization before any frozen
+calibration artifact may be produced. **No retagging is authorized** at any
+point in Pass 2; corpus disposition is a separate, later checkpoint (C5).

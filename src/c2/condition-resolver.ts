@@ -483,6 +483,13 @@ function entryToContent(entry: SearchResult["entry"]): string {
   // pattern type, critique, what-to-steal, and the structural tags. We exclude
   // source identity + image paths (private) and the raw anti-patterns list
   // (verbose). The subset matches what the shipped keyword scorer searches.
+  //
+  // Optional fields (`components`, `domainTags`, `platform`) are coerced to a
+  // canonical-JSON-safe default when absent. `platform` defaults to `null`
+  // (matching the `rank: null` / `score: null` sentinel used for gold-evidence
+  // records) because canonical JSON refuses `undefined`; coercing to `null`
+  // keeps the content hash stable regardless of whether an entry omits the
+  // optional platform field.
   return canonicalJsonStringify({
     id: entry.id,
     title: entry.title,
@@ -495,7 +502,7 @@ function entryToContent(entry: SearchResult["entry"]): string {
     whatToSteal: entry.whatToSteal,
     qualityScore: entry.qualityScore,
     qualityTier: entry.qualityTier,
-    platform: entry.platform,
+    platform: entry.platform ?? null,
   });
 }
 

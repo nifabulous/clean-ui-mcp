@@ -77,6 +77,12 @@ eval/c2/pilot/*
 !eval/c2/pilot/briefs/
 !eval/c2/pilot/labels/
 !eval/c2/pilot/source-snapshots/
+!eval/c2/pilot/evidence/
+# C2 gold-evidence descriptors (Task 3): each descriptor maps every label
+# goldEvidenceId to exact source JSON pointers (brief fields or migration
+# snapshot fields). Tracked because the pilot manifest binds their resolved
+# hashes, and downstream gates validate the binding via
+# `npm run validate:c2-pilot`. No prose duplication, no reviewer fields.
 # C2 pilot manifest (Task 5): the canonical content-addressed binding of the
 # three pilot packages. Tracked because downstream gates validate against it
 # via `npm run validate:c2-pilot`.

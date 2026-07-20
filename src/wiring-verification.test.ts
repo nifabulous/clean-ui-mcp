@@ -244,6 +244,15 @@ const ALLOWLIST = new Set<string>([
   // the C2 remediation validator (Pass 5). Same foundation-awaiting-caller
   // pattern as the other C2 assertion exports.
   "assertProposalMatchesFailure",
+  // c2/case-contracts.ts — gold-evidence descriptor + binding schemas. These
+  // are consumed by the .mjs manifest builder (scripts/build-c2-pilot-manifest.mjs)
+  // via the deferred dist/c2/case-contracts.js import, the same pattern as the
+  // other dist-consumed symbols (MIN_WORDS, loadEnv, etc.) at the top of this
+  // allowlist. The regex scan over src/*.ts cannot see the .mjs caller.
+  "C2GoldEvidenceDescriptorSchema",
+  "C2GoldEvidenceRecordSchema",
+  "C2GoldEvidenceRecordBindingSchema",
+  "C2PilotGoldEvidenceBindingSchema",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

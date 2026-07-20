@@ -48,6 +48,7 @@ import {
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { canonicalJsonStringify } from "../dist/readiness/contracts.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -56,7 +57,8 @@ const MANIFEST_REL = `${PILOT_REL}/manifest.json`;
 const BRIEFS_DIR = "briefs";
 const LABELS_DIR = "labels";
 const SNAPSHOTS_DIR = "source-snapshots";
-const ARTIFACT_DIRS = new Set([BRIEFS_DIR, LABELS_DIR, SNAPSHOTS_DIR]);
+const EVIDENCE_DIR = "evidence";
+const ARTIFACT_DIRS = new Set([BRIEFS_DIR, LABELS_DIR, SNAPSHOTS_DIR, EVIDENCE_DIR]);
 
 const REQUIRED_FAMILIES = new Set(["migration", "product", "safety"]);
 const EXPECTED_CASE_COUNT = 3;
@@ -69,6 +71,7 @@ const DIR_TO_ARTIFACT_TYPE = {
   [BRIEFS_DIR]: "c2-case-brief",
   [LABELS_DIR]: "c2-decision-label",
   [SNAPSHOTS_DIR]: "design-source-snapshot",
+  [EVIDENCE_DIR]: "c2-gold-evidence-descriptor",
 };
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
@@ -163,6 +166,7 @@ async function readArtifactDir(root, dir, expectedArtifactType) {
     const schemaMap = {
       "c2-case-brief": "C2CaseBriefSchema",
       "c2-decision-label": "C2DecisionLabelSchema",
+      "c2-gold-evidence-descriptor": "C2GoldEvidenceDescriptorSchema",
     };
     if (schemaMap[expectedArtifactType]) {
       const schemaName = schemaMap[expectedArtifactType];
@@ -275,6 +279,233 @@ function assertNoOrphanSnapshots(packages, snapshots) {
   }
 }
 
+// ─── Gold-evidence descriptor binding ────────────────────────────────────────
+
+/**
+ * Resolve a RFC 6901 JSON pointer against a parsed document. Empty pointer ""
+ * returns the whole document. Segments support ~1 (/) and ~0 (~) escapes.
+ * Throws on malformed pointers or paths that do not exist.
+ */
+function resolveJsonPointer(doc, pointer) {
+  if (pointer === "") return doc;
+  if (typeof pointer !== "string" || !pointer.startsWith("/")) {
+    fail(`malformed JSON pointer: ${JSON.stringify(pointer)}`);
+  }
+  if (pointer.includes("//")) {
+    fail(`JSON pointer contains an empty segment: ${JSON.stringify(pointer)}`);
+  }
+  const segments = pointer.slice(1).split("/").map((seg) => seg.replace(/~1/g, "/").replace(/~0/g, "~"));
+  let current = doc;
+  for (const seg of segments) {
+    if (current === null || typeof current !== "object") {
+      fail(`JSON pointer ${pointer} descends into a non-object at segment "${seg}"`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(current, seg)) {
+      fail(`JSON pointer ${pointer} does not resolve (missing segment "${seg}")`);
+    }
+    current = current[seg];
+  }
+  if (current === undefined) {
+    fail(`JSON pointer ${pointer} resolves to undefined`);
+  }
+  return current;
+}
+
+/**
+ * Hash the canonical bytes of every resolved pointer target for one record.
+ * The hash binds the exact bytes the descriptor points at, so mutating any
+ * pointed-to content changes the binding hash without copying any reviewer
+ * field into the brief or the manifest.
+ */
+function hashResolvedEvidence(sourceDoc, jsonPointers) {
+  const resolved = jsonPointers.map((ptr) => resolveJsonPointer(sourceDoc, ptr));
+  // Canonical serialization makes the hash stable regardless of key order in
+  // the source JSON and resilient to whitespace differences.
+  const bytes = canonicalJsonStringify(resolved);
+  return createHash("sha256").update(Buffer.from(bytes, "utf-8")).digest("hex");
+}
+
+/**
+ * Load + schema-validate every gold-evidence descriptor under evidence/.
+ * Descriptors are plain JSON files validated through C2GoldEvidenceDescriptorSchema
+ * (deferred dist import, same pattern as briefs/labels).
+ */
+async function readEvidenceDescriptors(root) {
+  const absDir = resolve(root, PILOT_REL, EVIDENCE_DIR);
+  if (!existsSync(absDir)) {
+    fail(`gold-evidence directory missing: ${absDir}`);
+  }
+  if (await isSymlink(absDir)) {
+    fail(`evidence directory must not be a symbolic link: ${absDir}`);
+  }
+  const names = await readDirEntries(absDir);
+  const out = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) {
+      fail(`non-JSON entry "${name}" under ${EVIDENCE_DIR}/`);
+    }
+    const absPath = join(absDir, name);
+    if (await isSymlink(absPath)) {
+      fail(`symbolic link is forbidden in pilot tree: ${absPath}`);
+    }
+    const stat = statSync(absPath);
+    if (!stat.isFile()) {
+      fail(`expected a regular file at ${absPath}`);
+    }
+    const parsed = await readJsonFile(absPath);
+    if (parsed.artifactType !== "c2-gold-evidence-descriptor") {
+      fail(`${EVIDENCE_DIR}/${name} has artifactType "${parsed.artifactType}", expected "c2-gold-evidence-descriptor"`);
+    }
+    const mod = await import(`../dist/c2/case-contracts.js`).catch(() => null);
+    if (mod && mod.C2GoldEvidenceDescriptorSchema) {
+      const result = mod.C2GoldEvidenceDescriptorSchema.safeParse(parsed);
+      if (!result.success) {
+        fail(`${EVIDENCE_DIR}/${name} fails strict C2GoldEvidenceDescriptorSchema: ${JSON.stringify(result.error.issues.map((i) => i.path.join(".") + ": " + i.message))}`);
+      }
+    }
+    if (typeof parsed.artifactId !== "string" || parsed.artifactId.length === 0) {
+      fail(`${EVIDENCE_DIR}/${name} is missing artifactId`);
+    }
+    const sha256 = await sha256File(absPath);
+    out.push({
+      name,
+      absPath,
+      relPath: toPosix(relative(resolve(root), absPath)),
+      sha256,
+      parsed,
+    });
+  }
+  return out;
+}
+
+/**
+ * Build the gold-evidence binding section for the pilot manifest.
+ *
+ * For each case:
+ *   - exactly one descriptor must exist on disk whose caseId matches,
+ *   - the descriptor's record IDs must EXACTLY equal the label's goldEvidenceIds
+ *     (set equality — no missing, no extra, no duplicates),
+ *   - every record's sourceArtifactId must match the package's brief artifactId
+ *     (product/safety) or the migration snapshot's artifactId (migration),
+ *   - every declared JSON pointer must resolve against the bound source
+ *     artifact's parsed body.
+ *
+ * Returns one binding per case, sorted by caseId. Each binding carries the
+ * descriptor file ref plus, per record, a SHA-256 over the canonical bytes at
+ * the declared pointers. The manifest does NOT carry the resolved content.
+ */
+async function buildGoldEvidenceBindings(packages, briefs, labels, snapshots, descriptors) {
+  // Build lookups of source artifacts by artifactId for pointer resolution.
+  // The briefs and snapshots are already read + schema-validated by the
+  // caller; the binding step only needs their parsed bodies for resolution.
+  const briefByArtifactId = new Map();
+  for (const brief of briefs) {
+    briefByArtifactId.set(brief.parsed.artifactId, brief);
+  }
+  const snapshotByArtifactId = new Map();
+  for (const snap of snapshots) {
+    snapshotByArtifactId.set(snap.parsed.artifactId, snap);
+  }
+
+  const descriptorByCaseId = new Map();
+  for (const desc of descriptors) {
+    if (descriptorByCaseId.has(desc.parsed.caseId)) {
+      fail(`duplicate gold-evidence descriptor for caseId "${desc.parsed.caseId}" (files: ${descriptors.filter((d) => d.parsed.caseId === desc.parsed.caseId).map((d) => d.name).join(", ")})`);
+    }
+    descriptorByCaseId.set(desc.parsed.caseId, desc);
+  }
+
+  const sortedPackages = [...packages].sort((a, b) =>
+    a.caseId < b.caseId ? -1 : a.caseId > b.caseId ? 1 : 0,
+  );
+
+  const bindings = [];
+  for (const pkg of sortedPackages) {
+    const label = labels.find((l) => l.parsed.caseId === pkg.caseId);
+    if (!label) {
+      fail(`no label for case ${pkg.caseId} during gold-evidence binding`);
+    }
+    const desc = descriptorByCaseId.get(pkg.caseId);
+    if (!desc) {
+      fail(`missing gold-evidence descriptor for caseId "${pkg.caseId}"`);
+    }
+    if (desc.parsed.artifactId !== `c2-gold-evidence-${pkg.caseId}-v${pkg.caseVersion}`) {
+      fail(
+        `descriptor ${desc.name} artifactId "${desc.parsed.artifactId}" does not match convention c2-gold-evidence-${pkg.caseId}-v${pkg.caseVersion}`,
+      );
+    }
+    if (desc.parsed.caseId !== pkg.caseId) {
+      fail(`descriptor ${desc.name} caseId "${desc.parsed.caseId}" does not match package caseId "${pkg.caseId}"`);
+    }
+
+    // Exact-set equality between descriptor record IDs and label gold IDs.
+    const recordIds = desc.parsed.records.map((r) => r.id);
+    const goldIds = [...label.parsed.goldEvidenceIds];
+    const recordSet = new Set(recordIds);
+    const goldSet = new Set(goldIds);
+    if (recordSet.size !== recordIds.length) {
+      fail(`descriptor ${desc.name} has duplicate record IDs`);
+    }
+    if (goldSet.size !== goldIds.length) {
+      // Should already be caught by the label schema; fail closed anyway.
+      fail(`label ${label.name} has duplicate goldEvidenceIds`);
+    }
+    for (const id of goldIds) {
+      if (!recordSet.has(id)) {
+        fail(`descriptor ${desc.name} is missing gold ID "${id}" declared on label ${label.name}`);
+      }
+    }
+    for (const id of recordIds) {
+      if (!goldSet.has(id)) {
+        fail(`descriptor ${desc.name} declares record "${id}" which is not a gold ID on label ${label.name}`);
+      }
+    }
+
+    // Resolve every record's pointers against the bound source artifact.
+    const allowedSourceArtifactIds = new Set([pkg.brief.artifactId]);
+    if (pkg.sourceSnapshot !== null) {
+      allowedSourceArtifactIds.add(pkg.sourceSnapshot.artifactId);
+    }
+    const recordBindings = [];
+    for (const record of desc.parsed.records) {
+      if (!allowedSourceArtifactIds.has(record.sourceArtifactId)) {
+        fail(
+          `descriptor ${desc.name} record "${record.id}" sourceArtifactId "${record.sourceArtifactId}" is neither the brief (${pkg.brief.artifactId}) nor the migration snapshot for case ${pkg.caseId}`,
+        );
+      }
+      const source =
+        briefByArtifactId.get(record.sourceArtifactId) ??
+        snapshotByArtifactId.get(record.sourceArtifactId);
+      if (!source) {
+        fail(
+          `descriptor ${desc.name} record "${record.id}" sourceArtifactId "${record.sourceArtifactId}" is not present on disk`,
+        );
+      }
+      const resolvedSha256 = hashResolvedEvidence(source.parsed, record.jsonPointers);
+      recordBindings.push({
+        id: record.id,
+        sourceArtifactId: record.sourceArtifactId,
+        resolvedSha256,
+      });
+    }
+
+    bindings.push({
+      schemaVersion: "1.0",
+      artifactType: "c2-gold-evidence-binding",
+      artifactId: `c2-gold-binding-${pkg.caseId}-v${pkg.caseVersion}`,
+      caseId: pkg.caseId,
+      descriptor: {
+        artifactId: desc.parsed.artifactId,
+        path: desc.relPath,
+        sha256: desc.sha256,
+      },
+      records: recordBindings,
+    });
+  }
+
+  return bindings;
+}
+
 /**
  * Build the canonical pilot manifest object from the pilot tree at
  * `<root>/eval/c2/pilot/`. Does not write anything to disk.
@@ -306,6 +537,7 @@ export async function buildPilotManifest(root) {
   const briefs = await readArtifactDir(root, BRIEFS_DIR, DIR_TO_ARTIFACT_TYPE[BRIEFS_DIR]);
   const labels = await readArtifactDir(root, LABELS_DIR, DIR_TO_ARTIFACT_TYPE[LABELS_DIR]);
   const snapshots = await readArtifactDir(root, SNAPSHOTS_DIR, DIR_TO_ARTIFACT_TYPE[SNAPSHOTS_DIR]);
+  const descriptors = await readEvidenceDescriptors(root);
 
   // ── Reject duplicate case IDs before pairing (P1 fix) ─────────────────────
   // Maps silently overwrite duplicates, allowing two packages with the same
@@ -400,6 +632,27 @@ export async function buildPilotManifest(root) {
   // ── Snapshot orphan check (post-assembly) ────────────────────────────────
   assertNoOrphanSnapshots(packages, snapshots);
 
+  // ── Gold-evidence descriptor binding ─────────────────────────────────────
+  // One binding per case; record IDs must exactly equal each label's
+  // goldEvidenceIds, every sourceArtifactId must match the package's brief or
+  // migration snapshot, and every JSON pointer must resolve. Unknown pointers
+  // or IDs fail closed here, before any run can begin.
+  const goldEvidenceBindings = await buildGoldEvidenceBindings(
+    packages,
+    briefs,
+    labels,
+    snapshots,
+    descriptors,
+  );
+
+  // Reject orphan descriptors: every descriptor must bind to exactly one case.
+  const boundDescriptorPaths = new Set(goldEvidenceBindings.map((b) => b.descriptor.path));
+  for (const desc of descriptors) {
+    if (!boundDescriptorPaths.has(desc.relPath)) {
+      fail(`orphan gold-evidence descriptor ${desc.name} is not bound to any case`);
+    }
+  }
+
   // ── Envelope ─────────────────────────────────────────────────────────────
   return {
     schemaVersion: "1.0",
@@ -409,6 +662,7 @@ export async function buildPilotManifest(root) {
     caseCount: packages.length,
     families: [...families].sort(),
     packages,
+    goldEvidenceBindings,
   };
 }
 

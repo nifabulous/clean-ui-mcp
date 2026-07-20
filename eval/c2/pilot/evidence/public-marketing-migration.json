@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-gold-evidence-public-marketing-migration-v1",
+  "caseId": "public-marketing-migration",
+  "records": [
+    {
+      "id": "evidence:home:hero-hierarchy",
+      "sourceArtifactId": "design-source-snapshot-public-marketing-migration-v1",
+      "jsonPointers": [
+        "/evidence/0",
+        "/foundations/layout/0"
+      ]
+    },
+    {
+      "id": "evidence:home:nav-consistency",
+      "sourceArtifactId": "design-source-snapshot-public-marketing-migration-v1",
+      "jsonPointers": [
+        "/evidence/2",
+        "/components/0"
+      ]
+    },
+    {
+      "id": "evidence:pricing:nav-consistency",
+      "sourceArtifactId": "design-source-snapshot-public-marketing-migration-v1",
+      "jsonPointers": [
+        "/evidence/3",
+        "/components/0"
+      ]
+    },
+    {
+      "id": "evidence:home:mobile-stack",
+      "sourceArtifactId": "design-source-snapshot-public-marketing-migration-v1",
+      "jsonPointers": [
+        "/evidence/5",
+        "/foundations/layout/1",
+        "/responsiveFindings/0"
+      ]
+    },
+    {
+      "id": "evidence:home:focus-visible",
+      "sourceArtifactId": "design-source-snapshot-public-marketing-migration-v1",
+      "jsonPointers": [
+        "/evidence/6",
+        "/accessibility/0"
+      ]
+    },
+    {
+      "id": "evidence:limitation:no-authenticated-screen",
+      "sourceArtifactId": "design-source-snapshot-public-marketing-migration-v1",
+      "jsonPointers": [
+        "/evidence/8",
+        "/limitations/0",
+        "/coverage/2"
+      ]
+    }
+  ]
+}

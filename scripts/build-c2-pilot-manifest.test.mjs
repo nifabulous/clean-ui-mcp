@@ -11,7 +11,9 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { buildPilotManifest, checkPilotManifest } from "./build-c2-pilot-manifest.mjs";
+import { createHash } from "node:crypto";
+import { canonicalJsonStringify } from "../dist/readiness/contracts.js";
+import { buildPilotManifest, checkPilotManifest, serializeManifest } from "./build-c2-pilot-manifest.mjs";
 
 // Tests for the canonical C2 pilot manifest generator. The generator binds the
 // three pilot case packages (brief + label + optional source snapshot) under
@@ -47,7 +49,7 @@ function writeJson(path, data) {
 function copyPilotIntoTemp(prefix) {
   const dest = mkdtempSync(join(tmpdir(), prefix));
   const target = join(dest, "eval/c2/pilot");
-  for (const sub of ["briefs", "labels", "source-snapshots"]) {
+  for (const sub of ["briefs", "labels", "source-snapshots", "evidence"]) {
     mkdirSync(join(target, sub), { recursive: true });
     for (const name of readdirSync(join(PILOT_SRC, sub))) {
       copyFileSync(join(PILOT_SRC, sub, name), join(target, sub, name));
@@ -215,6 +217,206 @@ describe("build-c2-pilot-manifest", () => {
       await expect(buildPilotManifest(dest)).rejects.toThrow(
         /must not bind a source snapshot|non-migration|only migration/i,
       );
+    } finally {
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  // ── Gold-evidence descriptor binding (Task 3) ─────────────────────────────
+  // The manifest binds one descriptor per case. Every descriptor's record IDs
+  // must exactly equal the label's goldEvidenceIds; every record's
+  // sourceArtifactId must be the package brief or migration snapshot; every
+  // JSON pointer must resolve. Mutating pointed-to content changes the
+  // resolved hash; mutating a descriptor or label ID set fails closed.
+
+  it("binds one gold-evidence descriptor per case with resolved pointer hashes", async () => {
+    const manifest = await buildPilotManifest(REPO_ROOT);
+    expect(manifest.goldEvidenceBindings).toHaveLength(3);
+    const bindingCaseIds = manifest.goldEvidenceBindings.map((b) => b.caseId).sort();
+    expect(bindingCaseIds).toEqual([
+      "named-inspiration-safety",
+      "public-marketing-migration",
+      "stablecoin-home",
+    ]);
+    for (const binding of manifest.goldEvidenceBindings) {
+      expect(binding.schemaVersion).toBe("1.0");
+      expect(binding.artifactType).toBe("c2-gold-evidence-binding");
+      expect(binding.descriptor.sha256).toMatch(SHA256);
+      expect(binding.descriptor.path).toMatch(/^eval\/c2\/pilot\/evidence\//);
+      for (const record of binding.records) {
+        expect(record.resolvedSha256).toMatch(SHA256);
+      }
+    }
+  });
+
+  it("each descriptor's record IDs exactly equal the label goldEvidenceIds", async () => {
+    const manifest = await buildPilotManifest(REPO_ROOT);
+    for (const binding of manifest.goldEvidenceBindings) {
+      const labelPath = join(REPO_ROOT, "eval/c2/pilot/labels", `${binding.caseId}.json`);
+      const label = readJson(labelPath);
+      const recordIds = binding.records.map((r) => r.id).sort();
+      const goldIds = [...label.goldEvidenceIds].sort();
+      expect(recordIds).toEqual(goldIds);
+    }
+  });
+
+  it("is byte-identical across two generations (determinism)", async () => {
+    const first = serializeManifest(await buildPilotManifest(REPO_ROOT));
+    const second = serializeManifest(await buildPilotManifest(REPO_ROOT));
+    expect(second).toBe(first);
+  });
+
+  it("mutating pointed-to brief content changes the resolved hash", async () => {
+    const dest = copyPilotIntoTemp("c2-pilot-gold-mut-");
+    try {
+      const before = await buildPilotManifest(dest);
+      const stablecoinBinding = before.goldEvidenceBindings.find(
+        (b) => b.caseId === "stablecoin-home",
+      );
+      const beforeHashes = stablecoinBinding.records.map((r) => r.resolvedSha256);
+
+      // Mutate a brief field that the stablecoin-home descriptor points at
+      // (evidence:brief:audience-hierarchy → /users).
+      const briefPath = join(dest, "eval/c2/pilot/briefs/stablecoin-home.json");
+      const brief = readJson(briefPath);
+      brief.users = [...brief.users, "a brand-new audience persona"];
+      writeJson(briefPath, brief);
+
+      const after = await buildPilotManifest(dest);
+      const afterHashes = after.goldEvidenceBindings.find(
+        (b) => b.caseId === "stablecoin-home",
+      ).records.map((r) => r.resolvedSha256);
+      expect(afterHashes).not.toEqual(beforeHashes);
+    } finally {
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a descriptor whose record IDs do not match the label goldEvidenceIds", async () => {
+    const dest = copyPilotIntoTemp("c2-pilot-gold-mismatch-");
+    try {
+      const descPath = join(dest, "eval/c2/pilot/evidence/stablecoin-home.json");
+      const desc = readJson(descPath);
+      // Drop one gold record so the set no longer matches the label.
+      desc.records = desc.records.slice(0, 1);
+      writeJson(descPath, desc);
+
+      await expect(buildPilotManifest(dest)).rejects.toThrow(
+        /missing gold ID|not a gold ID/i,
+      );
+    } finally {
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a descriptor record that points at an unknown sourceArtifactId", async () => {
+    const dest = copyPilotIntoTemp("c2-pilot-gold-src-");
+    try {
+      const descPath = join(dest, "eval/c2/pilot/evidence/stablecoin-home.json");
+      const desc = readJson(descPath);
+      desc.records[0].sourceArtifactId = "c2-brief-ghost-v1";
+      writeJson(descPath, desc);
+
+      await expect(buildPilotManifest(dest)).rejects.toThrow(
+        /sourceArtifactId.*is neither the brief/i,
+      );
+    } finally {
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a descriptor record with an unresolvable JSON pointer", async () => {
+    const dest = copyPilotIntoTemp("c2-pilot-gold-ptr-");
+    try {
+      const descPath = join(dest, "eval/c2/pilot/evidence/stablecoin-home.json");
+      const desc = readJson(descPath);
+      desc.records[0].jsonPointers = ["/nonexistent/path/999"];
+      writeJson(descPath, desc);
+
+      await expect(buildPilotManifest(dest)).rejects.toThrow(
+        /JSON pointer .* does not resolve|malformed JSON pointer/i,
+      );
+    } finally {
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an orphan gold-evidence descriptor not bound to any case", async () => {
+    const dest = copyPilotIntoTemp("c2-pilot-gold-orphan-");
+    try {
+      const ghostDesc = readJson(
+        join(dest, "eval/c2/pilot/evidence/stablecoin-home.json"),
+      );
+      ghostDesc.artifactId = "c2-gold-evidence-ghost-case-v1";
+      ghostDesc.caseId = "ghost-case";
+      writeJson(
+        join(dest, "eval/c2/pilot/evidence/ghost-case.json"),
+        ghostDesc,
+      );
+
+      await expect(buildPilotManifest(dest)).rejects.toThrow(
+        /orphan gold-evidence descriptor/i,
+      );
+    } finally {
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+
+  // RFC 6901 escape handling: a JSON pointer segment of `~1` decodes to `/`
+  // and `~0` decodes to `~`. The resolver at build-c2-pilot-manifest.mjs:297
+  // implements both escapes correctly, but previously had no test exercising
+  // them — a future refactor could silently break escape handling. This test
+  // points a descriptor record at snapshot keys containing `/` and `~` and
+  // confirms the resolver returns the correct value (via the resolved hash),
+  // not a "does not resolve" error.
+  it("resolves JSON pointer ~1 (/) and ~0 (~) escapes against escaped keys", async () => {
+    const dest = copyPilotIntoTemp("c2-pilot-gold-escapes-");
+    try {
+      // The migration snapshot is free-form JSON (no strict schema gate on
+      // arbitrary keys), so inject two escape-bearing keys at its root.
+      const snapshotPath = join(
+        dest,
+        "eval/c2/pilot/source-snapshots/public-marketing-migration.json",
+      );
+      const snapshot = readJson(snapshotPath);
+      const slashValue = "value-at-a-slash-b";
+      const tildeValue = "value-at-tilde-tilde";
+      snapshot["a/b"] = slashValue; // resolved by pointer /a~1b
+      snapshot["~tilde"] = tildeValue; // resolved by pointer /~0tilde
+      writeJson(snapshotPath, snapshot);
+
+      // Rewrite one existing migration record's pointers to target the
+      // escaped keys. The record id still matches a label goldEvidenceId, so
+      // no label change is needed.
+      const descPath = join(
+        dest,
+        "eval/c2/pilot/evidence/public-marketing-migration.json",
+      );
+      const desc = readJson(descPath);
+      const target = desc.records.find(
+        (r) => r.id === "evidence:limitation:no-authenticated-screen",
+      );
+      target.jsonPointers = ["/a~1b", "/~0tilde"];
+      writeJson(descPath, desc);
+
+      const manifest = await buildPilotManifest(dest);
+      const migrationBinding = manifest.goldEvidenceBindings.find(
+        (b) => b.caseId === "public-marketing-migration",
+      );
+      const record = migrationBinding.records.find(
+        (r) => r.id === "evidence:limitation:no-authenticated-screen",
+      );
+
+      // Independently compute the canonical hash the resolver should produce
+      // for [slashValue, tildeValue]. Matching this hash proves the resolver
+      // walked into the escaped keys and returned their values — a broken
+      // escape (e.g. literal "a~1b" lookup) would either throw or hash a
+      // different value.
+      const expectedBytes = canonicalJsonStringify([slashValue, tildeValue]);
+      const expectedSha = createHash("sha256")
+        .update(Buffer.from(expectedBytes, "utf-8"))
+        .digest("hex");
+      expect(record.resolvedSha256).toBe(expectedSha);
     } finally {
       rmSync(dest, { recursive: true, force: true });
     }

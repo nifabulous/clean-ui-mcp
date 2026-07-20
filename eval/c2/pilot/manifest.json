@@ -71,5 +71,116 @@
       },
       "sourceSnapshot": null
     }
+  ],
+  "goldEvidenceBindings": [
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-gold-evidence-binding",
+      "artifactId": "c2-gold-binding-named-inspiration-safety-v1",
+      "caseId": "named-inspiration-safety",
+      "descriptor": {
+        "artifactId": "c2-gold-evidence-named-inspiration-safety-v1",
+        "path": "eval/c2/pilot/evidence/named-inspiration-safety.json",
+        "sha256": "b32122126fee6c8421498ce45e21114e3be9ccabdf73a67f108f5fdfbdbf39d7"
+      },
+      "records": [
+        {
+          "id": "evidence:brief:named-inspiration",
+          "sourceArtifactId": "c2-brief-named-inspiration-safety-v1",
+          "resolvedSha256": "cc69744f36319064d6ca1409ff66c66d33250c242108f41c2a050b475756efed"
+        },
+        {
+          "id": "evidence:brief:generic-layout-principles",
+          "sourceArtifactId": "c2-brief-named-inspiration-safety-v1",
+          "resolvedSha256": "6fb79cf84e85f244e2e9dba7ef769730aefc05e3c327c6e0b0b719dc9ca2d32a"
+        },
+        {
+          "id": "evidence:brief:no-private-corpus-bound",
+          "sourceArtifactId": "c2-brief-named-inspiration-safety-v1",
+          "resolvedSha256": "50ff9c57166aff83904637746c8732eb940cf69550a75ef6186a4536125af30f"
+        },
+        {
+          "id": "evidence:brief:uncertainty-required",
+          "sourceArtifactId": "c2-brief-named-inspiration-safety-v1",
+          "resolvedSha256": "89f5944f994184a94df2ebc6f16b225193d80c4235bf68a76db916457ac023df"
+        }
+      ]
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-gold-evidence-binding",
+      "artifactId": "c2-gold-binding-public-marketing-migration-v1",
+      "caseId": "public-marketing-migration",
+      "descriptor": {
+        "artifactId": "c2-gold-evidence-public-marketing-migration-v1",
+        "path": "eval/c2/pilot/evidence/public-marketing-migration.json",
+        "sha256": "049b6529c7c5c3d40ece72965f06b5d363c189bf99c603011d8f9280cbc4e794"
+      },
+      "records": [
+        {
+          "id": "evidence:home:hero-hierarchy",
+          "sourceArtifactId": "design-source-snapshot-public-marketing-migration-v1",
+          "resolvedSha256": "c01807f6656656dff365ffed0a68595ce8bbbb795311a8c651e0dc55f571e3e3"
+        },
+        {
+          "id": "evidence:home:nav-consistency",
+          "sourceArtifactId": "design-source-snapshot-public-marketing-migration-v1",
+          "resolvedSha256": "fe4717a8c86d8b4a4218cdebf4b5e0505ff97b6a79323b85321a8963538d9f22"
+        },
+        {
+          "id": "evidence:pricing:nav-consistency",
+          "sourceArtifactId": "design-source-snapshot-public-marketing-migration-v1",
+          "resolvedSha256": "b714946ab08cee8d749b2de7cd52960dabf14ba8ff72928eed782d8824d0b8f7"
+        },
+        {
+          "id": "evidence:home:mobile-stack",
+          "sourceArtifactId": "design-source-snapshot-public-marketing-migration-v1",
+          "resolvedSha256": "e1ac9c79931df40f434d2459bea0dd230fc57be8704fd2ead69e61803f881be3"
+        },
+        {
+          "id": "evidence:home:focus-visible",
+          "sourceArtifactId": "design-source-snapshot-public-marketing-migration-v1",
+          "resolvedSha256": "9f54866324f2ed763c3a2f06b338a415ff7703615cc146f97ee376cf5508219a"
+        },
+        {
+          "id": "evidence:limitation:no-authenticated-screen",
+          "sourceArtifactId": "design-source-snapshot-public-marketing-migration-v1",
+          "resolvedSha256": "69686ad72b894193d7319b21ea72ee824dc18c165ebaddd2e249ceb6bd9fa8c7"
+        }
+      ]
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-gold-evidence-binding",
+      "artifactId": "c2-gold-binding-stablecoin-home-v1",
+      "caseId": "stablecoin-home",
+      "descriptor": {
+        "artifactId": "c2-gold-evidence-stablecoin-home-v1",
+        "path": "eval/c2/pilot/evidence/stablecoin-home.json",
+        "sha256": "8186f704ea74867f60f0b571b5a10ec51d8464248cbcd483cb6c890800122401"
+      },
+      "records": [
+        {
+          "id": "evidence:brief:audience-hierarchy",
+          "sourceArtifactId": "c2-brief-stablecoin-home-v1",
+          "resolvedSha256": "06385e603677c17ce681d709539a191ee852702861023f16ef1472e5d1394311"
+        },
+        {
+          "id": "evidence:brief:integrator-path",
+          "sourceArtifactId": "c2-brief-stablecoin-home-v1",
+          "resolvedSha256": "d3bbb32794d7aebe44ecec98bc49d05d256f7b8732c94484dd880487957a3fc1"
+        },
+        {
+          "id": "evidence:brief:primary-cta",
+          "sourceArtifactId": "c2-brief-stablecoin-home-v1",
+          "resolvedSha256": "6c3162d937502f42af9ee65c66907e9750ed4810c9a13e39d8f42a73f55cf181"
+        },
+        {
+          "id": "evidence:brief:trust-without-unsupported-claims",
+          "sourceArtifactId": "c2-brief-stablecoin-home-v1",
+          "resolvedSha256": "70dc8b8a596a6de5a32a43b4d6872723e3283d60a63c4666734dc7ffe1e47e77"
+        }
+      ]
+    }
   ]
 }

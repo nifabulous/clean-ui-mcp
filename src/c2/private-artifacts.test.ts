@@ -95,6 +95,20 @@ describe("scanDurableArtifact", () => {
     expect(() => scanDurableArtifact(JSON.stringify(artifact), baseConfig)).toThrow(/private/i);
   });
 
+  it("accepts a hash-only logical condition-input reference", () => {
+    const artifact = {
+      schemaVersion: "2.0",
+      artifactType: "c2-evaluation-run",
+      artifactId: "run-1",
+      conditionInputRef: {
+        artifactId: "condition-input-1",
+        path: "eval/c2/condition-inputs/stablecoin-home-current-grounded.json",
+        sha256: "a".repeat(64),
+      },
+    };
+    expect(() => scanDurableArtifact(JSON.stringify(artifact), baseConfig)).not.toThrow();
+  });
+
   it("rejects an artifact containing a corpus private path (images-private)", () => {
     const artifact = {
       artifactType: "c2-deterministic-score",

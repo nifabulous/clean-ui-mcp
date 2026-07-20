@@ -28,7 +28,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildModelEndpoint } from "./run-c2-pilot.js";
+import { buildModelEndpoint, logicalConditionInputPath } from "./run-c2-pilot.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../..");
@@ -383,5 +383,31 @@ describe("buildModelEndpoint — resolves apiKey from the env-var name", () => {
     } finally {
       delete process.env["OTHER_FAKE_KEY"];
     }
+  });
+});
+
+describe("logicalConditionInputPath", () => {
+  it("maps the default private execution path to the logical eval path", () => {
+    expect(
+      logicalConditionInputPath(
+        ".c2-private/c2/condition-inputs/stablecoin-home-current-grounded.json",
+      ),
+    ).toBe("eval/c2/condition-inputs/stablecoin-home-current-grounded.json");
+  });
+
+  it("leaves an already-normalized logical path unchanged", () => {
+    expect(
+      logicalConditionInputPath(
+        "eval/c2/condition-inputs/stablecoin-home-current-grounded.json",
+      ),
+    ).toBe("eval/c2/condition-inputs/stablecoin-home-current-grounded.json");
+  });
+
+  it("normalizes an alternate private-root path by its condition-input suffix", () => {
+    expect(
+      logicalConditionInputPath(
+        "/tmp/c2-private-run/c2/condition-inputs/stablecoin-home-current-grounded.json",
+      ),
+    ).toBe("eval/c2/condition-inputs/stablecoin-home-current-grounded.json");
   });
 });

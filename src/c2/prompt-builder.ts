@@ -81,6 +81,7 @@ const SYSTEM_INSTRUCTION = [
 
 const CANDIDATE_SCHEMA_SUMMARY = [
   "Candidate JSON schema summary (required top-level fields):",
+  "- All id and authorityLanes values must be stable IDs: lowercase alphanumeric with . : _ - separators (e.g. landing, note-capture, sd1, retain-headline-stack). No spaces, uppercase, or prose.",
   "- schemaVersion: \"1.0\"",
   "- artifactType: \"c2-candidate-design\"",
   "- artifactId: stable id",
@@ -88,7 +89,7 @@ const CANDIDATE_SCHEMA_SUMMARY = [
   "- globalDirection: { summary, principles[] }",
   "- screenBlueprints[]: { id, summary, requiredStates[], mobileRules[], accessibility[], failureAndRecovery[], inspectedUrls[] } — one blueprint per brief-required screen, including every required state and mobile rule",
   "- sourceDecisions[]: { id, lane: retain|adapt|reject, rationale, evidenceIds[] } — cite only evidence IDs supplied below",
-  "- authorityLanes: { retain[], adapt[], reject[] }",
+  "- authorityLanes: { retain[], adapt[], reject[] } — each value is a stable ID referencing a retained/adapted/rejected concept (e.g. retain: [\"headline-stack\"], adapt: [\"branded-palette\"], reject: [\"decorative-gradient\"]), NOT a descriptive phrase",
   "- acceptanceCriteria[]: { id, statement }",
   "- assumptions[]",
   "- accessibilityAndRecovery[]",

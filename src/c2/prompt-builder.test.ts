@@ -337,6 +337,21 @@ describe("buildC2Prompt — instruction invariants", () => {
     expect(prompt).toContain("authorityLanes");
     expect(prompt).toContain("acceptanceCriteria");
   });
+
+  it("documents the stable-id format for ids and authorityLanes", () => {
+    // Minimal brief-only condition input — the schema summary is present in
+    // every prompt regardless of evidence.
+    const { prompt } = buildC2Prompt({
+      brief: brief(),
+      conditionInput: briefOnlyConditionInput(),
+    });
+    // The format rule.
+    expect(prompt).toMatch(/stable IDs/i);
+    expect(prompt).toMatch(/No spaces/i);
+    // authorityLanes specifically called out as ID-references, not prose.
+    expect(prompt).toMatch(/authorityLanes.*stable ID/i);
+    expect(prompt).toMatch(/NOT.*descriptive phrase/i);
+  });
 });
 
 describe("buildC2Prompt — rejects unmatched evidence", () => {

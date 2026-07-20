@@ -346,6 +346,11 @@ const IndependentCompatibilitySchema = z
     forbiddenClaimsRespected: z.boolean(),
     compatibleJourneys: z.boolean(),
     safetyPassedIndependently: z.boolean(),
+    // Optional provenance marker. Present (and true) when the object was
+    // synthesized by the CLI from deterministic-score signals rather than a
+    // real OpenAI-vs-Claude evaluation. Absent on authoritative/human-authored
+    // checklists (e.g. a freeze authorization). See `IndependentCompatibility`.
+    cliSynthesized: z.boolean().optional(),
   })
   .strict();
 

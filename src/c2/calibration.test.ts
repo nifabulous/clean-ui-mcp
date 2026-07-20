@@ -1,0 +1,754 @@
+/**
+ * C2 calibration reducer tests (Task 8, Steps 1, 2, 5, 6).
+ *
+ * These tests pin the pure comparison reducer (spec §11) and the explicit
+ * freeze gate. The proposal carries measurements (mean deltas, per-dimension
+ * regressions, readiness transitions, deterministic transitions, safety
+ * non-inferiority, gold headroom, primary-vs-independent compatibility,
+ * observed costs) but selects NO thresholds. The freeze validates the human
+ * authorization's selected thresholds, binds the proposal + evidence hashes, and
+ * produces a byte-identical re-freeze for the same authorization + timestamp.
+ *
+ * Adversarial freeze-negative tests cover every concrete rejection in plan
+ * Step 2:
+ *   - missing scorecards
+ *   - changed candidate hashes (output hash drift between scorecard + manifest)
+ *   - missing family/provider coverage
+ *   - proposal missing any required primary run
+ *   - Claude set missing any pilot family
+ *   - threshold overrides (CLI-style fields the authorization must not accept)
+ *   - proposal-hash mismatch
+ *   - absent human authorization
+ */
+import { describe, expect, it, beforeEach } from "vitest";
+import {
+  buildCalibrationProposal,
+  evaluateIndependentCompatibility,
+  freezeCalibration,
+  type CalibrationRun,
+  type CalibrationScorecard,
+  type CompatibilityChecklistInput,
+  type FreezeAuthorization,
+} from "./calibration.js";
+import { C2CalibrationProposalSchema, C2FrozenCalibrationSchema } from "./condition-contracts.js";
+import type { C2HumanScorecard } from "./evaluation-contracts.js";
+import type { C2DeterministicScore } from "./candidate-contracts.js";
+import { canonicalJsonStringify, sha256Hex } from "../readiness/contracts.js";
+
+// ---------------------------------------------------------------------------
+// Dimension + family constants
+// ---------------------------------------------------------------------------
+
+const DIMENSIONS = [
+  "product-appropriateness",
+  "cross-screen-coherence",
+  "implementation-clarity",
+  "originality",
+  "accessibility-and-failure-states",
+  "evidence-discipline",
+] as const;
+
+const FAMILIES = ["product", "migration", "safety"] as const;
+const PRIMARY_CONDITIONS = ["brief-only", "current-grounded", "gold-evidence"] as const;
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const CASE_BY_FAMILY: Record<(typeof FAMILIES)[number], string> = {
+  product: "stablecoin-home",
+  migration: "named-inspiration-migration",
+  safety: "public-marketing-safety",
+};
+
+function shaOf(value: unknown): string {
+  return sha256Hex(Buffer.from(canonicalJsonStringify(value), "utf-8"));
+}
+
+/** A deterministic score for a run. `complete=true` unless overridden. */
+function makeScore(runId: string, runOutputSha256: string, complete = true): C2DeterministicScore {
+  return {
+    schemaVersion: "1.0",
+    artifactType: "c2-deterministic-score",
+    artifactId: `c2-score-${runId}`,
+    runId,
+    runOutputSha256,
+    scorerSha256: "s".repeat(64),
+    complete,
+    requiredSectionCoverage: 1,
+    requiredDecisionCoverage: 1,
+    acceptanceCriterionCoverage: 1,
+    missingScreenRequirements: [],
+    unsupportedClaimCount: 0,
+    forbiddenDisclosureCount: 0,
+    unresolvedEvidenceCount: 0,
+    provenanceMismatch: false,
+  };
+}
+
+/**
+ * A canonical human scorecard bound to a run + output hash. The `scores` array
+ * accepts per-dimension overrides so a test can construct regressions or
+ * deltas cleanly.
+ */
+function makeScorecard(opts: {
+  runId: string;
+  runOutputSha256: string;
+  reviewerActorId?: string;
+  scores?: Partial<Record<(typeof DIMENSIONS)[number], number>>;
+  implementationReady?: boolean;
+}): C2HumanScorecard {
+  const scores = DIMENSIONS.map((dimension) => ({
+    dimension,
+    score: opts.scores?.[dimension] ?? 4,
+    rationale: `Rationale for ${dimension}.`,
+  }));
+  const allMeetsFloor = scores.every((s) => s.score >= 3);
+  return {
+    schemaVersion: "1.0",
+    artifactType: "c2-human-scorecard",
+    artifactId: `c2-scorecard-${opts.runId}`,
+    runId: opts.runId,
+    runOutputSha256: opts.runOutputSha256,
+    reviewerActorId: opts.reviewerActorId ?? "reviewer.gold-1",
+    reviewerActorKind: "human",
+    blindedCondition: true,
+    scores,
+    implementationReady: opts.implementationReady ?? allMeetsFloor,
+    scoredAt: "2026-07-18T12:30:00.000Z",
+  };
+}
+
+function makeRun(opts: {
+  family: (typeof FAMILIES)[number];
+  condition: "brief-only" | "current-grounded" | "gold-evidence";
+  provider: "openai" | "claude";
+  runId?: string;
+  caseId?: string;
+  runOutputSha256?: string;
+}): CalibrationRun {
+  const caseId = opts.caseId ?? CASE_BY_FAMILY[opts.family];
+  const runId = opts.runId ?? `c2-run-${opts.provider}-${caseId}-${opts.condition}`;
+  const runOutputSha256 = opts.runOutputSha256 ?? shaOf({ runId, marker: opts.condition });
+  return {
+    manifest: {
+      schemaVersion: "2.0",
+      artifactType: "c2-evaluation-run",
+      artifactId: `c2-run-manifest-${runId}`,
+      runId,
+      predecessorRunId: null,
+      casePackage: {
+        artifactId: `c2-package-${caseId}-v1`,
+        path: "eval/c2/pilot/manifest.json",
+        sha256: "a".repeat(64),
+      },
+      condition: opts.condition,
+      corpusSha256: opts.condition === "brief-only" ? null : "c".repeat(64),
+      retrievalIndexSha256: opts.condition === "brief-only" ? null : "i".repeat(64),
+      promptSha256: "p".repeat(64),
+      harnessGitSha: "g".repeat(40),
+      provider: opts.provider,
+      model: opts.provider === "openai" ? "gpt-5.4-mini" : "claude-pinned",
+      samplingParameters: { temperature: 0.2 },
+      evidenceIds: opts.condition === "brief-only" ? [] : ["evidence:1"],
+      startedAt: "2026-07-18T10:00:00.000Z",
+      finishedAt: "2026-07-18T10:01:00.000Z",
+      status: "succeeded",
+      inputSha256: "n".repeat(64),
+      rawOutputSha256: runOutputSha256,
+      parsedOutputSha256: "q".repeat(64),
+      promptTokens: 120,
+      completionTokens: 80,
+      costUsd: 0.04,
+      conditionInputRef: {
+        artifactId: `c2-condition-input-${caseId}-${opts.condition}`,
+        path: `eval/c2/runs/${runId}/input.json`,
+        sha256: "d".repeat(64),
+      },
+      scorerRef: {
+        artifactId: "c2-scorer-v1",
+        path: "src/c2/scorer.ts",
+        sha256: "s".repeat(64),
+      },
+      attemptCount: 1,
+      providerLatencyMs: 432,
+      terminalReason: "succeeded",
+      validationErrors: [],
+      sourceSnapshotIds: opts.family === "migration" ? ["design-source-snapshot-1"] : [],
+    },
+    score: makeScore(runId, runOutputSha256),
+    caseId,
+    family: opts.family,
+  };
+}
+
+/** Build the full pilot matrix: 3 OpenAI primary conditions × 3 families + 1
+ * Claude independent condition × 3 families. Scorecards carry per-condition
+ * deltas so the reducer can compute non-trivial measurements. */
+function makeFullPilotMatrix(): {
+  runs: CalibrationRun[];
+  scorecards: CalibrationScorecard[];
+} {
+  const runs: CalibrationRun[] = [];
+  const scorecards: CalibrationScorecard[] = [];
+
+  for (const family of FAMILIES) {
+    for (const condition of PRIMARY_CONDITIONS) {
+      const run = makeRun({ family, condition, provider: "openai" });
+      runs.push(run);
+      // Score deltas: brief-only baseline 3.5, current-grounded 4.0,
+      // gold-evidence 4.5 (per-dimension). One dimension regresses for the
+      // safety family's brief-only baseline so the reducer can detect it.
+      const scoreOverrides: Partial<Record<(typeof DIMENSIONS)[number], number>> =
+        condition === "brief-only"
+          ? { "product-appropriateness": 3, "cross-screen-coherence": 3, "implementation-clarity": 4, originality: 4, "accessibility-and-failure-states": 4, "evidence-discipline": 3 }
+          : condition === "current-grounded"
+            ? { "product-appropriateness": 4, "cross-screen-coherence": 4, "implementation-clarity": 4, originality: 4, "accessibility-and-failure-states": 4, "evidence-discipline": 4 }
+            : { "product-appropriateness": 5, "cross-screen-coherence": 4, "implementation-clarity": 5, originality: 4, "accessibility-and-failure-states": 4, "evidence-discipline": 5 };
+      scorecards.push({
+        scorecard: makeScorecard({
+          runId: run.manifest.runId,
+          runOutputSha256: run.manifest.rawOutputSha256!,
+          scores: scoreOverrides,
+        }),
+        caseId: run.caseId,
+        family: run.family,
+        condition: run.manifest.condition,
+      });
+    }
+  }
+
+  // Independent lane: Claude current-grounded for every family.
+  for (const family of FAMILIES) {
+    const run = makeRun({ family, condition: "current-grounded", provider: "claude" });
+    runs.push(run);
+    scorecards.push({
+      scorecard: makeScorecard({
+        runId: run.manifest.runId,
+        runOutputSha256: run.manifest.rawOutputSha256!,
+        reviewerActorId: "reviewer.qa-1",
+      }),
+      caseId: run.caseId,
+      family: run.family,
+      condition: run.manifest.condition,
+    });
+  }
+
+  return { runs, scorecards };
+}
+
+function makeCompatibilityInput(): CompatibilityChecklistInput {
+  return {
+    criticalDecisionIds: ["decision:1", "decision:2", "decision:3"],
+    openaiPrimary: {
+      caseId: "stablecoin-home",
+      coveredCriticalDecisionIds: ["decision:1", "decision:2", "decision:3"],
+      criticalDecisionLanes: { "decision:1": "adapt", "decision:2": "retain", "decision:3": "reject" },
+      constraintsRespected: ["constraint:1", "constraint:2"],
+      forbiddenClaimsRespected: true,
+      safetyCompliant: true,
+    },
+    claudeIndependent: {
+      caseId: "stablecoin-home",
+      coveredCriticalDecisionIds: ["decision:1", "decision:2", "decision:3"],
+      criticalDecisionLanes: { "decision:1": "adapt", "decision:2": "retain", "decision:3": "reject" },
+      constraintsRespected: ["constraint:1", "constraint:2"],
+      forbiddenClaimsRespected: true,
+      safetyCompliant: true,
+    },
+  };
+}
+
+function refOf(artifact: { artifactId: string; path: string; sha256: string }) {
+  return { artifactId: artifact.artifactId, path: artifact.path, sha256: artifact.sha256 };
+}
+
+function makeMatchingAuthorization(proposalSha256: string, overrides: Partial<FreezeAuthorization> = {}): FreezeAuthorization {
+  return {
+    schemaVersion: "1.0",
+    artifactType: "c2-freeze-authorization",
+    artifactId: "c2-freeze-auth-1",
+    proposalSha256,
+    reviewerActorId: "reviewer.gold-1",
+    reviewerRole: "Gold Label Owner",
+    rationale: "Approved material-benefit minimum and regression tolerance for the pilot.",
+    materialBenefitMinimum: 0.25,
+    regressionTolerance: 0.5,
+    independentChecklist: {
+      criticalDecisionCoverageComplete: true,
+      contradictoryCriticalDecisions: false,
+      constraintsRespected: true,
+      forbiddenClaimsRespected: true,
+      compatibleJourneys: true,
+      safetyPassedIndependently: true,
+    },
+    maxRunCostUsd: 0.5,
+    maxCampaignCostUsd: 5,
+    frozenAt: "2026-07-19T00:00:00.000Z",
+    rubricDimensions: [...DIMENSIONS],
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// buildCalibrationProposal — pure comparison reduction
+// ---------------------------------------------------------------------------
+
+describe("buildCalibrationProposal", () => {
+  let matrix: ReturnType<typeof makeFullPilotMatrix>;
+  let campaignConfigRef: { artifactId: string; path: string; sha256: string };
+  let pricingTableRef: { artifactId: string; path: string; sha256: string };
+
+  beforeEach(() => {
+    matrix = makeFullPilotMatrix();
+    campaignConfigRef = {
+      artifactId: "c2-campaign-config-pilot-v1",
+      path: "eval/c2/config/pilot-campaign.json",
+      sha256: "a".repeat(64),
+    };
+    pricingTableRef = {
+      artifactId: "c2-pricing-table-pilot-v1",
+      path: "eval/c2/config/pricing.json",
+      sha256: "b".repeat(64),
+    };
+  });
+
+  function proposalInputs(overrides: { runs?: CalibrationRun[]; scorecards?: CalibrationScorecard[] } = {}) {
+    return {
+      runs: overrides.runs ?? matrix.runs,
+      scorecards: overrides.scorecards ?? matrix.scorecards,
+      campaignConfigRef,
+      pricingTableRef,
+      compatibility: evaluateIndependentCompatibility(makeCompatibilityInput()),
+      artifactId: "c2-calibration-proposal-pilot-v1",
+    };
+  }
+
+  it("produces a schema-valid proposal carrying all measurement sections + artifact hashes", () => {
+    const proposal = buildCalibrationProposal(proposalInputs());
+    expect(C2CalibrationProposalSchema.safeParse(proposal).success).toBe(true);
+    expect(proposal.campaignConfigRef).toEqual(campaignConfigRef);
+    expect(proposal.pricingTableRef).toEqual(pricingTableRef);
+    expect(proposal.measurements.conditionDeltas).toHaveLength(DIMENSIONS.length);
+    expect(proposal.measurements.regressions).toBeInstanceOf(Array);
+    expect(proposal.measurements.readinessTransitions.length).toBeGreaterThan(0);
+    expect(proposal.measurements.deterministicTransitions.length).toBeGreaterThan(0);
+    expect(proposal.measurements.safetyResults.length).toBeGreaterThan(0);
+    expect(proposal.measurements.goldHeadroom).toBeDefined();
+    expect(proposal.measurements.independentCompatibility).toBeDefined();
+    expect(proposal.measurements.observedCosts).toBeDefined();
+  });
+
+  it("computes per-dimension current-grounded minus brief-only deltas", () => {
+    const proposal = buildCalibrationProposal(proposalInputs());
+    const delta = proposal.measurements.conditionDeltas.find(
+      (d) => d.dimension === "product-appropriateness",
+    );
+    expect(delta).toBeDefined();
+    // brief-only mean = 3, current-grounded mean = 4 across the 3 families.
+    expect(delta!.briefOnlyMean).toBeCloseTo(3, 5);
+    expect(delta!.currentGroundedMean).toBeCloseTo(4, 5);
+    expect(delta!.goldEvidenceMean).toBeCloseTo(5, 5);
+  });
+
+  it("detects a per-dimension regression when a higher-condition mean drops below a lower-condition mean", () => {
+    // Inject a regression: drop originality on current-grounded below brief-only.
+    const scorecards = matrix.scorecards.map((entry) => {
+      if (entry.condition === "current-grounded" && entry.family === "product") {
+        const sc = entry.scorecard;
+        return {
+          ...entry,
+          scorecard: {
+            ...sc,
+            scores: sc.scores.map((s) => (s.dimension === "originality" ? { ...s, score: 2 } : s)),
+            implementationReady: false,
+          },
+        };
+      }
+      return entry;
+    });
+    const proposal = buildCalibrationProposal(proposalInputs({ scorecards }));
+    const regression = proposal.measurements.regressions.find((r) => r.dimension === "originality");
+    expect(regression).toBeDefined();
+    expect(regression!.regressionMagnitude).toBeGreaterThan(0);
+  });
+
+  it("reports an implementation-readiness transition when brief-only is not ready but current-grounded is", () => {
+    const scorecards = matrix.scorecards.map((entry) => {
+      if (entry.family === "product" && entry.condition === "brief-only") {
+        return {
+          ...entry,
+          scorecard: {
+            ...entry.scorecard,
+            scores: entry.scorecard.scores.map((s) => ({ ...s, score: 2 })),
+            implementationReady: false,
+          },
+        };
+      }
+      return entry;
+    });
+    const proposal = buildCalibrationProposal(proposalInputs({ scorecards }));
+    const transition = proposal.measurements.readinessTransitions.find(
+      (t) => t.caseId === CASE_BY_FAMILY.product,
+    );
+    expect(transition).toBeDefined();
+    expect(transition!.briefOnlyReady).toBe(false);
+    expect(transition!.currentGroundedReady).toBe(true);
+  });
+
+  it("reports safety non-inferiority: current-grounded mean >= brief-only mean for the safety family", () => {
+    const proposal = buildCalibrationProposal(proposalInputs());
+    const safetyResult = proposal.measurements.safetyResults.find(
+      (r) => r.caseId === CASE_BY_FAMILY.safety,
+    );
+    expect(safetyResult).toBeDefined();
+    // Non-inferiority: current-grounded >= brief-only for every safety scorecard.
+    expect(safetyResult!.currentGroundedCompliant).toBe(true);
+  });
+
+  it("reports gold-evidence minus current-grounded headroom", () => {
+    const proposal = buildCalibrationProposal(proposalInputs());
+    // goldEvidenceMean (4.666...) > currentGroundedMean (4.0) ⇒ positive headroom.
+    expect(proposal.measurements.goldHeadroom.goldEvidenceMean).toBeGreaterThan(
+      proposal.measurements.goldHeadroom.currentGroundedMean,
+    );
+  });
+
+  it("rejects a scorecard whose runOutputSha256 does not match its run manifest", () => {
+    const tampered = matrix.scorecards.map((entry) => {
+      if (entry.condition === "brief-only" && entry.family === "product") {
+        return {
+          ...entry,
+          scorecard: { ...entry.scorecard, runOutputSha256: "x".repeat(64) },
+        };
+      }
+      return entry;
+    });
+    expect(() => buildCalibrationProposal(proposalInputs({ scorecards: tampered }))).toThrow(
+      /hash|mismatch|binding|runOutput/i,
+    );
+  });
+
+  it("rejects a scorecard that has no matching run manifest", () => {
+    const orphan: CalibrationScorecard = {
+      ...matrix.scorecards[0]!,
+      scorecard: { ...matrix.scorecards[0]!.scorecard, runId: "c2-run-ghost" },
+    };
+    expect(() => buildCalibrationProposal(proposalInputs({ scorecards: [orphan] }))).toThrow(
+      /no matching|manifest|run|orphan/i,
+    );
+  });
+
+  it("the proposal carries NO thresholds (no materialBenefitMinimum, no regressionTolerance)", () => {
+    const proposal = buildCalibrationProposal(proposalInputs());
+    const serialized = canonicalJsonStringify(proposal);
+    expect(serialized).not.toContain("materialBenefitMinimum");
+    expect(serialized).not.toContain("regressionTolerance");
+    expect(serialized).not.toContain("maxRunCostUsd");
+    expect(serialized).not.toContain("frozenAt");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// evaluateIndependentCompatibility — OpenAI primary vs Claude independent
+// ---------------------------------------------------------------------------
+
+describe("evaluateIndependentCompatibility", () => {
+  it("returns a fully-compatible checklist when both sides cover, agree, respect constraints, and pass safety", () => {
+    const result = evaluateIndependentCompatibility(makeCompatibilityInput());
+    expect(result.criticalDecisionCoverageComplete).toBe(true);
+    expect(result.contradictoryCriticalDecisions).toBe(false);
+    expect(result.constraintsRespected).toBe(true);
+    expect(result.forbiddenClaimsRespected).toBe(true);
+    expect(result.compatibleJourneys).toBe(true);
+    expect(result.safetyPassedIndependently).toBe(true);
+  });
+
+  it("flags incomplete critical-decision coverage", () => {
+    const input = makeCompatibilityInput();
+    input.openaiPrimary.coveredCriticalDecisionIds = ["decision:1"];
+    const result = evaluateIndependentCompatibility(input);
+    expect(result.criticalDecisionCoverageComplete).toBe(false);
+  });
+
+  it("flags contradictory critical decisions (same ID, different lane)", () => {
+    const input = makeCompatibilityInput();
+    input.claudeIndependent.criticalDecisionLanes = {
+      ...input.claudeIndependent.criticalDecisionLanes,
+      "decision:1": "reject", // openai had "adapt"
+    };
+    const result = evaluateIndependentCompatibility(input);
+    expect(result.contradictoryCriticalDecisions).toBe(true);
+  });
+
+  it("flags a constraint respected by one side but not the other", () => {
+    const input = makeCompatibilityInput();
+    input.claudeIndependent.constraintsRespected = ["constraint:1"];
+    const result = evaluateIndependentCompatibility(input);
+    expect(result.constraintsRespected).toBe(false);
+  });
+
+  it("flags a forbidden-claim or safety violation on either side", () => {
+    const input = makeCompatibilityInput();
+    input.openaiPrimary.forbiddenClaimsRespected = false;
+    const result = evaluateIndependentCompatibility(input);
+    expect(result.forbiddenClaimsRespected).toBe(false);
+    // Safety fails independently when either side's safetyCompliant is false.
+    input.claudeIndependent.safetyCompliant = false;
+    const result2 = evaluateIndependentCompatibility(input);
+    expect(result2.safetyPassedIndependently).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// freezeCalibration — explicit authorization + byte-identical re-freeze
+// ---------------------------------------------------------------------------
+
+describe("freezeCalibration", () => {
+  let matrix: ReturnType<typeof makeFullPilotMatrix>;
+  let campaignConfigRef: { artifactId: string; path: string; sha256: string };
+  let pricingTableRef: { artifactId: string; path: string; sha256: string };
+
+  beforeEach(() => {
+    matrix = makeFullPilotMatrix();
+    campaignConfigRef = {
+      artifactId: "c2-campaign-config-pilot-v1",
+      path: "eval/c2/config/pilot-campaign.json",
+      sha256: "a".repeat(64),
+    };
+    pricingTableRef = {
+      artifactId: "c2-pricing-table-pilot-v1",
+      path: "eval/c2/config/pricing.json",
+      sha256: "b".repeat(64),
+    };
+  });
+
+  function buildProposal(runs: CalibrationRun[] = matrix.runs, scorecards: CalibrationScorecard[] = matrix.scorecards) {
+    return buildCalibrationProposal({
+      runs,
+      scorecards,
+      campaignConfigRef,
+      pricingTableRef,
+      compatibility: evaluateIndependentCompatibility(makeCompatibilityInput()),
+      artifactId: "c2-calibration-proposal-pilot-v1",
+    });
+  }
+
+  it("produces a schema-valid frozen calibration binding the proposal + run/scorecard/pricing/campaign hashes + selected thresholds", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const frozen = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+    expect(C2FrozenCalibrationSchema.safeParse(frozen).success).toBe(true);
+    expect(frozen.proposalRef.sha256).toBe(proposal.proposalSha256);
+    expect(frozen.materialBenefitMinimum).toBe(0.25);
+    expect(frozen.regressionTolerance).toBe(0.5);
+    expect(frozen.frozenAt).toBe("2026-07-19T00:00:00.000Z");
+    expect(frozen.maxRunCostUsd).toBe(0.5);
+    expect(frozen.maxCampaignCostUsd).toBe(5);
+  });
+
+  it("re-freeze with the SAME authorization + timestamp produces byte-identical output (OV8)", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const a = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+    const b = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+    expect(canonicalJsonStringify(a)).toBe(canonicalJsonStringify(b));
+  });
+
+  it("a DIFFERENT timestamp intentionally produces a different artifact hash", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const a = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+    const b = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256, { frozenAt: "2026-07-20T00:00:00.000Z" }),
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+    expect(canonicalJsonStringify(a)).not.toBe(canonicalJsonStringify(b));
+  });
+
+  // -------------------------------------------------------------------------
+  // Freeze-negative tests (plan Step 2)
+  // -------------------------------------------------------------------------
+
+  it("rejects an authorization whose proposal hash does not match the proposal", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    expect(() =>
+      freezeCalibration({
+        proposal,
+        compatibility,
+        authorization: makeMatchingAuthorization("0".repeat(64)),
+        artifactId: "c2-frozen-calibration-pilot-v1",
+      }),
+    ).toThrow(/proposal.*hash|mismatch|authorization/i);
+  });
+
+  it("rejects a missing scorecard set (proposal reduced from no scorecards)", () => {
+    expect(() =>
+      buildCalibrationProposal({
+        runs: matrix.runs,
+        scorecards: [],
+        campaignConfigRef,
+        pricingTableRef,
+        compatibility: evaluateIndependentCompatibility(makeCompatibilityInput()),
+        artifactId: "c2-calibration-proposal-pilot-v1",
+      }),
+    ).toThrow(/scorecard|empty|missing/i);
+  });
+
+  it("rejects a proposal missing any required primary run (one family missing)", () => {
+    const trimmed = matrix.runs.filter((r) => r.manifest.condition !== "brief-only" || r.family !== "safety");
+    expect(() =>
+      buildCalibrationProposal({
+        runs: trimmed,
+        scorecards: matrix.scorecards.filter((s) => s.family !== "safety" || s.condition !== "brief-only"),
+        campaignConfigRef,
+        pricingTableRef,
+        compatibility: evaluateIndependentCompatibility(makeCompatibilityInput()),
+        artifactId: "c2-calibration-proposal-pilot-v1",
+      }),
+    ).toThrow(/primary|coverage|family|missing|run/i);
+  });
+
+  it("rejects a proposal missing a Claude independent run for any pilot family", () => {
+    const trimmed = matrix.runs.filter((r) => !(r.manifest.provider === "claude" && r.family === "safety"));
+    expect(() =>
+      buildCalibrationProposal({
+        runs: trimmed,
+        scorecards: matrix.scorecards.filter((s) => !(s.family === "safety" && s.condition === "current-grounded" && matrix.runs.find((r) => r.manifest.runId === s.scorecard.runId)?.manifest.provider === "claude")),
+        campaignConfigRef,
+        pricingTableRef,
+        compatibility: evaluateIndependentCompatibility(makeCompatibilityInput()),
+        artifactId: "c2-calibration-proposal-pilot-v1",
+      }),
+    ).toThrow(/independent|claude|family|coverage|missing/i);
+  });
+
+  it("rejects a non-positive material-benefit minimum (must be > 0)", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    expect(() =>
+      freezeCalibration({
+        proposal,
+        compatibility,
+        authorization: makeMatchingAuthorization(proposal.proposalSha256, { materialBenefitMinimum: 0 }),
+        artifactId: "c2-frozen-calibration-pilot-v1",
+      }),
+    ).toThrow(/material|benefit|positive|minimum/i);
+  });
+
+  it("rejects a non-finite or negative regression tolerance", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    expect(() =>
+      freezeCalibration({
+        proposal,
+        compatibility,
+        // JSON cannot carry NaN; simulate via an explicit negative value.
+        authorization: makeMatchingAuthorization(proposal.proposalSha256, { regressionTolerance: -0.1 }),
+        artifactId: "c2-frozen-calibration-pilot-v1",
+      }),
+    ).toThrow(/regression|tolerance|negative|finite/i);
+  });
+
+  it("rejects a threshold override (the authorization tries to override the $0.50 run budget)", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    expect(() =>
+      freezeCalibration({
+        proposal,
+        compatibility,
+        authorization: makeMatchingAuthorization(proposal.proposalSha256, { maxRunCostUsd: 1.0 as unknown as 0.5 }),
+        artifactId: "c2-frozen-calibration-pilot-v1",
+      }),
+    ).toThrow(/budget|0\.5|max.*cost|override/i);
+  });
+
+  it("rejects a non-matching rubric-dimension set (the authorization's dimensions do not match the fixed six)", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    expect(() =>
+      freezeCalibration({
+        proposal,
+        compatibility,
+        authorization: makeMatchingAuthorization(proposal.proposalSha256, {
+          rubricDimensions: [...DIMENSIONS].slice(0, 5),
+        }),
+        artifactId: "c2-frozen-calibration-pilot-v1",
+      }),
+    ).toThrow(/rubric|dimension|six|6/i);
+  });
+
+  it("rejects a compatibility checklist that does not match the evaluated compatibility", () => {
+    const proposal = buildProposal();
+    // Authorize an incompatible checklist while the proposal's evaluation is compatible.
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    expect(() =>
+      freezeCalibration({
+        proposal,
+        compatibility,
+        authorization: makeMatchingAuthorization(proposal.proposalSha256, {
+          independentChecklist: {
+            ...compatibility,
+            criticalDecisionCoverageComplete: false,
+          },
+        }),
+        artifactId: "c2-frozen-calibration-pilot-v1",
+      }),
+    ).toThrow(/compatibility|checklist|mismatch/i);
+  });
+
+  it("rejects an absent human authorization (empty reviewerActorId)", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    // An empty reviewerActorId is the "no human authorization" case — the freeze
+    // gate must refuse the freeze with an actionable message naming the field.
+    expect(() =>
+      freezeCalibration({
+        proposal,
+        compatibility,
+        authorization: makeMatchingAuthorization(proposal.proposalSha256, {
+          reviewerActorId: "",
+        }),
+        artifactId: "c2-frozen-calibration-pilot-v1",
+      }),
+    ).toThrow(/reviewerActorId|required|authorization|human/i);
+  });
+
+  it("rejects a whitespace-only reviewerActorId (treats it as absent authorization)", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    expect(() =>
+      freezeCalibration({
+        proposal,
+        compatibility,
+        authorization: makeMatchingAuthorization(proposal.proposalSha256, {
+          reviewerActorId: "   ",
+        }),
+        artifactId: "c2-frozen-calibration-pilot-v1",
+      }),
+    ).toThrow(/reviewerActorId|required|authorization|human/i);
+  });
+});

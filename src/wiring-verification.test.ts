@@ -280,6 +280,16 @@ const ALLOWLIST = new Set<string>([
   "writePrivateArtifact",
   "writeDurableArtifact",
   "scanDurableArtifact",
+  // c2/review-packets.ts — Task 8 foundation helpers for the operational
+  // review-batch flow (Task 10). `shufflePackets` is the spec §10 packet-order
+  // shuffle (crypto.randomInt + rejection sampling); `createFileBlindMapStore`
+  // is the file-backed reversible-map store under .c2-private/c2/blind-map.json.
+  // The CLI's runPropose/runFreeze/runValidate (already wired) do not call them
+  // yet — the batch packet emission is a Task 10 operational step during paid
+  // execution. Listed here rather than wired to a placeholder caller to avoid
+  // fake coupling, per the same precedent as cost-policy above.
+  "shufflePackets",
+  "createFileBlindMapStore",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

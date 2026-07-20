@@ -352,6 +352,20 @@ describe("buildC2Prompt — instruction invariants", () => {
     expect(prompt).toMatch(/authorityLanes.*stable ID/i);
     expect(prompt).toMatch(/NOT.*descriptive phrase/i);
   });
+
+  it("clarifies that assumptions and accessibilityAndRecovery are plain strings, not objects", () => {
+    // Bug #3: the candidate schema requires `assumptions: UniqueNonEmptyStrings`
+    // and `accessibilityAndRecovery: UniqueNonEmptyStrings` (arrays of plain
+    // strings), but the prompt previously documented these only as `field[]`
+    // with no type guidance. The model mirrored the adjacent
+    // `acceptanceCriteria[]: { id, statement }` shape and produced
+    // `[{id, statement}, ...]` objects, which then failed schema validation.
+    // The prompt MUST clarify these two fields are plain strings, NOT objects.
+    const { prompt } = buildC2Prompt({ brief: brief(), conditionInput: briefOnlyConditionInput() });
+    expect(prompt).toMatch(/assumptions\[\].*plain string/i);
+    expect(prompt).toMatch(/NOT object/i);
+    expect(prompt).toMatch(/accessibilityAndRecovery\[\].*plain string/i);
+  });
 });
 
 describe("buildC2Prompt — rejects unmatched evidence", () => {

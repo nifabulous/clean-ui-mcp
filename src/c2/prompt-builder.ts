@@ -91,8 +91,8 @@ const CANDIDATE_SCHEMA_SUMMARY = [
   "- sourceDecisions[]: { id, lane: retain|adapt|reject, rationale, evidenceIds[] } — cite only evidence IDs supplied below",
   "- authorityLanes: { retain[], adapt[], reject[] } — each value is a stable ID referencing a retained/adapted/rejected concept (e.g. retain: [\"headline-stack\"], adapt: [\"branded-palette\"], reject: [\"decorative-gradient\"]), NOT a descriptive phrase",
   "- acceptanceCriteria[]: { id, statement }",
-  "- assumptions[]",
-  "- accessibilityAndRecovery[]",
+  "- assumptions[] — plain strings, one per assumption (e.g. \"The exact typography is not specified in the brief.\"). NOT objects.",
+  "- accessibilityAndRecovery[] — plain strings, one per criterion. NOT objects.",
   "- provenance: { conditionInputSha256 } — must equal the supplied conditionInput.inputSha256",
 ].join("\n");
 

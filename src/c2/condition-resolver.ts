@@ -196,15 +196,19 @@ async function resolveCurrentGrounded(
   //    ranked list of N entries (the production corpus returned 787) would
   //    balloon the current-grounded prompt's evidence section unboundedly and
   //    get cost-blocked.
-  const ranked = (
-    await deps.reader.searchRanked({
-      query,
-      limit: C2_RETRIEVAL_LIMIT,
-      reviewStatus: "approved",
-      rerank: false,
-      searchMode: C2_RETRIEVAL_MODE,
-    })
-  ).slice(0, C2_RETRIEVAL_LIMIT);
+  const rankedRaw = await deps.reader.searchRanked({
+    query,
+    limit: C2_RETRIEVAL_LIMIT,
+    reviewStatus: "approved",
+    rerank: false,
+    searchMode: C2_RETRIEVAL_MODE,
+  });
+  // Capture the pre-slice count so the private payload can record whether
+  // truncation happened (production debugging: distinguishes "searchRanked
+  // returned exactly 10" from "returned 787 and we sliced"). Private-payload
+  // only — never enters the durable/model-visible metadata.
+  const searchRankedReturned = rankedRaw.length;
+  const ranked = rankedRaw.slice(0, C2_RETRIEVAL_LIMIT);
 
   // 4. Re-hash `corpus/entries.json` AFTER ranking. If the corpus mutated
   //    during resolution, abort — the evidence would bind to a moving target.
@@ -219,10 +223,11 @@ async function resolveCurrentGrounded(
   }
 
   // 5. Convert ranked results into evidence records with canonical content
-  //    hashes. The complete ranked result is preserved; the durable metadata
-  //    carries the ranking (entryId + rank + score + contentSha256) and the
-  //    per-record evidence metadata. The actual content bytes are stored
-  //    privately and surfaced through the private payload.
+  //    hashes. The top-C2_RETRIEVAL_LIMIT slice of the ranked result is
+  //    preserved (the resolver truncates at its own boundary — see step 3);
+  //    the durable metadata carries the ranking (entryId + rank + score +
+  //    contentSha256) and the per-record evidence metadata. The actual content
+  //    bytes are stored privately and surfaced through the private payload.
   const evidence: C2EvidenceRecord[] = [];
   const rankedResult: Array<{
     entryId: string;
@@ -309,6 +314,9 @@ async function resolveCurrentGrounded(
     corpusSha256,
     corpusEntryCount,
     retrievalMode: C2_RETRIEVAL_MODE,
+    // Pre-slice count from searchRanked (production debugging — records
+    // whether truncation happened). Absent from the durable metadata above.
+    searchRankedReturned,
     rankedResult,
     evidenceContent: Object.fromEntries(evidenceContent),
   });

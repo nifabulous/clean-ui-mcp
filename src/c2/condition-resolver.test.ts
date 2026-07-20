@@ -405,6 +405,8 @@ describe("resolveConditionInput", () => {
     ]);
     // The literal retrieval mode is recorded in the private payload.
     expect(result.privatePayload).toContain('"retrievalMode":"keyword-only"');
+    // The pre-slice searchRanked count is recorded for truncation observability.
+    expect(result.privatePayload).toContain('"searchRankedReturned":2');
     // The private payload carries the actual evidence content bytes.
     expect(result.privatePayload).toContain("corpus:entry-a");
     // Reviewer-only values from eval/c2/pilot/labels/stablecoin-home.json must

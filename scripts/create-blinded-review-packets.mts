@@ -27,7 +27,7 @@ const SCORECARDS_DIR = join(REPO, "eval/c2/scorecards");
 const PACKETS_DIR = join(SCORECARDS_DIR, "blinded-packets");
 const PRIVATE_ROOT = join(REPO, ".c2-private");
 
-const REVIEWER = "gold-label-owner";
+const REVIEWER = "codex-gold-reviewer";
 
 async function main() {
   mkdirSync(PACKETS_DIR, { recursive: true });

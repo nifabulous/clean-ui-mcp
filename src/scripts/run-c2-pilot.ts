@@ -448,7 +448,7 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
         conditionInput,
         conditionInputRef: {
           artifactId: conditionInput.artifactId,
-          path: relPathFromRepo(conditionInputPath),
+          path: logicalConditionInputPath(relPathFromRepo(conditionInputPath)),
           sha256: fileSha256(conditionInputPath),
         },
         scorerRef: {
@@ -518,7 +518,7 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
         conditionInput,
         conditionInputRef: {
           artifactId: conditionInput.artifactId,
-          path: relPathFromRepo(conditionInputPath),
+          path: logicalConditionInputPath(relPathFromRepo(conditionInputPath)),
           sha256: fileSha256(conditionInputPath),
         },
         scorerRef: {
@@ -701,6 +701,32 @@ function relPathFromRepo(absOrRel: string): string {
   if (!isAbsolute(absOrRel)) return absOrRel;
   // Make a best-effort repo-relative path for the manifest's ref.
   return absOrRel.replace(process.cwd() + "/", "");
+}
+
+/**
+ * Convert a private condition-input execution path into the logical path
+ * recorded in durable run metadata. The descriptor remains private on disk;
+ * only its SHA-256 binds the run to the exact bytes.
+ */
+export function logicalConditionInputPath(executionPath: string): string {
+  const normalized = executionPath.replaceAll("\\", "/");
+  const marker = "/c2/condition-inputs/";
+  const markerIndex = normalized.lastIndexOf(marker);
+
+  if (markerIndex >= 0) {
+    const fileName = normalized.slice(markerIndex + marker.length);
+    if (fileName.length > 0 && !fileName.includes("/")) {
+      return `eval/c2/condition-inputs/${fileName}`;
+    }
+  }
+
+  if (normalized.startsWith("eval/c2/condition-inputs/")) {
+    return normalized;
+  }
+
+  throw new Error(
+    `[c2-cli] cannot normalize condition-input path: ${executionPath}`,
+  );
 }
 
 // ---------------------------------------------------------------------------

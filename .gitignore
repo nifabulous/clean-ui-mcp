@@ -78,6 +78,14 @@ eval/c2/pilot/*
 !eval/c2/pilot/labels/
 !eval/c2/pilot/source-snapshots/
 !eval/c2/pilot/evidence/
+# C2 reviewed campaign + pricing config (Task 5): non-secret provider/model
+# pins, sampling parameters, output-token ceilings, fixed $0.50/$5 budgets,
+# and a versioned pricing table with provenance URLs + verification dates.
+# Stores apiKeyEnv NAMES only (OPENAI_API_KEY / ANTHROPIC_API_KEY), never key
+# values. Pricing values are placeholders that must be re-verified from
+# official provider sources immediately before the paid campaign. Tracked
+# because the paid-call harness and calibration reducer bind these hashes.
+!eval/c2/config/
 # C2 gold-evidence descriptors (Task 3): each descriptor maps every label
 # goldEvidenceId to exact source JSON pointers (brief fields or migration
 # snapshot fields). Tracked because the pilot manifest binds their resolved

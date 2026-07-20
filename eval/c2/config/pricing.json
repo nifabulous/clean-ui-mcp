@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-pricing-table",
+  "artifactId": "c2-pricing-table-v1",
+  "campaignStartsAt": "2026-07-20T00:00:00.000Z",
+  "entries": [
+    {
+      "provider": "openai",
+      "model": "gpt-5.4-mini",
+      "inputTokenPriceUsdPerMillion": 0.000001,
+      "outputTokenPriceUsdPerMillion": 0.000001,
+      "effectiveDate": "2026-07-01",
+      "verifiedAt": "2026-07-18T00:00:00.000Z",
+      "sourceUrl": "https://platform.openai.com/docs/pricing"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-sonnet-4-5",
+      "inputTokenPriceUsdPerMillion": 0.000001,
+      "outputTokenPriceUsdPerMillion": 0.000001,
+      "effectiveDate": "2026-07-01",
+      "verifiedAt": "2026-07-18T00:00:00.000Z",
+      "sourceUrl": "https://www.anthropic.com/pricing"
+    }
+  ]
+}

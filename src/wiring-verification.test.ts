@@ -253,6 +253,19 @@ const ALLOWLIST = new Set<string>([
   "C2GoldEvidenceRecordSchema",
   "C2GoldEvidenceRecordBindingSchema",
   "C2PilotGoldEvidenceBindingSchema",
+  // c2/cost-policy.ts — pure cost decisions consumed only by their tests today.
+  // The paid-call harness (Task 7) calls preflightCampaignCosts before every
+  // provider request and assertRunBudget/assertCampaignBudget after each call;
+  // the calibration reducer (Task 8) aggregates the resulting actual costs.
+  // Listed here rather than wired to a placeholder caller to avoid fake
+  // coupling, per the same precedent as renderSourceDesign /
+  // assertAgreementMatchesSubmissions above. The internal helpers
+  // (forecastRunCost, calculateActualCost, campaignReserveUsd, roundPersistedCost,
+  // findPricingEntry) are already referenced by preflightCampaignCosts and so
+  // do not need allowlisting.
+  "assertRunBudget",
+  "assertCampaignBudget",
+  "preflightCampaignCosts",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

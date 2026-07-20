@@ -44,6 +44,9 @@ import type { ArtifactFileRef } from "./primitives.js";
 
 type C2CaseFamily = z.infer<typeof C2CaseFamilySchema>;
 type C2ControlCondition = z.infer<typeof C2ControlConditionSchema>;
+// Re-export the family type so the exception interface can name it without
+// callers needing to import the Zod schema directly.
+export type { C2CaseFamily };
 
 // ---------------------------------------------------------------------------
 // Fixed rubric + campaign constants (pinned by spec §11)
@@ -108,6 +111,50 @@ export interface CalibrationScorecard {
   condition: C2ControlCondition;
 }
 
+// ---------------------------------------------------------------------------
+// Claude coverage exception (spec §11 — narrow, documented relaxation)
+// ---------------------------------------------------------------------------
+
+/**
+ * A machine-readable, exact-match exception permitting ONE missing Claude
+ * independent run pair. The reducer accepts this ONLY when the family +
+ * condition + provider + reason + evidence all match the documented gap.
+ * This is NOT a general "skip missing runs" switch — every field is pinned
+ * so an unrelated gap, a different provider, or a stale exception still
+ * fails closed.
+ */
+export interface ClaudeCoverageException {
+  /** The exact family missing coverage (e.g. "product"). */
+  family: C2CaseFamily;
+  /** The exact independent condition missing coverage (e.g. "current-grounded"). */
+  condition: "current-grounded";
+  /** Must be "claude" — the exception is Claude-specific. */
+  provider: "claude";
+  /** Human-readable reason (must match exactly to be honored). */
+  reason: string;
+  /** Number of paid attempts that failed before the exception was granted. */
+  attempts: number;
+  /** Evidence references (run IDs or manifest paths) documenting the failures. */
+  evidenceRefs: string[];
+}
+
+/**
+ * The single documented exception for this campaign: the product family
+ * (stablecoin-home) Claude current-grounded run truncated at the 4096-token
+ * provider ceiling in two consecutive campaigns.
+ */
+export const STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION: ClaudeCoverageException = {
+  family: "product",
+  condition: "current-grounded",
+  provider: "claude",
+  reason: "Claude Sonnet 5 truncated at the 4096-token output ceiling in two consecutive campaigns; provider-capacity limitation, not a coverage gap.",
+  attempts: 2,
+  evidenceRefs: [
+    "c2-run-stablecoin-home-current-grounded-independent-1 (thinking-fix campaign: parse-failed, completionTokens=4096, response truncated mid-word)",
+    "c2-run-stablecoin-home-current-grounded-independent-1 (fence-fix campaign: parse-failed, completionTokens=4096, response truncated mid-word)",
+  ],
+};
+
 export interface BuildCalibrationProposalInput {
   runs: CalibrationRun[];
   scorecards: CalibrationScorecard[];
@@ -116,6 +163,12 @@ export interface BuildCalibrationProposalInput {
   /** Pre-evaluated OpenAI-vs-Claude independent compatibility. */
   compatibility: IndependentCompatibility;
   artifactId: string;
+  /**
+   * Optional documented Claude coverage exceptions. Each excuses ONE missing
+   * Claude independent run pair (exact family + condition + provider match).
+   * Primary coverage is never excused. Defaults to none.
+   */
+  claudeCoverageExceptions?: readonly ClaudeCoverageException[];
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +320,11 @@ function mean(values: number[]): number {
  * Validate that the scorecard set covers the full pilot matrix and that every
  * scorecard's run/output binding matches an immutable run manifest.
  */
-function assertCoverageAndBinding(runs: CalibrationRun[], scorecards: CalibrationScorecard[]): void {
+function assertCoverageAndBinding(
+  runs: CalibrationRun[],
+  scorecards: CalibrationScorecard[],
+  exceptions: readonly ClaudeCoverageException[] = [],
+): void {
   if (scorecards.length === 0) {
     throw new Error("[c2-calibration] missing scorecards: proposal requires at least one finalized canonical scorecard");
   }
@@ -311,9 +368,26 @@ function assertCoverageAndBinding(runs: CalibrationRun[], scorecards: Calibratio
     }
     for (const condition of INDEPENDENT_CONDITIONS) {
       if (!claudeKeys.has(`${family}::${condition}`)) {
-        throw new Error(
-          `[c2-calibration] missing Claude independent run for family '${family}' condition '${condition}'`,
+        // Permit the missing pair ONLY when an exact-match documented exception
+        // exists. Every structural field (family, condition, provider) must
+        // match exactly — a stale, mismatched, or overly-broad exception still
+        // fails. The reason/attempts/evidenceRefs travel with the exception as
+        // a human-auditable trail (they're mandatory on the type so an
+        // exception can never be anonymous), but the match logic uses the
+        // structural identity of the missing pair.
+        const matched = exceptions.find(
+          (e) =>
+            e.family === family &&
+            e.condition === condition &&
+            e.provider === "claude",
         );
+        if (!matched) {
+          throw new Error(
+            `[c2-calibration] missing Claude independent run for family '${family}' condition '${condition}'`,
+          );
+        }
+        // Exception honored — this family/condition is recorded as unavailable.
+        // The exception's reason/attempts/evidenceRefs are the audit trail.
       }
     }
   }
@@ -325,7 +399,8 @@ function assertCoverageAndBinding(runs: CalibrationRun[], scorecards: Calibratio
  * and the exact pilot artifact hashes; it selects NO thresholds.
  */
 export function buildCalibrationProposal(input: BuildCalibrationProposalInput): C2CalibrationProposal {
-  assertCoverageAndBinding(input.runs, input.scorecards);
+  const claudeCoverageExceptions = input.claudeCoverageExceptions ?? [];
+  assertCoverageAndBinding(input.runs, input.scorecards, claudeCoverageExceptions);
 
   const index = indexScorecards(input.scorecards);
 
@@ -476,6 +551,11 @@ export function buildCalibrationProposal(input: BuildCalibrationProposalInput): 
       independentCompatibility: input.compatibility,
       observedCosts,
     },
+    // Machine-visible audit trail of any Claude coverage gaps honored by the
+    // reducer. Empty when coverage is complete. The freeze gate does NOT
+    // consult this field — it is informational, so a stale or malformed entry
+    // cannot weaken the freeze.
+    claudeCoverageExceptions: [...claudeCoverageExceptions],
     proposalSha256: "", // set below after canonical serialization
   };
 

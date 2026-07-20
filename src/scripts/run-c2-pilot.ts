@@ -49,6 +49,7 @@ import {
   buildCalibrationProposal,
   freezeCalibration,
   evaluateIndependentCompatibility,
+  STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
   type CalibrationRun,
   type CalibrationScorecard,
   type FreezeAuthorization,
@@ -913,6 +914,10 @@ async function runPropose(args: Record<string, unknown>): Promise<number> {
         sha256: fileSha256("eval/c2/config/pricing.json"),
       },
       artifactId: "c2-calibration-proposal-pilot-v1",
+      // The documented Claude truncation exception for the product family
+      // (stablecoin-home) current-grounded independent run. Permits ONLY this
+      // exact missing pair; every other gap still fails closed.
+      claudeCoverageExceptions: [STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION],
     });
 
     // Durable write under eval/c2/calibration/ — runs the boundary scan FIRST

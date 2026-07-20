@@ -25,8 +25,11 @@ import {
   buildCalibrationProposal,
   evaluateIndependentCompatibility,
   freezeCalibration,
+  STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+  __test,
   type CalibrationRun,
   type CalibrationScorecard,
+  type ClaudeCoverageException,
   type CompatibilityChecklistInput,
   type FreezeAuthorization,
   type IndependentCompatibility,
@@ -447,6 +450,101 @@ describe("buildCalibrationProposal", () => {
     expect(serialized).not.toContain("regressionTolerance");
     expect(serialized).not.toContain("maxRunCostUsd");
     expect(serialized).not.toContain("frozenAt");
+  });
+
+  // -------------------------------------------------------------------------
+  // Claude coverage exception — fail-closed relaxation for ONE documented pair
+  // -------------------------------------------------------------------------
+
+  /**
+   * Build the pilot matrix missing ONLY the product::current-grounded Claude
+   * run (the documented stablecoin-home truncation gap). All 9 primary runs +
+   * the safety and migration Claude current-grounded runs are present.
+   */
+  function matrixMissingProductClaude(): {
+    runs: CalibrationRun[];
+    scorecards: CalibrationScorecard[];
+  } {
+    const runs = matrix.runs.filter(
+      (r) => !(r.manifest.provider === "claude" && r.family === "product" && r.manifest.condition === "current-grounded"),
+    );
+    const scorecards = matrix.scorecards.filter(
+      (s) => !(s.family === "product" && s.condition === "current-grounded" && matrix.runs.find((r) => r.manifest.runId === s.scorecard.runId)?.manifest.provider === "claude"),
+    );
+    return { runs, scorecards };
+  }
+
+  it("permits the documented exception for the exact missing Claude pair (product::current-grounded)", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    // The documented exception is honored — assertCoverageAndBinding must NOT throw.
+    expect(() =>
+      __test.assertCoverageAndBinding(runs, scorecards, [STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION]),
+    ).not.toThrow();
+  });
+
+  it("still throws when the documented pair is missing and no exception is supplied", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
+  it("still throws when the exception targets the wrong family (mismatched exception)", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const wrongFamily: ClaudeCoverageException = {
+      ...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+      family: "migration",
+    };
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [wrongFamily])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
+  it("still throws when an unrelated Claude pair is also missing (exception excuses only product)", () => {
+    // Drop BOTH product::current-grounded AND migration::current-grounded Claude runs.
+    const runs = matrix.runs.filter(
+      (r) => !(r.manifest.provider === "claude" && r.manifest.condition === "current-grounded"),
+    );
+    const scorecards = matrix.scorecards.filter(
+      (s) => !(s.condition === "current-grounded" && matrix.runs.find((r) => r.manifest.runId === s.scorecard.runId)?.manifest.provider === "claude"),
+    );
+    // The exception only excuses product::current-grounded; migration still fails.
+    expect(() =>
+      __test.assertCoverageAndBinding(runs, scorecards, [STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION]),
+    ).toThrow(/missing Claude independent run for family 'migration'/);
+  });
+
+  it("primary coverage stays strict — a Claude exception does NOT excuse a missing primary run", () => {
+    // Drop a primary run (product::brief-only).
+    const runs = matrix.runs.filter(
+      (r) => !(r.manifest.provider === "openai" && r.family === "product" && r.manifest.condition === "brief-only"),
+    );
+    const scorecards = matrix.scorecards.filter(
+      (s) => !(s.family === "product" && s.condition === "brief-only"),
+    );
+    expect(() =>
+      __test.assertCoverageAndBinding(runs, scorecards, [STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION]),
+    ).toThrow(/missing primary run coverage/);
+  });
+
+  it("records honored Claude coverage exceptions on the proposal", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const proposal = buildCalibrationProposal({
+      runs,
+      scorecards,
+      campaignConfigRef,
+      pricingTableRef,
+      compatibility: evaluateIndependentCompatibility(makeCompatibilityInput()),
+      artifactId: "c2-calibration-proposal-pilot-v1",
+      claudeCoverageExceptions: [STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION],
+    });
+    expect(proposal.claudeCoverageExceptions).toHaveLength(1);
+    expect(proposal.claudeCoverageExceptions[0]?.family).toBe("product");
+    expect(proposal.claudeCoverageExceptions[0]?.condition).toBe("current-grounded");
+    expect(proposal.claudeCoverageExceptions[0]?.provider).toBe("claude");
+    // The default (no exceptions supplied) is an empty array.
+    const fullProposal = buildCalibrationProposal(proposalInputs());
+    expect(fullProposal.claudeCoverageExceptions).toEqual([]);
   });
 });
 

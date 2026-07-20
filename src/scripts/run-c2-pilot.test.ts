@@ -28,7 +28,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildModelEndpoint, logicalConditionInputPath } from "./run-c2-pilot.js";
+import { buildModelEndpoint, logicalConditionInputPath, c2RunId } from "./run-c2-pilot.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../..");
@@ -417,5 +417,43 @@ describe("logicalConditionInputPath", () => {
         ".c2-private\\c2\\condition-inputs\\stablecoin-home-current-grounded.json",
       ),
     ).toBe("eval/c2/condition-inputs/stablecoin-home-current-grounded.json");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// c2RunId — lane namespacing (regression for the runId-collision bug)
+// ---------------------------------------------------------------------------
+//
+// Regression for the deterministic runId-collision bug: the primary lane
+// (OpenAI) and the independent lane (Claude) both ran the same case+condition
+// (`current-grounded`) starting at n=1. With no lane discriminator in the
+// runId, both lanes produced the SAME runId (e.g.
+// `c2-run-named-inspiration-safety-current-grounded-1`). The harness's
+// immutability guard then blocked the independent run because a terminal
+// manifest already existed from the primary lane — so the 3 independent-lane
+// runs never executed.
+//
+// The fix namespaces runIds by lane label. `c2RunId` is the pure helper both
+// the CLI and this test use; pinning it here proves primary and independent
+// runs for the same case+condition receive distinct IDs.
+describe("c2RunId — lane namespacing", () => {
+  it("generates distinct IDs for primary vs independent lanes on the same case+condition", () => {
+    const primary = c2RunId("named-inspiration-safety", "current-grounded", "primary", 1);
+    const independent = c2RunId("named-inspiration-safety", "current-grounded", "independent", 1);
+    expect(primary).toBe("c2-run-named-inspiration-safety-current-grounded-primary-1");
+    expect(independent).toBe("c2-run-named-inspiration-safety-current-grounded-independent-1");
+    expect(primary).not.toBe(independent);
+  });
+
+  it("includes the attempt number for retry distinctness", () => {
+    const first = c2RunId("stablecoin-home", "brief-only", "primary", 1);
+    const retry = c2RunId("stablecoin-home", "brief-only", "primary", 2);
+    expect(first).not.toBe(retry);
+  });
+
+  it("truncates to 64 characters", () => {
+    const longCase = "x".repeat(80);
+    const id = c2RunId(longCase, "current-grounded", "primary", 1);
+    expect(id.length).toBeLessThanOrEqual(64);
   });
 });

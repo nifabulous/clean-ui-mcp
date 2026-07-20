@@ -474,7 +474,7 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
       // Swap the pricing entry to the lane we're about to call.
       campaignState.pricingEntry = primaryPricing.value;
 
-      const result = await executeC2RunWithAudit(request, store, campaignState, runCounter);
+      const result = await executeC2RunWithAudit(request, store, campaignState, runCounter, "primary");
       results.push(result);
     }
   }
@@ -543,7 +543,7 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
 
       campaignState.pricingEntry = independentPricing.value;
 
-      const result = await executeC2RunWithAudit(request, store, campaignState, runCounter);
+      const result = await executeC2RunWithAudit(request, store, campaignState, runCounter, "independent");
       results.push(result);
     }
   }
@@ -580,6 +580,16 @@ export function buildModelEndpoint(req: {
 }
 
 /**
+ * Generate a lane-namespaced runId. Primary and independent lanes for the same
+ * case+condition receive distinct IDs (e.g. `...-primary-1` vs `...-independent-1`)
+ * so the immutability guard never blocks an independent run with a primary run's ID.
+ */
+export function c2RunId(caseId: string, condition: string, laneLabel: string, attempt: number): string {
+  const base = `c2-run-${caseId}-${condition}-${laneLabel}-${attempt}`;
+  return base.slice(0, 64);
+}
+
+/**
  * Wrap executeC2Run with a network-audit hook. The audit fires immediately
  * BEFORE the provider call (inside the injected callModel) so the no-egress
  * guarantee is observable from a subprocess.
@@ -589,6 +599,7 @@ async function executeC2RunWithAudit(
   store: C2RunStore,
   campaign: CampaignState,
   attempt: number,
+  laneLabel: string,
 ): Promise<{ runId: string; status: string; terminalReason: string | null; costUsd: number }> {
   let audited = false;
   const manifest = await executeC2Run(request, {
@@ -612,7 +623,7 @@ async function executeC2RunWithAudit(
       });
     },
     now: () => new Date().toISOString(),
-    runId: (caseId, condition, n) => `c2-run-${caseId}-${condition}-${n}`.slice(0, 64),
+    runId: (caseId, condition, n) => c2RunId(caseId, condition, laneLabel, n),
     scorerSha256: () => {
       try {
         return fileSha256("src/c2/scorer.ts");

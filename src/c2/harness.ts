@@ -850,16 +850,30 @@ function estimatePromptTokens(request: ExecuteC2RunRequest, deps: ExecuteC2RunDe
  *   - a leading/trailing code fence
  * Does NOT repair or retry. A failure here is a `parse-failed` terminal.
  */
-function parseOneJsonObject(raw: string): unknown {
+export function parseOneJsonObject(raw: string): unknown {
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
     throw new Error("[c2-harness] empty model response");
   }
-  // Strip a single optional ```json ... ``` fence. We do NOT strip arbitrary
-  // prose — the system instruction forbids it. A fenced object is the one
-  // tolerated shape because some providers wrap output despite instructions.
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
-  const body = fenced ? fenced[1]! : trimmed;
+  // Strip an optional ```json ... ``` code fence. Some providers wrap output
+  // despite the instruction not to. We tolerate TWO shapes:
+  //   1. The ENTIRE response is one fenced block (```json\n{...}\n```).
+  //   2. A fenced block at the START followed by trailing prose — the model
+  //      added commentary after the closing fence. We extract just the fenced
+  //      body and ignore everything after the closing fence.
+  // We do NOT tolerate a fence appearing mid-prose: the `^` anchor on the
+  // opening fence ensures only a fence at the very start is recognized. We
+  // also do NOT repair or retry — malformed JSON inside a fence still throws.
+  let body: string;
+  const entireFenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  const leadingFenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (entireFenced) {
+    body = entireFenced[1]!;
+  } else if (leadingFenced) {
+    body = leadingFenced[1]!;
+  } else {
+    body = trimmed;
+  }
   // JSON.parse accepts only one top-level value; trailing garbage throws.
   const value = JSON.parse(body) as unknown;
   if (value === null || typeof value !== "object" || Array.isArray(value)) {

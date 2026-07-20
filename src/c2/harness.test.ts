@@ -32,6 +32,7 @@ import type { ModelCallResult } from "../tagger.js";
 import { canonicalJsonStringify, sha256Hex } from "../readiness/contracts.js";
 import {
   executeC2Run,
+  parseOneJsonObject,
   type ExecuteC2RunRequest,
   type ExecuteC2RunDeps,
   type CampaignState,
@@ -884,5 +885,57 @@ describe("executeC2Run — boundary scan rejects secret-bearing durable manifest
         secretEnvNames: [],
       }),
     ).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseOneJsonObject — code-fence stripping.
+//
+// The harness must tolerate a model that wraps its JSON in a ```json fence
+// even when trailing prose follows the closing fence. The function still
+// refuses empty input, malformed JSON, non-object JSON, and unfenced prose
+// that is not JSON.
+// ---------------------------------------------------------------------------
+
+describe("parseOneJsonObject — fence stripping", () => {
+  it("parses a complete ```json fenced object", () => {
+    expect(parseOneJsonObject("```json\n{\"a\":1}\n```")).toEqual({ a: 1 });
+  });
+
+  it("parses a fenced object with trailing prose (ignores prose after the closing fence)", () => {
+    const raw = "```json\n{\"a\":1}\n```\n\nHere is the design.";
+    expect(parseOneJsonObject(raw)).toEqual({ a: 1 });
+  });
+
+  it("parses a fenced object without the `json` language tag", () => {
+    expect(parseOneJsonObject("```\n{\"a\":1}\n```")).toEqual({ a: 1 });
+  });
+
+  it("parses a fenced object with trailing prose even without the `json` tag", () => {
+    const raw = "```\n{\"a\":1}\n```\n\nLet me know your thoughts.";
+    expect(parseOneJsonObject(raw)).toEqual({ a: 1 });
+  });
+
+  it("throws on malformed JSON inside a fence", () => {
+    expect(() => parseOneJsonObject("```json\n{not valid json}\n```")).toThrow();
+  });
+
+  it("throws on a non-object (array) inside a fence", () => {
+    expect(() => parseOneJsonObject("```json\n[1,2,3]\n```")).toThrow(
+      /not a single JSON object/,
+    );
+  });
+
+  it("throws on empty response", () => {
+    expect(() => parseOneJsonObject("")).toThrow(/empty/);
+    expect(() => parseOneJsonObject("   \n\t  ")).toThrow(/empty/);
+  });
+
+  it("does NOT match a fence appearing mid-prose (only a fence at the start)", () => {
+    // The opening fence is NOT at the start, so this must not be treated as a
+    // fenced block — it is unfenced prose containing fence markers and should
+    // fail to parse as JSON.
+    const raw = "Here is the result:\n```json\n{\"a\":1}\n```";
+    expect(() => parseOneJsonObject(raw)).toThrow();
   });
 });

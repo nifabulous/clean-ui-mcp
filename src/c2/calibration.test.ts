@@ -130,10 +130,17 @@ function makeRun(opts: {
   runId?: string;
   caseId?: string;
   runOutputSha256?: string;
+  /**
+   * The on-disk directory name. Defaults to `runId` (the common case). Override
+   * to a different value to exercise the fallback-run case where the directory
+   * is suffixed but the manifest's runId is canonical.
+   */
+  runDir?: string;
 }): CalibrationRun {
   const caseId = opts.caseId ?? CASE_BY_FAMILY[opts.family];
   const runId = opts.runId ?? `c2-run-${opts.provider}-${caseId}-${opts.condition}`;
   const runOutputSha256 = opts.runOutputSha256 ?? shaOf({ runId, marker: opts.condition });
+  const runDir = opts.runDir ?? runId;
   return {
     manifest: {
       schemaVersion: "2.0",
@@ -183,6 +190,7 @@ function makeRun(opts: {
     score: makeScore(runId, runOutputSha256),
     caseId,
     family: opts.family,
+    runDir,
   };
 }
 
@@ -962,10 +970,11 @@ describe("freezeCalibration", () => {
     expect(frozen.scorecardRefs).toHaveLength(scorecards.length);
 
     // The refs' artifactId / path / sha256 must match the ACTUAL run manifests
-    // + scorecards — NOT the proposal.json placeholder.
+    // + scorecards — NOT the proposal.json placeholder. The path uses runDir
+    // (the on-disk directory name), not runId.
     const expectedRunRefs = runs.map((r) => refOf({
       artifactId: r.manifest.artifactId,
-      path: `eval/c2/runs/${r.manifest.runId}/manifest.json`,
+      path: `eval/c2/runs/${r.runDir}/manifest.json`,
       sha256: sha256Hex(Buffer.from(canonicalJsonStringify(r.manifest), "utf-8")),
     }));
     expect(frozen.runManifestRefs).toEqual(expectedRunRefs);
@@ -1002,5 +1011,109 @@ describe("freezeCalibration", () => {
     expect(frozen.scorecardRefs).toHaveLength(1);
     expect(frozen.runManifestRefs[0]!.path).toBe("eval/c2/calibration/proposal.json");
     expect(frozen.scorecardRefs[0]!.path).toBe("eval/c2/calibration/proposal.json");
+  });
+
+  // -------------------------------------------------------------------------
+  // P2: manifestRef uses run.runDir (the actual on-disk directory) for the ref
+  // path — NOT manifest.runId. A fallback run's directory is suffixed
+  // `-fallback` while its manifest.runId carries the canonical (un-suffixed)
+  // identifier; using runId for the path would point at the wrong directory
+  // and the frozen ref would fail to resolve in a fresh clone. This test
+  // reproduces the exact fallback-run shape observed in the pilot: a run whose
+  // directory name differs from its manifest.runId.
+  // -------------------------------------------------------------------------
+
+  it("freezeCalibration uses run.runDir (not manifest.runId) for the ref path — fallback-run case", () => {
+    // Build the full pilot matrix, then RE-PLACE the migration product family's
+    // current-grounded primary run with a fallback variant: its directory name
+    // is suffixed `-fallback` while its manifest.runId is the canonical form.
+    const matrixRuns = matrix.runs;
+    const matrixScorecards = matrix.scorecards;
+
+    // The canonical runId the fallback manifest reports (matches what the
+    // scorecard binds via runId). The fallback directory is suffixed.
+    const fallbackRunId = "c2-run-openai-named-inspiration-migration-current-grounded-primary-1";
+    const fallbackRunDir = `${fallbackRunId}-fallback`;
+    const fallbackOutputSha = shaOf({ runId: fallbackRunId, marker: "fallback-output" });
+
+    // Replace the migration current-grounded openai run with a fallback whose
+    // runDir differs from its manifest.runId.
+    const runs = matrixRuns.map((r) => {
+      if (
+        r.family === "migration" &&
+        r.manifest.provider === "openai" &&
+        r.manifest.condition === "current-grounded"
+      ) {
+        return makeRun({
+          family: "migration",
+          condition: "current-grounded",
+          provider: "openai",
+          runId: fallbackRunId,
+          runDir: fallbackRunDir,
+          runOutputSha256: fallbackOutputSha,
+        });
+      }
+      return r;
+    });
+
+    // The matching scorecard must bind the fallback runId + output hash.
+    const scorecards = matrixScorecards.map((s) => {
+      if (
+        s.family === "migration" &&
+        s.condition === "current-grounded" &&
+        matrixRuns.find((r) => r.manifest.runId === s.scorecard.runId)?.manifest.provider === "openai"
+      ) {
+        return {
+          ...s,
+          scorecard: makeScorecard({
+            runId: fallbackRunId,
+            runOutputSha256: fallbackOutputSha,
+          }),
+        };
+      }
+      return s;
+    });
+
+    const proposal = buildProposal(runs, scorecards);
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const frozen = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      runs,
+      scorecards,
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+
+    // Find the fallback run's ref. It MUST point at the `-fallback` directory
+    // (runDir), NOT the canonical runId directory. Using runId would point at
+    // the FAILED run's directory (which has no score.json) and the ref would
+    // fail to resolve.
+    const fallbackRef = frozen.runManifestRefs.find(
+      (ref) => ref.artifactId === `c2-run-manifest-${fallbackRunId}`,
+    );
+    expect(fallbackRef).toBeDefined();
+    expect(fallbackRef!.path).toBe(`eval/c2/runs/${fallbackRunDir}/manifest.json`);
+    // The path must NOT match the canonical runId directory (the bug case).
+    expect(fallbackRef!.path).not.toBe(`eval/c2/runs/${fallbackRunId}/manifest.json`);
+    // The sha256 must bind the fallback manifest's canonical JSON — so path
+    // and hash agree (the original bug was path=runId dir, hash=fallback
+    // manifest).
+    expect(fallbackRef!.sha256).toBe(
+      sha256Hex(
+        Buffer.from(
+          canonicalJsonStringify(
+            runs.find((r) => r.runDir === fallbackRunDir)!.manifest,
+          ),
+          "utf-8",
+        ),
+      ),
+    );
+
+    // No ref anywhere in the frozen artifact may point at the canonical runId
+    // directory (the failed-run path). Every ref must use a runDir.
+    for (const ref of frozen.runManifestRefs) {
+      expect(ref.path).not.toBe(`eval/c2/runs/${fallbackRunId}/manifest.json`);
+    }
   });
 });

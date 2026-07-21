@@ -784,7 +784,12 @@ function loadCalibrationRuns(runsDir: string): CalibrationRun[] {
     if (!family) {
       throw new Error(`[c2-propose] run ${manifest.runId} caseId ${caseId} has no pilot family mapping`);
     }
-    runs.push({ manifest, score, caseId, family });
+    // Record the actual directory name (`entry.name`) so the frozen-calibration
+    // ref's path points at the on-disk location. A fallback run's directory is
+    // suffixed `-fallback` while its manifest.runId carries the canonical
+    // (un-suffixed) identifier; using `entry.name` (not `manifest.runId`) keeps
+    // the ref's path and hash in agreement.
+    runs.push({ manifest, score, caseId, family, runDir: entry.name });
   }
   return runs;
 }

@@ -101,6 +101,16 @@ export interface CalibrationRun {
   family: C2CaseFamily;
   /** Case ID derived from the package / brief. */
   caseId: string;
+  /**
+   * The actual directory name under `eval/c2/runs/` that holds this run's
+   * `manifest.json` + `score.json`. This MAY differ from `manifest.runId` —
+   * e.g. a fallback run whose directory is suffixed `-fallback` while its
+   * manifest's `runId` carries the canonical (un-suffixed) identifier. The
+   * frozen-calibration ref's `path` MUST use `runDir` (the real on-disk
+   * location) so a fresh clone can resolve the file the ref's SHA-256 binds;
+   * using `manifest.runId` would point at the wrong directory in that case.
+   */
+  runDir: string;
 }
 
 /** One finalized canonical scorecard, keyed for calibration. */
@@ -733,8 +743,13 @@ export function freezeCalibration(input: FreezeCalibrationInput): C2FrozenCalibr
   // 8. Build run/scorecard refs from the supplied backing evidence (or fall
   //    back to a single placeholder ref when the caller did not supply them).
   //    The CLI always supplies them; the e2e test exercises the full path.
+  //    manifestRef takes the whole run (not just the manifest) so it can build
+  //    the path from `run.runDir` — the actual on-disk directory name, which
+  //    may differ from `manifest.runId` (e.g. a fallback run whose directory is
+  //    suffixed `-fallback`). Using `runId` for the path would point at the
+  //    wrong directory and the ref would fail to resolve in a fresh clone.
   const runManifestRefs = input.runs && input.runs.length > 0
-    ? input.runs.map((r) => manifestRef(r.manifest))
+    ? input.runs.map((r) => manifestRef(r))
     : [proposalRef(proposal)];
   const scorecardRefs = input.scorecards && input.scorecards.length > 0
     ? input.scorecards.map((s) => scorecardRef(s.scorecard))
@@ -782,11 +797,20 @@ function sameCompatibility(a: IndependentCompatibility, b: IndependentCompatibil
   );
 }
 
-function manifestRef(manifest: C2EvaluationRunManifestV2): ArtifactFileRef {
+/**
+ * Build a frozen-calibration ref for one run's manifest. Uses `run.runDir`
+ * (the actual on-disk directory name) for the path so a fresh clone can
+ * resolve the file the SHA-256 binds — NOT `run.manifest.runId`, which may
+ * disagree with the directory name (e.g. a fallback run whose directory is
+ * suffixed `-fallback` while its manifest's `runId` carries the canonical
+ * un-suffixed identifier). The hash is over the manifest's canonical JSON
+ * (stable across on-disk key ordering), so path + hash always agree.
+ */
+function manifestRef(run: CalibrationRun): ArtifactFileRef {
   return {
-    artifactId: manifest.artifactId,
-    path: `eval/c2/runs/${manifest.runId}/manifest.json`,
-    sha256: sha256Hex(Buffer.from(canonicalJsonStringify(manifest), "utf-8")),
+    artifactId: run.manifest.artifactId,
+    path: `eval/c2/runs/${run.runDir}/manifest.json`,
+    sha256: sha256Hex(Buffer.from(canonicalJsonStringify(run.manifest), "utf-8")),
   };
 }
 

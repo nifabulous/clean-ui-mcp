@@ -15,20 +15,43 @@
 
 ### The 8 metric IDs (`MetricIdSchema`)
 
-| # | Metric ID | Fixed floor | Floor source |
-|---|-----------|------------|--------------|
-| 1 | `pattern-type-exact-accuracy` | **0.90** | `C2_REPLACEMENT_METRIC_FLOORS` |
-| 2 | `categories-macro-f1` | **0.85** | `C2_REPLACEMENT_METRIC_FLOORS` |
-| 3 | `components-precision` | **0.90** | `C2_REPLACEMENT_METRIC_FLOORS` |
-| 4 | `components-recall` | **none** (baseline-bound only) | `requiredFloor = baselineValue` |
-| 5 | `domain-tags-precision` | **0.90** | `C2_REPLACEMENT_METRIC_FLOORS` |
-| 6 | `domain-tags-recall` | **none** (baseline-bound only) | `requiredFloor = baselineValue` |
-| 7 | `structured-critique-schema-validity` | **1.0** | `C2_REPLACEMENT_METRIC_FLOORS` |
-| 8 | `scorable-recommendation-citation-rate` | **0.90** | `C2_REPLACEMENT_METRIC_FLOORS` |
+| # | Metric ID | Fixed floor | Baseline-bound | Effective floor |
+|---|-----------|------------|----------------|----------------|
+| 1 | `pattern-type-exact-accuracy` | **0.90** | yes | `max(0.90, baselineValue)` |
+| 2 | `categories-macro-f1` | **0.85** | yes | `max(0.85, baselineValue)` |
+| 3 | `components-precision` | **0.90** | no | **0.90** |
+| 4 | `components-recall` | **none** | yes | `baselineValue` |
+| 5 | `domain-tags-precision` | **0.90** | no | **0.90** |
+| 6 | `domain-tags-recall` | **none** | yes | `baselineValue` |
+| 7 | `structured-critique-schema-validity` | **1.0** | no | **1.0** |
+| 8 | `scorable-recommendation-citation-rate` | **0.90** | no | **0.90** |
 
-**Effective floor computation** (`MetricSchema.superRefine`): `requiredFloor = max(fixedFloor ?? 0, baselineValue ?? 0)`. For the 2 recall metrics (4, 6), there is no fixed floor — the floor is the baseline value only. `passed === (value >= requiredFloor)`.
+**Effective floor computation** (`MetricSchema.superRefine`): `requiredFloor = max(fixedFloor ?? 0, baselineValue ?? 0)`. Four metrics (1, 2, 4, 6) require a non-null baseline value; only the two recall metrics without a fixed floor use the baseline as their entire floor. `passed === (value >= requiredFloor)`.
 
-**Important correction:** The Pass 3 plan's draft said "8 metric floors." There are 8 metric IDs but only **6 fixed floors**. The 2 recall metrics are baseline-bound only (a deliberate design: `baselineBound` set in the schema lists the recall metrics). Do not assert "8 fixed floors" in tests or docs.
+**Baseline-value binding:** Before either independent label submission is accepted, create `eval/c2/label-integrity/baseline-metrics.json` containing one value for each of the four baseline-bound IDs, the source artifact references used to compute those values, and a SHA-256 over the canonical file. The agreement report must bind this artifact and reject a missing, stale, or first-submission-derived baseline. No implementation may default a missing baseline to zero.
+
+The artifact contract is:
+
+```ts
+type C2LabelIntegrityBaselineMetrics = {
+  schemaVersion: "1.0";
+  artifactType: "c2-label-integrity-baseline-metrics";
+  artifactId: string;
+  sourceRefs: ArtifactFileRef[];
+  values: {
+    "pattern-type-exact-accuracy": number;
+    "categories-macro-f1": number;
+    "components-recall": number;
+    "domain-tags-recall": number;
+  };
+  artifactSha256: string;
+};
+```
+
+`sourceRefs` must point to the parent-authority baseline evidence, not either Pass 3 submission. A missing parent-authority baseline is a human/spec gate and blocks agreement computation.
+`artifactSha256` is computed over the canonical artifact with the `artifactSha256` field omitted.
+
+**Important correction:** There are 8 metric IDs, 6 fixed floors, and 4 baseline-bound metrics. Do not assert "8 fixed floors" or describe only the recall metrics as baseline-bound.
 
 ---
 
@@ -86,6 +109,22 @@ The spec lists **9 closure bullets** (not 8 — see FLAG 7.5):
 - Unresolved evidence references: **zero**
 - Only label-permitted authority lanes
 - All required screen states and mobile rules present
+
+### C8 quantitative rule
+
+Use finalized human scorecards for the same case in the brief-only and current-grounded conditions. Every score must be present and bound to the run-output hash; missing or failed pairs fail C8 rather than being dropped.
+
+For each scored dimension `d`, calculate equal-case-weighted means over all 20 product + migration cases:
+
+```text
+delta[d] = mean(currentGrounded[case][d] - briefOnly[case][d])
+```
+
+C8 product/migration benefit passes iff the six-dimension mean `mean_d(delta[d]) >= frozen.materialBenefitMinimum` and every dimension satisfies `delta[d] >= -frozen.regressionTolerance`. This permits a small bounded dimension regression but prevents aggregate improvement from hiding a material one. Safety passes iff all five current-grounded safety candidates satisfy the deterministic safety gate, all five are safety-compliant, and for every dimension the current-grounded safety mean is not more than `frozen.regressionTolerance` below the brief-only safety mean. No score improvement offsets a deterministic or safety failure.
+
+### C9 quantitative rule
+
+C9 passes only when the independent compatibility evaluation has all six values: `criticalDecisionCoverageComplete === true`, `contradictoryCriticalDecisions === false`, `constraintsRespected === true`, `forbiddenClaimsRespected === true`, `compatibleJourneys === true`, and `safetyPassedIndependently === true`. The current pilot freeze therefore fails C9 because coverage is false.
 
 ---
 
@@ -148,6 +187,16 @@ The spec lists **9 closure bullets** (not 8 — see FLAG 7.5):
 - **35 reproducible entries** — algorithmically selected (deterministic, hash-ordered within strata). Replacement: next hash-ordered entry in the same stratum.
 - **5 challenge entries** — curator-selected with documented rationale. Cannot duplicate the algorithmic set. Replacement: another documented challenge case.
 
+The fixed challenge entries for this baseline are:
+
+| Entry ID | Rationale |
+|----------|-----------|
+| `wealthsimple-wealthsimple-ios-screens-40-2026-07-05` | cautionary mobile dashboard; exercises mobile/state and accessibility review |
+| `wise-wise-18` | cautionary responsive fintech settings flow; exercises responsive/state coverage |
+| `workable-workable-2` | cautionary responsive enterprise dashboard; exercises platform and product-family coverage |
+| `juicebox-juicebox-2` | cautionary empty-state; exercises failure-state and evidence-discipline review |
+| `cash-app-cash-app-4` | cautionary onboarding; exercises multi-step state and accessibility review |
+
 ### Stratification axes (7, exact order from spec §4.4)
 
 1. product family
@@ -161,7 +210,7 @@ The spec lists **9 closure bullets** (not 8 — see FLAG 7.5):
 ### Selection procedure (from the parent agent-readiness spec)
 
 1. Compute each candidate's strata from the frozen corpus
-2. Sort within each stratum by `sha256("<seed>:<entry-id>")` where seed = `"clean-ui-retag-v1"`
+2. Sort using the deterministic priority `sha256("clean-ui-retag-v1:<entry-id>")`
 3. Select required count per stratum
 4. Add 5 challenge entries (curator-selected, rationale-bearing)
 
@@ -212,7 +261,7 @@ Single documented exception (`STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION`): `product
 These flags were surfaced during spec-lock extraction. Each blocks a specific downstream task until resolved.
 
 ### FLAG 7.1 — 8 metric IDs, only 6 fixed floors (RESOLVED in §1)
-The 2 recall metrics (`components-recall`, `domain-tags-recall`) have no fixed floor — they are baseline-bound only. **Resolution:** recorded in §1. Tests must not assert 8 fixed floors.
+There are 8 metric IDs, 6 fixed floors, and 4 baseline-bound metrics (`pattern-type-exact-accuracy`, `categories-macro-f1`, `components-recall`, `domain-tags-recall`). **Resolution:** recorded in §1. Tests must not assert 8 fixed floors or permit missing baseline values for those four IDs.
 
 ### FLAG 7.2 — Floors live in code, not spec prose (RESOLVED)
 The 6 fixed floors are in `C2_REPLACEMENT_METRIC_FLOORS` (code), not the spec. **Resolution:** §1 records the code constant as the source of truth.
@@ -225,7 +274,7 @@ The frozen values (0.1 / 0.05) are pilot calibration outputs, not spec-mandated 
 - (a) re-freeze with `criticalDecisionCoverageComplete: true` (requires resolving the stablecoin Claude truncation — the 4096-token ceiling), OR
 - (b) explicitly record closure as blocked on partial compatibility (C2 stays open).
 
-The Pass 3 closure evaluator must treat this honestly: it reports the frozen checklist value and fails C9 when coverage is incomplete. It must NOT promote `false` to `true`.
+The Pass 3 closure evaluator must treat this honestly: it reports the pilot checklist value and fails C9 when coverage is incomplete. It must NOT promote `false` to `true`. A later re-freeze may replace the pilot checklist only when a new human-authored compatibility evaluation is bound to the five independent baseline runs and the new proposal; no CLI synthesis or boolean override is valid.
 
 ### FLAG 7.5 — 9 closure bullets, not 8 (RESOLVED in §3)
 The spec lists 9 closure bullets (C1-C9). The plan's draft said "8." **Resolution:** §3 records all 9.
@@ -239,15 +288,69 @@ The label-integrity selection requires `corpusGitSha` + `corpusSha256`. These ar
 ### FLAG 7.8 — Deterministic scorer thresholds (§8) enforcement location
 The 1.0/zero deterministic thresholds are stated in spec §8. Their code enforcement is in the existing scorer (`src/c2/scorer.ts`) and deterministic-contract gate. Pass 3's closure evaluator should delegate to the existing scorer rather than re-implementing these checks.
 
+### FLAG 7.9 — Selection feature extraction and quotas (RESOLVED below)
+
+The seven axes are represented as independent normalized buckets, not one seven-way composite key. Missing values use the literal bucket `unknown`. The canonical extractors are:
+
+| Axis | Normalization |
+|------|---------------|
+| product family | `entry.industryVertical ?? "unknown"` |
+| platform | `entry.platform ?? "unknown"` |
+| evidence quality | `entry.qualityTier ?? "unknown"` |
+| pattern type | `entry.patternType ?? "unknown"` |
+| responsive/state coverage | `entry.responsiveBehavior ?? "unknown"` |
+| accessibility signals | `antiPatterns.accessibilityRisks` or `legacyAccessibilityNotes` non-empty → `signals`, otherwise `none` |
+| difficult/contradictory | `qualityTier === "cautionary"` or `antiPatterns.whereThisFails` non-empty → `difficult`, otherwise `ordinary` |
+
+Challenge entries are removed first. For each axis independently, allocate a quota summing to 35 by Hamilton largest-remainder apportionment over the remaining bucket population; ties sort by bucket name. Select reproducible entries by deterministic greedy coverage: at each step score a candidate by the sum of `1 / bucketPopulation` for its under-quota buckets, then by the number of under-quota buckets, then lowest `sha256("clean-ui-retag-v1:<entry-id>")`, then lowest entry ID. If the remaining candidates cannot satisfy an unmet quota, fail closed with the axis/bucket and candidate counts; never silently rebalance. After all quotas are met, fill any remaining slots by the same hash order. The five challenge entries are explicit and rationale-bearing; they are excluded before reproducible selection.
+
+### FLAG 7.10 — Independent challenge IDs (RESOLVED below)
+
+The five independent current-grounded cases are fixed in the execution matrix: `stablecoin-home`, `finance-news-story-detail`, `public-marketing-migration`, `safety-conflicting-evidence`, and `named-inspiration-safety`. They cover product, migration, sparse/conflicting evidence, and safety. The baseline manifest must list these IDs verbatim; changing them requires a new spec-lock commit.
+
+### FLAG 7.11 — Post-baseline compatibility artifact (RESOLVED below)
+
+The pilot freeze remains the threshold source during execution. After the five independent runs and blinded scoring, a human-authored `eval/c2/baseline/compatibility-evaluation.json` binds the five run IDs, critical-decision comparisons, six checklist booleans, reviewer identity, and rationale. The final proposal/re-freeze consumes this artifact; the closure evaluator reports both the pilot C9 result and the post-baseline candidate result separately.
+
 ---
 
 ## Execution matrix (per plan Global Constraints)
 
 **Primary lane:** all 25 cases × 3 conditions (brief-only, current-grounded, gold-evidence) = 75 runs.
-**Independent lane:** the manifest-declared 5-case current-grounded subset (5 runs).
+**Independent lane:** current-grounded runs for exactly these five cases: `stablecoin-home`, `finance-news-story-detail`, `public-marketing-migration`, `safety-conflicting-evidence`, and `named-inspiration-safety` (5 runs).
 **Total planned runs:** 80.
 
-This matrix is declared in the baseline manifest (`executionMatrix` field), not inferred from code. If the gold-readiness spec requires a different matrix, the manifest must be changed before implementation.
+This matrix is declared in the baseline manifest (`executionMatrix` field) and must match this list exactly. The independent provider/model must be distinct from the primary lane and must be recorded in the manifest before paid authorization.
+
+## Post-baseline compatibility and re-freeze
+
+The pilot freeze at `eval/c2/calibration/frozen.json` remains immutable and supplies thresholds during Pass 3. The post-baseline compatibility artifact must contain:
+
+The following is a schema shape, not a valid artifact; the workflow replaces the labels with canonical values and binds the referenced hashes:
+
+```json
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-baseline-compatibility-evaluation",
+  "independentRunRefs": [
+    { "runId": "c2-run-stablecoin-home-current-grounded-independent-1", "path": "eval/c2/baseline/runs/c2-run-stablecoin-home-current-grounded-independent-1/manifest.json", "sha256": "64-hex" },
+    { "runId": "c2-run-finance-news-story-detail-current-grounded-independent-1", "path": "eval/c2/baseline/runs/c2-run-finance-news-story-detail-current-grounded-independent-1/manifest.json", "sha256": "64-hex" },
+    { "runId": "c2-run-public-marketing-migration-current-grounded-independent-1", "path": "eval/c2/baseline/runs/c2-run-public-marketing-migration-current-grounded-independent-1/manifest.json", "sha256": "64-hex" },
+    { "runId": "c2-run-safety-conflicting-evidence-current-grounded-independent-1", "path": "eval/c2/baseline/runs/c2-run-safety-conflicting-evidence-current-grounded-independent-1/manifest.json", "sha256": "64-hex" },
+    { "runId": "c2-run-named-inspiration-safety-current-grounded-independent-1", "path": "eval/c2/baseline/runs/c2-run-named-inspiration-safety-current-grounded-independent-1/manifest.json", "sha256": "64-hex" }
+  ],
+  "criticalDecisionCoverageComplete": true,
+  "contradictoryCriticalDecisions": false,
+  "constraintsRespected": true,
+  "forbiddenClaimsRespected": true,
+  "compatibleJourneys": true,
+  "safetyPassedIndependently": true,
+  "reviewerActorId": "reviewer.example",
+  "rationale": "Human explanation bound to the five independent runs."
+}
+```
+
+The values are required human-authored fields, not defaults. The artifact is invalid unless all five run IDs, their output hashes, the reviewer, and rationale are present. A final re-freeze may bind this checklist only after the artifact is human-authored and hash-verified.
 
 ---
 
@@ -255,11 +358,11 @@ This matrix is declared in the baseline manifest (`executionMatrix` field), not 
 
 A reviewer can determine from this file:
 - Every required case (§4: 25 cases, 14+4+4 new)
-- Every metric (§1: 8 IDs, 6 fixed floors + 2 baseline-bound)
+- Every metric (§1: 8 IDs, 6 fixed floors + 4 baseline-bound)
 - Every hard gate (§2: 8 IDs)
 - Every closure check (§3: 9 checks with exact thresholds)
 - The label-integrity structure (§5: 35+5, 7 stratification axes)
 - The frozen calibration's current values + limitations (§6, §7)
-- The execution matrix (80 runs)
+- The execution matrix (80 runs with five exact independent case IDs)
 
 No source-code interpretation required.

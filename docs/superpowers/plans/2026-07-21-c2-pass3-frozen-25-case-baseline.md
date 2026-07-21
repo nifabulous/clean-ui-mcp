@@ -19,8 +19,9 @@
 - The runner reads thresholds only from the frozen calibration; reject CLI threshold overrides.
 - No corpus mutation, retagging, Pass 4 work, or C2 closure is permitted in this plan.
 - Default tests and verification must make zero paid provider calls.
-- The independent execution matrix must be declared in a committed manifest. Do not infer its scope from code. This plan uses the Pass 2-compatible design: primary lane on all 25 cases × 3 conditions, independent lane on the declared 5-case current-grounded subset; change the manifest before implementation if the approved gold-readiness specification requires a different matrix.
+- The independent execution matrix is fixed in this plan and the committed manifest: current-grounded runs for `stablecoin-home`, `finance-news-story-detail`, `public-marketing-migration`, `safety-conflicting-evidence`, and `named-inspiration-safety`. Do not infer its scope from code.
 - The frozen calibration's `criticalDecisionCoverageComplete: false` remains visible in every report; it is never promoted to `true` by the evaluator.
+- The four baseline-bound label metrics (`pattern-type-exact-accuracy`, `categories-macro-f1`, `components-recall`, `domain-tags-recall`) require a separately bound baseline-metrics artifact; missing baselines fail closed.
 
 ## Evidence and File Map
 
@@ -40,7 +41,9 @@
 - `eval/c2/baseline/scorecards/` — finalized blinded scorecards after human review.
 - `eval/c2/baseline/closure-report.json` — deterministic threshold report; records pass/fail and partial compatibility.
 - `eval/c2/label-integrity/selection.json` — frozen 40-entry selection.
+- `eval/c2/label-integrity/baseline-metrics.json` — approved baseline values for the four baseline-bound metrics.
 - `eval/c2/label-integrity/agreement-report.json` — written only after two valid independent submissions exist.
+- `eval/c2/baseline/compatibility-evaluation.json` — human-authored post-baseline compatibility judgment.
 
 ### New source files
 
@@ -78,6 +81,18 @@
 
 **Commit:** `chore(c2): lock pass 3 specification and baseline`.
 
+### Task 0.3: Bind the parent-authority label baselines
+
+**Files:**
+- Create: `eval/c2/label-integrity/baseline-metrics.json`
+- Test: `src/c2/label-agreement.test.ts`
+
+- [ ] Obtain the four baseline values from the parent C2 authority and record their source artifact refs; do not calculate them from Pass 3 submissions.
+- [ ] Validate the artifact against the schema in the spec-lock and compute its canonical SHA-256.
+- [ ] Make agreement computation fail with an actionable error when the file is absent, stale, or missing any of the four IDs.
+
+**Acceptance:** The baseline artifact is independently auditable and available before either labeler submits; no default values are permitted.
+
 ## Workstream A: 40-entry label-integrity gate
 
 ### Task A1: Add the selection contract
@@ -99,20 +114,28 @@ export interface C2LabelIntegritySelection {
   schemaVersion: "1.0";
   artifactType: "c2-label-integrity-selection";
   artifactId: string;
+  selectionVersion: string;
   seed: "clean-ui-retag-v1";
-  reproducibleEntryIds: string[]; // exactly 35
-  challengeEntries: Array<{ entryId: string; rationale: string }>; // exactly 5
-  corpusSnapshotSha256: string;
-  selectionSha256: string;
+  corpusGitSha: string;
+  corpusSha256: string;
+  entries: ReadonlyArray<{
+    entryId: string;
+    cohort: "reproducible" | "challenge";
+    stratum: string;
+    selectionReason: string;
+    imageSha256: string;
+  }>; // exactly 35 reproducible + 5 challenge
 }
 
 export function buildLabelIntegritySelection(input: LabelSelectionInput): C2LabelIntegritySelection;
 ```
 
-- [ ] Write failing tests for deterministic byte identity, exactly 35 + 5 entries, no duplicates, corpus-snapshot binding, and replacement by the next hash-ordered entry within the same stratum.
-- [ ] Define strata from the existing entry fields: pattern type, platform/image dimensions, component density, and evidence quality. Persist the derived stratum for every selected entry so reviewers can audit balance.
-- [ ] Sort candidates within each stratum by `sha256("${seed}:${entryId}")`; select the configured quota.
-- [ ] Accept the five challenge entries as explicit, rationale-bearing inputs; never silently mix challenge entries into the reproducible 35.
+- [ ] Write failing tests for deterministic byte identity, exactly 35 + 5 entries, no duplicates, corpus-snapshot binding, every realizable bucket quota, and replacement by the next hash-ordered entry within the same stratum.
+- [ ] Define the seven normalized axes from the spec-lock: `industryVertical`, `platform`, `qualityTier`, `patternType`, `responsiveBehavior`, accessibility signals from `antiPatterns`, and difficult/contradictory signals from `qualityTier`/`whereThisFails`; every absent value maps to `unknown`.
+- [ ] Allocate per-axis quotas with Hamilton largest-remainder apportionment over bucket population, using bucket name as the tie-breaker.
+- [ ] Select with the deterministic rarity-weighted greedy coverage rule from the spec-lock, then hash order and entry ID as tie-breakers. Persist all seven derived buckets and quota decisions for audit.
+- [ ] Use `sha256("${seed}:${entryId}")` and entry ID only as the deterministic tie-break after the quota-coverage score.
+- [ ] Accept exactly these five challenge entries as rationale-bearing inputs: `wealthsimple-wealthsimple-ios-screens-40-2026-07-05`, `wise-wise-18`, `workable-workable-2`, `juicebox-juicebox-2`, and `cash-app-cash-app-4`; never silently mix challenge entries into the reproducible 35.
 - [ ] Parse the result with a strict Zod schema and canonicalize before hashing.
 - [ ] Run `npm test -- --run src/c2/label-selection.test.ts`.
 
@@ -138,38 +161,45 @@ export function buildLabelIntegritySelection(input: LabelSelectionInput): C2Labe
 **Files:**
 - Create: `src/c2/label-agreement.ts`
 - Test: `src/c2/label-agreement.test.ts`
+- Modify: `src/c2/evaluation-contracts.ts` and `src/c2/evaluation-contracts.test.ts` to add the required `baselineMetricsRef` to the agreement report.
 - Create: `src/scripts/collect-label-submissions.mts`
 
 **Interface:**
 
 ```ts
-export type LabelerRole = "Gold Label Owner" | "External QA";
+export type LabelerRole = "Gold Label Owner" | "QA"; // QA is the external reviewer role
 
 export interface C2IndependentLabelSubmission {
   schemaVersion: "1.0";
   artifactType: "c2-independent-label-submission";
+  artifactId: string;
+  selectionArtifactId: string;
   selectionSha256: string;
-  labelerActorId: string;
-  labelerRole: LabelerRole;
-  entries: ReadonlyArray<C2EntryLabel>; // exactly the 40 selected entries
-  submittedAt: string;
+  submissionVersion: string;
+  actorId: string;
+  actorKind: "human";
+  reviewerRole: LabelerRole;
+  sealedAt: string;
+  labels: ReadonlyArray<C2EntryLabel>; // exactly the 40 selected entries
 }
 
 export function computeLabelAgreement(
   gold: C2IndependentLabelSubmission,
   qa: C2IndependentLabelSubmission,
   thresholds: LabelAgreementThresholds,
+  baselineMetrics: C2LabelIntegrityBaselineMetrics,
 ): C2LabelAgreementReport;
 ```
 
 - [ ] Reject submissions with the same actor ID, same role, wrong selection hash, missing entry IDs, duplicate IDs, or non-canonical ordering.
+- [ ] Require `eval/c2/label-integrity/baseline-metrics.json` before computing agreement; bind its hash and all four baseline-bound values into the report. Never derive baseline values from either current submission.
 - [ ] Compute the eight spec-locked metrics and their per-metric pass/fail decisions.
 - [ ] Return `Qualified` only when every hard gate passes; otherwise return `Replacement not justified` with machine-readable failures.
 - [ ] Keep adjudication separate: disagreement must be reported before any adjudicated label is recorded.
 - [ ] Test exact agreement, one-metric failure, cross-entry disagreement, tampered selection hash, and same-labeler misuse.
 - [ ] The collection script must refuse to synthesize a missing external QA submission.
 
-**Gate A2:** selection and agreement tooling is ready; actual labeling remains blocked until an external QA reviewer is available.
+**Gate A2:** selection and agreement tooling is ready; actual labeling remains blocked until an external QA reviewer and the approved baseline-metrics artifact are available.
 
 ### Task A4: Human labeling gate (blocked)
 
@@ -206,7 +236,8 @@ export const C2BaselineManifestSchema = z.object({
 ```
 
 - [ ] Reject duplicate case IDs, wrong family counts, missing gold-evidence bindings, and a calibration ref whose file hash does not match.
-- [ ] Validate the execution matrix as data, including the exact independent subset and conditions.
+- [ ] Validate the execution matrix as data: primary all 25 cases × 3 conditions, plus current-grounded independent runs for `stablecoin-home`, `finance-news-story-detail`, `public-marketing-migration`, `safety-conflicting-evidence`, and `named-inspiration-safety`.
+- [ ] Compute `manifestSha256` over the canonical manifest with the `manifestSha256` field omitted; compare that preimage hash during validation so the self-hash is reproducible.
 - [ ] Keep this schema separate from `C2PilotManifestSchema`; do not change the three-case pilot contract.
 - [ ] Add tests for every count and binding failure.
 
@@ -231,7 +262,7 @@ export interface ClosureEvaluationInput {
 export function evaluateC2Closure(input: ClosureEvaluationInput): C2ClosureReport;
 ```
 
-- [ ] Implement each spec-locked check independently: family implementation-ready counts, overall count, product dimension means, no score below 3, material benefit, regression tolerance, safety non-inferiority, and independent compatibility.
+- [ ] Implement all nine spec-locked checks independently: deterministic current-grounded gate, no score below 3, product dimension means, product count, migration count, safety count, overall count, material benefit/non-inferiority, and independent compatibility.
 - [ ] Bind every scorecard to its run ID and output hash before aggregating.
 - [ ] Use the frozen calibration's material-benefit minimum, regression tolerance, and budget values; reject caller-supplied overrides.
 - [ ] Report partial Claude compatibility exactly as frozen (`criticalDecisionCoverageComplete: false`) and make the compatibility check fail/partial according to the spec; never reinterpret it as complete.
@@ -239,6 +270,8 @@ export function evaluateC2Closure(input: ClosureEvaluationInput): C2ClosureRepor
 - [ ] Run `npm test -- --run src/c2/closure-evaluator.test.ts`.
 
 **Gate B1:** all closure checks compute deterministically on synthetic data and the three Pass 2 pilots without network access.
+
+The evaluator must implement C8 exactly as specified: equal-case-weighted per-dimension deltas over the 20 product/migration case pairs, six-dimension mean delta at least the frozen material-benefit minimum, no dimension below negative frozen regression tolerance, and five-of-five safety compliance plus non-inferiority. Missing or failed pairs fail closed. C9 passes only when all six compatibility booleans satisfy the spec-lock; the pilot freeze therefore produces an explicit C9 failure.
 
 ### Task B3: Build the baseline runner around existing harness primitives
 
@@ -257,7 +290,23 @@ export function evaluateC2Closure(input: ClosureEvaluationInput): C2ClosureRepor
 
 **Gate B2:** runner validates and evaluates the three pilots offline; no paid authorization is implicit.
 
-### Task B4: Author and review the 22 new cases
+### Task B4: Add the post-baseline compatibility evaluation contract
+
+**Files:**
+- Create: `src/c2/baseline-compatibility.ts`
+- Test: `src/c2/baseline-compatibility.test.ts`
+- Create: `eval/c2/baseline/compatibility-evaluation.template.json`
+
+- [ ] Require exactly the five manifest-pinned independent run IDs and their output hashes.
+- [ ] Store them as five `ArtifactFileRef` objects in `independentRunRefs`, using the exact run IDs and paths from the baseline manifest.
+- [ ] Require all six checklist booleans, a distinct human reviewer ID, and a non-empty rationale.
+- [ ] Reject `cliSynthesized`, missing coverage, duplicate run IDs, or a run/provider/model mismatch with the baseline manifest.
+- [ ] Make the artifact the only permitted source for the post-baseline re-freeze checklist; the pilot frozen checklist remains immutable.
+- [ ] Test missing product coverage, tampered output hash, synthesized checklist, and a valid human-authored evaluation.
+
+**Gate B2.5:** a human-authored compatibility artifact can be validated and bound, but no value is fabricated and no re-freeze occurs automatically.
+
+### Task B5: Author and review the 22 new cases
 
 **Files:**
 - Create 14 product packages under `eval/c2/baseline/`.
@@ -276,21 +325,22 @@ export function evaluateC2Closure(input: ClosureEvaluationInput): C2ClosureRepor
 
 **Gate B3:** 25 cases are reviewed, frozen, content-addressed, and the manifest is byte-stable. This gate does not imply Workstream A has passed.
 
-### Task B5: Execute, blind-score, and evaluate the baseline
+### Task B6: Execute, blind-score, and evaluate the baseline
 
 **Files:**
 - Create: `eval/c2/baseline/runs/`, `eval/c2/baseline/scorecards/`, and `eval/c2/baseline/closure-report.json` only after authorization.
 - Modify: none of the Pass 2 artifacts.
 
 - [ ] Run `prepare` and review the forecast; stop if any run exceeds the frozen per-run or campaign cap.
-- [ ] Obtain explicit authorization for the declared matrix (primary 25 × 3 conditions plus the manifest-declared independent subset).
+- [ ] Obtain explicit authorization for the declared 80-run matrix: primary 25 × 3 conditions plus current-grounded independent runs for `stablecoin-home`, `finance-news-story-detail`, `public-marketing-migration`, `safety-conflicting-evidence`, and `named-inspiration-safety`.
 - [ ] Execute with audit logging and preserve terminal manifests for every attempted run, including bounded retries and failure reasons.
 - [ ] Generate blinded review packets with no provider, model, condition, or case metadata.
 - [ ] Have the Gold Label Owner score the required packets; finalize scorecards with run/output hash binding.
 - [ ] Run the closure evaluator and write `closure-report.json` with every threshold, denominator, result, and failure reason.
+- [ ] After scoring, collect the human-authored compatibility evaluation for the five independent runs; do not derive it from score completeness.
 - [ ] Do not rerun indefinitely for stochastic failures; use only the retry policy declared in the spec-lock and record exclusions explicitly.
 
-**Gate B4:** decision-quality baseline has a deterministic closure report. It passes only if every B threshold passes and the independent-compatibility limitation is accepted by the governing spec.
+**Gate B4:** decision-quality baseline has a deterministic closure report and a separately validated human compatibility artifact. It passes only if all nine checks pass; the pilot freeze's partial C9 remains a recorded failure until the post-baseline compatibility artifact supports a new freeze.
 
 ## Final C2 closure gate
 
@@ -299,12 +349,13 @@ Create a machine-readable gate report that requires both conditions:
 ```ts
 const canCloseC2 = labelIntegrity.status === "Qualified"
   && decisionQuality.status === "Passed"
-  && closureReport.independentCompatibility.criticalDecisionCoverageComplete === true;
+  && compatibilityEvaluation.criticalDecisionCoverageComplete === true;
 ```
 
 - [ ] Verify Workstream A has two independent labeler submissions and a qualified agreement report.
 - [ ] Verify Workstream B has a passing closure report for all thresholds.
-- [ ] Resolve the frozen calibration's current partial Claude coverage or explicitly record closure as blocked; do not silently override it.
+- [ ] Validate the post-baseline compatibility artifact and, only if it passes, prepare a new proposal/re-freeze with its exact checklist and evidence hashes.
+- [ ] If C9 remains partial, explicitly record closure as blocked; do not silently override the pilot checklist.
 - [ ] Obtain the required human authorization for closure.
 - [ ] Only then prepare a separate closure/retagging proposal. This plan does not execute that mutation.
 
@@ -315,9 +366,10 @@ const canCloseC2 = labelIntegrity.status === "Qualified"
 3. `feat(c2): add independent label agreement tooling` — Task A3.
 4. `feat(c2): add frozen 25-case manifest and closure evaluator` — Tasks B1–B2.
 5. `feat(c2): add offline baseline runner` — Task B3.
-6. `feat(c2): add reviewed 25-case baseline content` — Task B4.
-7. `feat(c2): record authorized baseline evidence and closure report` — Task B5, only after paid authorization.
-8. A separate closure PR after both independent gates pass.
+6. `feat(c2): add post-baseline compatibility contract` — Task B4.
+7. `feat(c2): add reviewed 25-case baseline content` — Task B5.
+8. `feat(c2): record authorized baseline evidence and closure report` — Task B6, only after paid authorization.
+9. A separate closure PR after both independent gates pass.
 
 ## Verification checklist
 

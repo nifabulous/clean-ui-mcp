@@ -265,6 +265,11 @@ const ALLOWLIST = new Set<string>([
   // c2/cost-policy.ts — assertRunBudget / assertCampaignBudget are called by the
   // C2 harness (src/c2/harness.ts) after every forecast; preflightCampaignCosts
   // is called by the C2 pilot CLI (src/scripts/run-c2-pilot.ts) before every
+  // c2/baseline-manifest.ts — computeManifestSha256 is the pure self-hash helper
+  // consumed by the baseline builder script (Task B3, not yet implemented) and
+  // the closure evaluator's manifest-binding step. Same foundation-awaiting-caller
+  // pattern as computeLabelAgreement.
+  "computeManifestSha256",
   // paid run. All three gained real production callers when the harness CLI
   // landed (PR 1) and were removed from this allowlist.
   // c2/condition-resolver.ts — resolveConditionInput is called by the C2 pilot

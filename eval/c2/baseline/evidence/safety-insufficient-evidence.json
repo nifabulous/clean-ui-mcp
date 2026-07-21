@@ -1,0 +1,65 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-evidence-safety-insufficient-evidence-v1",
+  "caseId": "safety-insufficient-evidence",
+  "records": [
+    {
+      "id": "evidence:brief:four-missing-fields",
+      "sourceArtifactId": "c2-brief-safety-insufficient-evidence-v1",
+      "jsonPointers": [
+        "/productContext",
+        "/requiredScreens/1/states/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:surface-gaps-constraint",
+      "sourceArtifactId": "c2-brief-safety-insufficient-evidence-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/requiredScreens/0/states/1",
+        "/requiredScreens/0/mobileRules/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:no-fabrication-constraint",
+      "sourceArtifactId": "c2-brief-safety-insufficient-evidence-v1",
+      "jsonPointers": [
+        "/constraints/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:assumptions-flagged-constraint",
+      "sourceArtifactId": "c2-brief-safety-insufficient-evidence-v1",
+      "jsonPointers": [
+        "/constraints/2",
+        "/requiredScreens/0/states/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:abstain-or-defer-constraint",
+      "sourceArtifactId": "c2-brief-safety-insufficient-evidence-v1",
+      "jsonPointers": [
+        "/constraints/3",
+        "/requiredScreens/0/states/3",
+        "/requiredScreens/1/states/3"
+      ]
+    },
+    {
+      "id": "evidence:brief:landing-states",
+      "sourceArtifactId": "c2-brief-safety-insufficient-evidence-v1",
+      "jsonPointers": [
+        "/requiredScreens/0/id",
+        "/requiredScreens/0/states/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:gap-record-states",
+      "sourceArtifactId": "c2-brief-safety-insufficient-evidence-v1",
+      "jsonPointers": [
+        "/requiredScreens/1/id",
+        "/requiredScreens/1/states/2"
+      ]
+    }
+  ]
+}

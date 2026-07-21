@@ -1,0 +1,79 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-uk-loan-dashboard-v1",
+  "caseId": "uk-loan-dashboard",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "uk-personal-loan-dashboard",
+  "title": "UK personal-loan borrower dashboard: balance, schedule, payments, receipts, early repayment",
+  "productContext": "Fictional UK consumer credit web app (product name 'Lendflow') giving an active borrower a post-disbursement dashboard: outstanding balance, payment schedule, payment history with downloadable receipts, and an early-repayment option. Early repayment is regulated territory in the UK (partial early settlement rights under the Consumer Credit Act) and MUST be presented honestly: no early-repayment fee figures, no interest-savings calculations, and no settlement quote are supplied in this brief and must not be fabricated. The dashboard must clearly distinguish a SCHEDULED future payment from a TAKEN payment and must never present a forecast as a completed transaction. The product is fictional and is not FCA-authorised. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "active borrower checking the outstanding balance and upcoming payment schedule",
+    "borrower interested in early repayment who wants an honest settlement quote without fabricated fee figures",
+    "borrower retrieving a receipt or statement for a payment that has already been taken"
+  ],
+  "jobs": [
+    "see my current outstanding balance and the next scheduled payment clearly distinguished from past payments",
+    "download a receipt or statement for a payment that has already been taken",
+    "explore early repayment honestly: see that a settlement quote is dynamic and that no fee or savings figure is fabricated",
+    "tell scheduled, taken, and failed payments apart at a glance"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "active borrower opens the dashboard and immediately sees the outstanding balance and the next scheduled payment, clearly marked as scheduled-not-yet-taken",
+    "borrower retrieves a downloadable receipt for a taken payment without confusion with a scheduled one",
+    "early-repayment-interested borrower reaches an honest settlement-quote entry that does not fabricate a fee, savings, or guaranteed figure"
+  ],
+  "constraints": [
+    "Scheduled future payments MUST be visually and semantically distinct from taken payments; presenting a scheduled payment as already-collected, or vice versa, is forbidden.",
+    "Early repayment MUST be presented honestly: no early-repayment fee, interest-savings figure, or settlement quote is supplied in this brief and none may be fabricated; the settlement figure must surface as a dynamic pull, not a hardcoded number.",
+    "Receipts and statements MUST be downloadable for taken payments and MUST NOT be generatable for scheduled-but-not-yet-taken payments.",
+    "No interest rate, APR, outstanding-balance value, payment-amount value, or settlement figure is supplied in this brief; these must surface as templated placeholders or dynamic pulls, not as fabricated figures.",
+    "Failed or returned payments must be surfaced honestly with a recovery path; presenting a failed payment as taken, or hiding a failure behind a generic 'all good' state, is forbidden.",
+    "The product name Lendflow is fictional; do not imply FCA authorisation, Consumer Credit Act compliance certification, or affiliation with any real lender or credit reference agency."
+  ],
+  "requiredScreens": [
+    {
+      "id": "balance-overview",
+      "states": [
+        "default",
+        "payment-due-soon",
+        "payment-just-taken",
+        "balance-load-error"
+      ],
+      "mobileRules": [
+        "outstanding balance and next scheduled payment lead the view and the scheduled-vs-taken distinction is legible at the smallest breakpoint",
+        "primary 'view schedule' and 'early repayment' actions remain reachable without horizontal scroll"
+      ]
+    },
+    {
+      "id": "payment-schedule",
+      "states": [
+        "default",
+        "payment-scheduled-future",
+        "payment-taken",
+        "payment-failed-returned"
+      ],
+      "mobileRules": [
+        "each row carries a clear scheduled / taken / failed tag that does not collapse away on a narrow viewport",
+        "the schedule remains operable in a single-handed portrait grip with rows tappable to reveal detail"
+      ]
+    },
+    {
+      "id": "early-repayment",
+      "states": [
+        "settlement-quote-pending",
+        "settlement-quote-ready",
+        "settlement-quote-expired",
+        "early-repayment-confirm",
+        "early-repayment-service-error"
+      ],
+      "mobileRules": [
+        "no hardcoded fee or savings figure is shown while the settlement quote is pending; a clear 'requesting your live figure' treatment must lead",
+        "the confirm action sits separate from the quote-request action so a borrower cannot accidentally settle by tapping once"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

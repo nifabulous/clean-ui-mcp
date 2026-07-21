@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-uk-loan-decision-v1",
+  "caseId": "uk-loan-decision",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "uk-personal-loan-decision",
+  "title": "UK personal-loan decision explanation, agreement review, acceptance, and disbursement tracking",
+  "productContext": "Fictional UK consumer credit web app (product name 'Lendflow') presenting a loan decision to a borrower after a full application: the borrower may be APPROVED, DECLINED, or referred for manual review. For approved borrowers the flow proceeds to agreement review, acceptance, and disbursement tracking. For declined borrowers the flow MUST surface a clear, honest decline reason without misleading appeal language: 'you may still be approved elsewhere' or 'try again with a co-signer' are dark patterns when the decline is final and the affordability data was used. The product is fictional and is not FCA-authorised; the brief deliberately does not supply the decline-reason taxonomy, the agreement's exact clauses, or a guaranteed disbursement time. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "approved borrower reviewing the credit agreement before accepting the loan",
+    "declined borrower trying to understand why the application was not accepted and what honest options remain",
+    "borrower whose application was referred for manual review and is waiting for a final outcome"
+  ],
+  "jobs": [
+    "understand the decision clearly: approved, declined, or referred, with a plain-language reason that is not misleading",
+    "if approved, review the credit agreement, accept it, and track disbursement to my bank account",
+    "if declined, get an honest explanation and legitimate next steps (e.g., free debt advice, correcting errors), not false hope",
+    "if referred, see the manual-review status without being led to treat it as a likely approval"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "approved borrower reviews the agreement, accepts it, and reaches a disbursement-tracking view that shows status without inventing a guaranteed payout time",
+    "declined borrower reaches a clear decline reason and legitimate support routes, with no misleading appeal language presented as a viable path",
+    "referred borrower sees the manual-review status framed honestly as pending, not as a soft approval"
+  ],
+  "constraints": [
+    "Decline reasons MUST be honest and specific enough to be useful; final declines must NOT be paired with misleading appeal language such as 'you may still be approved', 'try again with a co-signer', or 'reapply now' when the affordability data was already used.",
+    "Accepting the credit agreement MUST be an explicit, un-coerced action: pre-ticked acceptance, acceptance bundled with marketing preferences, or hiding key clauses behind a collapse are forbidden.",
+    "No decline-reason taxonomy, agreement clause set, or guaranteed disbursement time is supplied in this brief; these must surface as clearly-templated placeholders or dynamic pulls, not as fabricated figures or invented clauses.",
+    "Referred-for-manual-review must be framed honestly as pending; presenting a referral as a soft approval, a likely approval, or a queue position with a fake estimated time is forbidden.",
+    "Free, independent debt advice and complaint routes must be reachable from the decline path without being framed as upsell opportunities.",
+    "The product name Lendflow is fictional; do not imply FCA authorisation, regulation, or affiliation with any real lender, credit reference agency, or debt-advice charity."
+  ],
+  "requiredScreens": [
+    {
+      "id": "decision-outcome",
+      "states": [
+        "approved",
+        "declined-final",
+        "referred-manual-review",
+        "outcome-load-error"
+      ],
+      "mobileRules": [
+        "the decision word (approved / declined / referred) leads the view and is not buried under decorative content on a narrow viewport",
+        "decline reasons and referred-status explanations remain readable at the smallest breakpoint without horizontal scrolling"
+      ]
+    },
+    {
+      "id": "agreement-review",
+      "states": [
+        "agreement-ready",
+        "clause-expanded",
+        "acceptance-required-error",
+        "accepted-locked"
+      ],
+      "mobileRules": [
+        "key clauses must be expandable inline and remain reachable, not collapsed behind a single hard-to-find control",
+        "the accept button sits separate from any marketing-preference control and is not pre-ticked"
+      ]
+    },
+    {
+      "id": "disbursement-tracking",
+      "states": [
+        "pending",
+        "in-progress",
+        "disbursed",
+        "disbursement-failed"
+      ],
+      "mobileRules": [
+        "the status timeline must not present a fabricated guaranteed payout time as concrete",
+        "the disbursement-failed state surfaces a clear recovery path without implying the loan was never approved"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

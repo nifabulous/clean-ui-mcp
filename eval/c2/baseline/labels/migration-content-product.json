@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-migration-content-product-v1",
+  "caseId": "migration-content-product",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:preserve-content-provenance",
+    "decision:blocked-routes-not-presented-as-published",
+    "decision:retain-adapt-reject-per-content-element",
+    "decision:original-not-proprietary-including-photography-and-typography"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:every-adapted-article-carries-byline-date-and-source-traced-to-inspected-route",
+    "ac:paywalled-or-draft-routes-marked-not-published-not-presented-as-live",
+    "ac:retain-adapt-or-reject-recorded-for-article-hierarchy-byline-related-content-photography-typography",
+    "ac:no-proprietary-copy-masthead-palette-photography-or-typography-reproduced"
+  ],
+  "permittedAuthorityLanes": [
+    "retain",
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:original-not-proprietary-constraint",
+    "evidence:brief:provenance-preserved-constraint",
+    "evidence:brief:blocked-routes-not-published-constraint",
+    "evidence:brief:inspected-only-constraint",
+    "evidence:brief:retain-adapt-reject-constraint",
+    "evidence:brief:content-home-states",
+    "evidence:brief:article-route-states"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:original-not-proprietary-constraint",
+    "evidence:brief:provenance-preserved-constraint",
+    "evidence:brief:blocked-routes-not-published-constraint",
+    "evidence:brief:retain-adapt-reject-constraint"
+  ],
+  "forbiddenClaims": [
+    "that a paywalled or draft route was inspected or is a live published article",
+    "reproduction of the source site's proprietary copy, masthead, exact palette, unique illustrations, photography, or distinctive typography",
+    "an article with stripped or fabricated provenance (missing byline, publish date, or source attribution)",
+    "a soft login wall that implies a blocked article is live and merely gated",
+    "an invented article, fabricated byline, or speculative related-content set not present in the snapshot",
+    "affiliation with any real publisher, masthead, syndication service, or wire service observed or implied by the source"
+  ],
+  "privateMarkers": [
+    "/corpus/private/migration-content-product/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "The adaptation strips provenance, presents a blocked route as live, or copies the source masthead/photography.",
+      "score3": "Provenance is present but partial (e.g., date without source), or a blocked route is shown behind a soft wall implying it is live.",
+      "score5": "Every adapted article carries clear byline, date, and source traced to an inspected route, and blocked routes are explicitly marked not-published."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "Content-home and article-route share no common article-card, byline, or provenance model.",
+      "score3": "Some shared tokens but the byline/date treatment drifts between feed cards and the article route.",
+      "score5": "A single direction system unifies content-home and article-route, including a consistent article-card hierarchy, byline/date anchoring, and related-content treatment."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the provenance-visible, related-content-shown, route-blocked-paywalled, or route-not-found states.",
+      "score3": "Partial blueprints with unresolved route-blocked-paywalled or route-not-found states.",
+      "score5": "Engineers can build content-home and article-route directly, including all declared states and the byline/date/source anchoring rule at every breakpoint."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A verbatim copy of the source site's copy, masthead, palette, photography, or distinctive typography.",
+      "score3": "Generic principles adapted but a proprietary identifier (masthead, photo, typeface) slips through.",
+      "score5": "Only generic structural principles are retained or adapted; proprietary copy, masthead, palette, photography, and typography are explicitly rejected with recorded decisions."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no feed-load-error, route-blocked-paywalled, or route-not-found states.",
+      "score3": "Baseline contrast and focus with partial handling of the feed-load-error and route-blocked-paywalled states.",
+      "score5": "WCAG-aligned contrast and focus across both screens, with robust feed-load-error, route-blocked-paywalled (clear not-published messaging), and route-not-found states that preserve provenance and the inspected-route boundary."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "Claims rely on a paywalled/draft route, a fabricated byline, or an invented article not in the snapshot.",
+      "score3": "Most claims trace to inspected routes but one claim overreaches into a blocked route or invents a byline.",
+      "score5": "Every claim traces to an inspected route, provenance is preserved and traceable, and paywalled/draft routes are explicitly excluded."
+    }
+  ],
+  "adjudicationNotes": [
+    "Content provenance is load-bearing: stripping byline/date/source, or fabricating provenance, fails evidence-discipline and product-appropriateness.",
+    "A blocked (paywalled or draft) route MUST be treated as not-published; presenting it as a live gated article fails evidence-discipline.",
+    "Photography and distinctive typography count as proprietary identifiers and must be rejected under originality.",
+    "retain/adapt/reject lanes are all permitted: generic content-structure principles may be retained or adapted, while proprietary identifiers must be rejected.",
+    "The brief's sourceSnapshotRef.sha256 binds the exact on-disk snapshot bytes; the manifest generator verifies this binding on every build (placeholder sha will be replaced once the real snapshot is authored)."
+  ]
+}

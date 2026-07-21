@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-uk-loan-eligibility-v1",
+  "caseId": "uk-loan-eligibility",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:soft-check-disclosure-before-submission",
+    "decision:indicative-quote-not-a-guarantee",
+    "decision:no-fabricated-apr-amount-or-approval-rate",
+    "decision:stale-quote-recheck-not-resurface"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:soft-check-disclosure-visible-before-any-personal-detail-submitted",
+    "ac:every-apr-amount-and-term-carries-indicative-only-and-not-a-guarantee",
+    "ac:no-fabricated-representative-apr-or-approval-rate-anywhere",
+    "ac:stale-quote-routed-to-recheck-never-shown-as-still-valid"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:soft-search-only-constraint",
+    "evidence:brief:indicative-not-a-guarantee-constraint",
+    "evidence:brief:no-apr-supplied-constraint",
+    "evidence:brief:disclosure-before-submission-constraint",
+    "evidence:brief:stale-quote-constraint",
+    "evidence:brief:eligibility-entry-states",
+    "evidence:brief:indicative-quote-states",
+    "evidence:brief:re-check-entry-states"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:soft-search-only-constraint",
+    "evidence:brief:indicative-not-a-guarantee-constraint",
+    "evidence:brief:no-apr-supplied-constraint",
+    "evidence:brief:disclosure-before-submission-constraint",
+    "evidence:brief:stale-quote-constraint"
+  ],
+  "forbiddenClaims": [
+    "guaranteed approval or guaranteed acceptance",
+    "a specific representative APR value not supplied in the brief",
+    "an approval rate, acceptance probability, or likelihood-of-approval percentage",
+    "a guaranteed loan amount or guaranteed term for the applicant",
+    "that the soft check improves, builds, or repairs the customer's credit file",
+    "FCA authorisation, regulation, or affiliation with any real lender or credit reference agency"
+  ],
+  "privateMarkers": [
+    "/corpus/private/uk-loan-eligibility/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "The flow performs or implies a hard search, or presents the indicative quote as a confirmed offer.",
+      "score3": "The flow is framed as a soft check but the indicative quote reads as a likely approval, or the disclosure is gated behind submission.",
+      "score5": "The soft-check nature is disclosed before any personal detail is submitted, the indicative quote is clearly not-a-guarantee, and the proceed path stays subordinate to the disclosure."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "Eligibility-entry, indicative-quote, and re-check-entry share no common treatment of the indicative-only and not-a-guarantee tags.",
+      "score3": "Some shared tokens across the three screens but the indicative-only labelling drifts between entry, quote, and re-check.",
+      "score5": "A single direction system unifies all three screens, including a consistent indicative-only badge and not-a-guarantee tag anchored to every APR, amount, and term value."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the four eligibility-entry states, four indicative-quote states, or two re-check-entry states.",
+      "score3": "Partial blueprints with unresolved quote-expired or ineligible-no-match states.",
+      "score5": "Engineers can build all three screens directly, including the soft-check-disclosure-visible, validation-error, quote-expired, ineligible-no-match, service-unavailable, and stale-quote-warning states."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of an existing UK price-comparison or eligibility-checker page that fabricates a representative APR.",
+      "score3": "Derivative of common UK eligibility-checker patterns but the not-a-guarantee treatment is visually distinguishable.",
+      "score5": "A distinct treatment that makes the indicative, soft-check, non-binding nature of the quote legible without diluting the eligibility-check job."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no quote-expired, ineligible-no-match, service-unavailable, or stale-quote-warning states.",
+      "score3": "Baseline contrast and focus with partial handling of the ineligible and service-unavailable states.",
+      "score5": "WCAG-aligned contrast and focus across all three screens, with robust quote-expired, ineligible-no-match, service-unavailable, and stale-quote-warning states that preserve the indicative-only and not-a-guarantee labels."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "A fabricated representative APR, approval rate, or likely loan amount appears anywhere in the output.",
+      "score3": "Most claims trace to the brief but one APR or approval-rate figure slips through as a concrete number.",
+      "score5": "Every claim traces to the brief, APR/amount/term figures are clearly-templated placeholders, no approval rate is asserted, and no FCA or hard-search claim appears."
+    }
+  ],
+  "adjudicationNotes": [
+    "Any fabricated representative APR, approval rate, or guaranteed loan amount is an automatic fail on evidence-discipline, regardless of how polished the layout is.",
+    "The soft-check disclosure is load-bearing: it must be visible BEFORE the customer submits personal financial detail; gating it behind submission fails product-appropriateness.",
+    "Stale indicative quotes must never be resurfaced as still-valid; the re-check-entry screen's stale-quote-warning state exists precisely to enforce this.",
+    "Do not prescribe exact copy, brand colours, or pixel-level layout; the brief fixes constraints (soft-check, indicative, not-a-guarantee), not visual identity.",
+    "Treat the absence of a representative APR value as a constraint: the design must surface it as a templated placeholder, not fill the gap with a plausible-looking number."
+  ]
+}

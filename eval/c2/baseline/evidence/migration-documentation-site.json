@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-evidence-migration-documentation-site-v1",
+  "caseId": "migration-documentation-site",
+  "records": [
+    {
+      "id": "evidence:brief:original-not-proprietary-constraint",
+      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/constraints/5"
+      ]
+    },
+    {
+      "id": "evidence:brief:inspected-only-constraint",
+      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
+      "jsonPointers": [
+        "/constraints/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:same-origin-constraint",
+      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
+      "jsonPointers": [
+        "/constraints/2",
+        "/requiredJourneys/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:retain-adapt-reject-constraint",
+      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
+      "jsonPointers": [
+        "/constraints/3",
+        "/requiredJourneys/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:no-fabricated-structure-constraint",
+      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
+      "jsonPointers": [
+        "/constraints/4"
+      ]
+    },
+    {
+      "id": "evidence:brief:docs-home-states",
+      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
+      "jsonPointers": [
+        "/requiredScreens/0/id",
+        "/requiredScreens/0/states/1",
+        "/requiredScreens/0/states/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:article-route-states",
+      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
+      "jsonPointers": [
+        "/requiredScreens/1/id",
+        "/requiredScreens/1/states/2",
+        "/requiredScreens/1/states/3"
+      ]
+    }
+  ]
+}

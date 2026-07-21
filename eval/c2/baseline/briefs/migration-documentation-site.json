@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-migration-documentation-site-v1",
+  "caseId": "migration-documentation-site",
+  "caseVersion": 1,
+  "family": "migration",
+  "stratum": "documentation-site-migration",
+  "title": "Original adaptation of a documentation-heavy product site",
+  "productContext": "A fictional developer-tools company (product name 'Docuforge') is adapting a publicly accessible documentation site at https://example.com/c2-docs-pilot/ into an original documentation surface. Documentation sites are content-heavy, navigation-critical, and route-dense: every claim must be grounded in the inspected public routes captured in the bound design-source snapshot. The crawl is unauthenticated and non-mutating. The adaptation MUST be original: it may retain or adapt only GENERIC structural principles (information architecture, left-rail navigation, heading hierarchy, code-block treatment) observed in the snapshot; it MUST NOT reproduce the source site's proprietary copy, wordmark, exact palette, unique illustrations, or distinctive iconography. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "developer navigating the documentation to integrate the product",
+    "technical writer maintaining the adapted documentation surface"
+  ],
+  "jobs": [
+    "find the right documentation route via left-rail navigation and search without losing context",
+    "read code samples and headings with a clear, retained heading hierarchy and code-block treatment",
+    "as a technical writer, author and adapt content within the same generic structural principles"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "developer lands on the migrated documentation home, scans the left-rail navigation, and reaches a representative article route with heading hierarchy intact",
+    "developer follows a same-origin internal link between two inspected routes without crossing into an uninspected or blocked route",
+    "technical writer perceives a consistent retain/adapt/reject decision across navigation, heading hierarchy, and code-block treatment"
+  ],
+  "constraints": [
+    "The adaptation MUST be ORIGINAL: it must not reproduce the source site's proprietary copy, wordmark, exact palette, unique illustrations, or distinctive iconography; only generic structural principles observed in the snapshot may be retained or adapted.",
+    "Only the routes marked 'inspected' in the bound snapshot may ground a claim; any route marked 'blocked' (e.g., an authenticated admin or draft-content route) MUST be treated as not-observed and no claim may rely on it.",
+    "Same-origin internal links between inspected routes must be preserved as a generic principle; cross-origin links or links into blocked routes must be marked clearly and not treated as part of the migrated surface.",
+    "A retain / adapt / reject decision MUST be made for every major structural element (navigation, heading hierarchy, code-block treatment, palette, iconography) and recorded explicitly; proprietary identifiers are always 'reject'.",
+    "Every claim about the source site must trace to an inspected route in the snapshot; speculative content structure, invented routes, or fabricated API references are forbidden.",
+    "The product name Docuforge is fictional; do not imply affiliation with any real documentation-platform vendor (e.g., a named docs-as-a-service product) observed or implied by the source."
+  ],
+  "requiredScreens": [
+    {
+      "id": "docs-home",
+      "states": [
+        "default",
+        "search-active",
+        "nav-collapsed-mobile"
+      ],
+      "mobileRules": [
+        "the left-rail navigation collapses into an operable drawer on narrow viewports and remains keyboard-reachable",
+        "the primary search entry stays reachable above the fold on mobile without horizontal scroll"
+      ]
+    },
+    {
+      "id": "article-route",
+      "states": [
+        "default",
+        "heading-expanded",
+        "code-block-copied",
+        "route-not-found"
+      ],
+      "mobileRules": [
+        "heading hierarchy is preserved as a generic principle and code blocks scroll horizontally inside their own container only",
+        "the on-this-page outline remains operable in a single-handed portrait grip"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": {
+    "artifactId": "c2-snapshot-migration-documentation-site-v1",
+    "artifactType": "design-source-snapshot",
+    "path": "eval/c2/baseline/source-snapshots/migration-documentation-site.json",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

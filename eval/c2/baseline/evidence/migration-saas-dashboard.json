@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-evidence-migration-saas-dashboard-v1",
+  "caseId": "migration-saas-dashboard",
+  "records": [
+    {
+      "id": "evidence:brief:original-not-proprietary-constraint",
+      "sourceArtifactId": "c2-brief-migration-saas-dashboard-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/constraints/5"
+      ]
+    },
+    {
+      "id": "evidence:brief:responsive-disagreement-constraint",
+      "sourceArtifactId": "c2-brief-migration-saas-dashboard-v1",
+      "jsonPointers": [
+        "/constraints/1",
+        "/requiredScreens/0/states/1",
+        "/requiredScreens/0/mobileRules/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:consent-banner-generic-constraint",
+      "sourceArtifactId": "c2-brief-migration-saas-dashboard-v1",
+      "jsonPointers": [
+        "/constraints/2",
+        "/requiredScreens/1/id",
+        "/requiredScreens/1/mobileRules/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:inspected-only-constraint",
+      "sourceArtifactId": "c2-brief-migration-saas-dashboard-v1",
+      "jsonPointers": [
+        "/constraints/3"
+      ]
+    },
+    {
+      "id": "evidence:brief:no-fabricated-dashboard-constraint",
+      "sourceArtifactId": "c2-brief-migration-saas-dashboard-v1",
+      "jsonPointers": [
+        "/constraints/4"
+      ]
+    },
+    {
+      "id": "evidence:brief:dashboard-shell-states",
+      "sourceArtifactId": "c2-brief-migration-saas-dashboard-v1",
+      "jsonPointers": [
+        "/requiredScreens/0/id",
+        "/requiredScreens/0/states/2",
+        "/requiredScreens/0/states/3"
+      ]
+    },
+    {
+      "id": "evidence:brief:consent-banner-states",
+      "sourceArtifactId": "c2-brief-migration-saas-dashboard-v1",
+      "jsonPointers": [
+        "/requiredScreens/1/id",
+        "/requiredScreens/1/states/2",
+        "/requiredScreens/1/states/3"
+      ]
+    }
+  ]
+}

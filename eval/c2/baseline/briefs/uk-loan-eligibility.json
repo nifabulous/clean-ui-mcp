@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-uk-loan-eligibility-v1",
+  "caseId": "uk-loan-eligibility",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "uk-personal-loan-eligibility",
+  "title": "UK personal-loan eligibility check and indicative quote",
+  "productContext": "Fictional UK consumer credit web app (product name 'Lendflow') that offers unsecured personal loans to UK residents. The eligibility flow performs a soft credit check that does not affect a customer's credit file and returns an INDICATIVE quote: it is not a loan offer, not a guarantee of approval, and not a binding commitment to lend. Representative APR, loan amounts, and repayment terms shown are illustrative examples for layout only and must be labelled as 'indicative' on every surface. The product is fictional and is not authorised or regulated by the Financial Conduct Authority; the brief deliberately does not supply a representative APR value, a loan amount range, or an approval rate. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "first-time borrower checking whether they are likely to qualify before committing to a full application",
+    "comparison shopper evaluating Lendflow against other UK personal-loan providers without affecting their credit score",
+    "returning visitor who previously received an indicative quote and wants to re-check eligibility after circumstances changed"
+  ],
+  "jobs": [
+    "find out whether Lendflow is likely to lend to me without a hard credit search",
+    "see an indicative APR, amount, and term clearly labelled as not-a-guarantee",
+    "understand that the soft check will not appear on or affect my credit file",
+    "decide whether to proceed to a full application from the indicative quote"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "first-time borrower enters minimal eligibility details and reaches an indicative quote clearly labelled as not a guarantee of approval",
+    "comparison shopper confirms the soft-check will not affect their credit file before submitting any detail",
+    "returning visitor reaches a re-check entry without being shown stale indicative figures as still-valid quotes"
+  ],
+  "constraints": [
+    "The eligibility check is a SOFT search only; the flow must explicitly state it will not affect the customer's credit file and must not perform or imply a hard search.",
+    "The indicative quote is NOT an offer and NOT a guarantee of approval; every APR, amount, and term value must carry a visible 'indicative only' and 'not a guarantee' treatment next to the value, not buried in a footer.",
+    "No representative APR value, approval rate, acceptance probability, or likely loan amount is supplied in this brief; the design must surface these as clearly-templated placeholders, not as fabricated figures.",
+    "Comparison shoppers must be able to confirm the soft-check nature of the flow BEFORE submitting personal financial details; gating the soft-check disclosure behind submission is forbidden.",
+    "Stale indicative quotes from a prior session must never be presented as still-valid; a returning visitor must be routed to a re-check, not shown an old figure as current.",
+    "The product name Lendflow is fictional; do not imply FCA authorisation, regulation, or affiliation with any real lender, credit reference agency, or price-comparison brand."
+  ],
+  "requiredScreens": [
+    {
+      "id": "eligibility-entry",
+      "states": [
+        "default",
+        "soft-check-disclosure-visible",
+        "validation-error",
+        "submitted"
+      ],
+      "mobileRules": [
+        "the soft-check disclosure must appear inline above the primary submit action, not behind a tooltip or accordion",
+        "primary submit action sits in the bottom thumb zone and remains operable in a single-handed portrait grip"
+      ]
+    },
+    {
+      "id": "indicative-quote",
+      "states": [
+        "quote-presented",
+        "quote-expired",
+        "ineligible-no-match",
+        "service-unavailable"
+      ],
+      "mobileRules": [
+        "the 'indicative only' and 'not a guarantee' tags remain anchored to each APR, amount, and term value when the layout collapses to a single column",
+        "the proceed-to-full-application action stays visually subordinate to the indicative-quote disclosure, never promoted as a confirmed offer"
+      ]
+    },
+    {
+      "id": "re-check-entry",
+      "states": [
+        "default",
+        "stale-quote-warning"
+      ],
+      "mobileRules": [
+        "the stale-quote warning appears above any re-check action and is not dismissible into a hidden state",
+        "re-check action and the abandon-and-leave action are operable without horizontal scroll"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

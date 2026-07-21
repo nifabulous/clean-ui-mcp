@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-uk-loan-application-v1",
+  "caseId": "uk-loan-application",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:hard-search-consent-before-action",
+    "decision:data-survives-session-timeout",
+    "decision:interruption-recovery-resume-exact",
+    "decision:no-fabricated-turnaround-or-document-list"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:hard-search-disclosure-precedes-consent-and-not-bundled",
+    "ac:partial-data-survives-timeout-and-re-presentable-on-return",
+    "ac:interrupted-applicant-resumes-exactly-where-they-left-off",
+    "ac:no-fabricated-decision-turnaround-or-affordability-threshold"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:hard-search-before-consent-constraint",
+    "evidence:brief:data-survives-timeout-constraint",
+    "evidence:brief:interruption-recovery-constraint",
+    "evidence:brief:no-turnaround-supplied-constraint",
+    "evidence:brief:consent-not-darkened-constraint",
+    "evidence:brief:application-step-states",
+    "evidence:brief:hard-search-consent-states",
+    "evidence:brief:document-upload-states"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:hard-search-before-consent-constraint",
+    "evidence:brief:data-survives-timeout-constraint",
+    "evidence:brief:interruption-recovery-constraint",
+    "evidence:brief:consent-not-darkened-constraint"
+  ],
+  "forbiddenClaims": [
+    "a guaranteed decision turnaround time not supplied in the brief",
+    "a specific affordability threshold or income multiple",
+    "a fixed required-document list presented as authoritative when none is supplied",
+    "pre-ticked consent for the hard credit search",
+    "consent for the hard search bundled with marketing preferences or generic terms",
+    "FCA authorisation, regulation, or affiliation with any real identity-verification vendor or credit reference agency"
+  ],
+  "privateMarkers": [
+    "/corpus/private/uk-loan-application/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "The flow triggers or implies a hard search without clear prior disclosure, or silently discards data on timeout.",
+      "score3": "A hard-search disclosure is present but bundled into generic terms, or recovery works only for some interruption types.",
+      "score5": "The hard-search disclosure precedes an un-ticked, unbundled consent, and any interrupted applicant resumes exactly where they left off with all entered data and uploads intact."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "Application-step, hard-search-consent, and document-upload share no common recovery or autosave model.",
+      "score3": "Some shared tokens across the three screens but the draft-autosaved and recovered-on-return treatments are inconsistent.",
+      "score5": "A single direction system unifies all three screens, including a consistent draft-autosaved indicator, session-timed-out routing, and recovered-on-return treatment across the full journey."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the session-timed-out, recovered-on-return, or upload-interrupted-resumable states.",
+      "score3": "Partial blueprints with unresolved session-timed-out or upload-corrupted-retry states.",
+      "score5": "Engineers can build all three screens directly, including the four application-step states, four hard-search-consent states, and five document-upload states, with the resumable-upload behaviour made explicit."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of an existing UK lender's application funnel with the same darkened consent pattern.",
+      "score3": "Derivative of common multi-step application patterns but the recovery and consent treatments are visually distinguishable.",
+      "score5": "A distinct treatment that makes the hard-search disclosure, no-data-loss guarantee, and resumable upload legible without diluting the application job."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no session-timed-out, recovered-on-return, or upload-interrupted-resumable states.",
+      "score3": "Baseline contrast and focus with partial handling of the session-timed-out and upload-interrupted states.",
+      "score5": "WCAG-aligned contrast and focus across all three screens, with robust session-timed-out, recovered-on-return, upload-interrupted-resumable, and upload-corrupted-retry states that preserve the consent boundary."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "A fabricated decision turnaround, affordability threshold, or authoritative document list appears anywhere.",
+      "score3": "Most claims trace to the brief but one turnaround or threshold figure slips through as a concrete number.",
+      "score5": "Every claim traces to the brief, decision turnaround and affordability thresholds surface as templated placeholders or dynamic pulls, and no FCA or vendor-affiliation claim appears."
+    }
+  ],
+  "adjudicationNotes": [
+    "Any fabricated decision turnaround, affordability threshold, or authoritative document list is an automatic fail on evidence-discipline.",
+    "The hard-search consent is load-bearing: pre-ticked consent, consent bundled with marketing preferences, or consent-as-prerequisite-for-summary all fail product-appropriateness.",
+    "No-data-loss is load-bearing: silently discarding entered data on session timeout, or forcing a restart after an interrupted upload, fails accessibility-and-failure-states regardless of polish.",
+    "The upload-interrupted-resumable state exists specifically to forbid restart-from-zero behaviour on metered mobile connections; do not weaken it.",
+    "Do not prescribe exact copy, brand colours, or pixel-level layout; the brief fixes constraints (hard-search-first, no-data-loss, resumable), not visual identity."
+  ]
+}

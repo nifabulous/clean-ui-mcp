@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-uk-loan-payment-difficulty-v1",
+  "caseId": "uk-loan-payment-difficulty",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "uk-personal-loan-payment-difficulty",
+  "title": "UK personal-loan payment-difficulty and support journey",
+  "productContext": "Fictional UK consumer credit web app (product name 'Lendflow') supporting a borrower who is struggling to keep up with repayments. UK regulated forbearance practice is supportive, not punitive: the journey must help the borrower disclose difficulty honestly, see legitimate options, and reach free independent debt advice, WITHOUT threats, intimidation, pressure to prioritise the Lendflow loan over essentials, or fabricated legal consequences. A support agent (internal Lendflow staff, not a third-party collections agency) may assist via the same journey. The brief deliberately does not supply a forbearance-option taxonomy, a specific repayment-plan figure, or a hardship-assessment script; these must surface as clearly-templated placeholders or dynamic pulls, not as invented terms. The product is fictional and is not FCA-authorised. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "struggling borrower who has missed or is about to miss a payment and needs supportive options without threats",
+    "borrower wanting to disclose changed circumstances (job loss, illness) and see legitimate forbearance options",
+    "support agent assisting a borrower through the same journey without punitive framing"
+  ],
+  "jobs": [
+    "disclose that I am struggling without being threatened, judged, or pressured to skip essentials",
+    "see legitimate, clearly-labelled options and reach free independent debt advice",
+    "as a support agent, follow a supportive script that does not push the borrower into an unaffordable commitment"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "struggling borrower reaches a payment-difficulty entry that is supportive in tone, surfaces legitimate options, and reaches free independent debt advice without threats or intimidation",
+    "borrower discloses changed circumstances and is routed to an affordability review that does not pressure them into an unaffordable repayment plan",
+    "support agent follows the same journey with a view that does not surface punitive language, fake legal consequences, or pressure tactics"
+  ],
+  "constraints": [
+    "The journey MUST be supportive and non-punitive: threats, intimidation, pressure to prioritise the Lendflow loan over essentials (food, rent, utilities), or language that fabricates legal consequences (e.g., fake bailiff or court action) are forbidden.",
+    "Free independent debt advice (e.g., a clearly-labelled external route to a debt-advice charity) MUST be reachable from the payment-difficulty entry without being gated behind disclosure of personal financial detail.",
+    "No forbearance-option taxonomy, repayment-plan figure, interest-freeze term, or hardship-assessment script is supplied in this brief; these must surface as clearly-templated placeholders or dynamic pulls, not as invented terms or fabricated figures.",
+    "Affordability review MUST be honest: it must not push a borrower into a repayment plan they cannot afford, and must not present a templated repayment figure as a guaranteed or only option.",
+    "Support-agent views MUST NOT surface punitive language, fake legal consequences, or pressure tactics even when assisting; the supportive framing is mandatory on the agent view too.",
+    "The product name Lendflow is fictional; do not imply FCA authorisation, regulation, or affiliation with any real debt-advice charity, collections agency, or enforcement body."
+  ],
+  "requiredScreens": [
+    {
+      "id": "payment-difficulty-entry",
+      "states": [
+        "default",
+        "options-presented",
+        "debt-advice-reachable",
+        "entry-load-error"
+      ],
+      "mobileRules": [
+        "supportive tone leads the view and the free-debt-advice route is reachable without horizontal scroll or a collapsed menu",
+        "primary 'see my options' and 'speak to someone' actions remain operable in a single-handed portrait grip"
+      ]
+    },
+    {
+      "id": "affordability-review",
+      "states": [
+        "default",
+        "circumstances-disclosed",
+        "review-in-progress",
+        "options-not-yet-available",
+        "review-service-error"
+      ],
+      "mobileRules": [
+        "the review must not present a templated repayment figure as a guaranteed or only option; a clear 'we are reviewing your circumstances' treatment leads while options are pending",
+        "essential-expenses (food, rent, utilities) fields must be present and respected, not skipped"
+      ]
+    },
+    {
+      "id": "support-agent-assist",
+      "states": [
+        "default",
+        "borrower-context-loaded",
+        "supportive-script-active",
+        "punitive-language-blocked"
+      ],
+      "mobileRules": [
+        "the agent view must not surface punitive language, fake legal consequences, or pressure tactics in any collapsed or expanded state",
+        "the supportive-script framing must remain visible to the agent throughout the interaction, not hidden behind a tab"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-migration-content-product-v1",
+  "caseId": "migration-content-product",
+  "caseVersion": 1,
+  "family": "migration",
+  "stratum": "content-product-migration",
+  "title": "Original adaptation of a content product (media site)",
+  "productContext": "A fictional media publisher (product name 'Storyline') is adapting a publicly accessible content site at https://example.com/c2-content-pilot/ into an original content product. Content products carry a specific migration hazard: CONTENT PROVENANCE — every article must trace to an inspected route with clear byline, publish date, and source attribution, and paywalled or draft routes must be treated as blocked and never claimed as inspected. The adaptation MUST be original: it may retain or adapt only GENERIC structural principles (article hierarchy, byline/date treatment, related-content patterns) observed in the snapshot; it MUST NOT reproduce the source site's proprietary copy, masthead, exact palette, unique illustrations, photography, or distinctive typography. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "reader navigating the migrated content site and relying on clear provenance (byline, date, source) to trust an article",
+    "editor adapting and authoring content within the migrated surface while preserving provenance"
+  ],
+  "jobs": [
+    "read an article with clear byline, publish date, and source attribution traced to an inspected route",
+    "navigate between inspected article routes without crossing into a paywalled or draft route presented as published",
+    "as an editor, adapt content while preserving provenance metadata (byline, date, source) for every piece"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "reader lands on the migrated content home, follows a same-origin link to an article, and sees clear byline, publish date, and source attribution",
+    "reader encounters a paywalled or draft route and sees it clearly marked as not-published or not-inspected, never presented as a live article",
+    "editor adapts an article and the provenance metadata (byline, date, source) is preserved and traceable to an inspected route"
+  ],
+  "constraints": [
+    "The adaptation MUST be ORIGINAL: it must not reproduce the source site's proprietary copy, masthead, exact palette, unique illustrations, photography, or distinctive typography; only generic structural principles observed in the snapshot may be retained or adapted.",
+    "Content provenance MUST be preserved: every adapted article must carry clear byline, publish date, and source attribution, traced to an inspected route; stripped or fabricated provenance is forbidden.",
+    "Paywalled, draft, or otherwise blocked routes MUST be treated as not-published and not-inspected; presenting a blocked route as a live, published article is forbidden.",
+    "Only the routes marked 'inspected' in the bound snapshot may ground a claim; any route marked 'blocked' MUST be excluded and no claim may rely on it.",
+    "A retain / adapt / reject decision MUST be made for every major content element (article hierarchy, byline/date treatment, related-content, photography, typography) and recorded explicitly; proprietary identifiers are always 'reject'.",
+    "The product name Storyline is fictional; do not imply affiliation with any real publisher, masthead, syndication service, or wire service observed or implied by the source."
+  ],
+  "requiredScreens": [
+    {
+      "id": "content-home",
+      "states": [
+        "default",
+        "search-active",
+        "nav-collapsed-mobile",
+        "feed-load-error"
+      ],
+      "mobileRules": [
+        "article cards lead with headline, byline, and date in a legible stack on a narrow viewport",
+        "primary navigation remains operable in a single-handed portrait grip when collapsed"
+      ]
+    },
+    {
+      "id": "article-route",
+      "states": [
+        "default",
+        "provenance-visible",
+        "related-content-shown",
+        "route-blocked-paywalled",
+        "route-not-found"
+      ],
+      "mobileRules": [
+        "byline, publish date, and source attribution remain anchored to the article headline when the layout collapses",
+        "the route-blocked-paywalled state surfaces a clear not-published / not-inspected message, not a soft login wall that implies the article is live"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": {
+    "artifactId": "c2-snapshot-migration-content-product-v1",
+    "artifactType": "design-source-snapshot",
+    "path": "eval/c2/baseline/source-snapshots/migration-content-product.json",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

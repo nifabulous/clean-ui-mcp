@@ -1,0 +1,79 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-uk-loan-application-v1",
+  "caseId": "uk-loan-application",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "uk-personal-loan-application",
+  "title": "UK personal-loan application with ID verification, document upload, and interruption recovery",
+  "productContext": "Fictional UK consumer credit web app (product name 'Lendflow') taking a borrower from an indicative quote through a full unsecured personal-loan application: identity verification, affordability assessment, and document upload. The application is multi-step and frequently interrupted: applicants close the tab, lose connectivity, or let the session idle past its timeout. The flow MUST recover without data loss: partially-entered application data must survive a session timeout and be re-presentable on return, never silently discarded. The full application triggers a HARD credit search and this must be disclosed before the customer consents. The product is fictional and is not FCA-authorised; the brief deliberately does not supply a guaranteed decision turnaround, a document list, or an affordability threshold. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "applicant working through the full loan application for the first time",
+    "returning applicant resuming an in-progress application after an interruption",
+    "applicant on a metered or unstable mobile connection uploading identity and affordability documents"
+  ],
+  "jobs": [
+    "complete identity verification and document upload without losing progress if I am interrupted",
+    "understand that proceeding past the consent step will trigger a hard credit search that affects my credit file",
+    "resume my application exactly where I left off after a session timeout, browser close, or connectivity loss",
+    "see which required documents are still outstanding without re-uploading anything I already provided"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "applicant consents to a hard credit search with clear disclosure before the hard search is triggered",
+    "returning applicant resumes an interrupted application and finds every previously entered field and uploaded document intact",
+    "applicant experiences a session timeout and is routed to a recovery flow that preserves entered data rather than wiping the form"
+  ],
+  "constraints": [
+    "Proceeding past the consent step triggers a HARD credit search that will appear on the customer's credit file; the hard-search disclosure MUST precede consent and must not be bundled into generic terms-and-conditions prose.",
+    "Partially-entered application data MUST survive a session timeout and be re-presentable on return; silently discarding entered data on timeout is forbidden.",
+    "The flow MUST support interruption recovery: an applicant who closes the tab, loses connectivity, or idles past the timeout must be able to resume exactly where they left off, including uploaded documents.",
+    "No guaranteed decision turnaround, document list, or affordability threshold is supplied in this brief; these must surface as clearly-templated placeholders or dynamic pulls, not as fabricated figures.",
+    "The hard-search disclosure must not be darkened: pre-ticked consent, consent bundled with marketing preferences, or consent as a prerequisite for seeing the application summary are all forbidden.",
+    "The product name Lendflow is fictional; do not imply FCA authorisation, regulation, or affiliation with any real lender, credit reference agency, or identity-verification vendor."
+  ],
+  "requiredScreens": [
+    {
+      "id": "application-step",
+      "states": [
+        "default",
+        "draft-autosaved",
+        "session-timed-out",
+        "recovered-on-return"
+      ],
+      "mobileRules": [
+        "the draft-autosaved indicator stays visible long enough to be read on a narrow viewport and is not a transient toast that vanishes",
+        "primary continue action sits in the bottom thumb zone and remains operable in a single-handed portrait grip"
+      ]
+    },
+    {
+      "id": "hard-search-consent",
+      "states": [
+        "default",
+        "consent-expanded",
+        "consent-required-error",
+        "already-consented-locked"
+      ],
+      "mobileRules": [
+        "the hard-search disclosure text remains readable at the smallest breakpoint without horizontal scrolling",
+        "the consent control must not be pre-ticked and must sit separate from any marketing-preference control"
+      ]
+    },
+    {
+      "id": "document-upload",
+      "states": [
+        "empty",
+        "upload-in-progress",
+        "upload-interrupted-resumable",
+        "upload-complete",
+        "upload-corrupted-retry"
+      ],
+      "mobileRules": [
+        "an interrupted upload MUST be resumable from where it stopped, not restarted from zero, on a metered mobile connection",
+        "the list of outstanding documents stays visible alongside uploaded documents so the applicant can see what remains"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

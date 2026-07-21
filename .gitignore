@@ -78,6 +78,16 @@ eval/c2/pilot/*
 !eval/c2/pilot/labels/
 !eval/c2/pilot/source-snapshots/
 !eval/c2/pilot/evidence/
+# C2 Pass 3 stablecoin product case packages: synthetic, portable gold contracts
+# (briefs + decision labels + gold-evidence descriptors) for the four new
+# product-family baseline cases. Same rationale as the pilot carve-out above —
+# required deliverables, no provider data, no private corpus, no source
+# snapshots (product family binds sourceSnapshotRef: null).
+!eval/c2/baseline/
+eval/c2/baseline/*
+!eval/c2/baseline/briefs/
+!eval/c2/baseline/labels/
+!eval/c2/baseline/evidence/
 # C2 reviewed campaign + pricing config (Task 5): non-secret provider/model
 # pins, sampling parameters, output-token ceilings, fixed $0.50/$5 budgets,
 # and a versioned pricing table with provenance URLs + verification dates.

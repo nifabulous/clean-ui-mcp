@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-stablecoin-trust-compliance-v1",
+  "caseId": "stablecoin-trust-compliance",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "stablecoin-trust-centre",
+  "title": "Trust and compliance centre without unsupported regulatory claims",
+  "productContext": "Fictional early-stage stablecoin infrastructure provider (product name 'Stablebridge') is building a trust and compliance centre at trust.stablebridge.example.com to give business evaluators, security reviewers, and compliance officers a framework-level view of how the company thinks about risk. The company holds NO regulatory licences, has NO completed external audits, and is NOT authorised, registered, or approved in any jurisdiction. Every statement on this page must be aspirational or framework-level (what the company intends or how its controls are designed) rather than a claim of achieved certification, licence, or regulatory standing. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "compliance officer at a prospect business assessing Stablebridge's regulatory posture before any engagement",
+    "security reviewer evaluating how Stablebridge describes its security practices and what evidence it points to",
+    "business evaluator distinguishing what Stablebridge has actually achieved from what it aspires to"
+  ],
+  "jobs": [
+    "assess Stablebridge's regulatory posture without being misled into thinking the company holds licences it does not",
+    "review the stated security practices and understand they are framework-level, not certified",
+    "evaluate the audit and compliance documentation trail and see clearly what exists versus what is planned",
+    "leave the page able to explain to an internal stakeholder what Stablebridge has and has not committed to"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "compliance officer opens the trust centre, scans the compliance overview, and confirms no licence or registration is claimed",
+    "security reviewer navigates from the overview into the security practices section and finds framework-level language, not certification claims",
+    "business evaluator opens the audit trail and can distinguish completed artefacts from planned or aspirational ones",
+    "any visitor can reach a primary contact or request-access action without being shown a false sense of regulatory standing"
+  ],
+  "constraints": [
+    "CRITICAL: Stablebridge holds no licences, registrations, authorisations, or regulatory approvals anywhere; do not claim, imply, or visualise any specific licence, jurisdiction, regulator, or certification (for example no SOC 2, no ISO 27001, no FinCEN, no FCA, no MAS, no NYDFS, no Money Transmitter Licence) as held or achieved.",
+    "All compliance, security, and audit language must be framework-level or aspirational (for example 'designed against', 'working towards', 'intended to align with') and never assert that a standard, audit, or certification has been completed.",
+    "Where an audit or compliance artefact is shown, it must be clearly labelled as planned, in progress, or a template — never as a completed external attestation.",
+    "The page must not create a false sense of regulatory standing: no badge, seal, checkmark, or logo that implies a real regulator, scheme, or auditor has approved Stablebridge.",
+    "Compliance and security reviewers must be able to read every claim as either a design intent or a future commitment; a single achieved-certification claim anywhere on the page is a critical failure.",
+    "Exactly one primary call to action (request access or contact) may lead the page; secondary paths to security practices and the audit trail must remain reachable without competing with it.",
+    "The product name Stablebridge is fictional; do not imply affiliation with any real regulator, auditor, standards body, stablecoin issuer, or exchange."
+  ],
+  "requiredScreens": [
+    {
+      "id": "compliance-overview",
+      "states": [
+        "default",
+        "framework-expanded",
+        "posture-disclaimer-visible"
+      ],
+      "mobileRules": [
+        "the 'no licences held' disclaimer stays visible above the fold on the smallest breakpoint",
+        "framework cards stack vertically and the aspirational verb ('working towards', 'designed against') is never truncated"
+      ]
+    },
+    {
+      "id": "security-practices",
+      "states": [
+        "default",
+        "practice-expanded",
+        "evidence-link-broken"
+      ],
+      "mobileRules": [
+        "each practice card keeps its framework-level label and its planned-versus-achieved marker on one row when stacked",
+        "broken evidence links surface an inline recovery affordance without implying the artefact exists elsewhere"
+      ]
+    },
+    {
+      "id": "audit-trail",
+      "states": [
+        "default",
+        "artefact-filtered-to-planned",
+        "artefact-filtered-to-template",
+        "audit-artefact-missing"
+      ],
+      "mobileRules": [
+        "planned, in-progress, and template artefacts are visually distinguishable from any completed internal artefact on a narrow viewport",
+        "the missing-artefact state preserves the 'no external attestation claimed' disclaimer inline"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

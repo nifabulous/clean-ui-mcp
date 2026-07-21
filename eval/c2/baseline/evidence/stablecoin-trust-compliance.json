@@ -1,0 +1,65 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-evidence-stablecoin-trust-compliance-v1",
+  "caseId": "stablecoin-trust-compliance",
+  "records": [
+    {
+      "id": "evidence:brief:no-licences-constraint",
+      "sourceArtifactId": "c2-brief-stablecoin-trust-compliance-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/requiredScreens/0/mobileRules/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:framework-language-constraint",
+      "sourceArtifactId": "c2-brief-stablecoin-trust-compliance-v1",
+      "jsonPointers": [
+        "/constraints/1",
+        "/requiredScreens/0/states/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:artefact-labelling-constraint",
+      "sourceArtifactId": "c2-brief-stablecoin-trust-compliance-v1",
+      "jsonPointers": [
+        "/constraints/2",
+        "/requiredScreens/2/id",
+        "/requiredScreens/2/states/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:no-false-standing-visuals-constraint",
+      "sourceArtifactId": "c2-brief-stablecoin-trust-compliance-v1",
+      "jsonPointers": [
+        "/constraints/3",
+        "/constraints/4"
+      ]
+    },
+    {
+      "id": "evidence:brief:compliance-overview-states",
+      "sourceArtifactId": "c2-brief-stablecoin-trust-compliance-v1",
+      "jsonPointers": [
+        "/requiredScreens/0/id",
+        "/requiredScreens/0/states/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:security-practices-states",
+      "sourceArtifactId": "c2-brief-stablecoin-trust-compliance-v1",
+      "jsonPointers": [
+        "/requiredScreens/1/id",
+        "/requiredScreens/1/states/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:audit-trail-states",
+      "sourceArtifactId": "c2-brief-stablecoin-trust-compliance-v1",
+      "jsonPointers": [
+        "/requiredScreens/2/id",
+        "/requiredScreens/2/states/3"
+      ]
+    }
+  ]
+}

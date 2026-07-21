@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-stablecoin-developer-infrastructure-v1",
+  "caseId": "stablecoin-developer-infrastructure",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:api-surface-without-volume-or-uptime-claims",
+    "decision:ordered-integration-journey-with-verification-exit",
+    "decision:failure-state-per-happy-path-step",
+    "decision:actionable-error-recovery-not-bare-status-codes",
+    "decision:developer-first-register-no-marketing-pitch"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:no-transaction-volume-throughput-uptime-or-sla-claims",
+    "ac:integration-journey-is-finite-ordered-with-clear-exit",
+    "ac:at-least-one-explicit-transaction-failure-state-with-recovery",
+    "ac:every-error-carries-an-actionable-recovery-next-step",
+    "ac:single-primary-cta-with-secondary-nav-between-overview-journey-and-errors"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:no-volume-uptime-constraint",
+    "evidence:brief:ordered-journey-constraint",
+    "evidence:brief:failure-state-per-step-constraint",
+    "evidence:brief:actionable-recovery-constraint",
+    "evidence:brief:api-overview-states",
+    "evidence:brief:integration-journey-states",
+    "evidence:brief:error-reference-states"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:no-volume-uptime-constraint",
+    "evidence:brief:ordered-journey-constraint",
+    "evidence:brief:failure-state-per-step-constraint",
+    "evidence:brief:actionable-recovery-constraint"
+  ],
+  "forbiddenClaims": [
+    "specific transactions-per-second or daily transaction volume",
+    "uptime percentage or availability SLA",
+    "guaranteed latency or settlement time for API calls",
+    "customer count, logo wall, or named production deployer not stated in the brief",
+    "compatibility with a specific blockchain network or wallet not named in the brief",
+    "a happy-path-only integration journey with no failure branches"
+  ],
+  "privateMarkers": [
+    "/corpus/private/stablecoin-developer-infrastructure/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "The page reads as a marketing landing with volume and uptime claims and no failure treatment.",
+      "score3": "Developer-first register is mostly held but a volume/uptime figure or a customer logo slips in, or failure handling is an afterthought.",
+      "score5": "The page is unmistakably developer-first, makes no volume/uptime/SLA claim, and treats failure states as a first-class feature with a single request-access CTA."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "api-overview, integration-journey, and error-reference share no navigation model and disagree on how errors are named.",
+      "score3": "Shared tokens across the three screens but the error names used in the journey do not match the error-reference entries.",
+      "score5": "A single direction system unifies all three screens, and the error identifiers used in the journey's step-failed state resolve to entries in the error-reference."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the api-overview, integration-journey, or error-reference states.",
+      "score3": "Partial blueprints with unresolved step-failed or transaction-failed-recovery states.",
+      "score5": "Engineers can build all three screens directly, including resource-unavailable, step-failed, journey-completed, transaction-failed-recovery, and error-reference-unreachable."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of an existing stablecoin or payments developer portal with the same happy-path bias.",
+      "score3": "Derivative of common developer-doc patterns but the failure-first treatment is visually distinguishable.",
+      "score5": "A distinct developer-doc treatment that makes failure states as legible as the happy path without mimicking a real payments API portal."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no step-failed or transaction-failed-recovery states.",
+      "score3": "Baseline contrast and focus with partial failure states on the integration journey.",
+      "score5": "WCAG-aligned contrast and focus across all three screens, with step-failed, transaction-failed-recovery, and error-reference-unreachable states that preserve the back button and keep the recovery action inline."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "Volume, throughput, uptime, SLA, or latency claims appear unsupported.",
+      "score3": "Most claims trace to the brief but one round-number volume or uptime figure slips in.",
+      "score5": "Every claim traces to the brief, no volume/uptime/SLA figure appears, every error has an actionable recovery, and the journey has a verifiable exit."
+    }
+  ],
+  "adjudicationNotes": [
+    "Failure states are the spine of this case: an output with a happy-path-only integration journey, or an error reference of bare HTTP status codes with no recovery action, fails implementation-clarity and accessibility-and-failure-states.",
+    "Treat the absence of volume/uptime/SLA numbers as a constraint: do not invent round-number figures to make the docs look more mature than the brief allows.",
+    "The integration journey must be finite and ordered with a verification exit; an open-ended 'and so on' stepper fails the ordered-journey decision.",
+    "Error identifiers in the journey's step-failed state should resolve to entries in the error-reference; an output that uses inconsistent error names across screens fails cross-screen-coherence.",
+    "Do not prescribe exact copy, code language, or pixel-level layout; the brief fixes the failure-state and no-volume constraints, not the visual identity."
+  ]
+}

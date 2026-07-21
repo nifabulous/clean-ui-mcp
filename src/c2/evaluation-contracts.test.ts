@@ -3,6 +3,7 @@ import {
   C2LabelIntegritySelectionSchema,
   C2IndependentLabelSubmissionSchema,
   C2LabelAgreementReportSchema,
+  C2LabelIntegrityBaselineMetricsSchema,
   C2EvaluationRunManifestSchema,
   C2EvaluationRunManifestV1Schema,
   C2EvaluationRunManifestV2Schema,
@@ -43,7 +44,7 @@ function makeSelection() {
     artifactType: "c2-label-integrity-selection" as const,
     artifactId: "c2-integrity-selection-v1",
     selectionVersion: 1,
-    seed: "deterministic-seed-2026-07",
+    seed: "clean-ui-retag-v1",
     corpusGitSha: SHA_40,
     corpusSha256: SHA_64,
     entries: [...reproducible, ...challenge],
@@ -123,6 +124,7 @@ function makeAgreementReport(
     selectionRef: fileRef(selection.artifactId, "corpus/c2/integrity/selection.json"),
     goldOwnerSubmissionRef: fileRef(goldOwner.artifactId, "corpus/c2/integrity/gold-owner-submission.json"),
     qaSubmissionRef: fileRef(qa.artifactId, "corpus/c2/integrity/qa-submission.json"),
+    baselineMetricsRef: fileRef("c2-baseline-metrics-v1", "corpus/c2/integrity/baseline-metrics.json"),
     goldOwnerActorId: goldOwner.actorId,
     qaActorId: qa.actorId,
     submissionsUnsealedAt: "2026-07-18T11:00:00.000Z",
@@ -271,6 +273,46 @@ describe("C2 evaluation and attribution contracts", () => {
 
     const sameActor = { ...report, qaActorId: report.goldOwnerActorId };
     expect(C2LabelAgreementReportSchema.safeParse(sameActor).success).toBe(false);
+  });
+
+  it("requires a baselineMetricsRef binding in the agreement report (FLAG 7.1/7.3)", () => {
+    const selection = makeSelection();
+    const goldOwner = makeSubmission("Gold Label Owner", "reviewer.gold-1");
+    const qa = makeSubmission("QA", "reviewer.qa-1");
+    const report = makeAgreementReport(selection, goldOwner, qa);
+    const { baselineMetricsRef: _omit, ...missing } = report;
+    expect(C2LabelAgreementReportSchema.safeParse(missing).success).toBe(false);
+  });
+
+  it("parses a baseline-metrics artifact with all 4 baseline-bound values", () => {
+    const selection = makeSelection();
+    const baseline = {
+      schemaVersion: "1.0",
+      artifactType: "c2-label-integrity-baseline-metrics",
+      artifactId: "c2-baseline-metrics-v1",
+      selectionArtifactId: selection.artifactId,
+      selectionSha256: SHA_64,
+      "pattern-type-exact-accuracy": 0.80,
+      "categories-macro-f1": 0.75,
+      "components-recall": 0.70,
+      "domain-tags-recall": 0.65,
+      sourceArtifactRefs: [fileRef("c2-parent-baseline-v1", "corpus/c2/integrity/parent-baseline.json")],
+      computedAt: "2026-07-18T09:00:00.000Z",
+      baselineMetricsSha256: SHA_64,
+    };
+    expect(C2LabelIntegrityBaselineMetricsSchema.safeParse(baseline).success).toBe(true);
+
+    // Must carry all 4 baseline-bound values; dropping one fails.
+    const { "components-recall": _omit, ...missing } = baseline;
+    expect(C2LabelIntegrityBaselineMetricsSchema.safeParse(missing).success).toBe(false);
+
+    // Must carry at least one source-artifact reference (no first-submission derivation).
+    const noSources = { ...baseline, sourceArtifactRefs: [] };
+    expect(C2LabelIntegrityBaselineMetricsSchema.safeParse(noSources).success).toBe(false);
+
+    // Must carry the self-hash (P1/S8 alignment with other durable artifacts).
+    const { baselineMetricsSha256: _omitSha, ...noSelfHash } = baseline;
+    expect(C2LabelIntegrityBaselineMetricsSchema.safeParse(noSelfHash).success).toBe(false);
   });
 
   it("cross-checks agreement hashes, actors, roles, selection, and entry disagreements", () => {

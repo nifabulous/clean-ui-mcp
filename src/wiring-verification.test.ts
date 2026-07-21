@@ -234,6 +234,15 @@ const ALLOWLIST = new Set<string>([
   // here rather than wired to a placeholder caller to avoid fake coupling, per
   // the same precedent as renderSourceDesign / buildCheckpointTarget above.
   "assertAgreementMatchesSubmissions",
+  // c2/label-agreement.ts — computeLabelAgreement is the pure algorithm that
+  // compares the two independent label submissions (Gold Label Owner + external
+  // QA) and emits the C2LabelAgreementReport. Its production caller is the C2
+  // agreement validator (a separately-reviewed downstream task); the
+  // collect-label-submissions.mts workflow helper only collects the submission
+  // files, it does not run agreement. Listed here rather than wired to a
+  // placeholder caller to avoid fake coupling, per the same precedent as
+  // assertAgreementMatchesSubmissions above.
+  "computeLabelAgreement",
   // c2/governance-contracts.ts — C2_REQUIRED_APPROVAL_ROLES declares the exact
   // future closure-role set (Gold Label Owner + QA). Consumed by the C2 closure
   // validator (Pass 6) and the provisional evidence manifest schema. Allowlisted
@@ -256,6 +265,11 @@ const ALLOWLIST = new Set<string>([
   // c2/cost-policy.ts — assertRunBudget / assertCampaignBudget are called by the
   // C2 harness (src/c2/harness.ts) after every forecast; preflightCampaignCosts
   // is called by the C2 pilot CLI (src/scripts/run-c2-pilot.ts) before every
+  // c2/baseline-manifest.ts — computeManifestSha256 is the pure self-hash helper
+  // consumed by the baseline builder script (Task B3, not yet implemented) and
+  // the closure evaluator's manifest-binding step. Same foundation-awaiting-caller
+  // pattern as computeLabelAgreement.
+  "computeManifestSha256",
   // paid run. All three gained real production callers when the harness CLI
   // landed (PR 1) and were removed from this allowlist.
   // c2/condition-resolver.ts — resolveConditionInput is called by the C2 pilot

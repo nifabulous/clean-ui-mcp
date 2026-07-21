@@ -98,6 +98,15 @@ eval/c2/pilot/*
 eval/c2/calibration/*
 !eval/c2/calibration/frozen.json
 !eval/c2/calibration/proposal.json
+# C2 Pass 3 frozen label-integrity selection (Task A2): the deterministic
+# 35-reproducible + 5-challenge selection bound to the corpus + commit SHAs.
+# Tracked because downstream label submissions + agreement reports bind its
+# artifactId + content hash. Carries only entry IDs + image SHA-256 + rationales
+# + corpus/git hashes — verified to pass scanDurableArtifact (no prompt/evidence/
+# raw content, no secrets, no private paths).
+!eval/c2/label-integrity/
+eval/c2/label-integrity/*
+!eval/c2/label-integrity/selection.json
 # C2 Pass 2 frozen-calibration evidence bundle: the run manifests + human
 # scorecards the frozen calibration binds by hash. These are hash-only
 # metadata (no prompt/evidence/raw content, no secrets) — verified to pass

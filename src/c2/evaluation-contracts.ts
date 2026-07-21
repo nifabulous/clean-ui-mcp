@@ -23,7 +23,7 @@ export const C2LabelIntegritySelectionSchema = z.object({
   artifactType: z.literal("c2-label-integrity-selection"),
   artifactId: StableId,
   selectionVersion: PositiveVersion,
-  seed: NonEmptyText,
+  seed: z.literal("clean-ui-retag-v1"),
   corpusGitSha: GitSha,
   corpusSha256: Sha256,
   entries: z.array(IntegrityEntrySchema).length(40),
@@ -89,7 +89,7 @@ export const C2_REPLACEMENT_METRIC_FLOORS = {
   "scorable-recommendation-citation-rate": 0.90,
 } as const;
 
-const MetricIdSchema = z.enum([
+export const MetricIdSchema = z.enum([
   "pattern-type-exact-accuracy",
   "categories-macro-f1",
   "components-precision",
@@ -99,6 +99,13 @@ const MetricIdSchema = z.enum([
   "structured-critique-schema-validity",
   "scorable-recommendation-citation-rate",
 ]);
+
+/**
+ * The frozen set of 8 metric IDs, in canonical order. Exported so the agreement
+ * module and any downstream consumers reference a single source of truth instead
+ * of re-declaring the list (S13).
+ */
+export const METRIC_IDS = MetricIdSchema.options;
 
 const MetricSchema = z.object({
   metricId: MetricIdSchema,
@@ -132,6 +139,44 @@ const HardGateResultSchema = z.object({
   evidence: NonEmptyText,
 }).strict();
 
+/**
+ * Frozen baseline metrics for the 4 baseline-bound metric IDs (spec-lock §1).
+ *
+ * The 4 baseline-bound IDs are `pattern-type-exact-accuracy`,
+ * `categories-macro-f1`, `components-recall`, and `domain-tags-recall` —
+ * exactly the set in `MetricSchema.superRefine`'s `baselineBound`. The two
+ * recall metrics have NO fixed floor, so their entire floor comes from this
+ * artifact. The other two combine `max(fixedFloor, baselineValue)`.
+ *
+ * CRITICAL (FLAG 7.1/7.3): this artifact MUST be derived from parent-authority
+ * baseline evidence (e.g. a prior consensus freeze), NOT from either Pass 3
+ * independent submission. `sourceArtifactRefs` therefore points to the
+ * parent-authority baseline artifacts; the agreement computation refuses to
+ * proceed if this artifact is missing — it cannot compute the recall floors.
+ */
+export const C2LabelIntegrityBaselineMetricsSchema = z.object({
+  schemaVersion: z.literal("1.0"),
+  artifactType: z.literal("c2-label-integrity-baseline-metrics"),
+  artifactId: StableId,
+  selectionArtifactId: StableId,
+  selectionSha256: Sha256,
+  "pattern-type-exact-accuracy": z.number().min(0).max(1),
+  "categories-macro-f1": z.number().min(0).max(1),
+  "components-recall": z.number().min(0).max(1),
+  "domain-tags-recall": z.number().min(0).max(1),
+  sourceArtifactRefs: z.array(ArtifactFileRefSchema).min(1),
+  computedAt: z.string().datetime(),
+  // Self-hash over the canonical artifact bytes with this field set to the
+  // empty string, mirroring the `proposalSha256` pattern on calibration
+  // proposals. Every other durable artifact in this codebase carries a
+  // content-addressing self-hash; the baseline-metrics artifact is the only
+  // one that did not, so we add it for consistency (P1/S8). The agreement
+  // computation does not recompute this hash itself (the caller resolves
+  // artifact hashes from canonical bytes); the field is the on-disk tamper
+  // seal.
+  baselineMetricsSha256: Sha256,
+}).strict();
+
 export const C2LabelAgreementReportSchema = z.object({
   schemaVersion: z.literal("1.0"),
   artifactType: z.literal("c2-label-agreement-report"),
@@ -139,6 +184,7 @@ export const C2LabelAgreementReportSchema = z.object({
   selectionRef: ArtifactFileRefSchema,
   goldOwnerSubmissionRef: ArtifactFileRefSchema,
   qaSubmissionRef: ArtifactFileRefSchema,
+  baselineMetricsRef: ArtifactFileRefSchema,
   goldOwnerActorId: StableId,
   qaActorId: StableId,
   submissionsUnsealedAt: z.string().datetime(),
@@ -358,6 +404,7 @@ export const C2FailureReportSchema = z.object({
 
 export type C2LabelIntegritySelection = z.infer<typeof C2LabelIntegritySelectionSchema>;
 export type C2IndependentLabelSubmission = z.infer<typeof C2IndependentLabelSubmissionSchema>;
+export type C2LabelIntegrityBaselineMetrics = z.infer<typeof C2LabelIntegrityBaselineMetricsSchema>;
 export type C2LabelAgreementReport = z.infer<typeof C2LabelAgreementReportSchema>;
 export type C2EvaluationRunManifestV1 = z.infer<typeof C2EvaluationRunManifestV1Schema>;
 export type C2EvaluationRunManifest = z.infer<typeof C2EvaluationRunManifestSchema>;

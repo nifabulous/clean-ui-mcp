@@ -8,6 +8,22 @@
 
 **Tech Stack:** TypeScript, Zod contracts, Vitest, Node CLI scripts, SHA-256 content addressing, existing `executeC2Run` harness, existing blinded scorecard workflow, and the frozen artifact at `eval/c2/calibration/frozen.json`.
 
+## Status
+
+**Workstream A complete; Workstream B deferred to follow-up branches.**
+
+Workstream A (the 40-entry label-integrity gate: selection contract, frozen selection artifact, independent submission + agreement contracts, and the baseline-metrics gate) is implemented, tested, and review-fix landed. The label-integrity selection artifact at `eval/c2/label-integrity/selection.json` is frozen and `--check`-verified.
+
+Workstream B (the 25-case decision-quality baseline: manifest, closure evaluator, runner, case authoring, and paid execution) is **deferred** to follow-up branches. It is blocked on human-authored case content and paid provider budget, neither of which belong in this infrastructure branch. Do not interpret the absence of Workstream B artifacts as abandonment; the contracts and harness primitives it will consume are already in place from Pass 2.
+
+C2 remains open until BOTH workstreams pass; this branch does not claim C2 closure.
+
+### Strategic risk: Claude 4096-token truncation (S11)
+
+C9 closure ("the independent challenge subset reaches compatible critical decisions") depends on resolving the **Claude 4096-token truncation** documented in the frozen calibration's `STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION`. The frozen `criticalDecisionCoverageComplete: false` is a direct consequence of this truncation: the stablecoin Claude current-grounded run could not complete within the model's 4096-token output ceiling, so its critical decisions are unavailable for the independent compatibility evaluation.
+
+This is an **external model-capability dependency**, not something this branch can resolve. Closing C9 requires either (a) a provider/model configuration that lifts or bypasses the 4096-token ceiling for the stablecoin case, or (b) a human-authored re-freeze that records the truncation as a permanent, documented exception with explicit reviewer sign-off (the spec-lock's FLAG 7.4 permits this only via a new human-authored compatibility evaluation — never a CLI override). Until one of those happens, C2 cannot close even after Workstream B completes. Track this as the single highest-priority external blocker for C2 closure.
+
 ## Global Constraints
 
 - C2 remains open until both Workstream A and Workstream B pass; one cannot compensate for the other.

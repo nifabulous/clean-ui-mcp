@@ -30,26 +30,27 @@
 
 **Baseline-value binding:** Before either independent label submission is accepted, create `eval/c2/label-integrity/baseline-metrics.json` containing one value for each of the four baseline-bound IDs, the source artifact references used to compute those values, and a SHA-256 over the canonical file. The agreement report must bind this artifact and reject a missing, stale, or first-submission-derived baseline. No implementation may default a missing baseline to zero.
 
-The artifact contract is:
+The artifact contract (source of truth: `C2LabelIntegrityBaselineMetricsSchema` in `src/c2/evaluation-contracts.ts`) uses **flat top-level fields** for the four baseline-bound metric values (not a nested `values: {...}` object), mirroring how `readBaselineValue` accesses them by metric ID. It also carries a `baselineMetricsSha256` self-hash for consistency with every other durable artifact in this codebase (e.g. `proposalSha256` on calibration proposals):
 
 ```ts
 type C2LabelIntegrityBaselineMetrics = {
   schemaVersion: "1.0";
   artifactType: "c2-label-integrity-baseline-metrics";
   artifactId: string;
-  sourceRefs: ArtifactFileRef[];
-  values: {
-    "pattern-type-exact-accuracy": number;
-    "categories-macro-f1": number;
-    "components-recall": number;
-    "domain-tags-recall": number;
-  };
-  artifactSha256: string;
+  selectionArtifactId: string;
+  selectionSha256: string;
+  "pattern-type-exact-accuracy": number;
+  "categories-macro-f1": number;
+  "components-recall": number;
+  "domain-tags-recall": number;
+  sourceArtifactRefs: ArtifactFileRef[];
+  computedAt: string;  // ISO-8601 datetime
+  baselineMetricsSha256: string;
 };
 ```
 
-`sourceRefs` must point to the parent-authority baseline evidence, not either Pass 3 submission. A missing parent-authority baseline is a human/spec gate and blocks agreement computation.
-`artifactSha256` is computed over the canonical artifact with the `artifactSha256` field omitted.
+`sourceArtifactRefs` must point to the parent-authority baseline evidence, not either Pass 3 submission. A missing parent-authority baseline is a human/spec gate and blocks agreement computation.
+`baselineMetricsSha256` is computed over the canonical artifact bytes with the `baselineMetricsSha256` field set to the empty string (the same pattern used by `proposalSha256`), and binds the artifact to the agreement report's `baselineMetricsRef.sha256`.
 
 **Important correction:** There are 8 metric IDs, 6 fixed floors, and 4 baseline-bound metrics. Do not assert "8 fixed floors" or describe only the recall metrics as baseline-bound.
 
@@ -219,6 +220,12 @@ The fixed challenge entries for this baseline are:
 - `corpus/entries.json`: **787 entries** (version 2), all `image.visibility: "private"`
 - `industryVertical` populated on only 22/787; `responsiveBehavior` on only 22/787 → stratification must lean on `patternType` (well-populated: 210 dashboard, 162 onboarding, etc.) and `components`/`styleTags`
 - The Pass 3 corpus SHA is NOT yet pinned — it will be bound when the selection artifact is generated (FLAG 7.7)
+
+### Stratification degeneracy (S1)
+
+Four of the seven axes are effectively **degenerate** on the current corpus: `industryVertical`, `responsiveBehavior`, `accessibilitySignal`, and `difficulty` collapse to a single dominant bucket (or a near-binary split) for the vast majority of entries — 765 of 787 entries carry `null` for `industryVertical` and `responsiveBehavior`, so those two axes normalize almost entirely to the `unknown` bucket. The practical consequence is that the per-axis Hamilton quotas for those four axes allocate nearly all 35 seats to one or two buckets, so the greedy coverage score is dominated by the `patternType` and `platform` axes (which are well-populated and genuinely discriminative). The selection is therefore primarily **patternType/platform-driven**, with the four degenerate axes acting as weak tiebreakers rather than independent stratification dimensions.
+
+This is documented, not a defect: the algorithm is unchanged (it still computes seven independent quotas and runs the same greedy coverage), and a future corpus with richer `industryVertical` / `responsiveBehavior` / accessibility metadata would automatically exercise those axes more meaningfully. The degeneracy is a property of the current corpus state, not of the selector.
 
 ---
 

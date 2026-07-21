@@ -46,7 +46,7 @@ function makeSelection(): C2LabelIntegritySelection {
     artifactType: "c2-label-integrity-selection",
     artifactId: "c2-integrity-selection-v1",
     selectionVersion: 1,
-    seed: "deterministic-seed-2026-07",
+    seed: "clean-ui-retag-v1",
     corpusGitSha: "0".repeat(40),
     corpusSha256: SHA_64,
     entries: [...reproducible, ...challenge],
@@ -111,6 +111,7 @@ function makeBaselineMetrics(overrides: Partial<C2LabelIntegrityBaselineMetrics>
     "domain-tags-recall": 0.65,
     sourceArtifactRefs: [fileRef("c2-parent-baseline-v1", "corpus/c2/integrity/parent-baseline.json")],
     computedAt: "2026-07-18T09:00:00.000Z",
+    baselineMetricsSha256: BASELINE_SHA,
     ...overrides,
   };
 }
@@ -340,5 +341,98 @@ describe("computeLabelAgreement", () => {
 
     const gateIds = report.hardGates.map((g) => g.gateId).sort();
     expect(gateIds).toEqual([...C2_HARD_GATE_IDS].sort());
+  });
+
+  // P1/S7: WCAG gate must fire on a malformed (4+ component) identifier. The old
+  // implementation used two functionally identical regexes, so the gate was dead
+  // code. The new implementation narrows WCAG_WELLFORMED to accept only 1-3
+  // numeric components, so "wcag 1.4.3.5" (4 components) is detected by
+  // WCAG_PATTERN but rejected by WCAG_WELLFORMED → gate 6 fails → not Qualified.
+  it("fails to Qualified when visualFields contains a malformed WCAG identifier (4+ components)", () => {
+    const selection = makeSelection();
+    const tamperedLabels: Record<string, ReturnType<typeof makeLabel>> = {};
+    const entryId = "entry.repro-0";
+    tamperedLabels[entryId] = {
+      ...makeLabel(entryId),
+      visualFields: { "field.conformance": "wcag 1.4.3.5" },
+      accessibilityEvidenceIds: ["a11y.contrast"],
+    };
+    const gold = makeSubmission(selection, "Gold Label Owner", "reviewer.gold-1");
+    const qa = makeSubmission(selection, "QA", "reviewer.qa-1", tamperedLabels);
+    const baseline = makeBaselineMetrics();
+
+    const report = computeLabelAgreement(gold, qa, selection, baseline, makeResolvedHashes());
+
+    expect(report.terminalOutcome).toBe("Replacement not justified");
+    const wcagGate = report.hardGates.find((g) => g.gateId === "valid-wcag-identifiers")!;
+    expect(wcagGate.passed).toBe(false);
+  });
+
+  // A well-formed WCAG identifier (1-3 components) must NOT trip the gate.
+  it("passes the WCAG gate for a well-formed identifier (3 components)", () => {
+    const selection = makeSelection();
+    const tamperedLabels: Record<string, ReturnType<typeof makeLabel>> = {};
+    const entryId = "entry.repro-0";
+    tamperedLabels[entryId] = {
+      ...makeLabel(entryId),
+      visualFields: { "field.conformance": "wcag 1.4.3" },
+      accessibilityEvidenceIds: ["a11y.contrast"],
+    };
+    const gold = makeSubmission(selection, "Gold Label Owner", "reviewer.gold-1");
+    const qa = makeSubmission(selection, "QA", "reviewer.qa-1", tamperedLabels);
+    const baseline = makeBaselineMetrics();
+
+    const report = computeLabelAgreement(gold, qa, selection, baseline, makeResolvedHashes());
+
+    const wcagGate = report.hardGates.find((g) => g.gateId === "valid-wcag-identifiers")!;
+    expect(wcagGate.passed).toBe(true);
+  });
+
+  // S6: the banned-phrase list must not misfire on "tbd" inside a legitimate
+  // label (e.g. todo-app, TBD-ld-cohort). The narrowed list drops "tbd".
+  it("does not trip no-banned-phrases on a label containing the substring 'tbd' (narrowed list)", () => {
+    const selection = makeSelection();
+    const tamperedLabels: Record<string, ReturnType<typeof makeLabel>> = {};
+    const entryId = "entry.repro-0";
+    tamperedLabels[entryId] = {
+      ...makeLabel(entryId),
+      domainTags: ["tbd-app", "productivity"],
+    };
+    const gold = makeSubmission(selection, "Gold Label Owner", "reviewer.gold-1");
+    const qa = makeSubmission(selection, "QA", "reviewer.qa-1", tamperedLabels);
+    const baseline = makeBaselineMetrics();
+
+    const report = computeLabelAgreement(gold, qa, selection, baseline, makeResolvedHashes());
+
+    const bannedGate = report.hardGates.find((g) => g.gateId === "no-banned-phrases")!;
+    expect(bannedGate.passed).toBe(true);
+  });
+
+  // S9: the two roles must not only be distinct, they must be in the canonical
+  // order: gold == "Gold Label Owner", qa == "QA". A swapped pair must throw.
+  it("rejects submissions with roles in the wrong order (gold=QA, qa=Gold)", () => {
+    const selection = makeSelection();
+    const gold = makeSubmission(selection, "QA", "reviewer.gold-1");
+    const qa = makeSubmission(selection, "Gold Label Owner", "reviewer.qa-1");
+    const baseline = makeBaselineMetrics();
+
+    expect(() =>
+      computeLabelAgreement(gold, qa, selection, baseline, makeResolvedHashes()),
+    ).toThrow(/role/i);
+  });
+
+  // P2: baseline.selectionSha256 must match the resolved selection hash; a
+  // baseline computed against a different selection revision is rejected.
+  it("throws when baseline.selectionSha256 disagrees with the resolved selection hash", () => {
+    const selection = makeSelection();
+    const gold = makeSubmission(selection, "Gold Label Owner", "reviewer.gold-1");
+    const qa = makeSubmission(selection, "QA", "reviewer.qa-1");
+    const baseline = makeBaselineMetrics({
+      selectionSha256: "f".repeat(64),
+    });
+
+    expect(() =>
+      computeLabelAgreement(gold, qa, selection, baseline, makeResolvedHashes()),
+    ).toThrow(/baseline.selectionSha256|baseline.*selection/i);
   });
 });

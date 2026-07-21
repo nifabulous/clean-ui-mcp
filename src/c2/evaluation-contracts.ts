@@ -23,7 +23,7 @@ export const C2LabelIntegritySelectionSchema = z.object({
   artifactType: z.literal("c2-label-integrity-selection"),
   artifactId: StableId,
   selectionVersion: PositiveVersion,
-  seed: NonEmptyText,
+  seed: z.literal("clean-ui-retag-v1"),
   corpusGitSha: GitSha,
   corpusSha256: Sha256,
   entries: z.array(IntegrityEntrySchema).length(40),
@@ -89,7 +89,7 @@ export const C2_REPLACEMENT_METRIC_FLOORS = {
   "scorable-recommendation-citation-rate": 0.90,
 } as const;
 
-const MetricIdSchema = z.enum([
+export const MetricIdSchema = z.enum([
   "pattern-type-exact-accuracy",
   "categories-macro-f1",
   "components-precision",
@@ -99,6 +99,13 @@ const MetricIdSchema = z.enum([
   "structured-critique-schema-validity",
   "scorable-recommendation-citation-rate",
 ]);
+
+/**
+ * The frozen set of 8 metric IDs, in canonical order. Exported so the agreement
+ * module and any downstream consumers reference a single source of truth instead
+ * of re-declaring the list (S13).
+ */
+export const METRIC_IDS = MetricIdSchema.options;
 
 const MetricSchema = z.object({
   metricId: MetricIdSchema,
@@ -159,6 +166,15 @@ export const C2LabelIntegrityBaselineMetricsSchema = z.object({
   "domain-tags-recall": z.number().min(0).max(1),
   sourceArtifactRefs: z.array(ArtifactFileRefSchema).min(1),
   computedAt: z.string().datetime(),
+  // Self-hash over the canonical artifact bytes with this field set to the
+  // empty string, mirroring the `proposalSha256` pattern on calibration
+  // proposals. Every other durable artifact in this codebase carries a
+  // content-addressing self-hash; the baseline-metrics artifact is the only
+  // one that did not, so we add it for consistency (P1/S8). The agreement
+  // computation does not recompute this hash itself (the caller resolves
+  // artifact hashes from canonical bytes); the field is the on-disk tamper
+  // seal.
+  baselineMetricsSha256: Sha256,
 }).strict();
 
 export const C2LabelAgreementReportSchema = z.object({

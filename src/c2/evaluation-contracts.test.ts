@@ -44,7 +44,7 @@ function makeSelection() {
     artifactType: "c2-label-integrity-selection" as const,
     artifactId: "c2-integrity-selection-v1",
     selectionVersion: 1,
-    seed: "deterministic-seed-2026-07",
+    seed: "clean-ui-retag-v1",
     corpusGitSha: SHA_40,
     corpusSha256: SHA_64,
     entries: [...reproducible, ...challenge],
@@ -298,6 +298,7 @@ describe("C2 evaluation and attribution contracts", () => {
       "domain-tags-recall": 0.65,
       sourceArtifactRefs: [fileRef("c2-parent-baseline-v1", "corpus/c2/integrity/parent-baseline.json")],
       computedAt: "2026-07-18T09:00:00.000Z",
+      baselineMetricsSha256: SHA_64,
     };
     expect(C2LabelIntegrityBaselineMetricsSchema.safeParse(baseline).success).toBe(true);
 
@@ -308,6 +309,10 @@ describe("C2 evaluation and attribution contracts", () => {
     // Must carry at least one source-artifact reference (no first-submission derivation).
     const noSources = { ...baseline, sourceArtifactRefs: [] };
     expect(C2LabelIntegrityBaselineMetricsSchema.safeParse(noSources).success).toBe(false);
+
+    // Must carry the self-hash (P1/S8 alignment with other durable artifacts).
+    const { baselineMetricsSha256: _omitSha, ...noSelfHash } = baseline;
+    expect(C2LabelIntegrityBaselineMetricsSchema.safeParse(noSelfHash).success).toBe(false);
   });
 
   it("cross-checks agreement hashes, actors, roles, selection, and entry disagreements", () => {

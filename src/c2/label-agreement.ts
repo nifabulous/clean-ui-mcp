@@ -26,6 +26,7 @@ import {
   C2_HARD_GATE_IDS,
   C2_REPLACEMENT_METRIC_FLOORS,
   C2LabelAgreementReportSchema,
+  METRIC_IDS,
   assertSubmissionMatchesSelection,
   type C2IndependentLabelSubmission,
   type C2LabelAgreementReport,
@@ -61,16 +62,9 @@ export interface AgreementArtifactBindings {
 // Metric IDs + helpers
 // ---------------------------------------------------------------------------
 
-const METRIC_IDS = [
-  "pattern-type-exact-accuracy",
-  "categories-macro-f1",
-  "components-precision",
-  "components-recall",
-  "domain-tags-precision",
-  "domain-tags-recall",
-  "structured-critique-schema-validity",
-  "scorable-recommendation-citation-rate",
-] as const;
+// `METRIC_IDS` is imported from evaluation-contracts.ts (S13): a single source
+// of truth for the 8 metric IDs. We derive the local `MetricId` union type from
+// it so the agreement module stays in lockstep with the schema.
 
 type MetricId = (typeof METRIC_IDS)[number];
 
@@ -117,6 +111,16 @@ function assertIndependentActors(
   if (gold.reviewerRole === qa.reviewerRole) {
     throw new Error(
       `label agreement requires distinct reviewer roles: both are "${gold.reviewerRole}"`,
+    );
+  }
+  // S9: roles must be in the CANONICAL ORDER — gold == "Gold Label Owner" and
+  // qa == "QA". The two recall/precision metrics are computed against a fixed
+  // gold-as-predicted / qa-as-reference convention, so a swapped pair would
+  // silently flip precision and recall. Reject that here rather than at metric
+  // compute time.
+  if (gold.reviewerRole !== "Gold Label Owner" || qa.reviewerRole !== "QA") {
+    throw new Error(
+      `label agreement requires canonical role assignment: gold.reviewerRole must be "Gold Label Owner" (got "${gold.reviewerRole}") and qa.reviewerRole must be "QA" (got "${qa.reviewerRole}")`,
     );
   }
 }
@@ -330,11 +334,15 @@ function computeHardGates(
   );
 
   // Gate 4: no-banned-phrases. Structural check: no label field string contains
-  // an empty string or a forbidden placeholder marker. This is intentionally
-  // narrow — full profanity/SEO-spam detection is out of scope for a structural
-  // gate. We scan the string-bearing fields: patternType, categories, components,
-  // domainTags, visualFields values, groundedClaimIds, accessibilityEvidenceIds.
-  const BANNED = ["__placeholder__", "TODO", "FIXME", "tbd", "lorem ipsum"];
+  // a forbidden placeholder marker. This is intentionally narrow — full
+  // profanity/SEO-spam detection is out of scope for a structural gate. The
+  // schema already enforces non-empty strings via StableId / UniqueNonEmptyStrings
+  // / NonEmptyText, so we only scan for literal placeholder markers here. We do
+  // NOT include "tbd" — it misfires on legitimate substrings like "tbd-app" or
+  // "todo-app" (S6). The list targets unambiguous placeholder tokens only.
+  // Scanned fields: patternType, categories, components, domainTags, visualFields
+  // values, groundedClaimIds, accessibilityEvidenceIds.
+  const BANNED = ["__placeholder__", "TODO", "FIXME", "lorem ipsum"];
   const hasBanned = (text: string): boolean => BANNED.some((b) => text.toLowerCase().includes(b.toLowerCase()));
   let noBannedPhrases = true;
   for (const label of allLabels) {
@@ -347,7 +355,7 @@ function computeHardGates(
       ...label.groundedClaimIds,
       ...label.accessibilityEvidenceIds,
     ];
-    if (fieldStrings.some((s) => s.length === 0 || hasBanned(s))) {
+    if (fieldStrings.some((s) => hasBanned(s))) {
       noBannedPhrases = false;
       break;
     }
@@ -369,11 +377,24 @@ function computeHardGates(
   }
 
   // Gate 6: valid-wcag-identifiers. Structural check: any string in visualFields
-  // keys or values that LOOKS like a WCAG reference (matches /\b\d+(\.\d+(\.\d+)?)?\b/
-  // after a "wcag" prefix) must be well-formed. We treat the absence of WCAG-like
+  // keys or values that LOOKS like a WCAG reference must be well-formed. We
+  // detect broadly (any "wcag" + digits) and accept narrowly (exactly 1-3
+  // numeric components separated by . _ or -). So "wcag 1.4.3" passes, but
+  // "wcag 1.4.3.5" (4 components) is detected by WCAG_PATTERN and rejected by
+  // WCAG_WELLFORMED → the gate fails. We treat the absence of WCAG-like
   // identifiers as a pass.
-  const WCAG_PATTERN = /\bwcag[\s_-]*\d+(?:[.\s_-]\d+)?(?:[.\s_-]\d+)?\b/i;
-  const WCAG_WELLFORMED = /\bwcag[\s_-]*\d+(?:[.\s_-]\d+(?:[.\s_-]\d+)?)?\b/i;
+  //
+  // P1/S7 fix: the previous two regexes were functionally identical (both
+  // matched the same set), so the gate was dead code. WCAG_PATTERN now matches
+  // any wcag+digits; WCAG_WELLFORMED is tightened to 1-3 components via a
+  // `{0,2}` quantifier plus a negative lookahead that rejects a trailing
+  // fourth component.
+  // Detect any WCAG-style reference (broad): wcag followed by digits.
+  const WCAG_PATTERN = /\bwcag[\s_-]*\d+/i;
+  // Well-formed: 1-3 dot/dash/underscore-separated numeric components, NOT
+  // followed by another component (the negative lookahead rejects "wcag
+  // 1.4.3.5" because after matching 1.4.3 a fourth ".5" is still present).
+  const WCAG_WELLFORMED = /\bwcag[\s_-]*\d+(?:[.\s_-]\d+){0,2}(?![.\s_-]*\d)/i;
   let validWcag = true;
   for (const label of allLabels) {
     const candidates = [...Object.keys(label.visualFields), ...Object.values(label.visualFields)];

@@ -322,6 +322,17 @@ function compareCandidates(
 /**
  * Verify that every unmet per-axis-bucket quota still has at least one
  * remaining candidate that could fill it. Throw (fail-closed) if not.
+ *
+ * UNREACHABLE under correct Hamilton: the floor-clamp
+ * (`Math.min(floor, pop)`) plus the pop-capped remainder distribution
+ * guarantee `quota <= pop` for every bucket. Since a candidate belongs to
+ * exactly one bucket per axis, selection cannot consume another bucket's
+ * members, so `remaining_in_bucket >= quota - selected` always holds.
+ * Retained as defense-in-depth: if a future change weakens the Hamilton
+ * invariant, this guard catches the infeasibility before producing a
+ * silently-wrong selection. The genuine user-facing failure mode (total
+ * non-challenge candidates < 35) is caught by the upfront precheck in
+ * `buildLabelIntegritySelection`.
  */
 function assertQuotasFeasible(
   remaining: ReadonlyArray<Candidate>,

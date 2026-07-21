@@ -209,18 +209,14 @@ describe("buildLabelIntegritySelection — fail-closed on impossible quota", () 
     );
   });
 
-  it("throws naming axis/bucket/counts when an axis-bucket quota becomes unreachable mid-run", () => {
-    // Construct a corpus whose total candidate count is exactly 35, but where one
-    // axis-bucket cannot reach its Hamilton quota because the bucket's members are
-    // ALL challenge entries (removed first) and thus have zero non-challenge
-    // representatives. We force this by making every "mobile" entry a challenge id:
-    // the mobile axis has zero non-challenge candidates, yet the platform axis
-    // exists. Because the candidates that remain are all "web", Hamilton gives web
-    // all 35 seats (feasible), so we additionally constrain the total count to <35
-    // by removing enough web entries to make the per-axis infeasibility fire.
-    //
-    // Simplest reliable trigger: total non-challenge candidates < 35. Verified above.
-    // Here we additionally assert the message mentions the selection invariants.
+  it("throws a descriptive error when total non-challenge candidates are fewer than 35 reproducible seats", () => {
+    // The genuine user-facing failure mode: fewer than 35 non-challenge candidates.
+    // The per-axis mid-run feasibility guard (assertQuotasFeasible) is provably
+    // unreachable under correct Hamilton (quota <= pop is guaranteed), so this
+    // upfront count check is the only fail-closed path that can fire. The test
+    // asserts the descriptive message, NOT an axis/bucket mid-run error (which
+    // cannot occur). See the assertQuotasFeasible docstring for the unreachability
+    // proof.
     const pool = genericEntries(30);
     expect(() => buildLabelIntegritySelection(baseInput(pool))).toThrow(
       /non-challenge candidates|reproducible seats/i,

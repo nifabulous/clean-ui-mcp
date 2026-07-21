@@ -1,0 +1,116 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-finance-news-story-detail-v1",
+  "caseId": "finance-news-story-detail",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:four-layers-visually-and-semantically-separated",
+    "decision:ai-summary-sentence-level-source-trace",
+    "decision:honest-no-source-for-point-instead-of-synthesis",
+    "decision:no-accuracy-confidence-or-source-authority-ranking",
+    "decision:context-labelled-machine-assembled-not-editorial",
+    "decision:sourced-text-keeps-publisher-and-timestamp-at-all-scroll-positions",
+    "decision:other-publishers-presented-neutrally-without-reliability-ranking"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:sourced-ai-summary-context-and-other-publishers-never-merge-into-one-narrative",
+    "ac:every-ai-summary-point-links-to-the-source-passage-it-condenses",
+    "ac:no-source-for-point-affordance-shown-when-a-summary-point-lacks-a-visible-source",
+    "ac:no-accuracy-confidence-or-source-authority-ranking-anywhere-on-the-screen",
+    "ac:context-panel-labelled-machine-assembled-and-never-reads-as-editorial-or-price-recommendation",
+    "ac:publisher-identity-and-timestamp-visible-on-sourced-text-at-every-scroll-position",
+    "ac:other-publishers-list-carries-no-reliability-or-best-source-marker"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:four-layer-separation-constraint",
+    "evidence:brief:ai-summary-sentence-trace-constraint",
+    "evidence:brief:no-source-for-point-constraint",
+    "evidence:brief:no-accuracy-or-authority-ranking-constraint",
+    "evidence:brief:context-machine-assembled-constraint",
+    "evidence:brief:publisher-timestamp-persistence-constraint",
+    "evidence:brief:other-publishers-neutral-constraint",
+    "evidence:brief:story-sourced-article-screen",
+    "evidence:brief:ai-summary-block-screen",
+    "evidence:brief:context-panel-screen",
+    "evidence:brief:other-publishers-list-screen"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:four-layer-separation-constraint",
+    "evidence:brief:ai-summary-sentence-trace-constraint",
+    "evidence:brief:no-source-for-point-constraint",
+    "evidence:brief:no-accuracy-or-authority-ranking-constraint",
+    "evidence:brief:context-machine-assembled-constraint"
+  ],
+  "forbiddenClaims": [
+    "AI summary accuracy percentage, confidence score, or reliability ranking",
+    "source-authority ranking or 'most reliable source' / 'best source' verdict over publishers",
+    "AI summary presented as the publisher's verdict, Newswire's reporting, an editorial conclusion, or a source of record",
+    "context panel presented as editorial analysis, a price forecast, or a buy/sell recommendation",
+    "analyst quotes, price targets, ratings, subscriber counts, or read counts not supplied in the brief",
+    "the four layers merged into a single Newswire-authored narrative",
+    "affiliation with any real news publisher, exchange, index provider, rating agency, or data vendor"
+  ],
+  "privateMarkers": [
+    "/corpus/private/finance-news-story-detail/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "Sourced publisher text, AI summary, context, and other publishers blur into one Newswire-authored narrative, or the AI summary is presented as the publisher's verdict.",
+      "score3": "The four layers are distinguishable but one boundary is soft — for example context reads as editorial analysis, or a summary point lacks a source link.",
+      "score5": "The four layers are visually and semantically separated at all scroll positions, every AI-summary point traces to its source, context is labelled machine-assembled, and no authoritative verdict is claimed."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "story-sourced-article, ai-summary-block, context-panel, and other-publishers-list share no common direction system and disagree on how layers are labelled.",
+      "score3": "Shared tokens across the four screens but the machine-generated label or the source-trace treatment is applied inconsistently between screens.",
+      "score5": "A single direction system unifies all four screens, with a consistent layer-labelling system (sourced / AI summary / context / other publishers) and a consistent source-trace treatment."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the sourced-article, ai-summary-block, context-panel, or other-publishers-list states.",
+      "score3": "Partial blueprints with unresolved no-source-for-point, paywall-detected, single-publisher-only, or context-empty states.",
+      "score5": "Engineers can build all four screens directly, including no-source-for-point, sentence-source-trace-active, paywall-detected, single-publisher-only, and context-empty states with their mobile rules."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of an existing reader that merges AI synthesis and publisher text or ranks sources by authority.",
+      "score3": "Derivative of common reader patterns but the four-layer separation and source-trace treatment is visually distinguishable.",
+      "score5": "A distinct treatment that makes the boundary between reported fact and machine synthesis unmistakable on a small screen, without ranking sources or claiming accuracy."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no article-unavailable, no-source-for-point, or single-publisher-only states.",
+      "score3": "Baseline contrast and focus with partial handling of paywall-detected or no-source-for-point.",
+      "score5": "WCAG-aligned contrast and focus across all four screens, with article-unavailable, paywall-detected, no-source-for-point, single-publisher-only, and context-empty states that never substitute the AI summary for missing publisher text without notice."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "An accuracy, confidence, source-authority, analyst-quote, or price-target claim appears unsupported, or the AI summary stands in for missing publisher text without notice.",
+      "score3": "Most claims trace to a visible source but one AI-summary point reads as established fact or loses its source link.",
+      "score5": "Every claim traces to a visible source passage, no-source-for-point is shown honestly when no source backs a point, and no accuracy, authority-ranking, analyst, or price-target claim appears anywhere."
+    }
+  ],
+  "adjudicationNotes": [
+    "This is a zero-tolerance case for layer blurring: any screen that merges sourced publisher text, AI summary, context, or other publishers into a single Newswire-authored narrative is an automatic fail on evidence-discipline and product-appropriateness, regardless of polish.",
+    "Sentence-level source trace is load-bearing: an output that attaches an AI summary without per-point source links fails product-appropriateness and implementation-clarity.",
+    "The no-source-for-point state tests honest synthesis: an output that silently fills gaps with confident-sounding summary sentences fails evidence-discipline.",
+    "Context is machine-assembled background, never editorial analysis: an output that lets the context panel read as a price forecast or buy/sell recommendation fails product-appropriateness.",
+    "Other publishers must be neutral: an output that ranks publishers by reliability or marks a 'best source' fails evidence-discipline.",
+    "Do not prescribe exact copy, brand colours, or pixel-level layout; the brief fixes the layer-separation and source-trace constraints, not the visual identity."
+  ]
+}

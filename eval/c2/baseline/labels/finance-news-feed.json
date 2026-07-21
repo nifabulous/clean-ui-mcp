@@ -1,0 +1,108 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-finance-news-feed-v1",
+  "caseId": "finance-news-feed",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:balanced-importance-recency-diversity-ranking",
+    "decision:source-diversity-visible-per-topic",
+    "decision:ai-summary-attributed-and-separated-from-publisher-articles",
+    "decision:no-authoritative-importance-verdict-or-accuracy-metric",
+    "decision:density-preserves-attribution",
+    "decision:sort-and-filter-never-claim-objective-correctness"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:feed-balances-importance-recency-and-diversity-without-one-dominating",
+    "ac:distinct-publisher-labels-visible-within-any-topic-cluster",
+    "ac:ai-summary-labelled-machine-generated-and-source-linked-separately-from-publisher-articles",
+    "ac:no-accuracy-confidence-or-most-important-verdict-anywhere-in-feed",
+    "ac:densest-layout-still-shows-publisher-timestamp-and-ai-summary-marker",
+    "ac:sort-and-filter-changes-do-not-claim-the-new-order-is-objectively-correct"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:balanced-ranking-constraint",
+    "evidence:brief:source-diversity-constraint",
+    "evidence:brief:ai-summary-attribution-constraint",
+    "evidence:brief:no-accuracy-or-importance-verdict-constraint",
+    "evidence:brief:density-preserves-attribution-constraint",
+    "evidence:brief:feed-default-screen",
+    "evidence:brief:topic-cluster-screen",
+    "evidence:brief:sort-filter-rail-screen"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:balanced-ranking-constraint",
+    "evidence:brief:source-diversity-constraint",
+    "evidence:brief:ai-summary-attribution-constraint",
+    "evidence:brief:no-accuracy-or-importance-verdict-constraint"
+  ],
+  "forbiddenClaims": [
+    "AI summary accuracy percentage, confidence score, or reliability ranking",
+    "Newswire's authoritative 'most important' or editorial importance verdict",
+    "article-volume, reader-count, market-coverage, or update-frequency metric not supplied in the brief",
+    "AI summary presented as Newswire's editorial verdict or a source of record without a machine-generated label",
+    "a single publisher silently presented as the only source for a topic with no diversity signal",
+    "affiliation with any real news publisher, exchange, index provider, or rating agency"
+  ],
+  "privateMarkers": [
+    "/corpus/private/finance-news-feed/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "The feed claims an authoritative importance ranking or lets one publisher dominate a topic with no diversity signal.",
+      "score3": "Importance, recency, and diversity are present but one signal drowns the others or the AI summary reads as an editorial verdict.",
+      "score5": "Importance, recency, and source diversity are visibly balanced, the AI summary is machine-generated and source-attributed, and no authoritative verdict is claimed."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "feed-default, topic-cluster, and sort-filter-rail share no common direction system and disagree on how the AI summary is labelled.",
+      "score3": "Shared tokens across the three screens but the publisher label, timestamp, or AI-summary marker is applied inconsistently.",
+      "score5": "A single direction system unifies all three screens, with a consistent publisher-label-plus-timestamp-plus-AI-summary-marker treatment on every item and cluster."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the feed-default, topic-cluster, or sort-filter-rail states.",
+      "score3": "Partial blueprints with unresolved single-source-warning, filter-no-results, or refresh-error states.",
+      "score5": "Engineers can build all three screens directly, including single-source-warning, filter-no-results, refresh-error, and sort-changed-to-recency states with their mobile rules."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of an existing finance feed that presents an authoritative ranking or hides source diversity.",
+      "score3": "Derivative of common feed patterns but the source-diversity and AI-attribution treatment is visually distinguishable.",
+      "score5": "A distinct treatment that makes the inferred ranking and source-diversity signals legible without claiming objective importance or accuracy."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no empty-no-stories, refresh-error, or filter-no-results states.",
+      "score3": "Baseline contrast and focus with partial handling of refresh-error or filter-no-results.",
+      "score5": "WCAG-aligned contrast and focus across all three screens, with empty-no-stories, refresh-error, single-source-warning, and filter-no-results states that keep sort and filter controls reachable."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "An accuracy, confidence, importance-verdict, article-volume, or market-coverage claim appears unsupported in the feed.",
+      "score3": "Most claims trace to the brief but one AI summary element reads as an editorial verdict or loses its source attribution.",
+      "score5": "Every claim traces to the brief, the AI summary is labelled machine-generated and source-linked, distinct publishers are visible per topic, and no accuracy or volume metric appears."
+    }
+  ],
+  "adjudicationNotes": [
+    "The feed's importance is an inferred ranking signal, never a Newswire editorial verdict; any 'most important' or authoritative-ranking claim is an automatic fail on evidence-discipline.",
+    "Source diversity is load-bearing: an output that lets a single publisher silently dominate a topic with no diversity signal fails product-appropriateness and cross-screen-coherence.",
+    "Density must not strip attribution: even in the densest layout, losing the publisher label, timestamp, or AI-summary marker on any item fails accessibility-and-failure-states.",
+    "The single-source-warning state tests honest degradation; an output that hides single-source topics to look comprehensive fails evidence-discipline.",
+    "Do not prescribe exact copy, brand colours, or pixel-level layout; the brief fixes the ranking-is-inferred and AI-is-attributed constraints, not the visual identity."
+  ]
+}

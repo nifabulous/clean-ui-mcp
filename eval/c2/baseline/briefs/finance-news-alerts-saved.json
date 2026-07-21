@@ -1,0 +1,82 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-finance-news-alerts-saved-v1",
+  "caseId": "finance-news-alerts-saved",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "finance-news-alerts-saved",
+  "title": "Newswire mobile breaking-news alerts, saved stories, and notification controls",
+  "productContext": "Fictional global finance-news mobile app (product name 'Newswire') for iOS and Android. This surface combines three jobs on one part of the app: subscribing to breaking-news alerts (with topic, company, and severity controls), reading and managing saved stories offline, and tuning notifications to fight fatigue. Newswire is reader-and-aggregation software only; alert severities are an inferred relevance signal, not an editorial verdict or a guarantee of market impact, and any AI summary attached to an alert is machine-generated and source-attributed. The app is pre-scale: there is no published alert-volume metric, no accuracy figure, and no promise of real-time delivery. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "alert subscriber who turns on breaking-news alerts for specific companies or topics and expects severity to be meaningful, not noise",
+    "offline reader who saves stories on cellular and reads them later on a plane or subway with no connection",
+    "notification-fatigued user who needs to mute, batch, or snooze alerts without losing the ability to get genuinely material developments"
+  ],
+  "jobs": [
+    "subscribe to and tune breaking-news alerts by company, topic, and severity, with a clear preview of how many alerts a setting will produce",
+    "save a story for offline reading and later find it, with its publisher identity, timestamp, and AI-summary attribution intact even when offline",
+    "fight notification fatigue by muting, batching, snoozing, or quiet-hours-ing alerts without the app claiming its severity is authoritative or its delivery is real-time",
+    "tell apart a publisher-authored alert headline from a machine-generated AI summary inside a notification"
+  ],
+  "platform": "mobile-app",
+  "requiredJourneys": [
+    "alert subscriber opens alert settings, picks a company and a severity threshold, sees a preview of expected alert volume, and confirms without being promised real-time delivery",
+    "offline reader saves a story while online, switches the device offline, and reopens the saved story with publisher, timestamp, and AI-summary label all intact",
+    "notification-fatigued user applies quiet hours and batched delivery, and confirms a genuinely material (highest-severity) development can still break through under the rules they set",
+    "any user receives a breaking-news notification and can tell at a glance whether the headline is publisher-authored or a machine-generated AI summary"
+  ],
+  "constraints": [
+    "Do not claim alerts are delivered in real time, instantly, or with guaranteed latency; the app is pre-scale and cannot promise delivery speed. Any timing language must be an expectation, not a guarantee, with a visible 'not guaranteed' treatment.",
+    "Alert severity is an inferred relevance signal, not an editorial verdict, a market-impact guarantee, or a source-of-truth ranking; do not display severity as an authoritative importance score, a confidence percentage, or a 'will move markets' promise.",
+    "Any AI summary attached to an alert or saved story must be labelled machine-generated and source-attributed; do not present it as the publisher's headline, an editorial verdict, or a source of record inside a notification or offline view.",
+    "Do not fabricate alert-volume counts, subscriber counts, accuracy figures, or delivery-speed metrics; any expected-volume preview must be clearly an estimate derived from the user's own settings, not a published benchmark.",
+    "Notification controls (mute, batch, snooze, quiet hours) must be reversible and individually legible: the user must be able to see what each control does and override it, and quiet hours must expose a 'material developments break through' exception that the user controls.",
+    "Offline saved stories must preserve publisher identity, timestamp, and AI-summary attribution; do not silently substitute a machine summary for a publisher article when offline, and surface an honest 'source not downloaded' state when the full article body is unavailable offline.",
+    "Exactly one primary action may lead any alert-subscription confirmation step; secondary actions (preview, skip, customize) must remain reachable without competing with it.",
+    "The product name Newswire is fictional; do not imply affiliation with any real news publisher, exchange, index provider, or rating agency, and do not imply any device-vendor or OS-level notification partnership."
+  ],
+  "requiredScreens": [
+    {
+      "id": "alert-subscription",
+      "states": [
+        "default",
+        "company-and-severity-selected",
+        "volume-preview-visible",
+        "subscription-confirm-pending"
+      ],
+      "mobileRules": [
+        "the company, topic, and severity controls stay operable in a single-handed grip and the selected severity stays sticky while the volume preview updates",
+        "the volume-preview-visible state labels the estimate as derived from the user's settings, not a published benchmark"
+      ]
+    },
+    {
+      "id": "saved-stories",
+      "states": [
+        "default",
+        "offline-mode-active",
+        "source-not-downloaded",
+        "save-failed-retry"
+      ],
+      "mobileRules": [
+        "each saved story keeps its publisher label, timestamp, and AI-summary marker visible and readable with no connection",
+        "the source-not-downloaded state names honestly that the full publisher article body is unavailable offline and never silently swaps in the AI summary as a substitute"
+      ]
+    },
+    {
+      "id": "notification-controls",
+      "states": [
+        "default",
+        "quiet-hours-active",
+        "batched-delivery-active",
+        "material-breakthrough-exception-on",
+        "all-muted"
+      ],
+      "mobileRules": [
+        "each control (mute, batch, snooze, quiet hours) shows its current effect inline and the material-breakthrough exception sits adjacent to quiet hours, not buried in a sub-screen",
+        "the all-muted state surfaces the material-breakthrough exception so a fatigued user can still opt to receive genuinely material developments"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

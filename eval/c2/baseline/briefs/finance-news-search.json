@@ -1,0 +1,83 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-finance-news-search-v1",
+  "caseId": "finance-news-search",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "finance-news-search",
+  "title": "Newswire mobile search and discovery across markets, companies, topics, and countries",
+  "productContext": "Fictional global finance-news mobile app (product name 'Newswire') for iOS and Android. Search is where a researcher, trend-follower, or new user goes to discover coverage across markets, companies, topics, and countries. Results mix publisher articles with an optional machine-generated AI summary and machine-assembled discovery groupings (trending tickers, related topics, country hubs). Newswire is reader-and-aggregation software only; it does not employ analysts, does not set a relevance authority, and the ranking of results is an inferred relevance signal, not an objective truth ranking. The app is pre-scale: there is no published index size, no coverage metric, and no AI-accuracy figure, and any trend signal shown is an inferred observation, not a forecast. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "researcher running a precise query across markets, companies, and countries and needing filters and source attribution on every result",
+    "trend-follower exploring what is rising in attention across topics or tickers, aware that 'trending' is an inferred signal not a forecast",
+    "new user exploring the app for the first time via search with no saved topics or follow list"
+  ],
+  "jobs": [
+    "search across markets, companies, topics, and countries and filter results without losing publisher attribution on any item",
+    "discover related topics, trending tickers, and country hubs, knowing these are machine-assembled and inferred, not editorial picks or forecasts",
+    "tell apart a publisher article result from a machine-generated AI summary result at a glance in the result list",
+    "recover gracefully from a typo, a zero-results query, or a slow query without being shown fabricated totals or accuracy claims"
+  ],
+  "platform": "mobile-app",
+  "requiredJourneys": [
+    "researcher types a precise query, applies company and country filters, and scans results where every item shows its publisher, timestamp, and AI-summary marker",
+    "trend-follower opens discovery, scans trending tickers and related topics, and confirms the screen labels them inferred, not forecast or authoritative",
+    "new user with no follow list runs an exploratory query, gets a useful starting set and discovery suggestions, and can refine without signing up first",
+    "any user hits a zero-results or slow-query state and gets a recoverable path (suggestions, filters reset, retry) with no fabricated result totals"
+  ],
+  "constraints": [
+    "Do not present search ranking as an objective truth or relevance-authority ranking; result order is an inferred relevance signal and the UI must not claim one publisher or result is objectively more correct than another.",
+    "Any AI summary in results must be labelled machine-generated and source-attributed; do not present it as the publisher's verdict, Newswire's editorial pick, or a source of record, and AI-summary results must be visually distinct from publisher-article results.",
+    "Do not display any AI-accuracy percentage, confidence score, coverage metric, or index-size figure; the app is pre-scale and no such numbers are supplied.",
+    "Trending tickers, related topics, and country hubs must be labelled machine-assembled and inferred; do not present them as forecasts, investment signals, buy/sell recommendations, or editorial endorsements.",
+    "Every search result — publisher article or AI summary — must keep a publisher label and timestamp visible in the list; filtering by market, company, topic, or country must never strip attribution.",
+    "Zero-results, typo-correction, and slow-query states must be honest and recoverable: the UI must not fabricate result totals, pad with synthetic results, or claim a slow query returned more than it did.",
+    "Discovery for a new user must not require sign-up or a saved follow list; an exploratory query must return a usable starting set and discovery suggestions without gating.",
+    "The product name Newswire is fictional; do not imply affiliation with any real news publisher, exchange, index provider, rating agency, or data vendor."
+  ],
+  "requiredScreens": [
+    {
+      "id": "search-input",
+      "states": [
+        "default",
+        "suggestions-visible",
+        "recent-queries-visible",
+        "query-slow"
+      ],
+      "mobileRules": [
+        "the search field sits in the thumb zone, keeps the active filter chips visible above the keyboard, and the submit affordance stays reachable in portrait",
+        "the query-slow state surfaces an honest 'still searching' indicator and offers a refine-or-cancel path without claiming results have arrived"
+      ]
+    },
+    {
+      "id": "results-list",
+      "states": [
+        "default",
+        "filters-applied",
+        "zero-results",
+        "typo-corrected",
+        "results-loading-error"
+      ],
+      "mobileRules": [
+        "every result row keeps its publisher label, timestamp, and AI-summary marker visible when filters collapse the list on a narrow viewport",
+        "the zero-results and results-loading-error states keep filters and recent queries reachable so the user can recover without retyping"
+      ]
+    },
+    {
+      "id": "discovery-hub",
+      "states": [
+        "default",
+        "trending-tickers-expanded",
+        "related-topics-expanded",
+        "country-hub-selected",
+        "discovery-loading"
+      ],
+      "mobileRules": [
+        "trending tickers, related topics, and country hubs each carry a 'machine-assembled, inferred' label wherever they appear",
+        "selecting a country hub filters results without implying Newswire ranks that market's sources by authority"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

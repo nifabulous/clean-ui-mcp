@@ -1,0 +1,110 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-finance-news-alerts-saved-v1",
+  "caseId": "finance-news-alerts-saved",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:delivery-timing-expectation-not-guarantee",
+    "decision:severity-is-inferred-relevance-not-authoritative",
+    "decision:ai-summary-attributed-in-alerts-and-offline",
+    "decision:volume-preview-is-user-derived-estimate-not-benchmark",
+    "decision:reversible-notification-controls-with-material-breakthrough",
+    "decision:offline-preserves-attribution-and-honest-source-not-downloaded"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:no-real-time-or-guaranteed-latency-claim-anywhere",
+    "ac:severity-labelled-inferred-relevance-with-no-authoritative-score-or-market-impact-promise",
+    "ac:ai-summary-labelled-machine-generated-and-source-attributed-in-notifications-and-offline-views",
+    "ac:volume-preview-labelled-user-derived-estimate-not-a-published-benchmark",
+    "ac:mute-batch-snooze-quiet-hours-reversible-with-material-breakthrough-exception-visible",
+    "ac:offline-saved-stories-keep-publisher-timestamp-and-ai-summary-marker-and-honest-source-not-downloaded-state"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:delivery-not-guaranteed-constraint",
+    "evidence:brief:severity-inferred-not-authoritative-constraint",
+    "evidence:brief:ai-summary-attribution-constraint",
+    "evidence:brief:volume-preview-estimate-constraint",
+    "evidence:brief:reversible-notification-controls-constraint",
+    "evidence:brief:offline-attribution-constraint",
+    "evidence:brief:alert-subscription-screen",
+    "evidence:brief:saved-stories-screen",
+    "evidence:brief:notification-controls-screen"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:delivery-not-guaranteed-constraint",
+    "evidence:brief:severity-inferred-not-authoritative-constraint",
+    "evidence:brief:ai-summary-attribution-constraint",
+    "evidence:brief:reversible-notification-controls-constraint"
+  ],
+  "forbiddenClaims": [
+    "real-time, instant, or guaranteed-latency alert delivery",
+    "severity as an authoritative importance score, confidence percentage, or 'will move markets' promise",
+    "alert-volume, subscriber, accuracy, or delivery-speed metric not supplied in the brief",
+    "AI summary presented as the publisher's headline, an editorial verdict, or a source of record inside a notification or offline view",
+    "silent substitution of a machine summary for a publisher article when the source is not downloaded offline",
+    "notification controls that cannot be reversed or that bury the material-breakthrough exception",
+    "affiliation with any real news publisher, exchange, index provider, rating agency, or device-vendor notification partnership"
+  ],
+  "privateMarkers": [
+    "/corpus/private/finance-news-alerts-saved/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "Alerts promise real-time delivery or authoritative severity, or silently swap an AI summary for a publisher article offline.",
+      "score3": "Timing and severity are mostly hedged but one alert reads as a market-impact promise or the offline substitution goes unnoticed.",
+      "score5": "Delivery is an expectation not a guarantee, severity is inferred relevance, AI summaries are labelled and source-attributed, and notification controls are reversible with a material-breakthrough exception."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "alert-subscription, saved-stories, and notification-controls share no common direction system and disagree on how severity or AI summaries are labelled.",
+      "score3": "Shared tokens across the three screens but the severity label, estimate framing, or AI-summary marker is applied inconsistently.",
+      "score5": "A single direction system unifies all three screens, with a consistent inferred-severity label, a consistent user-derived-estimate framing for volume, and a consistent machine-generated AI-summary marker."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the alert-subscription, saved-stories, or notification-controls states.",
+      "score3": "Partial blueprints with unresolved volume-preview-visible, source-not-downloaded, or material-breakthrough-exception-on states.",
+      "score5": "Engineers can build all three screens directly, including volume-preview-visible, source-not-downloaded, save-failed-retry, quiet-hours-active, batched-delivery-active, material-breakthrough-exception-on, and all-muted states with their mobile rules."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of an existing finance-alerts surface that promises real-time delivery or authoritative severity.",
+      "score3": "Derivative of common alert patterns but the inferred-severity and honest-offline treatment is visually distinguishable.",
+      "score5": "A distinct treatment that makes inferred severity, user-derived volume estimates, and honest offline attribution legible without promising speed or authority."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no source-not-downloaded, save-failed-retry, or all-muted states.",
+      "score3": "Baseline contrast and focus with partial handling of source-not-downloaded or save-failed-retry.",
+      "score5": "WCAG-aligned contrast and focus across all three screens, with source-not-downloaded, save-failed-retry, all-muted, and quiet-hours-active states that keep attribution intact and the material-breakthrough exception reachable."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "A real-time, guaranteed-latency, authoritative-severity, alert-volume, or accuracy claim appears unsupported, or an AI summary silently substitutes for missing publisher text offline.",
+      "score3": "Most claims trace to the brief but one severity reads as a market-impact promise or one offline item loses its source attribution.",
+      "score5": "Every claim traces to the brief, timing is an expectation, severity is inferred relevance, volume previews are user-derived estimates, and no delivery-speed, accuracy, or authority claim appears."
+    }
+  ],
+  "adjudicationNotes": [
+    "This is a zero-tolerance case for delivery-speed and severity-authority claims: any real-time, instant, guaranteed-latency, or authoritative-severity framing is an automatic fail on evidence-discipline, regardless of polish.",
+    "Offline attribution is load-bearing: an output that silently swaps a machine summary for a publisher article when the source is not downloaded fails product-appropriateness and evidence-discipline.",
+    "Notification controls must be reversible and expose the material-breakthrough exception adjacent to quiet hours; an output that buries or omits it fails accessibility-and-failure-states.",
+    "Volume previews must read as user-derived estimates, not published benchmarks; an output that frames expected volume as a guaranteed cadence fails evidence-discipline.",
+    "Do not prescribe exact copy, brand colours, or pixel-level layout; the brief fixes the timing-not-guaranteed and severity-not-authoritative constraints, not the visual identity."
+  ]
+}

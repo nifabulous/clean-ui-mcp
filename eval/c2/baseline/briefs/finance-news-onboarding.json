@@ -1,0 +1,92 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-finance-news-onboarding-v1",
+  "caseId": "finance-news-onboarding",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "finance-news-onboarding",
+  "title": "Newswire mobile onboarding: role, topics, regions, and AI summary preview",
+  "productContext": "Fictional global finance-news mobile app (product name 'Newswire') for iOS and Android. The app is pre-subscription: there is no published subscriber count, no market-coverage percentage, and no AI-accuracy metric. Newswire is news-aggregation-and-reader software only; it does not employ analysts, does not publish original price targets or ratings, and the in-app 'AI summary' is a machine-generated condensation of publisher articles, never an editorial verdict. Onboarding lets a new subscriber pick a role (for example investor, analyst, operator), topics, and regions, then shows a personalized preview before they start a trial. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "new subscriber choosing a role, topics, and regions for the first time on a phone",
+    "returning reader re-running onboarding to retune topics and regions after interests change",
+    "content curator at a partner organization setting up a shared topic profile for a team"
+  ],
+  "jobs": [
+    "select a role, a set of topics, and a set of regions without losing progress on a small screen",
+    "see a personalized preview that reflects the selected role, topics, and regions before starting a trial",
+    "understand what the in-app AI summary is and is not (machine-generated, attributed to sources, not an editorial verdict) before relying on it",
+    "start a trial or skip personalization without being pressured or shown fabricated subscriber or accuracy numbers"
+  ],
+  "platform": "mobile-app",
+  "requiredJourneys": [
+    "new subscriber completes role, topics, and regions steps in order and reaches a personalized preview that reflects every choice",
+    "returning reader re-enters onboarding, changes topics and regions, and sees the preview update before confirming",
+    "any subscriber reaches an explanation of the AI summary that states it is machine-generated and attributed to sources, before the preview leans on it",
+    "any subscriber can skip personalization and still reach the app home with a clear non-personalized fallback"
+  ],
+  "constraints": [
+    "Do not claim Newswire employs analysts, publishes original price targets, ratings, or buy/sell recommendations; the app aggregates and presents publisher content plus a machine-generated summary.",
+    "The AI summary must be visibly attributed and labelled as machine-generated; do not present it as editorial fact, a Newswire verdict, or a source of record. Every AI summary element must carry an 'AI summary' label and link back to its source articles.",
+    "Do not present AI summaries as accurate, authoritative, or guaranteed; the UI must not display any accuracy percentage, confidence score, or 'most reliable' ranking for AI output.",
+    "Do not fabricate subscriber counts, market-coverage percentages, source counts, or any metric not supplied in this brief; onboarding is pre-trial and has no published numbers.",
+    "Personalization must be reversible: the subscriber can go back, change, or skip any of role, topics, and regions, and skip-personalization must be a first-class path, not a hidden link.",
+    "Exactly one primary action (start trial) may lead the preview step; secondary actions (edit selections, skip) must remain reachable without competing with it.",
+    "Do not collect or imply collection of payment during onboarding; onboarding ends at trial start, not at checkout.",
+    "The product name Newswire is fictional; do not imply affiliation with any real news publisher, exchange, index provider, or rating agency."
+  ],
+  "requiredScreens": [
+    {
+      "id": "role-select",
+      "states": [
+        "default",
+        "role-selected",
+        "role-change-pending"
+      ],
+      "mobileRules": [
+        "role chips are large enough to tap with a thumb in portrait and the selected role stays sticky as the subscriber advances",
+        "the back affordance on role-change-pending does not silently discard topic and region selections made in later steps"
+      ]
+    },
+    {
+      "id": "topic-region-select",
+      "states": [
+        "default",
+        "partial-selection",
+        "selection-error-no-region",
+        "selection-loading"
+      ],
+      "mobileRules": [
+        "topic and region pickers stack vertically and each chosen chip remains visible and removable in a single-handed grip",
+        "selection-error-no-region surfaces an inline message that names the missing field and keeps prior selections intact"
+      ]
+    },
+    {
+      "id": "preview",
+      "states": [
+        "default",
+        "preview-loading",
+        "preview-empty",
+        "ai-summary-explainer-visible"
+      ],
+      "mobileRules": [
+        "the personalized preview reflects every selected role, topic, and region and each preview card keeps its AI-summary label attached when collapsed",
+        "the preview-empty state offers a non-personalized fallback and keeps the skip-personalization path reachable"
+      ]
+    },
+    {
+      "id": "ai-summary-explainer",
+      "states": [
+        "default",
+        "source-list-visible",
+        "explainer-dismissed"
+      ],
+      "mobileRules": [
+        "the explainer states the summary is machine-generated and attributed to sources in the same viewport as the dismiss action",
+        "source links inside the explainer open the source article, not a Newswire-authored substitute"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

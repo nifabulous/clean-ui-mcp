@@ -149,6 +149,19 @@ export const C2BaselineManifestSchema = z
         message: "case IDs must be unique",
       });
     }
+    // Every independent case ID must appear exactly once in the cases array.
+    // Without this cross-field check, the execution matrix could declare runs
+    // for cases that don't exist in the manifest.
+    const caseIds = new Set(manifest.cases.map((c) => c.caseId));
+    for (const independentId of manifest.executionMatrix.independentCaseIds) {
+      if (!caseIds.has(independentId)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["executionMatrix", "independentCaseIds"],
+          message: `independent case ID '${independentId}' does not appear in manifest.cases`,
+        });
+      }
+    }
   });
 
 export type C2BaselineManifest = z.infer<typeof C2BaselineManifestSchema>;

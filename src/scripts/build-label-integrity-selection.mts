@@ -40,6 +40,7 @@ import {
   type ChallengeEntryInput,
 } from "../c2/label-selection.js";
 import { scanDurableArtifact, writeDurableArtifact, type BoundaryScanConfig } from "../c2/private-artifacts.js";
+import { C2LabelIntegritySelectionSchema } from "../c2/evaluation-contracts.js";
 import { canonicalJsonStringify, sha256Hex } from "../readiness/contracts.js";
 
 // ---------------------------------------------------------------------------
@@ -346,9 +347,42 @@ function checkSelection(canonical: string): void {
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const check = argv.includes("--check");
-  const unknown = argv.filter((a) => a !== "--check");
+  const verifySchema = argv.includes("--verify-schema");
+  const unknown = argv.filter((a) => a !== "--check" && a !== "--verify-schema");
   if (unknown.length > 0) {
-    fail(`unknown argument(s): ${unknown.join(" ")} (only --check is supported)`);
+    fail(`unknown argument(s): ${unknown.join(" ")} (only --check and --verify-schema are supported)`);
+  }
+
+  if (check && verifySchema) {
+    fail("--check and --verify-schema are mutually exclusive");
+  }
+
+  // --verify-schema: CI-safe validation of the committed artifact WITHOUT the
+  // gitignored corpus. Validates the selection's structure through the Zod
+  // schema + boundary scan. This is the build-chain check; --check (which
+  // requires the corpus) is the operator-local drift detector.
+  if (verifySchema) {
+    const selPath = SELECTION_ABS_PATH;
+    if (!existsSync(selPath)) {
+      fail(`selection not found: ${SELECTION_REL_PATH}`);
+    }
+    const text = readFileSync(selPath, "utf8");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (err) {
+      fail(`${SELECTION_REL_PATH} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // Parse through the strict schema (enforces 40 entries, 35+5, unique IDs,
+    // StableId/Sha256/GitSha shapes, seed literal, etc.).
+    const result = C2LabelIntegritySelectionSchema.safeParse(parsed);
+    if (!result.success) {
+      fail(`${SELECTION_REL_PATH} fails schema validation: ${result.error.message}`);
+    }
+    // Boundary scan (no secrets, no private paths, no content fields).
+    scanDurableArtifact(text, { secretValues: [], secretEnvNames: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"] });
+    console.error(`build-label-integrity-selection: ${SELECTION_REL_PATH} schema + boundary check OK (40 entries, corpus-free)`);
+    return;
   }
 
   if (check) {

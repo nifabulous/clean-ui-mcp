@@ -433,17 +433,17 @@ async function runPrepareCli(args: Record<string, unknown>): Promise<number> {
     );
     return 1;
   }
-  // When every case file exists, defer to the pilot's prepare implementation.
-  // The resolver is identical; the only difference is the manifest source.
-  // We deliberately do NOT re-implement resolution here — the pilot's
-  // prepare is the canonical implementation and any drift would split the
-  // campaign into two resolver code paths.
+  // prepare is NOT YET IMPLEMENTED for the baseline manifest. The pilot CLI's
+  // prepare is hardcoded to eval/c2/pilot/manifest.json and cannot resolve
+  // baseline cases. Returning non-zero so an operator does not believe inputs
+  // were prepared when they were not.
   console.error(
-    `[c2-baseline-prepare] all ${manifest.cases.length} cases have on-disk files; `
-    + `resolution reuses src/scripts/run-c2-pilot.ts prepare semantics. `
-    + `Run \`c2:pilot prepare\` against the baseline manifest to populate condition inputs.`,
+    `[c2-baseline-prepare] NOT IMPLEMENTED: baseline condition-input resolution `
+    + `requires wiring the resolver to the 25-case baseline manifest. `
+    + `The pilot CLI's prepare is hardcoded to eval/c2/pilot/manifest.json and `
+    + `cannot prepare baseline cases.`,
   );
-  return 0;
+  return 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -524,30 +524,21 @@ async function runRunCli(args: Record<string, unknown>): Promise<number> {
     return 1;
   }
 
-  // The paid execution loop reuses the pilot's harness primitives. We do NOT
-  // re-implement executeC2Run, the audit hook, the atomic writes, or the cost
-  // controls — those are imported from src/scripts/run-c2-pilot.ts and
-  // src/c2/harness.ts. The pilot CLI is the canonical network-capable
-  // implementation; this command wires the baseline manifest into the same
-  // loop and is exercised only by the production operator (never by tests).
-  //
-  // Implementation note: the full 80-run execution requires the 25 case
-  // packages (Task B4) AND prepared condition inputs (run prepare first).
-  // Both are offline prerequisites; the paid path fails closed if either is
-  // missing, exactly as the pilot does.
+  // The paid execution loop is NOT YET IMPLEMENTED. It will reuse the pilot's
+  // harness primitives (executeC2Run + audit hook + atomic writes + cost
+  // controls from src/c2/harness.ts) but requires the 25 case packages (Task
+  // B4) and prepared condition inputs. Returning non-zero so an operator does
+  // not believe the 80-run campaign completed when zero runs occurred.
   console.error(renderBaselinePreflight(pf));
   console.error("");
   console.error(
-    "[c2-baseline-run] paid execution reuses src/scripts/run-c2-pilot.ts run semantics "
-    + "(executeC2Run + audit hook + atomic writes + cost controls). "
-    + "Ensure `prepare` has populated .c2-private/c2/baseline/condition-inputs/ first.",
+    "[c2-baseline-run] NOT IMPLEMENTED: paid execution requires wiring the "
+    + "80-run matrix into executeC2Run. The preflight above shows the planned "
+    + "campaign; the execution loop lands in a follow-up PR after the 25 case "
+    + "packages (Task B4) are authored.",
   );
-  // Audit hook is wired but never reached without a real provider call. The
-  // presence of this reference proves the no-egress audit is part of the
-  // runner's contract (a future implementation that calls executeC2Run must
-  // thread it).
   void auditNetworkEgress;
-  return 0;
+  return 1;
 }
 
 // ---------------------------------------------------------------------------

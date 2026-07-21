@@ -22,7 +22,7 @@ interface CaseSeed {
 
 const PRODUCT_CASES: CaseSeed[] = [
   { caseId: "stablecoin-home", family: "product" },
-  { caseId: "product-2", family: "product" },
+  { caseId: "finance-news-story-detail", family: "product" },
   { caseId: "product-3", family: "product" },
   { caseId: "product-4", family: "product" },
   { caseId: "product-5", family: "product" },
@@ -271,5 +271,35 @@ describe("C2BaselineManifestSchema", () => {
     expect(json).not.toContain(".c2-private/");
     expect(json).not.toContain('"prompt":');
     expect(json).not.toContain('"rawResponse":');
+  });
+
+  it("rejects an independent case ID that does not appear in manifest.cases", () => {
+    // Finding #4: independent IDs must be bound to manifest cases. A manifest
+    // that declares an independent run for a case not in the cases array would
+    // permit 80 runs involving a nonexistent case.
+    // Build 25 cases but replace finance-news-story-detail with a placeholder.
+    const cases = [
+      ...PRODUCT_CASES.map((c) => c.caseId === "finance-news-story-detail"
+        ? { ...c, caseId: "product-replacement" }
+        : c),
+      ...MIGRATION_CASES,
+      ...SAFETY_CASES,
+    ].map((c) => ({
+      schemaVersion: "1.0" as const,
+      artifactType: "c2-case-package" as const,
+      artifactId: `c2-package-${c.caseId}-v1`,
+      caseId: c.caseId,
+      caseVersion: 1,
+      family: c.family,
+      brief: fileRef(`c2-brief-${c.caseId}`, `briefs/${c.caseId}.json`),
+      label: fileRef(`c2-label-${c.caseId}`, `labels/${c.caseId}.json`),
+      sourceSnapshot: c.family === "migration" ? fileRef(`c2-snap-${c.caseId}`, `snapshots/${c.caseId}.json`) : null,
+      goldEvidenceDescriptor: fileRef(`c2-evidence-${c.caseId}`, `evidence/${c.caseId}.json`),
+    }));
+    const result = C2BaselineManifestSchema.safeParse(buildManifest({ cases }));
+    expect(result.success).toBe(false);
+    expect(result.error!.issues.some((i) =>
+      /independent case ID.*finance-news-story-detail.*does not appear/.test(i.message),
+    )).toBe(true);
   });
 });

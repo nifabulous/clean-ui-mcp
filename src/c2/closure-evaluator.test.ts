@@ -687,4 +687,18 @@ describe("evaluateC2Closure", () => {
     expect(checkById(report, "C8").passed).toBe(false);
     expect(report.overallPassed).toBe(false);
   });
+
+  it("rejects duplicate scorecard runIds (prevents count inflation)", () => {
+    // Finding #5: duplicating a scorecard can inflate C4/C7 readiness counts.
+    // The evaluator must reject duplicates by runId.
+    const dataset = buildDataset();
+    // Duplicate the first scorecard — same runId appears twice.
+    const dupScorecards = [...dataset.scorecards, dataset.scorecards[0]!];
+    const report = evaluateC2Closure(buildInput({ ...dataset, scorecards: dupScorecards }));
+    // The duplicate must not inflate counts. The report should still compute
+    // but the duplicate is excluded (drifted). If it were counted, C7 would
+    // show 26 implementation-ready instead of 25.
+    const c7 = checkById(report, "C7");
+    expect(c7.details).not.toContain("26");
+  });
 });

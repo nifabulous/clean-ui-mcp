@@ -76,10 +76,14 @@ interface CaseSeed {
   family: "product" | "migration" | "safety";
 }
 
-const PRODUCT_CASES: CaseSeed[] = Array.from({ length: 15 }, (_, i) => ({
-  caseId: i === 0 ? "stablecoin-home" : `product-${i + 1}`,
-  family: "product" as const,
-}));
+const PRODUCT_CASES: CaseSeed[] = [
+  { caseId: "stablecoin-home", family: "product" },
+  { caseId: "finance-news-story-detail", family: "product" },
+  ...Array.from({ length: 13 }, (_, i) => ({
+    caseId: `product-${i + 3}`,
+    family: "product" as const,
+  })),
+];
 const MIGRATION_CASES: CaseSeed[] = Array.from({ length: 5 }, (_, i) => ({
   caseId: i === 0 ? "public-marketing-migration" : `migration-${i + 1}`,
   family: "migration" as const,

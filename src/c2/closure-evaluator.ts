@@ -189,7 +189,23 @@ function bindScorecards(
 ): { bound: BoundScorecard[]; drifted: BoundScorecard[] } {
   const bound: BoundScorecard[] = [];
   const drifted: BoundScorecard[] = [];
+  // Reject duplicate runIds — a duplicate can inflate readiness counts (C4/C7)
+  // and dimension means (C3). Track seen runIds and mark duplicates as drifted.
+  const seenRunIds = new Set<string>();
   for (const sc of scorecards) {
+    if (seenRunIds.has(sc.runId)) {
+      drifted.push({
+        scorecard: sc,
+        run: undefined,
+        caseId: "",
+        family: "product",
+        condition: "current-grounded",
+        bound: false,
+        driftReason: `duplicate runId ${sc.runId} — a second scorecard for the same run inflates counts`,
+      });
+      continue;
+    }
+    seenRunIds.add(sc.runId);
     const run = runsByRunId.get(sc.runId);
     if (!run) {
       drifted.push({

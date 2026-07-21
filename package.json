@@ -11,7 +11,7 @@
     "generate-references": "node scripts/generate-reference-artifacts.mjs",
     "validate-references": "node scripts/generate-reference-artifacts.mjs --check && tsc && node dist/references/loader.js",
     "check-public-site-boundary": "node scripts/check-public-site-boundary.mjs",
-    "build": "npm run check-public-site-boundary && npm run validate:c2-pilot && npm run validate:c2-label-selection && npm run generate-references && tsc",
+    "build": "npm run check-public-site-boundary && npm run validate:c2-pilot && npm run validate:c2-label-selection:schema && npm run generate-references && tsc",
     "start": "node dist/server.js",
     "dev": "tsc && node dist/server.js",
     "ui": "tsc && node dist/scripts/ui-server.js",
@@ -51,11 +51,12 @@
     "test:c2-scoring": "vitest run src/c2/scorer.test.ts scripts/design-handoff-v1-regression.test.mjs scripts/design-handoff-scorer.test.mjs",
     "generate:c2-pilot": "node scripts/build-c2-pilot-manifest.mjs",
     "validate:c2-pilot": "node scripts/build-c2-pilot-manifest.mjs --check",
-    "generate:c2-label-selection": "npx tsx src/scripts/build-label-integrity-selection.mts",
-    "validate:c2-label-selection": "npx tsx src/scripts/build-label-integrity-selection.mts --check",
+    "generate:c2-label-selection": "tsx src/scripts/build-label-integrity-selection.mts",
+    "validate:c2-label-selection": "tsx src/scripts/build-label-integrity-selection.mts --check",
+    "validate:c2-label-selection:schema": "tsx src/scripts/build-label-integrity-selection.mts --verify-schema",
     "c2:pilot": "tsc && node dist/scripts/run-c2-pilot.js",
-    "c2:baseline": "npx tsx src/scripts/run-c2-baseline.ts",
-    "validate:c2-baseline": "npx tsx src/scripts/run-c2-baseline.ts validate --manifest eval/c2/baseline/manifest.json --calibration eval/c2/calibration/frozen.json",
+    "c2:baseline": "tsx src/scripts/run-c2-baseline.ts",
+    "validate:c2-baseline": "tsx src/scripts/run-c2-baseline.ts validate --manifest eval/c2/baseline/manifest.json --calibration eval/c2/calibration/frozen.json",
     "validate-readiness-artifacts": "tsc && node dist/scripts/validate-readiness-artifacts.js",
     "typecheck:contracts": "tsc --noEmit && tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck src/tool-contract-types.test.ts"
   },
@@ -92,6 +93,7 @@
     "@vitest/browser": "^4.1.9",
     "jsdom": "^28.0.0",
     "typescript": "^5.9.3",
+    "tsx": "^4.23.1",
     "vite": "^7.3.6",
     "vitest": "^4.1.9"
   }

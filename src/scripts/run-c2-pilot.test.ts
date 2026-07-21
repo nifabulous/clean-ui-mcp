@@ -532,16 +532,20 @@ describe("run-c2-pilot CLI — freeze binds real run + scorecard evidence (P1)",
       : [];
     expect(scorecardFiles.length).toBeGreaterThan(0);
 
-    // Build a matching authorization. The freeze gate requires the
-    // independentChecklist to equal the proposal's compatibility MINUS the
-    // cliSynthesized marker (the CLI substitutes the authorization's checklist
-    // when the proposal carries cliSynthesized — we reuse that exact checklist
-    // here with the marker stripped, mirroring the freeze-authorization
-    // template's contract).
+    // Build a human authorization whose checklist is deliberately different
+    // from the proposal's CLI-synthesized placeholder. This is important: the
+    // regression must prove that `runFreeze` binds the human judgment rather
+    // than silently persisting the proposal's fabricated false values.
     const tmpAuth = mkdtempSync(join(tmpdir(), "c2-p1-auth-"));
     const authPath = join(tmpAuth, "authorization.json");
-    const { cliSynthesized: _omit, ...checklist } = proposal.measurements.independentCompatibility;
-    void _omit;
+    const checklist = {
+      criticalDecisionCoverageComplete: false,
+      contradictoryCriticalDecisions: false,
+      constraintsRespected: true,
+      forbiddenClaimsRespected: true,
+      compatibleJourneys: true,
+      safetyPassedIndependently: true,
+    };
     const authorization = {
       schemaVersion: "1.0",
       artifactType: "c2-freeze-authorization",
@@ -590,12 +594,17 @@ describe("run-c2-pilot CLI — freeze binds real run + scorecard evidence (P1)",
       const frozen = JSON.parse(readFileSync(FROZEN_PATH, "utf-8")) as {
         runManifestRefs: Array<{ artifactId: string; path: string; sha256: string }>;
         scorecardRefs: Array<{ artifactId: string; path: string; sha256: string }>;
+        independentChecklist: typeof checklist;
       };
 
       // P1 core assertion: every run manifest is bound — NOT the proposal
       // placeholder (which would collapse to a single ref).
       expect(frozen.runManifestRefs).toHaveLength(runDirs.length);
       expect(frozen.scorecardRefs).toHaveLength(scorecardFiles.length);
+
+      // The persisted checklist must be the human authorization, not the
+      // proposal's cliSynthesized placeholder.
+      expect(frozen.independentChecklist).toEqual(checklist);
 
       // Every run-manifest ref must point at a real eval/c2/runs/<runId>/manifest.json
       // path — NOT the proposal.json placeholder.
@@ -627,6 +636,21 @@ describe("run-c2-pilot CLI — freeze binds real run + scorecard evidence (P1)",
       restoreFrozen(frozenState);
       rmSync(tmpAuth, { recursive: true, force: true });
     }
+  });
+
+  it("checked-in frozen calibration preserves the human compatibility judgment", () => {
+    if (!existsSync(FROZEN_PATH)) return;
+    const frozen = JSON.parse(readFileSync(FROZEN_PATH, "utf-8")) as {
+      independentChecklist: Record<string, boolean>;
+    };
+    expect(frozen.independentChecklist).toEqual({
+      criticalDecisionCoverageComplete: false,
+      contradictoryCriticalDecisions: false,
+      constraintsRespected: true,
+      forbiddenClaimsRespected: true,
+      compatibleJourneys: true,
+      safetyPassedIndependently: true,
+    });
   });
 
   it("freeze without --runs exits non-zero with a usage error naming the required flag", () => {

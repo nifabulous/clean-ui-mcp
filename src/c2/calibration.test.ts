@@ -514,6 +514,69 @@ describe("buildCalibrationProposal", () => {
     ).toThrow(/missing Claude independent run for family 'migration'/);
   });
 
+  // -------------------------------------------------------------------------
+  // Exact-match exception (P2): every field — family, condition, provider,
+  // reason, attempts, evidenceRefs — must match the canonical constant. A
+  // crafted exception with the right structural identity (family + condition +
+  // provider) but a tampered reason/attempts/evidenceRefs must NOT pass the
+  // coverage gate.
+  // -------------------------------------------------------------------------
+
+  it("rejects a tampered reason: same family/condition/provider but a different reason string fails closed", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const tampered: ClaudeCoverageException = {
+      ...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+      reason: "A completely different reason that does not match the documented truncation incident.",
+    };
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [tampered])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
+  it("rejects a tampered attempts count: same family/condition/provider/reason but a different attempts number fails closed", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const tampered: ClaudeCoverageException = {
+      ...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+      attempts: STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION.attempts + 1,
+    };
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [tampered])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
+  it("rejects tampered evidenceRefs: same identity but a different evidenceRefs array fails closed", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const tampered: ClaudeCoverageException = {
+      ...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+      evidenceRefs: ["a-different-evidence-ref"],
+    };
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [tampered])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
+  it("rejects evidenceRefs with an extra entry (right prefix but a superset array fails closed)", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const tampered: ClaudeCoverageException = {
+      ...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+      evidenceRefs: [...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION.evidenceRefs, "extra-ref"],
+    };
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [tampered])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
+  it("rejects evidenceRefs with a reordered array (same entries, different order fails closed — order is part of the binding)", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const tampered: ClaudeCoverageException = {
+      ...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+      evidenceRefs: [...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION.evidenceRefs].reverse(),
+    };
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [tampered])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
   it("primary coverage stays strict — a Claude exception does NOT excuse a missing primary run", () => {
     // Drop a primary run (product::brief-only).
     const runs = matrix.runs.filter(

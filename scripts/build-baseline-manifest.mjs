@@ -51,6 +51,7 @@ import {
   existsSync,
   fsyncSync,
   openSync,
+  readFileSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -267,7 +268,7 @@ async function readAllArtifacts(root) {
  * For non-migration briefs: sourceSnapshotRef must be null/absent and the
  * manifest's sourceSnapshot is null.
  */
-function resolveSourceSnapshot(brief) {
+function resolveSourceSnapshot(brief, opts = {}, root = ".") {
   const ref = brief.parsed.sourceSnapshotRef;
   if (brief.parsed.family === "migration") {
     if (!ref || ref.artifactType !== "design-source-snapshot") {
@@ -278,6 +279,30 @@ function resolveSourceSnapshot(brief) {
     if (typeof ref.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(ref.sha256)) {
       fail(
         `migration brief ${brief.name} sourceSnapshotRef.sha256 is not a valid 64-hex digest`,
+      );
+    }
+    // When the snapshot file exists, verify the declared hash matches the actual
+    // bytes. When it doesn't exist yet (placeholder sha), warn loudly so the
+    // gap is visible — the manifest validates but execution will fail closed.
+    const snapshotPath = resolve(root, ref.path);
+    if (existsSync(snapshotPath)) {
+      const actualSha = sha256Hex(readFileSync(snapshotPath));
+      if (actualSha !== ref.sha256) {
+        fail(
+          `migration brief ${brief.name} sourceSnapshotRef.sha256 (${ref.sha256.slice(0, 12)}…) ` +
+          `does not match the actual file hash (${actualSha.slice(0, 12)}…) at ${ref.path}`,
+        );
+      }
+    } else if (!opts.allowMissingSnapshots) {
+      fail(
+        `migration brief ${brief.name} references snapshot at ${ref.path} but the file does not exist. ` +
+        `Author the snapshot and update the brief's sourceSnapshotRef.sha256, or pass --allow-missing-snapshots.`,
+      );
+    } else {
+      // Only warn — don't fail. This is for the current deferral period.
+      console.error(
+        `WARNING: migration brief ${brief.name} references snapshot at ${ref.path} which does not exist yet. ` +
+        `The manifest will bind the declared placeholder hash; execution (prepare/run) will fail closed until the file is authored.`,
       );
     }
     return {
@@ -304,7 +329,7 @@ function resolveSourceSnapshot(brief) {
  * @param {string} root  absolute path to the repo root.
  * @returns {Promise<object>} the manifest object (caller serializes it).
  */
-export async function buildBaselineManifest(root) {
+export async function buildBaselineManifest(root, opts = {}) {
   if (typeof root !== "string" || root.length === 0) {
     fail("root path is required");
   }
@@ -410,7 +435,7 @@ export async function buildBaselineManifest(root) {
       );
     }
 
-    const sourceSnapshot = resolveSourceSnapshot(brief);
+    const sourceSnapshot = resolveSourceSnapshot(brief, opts, root);
 
     cases.push({
       schemaVersion: "1.0",
@@ -545,8 +570,8 @@ function validateManifestObject(manifest) {
  *
  * @param {string} root  absolute path to the repo root.
  */
-export async function checkBaselineManifest(root) {
-  const manifest = await buildBaselineManifest(root);
+export async function checkBaselineManifest(root, opts = {}) {
+  const manifest = await buildBaselineManifest(root, opts);
   validateManifestObject(manifest);
 
   const manifestAbs = resolve(root, MANIFEST_REL);
@@ -593,11 +618,17 @@ function writeManifestAtomic(root, bytes) {
 async function main() {
   const argv = process.argv.slice(2);
   const check = argv.includes("--check");
+  const allowMissingSnapshots = argv.includes("--allow-missing-snapshots");
+  const unknown = argv.filter((a) => a !== "--check" && a !== "--allow-missing-snapshots");
+  if (unknown.length > 0) {
+    console.error(`unknown argument(s): ${unknown.join(" ")}`);
+    process.exit(1);
+  }
   const root = process.cwd();
 
   if (check) {
     try {
-      await checkBaselineManifest(root);
+      await checkBaselineManifest(root, { allowMissingSnapshots });
     } catch (cause) {
       console.error(cause.message);
       process.exit(1);
@@ -608,7 +639,7 @@ async function main() {
 
   let manifest;
   try {
-    manifest = await buildBaselineManifest(root);
+    manifest = await buildBaselineManifest(root, { allowMissingSnapshots });
     validateManifestObject(manifest);
   } catch (cause) {
     console.error(cause.message);

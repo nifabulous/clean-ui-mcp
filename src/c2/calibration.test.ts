@@ -25,8 +25,11 @@ import {
   buildCalibrationProposal,
   evaluateIndependentCompatibility,
   freezeCalibration,
+  STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+  __test,
   type CalibrationRun,
   type CalibrationScorecard,
+  type ClaudeCoverageException,
   type CompatibilityChecklistInput,
   type FreezeAuthorization,
   type IndependentCompatibility,
@@ -127,10 +130,17 @@ function makeRun(opts: {
   runId?: string;
   caseId?: string;
   runOutputSha256?: string;
+  /**
+   * The on-disk directory name. Defaults to `runId` (the common case). Override
+   * to a different value to exercise the fallback-run case where the directory
+   * is suffixed but the manifest's runId is canonical.
+   */
+  runDir?: string;
 }): CalibrationRun {
   const caseId = opts.caseId ?? CASE_BY_FAMILY[opts.family];
   const runId = opts.runId ?? `c2-run-${opts.provider}-${caseId}-${opts.condition}`;
   const runOutputSha256 = opts.runOutputSha256 ?? shaOf({ runId, marker: opts.condition });
+  const runDir = opts.runDir ?? runId;
   return {
     manifest: {
       schemaVersion: "2.0",
@@ -180,6 +190,7 @@ function makeRun(opts: {
     score: makeScore(runId, runOutputSha256),
     caseId,
     family: opts.family,
+    runDir,
   };
 }
 
@@ -447,6 +458,164 @@ describe("buildCalibrationProposal", () => {
     expect(serialized).not.toContain("regressionTolerance");
     expect(serialized).not.toContain("maxRunCostUsd");
     expect(serialized).not.toContain("frozenAt");
+  });
+
+  // -------------------------------------------------------------------------
+  // Claude coverage exception — fail-closed relaxation for ONE documented pair
+  // -------------------------------------------------------------------------
+
+  /**
+   * Build the pilot matrix missing ONLY the product::current-grounded Claude
+   * run (the documented stablecoin-home truncation gap). All 9 primary runs +
+   * the safety and migration Claude current-grounded runs are present.
+   */
+  function matrixMissingProductClaude(): {
+    runs: CalibrationRun[];
+    scorecards: CalibrationScorecard[];
+  } {
+    const runs = matrix.runs.filter(
+      (r) => !(r.manifest.provider === "claude" && r.family === "product" && r.manifest.condition === "current-grounded"),
+    );
+    const scorecards = matrix.scorecards.filter(
+      (s) => !(s.family === "product" && s.condition === "current-grounded" && matrix.runs.find((r) => r.manifest.runId === s.scorecard.runId)?.manifest.provider === "claude"),
+    );
+    return { runs, scorecards };
+  }
+
+  it("permits the documented exception for the exact missing Claude pair (product::current-grounded)", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    // The documented exception is honored — assertCoverageAndBinding must NOT throw.
+    expect(() =>
+      __test.assertCoverageAndBinding(runs, scorecards, [STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION]),
+    ).not.toThrow();
+  });
+
+  it("still throws when the documented pair is missing and no exception is supplied", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
+  it("still throws when the exception targets the wrong family (mismatched exception)", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const wrongFamily: ClaudeCoverageException = {
+      ...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+      family: "migration",
+    };
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [wrongFamily])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
+  it("still throws when an unrelated Claude pair is also missing (exception excuses only product)", () => {
+    // Drop BOTH product::current-grounded AND migration::current-grounded Claude runs.
+    const runs = matrix.runs.filter(
+      (r) => !(r.manifest.provider === "claude" && r.manifest.condition === "current-grounded"),
+    );
+    const scorecards = matrix.scorecards.filter(
+      (s) => !(s.condition === "current-grounded" && matrix.runs.find((r) => r.manifest.runId === s.scorecard.runId)?.manifest.provider === "claude"),
+    );
+    // The exception only excuses product::current-grounded; migration still fails.
+    expect(() =>
+      __test.assertCoverageAndBinding(runs, scorecards, [STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION]),
+    ).toThrow(/missing Claude independent run for family 'migration'/);
+  });
+
+  // -------------------------------------------------------------------------
+  // Exact-match exception (P2): every field — family, condition, provider,
+  // reason, attempts, evidenceRefs — must match the canonical constant. A
+  // crafted exception with the right structural identity (family + condition +
+  // provider) but a tampered reason/attempts/evidenceRefs must NOT pass the
+  // coverage gate.
+  // -------------------------------------------------------------------------
+
+  it("rejects a tampered reason: same family/condition/provider but a different reason string fails closed", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const tampered: ClaudeCoverageException = {
+      ...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+      reason: "A completely different reason that does not match the documented truncation incident.",
+    };
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [tampered])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
+  it("rejects a tampered attempts count: same family/condition/provider/reason but a different attempts number fails closed", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const tampered: ClaudeCoverageException = {
+      ...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+      attempts: STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION.attempts + 1,
+    };
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [tampered])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
+  it("rejects tampered evidenceRefs: same identity but a different evidenceRefs array fails closed", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const tampered: ClaudeCoverageException = {
+      ...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+      evidenceRefs: ["a-different-evidence-ref"],
+    };
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [tampered])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
+  it("rejects evidenceRefs with an extra entry (right prefix but a superset array fails closed)", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const tampered: ClaudeCoverageException = {
+      ...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+      evidenceRefs: [...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION.evidenceRefs, "extra-ref"],
+    };
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [tampered])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
+  it("rejects evidenceRefs with a reordered array (same entries, different order fails closed — order is part of the binding)", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const tampered: ClaudeCoverageException = {
+      ...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+      evidenceRefs: [...STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION.evidenceRefs].reverse(),
+    };
+    expect(() => __test.assertCoverageAndBinding(runs, scorecards, [tampered])).toThrow(
+      /missing Claude independent run for family 'product'/,
+    );
+  });
+
+  it("primary coverage stays strict — a Claude exception does NOT excuse a missing primary run", () => {
+    // Drop a primary run (product::brief-only).
+    const runs = matrix.runs.filter(
+      (r) => !(r.manifest.provider === "openai" && r.family === "product" && r.manifest.condition === "brief-only"),
+    );
+    const scorecards = matrix.scorecards.filter(
+      (s) => !(s.family === "product" && s.condition === "brief-only"),
+    );
+    expect(() =>
+      __test.assertCoverageAndBinding(runs, scorecards, [STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION]),
+    ).toThrow(/missing primary run coverage/);
+  });
+
+  it("records honored Claude coverage exceptions on the proposal", () => {
+    const { runs, scorecards } = matrixMissingProductClaude();
+    const proposal = buildCalibrationProposal({
+      runs,
+      scorecards,
+      campaignConfigRef,
+      pricingTableRef,
+      compatibility: evaluateIndependentCompatibility(makeCompatibilityInput()),
+      artifactId: "c2-calibration-proposal-pilot-v1",
+      claudeCoverageExceptions: [STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION],
+    });
+    expect(proposal.claudeCoverageExceptions).toHaveLength(1);
+    expect(proposal.claudeCoverageExceptions[0]?.family).toBe("product");
+    expect(proposal.claudeCoverageExceptions[0]?.condition).toBe("current-grounded");
+    expect(proposal.claudeCoverageExceptions[0]?.provider).toBe("claude");
+    // The default (no exceptions supplied) is an empty array.
+    const fullProposal = buildCalibrationProposal(proposalInputs());
+    expect(fullProposal.claudeCoverageExceptions).toEqual([]);
   });
 });
 
@@ -770,5 +939,181 @@ describe("freezeCalibration", () => {
         artifactId: "c2-frozen-calibration-pilot-v1",
       }),
     ).toThrow(/cliSynthesized|fabricated|placeholder|genuine/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // P1: frozen calibration binds the ACTUAL run + scorecard evidence
+  // (not the proposal placeholder). The CLI's runFreeze MUST pass real runs +
+  // scorecards into freezeCalibration; otherwise both runManifestRefs and
+  // scorecardRefs collapse to a single placeholder ref pointing at proposal.json
+  // (gitignored), and the frozen artifact cannot be audited against the 11 run
+  // manifests + 11 scorecards.
+  // -------------------------------------------------------------------------
+
+  it("freezeCalibration with real runs + scorecards binds every run manifest + scorecard (NOT the proposal placeholder)", () => {
+    const runs = matrix.runs;
+    const scorecards = matrix.scorecards;
+    const proposal = buildProposal(runs, scorecards);
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const frozen = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      runs,
+      scorecards,
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+
+    // All runs bound — one ref per run, no placeholder collapse.
+    expect(frozen.runManifestRefs).toHaveLength(runs.length);
+    // All scorecards bound — one ref per scorecard, no placeholder collapse.
+    expect(frozen.scorecardRefs).toHaveLength(scorecards.length);
+
+    // The refs' artifactId / path / sha256 must match the ACTUAL run manifests
+    // + scorecards — NOT the proposal.json placeholder. The path uses runDir
+    // (the on-disk directory name), not runId.
+    const expectedRunRefs = runs.map((r) => refOf({
+      artifactId: r.manifest.artifactId,
+      path: `eval/c2/runs/${r.runDir}/manifest.json`,
+      sha256: sha256Hex(Buffer.from(canonicalJsonStringify(r.manifest), "utf-8")),
+    }));
+    expect(frozen.runManifestRefs).toEqual(expectedRunRefs);
+
+    const expectedScorecardRefs = scorecards.map((s) => refOf({
+      artifactId: s.scorecard.artifactId,
+      path: `eval/c2/scorecards/${s.scorecard.artifactId}.json`,
+      sha256: sha256Hex(Buffer.from(canonicalJsonStringify(s.scorecard), "utf-8")),
+    }));
+    expect(frozen.scorecardRefs).toEqual(expectedScorecardRefs);
+
+    // None of the refs may point at the proposal.json placeholder path.
+    for (const ref of frozen.runManifestRefs) {
+      expect(ref.path).not.toBe("eval/c2/calibration/proposal.json");
+    }
+    for (const ref of frozen.scorecardRefs) {
+      expect(ref.path).not.toBe("eval/c2/calibration/proposal.json");
+    }
+  });
+
+  it("freezeCalibration WITHOUT runs + scorecards falls back to the proposal placeholder (documents the P1 gap)", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const frozen = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+    // The fallback path: both refs collapse to a single proposal.json ref.
+    // This is the pre-P1 behavior; the test pins it so the contrast with the
+    // real-evidence path above is explicit.
+    expect(frozen.runManifestRefs).toHaveLength(1);
+    expect(frozen.scorecardRefs).toHaveLength(1);
+    expect(frozen.runManifestRefs[0]!.path).toBe("eval/c2/calibration/proposal.json");
+    expect(frozen.scorecardRefs[0]!.path).toBe("eval/c2/calibration/proposal.json");
+  });
+
+  // -------------------------------------------------------------------------
+  // P2: manifestRef uses run.runDir (the actual on-disk directory) for the ref
+  // path — NOT manifest.runId. A fallback run's directory is suffixed
+  // `-fallback` while its manifest.runId carries the canonical (un-suffixed)
+  // identifier; using runId for the path would point at the wrong directory
+  // and the frozen ref would fail to resolve in a fresh clone. This test
+  // reproduces the exact fallback-run shape observed in the pilot: a run whose
+  // directory name differs from its manifest.runId.
+  // -------------------------------------------------------------------------
+
+  it("freezeCalibration uses run.runDir (not manifest.runId) for the ref path — fallback-run case", () => {
+    // Build the full pilot matrix, then RE-PLACE the migration product family's
+    // current-grounded primary run with a fallback variant: its directory name
+    // is suffixed `-fallback` while its manifest.runId is the canonical form.
+    const matrixRuns = matrix.runs;
+    const matrixScorecards = matrix.scorecards;
+
+    // The canonical runId the fallback manifest reports (matches what the
+    // scorecard binds via runId). The fallback directory is suffixed.
+    const fallbackRunId = "c2-run-openai-named-inspiration-migration-current-grounded-primary-1";
+    const fallbackRunDir = `${fallbackRunId}-fallback`;
+    const fallbackOutputSha = shaOf({ runId: fallbackRunId, marker: "fallback-output" });
+
+    // Replace the migration current-grounded openai run with a fallback whose
+    // runDir differs from its manifest.runId.
+    const runs = matrixRuns.map((r) => {
+      if (
+        r.family === "migration" &&
+        r.manifest.provider === "openai" &&
+        r.manifest.condition === "current-grounded"
+      ) {
+        return makeRun({
+          family: "migration",
+          condition: "current-grounded",
+          provider: "openai",
+          runId: fallbackRunId,
+          runDir: fallbackRunDir,
+          runOutputSha256: fallbackOutputSha,
+        });
+      }
+      return r;
+    });
+
+    // The matching scorecard must bind the fallback runId + output hash.
+    const scorecards = matrixScorecards.map((s) => {
+      if (
+        s.family === "migration" &&
+        s.condition === "current-grounded" &&
+        matrixRuns.find((r) => r.manifest.runId === s.scorecard.runId)?.manifest.provider === "openai"
+      ) {
+        return {
+          ...s,
+          scorecard: makeScorecard({
+            runId: fallbackRunId,
+            runOutputSha256: fallbackOutputSha,
+          }),
+        };
+      }
+      return s;
+    });
+
+    const proposal = buildProposal(runs, scorecards);
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const frozen = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      runs,
+      scorecards,
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+
+    // Find the fallback run's ref. It MUST point at the `-fallback` directory
+    // (runDir), NOT the canonical runId directory. Using runId would point at
+    // the FAILED run's directory (which has no score.json) and the ref would
+    // fail to resolve.
+    const fallbackRef = frozen.runManifestRefs.find(
+      (ref) => ref.artifactId === `c2-run-manifest-${fallbackRunId}`,
+    );
+    expect(fallbackRef).toBeDefined();
+    expect(fallbackRef!.path).toBe(`eval/c2/runs/${fallbackRunDir}/manifest.json`);
+    // The path must NOT match the canonical runId directory (the bug case).
+    expect(fallbackRef!.path).not.toBe(`eval/c2/runs/${fallbackRunId}/manifest.json`);
+    // The sha256 must bind the fallback manifest's canonical JSON — so path
+    // and hash agree (the original bug was path=runId dir, hash=fallback
+    // manifest).
+    expect(fallbackRef!.sha256).toBe(
+      sha256Hex(
+        Buffer.from(
+          canonicalJsonStringify(
+            runs.find((r) => r.runDir === fallbackRunDir)!.manifest,
+          ),
+          "utf-8",
+        ),
+      ),
+    );
+
+    // No ref anywhere in the frozen artifact may point at the canonical runId
+    // directory (the failed-run path). Every ref must use a runDir.
+    for (const ref of frozen.runManifestRefs) {
+      expect(ref.path).not.toBe(`eval/c2/runs/${fallbackRunId}/manifest.json`);
+    }
   });
 });

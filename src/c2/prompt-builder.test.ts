@@ -337,6 +337,48 @@ describe("buildC2Prompt — instruction invariants", () => {
     expect(prompt).toContain("authorityLanes");
     expect(prompt).toContain("acceptanceCriteria");
   });
+
+  it("documents the stable-id format for ids and authorityLanes", () => {
+    // Minimal brief-only condition input — the schema summary is present in
+    // every prompt regardless of evidence.
+    const { prompt } = buildC2Prompt({
+      brief: brief(),
+      conditionInput: briefOnlyConditionInput(),
+    });
+    // The format rule.
+    expect(prompt).toMatch(/stable IDs/i);
+    expect(prompt).toMatch(/No spaces/i);
+    // authorityLanes specifically called out as ID-references, not prose.
+    expect(prompt).toMatch(/authorityLanes.*stable ID/i);
+    expect(prompt).toMatch(/NEVER use descriptive phrase/i);
+  });
+
+  it("surfaces the provenance hash on a dedicated, unmissable line", () => {
+    // Issue A (retry3): the model wrote "unknown" for provenance.conditionInputSha256
+    // because the hash was buried only inside the condition-input JSON block. The
+    // prompt now surfaces it on a dedicated PROVENANCE HASH line so the model
+    // cannot miss it.
+    const ci = briefOnlyConditionInput();
+    const { prompt } = buildC2Prompt({ brief: brief(), conditionInput: ci });
+    expect(prompt).toMatch(/PROVENANCE HASH/i);
+    expect(prompt).toContain(ci.inputSha256);
+    // The surfaced line must instruct the model to copy the exact value.
+    expect(prompt).toMatch(/copy this EXACT value/i);
+  });
+
+  it("clarifies that assumptions and accessibilityAndRecovery are plain strings, not objects", () => {
+    // Bug #3: the candidate schema requires `assumptions: UniqueNonEmptyStrings`
+    // and `accessibilityAndRecovery: UniqueNonEmptyStrings` (arrays of plain
+    // strings), but the prompt previously documented these only as `field[]`
+    // with no type guidance. The model mirrored the adjacent
+    // `acceptanceCriteria[]: { id, statement }` shape and produced
+    // `[{id, statement}, ...]` objects, which then failed schema validation.
+    // The prompt MUST clarify these two fields are plain strings, NOT objects.
+    const { prompt } = buildC2Prompt({ brief: brief(), conditionInput: briefOnlyConditionInput() });
+    expect(prompt).toMatch(/assumptions\[\].*plain string/i);
+    expect(prompt).toMatch(/NOT object/i);
+    expect(prompt).toMatch(/accessibilityAndRecovery\[\].*plain string/i);
+  });
 });
 
 describe("buildC2Prompt — rejects unmatched evidence", () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   C2ConditionInputSchema,
   C2EvidenceRecordSchema,
@@ -313,6 +314,75 @@ describe("C2ConditionInputSchema", () => {
     expect(C2ConditionInputSchema.safeParse(input).success).toBe(false);
   });
 
+  it("accepts a current-grounded condition input whose selectedEntryIds match rankedResult entryIds", () => {
+    // Regression for the 787-mismatch bug: the resolver was emitting
+    // selectedEntryIds with a `corpus:` prefix while rankedResult.entryId was
+    // raw, so the schema's superRefine (`entry.entryId === id`) never matched.
+    // This characterization test locks in the CORRECT contract at the schema
+    // layer: both fields use raw corpus entry IDs. A future resolver regression
+    // that re-introduces the prefix mismatch would not be caught directly here,
+    // but this test pins the shape the resolver MUST produce to pass validation.
+    const input = {
+      schemaVersion: "1.0",
+      artifactType: "c2-condition-input",
+      artifactId: "c2-condition-current-grounded-resolver-output-v1",
+      casePackageRef: fileRef("c2-package-stablecoin-home-v1", "eval/c2/pilot/stablecoin-home/package.json"),
+      condition: "current-grounded",
+      briefRef: fileRef("c2-brief-stablecoin-home-v1", "eval/c2/pilot/stablecoin-home/brief.json"),
+      evidence: [
+        evidenceRecord({
+          id: "corpus:entry-a", // evidence IDs stay corpus:-prefixed (evidence namespace)
+          authorityLane: "adapt",
+          sourceType: "corpus-entry",
+          sourceArtifactId: "corpus",
+          rank: 1,
+          score: 0.9,
+        }),
+      ],
+      corpusSha256: SHA_64,
+      retrievalIndexSha256: SHA_64,
+      retrieval: {
+        query: "stablecoin home audience",
+        configurationSha256: SHA_64,
+        rankedResult: [
+          { entryId: "entry-a", rank: 1, score: 0.9, contentSha256: SHA_64 },
+        ],
+        // selectedEntryIds uses the SAME raw id as rankedResult.entryId.
+        selectedEntryIds: ["entry-a"],
+      },
+      sourceSnapshotRefs: [],
+      inputSha256: SHA_64,
+    };
+    expect(() => C2ConditionInputSchema.parse(input)).not.toThrow();
+  });
+
+  it("rejects a current-grounded input where selectedEntryIds uses a corpus: prefix that rankedResult lacks", () => {
+    // Inverse characterization: if someone re-introduces the prefix mismatch
+    // (rankedResult raw, selectedEntryIds prefixed), the schema MUST reject it.
+    const input = {
+      ...currentGroundedInput(),
+      evidence: [
+        evidenceRecord({
+          id: "corpus:entry-a",
+          authorityLane: "adapt",
+          sourceType: "corpus-entry",
+          sourceArtifactId: "corpus",
+          rank: 1,
+          score: 0.9,
+        }),
+      ],
+      retrieval: {
+        query: "stablecoin home audience",
+        configurationSha256: SHA_64,
+        rankedResult: [
+          { entryId: "entry-a", rank: 1, score: 0.9, contentSha256: SHA_64 },
+        ],
+        selectedEntryIds: ["corpus:entry-a"], // mismatched prefix — must fail superRefine
+      },
+    };
+    expect(C2ConditionInputSchema.safeParse(input).success).toBe(false);
+  });
+
   it("parses a valid gold-evidence input with a bound packet", () => {
     expect(C2ConditionInputSchema.safeParse(goldEvidenceInput()).success).toBe(true);
   });
@@ -436,6 +506,20 @@ describe("C2CampaignConfigSchema", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("the production pilot-campaign.json pins maxOutputTokens at 4096 for both lanes", () => {
+    // Issue B (retry3): candidates were truncated at 2048 output tokens, producing
+    // unparseable JSON. The production config now pins 4096 for both lanes so the
+    // rich candidate schema (globalDirection + screenBlueprints + sourceDecisions
+    // + authorityLanes + acceptanceCriteria + assumptions) has room to complete.
+    // This test guards against an accidental revert to 2048.
+    const cfg = JSON.parse(
+      readFileSync("eval/c2/config/pilot-campaign.json", "utf-8"),
+    );
+    expect(C2CampaignConfigSchema.safeParse(cfg).success).toBe(true);
+    expect(cfg.primary.maxOutputTokens).toBe(4096);
+    expect(cfg.independent.maxOutputTokens).toBe(4096);
   });
 });
 

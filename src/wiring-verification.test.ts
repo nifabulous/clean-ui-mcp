@@ -253,33 +253,19 @@ const ALLOWLIST = new Set<string>([
   "C2GoldEvidenceRecordSchema",
   "C2GoldEvidenceRecordBindingSchema",
   "C2PilotGoldEvidenceBindingSchema",
-  // c2/cost-policy.ts — pure cost decisions consumed only by their tests today.
-  // The paid-call harness (Task 7) calls preflightCampaignCosts before every
-  // provider request and assertRunBudget/assertCampaignBudget after each call;
-  // the calibration reducer (Task 8) aggregates the resulting actual costs.
-  // Listed here rather than wired to a placeholder caller to avoid fake
-  // coupling, per the same precedent as renderSourceDesign /
-  // assertAgreementMatchesSubmissions above. The internal helpers
-  // (forecastRunCost, calculateActualCost, campaignReserveUsd, roundPersistedCost,
-  // findPricingEntry) are already referenced by preflightCampaignCosts and so
-  // do not need allowlisting.
-  "assertRunBudget",
-  "assertCampaignBudget",
-  "preflightCampaignCosts",
-  // c2/condition-resolver.ts + c2/private-artifacts.ts — Task 6. The resolver
-  // converts a model-visible brief + control condition into an immutable,
-  // content-addressed condition input. The private-artifacts module supplies
-  // the atomic write + boundary-scan primitives. The production caller is the
-  // paid-call harness (Task 7), which resolves a condition input before every
-  // provider request and routes private vs. durable writes through these
-  // primitives. Listed here rather than wired to a placeholder caller to avoid
-  // fake coupling, per the same precedent as cost-policy above. Internal
-  // helpers (briefToQuery, resolveJsonPointer, computeInputSha256, C2_RETRIEVAL_*)
-  // are referenced by resolveConditionInput and so do not need allowlisting.
-  "resolveConditionInput",
-  "writePrivateArtifact",
-  "writeDurableArtifact",
-  "scanDurableArtifact",
+  // c2/cost-policy.ts — assertRunBudget / assertCampaignBudget are called by the
+  // C2 harness (src/c2/harness.ts) after every forecast; preflightCampaignCosts
+  // is called by the C2 pilot CLI (src/scripts/run-c2-pilot.ts) before every
+  // paid run. All three gained real production callers when the harness CLI
+  // landed (PR 1) and were removed from this allowlist.
+  // c2/condition-resolver.ts — resolveConditionInput is called by the C2 pilot
+  // CLI's `prepare` command (src/scripts/run-c2-pilot.ts); removed from this
+  // allowlist when the CLI became its production caller.
+  // c2/private-artifacts.ts — writePrivateArtifact / writeDurableArtifact /
+  // scanDurableArtifact are all called by the harness + CLI now (the harness
+  // runs scanDurableArtifact before every durable write; the CLI routes private
+  // and durable writes through the atomic primitives). Removed from this
+  // allowlist once the CLI adopted the atomic-write path.
   // c2/review-packets.ts — Task 8 foundation helpers for the operational
   // review-batch flow (Task 10). `shufflePackets` is the spec §10 packet-order
   // shuffle (crypto.randomInt + rejection sampling); `createFileBlindMapStore`

@@ -189,13 +189,26 @@ async function resolveCurrentGrounded(
 
   // 3. Run the pinned keyword-only retrieval. The shipped `searchRanked` makes
   //    ZERO Voyage requests under `searchMode: "keyword-only"` (Task 6 Step 3).
-  const ranked = await deps.reader.searchRanked({
+  //    `searchRanked` is a SHARED contract that returns the FULL ranked list
+  //    (other consumers — MCP tools, the critique pipeline — depend on that).
+  //    The resolver enforces its OWN C2-specific limit by slicing here, at the
+  //    boundary, so the shared method stays unchanged. Without this slice a
+  //    ranked list of N entries (the production corpus returned 787) would
+  //    balloon the current-grounded prompt's evidence section unboundedly and
+  //    get cost-blocked.
+  const rankedRaw = await deps.reader.searchRanked({
     query,
     limit: C2_RETRIEVAL_LIMIT,
     reviewStatus: "approved",
     rerank: false,
     searchMode: C2_RETRIEVAL_MODE,
   });
+  // Capture the pre-slice count so the private payload can record whether
+  // truncation happened (production debugging: distinguishes "searchRanked
+  // returned exactly 10" from "returned 787 and we sliced"). Private-payload
+  // only — never enters the durable/model-visible metadata.
+  const searchRankedReturned = rankedRaw.length;
+  const ranked = rankedRaw.slice(0, C2_RETRIEVAL_LIMIT);
 
   // 4. Re-hash `corpus/entries.json` AFTER ranking. If the corpus mutated
   //    during resolution, abort — the evidence would bind to a moving target.
@@ -210,10 +223,11 @@ async function resolveCurrentGrounded(
   }
 
   // 5. Convert ranked results into evidence records with canonical content
-  //    hashes. The complete ranked result is preserved; the durable metadata
-  //    carries the ranking (entryId + rank + score + contentSha256) and the
-  //    per-record evidence metadata. The actual content bytes are stored
-  //    privately and surfaced through the private payload.
+  //    hashes. The top-C2_RETRIEVAL_LIMIT slice of the ranked result is
+  //    preserved (the resolver truncates at its own boundary — see step 3);
+  //    the durable metadata carries the ranking (entryId + rank + score +
+  //    contentSha256) and the per-record evidence metadata. The actual content
+  //    bytes are stored privately and surfaced through the private payload.
   const evidence: C2EvidenceRecord[] = [];
   const rankedResult: Array<{
     entryId: string;
@@ -266,7 +280,7 @@ async function resolveCurrentGrounded(
   // resolver MUST NOT inject hand-curated results (spec §5.2). The schema's
   // `min(1)` constraint on current-grounded evidence will then reject the
   // input at validation time — surfacing the gap honestly.
-  const selectedEntryIds = ranked.map((r) => `corpus:${r.entry.id}`);
+  const selectedEntryIds = ranked.map((r) => r.entry.id);
 
   // 6. Assemble the metadata. Use the variant type directly so the discriminated
   //    union narrows correctly.
@@ -300,6 +314,9 @@ async function resolveCurrentGrounded(
     corpusSha256,
     corpusEntryCount,
     retrievalMode: C2_RETRIEVAL_MODE,
+    // Pre-slice count from searchRanked (production debugging — records
+    // whether truncation happened). Absent from the durable metadata above.
+    searchRankedReturned,
     rankedResult,
     evidenceContent: Object.fromEntries(evidenceContent),
   });

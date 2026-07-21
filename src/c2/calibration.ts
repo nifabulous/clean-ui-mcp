@@ -44,6 +44,9 @@ import type { ArtifactFileRef } from "./primitives.js";
 
 type C2CaseFamily = z.infer<typeof C2CaseFamilySchema>;
 type C2ControlCondition = z.infer<typeof C2ControlConditionSchema>;
+// Re-export the family type so the exception interface can name it without
+// callers needing to import the Zod schema directly.
+export type { C2CaseFamily };
 
 // ---------------------------------------------------------------------------
 // Fixed rubric + campaign constants (pinned by spec §11)
@@ -98,6 +101,16 @@ export interface CalibrationRun {
   family: C2CaseFamily;
   /** Case ID derived from the package / brief. */
   caseId: string;
+  /**
+   * The actual directory name under `eval/c2/runs/` that holds this run's
+   * `manifest.json` + `score.json`. This MAY differ from `manifest.runId` —
+   * e.g. a fallback run whose directory is suffixed `-fallback` while its
+   * manifest's `runId` carries the canonical (un-suffixed) identifier. The
+   * frozen-calibration ref's `path` MUST use `runDir` (the real on-disk
+   * location) so a fresh clone can resolve the file the ref's SHA-256 binds;
+   * using `manifest.runId` would point at the wrong directory in that case.
+   */
+  runDir: string;
 }
 
 /** One finalized canonical scorecard, keyed for calibration. */
@@ -108,6 +121,87 @@ export interface CalibrationScorecard {
   condition: C2ControlCondition;
 }
 
+// ---------------------------------------------------------------------------
+// Claude coverage exception (spec §11 — narrow, documented relaxation)
+// ---------------------------------------------------------------------------
+
+/**
+ * A machine-readable, exact-match exception permitting ONE missing Claude
+ * independent run pair. The reducer accepts this ONLY when EVERY field —
+ * family, condition, provider, reason, attempts, evidenceRefs — matches one
+ * of the canonical constants in `ALLOWED_CLAUDE_COVERAGE_EXCEPTIONS`
+ * exactly (array order included). This is NOT a general "skip missing runs"
+ * switch — every field is pinned so an unrelated gap, a different provider,
+ * a stale exception, or a tampered reason/attempts/evidence still fails
+ * closed.
+ */
+export interface ClaudeCoverageException {
+  /** The exact family missing coverage (e.g. "product"). */
+  family: C2CaseFamily;
+  /** The exact independent condition missing coverage (e.g. "current-grounded"). */
+  condition: "current-grounded";
+  /** Must be "claude" — the exception is Claude-specific. */
+  provider: "claude";
+  /** Human-readable reason (must match an allowed constant exactly to be honored). */
+  reason: string;
+  /** Number of paid attempts that failed before the exception was granted. */
+  attempts: number;
+  /** Evidence references (run IDs or manifest paths) documenting the failures. */
+  evidenceRefs: string[];
+}
+
+/**
+ * The single documented exception for this campaign: the product family
+ * (stablecoin-home) Claude current-grounded run truncated at the 4096-token
+ * provider ceiling in two consecutive campaigns.
+ */
+export const STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION: ClaudeCoverageException = {
+  family: "product",
+  condition: "current-grounded",
+  provider: "claude",
+  reason: "Claude Sonnet 5 truncated at the 4096-token output ceiling in two consecutive campaigns; provider-capacity limitation, not a coverage gap.",
+  attempts: 2,
+  evidenceRefs: [
+    "c2-run-stablecoin-home-current-grounded-independent-1 (thinking-fix campaign: parse-failed, completionTokens=4096, response truncated mid-word)",
+    "c2-run-stablecoin-home-current-grounded-independent-1 (fence-fix campaign: parse-failed, completionTokens=4096, response truncated mid-word)",
+  ],
+};
+
+/**
+ * The single source of truth for Claude coverage exceptions this reducer will
+ * honor. An exception supplied to `assertCoverageAndBinding` is honored ONLY
+ * if it is exactly equal (every field, including `reason`, `attempts`, and
+ * `evidenceRefs` in order) to one of the constants in this list. A crafted
+ * exception with the right structural identity (family + condition + provider)
+ * but a tampered `reason` / `attempts` / `evidenceRefs` will NOT match any
+ * allowed constant and fails the coverage gate closed.
+ *
+ * Add new exceptions here ONLY after explicit human review — every entry is a
+ * documented, narrow relaxation of the OpenAI-vs-Claude coverage rule.
+ */
+export const ALLOWED_CLAUDE_COVERAGE_EXCEPTIONS: readonly ClaudeCoverageException[] = [
+  STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
+];
+
+/**
+ * Exact-match comparison for a Claude coverage exception. Every field —
+ * family, condition, provider, reason, attempts, evidenceRefs (length AND
+ * element-by-element order) — must match. This prevents a crafted exception
+ * with the right structural identity but a tampered reason/attempts/evidence
+ * from passing the coverage gate.
+ */
+function exceptionMatchesExact(a: ClaudeCoverageException, b: ClaudeCoverageException): boolean {
+  return (
+    a.family === b.family &&
+    a.condition === b.condition &&
+    a.provider === b.provider &&
+    a.reason === b.reason &&
+    a.attempts === b.attempts &&
+    a.evidenceRefs.length === b.evidenceRefs.length &&
+    a.evidenceRefs.every((ref, i) => ref === b.evidenceRefs[i])
+  );
+}
+
 export interface BuildCalibrationProposalInput {
   runs: CalibrationRun[];
   scorecards: CalibrationScorecard[];
@@ -116,6 +210,12 @@ export interface BuildCalibrationProposalInput {
   /** Pre-evaluated OpenAI-vs-Claude independent compatibility. */
   compatibility: IndependentCompatibility;
   artifactId: string;
+  /**
+   * Optional documented Claude coverage exceptions. Each excuses ONE missing
+   * Claude independent run pair (exact family + condition + provider match).
+   * Primary coverage is never excused. Defaults to none.
+   */
+  claudeCoverageExceptions?: readonly ClaudeCoverageException[];
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +367,11 @@ function mean(values: number[]): number {
  * Validate that the scorecard set covers the full pilot matrix and that every
  * scorecard's run/output binding matches an immutable run manifest.
  */
-function assertCoverageAndBinding(runs: CalibrationRun[], scorecards: CalibrationScorecard[]): void {
+function assertCoverageAndBinding(
+  runs: CalibrationRun[],
+  scorecards: CalibrationScorecard[],
+  exceptions: readonly ClaudeCoverageException[] = [],
+): void {
   if (scorecards.length === 0) {
     throw new Error("[c2-calibration] missing scorecards: proposal requires at least one finalized canonical scorecard");
   }
@@ -311,9 +415,26 @@ function assertCoverageAndBinding(runs: CalibrationRun[], scorecards: Calibratio
     }
     for (const condition of INDEPENDENT_CONDITIONS) {
       if (!claudeKeys.has(`${family}::${condition}`)) {
-        throw new Error(
-          `[c2-calibration] missing Claude independent run for family '${family}' condition '${condition}'`,
+        // Permit the missing pair ONLY when an exact-match documented exception
+        // exists. Every field — family, condition, provider, reason, attempts,
+        // evidenceRefs (length AND order) — must match one of the canonical
+        // constants in ALLOWED_CLAUDE_COVERAGE_EXCEPTIONS. A stale, mismatched,
+        // overly-broad, or tampered exception (e.g. right structural identity
+        // but a different `reason` string) still fails closed.
+        const matched = exceptions.find(
+          (e) =>
+            e.family === family &&
+            e.condition === condition &&
+            e.provider === "claude" &&
+            ALLOWED_CLAUDE_COVERAGE_EXCEPTIONS.some((allowed) => exceptionMatchesExact(e, allowed)),
         );
+        if (!matched) {
+          throw new Error(
+            `[c2-calibration] missing Claude independent run for family '${family}' condition '${condition}'`,
+          );
+        }
+        // Exception honored — this family/condition is recorded as unavailable.
+        // The exception's reason/attempts/evidenceRefs are the audit trail.
       }
     }
   }
@@ -325,7 +446,8 @@ function assertCoverageAndBinding(runs: CalibrationRun[], scorecards: Calibratio
  * and the exact pilot artifact hashes; it selects NO thresholds.
  */
 export function buildCalibrationProposal(input: BuildCalibrationProposalInput): C2CalibrationProposal {
-  assertCoverageAndBinding(input.runs, input.scorecards);
+  const claudeCoverageExceptions = input.claudeCoverageExceptions ?? [];
+  assertCoverageAndBinding(input.runs, input.scorecards, claudeCoverageExceptions);
 
   const index = indexScorecards(input.scorecards);
 
@@ -476,6 +598,11 @@ export function buildCalibrationProposal(input: BuildCalibrationProposalInput): 
       independentCompatibility: input.compatibility,
       observedCosts,
     },
+    // Machine-visible audit trail of any Claude coverage gaps honored by the
+    // reducer. Empty when coverage is complete. The freeze gate does NOT
+    // consult this field — it is informational, so a stale or malformed entry
+    // cannot weaken the freeze.
+    claudeCoverageExceptions: [...claudeCoverageExceptions],
     proposalSha256: "", // set below after canonical serialization
   };
 
@@ -616,8 +743,13 @@ export function freezeCalibration(input: FreezeCalibrationInput): C2FrozenCalibr
   // 8. Build run/scorecard refs from the supplied backing evidence (or fall
   //    back to a single placeholder ref when the caller did not supply them).
   //    The CLI always supplies them; the e2e test exercises the full path.
+  //    manifestRef takes the whole run (not just the manifest) so it can build
+  //    the path from `run.runDir` — the actual on-disk directory name, which
+  //    may differ from `manifest.runId` (e.g. a fallback run whose directory is
+  //    suffixed `-fallback`). Using `runId` for the path would point at the
+  //    wrong directory and the ref would fail to resolve in a fresh clone.
   const runManifestRefs = input.runs && input.runs.length > 0
-    ? input.runs.map((r) => manifestRef(r.manifest))
+    ? input.runs.map((r) => manifestRef(r))
     : [proposalRef(proposal)];
   const scorecardRefs = input.scorecards && input.scorecards.length > 0
     ? input.scorecards.map((s) => scorecardRef(s.scorecard))
@@ -665,11 +797,20 @@ function sameCompatibility(a: IndependentCompatibility, b: IndependentCompatibil
   );
 }
 
-function manifestRef(manifest: C2EvaluationRunManifestV2): ArtifactFileRef {
+/**
+ * Build a frozen-calibration ref for one run's manifest. Uses `run.runDir`
+ * (the actual on-disk directory name) for the path so a fresh clone can
+ * resolve the file the SHA-256 binds — NOT `run.manifest.runId`, which may
+ * disagree with the directory name (e.g. a fallback run whose directory is
+ * suffixed `-fallback` while its manifest's `runId` carries the canonical
+ * un-suffixed identifier). The hash is over the manifest's canonical JSON
+ * (stable across on-disk key ordering), so path + hash always agree.
+ */
+function manifestRef(run: CalibrationRun): ArtifactFileRef {
   return {
-    artifactId: manifest.artifactId,
-    path: `eval/c2/runs/${manifest.runId}/manifest.json`,
-    sha256: sha256Hex(Buffer.from(canonicalJsonStringify(manifest), "utf-8")),
+    artifactId: run.manifest.artifactId,
+    path: `eval/c2/runs/${run.runDir}/manifest.json`,
+    sha256: sha256Hex(Buffer.from(canonicalJsonStringify(run.manifest), "utf-8")),
   };
 }
 

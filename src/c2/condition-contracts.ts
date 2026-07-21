@@ -19,6 +19,7 @@ import { Sha256 } from "../readiness/contracts.js";
 import {
   ArtifactFileRefSchema,
   AuthorityLaneSchema,
+  C2CaseFamilySchema,
   C2ControlConditionSchema,
   NonEmptyText,
   StableId,
@@ -362,6 +363,25 @@ const ObservedCostsSchema = z
   })
   .strict();
 
+/**
+ * Schema for a documented Claude coverage exception. Mirrors the
+ * `ClaudeCoverageException` interface in `calibration.ts`. Every field is
+ * pinned so a stale, mismatched, or anonymous exception cannot validate.
+ * `reason`/`attempts`/`evidenceRefs` are mandatory so an exception can never
+ * be anonymous — they are the human-auditable trail that travels with the
+ * structural identity (family + condition + provider).
+ */
+export const ClaudeCoverageExceptionSchema = z
+  .object({
+    family: C2CaseFamilySchema,
+    condition: z.literal("current-grounded"),
+    provider: z.literal("claude"),
+    reason: NonEmptyText,
+    attempts: z.number().int().nonnegative(),
+    evidenceRefs: z.array(NonEmptyText).min(1),
+  })
+  .strict();
+
 const CalibrationMeasurementsSchema = z
   .object({
     conditionDeltas: z.array(ConditionDeltaSchema),
@@ -383,6 +403,10 @@ export const C2CalibrationProposalSchema = z
     campaignConfigRef: ArtifactFileRefSchema,
     pricingTableRef: ArtifactFileRefSchema,
     measurements: CalibrationMeasurementsSchema,
+    // Machine-visible audit trail of any Claude coverage gaps honored by the
+    // reducer. Defaults to empty (no exceptions). The freeze gate does NOT
+    // consult this field — it is informational.
+    claudeCoverageExceptions: z.array(ClaudeCoverageExceptionSchema).default([]),
     proposalSha256: Sha256,
   })
   .strict();

@@ -4,9 +4,9 @@
   "artifactId": "c2-campaign-pilot-v1",
   "primary": {
     "provider": "openai",
-    "model": "gpt-5.4-mini",
+    "model": "gpt-5.4-mini-2026-03-17",
     "apiKeyEnv": "OPENAI_API_KEY",
-    "maxOutputTokens": 2048,
+    "maxOutputTokens": 4096,
     "samplingParameters": {
       "temperature": 0.2,
       "top_p": 0.95,
@@ -15,9 +15,9 @@
   },
   "independent": {
     "provider": "claude",
-    "model": "claude-sonnet-4-5",
+    "model": "claude-sonnet-5",
     "apiKeyEnv": "ANTHROPIC_API_KEY",
-    "maxOutputTokens": 2048,
+    "maxOutputTokens": 4096,
     "samplingParameters": {
       "temperature": 0.2,
       "top_p": 0.95

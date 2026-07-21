@@ -2200,6 +2200,23 @@ async function callClaudeWithMetadata(
 
   const meta: { attempts: number } = { attempts: 0 };
   const startedAt = Date.now();
+  // Build the request body conditionally: Claude Sonnet 5+ runs with adaptive
+  // thinking ENABLED by default, and thinking tokens count against max_tokens.
+  // For the C2 evaluation path (which pins maxOutputTokens for deterministic
+  // structured output), disable thinking so the full output budget is available
+  // for the visible response — otherwise the model can spend the entire budget
+  // on `thinking` content blocks and return an empty/truncated `text` block.
+  // Legacy tagger callers (no maxOutputTokens override) keep thinking at the
+  // model's default.
+  const body: Record<string, unknown> = {
+    model: resolvedModel,
+    max_tokens: resolvedMaxTokens,
+    system: SYSTEM,
+    messages: [{ role: "user", content }],
+  };
+  if (options?.maxOutputTokens !== undefined) {
+    body.thinking = { type: "disabled" };
+  }
   const response = await fetchWithRetry(ANTHROPIC_API, {
     method: "POST",
     headers: {
@@ -2207,12 +2224,7 @@ async function callClaudeWithMetadata(
       "anthropic-version": "2023-06-01",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model: resolvedModel,
-      max_tokens: resolvedMaxTokens,
-      system: SYSTEM,
-      messages: [{ role: "user", content }],
-    }),
+    body: JSON.stringify(body),
   }, meta, options?.maxAttempts);
 
   if (!response.ok) throw new Error(`Claude API error ${response.status}: ${await response.text()}`);
@@ -2222,10 +2234,24 @@ async function callClaudeWithMetadata(
     content?: Array<{ type?: string; text?: string }>;
     usage?: { input_tokens?: number; output_tokens?: number };
   };
+  const extractedText = (data.content ?? [])
+    .filter((b) => b.type === "text")
+    .map((b) => b.text ?? "").join("");
+  // Defensive: if content blocks were present but no text was extracted, the
+  // response likely contained only thinking/reasoning blocks (Sonnet 5 adaptive
+  // thinking, or any future caller that enables thinking). Surface a clear
+  // error so the caller knows the output budget was consumed by thinking,
+  // rather than silently receiving an empty string.
+  if (extractedText.length === 0 && Array.isArray(data.content) && data.content.length > 0) {
+    const blockTypes = data.content.map((b) => b.type ?? "unknown").join(", ");
+    throw new Error(
+      `[claude] response contained ${data.content.length} content block(s) [${blockTypes}] but no text block was extracted. `
+      + `The model likely spent its output budget on thinking/reasoning blocks. `
+      + `Disable thinking (thinking: {type: "disabled"}) or increase max_tokens.`,
+    );
+  }
   return {
-    content: (data.content ?? [])
-      .filter((b) => b.type === "text")
-      .map((b) => b.text ?? "").join(""),
+    content: extractedText,
     metadata: {
       model: typeof data.model === "string" ? data.model : null,
       usage: normalizeClaudeUsage(data.usage),

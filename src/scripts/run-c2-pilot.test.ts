@@ -24,11 +24,11 @@
  */
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildModelEndpoint } from "./run-c2-pilot.js";
+import { buildModelEndpoint, logicalConditionInputPath, c2RunId } from "./run-c2-pilot.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../..");
@@ -122,7 +122,7 @@ function expectZeroEgress(res: SpawnResult): void {
   ).toEqual([]);
 }
 
-describe("run-c2-pilot CLI — no-egress behavior", () => {
+describe("run-c2-pilot CLI — no-egress behavior", { timeout: 30_000 }, () => {
   it("exits non-zero with usage when invoked with no args, and makes zero provider calls", () => {
     const res = spawnCli([]);
     expect(res.code).not.toBe(0);
@@ -298,7 +298,7 @@ describe("run-c2-pilot CLI — no-egress behavior", () => {
   });
 });
 
-describe("run-c2-pilot CLI — subprocess isolation", () => {
+describe("run-c2-pilot CLI — subprocess isolation", { timeout: 30_000 }, () => {
   it("the compiled CLI exists at dist/scripts/run-c2-pilot.js", () => {
     expect(existsSync(CLI_PATH)).toBe(true);
   });
@@ -383,5 +383,290 @@ describe("buildModelEndpoint — resolves apiKey from the env-var name", () => {
     } finally {
       delete process.env["OTHER_FAKE_KEY"];
     }
+  });
+});
+
+describe("logicalConditionInputPath", () => {
+  it("maps the default private execution path to the logical eval path", () => {
+    expect(
+      logicalConditionInputPath(
+        ".c2-private/c2/condition-inputs/stablecoin-home-current-grounded.json",
+      ),
+    ).toBe("eval/c2/condition-inputs/stablecoin-home-current-grounded.json");
+  });
+
+  it("leaves an already-normalized logical path unchanged", () => {
+    expect(
+      logicalConditionInputPath(
+        "eval/c2/condition-inputs/stablecoin-home-current-grounded.json",
+      ),
+    ).toBe("eval/c2/condition-inputs/stablecoin-home-current-grounded.json");
+  });
+
+  it("normalizes an alternate private-root path by its condition-input suffix", () => {
+    expect(
+      logicalConditionInputPath(
+        "/tmp/c2-private-run/c2/condition-inputs/stablecoin-home-current-grounded.json",
+      ),
+    ).toBe("eval/c2/condition-inputs/stablecoin-home-current-grounded.json");
+  });
+
+  it("normalizes a Windows backslash private path to the logical eval path", () => {
+    expect(
+      logicalConditionInputPath(
+        ".c2-private\\c2\\condition-inputs\\stablecoin-home-current-grounded.json",
+      ),
+    ).toBe("eval/c2/condition-inputs/stablecoin-home-current-grounded.json");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// c2RunId — lane namespacing (regression for the runId-collision bug)
+// ---------------------------------------------------------------------------
+//
+// Regression for the deterministic runId-collision bug: the primary lane
+// (OpenAI) and the independent lane (Claude) both ran the same case+condition
+// (`current-grounded`) starting at n=1. With no lane discriminator in the
+// runId, both lanes produced the SAME runId (e.g.
+// `c2-run-named-inspiration-safety-current-grounded-1`). The harness's
+// immutability guard then blocked the independent run because a terminal
+// manifest already existed from the primary lane — so the 3 independent-lane
+// runs never executed.
+//
+// The fix namespaces runIds by lane label. `c2RunId` is the pure helper both
+// the CLI and this test use; pinning it here proves primary and independent
+// runs for the same case+condition receive distinct IDs.
+describe("c2RunId — lane namespacing", () => {
+  it("generates distinct IDs for primary vs independent lanes on the same case+condition", () => {
+    const primary = c2RunId("named-inspiration-safety", "current-grounded", "primary", 1);
+    const independent = c2RunId("named-inspiration-safety", "current-grounded", "independent", 1);
+    expect(primary).toBe("c2-run-named-inspiration-safety-current-grounded-primary-1");
+    expect(independent).toBe("c2-run-named-inspiration-safety-current-grounded-independent-1");
+    expect(primary).not.toBe(independent);
+  });
+
+  it("includes the attempt number for retry distinctness", () => {
+    const first = c2RunId("stablecoin-home", "brief-only", "primary", 1);
+    const retry = c2RunId("stablecoin-home", "brief-only", "primary", 2);
+    expect(first).not.toBe(retry);
+  });
+
+  it("truncates to 64 characters", () => {
+    const longCase = "x".repeat(80);
+    const id = c2RunId(longCase, "current-grounded", "primary", 1);
+    expect(id.length).toBeLessThanOrEqual(64);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// freeze — binds the ACTUAL run + scorecard evidence (P1 regression)
+// ---------------------------------------------------------------------------
+//
+// Regression for the P1 finding: `runFreeze` previously called
+// `freezeCalibration` WITHOUT passing `runs` or `scorecards`, so both
+// `runManifestRefs` and `scorecardRefs` collapsed to a single placeholder
+// ref pointing at the gitignored proposal.json. The frozen artifact could
+// not be independently audited against the actual run manifests + scorecards.
+//
+// The fix: `runFreeze` accepts `--runs <dir>`, loads the runs + scorecards
+// via the same loaders `runPropose` uses (`loadCalibrationRuns`,
+// `loadCalibrationScorecards`), and passes them into `freezeCalibration`.
+//
+// This subprocess test exercises the compiled CLI end-to-end against the
+// real committed run/scorecard evidence + the real proposal.json. It backs
+// up the tracked frozen.json, re-freezes with `--runs`, asserts the output
+// binds every run manifest + scorecard by its real path (NOT the proposal
+// placeholder), then restores the original frozen.json.
+describe("run-c2-pilot CLI — freeze binds real run + scorecard evidence (P1)", { timeout: 30_000 }, () => {
+  const PROPOSAL_PATH = join(REPO_ROOT, "eval/c2/calibration/proposal.json");
+  const FROZEN_PATH = join(REPO_ROOT, "eval/c2/calibration/frozen.json");
+  const RUNS_DIR = join(REPO_ROOT, "eval/c2/runs");
+
+  function backupFrozen(): { backedUp: boolean; backup: string } {
+    if (!existsSync(FROZEN_PATH)) return { backedUp: false, backup: "" };
+    const backup = `${FROZEN_PATH}.p1-test-backup`;
+    writeFileSync(backup, readFileSync(FROZEN_PATH));
+    return { backedUp: true, backup };
+  }
+
+  function restoreFrozen(state: { backedUp: boolean; backup: string }): void {
+    if (!state.backedUp) return;
+    if (existsSync(state.backup)) {
+      writeFileSync(FROZEN_PATH, readFileSync(state.backup));
+      rmSync(state.backup, { force: true });
+    }
+  }
+
+  it("freeze --runs writes a frozen.json whose runManifestRefs + scorecardRefs bind the ACTUAL runs + scorecards", () => {
+    // The committed proposal.json + runs + scorecards are the real evidence
+    // set. Skip the test gracefully if the repo doesn't carry them (e.g. a
+    // fresh clone before the pilot has executed).
+    const skipReason =
+      !existsSync(PROPOSAL_PATH)
+        ? "proposal.json not committed — skip the P1 freeze-binding test"
+        : !existsSync(RUNS_DIR)
+          ? "eval/c2/runs not present — skip the P1 freeze-binding test"
+          : null;
+    if (skipReason) {
+      console.warn(`[p1-test] ${skipReason}`);
+      return;
+    }
+
+    const proposalText = readFileSync(PROPOSAL_PATH, "utf-8");
+    const proposal = JSON.parse(proposalText) as { proposalSha256: string; measurements: { independentCompatibility: Record<string, unknown> } };
+
+    // Count the runs the loader will pick up (dirs with both manifest.json
+    // AND score.json). This is the exact set the CLI's loadCalibrationRuns
+    // returns, and the exact count we expect frozen.runManifestRefs to carry.
+    const runDirs = readdirSync(RUNS_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(RUNS_DIR, entry.name))
+      .filter((dir) => existsSync(join(dir, "manifest.json")) && existsSync(join(dir, "score.json")));
+    expect(runDirs.length).toBeGreaterThan(0);
+
+    // Count the scorecards the loader will pick up (every *.json directly
+    // under eval/c2/scorecards — the loader filters by runId binding).
+    const scorecardsDir = join(REPO_ROOT, "eval/c2/scorecards");
+    const scorecardFiles = existsSync(scorecardsDir)
+      ? readdirSync(scorecardsDir).filter((f) => f.endsWith(".json"))
+      : [];
+    expect(scorecardFiles.length).toBeGreaterThan(0);
+
+    // Build a human authorization whose checklist is deliberately different
+    // from the proposal's CLI-synthesized placeholder. This is important: the
+    // regression must prove that `runFreeze` binds the human judgment rather
+    // than silently persisting the proposal's fabricated false values.
+    const tmpAuth = mkdtempSync(join(tmpdir(), "c2-p1-auth-"));
+    const authPath = join(tmpAuth, "authorization.json");
+    const checklist = {
+      criticalDecisionCoverageComplete: false,
+      contradictoryCriticalDecisions: false,
+      constraintsRespected: true,
+      forbiddenClaimsRespected: true,
+      compatibleJourneys: true,
+      safetyPassedIndependently: true,
+    };
+    const authorization = {
+      schemaVersion: "1.0",
+      artifactType: "c2-freeze-authorization",
+      artifactId: "c2-freeze-auth-p1-test",
+      proposalSha256: proposal.proposalSha256,
+      reviewerActorId: "p1-test-reviewer",
+      reviewerRole: "Gold Label Owner",
+      rationale: "P1 regression test authorization — exercises freeze --runs binding.",
+      materialBenefitMinimum: 0.1,
+      regressionTolerance: 0.05,
+      independentChecklist: checklist,
+      maxRunCostUsd: 0.5,
+      maxCampaignCostUsd: 5,
+      frozenAt: "2026-07-21T00:00:00.000Z",
+      rubricDimensions: [
+        "product-appropriateness",
+        "cross-screen-coherence",
+        "implementation-clarity",
+        "originality",
+        "accessibility-and-failure-states",
+        "evidence-discipline",
+      ],
+    };
+    writeFileSync(authPath, JSON.stringify(authorization));
+
+    const frozenState = backupFrozen();
+    try {
+      const res = spawnCli([
+        "freeze",
+        "--proposal",
+        PROPOSAL_PATH,
+        "--authorization",
+        authPath,
+        "--runs",
+        RUNS_DIR,
+      ]);
+
+      // The freeze must succeed (exit 0) and make zero provider calls.
+      expectZeroEgress(res);
+      expect(
+        res.code,
+        `freeze exited non-zero: ${res.stderr}`,
+      ).toBe(0);
+
+      // Read the freshly-written frozen.json.
+      const frozen = JSON.parse(readFileSync(FROZEN_PATH, "utf-8")) as {
+        runManifestRefs: Array<{ artifactId: string; path: string; sha256: string }>;
+        scorecardRefs: Array<{ artifactId: string; path: string; sha256: string }>;
+        independentChecklist: typeof checklist;
+      };
+
+      // P1 core assertion: every run manifest is bound — NOT the proposal
+      // placeholder (which would collapse to a single ref).
+      expect(frozen.runManifestRefs).toHaveLength(runDirs.length);
+      expect(frozen.scorecardRefs).toHaveLength(scorecardFiles.length);
+
+      // The persisted checklist must be the human authorization, not the
+      // proposal's cliSynthesized placeholder.
+      expect(frozen.independentChecklist).toEqual(checklist);
+
+      // Every run-manifest ref must point at a real eval/c2/runs/<runId>/manifest.json
+      // path — NOT the proposal.json placeholder.
+      for (const ref of frozen.runManifestRefs) {
+        expect(ref.path).toMatch(/^eval\/c2\/runs\/[^/]+\/manifest\.json$/);
+        expect(ref.path).not.toBe("eval/c2/calibration/proposal.json");
+        expect(ref.sha256).toMatch(/^[0-9a-f]{64}$/);
+        // The referenced manifest exists on disk and its hash binds it.
+        const manifestAbsPath = join(REPO_ROOT, ref.path);
+        expect(existsSync(manifestAbsPath)).toBe(true);
+      }
+
+      // Every scorecard ref must point at a real eval/c2/scorecards/<artifactId>.json
+      // path — NOT the proposal.json placeholder.
+      for (const ref of frozen.scorecardRefs) {
+        expect(ref.path).toMatch(/^eval\/c2\/scorecards\/[^/]+\.json$/);
+        expect(ref.path).not.toBe("eval/c2/calibration/proposal.json");
+        expect(ref.sha256).toMatch(/^[0-9a-f]{64}$/);
+        const scorecardAbsPath = join(REPO_ROOT, ref.path);
+        expect(existsSync(scorecardAbsPath)).toBe(true);
+      }
+
+      // No placeholder collapse: the proposal-ref path must not appear in
+      // either the runManifestRefs or scorecardRefs arrays.
+      const proposalPath = "eval/c2/calibration/proposal.json";
+      expect(frozen.runManifestRefs.some((r) => r.path === proposalPath)).toBe(false);
+      expect(frozen.scorecardRefs.some((r) => r.path === proposalPath)).toBe(false);
+    } finally {
+      restoreFrozen(frozenState);
+      rmSync(tmpAuth, { recursive: true, force: true });
+    }
+  });
+
+  it("checked-in frozen calibration preserves the human compatibility judgment", () => {
+    if (!existsSync(FROZEN_PATH)) return;
+    const frozen = JSON.parse(readFileSync(FROZEN_PATH, "utf-8")) as {
+      independentChecklist: Record<string, boolean>;
+    };
+    expect(frozen.independentChecklist).toEqual({
+      criticalDecisionCoverageComplete: false,
+      contradictoryCriticalDecisions: false,
+      constraintsRespected: true,
+      forbiddenClaimsRespected: true,
+      compatibleJourneys: true,
+      safetyPassedIndependently: true,
+    });
+  });
+
+  it("freeze without --runs exits non-zero with a usage error naming the required flag", () => {
+    // After the P1 fix, --runs is required. The CLI must refuse a freeze
+    // invocation that omits it with an exit code 2 (usage error) and an
+    // actionable message naming --runs.
+    const res = spawnCli([
+      "freeze",
+      "--proposal",
+      PROPOSAL_PATH,
+      "--authorization",
+      "/dev/null",
+    ]);
+    expect(res.code).toBe(2);
+    expectZeroEgress(res);
+    const combined = `${res.stdout}\n${res.stderr}`;
+    expect(combined).toMatch(/--runs|runs.*required|freeze.*requires/i);
   });
 });

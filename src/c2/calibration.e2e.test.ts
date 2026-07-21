@@ -159,10 +159,13 @@ function makeRun(opts: {
   runId?: string;
   caseId?: string;
   runOutputSha256?: string;
+  /** The on-disk directory name; defaults to `runId`. */
+  runDir?: string;
 }): CalibrationRun {
   const caseId = opts.caseId ?? CASE_BY_FAMILY[opts.family];
   const runId = opts.runId ?? `c2-run-${opts.provider}-${caseId}-${opts.condition}`;
   const runOutputSha256 = opts.runOutputSha256 ?? shaOf({ runId, marker: opts.condition });
+  const runDir = opts.runDir ?? runId;
   return {
     manifest: {
       schemaVersion: "2.0",
@@ -212,6 +215,7 @@ function makeRun(opts: {
     score: makeScore(runId, runOutputSha256),
     caseId,
     family: opts.family,
+    runDir,
   };
 }
 

@@ -20,7 +20,7 @@
  * Exit codes: 0 = success, 1 = operational failure, 2 = usage/config error.
  */
 import { parseArgs } from "node:util";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, appendFileSync, readdirSync } from "node:fs";
 import { resolve, dirname, join, isAbsolute } from "node:path";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -30,6 +30,7 @@ import {
   C2PricingTableSchema,
   C2CalibrationProposalSchema,
   C2FrozenCalibrationSchema,
+  C2ConditionInputSchema,
   type C2CampaignConfig,
   type C2PricingTable,
   type C2ConditionInput,
@@ -40,6 +41,7 @@ import { C2CaseBriefSchema, C2DecisionLabelSchema, C2GoldEvidenceDescriptorSchem
 import { resolveConditionInput } from "../c2/condition-resolver.js";
 import { preflightCampaignCosts, findPricingEntry } from "../c2/cost-policy.js";
 import { executeC2Run, type CampaignState, type C2RunStore, type ExecuteC2RunRequest } from "../c2/harness.js";
+import { writePrivateArtifact, writeDurableArtifact, type BoundaryScanConfig } from "../c2/private-artifacts.js";
 import { callTextModelWithMetadata, type Provider } from "../tagger.js";
 import { sha256Hex, canonicalJsonStringify } from "../readiness/contracts.js";
 import { PrivateCorpusReader } from "../corpus-reader.js";
@@ -47,6 +49,7 @@ import {
   buildCalibrationProposal,
   freezeCalibration,
   evaluateIndependentCompatibility,
+  STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION,
   type CalibrationRun,
   type CalibrationScorecard,
   type FreezeAuthorization,
@@ -72,7 +75,9 @@ Subcommands:
                               campaign cost preflight.
   propose  --runs <dir>       Offline. Calibration proposal (Task 8).
   freeze   --proposal <proposal.json> --authorization <review.json>
-                              Offline. Freeze calibration (Task 8).
+                              --runs <dir>
+                              Offline. Freeze calibration (Task 8). Binds the
+                              actual run manifests + scorecards as evidence.
   validate --calibration <frozen.json>
                               Offline. Validate frozen calibration (Task 8).
 
@@ -113,26 +118,15 @@ async function main(): Promise<number> {
     case "run":
       return runRun(args);
     case "propose":
-      return runPropose(args);
+      return await runPropose(args);
     case "freeze":
-      return runFreeze(args);
+      return await runFreeze(args);
     case "validate":
       return runValidate(args);
     default:
       console.error(`error: unknown subcommand '${subcommand}'`);
       usage();
   }
-}
-
-// Run only when this module is the entry point (not when imported by tests).
-const isMainModule = import.meta.url === `file://${process.argv[1]}`;
-if (isMainModule) {
-  main()
-    .then((code) => process.exit(code))
-    .catch((err) => {
-      console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    });
 }
 
 export {};
@@ -186,6 +180,32 @@ function harnessGitSha(): string {
 /** SHA-256 of a file's bytes (matches the readiness canonical hex helper). */
 function fileSha256(path: string): string {
   return sha256Hex(readFileSync(path));
+}
+
+/**
+ * Load a prepared condition input from disk, validate it through the Zod schema
+ * (NOT a TypeScript cast), and verify the recomputed `inputSha256` matches the
+ * persisted value before returning. The condition input file lives under the
+ * gitignored `.c2-private/` tree, so the threat surface is operator/attacker
+ * editing it between `prepare` and `run`. The schema parse catches shape drift;
+ * the hash check catches any in-place mutation (including ones that preserve the
+ * shape). Throws an actionable error if the hash mismatches.
+ */
+function loadValidatedConditionInput(conditionInputPath: string): C2ConditionInput {
+  const raw = JSON.parse(readFileSync(conditionInputPath, "utf-8"));
+  const conditionInput = C2ConditionInputSchema.parse(raw) as C2ConditionInput;
+  // Recompute the canonical inputSha256 (over every model-visible field EXCEPT
+  // the hash itself) and refuse to run if it doesn't match the persisted value.
+  const { inputSha256: _omit, ...rest } = conditionInput;
+  void _omit;
+  const recomputed = sha256Hex(Buffer.from(canonicalJsonStringify(rest), "utf-8"));
+  if (recomputed !== conditionInput.inputSha256) {
+    throw new Error(
+      "condition input hash mismatch: the loaded inputSha256 does not match the recomputed hash. "
+      + "The condition input file may have been corrupted or tampered.",
+    );
+  }
+  return conditionInput;
 }
 
 // ---------------------------------------------------------------------------
@@ -250,21 +270,14 @@ async function runPrepare(args: Record<string, unknown>): Promise<number> {
         {
           reader,
           readArtifact: (p) => readFileSync(p),
-          writePrivate: (relPath, bytes) => {
-            const abs = join(privateRoot, relPath);
-            mkdirSync(dirname(abs), { recursive: true });
-            writeFileSync(abs, bytes);
-          },
+          writePrivate: async (relPath, bytes) => { await writePrivateArtifact(privateRoot, relPath, bytes); },
           now: () => new Date().toISOString(),
         },
       );
 
-      const outDir = join(privateRoot, "c2/condition-inputs");
-      mkdirSync(outDir, { recursive: true });
-      const outFile = join(outDir, `${pkg.caseId}-${condition}.json`);
-      writeFileSync(outFile, canonicalJsonStringify(r.metadata));
-      const payloadFile = join(outDir, `${pkg.caseId}-${condition}.private.json`);
-      writeFileSync(payloadFile, r.privatePayload);
+      const outRelDir = "c2/condition-inputs";
+      await writePrivateArtifact(privateRoot, join(outRelDir, `${pkg.caseId}-${condition}.json`), Buffer.from(canonicalJsonStringify(r.metadata), "utf-8"));
+      await writePrivateArtifact(privateRoot, join(outRelDir, `${pkg.caseId}-${condition}.private.json`), Buffer.from(r.privatePayload, "utf-8"));
       resolvedCount += 1;
     }
   }
@@ -410,7 +423,13 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
         console.error(`error: condition input not prepared. Run 'prepare' first. Missing: ${conditionInputPath}`);
         return 1;
       }
-      const conditionInput = JSON.parse(readFileSync(conditionInputPath, "utf-8")) as C2ConditionInput;
+      let conditionInput: C2ConditionInput;
+      try {
+        conditionInput = loadValidatedConditionInput(conditionInputPath);
+      } catch (err) {
+        console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
       const privatePayloadPath = join(privateRoot, "c2/condition-inputs", `${pkg.caseId}-${condition}.private.json`);
       const evidenceContent = loadEvidenceContent(conditionInput, privatePayloadPath);
 
@@ -421,7 +440,7 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
         conditionInput,
         conditionInputRef: {
           artifactId: conditionInput.artifactId,
-          path: relPathFromRepo(conditionInputPath),
+          path: logicalConditionInputPath(relPathFromRepo(conditionInputPath)),
           sha256: fileSha256(conditionInputPath),
         },
         scorerRef: {
@@ -436,6 +455,8 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
           maxOutputTokens: campaign.primary.maxOutputTokens,
           samplingParameters: campaign.primary.samplingParameters,
         },
+        maxRunCostUsd: campaign.maxRunCostUsd,
+        maxCampaignCostUsd: campaign.maxCampaignCostUsd,
         evidenceContent,
         harnessGitSha: gitSha,
         sourceSnapshotIds: pkg.sourceSnapshot ? [pkg.sourceSnapshot.artifactId] : [],
@@ -445,7 +466,7 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
       // Swap the pricing entry to the lane we're about to call.
       campaignState.pricingEntry = primaryPricing.value;
 
-      const result = await executeC2RunWithAudit(request, store, campaignState, runCounter);
+      const result = await executeC2RunWithAudit(request, store, campaignState, runCounter, "primary");
       results.push(result);
     }
   }
@@ -472,7 +493,13 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
         console.error(`error: condition input not prepared. Run 'prepare' first. Missing: ${conditionInputPath}`);
         return 1;
       }
-      const conditionInput = JSON.parse(readFileSync(conditionInputPath, "utf-8")) as C2ConditionInput;
+      let conditionInput: C2ConditionInput;
+      try {
+        conditionInput = loadValidatedConditionInput(conditionInputPath);
+      } catch (err) {
+        console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
       const privatePayloadPath = join(privateRoot, "c2/condition-inputs", `${pkg.caseId}-${condition}.private.json`);
       const evidenceContent = loadEvidenceContent(conditionInput, privatePayloadPath);
 
@@ -483,7 +510,7 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
         conditionInput,
         conditionInputRef: {
           artifactId: conditionInput.artifactId,
-          path: relPathFromRepo(conditionInputPath),
+          path: logicalConditionInputPath(relPathFromRepo(conditionInputPath)),
           sha256: fileSha256(conditionInputPath),
         },
         scorerRef: {
@@ -498,6 +525,8 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
           maxOutputTokens: campaign.independent.maxOutputTokens,
           samplingParameters: campaign.independent.samplingParameters,
         },
+        maxRunCostUsd: campaign.maxRunCostUsd,
+        maxCampaignCostUsd: campaign.maxCampaignCostUsd,
         evidenceContent,
         harnessGitSha: gitSha,
         sourceSnapshotIds: pkg.sourceSnapshot ? [pkg.sourceSnapshot.artifactId] : [],
@@ -506,7 +535,7 @@ async function runRun(args: Record<string, unknown>): Promise<number> {
 
       campaignState.pricingEntry = independentPricing.value;
 
-      const result = await executeC2RunWithAudit(request, store, campaignState, runCounter);
+      const result = await executeC2RunWithAudit(request, store, campaignState, runCounter, "independent");
       results.push(result);
     }
   }
@@ -543,6 +572,16 @@ export function buildModelEndpoint(req: {
 }
 
 /**
+ * Generate a lane-namespaced runId. Primary and independent lanes for the same
+ * case+condition receive distinct IDs (e.g. `...-primary-1` vs `...-independent-1`)
+ * so the immutability guard never blocks an independent run with a primary run's ID.
+ */
+export function c2RunId(caseId: string, condition: string, laneLabel: string, attempt: number): string {
+  const base = `c2-run-${caseId}-${condition}-${laneLabel}-${attempt}`;
+  return base.slice(0, 64);
+}
+
+/**
  * Wrap executeC2Run with a network-audit hook. The audit fires immediately
  * BEFORE the provider call (inside the injected callModel) so the no-egress
  * guarantee is observable from a subprocess.
@@ -552,6 +591,7 @@ async function executeC2RunWithAudit(
   store: C2RunStore,
   campaign: CampaignState,
   attempt: number,
+  laneLabel: string,
 ): Promise<{ runId: string; status: string; terminalReason: string | null; costUsd: number }> {
   let audited = false;
   const manifest = await executeC2Run(request, {
@@ -575,7 +615,7 @@ async function executeC2RunWithAudit(
       });
     },
     now: () => new Date().toISOString(),
-    runId: (caseId, condition, n) => `c2-run-${caseId}-${condition}-${n}`.slice(0, 64),
+    runId: (caseId, condition, n) => c2RunId(caseId, condition, laneLabel, n),
     scorerSha256: () => {
       try {
         return fileSha256("src/c2/scorer.ts");
@@ -604,6 +644,20 @@ function collectSecretValues(): string[] {
   return values;
 }
 
+/**
+ * Boundary-scan config for the proposal/freeze durable writes. Mirrors the
+ * config the harness threads into executeC2Run: the resolved API-key values +
+ * the secret env-var names. writeDurableArtifact runs this scan BEFORE the
+ * atomic write so a calibration artifact carrying any secret material, a
+ * forbidden content field, or a private path is rejected with no file on disk.
+ */
+function durableBoundaryScan(): BoundaryScanConfig {
+  return {
+    secretValues: collectSecretValues(),
+    secretEnvNames: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+  };
+}
+
 function loadEvidenceContent(conditionInput: C2ConditionInput, privatePayloadPath: string): Map<string, string> {
   const map = new Map<string, string>();
   if (!existsSync(privatePayloadPath)) return map;
@@ -623,20 +677,22 @@ function loadEvidenceContent(conditionInput: C2ConditionInput, privatePayloadPat
 
 function makeFilesystemStore(privateRoot: string, runsRoot: string): C2RunStore {
   return {
+    // Private writes (raw responses, private payloads) use the atomic
+    // fsync+rename primitive. No boundary scan — everything under the private
+    // root is private by construction.
     async writePrivate(relPath, bytes) {
-      const abs = join(privateRoot, relPath);
-      mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, bytes);
+      await writePrivateArtifact(privateRoot, relPath, bytes);
     },
+    // Durable writes (manifests, scores) are ALREADY boundary-scanned by the
+    // harness's writeManifestDurable / writeScoreDurable (scanDurableArtifact
+    // runs before the store is called). The store only needs the atomic
+    // fsync+rename lifecycle, so it routes through writePrivateArtifact against
+    // the durable root. The boundary scan config stays owned by the harness.
     async writeDurableManifest(runId, manifestJson) {
-      const abs = join(runsRoot, runId, "manifest.json");
-      mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, manifestJson, "utf-8");
+      await writePrivateArtifact(runsRoot, join(runId, "manifest.json"), Buffer.from(manifestJson, "utf-8"));
     },
     async writeDurableScore(runId, scoreJson) {
-      const abs = join(runsRoot, runId, "score.json");
-      mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, scoreJson, "utf-8");
+      await writePrivateArtifact(runsRoot, join(runId, "score.json"), Buffer.from(scoreJson, "utf-8"));
     },
     hasTerminalRun(runId) {
       return existsSync(join(runsRoot, runId, "manifest.json"));
@@ -648,6 +704,32 @@ function relPathFromRepo(absOrRel: string): string {
   if (!isAbsolute(absOrRel)) return absOrRel;
   // Make a best-effort repo-relative path for the manifest's ref.
   return absOrRel.replace(process.cwd() + "/", "");
+}
+
+/**
+ * Convert a private condition-input execution path into the logical path
+ * recorded in durable run metadata. The descriptor remains private on disk;
+ * only its SHA-256 binds the run to the exact bytes.
+ */
+export function logicalConditionInputPath(executionPath: string): string {
+  const normalized = executionPath.replaceAll("\\", "/");
+  const marker = "/c2/condition-inputs/";
+  const markerIndex = normalized.lastIndexOf(marker);
+
+  if (markerIndex >= 0) {
+    const fileName = normalized.slice(markerIndex + marker.length);
+    if (fileName.length > 0 && !fileName.includes("/")) {
+      return `eval/c2/condition-inputs/${fileName}`;
+    }
+  }
+
+  if (normalized.startsWith("eval/c2/condition-inputs/")) {
+    return normalized;
+  }
+
+  throw new Error(
+    `[c2-cli] cannot normalize condition-input path: ${executionPath}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -702,7 +784,12 @@ function loadCalibrationRuns(runsDir: string): CalibrationRun[] {
     if (!family) {
       throw new Error(`[c2-propose] run ${manifest.runId} caseId ${caseId} has no pilot family mapping`);
     }
-    runs.push({ manifest, score, caseId, family });
+    // Record the actual directory name (`entry.name`) so the frozen-calibration
+    // ref's path points at the on-disk location. A fallback run's directory is
+    // suffixed `-fallback` while its manifest.runId carries the canonical
+    // (un-suffixed) identifier; using `entry.name` (not `manifest.runId`) keeps
+    // the ref's path and hash in agreement.
+    runs.push({ manifest, score, caseId, family, runDir: entry.name });
   }
   return runs;
 }
@@ -794,7 +881,7 @@ function buildCompatibilityInput(runs: CalibrationRun[]): CompatibilityChecklist
   };
 }
 
-function runPropose(args: Record<string, unknown>): number {
+async function runPropose(args: Record<string, unknown>): Promise<number> {
   if (!args.runs) {
     console.error("error: propose requires --runs <dir>");
     return 2;
@@ -834,11 +921,17 @@ function runPropose(args: Record<string, unknown>): number {
         sha256: fileSha256("eval/c2/config/pricing.json"),
       },
       artifactId: "c2-calibration-proposal-pilot-v1",
+      // The documented Claude truncation exception for the product family
+      // (stablecoin-home) current-grounded independent run. Permits ONLY this
+      // exact missing pair; every other gap still fails closed.
+      claudeCoverageExceptions: [STABLECOIN_CLAUDE_TRUNCATION_EXCEPTION],
     });
 
-    mkdirSync(CALIBRATION_DIR, { recursive: true });
+    // Durable write under eval/c2/calibration/ — runs the boundary scan FIRST
+    // (no secret values, no private paths, no content fields) then writes
+    // atomically with fsync+rename.
+    await writeDurableArtifact(CALIBRATION_DIR, "proposal.json", canonicalJsonStringify(proposal), durableBoundaryScan());
     const proposalPath = join(CALIBRATION_DIR, "proposal.json");
-    writeFileSync(proposalPath, canonicalJsonStringify(proposal), "utf-8");
     console.error(`[c2-propose] wrote ${proposalPath} (proposalSha256=${proposal.proposalSha256.slice(0, 12)}…)`);
     return 0;
   } catch (err) {
@@ -847,13 +940,14 @@ function runPropose(args: Record<string, unknown>): number {
   }
 }
 
-function runFreeze(args: Record<string, unknown>): number {
-  if (!args.proposal || !args.authorization) {
-    console.error("error: freeze requires --proposal <proposal.json> --authorization <review.json>");
+async function runFreeze(args: Record<string, unknown>): Promise<number> {
+  if (!args.proposal || !args.authorization || !args.runs) {
+    console.error("error: freeze requires --proposal <proposal.json> --authorization <review.json> --runs <dir>");
     return 2;
   }
   const proposalPath = resolve(args.proposal as string);
   const authorizationPath = resolve(args.authorization as string);
+  const runsDir = resolve(args.runs as string);
   try {
     if (!existsSync(proposalPath)) {
       console.error(`[c2-freeze] proposal not found: ${proposalPath}`);
@@ -866,36 +960,48 @@ function runFreeze(args: Record<string, unknown>): number {
     const proposal = C2CalibrationProposalSchema.parse(JSON.parse(readFileSync(proposalPath, "utf-8"))) as C2CalibrationProposal;
     const authorization = JSON.parse(readFileSync(authorizationPath, "utf-8")) as FreezeAuthorization;
 
-    // The freeze binds the proposal's compatibility. The authorization's
-    // checklist MUST match it; the freeze validates that.
-    const compatibility = proposal.measurements.independentCompatibility;
-
-    // Reject CLI-synthesized compatibility at freeze time. A `cliSynthesized:
-    // true` marker means the compatibility was fabricated from score-completeness
-    // signals, not measured against real independent evidence. The freeze gate
-    // requires a genuine human-authored compatibility evaluation.
-    if (compatibility.cliSynthesized === true) {
-      console.error(
-        "[c2-freeze] rejected: proposal carries cliSynthesized compatibility (a fabricated placeholder). "
-        + "The freeze gate requires a genuine independent-compatibility evaluation, not a CLI-synthesized one. "
-        + "Review the proposal's independent evidence and author a real compatibility evaluation in the authorization.",
-      );
+    // Load the ACTUAL run manifests + scorecards backing the proposal. The
+    // freeze must bind these — not the proposal placeholder — so the frozen
+    // artifact is independently auditable against the campaign's raw evidence.
+    // The loaders are the same `runPropose` uses (loadCalibrationRuns +
+    // loadCalibrationScorecards); the re-freeze is byte-identical for the
+    // same proposal + authorization + timestamp, so passing the runs +
+    // scorecards cannot drift the frozen bytes unless the evidence itself
+    // changed.
+    const runs = loadCalibrationRuns(runsDir);
+    if (runs.length === 0) {
+      console.error(`[c2-freeze] no completed runs found under ${runsDir} (expected <runId>/manifest.json + <runId>/score.json)`);
       return 1;
     }
+    const scorecards = loadCalibrationScorecards(runs);
+
+    // The proposal's compatibility is a CLI-synthesized placeholder (the CLI
+    // cannot measure real OpenAI-vs-Claude agreement). The freeze binds the
+    // AUTHORIZATION's human-authored independentChecklist as the genuine
+    // compatibility evaluation. The authorization's checklist MUST NOT carry
+    // cliSynthesized (the template omits it); the freeze gate rejects any
+    // compatibility with cliSynthesized === true.
+    const proposalCompatibility = proposal.measurements.independentCompatibility;
+    const compatibility: IndependentCompatibility = proposalCompatibility.cliSynthesized === true
+      ? authorization.independentChecklist
+      : proposalCompatibility;
 
     const frozen = freezeCalibration({
       proposal,
       compatibility,
       authorization,
+      runs,
+      scorecards,
       campaignConfigRef: proposal.campaignConfigRef,
       pricingTableRef: proposal.pricingTableRef,
       artifactId: "c2-frozen-calibration-pilot-v1",
     });
 
-    mkdirSync(CALIBRATION_DIR, { recursive: true });
+    // Durable write under eval/c2/calibration/ — boundary scan FIRST, then
+    // atomic fsync+rename.
+    await writeDurableArtifact(CALIBRATION_DIR, "frozen.json", canonicalJsonStringify(frozen), durableBoundaryScan());
     const frozenPath = join(CALIBRATION_DIR, "frozen.json");
-    writeFileSync(frozenPath, canonicalJsonStringify(frozen), "utf-8");
-    console.error(`[c2-freeze] wrote ${frozenPath} (frozenAt=${frozen.frozenAt})`);
+    console.error(`[c2-freeze] wrote ${frozenPath} (frozenAt=${frozen.frozenAt}, ${frozen.runManifestRefs.length} run manifests, ${frozen.scorecardRefs.length} scorecards)`);
     return 0;
   } catch (err) {
     console.error(`[c2-freeze] ${err instanceof Error ? err.message : String(err)}`);
@@ -926,4 +1032,22 @@ function runValidate(args: Record<string, unknown>): number {
     console.error(`[c2-validate] ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Entry point — MUST be at the end of the file, after all module-level const
+// declarations (PILOT_MANIFEST_PATH, SCORECARDS_DIR, CALIBRATION_DIR). Placing
+// this block earlier triggers a temporal-dead-zone error: main() calls
+// runPropose() → loadCalibrationRuns() → loadPilotPackages(), which references
+// PILOT_MANIFEST_PATH before its declaration is reached. The `import.meta.url`
+// guard ensures tests importing this module never trigger the auto-run.
+// ---------------------------------------------------------------------------
+const isMainModule = import.meta.url === `file://${process.argv[1]}`;
+if (isMainModule) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    });
 }

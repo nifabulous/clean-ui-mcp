@@ -86,6 +86,30 @@ eval/c2/pilot/*
 # official provider sources immediately before the paid campaign. Tracked
 # because the paid-call harness and calibration reducer bind these hashes.
 !eval/c2/config/
+# C2 Pass 2 frozen calibration (Task 10): the byte-identical-deterministic
+# frozen artifact bound to the human-authorized compatibility evaluation. Both
+# frozen.json (the reproducible calibration deliverable) and proposal.json (the
+# reduced measurements the freeze binds via proposalRef) are tracked. Tracking
+# proposal.json makes the frozen calibration fully auditable: proposal.json
+# (the reduced measurements) + the run/scorecard refs (the raw evidence
+# bindings) are all traceable. Both pass the boundary scanner (hashes +
+# metadata only, no prompt/evidence/raw content).
+!eval/c2/calibration/
+eval/c2/calibration/*
+!eval/c2/calibration/frozen.json
+!eval/c2/calibration/proposal.json
+# C2 Pass 2 frozen-calibration evidence bundle: the run manifests + human
+# scorecards the frozen calibration binds by hash. These are hash-only
+# metadata (no prompt/evidence/raw content, no secrets) — verified to pass
+# scanDurableArtifact. Tracked so a fresh clone can independently audit every
+# hash binding in frozen.json. Raw responses, blinded reviewer packets, and
+# the failed runs without score.json all stay gitignored under their own
+# rules; only the 11 succeeded run manifests + their score.json + the 11
+# canonical scorecards are git-added with -f below.
+!eval/c2/runs/
+eval/c2/runs/*
+!eval/c2/scorecards/
+eval/c2/scorecards/*
 # C2 gold-evidence descriptors (Task 3): each descriptor maps every label
 # goldEvidenceId to exact source JSON pointers (brief fields or migration
 # snapshot fields). Tracked because the pilot manifest binds their resolved

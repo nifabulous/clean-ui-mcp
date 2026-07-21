@@ -51,12 +51,14 @@
     "test:c2-scoring": "vitest run src/c2/scorer.test.ts scripts/design-handoff-v1-regression.test.mjs scripts/design-handoff-scorer.test.mjs",
     "generate:c2-pilot": "node scripts/build-c2-pilot-manifest.mjs",
     "validate:c2-pilot": "node scripts/build-c2-pilot-manifest.mjs --check",
+    "generate:c2-baseline": "node scripts/build-baseline-manifest.mjs",
+    "validate:c2-baseline": "node scripts/build-baseline-manifest.mjs --check",
     "generate:c2-label-selection": "tsx src/scripts/build-label-integrity-selection.mts",
     "validate:c2-label-selection": "tsx src/scripts/build-label-integrity-selection.mts --check",
     "validate:c2-label-selection:schema": "tsx src/scripts/build-label-integrity-selection.mts --verify-schema",
     "c2:pilot": "tsc && node dist/scripts/run-c2-pilot.js",
     "c2:baseline": "tsx src/scripts/run-c2-baseline.ts",
-    "validate:c2-baseline": "tsx src/scripts/run-c2-baseline.ts validate --manifest eval/c2/baseline/manifest.json --calibration eval/c2/calibration/frozen.json",
+    "validate:c2-baseline-runner": "tsx src/scripts/run-c2-baseline.ts validate --manifest eval/c2/baseline/manifest.json --calibration eval/c2/calibration/frozen.json",
     "validate-readiness-artifacts": "tsc && node dist/scripts/validate-readiness-artifacts.js",
     "typecheck:contracts": "tsc --noEmit && tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck src/tool-contract-types.test.ts"
   },
@@ -92,8 +94,8 @@
     "@vitejs/plugin-react": "^5.1.4",
     "@vitest/browser": "^4.1.9",
     "jsdom": "^28.0.0",
-    "typescript": "^5.9.3",
     "tsx": "^4.23.1",
+    "typescript": "^5.9.3",
     "vite": "^7.3.6",
     "vitest": "^4.1.9"
   }

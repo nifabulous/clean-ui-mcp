@@ -88,6 +88,12 @@ eval/c2/baseline/*
 !eval/c2/baseline/briefs/
 !eval/c2/baseline/labels/
 !eval/c2/baseline/evidence/
+# C2 Pass 3 baseline manifest (Task B5): the canonical content-addressed binding
+# of the 25 frozen baseline cases (3 pilot + 22 new). Tracked because downstream
+# gates validate against it via `npm run validate:c2-baseline`. Carries only
+# hashes + refs (no prompt/evidence/raw content, no secrets, no private paths) —
+# verified to pass scanDurableArtifact on every build + check.
+!eval/c2/baseline/manifest.json
 # C2 reviewed campaign + pricing config (Task 5): non-secret provider/model
 # pins, sampling parameters, output-token ceilings, fixed $0.50/$5 budgets,
 # and a versioned pricing table with provenance URLs + verification dates.

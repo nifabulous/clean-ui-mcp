@@ -29,6 +29,7 @@ import {
 } from "./primitives.js";
 import { C2CasePackageManifestSchema } from "./case-contracts.js";
 import { canonicalJsonStringify, sha256Hex, Sha256 } from "../readiness/contracts.js";
+import { NonEmptyText } from "./primitives.js";
 
 // ---------------------------------------------------------------------------
 // Case reference — a case package + the gold-evidence descriptor file ref.
@@ -127,6 +128,14 @@ export const C2BaselineManifestSchema = z
     executionMatrix: C2ExecutionMatrixSchema,
     frozenCalibrationRef: ArtifactFileRefSchema,
     manifestSha256: Sha256,
+    /** Explicitly documents incomplete sections of the baseline (e.g., pending
+     * migration source snapshots). When non-empty, the manifest is STAGED, not
+     * runnable — prepare/run must fail closed until all sections are resolved. */
+    stagedSections: z.array(z.object({
+      section: NonEmptyText,
+      reason: NonEmptyText,
+      affectedCaseIds: z.array(StableId),
+    })).default([]),
   })
   .strict()
   .superRefine((manifest, ctx) => {

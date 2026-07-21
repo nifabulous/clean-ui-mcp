@@ -135,6 +135,7 @@ function buildManifest(opts: ManifestOpts = {}): C2BaselineManifest {
       opts.frozenCalibrationRef ??
       fileRef("c2-frozen-calibration-v1", "eval/c2/calibration/frozen.json"),
     manifestSha256: opts.manifestSha256 ?? SHA64,
+    stagedSections: [],
   };
   return manifest as C2BaselineManifest;
 }

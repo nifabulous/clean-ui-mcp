@@ -654,5 +654,35 @@
     "path": "eval/c2/calibration/frozen.json",
     "sha256": "bc0561b5c8be36f82397577c58aafc2b1e893407df822272758ed35281a7c51f"
   },
-  "manifestSha256": "1ade178a2b616fdac12b1a45e0f89d50b8ff285f5e9dd646c96babc52982ae0c"
+  "manifestSha256": "91acdf59d2fb76bf2d5f86d0b482aad5c8e574ae7090be44163b4cce98a03549",
+  "stagedSections": [
+    {
+      "section": "migration-source-snapshot:migration-content-product",
+      "reason": "Snapshot file eval/c2/baseline/source-snapshots/migration-content-product.json does not exist yet; brief declares placeholder sha256. Execution (prepare/run) will fail closed until the file is authored and the brief's sourceSnapshotRef.sha256 is updated.",
+      "affectedCaseIds": [
+        "migration-content-product"
+      ]
+    },
+    {
+      "section": "migration-source-snapshot:migration-documentation-site",
+      "reason": "Snapshot file eval/c2/baseline/source-snapshots/migration-documentation-site.json does not exist yet; brief declares placeholder sha256. Execution (prepare/run) will fail closed until the file is authored and the brief's sourceSnapshotRef.sha256 is updated.",
+      "affectedCaseIds": [
+        "migration-documentation-site"
+      ]
+    },
+    {
+      "section": "migration-source-snapshot:migration-regulated-service",
+      "reason": "Snapshot file eval/c2/baseline/source-snapshots/migration-regulated-service.json does not exist yet; brief declares placeholder sha256. Execution (prepare/run) will fail closed until the file is authored and the brief's sourceSnapshotRef.sha256 is updated.",
+      "affectedCaseIds": [
+        "migration-regulated-service"
+      ]
+    },
+    {
+      "section": "migration-source-snapshot:migration-saas-dashboard",
+      "reason": "Snapshot file eval/c2/baseline/source-snapshots/migration-saas-dashboard.json does not exist yet; brief declares placeholder sha256. Execution (prepare/run) will fail closed until the file is authored and the brief's sourceSnapshotRef.sha256 is updated.",
+      "affectedCaseIds": [
+        "migration-saas-dashboard"
+      ]
+    }
+  ]
 }

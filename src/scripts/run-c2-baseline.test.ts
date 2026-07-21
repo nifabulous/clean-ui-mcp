@@ -150,6 +150,7 @@ function build25CaseManifest() {
       "eval/c2/calibration/frozen.json",
     ),
     manifestSha256: "",
+    stagedSections: [],
   };
   manifest.manifestSha256 = computeManifestSha256(
     manifest as Parameters<typeof computeManifestSha256>[0],

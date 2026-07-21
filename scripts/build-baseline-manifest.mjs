@@ -268,7 +268,7 @@ async function readAllArtifacts(root) {
  * For non-migration briefs: sourceSnapshotRef must be null/absent and the
  * manifest's sourceSnapshot is null.
  */
-function resolveSourceSnapshot(brief, opts = {}, root = ".") {
+function resolveSourceSnapshot(brief, opts = {}, root = ".", stagedSections = []) {
   const ref = brief.parsed.sourceSnapshotRef;
   if (brief.parsed.family === "migration") {
     if (!ref || ref.artifactType !== "design-source-snapshot") {
@@ -300,9 +300,16 @@ function resolveSourceSnapshot(brief, opts = {}, root = ".") {
       );
     } else {
       // Only warn — don't fail. This is for the current deferral period.
+      // Record this as a staged section so the manifest explicitly documents
+      // it as incomplete, not silently runnable.
+      stagedSections.push({
+        section: `migration-source-snapshot:${brief.parsed.caseId}`,
+        reason: `Snapshot file ${ref.path} does not exist yet; brief declares placeholder sha256. Execution (prepare/run) will fail closed until the file is authored and the brief's sourceSnapshotRef.sha256 is updated.`,
+        affectedCaseIds: [brief.parsed.caseId],
+      });
       console.error(
         `WARNING: migration brief ${brief.name} references snapshot at ${ref.path} which does not exist yet. ` +
-        `The manifest will bind the declared placeholder hash; execution (prepare/run) will fail closed until the file is authored.`,
+        `The manifest will bind the declared placeholder hash and record this as a staged section; execution will fail closed.`,
       );
     }
     return {
@@ -335,6 +342,7 @@ export async function buildBaselineManifest(root, opts = {}) {
   }
 
   const { briefs, labels, evidence } = await readAllArtifacts(root);
+  const stagedSections = [];
 
   // ── Reject duplicate case IDs before pairing ─────────────────────────────
   const seenBriefIds = new Set();
@@ -435,7 +443,7 @@ export async function buildBaselineManifest(root, opts = {}) {
       );
     }
 
-    const sourceSnapshot = resolveSourceSnapshot(brief, opts, root);
+    const sourceSnapshot = resolveSourceSnapshot(brief, opts, root, stagedSections);
 
     cases.push({
       schemaVersion: "1.0",
@@ -508,6 +516,7 @@ export async function buildBaselineManifest(root, opts = {}) {
     executionMatrix: EXECUTION_MATRIX,
     frozenCalibrationRef,
     manifestSha256: "", // patched below
+    stagedSections,
   };
 
   // ── Self-hash ────────────────────────────────────────────────────────────

@@ -716,6 +716,51 @@ describe.skipIf(!existsSync(CLI_PATH))(
     it("the compiled CLI exists at dist/scripts/run-c2-baseline.js", () => {
       expect(existsSync(CLI_PATH)).toBe(true);
     });
+
+    it("run --paid returns exit 1 (no silent success without execution)", () => {
+      // Finding #2: run --paid must not return 0 without executing. Until the
+      // execution loop is wired, it returns exit 1 regardless of whether the
+      // manifest passes validation. With dummy files, the paid path exits at
+      // validation (exit 1) or at NOT IMPLEMENTED (exit 1). Either way: NOT 0.
+      const dir = mkdtempSync(join(tmpdir(), "c2-baseline-run-paid-"));
+      try {
+        const manifestPath = join(dir, "manifest.json");
+        const calibrationPath = join(dir, "frozen.json");
+        writeFileSync(manifestPath, JSON.stringify({ dummy: "manifest" }));
+        writeFileSync(calibrationPath, JSON.stringify({ dummy: "calibration" }));
+        const res = spawnCli([
+          "run",
+          "--manifest", manifestPath,
+          "--calibration", calibrationPath,
+          "--paid",
+        ]);
+        expect(res.code).toBe(1);
+        expectZeroEgress(res);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("prepare returns exit 1 (no silent success without preparing)", () => {
+      // Finding #3: prepare must not return 0 without preparing. Until the
+      // resolver is wired, it returns exit 1.
+      const dir = mkdtempSync(join(tmpdir(), "c2-baseline-prepare-"));
+      try {
+        const manifestPath = join(dir, "manifest.json");
+        const calibrationPath = join(dir, "frozen.json");
+        writeFileSync(manifestPath, JSON.stringify({ dummy: "manifest" }));
+        writeFileSync(calibrationPath, JSON.stringify({ dummy: "calibration" }));
+        const res = spawnCli([
+          "prepare",
+          "--manifest", manifestPath,
+          "--calibration", calibrationPath,
+        ]);
+        expect(res.code).toBe(1);
+        expectZeroEgress(res);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   },
 );
 

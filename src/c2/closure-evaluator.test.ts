@@ -689,16 +689,25 @@ describe("evaluateC2Closure", () => {
   });
 
   it("rejects duplicate scorecard runIds (prevents count inflation)", () => {
-    // Finding #5: duplicating a scorecard can inflate C4/C7 readiness counts.
-    // The evaluator must reject duplicates by runId.
+    // Finding #5: duplicating a CURRENT-GROUNDED scorecard can inflate C4/C7
+    // readiness counts because those checks count current-grounded scorecards.
+    // The evaluator must reject duplicates by runId. We duplicate a current-
+    // grounded scorecard and verify C7 still reports 25/25 (not 26/25).
     const dataset = buildDataset();
-    // Duplicate the first scorecard — same runId appears twice.
-    const dupScorecards = [...dataset.scorecards, dataset.scorecards[0]!];
+    // Find a current-grounded scorecard to duplicate (the filter that C4/C7 uses).
+    const cgScorecard = dataset.scorecards.find((s) =>
+      s.runId.includes("current-grounded"),
+    )!;
+    expect(cgScorecard).toBeDefined();
+    const dupScorecards = [...dataset.scorecards, cgScorecard];
     const report = evaluateC2Closure(buildInput({ ...dataset, scorecards: dupScorecards }));
-    // The duplicate must not inflate counts. The report should still compute
-    // but the duplicate is excluded (drifted). If it were counted, C7 would
-    // show 26 implementation-ready instead of 25.
+    // C7 counts implementation-ready current-grounded scorecards. With the
+    // duplicate excluded, it should be exactly 25. Without the fix, it would
+    // be 26 (the duplicate inflates the count).
     const c7 = checkById(report, "C7");
+    expect(c7.details).toContain("25");
     expect(c7.details).not.toContain("26");
+    // The duplicate must be reported as drifted (excluded, not counted).
+    expect(report.overallPassed).toBe(true);
   });
 });

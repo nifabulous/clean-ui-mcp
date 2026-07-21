@@ -47,6 +47,10 @@ export interface ClosureEvaluationInput {
   manifest: C2BaselineManifest;
   /** The frozen calibration supplying all thresholds + the C9 checklist. */
   frozenCalibration: C2FrozenCalibration;
+  /** SHA-256 of the frozen calibration FILE bytes (for replay binding). The CLI
+   * computes this after loading + validating the calibration file; it is NOT the
+   * proposal's hash (which is a different artifact). */
+  frozenCalibrationFileSha256: string;
   /** The run manifests (brief-only + current-grounded primary runs at minimum). */
   runs: ReadonlyArray<C2EvaluationRunManifestV2>;
   /** The human scorecards, one per run. */
@@ -153,10 +157,15 @@ function caseIdOfRun(run: C2EvaluationRunManifestV2, index: CaseIndex): string |
   return index.caseIdByPackageArtifactId.get(pkg);
 }
 
-/** Index every run by runId. */
+/** Index every run by runId. Throws on duplicate runIds (fail closed). */
 function indexRuns(runs: ReadonlyArray<C2EvaluationRunManifestV2>): Map<string, C2EvaluationRunManifestV2> {
   const byRunId = new Map<string, C2EvaluationRunManifestV2>();
-  for (const r of runs) byRunId.set(r.runId, r);
+  for (const r of runs) {
+    if (byRunId.has(r.runId)) {
+      throw new Error(`duplicate runId in closure input: ${r.runId} — duplicate run manifests can silently replace the first`);
+    }
+    byRunId.set(r.runId, r);
+  }
   return byRunId;
 }
 
@@ -688,7 +697,7 @@ export function evaluateC2Closure(input: ClosureEvaluationInput): C2ClosureRepor
     overallPassed,
     frozenCalibrationRef: {
       artifactId: input.frozenCalibration.artifactId,
-      sha256: input.frozenCalibration.proposalRef.sha256,
+      sha256: input.frozenCalibrationFileSha256,
     },
     manifestSha256: input.manifest.manifestSha256,
   };

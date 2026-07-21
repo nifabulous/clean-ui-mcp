@@ -192,6 +192,8 @@ export interface ValidateResult {
   manifest: C2BaselineManifest | null;
   /** The validated frozen calibration, when ok. Null otherwise. */
   frozenCalibration: C2FrozenCalibration | null;
+  /** SHA-256 of the calibration FILE bytes (for closure report binding). Null on error. */
+  calibrationFileSha256: string | null;
 }
 
 /**
@@ -215,10 +217,10 @@ export function validateBaselineFiles(
   calibrationPath: string,
 ): ValidateResult {
   if (!existsSync(manifestPath)) {
-    return { ok: false, error: `manifest not found: ${manifestPath}`, manifest: null, frozenCalibration: null };
+    return { ok: false, error: `manifest not found: ${manifestPath}`, manifest: null, frozenCalibration: null, calibrationFileSha256: null };
   }
   if (!existsSync(calibrationPath)) {
-    return { ok: false, error: `calibration not found: ${calibrationPath}`, manifest: null, frozenCalibration: null };
+    return { ok: false, error: `calibration not found: ${calibrationPath}`, manifest: null, frozenCalibration: null, calibrationFileSha256: null };
   }
 
   // Parse manifest through the schema (catches shape + count drift).
@@ -231,7 +233,7 @@ export function validateBaselineFiles(
       ok: false,
       error: `manifest schema parse failed: ${err instanceof Error ? err.message : String(err)}`,
       manifest: null,
-      frozenCalibration: null,
+      frozenCalibration: null, calibrationFileSha256: null,
     };
   }
 
@@ -244,7 +246,7 @@ export function validateBaselineFiles(
       ok: false,
       error: `calibration schema parse failed: ${err instanceof Error ? err.message : String(err)}`,
       manifest,
-      frozenCalibration: null,
+      frozenCalibration: null, calibrationFileSha256: null,
     };
   }
 
@@ -259,7 +261,7 @@ export function validateBaselineFiles(
         + `but the calibration file's actual sha256 is ${calibrationSha}. The calibration file may have `
         + `been regenerated or tampered after the manifest was authored.`,
       manifest,
-      frozenCalibration: null,
+      frozenCalibration: null, calibrationFileSha256: null,
     };
   }
 
@@ -274,12 +276,12 @@ export function validateBaselineFiles(
         `manifestSha256 mismatch: manifest carries ${manifest.manifestSha256} but the recomputed self-hash is `
         + `${recomputed}. The manifest may have been edited after its hash was computed (tamper or drift).`,
       manifest,
-      frozenCalibration: null,
+      frozenCalibration: null, calibrationFileSha256: null,
     };
   }
 
   const frozenCalibration = C2FrozenCalibrationSchema.parse(readJson(calibrationPath)) as C2FrozenCalibration;
-  return { ok: true, error: null, manifest, frozenCalibration };
+  return { ok: true, error: null, manifest, frozenCalibration, calibrationFileSha256: calibrationSha };
 }
 
 function runValidateCli(args: Record<string, unknown>): number {
@@ -683,6 +685,7 @@ export async function runClosureSubcommand(
   const evalInput: ClosureEvaluationInput = {
     manifest,
     frozenCalibration,
+    frozenCalibrationFileSha256: validation.calibrationFileSha256!,
     runs,
     scorecards,
     artifactId: input.artifactId ?? "c2-closure-report-baseline-v1",

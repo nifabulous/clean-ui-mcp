@@ -364,6 +364,7 @@ function buildInput(dataset: Dataset): ClosureEvaluationInput {
   return {
     manifest: dataset.manifest,
     frozenCalibration: dataset.frozen,
+    frozenCalibrationFileSha256: "f".repeat(64),
     runs: dataset.runs,
     scorecards: dataset.scorecards,
     artifactId: "c2-closure-report-test-v1",
@@ -392,9 +393,10 @@ describe("evaluateC2Closure", () => {
     expect(report.checks).toHaveLength(9);
     const ids = report.checks.map((c) => c.checkId);
     expect(ids).toEqual(["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]);
-    // frozenCalibrationRef echoes the consumed frozen calibration's identity.
+    // frozenCalibrationRef echoes the consumed frozen calibration's identity +
+    // the FILE sha256 (not the proposal hash — the proposal is a different artifact).
     expect(report.frozenCalibrationRef.artifactId).toBe(dataset.frozen.artifactId);
-    expect(report.frozenCalibrationRef.sha256).toBe(dataset.frozen.proposalRef.sha256);
+    expect(report.frozenCalibrationRef.sha256).toBe("f".repeat(64));
     expect(report.manifestSha256).toBe(SHA64);
   });
 

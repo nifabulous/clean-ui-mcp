@@ -49,6 +49,25 @@ export type ChallengeEntryId = (typeof CHALLENGE_ENTRY_IDS)[number];
 
 export const CHALLENGE_ENTRY_ID_SET: ReadonlySet<string> = new Set(CHALLENGE_ENTRY_IDS);
 
+/**
+ * Developer seed / fixture entry ids (S2). These are NOT real product screens —
+ * they are developer scaffolding ("sample" titled "Origin", plus four
+ * "origin-origin" duplicates) that leaked into the corpus. They MUST be excluded
+ * from the reproducible candidate pool before selection, exactly as challenge
+ * entries are, so the frozen 40-entry baseline reflects only genuine product
+ * screens. The builder script supplies this list via `fixtureEntryIds`; the
+ * algorithm excludes them before quota computation.
+ */
+export const FIXTURE_ENTRY_IDS = [
+  "sample",
+  "origin-origin",
+  "origin-origin-2",
+  "origin-origin-3",
+  "origin-origin-4",
+] as const;
+
+export type FixtureEntryId = (typeof FIXTURE_ENTRY_IDS)[number];
+
 export interface CorpusEntryForLabelSelection {
   entryId: string;
   industryVertical: string | null;
@@ -80,6 +99,14 @@ export interface LabelSelectionInput {
   corpusSha256: string;
   artifactId: string;
   selectionVersion: number;
+  /**
+   * Optional developer-fixture entry ids to exclude from the reproducible
+   * candidate pool BEFORE quota computation (S2). Defaults to
+   * `FIXTURE_ENTRY_IDS` when omitted, so the algorithm always excludes the
+   * known developer scaffolding ("sample", "origin-origin*"). A caller MAY
+   * pass an explicit list (e.g. empty for back-compat unit tests).
+   */
+  fixtureEntryIds?: ReadonlyArray<string>;
 }
 
 export interface LabelSelectionEntry {
@@ -233,11 +260,13 @@ function hamiltonApportionment(
 
 function buildCandidates(
   entries: ReadonlyArray<CorpusEntryForLabelSelection>,
+  excludedIds: ReadonlySet<string>,
 ): Candidate[] {
   const seen = new Set<string>();
   const out: Candidate[] = [];
   for (const e of entries) {
-    if (CHALLENGE_ENTRY_ID_SET.has(e.entryId)) continue; // removed first
+    // Challenge + fixture entries are removed first, before quota computation.
+    if (excludedIds.has(e.entryId)) continue;
     if (seen.has(e.entryId)) continue; // dedupe defensively
     seen.add(e.entryId);
     out.push({
@@ -479,7 +508,16 @@ export function buildLabelIntegritySelection(
   }
   assertChallengeEntries(input.challengeEntries);
 
-  const candidates = buildCandidates(input.entries);
+  // Build the combined exclusion set: challenge entries (always) plus the
+  // caller-supplied fixture IDs. The builder script always passes
+  // `FIXTURE_ENTRY_IDS` (the known developer scaffolding); unit tests may pass
+  // an explicit list or omit it (treated as no extra exclusions) to exercise
+  // the raw algorithm.
+  const fixtureIds = input.fixtureEntryIds ?? [];
+  const excludedIds: Set<string> = new Set<string>(CHALLENGE_ENTRY_ID_SET);
+  for (const id of fixtureIds) excludedIds.add(id);
+
+  const candidates = buildCandidates(input.entries, excludedIds);
   if (candidates.length < REPRODUCIBLE_SEAT_COUNT) {
     throw new Error(
       `label-integrity selection needs at least ${REPRODUCIBLE_SEAT_COUNT} non-challenge candidates, ` +

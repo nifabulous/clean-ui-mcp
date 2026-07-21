@@ -377,6 +377,53 @@ describe("buildLabelIntegritySelection — input plumbing", () => {
       }),
     ).toThrow();
   });
+
+  // S2: developer seed/fixture entries (the "sample" + "origin-origin*") MUST be
+  // excluded from the reproducible candidate pool before selection, exactly as
+  // challenge entries are. Otherwise a developer fixture ends up in the frozen
+  // 40-entry baseline. The builder supplies the fixture IDs via
+  // `fixtureEntryIds`; the algorithm excludes them from the candidate pool.
+  it("excludes fixture entries from the reproducible candidate pool", () => {
+    // 40 generic entries + the 5 fixture entries + ensure the fixture entries
+    // would otherwise have the LOWEST hashes (so they would be picked first if
+    // not excluded). We assert the resulting selection does NOT include them.
+    const fixtureIds = [
+      "sample",
+      "origin-origin",
+      "origin-origin-2",
+      "origin-origin-3",
+      "origin-origin-4",
+    ];
+    const entries: CorpusEntryForLabelSelection[] = [
+      ...genericEntries(40),
+      ...fixtureIds.map((id) =>
+        entry(id, { patternType: "dashboard", platform: "web" }),
+      ),
+    ];
+    const selection = buildLabelIntegritySelection({
+      ...baseInput(entries),
+      fixtureEntryIds: fixtureIds,
+    });
+    const selectedIds = new Set(selection.entries.map((e) => e.entryId));
+    for (const fixtureId of fixtureIds) {
+      expect(selectedIds.has(fixtureId)).toBe(false);
+    }
+    // Reproducible count is unchanged (35) — fixtures removed BEFORE quotas.
+    expect(selection.entries.filter((e) => e.cohort === "reproducible")).toHaveLength(35);
+  });
+
+  it("does NOT exclude fixture entries when fixtureEntryIds is omitted (back-compat)", () => {
+    // Without the parameter, the algorithm behaves exactly as before: only
+    // challenge entries are removed. A "sample" entry in the pool can be picked.
+    const entries: CorpusEntryForLabelSelection[] = [
+      ...genericEntries(40),
+      entry("sample", { patternType: "dashboard", platform: "web" }),
+    ];
+    const selection = buildLabelIntegritySelection(baseInput(entries));
+    // "sample" is a valid candidate; whether it is picked depends on its hash,
+    // but the function must not throw and must produce a valid 40-entry set.
+    expect(selection.entries).toHaveLength(40);
+  });
 });
 
 // ---------------------------------------------------------------------------

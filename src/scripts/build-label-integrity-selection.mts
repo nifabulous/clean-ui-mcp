@@ -17,8 +17,11 @@
  *
  * Determinism: same corpus + same commit → byte-identical output. The artifact
  * carries `corpusSha256` (content hash of `corpus/entries.json`) and
- * `corpusGitSha` (`git rev-parse HEAD`), so any corpus or commit change alters
- * the artifact and trips `--check`.
+ * `corpusGitSha` (the last commit that touched `corpus/entries.json`, falling
+ * back to `git rev-parse HEAD` only when the corpus has no git history), so any
+ * corpus mutation alters the artifact and trips `--check`. The fixture entries
+ * (`sample`, `origin-origin*`) are excluded from the reproducible candidate
+ * pool before selection (S2).
  *
  * Boundary: the selection carries only entry IDs + image SHA-256 + rationales +
  * corpus/git hashes — never image content, raw responses, or private paths.
@@ -32,6 +35,7 @@ import { resolve } from "node:path";
 import {
   buildLabelIntegritySelection,
   CHALLENGE_ENTRY_IDS,
+  FIXTURE_ENTRY_IDS,
   type CorpusEntryForLabelSelection,
   type ChallengeEntryInput,
 } from "../c2/label-selection.js";
@@ -184,22 +188,44 @@ function extractForSelection(entry: RawCorpusEntry): CorpusEntryForLabelSelectio
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve `corpusGitSha` = `git rev-parse HEAD` (40-hex). Throws if git is
+ * Resolve `corpusGitSha` = the last commit that touched `corpus/entries.json`
+ * (40-hex). Falls back to `git rev-parse HEAD` only if the corpus file has no
+ * git history (e.g. fully gitignored with no tracked history). Throws if git is
  * unavailable or the SHA is malformed.
+ *
+ * Rationale (S3): `git rev-parse HEAD` returns the repo HEAD, which moves on
+ * every commit — including doc/test commits that have nothing to do with the
+ * corpus. That makes the frozen selection stale the instant ANY commit lands,
+ * even when the corpus is byte-identical. The last corpus-touching commit is
+ * the true freeze point: it changes only when the corpus itself changes.
  */
 function resolveCorpusGitSha(): string {
-  let sha: string;
+  let sha: string | undefined;
   try {
-    sha = execSync("git rev-parse HEAD", {
+    const out = execSync("git log -1 --format=%H -- corpus/entries.json", {
       cwd: REPO_ROOT,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-  } catch (err) {
-    fail(`failed to resolve git HEAD: ${err instanceof Error ? err.message : String(err)}`);
+    if (out && /^[0-9a-f]{40}$/.test(out)) {
+      sha = out;
+    }
+  } catch {
+    // git unavailable OR no history for the path — fall through to HEAD below.
   }
-  if (!/^[0-9a-f]{40}$/.test(sha)) {
-    fail(`git rev-parse HEAD returned a non-SHA value: "${sha}"`);
+  if (!sha) {
+    try {
+      sha = execSync("git rev-parse HEAD", {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+    } catch (err) {
+      fail(`failed to resolve corpus git sha: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (!sha || !/^[0-9a-f]{40}$/.test(sha)) {
+    fail(`git returned a non-SHA value for the corpus git sha: "${sha ?? ""}"`);
   }
   return sha;
 }
@@ -215,12 +241,9 @@ function resolveCorpusGitSha(): string {
  * byte-identical output.
  *
  * `corpusGitShaOverride` lets `--check` rebuild against the value FROZEN in the
- * on-disk artifact. Without it, `git rev-parse HEAD` would change on every
- * commit that touches the repo (including the one that lands this very
- * artifact), making the selection stale the instant it lands — the classic
- * self-referential-commit trap. The freeze point is recorded at generation
- * time; `--check` validates corpus/image/algorithm drift against the frozen
- * value, NOT the live HEAD.
+ * on-disk artifact. The frozen value is the last corpus-touching commit (not
+ * the live repo HEAD), recorded at generation time. `--check` validates
+ * corpus/image/algorithm drift against the frozen value, NOT the live HEAD.
  */
 function buildSelection(corpusGitShaOverride?: string): { canonical: string } {
   const { entries, corpusSha256 } = loadCorpus();
@@ -257,7 +280,10 @@ function buildSelection(corpusGitShaOverride?: string): { canonical: string } {
   //    (The pure builder guarantees reproducible ids come from the input pool,
   //    so this is defense-in-depth against future refactors.)
 
-  // 4. Invoke the pure, tested builder.
+  // 4. Invoke the pure, tested builder. Pass the fixture IDs so developer
+  //    scaffolding ("sample", "origin-origin*") is excluded from the
+  //    reproducible candidate pool before selection (S2). The builder's
+  //    challenge rationales come from the spec-lock.
   const selection = buildLabelIntegritySelection({
     entries: corpusEntriesForSelection,
     challengeEntries,
@@ -266,6 +292,7 @@ function buildSelection(corpusGitShaOverride?: string): { canonical: string } {
     corpusSha256,
     artifactId: ARTIFACT_ID,
     selectionVersion: SELECTION_VERSION,
+    fixtureEntryIds: FIXTURE_ENTRY_IDS,
   });
 
   // 5. Canonical JSON: sorted keys, compact, deterministic byte output.

@@ -75,7 +75,9 @@ Subcommands:
                               campaign cost preflight.
   propose  --runs <dir>       Offline. Calibration proposal (Task 8).
   freeze   --proposal <proposal.json> --authorization <review.json>
-                              Offline. Freeze calibration (Task 8).
+                              --runs <dir>
+                              Offline. Freeze calibration (Task 8). Binds the
+                              actual run manifests + scorecards as evidence.
   validate --calibration <frozen.json>
                               Offline. Validate frozen calibration (Task 8).
 
@@ -934,12 +936,13 @@ async function runPropose(args: Record<string, unknown>): Promise<number> {
 }
 
 async function runFreeze(args: Record<string, unknown>): Promise<number> {
-  if (!args.proposal || !args.authorization) {
-    console.error("error: freeze requires --proposal <proposal.json> --authorization <review.json>");
+  if (!args.proposal || !args.authorization || !args.runs) {
+    console.error("error: freeze requires --proposal <proposal.json> --authorization <review.json> --runs <dir>");
     return 2;
   }
   const proposalPath = resolve(args.proposal as string);
   const authorizationPath = resolve(args.authorization as string);
+  const runsDir = resolve(args.runs as string);
   try {
     if (!existsSync(proposalPath)) {
       console.error(`[c2-freeze] proposal not found: ${proposalPath}`);
@@ -951,6 +954,21 @@ async function runFreeze(args: Record<string, unknown>): Promise<number> {
     }
     const proposal = C2CalibrationProposalSchema.parse(JSON.parse(readFileSync(proposalPath, "utf-8"))) as C2CalibrationProposal;
     const authorization = JSON.parse(readFileSync(authorizationPath, "utf-8")) as FreezeAuthorization;
+
+    // Load the ACTUAL run manifests + scorecards backing the proposal. The
+    // freeze must bind these — not the proposal placeholder — so the frozen
+    // artifact is independently auditable against the campaign's raw evidence.
+    // The loaders are the same `runPropose` uses (loadCalibrationRuns +
+    // loadCalibrationScorecards); the re-freeze is byte-identical for the
+    // same proposal + authorization + timestamp, so passing the runs +
+    // scorecards cannot drift the frozen bytes unless the evidence itself
+    // changed.
+    const runs = loadCalibrationRuns(runsDir);
+    if (runs.length === 0) {
+      console.error(`[c2-freeze] no completed runs found under ${runsDir} (expected <runId>/manifest.json + <runId>/score.json)`);
+      return 1;
+    }
+    const scorecards = loadCalibrationScorecards(runs);
 
     // The proposal's compatibility is a CLI-synthesized placeholder (the CLI
     // cannot measure real OpenAI-vs-Claude agreement). The freeze binds the
@@ -967,6 +985,8 @@ async function runFreeze(args: Record<string, unknown>): Promise<number> {
       proposal,
       compatibility,
       authorization,
+      runs,
+      scorecards,
       campaignConfigRef: proposal.campaignConfigRef,
       pricingTableRef: proposal.pricingTableRef,
       artifactId: "c2-frozen-calibration-pilot-v1",
@@ -976,7 +996,7 @@ async function runFreeze(args: Record<string, unknown>): Promise<number> {
     // atomic fsync+rename.
     await writeDurableArtifact(CALIBRATION_DIR, "frozen.json", canonicalJsonStringify(frozen), durableBoundaryScan());
     const frozenPath = join(CALIBRATION_DIR, "frozen.json");
-    console.error(`[c2-freeze] wrote ${frozenPath} (frozenAt=${frozen.frozenAt})`);
+    console.error(`[c2-freeze] wrote ${frozenPath} (frozenAt=${frozen.frozenAt}, ${frozen.runManifestRefs.length} run manifests, ${frozen.scorecardRefs.length} scorecards)`);
     return 0;
   } catch (err) {
     console.error(`[c2-freeze] ${err instanceof Error ? err.message : String(err)}`);

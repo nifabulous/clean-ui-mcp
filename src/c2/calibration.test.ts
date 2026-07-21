@@ -932,4 +932,75 @@ describe("freezeCalibration", () => {
       }),
     ).toThrow(/cliSynthesized|fabricated|placeholder|genuine/i);
   });
+
+  // -------------------------------------------------------------------------
+  // P1: frozen calibration binds the ACTUAL run + scorecard evidence
+  // (not the proposal placeholder). The CLI's runFreeze MUST pass real runs +
+  // scorecards into freezeCalibration; otherwise both runManifestRefs and
+  // scorecardRefs collapse to a single placeholder ref pointing at proposal.json
+  // (gitignored), and the frozen artifact cannot be audited against the 11 run
+  // manifests + 11 scorecards.
+  // -------------------------------------------------------------------------
+
+  it("freezeCalibration with real runs + scorecards binds every run manifest + scorecard (NOT the proposal placeholder)", () => {
+    const runs = matrix.runs;
+    const scorecards = matrix.scorecards;
+    const proposal = buildProposal(runs, scorecards);
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const frozen = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      runs,
+      scorecards,
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+
+    // All runs bound — one ref per run, no placeholder collapse.
+    expect(frozen.runManifestRefs).toHaveLength(runs.length);
+    // All scorecards bound — one ref per scorecard, no placeholder collapse.
+    expect(frozen.scorecardRefs).toHaveLength(scorecards.length);
+
+    // The refs' artifactId / path / sha256 must match the ACTUAL run manifests
+    // + scorecards — NOT the proposal.json placeholder.
+    const expectedRunRefs = runs.map((r) => refOf({
+      artifactId: r.manifest.artifactId,
+      path: `eval/c2/runs/${r.manifest.runId}/manifest.json`,
+      sha256: sha256Hex(Buffer.from(canonicalJsonStringify(r.manifest), "utf-8")),
+    }));
+    expect(frozen.runManifestRefs).toEqual(expectedRunRefs);
+
+    const expectedScorecardRefs = scorecards.map((s) => refOf({
+      artifactId: s.scorecard.artifactId,
+      path: `eval/c2/scorecards/${s.scorecard.artifactId}.json`,
+      sha256: sha256Hex(Buffer.from(canonicalJsonStringify(s.scorecard), "utf-8")),
+    }));
+    expect(frozen.scorecardRefs).toEqual(expectedScorecardRefs);
+
+    // None of the refs may point at the proposal.json placeholder path.
+    for (const ref of frozen.runManifestRefs) {
+      expect(ref.path).not.toBe("eval/c2/calibration/proposal.json");
+    }
+    for (const ref of frozen.scorecardRefs) {
+      expect(ref.path).not.toBe("eval/c2/calibration/proposal.json");
+    }
+  });
+
+  it("freezeCalibration WITHOUT runs + scorecards falls back to the proposal placeholder (documents the P1 gap)", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const frozen = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+    // The fallback path: both refs collapse to a single proposal.json ref.
+    // This is the pre-P1 behavior; the test pins it so the contrast with the
+    // real-evidence path above is explicit.
+    expect(frozen.runManifestRefs).toHaveLength(1);
+    expect(frozen.scorecardRefs).toHaveLength(1);
+    expect(frozen.runManifestRefs[0]!.path).toBe("eval/c2/calibration/proposal.json");
+    expect(frozen.scorecardRefs[0]!.path).toBe("eval/c2/calibration/proposal.json");
+  });
 });

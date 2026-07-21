@@ -143,19 +143,14 @@ function buildCaseIndex(manifest: C2BaselineManifest): CaseIndex {
 }
 
 /**
- * Resolve a run to its caseId. Prefers the manifest's package-artifactId
- * mapping (authoritative); falls back to the runId pattern as defense-in-depth.
+ * Resolve a run to its caseId. Uses ONLY the manifest's package-artifactId
+ * mapping (authoritative). An unknown package reference returns undefined
+ * (fail closed) — a run referencing a package not in the baseline manifest
+ * must not be silently attributed to a case via runId pattern parsing.
  */
 function caseIdOfRun(run: C2EvaluationRunManifestV2, index: CaseIndex): string | undefined {
   const pkg = run.casePackage.artifactId;
-  if (index.caseIdByPackageArtifactId.has(pkg)) {
-    return index.caseIdByPackageArtifactId.get(pkg);
-  }
-  const match = /^c2-run-(.+)-(?:brief-only|current-grounded|gold-evidence|corrected-label-shadow)(?:-|$)/.exec(
-    run.runId,
-  );
-  if (match && index.familyByCaseId.has(match[1])) return match[1];
-  return undefined;
+  return index.caseIdByPackageArtifactId.get(pkg);
 }
 
 /** Index every run by runId. */

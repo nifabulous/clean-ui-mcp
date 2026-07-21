@@ -605,6 +605,8 @@ export interface RunClosureSubcommandResult {
   error: string | null;
   /** The report path, when ok. */
   reportPath: string | null;
+  /** The closure result — false means at least one C1-C9 gate failed. */
+  overallPassed: boolean;
 }
 
 /**
@@ -626,14 +628,14 @@ export async function runClosureSubcommand(
   // 1. Validate manifest + calibration (hash binding + schema).
   const validation = validateBaselineFiles(input.manifestPath, input.calibrationPath);
   if (!validation.ok) {
-    return { ok: false, error: validation.error, reportPath: null };
+    return { ok: false, error: validation.error, reportPath: null, overallPassed: false };
   }
   const manifest = validation.manifest!;
   const frozenCalibration = validation.frozenCalibration!;
 
   // 2. Load run manifests.
   if (!existsSync(input.runsDir)) {
-    return { ok: false, error: `runs directory not found: ${input.runsDir}`, reportPath: null };
+    return { ok: false, error: `runs directory not found: ${input.runsDir}`, reportPath: null, overallPassed: false };
   }
   const runs: C2EvaluationRunManifestV2[] = [];
   const runEntries = readdirSync(input.runsDir, { withFileTypes: true })
@@ -650,14 +652,14 @@ export async function runClosureSubcommand(
       return {
         ok: false,
         error: `failed to parse run manifest ${manifestFile}: ${err instanceof Error ? err.message : String(err)}`,
-        reportPath: null,
+        reportPath: null, overallPassed: false,
       };
     }
   }
 
   // 3. Load human scorecards.
   if (!existsSync(input.scorecardsDir)) {
-    return { ok: false, error: `scorecards directory not found: ${input.scorecardsDir}`, reportPath: null };
+    return { ok: false, error: `scorecards directory not found: ${input.scorecardsDir}`, reportPath: null, overallPassed: false };
   }
   const scorecards: C2HumanScorecard[] = [];
   const scFiles = readdirSync(input.scorecardsDir)
@@ -672,7 +674,7 @@ export async function runClosureSubcommand(
       return {
         ok: false,
         error: `failed to parse scorecard ${path}: ${err instanceof Error ? err.message : String(err)}`,
-        reportPath: null,
+        reportPath: null, overallPassed: false,
       };
     }
   }
@@ -702,11 +704,11 @@ export async function runClosureSubcommand(
     return {
       ok: false,
       error: `failed to write closure report: ${err instanceof Error ? err.message : String(err)}`,
-      reportPath: null,
+      reportPath: null, overallPassed: false,
     };
   }
 
-  return { ok: true, error: null, reportPath: input.reportPath };
+  return { ok: true, error: null, reportPath: input.reportPath, overallPassed: report.overallPassed };
 }
 
 async function runClosureCli(args: Record<string, unknown>): Promise<number> {
@@ -728,8 +730,11 @@ async function runClosureCli(args: Record<string, unknown>): Promise<number> {
     console.error(`[c2-baseline-closure] FAIL: ${result.error}`);
     return 1;
   }
-  console.error(`[c2-baseline-closure] wrote ${result.reportPath}`);
-  return 0;
+  console.error(`[c2-baseline-closure] wrote ${result.reportPath} (overallPassed=${result.overallPassed})`);
+  // A failed closure (any C1-C9 gate failed) must exit non-zero so automation
+  // and operators see the failure. A successful report-write with a failing
+  // result is NOT a success.
+  return result.overallPassed ? 0 : 1;
 }
 
 // ---------------------------------------------------------------------------

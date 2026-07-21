@@ -710,4 +710,26 @@ describe("evaluateC2Closure", () => {
     // The duplicate must be reported as drifted (excluded, not counted).
     expect(report.overallPassed).toBe(true);
   });
+
+  it("rejects runs whose casePackage.artifactId is not in the manifest (fail closed)", () => {
+    // Finding: an unknown package reference must NOT fall back to runId
+    // pattern parsing. It must return undefined so the run is excluded
+    // from closure aggregation rather than silently attributed to a case.
+    const dataset = buildDataset();
+    // Tamper a CURRENT-GROUNDED run's casePackage.artifactId so it doesn't
+    // match any manifest case. The scorecard should drift → C7 drops by 1.
+    const cgIdx = dataset.runs.findIndex((r) => r.condition === "current-grounded");
+    expect(cgIdx).toBeGreaterThanOrEqual(0);
+    const tamperedRuns = dataset.runs.map((r, i) =>
+      i === cgIdx ? { ...r, casePackage: { ...r.casePackage, artifactId: "c2-package-unknown-v1" } } : r,
+    );
+    const report = evaluateC2Closure(buildInput({ ...dataset, runs: tamperedRuns }));
+    // With the fix, the tampered run's scorecard can't be bound to a case
+    // (caseIdOfRun returns undefined for unknown package). It drifts. C7
+    // should report 24 implementation-ready (one fewer than the base 25).
+    // Without the fix (old runId fallback), it would still be 25.
+    const c7 = checkById(report, "C7");
+    expect(c7.details).toContain("24");
+    expect(c7.details).not.toMatch(/25\/25/);
+  });
 });

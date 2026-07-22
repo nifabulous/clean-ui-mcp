@@ -253,8 +253,10 @@ export interface DesignHandoffT {
 /**
  * Validate untrusted input and return a trusted `DesignHandoffT`. Throws on any
  * parse failure (invalid UiSpec, invalid target, invalid motion intent, or
- * malformed generatedAt). The registry compatibility resolution happens in a
- * later task; this boundary only performs schema validation.
+ * malformed generatedAt). Also applies boundary checks: private-path rejection
+ * and structural-Markdown rejection run at the parser level so every trusted
+ * DesignHandoffT is guaranteed clean, regardless of which entry point
+ * constructed it.
  */
 export function parseDesignHandoff(input: DesignHandoffInput): DesignHandoffT {
   // Validate the envelope shape first (also enforces generatedAt datetime).
@@ -279,6 +281,13 @@ export function parseDesignHandoff(input: DesignHandoffInput): DesignHandoffT {
     throw new Error(`Invalid MotionIntents: ${motionIntentsParse.error.message}`);
   }
 
+  // Boundary checks: scan the entire envelope recursively for private paths
+  // and structural Markdown. These run at the parser level so every
+  // DesignHandoffT — regardless of which entry point constructed it — is
+  // guaranteed clean.
+  assertNoPrivatePathsEnvelope(specParse.data, targetParse.data, motionIntentsParse.data);
+  assertNoStructuralMarkdownEnvelope(specParse.data, motionIntentsParse.data);
+
   // The ONLY constructor for DesignHandoffT. Cast is contained to this single
   // line; the brand makes the type unconstructable elsewhere.
   return {
@@ -288,4 +297,57 @@ export function parseDesignHandoff(input: DesignHandoffInput): DesignHandoffT {
     motionIntents: motionIntentsParse.data,
     generatedAt: validInput.generatedAt,
   } as DesignHandoffT;
+}
+
+// ---------------------------------------------------------------------------
+// Boundary checks — live here (in the contracts module) so parseDesignHandoff
+// applies them. buildDesignHandoff also applies them as defense-in-depth.
+// ---------------------------------------------------------------------------
+
+const PRIVATE_PATH_PATTERNS = [
+  /\.c2-private\//,
+  /\/corpus\/private\//,
+  /corpus\/images-private\//,
+] as const;
+
+/** Recursively collect ALL string values from an arbitrary object. */
+function collectAllStrings(value: unknown, path: string = ""): Array<string> {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap((v, i) => collectAllStrings(v, `${path}[${i}]`));
+  if (value !== null && typeof value === "object") {
+    return Object.keys(value).flatMap((k) => collectAllStrings((value as Record<string, unknown>)[k], path ? `${path}.${k}` : k));
+  }
+  return [];
+}
+
+/** Reject any string in the handoff envelope containing a private corpus path. */
+function assertNoPrivatePathsEnvelope(spec: unknown, target: unknown, motionIntents: unknown): void {
+  const all = [...collectAllStrings(spec), ...collectAllStrings(target), ...collectAllStrings(motionIntents)];
+  for (const s of all) {
+    for (const pattern of PRIVATE_PATH_PATTERNS) {
+      if (pattern.test(s)) {
+        throw new Error(
+          `[design-handoff] private path detected in handoff input: ` +
+          `pattern ${String(pattern)} matched. Private corpus paths must not ` +
+          `appear in design handoff output.`,
+        );
+      }
+    }
+  }
+}
+
+/** Reject structural Markdown (headings/fences with up to 3 leading spaces). */
+function assertNoStructuralMarkdownEnvelope(spec: unknown, motionIntents: unknown): void {
+  const all = [...collectAllStrings(spec), ...collectAllStrings(motionIntents)];
+  const headingRe = /^ {0,3}#{1,6}\s/m;
+  const fenceRe = /^ {0,3}(`{3,}|~{3,})/m;
+  for (const s of all) {
+    if (headingRe.test(s) || fenceRe.test(s)) {
+      throw new Error(
+        `[design-handoff] structural Markdown detected in handoff input: ` +
+        `the value contains a heading or fenced code block that would break ` +
+        `the deterministic section contract.`,
+      );
+    }
+  }
 }

@@ -171,11 +171,12 @@ const GENERATED_AT = "2026-07-21T00:00:00.000Z";
 function input(
   spec: Record<string, unknown> = validUiSpec(),
   target: Record<string, unknown> = neutralTarget(),
+  motion: Record<string, unknown>[] | undefined = undefined,
 ): DesignHandoffInput {
   return {
     spec,
     target,
-    motionIntents: motionIntents(),
+    motionIntents: motion ?? motionIntents(),
     generatedAt: GENERATED_AT,
   };
 }
@@ -584,5 +585,60 @@ describe("adversarial input rejection at buildDesignHandoff", () => {
       docsUrl: null,
     };
     expect(() => DependencyRefSchema.parse(badDep)).toThrow();
+  });
+
+  it("rejects .c2-private/ in a colorTokens value", () => {
+    const spec = { ...validUiSpec(), colorTokens: { ...validUiSpec().colorTokens, primary: ".c2-private/secret.png" } };
+    expect(() => buildDesignHandoff(input(spec))).toThrow(/private path/i);
+  });
+
+  it("rejects .c2-private/ in a typographyTokens value", () => {
+    const spec = { ...validUiSpec(), typographyTokens: { ...validUiSpec().typographyTokens, heading: ".c2-private/fonts/secret.woff2" } };
+    expect(() => buildDesignHandoff(input(spec))).toThrow(/private path/i);
+  });
+
+  it("rejects .c2-private/ in target.islandStrategy", () => {
+    const badTarget = { ...astroReactTarget(), islandStrategy: ".c2-private/runs/output.json" };
+    expect(() => buildDesignHandoff(input(validUiSpec(), badTarget))).toThrow(/private path/i);
+  });
+
+  it("rejects .c2-private/ in motionIntent properties", () => {
+    const badMotion = [{ ...motionIntents()[0]!, properties: [".c2-private/leak"] }];
+    expect(() => buildDesignHandoff(input(validUiSpec(), neutralTarget(), badMotion))).toThrow(/private path/i);
+  });
+
+  it("rejects an indented ## heading (CommonMark 3-space indent)", () => {
+    const spec = { ...validUiSpec(), designDirection: "Calm\n   ## Injected" };
+    expect(() => buildDesignHandoff(input(spec))).toThrow(/structural Markdown|heading/i);
+  });
+
+  it("rejects a single-line ## heading (no newline)", () => {
+    const spec = { ...validUiSpec(), designDirection: "## Fake Section" };
+    expect(() => buildDesignHandoff(input(spec))).toThrow(/structural Markdown|heading/i);
+  });
+
+  it("rejects a fenced code block with tildes", () => {
+    const spec = { ...validUiSpec(), rejectedDefaults: ["~~~\neval('evil')\n~~~"] };
+    expect(() => buildDesignHandoff(input(spec))).toThrow(/structural Markdown|fence/i);
+  });
+
+  it("rejects ## in a motion intent id", () => {
+    const badMotion = [{ ...motionIntents()[0]!, id: "evil\n## Injected" }];
+    expect(() => buildDesignHandoff(input(validUiSpec(), neutralTarget(), badMotion))).toThrow(/structural Markdown|heading/i);
+  });
+
+  it("rejects ## in a motion intent property value", () => {
+    const badMotion = [{ ...motionIntents()[0]!, properties: ["opacity\n## Injected"] }];
+    expect(() => buildDesignHandoff(input(validUiSpec(), neutralTarget(), badMotion))).toThrow(/structural Markdown|heading/i);
+  });
+
+  it("parseDesignHandoff also rejects private paths (not just buildDesignHandoff)", () => {
+    const spec = { ...validUiSpec(), designDirection: "Uses .c2-private/secret.png" };
+    expect(() => parseDesignHandoff(input(spec))).toThrow(/private path/i);
+  });
+
+  it("parseDesignHandoff also rejects structural Markdown (not just buildDesignHandoff)", () => {
+    const spec = { ...validUiSpec(), designDirection: "## INJECTED" };
+    expect(() => parseDesignHandoff(input(spec))).toThrow(/structural Markdown/i);
   });
 });

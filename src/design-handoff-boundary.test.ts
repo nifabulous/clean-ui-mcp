@@ -29,7 +29,11 @@ import {
 import type { DesignHandoffInput } from "./design-handoff.js";
 import { resolveWebTarget } from "./design-adapter-registry.js";
 import { buildSourceManifest } from "./design-source-registry.js";
-import { WebTargetProfileSchema } from "./design-target-contracts.js";
+import {
+  WebTargetProfileSchema,
+  SourceRefSchema,
+  DependencyRefSchema,
+} from "./design-target-contracts.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -496,5 +500,89 @@ describe("UiSpec 1.0 byte stability (release gate)", () => {
     const shape = UiSpec.safeParse(validUiSpec());
     expect(shape.success).toBe(true);
     expect(shape.data!.specVersion).toBe("1.0");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Adversarial input tests — private paths, structural Markdown injection,
+// not-captured sources with hashes, range versionPolicy on dependencies.
+// ---------------------------------------------------------------------------
+
+describe("adversarial input rejection at buildDesignHandoff", () => {
+  it("rejects a UiSpec with .c2-private/ in designDirection", () => {
+    const spec = { ...validUiSpec(), designDirection: "Use .c2-private/corpus/secret.png as inspiration" };
+    expect(() => buildDesignHandoff(input(spec))).toThrow(/private path/i);
+  });
+
+  it("rejects a UiSpec with /corpus/private/ in citedReferences", () => {
+    const spec = { ...validUiSpec(), citedReferences: ["/corpus/private/stablecoin/entry-1.png"] };
+    expect(() => buildDesignHandoff(input(spec))).toThrow(/private path/i);
+  });
+
+  it("rejects a UiSpec with corpus/images-private/ in a constraint", () => {
+    const spec = { ...validUiSpec(), context: { ...validUiSpec().context, constraints: ["do not reference corpus/images-private/secret.png"] } };
+    expect(() => buildDesignHandoff(input(spec))).toThrow(/private path/i);
+  });
+
+  it("rejects a UiSpec with a multi-line ## header in designDirection", () => {
+    const spec = { ...validUiSpec(), designDirection: "Calm layout\n## Injected Section" };
+    expect(() => buildDesignHandoff(input(spec))).toThrow(/structural Markdown/i);
+  });
+
+  it("rejects a UiSpec with a fenced code block in a constraint", () => {
+    const spec = { ...validUiSpec(), context: { ...validUiSpec().context, constraints: ["```\nmalicious code\n```"] } };
+    expect(() => buildDesignHandoff(input(spec))).toThrow(/structural Markdown/i);
+  });
+
+  it("rejects a not-captured source carrying a non-null hash", () => {
+    const badSource = {
+      sourceId: "evil",
+      kind: "docs",
+      url: "https://example.com",
+      snapshotStatus: "not-captured",
+      snapshotSha256: "a".repeat(64),
+      snapshotReason: "bytes not vendored",
+      licenseStatus: "unknown",
+      attribution: "unknown",
+    };
+    expect(() => SourceRefSchema.parse(badSource)).toThrow(/not-captured.*must not.*snapshotSha256/i);
+  });
+
+  it("rejects a captured source carrying a non-null reason", () => {
+    const badSource = {
+      sourceId: "evil",
+      kind: "docs",
+      url: "https://example.com",
+      snapshotStatus: "captured",
+      snapshotSha256: "a".repeat(64),
+      snapshotReason: "should not be here",
+      licenseStatus: "mit",
+      attribution: "author",
+    };
+    expect(() => SourceRefSchema.parse(badSource)).toThrow(/captured.*must not.*snapshotReason/i);
+  });
+
+  it("rejects a DependencyRef with versionPolicy range", () => {
+    const badDep = {
+      packageName: "react",
+      version: "19.0.0",
+      versionPolicy: "range",
+      required: true,
+      purpose: "UI runtime",
+      docsUrl: null,
+    };
+    expect(() => DependencyRefSchema.parse(badDep)).toThrow();
+  });
+
+  it("rejects a DependencyRef with versionPolicy unversioned", () => {
+    const badDep = {
+      packageName: "react",
+      version: "19.0.0",
+      versionPolicy: "unversioned",
+      required: true,
+      purpose: "UI runtime",
+      docsUrl: null,
+    };
+    expect(() => DependencyRefSchema.parse(badDep)).toThrow();
   });
 });

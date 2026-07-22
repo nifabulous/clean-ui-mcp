@@ -109,14 +109,15 @@ export type VersionedRef = z.infer<typeof VersionedRefSchema>;
 // ===========================================================================
 
 /**
- * A concrete installable package. The schema accepts any valid versionPolicy
- * for shape; the registry-level rule "package dependencies use exact versions"
- * is enforced in Task 2.
+ * A concrete installable package. Package dependencies MUST use exact
+ * versions — the schema enforces this at the contract level, not just
+ * at the registry level. Target profile references (VersionedRef) may
+ * use range or unversioned policies.
  */
 export const DependencyRefSchema = z.object({
   packageName: z.string().min(1),
   version: z.string().min(1),
-  versionPolicy: VersionPolicy,
+  versionPolicy: z.literal("exact"),
   required: z.boolean(),
   purpose: z.string().min(1),
   docsUrl: z.string().nullable(),
@@ -156,6 +157,13 @@ export const SourceRefSchema = z.object({
         path: ["snapshotSha256"],
       });
     }
+    if (val.snapshotReason !== null) {
+      ctx.addIssue({
+        code: "custom",
+        message: "captured source must not carry a snapshotReason",
+        path: ["snapshotReason"],
+      });
+    }
   } else {
     // not-captured
     if (val.snapshotReason === null || val.snapshotReason.length === 0) {
@@ -163,6 +171,13 @@ export const SourceRefSchema = z.object({
         code: "custom",
         message: "not-captured source requires a non-empty snapshotReason",
         path: ["snapshotReason"],
+      });
+    }
+    if (val.snapshotSha256 !== null) {
+      ctx.addIssue({
+        code: "custom",
+        message: "not-captured source must not carry a snapshotSha256",
+        path: ["snapshotSha256"],
       });
     }
   }

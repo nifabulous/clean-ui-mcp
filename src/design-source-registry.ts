@@ -34,7 +34,7 @@ export const DESIGN_SOURCE_REGISTRY: readonly SourceRef[] = [
   {
     sourceId: "astro-official",
     kind: "documentation",
-    url: "https://docs.astro.build/pl/guides/framework-components/",
+    url: "https://docs.astro.build/en/guides/framework-components/",
     snapshotStatus: "not-captured",
     snapshotSha256: null,
     snapshotReason: NOT_CAPTURED_REASON,

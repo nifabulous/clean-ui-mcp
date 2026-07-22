@@ -349,7 +349,7 @@ describe("boundary: URLs preserved, source code not embedded", () => {
     const handoff = buildDesignHandoff(input(validUiSpec(), astroReactTarget()));
     const md = renderDesignHandoffMarkdown(handoff);
     // Documentation URLs that the registry pins are preserved verbatim.
-    expect(md).toContain("https://docs.astro.build/pl/guides/framework-components/");
+    expect(md).toContain("https://docs.astro.build/en/guides/framework-components/");
     expect(md).toContain("https://ui.shadcn.com/docs/installation/manual");
     expect(md).toContain("https://tailwindcss.com/docs/functions-and-directives");
   });

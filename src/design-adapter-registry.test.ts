@@ -463,4 +463,19 @@ describe("buildDependencyManifest", () => {
       expect(dep.purpose.length).toBeGreaterThan(0);
     }
   });
+
+  it("rejects vue-transition motion under astro-react (Vue primitive in React runtime)", () => {
+    // Review finding C2/R1: astro-react must reject Vue-specific motion primitives.
+    expect(() =>
+      resolveWebTarget(astroReact({ motion: "vue-transition" })),
+    ).toThrow(/vue-transition|Vue.*motion|React.*forbids/i);
+  });
+
+  it("astro-react accepts css motion", () => {
+    expect(() => resolveWebTarget(astroReact({ motion: "css" }))).not.toThrow();
+  });
+
+  it("astro-react accepts gsap motion", () => {
+    expect(() => resolveWebTarget(astroReact({ motion: "gsap" }))).not.toThrow();
+  });
 });

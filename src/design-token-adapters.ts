@@ -103,7 +103,7 @@ export function normalizeSemanticTokens(spec: UiSpecT): SemanticTokens {
  * outright; legitimate CSS values (hex, rgb(), color(), font stacks with
  * commas, quotes, spaces, parentheses) never contain a bare `;`.
  */
-const FORBIDDEN_CHARS = /[\n\r`;]/;
+const FORBIDDEN_CHARS = /[\n\r`{};]/;
 
 /**
  * Validate a single token value for safe emission. Throws if the value contains

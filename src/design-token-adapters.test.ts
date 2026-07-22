@@ -414,6 +414,18 @@ describe("injection hardening", () => {
     expect(() => renderCssTokens(tokens)).not.toThrow();
     expect(() => renderTailwindTheme(tokens)).not.toThrow();
   });
+
+  it("rejects } in a token value (CSS block close escape)", () => {
+    const tokens = tokensWith({ canvas: "red}" });
+    expect(() => renderCssTokens(tokens)).toThrow();
+    expect(() => renderTailwindTheme(tokens)).toThrow();
+  });
+
+  it("rejects { in a token value (CSS block open escape)", () => {
+    const tokens = tokensWith({ primary: "red{" });
+    expect(() => renderCssTokens(tokens)).toThrow();
+    expect(() => renderTailwindTheme(tokens)).toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------

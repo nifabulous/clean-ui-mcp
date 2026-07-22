@@ -102,7 +102,7 @@ export const WEB_TARGET_PROFILES: readonly WebTargetProfileDefinition[] = [
     siteFrameworkRange: "5.x",
     runtimePackage: "react",
     runtimeRange: "19.x",
-    docsUrl: "https://docs.astro.build/pl/guides/framework-components/",
+    docsUrl: "https://docs.astro.build/en/guides/framework-components/",
     setupNotes:
       "Install Astro and the React integration. Hydrate React islands with an explicit client directive (client:load, client:idle, client:visible). React-compatible component libraries (shadcn/ui, Radix, Kumo, Base UI, React Aria, MUI) are permitted. Motion must be the `motion` package or CSS; prefers-reduced-motion must fall back to the final state.",
     sourceIds: ["astro-official", "shadcn-official", "kumo-official"],
@@ -114,7 +114,7 @@ export const WEB_TARGET_PROFILES: readonly WebTargetProfileDefinition[] = [
     siteFrameworkRange: "5.x",
     runtimePackage: "vue",
     runtimeRange: "3.x",
-    docsUrl: "https://docs.astro.build/pl/guides/framework-components/",
+    docsUrl: "https://docs.astro.build/en/guides/framework-components/",
     setupNotes:
       "Install Astro and the Vue integration (@astrojs/vue). Hydrate Vue islands with an explicit client directive. Use native HTML or custom components only — React-only component libraries are not permitted. Use Vue <Transition>/<TransitionGroup>, CSS, or View Transitions for motion; prefers-reduced-motion must fall back to the final state.",
     sourceIds: ["astro-official", "vue-official"],
@@ -231,8 +231,15 @@ function assertAstroReact(profile: WebTargetProfile): void {
     );
   }
   assertAstroIsland(profile);
-  // React targets may use any componentSource enum value; React-only sources
-  // are permitted here. No additional source restriction.
+  // React targets must not use Vue-specific motion primitives.
+  const REACT_FORBIDDEN_MOTION: ReadonlySet<WebMotionT> = new Set(["vue-transition"]);
+  if (REACT_FORBIDDEN_MOTION.has(profile.motion)) {
+    throw new Error(
+      `resolveWebTarget: astro-react forbids motion "${profile.motion}" — ` +
+      `Vue-specific motion primitives are not available in a React runtime. ` +
+      `Use one of: css, view-transitions, css-view-transitions, motion, gsap.`,
+    );
+  }
 }
 
 function assertAstroVue(profile: WebTargetProfile): void {
@@ -302,8 +309,8 @@ const DOCS_URLS: Record<string, string> = {
   react: "https://react.dev/",
   "react-dom": "https://react.dev/",
   vue: "https://vuejs.org/",
-  "@astrojs/react": "https://docs.astro.build/pl/guides/framework-components/",
-  "@astrojs/vue": "https://docs.astro.build/pl/guides/framework-components/",
+  "@astrojs/react": "https://docs.astro.build/en/guides/framework-components/",
+  "@astrojs/vue": "https://docs.astro.build/en/guides/framework-components/",
   tailwindcss: "https://tailwindcss.com/docs/installation/",
   motion: "https://motion.dev/docs",
   gsap: "https://gsap.com/docs/",

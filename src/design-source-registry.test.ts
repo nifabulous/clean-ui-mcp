@@ -118,7 +118,7 @@ describe("DESIGN_SOURCE_REGISTRY provenance", () => {
   it("URLs match the spec exactly", () => {
     const byId = new Map(DESIGN_SOURCE_REGISTRY.map((e) => [e.sourceId, e.url]));
     expect(byId.get("astro-official")).toBe(
-      "https://docs.astro.build/pl/guides/framework-components/",
+      "https://docs.astro.build/en/guides/framework-components/",
     );
     expect(byId.get("vue-official")).toBe(
       "https://vuejs.org/guide/built-ins/transition.html",

@@ -25,7 +25,7 @@
  * observable signal, not the schema parse. The schema-parse path is pinned
  * by the in-process tests against a real 25-case synthetic manifest.
  */
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -34,6 +34,7 @@ import {
   writeFileSync,
   readFileSync,
   mkdirSync,
+  readdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -43,6 +44,7 @@ import {
   computeBaselinePreflight,
   renderBaselinePreflight,
   runClosureSubcommand,
+  prepareBaselineConditions,
   type BaselinePreflightInput,
   type RunClosureSubcommandResult,
 } from "./run-c2-baseline.js";
@@ -51,6 +53,8 @@ import {
   computeManifestSha256,
 } from "../c2/baseline-manifest.js";
 import { canonicalJsonStringify, sha256Hex } from "../readiness/contracts.js";
+import type { CorpusReader, SearchResult } from "../corpus-reader.js";
+import type { CorpusEntryT } from "../schema.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../..");
@@ -557,6 +561,569 @@ describe("runClosureSubcommand — closure report generation", () => {
 });
 
 // ---------------------------------------------------------------------------
+// IN-PROCESS: prepareBaselineConditions — offline condition input resolution
+//
+// The prepare subcommand resolves every (case × primary condition) input via
+// the reusable `resolveConditionInput`. These tests build a synthetic 25-case
+// fixture (real brief/label/evidence files written to a temp dir with correct
+// hashes) and a fake CorpusReader so nothing depends on the gitignored
+// production corpus. They cover the 5 required behaviors:
+//   1. resolves all 75 primary inputs,
+//   2. fails closed on a missing migration snapshot,
+//   3. fails closed on a stale (hash-mismatched) artifact ref,
+//   4. is deterministic across repeated runs,
+//   5. makes zero provider calls (no network).
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal but schema-valid C2CaseBrief for a synthetic case. Every
+ * brief shares a stable structure so the gold-evidence descriptor's JSON
+ * pointers (/users, /constraints/0, /requiredScreens/0/id) resolve uniformly.
+ */
+function makeSyntheticBrief(caseId: string, family: CaseSeed["family"]): Record<string, unknown> {
+  const brief = {
+    schemaVersion: "1.0",
+    artifactType: "c2-case-brief",
+    artifactId: `c2-brief-${caseId}-v1`,
+    caseId,
+    caseVersion: 1,
+    family,
+    stratum: `synthetic-${caseId}`,
+    title: `Synthetic brief for ${caseId}`,
+    productContext: `Product context for ${caseId}. Synthetic descriptive text that gives the model something to read.`,
+    users: [
+      `primary user of ${caseId}`,
+      `secondary user of ${caseId}`,
+      `tertiary integrator of ${caseId}`,
+    ],
+    jobs: [
+      `understand ${caseId}`,
+      `complete the primary task for ${caseId}`,
+      `reach the secondary flow for ${caseId}`,
+    ],
+    platform: "responsive-web",
+    requiredJourneys: [
+      `visitor lands and reaches the main task for ${caseId}`,
+      `visitor reaches the secondary flow for ${caseId}`,
+    ],
+    constraints: [
+      `Do not invent features for ${caseId}.`,
+      `Primary audience must dominate above the fold for ${caseId}.`,
+      `Exactly one primary call to action for ${caseId}.`,
+    ],
+    requiredScreens: [
+      {
+        id: `screen-${caseId}`,
+        states: ["default", "success"],
+        mobileRules: [`mobile rule for ${caseId}`],
+      },
+    ],
+    // Migration briefs MUST declare a source snapshot ref; non-migration MUST
+    // be null. The snapshot file path + placeholder sha are filled per-case.
+    sourceSnapshotRef: null,
+  };
+  return brief;
+}
+
+/**
+ * Build a schema-valid C2DecisionLabel whose goldEvidenceIds line up with the
+ * synthetic descriptor's record IDs so the resolver's gold-evidence equality
+ * check passes.
+ */
+function makeSyntheticLabel(caseId: string): Record<string, unknown> {
+  // NOTE: distinct array literals for every array field. canonicalJsonStringify
+  // walks the object graph and rejects the same array reference appearing twice
+  // (it looks like a cycle), so we MUST NOT alias goldIds into two fields.
+  return {
+    schemaVersion: "1.0",
+    artifactType: "c2-decision-label",
+    artifactId: `c2-label-${caseId}-v1`,
+    caseId,
+    caseVersion: 1,
+    labelVersion: 2,
+    requiredSections: ["globalDirection", "screenBlueprints", "acceptanceCriteria"],
+    requiredDecisionIds: [`decision:primary-${caseId}`],
+    requiredAcceptanceCriteria: [`ac:primary-${caseId}`],
+    permittedAuthorityLanes: ["adapt", "reject"],
+    validEvidenceIds: [
+      `evidence:brief:users-${caseId}`,
+      `evidence:brief:constraint-${caseId}`,
+    ],
+    goldEvidenceIds: [
+      `evidence:brief:users-${caseId}`,
+      `evidence:brief:constraint-${caseId}`,
+    ],
+    forbiddenClaims: [`forbidden:${caseId}`],
+    privateMarkers: [`private:${caseId}`],
+    rubricAnchors: [
+      "product-appropriateness",
+      "cross-screen-coherence",
+      "implementation-clarity",
+      "originality",
+      "accessibility-and-failure-states",
+      "evidence-discipline",
+    ].map((dimension) => ({
+      dimension,
+      score1: `1 for ${dimension}`,
+      score3: `3 for ${dimension}`,
+      score5: `5 for ${dimension}`,
+    })),
+    adjudicationNotes: [`note:${caseId}`],
+  };
+}
+
+/**
+ * Build a gold-evidence descriptor whose pointers resolve against the synthetic
+ * brief and whose record IDs exactly equal the label's goldEvidenceIds.
+ */
+function makeSyntheticDescriptor(caseId: string): Record<string, unknown> {
+  return {
+    schemaVersion: "1.0",
+    artifactType: "c2-gold-evidence-descriptor",
+    artifactId: `c2-evidence-${caseId}-v1`,
+    caseId,
+    records: [
+      {
+        id: `evidence:brief:users-${caseId}`,
+        sourceArtifactId: `c2-brief-${caseId}-v1`,
+        jsonPointers: ["/users", "/constraints/0"],
+      },
+      {
+        id: `evidence:brief:constraint-${caseId}`,
+        sourceArtifactId: `c2-brief-${caseId}-v1`,
+        jsonPointers: ["/constraints/1", "/requiredScreens/0/id"],
+      },
+    ],
+  };
+}
+
+/**
+ * Write a synthetic source-snapshot file (a minimal valid DesignSourceSnapshot
+ * shape is not required — the resolver only reads the brief's
+ * sourceSnapshotRef.path when a descriptor record names the snapshot artifact.
+ * The synthetic descriptor points every record at the BRIEF artifact, so the
+ * snapshot file is never read by the resolver. We still write it so the
+ * prepare's existence check passes for migration cases.)
+ */
+const SYNTHETIC_SNAPSHOT_BYTES = Buffer.from(
+  JSON.stringify({
+    schemaVersion: "1.0",
+    artifactType: "design-source-snapshot",
+    artifactId: "synthetic-snapshot-placeholder",
+    projectId: "synthetic",
+    capturedAt: "2026-07-22T00:00:00.000Z",
+    capturedByActorId: "synthetic-test",
+    sourceType: "figma",
+    sourceLocator: "https://example.com/synthetic",
+    contentHash: sha256Hex(Buffer.from("synthetic-snapshot-content")),
+    files: [],
+  }),
+);
+
+/**
+ * Build the full fixture tree under `repoRoot`: for each of the 25 cases,
+ * write brief/label/evidence (and snapshot for migration) at the paths the
+ * manifest will pin, then return the manifest with REAL sha256 hashes wired
+ * in. The caller writes the manifest to disk and passes it to
+ * `validateBaselineFiles` (which checks the self-hash) before preparing.
+ */
+function writePrepareFixture(repoRoot: string, opts: {
+  omitMigrationSnapshot?: string;
+  tamperBriefFor?: string;
+} = {}): { manifest: Record<string, unknown>; manifestPath: string } {
+  // Directory layout: eval/c2/cases/<caseId>/{brief,label,evidence,snapshot}.json
+  const casesDir = join(repoRoot, "eval/c2/cases");
+  mkdirSync(casesDir, { recursive: true });
+
+  // Write a synthetic corpus/entries.json so the resolver's hardcoded
+  // `corpus/entries.json` read (snapshot + post-ranking re-hash) resolves
+  // against stable bytes. The fake CorpusReader's searchRanked never touches
+  // disk, but the resolver still reads + re-hashes the corpus file directly.
+  const corpusDir = join(repoRoot, "corpus");
+  mkdirSync(corpusDir, { recursive: true });
+  const SYNTHETIC_CORPUS_BYTES = Buffer.from(
+    JSON.stringify({
+      version: 2,
+      entries: [
+        { id: "synthetic-1", title: "Synthetic Entry 1", reviewStatus: "approved", source: "synthetic", image: "synthetic/1.png", addedAt: "2026-01-01T00:00:00Z" },
+        { id: "synthetic-2", title: "Synthetic Entry 2", reviewStatus: "approved", source: "synthetic", image: "synthetic/2.png", addedAt: "2026-01-01T00:00:00Z" },
+      ],
+    }),
+  );
+  writeFileSync(join(corpusDir, "entries.json"), SYNTHETIC_CORPUS_BYTES);
+
+  const caseEntries: Array<Record<string, unknown>> = [];
+  for (const seed of ALL_CASES) {
+    const caseDir = join(casesDir, seed.caseId);
+    mkdirSync(caseDir, { recursive: true });
+
+    const briefPath = `eval/c2/cases/${seed.caseId}/brief.json`;
+    const labelPath = `eval/c2/cases/${seed.caseId}/label.json`;
+    const evidencePath = `eval/c2/cases/${seed.caseId}/evidence.json`;
+
+    let brief = makeSyntheticBrief(seed.caseId, seed.family);
+    // Migration cases need a non-null sourceSnapshotRef on the brief.
+    if (seed.family === "migration") {
+      const snapshotPath = `eval/c2/cases/${seed.caseId}/snapshot.json`;
+      const snapshotSha = sha256Hex(SYNTHETIC_SNAPSHOT_BYTES);
+      brief = {
+        ...brief,
+        sourceSnapshotRef: {
+          artifactId: `design-source-snapshot-${seed.caseId}-v1`,
+          artifactType: "design-source-snapshot",
+          path: snapshotPath,
+          sha256: snapshotSha,
+        },
+      };
+      // Write the snapshot unless the caller asked to omit it (for the
+      // missing-snapshot failure test).
+      if (opts.omitMigrationSnapshot !== seed.caseId) {
+        writeFileSync(join(repoRoot, snapshotPath), SYNTHETIC_SNAPSHOT_BYTES);
+      } else {
+        // Pin a deliberately-mismatched sha so even if a file appeared it
+        // wouldn't match; but the primary signal is the file's absence.
+      }
+    }
+
+    const label = makeSyntheticLabel(seed.caseId);
+    const descriptor = makeSyntheticDescriptor(seed.caseId);
+
+    // Optionally tamper the brief CONTENT (without updating the pinned hash)
+    // to exercise the stale-ref failure path.
+    let briefBytes = Buffer.from(canonicalJsonStringify(brief));
+    if (opts.tamperBriefFor === seed.caseId) {
+      briefBytes = Buffer.from(canonicalJsonStringify({ ...brief, title: "TAMPERED TITLE" }));
+    } else {
+      writeFileSync(join(repoRoot, briefPath), briefBytes);
+      // For the tamper case we DO NOT write the file — the prepare's existence
+      // check then reports "not found", which is also a valid stale signal.
+      // To exercise the HASH-mismatch path specifically, write the tampered
+      // bytes to disk so the file exists but its sha diverges from the pin.
+      if (opts.tamperBriefFor === seed.caseId) {
+        // already handled above; keep this branch for clarity
+      }
+    }
+    if (opts.tamperBriefFor === seed.caseId) {
+      // Write tampered bytes so the file EXISTS but hashes differently.
+      writeFileSync(join(repoRoot, briefPath), briefBytes);
+    }
+    const briefSha = sha256Hex(Buffer.from(canonicalJsonStringify(brief)));
+
+    writeFileSync(join(repoRoot, labelPath), canonicalJsonStringify(label));
+    writeFileSync(join(repoRoot, evidencePath), canonicalJsonStringify(descriptor));
+    const labelSha = sha256Hex(readFileSync(join(repoRoot, labelPath)));
+    const evidenceSha = sha256Hex(readFileSync(join(repoRoot, evidencePath)));
+
+    const caseEntry: Record<string, unknown> = {
+      schemaVersion: "1.0",
+      artifactType: "c2-case-package",
+      artifactId: `c2-package-${seed.caseId}-v1`,
+      caseId: seed.caseId,
+      caseVersion: 1,
+      family: seed.family,
+      brief: { artifactId: `c2-brief-${seed.caseId}-v1`, path: briefPath, sha256: briefSha },
+      label: { artifactId: `c2-label-${seed.caseId}-v1`, path: labelPath, sha256: labelSha },
+      sourceSnapshot:
+        seed.family === "migration"
+          ? {
+              artifactId: `design-source-snapshot-${seed.caseId}-v1`,
+              path: `eval/c2/cases/${seed.caseId}/snapshot.json`,
+              sha256: sha256Hex(SYNTHETIC_SNAPSHOT_BYTES),
+            }
+          : null,
+      goldEvidenceDescriptor: {
+        artifactId: `c2-evidence-${seed.caseId}-v1`,
+        path: evidencePath,
+        sha256: evidenceSha,
+      },
+    };
+    caseEntries.push(caseEntry);
+  }
+
+  const manifest: Record<string, unknown> = {
+    schemaVersion: "1.0",
+    artifactType: "c2-baseline-manifest",
+    artifactId: "c2-baseline-prepare-test-v1",
+    caseCount: 25,
+    familyCounts: { product: 15, migration: 5, safety: 5 },
+    cases: caseEntries,
+    executionMatrix: {
+      primaryConditions: ["brief-only", "current-grounded", "gold-evidence"],
+      primaryCaseCount: 25,
+      independentConditions: ["current-grounded"],
+      independentCaseIds: [
+        "stablecoin-home",
+        "finance-news-story-detail",
+        "public-marketing-migration",
+        "safety-conflicting-evidence",
+        "named-inspiration-safety",
+      ],
+      totalPlannedRuns: 80,
+    },
+    frozenCalibrationRef: fileRef(
+      "c2-frozen-calibration-test-v1",
+      "eval/c2/calibration/frozen.json",
+    ),
+    manifestSha256: "",
+    stagedSections: [],
+  };
+  manifest.manifestSha256 = computeManifestSha256(
+    manifest as Parameters<typeof computeManifestSha256>[0],
+  );
+  const manifestPath = join(repoRoot, "manifest.json");
+  writeFileSync(manifestPath, canonicalJsonStringify(manifest));
+  return { manifest, manifestPath };
+}
+
+/**
+ * Fake CorpusReader that returns a stable ranked list. The current-grounded
+ * condition needs at least one ranked result; we return two deterministic
+ * synthetic entries. The real corpus/entries.json is gitignored (absent on
+ * clean CI), so tests MUST NOT depend on it.
+ */
+function makeFakeReader(): { reader: CorpusReader; searchRanked: ReturnType<typeof vi.fn> } {
+  const entry = {
+    id: "synthetic-corpus-entry",
+    title: "Synthetic Corpus Entry",
+    categories: ["dashboard"],
+    styleTags: [],
+    components: [],
+    domainTags: [],
+    patternType: "dashboard",
+    critique: "synthetic critique text",
+    whatToSteal: [],
+    antiPatterns: { antiPatterns: [], whereThisFails: [] },
+    qualityScore: 7,
+    qualityTier: "strong",
+    platform: "web" as const,
+    reviewStatus: "approved" as const,
+    visual: {
+      dominantColors: [],
+      accentColor: null,
+      spacingDensity: null,
+      cornerStyle: null,
+      typePairing: { display: null, body: null, notes: null },
+    },
+    source: { productName: "Synthetic", url: "https://example.com/synthetic" },
+    image: { path: "images-private/synthetic.png", format: "png", width: 100, height: 100 },
+    businessRationale: null,
+    mood: null,
+    colorScheme: null,
+    industryVertical: null,
+    responsiveBehavior: null,
+  } as unknown as CorpusEntryT;
+  const ranked: SearchResult[] = [
+    { entry, score: 0.9, searchMode: "keyword" },
+  ];
+  const searchRanked = vi.fn(async () => ranked) as never;
+  const reader = {
+    searchRanked,
+    search: vi.fn(async () => ranked.map((r) => r.entry)) as never,
+    getById: vi.fn(() => undefined) as never,
+    findSimilar: vi.fn(() => []) as never,
+    listCategories: vi.fn(() => []) as never,
+    listStyleTags: vi.fn(() => []) as never,
+    listDomainTags: vi.fn(() => []) as never,
+    indexStatus: vi.fn(() => ({
+      indexed: 0, total: 0, hasIndex: false, missing: 0, stale: 0, contentStale: 0,
+    })) as never,
+    entriesForAggregation: vi.fn(() => []) as never,
+    resolveImagePath: vi.fn(() => null) as never,
+    getImageIndex: vi.fn(async () => null) as never,
+  } as unknown as CorpusReader;
+  return { reader, searchRanked };
+}
+
+describe("prepareBaselineConditions — offline condition input resolution", () => {
+  it("resolves all 75 primary condition inputs (25 cases × 3 conditions)", async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "c2-prepare-75-"));
+    const privateRoot = mkdtempSync(join(tmpdir(), "c2-prepare-75-private-"));
+    try {
+      const { manifestPath } = writePrepareFixture(repoRoot);
+      // validateBaselineFiles parses the manifest through the schema and
+      // verifies the self-hash; the synthetic fixture must pass both.
+      const parsed = C2BaselineManifestSchema.parse(
+        JSON.parse(readFileSync(manifestPath, "utf-8")),
+      );
+      const { reader } = makeFakeReader();
+      const result = await prepareBaselineConditions({
+        manifest: parsed,
+        privateRoot,
+        reader,
+        repoRoot,
+        // Pass the manifest path so the per-case casePackageRef points at the
+        // manifest bytes (matching the pilot's runPrepare + production CLI).
+        manifestPath: "manifest.json",
+      });
+      expect(result.ok, result.ok ? "" : result.error).toBe(true);
+      expect(result.error).toBeNull();
+      expect(result.resolvedCount).toBe(75);
+      // Two files per condition (descriptor + private payload) ⇒ 150 files.
+      const outDir = result.outputDir!;
+      expect(existsSync(outDir)).toBe(true);
+      const files = readdirSync(outDir).sort();
+      expect(files).toHaveLength(150);
+      // Spot-check one descriptor parses through the condition-input schema.
+      const samplePath = join(outDir, "stablecoin-home-brief-only.json");
+      expect(existsSync(samplePath)).toBe(true);
+      const sample = JSON.parse(readFileSync(samplePath, "utf-8"));
+      expect(sample.condition).toBe("brief-only");
+      expect(sample.inputSha256).toMatch(/^[0-9a-f]{64}$/);
+      // The casePackageRef points at the manifest (production semantics).
+      expect(sample.casePackageRef.path).toBe("manifest.json");
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+      rmSync(privateRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("fails closed on a missing migration snapshot with a specific error", async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "c2-prepare-missing-snap-"));
+    const privateRoot = mkdtempSync(join(tmpdir(), "c2-prepare-missing-snap-priv-"));
+    try {
+      // Omit the snapshot for the first migration case. The manifest will pin
+      // a hash but the file won't exist on disk.
+      const { manifestPath } = writePrepareFixture(repoRoot, {
+        omitMigrationSnapshot: MIGRATION_CASES[0]!.caseId,
+      });
+      const parsed = C2BaselineManifestSchema.parse(
+        JSON.parse(readFileSync(manifestPath, "utf-8")),
+      );
+      const { reader } = makeFakeReader();
+      const result = await prepareBaselineConditions({
+        manifest: parsed,
+        privateRoot,
+        reader,
+        repoRoot,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.resolvedCount).toBe(0);
+      // The error must name the snapshot file and the case, and reference the
+      // migration-snapshot prerequisite so the operator knows what to do.
+      expect(result.error).toMatch(/migration source snapshot/i);
+      expect(result.error).toContain(MIGRATION_CASES[0]!.caseId);
+      expect(result.error).toMatch(/snapshot\.json/);
+      expect(result.error).toMatch(/not found|absent|Task C0|author/i);
+      // Nothing should have been written — fail closed BEFORE any resolution.
+      expect(result.outputDir).toBeNull();
+      expect(existsSync(join(privateRoot, "c2/baseline/condition-inputs"))).toBe(false);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+      rmSync(privateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on a stale (hash-mismatched) brief ref with a specific error", async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "c2-prepare-stale-"));
+    const privateRoot = mkdtempSync(join(tmpdir(), "c2-prepare-stale-priv-"));
+    try {
+      // Tamper ONE product case's brief bytes on disk so its sha diverges from
+      // the manifest's pinned hash.
+      const tamperCase = PRODUCT_CASES[0]!.caseId;
+      const { manifestPath } = writePrepareFixture(repoRoot, {
+        tamperBriefFor: tamperCase,
+      });
+      const parsed = C2BaselineManifestSchema.parse(
+        JSON.parse(readFileSync(manifestPath, "utf-8")),
+      );
+      const { reader } = makeFakeReader();
+      const result = await prepareBaselineConditions({
+        manifest: parsed,
+        privateRoot,
+        reader,
+        repoRoot,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.resolvedCount).toBe(0);
+      expect(result.error).toMatch(/stale brief/i);
+      expect(result.error).toContain(tamperCase);
+      expect(result.error).toMatch(/sha256|mismatch|hash/i);
+      expect(result.outputDir).toBeNull();
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+      rmSync(privateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("is deterministic: repeated runs produce byte-identical descriptors", async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "c2-prepare-det-"));
+    const privateRoot1 = mkdtempSync(join(tmpdir(), "c2-prepare-det-1-"));
+    const privateRoot2 = mkdtempSync(join(tmpdir(), "c2-prepare-det-2-"));
+    try {
+      const { manifestPath } = writePrepareFixture(repoRoot);
+      const parsed = C2BaselineManifestSchema.parse(
+        JSON.parse(readFileSync(manifestPath, "utf-8")),
+      );
+
+      const r1 = await prepareBaselineConditions({
+        manifest: parsed,
+        privateRoot: privateRoot1,
+        reader: makeFakeReader().reader,
+        repoRoot,
+        manifestPath: "manifest.json",
+      });
+      const r2 = await prepareBaselineConditions({
+        manifest: parsed,
+        privateRoot: privateRoot2,
+        reader: makeFakeReader().reader,
+        repoRoot,
+        manifestPath: "manifest.json",
+      });
+      expect(r1.ok).toBe(true);
+      expect(r2.ok).toBe(true);
+
+      // Every descriptor + private payload file must be byte-identical between
+      // the two runs (same inputs ⇒ same outputs; the resolver's inputSha256
+      // is canonical-JSON-derived and the corpus bytes are stable).
+      const dir1 = r1.outputDir!;
+      const dir2 = r2.outputDir!;
+      const files1 = readdirSync(dir1).sort();
+      const files2 = readdirSync(dir2).sort();
+      expect(files1).toEqual(files2);
+      for (const file of files1) {
+        const bytes1 = readFileSync(join(dir1, file));
+        const bytes2 = readFileSync(join(dir2, file));
+        expect(bytes1.equals(bytes2), `divergent bytes for ${file}`).toBe(true);
+      }
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+      rmSync(privateRoot1, { recursive: true, force: true });
+      rmSync(privateRoot2, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("makes zero provider calls (offline — no reader network, no egress)", async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "c2-prepare-noegress-"));
+    const privateRoot = mkdtempSync(join(tmpdir(), "c2-prepare-noegress-priv-"));
+    try {
+      const { manifestPath } = writePrepareFixture(repoRoot);
+      const parsed = C2BaselineManifestSchema.parse(
+        JSON.parse(readFileSync(manifestPath, "utf-8")),
+      );
+      const { reader, searchRanked } = makeFakeReader();
+      const result = await prepareBaselineConditions({
+        manifest: parsed,
+        privateRoot,
+        reader,
+        repoRoot,
+        manifestPath: "manifest.json",
+      });
+      expect(result.ok).toBe(true);
+      // The reader's searchRanked is the ONLY corpus entry point; it performs
+      // local keyword matching (no HTTP). A provider call would manifest as a
+      // network request — there is no provider in this code path at all.
+      // Assert the current-grounded runs DID call searchRanked (proving the
+      // resolver exercised the corpus path) and that the call count equals
+      // exactly 25 (one current-grounded resolution per case).
+      expect(searchRanked).toHaveBeenCalledTimes(25);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+      rmSync(privateRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
 // SUBPROCESS: zero-egress + --paid guard + entry-point isolation
 // ---------------------------------------------------------------------------
 
@@ -743,9 +1310,11 @@ describe.skipIf(!existsSync(CLI_PATH))(
       }
     });
 
-    it("prepare returns exit 1 (no silent success without preparing)", () => {
-      // Finding #3: prepare must not return 0 without preparing. Until the
-      // resolver is wired, it returns exit 1.
+    it("prepare returns exit 1 on an invalid manifest (fail-closed, zero egress)", () => {
+      // The prepare subcommand must not return 0 against an invalid manifest.
+      // A dummy manifest fails schema validation inside validateBaselineFiles,
+      // so prepare exits 1 before any resolution. This is the fail-closed
+      // contract: an operator never sees exit 0 without real preparation.
       const dir = mkdtempSync(join(tmpdir(), "c2-baseline-prepare-"));
       try {
         const manifestPath = join(dir, "manifest.json");

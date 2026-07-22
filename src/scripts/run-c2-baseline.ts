@@ -46,8 +46,18 @@ import {
   C2BaselineManifestSchema,
   computeManifestSha256,
   type C2BaselineManifest,
+  type C2BaselineCaseRef,
 } from "../c2/baseline-manifest.js";
 import { C2FrozenCalibrationSchema, type C2FrozenCalibration } from "../c2/condition-contracts.js";
+import {
+  C2CaseBriefSchema,
+  C2DecisionLabelSchema,
+  C2GoldEvidenceDescriptorSchema,
+  type C2CaseBrief,
+  type C2DecisionLabel,
+  type C2GoldEvidenceDescriptor,
+} from "../c2/case-contracts.js";
+import { resolveConditionInput } from "../c2/condition-resolver.js";
 import {
   C2EvaluationRunManifestV2Schema,
   C2HumanScorecardSchema,
@@ -56,7 +66,20 @@ import {
 } from "../c2/evaluation-contracts.js";
 import { evaluateC2Closure, type ClosureEvaluationInput } from "../c2/closure-evaluator.js";
 import { sha256Hex, canonicalJsonStringify } from "../readiness/contracts.js";
-import { writeDurableArtifact, type BoundaryScanConfig } from "../c2/private-artifacts.js";
+import {
+  writePrivateArtifact,
+  writeDurableArtifact,
+  type BoundaryScanConfig,
+} from "../c2/private-artifacts.js";
+import { PrivateCorpusReader, type CorpusReader } from "../corpus-reader.js";
+// NOTE: `logicalConditionInputPath` (from ./run-c2-pilot.js) is the helper that
+// normalizes a private condition-input execution path into the logical
+// `eval/c2/condition-inputs/<file>` form recorded in durable run metadata. It
+// is a RUN-time concern (the `run` subcommand, Task C2, builds the
+// `conditionInputRef` and normalizes its path there). `prepare` only writes the
+// private descriptor + payload; it does not produce a durable ref, so the
+// helper is not imported here. Reusing it at run time keeps the normalization
+// rule in one place (the pilot CLI).
 
 // ---------------------------------------------------------------------------
 // Usage
@@ -401,6 +424,286 @@ export function renderBaselinePreflight(pf: BaselinePreflight): string {
 // case files referenced by the manifest to exist on disk.
 // ---------------------------------------------------------------------------
 
+/** The three primary conditions declared on the baseline execution matrix. */
+const PRIMARY_CONDITIONS = ["brief-only", "current-grounded", "gold-evidence"] as const;
+type PrimaryCondition = (typeof PRIMARY_CONDITIONS)[number];
+
+/**
+ * Logical (durable) output directory for the condition-input descriptors. The
+ * actual descriptor + private payload files stay under the gitignored private
+ * root; only the SHA-256 binding travels into durable run metadata at `run`
+ * time (where `logicalConditionInputPath` normalizes the execution path to the
+ * documented `eval/c2/condition-inputs/<file>` form).
+ */
+const CONDITION_INPUTS_PRIVATE_SUBDIR = "c2/baseline/condition-inputs";
+
+export interface PrepareBaselineConditionsInput {
+  /** The validated baseline manifest (from `validateBaselineFiles`). */
+  manifest: C2BaselineManifest;
+  /** Private-root directory for the resolved condition-input payloads. */
+  privateRoot: string;
+  /**
+   * Corpus reader for current-grounded retrieval. Defaults to the shipped
+   * `PrivateCorpusReader`; tests inject a fake so they don't depend on the
+   * gitignored production corpus.
+   */
+  reader?: CorpusReader;
+  /**
+   * Repo-relative root the manifest's `path` fields resolve against. Defaults
+   * to `process.cwd()`. Tests that author fixture files under a temp dir pass
+   * the temp dir so `existsSync`/`readFileSync` find the synthetic artifacts.
+   */
+  repoRoot?: string;
+  /**
+   * Optional repo-relative path of the manifest file itself. When provided,
+   * the per-case `casePackageRef.path`/`sha256` point at the manifest (matching
+   * the pilot's `runPrepare` semantics: the package ref identifies the case
+   * package manifest, not the brief). When omitted, the ref falls back to the
+   * brief's path/sha so the field stays non-null + content-addressed.
+   */
+  manifestPath?: string;
+}
+
+export interface PrepareBaselineConditionsResult {
+  ok: boolean;
+  /** Specific, actionable error on failure. Null on success. */
+  error: string | null;
+  /** Number of primary condition inputs resolved (0 on failure). */
+  resolvedCount: number;
+  /** Absolute path of the private condition-inputs directory written under. */
+  outputDir: string | null;
+  /**
+   * The manifest's primary conditions, in resolution order. Equals
+   * `manifest.executionMatrix.primaryConditions`. Exposed for tests/assertions.
+   */
+  primaryConditions: readonly PrimaryCondition[];
+}
+
+/**
+ * Resolve every primary condition input for the 25-case baseline campaign and
+ * write each descriptor + private payload under
+ * `<privateRoot>/c2/baseline/condition-inputs/`. Pure I/O + the reusable
+ * `resolveConditionInput` + private writes; NO provider calls, NO corpus
+ * mutation.
+ *
+ * Fail-closed behavior:
+ *   - Every case file pinned by the manifest (brief, label, gold-evidence
+ *     descriptor) MUST exist on disk with a sha256 that matches the manifest's
+ *     pinned hash. A stale ref fails with a specific message naming the file.
+ *   - Migration cases MUST have their source-snapshot file present at the
+ *     path pinned by the case ref. A missing snapshot fails closed — this is
+ *     what surfaces the Task C0 prerequisite (migration snapshots) until those
+ *     files land. We never silently skip a migration case.
+ *   - The resolver itself enforces corpus-hash stability and gold-ID equality;
+ *     a resolver throw propagates as an `ok: false` result.
+ *
+ * Determinism: every output path is content-derived (`<caseId>-<condition>.json`
+ * + the matching `.private.json`), the canonical-JSON serialization is
+ * key-sorted, and the resolver's `inputSha256` is reproducible. Two runs over
+ * the same inputs produce byte-identical descriptor files.
+ */
+export async function prepareBaselineConditions(
+  input: PrepareBaselineConditionsInput,
+): Promise<PrepareBaselineConditionsResult> {
+  const { manifest, privateRoot } = input;
+  const repoRoot = input.repoRoot ?? process.cwd();
+  const reader = input.reader ?? new PrivateCorpusReader();
+  const primaryConditions = manifest.executionMatrix.primaryConditions;
+  const outputDir = join(privateRoot, CONDITION_INPUTS_PRIVATE_SUBDIR);
+
+  // The per-case casePackageRef identifies the case PACKAGE. When the caller
+  // passes the manifest path, point the ref at the manifest bytes (matching the
+  // pilot's runPrepare semantics); otherwise fall back to the brief ref so the
+  // field is non-null + content-addressed in either case.
+  const manifestAbsPath = input.manifestPath ? join(repoRoot, input.manifestPath) : null;
+  const manifestSha =
+    manifestAbsPath && existsSync(manifestAbsPath) ? sha256Hex(readFileSync(manifestAbsPath)) : null;
+
+  // 1. Verify every case file exists and its pinned sha matches the on-disk
+  //    bytes BEFORE resolving anything. A stale or missing file fails closed
+  //    with a specific message so the operator knows exactly what to fix.
+  //    Migration snapshots are part of this check: a migration case whose
+  //    snapshot file is absent fails here (Task C0 prerequisite).
+  for (const c of manifest.cases) {
+    const stale = verifyCaseArtifacts(c, repoRoot);
+    if (stale !== null) {
+      return {
+        ok: false,
+        error: stale,
+        resolvedCount: 0,
+        outputDir: null,
+        primaryConditions,
+      };
+    }
+  }
+
+  // 2. Resolve every case × primary condition. Reuses the pilot's resolver;
+  //    each resolved input is two private files: the metadata descriptor +
+  //    the private payload (full ranking, corpus snapshot path, evidence
+  //    content). The descriptor's SHA-256 is the binding that travels into
+  //    durable run metadata; the payload stays private.
+  let resolvedCount = 0;
+  for (const c of manifest.cases) {
+    const brief = loadBrief(repoRoot, c);
+    const label = loadLabel(repoRoot, c);
+    const casePackageRef = manifestAbsPath && manifestSha
+      ? {
+          artifactId: c.artifactId,
+          // Point at the manifest (the case package's source-of-truth), matching
+          // the pilot's runPrepare: the package ref identifies the package
+          // manifest, not the brief.
+          path: input.manifestPath!,
+          sha256: manifestSha,
+        }
+      : {
+          // Fallback (no manifestPath provided): pin the brief ref so the field
+          // is non-null + content-addressed. Used by tests that build a manifest
+          // object directly without writing it to a path first.
+          artifactId: c.artifactId,
+          path: c.brief.path,
+          sha256: c.brief.sha256,
+        };
+    const briefRef = { artifactId: c.brief.artifactId, path: c.brief.path, sha256: c.brief.sha256 };
+
+    // Migration cases bind the source snapshot via the brief's
+    // sourceSnapshotRef (typed: carries artifactType "design-source-snapshot").
+    // The brief schema already enforces that migration ⇒ non-null ref.
+    const sourceSnapshotRef = brief.sourceSnapshotRef;
+
+    for (const condition of primaryConditions) {
+      let goldEvidenceDescriptor: C2GoldEvidenceDescriptor | undefined;
+      let goldDescriptorRef:
+        | { artifactId: string; path: string; sha256: string }
+        | undefined;
+      if (condition === "gold-evidence") {
+        goldEvidenceDescriptor = loadGoldDescriptor(repoRoot, c);
+        goldDescriptorRef = {
+          artifactId: c.goldEvidenceDescriptor.artifactId,
+          path: c.goldEvidenceDescriptor.path,
+          sha256: c.goldEvidenceDescriptor.sha256,
+        };
+      }
+
+      let resolved;
+      try {
+        resolved = await resolveConditionInput(
+          {
+            casePackageRef,
+            briefRef,
+            brief,
+            condition,
+            label: condition === "gold-evidence" ? label : undefined,
+            sourceSnapshotRef,
+            goldEvidenceDescriptor,
+            goldDescriptorRef,
+          },
+          {
+            reader,
+            readArtifact: (p) => readFileSync(join(repoRoot, p)),
+            writePrivate: async (relPath, bytes) => {
+              await writePrivateArtifact(privateRoot, relPath, bytes);
+            },
+            now: () => new Date().toISOString(),
+          },
+        );
+      } catch (err) {
+        return {
+          ok: false,
+          error: `failed to resolve ${c.caseId}/${condition}: ${err instanceof Error ? err.message : String(err)}`,
+          resolvedCount,
+          outputDir: null,
+          primaryConditions,
+        };
+      }
+
+      // Write the descriptor + private payload under the baseline condition-
+      // inputs subdir. Two files per condition: the metadata descriptor (the
+      // durable binding the run reads) and the private payload (evidence
+      // content + corpus snapshot path).
+      const fileName = `${c.caseId}-${condition}`;
+      try {
+        await writePrivateArtifact(
+          privateRoot,
+          join(CONDITION_INPUTS_PRIVATE_SUBDIR, `${fileName}.json`),
+          Buffer.from(canonicalJsonStringify(resolved.metadata), "utf-8"),
+        );
+        await writePrivateArtifact(
+          privateRoot,
+          join(CONDITION_INPUTS_PRIVATE_SUBDIR, `${fileName}.private.json`),
+          Buffer.from(resolved.privatePayload, "utf-8"),
+        );
+      } catch (err) {
+        return {
+          ok: false,
+          error: `failed to write condition input ${fileName}: ${err instanceof Error ? err.message : String(err)}`,
+          resolvedCount,
+          outputDir: null,
+          primaryConditions,
+        };
+      }
+      resolvedCount += 1;
+    }
+  }
+
+  return {
+    ok: true,
+    error: null,
+    resolvedCount,
+    outputDir,
+    primaryConditions,
+  };
+}
+
+/**
+ * Verify a case's pinned artifact files exist and match their pinned sha256.
+ * Returns null on success, or a specific actionable error string on the first
+ * stale/missing file. Migration cases additionally verify the source snapshot
+ * exists (fail-closed on the Task C0 prerequisite). The returned string (when
+ * non-null) is a plain message WITHOUT a `[c2-baseline-prepare]` prefix — the
+ * caller adds the prefix so the message isn't double-prefixed.
+ */
+function verifyCaseArtifacts(c: C2BaselineCaseRef, repoRoot: string): string | null {
+  const checks: Array<{ kind: string; ref: { path: string; sha256: string } }> = [
+    { kind: "brief", ref: c.brief },
+    { kind: "label", ref: c.label },
+    { kind: "gold-evidence descriptor", ref: c.goldEvidenceDescriptor },
+  ];
+  if (c.family === "migration" && c.sourceSnapshot) {
+    checks.push({ kind: "migration source snapshot", ref: c.sourceSnapshot });
+  }
+  for (const { kind, ref } of checks) {
+    const abs = join(repoRoot, ref.path);
+    if (!existsSync(abs)) {
+      return `${kind} file not found for case ${c.caseId}: ${ref.path}. `
+        + (kind === "migration source snapshot"
+          ? `Author the snapshot (Task C0) and update the manifest before preparing.`
+          : `The manifest pins a file that is absent on disk.`);
+    }
+    const actual = sha256Hex(readFileSync(abs));
+    if (actual !== ref.sha256) {
+      return `stale ${kind} ref for case ${c.caseId}: ${ref.path} `
+        + `pins sha256 ${ref.sha256.slice(0, 12)}… but the on-disk bytes hash to ${actual.slice(0, 12)}…. `
+        + `Regenerate the manifest or restore the pinned file.`;
+    }
+  }
+  return null;
+}
+
+function loadBrief(repoRoot: string, c: C2BaselineCaseRef): C2CaseBrief {
+  const raw = JSON.parse(readFileSync(join(repoRoot, c.brief.path), "utf-8"));
+  return C2CaseBriefSchema.parse(raw) as C2CaseBrief;
+}
+
+function loadLabel(repoRoot: string, c: C2BaselineCaseRef): C2DecisionLabel {
+  const raw = JSON.parse(readFileSync(join(repoRoot, c.label.path), "utf-8"));
+  return C2DecisionLabelSchema.parse(raw) as C2DecisionLabel;
+}
+
+function loadGoldDescriptor(repoRoot: string, c: C2BaselineCaseRef): C2GoldEvidenceDescriptor {
+  const raw = JSON.parse(readFileSync(join(repoRoot, c.goldEvidenceDescriptor.path), "utf-8"));
+  return C2GoldEvidenceDescriptorSchema.parse(raw) as C2GoldEvidenceDescriptor;
+}
+
 async function runPrepareCli(args: Record<string, unknown>): Promise<number> {
   if (!args.manifest || !args.calibration) {
     console.error("error: prepare requires --manifest <manifest.json> --calibration <frozen.json>");
@@ -413,39 +716,26 @@ async function runPrepareCli(args: Record<string, unknown>): Promise<number> {
     console.error(`[c2-baseline-prepare] cannot prepare: ${validation.error}`);
     return 1;
   }
-  // The resolver lives in src/c2/condition-resolver.ts and operates per-case.
-  // Reusing it requires the case briefs, labels, and (for migration) source
-  // snapshots to exist on disk at the paths pinned by the manifest. Task B4
-  // authors those files; until then, prepare exits with a clear "case files
-  // not yet authored" message rather than a partial write.
   const manifest = validation.manifest!;
-  const missing: string[] = [];
-  for (const c of manifest.cases) {
-    if (!existsSync(c.brief.path)) missing.push(c.brief.path);
-    if (!existsSync(c.label.path)) missing.push(c.label.path);
-    if (c.family === "migration" && c.sourceSnapshot && !existsSync(c.sourceSnapshot.path)) {
-      missing.push(c.sourceSnapshot.path);
-    }
-    if (!existsSync(c.goldEvidenceDescriptor.path)) missing.push(c.goldEvidenceDescriptor.path);
-  }
-  if (missing.length > 0) {
-    console.error(
-      `[c2-baseline-prepare] ${missing.length} case file(s) not yet authored (Task B4). `
-      + `First missing: ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? "…" : ""}`,
-    );
+  const privateRoot = (args["private-root"] as string) ?? ".c2-private";
+  // Pass the manifest path repo-relative so the per-case casePackageRef can
+  // point at the manifest bytes (matching the pilot's runPrepare semantics).
+  const manifestPathRel = isAbsolute(args.manifest as string)
+    ? (args.manifest as string).replace(process.cwd() + "/", "")
+    : (args.manifest as string);
+  const result = await prepareBaselineConditions({
+    manifest,
+    privateRoot,
+    manifestPath: manifestPathRel,
+  });
+  if (!result.ok) {
+    console.error(`[c2-baseline-prepare] ${result.error}`);
     return 1;
   }
-  // prepare is NOT YET IMPLEMENTED for the baseline manifest. The pilot CLI's
-  // prepare is hardcoded to eval/c2/pilot/manifest.json and cannot resolve
-  // baseline cases. Returning non-zero so an operator does not believe inputs
-  // were prepared when they were not.
   console.error(
-    `[c2-baseline-prepare] NOT IMPLEMENTED: baseline condition-input resolution `
-    + `requires wiring the resolver to the 25-case baseline manifest. `
-    + `The pilot CLI's prepare is hardcoded to eval/c2/pilot/manifest.json and `
-    + `cannot prepare baseline cases.`,
+    `[c2-baseline-prepare] resolved ${result.resolvedCount} primary condition inputs under ${result.outputDir}/`,
   );
-  return 1;
+  return 0;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-evidence-uk-loan-dashboard-v1",
+  "caseId": "uk-loan-dashboard",
+  "records": [
+    {
+      "id": "evidence:brief:scheduled-vs-taken-constraint",
+      "sourceArtifactId": "c2-brief-uk-loan-dashboard-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/requiredScreens/1/states/1",
+        "/requiredScreens/1/states/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:early-repayment-honest-constraint",
+      "sourceArtifactId": "c2-brief-uk-loan-dashboard-v1",
+      "jsonPointers": [
+        "/constraints/1",
+        "/requiredScreens/2/id",
+        "/requiredScreens/2/states/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:receipts-taken-only-constraint",
+      "sourceArtifactId": "c2-brief-uk-loan-dashboard-v1",
+      "jsonPointers": [
+        "/constraints/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:failed-payment-honest-constraint",
+      "sourceArtifactId": "c2-brief-uk-loan-dashboard-v1",
+      "jsonPointers": [
+        "/constraints/4",
+        "/requiredScreens/1/states/3"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-finance-news-search-v1",
+  "caseId": "finance-news-search",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:ranking-is-inferred-relevance-not-objective-truth",
+    "decision:ai-summary-results-distinct-from-publisher-results",
+    "decision:no-accuracy-coverage-or-index-size-metrics",
+    "decision:discovery-labelled-machine-assembled-not-forecast",
+    "decision:filters-never-strip-attribution",
+    "decision:honest-zero-typo-and-slow-query-recovery",
+    "decision:discovery-without-signup-or-follow-list"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:result-order-labelled-inferred-relevance-with-no-objective-truth-or-authority-ranking",
+    "ac:ai-summary-results-visually-distinct-from-publisher-results-and-source-attributed",
+    "ac:no-accuracy-confidence-coverage-or-index-size-claim-anywhere-in-search",
+    "ac:trending-related-and-country-hubs-labelled-machine-assembled-and-inferred-not-forecast",
+    "ac:filters-preserve-publisher-label-timestamp-and-ai-summary-marker-on-every-result",
+    "ac:zero-typo-and-slow-query-states-honest-and-recoverable-with-no-fabricated-totals",
+    "ac:exploratory-query-returns-usable-starting-set-without-signup-or-follow-list"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:inferred-ranking-constraint",
+    "evidence:brief:ai-summary-distinct-constraint",
+    "evidence:brief:no-accuracy-or-coverage-metrics-constraint",
+    "evidence:brief:discovery-machine-assembled-constraint",
+    "evidence:brief:filters-preserve-attribution-constraint",
+    "evidence:brief:honest-recovery-constraint",
+    "evidence:brief:search-input-screen",
+    "evidence:brief:results-list-screen",
+    "evidence:brief:discovery-hub-screen"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:inferred-ranking-constraint",
+    "evidence:brief:ai-summary-distinct-constraint",
+    "evidence:brief:no-accuracy-or-coverage-metrics-constraint",
+    "evidence:brief:discovery-machine-assembled-constraint"
+  ],
+  "forbiddenClaims": [
+    "objective truth or relevance-authority ranking of publishers or results",
+    "AI summary accuracy percentage, confidence score, coverage metric, or index-size figure",
+    "AI summary presented as the publisher's verdict, Newswire's editorial pick, or a source of record",
+    "trending tickers, related topics, or country hubs presented as forecasts, investment signals, or buy/sell recommendations",
+    "fabricated result totals or synthetic results padding a zero-results or slow-query state",
+    "sign-up or follow-list required to run an exploratory query",
+    "affiliation with any real news publisher, exchange, index provider, rating agency, or data vendor"
+  ],
+  "privateMarkers": [
+    "/corpus/private/finance-news-search/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "Search claims an objective ranking or presents discovery as a forecast, or AI-summary results masquerade as publisher articles.",
+      "score3": "Ranking and discovery are mostly hedged but one result reads as an authority pick or AI summaries blur into publisher results.",
+      "score5": "Ranking is inferred relevance, AI-summary results are visually distinct and source-attributed, discovery is labelled machine-assembled, and exploratory search works without sign-up."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "search-input, results-list, and discovery-hub share no common direction system and disagree on how ranking or AI summaries are labelled.",
+      "score3": "Shared tokens across the three screens but the publisher label, timestamp, or AI-summary marker is applied inconsistently between list and discovery.",
+      "score5": "A single direction system unifies all three screens, with a consistent inferred-relevance framing, consistent AI-summary-vs-publisher distinction, and consistent attribution on every result and hub item."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the search-input, results-list, or discovery-hub states.",
+      "score3": "Partial blueprints with unresolved zero-results, typo-corrected, query-slow, or country-hub-selected states.",
+      "score5": "Engineers can build all three screens directly, including zero-results, typo-corrected, query-slow, results-loading-error, trending-tickers-expanded, related-topics-expanded, and country-hub-selected states with their mobile rules."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of an existing finance-search surface that ranks sources by authority or presents discovery as investment signals.",
+      "score3": "Derivative of common search patterns but the inferred-relevance and machine-assembled-discovery treatment is visually distinguishable.",
+      "score5": "A distinct treatment that makes inferred ranking, machine-assembled discovery, and AI-summary-vs-publisher separation legible without claiming authority or coverage."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no zero-results, query-slow, or results-loading-error states.",
+      "score3": "Baseline contrast and focus with partial handling of zero-results or query-slow.",
+      "score5": "WCAG-aligned contrast and focus across all three screens, with zero-results, typo-corrected, query-slow, and results-loading-error states that keep filters and recent queries reachable and never fabricate totals."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "An objective-ranking, accuracy, coverage, index-size, or investment-signal claim appears unsupported, or a zero-results state is padded with synthetic results.",
+      "score3": "Most claims trace to the brief but one result reads as an authority pick or one discovery item reads as a forecast.",
+      "score5": "Every claim traces to the brief, ranking is inferred relevance, discovery is machine-assembled, AI summaries are distinct and source-attributed, and no authority, accuracy, coverage, or index-size claim appears."
+    }
+  ],
+  "adjudicationNotes": [
+    "Search ranking is an inferred relevance signal, never objective truth; any authority-ranking or 'most correct result' framing is an automatic fail on evidence-discipline.",
+    "AI-summary results must be visually distinct from publisher-article results; an output that blurs them fails product-appropriateness and cross-screen-coherence.",
+    "Discovery must read as machine-assembled and inferred; an output that presents trending tickers or country hubs as forecasts or investment signals fails evidence-discipline.",
+    "Honest recovery is load-bearing: an output that fabricates result totals, pads zero-results with synthetic items, or claims a slow query returned results fails evidence-discipline and accessibility-and-failure-states.",
+    "Exploratory search must not gate on sign-up or a follow list; an output that blocks a new user's first query fails product-appropriateness.",
+    "Do not prescribe exact copy, brand colours, or pixel-level layout; the brief fixes the inferred-ranking and machine-assembled-discovery constraints, not the visual identity."
+  ]
+}

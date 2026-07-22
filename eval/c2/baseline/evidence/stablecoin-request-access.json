@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-evidence-stablecoin-request-access-v1",
+  "caseId": "stablecoin-request-access",
+  "records": [
+    {
+      "id": "evidence:brief:no-pressure-tactics-constraint",
+      "sourceArtifactId": "c2-brief-stablecoin-request-access-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/requiredScreens/0/mobileRules/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:illustrative-windows-constraint",
+      "sourceArtifactId": "c2-brief-stablecoin-request-access-v1",
+      "jsonPointers": [
+        "/constraints/1",
+        "/requiredScreens/1/states/1",
+        "/requiredScreens/2/mobileRules/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:recoverable-errors-constraint",
+      "sourceArtifactId": "c2-brief-stablecoin-request-access-v1",
+      "jsonPointers": [
+        "/constraints/2",
+        "/requiredScreens/0/states/1",
+        "/requiredScreens/0/states/2",
+        "/requiredScreens/0/states/3"
+      ]
+    },
+    {
+      "id": "evidence:brief:next-steps-confirmation-constraint",
+      "sourceArtifactId": "c2-brief-stablecoin-request-access-v1",
+      "jsonPointers": [
+        "/constraints/3",
+        "/requiredScreens/1/id",
+        "/requiredScreens/1/states/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:no-guaranteed-slot-constraint",
+      "sourceArtifactId": "c2-brief-stablecoin-request-access-v1",
+      "jsonPointers": [
+        "/constraints/4",
+        "/constraints/5"
+      ]
+    }
+  ]
+}

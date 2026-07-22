@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-stablecoin-request-access-v1",
+  "caseId": "stablecoin-request-access",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "stablecoin-demo-qualification",
+  "title": "Demo request-access qualification form, confirmation, and follow-up timeline",
+  "productContext": "Fictional early-stage stablecoin infrastructure provider (product name 'Stablebridge') routes business evaluators and interested prospects through a demo qualification flow at access.stablebridge.example.com before granting access to a product walkthrough. The flow captures enough business context for a sales qualifier to triage, then sets a clear expectation of what happens next and when. The product is pre-launch: there is no published waitlist size, no committed demo slot, and no SLA on response time. The flow must respect the prospect's time and never pressure them into urgency that the brief does not support. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "business evaluator deciding whether to request a demo and what business context to provide",
+    "sales qualifier at Stablebridge reading the submitted business context to triage the demo request",
+    "interested prospect who hit a form error and needs to recover without losing their input"
+  ],
+  "jobs": [
+    "qualify for a demo by providing accurate business context without being pressured",
+    "understand exactly what happens after submission, in what order, and within what illustrative window",
+    "recover gracefully from form errors (validation, network, or session) without losing entered data",
+    "leave the flow with a realistic next step, not a false promise of an instant demo or guaranteed slot"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "business evaluator opens the qualification form, fills the required business context, and submits successfully",
+    "prospect submits with a validation error, recovers without losing prior input, and reaches submission",
+    "submitted evaluator lands on a next-steps confirmation that states what happens next and in what illustrative window",
+    "evaluator follows up via the follow-up timeline and can see where their request sits in the triage sequence"
+  ],
+  "constraints": [
+    "Do not use pressure tactics: no fake scarcity ('only 3 demo slots left'), no countdown timers, no urgency language that the brief does not support.",
+    "All follow-up timing windows shown (for example 'a qualifier reviews within two business days') must be labelled as illustrative expectations, not commitments or SLAs.",
+    "Form errors must be recoverable: a validation error, a network failure, or a session expiry must each preserve the user's prior input where safe and offer a clear next action.",
+    "The next-steps confirmation must state plainly what happens after submission and what the prospect should do next; an empty thank-you screen with no next step fails the case.",
+    "Do not promise a guaranteed demo slot, an instant response, or a committed response-time SLA; the product is pre-launch and no slot inventory exists.",
+    "Exactly one primary submit action may lead the form; secondary paths (for example back to the marketing site or to the developer docs) must remain reachable without competing with submit.",
+    "The product name Stablebridge is fictional; do not imply affiliation with any real stablecoin issuer, bank, exchange, or regulator, and do not claim the demo is endorsed or co-hosted by a third party."
+  ],
+  "requiredScreens": [
+    {
+      "id": "qualification-form",
+      "states": [
+        "empty",
+        "validation-error",
+        "network-error",
+        "session-expired",
+        "submitting",
+        "submitted"
+      ],
+      "mobileRules": [
+        "the primary submit action sits in the bottom thumb zone and stays reachable on the smallest breakpoint",
+        "validation errors attach to their field, preserve prior input, and remain visible above the keyboard"
+      ]
+    },
+    {
+      "id": "next-steps-confirmation",
+      "states": [
+        "default",
+        "illustrative-window-expanded",
+        "what-happens-next-visible"
+      ],
+      "mobileRules": [
+        "the 'what happens next' sequence stacks vertically and the illustrative-not-committed label stays attached to each timing value",
+        "the secondary path back to marketing or docs remains reachable below the primary next action"
+      ]
+    },
+    {
+      "id": "follow-up-timeline",
+      "states": [
+        "default",
+        "step-in-review",
+        "step-scheduled",
+        "timeline-unreachable"
+      ],
+      "mobileRules": [
+        "the triage sequence collapses to a vertical stepper that keeps the illustrative-window label on each step",
+        "the timeline-unreachable state surfaces a recovery path (for example 'email access at stablebridge.example.com') without implying the request was lost"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-uk-loan-decision-v1",
+  "caseId": "uk-loan-decision",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:honest-decline-no-misleading-appeal",
+    "decision:explicit-uncoerced-agreement-acceptance",
+    "decision:referred-as-honest-pending",
+    "decision:no-fabricated-disbursement-time"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:decline-reason-honest-and-no-misleading-appeal-language",
+    "ac:agreement-acceptance-explicit-unbundled-not-preticked",
+    "ac:referred-status-honest-as-pending-not-soft-approval",
+    "ac:no-fabricated-disbursement-time-or-decline-taxonomy"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:honest-decline-constraint",
+    "evidence:brief:explicit-acceptance-constraint",
+    "evidence:brief:no-disbursement-time-supplied-constraint",
+    "evidence:brief:referred-honest-constraint",
+    "evidence:brief:debt-advice-routes-constraint",
+    "evidence:brief:decision-outcome-states",
+    "evidence:brief:agreement-review-states",
+    "evidence:brief:disbursement-tracking-states"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:honest-decline-constraint",
+    "evidence:brief:explicit-acceptance-constraint",
+    "evidence:brief:referred-honest-constraint",
+    "evidence:brief:debt-advice-routes-constraint"
+  ],
+  "forbiddenClaims": [
+    "misleading appeal language on a final decline ('you may still be approved', 'try again with a co-signer', 'reapply now')",
+    "a guaranteed disbursement time not supplied in the brief",
+    "an authoritative decline-reason taxonomy presented as complete when none is supplied",
+    "pre-ticked acceptance of the credit agreement",
+    "agreement acceptance bundled with marketing preferences or generic terms",
+    "referred-for-manual-review framed as a soft approval or likely approval with a fake estimated time",
+    "FCA authorisation, regulation, or affiliation with any real lender or debt-advice charity"
+  ],
+  "privateMarkers": [
+    "/corpus/private/uk-loan-decision/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "A final decline is paired with misleading appeal language, or agreement acceptance is pre-ticked or bundled.",
+      "score3": "The decision is honest but the decline path leans toward 'try again' framing, or acceptance is un-coerced but clauses are hidden.",
+      "score5": "Declines are honest and final where applicable, agreement acceptance is explicit and unbundled, and referred status is framed honestly as pending."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "Decision-outcome, agreement-review, and disbursement-tracking share no common status or recovery model.",
+      "score3": "Some shared tokens across the three screens but the approved / declined / referred treatments drift between screens.",
+      "score5": "A single direction system unifies all three screens, including a consistent decision-word treatment, agreement-acceptance boundary, and disbursement-status timeline."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the declined-final, referred-manual-review, acceptance-required-error, or disbursement-failed states.",
+      "score3": "Partial blueprints with unresolved referred-manual-review or disbursement-failed states.",
+      "score5": "Engineers can build all three screens directly, including the four decision-outcome states, four agreement-review states, and four disbursement-tracking states."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of an existing UK lender's decision page that fabricates a decline taxonomy and a guaranteed payout time.",
+      "score3": "Derivative of common decision-page patterns but the honest-decline and explicit-acceptance treatments are visually distinguishable.",
+      "score5": "A distinct treatment that makes the honest-decline, explicit-acceptance, and honest-referred boundaries legible without diluting the decision job."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no declined-final, referred-manual-review, outcome-load-error, or disbursement-failed states.",
+      "score3": "Baseline contrast and focus with partial handling of the declined and disbursement-failed states.",
+      "score5": "WCAG-aligned contrast and focus across all three screens, with robust declined-final, referred-manual-review, outcome-load-error, and disbursement-failed states, and free debt-advice routes reachable without upsell framing."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "A fabricated disbursement time, decline taxonomy, or agreement clause appears anywhere; misleading appeal language is presented as legitimate.",
+      "score3": "Most claims trace to the brief but one disbursement-time or decline-reason figure slips through as a concrete number.",
+      "score5": "Every claim traces to the brief, disbursement time and decline taxonomy surface as templated placeholders or dynamic pulls, and no FCA or debt-advice-affiliation claim appears."
+    }
+  ],
+  "adjudicationNotes": [
+    "Any misleading appeal language on a final decline (e.g., 'you may still be approved', 'try again with a co-signer') is an automatic fail on product-appropriateness and evidence-discipline.",
+    "Explicit, unbundled agreement acceptance is load-bearing: pre-ticked acceptance or clause-bundling fails accessibility-and-failure-states regardless of polish.",
+    "Referred-for-manual-review must stay honest as pending; presenting a referral as a likely approval or with a fake estimated time fails product-appropriateness.",
+    "Free independent debt advice and complaint routes must be reachable from the decline path without upsell framing.",
+    "Do not prescribe exact copy, brand colours, or pixel-level layout; the brief fixes constraints (honest decline, explicit acceptance, honest referral), not visual identity."
+  ]
+}

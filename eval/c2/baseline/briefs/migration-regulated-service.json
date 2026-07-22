@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-migration-regulated-service-v1",
+  "caseId": "migration-regulated-service",
+  "caseVersion": 1,
+  "family": "migration",
+  "stratum": "regulated-service-migration",
+  "title": "Original adaptation of a regulated healthcare portal",
+  "productContext": "A fictional healthcare provider (product name 'Carebridge') is adapting a publicly accessible patient-facing portal at https://example.com/c2-health-pilot/ into an original patient surface. Regulated services carry two compounding migration hazards: (1) DOM/SCREENSHOT DISAGREEMENT — the captured DOM and the captured screenshot of the same route disagree (e.g., the DOM exposes content hidden from the screenshot, or the screenshot shows decorative order the DOM omits), and the adaptation must resolve which signal to trust explicitly rather than silently picking one; (2) COMPLIANCE CONSTRAINTS — health information is sensitive, so the adaptation must not introduce new data-collection surfaces, must not reproduce clinical content as authoritative, and must preserve accessible-language requirements. The crawl is unauthenticated and non-mutating; authenticated patient-record routes were NOT inspected. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "patient navigating the adapted portal to find non-emergency service information",
+    "provider (clinician or admin) referring to the adapted public portal for service information"
+  ],
+  "jobs": [
+    "find non-emergency service information with accessible language and clear 'not a substitute for clinical advice' framing",
+    "trust that the adapted portal has introduced no new data-collection surface and respects sensitive-health-information boundaries",
+    "perceive a consistent resolution of the DOM/screenshot disagreement across the migrated routes"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "patient opens the migrated service-information route and sees accessible language plus a clear 'not clinical advice' framing, with no new data-collection surface",
+    "patient or provider perceives a consistent treatment of the DOM/screenshot disagreement across the inspected routes, with the resolution recorded explicitly",
+    "patient encounters the boundary between inspected-public and not-inspected-authenticated-record routes clearly marked, never presented as observed"
+  ],
+  "constraints": [
+    "The adaptation MUST be ORIGINAL: it must not reproduce the source portal's proprietary copy, masthead, exact palette, unique illustrations, distinctive iconography, or clinical content presented as authoritative.",
+    "The DOM/screenshot disagreement MUST be resolved explicitly with a recorded decision stating which signal is trusted and why; silently cloning the DOM or the screenshot as-is is forbidden.",
+    "The adaptation MUST NOT introduce any new data-collection surface (form, tracker, or identifiable-health-information input) beyond what the inspected routes show; adding a symptom-checker, triage widget, or PHI form is forbidden.",
+    "Clinical content MUST carry a clear 'not a substitute for professional clinical advice' framing; presenting adapted clinical text as authoritative medical guidance is forbidden.",
+    "Only the routes marked 'inspected' in the bound snapshot may ground a claim; authenticated patient-record routes were NOT inspected and no claim may rely on them.",
+    "Accessible-language requirements MUST be preserved: the adaptation may not regress reading level, contrast, or non-English-language access observed on the inspected routes.",
+    "The product name Carebridge is fictional; do not imply affiliation with any real healthcare provider, regulator (e.g., a named national health authority), clinical body, or EHR vendor observed or implied by the source."
+  ],
+  "requiredScreens": [
+    {
+      "id": "service-information",
+      "states": [
+        "default",
+        "dom-screenshot-disagreement-resolved",
+        "not-clinical-advice-visible",
+        "service-info-load-error"
+      ],
+      "mobileRules": [
+        "the 'not a substitute for clinical advice' framing remains anchored to clinical content when the layout collapses, not buried in a footer",
+        "accessible-language and reading-level treatment is preserved at the smallest breakpoint"
+      ]
+    },
+    {
+      "id": "record-boundary",
+      "states": [
+        "default",
+        "authenticated-route-blocked",
+        "no-new-data-collection-surface",
+        "boundary-load-error"
+      ],
+      "mobileRules": [
+        "the authenticated patient-record route is clearly marked as not-inspected and not reachable as if observed",
+        "no symptom-checker, triage widget, or PHI input is introduced anywhere in the mobile layout"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": {
+    "artifactId": "c2-snapshot-migration-regulated-service-v1",
+    "artifactType": "design-source-snapshot",
+    "path": "eval/c2/baseline/source-snapshots/migration-regulated-service.json",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

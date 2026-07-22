@@ -1,0 +1,103 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-migration-documentation-site-v1",
+  "caseId": "migration-documentation-site",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:retain-adapt-reject-per-structural-element",
+    "decision:same-origin-boundaries-preserved",
+    "decision:blocked-routes-not-claimed-as-inspected",
+    "decision:original-not-proprietary"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:retain-adapt-or-reject-recorded-for-navigation-headings-code-blocks-palette-iconography",
+    "ac:same-origin-internal-links-between-inspected-routes-preserved",
+    "ac:no-claim-relies-on-a-blocked-or-uninspected-route",
+    "ac:no-proprietary-copy-wordmark-palette-illustrations-or-iconography-reproduced"
+  ],
+  "permittedAuthorityLanes": [
+    "retain",
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:original-not-proprietary-constraint",
+    "evidence:brief:inspected-only-constraint",
+    "evidence:brief:same-origin-constraint",
+    "evidence:brief:retain-adapt-reject-constraint",
+    "evidence:brief:no-fabricated-structure-constraint",
+    "evidence:brief:docs-home-states",
+    "evidence:brief:article-route-states"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:original-not-proprietary-constraint",
+    "evidence:brief:inspected-only-constraint",
+    "evidence:brief:same-origin-constraint",
+    "evidence:brief:retain-adapt-reject-constraint"
+  ],
+  "forbiddenClaims": [
+    "that a blocked or uninspected route (e.g., an authenticated admin or draft-content route) was observed",
+    "reproduction of the source site's proprietary copy, wordmark, exact palette, unique illustrations, or distinctive iconography",
+    "an invented documentation route, fabricated API reference, or speculative content structure not present in the snapshot",
+    "a cross-origin link treated as part of the migrated surface without clear marking",
+    "affiliation with any real documentation-platform vendor observed or implied by the source"
+  ],
+  "privateMarkers": [
+    "/corpus/private/migration-documentation-site/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "The adaptation ignores the inspected documentation information architecture or invents routes/API references not present in the snapshot.",
+      "score3": "The adaptation follows the inspected IA but adds an unsupported route or mislabels a blocked route as inspected.",
+      "score5": "The adaptation preserves the inspected documentation IA for developer and technical-writer users, with no claim relying on a blocked or uninspected route."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "Docs-home and article-route share no common navigation, heading hierarchy, or code-block treatment.",
+      "score3": "Navigation and heading hierarchy are retained on some routes but drift between docs-home and article-route.",
+      "score5": "A single direction system unifies docs-home and article-route, including a consistent left-rail navigation, heading hierarchy, and code-block treatment as generic principles."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the search-active, nav-collapsed-mobile, code-block-copied, or route-not-found states.",
+      "score3": "Partial blueprints with unresolved nav-collapsed-mobile or route-not-found states.",
+      "score5": "Engineers can build docs-home and article-route directly, including all declared states, the operable mobile nav drawer, and the code-block horizontal-scroll-in-container rule."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A verbatim copy of the source site's copy, wordmark, palette, illustrations, or iconography.",
+      "score3": "Generic structural principles adapted but a proprietary identifier (wordmark, copy, illustration, palette, or icon) slips through.",
+      "score5": "Only generic structural principles are retained or adapted; every proprietary identifier is explicitly rejected with a recorded retain/adapt/reject decision."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "Keyboard navigation regresses (e.g., nav drawer not keyboard-reachable) and no route-not-found or search-active state handling.",
+      "score3": "Keyboard handling preserved on some elements but the mobile nav drawer or search-active state is inconsistent.",
+      "score5": "The collapsed mobile nav drawer remains keyboard-reachable, focus is preserved across navigation, and route-not-found and search-active states are handled explicitly."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "Claims rely on a blocked route, an uninspected page, or an invented API reference.",
+      "score3": "Most claims trace to inspected routes but one claim overreaches into a blocked or uninspected route.",
+      "score5": "Every claim traces to an inspected route in the snapshot and blocked/uninspected routes are explicitly excluded."
+    }
+  ],
+  "adjudicationNotes": [
+    "retain/adapt/reject lanes are all permitted: generic structural principles may be retained or adapted, while proprietary identifiers must be rejected.",
+    "A blocked route (e.g., an authenticated admin or draft-content route) MUST be treated as not-observed; any claim relying on it fails evidence-discipline.",
+    "Same-origin internal links between inspected routes are load-bearing for documentation wayfinding; breaking them or treating cross-origin links as migrated content fails product-appropriateness.",
+    "Originality and evidence-discipline are co-equal here: copying proprietary elements OR claiming uninspected pages fails regardless of other strengths.",
+    "The brief's sourceSnapshotRef.sha256 binds the exact on-disk snapshot bytes; the manifest generator verifies this binding on every build (placeholder sha will be replaced once the real snapshot is authored)."
+  ]
+}

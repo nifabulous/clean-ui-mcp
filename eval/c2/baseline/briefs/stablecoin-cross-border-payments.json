@@ -1,0 +1,77 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-stablecoin-cross-border-payments-v1",
+  "caseId": "stablecoin-cross-border-payments",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "stablecoin-corridors",
+  "title": "Cross-border payments corridors, settlement, and integration overview",
+  "productContext": "Fictional early-stage stablecoin infrastructure provider (product name 'Stablebridge') that helps businesses route cross-border payments through stablecoin rails between a small set of example corridors. The product is pre-launch: corridors, names, and timing shown on this page are illustrative samples for design, not a published rate card or licence. The page is reached from the marketing site's payments section at payments.stablebridge.example.com and targets a business payments audience with a secondary technical-evaluator path. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "business payments manager scoping supported corridors and timing for treasury planning",
+    "compliance officer evaluating corridor exposure and operational guardrails before sign-off",
+    "treasury lead comparing settlement expectations against existing fiat wire workflows"
+  ],
+  "jobs": [
+    "understand which corridors Stablebridge supports for design purposes",
+    "see illustrative settlement time expectations without being promised guarantees",
+    "evaluate the integration approach before deciding whether to request access",
+    "check that compliance-relevant guardrails (no licence claims, no guaranteed timing) are respected on the page"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "payments manager opens the page, scans supported corridors, and reaches a corridor detail for a representative pair",
+    "treasury lead compares illustrative settlement windows side by side and finds the disclaimers about timing",
+    "compliance officer reviews the page and confirms no regulatory or guaranteed-timing claims are made",
+    "technical evaluator follows a path from the page into the integration overview"
+  ],
+  "constraints": [
+    "Do not claim Stablebridge is licensed, authorised, or registered in any market; the company holds no regulatory licences and corridors are illustrative design samples only.",
+    "All corridor names, currency pairs, and settlement windows shown are fictional examples for layout purposes and must be labelled as illustrative on the page.",
+    "Do not present settlement windows as guarantees; show them as illustrative expectations with an explicit 'not a guarantee' treatment next to every timing value.",
+    "Compliance and treasury evaluators must be able to reach corridor and integration detail without exposure to speculative volume, partner-count, or savings claims not supplied in this brief.",
+    "Exactly one primary call to action (request access) may lead the page; a secondary link to the integration overview must remain reachable without competing with it.",
+    "The product name Stablebridge is fictional; do not imply affiliation with any real stablecoin issuer, bank, network, or regulator."
+  ],
+  "requiredScreens": [
+    {
+      "id": "corridor-selector",
+      "states": [
+        "default",
+        "corridor-selected",
+        "corridor-unavailable",
+        "corridor-loading-error"
+      ],
+      "mobileRules": [
+        "corridor origin and destination selectors stack vertically and remain operable in a single-handed grip",
+        "an illustrative-only badge stays attached to each corridor row when the list collapses"
+      ]
+    },
+    {
+      "id": "settlement-timeline",
+      "states": [
+        "default",
+        "window-expanded",
+        "timing-disclaimer-visible"
+      ],
+      "mobileRules": [
+        "timeline rails collapse to a vertical stack without losing the 'not a guarantee' tag",
+        "disclaimer text remains readable at the smallest breakpoint without horizontal scrolling"
+      ]
+    },
+    {
+      "id": "integration-overview",
+      "states": [
+        "default",
+        "integration-step-active",
+        "integration-unreachable"
+      ],
+      "mobileRules": [
+        "integration steps stack vertically and keep the secondary-action treatment intact",
+        "code or schema snippets scroll horizontally inside their own container only"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

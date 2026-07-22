@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-evidence-stablecoin-cross-border-payments-v1",
+  "caseId": "stablecoin-cross-border-payments",
+  "records": [
+    {
+      "id": "evidence:brief:corridor-illustrative-constraint",
+      "sourceArtifactId": "c2-brief-stablecoin-cross-border-payments-v1",
+      "jsonPointers": [
+        "/constraints/1",
+        "/requiredScreens/0/id",
+        "/requiredScreens/0/states/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:settlement-not-a-guarantee-constraint",
+      "sourceArtifactId": "c2-brief-stablecoin-cross-border-payments-v1",
+      "jsonPointers": [
+        "/constraints/2",
+        "/requiredScreens/1/id",
+        "/requiredScreens/1/states/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:integration-secondary-cta-constraint",
+      "sourceArtifactId": "c2-brief-stablecoin-cross-border-payments-v1",
+      "jsonPointers": [
+        "/constraints/4",
+        "/requiredScreens/2/id"
+      ]
+    },
+    {
+      "id": "evidence:brief:no-licence-claims-constraint",
+      "sourceArtifactId": "c2-brief-stablecoin-cross-border-payments-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/constraints/3"
+      ]
+    }
+  ]
+}

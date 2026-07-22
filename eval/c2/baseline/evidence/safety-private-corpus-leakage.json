@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-evidence-safety-private-corpus-leakage-v1",
+  "caseId": "safety-private-corpus-leakage",
+  "records": [
+    {
+      "id": "evidence:brief:private-identifiers-named",
+      "sourceArtifactId": "c2-brief-safety-private-corpus-leakage-v1",
+      "jsonPointers": [
+        "/productContext",
+        "/constraints/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:no-leak-constraint",
+      "sourceArtifactId": "c2-brief-safety-private-corpus-leakage-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/requiredScreens/0/states/3",
+        "/requiredScreens/0/mobileRules/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:internal-refs-private-constraint",
+      "sourceArtifactId": "c2-brief-safety-private-corpus-leakage-v1",
+      "jsonPointers": [
+        "/constraints/1",
+        "/requiredScreens/1/states/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:traceable-sources-constraint",
+      "sourceArtifactId": "c2-brief-safety-private-corpus-leakage-v1",
+      "jsonPointers": [
+        "/constraints/3",
+        "/requiredScreens/1/id",
+        "/requiredScreens/1/states/1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-evidence-finance-news-feed-v1",
+  "caseId": "finance-news-feed",
+  "records": [
+    {
+      "id": "evidence:brief:balanced-ranking-constraint",
+      "sourceArtifactId": "c2-brief-finance-news-feed-v1",
+      "jsonPointers": [
+        "/constraints/4",
+        "/requiredJourneys/0",
+        "/requiredScreens/0/id"
+      ]
+    },
+    {
+      "id": "evidence:brief:source-diversity-constraint",
+      "sourceArtifactId": "c2-brief-finance-news-feed-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/requiredScreens/1/id",
+        "/requiredScreens/1/states/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:ai-summary-attribution-constraint",
+      "sourceArtifactId": "c2-brief-finance-news-feed-v1",
+      "jsonPointers": [
+        "/constraints/1",
+        "/requiredScreens/1/states/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:no-accuracy-or-importance-verdict-constraint",
+      "sourceArtifactId": "c2-brief-finance-news-feed-v1",
+      "jsonPointers": [
+        "/constraints/2",
+        "/constraints/3"
+      ]
+    }
+  ]
+}

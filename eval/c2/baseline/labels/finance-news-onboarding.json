@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-finance-news-onboarding-v1",
+  "caseId": "finance-news-onboarding",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:progressive-role-topic-region-flow",
+    "decision:personalization-reversible-and-skippable",
+    "decision:ai-summary-attributed-and-labelled-machine-generated",
+    "decision:no-accuracy-confidence-or-subscriber-metrics",
+    "decision:single-start-trial-cta-on-preview"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:role-topic-region-flow-collects-and-persists-all-three",
+    "ac:back-skip-and-change-affordances-never-silently-discard-selections",
+    "ac:ai-summary-labelled-machine-generated-and-linked-to-sources-on-every-preview",
+    "ac:no-accuracy-confidence-or-subscriber-metrics-anywhere-in-onboarding",
+    "ac:exactly-one-start-trial-cta-leads-preview-with-edit-and-skip-secondary"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:reversible-personalization-constraint",
+    "evidence:brief:ai-summary-attribution-constraint",
+    "evidence:brief:no-accuracy-or-subscriber-metrics-constraint",
+    "evidence:brief:single-cta-constraint",
+    "evidence:brief:no-analyst-or-recommendation-constraint",
+    "evidence:brief:role-select-screen",
+    "evidence:brief:topic-region-select-screen",
+    "evidence:brief:preview-screen",
+    "evidence:brief:ai-summary-explainer-screen"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:reversible-personalization-constraint",
+    "evidence:brief:ai-summary-attribution-constraint",
+    "evidence:brief:no-accuracy-or-subscriber-metrics-constraint",
+    "evidence:brief:single-cta-constraint"
+  ],
+  "forbiddenClaims": [
+    "AI summary accuracy percentage, confidence score, or reliability ranking",
+    "subscriber, reader, or market-coverage count not supplied in the brief",
+    "Newswire analysts publish original price targets, ratings, or buy/sell recommendations",
+    "AI summary presented as editorial fact, a Newswire verdict, or a source of record without a machine-generated label",
+    "payment or price required to finish onboarding (onboarding ends at trial start, not checkout)",
+    "affiliation with any real news publisher, exchange, index provider, or rating agency"
+  ],
+  "privateMarkers": [
+    "/corpus/private/finance-news-onboarding/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "Onboarding collects no role or topic data, or pressures the subscriber with fabricated accuracy or subscriber numbers.",
+      "score3": "Role, topic, and region are collected but the AI preview reads as editorial fact or the skip path is buried.",
+      "score5": "Role, topic, and region flow cleanly, personalization is reversible and skippable, and the AI summary is visibly machine-generated and source-attributed with a single start-trial CTA."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "role-select, topic-region-select, preview, and ai-summary-explainer share no common direction system and disagree on how the AI summary is labelled.",
+      "score3": "Shared tokens across the four screens but the AI-summary label or the skip path is applied inconsistently.",
+      "score5": "A single direction system unifies all four screens, with a consistent machine-generated AI-summary label and a consistent reversible/skip treatment across every step."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the role-select, topic-region-select, preview, or explainer states.",
+      "score3": "Partial blueprints with unresolved selection-error-no-region, preview-empty, or ai-summary-explainer-visible states.",
+      "score5": "Engineers can build all four screens directly, including role-change-pending, selection-error-no-region, preview-empty, and ai-summary-explainer-visible states with their mobile rules."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of an existing finance-app onboarding that leans on accuracy or subscriber numbers for credibility.",
+      "score3": "Derivative of common onboarding patterns but the AI-attribution treatment is visually distinguishable.",
+      "score5": "A distinct treatment that makes personalization reversible and the AI summary's machine-generated, source-attributed nature legible without invented metrics."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no selection-error, preview-empty, or preview-loading states.",
+      "score3": "Baseline contrast and focus with partial handling of selection-error-no-region or preview-empty.",
+      "score5": "WCAG-aligned contrast and focus across all four screens, with selection-error-no-region, preview-empty, and preview-loading states that preserve prior selections and keep the skip path reachable."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "An AI-accuracy, subscriber-count, market-coverage, or analyst-recommendation claim appears unsupported in onboarding.",
+      "score3": "Most claims trace to the brief but one AI summary element reads as an editorial verdict or loses its source attribution.",
+      "score5": "Every claim traces to the brief, the AI summary is labelled machine-generated and source-linked everywhere, and no accuracy, confidence, subscriber, or analyst-recommendation claim appears."
+    }
+  ],
+  "adjudicationNotes": [
+    "Onboarding is a trial-start flow, not a checkout; any payment wall or price shown before the trial starts is a critical failure of product-appropriateness.",
+    "Any accuracy percentage, confidence score, subscriber count, or market-coverage figure for the AI summary or the app is an automatic fail on evidence-discipline, regardless of polish.",
+    "The AI summary is machine-generated and source-attributed: an output that presents it as editorial fact, a Newswire verdict, or a source of record fails product-appropriateness and evidence-discipline.",
+    "Reversibility and skip-personalization are load-bearing: an output that silently discards selections on back, or buries the skip path, fails accessibility-and-failure-states and implementation-clarity.",
+    "Do not prescribe exact copy, brand colours, or pixel-level layout; the brief fixes the AI-attribution and no-metrics constraints, not the visual identity."
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-evidence-migration-content-product-v1",
+  "caseId": "migration-content-product",
+  "records": [
+    {
+      "id": "evidence:brief:original-not-proprietary-constraint",
+      "sourceArtifactId": "c2-brief-migration-content-product-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/constraints/5"
+      ]
+    },
+    {
+      "id": "evidence:brief:provenance-preserved-constraint",
+      "sourceArtifactId": "c2-brief-migration-content-product-v1",
+      "jsonPointers": [
+        "/constraints/1",
+        "/requiredScreens/1/states/1",
+        "/requiredScreens/1/mobileRules/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:blocked-routes-not-published-constraint",
+      "sourceArtifactId": "c2-brief-migration-content-product-v1",
+      "jsonPointers": [
+        "/constraints/2",
+        "/requiredScreens/1/states/3",
+        "/requiredScreens/1/mobileRules/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:retain-adapt-reject-constraint",
+      "sourceArtifactId": "c2-brief-migration-content-product-v1",
+      "jsonPointers": [
+        "/constraints/4"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-evidence-migration-documentation-site-v1",
+  "caseId": "migration-documentation-site",
+  "records": [
+    {
+      "id": "evidence:brief:original-not-proprietary-constraint",
+      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/constraints/5"
+      ]
+    },
+    {
+      "id": "evidence:brief:inspected-only-constraint",
+      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
+      "jsonPointers": [
+        "/constraints/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:same-origin-constraint",
+      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
+      "jsonPointers": [
+        "/constraints/2",
+        "/requiredJourneys/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:retain-adapt-reject-constraint",
+      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
+      "jsonPointers": [
+        "/constraints/3",
+        "/requiredJourneys/2"
+      ]
+    }
+  ]
+}

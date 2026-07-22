@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-uk-loan-payment-difficulty-v1",
+  "caseId": "uk-loan-payment-difficulty",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:supportive-not-punitive-tone",
+    "decision:free-debt-advice-reachable-without-gating",
+    "decision:affordability-honest-no-unaffordable-plan",
+    "decision:agent-view-no-punitive-language"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:no-threats-intimidation-or-fabricated-legal-consequences-anywhere",
+    "ac:free-independent-debt-advice-reachable-without-personal-detail-disclosure",
+    "ac:affordability-review-does-not-push-an-unaffordable-repayment-plan",
+    "ac:support-agent-view-surfaces-no-punitive-language-or-pressure-tactics"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:supportive-not-punitive-constraint",
+    "evidence:brief:free-debt-advice-reachable-constraint",
+    "evidence:brief:no-forbearance-taxonomy-supplied-constraint",
+    "evidence:brief:affordability-honest-constraint",
+    "evidence:brief:agent-view-no-punitive-constraint",
+    "evidence:brief:payment-difficulty-entry-states",
+    "evidence:brief:affordability-review-states",
+    "evidence:brief:support-agent-assist-states"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:supportive-not-punitive-constraint",
+    "evidence:brief:free-debt-advice-reachable-constraint",
+    "evidence:brief:affordability-honest-constraint",
+    "evidence:brief:agent-view-no-punitive-constraint"
+  ],
+  "forbiddenClaims": [
+    "threats, intimidation, or pressure to prioritise the Lendflow loan over essentials (food, rent, utilities)",
+    "fabricated legal consequences (fake bailiff, court action, or enforcement-body threat)",
+    "a forbearance-option taxonomy, repayment-plan figure, interest-freeze term, or hardship-assessment script presented as authoritative",
+    "a templated repayment figure presented as a guaranteed or only option",
+    "gating the free-debt-advice route behind disclosure of personal financial detail",
+    "punitive language or pressure tactics on the support-agent view",
+    "FCA authorisation, regulation, or affiliation with any real debt-advice charity, collections agency, or enforcement body"
+  ],
+  "privateMarkers": [
+    "/corpus/private/uk-loan-payment-difficulty/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "The journey uses threats, intimidation, or fabricated legal consequences, or gates debt advice behind personal disclosure.",
+      "score3": "The journey is broadly supportive but one phrase leans punitive, or debt advice is reachable only after a step of disclosure.",
+      "score5": "The journey is supportive throughout, surfaces legitimate options, reaches free independent debt advice without gating, and never pushes an unaffordable plan."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "Payment-difficulty-entry, affordability-review, and support-agent-assist share no common supportive-tone model.",
+      "score3": "Some shared tokens across the three screens but the supportive framing drifts between borrower and agent views.",
+      "score5": "A single supportive direction system unifies all three screens, including a consistent debt-advice route and a consistent no-punitive-language treatment on the agent view."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the debt-advice-reachable, options-not-yet-available, review-service-error, or punitive-language-blocked states.",
+      "score3": "Partial blueprints with unresolved options-not-yet-available or punitive-language-blocked states.",
+      "score5": "Engineers can build all three screens directly, including the four payment-difficulty-entry states, five affordability-review states, and four support-agent-assist states, with the punitive-language-blocked guard made explicit."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of an existing punitive collections or arreals-management page that fabricates legal consequences.",
+      "score3": "Derivative of common payment-difficulty patterns but the supportive-tone and no-punitive-agent treatments are visually distinguishable.",
+      "score5": "A distinct treatment that makes the supportive-not-punitive boundary, free debt-advice route, and honest affordability review legible without diluting the support job."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no entry-load-error, review-service-error, or punitive-language-blocked states.",
+      "score3": "Baseline contrast and focus with partial handling of the entry-load-error and review-service-error states.",
+      "score5": "WCAG-aligned contrast and focus across all three screens, with robust entry-load-error, review-service-error, options-not-yet-available, and punitive-language-blocked states that preserve the supportive framing."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "A fabricated forbearance taxonomy, repayment-plan figure, interest-freeze term, or hardship script appears anywhere; punitive language is presented as legitimate.",
+      "score3": "Most claims trace to the brief but one forbearance option or repayment figure slips through as a concrete number.",
+      "score5": "Every claim traces to the brief, forbearance options and repayment figures surface as templated placeholders or dynamic pulls, and no FCA, charity-affiliation, or enforcement-body claim appears."
+    }
+  ],
+  "adjudicationNotes": [
+    "Any threat, intimidation, fabricated legal consequence, or pressure to prioritise the loan over essentials is an automatic fail on product-appropriateness and evidence-discipline.",
+    "The free-debt-advice route is load-bearing: it must be reachable WITHOUT prior personal-financial disclosure; gating it fails product-appropriateness.",
+    "The support-agent view's punitive-language-blocked state exists specifically to forbid punitive framing even on the staff view; weakening it fails accessibility-and-failure-states.",
+    "Affordability review must be honest: pushing a borrower into an unaffordable repayment plan, or presenting a templated figure as the only option, fails product-appropriateness.",
+    "Do not prescribe exact copy, brand colours, or pixel-level layout; the brief fixes constraints (supportive tone, free advice, honest review), not visual identity."
+  ]
+}

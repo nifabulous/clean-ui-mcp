@@ -1,0 +1,97 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-finance-news-story-detail-v1",
+  "caseId": "finance-news-story-detail",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "finance-news-story-detail",
+  "title": "Newswire mobile story detail separating sourced facts, AI summary, context, and publishers",
+  "productContext": "Fictional global finance-news mobile app (product name 'Newswire') for iOS and Android. The story-detail surface is the highest-stakes screen in the app: it is where a reader goes deep on a single market event and where the line between what a publisher actually reported and what Newswire's machine-generated AI summary said must be unambiguous. Newswire is reader-and-aggregation software only; it does not employ analysts, does not issue its own reporting, and does not publish price targets, ratings, or buy/sell recommendations. The 'AI summary' is a machine-generated condensation of publisher articles; the 'context' panel is machine-assembled background (prior coverage, related tickers, geography) and is never editorial. The app is pre-scale: there is no published accuracy metric, no source-authority ranking, and no claim that any publisher is more reliable than another. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "investigative reader who wants to read the publisher's own words first and only then consult the AI summary and context",
+    "fact-checker verifying which publisher made which specific claim and whether the AI summary faithfully reflects the sources",
+    "casual reader who wants the gist fast but must not be led to believe the AI summary is the publisher's verdict or a source of record"
+  ],
+  "jobs": [
+    "read the sourced publisher article in full before, or instead of, the AI summary, with the source identity and timestamp always visible",
+    "tell apart, at a glance and at every scroll position, four distinct layers: sourced publisher text, machine-generated AI summary, machine-assembled context, and other publishers covering the same story",
+    "trace any AI-summary sentence back to the specific publisher article(s) it condenses, and flag when a summary point is not backed by a visible source",
+    "consult context (prior coverage, related tickers, geography) knowing it is machine-assembled, not an editorial narrative or a price recommendation"
+  ],
+  "platform": "mobile-app",
+  "requiredJourneys": [
+    "investigative reader opens a story, reads the sourced publisher article first, and reaches the AI summary only afterwards with the source identity still visible",
+    "fact-checker expands the AI summary, taps a summary sentence, and lands on the specific publisher passage it condenses, with an honest 'no source backs this point' affordance when none exists",
+    "casual reader gets the gist from the AI summary but the screen never lets the summary masquerade as the publisher's verdict or a source of record",
+    "any reader scrolls from sourced text through AI summary and context into the other-publishers list without the four layers ever blurring into one another"
+  ],
+  "constraints": [
+    "CRITICAL: The four content layers — sourced publisher text, machine-generated AI summary, machine-assembled context, and other publishers — must be visually and semantically separated at all times; they must never merge into a single Newswire-authored narrative, and each layer must carry a persistent label identifying what it is.",
+    "The AI summary must be labelled machine-generated and attributed to its source publisher(s) on every sentence or paragraph; do not present it as the publisher's verdict, Newswire's reporting, an editorial conclusion, or a source of record. Every summary point must link to the source passage it condenses.",
+    "Where an AI-summary point cannot be traced to a visible source passage, the screen must surface an explicit 'no source backs this point' affordance rather than presenting the point as established fact; do not silently fill gaps with confident-sounding synthesis.",
+    "Do not display any AI-accuracy percentage, confidence score, source-authority ranking, or 'most reliable source' verdict; Newswire ranks neither the AI's correctness nor one publisher over another.",
+    "The context panel (prior coverage, related tickers, geography) must be labelled machine-assembled and must not read as an editorial narrative, a price forecast, or a buy/sell recommendation; do not present context as Newswire's analysis.",
+    "Do not fabricate analyst quotes, price targets, ratings, subscriber counts, read counts, or any metric not supplied in this brief; the publisher's own words are the only authoritative content on the screen.",
+    "Source identity and timestamp must remain visible on sourced publisher text at every scroll position; the reader must never lose track of which publisher said what and when.",
+    "The other-publishers list must present each publisher neutrally with its own timestamp and headline, with no implied reliability ranking or 'best source' marker.",
+    "The product name Newswire is fictional; do not imply affiliation with any real news publisher, exchange, index provider, rating agency, or data vendor."
+  ],
+  "requiredScreens": [
+    {
+      "id": "story-sourced-article",
+      "states": [
+        "default",
+        "article-loading",
+        "article-unavailable",
+        "paywall-detected"
+      ],
+      "mobileRules": [
+        "the publisher name, headline, and timestamp remain sticky or persistently visible while the sourced article body scrolls",
+        "the article-unavailable and paywall-detected states keep the AI summary and context reachable but never substitute the AI summary for the missing publisher text without an explicit substitution notice"
+      ]
+    },
+    {
+      "id": "ai-summary-block",
+      "states": [
+        "default",
+        "summary-expanded",
+        "sentence-source-trace-active",
+        "no-source-for-point",
+        "summary-loading"
+      ],
+      "mobileRules": [
+        "each summary sentence or paragraph keeps its machine-generated label and its source link tappable in a single-handed grip",
+        "the no-source-for-point affordance stays inline with the sentence it refers to and is never collapsed into a generic disclaimer"
+      ]
+    },
+    {
+      "id": "context-panel",
+      "states": [
+        "default",
+        "prior-coverage-expanded",
+        "related-tickers-visible",
+        "context-loading",
+        "context-empty"
+      ],
+      "mobileRules": [
+        "the context panel keeps a 'machine-assembled, not editorial analysis' label visible whenever any context item is shown",
+        "related tickers and geography tags are tappable but never read as price recommendations or forecasts"
+      ]
+    },
+    {
+      "id": "other-publishers-list",
+      "states": [
+        "default",
+        "publisher-selected",
+        "single-publisher-only",
+        "publishers-loading-error"
+      ],
+      "mobileRules": [
+        "each publisher row shows its own headline and timestamp and carries no reliability ranking or 'best source' marker",
+        "the single-publisher-only state names honestly that only one publisher covers the story so far and offers a 'get notified when more arrive' path without implying Newswire is suppressing sources"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

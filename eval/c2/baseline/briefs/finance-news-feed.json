@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-finance-news-feed-v1",
+  "caseId": "finance-news-feed",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "finance-news-feed",
+  "title": "Newswire mobile personalized feed balancing importance, recency, source diversity, and density",
+  "productContext": "Fictional global finance-news mobile app (product name 'Newswire') for iOS and Android. The feed is the subscriber's daily home surface: it ranks publisher articles by a combination of inferred importance, recency, and source diversity, and it can attach a machine-generated AI summary to groups of related articles. Newswire is reader-and-aggregation software only; it does not employ analysts, does not set an editorial importance verdict, and the AI summary is a machine-generated condensation attributed to its source publishers, never an authoritative ranking. The app is pre-scale: there is no published article-volume metric, no market-coverage percentage, and no AI-accuracy figure. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "daily reader scanning the feed over breakfast on a phone with one hand",
+    "breaking-news subscriber who needs the most recent material developments surfaced and timestamped above older context",
+    "portfolio-focused reader who filters the feed to the companies and sectors they follow and expects source diversity within a topic"
+  ],
+  "jobs": [
+    "scan a personalized feed that balances importance, recency, and source diversity without one signal drowning the others",
+    "read at high density on a small screen without losing the publisher, timestamp, and AI-summary attribution on each item",
+    "filter the feed to followed companies or sectors and see diverse sources within a topic rather than one publisher dominating",
+    "tell apart a publisher-authored article from a machine-generated AI summary at a glance"
+  ],
+  "platform": "mobile-app",
+  "requiredJourneys": [
+    "daily reader opens the feed, scans mixed-importance and mixed-recency items, and reaches a representative story without losing publisher and timestamp",
+    "breaking-news subscriber switches to a recency-first sort, sees the newest material developments with clear timestamps, and can return to the balanced sort",
+    "portfolio-focused reader applies a company or sector filter and confirms multiple publishers appear within the filtered topic, not a single source",
+    "any reader can distinguish a publisher article from an AI summary at a glance and reach the underlying sources for any summary"
+  ],
+  "constraints": [
+    "Do not let a single publisher dominate a topic in the default balanced sort; source diversity must be visible as distinct publisher labels within any grouped topic, and the app must not silently collapse all sources into one Newswire-authored item.",
+    "The AI summary must be visibly attributed to its source publishers and labelled machine-generated; do not present it as Newswire's editorial verdict, an authoritative ranking, or a source of record. Every AI summary must keep its source links.",
+    "Do not display any AI-accuracy percentage, confidence score, reliability ranking, or 'most important' authoritative verdict; importance in the feed is an inferred ranking signal, not a Newswire editorial judgement.",
+    "Do not fabricate article-volume, reader-count, market-coverage, or update-frequency metrics; the app is pre-scale and no such numbers are supplied.",
+    "Importance, recency, and source-diversity signals must remain individually legible: the subscriber must be able to tell why an item is where it is (for example a visible timestamp, a publisher label, and a topic grouping), without the UI claiming a single objective ranking.",
+    "The subscriber must be able to switch sort (balanced vs recency-first) and apply filters without the feed claiming the new order is objectively correct.",
+    "Density must not come at the cost of attribution: even in the densest layout, every item keeps a publisher label, a timestamp, and an AI-summary marker where applicable.",
+    "The product name Newswire is fictional; do not imply affiliation with any real news publisher, exchange, index provider, or rating agency."
+  ],
+  "requiredScreens": [
+    {
+      "id": "feed-default",
+      "states": [
+        "default",
+        "loading",
+        "empty-no-stories",
+        "refresh-error"
+      ],
+      "mobileRules": [
+        "each feed item keeps its publisher label, timestamp, and AI-summary marker visible in the densest single-handed scroll",
+        "the empty-no-stories and refresh-error states keep the sort and filter controls reachable so the subscriber can recover without force-quitting"
+      ]
+    },
+    {
+      "id": "topic-cluster",
+      "states": [
+        "default",
+        "cluster-expanded",
+        "single-source-warning",
+        "cluster-loading"
+      ],
+      "mobileRules": [
+        "an expanded cluster shows at least the distinct publisher labels of its member articles and keeps the AI-summary label attached to the cluster summary",
+        "the single-source-warning state names that only one publisher covers the topic so far and offers a 'see other topics' path without implying Newswire is hiding sources"
+      ]
+    },
+    {
+      "id": "sort-filter-rail",
+      "states": [
+        "default",
+        "filter-applied",
+        "filter-no-results",
+        "sort-changed-to-recency"
+      ],
+      "mobileRules": [
+        "sort and filter controls sit in the bottom thumb zone and stay operable while the feed is loading",
+        "filter-no-results surfaces a named empty state and offers a clear-reset path that restores the balanced sort without claiming the new order is authoritative"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

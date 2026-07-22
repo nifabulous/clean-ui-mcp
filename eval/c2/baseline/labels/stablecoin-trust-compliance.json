@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-stablecoin-trust-compliance-v1",
+  "caseId": "stablecoin-trust-compliance",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:no-licence-or-certification-claims",
+    "decision:framework-level-not-achieved-language",
+    "decision:planned-versus-completed-artefact-separation",
+    "decision:no-false-regulatory-standing-visuals",
+    "decision:primary-contact-cta-without-implied-standing"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:no-specific-licence-jurisdiction-or-certification-claimed",
+    "ac:all-compliance-language-is-framework-level-or-aspirational",
+    "ac:audit-artefacts-labelled-planned-in-progress-or-template",
+    "ac:no-badge-seal-or-logo-implying-real-regulator-or-auditor",
+    "ac:single-primary-contact-cta-with-secondary-paths-to-practices-and-audit"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:no-licences-constraint",
+    "evidence:brief:framework-language-constraint",
+    "evidence:brief:artefact-labelling-constraint",
+    "evidence:brief:no-false-standing-visuals-constraint",
+    "evidence:brief:compliance-overview-states",
+    "evidence:brief:security-practices-states",
+    "evidence:brief:audit-trail-states"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:no-licences-constraint",
+    "evidence:brief:framework-language-constraint",
+    "evidence:brief:artefact-labelling-constraint",
+    "evidence:brief:no-false-standing-visuals-constraint"
+  ],
+  "forbiddenClaims": [
+    "holds, is licensed by, is authorised by, or is registered with any regulator",
+    "SOC 2 Type II, ISO 27001, PCI DSS, or any other named certification as achieved or completed",
+    "FinCEN, FCA, MAS, NYDFS, MiCA, or any named jurisdiction's money-transmitter or e-money licence",
+    "completed external audit or third-party attestation",
+    "any badge, seal, checkmark, or logo that implies a real regulator, scheme, or auditor has approved Stablebridge",
+    "insurance, bond, or guarantee coverage not stated in the brief"
+  ],
+  "privateMarkers": [
+    "/corpus/private/stablecoin-trust-compliance/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "The page reads as a certified, licensed institution; no disclaimer that no licences are held.",
+      "score3": "Most language is aspirational but one section implies an achieved certification or completed audit.",
+      "score5": "Every section reads as framework-level intent, the 'no licences held' disclaimer is visible, and a single contact CTA leads without implying standing."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "compliance-overview, security-practices, and audit-trail disagree on whether artefacts are achieved or planned.",
+      "score3": "Shared tokens across the three screens but the planned-versus-completed marker is applied inconsistently.",
+      "score5": "A single direction system unifies all three screens, with a consistent planned/in-progress/template marker that never reads as a completed external attestation."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the compliance-overview, security-practices, or audit-trail states.",
+      "score3": "Partial blueprints with unresolved evidence-link-broken or audit-artefact-missing states.",
+      "score5": "Engineers can build all three screens directly, including framework-expanded, evidence-link-broken, audit-artefact-missing, and the planned/template filters."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of a real trust centre that leans on regulator logos and certification badges for credibility.",
+      "score3": "Derivative of common trust-centre patterns but the framework-level treatment is visually distinguishable.",
+      "score5": "A distinct treatment that earns trust through honest framework-level posture rather than borrowed regulator iconography."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no evidence-link-broken or audit-artefact-missing states.",
+      "score3": "Baseline contrast and focus with partial failure states on the security-practices screen.",
+      "score5": "WCAG-aligned contrast and focus across all three screens, with evidence-link-broken and audit-artefact-missing states that preserve the 'no external attestation claimed' disclaimer inline."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "A specific licence, jurisdiction, certification, or completed audit is claimed anywhere on the page.",
+      "score3": "Most claims are framework-level but one aspirational statement reads as an achieved certification.",
+      "score5": "Every claim is framework-level or aspirational, no named licence/certification/regulator appears as held, and the 'no licences held' disclaimer is present and visible."
+    }
+  ],
+  "adjudicationNotes": [
+    "This is a zero-tolerance case for regulatory claims: any specific licence, jurisdiction, regulator, certification, or completed audit anywhere in the output is an automatic fail on evidence-discipline, regardless of polish.",
+    "The compliance posture must be earned through honest framework language ('designed against', 'working towards', 'intended to align with'), never through certification badges or regulator logos.",
+    "Treat the audit-trail screen's planned/in-progress/template markers as load-bearing: an output that blurs planned and completed artefacts fails product-appropriateness and cross-screen-coherence.",
+    "The evidence-link-broken and audit-artefact-missing states exist precisely to test that the page degrades honestly; an output that hides missing evidence fails accessibility-and-failure-states.",
+    "Do not prescribe exact copy, brand colours, or pixel-level layout; the brief fixes the no-claims constraint, not the visual identity."
+  ]
+}

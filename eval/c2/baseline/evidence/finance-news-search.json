@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-evidence-finance-news-search-v1",
+  "caseId": "finance-news-search",
+  "records": [
+    {
+      "id": "evidence:brief:inferred-ranking-constraint",
+      "sourceArtifactId": "c2-brief-finance-news-search-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/requiredJourneys/0"
+      ]
+    },
+    {
+      "id": "evidence:brief:ai-summary-distinct-constraint",
+      "sourceArtifactId": "c2-brief-finance-news-search-v1",
+      "jsonPointers": [
+        "/constraints/1",
+        "/requiredScreens/1/id"
+      ]
+    },
+    {
+      "id": "evidence:brief:no-accuracy-or-coverage-metrics-constraint",
+      "sourceArtifactId": "c2-brief-finance-news-search-v1",
+      "jsonPointers": [
+        "/constraints/2",
+        "/constraints/6"
+      ]
+    },
+    {
+      "id": "evidence:brief:discovery-machine-assembled-constraint",
+      "sourceArtifactId": "c2-brief-finance-news-search-v1",
+      "jsonPointers": [
+        "/constraints/3",
+        "/requiredScreens/2/id",
+        "/requiredScreens/2/mobileRules/0"
+      ]
+    }
+  ]
+}

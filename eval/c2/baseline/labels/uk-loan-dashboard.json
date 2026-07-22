@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-uk-loan-dashboard-v1",
+  "caseId": "uk-loan-dashboard",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:scheduled-vs-taken-distinct",
+    "decision:early-repayment-honest-no-fabricated-figure",
+    "decision:receipts-only-for-taken-payments",
+    "decision:failed-payment-honest-recovery"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:scheduled-and-taken-payments-visually-and-semantically-distinct",
+    "ac:no-fabricated-early-repayment-fee-savings-or-settlement-figure",
+    "ac:receipts-downloadable-only-for-taken-payments",
+    "ac:failed-or-returned-payment-surfaced-honestly-with-recovery-path"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:scheduled-vs-taken-constraint",
+    "evidence:brief:early-repayment-honest-constraint",
+    "evidence:brief:receipts-taken-only-constraint",
+    "evidence:brief:no-balance-or-apr-supplied-constraint",
+    "evidence:brief:failed-payment-honest-constraint",
+    "evidence:brief:balance-overview-states",
+    "evidence:brief:payment-schedule-states",
+    "evidence:brief:early-repayment-states"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:scheduled-vs-taken-constraint",
+    "evidence:brief:early-repayment-honest-constraint",
+    "evidence:brief:receipts-taken-only-constraint",
+    "evidence:brief:failed-payment-honest-constraint"
+  ],
+  "forbiddenClaims": [
+    "an early-repayment fee, interest-savings figure, or settlement quote fabricated without a live pull",
+    "a hardcoded APR, outstanding-balance value, payment-amount value, or settlement figure",
+    "a scheduled future payment presented as already-taken, or a taken payment presented as merely scheduled",
+    "a downloadable receipt generated for a scheduled-but-not-yet-taken payment",
+    "a failed or returned payment hidden behind a generic all-good state",
+    "FCA authorisation, Consumer Credit Act compliance certification, or affiliation with any real lender"
+  ],
+  "privateMarkers": [
+    "/corpus/private/uk-loan-dashboard/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "Scheduled and taken payments are indistinguishable, or early repayment fabricates a fee or savings figure.",
+      "score3": "Scheduled and taken payments are tagged but inconsistently, or early repayment shows a plausible-looking but unsourced figure.",
+      "score5": "Scheduled and taken payments are visually and semantically distinct throughout, early repayment surfaces a live settlement quote with no fabricated figure, and failed payments are surfaced honestly."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "Balance-overview, payment-schedule, and early-repayment share no common scheduled / taken / failed model.",
+      "score3": "Some shared tokens across the three screens but the scheduled-vs-taken tag drifts between overview, schedule, and early repayment.",
+      "score5": "A single direction system unifies all three screens, including a consistent scheduled / taken / failed tag and a consistent settlement-quote pending / ready / expired treatment."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the payment-due-soon, payment-just-taken, payment-failed-returned, or settlement-quote-expired states.",
+      "score3": "Partial blueprints with unresolved payment-failed-returned or settlement-quote-expired states.",
+      "score5": "Engineers can build all three screens directly, including the four balance-overview states, four payment-schedule states, and five early-repayment states."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of an existing UK lender's dashboard that fabricates a settlement quote and hides failed payments.",
+      "score3": "Derivative of common loan-dashboard patterns but the scheduled-vs-taken and honest-early-repayment treatments are visually distinguishable.",
+      "score5": "A distinct treatment that makes the scheduled-vs-taken distinction, honest early repayment, and honest failed-payment recovery legible without diluting the dashboard job."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no payment-failed-returned, balance-load-error, or early-repayment-service-error states.",
+      "score3": "Baseline contrast and focus with partial handling of the failed-payment and balance-load-error states.",
+      "score5": "WCAG-aligned contrast and focus across all three screens, with robust payment-failed-returned, balance-load-error, settlement-quote-expired, and early-repayment-service-error states."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "A fabricated early-repayment fee, savings figure, settlement quote, APR, or balance value appears anywhere.",
+      "score3": "Most claims trace to the brief but one fee, savings, or settlement figure slips through as a concrete number.",
+      "score5": "Every claim traces to the brief, APR / balance / payment / settlement figures surface as templated placeholders or dynamic pulls, and no FCA or CCA-compliance claim appears."
+    }
+  ],
+  "adjudicationNotes": [
+    "Any fabricated early-repayment fee, interest-savings figure, or settlement quote is an automatic fail on evidence-discipline, regardless of how polished the dashboard is.",
+    "The scheduled-vs-taken distinction is load-bearing across all three screens; conflating them anywhere fails product-appropriateness.",
+    "Receipts must be downloadable only for taken payments; allowing a receipt for a scheduled-but-not-taken payment fails evidence-discipline.",
+    "Failed or returned payments must be surfaced honestly with a recovery path; hiding a failure behind a generic all-good state fails accessibility-and-failure-states.",
+    "Do not prescribe exact copy, brand colours, or pixel-level layout; the brief fixes constraints (distinct states, honest early repayment), not visual identity."
+  ]
+}

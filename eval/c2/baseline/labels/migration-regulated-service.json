@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-migration-regulated-service-v1",
+  "caseId": "migration-regulated-service",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:resolve-dom-screenshot-disagreement-explicit",
+    "decision:no-new-data-collection-surface",
+    "decision:clinical-content-not-authoritative",
+    "decision:authenticated-record-route-not-claimed-as-inspected"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:dom-screenshot-disagreement-resolved-with-recorded-decision",
+    "ac:no-new-form-tracker-or-phi-input-introduced-beyond-inspected-routes",
+    "ac:every-clinical-content-block-carries-not-clinical-advice-framing",
+    "ac:no-claim-that-the-authenticated-patient-record-route-was-inspected"
+  ],
+  "permittedAuthorityLanes": [
+    "retain",
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:original-not-proprietary-constraint",
+    "evidence:brief:dom-screenshot-disagreement-constraint",
+    "evidence:brief:no-new-data-collection-constraint",
+    "evidence:brief:clinical-not-authoritative-constraint",
+    "evidence:brief:inspected-only-constraint",
+    "evidence:brief:accessible-language-preserved-constraint",
+    "evidence:brief:service-information-states",
+    "evidence:brief:record-boundary-states"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:dom-screenshot-disagreement-constraint",
+    "evidence:brief:no-new-data-collection-constraint",
+    "evidence:brief:clinical-not-authoritative-constraint",
+    "evidence:brief:inspected-only-constraint"
+  ],
+  "forbiddenClaims": [
+    "that the authenticated patient-record route was inspected",
+    "any patient-record screen was observed",
+    "silently cloning the DOM or the screenshot without resolving the disagreement",
+    "a new data-collection surface: symptom-checker, triage widget, PHI form, or tracker not present on the inspected routes",
+    "adapted clinical content presented as authoritative medical guidance without a 'not clinical advice' framing",
+    "regression of accessible-language, reading-level, contrast, or non-English-language access",
+    "reproduction of the source portal's proprietary copy, masthead, exact palette, illustrations, or distinctive iconography",
+    "affiliation with any real healthcare provider, regulator, clinical body, or EHR vendor"
+  ],
+  "privateMarkers": [
+    "/corpus/private/migration-regulated-service/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "The adaptation silently clones one signal of the disagreement, introduces a new data-collection surface, or presents clinical content as authoritative.",
+      "score3": "The disagreement is acknowledged but the resolution is fuzzy, or the not-clinical-advice framing is present only in a footer.",
+      "score5": "The DOM/screenshot disagreement is resolved with a recorded decision, no new data-collection surface is introduced, and every clinical block carries an anchored not-clinical-advice framing."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "Service-information and record-boundary share no common disagreement-resolution or compliance model.",
+      "score3": "Some shared tokens but the not-clinical-advice framing or boundary marking drifts between the two screens.",
+      "score5": "A single direction system unifies service-information and record-boundary, including a consistent disagreement-resolution treatment and a consistent authenticated-route-boundary marking."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the dom-screenshot-disagreement-resolved, not-clinical-advice-visible, authenticated-route-blocked, or no-new-data-collection-surface states.",
+      "score3": "Partial blueprints with unresolved dom-screenshot-disagreement-resolved or authenticated-route-blocked states.",
+      "score5": "Engineers can build service-information and record-boundary directly, including all declared states, the explicit disagreement-resolution decision recorded in code, and the no-new-data-collection-surface guard made explicit."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A verbatim copy of the source portal's copy, masthead, palette, illustrations, or distinctive iconography.",
+      "score3": "Generic principles adapted but a proprietary identifier (masthead, illustration, icon) slips through.",
+      "score5": "Only generic structural principles are retained or adapted; proprietary identifiers and clinical content presented as authoritative are explicitly rejected with recorded decisions."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "Accessible-language, reading-level, contrast, or non-English-language access regresses; no service-info-load-error or boundary-load-error handling.",
+      "score3": "Accessibility is mostly preserved but reading-level or non-English-language access drifts on one route.",
+      "score5": "Accessible-language, reading-level, contrast, and non-English-language access are preserved across both screens, with robust service-info-load-error, authenticated-route-blocked, and boundary-load-error states."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "Claims rely on the authenticated patient-record route, an invented clinical finding, or a fabricated service not in the snapshot.",
+      "score3": "Most claims trace to inspected routes but one claim overreaches into the authenticated record or invents a service.",
+      "score5": "Every claim traces to an inspected route, the authenticated patient-record route is explicitly excluded, and the DOM/screenshot disagreement resolution is recorded with its evidence basis."
+    }
+  ],
+  "adjudicationNotes": [
+    "The DOM/screenshot disagreement is load-bearing: silently cloning either signal fails product-appropriateness and evidence-discipline.",
+    "No new data-collection surface is load-bearing: introducing a symptom-checker, triage widget, or PHI form fails product-appropriateness and accessibility-and-failure-states regardless of intent.",
+    "The authenticated patient-record route was NOT inspected; any claim relying on it fails evidence-discipline.",
+    "Clinical content must carry an anchored not-clinical-advice framing; burying it in a footer fails accessibility-and-failure-states.",
+    "Accessible-language preservation is non-negotiable for a regulated health surface; regressions fail accessibility-and-failure-states."
+  ]
+}

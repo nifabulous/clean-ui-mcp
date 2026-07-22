@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-stablecoin-cross-border-payments-v1",
+  "caseId": "stablecoin-cross-border-payments",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:corridor-as-illustrative-sample",
+    "decision:settlement-window-without-guarantee",
+    "decision:integration-path-secondary",
+    "decision:no-regulatory-or-licence-claims",
+    "decision:corridor-failure-and-unavailable-states"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:corridors-labelled-illustrative",
+    "ac:every-timing-value-carries-not-a-guarantee",
+    "ac:integration-overview-reachable-as-secondary",
+    "ac:no-licence-authorisation-or-registration-claims",
+    "ac:corridor-unavailable-and-loading-error-states-defined"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:corridor-illustrative-constraint",
+    "evidence:brief:settlement-not-a-guarantee-constraint",
+    "evidence:brief:integration-secondary-cta-constraint",
+    "evidence:brief:no-licence-claims-constraint",
+    "evidence:brief:corridor-selector-states",
+    "evidence:brief:settlement-timeline-states",
+    "evidence:brief:integration-overview-screen"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:corridor-illustrative-constraint",
+    "evidence:brief:settlement-not-a-guarantee-constraint",
+    "evidence:brief:integration-secondary-cta-constraint",
+    "evidence:brief:no-licence-claims-constraint"
+  ],
+  "forbiddenClaims": [
+    "licensed, authorised, or registered in any market",
+    "guaranteed or promised settlement time",
+    "specific guaranteed exchange rate or fee for a corridor",
+    "real-world corridor availability (the corridors are illustrative samples)",
+    "partner bank or network count not stated in the brief",
+    "transaction volume or savings figures not supplied in the brief"
+  ],
+  "privateMarkers": [
+    "/corpus/private/stablecoin-cross-border-payments/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "Corridors are presented as live, guaranteed products with no illustrative framing and no primary call to action.",
+      "score3": "Corridors are framed as samples but timing values read as guarantees, or the integration path competes with the primary CTA.",
+      "score5": "Corridors are clearly illustrative samples, every timing value carries a not-a-guarantee treatment, and the integration path stays secondary to a single request-access CTA."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "corridor-selector, settlement-timeline, and integration-overview share no common direction or token system.",
+      "score3": "Shared tokens across the three screens but inconsistent illustrative-only labelling or state treatment.",
+      "score5": "A single direction system unifies all three screens, including a consistent illustrative-only badge and not-a-guarantee tag applied to every corridor and timing value."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer corridor-selector, settlement-timeline, or integration-overview states.",
+      "score3": "Partial blueprints with unresolved corridor-unavailable or corridor-loading-error states.",
+      "score5": "Engineers can build all three screens directly, including the four corridor-selector states, three timeline states, and the integration-step-active and integration-unreachable states."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of an existing stablecoin corridor or FX comparison page with the same guarantees framing.",
+      "score3": "Derivative of common corridor-table patterns but the illustrative-only treatment is visually distinguishable.",
+      "score5": "A distinct treatment that makes the illustrative, non-guaranteed nature of the corridors legible without diluting the business-payments pitch."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no corridor-unavailable or corridor-loading-error states.",
+      "score3": "Baseline contrast and focus with partial failure states for the corridor selector.",
+      "score5": "WCAG-aligned contrast and focus across all three screens, with explicit corridor-unavailable, corridor-loading-error, and integration-unreachable states that preserve the illustrative-only and not-a-guarantee labels."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "Licence, guaranteed-timing, rate, or volume claims appear unsupported on the page.",
+      "score3": "Most claims trace to the brief but one timing value reads as a guarantee.",
+      "score5": "Every claim traces to the brief, corridors are labelled illustrative, every timing value is not-a-guarantee, and no regulatory or commercial claim appears unsupported."
+    }
+  ],
+  "adjudicationNotes": [
+    "The single primary CTA is request access; the integration overview must remain a secondary path, not a competing CTA.",
+    "Any licence, authorisation, registration, or guaranteed-settlement claim is an automatic fail on evidence-discipline, regardless of how polished the layout is.",
+    "Treat the absence of real corridors and timing as a constraint: corridors are illustrative samples and timing is an expectation, never a guarantee.",
+    "The corridor-unavailable and corridor-loading-error states are load-bearing for this case; an output that omits them fails implementation-clarity and accessibility-and-failure-states.",
+    "Do not prescribe exact copy, brand colours, or pixel-level layout; the brief fixes constraints, not visual identity."
+  ]
+}

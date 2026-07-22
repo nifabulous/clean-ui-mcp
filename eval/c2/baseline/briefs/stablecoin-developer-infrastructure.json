@@ -1,0 +1,79 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-stablecoin-developer-infrastructure-v1",
+  "caseId": "stablecoin-developer-infrastructure",
+  "caseVersion": 1,
+  "family": "product",
+  "stratum": "stablecoin-developer-docs",
+  "title": "Developer infrastructure overview: API surface, integration journey, and failure states",
+  "productContext": "Fictional early-stage stablecoin infrastructure provider (product name 'Stablebridge') maintains a developer documentation page at developers.stablebridge.example.com that walks integration engineers and technical evaluators through the API surface, the integration journey, and what happens when a transaction fails. The product is pre-launch: there is no public uptime SLA, no published transaction volume, and no committed throughput figure. The page is developer-first (not a marketing landing) and treats honest failure handling as a feature, not an afterthought. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "developer reading the API surface to scope an integration before requesting access",
+    "integration engineer following the step-by-step integration journey end to end",
+    "technical evaluator inspecting how Stablebridge documents and recovers from transaction failures"
+  ],
+  "jobs": [
+    "understand the API surface (the available resources and how they relate) without being sold a volume or uptime number",
+    "evaluate the integration journey step by step and know what to do at each stage",
+    "see explicit failure states for transactions (what fails, why, and how to recover) rather than a happy-path-only doc",
+    "leave the page able to estimate integration effort honestly, including the failure paths"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "developer opens the page, scans the API overview, and reaches a representative resource detail",
+    "integration engineer follows the integration journey from the first step to the final verification step",
+    "technical evaluator navigates into the error and failure-state reference and finds at least one explicit transaction-failure state with a recovery path",
+    "any visitor can reach a request-access or contact path from the docs without the page morphing into a marketing pitch"
+  ],
+  "constraints": [
+    "Do not claim specific transaction volumes, throughput numbers, uptime percentages, or SLAs; none are supplied in this brief and the product is pre-launch.",
+    "The integration journey must be presented as a finite, ordered sequence of steps with a clear entry and a clear verification exit; do not leave the journey open-ended.",
+    "Failure states are load-bearing for this case: every happy-path step in the integration journey must have a corresponding failure or error treatment, and at least one explicit transaction-failure state (for example a failed or reverted payment) with a documented recovery path must appear in the error reference.",
+    "Error and failure-state documentation must include actionable recovery guidance, not just an HTTP status code; a bare status code without a next action fails the case.",
+    "The page is developer-first: do not introduce marketing claims, customer logos, or volume figures that would shift the register toward sales.",
+    "Exactly one primary call to action (request access or contact developer relations) may appear; secondary navigation between the API overview, integration journey, and error reference must remain reachable without competing with it.",
+    "The product name Stablebridge is fictional; do not imply affiliation with any real stablecoin issuer, blockchain network, wallet provider, or exchange, and do not claim compatibility with a network that is not named in this brief."
+  ],
+  "requiredScreens": [
+    {
+      "id": "api-overview",
+      "states": [
+        "default",
+        "resource-expanded",
+        "resource-unavailable"
+      ],
+      "mobileRules": [
+        "the resource graph or list collapses to a vertically scrollable stack without losing the relationship labels",
+        "the resource-unavailable state keeps the request-access path reachable inline"
+      ]
+    },
+    {
+      "id": "integration-journey",
+      "states": [
+        "default",
+        "step-active",
+        "step-failed",
+        "journey-completed"
+      ],
+      "mobileRules": [
+        "the journey rail collapses to a vertical stepper that keeps the failure branch attached to its parent step",
+        "the step-failed state shows the recovery next action without pushing the developer off-screen"
+      ]
+    },
+    {
+      "id": "error-reference",
+      "states": [
+        "default",
+        "error-expanded",
+        "transaction-failed-recovery",
+        "error-reference-unreachable"
+      ],
+      "mobileRules": [
+        "error rows keep the HTTP status, the human reason, and the recovery action on a single stacked block on narrow viewports",
+        "the transaction-failed-recovery state surfaces the recovery steps inline without a modal that breaks the back button"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": null
+}

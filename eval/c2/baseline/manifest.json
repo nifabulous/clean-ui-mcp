@@ -1,0 +1,688 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-baseline-manifest",
+  "artifactId": "c2-baseline-v1",
+  "caseCount": 25,
+  "familyCounts": {
+    "product": 15,
+    "migration": 5,
+    "safety": 5
+  },
+  "cases": [
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-finance-news-alerts-saved-v1",
+      "caseId": "finance-news-alerts-saved",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-finance-news-alerts-saved-v1",
+        "path": "eval/c2/baseline/briefs/finance-news-alerts-saved.json",
+        "sha256": "0f24ef30890833e9587e59308d4a1b3baa632441e78d770c682f40cf05161ac6"
+      },
+      "label": {
+        "artifactId": "c2-label-finance-news-alerts-saved-v1",
+        "path": "eval/c2/baseline/labels/finance-news-alerts-saved.json",
+        "sha256": "aca9aaba1b92c63e9da447c0d199c2a15553eb202a1121fd2468b7488ca45e40"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-finance-news-alerts-saved-v1",
+        "path": "eval/c2/baseline/evidence/finance-news-alerts-saved.json",
+        "sha256": "bd9931ab02859d26fa79227aed128a9a12ac4a9ec2846312f29a991e4f03013e"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-finance-news-feed-v1",
+      "caseId": "finance-news-feed",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-finance-news-feed-v1",
+        "path": "eval/c2/baseline/briefs/finance-news-feed.json",
+        "sha256": "38064ef3e8871481cc2aadf9204e4de28e56953cf4fe8ee4ac15190a7933a28f"
+      },
+      "label": {
+        "artifactId": "c2-label-finance-news-feed-v1",
+        "path": "eval/c2/baseline/labels/finance-news-feed.json",
+        "sha256": "89ca514b89d3019e306e0f2944576ac08053413cca57bdc72cb925e311713317"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-finance-news-feed-v1",
+        "path": "eval/c2/baseline/evidence/finance-news-feed.json",
+        "sha256": "335568d0771441fb40d2b604129145a9b9bf054e87ad97120177e5a07c9dc714"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-finance-news-onboarding-v1",
+      "caseId": "finance-news-onboarding",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-finance-news-onboarding-v1",
+        "path": "eval/c2/baseline/briefs/finance-news-onboarding.json",
+        "sha256": "d1c778c9895d2687177317ca5ae2c77b0647ab710b99242e9463a253276013f5"
+      },
+      "label": {
+        "artifactId": "c2-label-finance-news-onboarding-v1",
+        "path": "eval/c2/baseline/labels/finance-news-onboarding.json",
+        "sha256": "028d79f3d7e6c90285f434d10821b3ea142590692307eae78e42015ad8c1928c"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-finance-news-onboarding-v1",
+        "path": "eval/c2/baseline/evidence/finance-news-onboarding.json",
+        "sha256": "2dee823e0745ea7239442087285d355f9519f80d56ee23caee3ef0dbfff59b0c"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-finance-news-search-v1",
+      "caseId": "finance-news-search",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-finance-news-search-v1",
+        "path": "eval/c2/baseline/briefs/finance-news-search.json",
+        "sha256": "cafb91483f1cc8a96f899fbc141147fa90b2694101d63205fa13e5d1e8d38aa2"
+      },
+      "label": {
+        "artifactId": "c2-label-finance-news-search-v1",
+        "path": "eval/c2/baseline/labels/finance-news-search.json",
+        "sha256": "5c293c507b101019d108d84ae0ad79b7911183191593a92693162143591ef7b6"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-finance-news-search-v1",
+        "path": "eval/c2/baseline/evidence/finance-news-search.json",
+        "sha256": "11d4223390b740b3f20d35bb0f23fc3ef3daa7d82dd216bf9a6e3149b9973d67"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-finance-news-story-detail-v1",
+      "caseId": "finance-news-story-detail",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-finance-news-story-detail-v1",
+        "path": "eval/c2/baseline/briefs/finance-news-story-detail.json",
+        "sha256": "ace51511c69ded34d5479a9bf1910eb6ddfaa0b404ab73b850c4b2807bf2165e"
+      },
+      "label": {
+        "artifactId": "c2-label-finance-news-story-detail-v1",
+        "path": "eval/c2/baseline/labels/finance-news-story-detail.json",
+        "sha256": "e9862135d0bc4f0c1080ac47edd29781aec3354a1edc91d5dde7634909f45736"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-finance-news-story-detail-v1",
+        "path": "eval/c2/baseline/evidence/finance-news-story-detail.json",
+        "sha256": "154b0a3504edd1e1218c1282e7863670f43ae2b9c2e04d54be33573799f19e7e"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-migration-content-product-v1",
+      "caseId": "migration-content-product",
+      "caseVersion": 1,
+      "family": "migration",
+      "brief": {
+        "artifactId": "c2-brief-migration-content-product-v1",
+        "path": "eval/c2/baseline/briefs/migration-content-product.json",
+        "sha256": "eb51d3bb5dd475c956db52357a32434ceb94948345a17f69171c4c60b18083fc"
+      },
+      "label": {
+        "artifactId": "c2-label-migration-content-product-v1",
+        "path": "eval/c2/baseline/labels/migration-content-product.json",
+        "sha256": "24a2b320c4b887563913568412942b4831f6bc54b4e8865a5bf010e79c29a089"
+      },
+      "sourceSnapshot": {
+        "artifactId": "c2-snapshot-migration-content-product-v1",
+        "path": "eval/c2/baseline/source-snapshots/migration-content-product.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-migration-content-product-v1",
+        "path": "eval/c2/baseline/evidence/migration-content-product.json",
+        "sha256": "316e6dfada36e2869c9902fa542d686be88a62c41690eca935cca6a66c934624"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-migration-documentation-site-v1",
+      "caseId": "migration-documentation-site",
+      "caseVersion": 1,
+      "family": "migration",
+      "brief": {
+        "artifactId": "c2-brief-migration-documentation-site-v1",
+        "path": "eval/c2/baseline/briefs/migration-documentation-site.json",
+        "sha256": "33594e59600af4b8fba622525ef73effd4cbda67350b49a32cda9f0e8df463af"
+      },
+      "label": {
+        "artifactId": "c2-label-migration-documentation-site-v1",
+        "path": "eval/c2/baseline/labels/migration-documentation-site.json",
+        "sha256": "d7e07bb5ddf898728670ffbb7a67519abd54b14a2878c2abac01fca62c8df20b"
+      },
+      "sourceSnapshot": {
+        "artifactId": "c2-snapshot-migration-documentation-site-v1",
+        "path": "eval/c2/baseline/source-snapshots/migration-documentation-site.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-migration-documentation-site-v1",
+        "path": "eval/c2/baseline/evidence/migration-documentation-site.json",
+        "sha256": "d9d4e380a78a530a0a190ce9bfdbcb5f20574d7e4ab2ddc8abcdce731e6c7e86"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-migration-regulated-service-v1",
+      "caseId": "migration-regulated-service",
+      "caseVersion": 1,
+      "family": "migration",
+      "brief": {
+        "artifactId": "c2-brief-migration-regulated-service-v1",
+        "path": "eval/c2/baseline/briefs/migration-regulated-service.json",
+        "sha256": "a8a339c890dc18727252c59eb355f9fb48f77d1a434dd89e9f4c7f54b497b30c"
+      },
+      "label": {
+        "artifactId": "c2-label-migration-regulated-service-v1",
+        "path": "eval/c2/baseline/labels/migration-regulated-service.json",
+        "sha256": "cf68a62c5f578031e841812368928e2d91b8a1fa0802ff0197521b580a9dc5c2"
+      },
+      "sourceSnapshot": {
+        "artifactId": "c2-snapshot-migration-regulated-service-v1",
+        "path": "eval/c2/baseline/source-snapshots/migration-regulated-service.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-migration-regulated-service-v1",
+        "path": "eval/c2/baseline/evidence/migration-regulated-service.json",
+        "sha256": "a31cf393004e05f71acfb2c61ae3811dfe00fc53c824f08e91b69206f39e9cf3"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-migration-saas-dashboard-v1",
+      "caseId": "migration-saas-dashboard",
+      "caseVersion": 1,
+      "family": "migration",
+      "brief": {
+        "artifactId": "c2-brief-migration-saas-dashboard-v1",
+        "path": "eval/c2/baseline/briefs/migration-saas-dashboard.json",
+        "sha256": "a257f694248961fcce9e9afd2b73c93f95fb6645b5d070cbc863f15478ebfeb2"
+      },
+      "label": {
+        "artifactId": "c2-label-migration-saas-dashboard-v1",
+        "path": "eval/c2/baseline/labels/migration-saas-dashboard.json",
+        "sha256": "186b4af6ed324b129df5b07bf06806486d5a18238683f387b47e651e46afac5e"
+      },
+      "sourceSnapshot": {
+        "artifactId": "c2-snapshot-migration-saas-dashboard-v1",
+        "path": "eval/c2/baseline/source-snapshots/migration-saas-dashboard.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-migration-saas-dashboard-v1",
+        "path": "eval/c2/baseline/evidence/migration-saas-dashboard.json",
+        "sha256": "e95f691b91e95f6d3011315b437c9a23f16e63d6bae47ed385a27da16d4d1295"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-named-inspiration-safety-v1",
+      "caseId": "named-inspiration-safety",
+      "caseVersion": 1,
+      "family": "safety",
+      "brief": {
+        "artifactId": "c2-brief-named-inspiration-safety-v1",
+        "path": "eval/c2/pilot/briefs/named-inspiration-safety.json",
+        "sha256": "f77d9da8aff0aeb3a5f9d055f7d2b1166efccc2804cb4af9a739ab52555278e1"
+      },
+      "label": {
+        "artifactId": "c2-label-named-inspiration-safety-v1",
+        "path": "eval/c2/pilot/labels/named-inspiration-safety.json",
+        "sha256": "f280c076afafa3a11a9a96cb73df95b9aa79fdda38c9cb8c18c095df1f8b3f86"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-gold-evidence-named-inspiration-safety-v1",
+        "path": "eval/c2/pilot/evidence/named-inspiration-safety.json",
+        "sha256": "b32122126fee6c8421498ce45e21114e3be9ccabdf73a67f108f5fdfbdbf39d7"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-public-marketing-migration-v1",
+      "caseId": "public-marketing-migration",
+      "caseVersion": 1,
+      "family": "migration",
+      "brief": {
+        "artifactId": "c2-brief-public-marketing-migration-v1",
+        "path": "eval/c2/pilot/briefs/public-marketing-migration.json",
+        "sha256": "041207ef1804392fb535a3073dd08db22b4e85feebee329ce797a6a56d33d63f"
+      },
+      "label": {
+        "artifactId": "c2-label-public-marketing-migration-v1",
+        "path": "eval/c2/pilot/labels/public-marketing-migration.json",
+        "sha256": "c79ddb69036b67ccc46acea275fb9113e683a93963c7952eac2ff7cc439c6049"
+      },
+      "sourceSnapshot": {
+        "artifactId": "design-source-snapshot-public-marketing-migration-v1",
+        "path": "eval/c2/pilot/source-snapshots/public-marketing-migration.json",
+        "sha256": "4e3aa3d03a7e2cb1bdd8e0295aba82926ee192295fb47f7c54c936b2f324c846"
+      },
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-gold-evidence-public-marketing-migration-v1",
+        "path": "eval/c2/pilot/evidence/public-marketing-migration.json",
+        "sha256": "049b6529c7c5c3d40ece72965f06b5d363c189bf99c603011d8f9280cbc4e794"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-safety-conflicting-evidence-v1",
+      "caseId": "safety-conflicting-evidence",
+      "caseVersion": 1,
+      "family": "safety",
+      "brief": {
+        "artifactId": "c2-brief-safety-conflicting-evidence-v1",
+        "path": "eval/c2/baseline/briefs/safety-conflicting-evidence.json",
+        "sha256": "0d8b302958ddb002adc5a83fe28deefa89df70057b61d1543fcb22415946ff0d"
+      },
+      "label": {
+        "artifactId": "c2-label-safety-conflicting-evidence-v1",
+        "path": "eval/c2/baseline/labels/safety-conflicting-evidence.json",
+        "sha256": "7e049df59b550c9279a1c3ae9beb4d656a90e89354e0134755b0295e4b046e36"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-safety-conflicting-evidence-v1",
+        "path": "eval/c2/baseline/evidence/safety-conflicting-evidence.json",
+        "sha256": "aebb24c55cca256a00608d8e92878377590b032c803cfa3e2eb4891ad584cead"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-safety-deceptive-request-v1",
+      "caseId": "safety-deceptive-request",
+      "caseVersion": 1,
+      "family": "safety",
+      "brief": {
+        "artifactId": "c2-brief-safety-deceptive-request-v1",
+        "path": "eval/c2/baseline/briefs/safety-deceptive-request.json",
+        "sha256": "821dabf920c1188d5235078e8b192873d3db527a0bbe140f2ee3d7c6fa7a0ce7"
+      },
+      "label": {
+        "artifactId": "c2-label-safety-deceptive-request-v1",
+        "path": "eval/c2/baseline/labels/safety-deceptive-request.json",
+        "sha256": "21e13e58653d99a3f466e4dd1fc905a35e56580659ccd00e3949847b7a8ed589"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-safety-deceptive-request-v1",
+        "path": "eval/c2/baseline/evidence/safety-deceptive-request.json",
+        "sha256": "34a8853fab212bd2459c7239e7f238618370d0d7684ca3043704ba2835a4c47a"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-safety-insufficient-evidence-v1",
+      "caseId": "safety-insufficient-evidence",
+      "caseVersion": 1,
+      "family": "safety",
+      "brief": {
+        "artifactId": "c2-brief-safety-insufficient-evidence-v1",
+        "path": "eval/c2/baseline/briefs/safety-insufficient-evidence.json",
+        "sha256": "6e375e5fe12032f5af151c191807972ff52448d0e8ee10942d0c7ca00d1d07ef"
+      },
+      "label": {
+        "artifactId": "c2-label-safety-insufficient-evidence-v1",
+        "path": "eval/c2/baseline/labels/safety-insufficient-evidence.json",
+        "sha256": "58fdc76e5a257deb6a9693cd0e6623fbcb743aa2fd1a6a7ae1a934e0759d9741"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-safety-insufficient-evidence-v1",
+        "path": "eval/c2/baseline/evidence/safety-insufficient-evidence.json",
+        "sha256": "45edac61b39efef99476127014e500cffd22f3efeb3b91702710e34db4ecc1b0"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-safety-private-corpus-leakage-v1",
+      "caseId": "safety-private-corpus-leakage",
+      "caseVersion": 1,
+      "family": "safety",
+      "brief": {
+        "artifactId": "c2-brief-safety-private-corpus-leakage-v1",
+        "path": "eval/c2/baseline/briefs/safety-private-corpus-leakage.json",
+        "sha256": "864804a2b250bf507565b863fb87a27735774262406b4091eee8e68f1faa2bf9"
+      },
+      "label": {
+        "artifactId": "c2-label-safety-private-corpus-leakage-v1",
+        "path": "eval/c2/baseline/labels/safety-private-corpus-leakage.json",
+        "sha256": "0e0910fa32e082e6f1a094a3b76acb338379b93070f7ce594f3f857dcae525de"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-safety-private-corpus-leakage-v1",
+        "path": "eval/c2/baseline/evidence/safety-private-corpus-leakage.json",
+        "sha256": "01059115869f50e12f3513f070398176bb1e144429b42ce37b88fcda53e9f457"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-stablecoin-cross-border-payments-v1",
+      "caseId": "stablecoin-cross-border-payments",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-stablecoin-cross-border-payments-v1",
+        "path": "eval/c2/baseline/briefs/stablecoin-cross-border-payments.json",
+        "sha256": "9922400682855631c658f16f16b0f487bf3bdbe52386d35ebed80c58004e4cda"
+      },
+      "label": {
+        "artifactId": "c2-label-stablecoin-cross-border-payments-v1",
+        "path": "eval/c2/baseline/labels/stablecoin-cross-border-payments.json",
+        "sha256": "667e811c177a038c8bad185d12e2c3c4dffbea191e73088080138a142a2252f3"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-stablecoin-cross-border-payments-v1",
+        "path": "eval/c2/baseline/evidence/stablecoin-cross-border-payments.json",
+        "sha256": "02a9f86e34158ee1f2d0ff73c5839cfeeb26793f7f7580af1fda57e8d6ba5490"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-stablecoin-developer-infrastructure-v1",
+      "caseId": "stablecoin-developer-infrastructure",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-stablecoin-developer-infrastructure-v1",
+        "path": "eval/c2/baseline/briefs/stablecoin-developer-infrastructure.json",
+        "sha256": "0f21f0e150fb04fde7b9342749138f1f029127c1b1174b9d7d9602ce1622d0a9"
+      },
+      "label": {
+        "artifactId": "c2-label-stablecoin-developer-infrastructure-v1",
+        "path": "eval/c2/baseline/labels/stablecoin-developer-infrastructure.json",
+        "sha256": "14bcf21c506dfae0e13b488a99a7f3724080a3c2f1690076089899233e73bed2"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-stablecoin-developer-infrastructure-v1",
+        "path": "eval/c2/baseline/evidence/stablecoin-developer-infrastructure.json",
+        "sha256": "7a7e16f8d8007bd7daeb65609909609cf80a943c2473b23e0ad35b88b989a5e6"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-stablecoin-home-v1",
+      "caseId": "stablecoin-home",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-stablecoin-home-v1",
+        "path": "eval/c2/pilot/briefs/stablecoin-home.json",
+        "sha256": "ee066c1a38fb864695d74be7ddc88d943926c75f4541029675176309430f94f9"
+      },
+      "label": {
+        "artifactId": "c2-label-stablecoin-home-v1",
+        "path": "eval/c2/pilot/labels/stablecoin-home.json",
+        "sha256": "6dc61b05704e60b69aa5b720924c25db660672508907eb95624bbc09ecbb7566"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-gold-evidence-stablecoin-home-v1",
+        "path": "eval/c2/pilot/evidence/stablecoin-home.json",
+        "sha256": "8186f704ea74867f60f0b571b5a10ec51d8464248cbcd483cb6c890800122401"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-stablecoin-request-access-v1",
+      "caseId": "stablecoin-request-access",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-stablecoin-request-access-v1",
+        "path": "eval/c2/baseline/briefs/stablecoin-request-access.json",
+        "sha256": "9a62259c6114f197db14617e317ec0f196ac08a332e7375612682d1a9764176f"
+      },
+      "label": {
+        "artifactId": "c2-label-stablecoin-request-access-v1",
+        "path": "eval/c2/baseline/labels/stablecoin-request-access.json",
+        "sha256": "d46c612805115530e47d04e0954b871b27a7c6e25e384f672a93fe5d6fdcade5"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-stablecoin-request-access-v1",
+        "path": "eval/c2/baseline/evidence/stablecoin-request-access.json",
+        "sha256": "3339c6ece318914176d15215f1f75984294a83a0e29dbc2aa27ab2ee536f7b61"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-stablecoin-trust-compliance-v1",
+      "caseId": "stablecoin-trust-compliance",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-stablecoin-trust-compliance-v1",
+        "path": "eval/c2/baseline/briefs/stablecoin-trust-compliance.json",
+        "sha256": "230d2425a961bd944bc21f3c33a64b99f2ece5c167ff3d547ff550cd4036ddc5"
+      },
+      "label": {
+        "artifactId": "c2-label-stablecoin-trust-compliance-v1",
+        "path": "eval/c2/baseline/labels/stablecoin-trust-compliance.json",
+        "sha256": "602d12736f02b8dcdbb171827d4790a2099f3c8e179cc66c3753ef770da12d7a"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-stablecoin-trust-compliance-v1",
+        "path": "eval/c2/baseline/evidence/stablecoin-trust-compliance.json",
+        "sha256": "548bd3f1c189145e6b6775a0362c8de0238fa1ad8c70747b339c47e310b97ed8"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-uk-loan-application-v1",
+      "caseId": "uk-loan-application",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-uk-loan-application-v1",
+        "path": "eval/c2/baseline/briefs/uk-loan-application.json",
+        "sha256": "355811765197cfed24e0c2837276304a3ef24d1a4beb858abe14080344f5a7eb"
+      },
+      "label": {
+        "artifactId": "c2-label-uk-loan-application-v1",
+        "path": "eval/c2/baseline/labels/uk-loan-application.json",
+        "sha256": "7d9e1bdfb685278644632e32529e876fc03619b8925fd69c722e89bf07c9ad6a"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-uk-loan-application-v1",
+        "path": "eval/c2/baseline/evidence/uk-loan-application.json",
+        "sha256": "4176181fe974718ee28f7f00ff14f5a8a4d8ae62844a346420faa3298d082178"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-uk-loan-dashboard-v1",
+      "caseId": "uk-loan-dashboard",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-uk-loan-dashboard-v1",
+        "path": "eval/c2/baseline/briefs/uk-loan-dashboard.json",
+        "sha256": "e342ccf569113ac7606954477808c2012b30881fdd7c751508bdf455d17dee60"
+      },
+      "label": {
+        "artifactId": "c2-label-uk-loan-dashboard-v1",
+        "path": "eval/c2/baseline/labels/uk-loan-dashboard.json",
+        "sha256": "5f81e8060e407503d3bbd426b8ab31d6da3d595932ad04fbfae57e570a280faa"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-uk-loan-dashboard-v1",
+        "path": "eval/c2/baseline/evidence/uk-loan-dashboard.json",
+        "sha256": "eb9e18cb602623812ec4269d1bd871cd01fbeb75995d581167b5982b2fe70c2a"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-uk-loan-decision-v1",
+      "caseId": "uk-loan-decision",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-uk-loan-decision-v1",
+        "path": "eval/c2/baseline/briefs/uk-loan-decision.json",
+        "sha256": "6d3db25532879fd3ad377a0f7e0486bb5fb9f087ab2d571341da1a8edc60f55f"
+      },
+      "label": {
+        "artifactId": "c2-label-uk-loan-decision-v1",
+        "path": "eval/c2/baseline/labels/uk-loan-decision.json",
+        "sha256": "f9e6310d5625738f4d769e7438bd0633f68bdcb5d93c583966259f51f42a83f2"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-uk-loan-decision-v1",
+        "path": "eval/c2/baseline/evidence/uk-loan-decision.json",
+        "sha256": "67b8dce3d067eaa63f950da780ea327b07eafd3e69417eab1db44c0caa5e8f52"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-uk-loan-eligibility-v1",
+      "caseId": "uk-loan-eligibility",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-uk-loan-eligibility-v1",
+        "path": "eval/c2/baseline/briefs/uk-loan-eligibility.json",
+        "sha256": "d3d36fd4ed9815be9fce02dd6caba83f218c68455f29ac3276f37c0e285d8f7d"
+      },
+      "label": {
+        "artifactId": "c2-label-uk-loan-eligibility-v1",
+        "path": "eval/c2/baseline/labels/uk-loan-eligibility.json",
+        "sha256": "68d04d1ce0e988bf8383936ade6cb7278c937c0f5eac76ab05ae96c2fcd5e59d"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-uk-loan-eligibility-v1",
+        "path": "eval/c2/baseline/evidence/uk-loan-eligibility.json",
+        "sha256": "e05d5fc35cb60e7db9b0d87c959a0f9640bd76ebffaec8089161c4f515a3f62e"
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "artifactType": "c2-case-package",
+      "artifactId": "c2-package-uk-loan-payment-difficulty-v1",
+      "caseId": "uk-loan-payment-difficulty",
+      "caseVersion": 1,
+      "family": "product",
+      "brief": {
+        "artifactId": "c2-brief-uk-loan-payment-difficulty-v1",
+        "path": "eval/c2/baseline/briefs/uk-loan-payment-difficulty.json",
+        "sha256": "fdab0fb66d9d6abed878a92c4a1cceec96421a8cf7d1de48404bf8c8beaf2313"
+      },
+      "label": {
+        "artifactId": "c2-label-uk-loan-payment-difficulty-v1",
+        "path": "eval/c2/baseline/labels/uk-loan-payment-difficulty.json",
+        "sha256": "aa1e33340c294aaac9a8efe0ce5c4271c6045d0b758b88c5ea8620f9e171a89e"
+      },
+      "sourceSnapshot": null,
+      "goldEvidenceDescriptor": {
+        "artifactId": "c2-evidence-uk-loan-payment-difficulty-v1",
+        "path": "eval/c2/baseline/evidence/uk-loan-payment-difficulty.json",
+        "sha256": "e07df561cf4d666f3a78ad269b3417d4fc81a9b94eb11bbf770a6e4d82fbd176"
+      }
+    }
+  ],
+  "executionMatrix": {
+    "primaryConditions": [
+      "brief-only",
+      "current-grounded",
+      "gold-evidence"
+    ],
+    "primaryCaseCount": 25,
+    "independentConditions": [
+      "current-grounded"
+    ],
+    "independentCaseIds": [
+      "stablecoin-home",
+      "finance-news-story-detail",
+      "public-marketing-migration",
+      "safety-conflicting-evidence",
+      "named-inspiration-safety"
+    ],
+    "totalPlannedRuns": 80
+  },
+  "frozenCalibrationRef": {
+    "artifactId": "c2-frozen-calibration-pilot-v1",
+    "path": "eval/c2/calibration/frozen.json",
+    "sha256": "bc0561b5c8be36f82397577c58aafc2b1e893407df822272758ed35281a7c51f"
+  },
+  "manifestSha256": "1728f003e180a579046f63492d8fb2e40f2223eea7c6293fdfe77044a9550061",
+  "stagedSections": [
+    {
+      "section": "migration-source-snapshot:migration-content-product",
+      "reason": "Snapshot file eval/c2/baseline/source-snapshots/migration-content-product.json does not exist yet; brief declares placeholder sha256. Execution (prepare/run) will fail closed until the file is authored and the brief's sourceSnapshotRef.sha256 is updated.",
+      "affectedCaseIds": [
+        "migration-content-product"
+      ]
+    },
+    {
+      "section": "migration-source-snapshot:migration-documentation-site",
+      "reason": "Snapshot file eval/c2/baseline/source-snapshots/migration-documentation-site.json does not exist yet; brief declares placeholder sha256. Execution (prepare/run) will fail closed until the file is authored and the brief's sourceSnapshotRef.sha256 is updated.",
+      "affectedCaseIds": [
+        "migration-documentation-site"
+      ]
+    },
+    {
+      "section": "migration-source-snapshot:migration-regulated-service",
+      "reason": "Snapshot file eval/c2/baseline/source-snapshots/migration-regulated-service.json does not exist yet; brief declares placeholder sha256. Execution (prepare/run) will fail closed until the file is authored and the brief's sourceSnapshotRef.sha256 is updated.",
+      "affectedCaseIds": [
+        "migration-regulated-service"
+      ]
+    },
+    {
+      "section": "migration-source-snapshot:migration-saas-dashboard",
+      "reason": "Snapshot file eval/c2/baseline/source-snapshots/migration-saas-dashboard.json does not exist yet; brief declares placeholder sha256. Execution (prepare/run) will fail closed until the file is authored and the brief's sourceSnapshotRef.sha256 is updated.",
+      "affectedCaseIds": [
+        "migration-saas-dashboard"
+      ]
+    }
+  ]
+}

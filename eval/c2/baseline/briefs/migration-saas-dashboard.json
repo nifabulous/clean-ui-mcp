@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-case-brief",
+  "artifactId": "c2-brief-migration-saas-dashboard-v1",
+  "caseId": "migration-saas-dashboard",
+  "caseVersion": 1,
+  "family": "migration",
+  "stratum": "saas-dashboard-migration",
+  "title": "Original adaptation of a SaaS dashboard and application shell",
+  "productContext": "A fictional B2B SaaS company (product name 'Paneflow') is adapting a publicly accessible marketing-and-product surface at https://example.com/c2-saas-pilot/ into an original SaaS dashboard and application shell. The bound design-source snapshot captured the marketing routes only; the authenticated product dashboard itself was NOT inspected (the crawl was unauthenticated) and MUST NOT be claimed as observed. Two specific migration hazards are in scope: (1) RESPONSIVE DISAGREEMENT — the source site's desktop and mobile layouts disagree on navigation order, primary-action placement, or content priority, and the adaptation must resolve the disagreement explicitly rather than silently picking one; (2) CONSENT BANNERS — the source site surfaces a cookie / consent banner whose treatment must be adapted generically without copying the source vendor's branded copy or pre-ticked preferences. Every URL in this brief is synthetic and uses example.com.",
+  "users": [
+    "SaaS admin configuring the dashboard shell after migration",
+    "end-user navigating the migrated marketing surface and the dashboard entry"
+  ],
+  "jobs": [
+    "perceive a consistent navigation order and primary-action placement across desktop and mobile after the responsive disagreement is resolved",
+    "encounter a consent banner whose treatment is generic and not copied from the source vendor, with no pre-ticked preferences",
+    "reach the dashboard entry from the migrated marketing surface without crossing into a claimed-but-uninspected authenticated route"
+  ],
+  "platform": "responsive-web",
+  "requiredJourneys": [
+    "admin opens the migrated dashboard shell on desktop and mobile and perceives a consistent, explicitly-resolved navigation and primary-action treatment",
+    "end-user encounters the adapted consent banner, can reject all non-essential cookies as easily as accepting, and is not shown pre-ticked preferences",
+    "end-user reaches the dashboard entry from the marketing surface and the boundary between inspected-marketing and not-inspected-authenticated is clearly marked"
+  ],
+  "constraints": [
+    "The adaptation MUST be ORIGINAL: it must not reproduce the source site's proprietary copy, wordmark, exact palette, unique illustrations, distinctive iconography, OR the source consent-banner vendor's branded copy or pre-ticked preference defaults.",
+    "The responsive disagreement (desktop and mobile navigation order / primary-action placement / content priority) MUST be resolved explicitly with a recorded decision; silently cloning the desktop or mobile variant as-is is forbidden.",
+    "The consent banner MUST be adapted generically with 'reject all non-essential' as easy as 'accept all'; pre-ticked preferences, consent walls that block all access, or copy that imitates the source consent vendor are forbidden.",
+    "Only the routes marked 'inspected' in the bound snapshot (marketing surface) may ground a claim; the authenticated dashboard route was NOT inspected and no claim may rely on having observed it.",
+    "Every claim about the source site must trace to an inspected route in the snapshot; speculative dashboard widgets, invented metrics, or fabricated feature lists are forbidden.",
+    "The product name Paneflow is fictional; do not imply affiliation with any real SaaS product, dashboard framework, or consent-management vendor observed or implied by the source."
+  ],
+  "requiredScreens": [
+    {
+      "id": "dashboard-shell",
+      "states": [
+        "default",
+        "responsive-disagreement-resolved",
+        "primary-action-relocated",
+        "nav-reordered"
+      ],
+      "mobileRules": [
+        "the resolved navigation order must be consistent with the desktop order after the responsive-disagreement decision, with the change made explicit in code or comments",
+        "the primary action remains reachable above the fold on mobile without horizontal scroll after relocation"
+      ]
+    },
+    {
+      "id": "consent-banner",
+      "states": [
+        "default",
+        "expanded-preferences",
+        "reject-all-reachable",
+        "consent-recorded"
+      ],
+      "mobileRules": [
+        "the 'reject all non-essential' control must be at least as prominent and tappable as the 'accept all' control in a single-handed portrait grip",
+        "expanded preferences must not pre-tick any non-essential category"
+      ]
+    }
+  ],
+  "sourceSnapshotRef": {
+    "artifactId": "c2-snapshot-migration-saas-dashboard-v1",
+    "artifactType": "design-source-snapshot",
+    "path": "eval/c2/baseline/source-snapshots/migration-saas-dashboard.json",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

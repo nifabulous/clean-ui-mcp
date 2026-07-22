@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-migration-saas-dashboard-v1",
+  "caseId": "migration-saas-dashboard",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:resolve-responsive-disagreement-explicit",
+    "decision:consent-banner-reject-as-easy-as-accept",
+    "decision:dashboard-route-not-claimed-as-inspected",
+    "decision:original-not-proprietary-including-consent-vendor"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:responsive-disagreement-resolved-with-recorded-decision",
+    "ac:reject-all-non-essential-as-easy-as-accept-all-no-preticking",
+    "ac:no-claim-that-the-authenticated-dashboard-route-was-inspected",
+    "ac:no-proprietary-copy-wordmark-palette-iconography-or-consent-vendor-branding-reproduced"
+  ],
+  "permittedAuthorityLanes": [
+    "retain",
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:original-not-proprietary-constraint",
+    "evidence:brief:responsive-disagreement-constraint",
+    "evidence:brief:consent-banner-generic-constraint",
+    "evidence:brief:inspected-only-constraint",
+    "evidence:brief:no-fabricated-dashboard-constraint",
+    "evidence:brief:dashboard-shell-states",
+    "evidence:brief:consent-banner-states"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:original-not-proprietary-constraint",
+    "evidence:brief:responsive-disagreement-constraint",
+    "evidence:brief:consent-banner-generic-constraint",
+    "evidence:brief:inspected-only-constraint"
+  ],
+  "forbiddenClaims": [
+    "that the authenticated dashboard route was inspected",
+    "any authenticated product dashboard screen was observed",
+    "reproduction of the source site's proprietary copy, wordmark, exact palette, or distinctive iconography",
+    "reproduction of the source consent-banner vendor's branded copy or pre-ticked preference defaults",
+    "silently cloning the desktop or mobile variant of the navigation without resolving the responsive disagreement",
+    "pre-ticked non-essential consent preferences or a consent wall that blocks all access",
+    "invented dashboard widgets, metrics, or feature lists not present in the snapshot"
+  ],
+  "privateMarkers": [
+    "/corpus/private/migration-saas-dashboard/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "The adaptation silently clones one responsive variant, or copies the source consent vendor's banner, or claims the authenticated dashboard was inspected.",
+      "score3": "The adaptation resolves the disagreement but the consent banner leans toward 'accept all' prominence, or the dashboard boundary is fuzzy.",
+      "score5": "The responsive disagreement is resolved with a recorded decision, the consent banner treats reject-all as equal to accept-all, and the inspected-marketing vs not-inspected-authenticated boundary is explicit."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "Dashboard-shell and consent-banner share no common responsive or token system.",
+      "score3": "Some shared tokens but the resolved navigation order drifts between desktop and mobile after migration.",
+      "score5": "A single direction system unifies dashboard-shell and consent-banner, including a consistent resolved navigation order across desktop and mobile."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the responsive-disagreement-resolved, primary-action-relocated, expanded-preferences, or consent-recorded states.",
+      "score3": "Partial blueprints with unresolved primary-action-relocated or reject-all-reachable states.",
+      "score5": "Engineers can build dashboard-shell and consent-banner directly, including all declared states and the explicit responsive-disagreement decision recorded in code."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A verbatim copy of the source site's copy, palette, iconography, or the source consent vendor's branded banner.",
+      "score3": "Generic principles adapted but a proprietary identifier or consent-vendor brand element slips through.",
+      "score5": "Only generic principles are adapted; proprietary identifiers and consent-vendor branding are explicitly rejected with recorded decisions."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "The reject-all control is less prominent or less tappable than accept-all, and no consent-recorded or responsive-disagreement-resolved state handling.",
+      "score3": "Reject-all is reachable but its prominence or tap-target is weaker than accept-all on mobile.",
+      "score5": "Reject-all is at least as prominent and tappable as accept-all, focus is preserved across banner states, and the responsive-disagreement-resolved and consent-recorded states are handled explicitly."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "Claims rely on the authenticated dashboard route or on invented widgets/metrics not in the snapshot.",
+      "score3": "Most claims trace to inspected marketing routes but one claim overreaches into the authenticated dashboard.",
+      "score5": "Every claim traces to an inspected marketing route and the authenticated dashboard is explicitly excluded as not-inspected."
+    }
+  ],
+  "adjudicationNotes": [
+    "The authenticated dashboard route was NOT inspected; any claim relying on it fails evidence-discipline.",
+    "The responsive disagreement is load-bearing: silently cloning the desktop or mobile variant without a recorded decision fails product-appropriateness.",
+    "The consent banner is load-bearing: pre-ticked preferences, a consent wall blocking all access, or accept-all prominence over reject-all fails accessibility-and-failure-states.",
+    "The source consent-banner vendor's branded copy and pre-ticked defaults count as proprietary identifiers and must be rejected under originality.",
+    "retain/adapt/reject lanes are all permitted: generic responsive and consent principles may be retained or adapted, while proprietary identifiers and consent-vendor branding must be rejected."
+  ]
+}

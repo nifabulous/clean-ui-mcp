@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-decision-label",
+  "artifactId": "c2-label-stablecoin-request-access-v1",
+  "caseId": "stablecoin-request-access",
+  "caseVersion": 1,
+  "labelVersion": 2,
+  "requiredSections": [
+    "globalDirection",
+    "screenBlueprints",
+    "acceptanceCriteria",
+    "assumptions",
+    "authorityLanes",
+    "sourceDecisions"
+  ],
+  "requiredDecisionIds": [
+    "decision:no-pressure-or-fake-scarcity",
+    "decision:illustrative-not-committed-follow-up-windows",
+    "decision:recoverable-form-errors",
+    "decision:next-steps-confirmation-with-explicit-expectation",
+    "decision:no-guaranteed-demo-or-response-sla"
+  ],
+  "requiredAcceptanceCriteria": [
+    "ac:no-fake-scarcity-countdown-or-urgency-language",
+    "ac:follow-up-windows-labelled-illustrative-not-committed",
+    "ac:validation-network-and-session-errors-preserve-input-and-recover",
+    "ac:confirmation-states-what-happens-next-and-next-action",
+    "ac:no-guaranteed-demo-slot-or-response-sla-claim"
+  ],
+  "permittedAuthorityLanes": [
+    "adapt",
+    "reject"
+  ],
+  "validEvidenceIds": [
+    "evidence:brief:no-pressure-tactics-constraint",
+    "evidence:brief:illustrative-windows-constraint",
+    "evidence:brief:recoverable-errors-constraint",
+    "evidence:brief:next-steps-confirmation-constraint",
+    "evidence:brief:no-guaranteed-slot-constraint",
+    "evidence:brief:qualification-form-states",
+    "evidence:brief:next-steps-confirmation-states",
+    "evidence:brief:follow-up-timeline-states"
+  ],
+  "goldEvidenceIds": [
+    "evidence:brief:no-pressure-tactics-constraint",
+    "evidence:brief:illustrative-windows-constraint",
+    "evidence:brief:recoverable-errors-constraint",
+    "evidence:brief:next-steps-confirmation-constraint",
+    "evidence:brief:no-guaranteed-slot-constraint"
+  ],
+  "forbiddenClaims": [
+    "fake scarcity such as 'only N demo slots left' or a live countdown timer",
+    "guaranteed or committed response time, demo slot, or SLA",
+    "waitlist size, queue position, or applicant count not stated in the brief",
+    "an empty thank-you confirmation with no stated next step",
+    "endorsement or co-hosting of the demo by a named third party not in the brief",
+    "a form error state that wipes prior user input or offers no recovery action"
+  ],
+  "privateMarkers": [
+    "/corpus/private/stablecoin-request-access/placeholder"
+  ],
+  "rubricAnchors": [
+    {
+      "dimension": "product-appropriateness",
+      "score1": "The form uses fake scarcity or countdown urgency, or promises an instant guaranteed demo.",
+      "score3": "No overt pressure but the confirmation is an empty thank-you, or one follow-up window reads as a commitment.",
+      "score5": "No pressure tactics, follow-up windows are illustrative expectations, and the confirmation states plainly what happens next with a single primary submit CTA."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score1": "qualification-form, next-steps-confirmation, and follow-up-timeline disagree on what the next step is or how timing is framed.",
+      "score3": "Shared tokens across the three screens but the illustrative-window label is applied inconsistently between confirmation and timeline.",
+      "score5": "A single direction system unifies all three screens, with a consistent illustrative-not-committed label applied to every timing value from form to timeline."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score1": "No actionable blueprint; engineers cannot infer the qualification-form, next-steps-confirmation, or follow-up-timeline states.",
+      "score3": "Partial blueprints with unresolved network-error, session-expired, or timeline-unreachable states.",
+      "score5": "Engineers can build all three screens directly, including validation-error, network-error, session-expired, submitting, step-in-review, step-scheduled, and timeline-unreachable."
+    },
+    {
+      "dimension": "originality",
+      "score1": "A direct clone of a high-pressure SaaS demo-gating form with a countdown timer and scarcity badge.",
+      "score3": "Derivative of common demo-qualification patterns but the no-pressure, illustrative-timing treatment is visually distinguishable.",
+      "score5": "A distinct qualification treatment that earns trust through honest next steps and recoverable errors rather than manufactured urgency."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score1": "No accessibility handling and no validation-error, network-error, or session-expired states.",
+      "score3": "Baseline contrast and focus with partial error recovery that loses user input.",
+      "score5": "WCAG-aligned contrast and focus across all three screens, with validation-error, network-error, session-expired, and timeline-unreachable states that preserve prior input and surface a clear recovery action."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score1": "Scarcity, waitlist size, guaranteed slot, or SLA claims appear unsupported.",
+      "score3": "Most claims trace to the brief but one follow-up window reads as a committed SLA.",
+      "score5": "Every claim traces to the brief, no scarcity or SLA appears, every timing value is illustrative, and every form error has a recovery path that preserves input."
+    }
+  ],
+  "adjudicationNotes": [
+    "No-pressure is the spine of this case: any fake scarcity, countdown timer, or urgency language is an automatic fail on evidence-discipline, regardless of polish.",
+    "Treat the absence of a guaranteed demo slot and response SLA as a constraint: follow-up windows are illustrative expectations, never commitments.",
+    "Form error recovery is load-bearing: an output whose validation-error, network-error, or session-expired state wipes user input fails accessibility-and-failure-states.",
+    "The next-steps-confirmation must state what happens next; an empty thank-you screen with no next step fails product-appropriateness and implementation-clarity.",
+    "Do not prescribe exact copy, brand colours, or pixel-level layout; the brief fixes the no-pressure and illustrative-timing constraints, not the visual identity."
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-gold-evidence-descriptor",
+  "artifactId": "c2-evidence-uk-loan-decision-v1",
+  "caseId": "uk-loan-decision",
+  "records": [
+    {
+      "id": "evidence:brief:honest-decline-constraint",
+      "sourceArtifactId": "c2-brief-uk-loan-decision-v1",
+      "jsonPointers": [
+        "/constraints/0",
+        "/requiredScreens/0/states/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:explicit-acceptance-constraint",
+      "sourceArtifactId": "c2-brief-uk-loan-decision-v1",
+      "jsonPointers": [
+        "/constraints/1",
+        "/requiredScreens/1/id",
+        "/requiredScreens/1/mobileRules/1"
+      ]
+    },
+    {
+      "id": "evidence:brief:referred-honest-constraint",
+      "sourceArtifactId": "c2-brief-uk-loan-decision-v1",
+      "jsonPointers": [
+        "/constraints/3",
+        "/requiredScreens/0/states/2"
+      ]
+    },
+    {
+      "id": "evidence:brief:debt-advice-routes-constraint",
+      "sourceArtifactId": "c2-brief-uk-loan-decision-v1",
+      "jsonPointers": [
+        "/constraints/4"
+      ]
+    }
+  ]
+}

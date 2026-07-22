@@ -289,7 +289,7 @@ export function parseDesignHandoff(input: DesignHandoffInput): DesignHandoffT {
 
   // Target fallback: when omitted, substitute the canonical neutral-web profile.
   // This implements "no target means neutral-web, never implicit React."
-  const targetInput = validInput.target ?? NEUTRAL_WEB_TARGET;
+  const targetInput = validInput.target === undefined ? NEUTRAL_WEB_TARGET : validInput.target;
   const targetParse = WebTargetProfileSchema.safeParse(targetInput);
   if (!targetParse.success) {
     throw new Error(`Invalid WebTargetProfile: ${targetParse.error.message}`);

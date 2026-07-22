@@ -660,6 +660,16 @@ describe("adversarial input rejection at buildDesignHandoff", () => {
     expect(handoff.target.runtime).toBe("none");
   });
 
+  it("rejects an explicitly null target instead of treating it as omitted", () => {
+    const nullTargetInput = {
+      spec: validUiSpec(),
+      target: null,
+      motionIntents: motionIntents(),
+      generatedAt: GENERATED_AT,
+    };
+    expect(() => buildDesignHandoff(nullTargetInput)).toThrow(/Invalid WebTargetProfile/);
+  });
+
   it("JSON output includes the canonical UiSpec spec", () => {
     const handoff = buildDesignHandoff(input());
     const json = JSON.parse(renderDesignHandoffJson(handoff));

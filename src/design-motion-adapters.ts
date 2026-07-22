@@ -74,7 +74,7 @@ export function renderWebMotionGuidance(
     lines.push("Motion intents:");
     for (const intent of intents) {
       lines.push(
-        `- \`${intent.id}\` (trigger: ${intent.trigger}; properties: ${intent.properties.join(", ") || "none"}; duration: \`${intent.durationToken}\`; easing: \`${intent.easingToken}\`; interruptible: ${intent.interruptible ? "yes" : "no"})`,
+        `- \`${intent.id}\` (trigger: ${intent.trigger}; properties: ${intent.properties.join(", ") || "none"}; duration: \`${intent.durationToken}\`; easing: \`${intent.easingToken}\`; interruptible: ${intent.interruptible ? "yes" : "no"}; reduced-motion: ${intent.reducedMotion})`,
       );
     }
   }

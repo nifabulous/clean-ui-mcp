@@ -641,4 +641,36 @@ describe("adversarial input rejection at buildDesignHandoff", () => {
     const spec = { ...validUiSpec(), designDirection: "## INJECTED" };
     expect(() => parseDesignHandoff(input(spec))).toThrow(/structural Markdown/i);
   });
+
+  it("rejects structural Markdown in target.islandStrategy", () => {
+    const badTarget = { ...astroReactTarget(), islandStrategy: "client:load\n## Injected" };
+    expect(() => buildDesignHandoff(input(validUiSpec(), badTarget))).toThrow(/structural Markdown/i);
+  });
+
+  it("rejects an incompatible target at parseDesignHandoff (registry resolution)", () => {
+    // astro-vue with a React-only source — must fail at the parser level
+    const incompatible = { ...astroVueTarget(), componentSource: "shadcn" };
+    expect(() => parseDesignHandoff(input(validUiSpec(), incompatible))).toThrow(/shadcn|React-only|incompatible/i);
+  });
+
+  it("omitted target defaults to neutral-web", () => {
+    const noTargetInput = { spec: validUiSpec(), motionIntents: motionIntents(), generatedAt: GENERATED_AT };
+    const handoff = buildDesignHandoff(noTargetInput as DesignHandoffInput);
+    expect(handoff.target.id).toBe("neutral-web");
+    expect(handoff.target.runtime).toBe("none");
+  });
+
+  it("JSON output includes the canonical UiSpec spec", () => {
+    const handoff = buildDesignHandoff(input());
+    const json = JSON.parse(renderDesignHandoffJson(handoff));
+    expect(json.spec).toBeDefined();
+    expect(json.spec.specVersion).toBe("1.0");
+    expect(json.spec.designDirection).toBeDefined();
+  });
+
+  it("motion guidance emits per-intent reducedMotion value", () => {
+    const handoff = buildDesignHandoff(input());
+    const md = renderDesignHandoffMarkdown(handoff);
+    expect(md).toContain("render final state immediately");
+  });
 });

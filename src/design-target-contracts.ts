@@ -13,6 +13,7 @@
  */
 import { z } from "zod";
 import { UiSpec, type UiSpecT } from "./tool-contracts.js";
+import { resolveWebTarget } from "./design-adapter-registry.js";
 
 // ===========================================================================
 // 1. Closed enum values
@@ -212,10 +213,25 @@ export type MotionIntent = z.infer<typeof MotionIntentSchema>;
  * Untrusted input from a producer (e.g. a future create_ui_spec tool). Each
  * field is validated independently against its schema; no field trusts another.
  * `generatedAt` must be an ISO-8601 datetime string.
+ *
+ * `target` is optional: when omitted, the parser substitutes the canonical
+ * neutral-web profile. This implements the documented "no target means
+ * neutral-web, never implicit React" contract.
  */
+export const NEUTRAL_WEB_TARGET = {
+  id: "neutral-web" as const,
+  platform: "web" as const,
+  siteFramework: "none" as const,
+  runtime: "none" as const,
+  styling: "vanilla-css" as const,
+  componentSource: "native-html" as const,
+  motion: "css" as const,
+  islandStrategy: null,
+};
+
 export const DesignHandoffInputSchema = z.object({
   spec: z.unknown(),
-  target: z.unknown(),
+  target: z.unknown().optional(),
   motionIntents: z.unknown(),
   generatedAt: z.string().datetime(),
 }).strict();
@@ -271,7 +287,10 @@ export function parseDesignHandoff(input: DesignHandoffInput): DesignHandoffT {
     throw new Error(`Invalid UiSpec: ${specParse.error.message}`);
   }
 
-  const targetParse = WebTargetProfileSchema.safeParse(validInput.target);
+  // Target fallback: when omitted, substitute the canonical neutral-web profile.
+  // This implements "no target means neutral-web, never implicit React."
+  const targetInput = validInput.target ?? NEUTRAL_WEB_TARGET;
+  const targetParse = WebTargetProfileSchema.safeParse(targetInput);
   if (!targetParse.success) {
     throw new Error(`Invalid WebTargetProfile: ${targetParse.error.message}`);
   }
@@ -286,7 +305,12 @@ export function parseDesignHandoff(input: DesignHandoffInput): DesignHandoffT {
   // DesignHandoffT — regardless of which entry point constructed it — is
   // guaranteed clean.
   assertNoPrivatePathsEnvelope(specParse.data, targetParse.data, motionIntentsParse.data);
-  assertNoStructuralMarkdownEnvelope(specParse.data, motionIntentsParse.data);
+  assertNoStructuralMarkdownEnvelope(specParse.data, targetParse.data, motionIntentsParse.data);
+
+  // Registry resolution: validate that the target's combination is legal
+  // (e.g. astro-vue cannot use React-only sources). This runs at the parser
+  // level so a trusted DesignHandoffT is always registry-valid.
+  resolveWebTarget(targetParse.data);
 
   // The ONLY constructor for DesignHandoffT. Cast is contained to this single
   // line; the brand makes the type unconstructable elsewhere.
@@ -337,8 +361,8 @@ function assertNoPrivatePathsEnvelope(spec: unknown, target: unknown, motionInte
 }
 
 /** Reject structural Markdown (headings/fences with up to 3 leading spaces). */
-function assertNoStructuralMarkdownEnvelope(spec: unknown, motionIntents: unknown): void {
-  const all = [...collectAllStrings(spec), ...collectAllStrings(motionIntents)];
+function assertNoStructuralMarkdownEnvelope(spec: unknown, target: unknown, motionIntents: unknown): void {
+  const all = [...collectAllStrings(spec), ...collectAllStrings(target), ...collectAllStrings(motionIntents)];
   const headingRe = /^ {0,3}#{1,6}\s/m;
   const fenceRe = /^ {0,3}(`{3,}|~{3,})/m;
   for (const s of all) {

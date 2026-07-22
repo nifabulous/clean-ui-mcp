@@ -697,6 +697,9 @@ export function renderDesignHandoffJson(handoff: DesignHandoffT): string {
       interruptible: intent.interruptible,
       reduced_motion: intent.reducedMotion,
     })),
+    // The canonical UiSpec is included so the JSON handoff is self-contained
+    // and two different designs never serialize identically.
+    spec: handoff.spec,
   };
 
   // 2-space indentation; stable key order (insertion order); final newline.

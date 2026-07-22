@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CorpusEntryT } from "./schema.js";
-import { generateBrief, renderBrief, renderBriefMarkdown } from "./design-prompt.js";
+import { generateBrief, renderBrief, renderBriefMarkdown, renderBriefTokens } from "./design-prompt.js";
 
 // generateBrief is a pure deterministic synthesizer — the tests verify it
 // extracts the right consensus signals from entries and degrades gracefully
@@ -101,5 +101,97 @@ describe("renderBrief", () => {
     const parsed = JSON.parse(out); // must be valid JSON
     expect(parsed.tokens.color.accent).toBeDefined();
     expect(parsed.techniques).toBeInstanceOf(Array);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 7 regression — the adapter layer (Tasks 1–5) MUST NOT change the
+// legacy generate_design_prompt output. An omitted target never becomes React,
+// Astro, Tailwind, or any other adapter vocabulary. These tests pin the legacy
+// brief + tokens bytes against silent drift introduced by the handoff layer.
+// ---------------------------------------------------------------------------
+
+describe("legacy brief output regression (Task 7)", () => {
+  it("generateBrief returns the legacy DesignBrief shape with no adapter fields", () => {
+    const brief = generateBrief([entry({ id: "a" }), entry({ id: "b" })], { ids: ["a", "b"] });
+    // The exact legacy field set — no profileId, target, handoffVersion, etc.
+    expect(Object.keys(brief).sort()).toEqual(
+      [
+        "avoid",
+        "colorTokens",
+        "context",
+        "direction",
+        "framework",
+        "layout",
+        "sources",
+        "techniques",
+        "typography",
+        "voice",
+      ],
+    );
+    // The framework field defaults to "brief" when omitted.
+    expect(brief.framework).toBe("brief");
+  });
+
+  it("legacy markdown is unchanged when no target is specified", () => {
+    const brief = generateBrief([entry({ id: "a" })], { ids: ["a"] });
+    const md = renderBriefMarkdown(brief);
+    // The legacy brief header is the only H1 — no DESIGN.md frontmatter leaked in.
+    expect(md.startsWith("# Design brief")).toBe(true);
+    expect(md).not.toContain("---");
+    // No adapter vocabulary leaks into the legacy brief.
+    expect(md).not.toMatch(/\breact\b/i);
+    expect(md).not.toMatch(/\bastro\b/i);
+    expect(md).not.toMatch(/\btailwind\b/i);
+    expect(md).not.toMatch(/\bisland\b/i);
+    expect(md).not.toMatch(/\bvue\b/i);
+    expect(md).not.toMatch(/handoff_version/);
+    expect(md).not.toMatch(/target_profile/);
+    expect(md).not.toMatch(/@astrojs\//);
+    expect(md).not.toMatch(/client:load/);
+  });
+
+  it("omitted target produces no React/Astro/Tailwind assumption in tokens output", () => {
+    const brief = generateBrief([entry({ id: "a" })], { ids: ["a"], framework: "tokens" });
+    const out = renderBriefTokens(brief);
+    const parsed = JSON.parse(out);
+    // Legacy tokens shape: no profile, no install dependencies, no island.
+    expect(parsed).not.toHaveProperty("target_profile");
+    expect(parsed).not.toHaveProperty("handoff_version");
+    expect(parsed).not.toHaveProperty("dependency_manifest");
+    expect(parsed).not.toHaveProperty("island_strategy");
+    // The tokens payload remains the legacy color/spacing/typography/voice shape.
+    expect(parsed.tokens.color.accent).toBeDefined();
+    // No adapter vocabulary anywhere in the rendered bytes.
+    expect(out).not.toMatch(/\breact\b/i);
+    expect(out).not.toMatch(/\bastro\b/i);
+    expect(out).not.toMatch(/\btailwind\b/i);
+    expect(out).not.toMatch(/\bisland\b/i);
+  });
+
+  it("the existing generateBrief function still works identically across repeated calls", () => {
+    // Determinism: the same entries + input must produce byte-identical output.
+    const a = JSON.stringify(
+      generateBrief([entry({ id: "a" }), entry({ id: "b" })], {
+        ids: ["a", "b"],
+        context: "a pricing page for a fintech",
+      }),
+    );
+    const b = JSON.stringify(
+      generateBrief([entry({ id: "a" }), entry({ id: "b" })], {
+        ids: ["a", "b"],
+        context: "a pricing page for a fintech",
+      }),
+    );
+    expect(a).toBe(b);
+  });
+
+  it("renderBrief dispatch is unchanged (markdown by default, JSON for tokens)", () => {
+    const briefMd = generateBrief([entry({ id: "a" })], { ids: ["a"] });
+    expect(renderBrief(briefMd)).toBe(renderBriefMarkdown(briefMd));
+    const briefJson = generateBrief([entry({ id: "a" })], { ids: ["a"], framework: "tokens" });
+    expect(renderBrief(briefJson)).toBe(renderBriefTokens(briefJson));
+    // The two outputs are distinct shapes.
+    expect(renderBrief(briefMd)).not.toBe(renderBrief(briefJson));
   });
 });

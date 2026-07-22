@@ -95,6 +95,13 @@ eval/c2/baseline/*
 # hashes + refs (no prompt/evidence/raw content, no secrets, no private paths) —
 # verified to pass scanDurableArtifact on every build + check.
 !eval/c2/baseline/manifest.json
+# C2 Pass 3 post-baseline compatibility evaluation template (Task C4): the
+# human-authored OpenAI-vs-Claude compatibility contract for the 5 independent
+# baseline runs. Tracked because it is the canonical input shape the
+# validateBaselineCompatibility gate enforces. Like the freeze-authorization
+# template it carries only <FILL> placeholders + pinned literals — no run
+# outputs, no raw model responses, no secrets, no private paths.
+!eval/c2/baseline/compatibility-evaluation.template.json
 # C2 reviewed campaign + pricing config (Task 5): non-secret provider/model
 # pins, sampling parameters, output-token ceilings, fixed $0.50/$5 budgets,
 # and a versioned pricing table with provenance URLs + verification dates.

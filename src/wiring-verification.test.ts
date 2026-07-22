@@ -290,6 +290,18 @@ const ALLOWLIST = new Set<string>([
   // fake coupling, per the same precedent as cost-policy above.
   "shufflePackets",
   "createFileBlindMapStore",
+  // c2/baseline-compatibility.ts — validateBaselineCompatibility is the pure
+  // post-baseline contract guard: it parses the human-authored OpenAI-vs-Claude
+  // compatibility evaluation for the 5 manifest-pinned independent runs,
+  // rejects cliSynthesized:true, and set-matches the 5 refs against the expected
+  // triples (artifactId + path + sha256). Its production caller is the
+  // post-baseline compatibility gate (C2 Pass 4), an operational step run AFTER
+  // the human fills eval/c2/baseline/compatibility-evaluation.template.json —
+  // not the campaign CLI (run --paid) or the scorecards CLI. Listed here rather
+  // than wired to a placeholder caller to avoid fake coupling, per the same
+  // precedent as computeLabelAgreement / assertAgreementMatchesSubmissions /
+  // computeManifestSha256 above.
+  "validateBaselineCompatibility",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

@@ -50,6 +50,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  lstatSync,
   openSync,
   readFileSync,
   renameSync,
@@ -70,6 +71,7 @@ const caseContractsMod = await import("../dist/c2/case-contracts.js").catch(() =
 const baselineManifestMod = await import("../dist/c2/baseline-manifest.js").catch(() => null);
 const privateArtifactsMod = await import("../dist/c2/private-artifacts.js").catch(() => null);
 const readinessMod = await import("../dist/readiness/contracts.js").catch(() => null);
+const designSourceMod = await import("../dist/design-source/contracts.js").catch(() => null);
 
 const C2CaseBriefSchema = caseContractsMod?.C2CaseBriefSchema;
 const C2DecisionLabelSchema = caseContractsMod?.C2DecisionLabelSchema;
@@ -79,6 +81,7 @@ const computeManifestSha256 = baselineManifestMod?.computeManifestSha256;
 const scanDurableArtifact = privateArtifactsMod?.scanDurableArtifact;
 const canonicalJsonStringify = readinessMod?.canonicalJsonStringify;
 const sha256Hex = readinessMod?.sha256Hex;
+const DesignSourceSnapshotSchema = designSourceMod?.DesignSourceSnapshotSchema;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -253,6 +256,59 @@ async function readAllArtifacts(root) {
 // ─── Source snapshot resolution ──────────────────────────────────────────────
 
 /**
+ * Validate an existing migration snapshot before binding it into the durable
+ * baseline manifest. A matching hash proves byte identity, not that the bytes
+ * are a regular, correctly typed snapshot for this case.
+ */
+export function validateSourceSnapshotFile(snapshotPath, ref, caseId) {
+  const stat = lstatSync(snapshotPath);
+  if (stat.isSymbolicLink()) {
+    fail(`source snapshot must not be a symbolic link: ${snapshotPath}`);
+  }
+  if (!stat.isFile()) {
+    fail(`source snapshot must be a regular file: ${snapshotPath}`);
+  }
+  if (!DesignSourceSnapshotSchema) {
+    fail(
+      "DesignSourceSnapshotSchema not available — dist/design-source/contracts.js is missing or out of date. Run `npm run build` (tsc) first.",
+    );
+  }
+
+  const bytes = readFileSync(snapshotPath);
+  let raw;
+  try {
+    raw = JSON.parse(bytes.toString("utf8"));
+  } catch (cause) {
+    fail(`source snapshot is not valid JSON at ${snapshotPath}: ${cause.message}`);
+  }
+  const parsed = DesignSourceSnapshotSchema.safeParse(raw);
+  if (!parsed.success) {
+    fail(
+      `source snapshot fails DesignSourceSnapshotSchema at ${snapshotPath}: `
+      + JSON.stringify(parsed.error.issues.map((i) => i.path.join(".") + ": " + i.message)),
+    );
+  }
+  if (parsed.data.artifactId !== ref.artifactId) {
+    fail(
+      `source snapshot artifactId "${parsed.data.artifactId}" does not match brief ref artifactId "${ref.artifactId}"`,
+    );
+  }
+  if (parsed.data.projectId !== caseId) {
+    fail(
+      `source snapshot projectId "${parsed.data.projectId}" does not match brief caseId "${caseId}"`,
+    );
+  }
+
+  const actualSha = sha256Hex(bytes);
+  if (actualSha !== ref.sha256) {
+    fail(
+      `sourceSnapshotRef.sha256 (${ref.sha256.slice(0, 12)}…) does not match `
+      + `the actual file hash (${actualSha.slice(0, 12)}…) at ${ref.path}`,
+    );
+  }
+}
+
+/**
  * Resolve the sourceSnapshot ref for a brief.
  *
  * The baseline manifest pins the brief's DECLARED sourceSnapshotRef — it does
@@ -268,7 +324,7 @@ async function readAllArtifacts(root) {
  * For non-migration briefs: sourceSnapshotRef must be null/absent and the
  * manifest's sourceSnapshot is null.
  */
-function resolveSourceSnapshot(brief, opts = {}, root = ".", stagedSections = []) {
+export function resolveSourceSnapshot(brief, opts = {}, root = ".", stagedSections = []) {
   const ref = brief.parsed.sourceSnapshotRef;
   if (brief.parsed.family === "migration") {
     if (!ref || ref.artifactType !== "design-source-snapshot") {
@@ -285,14 +341,11 @@ function resolveSourceSnapshot(brief, opts = {}, root = ".", stagedSections = []
     // bytes. When it doesn't exist yet (placeholder sha), warn loudly so the
     // gap is visible — the manifest validates but execution will fail closed.
     const snapshotPath = resolve(root, ref.path);
-    if (existsSync(snapshotPath)) {
-      const actualSha = sha256Hex(readFileSync(snapshotPath));
-      if (actualSha !== ref.sha256) {
-        fail(
-          `migration brief ${brief.name} sourceSnapshotRef.sha256 (${ref.sha256.slice(0, 12)}…) ` +
-          `does not match the actual file hash (${actualSha.slice(0, 12)}…) at ${ref.path}`,
-        );
-      }
+    // lstat does not follow symlinks, so even a dangling symlink is treated as
+    // an existing forbidden entry rather than as an authoring gap.
+    const snapshotStat = lstatSync(snapshotPath, { throwIfNoEntry: false });
+    if (snapshotStat !== undefined) {
+      validateSourceSnapshotFile(snapshotPath, ref, brief.parsed.caseId);
     } else if (!opts.allowMissingSnapshots) {
       fail(
         `migration brief ${brief.name} references snapshot at ${ref.path} but the file does not exist. ` +

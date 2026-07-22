@@ -11,15 +11,16 @@
  *
  * Run: npx tsx scripts/validate-c2-baseline-cases.mts
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   C2CaseBriefSchema,
   C2DecisionLabelSchema,
   C2GoldEvidenceDescriptorSchema,
 } from "../src/c2/case-contracts.ts";
+import { DesignSourceSnapshotSchema } from "../src/design-source/contracts.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = join(__dirname, "..");
@@ -28,7 +29,7 @@ const LABELS_DIR = join(REPO, "eval/c2/baseline/labels");
 const EVIDENCE_DIR = join(REPO, "eval/c2/baseline/evidence");
 
 /** RFC 6901 JSON pointer resolver. */
-function resolvePointer(doc: unknown, pointer: string): unknown {
+export function resolvePointer(doc: unknown, pointer: string): unknown {
   if (pointer === "") return doc;
   if (!pointer.startsWith("/")) throw new Error(`pointer must start with /: ${pointer}`);
   let current: unknown = doc;
@@ -37,7 +38,14 @@ function resolvePointer(doc: unknown, pointer: string): unknown {
     if (current === null || typeof current !== "object") {
       throw new Error(`pointer ${pointer} cannot resolve segment "${key}" on non-object`);
     }
-    const indexed = Array.isArray(current) ? parseInt(key, 10) : key;
+    let indexed: string | number = key;
+    if (Array.isArray(current)) {
+      const index = Number(key);
+      if (!Number.isInteger(index) || index < 0) {
+        throw new Error(`pointer ${pointer} has invalid array index "${key}"`);
+      }
+      indexed = index;
+    }
     current = (current as Record<string | number, unknown>)[indexed];
     if (current === undefined) {
       throw new Error(`pointer ${pointer} segment "${key}" not found`);
@@ -46,6 +54,20 @@ function resolvePointer(doc: unknown, pointer: string): unknown {
   return current;
 }
 
+export function sourceDocumentForEvidence(
+  sourceArtifactId: string,
+  brief: { artifactId: string },
+  snapshot: { artifactId: string } | null,
+): unknown {
+  if (sourceArtifactId === brief.artifactId) return brief;
+  if (snapshot && sourceArtifactId === snapshot.artifactId) return snapshot;
+  throw new Error(
+    `source artifact ${sourceArtifactId} is neither the bound brief (${brief.artifactId}) `
+    + `nor the bound source snapshot (${snapshot?.artifactId ?? "none"})`,
+  );
+}
+
+export function runBaselineCaseValidation(): number {
 let failures = 0;
 const caseIds = readdirSync(BRIEFS_DIR)
   .filter((f) => f.endsWith(".json"))
@@ -91,6 +113,29 @@ for (const caseId of caseIds) {
   const b = briefParsed.data!;
   const l = labelParsed.data!;
   const e = evidenceParsed.data!;
+
+  let sourceSnapshot: ReturnType<typeof DesignSourceSnapshotSchema.parse> | null = null;
+  if (b.sourceSnapshotRef !== null) {
+    const snapshotPath = join(REPO, b.sourceSnapshotRef.path);
+    if (existsSync(snapshotPath)) {
+      try {
+        sourceSnapshot = DesignSourceSnapshotSchema.parse(
+          JSON.parse(readFileSync(snapshotPath, "utf-8")),
+        );
+      } catch (err) {
+        console.error(`${prefix} FAIL source snapshot schema: ${err instanceof Error ? err.message.slice(0, 160) : String(err)}`);
+        ok = false;
+      }
+      if (sourceSnapshot && sourceSnapshot.artifactId !== b.sourceSnapshotRef.artifactId) {
+        console.error(`${prefix} FAIL source snapshot artifactId does not match brief sourceSnapshotRef`);
+        ok = false;
+      }
+      if (sourceSnapshot && sourceSnapshot.projectId !== b.caseId) {
+        console.error(`${prefix} FAIL source snapshot projectId does not match brief caseId`);
+        ok = false;
+      }
+    }
+  }
 
   // caseId agreement.
   if (b.caseId !== caseId || l.caseId !== caseId || e.caseId !== caseId) {
@@ -140,9 +185,17 @@ for (const caseId of caseIds) {
 
   // Every JSON pointer in every descriptor record resolves against the brief.
   for (const rec of e.records) {
+    let sourceDoc: unknown;
+    try {
+      sourceDoc = sourceDocumentForEvidence(rec.sourceArtifactId, b, sourceSnapshot);
+    } catch (err) {
+      console.error(`${prefix} FAIL record "${rec.id}" source binding: ${err instanceof Error ? err.message : String(err)}`);
+      ok = false;
+      continue;
+    }
     for (const ptr of rec.jsonPointers) {
       try {
-        resolvePointer(b, ptr);
+        resolvePointer(sourceDoc, ptr);
       } catch (err) {
         console.error(`${prefix} FAIL pointer "${ptr}" in record "${rec.id}" does not resolve: ${err instanceof Error ? err.message : String(err)}`);
         ok = false;
@@ -170,7 +223,14 @@ for (const caseId of caseIds) {
 console.log("");
 if (failures === 0) {
   console.log(`All ${caseIds.length} baseline case packages passed schema + integrity validation.`);
+  return 0;
 } else {
   console.error(`${failures} case package(s) failed validation.`);
-  process.exit(1);
+  return 1;
+}
+}
+
+const isMain = import.meta.url === pathToFileURL(process.argv[1] ?? "").href;
+if (isMain) {
+  process.exitCode = runBaselineCaseValidation();
 }

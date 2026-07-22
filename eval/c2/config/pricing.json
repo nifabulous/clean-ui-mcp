@@ -6,20 +6,20 @@
   "entries": [
     {
       "provider": "openai",
-      "model": "gpt-5.4-mini",
+      "model": "gpt-5.4-mini-2026-03-17",
       "inputTokenPriceUsdPerMillion": 0.000001,
       "outputTokenPriceUsdPerMillion": 0.000001,
       "effectiveDate": "2026-07-01",
-      "verifiedAt": "2026-07-18T00:00:00.000Z",
+      "verifiedAt": "2026-07-22T00:00:00.000Z",
       "sourceUrl": "https://platform.openai.com/docs/pricing"
     },
     {
       "provider": "claude",
-      "model": "claude-sonnet-4-5",
+      "model": "claude-sonnet-5",
       "inputTokenPriceUsdPerMillion": 0.000001,
       "outputTokenPriceUsdPerMillion": 0.000001,
       "effectiveDate": "2026-07-01",
-      "verifiedAt": "2026-07-18T00:00:00.000Z",
+      "verifiedAt": "2026-07-22T00:00:00.000Z",
       "sourceUrl": "https://www.anthropic.com/pricing"
     }
   ]

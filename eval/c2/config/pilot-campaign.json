@@ -17,7 +17,7 @@
     "provider": "claude",
     "model": "claude-sonnet-5",
     "apiKeyEnv": "ANTHROPIC_API_KEY",
-    "maxOutputTokens": 4096,
+    "maxOutputTokens": 8192,
     "samplingParameters": {
       "temperature": 0.2,
       "top_p": 0.95

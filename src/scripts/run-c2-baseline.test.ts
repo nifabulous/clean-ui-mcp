@@ -45,8 +45,11 @@ import {
   renderBaselinePreflight,
   runClosureSubcommand,
   prepareBaselineConditions,
+  buildBaselineExecutionMatrix,
+  c2BaselineRunId,
   type BaselinePreflightInput,
   type RunClosureSubcommandResult,
+  type BaselineExecutionSlot,
 } from "./run-c2-baseline.js";
 import {
   C2BaselineManifestSchema,
@@ -380,7 +383,142 @@ describe("computeBaselinePreflight — preflight math", () => {
     expect(text).toMatch(/\(cap \$5\.00/);
     expect(text).toMatch(/Per-run ceiling: \$0\.50 \(from frozen calibration\)/);
   });
+
+  it("the preflight echoes the 5 spec-locked independent case IDs", () => {
+    const pf = computeBaselinePreflight({
+      ...baseInput,
+      independentCaseIds: [
+        "stablecoin-home",
+        "finance-news-story-detail",
+        "public-marketing-migration",
+        "safety-conflicting-evidence",
+        "named-inspiration-safety",
+      ],
+    });
+    expect(pf.independentCaseIds).toHaveLength(5);
+    expect(pf.independentCaseIds).toContain("stablecoin-home");
+    const text = renderBaselinePreflight(pf);
+    expect(text).toMatch(/Independent IDs: .*stablecoin-home/);
+    expect(text).toMatch(/named-inspiration-safety/);
+  });
 });
+
+// ---------------------------------------------------------------------------
+// IN-PROCESS: buildBaselineExecutionMatrix + c2BaselineRunId (Task C2)
+//
+// The paid execution loop's load-bearing spec logic is the MATRIX CONSTRUCTION:
+// exactly 75 primary + 5 independent slots, the independent slots are the 5
+// spec-locked IDs, the run IDs are namespaced to avoid collision with pilot
+// runs. These tests pin that logic WITHOUT making any provider call — the
+// execution loop itself reuses executeC2Run (tested by harness.test.ts), so
+// we only need to prove the matrix shape, the namespacing, and the condition
+// input binding.
+// ---------------------------------------------------------------------------
+
+describe("buildBaselineExecutionMatrix — 75 primary + 5 independent matrix", () => {
+  const INDEPENDENT_IDS = [
+    "stablecoin-home",
+    "finance-news-story-detail",
+    "public-marketing-migration",
+    "safety-conflicting-evidence",
+    "named-inspiration-safety",
+  ];
+
+  it("produces exactly 75 primary + 5 independent = 80 slots", () => {
+    const manifest = C2BaselineManifestSchema.parse(build25CaseManifest());
+    const slots = buildBaselineExecutionMatrix(manifest);
+    expect(slots).toHaveLength(80);
+    const primary = slots.filter((s) => s.laneLabel === "primary");
+    const independent = slots.filter((s) => s.laneLabel === "independent");
+    expect(primary).toHaveLength(75);
+    expect(independent).toHaveLength(5);
+  });
+
+  it("the 75 primary slots cover every case × every primary condition", () => {
+    const manifest = C2BaselineManifestSchema.parse(build25CaseManifest());
+    const slots = buildBaselineExecutionMatrix(manifest);
+    const primary = slots.filter((s) => s.laneLabel === "primary");
+    // Every case appears exactly 3 times (brief-only, current-grounded, gold-evidence).
+    const seen = new Map<string, Set<string>>();
+    for (const slot of primary) {
+      const conds = seen.get(slot.caseId) ?? new Set<string>();
+      conds.add(slot.condition);
+      seen.set(slot.caseId, conds);
+    }
+    expect(seen.size).toBe(25);
+    for (const [, conds] of seen) {
+      expect(conds).toEqual(new Set(["brief-only", "current-grounded", "gold-evidence"]));
+    }
+  });
+
+  it("the 5 independent slots are exactly the manifest-pinned independent IDs × current-grounded", () => {
+    const manifest = C2BaselineManifestSchema.parse(build25CaseManifest());
+    const slots = buildBaselineExecutionMatrix(manifest);
+    const independent = slots.filter((s) => s.laneLabel === "independent");
+    expect(independent.map((s) => s.caseId).sort()).toEqual([...INDEPENDENT_IDS].sort());
+    for (const slot of independent) {
+      expect(slot.condition).toBe("current-grounded");
+    }
+  });
+
+  it("every run ID is namespaced with 'baseline' and the lane label to avoid pilot collisions", () => {
+    const manifest = C2BaselineManifestSchema.parse(build25CaseManifest());
+    const slots = buildBaselineExecutionMatrix(manifest);
+    for (const slot of slots) {
+      // Format: c2-run-baseline-{caseId}-{condition}-{laneLabel}-1
+      expect(slot.runId).toMatch(/^c2-run-baseline-/);
+      expect(slot.runId).toContain(`-${slot.laneLabel}-1`);
+      expect(slot.runId).toContain(slot.caseId);
+      expect(slot.runId).toContain(slot.condition);
+      // Must NOT collide with pilot IDs (which start c2-run- without 'baseline').
+      expect(slot.runId.startsWith("c2-run-") && !slot.runId.startsWith("c2-run-baseline-")).toBe(false);
+    }
+  });
+
+  it("every slot carries its conditionInputPath under the baseline condition-inputs root", () => {
+    const manifest = C2BaselineManifestSchema.parse(build25CaseManifest());
+    const slots = buildBaselineExecutionMatrix(manifest);
+    for (const slot of slots) {
+      // The prepared condition input lives at
+      // <privateRoot>/c2/baseline/condition-inputs/<caseId>-<condition>.json
+      expect(slot.conditionInputPath).toContain("c2/baseline/condition-inputs");
+      expect(slot.conditionInputPath).toContain(`${slot.caseId}-${slot.condition}.json`);
+    }
+  });
+
+  it("emits the primary lane before the independent lane (execution order)", () => {
+    const manifest = C2BaselineManifestSchema.parse(build25CaseManifest());
+    const slots = buildBaselineExecutionMatrix(manifest);
+    const firstIndependentIdx = slots.findIndex((s) => s.laneLabel === "independent");
+    const lastPrimaryIdx = slots.map((s) => s.laneLabel).lastIndexOf("primary");
+    expect(firstIndependentIdx).toBeGreaterThan(lastPrimaryIdx);
+  });
+
+  it("all 80 run IDs are unique (no slot collision)", () => {
+    const manifest = C2BaselineManifestSchema.parse(build25CaseManifest());
+    const slots = buildBaselineExecutionMatrix(manifest);
+    const ids = slots.map((s) => s.runId);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("c2BaselineRunId — baseline-namespaced run ID", () => {
+  it("namespaces with 'baseline' + lane label + attempt", () => {
+    expect(c2BaselineRunId("stablecoin-home", "brief-only", "primary", 1))
+      .toBe("c2-run-baseline-stablecoin-home-brief-only-primary-1");
+    expect(c2BaselineRunId("safety-conflicting-evidence", "current-grounded", "independent", 1))
+      .toBe("c2-run-baseline-safety-conflicting-evidence-current-grounded-independent-1");
+  });
+
+  it("cannot collide with the pilot's c2RunId output", () => {
+    // Pilot format: c2-run-{caseId}-{condition}-{laneLabel}-{n} (no 'baseline').
+    const baseline = c2BaselineRunId("stablecoin-home", "current-grounded", "primary", 1);
+    const pilot = `c2-run-stablecoin-home-current-grounded-primary-1`;
+    expect(baseline).not.toBe(pilot);
+    expect(baseline.startsWith(pilot)).toBe(false);
+  });
+});
+
 
 // ---------------------------------------------------------------------------
 // IN-PROCESS: runClosureSubcommand — consumes evaluateC2Closure
@@ -1287,10 +1425,8 @@ describe.skipIf(!existsSync(CLI_PATH))(
     });
 
     it("run --paid returns exit 1 (no silent success without execution)", () => {
-      // Finding #2: run --paid must not return 0 without executing. Until the
-      // execution loop is wired, it returns exit 1 regardless of whether the
-      // manifest passes validation. With dummy files, the paid path exits at
-      // validation (exit 1) or at NOT IMPLEMENTED (exit 1). Either way: NOT 0.
+      // run --paid must not return 0 without executing. With dummy files the
+      // paid path exits at validation (exit 1) before any provider call.
       const dir = mkdtempSync(join(tmpdir(), "c2-baseline-run-paid-"));
       try {
         const manifestPath = join(dir, "manifest.json");
@@ -1309,6 +1445,135 @@ describe.skipIf(!existsSync(CLI_PATH))(
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    it("run --paid fails closed (exit 1, zero egress) when prepared condition inputs are missing", () => {
+      // With a schema-valid manifest + hash-bound calibration but NO prepared
+      // condition inputs under .c2-private/c2/baseline/condition-inputs/, the
+      // paid path must fail closed with a specific error naming the missing
+      // input file BEFORE any provider call. This is the gate that makes
+      // "prepare first, then run" a hard precondition.
+      const dir = mkdtempSync(join(tmpdir(), "c2-baseline-paid-no-inputs-"));
+      const privateRoot = mkdtempSync(join(tmpdir(), "c2-baseline-paid-no-inputs-priv-"));
+      try {
+        // Write the 25-case fixture (briefs/labels/evidence) so the manifest is
+        // schema-valid and the calibration's config/pricing refs can point at
+        // real files. The fixture builds the manifest + a calibration whose
+        // campaignConfigRef / pricingTableRef point at eval/c2/config/* paths
+        // we author here.
+        writePrepareFixture(dir);
+        mkdirSync(join(dir, "eval/c2/config"), { recursive: true });
+        const campaignBytes = Buffer.from(canonicalJsonStringify({
+          schemaVersion: "1.0",
+          artifactType: "c2-campaign-config",
+          artifactId: "c2-campaign-config-test-v1",
+          primary: {
+            provider: "openai",
+            model: "gpt-test",
+            apiKeyEnv: "OPENAI_API_KEY",
+            maxOutputTokens: 4096,
+            samplingParameters: { temperature: 0.2 },
+          },
+          independent: {
+            provider: "claude",
+            model: "claude-test",
+            apiKeyEnv: "ANTHROPIC_API_KEY",
+            maxOutputTokens: 4096,
+            samplingParameters: { temperature: 0.2 },
+          },
+          maxRunCostUsd: 0.5,
+          maxCampaignCostUsd: 5,
+          maxAttempts: 1,
+          cases: ["stablecoin-home"],
+          conditions: ["brief-only", "current-grounded", "gold-evidence"],
+          independentConditions: ["current-grounded"],
+          plannedRunCount: 12,
+          retrievalMode: "keyword-only",
+        }), "utf-8");
+        const campaignPath = join(dir, "eval/c2/config/pilot-campaign.json");
+        writeFileSync(campaignPath, campaignBytes);
+        const pricingBytes = Buffer.from(canonicalJsonStringify({
+          schemaVersion: "1.0",
+          artifactType: "c2-pricing-table",
+          artifactId: "c2-pricing-test-v1",
+          campaignStartsAt: "2026-07-21T00:00:00.000Z",
+          entries: [
+            {
+              provider: "openai",
+              model: "gpt-test",
+              inputTokenPriceUsdPerMillion: 1,
+              outputTokenPriceUsdPerMillion: 2,
+              effectiveDate: "2026-07-21",
+              verifiedAt: "2026-07-21T00:00:00.000Z",
+              sourceUrl: "https://example.com/pricing",
+            },
+            {
+              provider: "claude",
+              model: "claude-test",
+              inputTokenPriceUsdPerMillion: 1,
+              outputTokenPriceUsdPerMillion: 2,
+              effectiveDate: "2026-07-21",
+              verifiedAt: "2026-07-21T00:00:00.000Z",
+              sourceUrl: "https://example.com/pricing",
+            },
+          ],
+        }), "utf-8");
+        const pricingPath = join(dir, "eval/c2/config/pricing.json");
+        writeFileSync(pricingPath, pricingBytes);
+        const campaignSha = sha256Hex(campaignBytes);
+        const pricingSha = sha256Hex(pricingBytes);
+
+        // Build the calibration with real config/pricing refs + a real
+        // calibration self-hash that the manifest will pin.
+        const calibration = buildFrozenCalibration();
+        (calibration as { campaignConfigRef: { path: string; sha256: string } }).campaignConfigRef = {
+          artifactId: "c2-campaign-config-test-v1",
+          path: "eval/c2/config/pilot-campaign.json",
+          sha256: campaignSha,
+        };
+        (calibration as { pricingTableRef: { path: string; sha256: string } }).pricingTableRef = {
+          artifactId: "c2-pricing-test-v1",
+          path: "eval/c2/config/pricing.json",
+          sha256: pricingSha,
+        };
+        const calibrationBytes = Buffer.from(canonicalJsonStringify(calibration), "utf-8");
+        const calibrationSha = sha256Hex(calibrationBytes);
+        const calibrationPath = join(dir, "frozen.json");
+        writeFileSync(calibrationPath, calibrationBytes);
+
+        // Wire the manifest's frozenCalibrationRef to the calibration's real sha.
+        const manifestPath = join(dir, "manifest.json");
+        const manifestRaw = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+        (manifestRaw as { frozenCalibrationRef: { sha256: string } }).frozenCalibrationRef = {
+          artifactId: "c2-frozen-calibration-test-v1",
+          path: "eval/c2/calibration/frozen.json",
+          sha256: calibrationSha,
+        };
+        manifestRaw.manifestSha256 = computeManifestSha256(
+          manifestRaw as Parameters<typeof computeManifestSha256>[0],
+        );
+        writeFileSync(manifestPath, canonicalJsonStringify(manifestRaw));
+
+        // No condition inputs prepared under privateRoot — the paid path must
+        // fail closed before any provider call.
+        const res = spawnCli([
+          "run",
+          "--manifest", manifestPath,
+          "--calibration", calibrationPath,
+          "--private-root", privateRoot,
+          "--paid",
+        ], { cwd: dir });
+        expect(res.code).toBe(1);
+        expectZeroEgress(res);
+        // The error must name the missing condition-input file.
+        const combined = `${res.stdout}\n${res.stderr}`.toLowerCase();
+        expect(combined).toMatch(/condition input|not prepared|missing|prepare/i);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(privateRoot, { recursive: true, force: true });
+      }
+    });
+
+
 
     it("prepare returns exit 1 on an invalid manifest (fail-closed, zero egress)", () => {
       // The prepare subcommand must not return 0 against an invalid manifest.

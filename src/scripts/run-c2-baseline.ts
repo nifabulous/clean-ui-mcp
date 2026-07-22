@@ -8,11 +8,18 @@
  *   - `sha256Hex` / `canonicalJsonStringify` (readiness hashing helpers),
  *   - the no-egress audit pattern (`C2_NETWORK_AUDIT` + `appendFileSync`),
  *   - `evaluateC2Closure` (Task B2's pure closure evaluator),
+ *   - `executeC2Run` (the harness; the `run --paid` loop calls it directly),
+ *   - the blinded-packet generator (the `scorecards` subcommand reuses it),
  *   - the entry-point guard (`import.meta.url === ...`).
  *
- * The network-capable execution path (`run --paid`) defers to the pilot's
- * `executeC2Run` harness rather than duplicating it; the actual 80-run loop
- * reuses the pilot's `c2:pilot run` semantics. Nothing here forks the harness.
+ * The network-capable execution path (`run --paid`) drives the 80-run matrix
+ * (75 primary + 5 independent) by calling `executeC2Run` for every slot. It
+ * does NOT duplicate the harness — prompt building, provider calls, scoring,
+ * cost accounting, audit logging, and immutable writes all flow through
+ * `executeC2Run`. The matrix comes EXCLUSIVELY from
+ * `C2BaselineManifest.executionMatrix`; model/pricing config comes from the
+ * frozen calibration's `campaignConfigRef` + `pricingTableRef` (both
+ * hash-verified before any provider call).
  *
  * Subcommands:
  *   validate   — offline. Verify the baseline manifest + frozen calibration
@@ -21,7 +28,8 @@
  *   prepare    — offline. Resolve every condition input (reuses the resolver).
  *   run        — the ONLY network-capable command. Without --paid it prints the
  *                preflight and exits; with --paid it executes the 80-run matrix.
- *   scorecards — offline. Stub for blinded-packet generation (Pass 2 workflow).
+ *   scorecards — offline. Generate metadata-blinded review packets from the
+ *                successful baseline runs (reuses the Pass 2 packet generator).
  *   closure    — offline. Consume `evaluateC2Closure` against committed runs +
  *                scorecards and write a closure report.
  *
@@ -41,6 +49,7 @@
 import { parseArgs } from "node:util";
 import { readFileSync, existsSync, appendFileSync, readdirSync } from "node:fs";
 import { resolve, join, isAbsolute, dirname, basename } from "node:path";
+import { execSync } from "node:child_process";
 
 import {
   C2BaselineManifestSchema,
@@ -48,7 +57,16 @@ import {
   type C2BaselineManifest,
   type C2BaselineCaseRef,
 } from "../c2/baseline-manifest.js";
-import { C2FrozenCalibrationSchema, type C2FrozenCalibration } from "../c2/condition-contracts.js";
+import {
+  C2FrozenCalibrationSchema,
+  C2CampaignConfigSchema,
+  C2PricingTableSchema,
+  C2ConditionInputSchema,
+  type C2FrozenCalibration,
+  type C2CampaignConfig,
+  type C2PricingTable,
+  type C2ConditionInput,
+} from "../c2/condition-contracts.js";
 import {
   C2CaseBriefSchema,
   C2DecisionLabelSchema,
@@ -72,14 +90,15 @@ import {
   type BoundaryScanConfig,
 } from "../c2/private-artifacts.js";
 import { PrivateCorpusReader, type CorpusReader } from "../corpus-reader.js";
-// NOTE: `logicalConditionInputPath` (from ./run-c2-pilot.js) is the helper that
-// normalizes a private condition-input execution path into the logical
-// `eval/c2/condition-inputs/<file>` form recorded in durable run metadata. It
-// is a RUN-time concern (the `run` subcommand, Task C2, builds the
-// `conditionInputRef` and normalizes its path there). `prepare` only writes the
-// private descriptor + payload; it does not produce a durable ref, so the
-// helper is not imported here. Reusing it at run time keeps the normalization
-// rule in one place (the pilot CLI).
+import { findPricingEntry } from "../c2/cost-policy.js";
+import {
+  executeC2Run,
+  type CampaignState,
+  type C2RunStore,
+  type ExecuteC2RunRequest,
+} from "../c2/harness.js";
+import { callTextModelWithMetadata, type Provider } from "../tagger.js";
+
 
 // ---------------------------------------------------------------------------
 // Usage
@@ -102,7 +121,8 @@ Subcommands:
                               the preflight (planned runs, forecast cost) and
                               exits. With --paid executes the 80-run matrix.
   scorecards --manifest <manifest.json> --calibration <frozen.json> --runs <dir>
-                              Offline. Stub for blinded-packet generation.
+                              Offline. Generate metadata-blinded review packets
+                              from the successful baseline runs.
   closure    --manifest <manifest.json> --calibration <frozen.json>
               --runs <dir> --scorecards <dir>
                               Offline. Evaluate the 9 closure checks (C1-C9)
@@ -199,6 +219,144 @@ function durableBoundaryScan(): BoundaryScanConfig {
     secretEnvNames: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
   };
 }
+
+/**
+ * Resolve the repo's harness git sha for manifest binding. Falls back to a
+ * 40-zero literal when git is unavailable (e.g. in a shallow checkout).
+ */
+function harnessGitSha(): string {
+  try {
+    return execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim().slice(0, 40);
+  } catch {
+    return "0".repeat(40);
+  }
+}
+
+/**
+ * Build the pinned model endpoint: resolve the apiKey from the env-var name
+ * the request carries. The paid path's credential preflight already guarantees
+ * the env var is set and non-empty for both lanes before any provider call.
+ */
+function buildModelEndpoint(req: {
+  provider: Provider;
+  model: string;
+  apiKeyEnv: string;
+}): { provider: Provider; model: string; apiKey: string } {
+  return {
+    provider: req.provider,
+    model: req.model,
+    apiKey: process.env[req.apiKeyEnv] ?? "",
+  };
+}
+
+/**
+ * Normalize a private baseline condition-input execution path into the logical
+ * `eval/c2/condition-inputs/<file>` form recorded in durable run metadata. The
+ * descriptor stays private on disk; only its SHA-256 binds the run.
+ *
+ * Mirrors the pilot's `logicalConditionInputPath` but handles the baseline's
+ * distinct `c2/baseline/condition-inputs/` subdir. The logical durable path is
+ * the SAME as the pilot's (`eval/c2/condition-inputs/<file>`) so the closure
+ * evaluator and scorecard machinery treat baseline + pilot runs uniformly.
+ */
+function logicalBaselineConditionInputPath(executionPath: string): string {
+  const normalized = executionPath.replaceAll("\\", "/");
+  const marker = "/c2/baseline/condition-inputs/";
+  const markerIndex = normalized.lastIndexOf(marker);
+  if (markerIndex >= 0) {
+    const fileName = normalized.slice(markerIndex + marker.length);
+    if (fileName.length > 0 && !fileName.includes("/")) {
+      return `eval/c2/condition-inputs/${fileName}`;
+    }
+  }
+  // Accept an already-logical path as a passthrough.
+  if (normalized.startsWith("eval/c2/condition-inputs/")) {
+    return normalized;
+  }
+  throw new Error(
+    `[c2-baseline-run] cannot normalize condition-input path: ${executionPath}`,
+  );
+}
+
+/** Repo-relative path from an absolute-or-relative path (best-effort). */
+function relPathFromRepo(absOrRel: string): string {
+  if (!isAbsolute(absOrRel)) return absOrRel;
+  return absOrRel.replace(process.cwd() + "/", "");
+}
+
+/**
+ * Load a prepared condition input from disk, validate it through the Zod schema
+ * (NOT a TypeScript cast), and verify the recomputed `inputSha256` matches the
+ * persisted value before returning. Mirrors the pilot's
+ * `loadValidatedConditionInput` exactly. The condition-input file lives under
+ * the gitignored private tree, so the threat surface is operator/attacker
+ * editing it between `prepare` and `run`; the hash check catches any mutation.
+ */
+function loadValidatedConditionInput(conditionInputPath: string): C2ConditionInput {
+  const raw = JSON.parse(readFileSync(conditionInputPath, "utf-8"));
+  const conditionInput = C2ConditionInputSchema.parse(raw) as C2ConditionInput;
+  const { inputSha256: _omit, ...rest } = conditionInput;
+  void _omit;
+  const recomputed = sha256Hex(Buffer.from(canonicalJsonStringify(rest), "utf-8"));
+  if (recomputed !== conditionInput.inputSha256) {
+    throw new Error(
+      "condition input hash mismatch: the loaded inputSha256 does not match the recomputed hash. "
+        + "The condition input file may have been corrupted or tampered.",
+    );
+  }
+  return conditionInput;
+}
+
+/** Read the evidence content map from a private condition-input payload file. */
+function loadEvidenceContent(privatePayloadPath: string): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!existsSync(privatePayloadPath)) return map;
+  try {
+    const payload = JSON.parse(readFileSync(privatePayloadPath, "utf-8")) as {
+      evidenceContent?: Record<string, string>;
+    };
+    if (payload.evidenceContent) {
+      for (const [id, content] of Object.entries(payload.evidenceContent)) {
+        map.set(id, content);
+      }
+    }
+  } catch {
+    // best effort — brief-only has no evidence content
+  }
+  return map;
+}
+
+/**
+ * Build the baseline's private + durable store. Mirrors the pilot's
+ * `makeFilesystemStore` with the baseline's private subdir
+ * (`c2/baseline/runs/<runId>`) and the baseline's durable runs root
+ * (`eval/c2/baseline/runs/<runId>`).
+ */
+function makeBaselineStore(privateRoot: string, runsRoot: string): C2RunStore {
+  return {
+    async writePrivate(relPath, bytes) {
+      await writePrivateArtifact(privateRoot, relPath, bytes);
+    },
+    async writeDurableManifest(runId, manifestJson) {
+      await writePrivateArtifact(
+        runsRoot,
+        join(runId, "manifest.json"),
+        Buffer.from(manifestJson, "utf-8"),
+      );
+    },
+    async writeDurableScore(runId, scoreJson) {
+      await writePrivateArtifact(
+        runsRoot,
+        join(runId, "score.json"),
+        Buffer.from(scoreJson, "utf-8"),
+      );
+    },
+    hasTerminalRun(runId) {
+      return existsSync(join(runsRoot, runId, "manifest.json"));
+    },
+  };
+}
+
 
 const DEFAULT_BASELINE_DIR = "eval/c2/baseline";
 const DEFAULT_CALIBRATION_DIR = "eval/c2/calibration";
@@ -340,6 +498,13 @@ export interface BaselinePreflightInput {
   maxRunCostUsd: number;
   /** Campaign-wide cost cap from the frozen calibration. */
   maxCampaignCostUsd: number;
+  /**
+   * The 5 spec-locked independent case IDs (from
+   * `manifest.executionMatrix.independentCaseIds`). Optional: when omitted the
+   * preflight reports the canonical constant set; when provided it is echoed
+   * in the report so an operator can verify the manifest pins the right cases.
+   */
+  independentCaseIds?: readonly string[];
 }
 
 export interface BaselinePreflight {
@@ -355,6 +520,8 @@ export interface BaselinePreflight {
   /** (cap - forecast) / cap, clamped to >= 0. */
   headroomPct: number;
   perRunCeilingUsd: number;
+  /** The 5 spec-locked independent case IDs the matrix will run. */
+  independentCaseIds: readonly string[];
 }
 
 /** Fixed baseline execution matrix (15 + 5 + 5 = 25 cases). */
@@ -362,6 +529,15 @@ const PRIMARY_CASE_COUNT = 25;
 const PRIMARY_CONDITION_COUNT = 3; // brief-only, current-grounded, gold-evidence
 const INDEPENDENT_CASE_COUNT = 5; // spec-locked
 const INDEPENDENT_CONDITION_COUNT = 1; // current-grounded
+
+/** The 5 spec-locked independent case IDs (mirrors the manifest schema). */
+const CANONICAL_INDEPENDENT_CASE_IDS = [
+  "stablecoin-home",
+  "finance-news-story-detail",
+  "public-marketing-migration",
+  "safety-conflicting-evidence",
+  "named-inspiration-safety",
+] as const;
 
 /**
  * Compute the preflight from the frozen calibration's thresholds. Pure math —
@@ -390,6 +566,7 @@ export function computeBaselinePreflight(input: BaselinePreflightInput): Baselin
     campaignCapUsd: input.maxCampaignCostUsd,
     headroomPct,
     perRunCeilingUsd: input.maxRunCostUsd,
+    independentCaseIds: input.independentCaseIds ?? CANONICAL_INDEPENDENT_CASE_IDS,
   };
 }
 
@@ -402,6 +579,7 @@ export function renderBaselinePreflight(pf: BaselinePreflight): string {
     `Calibration: ${pf.calibrationPath} (sha256=...${pf.calibrationSha.slice(-12)})`,
     `Primary runs: ${PRIMARY_CASE_COUNT} cases × ${PRIMARY_CONDITION_COUNT} conditions = ${pf.primaryRuns} runs`,
     `Independent runs: ${INDEPENDENT_CASE_COUNT} cases × current-grounded = ${pf.independentRuns} runs`,
+    `Independent IDs: ${pf.independentCaseIds.join(", ")}`,
     `Total planned runs: ${pf.totalPlannedRuns}`,
     `Forecast cost: $${pf.forecastCostUsd.toFixed(4)} (cap $${pf.campaignCapUsd.toFixed(2)}, headroom ${headroomPctStr}%)`,
     `Per-run ceiling: $${pf.perRunCeilingUsd.toFixed(2)} (from frozen calibration)`,
@@ -410,6 +588,142 @@ export function renderBaselinePreflight(pf: BaselinePreflight): string {
 
 // (renderBaselinePreflight above is the canonical renderer; the CLI calls it
 // directly. No `withRender` augmentation — keep the preflight object plain.)
+
+// ---------------------------------------------------------------------------
+// Execution matrix construction (Task C2).
+//
+// The paid execution loop's load-bearing spec logic is the MATRIX CONSTRUCTION:
+// exactly 75 primary slots (25 cases × 3 conditions) + 5 independent slots (5
+// spec-locked cases × current-grounded), drawn EXCLUSIVELY from
+// `C2BaselineManifest.executionMatrix`. The run IDs are namespaced with
+// `baseline` so they cannot collide with pilot run IDs (which would otherwise
+// shadow a baseline run as "already terminal" in a shared runs directory).
+//
+// `buildBaselineExecutionMatrix` is PURE: it takes the validated manifest and
+// returns the ordered list of slots. The actual execution loop (the `run`
+// subcommand) wires each slot into `executeC2Run`, but the matrix shape — the
+// part the spec freezes — is testable here without any provider call.
+// ---------------------------------------------------------------------------
+
+/** Condition-inputs subdirectory under the private root (matches `prepare`). */
+const BASELINE_CONDITION_INPUTS_SUBDIR = "c2/baseline/condition-inputs";
+
+/** One execution slot in the 80-run baseline matrix. */
+export interface BaselineExecutionSlot {
+  /** Case ID (one of the manifest's 25). */
+  caseId: string;
+  /** Condition name (brief-only | current-grounded | gold-evidence). */
+  condition: "brief-only" | "current-grounded" | "gold-evidence";
+  /** Lane: "primary" (OpenAI) or "independent" (Claude). */
+  laneLabel: "primary" | "independent";
+  /**
+   * Run number within this (case, condition, lane) group. The baseline matrix
+   * is single-attempt by default (attempt 1); retries increment this and are
+   * bound via `predecessorRunId` in the harness request, not here.
+   */
+  attempt: number;
+  /**
+   * The namespaced run ID: `c2-run-baseline-{caseId}-{condition}-{laneLabel}-{n}`.
+   * Cannot collide with pilot run IDs (which lack the `baseline` segment).
+   */
+  runId: string;
+  /**
+   * Absolute-ish path (relative to the private root) of the prepared condition
+   * input descriptor. The `prepare` subcommand writes this file; the `run`
+   * subcommand loads + hash-validates it before building the harness request.
+   */
+  conditionInputPath: string;
+  /** Source-snapshot artifact IDs the run binds (empty for non-migration cases). */
+  sourceSnapshotIds: readonly string[];
+}
+
+/**
+ * Generate a baseline-namespaced run ID. Primary and independent lanes for the
+ * same case+condition receive distinct IDs (`...-primary-1` vs
+ * `...-independent-1`) AND both carry the `baseline` segment so they cannot
+ * collide with pilot run IDs (`c2-run-{case}-{condition}-{lane}-{n}`).
+ *
+ * Unlike the pilot's `c2RunId` we do NOT truncate to 64 chars: the added
+ * `baseline` segment plus long baseline case IDs (e.g.
+ * `safety-conflicting-evidence`) would push a name past 64 and the truncation
+ * would erase the lane/attempt suffix, breaking uniqueness across the 80-run
+ * matrix. There is no schema length constraint on `runId`; uniqueness is the
+ * only binding requirement, and truncation is the latent collision risk.
+ */
+export function c2BaselineRunId(
+  caseId: string,
+  condition: string,
+  laneLabel: string,
+  attempt: number,
+): string {
+  return `c2-run-baseline-${caseId}-${condition}-${laneLabel}-${attempt}`;
+}
+
+/**
+ * Build the ordered 80-run execution matrix from the manifest's
+ * `executionMatrix`. Pure: no I/O, no schema (the caller passes a
+ * schema-validated manifest).
+ *
+ * The matrix is emitted in execution order: the 75 primary slots first (every
+ * case × every primary condition), then the 5 independent slots (the 5
+ * spec-locked independent IDs × current-grounded). This mirrors the pilot's
+ * lane ordering (primary lane before independent lane) and lets a campaign
+ * stop during the independent lane without wasting primary runs.
+ *
+ * The condition-input path is repo-relative to the private root: it matches
+ * the path `prepareBaselineConditions` writes
+ * (`<privateRoot>/c2/baseline/condition-inputs/<caseId>-<condition>.json`).
+ */
+export function buildBaselineExecutionMatrix(
+  manifest: C2BaselineManifest,
+): BaselineExecutionSlot[] {
+  const slots: BaselineExecutionSlot[] = [];
+  const snapshotByCase = new Map<string, readonly string[]>();
+  for (const c of manifest.cases) {
+    snapshotByCase.set(
+      c.caseId,
+      c.family === "migration" && c.sourceSnapshot ? [c.sourceSnapshot.artifactId] : [],
+    );
+  }
+
+  // Primary lane: every case × every primary condition = 75 slots.
+  for (const c of manifest.cases) {
+    for (const condition of manifest.executionMatrix.primaryConditions) {
+      slots.push({
+        caseId: c.caseId,
+        condition,
+        laneLabel: "primary",
+        attempt: 1,
+        runId: c2BaselineRunId(c.caseId, condition, "primary", 1),
+        conditionInputPath: join(
+          BASELINE_CONDITION_INPUTS_SUBDIR,
+          `${c.caseId}-${condition}.json`,
+        ),
+        sourceSnapshotIds: snapshotByCase.get(c.caseId) ?? [],
+      });
+    }
+  }
+
+  // Independent lane: every independent case × every independent condition = 5 slots.
+  for (const caseId of manifest.executionMatrix.independentCaseIds) {
+    for (const condition of manifest.executionMatrix.independentConditions) {
+      slots.push({
+        caseId,
+        condition,
+        laneLabel: "independent",
+        attempt: 1,
+        runId: c2BaselineRunId(caseId, condition, "independent", 1),
+        conditionInputPath: join(
+          BASELINE_CONDITION_INPUTS_SUBDIR,
+          `${caseId}-${condition}.json`,
+        ),
+        sourceSnapshotIds: snapshotByCase.get(caseId) ?? [],
+      });
+    }
+  }
+
+  return slots;
+}
 
 // ---------------------------------------------------------------------------
 // prepare — offline condition input resolution (reuses the resolver)
@@ -743,18 +1057,18 @@ async function runPrepareCli(args: Record<string, unknown>): Promise<number> {
 //
 // Without --paid: prints the preflight and exits non-zero. The preflight
 // reads the frozen calibration's maxRunCostUsd / maxCampaignCostUsd (NO
-// overrides) and emits the documented human-readable block.
+// overrides) and echoes the 80-run matrix shape + 5 independent IDs.
 //
-// With --paid: executes the 80-run matrix, reusing executeC2Run + the pilot's
-// audit/atomic-write patterns. The execution loop is structurally identical
-// to the pilot's (for pkg → for condition → executeC2RunWithAudit); the
-// differences are (a) the manifest source (baseline vs pilot), (b) the cost
-// ceilings come from the frozen calibration, and (c) the run artifacts land
-// under eval/c2/baseline/runs/ + .c2-private/c2/baseline/runs/.
+// With --paid: executes the 80-run matrix via `executeBaselineCampaign`. The
+// loop resolves the frozen calibration's config/pricing refs (hash-verified),
+// builds the matrix from the manifest, and reuses `executeC2Run` for every
+// slot. The run artifacts land under eval/c2/baseline/runs/ (durable) +
+// .c2-private/c2/baseline/runs/ (private raw responses). Run IDs are
+// baseline-namespaced so they cannot collide with pilot run IDs.
 //
-// The actual 80-run execution reuses the pilot's loop; this command does not
-// duplicate that code. Tests do not exercise the --paid path (no paid calls
-// in tests); the no-egress discipline is what we verify.
+// Tests do not exercise the --paid egress path (no paid calls in tests); the
+// matrix construction, the fail-closed gates, and the no-egress discipline
+// are what we verify.
 // ---------------------------------------------------------------------------
 
 async function runRunCli(args: Record<string, unknown>): Promise<number> {
@@ -790,6 +1104,20 @@ async function runRunCli(args: Record<string, unknown>): Promise<number> {
     }
   }
 
+  // Best-effort read of the manifest's independent case IDs so the preflight
+  // echoes the exact 5 IDs the matrix will run. Falls back to the canonical
+  // constant when the manifest doesn't parse (the no-egress subprocess test
+  // points at dummy files).
+  let independentCaseIds: readonly string[] | undefined;
+  if (existsSync(manifestPath)) {
+    try {
+      const parsedManifest = C2BaselineManifestSchema.parse(readJson(manifestPath)) as C2BaselineManifest;
+      independentCaseIds = parsedManifest.executionMatrix.independentCaseIds;
+    } catch {
+      // Leave undefined; the canonical constant is used.
+    }
+  }
+
   const pf = computeBaselinePreflight({
     manifestPath,
     manifestSha,
@@ -797,6 +1125,7 @@ async function runRunCli(args: Record<string, unknown>): Promise<number> {
     calibrationSha,
     maxRunCostUsd,
     maxCampaignCostUsd,
+    independentCaseIds,
   });
 
   if (!args.paid) {
@@ -816,21 +1145,339 @@ async function runRunCli(args: Record<string, unknown>): Promise<number> {
     return 1;
   }
 
-  // The paid execution loop is NOT YET IMPLEMENTED. It will reuse the pilot's
-  // harness primitives (executeC2Run + audit hook + atomic writes + cost
-  // controls from src/c2/harness.ts) but requires the 25 case packages (Task
-  // B4) and prepared condition inputs. Returning non-zero so an operator does
-  // not believe the 80-run campaign completed when zero runs occurred.
-  console.error(renderBaselinePreflight(pf));
-  console.error("");
+  const result = await executeBaselineCampaign({
+    manifest: validation.manifest!,
+    frozenCalibration: validation.frozenCalibration!,
+    repoRoot: process.cwd(),
+    privateRoot: (args["private-root"] as string) ?? ".c2-private",
+    runsRoot: (args["runs-root"] as string) ?? "eval/c2/baseline/runs",
+    manifestPath: relPathFromRepo(manifestPath),
+    preflight: pf,
+  });
+  if (!result.ok) {
+    console.error(`[c2-baseline-run] ${result.error}`);
+    return 1;
+  }
   console.error(
-    "[c2-baseline-run] NOT IMPLEMENTED: paid execution requires wiring the "
-    + "80-run matrix into executeC2Run. The preflight above shows the planned "
-    + "campaign; the execution loop lands in a follow-up PR after the 25 case "
-    + "packages (Task B4) are authored.",
+    `[c2-baseline-run] campaign complete: ${result.succeeded} succeeded, ${result.failed} failed, `
+      + `${result.costBlocked} cost-blocked. Total spend: $${result.spentUsd.toFixed(6)}`
+      + `${result.stopped ? ` (stopped: ${result.stopReason})` : ""}`,
   );
-  void auditNetworkEgress;
-  return 1;
+  return result.stopped ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// executeBaselineCampaign — the 80-run execution loop (Task C2)
+//
+// Reuses `executeC2Run` (the pilot's harness) for every slot. The matrix comes
+// EXCLUSIVELY from `buildBaselineExecutionMatrix(manifest)`. Model/pricing
+// config comes from the frozen calibration's `campaignConfigRef` +
+// `pricingTableRef` — BOTH file hashes are verified before any provider call.
+//
+// The loop mirrors the pilot's `runRun` shape (build request → executeC2Run →
+// collect) but draws its matrix + ceilings from the baseline manifest instead
+// of the pilot campaign config. Run IDs are baseline-namespaced so they cannot
+// collide with pilot run IDs in a shared filesystem.
+// ---------------------------------------------------------------------------
+
+export interface ExecuteBaselineCampaignInput {
+  manifest: C2BaselineManifest;
+  frozenCalibration: C2FrozenCalibration;
+  /** Repo root the manifest's repo-relative paths resolve against. */
+  repoRoot: string;
+  /** Private root for condition inputs + raw responses. */
+  privateRoot: string;
+  /** Durable runs root (one subdir per runId). */
+  runsRoot: string;
+  /** Repo-relative path of the baseline manifest (for casePackageRef binding). */
+  manifestPath: string;
+  /** The computed preflight (for the pre-egress console report). */
+  preflight?: BaselinePreflight;
+}
+
+export interface ExecuteBaselineCampaignResult {
+  ok: boolean;
+  error: string | null;
+  succeeded: number;
+  failed: number;
+  costBlocked: number;
+  spentUsd: number;
+  stopped: boolean;
+  stopReason: "run-budget-exceeded" | "campaign-budget-exceeded" | null;
+}
+
+/**
+ * Execute the 80-run baseline matrix. Resolves the frozen calibration's config
+ * + pricing refs, builds the matrix from the manifest, and reuses
+ * `executeC2Run` for every slot. Returns aggregate terminal counts.
+ *
+ * Fail-closed gates (before any provider call):
+ *   - The frozen calibration's `campaignConfigRef` + `pricingTableRef` files
+ *     MUST exist and their sha256 MUST match the pinned ref. A stale or
+ *     missing file fails with a specific message naming the file.
+ *   - BOTH API-key env vars (`primary.apiKeyEnv`, `independent.apiKeyEnv`)
+ *     MUST be set and non-empty.
+ *   - BOTH lanes' (provider, model) MUST have a pricing entry.
+ *   - EVERY prepared condition-input file MUST exist with a matching
+ *     `inputSha256`. A missing or tampered file fails closed.
+ *
+ * Campaign state: shared across every slot. A `run-budget-exceeded` terminal
+ * stops the campaign so subsequent slots perform no provider call.
+ */
+async function executeBaselineCampaign(
+  input: ExecuteBaselineCampaignInput,
+): Promise<ExecuteBaselineCampaignResult> {
+  const { manifest, frozenCalibration, repoRoot, privateRoot, runsRoot, manifestPath } = input;
+  if (input.preflight) {
+    console.error(renderBaselinePreflight(input.preflight));
+    console.error("");
+  }
+
+  // 1. Resolve + hash-verify the frozen calibration's config + pricing refs.
+  //    These two files are the ONLY source of model/pricing config for the
+  //    baseline; the pilot's `cases`/`conditions`/`plannedRunCount` are NOT
+  //    consulted (the baseline matrix comes from the manifest).
+  const configRef = frozenCalibration.campaignConfigRef;
+  const pricingRef = frozenCalibration.pricingTableRef;
+  const configAbs = join(repoRoot, configRef.path);
+  const pricingAbs = join(repoRoot, pricingRef.path);
+  if (!existsSync(configAbs)) {
+    return fail(`campaignConfigRef file not found: ${configRef.path}`);
+  }
+  if (!existsSync(pricingAbs)) {
+    return fail(`pricingTableRef file not found: ${pricingRef.path}`);
+  }
+  if (sha256Hex(readFileSync(configAbs)) !== configRef.sha256) {
+    return fail(
+      `campaignConfigRef.sha256 mismatch: ${configRef.path} has drifted from the pinned hash. `
+        + `Re-freeze the calibration or restore the pinned file.`,
+    );
+  }
+  if (sha256Hex(readFileSync(pricingAbs)) !== pricingRef.sha256) {
+    return fail(
+      `pricingTableRef.sha256 mismatch: ${pricingRef.path} has drifted from the pinned hash. `
+        + `Re-freeze the calibration or restore the pinned file.`,
+    );
+  }
+
+  let campaignConfig: C2CampaignConfig;
+  let pricingTable: C2PricingTable;
+  try {
+    campaignConfig = C2CampaignConfigSchema.parse(JSON.parse(readFileSync(configAbs, "utf-8")));
+  } catch (err) {
+    return fail(
+      `campaignConfigRef did not parse: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  try {
+    pricingTable = C2PricingTableSchema.parse(JSON.parse(readFileSync(pricingAbs, "utf-8")));
+  } catch (err) {
+    return fail(
+      `pricingTableRef did not parse: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  // 2. Credential preflight: both lanes' apiKey env vars must be set.
+  for (const slot of [campaignConfig.primary, campaignConfig.independent]) {
+    const value = process.env[slot.apiKeyEnv];
+    if (!value || value.trim().length === 0) {
+      return fail(
+        `missing credentials: environment variable ${slot.apiKeyEnv} is not set. `
+          + `Required for ${slot.provider}/${slot.model}.`,
+      );
+    }
+  }
+
+  // 3. Resolve the pricing entries for both lanes.
+  const primaryPricing = findPricingEntry({
+    pricingTable,
+    provider: campaignConfig.primary.provider,
+    model: campaignConfig.primary.model,
+  });
+  if (!primaryPricing.found) {
+    return fail(
+      `no pricing entry for primary ${campaignConfig.primary.provider}/${campaignConfig.primary.model}`,
+    );
+  }
+  const independentPricing = findPricingEntry({
+    pricingTable,
+    provider: campaignConfig.independent.provider,
+    model: campaignConfig.independent.model,
+  });
+  if (!independentPricing.found) {
+    return fail(
+      `no pricing entry for independent ${campaignConfig.independent.provider}/${campaignConfig.independent.model}`,
+    );
+  }
+
+  // 4. Build the matrix from the manifest (the ONLY source of the 80-run shape).
+  const slots = buildBaselineExecutionMatrix(manifest);
+
+  // 5. Verify every prepared condition input exists BEFORE any provider call.
+  //    A missing input fails closed with a specific message naming the file so
+  //    the operator knows to run `prepare` first.
+  for (const slot of slots) {
+    const conditionInputPath = join(privateRoot, slot.conditionInputPath);
+    if (!existsSync(conditionInputPath)) {
+      return fail(
+        `condition input not prepared: ${conditionInputPath}. Run 'prepare' first.`,
+      );
+    }
+  }
+
+  // 6. Shared campaign state. The harness keys cost off `pricingEntry`; we swap
+  //    it to the lane we're about to call (primary vs independent).
+  const campaignState: CampaignState = {
+    spentUsd: 0,
+    stopped: false,
+    stopReason: null,
+    pricingEntry: primaryPricing.value,
+  };
+  const store = makeBaselineStore(privateRoot, runsRoot);
+  const gitSha = harnessGitSha();
+  const scorerSha = (() => {
+    try {
+      return fileSha256("src/c2/scorer.ts");
+    } catch {
+      return "0".repeat(64);
+    }
+  })();
+  const manifestAbs = join(repoRoot, manifestPath);
+  const casePackageSha = existsSync(manifestAbs) ? fileSha256(manifestAbs) : "0".repeat(64);
+
+  // Index the cases so we can load the brief + label per slot without re-scanning.
+  const caseByCaseId = new Map(manifest.cases.map((c) => [c.caseId, c] as const));
+
+  let succeeded = 0;
+  let failed = 0;
+  let costBlocked = 0;
+
+  for (const slot of slots) {
+    if (campaignState.stopped) break;
+
+    const c = caseByCaseId.get(slot.caseId);
+    if (!c) {
+      return fail(`matrix slot references unknown case ${slot.caseId}`);
+    }
+    const brief = loadBrief(repoRoot, c);
+    const label = loadLabel(repoRoot, c);
+
+    const conditionInputPath = join(privateRoot, slot.conditionInputPath);
+    let conditionInput: C2ConditionInput;
+    try {
+      conditionInput = loadValidatedConditionInput(conditionInputPath);
+    } catch (err) {
+      return fail(
+        `${slot.runId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    const privatePayloadPath = join(
+      privateRoot,
+      slot.conditionInputPath.replace(/\.json$/, ".private.json"),
+    );
+    const evidenceContent = loadEvidenceContent(privatePayloadPath);
+
+    const laneModel =
+      slot.laneLabel === "primary" ? campaignConfig.primary : campaignConfig.independent;
+    const lanePricing =
+      slot.laneLabel === "primary" ? primaryPricing.value : independentPricing.value;
+
+    const request: ExecuteC2RunRequest = {
+      casePackageRef: {
+        artifactId: c.artifactId,
+        path: manifestPath,
+        sha256: casePackageSha,
+      },
+      brief,
+      label,
+      conditionInput,
+      conditionInputRef: {
+        artifactId: conditionInput.artifactId,
+        path: logicalBaselineConditionInputPath(relPathFromRepo(conditionInputPath)),
+        sha256: fileSha256(conditionInputPath),
+      },
+      scorerRef: {
+        artifactId: "c2-scorer-v1",
+        path: "src/c2/scorer.ts",
+        sha256: scorerSha,
+      },
+      model: {
+        provider: laneModel.provider,
+        model: laneModel.model,
+        apiKeyEnv: laneModel.apiKeyEnv,
+        maxOutputTokens: laneModel.maxOutputTokens,
+        samplingParameters: laneModel.samplingParameters,
+      },
+      maxRunCostUsd: frozenCalibration.maxRunCostUsd,
+      maxCampaignCostUsd: frozenCalibration.maxCampaignCostUsd,
+      evidenceContent,
+      harnessGitSha: gitSha,
+      sourceSnapshotIds: slot.sourceSnapshotIds,
+      predecessorRunId: null,
+    };
+
+    // Swap the campaign's pricing entry to the lane we're about to call. The
+    // harness's `assertPinnedModel` verifies (provider, model) matches.
+    campaignState.pricingEntry = lanePricing;
+
+    // Audit + execute. The audit fires immediately before the provider call
+    // inside the injected callModel, so a no-egress test sees an empty audit
+    // file when the campaign fails closed before egress.
+    let audited = false;
+    const manifestResult = await executeC2Run(request, {
+      callModel: async (req) => {
+        if (!audited) {
+          auditNetworkEgress(req.provider, req.model, slot.runId);
+          audited = true;
+        }
+        return callTextModelWithMetadata({
+          prompt: req.prompt,
+          endpoint: buildModelEndpoint({
+            provider: req.provider,
+            model: req.model,
+            apiKeyEnv: req.apiKeyEnv,
+          }),
+          maxOutputTokens: req.maxOutputTokens,
+          maxAttempts: req.maxAttempts,
+        });
+      },
+      now: () => new Date().toISOString(),
+      runId: (_caseId, _condition, _attempt) => slot.runId,
+      scorerSha256: () => scorerSha,
+      store,
+      campaign: campaignState,
+      boundaryScan: durableBoundaryScan(),
+    });
+
+    if (manifestResult.status === "succeeded") succeeded += 1;
+    else if (manifestResult.status === "cost-blocked") costBlocked += 1;
+    else failed += 1;
+  }
+
+  return {
+    ok: true,
+    error: null,
+    succeeded,
+    failed,
+    costBlocked,
+    spentUsd: campaignState.spentUsd,
+    stopped: campaignState.stopped,
+    stopReason: campaignState.stopReason,
+  };
+}
+
+/** Build a failed result with the preflight already rendered (if provided). */
+function fail(error: string): ExecuteBaselineCampaignResult {
+  return {
+    ok: false,
+    error,
+    succeeded: 0,
+    failed: 0,
+    costBlocked: 0,
+    spentUsd: 0,
+    stopped: false,
+    stopReason: null,
+  };
 }
 
 // ---------------------------------------------------------------------------

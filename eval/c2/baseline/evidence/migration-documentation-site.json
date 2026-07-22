@@ -34,31 +34,6 @@
         "/constraints/3",
         "/requiredJourneys/2"
       ]
-    },
-    {
-      "id": "evidence:brief:no-fabricated-structure-constraint",
-      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
-      "jsonPointers": [
-        "/constraints/4"
-      ]
-    },
-    {
-      "id": "evidence:brief:docs-home-states",
-      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
-      "jsonPointers": [
-        "/requiredScreens/0/id",
-        "/requiredScreens/0/states/1",
-        "/requiredScreens/0/states/2"
-      ]
-    },
-    {
-      "id": "evidence:brief:article-route-states",
-      "sourceArtifactId": "c2-brief-migration-documentation-site-v1",
-      "jsonPointers": [
-        "/requiredScreens/1/id",
-        "/requiredScreens/1/states/2",
-        "/requiredScreens/1/states/3"
-      ]
     }
   ]
 }

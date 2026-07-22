@@ -31,35 +31,10 @@
       ]
     },
     {
-      "id": "evidence:brief:inspected-only-constraint",
-      "sourceArtifactId": "c2-brief-migration-content-product-v1",
-      "jsonPointers": [
-        "/constraints/3"
-      ]
-    },
-    {
       "id": "evidence:brief:retain-adapt-reject-constraint",
       "sourceArtifactId": "c2-brief-migration-content-product-v1",
       "jsonPointers": [
         "/constraints/4"
-      ]
-    },
-    {
-      "id": "evidence:brief:content-home-states",
-      "sourceArtifactId": "c2-brief-migration-content-product-v1",
-      "jsonPointers": [
-        "/requiredScreens/0/id",
-        "/requiredScreens/0/states/1",
-        "/requiredScreens/0/states/3"
-      ]
-    },
-    {
-      "id": "evidence:brief:article-route-states",
-      "sourceArtifactId": "c2-brief-migration-content-product-v1",
-      "jsonPointers": [
-        "/requiredScreens/1/id",
-        "/requiredScreens/1/states/2",
-        "/requiredScreens/1/states/4"
       ]
     }
   ]

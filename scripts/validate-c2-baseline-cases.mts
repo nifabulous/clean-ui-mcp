@@ -115,6 +115,20 @@ for (const caseId of caseIds) {
     }
   }
 
+  // EXACT equality: descriptor record IDs must equal goldEvidenceIds as sets.
+  // The production resolver (condition-resolver.ts) requires this — extra
+  // records cause gold-evidence condition resolution to fail.
+  const descIds = new Set(e.records.map((r) => r.id));
+  const goldIds = new Set(l.goldEvidenceIds);
+  if (descIds.size !== goldIds.size || [...descIds].some((id) => !goldIds.has(id))) {
+    const extra = [...descIds].filter((id) => !goldIds.has(id));
+    const missing = [...goldIds].filter((id) => !descIds.has(id));
+    console.error(`${prefix} FAIL descriptor records do not exactly match goldEvidenceIds`);
+    if (extra.length) console.error(`${prefix}   extra (in descriptor, not gold): ${extra.join(", ")}`);
+    if (missing.length) console.error(`${prefix}   missing (gold, not in descriptor): ${missing.join(", ")}`);
+    ok = false;
+  }
+
   // Every gold evidence id must have a descriptor record.
   const descriptorIds = new Set(e.records.map((r) => r.id));
   for (const gold of l.goldEvidenceIds) {

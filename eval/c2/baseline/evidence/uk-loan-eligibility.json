@@ -42,30 +42,6 @@
         "/constraints/4",
         "/requiredScreens/2/states/1"
       ]
-    },
-    {
-      "id": "evidence:brief:eligibility-entry-states",
-      "sourceArtifactId": "c2-brief-uk-loan-eligibility-v1",
-      "jsonPointers": [
-        "/requiredScreens/0/id",
-        "/requiredScreens/0/states/3"
-      ]
-    },
-    {
-      "id": "evidence:brief:indicative-quote-states",
-      "sourceArtifactId": "c2-brief-uk-loan-eligibility-v1",
-      "jsonPointers": [
-        "/requiredScreens/1/id",
-        "/requiredScreens/1/states/2"
-      ]
-    },
-    {
-      "id": "evidence:brief:re-check-entry-states",
-      "sourceArtifactId": "c2-brief-uk-loan-eligibility-v1",
-      "jsonPointers": [
-        "/requiredScreens/2/id",
-        "/requiredScreens/2/states/0"
-      ]
     }
   ]
 }

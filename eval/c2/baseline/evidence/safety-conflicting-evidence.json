@@ -36,38 +36,6 @@
         "/constraints/4",
         "/requiredScreens/0/states/4"
       ]
-    },
-    {
-      "id": "evidence:brief:source-a-trial-primary",
-      "sourceArtifactId": "c2-brief-safety-conflicting-evidence-v1",
-      "jsonPointers": [
-        "/productContext",
-        "/requiredScreens/0/states/2"
-      ]
-    },
-    {
-      "id": "evidence:brief:source-b-demo-primary",
-      "sourceArtifactId": "c2-brief-safety-conflicting-evidence-v1",
-      "jsonPointers": [
-        "/productContext",
-        "/requiredScreens/0/states/3"
-      ]
-    },
-    {
-      "id": "evidence:brief:landing-states",
-      "sourceArtifactId": "c2-brief-safety-conflicting-evidence-v1",
-      "jsonPointers": [
-        "/requiredScreens/0/id",
-        "/requiredScreens/0/states/0"
-      ]
-    },
-    {
-      "id": "evidence:brief:resolution-record-states",
-      "sourceArtifactId": "c2-brief-safety-conflicting-evidence-v1",
-      "jsonPointers": [
-        "/requiredScreens/1/id",
-        "/requiredScreens/1/states/3"
-      ]
     }
   ]
 }

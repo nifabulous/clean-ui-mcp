@@ -37,46 +37,6 @@
         "/constraints/5",
         "/requiredScreens/2/id"
       ]
-    },
-    {
-      "id": "evidence:brief:no-analyst-or-recommendation-constraint",
-      "sourceArtifactId": "c2-brief-finance-news-onboarding-v1",
-      "jsonPointers": [
-        "/constraints/0",
-        "/productContext"
-      ]
-    },
-    {
-      "id": "evidence:brief:role-select-screen",
-      "sourceArtifactId": "c2-brief-finance-news-onboarding-v1",
-      "jsonPointers": [
-        "/requiredScreens/0/id",
-        "/requiredScreens/0/states/1"
-      ]
-    },
-    {
-      "id": "evidence:brief:topic-region-select-screen",
-      "sourceArtifactId": "c2-brief-finance-news-onboarding-v1",
-      "jsonPointers": [
-        "/requiredScreens/1/id",
-        "/requiredScreens/1/states/2"
-      ]
-    },
-    {
-      "id": "evidence:brief:preview-screen",
-      "sourceArtifactId": "c2-brief-finance-news-onboarding-v1",
-      "jsonPointers": [
-        "/requiredScreens/2/id",
-        "/requiredScreens/2/states/2"
-      ]
-    },
-    {
-      "id": "evidence:brief:ai-summary-explainer-screen",
-      "sourceArtifactId": "c2-brief-finance-news-onboarding-v1",
-      "jsonPointers": [
-        "/requiredScreens/3/id",
-        "/requiredScreens/3/states/2"
-      ]
     }
   ]
 }

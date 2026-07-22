@@ -37,38 +37,6 @@
         "/constraints/2",
         "/constraints/3"
       ]
-    },
-    {
-      "id": "evidence:brief:density-preserves-attribution-constraint",
-      "sourceArtifactId": "c2-brief-finance-news-feed-v1",
-      "jsonPointers": [
-        "/constraints/6",
-        "/requiredScreens/0/mobileRules/0"
-      ]
-    },
-    {
-      "id": "evidence:brief:feed-default-screen",
-      "sourceArtifactId": "c2-brief-finance-news-feed-v1",
-      "jsonPointers": [
-        "/requiredScreens/0/id",
-        "/requiredScreens/0/states/3"
-      ]
-    },
-    {
-      "id": "evidence:brief:topic-cluster-screen",
-      "sourceArtifactId": "c2-brief-finance-news-feed-v1",
-      "jsonPointers": [
-        "/requiredScreens/1/id",
-        "/requiredScreens/1/states/1"
-      ]
-    },
-    {
-      "id": "evidence:brief:sort-filter-rail-screen",
-      "sourceArtifactId": "c2-brief-finance-news-feed-v1",
-      "jsonPointers": [
-        "/requiredScreens/2/id",
-        "/requiredScreens/2/states/3"
-      ]
     }
   ]
 }

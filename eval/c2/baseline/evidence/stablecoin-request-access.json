@@ -47,31 +47,6 @@
         "/constraints/4",
         "/constraints/5"
       ]
-    },
-    {
-      "id": "evidence:brief:qualification-form-states",
-      "sourceArtifactId": "c2-brief-stablecoin-request-access-v1",
-      "jsonPointers": [
-        "/requiredScreens/0/id",
-        "/requiredScreens/0/states/4",
-        "/requiredScreens/0/states/5"
-      ]
-    },
-    {
-      "id": "evidence:brief:next-steps-confirmation-states",
-      "sourceArtifactId": "c2-brief-stablecoin-request-access-v1",
-      "jsonPointers": [
-        "/requiredScreens/1/id",
-        "/requiredScreens/1/states/0"
-      ]
-    },
-    {
-      "id": "evidence:brief:follow-up-timeline-states",
-      "sourceArtifactId": "c2-brief-stablecoin-request-access-v1",
-      "jsonPointers": [
-        "/requiredScreens/2/id",
-        "/requiredScreens/2/states/3"
-      ]
     }
   ]
 }

@@ -22,14 +22,6 @@
       ]
     },
     {
-      "id": "evidence:brief:no-disbursement-time-supplied-constraint",
-      "sourceArtifactId": "c2-brief-uk-loan-decision-v1",
-      "jsonPointers": [
-        "/constraints/2",
-        "/requiredScreens/2/mobileRules/0"
-      ]
-    },
-    {
       "id": "evidence:brief:referred-honest-constraint",
       "sourceArtifactId": "c2-brief-uk-loan-decision-v1",
       "jsonPointers": [
@@ -42,30 +34,6 @@
       "sourceArtifactId": "c2-brief-uk-loan-decision-v1",
       "jsonPointers": [
         "/constraints/4"
-      ]
-    },
-    {
-      "id": "evidence:brief:decision-outcome-states",
-      "sourceArtifactId": "c2-brief-uk-loan-decision-v1",
-      "jsonPointers": [
-        "/requiredScreens/0/id",
-        "/requiredScreens/0/states/0"
-      ]
-    },
-    {
-      "id": "evidence:brief:agreement-review-states",
-      "sourceArtifactId": "c2-brief-uk-loan-decision-v1",
-      "jsonPointers": [
-        "/requiredScreens/1/id",
-        "/requiredScreens/1/states/2"
-      ]
-    },
-    {
-      "id": "evidence:brief:disbursement-tracking-states",
-      "sourceArtifactId": "c2-brief-uk-loan-decision-v1",
-      "jsonPointers": [
-        "/requiredScreens/2/id",
-        "/requiredScreens/2/states/3"
       ]
     }
   ]

@@ -45,54 +45,6 @@
         "/requiredScreens/2/id",
         "/requiredScreens/2/mobileRules/0"
       ]
-    },
-    {
-      "id": "evidence:brief:publisher-timestamp-persistence-constraint",
-      "sourceArtifactId": "c2-brief-finance-news-story-detail-v1",
-      "jsonPointers": [
-        "/constraints/6",
-        "/requiredScreens/0/mobileRules/0"
-      ]
-    },
-    {
-      "id": "evidence:brief:other-publishers-neutral-constraint",
-      "sourceArtifactId": "c2-brief-finance-news-story-detail-v1",
-      "jsonPointers": [
-        "/constraints/7",
-        "/requiredScreens/3/mobileRules/0"
-      ]
-    },
-    {
-      "id": "evidence:brief:story-sourced-article-screen",
-      "sourceArtifactId": "c2-brief-finance-news-story-detail-v1",
-      "jsonPointers": [
-        "/requiredScreens/0/id",
-        "/requiredScreens/0/states/3"
-      ]
-    },
-    {
-      "id": "evidence:brief:ai-summary-block-screen",
-      "sourceArtifactId": "c2-brief-finance-news-story-detail-v1",
-      "jsonPointers": [
-        "/requiredScreens/1/id",
-        "/requiredScreens/1/states/1"
-      ]
-    },
-    {
-      "id": "evidence:brief:context-panel-screen",
-      "sourceArtifactId": "c2-brief-finance-news-story-detail-v1",
-      "jsonPointers": [
-        "/requiredScreens/2/id",
-        "/requiredScreens/2/states/4"
-      ]
-    },
-    {
-      "id": "evidence:brief:other-publishers-list-screen",
-      "sourceArtifactId": "c2-brief-finance-news-story-detail-v1",
-      "jsonPointers": [
-        "/requiredScreens/3/id",
-        "/requiredScreens/3/states/2"
-      ]
     }
   ]
 }

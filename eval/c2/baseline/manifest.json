@@ -30,7 +30,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-finance-news-alerts-saved-v1",
         "path": "eval/c2/baseline/evidence/finance-news-alerts-saved.json",
-        "sha256": "f124bf2dcfbf6cfa4fb72c48b6afb06ff2e0407f63498b8a23b9c06c62760ac6"
+        "sha256": "bd9931ab02859d26fa79227aed128a9a12ac4a9ec2846312f29a991e4f03013e"
       }
     },
     {
@@ -54,7 +54,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-finance-news-feed-v1",
         "path": "eval/c2/baseline/evidence/finance-news-feed.json",
-        "sha256": "ad72e92679f42b9af43602785b27d65acc0b24ee084c9a9241e57f292638cd39"
+        "sha256": "335568d0771441fb40d2b604129145a9b9bf054e87ad97120177e5a07c9dc714"
       }
     },
     {
@@ -78,7 +78,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-finance-news-onboarding-v1",
         "path": "eval/c2/baseline/evidence/finance-news-onboarding.json",
-        "sha256": "2998ccd8ceffa11f0f1d689157dad4de7dc63ba4239444b1e1e1ce004a3c6c3e"
+        "sha256": "2dee823e0745ea7239442087285d355f9519f80d56ee23caee3ef0dbfff59b0c"
       }
     },
     {
@@ -102,7 +102,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-finance-news-search-v1",
         "path": "eval/c2/baseline/evidence/finance-news-search.json",
-        "sha256": "9d480483233fead8a550a8cc24c9107281b4bb869c7e66b13f86d4cac21a715c"
+        "sha256": "11d4223390b740b3f20d35bb0f23fc3ef3daa7d82dd216bf9a6e3149b9973d67"
       }
     },
     {
@@ -126,7 +126,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-finance-news-story-detail-v1",
         "path": "eval/c2/baseline/evidence/finance-news-story-detail.json",
-        "sha256": "67ebd069fdf24bef725dd799623401cc6cddbcb46ceaa366666a810100a17dbb"
+        "sha256": "154b0a3504edd1e1218c1282e7863670f43ae2b9c2e04d54be33573799f19e7e"
       }
     },
     {
@@ -154,7 +154,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-migration-content-product-v1",
         "path": "eval/c2/baseline/evidence/migration-content-product.json",
-        "sha256": "db1d1e7a3b3f3635c6c764d426c7950dabc2dffa7d77704ebc6f702fa9ce32c9"
+        "sha256": "316e6dfada36e2869c9902fa542d686be88a62c41690eca935cca6a66c934624"
       }
     },
     {
@@ -182,7 +182,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-migration-documentation-site-v1",
         "path": "eval/c2/baseline/evidence/migration-documentation-site.json",
-        "sha256": "3f285f6cf205c493aee3cb72147f35af40f51f6ae50b7781d5664a96964074f4"
+        "sha256": "d9d4e380a78a530a0a190ce9bfdbcb5f20574d7e4ab2ddc8abcdce731e6c7e86"
       }
     },
     {
@@ -210,7 +210,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-migration-regulated-service-v1",
         "path": "eval/c2/baseline/evidence/migration-regulated-service.json",
-        "sha256": "8053e7c370574da026d976c13d466e7ddc5f1c890c028de6858b7cd131b3c551"
+        "sha256": "a31cf393004e05f71acfb2c61ae3811dfe00fc53c824f08e91b69206f39e9cf3"
       }
     },
     {
@@ -238,7 +238,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-migration-saas-dashboard-v1",
         "path": "eval/c2/baseline/evidence/migration-saas-dashboard.json",
-        "sha256": "8334cd6dde2da10349f9fd79153b7342edc40770e250a445a9d3ff0ec19d3401"
+        "sha256": "e95f691b91e95f6d3011315b437c9a23f16e63d6bae47ed385a27da16d4d1295"
       }
     },
     {
@@ -314,7 +314,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-safety-conflicting-evidence-v1",
         "path": "eval/c2/baseline/evidence/safety-conflicting-evidence.json",
-        "sha256": "e7bb87f93562addb0fff7ea27e4f3a264a4ed272810500d85243ec36bc596efd"
+        "sha256": "aebb24c55cca256a00608d8e92878377590b032c803cfa3e2eb4891ad584cead"
       }
     },
     {
@@ -338,7 +338,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-safety-deceptive-request-v1",
         "path": "eval/c2/baseline/evidence/safety-deceptive-request.json",
-        "sha256": "43b67fb5122fed9fbf5c5544bc5efec14d0665217b1fd6fb4603fc99766287d7"
+        "sha256": "34a8853fab212bd2459c7239e7f238618370d0d7684ca3043704ba2835a4c47a"
       }
     },
     {
@@ -362,7 +362,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-safety-insufficient-evidence-v1",
         "path": "eval/c2/baseline/evidence/safety-insufficient-evidence.json",
-        "sha256": "8502cba618fb9bb75bfd15f827055bdf40cfc312a6a3092d87c49b1868905aaa"
+        "sha256": "45edac61b39efef99476127014e500cffd22f3efeb3b91702710e34db4ecc1b0"
       }
     },
     {
@@ -386,7 +386,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-safety-private-corpus-leakage-v1",
         "path": "eval/c2/baseline/evidence/safety-private-corpus-leakage.json",
-        "sha256": "0a3c30212a1c5859622517a995a69e8308a04bef8e2eaa2efc87684241427239"
+        "sha256": "01059115869f50e12f3513f070398176bb1e144429b42ce37b88fcda53e9f457"
       }
     },
     {
@@ -410,7 +410,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-stablecoin-cross-border-payments-v1",
         "path": "eval/c2/baseline/evidence/stablecoin-cross-border-payments.json",
-        "sha256": "adeef9649a53701697333f7b48c2a5b159bbed881c1cc42447e7daba43e2a93f"
+        "sha256": "02a9f86e34158ee1f2d0ff73c5839cfeeb26793f7f7580af1fda57e8d6ba5490"
       }
     },
     {
@@ -434,7 +434,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-stablecoin-developer-infrastructure-v1",
         "path": "eval/c2/baseline/evidence/stablecoin-developer-infrastructure.json",
-        "sha256": "cfa80678001724e2d1e45558d20138b418e42fbfacc0a3fb25af04599803f519"
+        "sha256": "7a7e16f8d8007bd7daeb65609909609cf80a943c2473b23e0ad35b88b989a5e6"
       }
     },
     {
@@ -482,7 +482,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-stablecoin-request-access-v1",
         "path": "eval/c2/baseline/evidence/stablecoin-request-access.json",
-        "sha256": "33d43cd668be836453d534cbd360ec29508c4a182c4f78a54d652625ab270197"
+        "sha256": "3339c6ece318914176d15215f1f75984294a83a0e29dbc2aa27ab2ee536f7b61"
       }
     },
     {
@@ -506,7 +506,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-stablecoin-trust-compliance-v1",
         "path": "eval/c2/baseline/evidence/stablecoin-trust-compliance.json",
-        "sha256": "2ff6086a5a629adbe73dd2a7af9c928952a28c0440f0919caa8bb1739f8e72b6"
+        "sha256": "548bd3f1c189145e6b6775a0362c8de0238fa1ad8c70747b339c47e310b97ed8"
       }
     },
     {
@@ -530,7 +530,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-uk-loan-application-v1",
         "path": "eval/c2/baseline/evidence/uk-loan-application.json",
-        "sha256": "0d106e29fd06d725bd1e26a9775d0eb805bf87211675b39d57605dfc848605e8"
+        "sha256": "4176181fe974718ee28f7f00ff14f5a8a4d8ae62844a346420faa3298d082178"
       }
     },
     {
@@ -554,7 +554,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-uk-loan-dashboard-v1",
         "path": "eval/c2/baseline/evidence/uk-loan-dashboard.json",
-        "sha256": "0e2161cb97bbd918744599f2d6d91c5e8b274f46a6269005b45ba53280bdb303"
+        "sha256": "eb9e18cb602623812ec4269d1bd871cd01fbeb75995d581167b5982b2fe70c2a"
       }
     },
     {
@@ -578,7 +578,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-uk-loan-decision-v1",
         "path": "eval/c2/baseline/evidence/uk-loan-decision.json",
-        "sha256": "a66b5e07cdf887d8d09eeac7903e5a809ca3ff91175f04d0a5e7e0cd1b0dfb45"
+        "sha256": "67b8dce3d067eaa63f950da780ea327b07eafd3e69417eab1db44c0caa5e8f52"
       }
     },
     {
@@ -602,7 +602,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-uk-loan-eligibility-v1",
         "path": "eval/c2/baseline/evidence/uk-loan-eligibility.json",
-        "sha256": "2469ce3934a403080bb7d91953e41f9598d795b59d9b7d0257fb9f20e5155b8c"
+        "sha256": "e05d5fc35cb60e7db9b0d87c959a0f9640bd76ebffaec8089161c4f515a3f62e"
       }
     },
     {
@@ -626,7 +626,7 @@
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-uk-loan-payment-difficulty-v1",
         "path": "eval/c2/baseline/evidence/uk-loan-payment-difficulty.json",
-        "sha256": "9e123fcf624a84d1f8dd32f40777d940615337cfbefe152eb3480775cc000ee5"
+        "sha256": "e07df561cf4d666f3a78ad269b3417d4fc81a9b94eb11bbf770a6e4d82fbd176"
       }
     }
   ],
@@ -654,7 +654,7 @@
     "path": "eval/c2/calibration/frozen.json",
     "sha256": "bc0561b5c8be36f82397577c58aafc2b1e893407df822272758ed35281a7c51f"
   },
-  "manifestSha256": "91acdf59d2fb76bf2d5f86d0b482aad5c8e574ae7090be44163b4cce98a03549",
+  "manifestSha256": "1728f003e180a579046f63492d8fb2e40f2223eea7c6293fdfe77044a9550061",
   "stagedSections": [
     {
       "section": "migration-source-snapshot:migration-content-product",

@@ -37,30 +37,6 @@
         "/requiredScreens/2/id",
         "/requiredScreens/2/states/2"
       ]
-    },
-    {
-      "id": "evidence:brief:api-overview-states",
-      "sourceArtifactId": "c2-brief-stablecoin-developer-infrastructure-v1",
-      "jsonPointers": [
-        "/requiredScreens/0/id",
-        "/requiredScreens/0/states/2"
-      ]
-    },
-    {
-      "id": "evidence:brief:integration-journey-states",
-      "sourceArtifactId": "c2-brief-stablecoin-developer-infrastructure-v1",
-      "jsonPointers": [
-        "/requiredScreens/1/id",
-        "/requiredScreens/1/states/1"
-      ]
-    },
-    {
-      "id": "evidence:brief:error-reference-states",
-      "sourceArtifactId": "c2-brief-stablecoin-developer-infrastructure-v1",
-      "jsonPointers": [
-        "/requiredScreens/2/id",
-        "/requiredScreens/2/states/3"
-      ]
     }
   ]
 }

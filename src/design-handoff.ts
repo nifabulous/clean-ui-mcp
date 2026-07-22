@@ -100,7 +100,7 @@ export function buildDesignHandoff(input: DesignHandoffInput): DesignHandoffT {
   // contain private corpus paths (.c2-private/, corpus/private/, etc.).
   // The renderer reproduces UiSpec text verbatim into Markdown, so this
   // gate must fire at the handoff boundary, not in the renderer.
-  assertNoPrivatePathsInSpec(handoff.spec);
+  assertNoPrivatePathsInSpec(handoff.spec, handoff.motionIntents);
   // Step 1c: structural Markdown injection. Reject UiSpec text fields or
   // motion intent fields that contain structural Markdown characters
   // (multi-line content with ## headers, fenced code blocks) that would
@@ -138,6 +138,11 @@ function collectSpecTextFields(spec: UiSpecT): Array<{ field: string; value: str
   const fields: Array<{ field: string; value: string }> = [];
   fields.push({ field: "designDirection", value: spec.designDirection });
   if (spec.context.productContext) fields.push({ field: "context.productContext", value: spec.context.productContext });
+  if (spec.context.implementationFramework) fields.push({ field: "context.implementationFramework", value: spec.context.implementationFramework });
+  if (spec.context.designSystem) {
+    if (spec.context.designSystem.registry) fields.push({ field: "context.designSystem.registry", value: spec.context.designSystem.registry });
+    if (spec.context.designSystem.library) fields.push({ field: "context.designSystem.library", value: spec.context.designSystem.library });
+  }
   if (spec.contentVoiceGuidance) fields.push({ field: "contentVoiceGuidance", value: spec.contentVoiceGuidance });
   if (spec.frameworkNotes) fields.push({ field: "frameworkNotes", value: spec.frameworkNotes });
   for (const c of spec.context.constraints) fields.push({ field: "context.constraints[]", value: c });
@@ -149,13 +154,21 @@ function collectSpecTextFields(spec: UiSpecT): Array<{ field: string; value: str
   for (const a of spec.antiPatterns) fields.push({ field: "antiPatterns[].text", value: a.text });
   for (const r of spec.layoutRegions) {
     fields.push({ field: "layoutRegions[].name", value: r.name });
+    fields.push({ field: "layoutRegions[].type", value: r.type });
     for (const c of r.components) fields.push({ field: "layoutRegions[].components[]", value: c });
     for (const r2 of r.responsive) fields.push({ field: "layoutRegions[].responsive[]", value: r2 });
+  }
+  for (const rb of spec.responsiveBehavior) fields.push({ field: "responsiveBehavior[]", value: rb });
+  for (const ci of spec.componentInventory) {
+    fields.push({ field: "componentInventory[].name", value: ci.name });
+    fields.push({ field: "componentInventory[].pattern", value: ci.pattern });
   }
   for (const n of spec.motionGuidance.notes) fields.push({ field: "motionGuidance.notes[]", value: n });
   for (const u of spec.unavailableDecisions) fields.push({ field: "unavailableDecisions[].reason", value: u.reason });
   for (const a of spec.acceptanceCriteria) {
-    if ("description" in a && typeof a.description === "string") fields.push({ field: "acceptanceCriteria[].description", value: a.description });
+    if ("subject" in a && typeof a.subject === "string") fields.push({ field: "acceptanceCriteria[].subject", value: a.subject });
+    if ("expectedOutcome" in a && typeof a.expectedOutcome === "string") fields.push({ field: "acceptanceCriteria[].expectedOutcome", value: a.expectedOutcome });
+    if ("assertion" in a && typeof a.assertion === "string") fields.push({ field: "acceptanceCriteria[].assertion", value: a.assertion });
   }
   return fields;
 }
@@ -165,8 +178,16 @@ function collectSpecTextFields(spec: UiSpecT): Array<{ field: string; value: str
  * renderer reproduces UiSpec text verbatim into Markdown output, so private
  * paths must be caught at the handoff boundary.
  */
-function assertNoPrivatePathsInSpec(spec: UiSpecT): void {
+function assertNoPrivatePathsInSpec(spec: UiSpecT, motionIntents: ReadonlyArray<MotionIntent>): void {
   const fields = collectSpecTextFields(spec);
+  for (const m of motionIntents) {
+    fields.push({ field: `motionIntents[${m.id}].id`, value: m.id });
+    fields.push({ field: `motionIntents[${m.id}].reducedMotion`, value: m.reducedMotion });
+    fields.push({ field: `motionIntents[${m.id}].trigger`, value: m.trigger });
+    fields.push({ field: `motionIntents[${m.id}].durationToken`, value: m.durationToken });
+    fields.push({ field: `motionIntents[${m.id}].easingToken`, value: m.easingToken });
+    for (const p of m.properties) fields.push({ field: `motionIntents[${m.id}].properties[]`, value: p });
+  }
   for (const { field, value } of fields) {
     for (const pattern of PRIVATE_PATH_PATTERNS) {
       if (pattern.test(value)) {
@@ -183,8 +204,10 @@ function assertNoPrivatePathsInSpec(spec: UiSpecT): void {
 /**
  * Reject UiSpec text fields or motion intent fields containing structural
  * Markdown characters that would break the deterministic section contract:
- * - Multi-line values containing `## ` headers (would inject extra sections)
- * - Fenced code blocks ``` (would disrupt the rendered output structure)
+ * - Values starting with `## ` (would inject extra sections)
+ * - Values starting with triple backticks (would inject code blocks)
+ * Checked on ALL values, not just multi-line ones — a single-line value
+ * like "## INJECTED" at the start of a rendered section breaks the 19-section count.
  */
 function assertNoStructuralMarkdownInSpec(spec: UiSpecT, motionIntents: ReadonlyArray<MotionIntent>): void {
   const fields = collectSpecTextFields(spec);
@@ -195,16 +218,13 @@ function assertNoStructuralMarkdownInSpec(spec: UiSpecT, motionIntents: Readonly
     fields.push({ field: `motionIntents[${m.id}].easingToken`, value: m.easingToken });
   }
   for (const { field, value } of fields) {
-    if (value.includes("\n")) {
-      // Allow single newlines in prose but reject values that inject ## headers
-      // or fenced code blocks across line boundaries.
-      if (/^##\s/m.test(value) || /^```/m.test(value)) {
-        throw new Error(
-          `[design-handoff] structural Markdown detected in "${field}": ` +
-          `the value contains a line starting with ## or triple backticks. ` +
-          `This would inject extra sections or code blocks into the deterministic output.`,
-        );
-      }
+    // Check both single-line and multi-line: any line starting with ## or ```
+    if (/^##\s/m.test(value) || /^```/m.test(value)) {
+      throw new Error(
+        `[design-handoff] structural Markdown detected in "${field}": ` +
+        `the value contains a line starting with ## or triple backticks. ` +
+        `This would inject extra sections or code blocks into the deterministic output.`,
+      );
     }
   }
 }

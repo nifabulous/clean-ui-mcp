@@ -689,3 +689,7 @@ Prose quality alone is not a success metric.
 - Crawling an entire origin without a visible bounded plan
 - Accepting pasted raw authentication credentials in the initial hosted API
 - Adding inspected project material to the corpus without separate explicit curation
+
+## 25. Web adapter boundary
+
+The `UiSpec` 1.0 schema remains the canonical source of truth and is unchanged by the web adapter layer. A separately versioned `DesignHandoff` envelope (`handoff_version: "web-1.0"`) wraps a validated `UiSpec` together with a web target profile, structured motion intents, and a `generatedAt` timestamp, then renders it deterministically as `DESIGN.md` (19-section outline) or JSON for one of three supported web targets: `neutral-web`, `astro-react`, or `astro-vue`. An omitted target means neutral web — never implicit React. The target profile is a renderer concern and is NOT embedded in `UiSpec`; moving it into `UiSpec` would require a separate schema-version bump and contract-checkpoint sign-off with refreshed tool fixtures and catalog digests. The closed capability registry fails closed on unknown IDs, incompatible combinations (e.g. Vue with a React-only component source), native runtimes (e.g. SwiftUI), and malformed provenance. See `docs/design-targets.md` for the full profile matrix and `docs/superpowers/plans/2026-07-22-web-design-adapters.md` for the implementation plan.

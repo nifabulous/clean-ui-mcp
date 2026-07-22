@@ -166,7 +166,7 @@ async function main(): Promise<number> {
     case "run":
       return await runRunCli(args);
     case "scorecards":
-      return runScorecardsCli(args);
+      return await runScorecardsCli(args);
     case "closure":
       return await runClosureCli(args);
     default:
@@ -1481,15 +1481,257 @@ function fail(error: string): ExecuteBaselineCampaignResult {
 }
 
 // ---------------------------------------------------------------------------
-// scorecards — offline blinded-packet generation (stub)
+// scorecards — offline metadata-blinded review packet generation (Task C3)
 //
-// The blinded-packet workflow was built in Pass 2 (scripts/create-blinded-review-packets.mts).
-// This command is a structural stub: it validates the inputs and points the
-// operator at the existing script. The actual packet generation is NOT
-// duplicated here — the Pass 2 script is the canonical implementation.
+// Reuses the Pass 2 blinded-packet primitives (createBlindAssignment +
+// buildBlindedReviewPacket + the file blind-map store + shufflePackets). The
+// baseline command is a thin, canonical wrapper:
+//   1. Walk the baseline runs directory for successful scored runs.
+//   2. For each, load the private raw response, parse the candidate, mint a
+//      private blind assignment (reviewId ↔ runId binding), and write the
+//      reviewer-visible packet (ONLY { reviewId, candidate }).
+//   3. Shuffle the packets so the reviewer sees them in random order.
+//   4. Write the private blind map + a provenance manifest.
+//
+// The blinding guarantee (spec §10): provider, model, condition, family, run
+// ID, and case mapping NEVER reach the packet. Terminal failures are preserved
+// in provenance but produce no packet (no fabricated scorecard).
 // ---------------------------------------------------------------------------
 
-function runScorecardsCli(args: Record<string, unknown>): number {
+import {
+  createBlindAssignment,
+  buildBlindedReviewPacket,
+  createFileBlindMapStore,
+  shufflePackets,
+} from "../c2/review-packets.js";
+import { C2CandidateArtifactSchema } from "../c2/candidate-contracts.js";
+
+export interface GenerateBaselineScorecardsInput {
+  /** Durable runs root: one subdir per runId, each with manifest.json + score.json. */
+  runsDir: string;
+  /** Private runs root: <privateRoot>/c2/baseline/runs/<runId>/raw-response.json. */
+  privateRunsDir: string;
+  /** Where to write the blinded-packet files (one per successful run). */
+  packetsDir: string;
+  /** Where to write the private blind map (reviewId ↔ runId binding). */
+  blindMapDir: string;
+  /** Where to write the provenance manifest. */
+  provenancePath: string;
+  /** The reviewer the packets are assigned to. */
+  reviewerActorId: string;
+}
+
+export interface GenerateBaselineScorecardsResult {
+  ok: boolean;
+  error: string | null;
+  /** Number of packets generated (one per successful run). */
+  packetCount: number;
+  /** The packets directory (when ok). */
+  packetsDir: string | null;
+  /** The private blind-map directory (when ok). */
+  blindMapDir: string | null;
+  /** The provenance manifest path (when ok). */
+  provenancePath: string | null;
+}
+
+/**
+ * Generate metadata-blinded review packets from the successful baseline runs.
+ * Reuses the Pass 2 packet primitives; does NOT duplicate the blinding logic.
+ *
+ * A run qualifies for a packet when its manifest has `status: "succeeded"` AND
+ * `parsedOutputSha256` (a successful run always has both). The raw candidate is
+ * loaded from the private raw-response file and parsed through the candidate
+ * schema; an unparseable raw response is skipped (not a packet), preserving the
+ * rule that scorecards are never fabricated. Failed / cost-blocked runs produce
+ * no packet at all.
+ *
+ * The reviewer-visible packet is EXACTLY `{ reviewId, candidate }`. The
+ * reversible binding (reviewId → runId + runOutputSha256) lives only in the
+ * private blind map. The packets are shuffled before write so the reviewer sees
+ * them in a random order, defeating ordering bias.
+ */
+export async function generateBaselineScorecards(
+  input: GenerateBaselineScorecardsInput,
+): Promise<GenerateBaselineScorecardsResult> {
+  if (!existsSync(input.runsDir)) {
+    return {
+      ok: false,
+      error: `runs directory not found: ${input.runsDir}`,
+      packetCount: 0,
+      packetsDir: null,
+      blindMapDir: null,
+      provenancePath: null,
+    };
+  }
+  if (!existsSync(input.privateRunsDir)) {
+    return {
+      ok: false,
+      error: `private runs directory not found: ${input.privateRunsDir}`,
+      packetCount: 0,
+      packetsDir: null,
+      blindMapDir: null,
+      provenancePath: null,
+    };
+  }
+
+  // Discover successful scored runs.
+  const runDirs = readdirSync(input.runsDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .filter(
+      (name) =>
+        existsSync(join(input.runsDir, name, "manifest.json")) &&
+        existsSync(join(input.runsDir, name, "score.json")),
+    )
+    .sort();
+
+  const store = createFileBlindMapStore(input.blindMapDir);
+  const packets: Array<{ reviewId: string; packet: unknown; runId: string }> = [];
+  const stochasticFailures: Array<{ runId: string; reason: string }> = [];
+
+  for (const runDir of runDirs) {
+    const manifestPath = join(input.runsDir, runDir, "manifest.json");
+    let manifest: C2EvaluationRunManifestV2;
+    try {
+      manifest = C2EvaluationRunManifestV2Schema.parse(
+        JSON.parse(readFileSync(manifestPath, "utf-8")),
+      ) as C2EvaluationRunManifestV2;
+    } catch (err) {
+      return {
+        ok: false,
+        error: `failed to parse run manifest ${manifestPath}: ${err instanceof Error ? err.message : String(err)}`,
+        packetCount: 0,
+        packetsDir: null,
+        blindMapDir: null,
+        provenancePath: null,
+      };
+    }
+    // Only successful runs with a parsed output qualify for a packet.
+    if (manifest.status !== "succeeded" || !manifest.parsedOutputSha256) {
+      continue;
+    }
+    // Load the raw candidate from the private raw-response file.
+    const rawPath = join(input.privateRunsDir, runDir, "raw-response.json");
+    if (!existsSync(rawPath)) {
+      stochasticFailures.push({
+        runId: manifest.runId,
+        reason: "no raw-response.json under the private runs root",
+      });
+      continue;
+    }
+    const raw = readFileSync(rawPath, "utf-8");
+    let candidateJson: unknown;
+    try {
+      const trimmed = raw.trim();
+      const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```/);
+      const body = fenced ? fenced[1]! : trimmed;
+      candidateJson = JSON.parse(body);
+    } catch (err) {
+      stochasticFailures.push({
+        runId: manifest.runId,
+        reason: `raw response not parseable JSON (${err instanceof Error ? err.message : err})`,
+      });
+      continue;
+    }
+    let candidate;
+    try {
+      candidate = C2CandidateArtifactSchema.parse(candidateJson);
+    } catch (err) {
+      stochasticFailures.push({
+        runId: manifest.runId,
+        reason: `raw response failed candidate schema (${err instanceof Error ? err.message : err})`,
+      });
+      continue;
+    }
+
+    const assignment = await createBlindAssignment(
+      {
+        runId: manifest.runId,
+        runOutputSha256: manifest.parsedOutputSha256,
+        candidate,
+        assignedReviewerActorId: input.reviewerActorId,
+      },
+      { store },
+    );
+    const packet = buildBlindedReviewPacket(assignment, candidate);
+    packets.push({ reviewId: assignment.reviewId, packet, runId: manifest.runId });
+  }
+
+  // Shuffle so the reviewer sees packets in a random order, not filesystem order.
+  const shuffled = shufflePackets(packets);
+
+  // Ensure the packets directory exists, then write one packet per file.
+  // writeDurableArtifact handles the atomic fsync+rename; we route through it so
+  // the boundary scan runs before each write (a packet must never carry a secret
+  // value or a forbidden content field).
+  for (const { reviewId, packet } of shuffled) {
+    const packetJson = canonicalJsonStringify(packet);
+    try {
+      await writeDurableArtifact(input.packetsDir, `${reviewId}.json`, packetJson, durableBoundaryScan());
+    } catch (err) {
+      return {
+        ok: false,
+        error: `failed to write packet ${reviewId}: ${err instanceof Error ? err.message : String(err)}`,
+        packetCount: packets.length,
+        packetsDir: null,
+        blindMapDir: null,
+        provenancePath: null,
+      };
+    }
+  }
+
+  // Provenance manifest: documents the campaign state (packet count, the
+  // blinded-packets directory, any skipped runs). Durable artifacts must pass
+  // the boundary scan, which rejects any content field that references the
+  // private root. The private blind-map location is therefore recorded as a
+  // logical convention marker (not the literal private path); the CLI logs the
+  // actual private path to stderr separately for the operator.
+  const provenance = {
+    schemaVersion: "1.0",
+    artifactType: "c2-blinded-review-provenance",
+    artifactId: "c2-baseline-blinded-review-provenance-v1",
+    generatedAt: new Date().toISOString(),
+    reviewerActorId: input.reviewerActorId,
+    packetCount: packets.length,
+    packetsDir: relPathFromRepo(input.packetsDir),
+    // Logical convention: the reversible blind map lives under the private
+    // root at the documented baseline subdir. The literal path is operator-
+    // private and is logged to stderr, never embedded in a durable artifact.
+    blindMapConvention: "c2/baseline/blind-map (under the private root)",
+    selectionRule: "one packet per successful scored baseline run (status=succeeded + parsedOutputSha256)",
+    stochasticFailuresRecorded: stochasticFailures,
+  };
+  const provenanceDir = dirname(input.provenancePath);
+  const provenanceFile = basename(input.provenancePath);
+  try {
+    await writeDurableArtifact(
+      provenanceDir,
+      provenanceFile,
+      canonicalJsonStringify(provenance),
+      durableBoundaryScan(),
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      error: `failed to write provenance: ${err instanceof Error ? err.message : String(err)}`,
+      packetCount: packets.length,
+      packetsDir: null,
+      blindMapDir: null,
+      provenancePath: null,
+    };
+  }
+
+  return {
+    ok: true,
+    error: null,
+    packetCount: packets.length,
+    packetsDir: input.packetsDir,
+    blindMapDir: input.blindMapDir,
+    provenancePath: input.provenancePath,
+  };
+}
+
+async function runScorecardsCli(args: Record<string, unknown>): Promise<number> {
   if (!args.manifest || !args.calibration || !args.runs) {
     console.error("error: scorecards requires --manifest <manifest.json> --calibration <frozen.json> --runs <dir>");
     return 2;
@@ -1502,18 +1744,34 @@ function runScorecardsCli(args: Record<string, unknown>): number {
     console.error(`[c2-baseline-scorecards] cannot generate: ${validation.error}`);
     return 1;
   }
-  if (!existsSync(runsDir)) {
-    console.error(`[c2-baseline-scorecards] runs directory not found: ${runsDir}`);
+  // Default output locations mirror the pilot's: packets under the scorecards
+  // dir, private blind map under .c2-private/c2/baseline/blind-map.
+  const privateRoot = (args["private-root"] as string) ?? ".c2-private";
+  const packetsDir = (args["packets-dir"] as string) ?? join(runsDir, "..", "blinded-packets");
+  const blindMapDir = join(privateRoot, "c2/baseline/blind-map");
+  const provenancePath = join(runsDir, "..", "blinded-review-provenance.json");
+  const reviewerActorId =
+    validation.frozenCalibration!.reviewerActorId;
+  const result = await generateBaselineScorecards({
+    runsDir,
+    privateRunsDir: join(privateRoot, "c2/baseline/runs"),
+    packetsDir: resolve(packetsDir),
+    blindMapDir,
+    provenancePath: resolve(provenancePath),
+    reviewerActorId,
+  });
+  if (!result.ok) {
+    console.error(`[c2-baseline-scorecards] ${result.error}`);
     return 1;
   }
-  // Count terminal runs so the operator sees how many packets will be generated.
-  const runDirs = readdirSync(runsDir, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name);
   console.error(
-    `[c2-baseline-scorecards] found ${runDirs.length} run directory(ies) under ${runsDir}. `
-    + `Blinded-packet generation reuses scripts/create-blinded-review-packets.mts (Pass 2). `
-    + `Run that script with --runs ${runsDir} to produce the review packets.`,
+    `[c2-baseline-scorecards] generated ${result.packetCount} blinded review packet(s) under ${result.packetsDir}`,
+  );
+  console.error(
+    `[c2-baseline-scorecards] private blind map under ${result.blindMapDir}`,
+  );
+  console.error(
+    `[c2-baseline-scorecards] provenance: ${result.provenancePath}`,
   );
   return 0;
 }

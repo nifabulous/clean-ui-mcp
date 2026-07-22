@@ -47,9 +47,11 @@ import {
   prepareBaselineConditions,
   buildBaselineExecutionMatrix,
   c2BaselineRunId,
+  generateBaselineScorecards,
   type BaselinePreflightInput,
   type RunClosureSubcommandResult,
   type BaselineExecutionSlot,
+  type GenerateBaselineScorecardsResult,
 } from "./run-c2-baseline.js";
 import {
   C2BaselineManifestSchema,
@@ -516,6 +518,288 @@ describe("c2BaselineRunId — baseline-namespaced run ID", () => {
     const pilot = `c2-run-stablecoin-home-current-grounded-primary-1`;
     expect(baseline).not.toBe(pilot);
     expect(baseline.startsWith(pilot)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IN-PROCESS: generateBaselineScorecards — metadata-blinded packet generation
+// (Task C3)
+//
+// The scorecards subcommand generates one metadata-blinded review packet per
+// SUCCESSFUL scored run, reusing the Pass 2 packet generator primitives
+// (createBlindAssignment + buildBlindedReviewPacket). These tests synthesize a
+// tiny runs fixture (two successful runs + one failed run) and assert:
+//   1. exactly one packet per successful run,
+//   2. packets carry ONLY { reviewId, candidate } (no lane/condition metadata),
+//   3. no successful runs ⇒ zero packets,
+//   4. the private blind map + provenance are written.
+// ---------------------------------------------------------------------------
+
+describe("generateBaselineScorecards — canonical blinded packet generation", () => {
+  /**
+   * Write a synthetic runs fixture: N successful runs (each with manifest.json,
+   * score.json, and a private raw-response.json) + 1 failed run that must NOT
+   * produce a packet. Returns the runs dir + private runs dir.
+   */
+  function writeScorecardFixture(dir: string, successfulCount: number): {
+    runsDir: string;
+    privateRunsDir: string;
+    successfulRunIds: string[];
+  } {
+    const runsDir = join(dir, "eval/c2/baseline/runs");
+    const privateRunsDir = join(dir, ".c2-private/c2/baseline/runs");
+    mkdirSync(runsDir, { recursive: true });
+    mkdirSync(privateRunsDir, { recursive: true });
+    const successfulRunIds: string[] = [];
+    for (let i = 0; i < successfulCount; i++) {
+      const runId = `c2-run-baseline-product-${i + 1}-brief-only-primary-1`;
+      successfulRunIds.push(runId);
+      const runDir = join(runsDir, runId);
+      const privateRunDir = join(privateRunsDir, runId);
+      mkdirSync(runDir, { recursive: true });
+      mkdirSync(privateRunDir, { recursive: true });
+      const outputSha = sha256Hex(Buffer.from(runId));
+      // A schema-valid C2CandidateArtifact (mirrors candidate-contracts.test.ts's
+      // validCandidate). The packet generator parses the raw response through
+      // C2CandidateArtifactSchema, so the fixture must use the real shape. The
+      // candidate's artifactId is the case-scoped ID (NOT derived from the run
+      // ID) — a real candidate's identity is its case, not the run that made it.
+      const candidate = {
+        schemaVersion: "1.0",
+        artifactType: "c2-candidate-design",
+        artifactId: `c2-candidate-product-${i + 1}-v1`,
+        caseId: `product-${i + 1}`,
+        globalDirection: {
+          summary: `Direction for product case ${i + 1}`,
+          principles: ["principle.trust-first", "principle.clarity"],
+        },
+        screenBlueprints: [
+          {
+            id: `screen.home-product-${i + 1}`,
+            summary: `Home dashboard for product case ${i + 1}`,
+            requiredStates: ["state.loading", "state.empty"],
+            mobileRules: ["mobile.bottom-tab"],
+            accessibility: ["a11y.contrast-aaa"],
+            failureAndRecovery: ["failure.offline-retry"],
+            inspectedUrls: ["https://example.com/reference/home"],
+          },
+        ],
+        sourceDecisions: [
+          {
+            id: "decision.audience-hierarchy",
+            lane: "retain",
+            rationale: "Audience hierarchy remains canonical.",
+            evidenceIds: ["evidence.business-hierarchy"],
+          },
+        ],
+        authorityLanes: {
+          retain: ["decision.audience-hierarchy"],
+          adapt: [],
+          reject: [],
+        },
+        acceptanceCriteria: [
+          { id: "criterion.home-renders-loading-state", statement: "Home renders a loading state." },
+        ],
+        assumptions: ["assumption.pilot-scope"],
+        accessibilityAndRecovery: ["a11y.focus-trap", "recovery.retry-bounded"],
+        provenance: { conditionInputSha256: SHA64 },
+      };
+      const candidateJson = canonicalJsonStringify(candidate);
+      writeFileSync(join(privateRunDir, "raw-response.json"), candidateJson);
+      const parsedOutputSha256 = sha256Hex(Buffer.from(candidateJson));
+      const runManifest = {
+        schemaVersion: "2.0",
+        artifactType: "c2-evaluation-run",
+        artifactId: `c2-run-manifest-${runId}`,
+        runId,
+        predecessorRunId: null,
+        casePackage: {
+          artifactId: `c2-package-product-${i + 1}-v1`,
+          path: `eval/c2/baseline/manifest.json`,
+          sha256: SHA64,
+        },
+        condition: "brief-only",
+        corpusSha256: null,
+        retrievalIndexSha256: null,
+        promptSha256: SHA64,
+        harnessGitSha: "1234567890abcdef1234567890abcdef12345678",
+        provider: "openai",
+        model: "gpt-test",
+        samplingParameters: { temperature: 0.2 },
+        evidenceIds: [],
+        startedAt: "2026-07-22T10:00:00.000Z",
+        finishedAt: "2026-07-22T10:01:00.000Z",
+        status: "succeeded",
+        inputSha256: SHA64,
+        rawOutputSha256: outputSha,
+        parsedOutputSha256,
+        promptTokens: 120,
+        completionTokens: 80,
+        costUsd: 0.04,
+        conditionInputRef: fileRef(`c2-condition-input-product-${i + 1}-brief-only`, `eval/c2/condition-inputs/product-${i + 1}-brief-only.json`),
+        scorerRef: fileRef("c2-scorer-v1", "src/c2/scorer.ts"),
+        attemptCount: 1,
+        providerLatencyMs: 432,
+        terminalReason: "succeeded",
+        validationErrors: [],
+        sourceSnapshotIds: [],
+      };
+      writeFileSync(join(runDir, "manifest.json"), canonicalJsonStringify(runManifest));
+      writeFileSync(join(runDir, "score.json"), canonicalJsonStringify({
+        schemaVersion: "1.0",
+        artifactType: "c2-deterministic-score",
+        artifactId: `c2-score-${runId}`,
+        runId,
+        scorerSha256: SHA64,
+        scoredAt: "2026-07-22T10:02:00.000Z",
+        dimensions: [
+          { dimension: "product-appropriateness", score: 4 },
+          { dimension: "cross-screen-coherence", score: 4 },
+          { dimension: "implementation-clarity", score: 4 },
+          { dimension: "originality", score: 4 },
+          { dimension: "accessibility-and-failure-states", score: 4 },
+          { dimension: "evidence-discipline", score: 4 },
+        ],
+      }));
+    }
+    // One FAILED run — must NOT produce a packet.
+    const failedRunId = "c2-run-baseline-product-99-brief-only-primary-1";
+    const failedDir = join(runsDir, failedRunId);
+    mkdirSync(failedDir, { recursive: true });
+    writeFileSync(join(failedDir, "manifest.json"), canonicalJsonStringify({
+      schemaVersion: "2.0",
+      artifactType: "c2-evaluation-run",
+      artifactId: `c2-run-manifest-${failedRunId}`,
+      runId: failedRunId,
+      predecessorRunId: null,
+      casePackage: { artifactId: "c2-package-product-99-v1", path: "eval/c2/baseline/manifest.json", sha256: SHA64 },
+      condition: "brief-only",
+      corpusSha256: null,
+      retrievalIndexSha256: null,
+      promptSha256: SHA64,
+      harnessGitSha: "1234567890abcdef1234567890abcdef12345678",
+      provider: "openai",
+      model: "gpt-test",
+      samplingParameters: { temperature: 0.2 },
+      evidenceIds: [],
+      startedAt: "2026-07-22T10:00:00.000Z",
+      finishedAt: "2026-07-22T10:01:00.000Z",
+      status: "failed",
+      inputSha256: SHA64,
+      rawOutputSha256: sha256Hex(Buffer.from(failedRunId)),
+      parsedOutputSha256: null,
+      promptTokens: 120,
+      completionTokens: 80,
+      costUsd: 0.04,
+      conditionInputRef: fileRef("c2-condition-input-product-99-brief-only", "eval/c2/condition-inputs/product-99-brief-only.json"),
+      scorerRef: fileRef("c2-scorer-v1", "src/c2/scorer.ts"),
+      attemptCount: 1,
+      providerLatencyMs: 432,
+      terminalReason: "validation-failed",
+      validationErrors: ["bad"],
+      sourceSnapshotIds: [],
+    }));
+    return { runsDir, privateRunsDir, successfulRunIds };
+  }
+
+  it("generates exactly one packet per successful run", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "c2-scorecards-2-"));
+    const privateRoot = join(dir, ".c2-private");
+    try {
+      const { runsDir, privateRunsDir } = writeScorecardFixture(dir, 2);
+      const result = await generateBaselineScorecards({
+        runsDir,
+        privateRunsDir,
+        packetsDir: join(dir, "eval/c2/baseline/blinded-packets"),
+        blindMapDir: join(privateRoot, "c2/baseline/blind-map"),
+        provenancePath: join(dir, "eval/c2/baseline/blinded-review-provenance.json"),
+        reviewerActorId: "codex-gold-reviewer",
+      });
+      expect(result.ok, result.ok ? "" : result.error).toBe(true);
+      expect(result.packetCount).toBe(2);
+      expect(existsSync(result.packetsDir)).toBe(true);
+      const packets = readdirSync(result.packetsDir).filter((f) => f.endsWith(".json"));
+      expect(packets).toHaveLength(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("packets contain ONLY { reviewId, candidate } — no lane/condition/run metadata", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "c2-scorecards-blind-"));
+    const privateRoot = join(dir, ".c2-private");
+    try {
+      const { runsDir, privateRunsDir } = writeScorecardFixture(dir, 1);
+      const result = await generateBaselineScorecards({
+        runsDir,
+        privateRunsDir,
+        packetsDir: join(dir, "eval/c2/baseline/blinded-packets"),
+        blindMapDir: join(privateRoot, "c2/baseline/blind-map"),
+        provenancePath: join(dir, "eval/c2/baseline/blinded-review-provenance.json"),
+        reviewerActorId: "codex-gold-reviewer",
+      });
+      expect(result.ok).toBe(true);
+      const packets = readdirSync(result.packetsDir).filter((f) => f.endsWith(".json"));
+      const packet = JSON.parse(readFileSync(join(result.packetsDir, packets[0]!), "utf-8"));
+      // The reviewer-visible packet has EXACTLY two top-level keys.
+      expect(Object.keys(packet).sort()).toEqual(["candidate", "reviewId"]);
+      // The candidate itself must not carry the run ID, condition, or lane.
+      const candidateJson = JSON.stringify(packet.candidate);
+      expect(candidateJson).not.toMatch(/c2-run-baseline/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports zero packets when there are no successful runs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "c2-scorecards-empty-"));
+    const privateRoot = join(dir, ".c2-private");
+    try {
+      // Fixture with 0 successful runs (only the failed run is written).
+      const { runsDir, privateRunsDir } = writeScorecardFixture(dir, 0);
+      const result = await generateBaselineScorecards({
+        runsDir,
+        privateRunsDir,
+        packetsDir: join(dir, "eval/c2/baseline/blinded-packets"),
+        blindMapDir: join(privateRoot, "c2/baseline/blind-map"),
+        provenancePath: join(dir, "eval/c2/baseline/blinded-review-provenance.json"),
+        reviewerActorId: "codex-gold-reviewer",
+      });
+      expect(result.ok).toBe(true);
+      expect(result.packetCount).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a private blind map + provenance manifest", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "c2-scorecards-prov-"));
+    const privateRoot = join(dir, ".c2-private");
+    const blindMapDir = join(privateRoot, "c2/baseline/blind-map");
+    const provenancePath = join(dir, "eval/c2/baseline/blinded-review-provenance.json");
+    try {
+      const { runsDir, privateRunsDir } = writeScorecardFixture(dir, 2);
+      const result = await generateBaselineScorecards({
+        runsDir,
+        privateRunsDir,
+        packetsDir: join(dir, "eval/c2/baseline/blinded-packets"),
+        blindMapDir,
+        provenancePath,
+        reviewerActorId: "codex-gold-reviewer",
+      });
+      expect(result.ok).toBe(true);
+      // The private blind map exists and has one entry per packet.
+      expect(existsSync(join(blindMapDir, "blind-map.json"))).toBe(true);
+      const map = JSON.parse(readFileSync(join(blindMapDir, "blind-map.json"), "utf-8")) as unknown[];
+      expect(map).toHaveLength(2);
+      // Provenance exists and reports the packet count.
+      expect(existsSync(provenancePath)).toBe(true);
+      const provenance = JSON.parse(readFileSync(provenancePath, "utf-8"));
+      expect(provenance.artifactType).toBe("c2-blinded-review-provenance");
+      expect(provenance.packetCount).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

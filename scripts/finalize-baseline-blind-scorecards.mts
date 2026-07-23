@@ -56,9 +56,10 @@ export async function finalizeBaselineBlindScorecards(
   const resolutionPath = join(input.submissionsDir, "blind-resolution.json");
   if (existsSync(resolutionPath)) {
     throw new Error(
-      `[c2-baseline-finalize] blind-resolution.json already exists in ${input.submissionsDir}; `
-      + `refusing to overwrite. If this is a re-run after a partial failure, remove the file manually `
-      + `after verifying the already-finalized scorecards are correct.`,
+      `[c2-baseline-finalize] blind-resolution.json already exists in ${input.submissionsDir}. `
+      + `If all scorecards in the resolution are present in ${input.scorecardsDir}, finalization is complete. `
+      + `If some scorecards are missing (orphan from a crash between phases), remove this file and re-run: `
+      + `the script will skip entries with existing durable scorecards and re-derive any orphans.`,
     );
   }
   const store = createFileBlindMapStore(input.blindMapDir);
@@ -131,7 +132,7 @@ export async function finalizeBaselineBlindScorecards(
       // check whether the durable scorecard exists. If yes, skip (completed).
       // If no, it's an orphan — the map advanced but the scorecard wasn't
       // published. We can still recover by re-deriving the scorecard from
-      // the map entry (the map has runId + runOutputSha256).
+      // the submission + map entry (the map has runId + runOutputSha256).
       if (existingEntry?.state === "finalized") {
         const scorecardArtifactId = `c2-scorecard-${submission.reviewId}`;
         const durablePath = join(input.scorecardsDir, `${scorecardArtifactId}.json`);
@@ -146,7 +147,20 @@ export async function finalizeBaselineBlindScorecards(
         }
         // Map finalized but scorecard missing — orphan from a crash.
         // Re-derive the scorecard from the submission + map entry.
-        const now = (input.now ?? (() => new Date().toISOString()))();
+
+        // F1 fix: Verify the submission's reviewer matches the assigned reviewer
+        // before re-deriving. The normal path delegates to finalizeBlindScorecard
+        // which enforces this; the recovery path must enforce it independently.
+        if (submission.reviewerActorId !== existingEntry.assignedReviewerActorId) {
+          throw new Error(
+            `[c2-baseline-finalize] recovery: reviewer '${submission.reviewerActorId}' does not match ` +
+            `assigned reviewer '${existingEntry.assignedReviewerActorId}' for reviewId ${submission.reviewId}. ` +
+            `The submission may have been tampered with.`,
+          );
+        }
+
+        const nowIso = (input.now ?? (() => new Date().toISOString()))();
+        const scoredAt = typeof nowIso === "string" ? nowIso : nowIso();
         const allMeetsFloor = submission.scores.every((s) => s.score >= 3);
         const recoveredScorecard = {
           schemaVersion: "1.0" as const,
@@ -159,10 +173,16 @@ export async function finalizeBaselineBlindScorecards(
           blindedCondition: true as const,
           scores: submission.scores,
           implementationReady: allMeetsFloor,
-          scoredAt: typeof now === "string" ? now : now(),
+          scoredAt,
         };
         C2HumanScorecardSchema.parse(recoveredScorecard);
+        // F3 fix: duplicate-staging guard (mirrors the normal path's guard).
         const stagingPath = join(stagingDir, `${scorecardArtifactId}.json`);
+        if (existsSync(stagingPath)) {
+          throw new Error(
+            `[c2-baseline-finalize] duplicate scorecard artifactId in staging: ${scorecardArtifactId}`,
+          );
+        }
         await writeDurableArtifact(stagingDir, `${scorecardArtifactId}.json`, canonicalJsonStringify(recoveredScorecard), durableBoundaryScan());
         resolutionEntries.push({
           reviewId: submission.reviewId,

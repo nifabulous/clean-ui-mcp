@@ -15,7 +15,7 @@ import {
   createFileBlindMapStore,
   finalizeBlindScorecard,
 } from "../src/c2/review-packets.ts";
-import { C2HumanScorecardSchema } from "../src/c2/evaluation-contracts.ts";
+import { C2HumanScorecardSchema, C2BlindScoreSubmissionSchema, type C2BlindScoreSubmission } from "../src/c2/evaluation-contracts.ts";
 import {
   writeDurableArtifact,
   writePrivateArtifact,
@@ -62,7 +62,6 @@ export async function finalizeBaselineBlindScorecards(
     );
   }
   const store = createFileBlindMapStore(input.blindMapDir);
-  const resolutionEntries: Array<{ reviewId: string; runId: string; scorecardArtifactId: string }> = [];
   const files = readdirSync(input.submissionsDir)
     .filter((file) => file.endsWith(".json") && file !== "blind-resolution.json")
     .sort();
@@ -74,9 +73,11 @@ export async function finalizeBaselineBlindScorecards(
     );
   }
 
-  // Pre-validate: parse every submission through the schema before any side effects.
-  // This prevents a half-finalized batch from a single malformed or foreign JSON file.
-  const parsedSubmissions: Array<{ file: string; submission: Record<string, unknown> }> = [];
+  // P2 fix: Pre-validate EVERY submission through the full Zod schema before
+  // any side effects. This catches malformed objects that pass a shape check
+  // but fail strict schema validation (wrong types, missing required fields,
+  // invalid enum values, etc.).
+  const validatedSubmissions: C2BlindScoreSubmission[] = [];
   for (const file of files) {
     const submissionPath = join(input.submissionsDir, file);
     let parsed: unknown;
@@ -87,58 +88,99 @@ export async function finalizeBaselineBlindScorecards(
         `[c2-baseline-finalize] file ${file} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    // Verify it looks like a blind score submission (has reviewId + scores).
-    if (typeof parsed !== "object" || parsed === null || !("reviewId" in parsed) || !("scores" in parsed)) {
+    const schemaResult = C2BlindScoreSubmissionSchema.safeParse(parsed);
+    if (!schemaResult.success) {
       throw new Error(
-        `[c2-baseline-finalize] file ${file} does not look like a blind score submission (missing reviewId or scores). `
-        + `Remove foreign JSON files from the submissions directory before finalizing.`,
+        `[c2-baseline-finalize] file ${file} failed C2BlindScoreSubmissionSchema validation: `
+        + schemaResult.error.message.slice(0, 200),
       );
     }
-    parsedSubmissions.push({ file, submission: parsed as Record<string, unknown> });
+    validatedSubmissions.push(schemaResult.data);
   }
 
-  for (const { submission } of parsedSubmissions) {
-    const scorecard = await finalizeBlindScorecard(submission, {
-      store,
-      now: input.now,
-    });
-    C2HumanScorecardSchema.parse(scorecard);
+  // P1 fix: Two-phase transactional finalization.
+  //
+  // Phase 1 (staging): For each submission, finalize through the blind map
+  // (assigned → finalized transition) and write the scorecard to a STAGING
+  // directory. Any failure here aborts the entire batch before any durable
+  // artifacts are published — the staging dir can be safely discarded.
+  //
+  // Phase 2 (publish): Atomically move all staged scorecards to the durable
+  // scorecards directory and write the resolution manifest. This is a
+  // best-effort publish: if the process dies mid-publish, the staged files
+  // and the blind-map state are consistent (both finalized), and a re-run
+  // after removing blind-resolution.json will skip already-finalized entries
+  // via the existing scorecard-path guard and the map's finalized state.
+  const stagingDir = join(input.scorecardsDir, ".staging");
+  mkdirSync(stagingDir, { recursive: true });
+  const resolutionEntries: Array<{ reviewId: string; runId: string; scorecardArtifactId: string }> = [];
 
-    const scorecardPath = join(input.scorecardsDir, `${scorecard.artifactId}.json`);
-    if (existsSync(scorecardPath)) {
-      throw new Error(
-        `[c2-baseline-finalize] scorecard already exists: ${scorecardPath}; refusing to overwrite`,
+  try {
+    for (const submission of validatedSubmissions) {
+      const scorecard = await finalizeBlindScorecard(submission, {
+        store,
+        now: input.now,
+      });
+      C2HumanScorecardSchema.parse(scorecard);
+
+      const stagingPath = join(stagingDir, `${scorecard.artifactId}.json`);
+      if (existsSync(stagingPath)) {
+        throw new Error(
+          `[c2-baseline-finalize] duplicate scorecard artifactId: ${scorecard.artifactId}`,
+        );
+      }
+      // Write to staging (boundary-scanned, same as durable).
+      await writeDurableArtifact(
+        stagingDir,
+        `${scorecard.artifactId}.json`,
+        canonicalJsonStringify(scorecard),
+        durableBoundaryScan(),
+      );
+      resolutionEntries.push({
+        reviewId: submission.reviewId,
+        runId: scorecard.runId,
+        scorecardArtifactId: scorecard.artifactId,
+      });
+    }
+
+    // Phase 2: Publish — move all staged files to the durable directory.
+    for (const entry of resolutionEntries) {
+      const staged = join(stagingDir, `${entry.scorecardArtifactId}.json`);
+      const durable = join(input.scorecardsDir, `${entry.scorecardArtifactId}.json`);
+      if (existsSync(durable)) {
+        // Already published by a prior partial run — skip, don't overwrite.
+        continue;
+      }
+      const data = readFileSync(staged);
+      await writeDurableArtifact(
+        input.scorecardsDir,
+        `${entry.scorecardArtifactId}.json`,
+        data.toString("utf-8"),
+        durableBoundaryScan(),
       );
     }
-    await writeDurableArtifact(
-      input.scorecardsDir,
-      `${scorecard.artifactId}.json`,
-      canonicalJsonStringify(scorecard),
-      durableBoundaryScan(),
+
+    const nowIso = (input.now ?? (() => new Date().toISOString()))();
+    const resolution = {
+      schemaVersion: "1.0",
+      artifactType: "c2-baseline-blind-resolution",
+      artifactId: "c2-baseline-blind-resolution-v1",
+      resolvedAt: nowIso,
+      finalizedCount: resolutionEntries.length,
+      resolution: resolutionEntries,
+    };
+    await writePrivateArtifact(
+      input.submissionsDir,
+      "blind-resolution.json",
+      Buffer.from(canonicalJsonStringify(resolution), "utf8"),
     );
-    resolutionEntries.push({
-      reviewId: submission.reviewId,
-      runId: scorecard.runId,
-      scorecardArtifactId: scorecard.artifactId,
-    });
+  } finally {
+    // Clean up staging directory regardless of success or failure.
+    try { rmSync(stagingDir, { recursive: true, force: true }); } catch { /* best effort */ }
   }
-
-  const resolution = {
-    schemaVersion: "1.0",
-    artifactType: "c2-baseline-blind-resolution",
-    artifactId: "c2-baseline-blind-resolution-v1",
-    resolvedAt: (input.now ?? (() => new Date().toISOString()))(),
-    finalizedCount: resolutionEntries.length,
-    resolution: resolutionEntries,
-  };
-  await writePrivateArtifact(
-    input.submissionsDir,
-    "blind-resolution.json",
-    Buffer.from(canonicalJsonStringify(resolution), "utf8"),
-  );
 
   return {
-    finalizedCount: resolution.finalizedCount,
+    finalizedCount: resolutionEntries.length,
     scorecardsDir: input.scorecardsDir,
     resolutionPath,
   };

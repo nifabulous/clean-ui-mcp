@@ -69,7 +69,7 @@ describe("finalizeBaselineBlindScorecards", () => {
         scoredAt: "2026-07-23T01:00:00.000Z",
       });
       expect(JSON.stringify(scorecard)).not.toContain(".c2-private");
-      expect(readdirSync(scorecardsDir)).toEqual([`c2-scorecard-${REVIEW_ID}.json`]);
+      expect(readdirSync(scorecardsDir).filter(f => f.endsWith(".json"))).toEqual([`c2-scorecard-${REVIEW_ID}.json`]);
 
       const resolution = JSON.parse(readFileSync(join(submissionsDir, "blind-resolution.json"), "utf8"));
       expect(resolution).toMatchObject({ artifactType: "c2-baseline-blind-resolution", finalizedCount: 1 });

@@ -54,15 +54,50 @@ export async function finalizeBaselineBlindScorecards(
 
   mkdirSync(input.scorecardsDir, { recursive: true });
   const resolutionPath = join(input.submissionsDir, "blind-resolution.json");
+  if (existsSync(resolutionPath)) {
+    throw new Error(
+      `[c2-baseline-finalize] blind-resolution.json already exists in ${input.submissionsDir}; `
+      + `refusing to overwrite. If this is a re-run after a partial failure, remove the file manually `
+      + `after verifying the already-finalized scorecards are correct.`,
+    );
+  }
   const store = createFileBlindMapStore(input.blindMapDir);
   const resolutionEntries: Array<{ reviewId: string; runId: string; scorecardArtifactId: string }> = [];
   const files = readdirSync(input.submissionsDir)
     .filter((file) => file.endsWith(".json") && file !== "blind-resolution.json")
     .sort();
 
+  if (files.length === 0) {
+    throw new Error(
+      `[c2-baseline-finalize] no submission files found in ${input.submissionsDir}. `
+      + `Verify the reviewer submitted scorecards to the correct directory before finalizing.`,
+    );
+  }
+
+  // Pre-validate: parse every submission through the schema before any side effects.
+  // This prevents a half-finalized batch from a single malformed or foreign JSON file.
+  const parsedSubmissions: Array<{ file: string; submission: Record<string, unknown> }> = [];
   for (const file of files) {
     const submissionPath = join(input.submissionsDir, file);
-    const submission = JSON.parse(readFileSync(submissionPath, "utf8"));
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(submissionPath, "utf8"));
+    } catch (err) {
+      throw new Error(
+        `[c2-baseline-finalize] file ${file} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    // Verify it looks like a blind score submission (has reviewId + scores).
+    if (typeof parsed !== "object" || parsed === null || !("reviewId" in parsed) || !("scores" in parsed)) {
+      throw new Error(
+        `[c2-baseline-finalize] file ${file} does not look like a blind score submission (missing reviewId or scores). `
+        + `Remove foreign JSON files from the submissions directory before finalizing.`,
+      );
+    }
+    parsedSubmissions.push({ file, submission: parsed as Record<string, unknown> });
+  }
+
+  for (const { submission } of parsedSubmissions) {
     const scorecard = await finalizeBlindScorecard(submission, {
       store,
       now: input.now,

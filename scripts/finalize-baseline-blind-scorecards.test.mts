@@ -77,7 +77,7 @@ describe("finalizeBaselineBlindScorecards", () => {
 
       await expect(
         finalizeBaselineBlindScorecards({ submissionsDir, scorecardsDir, blindMapDir }),
-      ).rejects.toThrow("could not transition assigned");
+      ).rejects.toThrow(/blind-resolution.json already exists|could not transition assigned/i);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

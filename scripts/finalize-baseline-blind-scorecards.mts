@@ -145,18 +145,57 @@ export async function finalizeBaselineBlindScorecards(
         const scorecardArtifactId = `c2-scorecard-${submission.reviewId}`;
         const durablePath = join(input.scorecardsDir, `${scorecardArtifactId}.json`);
         if (existsSync(durablePath)) {
-          // Hardening: verify the durable scorecard's hash binding matches
-          // the map entry. Existence alone is not sufficient.
-          const onDisk = JSON.parse(readFileSync(durablePath, "utf8")) as { runId?: string; runOutputSha256?: string };
-          if (onDisk.runId !== existingEntry.runId || onDisk.runOutputSha256 !== existingEntry.runOutputSha256) {
+          let parsedOnDisk: unknown;
+          try {
+            parsedOnDisk = JSON.parse(readFileSync(durablePath, "utf8"));
+          } catch (error) {
             throw new Error(
-              `[c2-baseline-finalize] durable scorecard ${scorecardArtifactId}.json has stale hash binding: ` +
-              `runId=${onDisk.runId} (expected ${existingEntry.runId}), ` +
-              `runOutputSha256=${onDisk.runOutputSha256?.slice(0, 12)}… (expected ${existingEntry.runOutputSha256.slice(0, 12)}…). ` +
-              `The scorecard may have been tampered with or bound to the wrong run.`,
+              `[c2-baseline-finalize] durable scorecard ${scorecardArtifactId}.json is not valid JSON: `
+              + `${error instanceof Error ? error.message : String(error)}`,
             );
           }
-          // Hash binding verified — safe to skip.
+
+          const schemaResult = C2HumanScorecardSchema.safeParse(parsedOnDisk);
+          if (!schemaResult.success) {
+            throw new Error(
+              `[c2-baseline-finalize] durable scorecard ${scorecardArtifactId}.json failed `
+              + `C2HumanScorecardSchema validation: ${schemaResult.error.message.slice(0, 240)}`,
+            );
+          }
+          const onDisk = schemaResult.data;
+          const mismatches: string[] = [];
+          if (onDisk.artifactId !== scorecardArtifactId) {
+            mismatches.push(`artifactId=${onDisk.artifactId} (expected ${scorecardArtifactId})`);
+          }
+          if (onDisk.runId !== existingEntry.runId) {
+            mismatches.push(`runId=${onDisk.runId} (expected ${existingEntry.runId})`);
+          }
+          if (onDisk.runOutputSha256 !== existingEntry.runOutputSha256) {
+            mismatches.push(
+              `runOutputSha256=${onDisk.runOutputSha256.slice(0, 12)}… `
+              + `(expected ${existingEntry.runOutputSha256.slice(0, 12)}…)`,
+            );
+          }
+          if (onDisk.reviewerActorId !== existingEntry.assignedReviewerActorId) {
+            mismatches.push(
+              `reviewerActorId=${onDisk.reviewerActorId} `
+              + `(expected ${existingEntry.assignedReviewerActorId})`,
+            );
+          }
+          if (submission.reviewerActorId !== existingEntry.assignedReviewerActorId) {
+            mismatches.push(
+              `submission reviewerActorId=${submission.reviewerActorId} `
+              + `(expected ${existingEntry.assignedReviewerActorId})`,
+            );
+          }
+          if (mismatches.length > 0) {
+            throw new Error(
+              `[c2-baseline-finalize] durable scorecard ${scorecardArtifactId}.json failed `
+              + `recovery integrity checks: ${mismatches.join(", ")}. `
+              + `The scorecard may have been tampered with or bound to the wrong review.`,
+            );
+          }
+          // Full schema and binding checks passed — safe to skip.
           resolutionEntries.push({
             reviewId: submission.reviewId,
             runId: existingEntry.runId,

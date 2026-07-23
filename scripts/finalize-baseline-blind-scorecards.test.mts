@@ -343,7 +343,7 @@ describe("finalizeBaselineBlindScorecards", () => {
           schemaVersion: "1.0",
           artifactType: "c2-human-scorecard",
           artifactId: scorecardArtifactId,
-          runId: "WRONG-RUN-ID",
+          runId: "wrong-run-id",
           runOutputSha256: "f".repeat(64),
           reviewerActorId: "gold-label-owner",
           reviewerActorKind: "human",
@@ -362,7 +362,118 @@ describe("finalizeBaselineBlindScorecards", () => {
           blindMapDir,
           now: () => "2026-07-23T01:00:00.000Z",
         }),
-      ).rejects.toThrow(/stale hash binding|tampered|wrong run/i);
+      ).rejects.toThrow(/recovery integrity checks|tampered|wrong/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a durable scorecard with matching hashes but invalid scorecard content", async () => {
+    const root = mkdtempSync(join(tmpdir(), "c2-baseline-finalizer-invalid-durable-"));
+    try {
+      const submissionsDir = join(root, "eval/c2/baseline/blinded-submissions");
+      const scorecardsDir = join(root, "eval/c2/baseline/scorecards");
+      const blindMapDir = join(root, ".c2-private/c2/baseline/blind-map");
+      mkdirSync(submissionsDir, { recursive: true });
+      mkdirSync(scorecardsDir, { recursive: true });
+      mkdirSync(blindMapDir, { recursive: true });
+
+      const REVIEW_ID = "66666666-6666-4666-8666-666666666666";
+      const RUN_ID = "c2-run-baseline-invalid-durable-current-grounded-primary-1";
+      const OUTPUT_SHA = "6".repeat(64);
+      writeFileSync(join(blindMapDir, "blind-map.json"), JSON.stringify([{
+        reviewId: REVIEW_ID,
+        runId: RUN_ID,
+        runOutputSha256: OUTPUT_SHA,
+        assignedReviewerActorId: "gold-label-owner",
+        state: "finalized" as const,
+      }]));
+      writeFileSync(join(submissionsDir, `${REVIEW_ID}.json`), JSON.stringify({
+        schemaVersion: "1.0",
+        artifactType: "c2-blind-score-submission",
+        reviewId: REVIEW_ID,
+        reviewerActorId: "gold-label-owner",
+        reviewerActorKind: "human",
+        scores: DIMENSION_SCORES,
+        submittedAt: "2026-07-23T01:00:00.000Z",
+      }));
+
+      const scorecardArtifactId = `c2-scorecard-${REVIEW_ID}`;
+      writeFileSync(join(scorecardsDir, `${scorecardArtifactId}.json`), JSON.stringify({
+        schemaVersion: "1.0",
+        artifactType: "c2-human-scorecard",
+        artifactId: scorecardArtifactId,
+        runId: RUN_ID,
+        runOutputSha256: OUTPUT_SHA,
+        reviewerActorId: "gold-label-owner",
+        reviewerActorKind: "human",
+        blindedCondition: true,
+        scores: DIMENSION_SCORES.map((score) => ({ ...score, score: 6 })),
+        implementationReady: true,
+        scoredAt: "2026-07-23T01:00:00.000Z",
+      }));
+
+      await expect(finalizeBaselineBlindScorecards({
+        submissionsDir,
+        scorecardsDir,
+        blindMapDir,
+        now: () => "2026-07-23T01:00:00.000Z",
+      })).rejects.toThrow(/C2HumanScorecardSchema validation/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a valid durable scorecard with the wrong artifact identity", async () => {
+    const root = mkdtempSync(join(tmpdir(), "c2-baseline-finalizer-identity-"));
+    try {
+      const submissionsDir = join(root, "eval/c2/baseline/blinded-submissions");
+      const scorecardsDir = join(root, "eval/c2/baseline/scorecards");
+      const blindMapDir = join(root, ".c2-private/c2/baseline/blind-map");
+      mkdirSync(submissionsDir, { recursive: true });
+      mkdirSync(scorecardsDir, { recursive: true });
+      mkdirSync(blindMapDir, { recursive: true });
+
+      const REVIEW_ID = "77777777-7777-4777-8777-777777777777";
+      const RUN_ID = "c2-run-baseline-identity-current-grounded-primary-1";
+      const OUTPUT_SHA = "7".repeat(64);
+      writeFileSync(join(blindMapDir, "blind-map.json"), JSON.stringify([{
+        reviewId: REVIEW_ID,
+        runId: RUN_ID,
+        runOutputSha256: OUTPUT_SHA,
+        assignedReviewerActorId: "gold-label-owner",
+        state: "finalized" as const,
+      }]));
+      writeFileSync(join(submissionsDir, `${REVIEW_ID}.json`), JSON.stringify({
+        schemaVersion: "1.0",
+        artifactType: "c2-blind-score-submission",
+        reviewId: REVIEW_ID,
+        reviewerActorId: "gold-label-owner",
+        reviewerActorKind: "human",
+        scores: DIMENSION_SCORES,
+        submittedAt: "2026-07-23T01:00:00.000Z",
+      }));
+
+      writeFileSync(join(scorecardsDir, `c2-scorecard-${REVIEW_ID}.json`), JSON.stringify({
+        schemaVersion: "1.0",
+        artifactType: "c2-human-scorecard",
+        artifactId: "c2-scorecard-88888888-8888-4888-8888-888888888888",
+        runId: RUN_ID,
+        runOutputSha256: OUTPUT_SHA,
+        reviewerActorId: "gold-label-owner",
+        reviewerActorKind: "human",
+        blindedCondition: true,
+        scores: DIMENSION_SCORES,
+        implementationReady: true,
+        scoredAt: "2026-07-23T01:00:00.000Z",
+      }));
+
+      await expect(finalizeBaselineBlindScorecards({
+        submissionsDir,
+        scorecardsDir,
+        blindMapDir,
+        now: () => "2026-07-23T01:00:00.000Z",
+      })).rejects.toThrow(/recovery integrity checks.*artifactId/i);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

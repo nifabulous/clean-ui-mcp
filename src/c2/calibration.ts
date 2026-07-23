@@ -654,6 +654,19 @@ export interface FreezeCalibrationInput {
   runs?: CalibrationRun[];
   /** Scorecards backing the proposal (for hash binding). */
   scorecards?: CalibrationScorecard[];
+  /**
+   * Repository-relative root directory the run manifests live under. Defaults
+   * to `eval/c2/runs`. Used to build the frozen `runManifestRefs[].path` so the
+   * ref points at the directory the actual evidence file lives in (e.g. a
+   * remediation pilot whose runs live under `eval/c2/remediation-runs`).
+   * Must be repository-relative and slash-normalized — never absolute.
+   */
+  runsRoot?: string;
+  /**
+   * Repository-relative root directory the scorecards live under. Defaults to
+   * `eval/c2/scorecards`. See {@link runsRoot}.
+   */
+  scorecardsRoot?: string;
   campaignConfigRef?: ArtifactFileRef;
   pricingTableRef?: ArtifactFileRef;
   artifactId: string;
@@ -667,6 +680,15 @@ export interface FreezeCalibrationInput {
  */
 export function freezeCalibration(input: FreezeCalibrationInput): C2FrozenCalibration {
   const { proposal, compatibility, authorization } = input;
+
+  // Repository-relative roots for the run/scorecard evidence files. Default to
+  // the canonical pilot directories so existing callers see no change. The
+  // remediation pilot supplies eval/c2/remediation-runs +
+  // eval/c2/remediation-scorecards. normalizeRoot rejects absolute paths and
+  // collapses backslashes to forward slashes so the resulting artifact refs
+  // are always repository-relative and slash-normalized.
+  const runsRoot = normalizeRoot(input.runsRoot ?? "eval/c2/runs");
+  const scorecardsRoot = normalizeRoot(input.scorecardsRoot ?? "eval/c2/scorecards");
 
   // 1. Proposal hash must match exactly.
   if (authorization.proposalSha256 !== proposal.proposalSha256) {
@@ -749,10 +771,10 @@ export function freezeCalibration(input: FreezeCalibrationInput): C2FrozenCalibr
   //    suffixed `-fallback`). Using `runId` for the path would point at the
   //    wrong directory and the ref would fail to resolve in a fresh clone.
   const runManifestRefs = input.runs && input.runs.length > 0
-    ? input.runs.map((r) => manifestRef(r))
+    ? input.runs.map((r) => manifestRef(r, runsRoot))
     : [proposalRef(proposal)];
   const scorecardRefs = input.scorecards && input.scorecards.length > 0
-    ? input.scorecards.map((s) => scorecardRef(s.scorecard))
+    ? input.scorecards.map((s) => scorecardRef(s.scorecard, scorecardsRoot))
     : [proposalRef(proposal)];
 
   const frozen: C2FrozenCalibration = {
@@ -798,6 +820,30 @@ function sameCompatibility(a: IndependentCompatibility, b: IndependentCompatibil
 }
 
 /**
+ * Normalize a caller-supplied evidence root so the resulting artifact refs are
+ * repository-relative and slash-normalized. Backslashes (a Windows hazard) are
+ * collapsed to forward slashes, trailing slashes are dropped, and absolute
+ * paths are rejected outright — a frozen artifact ref must never be absolute.
+ */
+function normalizeRoot(root: string): string {
+  if (typeof root !== "string" || root.trim().length === 0) {
+    throw new Error("[c2-freeze] runsRoot/scorecardsRoot must be a non-empty string");
+  }
+  let normalized = root.replace(/\\/g, "/").replace(/\/+$/g, "");
+  if (normalized === "") {
+    throw new Error("[c2-freeze] runsRoot/scorecardsRoot must be a non-empty string");
+  }
+  // Reject absolute paths (POSIX or Windows drive letter). A frozen artifact
+  // ref MUST be repository-relative so it resolves identically in any clone.
+  if (normalized.startsWith("/") || /^[A-Za-z]:[\\/]/.test(normalized)) {
+    throw new Error(
+      `[c2-freeze] runsRoot/scorecardsRoot must be repository-relative, got an absolute path: ${root}`,
+    );
+  }
+  return normalized;
+}
+
+/**
  * Build a frozen-calibration ref for one run's manifest. Uses `run.runDir`
  * (the actual on-disk directory name) for the path so a fresh clone can
  * resolve the file the SHA-256 binds — NOT `run.manifest.runId`, which may
@@ -805,19 +851,22 @@ function sameCompatibility(a: IndependentCompatibility, b: IndependentCompatibil
  * suffixed `-fallback` while its manifest's `runId` carries the canonical
  * un-suffixed identifier). The hash is over the manifest's canonical JSON
  * (stable across on-disk key ordering), so path + hash always agree.
+ *
+ * The `runsRoot` selects which directory the manifest lives under (default
+ * `eval/c2/runs`); a remediation pilot passes `eval/c2/remediation-runs`.
  */
-function manifestRef(run: CalibrationRun): ArtifactFileRef {
+function manifestRef(run: CalibrationRun, runsRoot: string): ArtifactFileRef {
   return {
     artifactId: run.manifest.artifactId,
-    path: `eval/c2/runs/${run.runDir}/manifest.json`,
+    path: `${runsRoot}/${run.runDir}/manifest.json`,
     sha256: sha256Hex(Buffer.from(canonicalJsonStringify(run.manifest), "utf-8")),
   };
 }
 
-function scorecardRef(scorecard: C2HumanScorecard): ArtifactFileRef {
+function scorecardRef(scorecard: C2HumanScorecard, scorecardsRoot: string): ArtifactFileRef {
   return {
     artifactId: scorecard.artifactId,
-    path: `eval/c2/scorecards/${scorecard.artifactId}.json`,
+    path: `${scorecardsRoot}/${scorecard.artifactId}.json`,
     sha256: sha256Hex(Buffer.from(canonicalJsonStringify(scorecard), "utf-8")),
   };
 }

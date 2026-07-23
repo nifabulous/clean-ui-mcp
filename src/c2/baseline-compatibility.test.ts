@@ -184,9 +184,23 @@ describe("validateBaselineCompatibility — edge cases on refs", () => {
 
   it("rejects when the expected refs themselves are the wrong count (caller error)", () => {
     const ev = buildValidEvaluation();
-    // Caller passes only 4 expected refs — the evaluator still requires the
-    // evaluation to match what was passed, and 5 ≠ 4 fails.
     expect(() => validateBaselineCompatibility(ev, INDEPENDENT_RUN_REFS.slice(0, 4))).toThrow(/independentRunRefs|count|exactly/i);
+  });
+
+  it("rejects when the 5 refs do not span all 3 families (missing safety)", () => {
+    const ev = buildValidEvaluation();
+    // Replace BOTH safety cases with product cases — now no safety coverage.
+    const productOnlyRefs = INDEPENDENT_RUN_REFS.map((r) => {
+      if (r.artifactId.includes("safety-conflicting")) {
+        return { ...r, artifactId: r.artifactId.replace("safety-conflicting-evidence", "stablecoin-trust-compliance"), path: r.path.replace("safety-conflicting-evidence", "stablecoin-trust-compliance") };
+      }
+      if (r.artifactId.includes("named-inspiration-safety")) {
+        return { ...r, artifactId: r.artifactId.replace("named-inspiration-safety", "stablecoin-request-access"), path: r.path.replace("named-inspiration-safety", "stablecoin-request-access") };
+      }
+      return r;
+    });
+    const evPatched = { ...ev, independentRunRefs: productOnlyRefs };
+    expect(() => validateBaselineCompatibility(evPatched, productOnlyRefs)).toThrow(/famil|safety/i);
   });
 
   void SHA64;

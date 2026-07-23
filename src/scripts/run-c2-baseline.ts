@@ -462,6 +462,35 @@ export function validateBaselineFiles(
   }
 
   const frozenCalibration = C2FrozenCalibrationSchema.parse(readJson(calibrationPath)) as C2FrozenCalibration;
+
+  // Deep-hash check: verify the frozen calibration's campaignConfigRef and
+  // pricingTableRef against the on-disk files. This catches the drift that
+  // occurs when a config edit (e.g. A1's 8192 change) invalidates the frozen
+  // binding before a re-freeze (A3) has run.
+  const driftWarnings: string[] = [];
+  const repoRoot = process.cwd();
+  for (const [refName, ref] of [
+    ["campaignConfigRef", frozenCalibration.campaignConfigRef],
+    ["pricingTableRef", frozenCalibration.pricingTableRef],
+  ] as const) {
+    const refPath = resolve(repoRoot, ref.path);
+    if (existsSync(refPath)) {
+      const actualSha = sha256Hex(readFileSync(refPath));
+      if (actualSha !== ref.sha256) {
+        driftWarnings.push(
+          `${refName}: frozen pins ${ref.sha256.slice(0, 12)}… but on-disk ${ref.path} is ${actualSha.slice(0, 12)}…. ` +
+          `The config/pricing was edited after the calibration was frozen. Re-run the pilot campaign and re-freeze (Tasks A2-A3) before paid execution.`,
+        );
+      }
+    }
+  }
+  if (driftWarnings.length > 0) {
+    // Don't fail validate (the manifest + calibration binding is still valid);
+    // but warn loudly so the operator knows run --paid will fail closed.
+    console.error(`[c2-baseline-validate] WARNING: calibration refs have drifted:`);
+    for (const w of driftWarnings) console.error(`  - ${w}`);
+  }
+
   return { ok: true, error: null, manifest, frozenCalibration, calibrationFileSha256: calibrationSha };
 }
 

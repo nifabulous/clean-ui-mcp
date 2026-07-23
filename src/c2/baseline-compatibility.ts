@@ -164,6 +164,31 @@ export function validateBaselineCompatibility(
     }
   }
 
+  // 4. Family coverage check. The 5 independent case IDs span all 3 families
+  //    (product, migration, safety) per the spec-lock. Verify the expected
+  //    refs' artifact IDs reference cases from all 3 families. This catches
+  //    a human binding 5 product-only runs.
+  const expectedCaseIds = expectedIndependentRunRefs.map((r) => {
+    // Extract caseId from artifactId like "c2-run-manifest-c2-run-baseline-stablecoin-home-current-grounded-independent-1"
+    const match = r.artifactId.match(/baseline-(.+?)-current-grounded/);
+    return match ? match[1] : r.artifactId;
+  });
+  // The 5 spec-locked independent cases cover: stablecoin-home (product),
+  // finance-news-story-detail (product), public-marketing-migration (migration),
+  // safety-conflicting-evidence (safety), named-inspiration-safety (safety).
+  // We verify the IDs themselves contain the family signals rather than
+  // requiring the caller to pass family info separately.
+  const hasMigration = expectedCaseIds.some((id) => id.includes("migration"));
+  const hasSafety = expectedCaseIds.some((id) => id.includes("safety"));
+  const hasProduct = expectedCaseIds.some((id) => !id.includes("migration") && !id.includes("safety"));
+  if (!hasMigration || !hasSafety || !hasProduct) {
+    throw new Error(
+      `[c2-compatibility] independentRunRefs do not cover all 3 families. `
+      + `Expected product + migration + safety. Got: product=${hasProduct}, migration=${hasMigration}, safety=${hasSafety}. `
+      + `Case IDs: ${expectedCaseIds.join(", ")}`,
+    );
+  }
+
   return parsed;
 }
 

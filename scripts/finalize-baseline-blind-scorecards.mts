@@ -8,7 +8,7 @@
  * response or condition payload. The reviewId-to-run resolution manifest
  * remains private beside the submissions.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -98,25 +98,81 @@ export async function finalizeBaselineBlindScorecards(
     validatedSubmissions.push(schemaResult.data);
   }
 
-  // P1 fix: Two-phase transactional finalization.
+  // P1 fix: Two-phase transactional finalization with crash recovery.
   //
-  // Phase 1 (staging): For each submission, finalize through the blind map
-  // (assigned → finalized transition) and write the scorecard to a STAGING
-  // directory. Any failure here aborts the entire batch before any durable
-  // artifacts are published — the staging dir can be safely discarded.
+  // Before phase 1, we load the blind map to identify entries that are
+  // already finalized (from a prior partial run). Those entries are checked
+  // for a corresponding durable scorecard: if it exists, they're skipped
+  // (already completed). If the map is finalized but the scorecard is missing,
+  // the entry is an orphan from a crash and must be manually resolved.
   //
-  // Phase 2 (publish): Atomically move all staged scorecards to the durable
-  // scorecards directory and write the resolution manifest. This is a
-  // best-effort publish: if the process dies mid-publish, the staged files
-  // and the blind-map state are consistent (both finalized), and a re-run
-  // after removing blind-resolution.json will skip already-finalized entries
-  // via the existing scorecard-path guard and the map's finalized state.
+  // Phase 1 (staging): Finalize each non-completed submission through the
+  // blind map (assigned → finalized) and write scorecards to a staging dir.
+  // Any failure aborts before durable publication.
+  //
+  // Phase 2 (publish): Move staged files to the durable scorecards directory
+  // and write the resolution manifest. A crash between phases leaves the
+  // map finalized + staged files present; a re-run (after removing
+  // blind-resolution.json) skips the completed entries via the durable-path
+  // check below.
   const stagingDir = join(input.scorecardsDir, ".staging");
   mkdirSync(stagingDir, { recursive: true });
   const resolutionEntries: Array<{ reviewId: string; runId: string; scorecardArtifactId: string }> = [];
 
+  // Load map once for the recovery check.
+  const mapEntries = await store.load();
+  const mapByReviewId = new Map(mapEntries.map((e) => [e.reviewId, e]));
+
   try {
     for (const submission of validatedSubmissions) {
+      const existingEntry = mapByReviewId.get(submission.reviewId);
+
+      // Recovery check: if this entry is already finalized from a prior run,
+      // check whether the durable scorecard exists. If yes, skip (completed).
+      // If no, it's an orphan — the map advanced but the scorecard wasn't
+      // published. We can still recover by re-deriving the scorecard from
+      // the map entry (the map has runId + runOutputSha256).
+      if (existingEntry?.state === "finalized") {
+        const scorecardArtifactId = `c2-scorecard-${submission.reviewId}`;
+        const durablePath = join(input.scorecardsDir, `${scorecardArtifactId}.json`);
+        if (existsSync(durablePath)) {
+          // Already completed in a prior run — skip.
+          resolutionEntries.push({
+            reviewId: submission.reviewId,
+            runId: existingEntry.runId,
+            scorecardArtifactId,
+          });
+          continue;
+        }
+        // Map finalized but scorecard missing — orphan from a crash.
+        // Re-derive the scorecard from the submission + map entry.
+        const now = (input.now ?? (() => new Date().toISOString()))();
+        const allMeetsFloor = submission.scores.every((s) => s.score >= 3);
+        const recoveredScorecard = {
+          schemaVersion: "1.0" as const,
+          artifactType: "c2-human-scorecard" as const,
+          artifactId: scorecardArtifactId,
+          runId: existingEntry.runId,
+          runOutputSha256: existingEntry.runOutputSha256,
+          reviewerActorId: submission.reviewerActorId,
+          reviewerActorKind: "human" as const,
+          blindedCondition: true as const,
+          scores: submission.scores,
+          implementationReady: allMeetsFloor,
+          scoredAt: typeof now === "string" ? now : now(),
+        };
+        C2HumanScorecardSchema.parse(recoveredScorecard);
+        const stagingPath = join(stagingDir, `${scorecardArtifactId}.json`);
+        await writeDurableArtifact(stagingDir, `${scorecardArtifactId}.json`, canonicalJsonStringify(recoveredScorecard), durableBoundaryScan());
+        resolutionEntries.push({
+          reviewId: submission.reviewId,
+          runId: existingEntry.runId,
+          scorecardArtifactId,
+        });
+        continue;
+      }
+
+      // Normal path: finalize through the blind map.
       const scorecard = await finalizeBlindScorecard(submission, {
         store,
         now: input.now,

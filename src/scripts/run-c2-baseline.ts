@@ -327,28 +327,36 @@ function loadEvidenceContent(privatePayloadPath: string): Map<string, string> {
 }
 
 /**
- * Build the baseline's private + durable store. Mirrors the pilot's
- * `makeFilesystemStore` with the baseline's private subdir
- * (`c2/baseline/runs/<runId>`) and the baseline's durable runs root
- * (`eval/c2/baseline/runs/<runId>`).
+ * Build the baseline's private + durable store. The harness writes private
+ * artifacts (raw responses) as `runs/<runId>/raw-response.json` relative to
+ * `privateRoot`. To land them at `.c2-private/c2/baseline/runs/<runId>/`
+ * (where the scorecards CLI expects to find them), we pass a privateRoot that
+ * already includes the `c2/baseline` suffix.
+ *
+ * Durable writes (manifests, scores) go to `runsRoot` under `eval/c2/baseline/`.
+ * Score writes use `writeDurableArtifact` (boundary-scanned) because scores are
+ * committable artifacts that must pass the no-private-content guarantee.
  */
 function makeBaselineStore(privateRoot: string, runsRoot: string): C2RunStore {
+  const baselinePrivateRoot = join(privateRoot, "c2", "baseline");
   return {
     async writePrivate(relPath, bytes) {
-      await writePrivateArtifact(privateRoot, relPath, bytes);
+      await writePrivateArtifact(baselinePrivateRoot, relPath, bytes);
     },
     async writeDurableManifest(runId, manifestJson) {
-      await writePrivateArtifact(
+      await writeDurableArtifact(
         runsRoot,
         join(runId, "manifest.json"),
-        Buffer.from(manifestJson, "utf-8"),
+        manifestJson,
+        durableBoundaryScan(),
       );
     },
     async writeDurableScore(runId, scoreJson) {
-      await writePrivateArtifact(
+      await writeDurableArtifact(
         runsRoot,
         join(runId, "score.json"),
-        Buffer.from(scoreJson, "utf-8"),
+        scoreJson,
+        durableBoundaryScan(),
       );
     },
     hasTerminalRun(runId) {

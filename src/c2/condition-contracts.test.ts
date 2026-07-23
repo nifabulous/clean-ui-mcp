@@ -8,6 +8,7 @@ import {
   C2CalibrationProposalSchema,
   C2FrozenCalibrationSchema,
 } from "./condition-contracts.js";
+import { findPricingEntry } from "./cost-policy.js";
 
 const SHA_64 = "a".repeat(64);
 
@@ -508,18 +509,21 @@ describe("C2CampaignConfigSchema", () => {
     ).toBe(false);
   });
 
-  it("the production pilot-campaign.json pins maxOutputTokens at 4096 for both lanes", () => {
+  it("the production pilot-campaign.json pins maxOutputTokens at 4096 for the primary lane and 8192 for the independent lane", () => {
     // Issue B (retry3): candidates were truncated at 2048 output tokens, producing
-    // unparseable JSON. The production config now pins 4096 for both lanes so the
+    // unparseable JSON. The production config pinned 4096 for both lanes so the
     // rich candidate schema (globalDirection + screenBlueprints + sourceDecisions
-    // + authorityLanes + acceptanceCriteria + assumptions) has room to complete.
-    // This test guards against an accidental revert to 2048.
+    // + authorityLanes + acceptanceCriteria + assumptions) had room to complete.
+    // Task A1 (Pass 3): the independent (Claude) lane is raised to 8192 after the
+    // thinking-disable fix (commit 905fdb6) — a bounded capacity increase to stop
+    // Claude Sonnet 5 from truncating the stablecoin current-grounded candidate
+    // at 4096. The primary OpenAI lane stays at 4096.
     const cfg = JSON.parse(
       readFileSync("eval/c2/config/pilot-campaign.json", "utf-8"),
     );
     expect(C2CampaignConfigSchema.safeParse(cfg).success).toBe(true);
     expect(cfg.primary.maxOutputTokens).toBe(4096);
-    expect(cfg.independent.maxOutputTokens).toBe(4096);
+    expect(cfg.independent.maxOutputTokens).toBe(8192);
   });
 });
 
@@ -616,5 +620,117 @@ describe("C2FrozenCalibrationSchema", () => {
     expect(
       C2FrozenCalibrationSchema.safeParse({ ...frozenCalibration(), materialBenefitMinimum: 0 }).success,
     ).toBe(false);
+  });
+});
+
+// ===========================================================================
+// Task A1 (Pass 3): reviewed Claude remediation configuration.
+//
+// The Pass 2 pilot had Claude Sonnet 5 truncating at 4096 output tokens on the
+// stablecoin current-grounded case. The thinking-disable fix (commit 905fdb6)
+// already prevents thinking tokens from consuming the output budget. Task A1
+// raises the independent (Claude) lane's `maxOutputTokens` from 4096 to 8192 as
+// a bounded capacity increase, leaving the primary (OpenAI) lane unchanged and
+// preserving every other matrix field, cap, and ceiling. These tests pin the
+// reviewed remediation against future drift and prove the pricing table binds
+// the exact pinned models (so a stale `claude-sonnet-4-5` or `gpt-5.4-mini`
+// name cannot silently survive in production).
+// ===========================================================================
+
+const PILOT_CONFIG_PATH = "eval/c2/config/pilot-campaign.json";
+const PRICING_PATH = "eval/c2/config/pricing.json";
+
+describe("Task A1 — reviewed Claude remediation configuration", () => {
+  it("parses the remediation config and pins the reviewed ceilings, caps, and matrix", () => {
+    const raw = readFileSync(PILOT_CONFIG_PATH, "utf-8");
+    const cfg = JSON.parse(raw);
+
+    // The config must be schema-valid as-pinned (the schema pins the literal
+    // ceilings and plannedRunCount, so this also guards those literals).
+    const parsed = C2CampaignConfigSchema.safeParse(cfg);
+    expect(parsed.success, parsed.success ? "" : JSON.stringify(parsed.error.format(), null, 2)).toBe(true);
+
+    // Independent lane: 8192 after the bounded capacity increase. The plan's
+    // acceptance criteria require the independent output ceiling to be at
+    // least 8192.
+    expect(cfg.independent.provider).toBe("claude");
+    expect(cfg.independent.maxOutputTokens).toBe(8192);
+
+    // Primary lane: unchanged at 4096.
+    expect(cfg.primary.provider).toBe("openai");
+    expect(cfg.primary.maxOutputTokens).toBe(4096);
+
+    // Fixed cost ceilings (pinned literals in the schema).
+    expect(cfg.maxRunCostUsd).toBe(0.5);
+    expect(cfg.maxCampaignCostUsd).toBe(5);
+
+    // Pinned run count.
+    expect(cfg.plannedRunCount).toBe(12);
+
+    // All matrix fields unchanged.
+    expect(cfg.cases).toEqual([
+      "named-inspiration-safety",
+      "public-marketing-migration",
+      "stablecoin-home",
+    ]);
+    expect(cfg.conditions).toEqual(["brief-only", "current-grounded", "gold-evidence"]);
+    expect(cfg.independentConditions).toEqual(["current-grounded"]);
+    expect(cfg.retrievalMode).toBe("keyword-only");
+  });
+
+  it("pricing entries exactly match the config's pinned provider/model for both lanes", () => {
+    const cfg = JSON.parse(readFileSync(PILOT_CONFIG_PATH, "utf-8"));
+    const pricing = JSON.parse(readFileSync(PRICING_PATH, "utf-8"));
+
+    // Pricing table must be schema-valid as-pinned.
+    const parsed = C2PricingTableSchema.safeParse(pricing);
+    expect(parsed.success, parsed.success ? "" : JSON.stringify(parsed.error.format(), null, 2)).toBe(true);
+
+    // Every config lane (primary + independent) must have an EXACT
+    // (provider, model) pricing entry. A stale alias (e.g.
+    // `claude-sonnet-4-5`, `gpt-5.4-mini`) must not survive.
+    for (const lane of [cfg.primary, cfg.independent]) {
+      const match = pricing.entries.find(
+        (entry: { provider: string; model: string }) =>
+          entry.provider === lane.provider && entry.model === lane.model,
+      );
+      expect(
+        match,
+        `no pricing entry exactly matches config lane (${lane.provider}, ${lane.model})`,
+      ).toBeDefined();
+    }
+  });
+
+  it("findPricingEntry resolves the exact Claude independent model and rejects a stale/different name", () => {
+    const cfg = JSON.parse(readFileSync(PILOT_CONFIG_PATH, "utf-8"));
+    const pricing = C2PricingTableSchema.parse(
+      JSON.parse(readFileSync(PRICING_PATH, "utf-8")),
+    );
+
+    // The exact pinned independent model resolves.
+    const resolved = findPricingEntry({
+      pricingTable: pricing,
+      provider: cfg.independent.provider,
+      model: cfg.independent.model,
+    });
+    expect(resolved.found).toBe(true);
+    if (resolved.found) {
+      expect(resolved.value.provider).toBe("claude");
+      expect(resolved.value.model).toBe(cfg.independent.model);
+    }
+
+    // A stale/differently named Claude model (the old Pass 2 alias) must be
+    // rejected — fail closed with a structured missing-entry reason.
+    const stale = findPricingEntry({
+      pricingTable: pricing,
+      provider: "claude",
+      model: "claude-sonnet-4-5",
+    });
+    expect(stale.found).toBe(false);
+    if (!stale.found) {
+      expect(stale.reason).toBe("missing-pricing-entry");
+      expect(stale.provider).toBe("claude");
+      expect(stale.model).toBe("claude-sonnet-4-5");
+    }
   });
 });

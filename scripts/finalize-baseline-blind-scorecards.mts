@@ -103,9 +103,15 @@ export async function finalizeBaselineBlindScorecards(
   //
   // Before phase 1, we load the blind map to identify entries that are
   // already finalized (from a prior partial run). Those entries are checked
-  // for a corresponding durable scorecard: if it exists, they're skipped
-  // (already completed). If the map is finalized but the scorecard is missing,
-  // the entry is an orphan from a crash and must be manually resolved.
+  // for a corresponding durable scorecard: if it exists AND its hash binding
+  // matches the map entry, they're skipped (already completed). If the map
+  // is finalized but the scorecard is missing, the entry is an orphan from a
+  // crash and is re-derived.
+  //
+  // Staging is rebuilt fresh on every run: any leftover .staging/ from a
+  // crashed prior run is removed before the new run begins. This eliminates
+  // the stale-staging-file collision that blocked recovery after a crash
+  // during phase 1.
   //
   // Phase 1 (staging): Finalize each non-completed submission through the
   // blind map (assigned → finalized) and write scorecards to a staging dir.
@@ -113,10 +119,13 @@ export async function finalizeBaselineBlindScorecards(
   //
   // Phase 2 (publish): Move staged files to the durable scorecards directory
   // and write the resolution manifest. A crash between phases leaves the
-  // map finalized + staged files present; a re-run (after removing
-  // blind-resolution.json) skips the completed entries via the durable-path
-  // check below.
+  // map finalized + no durable; a re-run (after removing
+  // blind-resolution.json) re-derives the orphan and publishes it.
   const stagingDir = join(input.scorecardsDir, ".staging");
+  // Clear any stale staging from a crashed prior run.
+  if (existsSync(stagingDir)) {
+    try { rmSync(stagingDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
   mkdirSync(stagingDir, { recursive: true });
   const resolutionEntries: Array<{ reviewId: string; runId: string; scorecardArtifactId: string }> = [];
 
@@ -129,15 +138,25 @@ export async function finalizeBaselineBlindScorecards(
       const existingEntry = mapByReviewId.get(submission.reviewId);
 
       // Recovery check: if this entry is already finalized from a prior run,
-      // check whether the durable scorecard exists. If yes, skip (completed).
-      // If no, it's an orphan — the map advanced but the scorecard wasn't
-      // published. We can still recover by re-deriving the scorecard from
-      // the submission + map entry (the map has runId + runOutputSha256).
+      // check whether the durable scorecard exists AND its hash binding
+      // matches the map entry. If both are true, skip (already completed).
+      // If durable is missing, re-derive the orphan.
       if (existingEntry?.state === "finalized") {
         const scorecardArtifactId = `c2-scorecard-${submission.reviewId}`;
         const durablePath = join(input.scorecardsDir, `${scorecardArtifactId}.json`);
         if (existsSync(durablePath)) {
-          // Already completed in a prior run — skip.
+          // Hardening: verify the durable scorecard's hash binding matches
+          // the map entry. Existence alone is not sufficient.
+          const onDisk = JSON.parse(readFileSync(durablePath, "utf8")) as { runId?: string; runOutputSha256?: string };
+          if (onDisk.runId !== existingEntry.runId || onDisk.runOutputSha256 !== existingEntry.runOutputSha256) {
+            throw new Error(
+              `[c2-baseline-finalize] durable scorecard ${scorecardArtifactId}.json has stale hash binding: ` +
+              `runId=${onDisk.runId} (expected ${existingEntry.runId}), ` +
+              `runOutputSha256=${onDisk.runOutputSha256?.slice(0, 12)}… (expected ${existingEntry.runOutputSha256.slice(0, 12)}…). ` +
+              `The scorecard may have been tampered with or bound to the wrong run.`,
+            );
+          }
+          // Hash binding verified — safe to skip.
           resolutionEntries.push({
             reviewId: submission.reviewId,
             runId: existingEntry.runId,
@@ -148,7 +167,7 @@ export async function finalizeBaselineBlindScorecards(
         // Map finalized but scorecard missing — orphan from a crash.
         // Re-derive the scorecard from the submission + map entry.
 
-        // F1 fix: Verify the submission's reviewer matches the assigned reviewer
+        // Verify the submission's reviewer matches the assigned reviewer
         // before re-deriving. The normal path delegates to finalizeBlindScorecard
         // which enforces this; the recovery path must enforce it independently.
         if (submission.reviewerActorId !== existingEntry.assignedReviewerActorId) {
@@ -176,13 +195,9 @@ export async function finalizeBaselineBlindScorecards(
           scoredAt,
         };
         C2HumanScorecardSchema.parse(recoveredScorecard);
-        // F3 fix: duplicate-staging guard (mirrors the normal path's guard).
-        const stagingPath = join(stagingDir, `${scorecardArtifactId}.json`);
-        if (existsSync(stagingPath)) {
-          throw new Error(
-            `[c2-baseline-finalize] duplicate scorecard artifactId in staging: ${scorecardArtifactId}`,
-          );
-        }
+        // Staging was rebuilt fresh above, so no duplicate-staging guard needed
+        // on the recovery path — a collision would indicate a bug in the
+        // submission deduplication, not a stale file.
         await writeDurableArtifact(stagingDir, `${scorecardArtifactId}.json`, canonicalJsonStringify(recoveredScorecard), durableBoundaryScan());
         resolutionEntries.push({
           reviewId: submission.reviewId,

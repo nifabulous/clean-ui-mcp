@@ -230,4 +230,141 @@ describe("finalizeBaselineBlindScorecards", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("recovers from a crash: clears stale .staging before re-deriving orphan", async () => {
+    const root = mkdtempSync(join(tmpdir(), "c2-baseline-finalizer-stale-"));
+    try {
+      const submissionsDir = join(root, "eval/c2/baseline/blinded-submissions");
+      const scorecardsDir = join(root, "eval/c2/baseline/scorecards");
+      const blindMapDir = join(root, ".c2-private/c2/baseline/blind-map");
+      mkdirSync(submissionsDir, { recursive: true });
+      mkdirSync(scorecardsDir, { recursive: true });
+      mkdirSync(blindMapDir, { recursive: true });
+
+      const REVIEW_ID = "44444444-4444-4444-8444-444444444444";
+      const RUN_ID = "c2-run-baseline-stale-current-grounded-primary-1";
+      const OUTPUT_SHA = "d".repeat(64);
+
+      // Map finalized but NO durable scorecard — orphan from crash.
+      const mapEntry = [{
+        reviewId: REVIEW_ID,
+        runId: RUN_ID,
+        runOutputSha256: OUTPUT_SHA,
+        assignedReviewerActorId: "gold-label-owner",
+        state: "finalized" as const,
+      }];
+      writeFileSync(join(blindMapDir, "blind-map.json"), JSON.stringify(mapEntry));
+
+      writeFileSync(
+        join(submissionsDir, `${REVIEW_ID}.json`),
+        JSON.stringify({
+          schemaVersion: "1.0",
+          artifactType: "c2-blind-score-submission",
+          reviewId: REVIEW_ID,
+          reviewerActorId: "gold-label-owner",
+          reviewerActorKind: "human",
+          scores: DIMENSION_SCORES,
+          submittedAt: "2026-07-23T01:00:00.000Z",
+        }),
+      );
+
+      // Simulate a crashed prior run: stale .staging with an old file.
+      const stagingDir = join(scorecardsDir, ".staging");
+      mkdirSync(stagingDir, { recursive: true });
+      const scorecardArtifactId = `c2-scorecard-${REVIEW_ID}`;
+      writeFileSync(
+        join(stagingDir, `${scorecardArtifactId}.json`),
+        JSON.stringify({ stale: "content from crashed run" }),
+      );
+
+      // Re-run — should clear stale staging, re-derive, and publish.
+      const result = await finalizeBaselineBlindScorecards({
+        submissionsDir,
+        scorecardsDir,
+        blindMapDir,
+        now: () => "2026-07-23T01:00:00.000Z",
+      });
+
+      expect(result.finalizedCount).toBe(1);
+      // Stale staging was cleared; the published scorecard is valid.
+      const scorecard = JSON.parse(readFileSync(join(scorecardsDir, `${scorecardArtifactId}.json`), "utf8"));
+      expect(scorecard.runId).toBe(RUN_ID);
+      expect(scorecard.runOutputSha256).toBe(OUTPUT_SHA);
+      expect(scorecard.stale).toBeUndefined();
+      // Staging cleaned up after publish.
+      expect(existsSync(stagingDir)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a durable scorecard with stale hash binding during recovery skip", async () => {
+    const root = mkdtempSync(join(tmpdir(), "c2-baseline-finalizer-stale-hash-"));
+    try {
+      const submissionsDir = join(root, "eval/c2/baseline/blinded-submissions");
+      const scorecardsDir = join(root, "eval/c2/baseline/scorecards");
+      const blindMapDir = join(root, ".c2-private/c2/baseline/blind-map");
+      mkdirSync(submissionsDir, { recursive: true });
+      mkdirSync(scorecardsDir, { recursive: true });
+      mkdirSync(blindMapDir, { recursive: true });
+
+      const REVIEW_ID = "55555555-5555-4555-8555-555555555555";
+      const RUN_ID = "c2-run-baseline-correct-current-grounded-primary-1";
+      const OUTPUT_SHA = "e".repeat(64);
+
+      // Map entry binds to RUN_ID + OUTPUT_SHA.
+      const mapEntry = [{
+        reviewId: REVIEW_ID,
+        runId: RUN_ID,
+        runOutputSha256: OUTPUT_SHA,
+        assignedReviewerActorId: "gold-label-owner",
+        state: "finalized" as const,
+      }];
+      writeFileSync(join(blindMapDir, "blind-map.json"), JSON.stringify(mapEntry));
+
+      writeFileSync(
+        join(submissionsDir, `${REVIEW_ID}.json`),
+        JSON.stringify({
+          schemaVersion: "1.0",
+          artifactType: "c2-blind-score-submission",
+          reviewId: REVIEW_ID,
+          reviewerActorId: "gold-label-owner",
+          reviewerActorKind: "human",
+          scores: DIMENSION_SCORES,
+          submittedAt: "2026-07-23T01:00:00.000Z",
+        }),
+      );
+
+      // Durable scorecard exists BUT with WRONG runId/outputSha — tampered.
+      const scorecardArtifactId = `c2-scorecard-${REVIEW_ID}`;
+      writeFileSync(
+        join(scorecardsDir, `${scorecardArtifactId}.json`),
+        JSON.stringify({
+          schemaVersion: "1.0",
+          artifactType: "c2-human-scorecard",
+          artifactId: scorecardArtifactId,
+          runId: "WRONG-RUN-ID",
+          runOutputSha256: "f".repeat(64),
+          reviewerActorId: "gold-label-owner",
+          reviewerActorKind: "human",
+          blindedCondition: true,
+          scores: DIMENSION_SCORES,
+          implementationReady: true,
+          scoredAt: "2026-07-23T01:00:00.000Z",
+        }),
+      );
+
+      // Recovery should reject the stale-bound durable.
+      await expect(
+        finalizeBaselineBlindScorecards({
+          submissionsDir,
+          scorecardsDir,
+          blindMapDir,
+          now: () => "2026-07-23T01:00:00.000Z",
+        }),
+      ).rejects.toThrow(/stale hash binding|tampered|wrong run/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

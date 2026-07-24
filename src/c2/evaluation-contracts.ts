@@ -193,8 +193,13 @@ export const C2LabelAgreementReportSchema = z.object({
   disagreementEntryIds: z.array(StableId).refine(hasUniqueStrings, "disagreement IDs must be unique"),
   adjudicationRef: ArtifactFileRefSchema,
   terminalOutcome: z.enum(["Qualified", "Replacement not justified"]),
+  // Sole-operator review mode: when true, the distinct-actor check is relaxed so
+  // a single human reviewer may hold BOTH the Gold Label Owner and QA roles for
+  // the same agreement. Optional — absent = current (two-independent-actor)
+  // behavior, so default serialization is backward compatible.
+  soleOperatorReview: z.boolean().optional(),
 }).strict().superRefine((report, ctx) => {
-  if (report.goldOwnerActorId === report.qaActorId) ctx.addIssue({ code: "custom", path: ["qaActorId"], message: "independent actors must be distinct" });
+  if (!report.soleOperatorReview && report.goldOwnerActorId === report.qaActorId) ctx.addIssue({ code: "custom", path: ["qaActorId"], message: "independent actors must be distinct" });
   if (report.terminalOutcome === "Qualified" && (report.hardGates.some((gate) => !gate.passed) || report.metrics.some((metric) => !metric.passed))) ctx.addIssue({ code: "custom", path: ["terminalOutcome"], message: "Qualified requires all floors and hard gates" });
 });
 

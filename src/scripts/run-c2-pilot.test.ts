@@ -859,4 +859,67 @@ describe("run-c2-pilot CLI — --scorecards-dir redirects scorecard loading", { 
       }
     }
   });
+
+  it("freeze rejects an empty scorecards dir with a clear error (no silent evidence-free freeze)", () => {
+    if (!existsSync(RUNS_DIR)) {
+      console.warn("[scorecards-dir-test] eval/c2/runs not present — skip");
+      return;
+    }
+    // Create an empty scorecards dir so the loader returns [].
+    const emptyDir = mkdtempSync(join(tmpdir(), "c2-empty-scorecards-"));
+    // We also need a proposal + authorization that pass the existence checks
+    // so the freeze reaches the scorecards guard. Use the committed proposal
+    // and a minimal dummy authorization file.
+    const tempAuth = mkdtempSync(join(tmpdir(), "c2-dummy-auth-")) + "/auth.json";
+    writeFileSync(tempAuth, JSON.stringify({
+      schemaVersion: "1.0",
+      artifactType: "c2-freeze-authorization",
+      artifactId: "c2-freeze-auth-test",
+      proposalSha256: "0".repeat(64),
+      reviewerActorId: "test",
+      reviewerRole: "Gold Label Owner",
+      rationale: "test",
+      materialBenefitMinimum: 0.1,
+      regressionTolerance: 0.05,
+      independentChecklist: {
+        criticalDecisionCoverageComplete: true,
+        contradictoryCriticalDecisions: false,
+        constraintsRespected: true,
+        forbiddenClaimsRespected: true,
+        compatibleJourneys: true,
+        safetyPassedIndependently: true,
+      },
+      maxRunCostUsd: 0.5,
+      maxCampaignCostUsd: 5,
+      frozenAt: "2026-07-24T00:00:00.000Z",
+      rubricDimensions: [
+        "product-appropriateness", "cross-screen-coherence", "implementation-clarity",
+        "originality", "accessibility-and-failure-states", "evidence-discipline",
+      ],
+    }));
+    try {
+      const res = spawnCli([
+        "freeze",
+        "--proposal",
+        join(REPO_ROOT, "eval/c2/calibration/proposal.json"),
+        "--authorization",
+        tempAuth,
+        "--runs",
+        RUNS_DIR,
+        "--scorecards-dir",
+        emptyDir,
+      ]);
+      expectZeroEgress(res);
+      // Must exit non-zero — an empty scorecards set would silently fall
+      // through to proposalRef with no human-review evidence binding.
+      expect(res.code).not.toBe(0);
+      const combined = `${res.stdout}\n${res.stderr}`;
+      // The guard fires before the proposal-hash check, so we should see
+      // "no scorecards found" regardless of whether the auth matches.
+      expect(combined).toMatch(/no scorecards found/i);
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+      rmSync(tempAuth, { force: true });
+    }
+  });
 });

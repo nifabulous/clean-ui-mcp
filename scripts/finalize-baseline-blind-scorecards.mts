@@ -11,7 +11,7 @@
  * contains the unblinding map and must not be committed to the tracked tree.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, relative as nodeRelative, isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import {
@@ -29,6 +29,15 @@ export interface FinalizeBaselineBlindScorecardsInput {
   submissionsDir: string;
   scorecardsDir: string;
   blindMapDir: string;
+  /**
+   * The canonical repository `.c2-private/` root. The resolution manifest
+   * (blind-resolution.json) is written to `dirname(blindMapDir)`, which MUST
+   * resolve inside this root. This prevents a misconfigured or adversarial
+   * `--blind-map-dir` from leaking the `reviewId → runId` unblinding map into
+   * the tracked tree. `main()` computes this from the script location; tests
+   * supply their temp root's `.c2-private`.
+   */
+  privateRoot: string;
   now?: () => string;
 }
 
@@ -60,14 +69,21 @@ export async function finalizeBaselineBlindScorecards(
   // (e.g. .c2-private/c2/baseline/), NOT the public submissions directory.
   // The resolution contains the reviewId → runId unblinding map, which is
   // private evidence that must never be committed alongside reviewer
-  // submissions. Enforce the private-root invariant: the resolution dir MUST
-  // be under .c2-private/ so a misconfigured --blind-map-dir cannot leak the
-  // unblinding map into the tracked tree.
+  // submissions.
+  //
+  // Containment check: resolve both the resolutionDir and the privateRoot to
+  // their canonical paths (resolving symlinks and `..` traversal), then verify
+  // the resolutionDir is strictly inside the privateRoot. This replaces the
+  // earlier substring check which could be bypassed by paths like
+  // `repo/.c2-private/../eval/c2/...` or `/tmp/.c2-private/...`.
   const resolutionDir = dirname(input.blindMapDir);
-  const normalizedResolutionDir = resolutionDir.replace(/\\/g, "/");
-  if (!normalizedResolutionDir.includes("/.c2-private/") && !normalizedResolutionDir.endsWith("/.c2-private") && !normalizedResolutionDir.includes("\\.c2-private\\")) {
+  const resolvedPrivateRoot = resolve(input.privateRoot);
+  const resolvedResolutionDir = resolve(resolutionDir);
+  const relative = nodeRelative(resolvedPrivateRoot, resolvedResolutionDir);
+  if (relative === "" || relative.startsWith("..") || isAbsolute(relative)) {
     throw new Error(
-      `[c2-baseline-finalize] blind-map directory must be under .c2-private/, got: ${input.blindMapDir}. `
+      `[c2-baseline-finalize] blind-map directory must resolve inside .c2-private/, got: ${input.blindMapDir} `
+      + `(resolves to ${resolvedResolutionDir}, private root is ${resolvedPrivateRoot}). `
       + `The resolution manifest contains the reviewId → runId unblinding map and must never be written outside .c2-private/.`,
     );
   }
@@ -342,6 +358,7 @@ async function main(): Promise<void> {
       "submissions-dir": { type: "string" },
       "scorecards-dir": { type: "string" },
       "blind-map-dir": { type: "string" },
+      "private-root": { type: "string" },
     },
     allowPositionals: true,
   });
@@ -350,6 +367,7 @@ async function main(): Promise<void> {
     submissionsDir: resolve(args["submissions-dir"] ?? join(repo, "eval/c2/baseline/blinded-submissions")),
     scorecardsDir: resolve(args["scorecards-dir"] ?? join(repo, "eval/c2/baseline/scorecards")),
     blindMapDir: resolve(args["blind-map-dir"] ?? join(repo, ".c2-private/c2/baseline/blind-map")),
+    privateRoot: resolve(args["private-root"] ?? join(repo, ".c2-private")),
   });
   console.error(`[c2-baseline-finalize] finalized ${result.finalizedCount} scorecards under ${result.scorecardsDir}`);
   console.error(`[c2-baseline-finalize] private resolution: ${result.resolutionPath}`);

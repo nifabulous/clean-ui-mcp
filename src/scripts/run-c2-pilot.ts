@@ -1030,6 +1030,10 @@ async function runFreeze(args: Record<string, unknown>): Promise<number> {
       return 1;
     }
     const scorecards = loadCalibrationScorecards(runs, scorecardsDir);
+    if (scorecards.length === 0) {
+      console.error(`[c2-freeze] no scorecards found under ${scorecardsDir}. A frozen calibration MUST bind at least one human-review scorecard — an empty set would silently fall back to the proposal hash with no evidence binding.`);
+      return 1;
+    }
 
     // The proposal's compatibility is a CLI-synthesized placeholder (the CLI
     // cannot measure real OpenAI-vs-Claude agreement). The freeze binds the

@@ -1298,4 +1298,32 @@ describe("freezeCalibration", () => {
     const ref = frozen.scorecardRefs[0];
     expect(ref.path).toContain(`${scorecardWithoutFileName.scorecard.artifactId}.json`);
   });
+
+  it("rejects a scorecardFileName with path separators or traversal segments", () => {
+    const runs = matrix.runs;
+    const firstRun = runs[0];
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    for (const badName of ["../escape.json", "dir/nested.json", "C:\\bad.json", "no-extension", ""]) {
+      expect(() =>
+        freezeCalibration({
+          proposal,
+          compatibility,
+          authorization: makeMatchingAuthorization(proposal.proposalSha256),
+          runs,
+          scorecards: [{
+            scorecard: makeScorecard({
+              runId: firstRun.manifest.runId,
+              runOutputSha256: firstRun.manifest.rawOutputSha256!,
+            }),
+            caseId: firstRun.caseId,
+            family: firstRun.family,
+            condition: firstRun.manifest.condition,
+            scorecardFileName: badName,
+          }],
+          artifactId: "c2-frozen-calibration-pilot-v1",
+        }),
+      ).toThrow(/scorecardFileName/i);
+    }
+  });
 });

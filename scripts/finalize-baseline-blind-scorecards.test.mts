@@ -500,9 +500,11 @@ describe("finalize-baseline-blind-scorecards CLI flags", () => {
     const root = mkdtempSync(join(tmpdir(), "c2-baseline-finalizer-cli-"));
     try {
       // Custom (non-baseline) directory layout inside the temp root.
+      // The blind-map dir MUST be under .c2-private/ so the resolution
+      // manifest (blind-resolution.json) is written to a private location.
       const submissionsDir = join(root, "remediation", "blinded-submissions");
       const scorecardsDir = join(root, "remediation-scorecards");
-      const blindMapDir = join(root, "remediation", "blind-map");
+      const blindMapDir = join(root, ".c2-private", "c2", "remediation", "blind-map");
       mkdirSync(submissionsDir, { recursive: true });
 
       // Set up the blind map at the supplied --blind-map-dir.
@@ -527,7 +529,7 @@ describe("finalize-baseline-blind-scorecards CLI flags", () => {
           FINALIZER_SCRIPT,
           "--submissions-dir", "remediation/blinded-submissions",
           "--scorecards-dir", "remediation-scorecards",
-          "--blind-map-dir", "remediation/blind-map",
+          "--blind-map-dir", ".c2-private/c2/remediation/blind-map",
         ],
         { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
       );
@@ -569,7 +571,7 @@ describe("finalize-baseline-blind-scorecards CLI flags", () => {
     try {
       const submissionsDir = join(root, "in", "blinded-submissions");
       const scorecardsDir = join(root, "out", "scorecards");
-      const blindMapDir = join(root, "private", "blind-map");
+      const blindMapDir = join(root, ".c2-private", "c2", "remediation", "blind-map");
       mkdirSync(submissionsDir, { recursive: true });
 
       const store = createFileBlindMapStore(blindMapDir);
@@ -683,5 +685,33 @@ describe("finalizeBaselineBlindScorecards — resolution artifact privacy (T2)",
       rmSync(root, { recursive: true, force: true });
     }
   });
-});
 
+  it("rejects a blind-map dir outside .c2-private (prevents unblinding-map leak)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "c2-finalizer-leak-"));
+    try {
+      const submissionsDir = join(root, "eval", "c2", "remediation", "blinded-submissions");
+      const scorecardsDir = join(root, "eval", "c2", "remediation-scorecards");
+      // Deliberately NOT under .c2-private — simulates a misconfigured --blind-map-dir
+      const blindMapDir = join(root, "eval", "c2", "remediation", "blind-map");
+      mkdirSync(submissionsDir, { recursive: true });
+
+      const store = createFileBlindMapStore(blindMapDir);
+      await createBlindAssignment(
+        {
+          runId: "c2-run-remediation-current-grounded-primary-1",
+          runOutputSha256: OUTPUT_SHA,
+          candidate: {} as C2CandidateArtifact,
+          assignedReviewerActorId: REVIEWER,
+        },
+        { store, randomUuid: () => REVIEW_ID },
+      );
+      writeFileSync(join(submissionsDir, `${REVIEW_ID}.json`), JSON.stringify(makeSubmission()));
+
+      await expect(
+        finalizeBaselineBlindScorecards({ submissionsDir, scorecardsDir, blindMapDir }),
+      ).rejects.toThrow(/\.c2-private/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

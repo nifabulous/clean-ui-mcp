@@ -6,7 +6,9 @@
  * the review window. The private baseline blind map is resolved only here;
  * the resulting scorecards contain the run/output binding but no private
  * response or condition payload. The reviewId-to-run resolution manifest
- * remains private beside the submissions.
+ * (blind-resolution.json) is written to the private blind-map parent directory
+ * under .c2-private/ — never beside the public submissions — because it
+ * contains the unblinding map and must not be committed to the tracked tree.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -58,8 +60,17 @@ export async function finalizeBaselineBlindScorecards(
   // (e.g. .c2-private/c2/baseline/), NOT the public submissions directory.
   // The resolution contains the reviewId → runId unblinding map, which is
   // private evidence that must never be committed alongside reviewer
-  // submissions.
+  // submissions. Enforce the private-root invariant: the resolution dir MUST
+  // be under .c2-private/ so a misconfigured --blind-map-dir cannot leak the
+  // unblinding map into the tracked tree.
   const resolutionDir = dirname(input.blindMapDir);
+  const normalizedResolutionDir = resolutionDir.replace(/\\/g, "/");
+  if (!normalizedResolutionDir.includes("/.c2-private/") && !normalizedResolutionDir.endsWith("/.c2-private") && !normalizedResolutionDir.includes("\\.c2-private\\")) {
+    throw new Error(
+      `[c2-baseline-finalize] blind-map directory must be under .c2-private/, got: ${input.blindMapDir}. `
+      + `The resolution manifest contains the reviewId → runId unblinding map and must never be written outside .c2-private/.`,
+    );
+  }
   mkdirSync(resolutionDir, { recursive: true });
   const resolutionPath = join(resolutionDir, "blind-resolution.json");
   if (existsSync(resolutionPath)) {

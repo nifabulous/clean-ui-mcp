@@ -879,6 +879,20 @@ function scorecardRef(scorecard: C2HumanScorecard, scorecardsRoot: string, fileN
   // mirrors how manifestRef uses runDir (the real directory name) rather than
   // a name derived from the manifest's internal fields.
   const resolvedFileName = fileName ?? `${scorecard.artifactId}.json`;
+  // Validate the filename is a single safe .json file name — no path
+  // separators, no traversal segments, no absolute prefixes. A caller could
+  // pass an arbitrary scorecardFileName since freezeCalibration is exported.
+  if (typeof resolvedFileName !== "string" || resolvedFileName.length === 0) {
+    throw new Error(`[c2-freeze] scorecardFileName must be a non-empty string`);
+  }
+  if (resolvedFileName.includes("/") || resolvedFileName.includes("\\") || resolvedFileName.includes("..")) {
+    throw new Error(
+      `[c2-freeze] scorecardFileName must be a bare filename with no path separators or traversal segments, got: ${resolvedFileName}`,
+    );
+  }
+  if (!resolvedFileName.endsWith(".json")) {
+    throw new Error(`[c2-freeze] scorecardFileName must end with .json, got: ${resolvedFileName}`);
+  }
   return {
     artifactId: scorecard.artifactId,
     path: `${scorecardsRoot}/${resolvedFileName}`,

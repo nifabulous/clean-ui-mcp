@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-blind-score-submission",
+  "reviewId": "b2867731-80f8-4880-bdbe-998d7ef66f1b",
+  "reviewerActorId": "nifabulous",
+  "reviewerActorKind": "human",
+  "scores": [
+    {
+      "dimension": "product-appropriateness",
+      "score": 5,
+      "rationale": "Directly serves the brief's required journeys and audience hierarchy with clear product fit."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score": 5,
+      "rationale": "Consistent navigation, hierarchy, and state treatment across all screens with explicit DOM-order reasoning."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score": 5,
+      "rationale": "Acceptance criteria, states, mobile rules, and recovery behavior are all actionable for implementation."
+    },
+    {
+      "dimension": "originality",
+      "score": 3,
+      "rationale": "Adequate originality but relies heavily on generic patterns without distinctive re-authoring."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score": 5,
+      "rationale": "Explicit focus indicators, redundant status signals, form persistence, and recovery paths documented across all screens."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score": 4,
+      "rationale": "Most decisions evidenced with minor gaps in citation."
+    }
+  ],
+  "submittedAt": "2026-07-24T20:00:00.000Z"
+}

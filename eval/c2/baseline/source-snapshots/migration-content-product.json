@@ -1,0 +1,258 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "design-source-snapshot",
+  "artifactId": "c2-snapshot-migration-content-product-v1",
+  "projectId": "migration-content-product",
+  "source": {
+    "kind": "user-supplied-public-reference",
+    "origin": "https://example.com",
+    "startingUrls": [
+      "https://example.com/c2-content-pilot/"
+    ]
+  },
+  "capturedAt": "2026-07-18T00:00:00.000Z",
+  "crawl": {
+    "maxRoutes": 4,
+    "sameOrigin": true,
+    "authenticated": false,
+    "mutationAllowed": false
+  },
+  "coverage": [
+    {
+      "url": "https://example.com/c2-content-pilot/",
+      "status": "inspected",
+      "reason": "Content home; carries the article-card feed with byline and date treatment.",
+      "archetype": "content-home",
+      "viewports": ["desktop", "tablet", "mobile"]
+    },
+    {
+      "url": "https://example.com/c2-content-pilot/articles/industry-outlook",
+      "status": "inspected",
+      "reason": "Published article route; carries full byline, publish date, source attribution, and related-content pattern.",
+      "archetype": "published-article",
+      "viewports": ["desktop", "tablet", "mobile"]
+    },
+    {
+      "url": "https://example.com/c2-content-pilot/premium/deep-analysis",
+      "status": "blocked",
+      "reason": "Paywalled premium route; treated as not-published/not-inspected and must never be presented as a live published article.",
+      "archetype": null,
+      "viewports": ["desktop"]
+    },
+    {
+      "url": "https://example.com/c2-content-pilot/drafts/upcoming-feature",
+      "status": "blocked",
+      "reason": "Draft route; treated as not-published/not-inspected and must never be presented as a live published article.",
+      "archetype": null,
+      "viewports": ["desktop"]
+    }
+  ],
+  "foundations": {
+    "colors": [
+      {
+        "id": "finding:color:editorial-surface",
+        "value": "neutral editorial reading surface with a single restrained accent for links and section markers; no branded gradient",
+        "role": "reading-surface",
+        "confidence": "high",
+        "evidenceIds": ["evidence:home:card-stack", "evidence:article:provenance"]
+      }
+    ],
+    "typography": [
+      {
+        "id": "finding:type:headline-scale",
+        "value": "article headlines roughly 2.5x body scale on desktop, descending into a compact card title on the feed",
+        "role": "headline-scale",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:home:card-stack", "evidence:article:heading-hierarchy"]
+      },
+      {
+        "id": "finding:type:provenance-meta",
+        "value": "byline, publish date, and source attribution use a smaller, lower-contrast meta face distinct from body and headline",
+        "role": "provenance-face",
+        "confidence": "high",
+        "evidenceIds": ["evidence:article:provenance", "evidence:home:card-provenance"]
+      }
+    ],
+    "spacing": [
+      {
+        "id": "finding:spacing:article-rhythm",
+        "value": "consistent reading rhythm between article paragraphs and section breaks",
+        "role": "reading-rhythm",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:article:heading-hierarchy"]
+      }
+    ],
+    "radii": [
+      {
+        "id": "finding:radii:card-radius",
+        "value": "moderate card radius reused on article cards in the feed",
+        "role": "card-radius",
+        "confidence": "low",
+        "evidenceIds": ["evidence:home:card-stack"]
+      }
+    ],
+    "shadows": [
+      {
+        "id": "finding:shadow:card-elevation",
+        "value": "single low elevation on article cards; no layered shadow system",
+        "role": "card-elevation",
+        "confidence": "low",
+        "evidenceIds": ["evidence:home:card-stack"]
+      }
+    ],
+    "layout": [
+      {
+        "id": "finding:layout:card-feed",
+        "value": "content home is a vertical card feed; each card leads with headline, then byline and date",
+        "role": "feed-layout",
+        "confidence": "high",
+        "evidenceIds": ["evidence:home:card-stack", "evidence:home:card-provenance"]
+      },
+      {
+        "id": "finding:layout:article-provenance-anchor",
+        "value": "article route anchors byline, publish date, and source attribution directly beneath the headline, preserved at narrow viewports",
+        "role": "provenance-anchoring",
+        "confidence": "high",
+        "evidenceIds": ["evidence:article:provenance", "evidence:article:mobile-collapse"]
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "finding:component:article-card",
+      "value": "article card with headline, byline, publish date, and a thumbnail; consistent treatment across the feed",
+      "role": "feed-card",
+      "confidence": "high",
+      "evidenceIds": ["evidence:home:card-stack", "evidence:home:card-provenance"]
+    },
+    {
+      "id": "finding:component:primary-nav",
+      "value": "single top navigation bar repeated on every inspected route; collapses into an operable drawer on mobile",
+      "role": "primary-navigation",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:home:card-stack", "evidence:article:mobile-collapse"]
+    },
+    {
+      "id": "finding:component:related-content",
+      "value": "related-content region at the foot of the article linking to inspected same-origin routes",
+      "role": "related-content",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:article:related-content"]
+    }
+  ],
+  "responsiveFindings": [
+    {
+      "id": "finding:responsive:card-stack-mobile",
+      "value": "article cards stack to a single column on mobile; headline, byline, and date remain in a legible order",
+      "role": "mobile-stacking",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:home:card-provenance", "evidence:article:mobile-collapse"]
+    },
+    {
+      "id": "finding:responsive:provenance-anchor-preserved",
+      "value": "byline, publish date, and source attribution remain anchored to the headline when the article layout collapses on mobile",
+      "role": "provenance-preservation",
+      "confidence": "high",
+      "evidenceIds": ["evidence:article:provenance", "evidence:article:mobile-collapse"]
+    }
+  ],
+  "accessibility": [
+    {
+      "id": "finding:a11y:focus-visible",
+      "value": "visible focus outline present on interactive elements on the inspected routes",
+      "role": "focus-visibility",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:home:card-stack", "evidence:article:related-content"]
+    },
+    {
+      "id": "finding:a11y:blocked-route-marking",
+      "value": "blocked paywalled and draft routes surface a clear not-published / not-inspected message rather than a soft login wall implying the article is live",
+      "role": "blocked-route-clarity",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:limitation:no-paywalled-article", "evidence:limitation:no-draft-article"]
+    }
+  ],
+  "motion": [
+    {
+      "id": "finding:motion:feed-load",
+      "value": "minor fade-in on feed cards as they enter the viewport; no decorative motion on article routes",
+      "role": "feed-motion",
+      "confidence": "low",
+      "evidenceIds": ["evidence:home:card-stack"]
+    }
+  ],
+  "voice": [
+    {
+      "id": "finding:voice:editorial",
+      "value": "editorial third-person voice with clear datelines; attributed sources named inline",
+      "role": "editorial-voice",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:article:provenance"]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "evidence:home:card-stack",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-content-pilot/",
+      "summary": "Content home renders a vertical feed of article cards, each leading with a headline then a thumbnail.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:home:card-provenance",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-content-pilot/",
+      "summary": "Each article card carries a byline and publish date in a smaller meta face beneath the headline; preserved on mobile.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:article:provenance",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-content-pilot/articles/industry-outlook",
+      "summary": "Published article anchors byline, publish date, and a named source directly beneath the headline in a meta face.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:article:heading-hierarchy",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-content-pilot/articles/industry-outlook",
+      "summary": "Article uses a single h1 headline followed by h2 section breaks with consistent reading rhythm.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:article:related-content",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-content-pilot/articles/industry-outlook",
+      "summary": "Related-content region at the article foot links to inspected same-origin article routes.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:article:mobile-collapse",
+      "kind": "screenshot-observation",
+      "route": "https://example.com/c2-content-pilot/articles/industry-outlook",
+      "summary": "At the mobile breakpoint the article layout collapses and byline/date/source remain anchored beneath the headline.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:limitation:no-paywalled-article",
+      "kind": "public-content",
+      "route": "https://example.com/c2-content-pilot/premium/deep-analysis",
+      "summary": "The paywalled premium route was blocked and NOT inspected. It must not be presented as a live published article.",
+      "basis": "inferred"
+    },
+    {
+      "id": "evidence:limitation:no-draft-article",
+      "kind": "public-content",
+      "route": "https://example.com/c2-content-pilot/drafts/upcoming-feature",
+      "summary": "The draft route was blocked and NOT inspected. It must not be presented as a live published article.",
+      "basis": "inferred"
+    }
+  ],
+  "limitations": [
+    "The crawl was unauthenticated; the paywalled premium route at https://example.com/c2-content-pilot/premium/deep-analysis was blocked and was NOT inspected.",
+    "The draft route at https://example.com/c2-content-pilot/drafts/upcoming-feature was blocked and was NOT inspected.",
+    "Only the content home and one published article route were inspected; paywalled and draft routes must never be presented as live published content.",
+    "Provenance (byline, publish date, source) is required on every adapted article; stripped or fabricated provenance is forbidden.",
+    "The snapshot is non-mutating; no article was edited and no paywall was bypassed during capture."
+  ]
+}

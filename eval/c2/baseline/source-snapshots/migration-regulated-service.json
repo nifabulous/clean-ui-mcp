@@ -1,0 +1,279 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "design-source-snapshot",
+  "artifactId": "c2-snapshot-migration-regulated-service-v1",
+  "projectId": "migration-regulated-service",
+  "source": {
+    "kind": "user-supplied-public-reference",
+    "origin": "https://example.com",
+    "startingUrls": [
+      "https://example.com/c2-health-pilot/"
+    ]
+  },
+  "capturedAt": "2026-07-18T00:00:00.000Z",
+  "crawl": {
+    "maxRoutes": 4,
+    "sameOrigin": true,
+    "authenticated": false,
+    "mutationAllowed": false
+  },
+  "coverage": [
+    {
+      "url": "https://example.com/c2-health-pilot/",
+      "status": "inspected",
+      "reason": "Public portal home; carries the service-information entry and accessible-language framing.",
+      "archetype": "health-portal-home",
+      "viewports": ["desktop", "tablet", "mobile"]
+    },
+    {
+      "url": "https://example.com/c2-health-pilot/services/general-care",
+      "status": "inspected",
+      "reason": "Service-information route; carries clinical content with a 'not clinical advice' framing and the DOM/screenshot disagreement signal.",
+      "archetype": "service-information",
+      "viewports": ["desktop", "tablet", "mobile"]
+    },
+    {
+      "url": "https://example.com/c2-health-pilot/services/mental-health",
+      "status": "inspected",
+      "reason": "Second inspected service route; exercises the same DOM/screenshot disagreement treatment across routes.",
+      "archetype": "service-information",
+      "viewports": ["desktop", "mobile"]
+    },
+    {
+      "url": "https://example.com/c2-health-pilot/portal/records",
+      "status": "blocked",
+      "reason": "Authenticated patient-record route; crawl is unauthenticated so this route was not inspected and must not be claimed as observed.",
+      "archetype": null,
+      "viewports": ["desktop"]
+    }
+  ],
+  "foundations": {
+    "colors": [
+      {
+        "id": "finding:color:calm-surface",
+        "value": "calm, high-contrast neutral surface with a single restrained accent for primary actions; no clinical red/green reliance",
+        "role": "accessible-surface",
+        "confidence": "high",
+        "evidenceIds": ["evidence:home:service-entry", "evidence:service:primary-action"]
+      }
+    ],
+    "typography": [
+      {
+        "id": "finding:type:accessible-scale",
+        "value": "larger-than-average body scale for accessibility; generous line-height on clinical content",
+        "role": "accessible-reading-scale",
+        "confidence": "high",
+        "evidenceIds": ["evidence:service:clinical-content", "evidence:mentalhealth:clinical-content"]
+      },
+      {
+        "id": "finding:type:advisory-meta",
+        "value": "'not a substitute for clinical advice' framing uses a distinct, lower-contrast meta face anchored to the clinical content",
+        "role": "advisory-face",
+        "confidence": "high",
+        "evidenceIds": ["evidence:service:advisory-framing"]
+      }
+    ],
+    "spacing": [
+      {
+        "id": "finding:spacing:generous-rhythm",
+        "value": "generous vertical rhythm on service routes to support reading at a lower reading level",
+        "role": "reading-rhythm",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:service:clinical-content"]
+      }
+    ],
+    "radii": [
+      {
+        "id": "finding:radii:content-radius",
+        "value": "moderate content-card radius on service-information regions",
+        "role": "content-radius",
+        "confidence": "low",
+        "evidenceIds": ["evidence:service:clinical-content"]
+      }
+    ],
+    "shadows": [
+      {
+        "id": "finding:shadow:none",
+        "value": "no meaningful elevation; the portal surface is intentionally flat to avoid implying interactivity on clinical content",
+        "role": "flat-surface",
+        "confidence": "low",
+        "evidenceIds": ["evidence:home:service-entry"]
+      }
+    ],
+    "layout": [
+      {
+        "id": "finding:layout:service-content",
+        "value": "service-information routes lead with a section heading, then clinical content, with the 'not clinical advice' framing anchored beneath",
+        "role": "service-layout",
+        "confidence": "high",
+        "evidenceIds": ["evidence:service:clinical-content", "evidence:service:advisory-framing"]
+      },
+      {
+        "id": "finding:layout:dom-screenshot-disagreement",
+        "value": "the captured DOM and the captured screenshot of the same service route disagree: the DOM exposes a hidden secondary content region not visible in the screenshot, while the screenshot shows a decorative icon order the DOM omits",
+        "role": "capture-disagreement",
+        "confidence": "high",
+        "evidenceIds": ["evidence:service:dom-hidden-region", "evidence:service:screenshot-decorative-order"]
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "finding:component:service-entry",
+      "value": "portal home surfaces a clear service-information entry linking to inspected same-origin service routes",
+      "role": "service-navigation",
+      "confidence": "high",
+      "evidenceIds": ["evidence:home:service-entry"]
+    },
+    {
+      "id": "finding:component:advisory-framing",
+      "value": "'not a substitute for professional clinical advice' framing anchored to clinical content, not buried in a footer",
+      "role": "advisory",
+      "confidence": "high",
+      "evidenceIds": ["evidence:service:advisory-framing", "evidence:mentalhealth:advisory-framing"]
+    },
+    {
+      "id": "finding:component:primary-action",
+      "value": "single restrained primary action ('Find a service'); no symptom-checker, triage widget, or PHI input on the inspected public routes",
+      "role": "primary-action",
+      "confidence": "high",
+      "evidenceIds": ["evidence:service:primary-action"]
+    }
+  ],
+  "responsiveFindings": [
+    {
+      "id": "finding:responsive:advisory-anchored-mobile",
+      "value": "the 'not clinical advice' framing remains anchored to clinical content when the layout collapses on mobile, not pushed to a footer",
+      "role": "advisory-preservation",
+      "confidence": "high",
+      "evidenceIds": ["evidence:service:advisory-framing", "evidence:service:mobile-collapse"]
+    },
+    {
+      "id": "finding:responsive:accessible-scale-preserved",
+      "value": "accessible-language and reading-scale treatment is preserved at the smallest breakpoint",
+      "role": "accessibility-preservation",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:service:mobile-collapse"]
+    }
+  ],
+  "accessibility": [
+    {
+      "id": "finding:a11y:contrast-and-scale",
+      "value": "high text-to-background contrast and larger-than-average body scale on service-information routes to meet accessible-language requirements",
+      "role": "accessible-reading",
+      "confidence": "high",
+      "evidenceIds": ["evidence:service:clinical-content", "evidence:mentalhealth:clinical-content"]
+    },
+    {
+      "id": "finding:a11y:focus-visible",
+      "value": "visible focus outline present on the service entry and primary action",
+      "role": "focus-visibility",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:home:service-entry", "evidence:service:primary-action"]
+    },
+    {
+      "id": "finding:a11y:no-new-data-collection",
+      "value": "no form, tracker, or identifiable-health-information input is present on the inspected public routes; the adaptation must not introduce one",
+      "role": "no-phi-collection",
+      "confidence": "high",
+      "evidenceIds": ["evidence:service:primary-action", "evidence:limitation:no-record-route"]
+    }
+  ],
+  "motion": [
+    {
+      "id": "finding:motion:none",
+      "value": "no meaningful motion on the inspected service-information routes",
+      "role": "motion-baseline",
+      "confidence": "low",
+      "evidenceIds": ["evidence:home:service-entry"]
+    }
+  ],
+  "voice": [
+    {
+      "id": "finding:voice:accessible-language",
+      "value": "plain, accessible-language voice on clinical content aimed at a lower reading level; no jargon without a plain-language gloss",
+      "role": "accessible-voice",
+      "confidence": "high",
+      "evidenceIds": ["evidence:service:clinical-content", "evidence:mentalhealth:clinical-content"]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "evidence:home:service-entry",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-health-pilot/",
+      "summary": "Portal home surfaces a clear service-information entry linking to inspected same-origin service routes with accessible reading scale.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:service:clinical-content",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-health-pilot/services/general-care",
+      "summary": "General-care service route leads with clinical content at a larger-than-average body scale and generous line-height.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:service:advisory-framing",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-health-pilot/services/general-care",
+      "summary": "'Not a substitute for professional clinical advice' framing is anchored directly beneath the clinical content, not in a footer.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:service:primary-action",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-health-pilot/services/general-care",
+      "summary": "Single restrained 'Find a service' primary action carries the accent color; no symptom-checker, triage widget, or PHI input is present.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:service:dom-hidden-region",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-health-pilot/services/general-care",
+      "summary": "The captured DOM exposes a hidden secondary content region (aria-hidden) that is NOT visible in the captured screenshot of the same route.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:service:screenshot-decorative-order",
+      "kind": "screenshot-observation",
+      "route": "https://example.com/c2-health-pilot/services/general-care",
+      "summary": "The captured screenshot shows a decorative icon order above the clinical content that the DOM omits; the two captures disagree.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:service:mobile-collapse",
+      "kind": "screenshot-observation",
+      "route": "https://example.com/c2-health-pilot/services/general-care",
+      "summary": "At the mobile breakpoint the layout collapses and the 'not clinical advice' framing remains anchored beneath the clinical content.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:mentalhealth:clinical-content",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-health-pilot/services/mental-health",
+      "summary": "Mental-health service route carries clinical content with the same accessible reading scale and plain-language voice as general-care.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:mentalhealth:advisory-framing",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-health-pilot/services/mental-health",
+      "summary": "Mental-health route carries the same 'not clinical advice' framing anchored to its clinical content.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:limitation:no-record-route",
+      "kind": "public-content",
+      "route": "https://example.com/c2-health-pilot/portal/records",
+      "summary": "The authenticated patient-record route was blocked and NOT inspected. No claim may rely on having observed an authenticated record screen.",
+      "basis": "inferred"
+    }
+  ],
+  "limitations": [
+    "The crawl was unauthenticated; the authenticated patient-record route at https://example.com/c2-health-pilot/portal/records was blocked and was NOT inspected.",
+    "Only the portal home and two public service-information routes were inspected; authenticated record routes were NOT inspected.",
+    "The captured DOM and screenshot of the service routes DISAGREE: the DOM exposes a hidden region the screenshot omits, and the screenshot shows a decorative order the DOM omits. The adaptation must resolve which signal to trust and record the decision.",
+    "No form, tracker, or identifiable-health-information input was present on the inspected routes; the adaptation must not introduce any new data-collection surface.",
+    "The snapshot is non-mutating; no form submission, appointment booking, or state change was attempted during capture."
+  ]
+}

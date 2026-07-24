@@ -1,0 +1,299 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "design-source-snapshot",
+  "artifactId": "c2-snapshot-migration-documentation-site-v1",
+  "projectId": "migration-documentation-site",
+  "source": {
+    "kind": "user-supplied-public-reference",
+    "origin": "https://example.com",
+    "startingUrls": [
+      "https://example.com/c2-docs-pilot/"
+    ]
+  },
+  "capturedAt": "2026-07-18T00:00:00.000Z",
+  "crawl": {
+    "maxRoutes": 4,
+    "sameOrigin": true,
+    "authenticated": false,
+    "mutationAllowed": false
+  },
+  "coverage": [
+    {
+      "url": "https://example.com/c2-docs-pilot/",
+      "status": "inspected",
+      "reason": "Documentation home; carries the left-rail navigation archetype and entry heading hierarchy.",
+      "archetype": "documentation-home",
+      "viewports": ["desktop", "tablet", "mobile"]
+    },
+    {
+      "url": "https://example.com/c2-docs-pilot/getting-started/install",
+      "status": "inspected",
+      "reason": "Representative article route; carries heading hierarchy, code-block treatment, and on-this-page outline.",
+      "archetype": "documentation-article",
+      "viewports": ["desktop", "tablet", "mobile"]
+    },
+    {
+      "url": "https://example.com/c2-docs-pilot/getting-started/quickstart",
+      "status": "inspected",
+      "reason": "Second inspected route; exercises same-origin internal linking between two inspected article routes.",
+      "archetype": "documentation-article",
+      "viewports": ["desktop", "mobile"]
+    },
+    {
+      "url": "https://example.com/c2-docs-pilot/admin/drafts",
+      "status": "blocked",
+      "reason": "Authenticated draft-content route; crawl is unauthenticated so this route was not inspected and must not be claimed as observed.",
+      "archetype": null,
+      "viewports": ["desktop"]
+    }
+  ],
+  "foundations": {
+    "colors": [
+      {
+        "id": "finding:color:syntax-accent",
+        "value": "a single desaturated accent reserved for inline code and links; no branded gradient",
+        "role": "syntax-accent",
+        "confidence": "high",
+        "evidenceIds": ["evidence:home:code-inline", "evidence:install:code-block"]
+      },
+      {
+        "id": "finding:color:neutral-surface",
+        "value": "neutral document surface with a high text-to-background contrast for sustained reading",
+        "role": "reading-surface",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:home:heading-hierarchy", "evidence:install:code-block"]
+      }
+    ],
+    "typography": [
+      {
+        "id": "finding:type:heading-scale",
+        "value": "descending heading hierarchy (h1 through h4) with roughly 1.25x step between levels",
+        "role": "heading-hierarchy-scale",
+        "confidence": "high",
+        "evidenceIds": ["evidence:home:heading-hierarchy", "evidence:install:heading-hierarchy"]
+      },
+      {
+        "id": "finding:type:monospace-code",
+        "value": "monospaced code face distinct from body text, used in both inline code and fenced code blocks",
+        "role": "code-face",
+        "confidence": "high",
+        "evidenceIds": ["evidence:install:code-block", "evidence:home:code-inline"]
+      }
+    ],
+    "spacing": [
+      {
+        "id": "finding:spacing:doc-rhythm",
+        "value": "consistent vertical rhythm between documentation sections; paragraphs and code blocks share a baseline grid",
+        "role": "doc-section-rhythm",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:install:section-rhythm", "evidence:quickstart:section-rhythm"]
+      }
+    ],
+    "radii": [
+      {
+        "id": "finding:radii:code-radius",
+        "value": "small uniform radius on fenced code blocks and inline code chips",
+        "role": "code-container-radius",
+        "confidence": "low",
+        "evidenceIds": ["evidence:install:code-block"]
+      }
+    ],
+    "shadows": [
+      {
+        "id": "finding:shadow:none",
+        "value": "no meaningful elevation; the documentation surface is flat by design",
+        "role": "flat-surface",
+        "confidence": "low",
+        "evidenceIds": ["evidence:home:heading-hierarchy"]
+      }
+    ],
+    "layout": [
+      {
+        "id": "finding:layout:leftrail-article",
+        "value": "persistent left-rail navigation with the article content occupying the remaining width on desktop",
+        "role": "nav-plus-content",
+        "confidence": "high",
+        "evidenceIds": ["evidence:home:leftrail", "evidence:install:leftrail"]
+      },
+      {
+        "id": "finding:layout:outline-aside",
+        "value": "on-this-page outline anchored to the article heading hierarchy on desktop, collapsing into the article flow on mobile",
+        "role": "in-page-outline",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:install:outline", "evidence:install:mobile-collapse"]
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "finding:component:leftrail-nav",
+      "value": "left-rail navigation tree with expandable sections; consistent item order across all inspected routes",
+      "role": "primary-navigation",
+      "confidence": "high",
+      "evidenceIds": ["evidence:home:leftrail", "evidence:install:leftrail", "evidence:quickstart:leftrail"]
+    },
+    {
+      "id": "finding:component:code-block",
+      "value": "fenced code blocks with a copy affordance and horizontal scroll contained within the block",
+      "role": "code-listing",
+      "confidence": "high",
+      "evidenceIds": ["evidence:install:code-block"]
+    },
+    {
+      "id": "finding:component:search-entry",
+      "value": "single search entry in the top bar reachable above the fold on all inspected viewports",
+      "role": "search",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:home:search"]
+    }
+  ],
+  "responsiveFindings": [
+    {
+      "id": "finding:responsive:leftrail-drawer",
+      "value": "the left-rail navigation collapses into an operable drawer on narrow viewports and remains keyboard-reachable",
+      "role": "mobile-nav-collapse",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:install:mobile-collapse"]
+    },
+    {
+      "id": "finding:responsive:code-scroll",
+      "value": "code blocks scroll horizontally inside their own container only, preventing full-page horizontal scroll on mobile",
+      "role": "contained-code-scroll",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:install:mobile-collapse"]
+    }
+  ],
+  "accessibility": [
+    {
+      "id": "finding:a11y:focus-visible",
+      "value": "visible focus outline present on interactive elements including the nav tree, search, and code copy button",
+      "role": "focus-visibility",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:home:search", "evidence:install:code-block"]
+    },
+    {
+      "id": "finding:a11y:heading-landmarks",
+      "value": "article routes carry a single h1 with a descending hierarchy, supporting screen-reader outline navigation",
+      "role": "heading-structure",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:install:heading-hierarchy"]
+    }
+  ],
+  "motion": [
+    {
+      "id": "finding:motion:nav-expand",
+      "value": "minor expand/collapse animation on nav tree sections; no decorative motion",
+      "role": "nav-transition",
+      "confidence": "low",
+      "evidenceIds": ["evidence:home:leftrail"]
+    }
+  ],
+  "voice": [
+    {
+      "id": "finding:voice:technical-imperative",
+      "value": "concise technical-imperative copy; short instructional sentences aimed at a developer reader",
+      "role": "documentation-voice",
+      "confidence": "low",
+      "evidenceIds": ["evidence:install:heading-hierarchy"]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "evidence:home:heading-hierarchy",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-docs-pilot/",
+      "summary": "Documentation home leads with a single h1 and a descending heading hierarchy for section navigation.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:home:code-inline",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-docs-pilot/",
+      "summary": "Inline code spans use a monospaced face and the desaturated accent color.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:home:leftrail",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-docs-pilot/",
+      "summary": "Persistent left-rail navigation tree with expandable sections on the documentation home.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:home:search",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-docs-pilot/",
+      "summary": "Single search input in the top bar reachable above the fold on desktop and mobile.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:install:leftrail",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-docs-pilot/getting-started/install",
+      "summary": "Left-rail navigation repeats with the same section order observed on the documentation home.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:install:heading-hierarchy",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-docs-pilot/getting-started/install",
+      "summary": "Article leads with a single h1 then h2 and h3 sub-sections in a descending hierarchy.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:install:code-block",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-docs-pilot/getting-started/install",
+      "summary": "Fenced code block with a copy affordance, monospaced face, and contained horizontal scroll.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:install:outline",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-docs-pilot/getting-started/install",
+      "summary": "On-this-page outline aside mirrors the article heading hierarchy on desktop.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:install:section-rhythm",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-docs-pilot/getting-started/install",
+      "summary": "Vertical spacing between documentation sections follows a consistent baseline grid.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:install:mobile-collapse",
+      "kind": "screenshot-observation",
+      "route": "https://example.com/c2-docs-pilot/getting-started/install",
+      "summary": "At the mobile breakpoint the left-rail collapses into a drawer, the outline moves into the article flow, and code blocks scroll internally.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:quickstart:leftrail",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-docs-pilot/getting-started/quickstart",
+      "summary": "Left-rail navigation and same-origin internal link from the install route land here without crossing into a blocked route.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:quickstart:section-rhythm",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-docs-pilot/getting-started/quickstart",
+      "summary": "Section rhythm matches the install route, confirming a shared documentation layout.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:limitation:no-draft-route",
+      "kind": "public-content",
+      "route": "https://example.com/c2-docs-pilot/admin/drafts",
+      "summary": "The draft-content route was blocked and NOT inspected. No claim may rely on having observed authenticated draft content.",
+      "basis": "inferred"
+    }
+  ],
+  "limitations": [
+    "The crawl was unauthenticated; the draft-content route at https://example.com/c2-docs-pilot/admin/drafts was blocked and was NOT inspected, so no claim may rely on having observed it.",
+    "Only the home and two getting-started article routes were inspected; no claim may rely on pages outside the inspected set.",
+    "No authenticated authoring or admin screen was inspected; the migration covers public documentation surfaces only.",
+    "The snapshot is non-mutating; no form submission, search query, or state change was attempted during capture."
+  ]
+}

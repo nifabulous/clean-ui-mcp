@@ -62,6 +62,6 @@
     "artifactId": "c2-snapshot-migration-documentation-site-v1",
     "artifactType": "design-source-snapshot",
     "path": "eval/c2/baseline/source-snapshots/migration-documentation-site.json",
-    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    "sha256": "ed37dd749d0da59136c319f39739d81c083ddf1ce7e79978aa6f2b924a2a915e"
   }
 }

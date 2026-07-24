@@ -63,6 +63,6 @@
     "artifactId": "c2-snapshot-migration-saas-dashboard-v1",
     "artifactType": "design-source-snapshot",
     "path": "eval/c2/baseline/source-snapshots/migration-saas-dashboard.json",
-    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    "sha256": "c8d4c4519ab83e025ffdd5d406eb7e6436604a7e7bf59b0cc5f1144a7e78b7f1"
   }
 }

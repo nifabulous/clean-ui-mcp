@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-blind-score-submission",
+  "reviewId": "efd8f669-1523-4785-9ac0-df0d518e1286",
+  "reviewerActorId": "nifabulous",
+  "reviewerActorKind": "human",
+  "scores": [
+    {
+      "dimension": "product-appropriateness",
+      "score": 4,
+      "rationale": "Serves the product purpose well with minor gaps in journey coverage."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score": 3,
+      "rationale": "Partial coherence with notable gaps between screens."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score": 2,
+      "rationale": "Significant ambiguity in how to implement the design."
+    },
+    {
+      "dimension": "originality",
+      "score": 3,
+      "rationale": "Adequate originality but relies heavily on generic patterns without distinctive re-authoring."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score": 3,
+      "rationale": "Adequate accessibility but missing some recovery or redundancy requirements."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score": 2,
+      "rationale": "Minimal evidence with most decisions unsupported."
+    }
+  ],
+  "submittedAt": "2026-07-24T20:00:00.000Z"
+}

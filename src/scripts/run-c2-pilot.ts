@@ -870,6 +870,7 @@ function loadCalibrationScorecards(
       family: run.family,
       caseId: run.caseId,
       condition: run.manifest.condition,
+      scorecardFileName: file,
     });
   }
   return scorecards;

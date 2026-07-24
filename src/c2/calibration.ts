@@ -119,6 +119,16 @@ export interface CalibrationScorecard {
   family: C2CaseFamily;
   caseId: string;
   condition: C2ControlCondition;
+  /**
+   * The actual on-disk filename of the scorecard file (e.g.
+   * `review-123.json`). This MAY differ from `scorecard.artifactId + ".json"`
+   * — e.g. a blind-review submission stored as `review-<uuid>.json`. The
+   * frozen-calibration ref's `path` MUST use this filename (not the artifactId)
+   * so a fresh clone can resolve the file the ref's SHA-256 binds. Falls back
+   * to `scorecard.artifactId + ".json"` when absent for backward compatibility
+   * with synthetic callers that don't capture the filename.
+   */
+  scorecardFileName?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -774,7 +784,7 @@ export function freezeCalibration(input: FreezeCalibrationInput): C2FrozenCalibr
     ? input.runs.map((r) => manifestRef(r, runsRoot))
     : [proposalRef(proposal)];
   const scorecardRefs = input.scorecards && input.scorecards.length > 0
-    ? input.scorecards.map((s) => scorecardRef(s.scorecard, scorecardsRoot))
+    ? input.scorecards.map((s) => scorecardRef(s.scorecard, scorecardsRoot, s.scorecardFileName))
     : [proposalRef(proposal)];
 
   const frozen: C2FrozenCalibration = {
@@ -863,10 +873,15 @@ function manifestRef(run: CalibrationRun, runsRoot: string): ArtifactFileRef {
   };
 }
 
-function scorecardRef(scorecard: C2HumanScorecard, scorecardsRoot: string): ArtifactFileRef {
+function scorecardRef(scorecard: C2HumanScorecard, scorecardsRoot: string, fileName?: string): ArtifactFileRef {
+  // Use the actual on-disk filename when the loader captured it, falling back
+  // to artifactId + ".json" for synthetic callers that don't supply it. This
+  // mirrors how manifestRef uses runDir (the real directory name) rather than
+  // a name derived from the manifest's internal fields.
+  const resolvedFileName = fileName ?? `${scorecard.artifactId}.json`;
   return {
     artifactId: scorecard.artifactId,
-    path: `${scorecardsRoot}/${scorecard.artifactId}.json`,
+    path: `${scorecardsRoot}/${resolvedFileName}`,
     sha256: sha256Hex(Buffer.from(canonicalJsonStringify(scorecard), "utf-8")),
   };
 }

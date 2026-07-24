@@ -1235,4 +1235,67 @@ describe("freezeCalibration", () => {
       }),
     ).toThrow(/repository-relative.*absolute/i);
   });
+
+  // -------------------------------------------------------------------------
+  // Scorecard filename capture (T1: scorecardRef must use actual filename)
+  // -------------------------------------------------------------------------
+
+  it("uses the scorecardFileName for the frozen scorecardRef path, not artifactId", () => {
+    // A scorecard whose on-disk filename differs from its internal artifactId.
+    // scorecardRef MUST use the actual filename so a fresh clone can resolve it.
+    const runs = matrix.runs;
+    const firstRun = runs[0];
+    const scorecardWithCustomFile: CalibrationScorecard = {
+      scorecard: makeScorecard({
+        runId: firstRun.manifest.runId,
+        runOutputSha256: firstRun.manifest.rawOutputSha256!,
+      }),
+      caseId: firstRun.caseId,
+      family: firstRun.family,
+      condition: firstRun.manifest.condition,
+      scorecardFileName: "review-123.json",
+    };
+    const proposal = buildProposal(runs, [scorecardWithCustomFile]);
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const frozen = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      runs,
+      scorecards: [scorecardWithCustomFile],
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+    // The ref path MUST contain the actual filename, not the artifactId.
+    const ref = frozen.scorecardRefs[0];
+    expect(ref.path).toContain("review-123.json");
+    expect(ref.path).not.toContain(`${scorecardWithCustomFile.scorecard.artifactId}.json`);
+  });
+
+  it("falls back to artifactId.json when scorecardFileName is absent (backward compatible)", () => {
+    // Synthetic callers that build CalibrationScorecard without scorecardFileName
+    // (e.g. the e2e test harness) must still get a valid ref path.
+    const runs = matrix.runs;
+    const firstRun = runs[0];
+    const scorecardWithoutFileName: CalibrationScorecard = {
+      scorecard: makeScorecard({
+        runId: firstRun.manifest.runId,
+        runOutputSha256: firstRun.manifest.rawOutputSha256!,
+      }),
+      caseId: firstRun.caseId,
+      family: firstRun.family,
+      condition: firstRun.manifest.condition,
+    };
+    const proposal = buildProposal(runs, [scorecardWithoutFileName]);
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const frozen = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      runs,
+      scorecards: [scorecardWithoutFileName],
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+    const ref = frozen.scorecardRefs[0];
+    expect(ref.path).toContain(`${scorecardWithoutFileName.scorecard.artifactId}.json`);
+  });
 });

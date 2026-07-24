@@ -54,10 +54,17 @@ export async function finalizeBaselineBlindScorecards(
   }
 
   mkdirSync(input.scorecardsDir, { recursive: true });
-  const resolutionPath = join(input.submissionsDir, "blind-resolution.json");
+  // Write the resolution manifest to the PRIVATE blind-map parent directory
+  // (e.g. .c2-private/c2/baseline/), NOT the public submissions directory.
+  // The resolution contains the reviewId → runId unblinding map, which is
+  // private evidence that must never be committed alongside reviewer
+  // submissions.
+  const resolutionDir = dirname(input.blindMapDir);
+  mkdirSync(resolutionDir, { recursive: true });
+  const resolutionPath = join(resolutionDir, "blind-resolution.json");
   if (existsSync(resolutionPath)) {
     throw new Error(
-      `[c2-baseline-finalize] blind-resolution.json already exists in ${input.submissionsDir}. `
+      `[c2-baseline-finalize] blind-resolution.json already exists in ${resolutionDir}. `
       + `If all scorecards in the resolution are present in ${input.scorecardsDir}, finalization is complete. `
       + `If some scorecards are missing (orphan from a crash between phases), remove this file and re-run: `
       + `the script will skip entries with existing durable scorecards and re-derive any orphans.`,
@@ -294,14 +301,14 @@ export async function finalizeBaselineBlindScorecards(
     const nowIso = (input.now ?? (() => new Date().toISOString()))();
     const resolution = {
       schemaVersion: "1.0",
-      artifactType: "c2-baseline-blind-resolution",
-      artifactId: "c2-baseline-blind-resolution-v1",
+      artifactType: "c2-blind-resolution",
+      artifactId: "c2-blind-resolution-v1",
       resolvedAt: nowIso,
       finalizedCount: resolutionEntries.length,
       resolution: resolutionEntries,
     };
     await writePrivateArtifact(
-      input.submissionsDir,
+      resolutionDir,
       "blind-resolution.json",
       Buffer.from(canonicalJsonStringify(resolution), "utf8"),
     );

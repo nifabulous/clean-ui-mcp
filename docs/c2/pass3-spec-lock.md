@@ -419,8 +419,7 @@ relaxed. The same person may label the 40 entries in both roles.
 
 ### What it means for metrics
 
-When `soleOperatorReview: true`, the agreement metrics (pattern-type accuracy,
-category macro-F1, component recall, domain-tag recall) measure **consistency
+When `soleOperatorReview: true`, all 8 agreement metrics measure **consistency
 between two passes by the same person**, NOT independence between two different
 reviewers. A high agreement score in sole-operator mode means the labeler is
 self-consistent, not that the labels are independently validated.

@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 import {
   createFileBlindMapStore,
   finalizeBlindScorecard,
@@ -317,11 +318,20 @@ export async function finalizeBaselineBlindScorecards(
 }
 
 async function main(): Promise<void> {
+  const { values: args } = parseArgs({
+    args: process.argv.slice(2),
+    options: {
+      "submissions-dir": { type: "string" },
+      "scorecards-dir": { type: "string" },
+      "blind-map-dir": { type: "string" },
+    },
+    allowPositionals: true,
+  });
   const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const result = await finalizeBaselineBlindScorecards({
-    submissionsDir: join(repo, "eval/c2/baseline/blinded-submissions"),
-    scorecardsDir: join(repo, "eval/c2/baseline/scorecards"),
-    blindMapDir: join(repo, ".c2-private/c2/baseline/blind-map"),
+    submissionsDir: resolve(args["submissions-dir"] ?? join(repo, "eval/c2/baseline/blinded-submissions")),
+    scorecardsDir: resolve(args["scorecards-dir"] ?? join(repo, "eval/c2/baseline/scorecards")),
+    blindMapDir: resolve(args["blind-map-dir"] ?? join(repo, ".c2-private/c2/baseline/blind-map")),
   });
   console.error(`[c2-baseline-finalize] finalized ${result.finalizedCount} scorecards under ${result.scorecardsDir}`);
   console.error(`[c2-baseline-finalize] private resolution: ${result.resolutionPath}`);

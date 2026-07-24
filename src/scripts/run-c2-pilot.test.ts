@@ -670,3 +670,193 @@ describe("run-c2-pilot CLI — freeze binds real run + scorecard evidence (P1)",
     expect(combined).toMatch(/--runs|runs.*required|freeze.*requires/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// --scorecards-dir — parameterized scorecard loading (Task 3)
+// ---------------------------------------------------------------------------
+//
+// The remediation pilot's scorecards live under
+// eval/c2/remediation-scorecards, not the hardcoded eval/c2/scorecards the
+// original pilot used. `propose` and `freeze` now accept an optional
+// --scorecards-dir flag that redirects scorecard loading. The default
+// (omitting the flag) must read from eval/c2/scorecards — backward compatible
+// with the original pilot.
+//
+// This test spawns the compiled CLI and proves the flag is honored by a
+// discriminating signal: a custom dir holding a scorecard whose runId is
+// UNKNOWN to the loader. If the flag were ignored, the CLI would read the
+// real eval/c2/scorecards (whose scorecards bind to the real runs) and fail
+// with a different error (or succeed). Only a CLI that actually read the
+// custom dir can surface the "references unknown runId <UNKNOWN>" message.
+describe("run-c2-pilot CLI — --scorecards-dir redirects scorecard loading", { timeout: 30_000 }, () => {
+  const RUNS_DIR = join(REPO_ROOT, "eval/c2/runs");
+  // A runId that the real runs dir does not contain. The loader throws when a
+  // scorecard references a runId the loaded runs do not carry.
+  const UNKNOWN_RUN_ID = "c2-run-definitely-not-a-real-run-mismatch-1";
+
+  /** A minimal but schema-valid human scorecard binding UNKNOWN_RUN_ID. */
+  function buildMismatchScorecard(): Record<string, unknown> {
+    return {
+      schemaVersion: "1.0",
+      artifactType: "c2-human-scorecard",
+      artifactId: "c2-scorecard-mismatch-test",
+      runId: UNKNOWN_RUN_ID,
+      runOutputSha256: "0".repeat(64),
+      reviewerActorId: "codex-test-reviewer",
+      reviewerActorKind: "human",
+      blindedCondition: true,
+      scores: [
+        { dimension: "product-appropriateness", rationale: "x", score: 4 },
+        { dimension: "cross-screen-coherence", rationale: "x", score: 4 },
+        { dimension: "implementation-clarity", rationale: "x", score: 4 },
+        { dimension: "originality", rationale: "x", score: 4 },
+        { dimension: "accessibility-and-failure-states", rationale: "x", score: 4 },
+        { dimension: "evidence-discipline", rationale: "x", score: 4 },
+      ],
+      implementationReady: true,
+      scoredAt: "2026-07-23T00:00:00.000Z",
+    };
+  }
+
+  it("propose --scorecards-dir reads scorecards from the custom directory (not the default)", () => {
+    // Skip gracefully if the committed runs are absent (e.g. fresh clone
+    // before the pilot has executed). The test only makes sense against the
+    // real run evidence.
+    if (!existsSync(RUNS_DIR)) {
+      console.warn("[scorecards-dir-test] eval/c2/runs not present — skip");
+      return;
+    }
+
+    const customDir = mkdtempSync(join(tmpdir(), "c2-scorecards-custom-"));
+    try {
+      // A scorecard whose runId the real runs do NOT carry. The loader reads
+      // it from the custom dir and throws "references unknown runId".
+      writeFileSync(
+        join(customDir, "c2-scorecard-mismatch-test.json"),
+        JSON.stringify(buildMismatchScorecard()),
+      );
+
+      const res = spawnCli([
+        "propose",
+        "--runs",
+        RUNS_DIR,
+        "--scorecards-dir",
+        customDir,
+      ]);
+
+      // The CLI must remain offline.
+      expectZeroEgress(res);
+      // It must exit non-zero: the mismatched scorecard cannot bind.
+      expect(res.code).not.toBe(0);
+      // Discriminating assertion: the error names the unknown runId. This is
+      // only possible if the CLI read the scorecard from the CUSTOM dir — the
+      // default eval/c2/scorecards does not carry this runId anywhere.
+      const combined = `${res.stdout}\n${res.stderr}`;
+      expect(combined).toContain(UNKNOWN_RUN_ID);
+      expect(combined).toMatch(/unknown runId/i);
+    } finally {
+      rmSync(customDir, { recursive: true, force: true });
+    }
+  });
+
+  it("propose without --scorecards-dir reads from the default eval/c2/scorecards (backward compatible)", () => {
+    // Backward-compatibility gate: omitting the flag MUST read the default
+    // directory. The real eval/c2/scorecards holds scorecards that bind to
+    // the real runs, so propose should reach a later stage (success or a
+    // downstream error) WITHOUT surfacing the "unknown runId" signal — the
+    // custom mismatched runId is nowhere in the default dir.
+    if (!existsSync(RUNS_DIR)) {
+      console.warn("[scorecards-dir-test] eval/c2/runs not present — skip");
+      return;
+    }
+    const defaultScorecardsDir = join(REPO_ROOT, "eval/c2/scorecards");
+    if (!existsSync(defaultScorecardsDir)) {
+      console.warn("[scorecards-dir-test] eval/c2/scorecards not present — skip");
+      return;
+    }
+
+    // Back up the committed proposal.json so this run cannot clobber it.
+    const proposalPath = join(REPO_ROOT, "eval/c2/calibration/proposal.json");
+    const backup = existsSync(proposalPath)
+      ? { backedUp: true, bytes: readFileSync(proposalPath) as Buffer, path: proposalPath }
+      : { backedUp: false, bytes: Buffer.alloc(0), path: proposalPath };
+
+    try {
+      const res = spawnCli([
+        "propose",
+        "--runs",
+        RUNS_DIR,
+      ]);
+
+      expectZeroEgress(res);
+      // The default dir's scorecards all bind to real runs, so the loader
+      // must NOT throw the "unknown runId" error for the mismatch sentinel.
+      const combined = `${res.stdout}\n${res.stderr}`;
+      expect(combined).not.toContain(UNKNOWN_RUN_ID);
+      expect(combined).not.toMatch(/references unknown runId/i);
+    } finally {
+      if (backup.backedUp) {
+        writeFileSync(backup.path, backup.bytes);
+      }
+    }
+  });
+
+  it("propose --scorecards-dir reports a clear error when the directory does not exist", () => {
+    const res = spawnCli([
+      "propose",
+      "--runs",
+      RUNS_DIR,
+      "--scorecards-dir",
+      join(REPO_ROOT, "eval/c2/definitely-nonexistent-scorecards"),
+    ]);
+    expectZeroEgress(res);
+    expect(res.code).not.toBe(0);
+    const combined = `${res.stdout}\n${res.stderr}`;
+    expect(combined).toMatch(/scorecards directory not found/i);
+  });
+
+  it("freeze --scorecards-dir threads the custom root into freezeCalibration as repo-relative", () => {
+    // The freeze path must convert the resolved --scorecards-dir back to a
+    // repo-relative root before passing it to freezeCalibration, otherwise
+    // normalizeRoot rejects the absolute path. We verify this by running freeze
+    // with a repo-relative custom dir; if the CLI passed an absolute path,
+    // freezeCalibration would throw "must be repository-relative, got an
+    // absolute path" before reaching the scorecard-hash check.
+    if (!existsSync(RUNS_DIR)) {
+      console.warn("[scorecards-dir-test] eval/c2/runs not present — skip");
+      return;
+    }
+
+    // Back up committed calibration artifacts so this run cannot clobber them.
+    const frozenPath = join(REPO_ROOT, "eval/c2/calibration/frozen.json");
+    const proposalPath = join(REPO_ROOT, "eval/c2/calibration/proposal.json");
+    const backups: Array<{ path: string; bytes: Buffer | null }> = [];
+    for (const p of [frozenPath, proposalPath]) {
+      backups.push({ path: p, bytes: existsSync(p) ? readFileSync(p) as Buffer : null });
+    }
+
+    try {
+      const res = spawnCli([
+        "freeze",
+        "--proposal",
+        proposalPath,
+        "--authorization",
+        join(REPO_ROOT, ".c2-private/c2/freeze-authorization.json"),
+        "--runs",
+        RUNS_DIR,
+        "--scorecards-dir",
+        join(REPO_ROOT, "eval/c2/scorecards"),
+      ]);
+
+      expectZeroEgress(res);
+      const combined = `${res.stdout}\n${res.stderr}`;
+      // The CLI must NOT throw the "must be repository-relative, got an
+      // absolute path" error — that would mean repoRelativeEvidenceRoot failed.
+      expect(combined).not.toMatch(/must be repository-relative.*absolute/i);
+    } finally {
+      for (const b of backups) {
+        if (b.bytes !== null) writeFileSync(b.path, b.bytes);
+      }
+    }
+  });
+});

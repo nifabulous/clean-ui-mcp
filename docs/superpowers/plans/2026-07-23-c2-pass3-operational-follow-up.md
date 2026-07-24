@@ -181,7 +181,9 @@ Expected: exactly 12 attempted provider calls, no campaign stop, and stablecoin 
 
 - [ ] If remediation succeeds, generate scorecards, obtain freeze authorization, refreeze, and rebind baseline manifest.
 
-The remediation pilot writes its runs to `eval/c2/remediation-runs/` and scorecards to `eval/c2/remediation-scorecards/`. Human blind review submissions are required before finalization. The frozen calibration remains under `eval/c2/calibration/`.
+The remediation pilot writes its runs to `eval/c2/remediation-runs/` and scorecards to `eval/c2/remediation-scorecards/`. Human blind review submissions are required before finalization. The frozen calibration remains under `eval/c2/calibration/`. The resolution manifest (`blind-resolution.json`) is written to `.c2-private/c2/{baseline,remediation}/` alongside the blind map — it contains the `reviewId → runId` unblinding map and must never appear under the public submissions directory.
+
+**IMPORTANT: All C2 pilot commands must be run from the repository root.** The CLI resolves hardcoded manifest, calibration, and evidence paths relative to `process.cwd()`. Running `propose` or `freeze` from a subdirectory will produce incorrect repo-relative paths in frozen artifacts or fail with "must be repository-relative" errors.
 
 Run:
 

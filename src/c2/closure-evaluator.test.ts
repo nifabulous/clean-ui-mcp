@@ -735,4 +735,35 @@ describe("evaluateC2Closure", () => {
     expect(c7.details).toContain("24");
     expect(c7.details).not.toMatch(/25\/25/);
   });
+
+  // -------------------------------------------------------------------------
+  // soleOperatorReview propagation (sole-operator review mode).
+  //
+  // When a closure uses sole-operator review (the same human performs both the
+  // Gold Label Owner and QA passes), the input carries `soleOperatorReview: true`
+  // and that flag MUST surface on the report so a consumer can distinguish a
+  // sole-operator closure from a two-independent-operator closure. When the
+  // flag is absent (or false), the field is omitted for backward compatibility.
+  // -------------------------------------------------------------------------
+
+  it("propagates soleOperatorReview: true from input to report", () => {
+    const input = buildInput(buildDataset());
+    const report = evaluateC2Closure({ ...input, soleOperatorReview: true });
+    expect(report.soleOperatorReview).toBe(true);
+  });
+
+  it("omits soleOperatorReview from the report when the flag is absent", () => {
+    const input = buildInput(buildDataset());
+    const report = evaluateC2Closure(input);
+    // The field must be entirely absent (not false, not undefined-as-a-key).
+    expect(report).not.toHaveProperty("soleOperatorReview");
+    expect("soleOperatorReview" in report).toBe(false);
+  });
+
+  it("omits soleOperatorReview from the report when the flag is explicitly false", () => {
+    const input = buildInput(buildDataset());
+    const report = evaluateC2Closure({ ...input, soleOperatorReview: false });
+    expect(report).not.toHaveProperty("soleOperatorReview");
+    expect("soleOperatorReview" in report).toBe(false);
+  });
 });

@@ -1116,4 +1116,214 @@ describe("freezeCalibration", () => {
       expect(ref.path).not.toBe(`eval/c2/runs/${fallbackRunId}/manifest.json`);
     }
   });
+
+  // -------------------------------------------------------------------------
+  // P3: freezeCalibration honors caller-supplied runsRoot + scorecardsRoot so
+  // the frozen artifact's evidence refs point at the directories the ACTUAL
+  // evidence files live in. The remediation pilot's runs live under
+  // eval/c2/remediation-runs/ and its scorecards under
+  // eval/c2/remediation-scorecards/. If the frozen refs point at the default
+  // eval/c2/runs/ + eval/c2/scorecards/ directories, the binding is silently
+  // incorrect — the SHA-256 binds a file that is not where the ref says it is.
+  // -------------------------------------------------------------------------
+
+  it("freezeCalibration honors caller-supplied runsRoot + scorecardsRoot for evidence ref paths", () => {
+    const runs = matrix.runs;
+    const scorecards = matrix.scorecards;
+    const proposal = buildProposal(runs, scorecards);
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const frozen = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      runs,
+      scorecards,
+      runsRoot: "eval/c2/remediation-runs",
+      scorecardsRoot: "eval/c2/remediation-scorecards",
+      artifactId: "c2-frozen-calibration-remediation-pilot-v1",
+    });
+
+    // Every run manifest ref MUST point under the caller-supplied runsRoot,
+    // and every scorecard ref MUST point under the caller-supplied
+    // scorecardsRoot — never the default directories.
+    for (const ref of frozen.runManifestRefs) {
+      expect(ref.path.startsWith("eval/c2/remediation-runs/")).toBe(true);
+      expect(ref.path.startsWith("eval/c2/runs/")).toBe(false);
+    }
+    for (const ref of frozen.scorecardRefs) {
+      expect(ref.path.startsWith("eval/c2/remediation-scorecards/")).toBe(true);
+      expect(ref.path.startsWith("eval/c2/scorecards/")).toBe(false);
+    }
+  });
+
+  it("freezeCalibration WITHOUT runsRoot + scorecardsRoot keeps the default evidence ref paths (backward compatible)", () => {
+    const runs = matrix.runs;
+    const scorecards = matrix.scorecards;
+    const proposal = buildProposal(runs, scorecards);
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const frozen = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      runs,
+      scorecards,
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+
+    // Backward-compatible: omitting the new roots must produce the exact same
+    // default paths as before this change.
+    for (const r of runs) {
+      const ref = frozen.runManifestRefs.find((x) => x.artifactId === r.manifest.artifactId);
+      expect(ref).toBeDefined();
+      expect(ref!.path).toBe(`eval/c2/runs/${r.runDir}/manifest.json`);
+    }
+    for (const s of scorecards) {
+      const ref = frozen.scorecardRefs.find((x) => x.artifactId === s.scorecard.artifactId);
+      expect(ref).toBeDefined();
+      expect(ref!.path).toBe(`eval/c2/scorecards/${s.scorecard.artifactId}.json`);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Evidence-root validation (normalizeRoot rejection paths)
+  // -------------------------------------------------------------------------
+
+  it("rejects an empty runsRoot", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    expect(() =>
+      freezeCalibration({
+        proposal,
+        compatibility,
+        authorization: makeMatchingAuthorization(proposal.proposalSha256),
+        runs: matrix.runs,
+        scorecards: matrix.scorecards,
+        runsRoot: "",
+        artifactId: "c2-frozen-calibration-pilot-v1",
+      }),
+    ).toThrow(/non-empty/i);
+  });
+
+  it("rejects an absolute POSIX runsRoot", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    expect(() =>
+      freezeCalibration({
+        proposal,
+        compatibility,
+        authorization: makeMatchingAuthorization(proposal.proposalSha256),
+        runs: matrix.runs,
+        scorecards: matrix.scorecards,
+        runsRoot: "/etc/passwd",
+        artifactId: "c2-frozen-calibration-pilot-v1",
+      }),
+    ).toThrow(/repository-relative.*absolute/i);
+  });
+
+  it("rejects an absolute Windows-drive runsRoot", () => {
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    expect(() =>
+      freezeCalibration({
+        proposal,
+        compatibility,
+        authorization: makeMatchingAuthorization(proposal.proposalSha256),
+        runs: matrix.runs,
+        scorecards: matrix.scorecards,
+        runsRoot: "C:\\runs",
+        artifactId: "c2-frozen-calibration-pilot-v1",
+      }),
+    ).toThrow(/repository-relative.*absolute/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // Scorecard filename capture (T1: scorecardRef must use actual filename)
+  // -------------------------------------------------------------------------
+
+  it("uses the scorecardFileName for the frozen scorecardRef path, not artifactId", () => {
+    // A scorecard whose on-disk filename differs from its internal artifactId.
+    // scorecardRef MUST use the actual filename so a fresh clone can resolve it.
+    const runs = matrix.runs;
+    const firstRun = runs[0];
+    const scorecardWithCustomFile: CalibrationScorecard = {
+      scorecard: makeScorecard({
+        runId: firstRun.manifest.runId,
+        runOutputSha256: firstRun.manifest.rawOutputSha256!,
+      }),
+      caseId: firstRun.caseId,
+      family: firstRun.family,
+      condition: firstRun.manifest.condition,
+      scorecardFileName: "review-123.json",
+    };
+    const proposal = buildProposal(runs, [scorecardWithCustomFile]);
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const frozen = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      runs,
+      scorecards: [scorecardWithCustomFile],
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+    // The ref path MUST contain the actual filename, not the artifactId.
+    const ref = frozen.scorecardRefs[0];
+    expect(ref.path).toContain("review-123.json");
+    expect(ref.path).not.toContain(`${scorecardWithCustomFile.scorecard.artifactId}.json`);
+  });
+
+  it("falls back to artifactId.json when scorecardFileName is absent (backward compatible)", () => {
+    // Synthetic callers that build CalibrationScorecard without scorecardFileName
+    // (e.g. the e2e test harness) must still get a valid ref path.
+    const runs = matrix.runs;
+    const firstRun = runs[0];
+    const scorecardWithoutFileName: CalibrationScorecard = {
+      scorecard: makeScorecard({
+        runId: firstRun.manifest.runId,
+        runOutputSha256: firstRun.manifest.rawOutputSha256!,
+      }),
+      caseId: firstRun.caseId,
+      family: firstRun.family,
+      condition: firstRun.manifest.condition,
+    };
+    const proposal = buildProposal(runs, [scorecardWithoutFileName]);
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    const frozen = freezeCalibration({
+      proposal,
+      compatibility,
+      authorization: makeMatchingAuthorization(proposal.proposalSha256),
+      runs,
+      scorecards: [scorecardWithoutFileName],
+      artifactId: "c2-frozen-calibration-pilot-v1",
+    });
+    const ref = frozen.scorecardRefs[0];
+    expect(ref.path).toContain(`${scorecardWithoutFileName.scorecard.artifactId}.json`);
+  });
+
+  it("rejects a scorecardFileName with path separators or traversal segments", () => {
+    const runs = matrix.runs;
+    const firstRun = runs[0];
+    const proposal = buildProposal();
+    const compatibility = evaluateIndependentCompatibility(makeCompatibilityInput());
+    for (const badName of ["../escape.json", "dir/nested.json", "C:\\bad.json", "no-extension", ""]) {
+      expect(() =>
+        freezeCalibration({
+          proposal,
+          compatibility,
+          authorization: makeMatchingAuthorization(proposal.proposalSha256),
+          runs,
+          scorecards: [{
+            scorecard: makeScorecard({
+              runId: firstRun.manifest.runId,
+              runOutputSha256: firstRun.manifest.rawOutputSha256!,
+            }),
+            caseId: firstRun.caseId,
+            family: firstRun.family,
+            condition: firstRun.manifest.condition,
+            scorecardFileName: badName,
+          }],
+          artifactId: "c2-frozen-calibration-pilot-v1",
+        }),
+      ).toThrow(/scorecardFileName/i);
+    }
+  });
 });

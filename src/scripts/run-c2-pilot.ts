@@ -74,10 +74,19 @@ Subcommands:
                               valid config, fresh pricing, credentials, and
                               campaign cost preflight.
   propose  --runs <dir>       Offline. Calibration proposal (Task 8).
+            [--scorecards-dir <dir>]
+                              Optional. Read scorecards from <dir> instead of
+                              the default eval/c2/scorecards (e.g. a remediation
+                              pilot using eval/c2/remediation-scorecards).
+                              Omitting the flag preserves the original behavior.
   freeze   --proposal <proposal.json> --authorization <review.json>
                               --runs <dir>
+                              [--scorecards-dir <dir>]
                               Offline. Freeze calibration (Task 8). Binds the
                               actual run manifests + scorecards as evidence.
+                              --scorecards-dir redirects scorecard loading the
+                              same way as propose; the bound scorecardRefs
+                              point at the supplied directory.
   validate --calibration <frozen.json>
                               Offline. Validate frozen calibration (Task 8).
 
@@ -106,6 +115,7 @@ async function main(): Promise<number> {
       calibration: { type: "string" },
       "private-root": { type: "string" },
       "runs-root": { type: "string" },
+      "scorecards-dir": { type: "string" },
     },
     allowPositionals: true,
   });
@@ -707,6 +717,33 @@ function relPathFromRepo(absOrRel: string): string {
 }
 
 /**
+ * Convert an evidence-root path supplied on the CLI (typically an absolute
+ * filesystem path after `resolve()`) into a repository-relative,
+ * slash-normalized path suitable for `freezeCalibration`'s `runsRoot` /
+ * `scorecardsRoot`. `freezeCalibration`'s `normalizeRoot` rejects absolute
+ * paths outright — a frozen artifact ref must resolve identically in any
+ * clone — so this strips the current working-directory prefix and collapses
+ * backslashes (a Windows hazard) to forward slashes, dropping any trailing
+ * slash. If the path is already repository-relative it is returned with
+ * slashes normalized only.
+ *
+ * This mirrors the existing `relPathFromRepo` cwd-strip pattern but adds
+ * backslash normalization + trailing-slash trimming so the result is always
+ * a clean repository-relative segment (e.g. "eval/c2/remediation-runs").
+ */
+function repoRelativeEvidenceRoot(absOrRel: string): string {
+  let normalized = absOrRel.replace(/\\/g, "/");
+  if (isAbsolute(normalized)) {
+    const cwd = process.cwd().replace(/\\/g, "/");
+    const prefix = cwd.endsWith("/") ? cwd : `${cwd}/`;
+    if (normalized.startsWith(prefix)) {
+      normalized = normalized.slice(prefix.length);
+    }
+  }
+  return normalized.replace(/\/+$/g, "");
+}
+
+/**
  * Convert a private condition-input execution path into the logical path
  * recorded in durable run metadata. The descriptor remains private on disk;
  * only its SHA-256 binds the run to the exact bytes.
@@ -807,15 +844,22 @@ function deriveCaseId(runId: string, packages: PilotManifestPackage[]): string {
   return stripped;
 }
 
-function loadCalibrationScorecards(runs: CalibrationRun[]): CalibrationScorecard[] {
-  if (!existsSync(SCORECARDS_DIR)) {
-    throw new Error(`[c2-propose] scorecards directory not found at ${SCORECARDS_DIR}`);
+function loadCalibrationScorecards(
+  runs: CalibrationRun[],
+  scorecardsDir: string = SCORECARDS_DIR,
+): CalibrationScorecard[] {
+  if (!existsSync(scorecardsDir)) {
+    throw new Error(`[c2-propose] scorecards directory not found at ${scorecardsDir}`);
   }
   const runsByRunId = new Map(runs.map((r) => [r.manifest.runId, r]));
-  const files = readdirSync(SCORECARDS_DIR).filter((f) => f.endsWith(".json"));
+  // Read only DIRECT .json files — nested blinded-packets/ (and similar)
+  // subdirectories are deliberately ignored so their contents never bind.
+  const files = readdirSync(scorecardsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => entry.name);
   const scorecards: CalibrationScorecard[] = [];
   for (const file of files) {
-    const path = join(SCORECARDS_DIR, file);
+    const path = join(scorecardsDir, file);
     const sc = C2HumanScorecardSchema.parse(JSON.parse(readFileSync(path, "utf-8")));
     const run = runsByRunId.get(sc.runId);
     if (!run) {
@@ -826,6 +870,7 @@ function loadCalibrationScorecards(runs: CalibrationRun[]): CalibrationScorecard
       family: run.family,
       caseId: run.caseId,
       condition: run.manifest.condition,
+      scorecardFileName: file,
     });
   }
   return scorecards;
@@ -887,13 +932,18 @@ async function runPropose(args: Record<string, unknown>): Promise<number> {
     return 2;
   }
   const runsDir = resolve(args.runs as string);
+  // Resolve the scorecards directory once: the --scorecards-dir override, or
+  // the canonical SCORECARDS_DIR when the flag is omitted (backward compatible).
+  const scorecardsDir = resolve(
+    (args["scorecards-dir"] as string | undefined) ?? SCORECARDS_DIR,
+  );
   try {
     const runs = loadCalibrationRuns(runsDir);
     if (runs.length === 0) {
       console.error(`[c2-propose] no completed runs found under ${runsDir} (expected <runId>/manifest.json + <runId>/score.json)`);
       return 1;
     }
-    const scorecards = loadCalibrationScorecards(runs);
+    const scorecards = loadCalibrationScorecards(runs, scorecardsDir);
     // The CLI cannot enumerate the campaign's critical-decision IDs from run
     // artifacts alone, so `buildCompatibilityInput` synthesizes a conservative
     // checklist from the deterministic `score.complete` signals and the
@@ -947,7 +997,13 @@ async function runFreeze(args: Record<string, unknown>): Promise<number> {
   }
   const proposalPath = resolve(args.proposal as string);
   const authorizationPath = resolve(args.authorization as string);
+  // Resolve both evidence roots for the filesystem reads. The same defaults as
+  // runPropose: --runs is required, --scorecards-dir defaults to the canonical
+  // SCORECARDS_DIR when omitted (backward compatible).
   const runsDir = resolve(args.runs as string);
+  const scorecardsDir = resolve(
+    (args["scorecards-dir"] as string | undefined) ?? SCORECARDS_DIR,
+  );
   try {
     if (!existsSync(proposalPath)) {
       console.error(`[c2-freeze] proposal not found: ${proposalPath}`);
@@ -973,7 +1029,11 @@ async function runFreeze(args: Record<string, unknown>): Promise<number> {
       console.error(`[c2-freeze] no completed runs found under ${runsDir} (expected <runId>/manifest.json + <runId>/score.json)`);
       return 1;
     }
-    const scorecards = loadCalibrationScorecards(runs);
+    const scorecards = loadCalibrationScorecards(runs, scorecardsDir);
+    if (scorecards.length === 0) {
+      console.error(`[c2-freeze] no scorecards found under ${scorecardsDir}. A frozen calibration MUST bind at least one human-review scorecard — an empty set would silently fall back to the proposal hash with no evidence binding.`);
+      return 1;
+    }
 
     // The proposal's compatibility is a CLI-synthesized placeholder (the CLI
     // cannot measure real OpenAI-vs-Claude agreement). The freeze binds the
@@ -986,6 +1046,13 @@ async function runFreeze(args: Record<string, unknown>): Promise<number> {
       ? authorization.independentChecklist
       : proposalCompatibility;
 
+    // Thread the resolved evidence roots into the freeze as REPOSITORY-RELATIVE
+    // paths (e.g. eval/c2/remediation-runs). freezeCalibration's normalizeRoot
+    // rejects absolute paths outright — a frozen artifact ref must resolve
+    // identically in any clone — so we strip the cwd prefix and slash-normalize
+    // here. Omitting --scorecards-dir yields SCORECARDS_DIR
+    // ("eval/c2/scorecards") which is already repo-relative, preserving the
+    // original pilot's frozen-artifact bytes byte-for-byte.
     const frozen = freezeCalibration({
       proposal,
       compatibility,
@@ -995,6 +1062,8 @@ async function runFreeze(args: Record<string, unknown>): Promise<number> {
       campaignConfigRef: proposal.campaignConfigRef,
       pricingTableRef: proposal.pricingTableRef,
       artifactId: "c2-frozen-calibration-pilot-v1",
+      runsRoot: repoRelativeEvidenceRoot(runsDir),
+      scorecardsRoot: repoRelativeEvidenceRoot(scorecardsDir),
     });
 
     // Durable write under eval/c2/calibration/ — boundary scan FIRST, then

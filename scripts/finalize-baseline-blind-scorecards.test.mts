@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createBlindAssignment, createFileBlindMapStore } from "../src/c2/review-packets.ts";
 import { C2BlindScoreSubmissionSchema, type C2BlindScoreSubmission } from "../src/c2/evaluation-contracts.ts";
 import type { C2CandidateArtifact } from "../src/c2/candidate-contracts.ts";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -499,19 +499,22 @@ describe("finalizeBaselineBlindScorecards", () => {
 // ---------------------------------------------------------------------------
 
 const REPO_ROOT = process.cwd();
+const REPO_PRIVATE_ROOT = join(REPO_ROOT, ".c2-private");
 const TSX_BIN = join(REPO_ROOT, "node_modules/.bin/tsx");
 const FINALIZER_SCRIPT = join(REPO_ROOT, "scripts/finalize-baseline-blind-scorecards.mts");
 
 describe("finalize-baseline-blind-scorecards CLI flags", () => {
   it("finalizes a submission under the supplied --scorecards-dir and reads the map from --blind-map-dir", async () => {
-    const root = mkdtempSync(join(tmpdir(), "c2-baseline-finalizer-cli-"));
+    const root = mkdtempSync(join(REPO_PRIVATE_ROOT, "c2-baseline-finalizer-cli-"));
     try {
-      // Custom (non-baseline) directory layout inside the temp root.
+      // Custom (non-baseline) directory layout inside the repository's
+      // private root. The executable deliberately refuses arbitrary private
+      // roots so a fake /tmp/.c2-private cannot become trusted by the CLI.
       // The blind-map dir MUST be under .c2-private/ so the resolution
       // manifest (blind-resolution.json) is written to a private location.
       const submissionsDir = join(root, "remediation", "blinded-submissions");
       const scorecardsDir = join(root, "remediation-scorecards");
-      const blindMapDir = join(root, ".c2-private", "c2", "remediation", "blind-map");
+      const blindMapDir = join(root, "c2", "remediation", "blind-map");
       mkdirSync(submissionsDir, { recursive: true });
 
       // Set up the blind map at the supplied --blind-map-dir.
@@ -536,8 +539,8 @@ describe("finalize-baseline-blind-scorecards CLI flags", () => {
           FINALIZER_SCRIPT,
           "--submissions-dir", "remediation/blinded-submissions",
           "--scorecards-dir", "remediation-scorecards",
-          "--blind-map-dir", ".c2-private/c2/remediation/blind-map",
-          "--private-root", ".c2-private",
+          "--blind-map-dir", "c2/remediation/blind-map",
+          "--private-root", REPO_PRIVATE_ROOT,
         ],
         { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
       );
@@ -575,11 +578,11 @@ describe("finalize-baseline-blind-scorecards CLI flags", () => {
   });
 
   it("resolves absolute flag paths regardless of cwd", async () => {
-    const root = mkdtempSync(join(tmpdir(), "c2-baseline-finalizer-cli-abs-"));
+    const root = mkdtempSync(join(REPO_PRIVATE_ROOT, "c2-baseline-finalizer-cli-abs-"));
     try {
       const submissionsDir = join(root, "in", "blinded-submissions");
       const scorecardsDir = join(root, "out", "scorecards");
-      const blindMapDir = join(root, ".c2-private", "c2", "remediation", "blind-map");
+      const blindMapDir = join(root, "c2", "remediation", "blind-map");
       mkdirSync(submissionsDir, { recursive: true });
 
       const store = createFileBlindMapStore(blindMapDir);
@@ -602,7 +605,7 @@ describe("finalize-baseline-blind-scorecards CLI flags", () => {
           "--submissions-dir", submissionsDir,
           "--scorecards-dir", scorecardsDir,
           "--blind-map-dir", blindMapDir,
-          "--private-root", join(root, ".c2-private"),
+          "--private-root", REPO_PRIVATE_ROOT,
         ],
         // Deliberately run from a cwd different from root.
         { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
@@ -790,6 +793,51 @@ describe("finalizeBaselineBlindScorecards — resolution artifact privacy (T2)",
       }
     } finally {
       rmSync(fakePrivate, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a blind-map parent symlink that resolves outside .c2-private", async () => {
+    const root = mkdtempSync(join(tmpdir(), "c2-finalizer-symlink-parent-"));
+    try {
+      const submissionsDir = join(root, "submissions");
+      const scorecardsDir = join(root, "scorecards");
+      const privateRoot = join(root, ".c2-private");
+      const outsideDir = join(root, "outside");
+      const redirectedParent = join(privateRoot, "c2", "remediation");
+      mkdirSync(submissionsDir, { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+      mkdirSync(dirname(redirectedParent), { recursive: true });
+      symlinkSync(outsideDir, redirectedParent);
+      const blindMapDir = join(redirectedParent, "blind-map");
+
+      await expect(
+        finalizeBaselineBlindScorecards({ submissionsDir, scorecardsDir, blindMapDir, privateRoot }),
+      ).rejects.toThrow(/must resolve strictly inside \.c2-private/i);
+      expect(existsSync(join(outsideDir, "blind-resolution.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a blind-map directory symlink that resolves outside .c2-private", async () => {
+    const root = mkdtempSync(join(tmpdir(), "c2-finalizer-symlink-leaf-"));
+    try {
+      const submissionsDir = join(root, "submissions");
+      const scorecardsDir = join(root, "scorecards");
+      const privateRoot = join(root, ".c2-private");
+      const privateParent = join(privateRoot, "c2", "remediation");
+      const outsideDir = join(root, "outside");
+      const blindMapDir = join(privateParent, "blind-map");
+      mkdirSync(submissionsDir, { recursive: true });
+      mkdirSync(privateParent, { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+      symlinkSync(outsideDir, blindMapDir);
+
+      await expect(
+        finalizeBaselineBlindScorecards({ submissionsDir, scorecardsDir, blindMapDir, privateRoot }),
+      ).rejects.toThrow(/must resolve strictly inside \.c2-private/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

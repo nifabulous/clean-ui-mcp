@@ -10,8 +10,8 @@
  * under .c2-private/ — never beside the public submissions — because it
  * contains the unblinding map and must not be committed to the tracked tree.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { dirname, join, resolve, relative as nodeRelative, isAbsolute } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { basename, dirname, join, resolve, relative as nodeRelative, isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import {
@@ -57,6 +57,39 @@ function durableBoundaryScan() {
   };
 }
 
+/**
+ * Resolve a path through every existing filesystem segment while preserving
+ * not-yet-created trailing segments. `resolve()` alone is lexical and does
+ * not detect a symlink that redirects a private-looking path elsewhere.
+ */
+function canonicalPath(path: string): string {
+  let candidate = resolve(path);
+  const missingSegments: string[] = [];
+
+  while (!existsSync(candidate)) {
+    const parent = dirname(candidate);
+    if (parent === candidate) break;
+    missingSegments.push(basename(candidate));
+    candidate = parent;
+  }
+
+  return join(realpathSync(candidate), ...missingSegments.reverse());
+}
+
+function assertPrivatePath(path: string, privateRoot: string, label: string): string {
+  const resolvedPrivateRoot = canonicalPath(privateRoot);
+  const resolvedPath = canonicalPath(path);
+  const relative = nodeRelative(resolvedPrivateRoot, resolvedPath);
+  if (relative === "" || relative.startsWith("..") || isAbsolute(relative)) {
+    throw new Error(
+      `[c2-baseline-finalize] ${label} must resolve strictly inside .c2-private/, got: ${path} `
+      + `(resolves to ${resolvedPath}, private root is ${resolvedPrivateRoot}). `
+      + `The resolution manifest contains the reviewId → runId unblinding map and must never be written outside .c2-private/.`,
+    );
+  }
+  return resolvedPath;
+}
+
 export async function finalizeBaselineBlindScorecards(
   input: FinalizeBaselineBlindScorecardsInput,
 ): Promise<FinalizeBaselineBlindScorecardsResult> {
@@ -71,22 +104,12 @@ export async function finalizeBaselineBlindScorecards(
   // private evidence that must never be committed alongside reviewer
   // submissions.
   //
-  // Containment check: resolve both the resolutionDir and the privateRoot to
-  // their canonical paths (resolving symlinks and `..` traversal), then verify
-  // the resolutionDir is strictly inside the privateRoot. This replaces the
-  // earlier substring check which could be bypassed by paths like
-  // `repo/.c2-private/../eval/c2/...` or `/tmp/.c2-private/...`.
+  // Containment check: canonicalize the actual filesystem locations before
+  // comparing them. This catches `..` traversal and symlink redirects, as
+  // well as external paths whose names merely contain `.c2-private`.
   const resolutionDir = dirname(input.blindMapDir);
-  const resolvedPrivateRoot = resolve(input.privateRoot);
-  const resolvedResolutionDir = resolve(resolutionDir);
-  const relative = nodeRelative(resolvedPrivateRoot, resolvedResolutionDir);
-  if (relative === "" || relative.startsWith("..") || isAbsolute(relative)) {
-    throw new Error(
-      `[c2-baseline-finalize] blind-map directory must resolve inside .c2-private/, got: ${input.blindMapDir} `
-      + `(resolves to ${resolvedResolutionDir}, private root is ${resolvedPrivateRoot}). `
-      + `The resolution manifest contains the reviewId → runId unblinding map and must never be written outside .c2-private/.`,
-    );
-  }
+  assertPrivatePath(resolutionDir, input.privateRoot, "blind-map parent directory");
+  assertPrivatePath(input.blindMapDir, input.privateRoot, "blind-map directory");
   mkdirSync(resolutionDir, { recursive: true });
   const resolutionPath = join(resolutionDir, "blind-resolution.json");
   if (existsSync(resolutionPath)) {
@@ -363,11 +386,18 @@ async function main(): Promise<void> {
     allowPositionals: true,
   });
   const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const repoPrivateRoot = canonicalPath(join(repo, ".c2-private"));
+  const requestedPrivateRoot = canonicalPath(args["private-root"] ?? repoPrivateRoot);
+  if (requestedPrivateRoot !== repoPrivateRoot) {
+    throw new Error(
+      `[c2-baseline-finalize] --private-root must resolve to the repository .c2-private directory: ${repoPrivateRoot}`,
+    );
+  }
   const result = await finalizeBaselineBlindScorecards({
     submissionsDir: resolve(args["submissions-dir"] ?? join(repo, "eval/c2/baseline/blinded-submissions")),
     scorecardsDir: resolve(args["scorecards-dir"] ?? join(repo, "eval/c2/baseline/scorecards")),
     blindMapDir: resolve(args["blind-map-dir"] ?? join(repo, ".c2-private/c2/baseline/blind-map")),
-    privateRoot: resolve(args["private-root"] ?? join(repo, ".c2-private")),
+    privateRoot: repoPrivateRoot,
   });
   console.error(`[c2-baseline-finalize] finalized ${result.finalizedCount} scorecards under ${result.scorecardsDir}`);
   console.error(`[c2-baseline-finalize] private resolution: ${result.resolutionPath}`);

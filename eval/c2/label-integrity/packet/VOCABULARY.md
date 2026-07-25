@@ -29,7 +29,13 @@ notifications  onboarding  pricing  profile  search  settings
 ```
 
 Unlike `patternType`, this is a set — a screen that is both a dashboard and a
-data table gets both. Include the value you chose for `patternType`.
+data table gets both. Include the `patternType` value here **only if it also
+appears in the categories list above**. Five patternType values are
+patternType-only and have no categories equivalent: `calculator`,
+`command-palette`, `gallery`, `interstitial`, `modal`. For those, describe the
+screen's nature with the closest categories value instead (e.g. a `modal`
+sign-in dialog is `patternType: modal`, `categories: [auth]`, not
+`categories: [modal]`).
 
 ## 3. components — 1 to 8, only what is visibly rendered
 

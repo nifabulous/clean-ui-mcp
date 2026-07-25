@@ -1,0 +1,962 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>C2 label-integrity — AI draft review</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfa;         --panel: #fff;      --ink: #16171a;
+  --muted: #6b6f76;      --line: #e3e4e7;    --line-strong: #c9cbd0;
+  --accent: #2d6cdf;     --accent-ink: #fff; --accent-soft: #2d6cdf14;
+  --danger: #c0392b;     --ok: #1c7c4a;
+  --r: 8px; --r-lg: 12px;
+  --shadow: 0 1px 2px #0000000a, 0 4px 14px #0000000a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131417;        --panel: #191b1f;   --ink: #e9eaec;
+    --muted: #9a9ea6;     --line: #2a2d33;    --line-strong: #3b3f47;
+    --accent: #6ea0ff;    --accent-ink: #10131a; --accent-soft: #6ea0ff1f;
+    --danger: #ff7b6b;    --ok: #5fce97;
+    --shadow: 0 1px 2px #0000003d, 0 4px 14px #00000030;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: 88px; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1240px; margin: 0 auto; padding: 0 24px 96px; }
+
+/* ---------- header ---------- */
+header {
+  position: sticky; top: 0; z-index: 40;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.bar { max-width: 1240px; margin: 0 auto; padding: 12px 24px;
+       display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.bar h1 { font-size: 15px; font-weight: 650; margin: 0; letter-spacing: -.01em; }
+.spacer { flex: 1; }
+.count { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+.meter { width: 132px; height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.meter > i { display: block; height: 100%; width: 0%; background: var(--accent);
+             transition: width .25s ease; }
+button, .btn {
+  font: inherit; font-size: 13.5px; padding: 7px 13px; border-radius: var(--r);
+  border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink);
+  cursor: pointer; transition: background .12s, border-color .12s;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.primary:hover { filter: brightness(1.06); }
+.idbox { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+.idbox input {
+  font: inherit; font-size: 13.5px; width: 128px; padding: 6px 10px;
+  border: 1px solid var(--line-strong); border-radius: var(--r);
+  background: var(--panel); color: var(--ink);
+}
+
+/* ---------- notices ---------- */
+.notice { border-radius: var(--r-lg); padding: 14px 18px; margin: 20px 0; font-size: 14px;
+          border: 1px solid var(--line); background: var(--panel); }
+.notice.warn { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--panel)); }
+.notice strong { font-weight: 650; }
+.notice code { font-size: 12.5px; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+[hidden] { display: none !important; }
+
+/* ---------- entry card ---------- */
+.entry {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+  box-shadow: var(--shadow); margin: 18px 0; overflow: hidden;
+  transition: border-color .15s;
+}
+.entry.done { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.entry-head {
+  display: flex; align-items: center; gap: 10px; padding: 12px 18px;
+  border-bottom: 1px solid var(--line); flex-wrap: wrap;
+}
+.seq { font-variant-numeric: tabular-nums; font-weight: 650; font-size: 13px; color: var(--muted); }
+.eid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+       color: var(--muted); word-break: break-all; }
+.tag { font-size: 11px; letter-spacing: .02em; text-transform: uppercase; font-weight: 600;
+       border: 1px solid var(--line-strong); border-radius: 99px; padding: 2px 9px; color: var(--muted); }
+.tag.challenge { border-color: var(--accent); color: var(--accent); }
+.tick { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--ok); }
+
+/* landscape: image on top, controls below. portrait: side by side. */
+.body { display: grid; gap: 22px; padding: 18px; }
+.body.landscape { grid-template-columns: 1fr; }
+.body.portrait  { grid-template-columns: minmax(240px, 340px) 1fr; align-items: start; }
+@media (max-width: 900px) { .body.portrait { grid-template-columns: 1fr; } }
+
+.shot { position: relative; }
+.shot button.zoom {
+  position: absolute; top: 8px; right: 8px; opacity: 0; transition: opacity .15s;
+  font-size: 12px; padding: 4px 9px;
+}
+.shot:hover button.zoom, .shot:focus-within button.zoom { opacity: 1; }
+.shot img { display: block; width: 100%; height: auto; border-radius: var(--r);
+            border: 1px solid var(--line); background: #8881; cursor: zoom-in; }
+.landscape .shot img { max-height: 70vh; width: auto; max-width: 100%; margin: 0 auto; }
+
+/* phone-ish framing so tall captures read as a device, not a wall of pixels */
+.portrait .shot { position: sticky; top: 88px; }
+.portrait .shot img {
+  max-height: 74vh; width: auto; max-width: 100%; margin: 0 auto;
+  border-radius: 18px; border: 6px solid var(--line-strong); box-shadow: var(--shadow);
+}
+.dims { text-align: center; font-size: 11.5px; color: var(--muted); margin-top: 7px;
+        font-variant-numeric: tabular-nums; }
+
+/* ---------- fields ---------- */
+.fields { display: grid; gap: 16px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+.field > .lbl { font-size: 12px; font-weight: 650; letter-spacing: .02em; text-transform: uppercase;
+                color: var(--muted); margin-bottom: 6px; display: flex; gap: 6px; align-items: baseline; }
+.field > .lbl .hint { font-weight: 500; text-transform: none; letter-spacing: 0; font-size: 11.5px; }
+.field.missing > .lbl { color: var(--danger); }
+
+/* segmented control for short closed sets */
+.seg { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.seg label { border: 1px solid var(--line-strong); border-radius: var(--r); padding: 6px 12px;
+             font-size: 13.5px; cursor: pointer; user-select: none; background: var(--panel); }
+.seg label:hover { border-color: var(--accent); }
+.seg input { position: absolute; opacity: 0; width: 0; height: 0; }
+.seg label:has(input:checked) { background: var(--accent); border-color: var(--accent);
+                                color: var(--accent-ink); font-weight: 600; }
+
+/* text inputs */
+input.text { font: inherit; width: 100%; padding: 8px 11px; border-radius: var(--r);
+             border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); }
+input.text:focus, .cb.open .cb-input { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* ---------- searchable combobox ---------- */
+.cb { position: relative; }
+.cb-pills { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+.cb-pills:empty { display: none; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px;
+        background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+        color: var(--ink); border-radius: 99px; padding: 3px 5px 3px 11px; }
+.pill button { all: unset; cursor: pointer; line-height: 1; padding: 0 4px; border-radius: 99px;
+               color: var(--muted); font-size: 15px; }
+.pill button:hover { color: var(--danger); }
+.cb-input { font: inherit; width: 100%; padding: 8px 11px; border-radius: var(--r);
+            border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); }
+.cb-input::placeholder { color: var(--muted); }
+.cb-menu {
+  position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 4px);
+  max-height: 260px; overflow-y: auto; background: var(--panel);
+  border: 1px solid var(--line-strong); border-radius: var(--r); box-shadow: var(--shadow);
+  padding: 4px;
+}
+.cb:not(.open) .cb-menu { display: none; }
+.cb-opt { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 6px;
+          cursor: pointer; font-size: 14px; }
+.cb-opt[aria-selected="true"] { font-weight: 650; }
+.cb-opt[aria-selected="true"]::after { content: "✓"; margin-left: auto; color: var(--accent); }
+.cb-opt.active { background: var(--accent-soft); }
+.cb-empty { padding: 10px; color: var(--muted); font-size: 13.5px; }
+
+/* ---------- vocabulary-gap escape hatch ---------- */
+.gapwrap { border-top: 1px dashed var(--line-strong); padding-top: 14px; margin-top: 2px; }
+.gaplist { display: grid; gap: 6px; margin-bottom: 9px; }
+.gapitem { display: flex; gap: 9px; align-items: center; font-size: 13px;
+           background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+           border-radius: 6px; padding: 6px 8px 6px 11px; }
+.gapitem code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.gapitem .note { color: var(--muted); }
+.gapitem button { all: unset; cursor: pointer; margin-left: auto; color: var(--muted);
+                  font-size: 15px; padding: 0 4px; }
+.gapitem button:hover { color: var(--danger); }
+.gapform { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.gapform select, .gapform input {
+  font: inherit; font-size: 13.5px; padding: 7px 10px; border-radius: var(--r);
+  border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink);
+}
+.gapform input { flex: 1; min-width: 170px; }
+.linkbtn { all: unset; cursor: pointer; color: var(--accent); font-size: 13px; font-weight: 600; }
+.linkbtn:hover { text-decoration: underline; }
+.flagchip { font-size: 11px; font-weight: 700; letter-spacing: .02em; border-radius: 99px;
+            padding: 2px 9px; background: var(--accent); color: var(--accent-ink); }
+
+.notice.draft { border-color: var(--accent); background: var(--accent-soft); }
+.rationale { font-size: 13.5px; color: var(--muted); font-style: italic;
+             border-left: 3px solid var(--line-strong); padding: 2px 0 2px 12px; }
+.tag.conf-high { border-color: var(--ok); color: var(--ok); }
+.tag.conf-medium { border-color: var(--muted); }
+.tag.conf-low { border-color: var(--danger); color: var(--danger); }
+
+/* ---------- lightbox ---------- */
+#lightbox { position: fixed; inset: 0; z-index: 100; background: #000000e8;
+            display: none; align-items: center; justify-content: center; padding: 24px; cursor: zoom-out; }
+#lightbox.on { display: flex; }
+#lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
+#lightbox .cap { position: fixed; bottom: 14px; left: 0; right: 0; text-align: center;
+                 color: #fff; font-size: 12.5px; opacity: .8; }
+</style>
+
+<header>
+  <div class="bar">
+    <h1>C2 label-integrity — AI draft review</h1>
+    <div class="meter" title="completion"><i id="meterfill"></i></div>
+    <span class="count" id="progress"></span>
+    <span class="count" id="gapcount" title="vocabulary gaps flagged"></span>
+    <div class="spacer"></div>
+    <button id="jump">Next incomplete</button>
+    <button id="importbtn" title="load a draft or a previous export">Import</button>
+    <button id="clearbtn" title="wipe all labels in this browser">Clear</button>
+    <input type="file" id="importfile" accept="application/json,.json" hidden>
+    <span class="idbox">reviewer <input type="text" id="reviewer" placeholder="e.g. jdoe" spellcheck="false"></span>
+    <button class="primary" id="export">Export JSON</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="notice warn" id="nostore" hidden>
+    <strong>Autosave is unavailable in this browser.</strong> Your work is held in memory only and
+    will be lost if you close or reload this tab. Open this file in Chrome or Firefox, or serve the
+    folder over <code>http://localhost</code> — storage works on a real origin. Otherwise export
+    partial progress often.
+  </div>
+  <div class="notice draft">
+    <strong>This sheet is pre-filled with an AI-generated draft.</strong> It is a starting point for
+    your review, not a labeling pass. Every field is editable; each entry shows the draft's own
+    reasoning and confidence, and any vocabulary gaps it flagged. Correct what is wrong, then
+    Export.
+    <br><br>
+    <strong>Do not hand this draft to both baseline reviewers.</strong> Two people editing the same
+    anchor are not labeling independently — their agreement would overstate reliability, and
+    components-recall and domain-tags-recall take their entire floor from that number.
+  </div>
+  <div class="notice">
+    Read <strong>VOCABULARY.md</strong> first, especially the tie-break rules in §6. Every list is
+    closed — type to filter, click or press Enter to pick. Work autosaves as you go. Do not compare
+    notes with the other reviewer.
+  </div>
+  <div class="notice">
+    <strong>If nothing in a list fits, still pick the nearest value — then flag the gap.</strong>
+    Every entry has a <em>Flag a missing option</em> control at the bottom. Flags are collected
+    separately and do not affect your labels or the agreement measurement; they are how we find out
+    where the vocabulary itself is wrong. The lists are known to be incomplete — the corpus they
+    came from was machine-tagged, and its own notes describe components it has no tag for.
+  </div>
+  <main id="app"></main>
+</div>
+
+<div id="lightbox"><img alt=""><div class="cap"></div></div>
+
+<script>
+var VOCAB = {"patternType":["auth","calculator","chat-interface","checkout","command-palette","dashboard","data-table","editor-canvas","empty-state","forms","landing-page","marketing-hero","mobile-nav","modal","navigation","notifications","onboarding","pricing","profile","search","settings"],"categories":["auth","chat-interface","checkout","dashboard","data-table","editor-canvas","empty-state","forms","landing-page","marketing-hero","mobile-nav","navigation","notifications","onboarding","pricing","profile","search","settings"],"components":["area-chart","bar-chart","card-list","chart","command-palette","data-table","donut-chart","empty-state","feed-list","filter-controls","form-controls","icon-button","kpi-card","line-chart","media-grid","metric-grid","modal-dialog","notification-bell","pricing-card","report-list","search-command","segmented-control","sidebar-nav","status-chip","summary-card","tab-nav","timeline","top-nav"],"domainTags":["ai-ml","analytics","banking","communication","crypto","developer-tools","ecommerce","education","enterprise-saas","fintech","healthcare","hr","infrastructure","insurance","investing","marketing","media","payments","productivity","recruiting","security","social"],"density":["sparse","moderate","dense"],"color-scheme":["light","dark","mixed"],"layout":["single-column","two-column","three-column","modal-overlay"],"critiqueQuality":["insufficient","acceptable","strong"],"accessibilityEvidenceIds":["a11y:visible-focus","a11y:skip-link","a11y:contrast-control"]};
+var ENTRIES = [{"entryId":"hume-hume-12","image":"../../../../corpus/images-private/hume-ai-web-apr-2026-15-4.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"cash-app-cash-app-42","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-138.png","cohort":"reproducible","width":1284,"height":2778,"orientation":"portrait"},{"entryId":"leatherback-co-leatherback-co-group-9d4feb511b-desktop-2026-07-06","image":"../../../../corpus/images-private/leatherback-co-leatherback-co-group-9d4feb511b-desktop-2026-07-06.png","cohort":"reproducible","width":1440,"height":1960,"orientation":"portrait"},{"entryId":"alan-alan-ios-screens-29-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 29.png","cohort":"reproducible","width":1179,"height":2556,"orientation":"portrait"},{"entryId":"wealthsimple-wealthsimple-ios-screens-11-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Wealthsimple iOS Screens/Wealthsimple iOS Screens 11.png","cohort":"reproducible","width":1125,"height":2436,"orientation":"portrait"},{"entryId":"wealthsimple-wealthsimple-ios-screens-64-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Wealthsimple iOS Screens/Wealthsimple iOS Screens 64.png","cohort":"reproducible","width":1125,"height":2436,"orientation":"portrait"},{"entryId":"stackai-stackai-web-screens-42-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/StackAI Web Screens/StackAI Web Screens 42.png","cohort":"reproducible","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"wealthsimple-wealthsimple-ios-screens-31-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Wealthsimple iOS Screens/Wealthsimple iOS Screens 31.png","cohort":"reproducible","width":1125,"height":2436,"orientation":"portrait"},{"entryId":"alan-alan-ios-screens-120-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 120.png","cohort":"reproducible","width":1179,"height":2556,"orientation":"portrait"},{"entryId":"alan-alan-ios-screens-109-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 109.png","cohort":"reproducible","width":1179,"height":2556,"orientation":"portrait"},{"entryId":"alan-alan-ios-screens-105-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 105.png","cohort":"reproducible","width":1179,"height":2556,"orientation":"portrait"},{"entryId":"alan-alan-ios-screens-22-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 22.png","cohort":"reproducible","width":1180,"height":2556,"orientation":"portrait"},{"entryId":"mercury-mercury-web-screens-61-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Mercury Web Screens/Mercury Web Screens 61.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"mercury-mercury-web-screens-55-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Mercury Web Screens/Mercury Web Screens 55.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"wise-wise-32","image":"../../../../corpus/images-private/wise-web-screens-17-2.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"arcade-arcade-web-screens-35-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 35.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"arcade-arcade-web-screens-85-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 85.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"quicken-quicken-web-screens-9-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Quicken Web Screens/Quicken Web Screens 9.png","cohort":"reproducible","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"quicken-quicken-web-screens-15-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Quicken Web Screens/Quicken Web Screens 15.png","cohort":"reproducible","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"arcade-arcade-web-screens-14-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 14.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"arcade-arcade-web-screens-72-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 72.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"arcade-arcade-web-screens-11-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 11.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"cash-app-cash-app-64","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-161.png","cohort":"reproducible","width":1284,"height":2778,"orientation":"portrait"},{"entryId":"cash-app-cash-app-44","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-52.png","cohort":"reproducible","width":1284,"height":2778,"orientation":"portrait"},{"entryId":"cash-app-cash-app-47","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-60.png","cohort":"reproducible","width":1284,"height":2778,"orientation":"portrait"},{"entryId":"paycheck-paycheck-2","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-62.png","cohort":"reproducible","width":1284,"height":2778,"orientation":"portrait"},{"entryId":"blui-blui","image":"../../../../corpus/images-private/aboard-web-screens-70-3.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"we-we-12","image":"../../../../corpus/images-private/workable-web-screens-65.png","cohort":"reproducible","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"workable-workable-8","image":"../../../../corpus/images-private/workable-web-screens-9.png","cohort":"reproducible","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"jell-jell","image":"../../../../corpus/images-private/aboard-web-screens-7-3.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"wise-wise-15","image":"../../../../corpus/images-private/wise-web-screens-60.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"workable-workable-24","image":"../../../../corpus/images-private/workable-web-screens-63.png","cohort":"reproducible","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"cash-app-cash-app-11","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-29.png","cohort":"reproducible","width":1284,"height":2778,"orientation":"portrait"},{"entryId":"projects-projects","image":"../../../../corpus/images-private/juicebox-web-screens-43.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"untitled-untitled-14","image":"../../../../corpus/images-private/aboard-web-screens-60-2.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"wealthsimple-wealthsimple-ios-screens-40-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Wealthsimple iOS Screens/Wealthsimple iOS Screens 40.png","cohort":"challenge","width":1125,"height":2437,"orientation":"portrait"},{"entryId":"wise-wise-18","image":"../../../../corpus/images-private/wise-web-screens-120.png","cohort":"challenge","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"workable-workable-2","image":"../../../../corpus/images-private/workable-web-screens-2.png","cohort":"challenge","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"juicebox-juicebox-2","image":"../../../../corpus/images-private/juicebox-web-screens-46.png","cohort":"challenge","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"cash-app-cash-app-4","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-17.png","cohort":"challenge","width":1284,"height":2778,"orientation":"portrait"}];
+var SELECTION_ARTIFACT_ID = "c2-label-integrity-selection-v1";
+var SELECTION_SHA = "9ed6ff2d74c0078706c67037910a8f3fcd3c519d9f0d724902022ac2acbe00b7";
+var KEY = "c2-label-integrity-draft-v1";
+var SEED = {"labels":[{"entryId":"hume-hume-12","patternType":"dashboard","categories":["dashboard","navigation"],"components":["sidebar-nav","top-nav","media-grid","icon-button","notification-bell","status-chip"],"domainTags":["ai-ml","media","developer-tools"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"geometric sans, generous line height","layout":"two-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"cash-app-cash-app-42","patternType":"modal","categories":["navigation"],"components":["card-list","icon-button","modal-dialog"],"domainTags":["payments","fintech","banking"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"bold grotesque headings, high-contrast black on white","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"leatherback-co-leatherback-co-group-9d4feb511b-desktop-2026-07-06","patternType":"landing-page","categories":["landing-page","marketing-hero","navigation"],"components":["top-nav","card-list","summary-card","chart"],"domainTags":["payments","fintech","banking"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"high-contrast serif display with sans body","layout":"two-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"alan-alan-ios-screens-29-2026-07-05","patternType":"search","categories":["search"],"components":["form-controls","card-list","status-chip","icon-button"],"domainTags":["insurance","healthcare"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"rounded geometric sans, bold headings","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"wealthsimple-wealthsimple-ios-screens-11-2026-07-05","patternType":"empty-state","categories":["empty-state"],"components":["empty-state","chart","form-controls","icon-button","tab-nav"],"domainTags":["investing","fintech"],"visualFields":{"density":"sparse","color-scheme":"light","typography":"friendly humanist sans, bold headings","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"wealthsimple-wealthsimple-ios-screens-64-2026-07-05","patternType":"modal","categories":["auth","forms"],"components":["form-controls","icon-button","modal-dialog"],"domainTags":["fintech","banking","investing"],"visualFields":{"density":"sparse","color-scheme":"light","typography":"bold grotesque headings, neutral sans body","layout":"modal-overlay"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"stackai-stackai-web-screens-42-2026-07-05","patternType":"data-table","categories":["data-table","settings"],"components":["data-table","sidebar-nav","top-nav","filter-controls","icon-button","modal-dialog"],"domainTags":["ai-ml","enterprise-saas","developer-tools"],"visualFields":{"density":"sparse","color-scheme":"light","typography":"neutral grotesque, compact ui sans","layout":"two-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"wealthsimple-wealthsimple-ios-screens-31-2026-07-05","patternType":"settings","categories":["settings"],"components":["summary-card","card-list","form-controls","status-chip","icon-button"],"domainTags":["investing","fintech","banking"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"friendly humanist sans, bold weight headings","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"alan-alan-ios-screens-120-2026-07-05","patternType":"profile","categories":["profile","settings"],"components":["summary-card","card-list","icon-button"],"domainTags":["insurance","healthcare"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"geometric sans, bold section headings","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"alan-alan-ios-screens-109-2026-07-05","patternType":"profile","categories":["profile"],"components":["media-grid","tab-nav","status-chip","icon-button"],"domainTags":["insurance","healthcare"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"geometric sans, bold labels","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"alan-alan-ios-screens-105-2026-07-05","patternType":"editor-canvas","categories":["editor-canvas","profile"],"components":["tab-nav","media-grid","icon-button","top-nav"],"domainTags":["insurance","healthcare"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"rounded geometric sans, bold headings","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"alan-alan-ios-screens-22-2026-07-05","patternType":"editor-canvas","categories":["editor-canvas"],"components":["icon-button"],"domainTags":["insurance","healthcare"],"visualFields":{"density":"sparse","color-scheme":"light","typography":"rounded geometric sans, large display numerals","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"mercury-mercury-web-screens-61-2026-07-05","patternType":"forms","categories":["forms"],"components":["form-controls","tab-nav","status-chip","top-nav"],"domainTags":["banking","payments","fintech"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"neutral grotesque sans, generous line height","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"mercury-mercury-web-screens-55-2026-07-05","patternType":"forms","categories":["forms"],"components":["form-controls","summary-card","icon-button"],"domainTags":["banking","payments","fintech"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"neutral grotesque sans, clear label hierarchy","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"wise-wise-32","patternType":"modal","categories":["auth"],"components":["modal-dialog","top-nav","icon-button","status-chip"],"domainTags":["payments","fintech","banking"],"visualFields":{"density":"sparse","color-scheme":"light","typography":"heavy condensed display headline, humanist sans body","layout":"modal-overlay"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"arcade-arcade-web-screens-35-2026-07-05","patternType":"modal","categories":["editor-canvas"],"components":["modal-dialog","segmented-control","icon-button","top-nav"],"domainTags":["marketing","enterprise-saas"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"neutral sans, compact ui labels","layout":"modal-overlay"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"arcade-arcade-web-screens-85-2026-07-05","patternType":"modal","categories":["forms"],"components":["modal-dialog","form-controls","sidebar-nav","top-nav"],"domainTags":["marketing","enterprise-saas"],"visualFields":{"density":"sparse","color-scheme":"light","typography":"neutral sans, medium-weight labels","layout":"modal-overlay"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"quicken-quicken-web-screens-9-2026-07-05","patternType":"modal","categories":["forms"],"components":["modal-dialog","form-controls","tab-nav","sidebar-nav","donut-chart"],"domainTags":["fintech","banking","investing"],"visualFields":{"density":"dense","color-scheme":"light","typography":"geometric sans, dense form labels","layout":"modal-overlay"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":["a11y:visible-focus"],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"quicken-quicken-web-screens-15-2026-07-05","patternType":"modal","categories":["dashboard"],"components":["modal-dialog","bar-chart","card-list","icon-button","sidebar-nav","tab-nav"],"domainTags":["fintech","banking"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"geometric sans, numeric emphasis","layout":"modal-overlay"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"arcade-arcade-web-screens-14-2026-07-05","patternType":"onboarding","categories":["onboarding"],"components":["card-list","status-chip"],"domainTags":["marketing","enterprise-saas"],"visualFields":{"density":"sparse","color-scheme":"light","typography":"neutral sans, medium-weight headings","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"arcade-arcade-web-screens-72-2026-07-05","patternType":"forms","categories":["forms","onboarding"],"components":["form-controls","top-nav","icon-button"],"domainTags":["marketing","enterprise-saas","productivity"],"visualFields":{"density":"sparse","color-scheme":"light","typography":"geometric sans, heavy display heading, generous line height","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"arcade-arcade-web-screens-11-2026-07-05","patternType":"modal","categories":["onboarding"],"components":["modal-dialog","sidebar-nav","icon-button"],"domainTags":["marketing","enterprise-saas","productivity"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"geometric sans, bold two-line dialog heading","layout":"modal-overlay"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"cash-app-cash-app-64","patternType":"marketing-hero","categories":["marketing-hero"],"components":["icon-button"],"domainTags":["fintech","payments","banking"],"visualFields":{"density":"sparse","color-scheme":"light","typography":"grotesque sans, very large tight-tracked heading","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"cash-app-cash-app-44","patternType":"marketing-hero","categories":["marketing-hero"],"components":["icon-button","feed-list"],"domainTags":["fintech","payments","banking"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"grotesque sans, oversized centred headline, small bold list labels","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"cash-app-cash-app-47","patternType":"modal","categories":["onboarding"],"components":["modal-dialog","summary-card","icon-button"],"domainTags":["fintech","banking","payments"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"grotesque sans, bold centred heading, regular body","layout":"modal-overlay"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"paycheck-paycheck-2","patternType":"marketing-hero","categories":["marketing-hero"],"components":["icon-button"],"domainTags":["fintech","banking","payments"],"visualFields":{"density":"sparse","color-scheme":"light","typography":"grotesque sans, very large centred headline, light subhead","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"blui-blui","patternType":"dashboard","categories":["dashboard","notifications"],"components":["sidebar-nav","card-list","kpi-card","chart","timeline"],"domainTags":["hr","enterprise-saas","productivity"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"geometric sans, bold card titles, oversized numeric metric","layout":"two-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"we-we-12","patternType":"notifications","categories":["notifications","navigation"],"components":["top-nav","sidebar-nav","feed-list","filter-controls","notification-bell","icon-button"],"domainTags":["recruiting","hr","enterprise-saas"],"visualFields":{"density":"dense","color-scheme":"light","typography":"humanist sans, small bold actor names, muted metadata","layout":"two-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"workable-workable-8","patternType":"onboarding","categories":["onboarding","dashboard"],"components":["top-nav","tab-nav","card-list","status-chip","icon-button"],"domainTags":["recruiting","hr","enterprise-saas"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"humanist sans, large section headings, small centred card copy","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"jell-jell","patternType":"dashboard","categories":["dashboard","navigation"],"components":["top-nav","card-list","summary-card","notification-bell","icon-button"],"domainTags":["hr","enterprise-saas","productivity"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"geometric sans, bold greeting headline, bold card labels","layout":"two-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"wise-wise-15","patternType":"modal","categories":["forms","data-table"],"components":["sidebar-nav","form-controls","filter-controls","feed-list","icon-button","search-command","modal-dialog"],"domainTags":["fintech","payments","banking"],"visualFields":{"density":"dense","color-scheme":"light","typography":"geometric sans, heavy display headings","layout":"modal-overlay"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"workable-workable-24","patternType":"dashboard","categories":["dashboard","navigation","search"],"components":["sidebar-nav","top-nav","card-list","report-list","icon-button","search-command"],"domainTags":["recruiting","hr","enterprise-saas"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"humanist sans, generous heading weight contrast","layout":"two-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"cash-app-cash-app-11","patternType":"dashboard","categories":["dashboard","mobile-nav"],"components":["card-list","feed-list","tab-nav","status-chip"],"domainTags":["fintech","banking","payments","investing"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"grotesque sans, tight tracking, bold row titles","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"projects-projects","patternType":"data-table","categories":["data-table","dashboard","search"],"components":["sidebar-nav","data-table","status-chip","tab-nav","feed-list","search-command","icon-button"],"domainTags":["recruiting","ai-ml","enterprise-saas"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"neutral sans with serif accent headings","layout":"three-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"untitled-untitled-14","patternType":"modal","categories":["dashboard","empty-state"],"components":["top-nav","card-list","summary-card","empty-state","notification-bell","icon-button","modal-dialog"],"domainTags":["hr","productivity","enterprise-saas"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"rounded geometric sans, large friendly headings","layout":"modal-overlay"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"wealthsimple-wealthsimple-ios-screens-40-2026-07-05","patternType":"dashboard","categories":["dashboard"],"components":["area-chart","segmented-control","metric-grid","notification-bell","icon-button"],"domainTags":["investing","crypto","fintech"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"humanist sans, oversized numeric price display","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"wise-wise-18","patternType":"settings","categories":["settings","navigation"],"components":["sidebar-nav","card-list","filter-controls","icon-button"],"domainTags":["fintech","payments","banking"],"visualFields":{"density":"moderate","color-scheme":"light","typography":"geometric sans, heavy section headings","layout":"two-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"workable-workable-2","patternType":"dashboard","categories":["dashboard","data-table","notifications"],"components":["top-nav","data-table","summary-card","status-chip","card-list","icon-button"],"domainTags":["recruiting","hr","enterprise-saas"],"visualFields":{"density":"dense","color-scheme":"light","typography":"humanist sans, large numeric emphasis in balance cards","layout":"two-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"acceptable","protectedFieldExpectation":"unchanged"},{"entryId":"juicebox-juicebox-2","patternType":"empty-state","categories":["empty-state","onboarding"],"components":["sidebar-nav","empty-state","icon-button"],"domainTags":["recruiting","ai-ml","enterprise-saas"],"visualFields":{"density":"sparse","color-scheme":"light","typography":"neutral sans with serif welcome heading","layout":"two-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"},{"entryId":"cash-app-cash-app-4","patternType":"onboarding","categories":["onboarding"],"components":["feed-list"],"domainTags":["fintech","banking","payments"],"visualFields":{"density":"sparse","color-scheme":"light","typography":"grotesque sans display heading with monospace legal copy","layout":"single-column"},"groundedClaimIds":["claim:visual-inspection"],"accessibilityEvidenceIds":[],"critiqueQuality":"strong","protectedFieldExpectation":"unchanged"}],"vocabularyGaps":[{"entryId":"hume-hume-12","field":"patternType","wanted":"gallery","note":"The screen is a browsable catalog of voice presets grouped into shelves. dashboard was chosen as nearest but is wrong: there is not a single metric, KPI or status summary on the screen, which is what dashboard implies to any reviewer."},{"entryId":"hume-hume-12","field":"components","wanted":"carousel","note":"Each voice shelf has explicit prev/next chevrons and items clipped at the right edge. media-grid was used instead, but a grid implies wrapped static rows and loses the horizontal-paging affordance that is the dominant interaction here."},{"entryId":"hume-hume-12","field":"components","wanted":"avatar","note":"The account switcher at the bottom of the sidebar renders a circular user avatar next to the name; nothing in the list represents it, so it had to be dropped from the component set entirely."},{"entryId":"cash-app-cash-app-42","field":"patternType","wanted":"article","note":"This is a support/help article: a title, three paragraphs of body copy, then related links. modal was forced by the 6a sheet rule, but it describes the presentation container and says nothing about the screen actually being long-form editorial content."},{"entryId":"cash-app-cash-app-42","field":"categories","wanted":"modal","note":"Packet contradiction, not a judgement call: section 6a instructs 'categories: [modal, auth]', and section 2 says to include the patternType value, but the closed section 2 list has no modal (nor calculator or command-palette). I followed 6a literally and emitted modal, so this entry's categories contain a value outside the section 2 list. Either add modal to section 2 or drop the requirement to mirror patternType."},{"entryId":"cash-app-cash-app-42","field":"components","wanted":"list-row","note":"The Related and Contact us items are plain icon + label + chevron rows with no card surface, elevation or border. card-list was the nearest value but misdescribes the visual treatment, which is exactly what a component tag is supposed to capture."},{"entryId":"leatherback-co-leatherback-co-group-9d4feb511b-desktop-2026-07-06","field":"components","wanted":"cta-button","note":"Three prominent pill CTAs plus Login/Get Started in the nav are the main interactive elements on the page, but the list has no button value at all; form-controls would be wrong since there is no form, so they went unrecorded."},{"entryId":"alan-alan-ios-screens-29-2026-07-05","field":"components","wanted":"search-input","note":"A standard inline text field with magnifier and clear button. The only search component available is search-command, which denotes a command-palette overlay and would imply the wrong interaction model, so form-controls was used instead."},{"entryId":"alan-alan-ios-screens-29-2026-07-05","field":"components","wanted":"list-row","note":"Eight practitioner results render as icon + two-line text + chevron rows, not cards. card-list is the nearest available value but implies contained surfaces that are not present."},{"entryId":"wealthsimple-wealthsimple-ios-screens-11-2026-07-05","field":"components","wanted":"bottom-nav","note":"A persistent four-icon iOS tab bar sits at the bottom of the viewport. tab-nav was used as nearest, but tab-nav reads as in-page content tabs (as on the Alan badges screen), so the two structurally different things collapse to one tag."},{"entryId":"wealthsimple-wealthsimple-ios-screens-11-2026-07-05","field":"components","wanted":"cta-button","note":"The primary 'Add funds' and secondary 'Transfer an existing account' buttons are the entire call to action of this zero state; form-controls was used but denotes inputs, not action buttons."},{"entryId":"wealthsimple-wealthsimple-ios-screens-64-2026-07-05","field":"categories","wanted":"modal","note":"Same packet contradiction as the Cash App entry: 6a's worked example requires modal in categories, but modal is absent from the closed section 2 list. Emitted per 6a; flagging so the vocabulary can be reconciled rather than silently producing an out-of-list category on every overlay screen."},{"entryId":"wealthsimple-wealthsimple-ios-screens-64-2026-07-05","field":"components","wanted":"phone-input","note":"A composite country-flag + dial-code selector fused to a phone text field. form-controls flattens a two-part specialised input into the same tag as a checkbox, losing the detail a critique would target."},{"entryId":"stackai-stackai-web-screens-42-2026-07-05","field":"components","wanted":"dropdown-menu","note":"The open row-action popover (Rename / Permissions / Reconnect / Delete) is an unscrimmed anchored menu. modal-dialog was the nearest value but is actively misleading, since it also implies the 6a overlay rule should have changed patternType to modal."},{"entryId":"stackai-stackai-web-screens-42-2026-07-05","field":"components","wanted":"pagination","note":"Prev/Next controls and a rows-per-page selector sit directly beneath the table. No pagination value exists, and filter-controls does not cover it, so this visible control cluster is unrecorded."},{"entryId":"wealthsimple-wealthsimple-ios-screens-31-2026-07-05","field":"components","wanted":"payment-card","note":"The dominant element is a rendered virtual Mastercard with brand mark, masked PAN, EXP and CVC. summary-card was used as nearest but implies a metric summary tile, which is not what this is."},{"entryId":"wealthsimple-wealthsimple-ios-screens-31-2026-07-05","field":"components","wanted":"toggle-switch","note":"The Lock card row has an iOS switch, the only stateful control on the screen. form-controls covers it only generically and cannot distinguish a switch from a text field in agreement scoring."},{"entryId":"alan-alan-ios-screens-120-2026-07-05","field":"components","wanted":"avatar","note":"A circular illustrated avatar directly above the member name anchors the profile header. There is no avatar value, so the single most identifying element of a profile screen cannot be recorded."},{"entryId":"alan-alan-ios-screens-120-2026-07-05","field":"components","wanted":"callout","note":"The 'Activation in progress' block is an informational status banner with an icon and inline link, not a metric tile. summary-card was the nearest value; status-chip would be worse since it is a full-width panel, not a chip."},{"entryId":"alan-alan-ios-screens-109-2026-07-05","field":"patternType","wanted":"gallery","note":"The content region is a grid of earned and locked achievement badges. profile was chosen as nearest, but nothing on screen shows identity, account details or settings, so profile is a poor fit and dashboard (the 6e fallback) would be worse."},{"entryId":"alan-alan-ios-screens-109-2026-07-05","field":"components","wanted":"badge","note":"The nine circular medallion badges, greyed when unearned, are the entire content. media-grid was used for the layout, but the badge item type itself, including its locked/unlocked state, has no representation."},{"entryId":"alan-alan-ios-screens-105-2026-07-05","field":"patternType","wanted":"avatar-customizer","note":"A character/avatar builder (live 3D preview, randomize, tabbed asset picker) has no value in §1. editor-canvas was chosen but there is no document or canvas being authored, and profile implies viewing account details rather than composing an avatar."},{"entryId":"alan-alan-ios-screens-105-2026-07-05","field":"components","wanted":"preview-pane","note":"The large live 3D avatar preview occupying the top half of the screen has no component value; media-grid only covers the thumbnail picker below it, so the dominant region goes unrecorded."},{"entryId":"alan-alan-ios-screens-22-2026-07-05","field":"patternType","wanted":"media-player","note":"A full-screen guided-session player (countdown timer, phase label, animated character, pause/mute transport) matches nothing in §1. editor-canvas is a poor stand-in — nothing is being edited — but every alternative is worse."},{"entryId":"alan-alan-ios-screens-22-2026-07-05","field":"components","wanted":"playback-controls","note":"The pause button plus mute and music toggles are transport controls; icon-button is the only available value and erases the fact that they form a media control set."},{"entryId":"mercury-mercury-web-screens-61-2026-07-05","field":"components","wanted":"callout-banner","note":"The tinted \"Requested by / Mobbin Pro subscription\" context panel is an inline informational banner. No banner or callout value exists; summary-card implies aggregated metrics and status-chip implies a small inline pill."},{"entryId":"mercury-mercury-web-screens-55-2026-07-05","field":"components","wanted":"toggle-switch","note":"The \"Accept card payments\" switch is a distinct control type. form-controls is the nearest value but is a catch-all that makes a toggle indistinguishable from a text input."},{"entryId":"mercury-mercury-web-screens-55-2026-07-05","field":"components","wanted":"file-upload","note":"A drag-and-drop upload dropzone plus an uploaded-file row with success indicator is a whole interaction pattern that collapses into the generic form-controls value."},{"entryId":"wise-wise-32","field":"components","wanted":"stepper","note":"The Recipient / Amount / Review / Pay progress trail with a filled bar in the header has no component value; tab-nav would misdescribe it as free navigation rather than sequential progress."},{"entryId":"wise-wise-32","field":"components","wanted":"alert-banner","note":"The full-width \"Something went wrong.\" error banner with a red icon is the most salient element in the dialog. status-chip was used as nearest but a chip is a small inline status pill, not a blocking error message."},{"entryId":"wise-wise-32","field":"categories","wanted":"modal","note":"§2 instructs including the patternType value in categories and §6a's own example writes categories: [modal, auth], but `modal` is absent from the §2 closed list. The vocabulary contradicts itself for every modal-typed entry."},{"entryId":"arcade-arcade-web-screens-35-2026-07-05","field":"categories","wanted":"modal","note":"Same self-contradiction: patternType modal must be echoed into categories per §2, but `modal` is not one of the §2 values. Recorded again to show how often this recurs in this batch."},{"entryId":"arcade-arcade-web-screens-35-2026-07-05","field":"components","wanted":"slider","note":"The zoom/blur percentage slider with tick marks and a 0% readout has no component value; segmented-control and form-controls both misdescribe a continuous range input."},{"entryId":"arcade-arcade-web-screens-85-2026-07-05","field":"categories","wanted":"modal","note":"Third occurrence of the missing `modal` category value in this batch of ten."},{"entryId":"quicken-quicken-web-screens-9-2026-07-05","field":"categories","wanted":"modal","note":"Fourth occurrence of the missing `modal` category value."},{"entryId":"quicken-quicken-web-screens-15-2026-07-05","field":"categories","wanted":"modal","note":"Fifth occurrence in this batch — five of ten entries resolve to patternType modal and none can echo it into categories from the closed list."},{"entryId":"quicken-quicken-web-screens-15-2026-07-05","field":"components","wanted":"list-row","note":"The Coming Up and History entries are flat rows with an icon, two-line label and trailing amount, not cards. card-list was used as nearest but implies bounded card surfaces."},{"entryId":"arcade-arcade-web-screens-14-2026-07-05","field":"layout","wanted":"card-row","note":"Four option cards sit side by side across the viewport in a single centered band. single-column was chosen because it is one top-level content region, but that value reads as a vertical stack and loses the horizontal card arrangement; two-/three-column imply distinct content columns, which this is not."},{"entryId":"arcade-arcade-web-screens-72-2026-07-05","field":"components","wanted":"inline-validation","note":"The green check plus 'Available' next to the slug field is live inline validation feedback. status-chip is the nearest value but it is a pill-shaped state badge on an object, not a field-level validation message, so using it would misdescribe the widget."},{"entryId":"arcade-arcade-web-screens-72-2026-07-05","field":"components","wanted":"primary-button","note":"There is no plain button in the component list at all. 'Create workspace' is a standalone primary CTA; form-controls covers the inputs but a submit button is a distinct visible element that no listed value names."},{"entryId":"arcade-arcade-web-screens-11-2026-07-05","field":"components","wanted":"stepper","note":"The dialog's core content is a numbered 1-4 instruction trail. No listed component covers a numbered step list; modal-dialog only names the container, so the most informative element on the screen goes unrecorded."},{"entryId":"arcade-arcade-web-screens-11-2026-07-05","field":"patternType","wanted":"coach-mark","note":"This is an instructional coach-mark/product-tour overlay anchored to a browser-extension screenshot, not a decision dialog. modal is correct per 6a but flattens the distinction between a confirmation dialog and a guided-tour overlay."},{"entryId":"cash-app-cash-app-64","field":"patternType","wanted":"interstitial","note":"A dismissible full-screen in-app upsell/feature-education screen. marketing-hero implies a public marketing or landing page; this is authenticated in-product promotion. Neither marketing-hero nor onboarding (barred by 6b) describes it honestly."},{"entryId":"cash-app-cash-app-64","field":"components","wanted":"primary-button","note":"The pinned 'Track your spending' CTA is the only interactive element besides the close X, and no listed component names a button. icon-button covers only the X."},{"entryId":"cash-app-cash-app-44","field":"components","wanted":"list-row","note":"The benefit rows are icon + bold label + description list rows, not cards and not a social/activity feed. feed-list is the nearest but wrongly implies chronological feed content."},{"entryId":"cash-app-cash-app-44","field":"components","wanted":"illustration","note":"A large spot illustration occupies the top third of the screen and is a dominant visual element with no representable component value; media-grid would be plainly wrong for a single illustration."},{"entryId":"cash-app-cash-app-44","field":"patternType","wanted":"interstitial","note":"Same class as the other Cash App promo sheets: a dismissible in-app feature-introduction screen. marketing-hero is chosen only because no in-product promotional pattern exists."},{"entryId":"cash-app-cash-app-47","field":"components","wanted":"checklist","note":"The bordered card contains three green-check consent bullets. summary-card names the container but nothing names the check-list itself, which is the substance of the disclosure."},{"entryId":"cash-app-cash-app-47","field":"components","wanted":"bottom-sheet","note":"The surface is a rounded-top iOS sheet with a dimmed layer above, not a centred dialog box. modal-dialog is the nearest but a sheet and a dialog are visually and behaviourally different components."},{"entryId":"paycheck-paycheck-2","field":"patternType","wanted":"interstitial","note":"Dismissible full-screen in-app promotion for direct deposit, with a 'Scroll for benefits' cue implying more promo content below. marketing-hero is the nearest but wrongly implies a public marketing page."},{"entryId":"paycheck-paycheck-2","field":"components","wanted":"scroll-cue","note":"The downward-arrow 'Scroll for benefits' affordance is a distinct rendered control indicating further content; no listed component covers a scroll indicator."},{"entryId":"blui-blui","field":"components","wanted":"banner","note":"A full-width 'Trial ended - subscribe now' alert bar sits pinned at the top of the content region. There is no banner/alert/announcement-bar value; status-chip is far too small a unit and notification-bell is a different affordance entirely."},{"entryId":"blui-blui","field":"components","wanted":"avatar","note":"Avatars appear in the sidebar footer, the onboarding badge card and the meeting attendee row. No listed component names an avatar."},{"entryId":"blui-blui","field":"components","wanted":"icon-rail","note":"The left navigation is a narrow icon-only rail with no labels. sidebar-nav is the nearest but implies a labelled sidebar; the collapsed icon rail is a materially different navigation component."},{"entryId":"we-we-12","field":"components","wanted":"list-row","note":"The inbox is a list of selectable rows with checkbox, icon, avatar, text and trailing actions. feed-list is the nearest but a checkbox-selectable actionable inbox row is closer to a table row than to a feed item."},{"entryId":"we-we-12","field":"components","wanted":"badge","note":"Unread count badges (8, 8, 3) and blue unread dots are rendered throughout. status-chip does not fit a numeric count badge, and notification-bell was used only as the nearest stand-in for the badged envelope icon."},{"entryId":"we-we-12","field":"components","wanted":"checkbox","note":"Every row carries a selection checkbox plus a select-all control in the header. form-controls implies a data-entry form, which this list is not."},{"entryId":"workable-workable-8","field":"components","wanted":"banner","note":"A yellow 'IN REVIEW' alert block with job-board tasks sits above the content. No banner/alert value exists; status-chip covers only the small 'Published (In review)' pill, not this block."},{"entryId":"workable-workable-8","field":"components","wanted":"stepper","note":"The numbered circles 1 and 2 joined by a vertical connector line are the scaffolding that drove the patternType decision, yet no component value can record them."},{"entryId":"workable-workable-8","field":"components","wanted":"avatar-group","note":"Overlapping avatar clusters appear on the 'Passive candidates' and 'Resurfaced candidates' cards. Neither avatar nor avatar-group exists in the list."},{"entryId":"jell-jell","field":"components","wanted":"avatar","note":"Employee avatars appear in the birthdays and time-off cards, on task assignees and in the top-right account control. No listed component names an avatar."},{"entryId":"jell-jell","field":"components","wanted":"quick-action-chip","note":"The three pill buttons under the greeting (Add employee, Create post, New onboarding) are icon+label action chips. segmented-control is the nearest shape-wise but is a mutually exclusive selector, which these are not."},{"entryId":"jell-jell","field":"components","wanted":"checklist","note":"The Tasks card is a list of radio-circle to-do rows with due dates, one overdue in red. Nothing in the component list covers a task/checklist widget; summary-card names only the container."},{"entryId":"wise-wise-15","field":"categories","wanted":"modal","note":"The §2 categories list omits modal, yet §6a instructs categories: [modal, auth] for an overlay and §2 requires including the patternType value. modal was kept in categories for this entry and untitled-untitled-14 to satisfy the binding §6a rule; the §2 list needs modal added to resolve the contradiction."},{"entryId":"wise-wise-15","field":"components","wanted":"date-picker","note":"A full month calendar grid with month stepper is the dominant element of the filter drawer; no calendar/date-picker value exists, and form-controls flattens a distinctive widget into a generic bucket."},{"entryId":"wise-wise-15","field":"components","wanted":"drawer","note":"The Filters surface is an edge-anchored panel, not a centered dialog; modal-dialog is the only overlay component available and misdescribes the geometry, so it was omitted entirely."},{"entryId":"wise-wise-15","field":"components","wanted":"toggle-switch","note":"The Show hidden transactions switch is a distinct control type; form-controls is the nearest but covers everything from text inputs to checkboxes."},{"entryId":"wise-wise-15","field":"components","wanted":"avatar","note":"Recipient initial avatars (CL, AL, BC) and merchant logos are visibly rendered with no matching component value."},{"entryId":"workable-workable-24","field":"components","wanted":"search-input","note":"A plain Search... text field sits in the header; search-command implies a command-palette overlay, which is not what is rendered."},{"entryId":"workable-workable-24","field":"patternType","wanted":"resource-index","note":"A hub listing saved/suggested reports as cards is neither a metrics dashboard nor a data table; dashboard was chosen as nearest but implies charts and KPIs that are absent."},{"entryId":"workable-workable-24","field":"components","wanted":"badge","note":"Count badges on the inbox icon (7) and scheduled-report chips are rendered; status-chip is about state labels, not numeric counters."},{"entryId":"cash-app-cash-app-11","field":"components","wanted":"bottom-nav","note":"A persistent three-icon bottom tab bar is pinned at the viewport bottom; tab-nav describes in-content tab switching, so the mobile chrome has no accurate value."},{"entryId":"cash-app-cash-app-11","field":"components","wanted":"carousel","note":"The top region is a horizontally paged card carousel (card art, green card, banknote) clipped at the edges; card-list implies a static stack."},{"entryId":"cash-app-cash-app-11","field":"components","wanted":"list-row","note":"Six icon + title + subtitle + trailing-action rows are the entire content region; feed-list and card-list both misdescribe them."},{"entryId":"projects-projects","field":"components","wanted":"progress-bar","note":"A Getting Started 83% progress meter is rendered in the sidebar footer; nothing in the list covers a linear progress indicator."},{"entryId":"projects-projects","field":"components","wanted":"avatar","note":"Collaborator initial avatars are rendered in the table rows and in the account footer with no matching value."},{"entryId":"projects-projects","field":"components","wanted":"detail-rail","note":"The Your Tasks panel is a persistent right-hand rail, not a feed within the main region; feed-list was used as nearest but loses the layout role."},{"entryId":"untitled-untitled-14","field":"components","wanted":"drawer","note":"The Tasks surface is a right-edge drawer with a close control; modal-dialog is the only overlay component and would imply a centered dialog."},{"entryId":"untitled-untitled-14","field":"components","wanted":"checkbox-list","note":"Both the Tasks card and the drawer render checkable task rows with due dates; form-controls is too generic and card-list is wrong."},{"entryId":"untitled-untitled-14","field":"components","wanted":"avatar","note":"Employee photo avatars and assignee initial chips appear in the time-off and task rows."},{"entryId":"wealthsimple-wealthsimple-ios-screens-40-2026-07-05","field":"patternType","wanted":"detail-view","note":"An asset detail screen (single instrument, price, chart, stats, buy/transfer actions) is not a dashboard of many metrics; dashboard was the nearest available value but overstates breadth."},{"entryId":"wealthsimple-wealthsimple-ios-screens-40-2026-07-05","field":"components","wanted":"action-bar","note":"A pinned bottom bar with Buy and Transfer buttons is a distinct persistent element; there is no button or action-bar component in the list."},{"entryId":"wise-wise-18","field":"patternType","wanted":"marketplace","note":"An app marketplace / integrations directory has no accurate value; settings was chosen because connecting apps configures the account, but the screen is a browsable catalogue, not a preferences page."},{"entryId":"wise-wise-18","field":"components","wanted":"list-row","note":"Each app is a logo + name + chevron row, not a card; card-list was used as nearest and implies boxed cards in a grid."},{"entryId":"workable-workable-2","field":"components","wanted":"banner","note":"A dismissible inline Optimize your jobs webinar banner spans the content width; nothing in the list covers an inline informational banner."},{"entryId":"workable-workable-2","field":"components","wanted":"carousel","note":"The time-off balances widget is a paged carousel with dot indicators and a next arrow; summary-card captures the tiles but not the paging affordance."},{"entryId":"workable-workable-2","field":"components","wanted":"promo-card","note":"The dismissible mobile-app download card in the left column is a promotional module; card-list is the nearest and does not convey it."},{"entryId":"juicebox-juicebox-2","field":"components","wanted":"progress-bar","note":"A Getting Started 0% progress meter is rendered in the sidebar footer with no matching component value."},{"entryId":"juicebox-juicebox-2","field":"components","wanted":"illustration","note":"A large composed product illustration carries the zero state; empty-state covers the region but there is no value for the illustration itself."},{"entryId":"cash-app-cash-app-4","field":"components","wanted":"button","note":"The screen's only interactive controls are two stacked full-width buttons (Skip, Next) and nothing in the closed list names a plain button; icon-button and form-controls would both be inaccurate."},{"entryId":"cash-app-cash-app-4","field":"components","wanted":"feature-list","note":"Four icon + label benefit rows are the core content; feed-list was used as nearest but implies a scrolling activity feed."},{"entryId":"cash-app-cash-app-4","field":"components","wanted":"illustration","note":"A large hero illustration of the card occupies the top third of the screen with no matching component value."}]};
+var ANNOTATIONS = {"hume-hume-12":{"rationale":"Authenticated product home: persistent sidebar plus a main region of horizontally paged voice-card shelves; no overlay, no zero-state, and classifying by content region (6d) rather than the sidebar chrome leaves dashboard as the nearest home/overview value.","confidence":"medium"},"cash-app-cash-app-42":{"rationale":"A help article presented as a dismissible full-screen sheet (X close, no back affordance), so 6a's sheet rule applies; the residual tie between modal and navigation also resolves to modal under 6e since modal precedes navigation in the section 1 list.","confidence":"medium"},"leatherback-co-leatherback-co-group-9d4feb511b-desktop-2026-07-06":{"rationale":"Public marketing site with floating top nav, a display headline and multiple feature panels with CTAs; more than a single hero band, so landing-page over marketing-hero (and landing-page also wins the 6e ordering).","confidence":"high"},"alan-alan-ios-screens-29-2026-07-05":{"rationale":"The whole content region is a populated query field with a clear control plus live suggestion and result rows, which is search by structure rather than a list or directory screen.","confidence":"high"},"wealthsimple-wealthsimple-ios-screens-11-2026-07-05":{"rationale":"Per 6c the primary content region (the account's performance area) is empty with a zero-state prompt and illustrative curve; per 6b the absence of any step indicator, welcome heading or skip control rules out onboarding despite the first-run tone.","confidence":"high"},"wealthsimple-wealthsimple-ios-screens-64-2026-07-05":{"rationale":"A third-party Plaid sheet is the focused foreground element over a dimmed host app (rounded top edge, back and close controls), so 6a makes it modal with the sign-in nature recorded in categories.","confidence":"high"},"stackai-stackai-web-screens-42-2026-07-05":{"rationale":"The content region is a column-headed, paginated connections table; the open row-action popover is an unscrimmed dropdown menu rather than the dialog, sheet or drawer that 6a's overlay rule names, so the table wins.","confidence":"medium"},"wealthsimple-wealthsimple-ios-screens-31-2026-07-05":{"rationale":"Explicit 'Virtual card settings' heading over a toggle and a list of configuration actions, which is settings by structure with the card artwork acting as a header object rather than the pattern.","confidence":"high"},"alan-alan-ios-screens-120-2026-07-05":{"rationale":"Avatar and member name head a screen of that member's own identity records (social security number, birthdate, entitlement certificate) with a Change affordance, which is a profile detail screen rather than settings toggles.","confidence":"high"},"alan-alan-ios-screens-109-2026-07-05":{"rationale":"Classifying by content region per 6d, the tab bar is chrome and the region itself is a grid of the member's earned and locked achievement badges, which is closest to a personal profile screen; no metric overview is present to justify dashboard.","confidence":"medium"},"alan-alan-ios-screens-105-2026-07-05":{"rationale":"Live avatar preview plus a tabbed option picker is a customization surface, not onboarding (no step indicator, progress trail or skip control per 6b); editor-canvas and profile both fit, so 6e selects editor-canvas as the earlier value in the §1 list.","confidence":"medium"},"alan-alan-ios-screens-22-2026-07-05":{"rationale":"A full-screen guided-breathing session player with timer, animated character and transport controls matches nothing in §1; it is not an overlay (nothing behind it, 6a), not first-run scaffolded (6b) and not a zero state (6c), so 6e picks editor-canvas as the earliest of the weakly-fitting full-bleed-surface values.","confidence":"low"},"mercury-mercury-web-screens-61-2026-07-05":{"rationale":"A full-page centered card collecting payment details with labelled inputs and method tabs; the card is the page's own content region, not a dialog over dimmed content, so 6a does not apply and it classifies as forms.","confidence":"high"},"mercury-mercury-web-screens-55-2026-07-05":{"rationale":"A continuous single-column stack of labelled fields, a toggle, an upload area and Go Back / Review actions on a plain page — no overlay and no first-run scaffolding, so it is straightforwardly forms.","confidence":"high"},"wise-wise-32":{"rationale":"A passkey approval dialog sits in the foreground over a dimmed transfer flow, so 6a makes patternType modal and the authentication nature is recorded in categories.","confidence":"high"},"arcade-arcade-web-screens-35-2026-07-05":{"rationale":"The Edit Image surface is a dialog layered over the dimmed application shell, so 6a makes it modal regardless of the image-editing content, which is recorded as editor-canvas in categories.","confidence":"high"},"arcade-arcade-web-screens-85-2026-07-05":{"rationale":"An Add link dialog is the focused foreground element over a blurred Brand Sources page, so 6a gives modal with the form content captured in categories.","confidence":"high"},"quicken-quicken-web-screens-9-2026-07-05":{"rationale":"The Create Series dialog is layered over a blurred Spending Plan screen, so 6a makes it modal even though its content is a dense multi-tab form; the focused Tags field renders a visible focus ring.","confidence":"high"},"quicken-quicken-web-screens-15-2026-07-05":{"rationale":"A Cashback Reward detail dialog with a monthly bar chart and history list sits over the blurred Bills & Income page, so 6a makes it modal with the metric-detail nature recorded in categories.","confidence":"high"},"arcade-arcade-web-screens-14-2026-07-05":{"rationale":"An explicit \"How would you like to get started?\" setup heading with first-run path choices satisfies the 6b scaffolding requirement, and 6a does not override because there is no dialog, sheet or drawer container — the choices sit directly on a blurred full-screen backdrop.","confidence":"medium"},"arcade-arcade-web-screens-72-2026-07-05":{"rationale":"Two labelled text inputs plus a single submit button are the whole content region; there is no step indicator, progress trail or skip control, so per 6b it is not onboarding, and 6e (forms before onboarding in the section 1 list) settles the residual tie in favour of forms.","confidence":"medium"},"arcade-arcade-web-screens-11-2026-07-05":{"rationale":"A crisp foreground dialog sits over a heavily blurred library page, so 6a makes it modal regardless of its content; the numbered 1-4 trail and the 'No thanks' skip control put onboarding in categories.","confidence":"high"},"cash-app-cash-app-64":{"rationale":"A full-bleed in-app promo: oversized value-proposition headline, one paragraph of supporting copy and a single pinned CTA, with no first-run scaffolding (6b) and nothing rendered underneath to make it an overlay (6a), so the hero-style promotional layout is the closest available value.","confidence":"low"},"cash-app-cash-app-44":{"rationale":"Spot illustration, oversized feature headline, an icon benefit list and a primary/secondary CTA pair make this a feature-promotion screen; no step indicator or skip control means 6b bars onboarding, so marketing-hero is the nearest structural match.","confidence":"low"},"cash-app-cash-app-47":{"rationale":"The card is presented as a rounded-top sheet with a dimmed grey layer visible above it and a close affordance, which is exactly the foreground-overlay case 6a resolves to modal; the bank-linking consent content goes in categories.","confidence":"medium"},"paycheck-paycheck-2":{"rationale":"Oversized headline, one-line pitch, a rendered product hero image and a single CTA with a scroll cue is a hero promotional layout; there is no step indicator, welcome/setup heading or skip control, so 6b rules out onboarding.","confidence":"medium"},"blui-blui":{"rationale":"The content region is a populated grid of at-a-glance widget cards (hours metric, weekly timesheet chart, time-off, agenda, expenses); the icon rail is chrome, so per 6d it is classified as dashboard.","confidence":"high"},"we-we-12":{"rationale":"The primary region is an inbox of unread activity items (signature request, time-off requests, profile updates) with unread dots, per-item actions and Inbox/Important/To-dos counts, which is a notifications centre rather than a data-table of records.","confidence":"high"},"workable-workable-8":{"rationale":"A numbered progress trail (circled 1 and 2 joined by a vertical connector) plus a 'Get off to the right start' setup heading and a job-board task checklist is exactly the visible first-run scaffolding 6b requires, so it beats a plain card grid reading.","confidence":"medium"},"jell-jell":{"rationale":"A personalised home surface whose content region is a two-column grid of populated summary widgets (tasks, note, birthdays, time-off requests, onboardings, anniversaries) plus quick actions; the greeting is not first-run scaffolding under 6b, so dashboard, not onboarding.","confidence":"high"},"wise-wise-15":{"rationale":"A full-height Filters drawer with its own close button and an open date-picker popover is the focused foreground element over the dimmed Transactions list, so §6a makes it modal.","confidence":"high"},"workable-workable-24":{"rationale":"The content region is a report-center hub of suggested and custom report cards with a category sidebar; no overlay, no zero-state, and no first-run scaffolding, so dashboard is the nearest structural fit.","confidence":"medium"},"cash-app-cash-app-11":{"rationale":"A money hub listing financial products (Borrow, Bitcoin, Stocks, Taxes) with per-row Start actions above a persistent bottom tab bar; classified by the content region per §6d, dashboard is nearest.","confidence":"medium"},"projects-projects":{"rationale":"The primary content region is a populated projects table with Title/Progress/Created on/Collaborators/Status columns, flanked by a nav sidebar and a tasks rail that are chrome per §6d.","confidence":"high"},"untitled-untitled-14":{"rationale":"A right-hand Tasks drawer with a close control sits elevated over the HR home dashboard cards, and §6a makes a foreground drawer modal regardless of what is underneath.","confidence":"medium"},"wealthsimple-wealthsimple-ios-screens-40-2026-07-05":{"rationale":"A Bitcoin asset detail view built from a price headline, an area chart with range segments and a bid/ask/market-cap metric grid; no overlay or zero-state applies, and dashboard is the closest metric-display pattern in the closed list.","confidence":"medium"},"wise-wise-18":{"rationale":"An app-marketplace/integrations directory for connecting third-party tools to the account, which is account configuration in substance, so settings is the nearest value in the closed list.","confidence":"low"},"workable-workable-2":{"rationale":"A populated home dashboard of job, onboarding and time-off widgets; the dismissible mobile-app promo card is an inline sidebar promo rather than a focused foreground dialog, so §6a does not trigger.","confidence":"medium"},"juicebox-juicebox-2":{"rationale":"The main region holds no agents, only a zero-state illustration and a Create Your First Agent CTA (§6c); a welcome heading also invites onboarding, and §6e breaks that tie toward empty-state as the earlier §1 value.","confidence":"medium"},"cash-app-cash-app-4":{"rationale":"Explicit first-run scaffolding is visible — a Meet the Cash App Card intro heading plus paired Skip and Next controls — which is exactly what §6b requires for onboarding.","confidence":"high"}};
+
+/* localStorage throws on opaque origins (Safari + file://). Degrade to memory
+   and say so, rather than dying on load or silently losing 40 entries. */
+var store = null;
+try {
+  window.localStorage.setItem(KEY + ":probe", "1");
+  window.localStorage.removeItem(KEY + ":probe");
+  store = window.localStorage;
+} catch (err) { store = null; }
+
+function loadState() {
+  if (!store) return {};
+  try { return JSON.parse(store.getItem(KEY) || "{}"); } catch (err) { return {}; }
+}
+var state = loadState();
+if (!state.__gaps) state.__gaps = {};
+
+/* Copies only schema-known fields. Shared by the seed path and Import, so a
+   draft can never smuggle an extra key into a label. */
+function copyLabelInto(dst, src) {
+  if (typeof src.patternType === "string") dst.patternType = src.patternType;
+  if (typeof src.critiqueQuality === "string") dst.critiqueQuality = src.critiqueQuality;
+  var lists = ["categories", "components", "domainTags", "accessibilityEvidenceIds", "groundedClaimIds"];
+  for (var k = 0; k < lists.length; k++) {
+    if (Array.isArray(src[lists[k]])) dst[lists[k]] = src[lists[k]].slice();
+  }
+  if (src.visualFields) {
+    var vk = ["density", "color-scheme", "typography", "layout"];
+    for (var v = 0; v < vk.length; v++) {
+      if (typeof src.visualFields[vk[v]] === "string") dst.visualFields[vk[v]] = src.visualFields[vk[v]];
+    }
+  }
+  dst.protectedFieldExpectation = "unchanged";
+}
+
+/* Fields a reviewer can flag as having no adequate option. These are exactly
+   the closed-list fields; typography is free text so it cannot have a gap. */
+var GAP_FIELDS = ["patternType", "categories", "components", "domainTags",
+                  "layout", "density", "color-scheme", "critiqueQuality"];
+
+function gapsFor(entryId) { return state.__gaps[entryId] || []; }
+function totalGaps() {
+  var n = 0;
+  for (var k in state.__gaps) if (state.__gaps.hasOwnProperty(k)) n += state.__gaps[k].length;
+  return n;
+}
+
+function blank() {
+  return {
+    patternType: "", categories: [], components: [], domainTags: [],
+    visualFields: { density: "", "color-scheme": "", typography: "", layout: "" },
+    groundedClaimIds: ["claim:visual-inspection"], accessibilityEvidenceIds: [],
+    critiqueQuality: "", protectedFieldExpectation: "unchanged"
+  };
+}
+function complete(l) {
+  if (!l) return false;
+  var vf = l.visualFields;
+  return !!l.patternType && l.categories.length > 0 && l.components.length > 0 &&
+    l.domainTags.length > 0 && !!l.critiqueQuality &&
+    !!(vf.density || "").trim() && !!(vf["color-scheme"] || "").trim() &&
+    !!(vf.typography || "").trim() && !!(vf.layout || "").trim();
+}
+function save() {
+  if (store) {
+    try { store.setItem(KEY, JSON.stringify(state)); }
+    catch (err) { store = null; document.getElementById("nostore").hidden = false; }
+  }
+  paint();
+}
+if (!store) document.getElementById("nostore").hidden = false;
+
+function paint() {
+  var done = 0;
+  for (var i = 0; i < ENTRIES.length; i++) {
+    var e = ENTRIES[i];
+    var ok = complete(state[e.entryId]);
+    if (ok) done++;
+    var card = document.getElementById("row-" + e.entryId);
+    if (card) {
+      card.classList.toggle("done", ok);
+      card.querySelector(".tick").textContent = ok ? "complete" : "";
+      /* Only flag gaps once the reviewer has started this entry. Marking all
+         eight fields red on an untouched card is noise, not signal. */
+      var started = touched(state[e.entryId]);
+      var fields = card.querySelectorAll(".field[data-req]");
+      for (var j = 0; j < fields.length; j++) {
+        var f = fields[j];
+        f.classList.toggle("missing", started && !fieldFilled(state[e.entryId], f.dataset.req));
+      }
+    }
+  }
+  document.getElementById("progress").textContent = done + " / " + ENTRIES.length;
+  document.getElementById("meterfill").style.width = (done / ENTRIES.length * 100) + "%";
+  var g = totalGaps();
+  document.getElementById("gapcount").textContent = g ? "· " + g + " gap" + (g === 1 ? "" : "s") + " flagged" : "";
+}
+function touched(l) {
+  if (!l) return false;
+  var vf = l.visualFields;
+  return !!l.patternType || !!l.critiqueQuality ||
+    l.categories.length > 0 || l.components.length > 0 || l.domainTags.length > 0 ||
+    l.accessibilityEvidenceIds.length > 0 ||
+    !!(vf.density || vf["color-scheme"] || (vf.typography || "").trim() || (vf.layout || "").trim());
+}
+function fieldFilled(l, name) {
+  if (!l) return false;
+  if (name === "patternType" || name === "critiqueQuality") return !!l[name];
+  if (name === "density" || name === "color-scheme" || name === "typography" || name === "layout") {
+    return !!(l.visualFields[name] || "").trim();
+  }
+  return (l[name] || []).length > 0;
+}
+
+/* ---------- searchable combobox ---------- */
+function combobox(opts) {
+  var options = opts.options, multi = opts.multi, get = opts.get, set = opts.set;
+  var root = document.createElement("div");
+  root.className = "cb";
+  var pills = document.createElement("div");
+  pills.className = "cb-pills";
+  var input = document.createElement("input");
+  input.className = "cb-input";
+  input.type = "text";
+  input.spellcheck = false;
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-expanded", "false");
+  var menu = document.createElement("div");
+  menu.className = "cb-menu";
+  menu.setAttribute("role", "listbox");
+  root.append(pills, input, menu);
+
+  var active = -1;
+  var visible = options.slice();
+
+  function selected() { return multi ? get() : (get() ? [get()] : []); }
+  function placeholder() {
+    var n = selected().length;
+    if (!multi) return n ? "change…" : "search " + options.length + " options…";
+    return "search " + options.length + " options…";
+  }
+  function renderPills() {
+    pills.textContent = "";
+    var vals = selected();
+    for (var i = 0; i < vals.length; i++) {
+      (function (value) {
+        var pill = document.createElement("span");
+        pill.className = "pill";
+        pill.append(document.createTextNode(value));
+        var x = document.createElement("button");
+        x.type = "button";
+        x.textContent = "×";
+        x.title = "remove " + value;
+        x.onclick = function (ev) { ev.stopPropagation(); toggle(value); };
+        pill.append(x);
+        pills.append(pill);
+      })(vals[i]);
+    }
+    input.placeholder = placeholder();
+  }
+  function renderMenu() {
+    var q = input.value.trim().toLowerCase();
+    visible = options.filter(function (o) { return o.indexOf(q) !== -1; });
+    menu.textContent = "";
+    if (!visible.length) {
+      var none = document.createElement("div");
+      none.className = "cb-empty";
+      none.textContent = 'no match for "' + input.value.trim() + '" — the list is closed, pick the nearest value';
+      menu.append(none);
+      return;
+    }
+    if (active >= visible.length) active = visible.length - 1;
+    var chosen = selected();
+    for (var i = 0; i < visible.length; i++) {
+      (function (value, index) {
+        var row = document.createElement("div");
+        row.className = "cb-opt" + (index === active ? " active" : "");
+        row.setAttribute("role", "option");
+        row.setAttribute("aria-selected", chosen.indexOf(value) !== -1 ? "true" : "false");
+        row.textContent = value;
+        row.onmousedown = function (ev) { ev.preventDefault(); toggle(value); };
+        row.onmouseenter = function () { active = index; highlight(); };
+        menu.append(row);
+      })(visible[i], i);
+    }
+  }
+  function highlight() {
+    var rows = menu.querySelectorAll(".cb-opt");
+    for (var i = 0; i < rows.length; i++) rows[i].classList.toggle("active", i === active);
+    if (rows[active]) rows[active].scrollIntoView({ block: "nearest" });
+  }
+  function toggle(value) {
+    if (multi) {
+      var cur = get().slice();
+      var at = cur.indexOf(value);
+      if (at === -1) cur.push(value); else cur.splice(at, 1);
+      set(cur);
+    } else {
+      set(get() === value ? "" : value);
+      close();
+    }
+    renderPills();
+    renderMenu();
+    save();
+  }
+  function open() { root.classList.add("open"); input.setAttribute("aria-expanded", "true"); active = -1; renderMenu(); }
+  function close() { root.classList.remove("open"); input.setAttribute("aria-expanded", "false"); input.value = ""; }
+
+  input.onfocus = open;
+  input.onblur = function () { setTimeout(close, 120); };
+  input.oninput = function () { active = 0; renderMenu(); };
+  input.onkeydown = function (ev) {
+    if (ev.key === "ArrowDown") { ev.preventDefault(); active = Math.min(active + 1, visible.length - 1); highlight(); }
+    else if (ev.key === "ArrowUp") { ev.preventDefault(); active = Math.max(active - 1, 0); highlight(); }
+    else if (ev.key === "Enter") { ev.preventDefault(); if (visible[active]) toggle(visible[active]); }
+    else if (ev.key === "Escape") { input.blur(); }
+    else if (ev.key === "Backspace" && !input.value && multi) {
+      var cur = get();
+      if (cur.length) toggle(cur[cur.length - 1]);
+    }
+  };
+  renderPills();
+  return root;
+}
+
+/* ---------- segmented control ---------- */
+function segmented(opts) {
+  var wrap = document.createElement("div");
+  wrap.className = "seg";
+  for (var i = 0; i < opts.options.length; i++) {
+    (function (value) {
+      var lab = document.createElement("label");
+      var box = document.createElement("input");
+      box.type = opts.multi ? "checkbox" : "radio";
+      box.name = opts.name;
+      box.checked = opts.multi ? opts.get().indexOf(value) !== -1 : opts.get() === value;
+      box.onchange = function () {
+        if (opts.multi) {
+          var cur = opts.get().slice();
+          var at = cur.indexOf(value);
+          if (box.checked && at === -1) cur.push(value);
+          if (!box.checked && at !== -1) cur.splice(at, 1);
+          opts.set(cur);
+        } else {
+          opts.set(value);
+        }
+        save();
+      };
+      lab.append(box, document.createTextNode(value));
+      wrap.append(lab);
+    })(opts.options[i]);
+  }
+  return wrap;
+}
+
+/* ---------- vocabulary-gap escape hatch ----------
+   A reviewer who finds no adequate option still picks the nearest value (so the
+   agreement metric stays computable) and records what was missing here. Flags
+   are exported alongside the labels, never inside them. */
+function gapSection(entryId, flagChip) {
+  var wrap = document.createElement("div");
+  wrap.className = "field gapwrap";
+
+  var list = document.createElement("div");
+  list.className = "gaplist";
+
+  var form = document.createElement("div");
+  form.className = "gapform";
+  form.hidden = true;
+
+  var pick = document.createElement("select");
+  pick.append(new Option("which field?", ""));
+  for (var i = 0; i < GAP_FIELDS.length; i++) pick.append(new Option(GAP_FIELDS[i], GAP_FIELDS[i]));
+
+  var wanted = document.createElement("input");
+  wanted.type = "text";
+  wanted.placeholder = "what you wanted, e.g. bottom-nav";
+  wanted.spellcheck = false;
+
+  var note = document.createElement("input");
+  note.type = "text";
+  note.placeholder = "optional — why the nearest value is wrong";
+
+  var add = document.createElement("button");
+  add.type = "button";
+  add.textContent = "Add";
+
+  var cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "Cancel";
+
+  var open = document.createElement("button");
+  open.type = "button";
+  open.className = "linkbtn";
+  open.textContent = "⚑ Flag a missing option";
+
+  function render() {
+    list.textContent = "";
+    var gaps = gapsFor(entryId);
+    flagChip.textContent = gaps.length ? gaps.length + " flagged" : "";
+    flagChip.hidden = gaps.length === 0;
+    for (var i = 0; i < gaps.length; i++) {
+      (function (gap, index) {
+        var row = document.createElement("div");
+        row.className = "gapitem";
+        var f = document.createElement("code");
+        f.textContent = gap.field;
+        var w = document.createElement("span");
+        w.textContent = "wanted “" + gap.wanted + "”";
+        row.append(f, w);
+        if (gap.note) {
+          var n = document.createElement("span");
+          n.className = "note";
+          n.textContent = "— " + gap.note;
+          row.append(n);
+        }
+        var del = document.createElement("button");
+        del.type = "button";
+        del.textContent = "×";
+        del.title = "remove this flag";
+        del.onclick = function () {
+          state.__gaps[entryId].splice(index, 1);
+          if (!state.__gaps[entryId].length) delete state.__gaps[entryId];
+          render();
+          save();
+        };
+        row.append(del);
+        list.append(row);
+      })(gaps[i], i);
+    }
+  }
+
+  open.onclick = function () { form.hidden = false; open.hidden = true; pick.focus(); };
+  cancel.onclick = function () {
+    form.hidden = true; open.hidden = false;
+    pick.value = ""; wanted.value = ""; note.value = "";
+  };
+  add.onclick = function () {
+    if (!pick.value) { alert("Pick which field the gap is in."); return; }
+    if (!wanted.value.trim()) { alert("Say what value you wanted."); return; }
+    if (!state.__gaps[entryId]) state.__gaps[entryId] = [];
+    state.__gaps[entryId].push({
+      field: pick.value,
+      wanted: wanted.value.trim(),
+      note: note.value.trim()
+    });
+    pick.value = ""; wanted.value = ""; note.value = "";
+    form.hidden = true; open.hidden = false;
+    render();
+    save();
+  };
+
+  form.append(pick, wanted, note, add, cancel);
+  wrap.append(list, form, open);
+  render();
+  return wrap;
+}
+
+function field(title, hint, node, reqName) {
+  var d = document.createElement("div");
+  d.className = "field";
+  if (reqName) d.dataset.req = reqName;
+  var l = document.createElement("div");
+  l.className = "lbl";
+  l.append(document.createTextNode(title));
+  if (hint) {
+    var h = document.createElement("span");
+    h.className = "hint";
+    h.textContent = hint;
+    l.append(h);
+  }
+  d.append(l, node);
+  return d;
+}
+function textInput(entryId, key, placeholder) {
+  var box = document.createElement("input");
+  box.type = "text";
+  box.className = "text";
+  box.placeholder = placeholder;
+  box.value = state[entryId].visualFields[key];
+  box.oninput = function () { state[entryId].visualFields[key] = box.value; save(); };
+  return box;
+}
+
+/* Seed from the baked-in draft, but only on a genuinely fresh sheet — never
+   clobber work already in this browser. */
+function applySeed() {
+  if (!SEED || !Array.isArray(SEED.labels)) return;
+  var anyWork = false;
+  for (var i = 0; i < ENTRIES.length; i++) {
+    if (touched(state[ENTRIES[i].entryId])) { anyWork = true; break; }
+  }
+  if (anyWork) return;
+  for (var j = 0; j < SEED.labels.length; j++) {
+    var src = SEED.labels[j];
+    if (!src || !src.entryId) continue;
+    if (!state[src.entryId]) state[src.entryId] = blank();
+    copyLabelInto(state[src.entryId], src);
+  }
+  state.__gaps = {};
+  var gaps = Array.isArray(SEED.vocabularyGaps) ? SEED.vocabularyGaps : [];
+  for (var g = 0; g < gaps.length; g++) {
+    var gap = gaps[g];
+    if (!gap.entryId || !gap.field || !gap.wanted) continue;
+    if (!state.__gaps[gap.entryId]) state.__gaps[gap.entryId] = [];
+    state.__gaps[gap.entryId].push({ field: gap.field, wanted: gap.wanted, note: gap.note || "" });
+  }
+}
+applySeed();
+
+/* ---------- build ---------- */
+var app = document.getElementById("app");
+function renderAll() {
+app.textContent = "";
+ENTRIES.forEach(function (e, i) {
+  if (!state[e.entryId]) state[e.entryId] = blank();
+  var L = state[e.entryId];
+
+  var card = document.createElement("section");
+  card.className = "entry";
+  card.id = "row-" + e.entryId;
+
+  var head = document.createElement("div");
+  head.className = "entry-head";
+  var seq = document.createElement("span");
+  seq.className = "seq";
+  seq.textContent = (i + 1) + " / " + ENTRIES.length;
+  var eid = document.createElement("span");
+  eid.className = "eid";
+  eid.textContent = e.entryId;
+  var cohort = document.createElement("span");
+  cohort.className = "tag" + (e.cohort === "challenge" ? " challenge" : "");
+  cohort.textContent = e.cohort;
+  var device = document.createElement("span");
+  device.className = "tag";
+  device.textContent = e.orientation === "portrait" ? "mobile" : "desktop";
+  var ann = ANNOTATIONS ? ANNOTATIONS[e.entryId] : null;
+  var confChip = null;
+  if (ann && ann.confidence) {
+    confChip = document.createElement("span");
+    confChip.className = "tag conf-" + ann.confidence;
+    confChip.textContent = ann.confidence + " confidence";
+  }
+  var flagChip = document.createElement("span");
+  flagChip.className = "flagchip";
+  flagChip.hidden = true;
+  var tick = document.createElement("span");
+  tick.className = "tick";
+  head.append(seq, eid, cohort, device);
+  if (confChip) head.append(confChip);
+  head.append(flagChip, tick);
+
+  var body = document.createElement("div");
+  body.className = "body " + e.orientation;
+
+  var shot = document.createElement("div");
+  shot.className = "shot";
+  var img = document.createElement("img");
+  img.src = e.image;
+  img.loading = "lazy";
+  img.decoding = "async";
+  img.width = e.width;
+  img.height = e.height;
+  img.alt = "screenshot for " + e.entryId;
+  img.onclick = function () { lightbox(e); };
+  var zoom = document.createElement("button");
+  zoom.className = "zoom";
+  zoom.type = "button";
+  zoom.textContent = "Zoom";
+  zoom.onclick = function () { lightbox(e); };
+  var dims = document.createElement("div");
+  dims.className = "dims";
+  dims.textContent = e.width + " × " + e.height;
+  shot.append(img, zoom, dims);
+
+  var fields = document.createElement("div");
+  fields.className = "fields";
+
+  if (ann && ann.rationale) {
+    var why = document.createElement("div");
+    why.className = "rationale";
+    why.textContent = "Draft reasoning: " + ann.rationale;
+    fields.append(why);
+  }
+
+  fields.append(field("patternType", "exactly one", combobox({
+    options: VOCAB.patternType, multi: false,
+    get: function () { return L.patternType; },
+    set: function (v) { L.patternType = v; }
+  }), "patternType"));
+
+  fields.append(field("categories", "1–4", combobox({
+    options: VOCAB.categories, multi: true,
+    get: function () { return L.categories; },
+    set: function (v) { L.categories = v; }
+  }), "categories"));
+
+  fields.append(field("components", "1–8, only what is visible", combobox({
+    options: VOCAB.components, multi: true,
+    get: function () { return L.components; },
+    set: function (v) { L.components = v; }
+  }), "components"));
+
+  fields.append(field("domainTags", "1–4", combobox({
+    options: VOCAB.domainTags, multi: true,
+    get: function () { return L.domainTags; },
+    set: function (v) { L.domainTags = v; }
+  }), "domainTags"));
+
+  var row = document.createElement("div");
+  row.className = "grid2";
+  row.append(
+    field("density", "", segmented({
+      options: VOCAB.density, name: "density-" + i,
+      get: function () { return L.visualFields.density; },
+      set: function (v) { L.visualFields.density = v; }
+    }), "density"),
+    field("color-scheme", "", segmented({
+      options: VOCAB["color-scheme"], name: "scheme-" + i,
+      get: function () { return L.visualFields["color-scheme"]; },
+      set: function (v) { L.visualFields["color-scheme"] = v; }
+    }), "color-scheme")
+  );
+  fields.append(row);
+
+  /* critiqueQuality gets its own row — its three option labels are long enough
+     to wrap badly inside a three-up grid. */
+  fields.append(field("critiqueQuality", "how well this screenshot alone supports a critique", segmented({
+    options: VOCAB.critiqueQuality, name: "critique-" + i,
+    get: function () { return L.critiqueQuality; },
+    set: function (v) { L.critiqueQuality = v; }
+  }), "critiqueQuality"));
+
+  var row2 = document.createElement("div");
+  row2.className = "grid2";
+  row2.append(
+    field("layout", "overall column form", combobox({
+      options: VOCAB.layout, multi: false,
+      get: function () { return L.visualFields.layout; },
+      set: function (v) { L.visualFields.layout = v; }
+    }), "layout"),
+    field("typography", "free text", textInput(e.entryId, "typography", "geometric sans, tight tracking"), "typography")
+  );
+  fields.append(row2);
+
+  fields.append(field("accessibilityEvidenceIds", "only if visibly rendered", segmented({
+    options: VOCAB.accessibilityEvidenceIds, name: "a11y-" + i, multi: true,
+    get: function () { return L.accessibilityEvidenceIds; },
+    set: function (v) { L.accessibilityEvidenceIds = v; }
+  })));
+
+  fields.append(gapSection(e.entryId, flagChip));
+
+  body.append(shot, fields);
+  card.append(head, body);
+  app.append(card);
+});
+paint();
+}
+renderAll();
+
+/* ---------- lightbox ---------- */
+var lb = document.getElementById("lightbox");
+function lightbox(e) {
+  lb.querySelector("img").src = e.image;
+  lb.querySelector(".cap").textContent = e.entryId + " — " + e.width + " × " + e.height + " — click or press Esc to close";
+  lb.classList.add("on");
+}
+lb.onclick = function () { lb.classList.remove("on"); };
+document.addEventListener("keydown", function (ev) {
+  if (ev.key === "Escape") lb.classList.remove("on");
+});
+
+/* ---------- header controls ---------- */
+var reviewerBox = document.getElementById("reviewer");
+reviewerBox.value = state.__reviewer || "";
+reviewerBox.oninput = function () { state.__reviewer = reviewerBox.value.trim(); save(); };
+
+/* ---------- import / clear ----------
+   Import accepts anything shaped like a reviewer export: a labels array, and
+   optionally vocabularyGaps. Used to review a pre-filled draft in this UI, or
+   to resume from an earlier export on another machine. Only fields the schema
+   knows are copied; anything else in the file is ignored. */
+var VISUAL_KEYS = ["density", "color-scheme", "typography", "layout"];
+function applyImport(raw) {
+  var incoming = Array.isArray(raw) ? raw : raw.labels;
+  if (!Array.isArray(incoming)) { alert("That file has no labels array."); return; }
+  var known = {};
+  for (var i = 0; i < ENTRIES.length; i++) known[ENTRIES[i].entryId] = true;
+
+  var applied = 0, unknown = 0;
+  for (var j = 0; j < incoming.length; j++) {
+    var src = incoming[j];
+    if (!src || !known[src.entryId]) { unknown++; continue; }
+    var dst = state[src.entryId] || (state[src.entryId] = blank());
+    copyLabelInto(dst, src);
+    applied++;
+  }
+
+  var gapCount = 0;
+  if (Array.isArray(raw.vocabularyGaps)) {
+    state.__gaps = {};
+    for (var g = 0; g < raw.vocabularyGaps.length; g++) {
+      var gap = raw.vocabularyGaps[g];
+      if (!known[gap.entryId] || !gap.field || !gap.wanted) continue;
+      if (!state.__gaps[gap.entryId]) state.__gaps[gap.entryId] = [];
+      state.__gaps[gap.entryId].push({ field: gap.field, wanted: gap.wanted, note: gap.note || "" });
+      gapCount++;
+    }
+  }
+
+  save();
+  renderAll();
+  alert("Imported " + applied + " label(s) and " + gapCount + " gap flag(s)." +
+        (unknown ? "\n" + unknown + " entr(y/ies) were skipped — not in this selection." : ""));
+}
+
+document.getElementById("importbtn").onclick = function () {
+  var anyWork = ENTRIES.some(function (e) { return touched(state[e.entryId]); });
+  if (anyWork && !confirm("Importing overwrites the labels currently in this browser. Continue?")) return;
+  document.getElementById("importfile").click();
+};
+document.getElementById("importfile").onchange = function (ev) {
+  var file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function () {
+    try { applyImport(JSON.parse(reader.result)); }
+    catch (err) { alert("Could not read that file: " + err.message); }
+  };
+  reader.readAsText(file);
+  ev.target.value = "";
+};
+
+document.getElementById("clearbtn").onclick = function () {
+  if (!confirm("Wipe every label and flag stored in this browser? This cannot be undone.")) return;
+  for (var i = 0; i < ENTRIES.length; i++) state[ENTRIES[i].entryId] = blank();
+  state.__gaps = {};
+  save();
+  renderAll();
+};
+
+document.getElementById("jump").onclick = function () {
+  for (var i = 0; i < ENTRIES.length; i++) {
+    if (!complete(state[ENTRIES[i].entryId])) {
+      document.getElementById("row-" + ENTRIES[i].entryId).scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+  }
+  alert("All 40 entries are complete.");
+};
+
+window.addEventListener("beforeunload", function (ev) {
+  if (store) return;
+  var any = ENTRIES.some(function (e) { return complete(state[e.entryId]); });
+  if (any) { ev.preventDefault(); ev.returnValue = ""; }
+});
+
+document.getElementById("export").onclick = function () {
+  var reviewer = (state.__reviewer || "").trim();
+  if (!reviewer) { alert("Set a reviewer id first."); return; }
+  var missing = ENTRIES.filter(function (e) { return !complete(state[e.entryId]); });
+  if (missing.length && !confirm(missing.length + " entries are incomplete. Export anyway?")) return;
+  var out = {
+    labelingMethod: "independent-human-review",
+    reviewer: reviewer,
+    selectionArtifactId: SELECTION_ARTIFACT_ID,
+    selectionSha256: SELECTION_SHA,
+    labels: ENTRIES.map(function (e) {
+      var l = state[e.entryId];
+      return {
+        entryId: e.entryId,
+        patternType: l.patternType,
+        categories: l.categories,
+        components: l.components,
+        domainTags: l.domainTags,
+        visualFields: l.visualFields,
+        groundedClaimIds: l.groundedClaimIds,
+        accessibilityEvidenceIds: l.accessibilityEvidenceIds,
+        critiqueQuality: l.critiqueQuality,
+        protectedFieldExpectation: l.protectedFieldExpectation
+      };
+    }),
+    /* Sits beside the labels array, never inside one — EntryLabelSchema is
+       strict, and these must not reach the agreement computation. */
+    vocabularyGaps: ENTRIES.reduce(function (acc, e) {
+      var gaps = gapsFor(e.entryId);
+      for (var i = 0; i < gaps.length; i++) {
+        acc.push({ entryId: e.entryId, field: gaps[i].field, wanted: gaps[i].wanted, note: gaps[i].note });
+      }
+      return acc;
+    }, [])
+  };
+  var url = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2) + "\n"], { type: "application/json" }));
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = "reviewer-" + reviewer + ".json";
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+paint();
+</script>

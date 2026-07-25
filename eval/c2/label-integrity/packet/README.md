@@ -5,16 +5,23 @@ becomes the baseline floor for the C2 Pass 3 label-integrity gate.
 
 ## Before anyone labels — operator checklist
 
-1. **Edit the tie-break rules.** `VOCABULARY.md` §6 is a draft written from a
+1. **Deliver the image bundle.** The 40 screenshots live under
+   `corpus/images-private/`, which is **gitignored** (rights-bound). A fresh
+   clone has no images, and labeling without them is impossible. The operator
+   must deliver the 40 PNGs separately and confirm they resolve at the paths
+   embedded in `label.html` / `reviewer-template.json` before reviewers begin.
+   The browser sheet shows a red banner if images are missing. **Do not commit
+   private images without rights clearance.**
+2. **Edit the tie-break rules.** `VOCABULARY.md` §6 is a draft written from a
    prior labeling that scored only 0.625 agreement on `patternType`. Decide each
    rule, then freeze the file. Changing rules mid-labeling invalidates completed
    passes.
-2. **Pick two distinct reviewers.** They need different `reviewer` ids. If one
+3. **Pick two distinct reviewers.** They need different `reviewer` ids. If one
    person does both passes, that is sole-operator mode — self-consistency, not
    independent validation — and must be recorded as such.
-3. **Decide directionality and keep it.** Reviewer 1 is *gold* (predicted),
+4. **Decide directionality and keep it.** Reviewer 1 is *gold* (predicted),
    reviewer 2 is *qa* (reference). Swapping them changes both recall values.
-4. **Build once:** `npm run build`. The validator refuses to run without
+5. **Build once:** `npm run build`. The validator refuses to run without
    `dist/`.
 
 ## For each reviewer

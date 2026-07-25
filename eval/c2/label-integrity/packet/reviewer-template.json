@@ -1,0 +1,929 @@
+{
+  "_README": "Fill one copy of this file per reviewer. Rename to reviewer-<name>.json. Fill patternType, categories, components, domainTags, visualFields and critiqueQuality for all 40 entries. Within visualFields, density / color-scheme / layout are closed lists (see VOCABULARY.md §5) and only typography is free text. Leave groundedClaimIds, accessibilityEvidenceIds (unless a11y affordances are visible) and protectedFieldExpectation as-is. The _image, _cohort, _width and _height keys are viewing aids and are stripped by validate-reviewer-file.mjs. Easier alternative: open label.html in a browser, label there, and use its Export button.",
+  "labelingMethod": "independent-human-review",
+  "reviewer": "<FILL: short lowercase id, e.g. jdoe — must differ from the other reviewer>",
+  "selectionArtifactId": "c2-label-integrity-selection-v1",
+  "selectionSha256": "9ed6ff2d74c0078706c67037910a8f3fcd3c519d9f0d724902022ac2acbe00b7",
+  "labels": [
+    {
+      "entryId": "hume-hume-12",
+      "_image": "../../../../corpus/images-private/hume-ai-web-apr-2026-15-4.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "cash-app-cash-app-42",
+      "_image": "../../../../corpus/images-private/cash-app-ios-nov-2025-138.png",
+      "_cohort": "reproducible",
+      "_width": 1284,
+      "_height": 2778,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "leatherback-co-leatherback-co-group-9d4feb511b-desktop-2026-07-06",
+      "_image": "../../../../corpus/images-private/leatherback-co-leatherback-co-group-9d4feb511b-desktop-2026-07-06.png",
+      "_cohort": "reproducible",
+      "_width": 1440,
+      "_height": 1960,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "alan-alan-ios-screens-29-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 29.png",
+      "_cohort": "reproducible",
+      "_width": 1179,
+      "_height": 2556,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wealthsimple-wealthsimple-ios-screens-11-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Wealthsimple iOS Screens/Wealthsimple iOS Screens 11.png",
+      "_cohort": "reproducible",
+      "_width": 1125,
+      "_height": 2436,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wealthsimple-wealthsimple-ios-screens-64-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Wealthsimple iOS Screens/Wealthsimple iOS Screens 64.png",
+      "_cohort": "reproducible",
+      "_width": 1125,
+      "_height": 2436,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "stackai-stackai-web-screens-42-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/StackAI Web Screens/StackAI Web Screens 42.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1205,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wealthsimple-wealthsimple-ios-screens-31-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Wealthsimple iOS Screens/Wealthsimple iOS Screens 31.png",
+      "_cohort": "reproducible",
+      "_width": 1125,
+      "_height": 2436,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "alan-alan-ios-screens-120-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 120.png",
+      "_cohort": "reproducible",
+      "_width": 1179,
+      "_height": 2556,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "alan-alan-ios-screens-109-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 109.png",
+      "_cohort": "reproducible",
+      "_width": 1179,
+      "_height": 2556,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "alan-alan-ios-screens-105-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 105.png",
+      "_cohort": "reproducible",
+      "_width": 1179,
+      "_height": 2556,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "alan-alan-ios-screens-22-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 22.png",
+      "_cohort": "reproducible",
+      "_width": 1180,
+      "_height": 2556,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "mercury-mercury-web-screens-61-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Mercury Web Screens/Mercury Web Screens 61.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "mercury-mercury-web-screens-55-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Mercury Web Screens/Mercury Web Screens 55.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wise-wise-32",
+      "_image": "../../../../corpus/images-private/wise-web-screens-17-2.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "arcade-arcade-web-screens-35-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 35.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "arcade-arcade-web-screens-85-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 85.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "quicken-quicken-web-screens-9-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Quicken Web Screens/Quicken Web Screens 9.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1205,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "quicken-quicken-web-screens-15-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Quicken Web Screens/Quicken Web Screens 15.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1205,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "arcade-arcade-web-screens-14-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 14.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "arcade-arcade-web-screens-72-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 72.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "arcade-arcade-web-screens-11-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 11.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "cash-app-cash-app-64",
+      "_image": "../../../../corpus/images-private/cash-app-ios-nov-2025-161.png",
+      "_cohort": "reproducible",
+      "_width": 1284,
+      "_height": 2778,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "cash-app-cash-app-44",
+      "_image": "../../../../corpus/images-private/cash-app-ios-nov-2025-52.png",
+      "_cohort": "reproducible",
+      "_width": 1284,
+      "_height": 2778,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "cash-app-cash-app-47",
+      "_image": "../../../../corpus/images-private/cash-app-ios-nov-2025-60.png",
+      "_cohort": "reproducible",
+      "_width": 1284,
+      "_height": 2778,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "paycheck-paycheck-2",
+      "_image": "../../../../corpus/images-private/cash-app-ios-nov-2025-62.png",
+      "_cohort": "reproducible",
+      "_width": 1284,
+      "_height": 2778,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "blui-blui",
+      "_image": "../../../../corpus/images-private/aboard-web-screens-70-3.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "we-we-12",
+      "_image": "../../../../corpus/images-private/workable-web-screens-65.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1205,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "workable-workable-8",
+      "_image": "../../../../corpus/images-private/workable-web-screens-9.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1205,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "jell-jell",
+      "_image": "../../../../corpus/images-private/aboard-web-screens-7-3.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wise-wise-15",
+      "_image": "../../../../corpus/images-private/wise-web-screens-60.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "workable-workable-24",
+      "_image": "../../../../corpus/images-private/workable-web-screens-63.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1205,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "cash-app-cash-app-11",
+      "_image": "../../../../corpus/images-private/cash-app-ios-nov-2025-29.png",
+      "_cohort": "reproducible",
+      "_width": 1284,
+      "_height": 2778,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "projects-projects",
+      "_image": "../../../../corpus/images-private/juicebox-web-screens-43.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "untitled-untitled-14",
+      "_image": "../../../../corpus/images-private/aboard-web-screens-60-2.png",
+      "_cohort": "reproducible",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wealthsimple-wealthsimple-ios-screens-40-2026-07-05",
+      "_image": "../../../../corpus/images-private/new-products-batch/Wealthsimple iOS Screens/Wealthsimple iOS Screens 40.png",
+      "_cohort": "challenge",
+      "_width": 1125,
+      "_height": 2437,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wise-wise-18",
+      "_image": "../../../../corpus/images-private/wise-web-screens-120.png",
+      "_cohort": "challenge",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "workable-workable-2",
+      "_image": "../../../../corpus/images-private/workable-web-screens-2.png",
+      "_cohort": "challenge",
+      "_width": 1920,
+      "_height": 1205,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "juicebox-juicebox-2",
+      "_image": "../../../../corpus/images-private/juicebox-web-screens-46.png",
+      "_cohort": "challenge",
+      "_width": 1920,
+      "_height": 1200,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "cash-app-cash-app-4",
+      "_image": "../../../../corpus/images-private/cash-app-ios-nov-2025-17.png",
+      "_cohort": "challenge",
+      "_width": 1284,
+      "_height": 2778,
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    }
+  ]
+}

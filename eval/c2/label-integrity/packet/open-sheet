@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Serves the repo over localhost and opens a labeling sheet in a browser.
+#
+#   open-sheet              # the AI draft, pre-filled, for review (default if present)
+#   open-sheet blank        # an empty sheet, for a real reviewer pass
+#   open-sheet draft 8080   # pick the port too
+#
+# Why serve instead of double-clicking the file: a page opened straight from
+# disk is an "opaque origin", and Safari refuses local storage there — the sheet
+# runs with no autosave and warns you about it. On http://localhost it behaves
+# normally. Serving also sidesteps any file:// path confusion.
+set -euo pipefail
+
+WHICH="draft"
+PORT="8765"
+for arg in "$@"; do
+  case "$arg" in
+    draft|blank) WHICH="$arg" ;;
+    ''|*[!0-9]*) echo "unknown argument: $arg (expected draft|blank and/or a port)" >&2; exit 2 ;;
+    *) PORT="$arg" ;;
+  esac
+done
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/../../../.." && pwd)"
+BASE="eval/c2/label-integrity/packet"
+
+if [ "$WHICH" = "draft" ] && [ ! -f "$REPO/$BASE/review-draft.html" ]; then
+  echo "note: no review-draft.html (no AI draft generated) — opening the blank sheet." >&2
+  WHICH="blank"
+fi
+
+if [ "$WHICH" = "draft" ]; then
+  REL="$BASE/review-draft.html"
+else
+  REL="$BASE/label.html"
+fi
+URL="http://localhost:${PORT}/${REL}"
+
+if [ ! -f "$REPO/$REL" ]; then
+  echo "error: $REPO/$REL not found." >&2
+  echo "Regenerate the packet, or check you are in the right clone." >&2
+  exit 1
+fi
+
+BYTES=$(wc -c < "$REPO/$REL" | tr -d ' ')
+ENTRIES=$(grep -o '"entryId"' "$REPO/$REL" | wc -l | tr -d ' ')
+echo "sheet: $REPO/$REL  [${WHICH}]"
+echo "       ${BYTES} bytes, ${ENTRIES} entries embedded"
+if [ "$WHICH" = "draft" ]; then
+  echo "       pre-filled with the AI draft — review and correct, then Export"
+else
+  echo "       empty sheet — for an independent reviewer pass"
+fi
+if [ "$BYTES" -lt 10000 ]; then
+  echo "warning: that file looks too small — the packet may not have generated correctly." >&2
+fi
+
+cd "$REPO"
+python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 &
+SERVER_PID=$!
+trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+
+for _ in $(seq 1 40); do
+  if curl -fsS -o /dev/null "$URL" 2>/dev/null; then break; fi
+  sleep 0.25
+done
+
+if ! curl -fsS -o /dev/null "$URL" 2>/dev/null; then
+  echo "error: server did not come up on port ${PORT}. Try another port:" >&2
+  echo "  $0 8766" >&2
+  exit 1
+fi
+
+echo "serving at $URL"
+echo "Press Ctrl-C when you are done labeling (export first — the tab keeps its own copy)."
+if command -v open >/dev/null 2>&1; then open "$URL"; fi
+wait $SERVER_PID

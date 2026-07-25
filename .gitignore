@@ -144,6 +144,10 @@ eval/c2/label-integrity/packet/*
 !eval/c2/label-integrity/packet/validate-reviewer-file.mjs
 !eval/c2/label-integrity/packet/label.html
 !eval/c2/label-integrity/packet/README.md
+!eval/c2/label-integrity/packet/reviewer-template.json
+!eval/c2/label-integrity/packet/summarize-gaps.mjs
+!eval/c2/label-integrity/packet/open-sheet
+!eval/c2/label-integrity/packet/review-draft.html
 # C2 Pass 2 frozen-calibration evidence bundle: the run manifests + human
 # scorecards the frozen calibration binds by hash. These are hash-only
 # metadata (no prompt/evidence/raw content, no secrets) — verified to pass

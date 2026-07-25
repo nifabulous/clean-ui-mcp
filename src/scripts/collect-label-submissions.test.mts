@@ -61,22 +61,42 @@ describe("computeActorRoleErrors (sole-operator-review guard)", () => {
   });
 
   it("same-role still fails even WITH the flag (role check always fires)", () => {
-    // Both carry the Gold Label Owner role -> role check fires regardless of flag.
+    // Both carry the Gold Label Owner role -> same-role check + canonical-order check fire.
     const sameRoleQa = { actorId: "operator-2", reviewerRole: "Gold Label Owner" };
     const errors = computeActorRoleErrors(gold, sameRoleQa, true);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatch(/distinct reviewer roles/i);
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    expect(errors.some((e) => e.match(/distinct reviewer roles/i))).toBe(true);
+    // Also has a canonical-role error for the QA submission.
+    expect(errors.some((e) => e.includes("QA"))).toBe(true);
 
     // And without the flag too.
-    expect(computeActorRoleErrors(gold, sameRoleQa, false)).toHaveLength(1);
+    const errorsNoFlag = computeActorRoleErrors(gold, sameRoleQa, false);
+    expect(errorsNoFlag.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("same-actor AND same-role WITH the flag reports only the role error", () => {
-    // Flag relaxes the actor check; the role check is the only remaining error.
+  it("same-actor AND same-role WITH the flag reports role errors (not actor)", () => {
+    // Flag relaxes the actor check; role checks still fire.
     const sameBoth = { actorId: "operator-1", reviewerRole: "Gold Label Owner" };
     const errors = computeActorRoleErrors(gold, sameBoth, true);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatch(/distinct reviewer roles/i);
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    expect(errors.some((e) => e.match(/distinct reviewer roles/i))).toBe(true);
+  });
+
+  it("reversed roles (gold=QA, qa=Gold Label Owner) are rejected", () => {
+    const reversedGold = { actorId: "operator-1", reviewerRole: "QA" };
+    const reversedQa = { actorId: "operator-2", reviewerRole: "Gold Label Owner" };
+    const errors = computeActorRoleErrors(reversedGold, reversedQa, false);
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    // Should include the canonical-role-order error
+    expect(errors.some((e) => e.includes("Gold Label Owner") && e.includes("gold"))).toBe(true);
+  });
+
+  it("reversed roles are rejected even in sole-operator mode", () => {
+    const reversedGold = { actorId: "operator-1", reviewerRole: "QA" };
+    const reversedQa = { actorId: "operator-1", reviewerRole: "Gold Label Owner" };
+    const errors = computeActorRoleErrors(reversedGold, reversedQa, true);
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    expect(errors.some((e) => e.includes("Gold Label Owner") && e.includes("gold"))).toBe(true);
   });
 });
 

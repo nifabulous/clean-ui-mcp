@@ -184,6 +184,21 @@ export function computeActorRoleErrors(
         `The Gold Label Owner submission must use role "Gold Label Owner" and the QA submission "QA".`,
     );
   }
+  // Canonical role order: gold MUST be "Gold Label Owner" and qa MUST be "QA".
+  // This is required for metric computation (precision/recall convention treats
+  // gold as predicted and qa as reference). computeLabelAgreement enforces this
+  // too, but surfacing it early gives the operator an actionable error before
+  // the agreement reducer runs.
+  if (gold.reviewerRole !== "Gold Label Owner") {
+    errors.push(
+      `the gold submission must use reviewerRole "Gold Label Owner", got "${gold.reviewerRole}".`,
+    );
+  }
+  if (qa.reviewerRole !== "QA") {
+    errors.push(
+      `the qa submission must use reviewerRole "QA", got "${qa.reviewerRole}".`,
+    );
+  }
   return errors;
 }
 

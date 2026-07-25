@@ -200,6 +200,7 @@ export const C2LabelAgreementReportSchema = z.object({
   soleOperatorReview: z.boolean().optional(),
 }).strict().superRefine((report, ctx) => {
   if (!report.soleOperatorReview && report.goldOwnerActorId === report.qaActorId) ctx.addIssue({ code: "custom", path: ["qaActorId"], message: "independent actors must be distinct" });
+  if (report.soleOperatorReview === true && report.goldOwnerActorId !== report.qaActorId) ctx.addIssue({ code: "custom", path: ["qaActorId"], message: "soleOperatorReview requires matching actor IDs — distinct actors must not use sole-operator mode" });
   if (report.terminalOutcome === "Qualified" && (report.hardGates.some((gate) => !gate.passed) || report.metrics.some((metric) => !metric.passed))) ctx.addIssue({ code: "custom", path: ["terminalOutcome"], message: "Qualified requires all floors and hard gates" });
 });
 

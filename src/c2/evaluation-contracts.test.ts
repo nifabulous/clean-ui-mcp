@@ -295,6 +295,17 @@ describe("C2 evaluation and attribution contracts", () => {
     expect(C2LabelAgreementReportSchema.safeParse(sameActor).success).toBe(false);
   });
 
+  it("sole-operator mode: distinct actors rejected when soleOperatorReview is true", () => {
+    const selection = makeSelection();
+    const goldOwner = makeSubmission("Gold Label Owner", "reviewer.gold-1");
+    const qa = makeSubmission("QA", "reviewer.qa-1");
+    const report = makeAgreementReport(selection, goldOwner, qa);
+    // Distinct actors + soleOperatorReview flag = invalid. The flag must
+    // require matching actor IDs.
+    const distinctActorSole = { ...report, soleOperatorReview: true };
+    expect(C2LabelAgreementReportSchema.safeParse(distinctActorSole).success).toBe(false);
+  });
+
   it("requires a baselineMetricsRef binding in the agreement report (FLAG 7.1/7.3)", () => {
     const selection = makeSelection();
     const goldOwner = makeSubmission("Gold Label Owner", "reviewer.gold-1");

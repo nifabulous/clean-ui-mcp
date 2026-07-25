@@ -125,12 +125,10 @@ Subcommands:
                               from the successful baseline runs.
   closure    --manifest <manifest.json> --calibration <frozen.json>
               --runs <dir> --scorecards <dir>
-              [--sole-operator-review]
                               Offline. Evaluate the 9 closure checks (C1-C9)
                               and write eval/c2/baseline/closure-report.json.
-                              --sole-operator-review records that the label-
-                              agreement gate used sole-operator review (same
-                              human for both passes). Off by default.
+                              (soleOperatorReview is derived from the label-
+                              agreement report, not set via CLI flag.)
 
 Environment:
   C2_NETWORK_AUDIT=<path>     If set, the CLI appends one line per attempted
@@ -156,7 +154,6 @@ async function main(): Promise<number> {
       "private-root": { type: "string" },
       "runs-root": { type: "string" },
       "report-path": { type: "string" },
-      "sole-operator-review": { type: "boolean", default: false },
     },
     allowPositionals: true,
   });
@@ -1968,7 +1965,6 @@ async function runClosureCli(args: Record<string, unknown>): Promise<number> {
     runsDir: resolve(args.runs as string),
     scorecardsDir: resolve(args.scorecards as string),
     reportPath,
-    soleOperatorReview: args["sole-operator-review"] === true,
   });
   if (!result.ok) {
     console.error(`[c2-baseline-closure] FAIL: ${result.error}`);

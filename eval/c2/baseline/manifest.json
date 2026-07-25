@@ -652,8 +652,8 @@
   "frozenCalibrationRef": {
     "artifactId": "c2-frozen-calibration-pilot-v1",
     "path": "eval/c2/calibration/frozen.json",
-    "sha256": "14ef86dd366bd0e7c21fb47f3cbcbabd6bb80a64b0c416578ac532421663826f"
+    "sha256": "c154e55eb2ae2d099da98bad6a7d49fb4b06fc83cb11f87681ff0b5b20b2c10d"
   },
-  "manifestSha256": "4541102a0f992ac02da6fa0d6f545f01044c31d46cf444a90274a95678e19477",
+  "manifestSha256": "779b53caa0233278323bebca55c75eb68e5cd481d9a566d088ae115b2dfcf964",
   "stagedSections": []
 }

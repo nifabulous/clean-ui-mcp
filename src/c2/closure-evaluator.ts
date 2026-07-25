@@ -59,14 +59,6 @@ export interface ClosureEvaluationInput {
   artifactId?: string;
   /** Optional ISO-8601 evaluation timestamp. Defaults to "1970-01-01T00:00:00.000Z". */
   evaluatedAt?: string;
-  /**
-   * When true, the label-agreement gate used sole-operator review (the same
-   * human performed both the Gold Label Owner and QA passes). Propagated to
-   * the report so a consumer can distinguish a sole-operator closure from a
-   * two-independent-operator closure. When absent, the field is omitted from
-   * the report (backward compatible).
-   */
-  soleOperatorReview?: boolean;
 }
 
 export interface ClosureCheckResult {
@@ -93,8 +85,6 @@ export interface C2ClosureReport {
   frozenCalibrationRef: { artifactId: string; sha256: string };
   /** The manifest's self-hash (for replay binding). */
   manifestSha256: string;
-  /** When true, the label-agreement gate used sole-operator review (same human for both passes). */
-  soleOperatorReview?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -710,6 +700,5 @@ export function evaluateC2Closure(input: ClosureEvaluationInput): C2ClosureRepor
       sha256: input.frozenCalibrationFileSha256,
     },
     manifestSha256: input.manifest.manifestSha256,
-    ...(input.soleOperatorReview === true ? { soleOperatorReview: true } : {}),
   };
 }

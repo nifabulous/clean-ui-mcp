@@ -1834,8 +1834,6 @@ export interface RunClosureSubcommandInput {
   artifactId?: string;
   /** Optional evaluatedAt ISO timestamp. */
   evaluatedAt?: string;
-  /** When true, the label-agreement gate used sole-operator review. */
-  soleOperatorReview?: boolean;
 }
 
 export interface RunClosureSubcommandResult {
@@ -1926,7 +1924,6 @@ export async function runClosureSubcommand(
     scorecards,
     artifactId: input.artifactId ?? "c2-closure-report-baseline-v1",
     evaluatedAt: input.evaluatedAt ?? new Date().toISOString(),
-    soleOperatorReview: input.soleOperatorReview,
   };
   const report = evaluateC2Closure(evalInput);
 

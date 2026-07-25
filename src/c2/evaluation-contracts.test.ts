@@ -275,6 +275,37 @@ describe("C2 evaluation and attribution contracts", () => {
     expect(C2LabelAgreementReportSchema.safeParse(sameActor).success).toBe(false);
   });
 
+  it("sole-operator mode: same actorId accepted when soleOperatorReview is true", () => {
+    const selection = makeSelection();
+    const goldOwner = makeSubmission("Gold Label Owner", "reviewer.gold-1");
+    const qa = makeSubmission("QA", "reviewer.qa-1");
+    const report = makeAgreementReport(selection, goldOwner, qa);
+    // Collapse both roles onto a single actor; the flag must admit the report.
+    const sameActorSole = { ...report, qaActorId: report.goldOwnerActorId, soleOperatorReview: true };
+    expect(C2LabelAgreementReportSchema.safeParse(sameActorSole).success).toBe(true);
+  });
+
+  it("sole-operator mode: distinct-actor rejection still fires when flag is absent", () => {
+    const selection = makeSelection();
+    const goldOwner = makeSubmission("Gold Label Owner", "reviewer.gold-1");
+    const qa = makeSubmission("QA", "reviewer.qa-1");
+    const report = makeAgreementReport(selection, goldOwner, qa);
+    // No flag → existing behavior: identical actorIds are rejected.
+    const sameActor = { ...report, qaActorId: report.goldOwnerActorId };
+    expect(C2LabelAgreementReportSchema.safeParse(sameActor).success).toBe(false);
+  });
+
+  it("sole-operator mode: distinct actors rejected when soleOperatorReview is true", () => {
+    const selection = makeSelection();
+    const goldOwner = makeSubmission("Gold Label Owner", "reviewer.gold-1");
+    const qa = makeSubmission("QA", "reviewer.qa-1");
+    const report = makeAgreementReport(selection, goldOwner, qa);
+    // Distinct actors + soleOperatorReview flag = invalid. The flag must
+    // require matching actor IDs.
+    const distinctActorSole = { ...report, soleOperatorReview: true };
+    expect(C2LabelAgreementReportSchema.safeParse(distinctActorSole).success).toBe(false);
+  });
+
   it("requires a baselineMetricsRef binding in the agreement report (FLAG 7.1/7.3)", () => {
     const selection = makeSelection();
     const goldOwner = makeSubmission("Gold Label Owner", "reviewer.gold-1");

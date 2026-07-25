@@ -502,6 +502,10 @@ const REPO_ROOT = process.cwd();
 const REPO_PRIVATE_ROOT = join(REPO_ROOT, ".c2-private");
 const TSX_BIN = join(REPO_ROOT, "node_modules/.bin/tsx");
 const FINALIZER_SCRIPT = join(REPO_ROOT, "scripts/finalize-baseline-blind-scorecards.mts");
+// .c2-private is gitignored and may not exist on a clean checkout. The CLI
+// tests create temp dirs beneath it (so the containment check passes), so
+// ensure the parent exists before any mkdtempSync call.
+mkdirSync(REPO_PRIVATE_ROOT, { recursive: true });
 
 describe("finalize-baseline-blind-scorecards CLI flags", () => {
   it("finalizes a submission under the supplied --scorecards-dir and reads the map from --blind-map-dir", async () => {

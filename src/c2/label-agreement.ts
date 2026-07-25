@@ -58,6 +58,19 @@ export interface AgreementArtifactBindings {
   adjudicationPath: string;
 }
 
+/**
+ * Options for `computeLabelAgreement`.
+ *
+ * `soleOperatorReview`: when true, relax ONLY the distinct-actorId guard so a
+ * single human reviewer may hold both the Gold Label Owner and QA roles. The
+ * distinct-role and canonical-role-order checks remain enforced — they are
+ * load-bearing for metric computation (precision/recall convention depends on
+ * gold-as-predicted / qa-as-reference). Optional — absent = current behavior.
+ */
+export interface LabelAgreementOptions {
+  soleOperatorReview?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Metric IDs + helpers
 // ---------------------------------------------------------------------------
@@ -102,8 +115,13 @@ interface EntryLabel {
 function assertIndependentActors(
   gold: C2IndependentLabelSubmission,
   qa: C2IndependentLabelSubmission,
+  soleOperatorReview = false,
 ): void {
-  if (gold.actorId === qa.actorId) {
+  // Sole-operator review relaxes ONLY the distinct-actorId check below. The
+  // distinct-role and canonical-role-order checks further down MUST still fire —
+  // they are required for metric computation (the precision/recall convention
+  // treats gold as predicted and qa as reference).
+  if (!soleOperatorReview && gold.actorId === qa.actorId) {
     throw new Error(
       `label agreement requires independent actors: gold.actorId === qa.actorId === "${gold.actorId}"`,
     );
@@ -503,6 +521,7 @@ export function computeLabelAgreement(
   baselineMetrics: C2LabelIntegrityBaselineMetrics | null | undefined,
   resolvedHashes: AgreementResolvedHashes,
   artifactBindings: AgreementArtifactBindings = DEFAULT_BINDINGS,
+  options?: LabelAgreementOptions,
 ): C2LabelAgreementReport {
   // FLAG 7.1/7.3: missing baseline → cannot compute recall floors.
   if (baselineMetrics === null || baselineMetrics === undefined) {
@@ -511,8 +530,10 @@ export function computeLabelAgreement(
     );
   }
 
-  // Pre-flight: independent actors + roles.
-  assertIndependentActors(gold, qa);
+  // Pre-flight: independent actors + roles. In sole-operator mode the
+  // distinct-actorId guard is skipped, but distinct-role / canonical-order
+  // checks still fire.
+  assertIndependentActors(gold, qa, options?.soleOperatorReview);
 
   // Pre-flight: both submissions match the frozen selection.
   assertSubmissionMatchesSelection(selection, gold, resolvedHashes.selectionSha256);
@@ -558,6 +579,11 @@ export function computeLabelAgreement(
   const terminalOutcome: "Qualified" | "Replacement not justified" =
     allMetricsPass && allGatesPass ? "Qualified" : "Replacement not justified";
 
+  // Build the report. `soleOperatorReview` is included ONLY when the caller
+  // passed the option, so default serialization stays identical to today (the
+  // field is optional on the schema). When provided, it is normalized to a
+  // concrete boolean so the report is self-describing about which mode produced
+  // it.
   const report: C2LabelAgreementReport = {
     schemaVersion: "1.0",
     artifactType: "c2-label-agreement-report",
@@ -574,6 +600,9 @@ export function computeLabelAgreement(
     disagreementEntryIds,
     adjudicationRef: ref(artifactBindings.adjudicationArtifactId, artifactBindings.adjudicationPath, resolvedHashes.adjudicationSha256),
     terminalOutcome,
+    ...(options && options.soleOperatorReview !== undefined
+      ? { soleOperatorReview: options.soleOperatorReview ?? false }
+      : {}),
   };
 
   // Fail-closed: the report MUST parse through the agreement schema.

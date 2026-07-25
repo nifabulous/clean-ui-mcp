@@ -373,3 +373,91 @@ A reviewer can determine from this file:
 - The execution matrix (80 runs with five exact independent case IDs)
 
 No source-code interpretation required.
+
+---
+
+## §8 — Sole-Operator Review Mode (Spec Amendment)
+
+### Purpose
+
+This section defines an opt-in mode that permits the same human actor to
+submit both the Gold Label Owner and QA label passes for the 40-entry
+label-integrity agreement. It exists because sole-operator projects cannot
+recruit a second independent human reviewer but still need to run the
+label-agreement gate to produce metrics and hard-gate results.
+
+### Opt-in mechanism
+
+Sole-operator mode is activated by an explicit, auditable flag. It is NEVER
+enabled implicitly because actor IDs happen to match.
+
+- **Schema:** the agreement report carries `soleOperatorReview: true` (an
+  optional boolean field on `C2LabelAgreementReportSchema`). When absent or
+  `false`, the schema enforces distinct actors exactly as before.
+- **Runtime:** `computeLabelAgreement` accepts an optional `options:
+  { soleOperatorReview?: boolean }` parameter. When `true`, the
+  same-actor check in `assertIndependentActors` is skipped.
+- **Collector:** `collect-label-submissions.mts` accepts `--sole-operator-review`
+  as a CLI flag. Without the flag, same-actor submissions are rejected.
+
+### What is relaxed
+
+Only the actor-distinctness requirement (`goldOwnerActorId !== qaActorId`) is
+relaxed. The same person may label the 40 entries in both roles.
+
+### What is NOT relaxed
+
+- Both submissions MUST still carry distinct reviewer roles (`Gold Label Owner`
+  and `QA`). Same-role submissions remain rejected.
+- Roles MUST remain in canonical order (gold = `Gold Label Owner`, qa = `QA`).
+  Swapped roles remain rejected.
+- All metric computation, hard gates, floors, and thresholds remain mandatory.
+- The baseline-metrics gate remains mandatory.
+- The compatibility gate (C9) remains mandatory.
+- The paid-execution authorization gate remains mandatory.
+- The governance-approval gate remains mandatory.
+
+### What it means for metrics
+
+When `soleOperatorReview: true`, all 8 agreement metrics measure **consistency
+between two passes by the same person**, NOT independence between two different
+reviewers. A high agreement score in sole-operator mode means the labeler is
+self-consistent, not that the labels are independently validated.
+
+### Closure semantics
+
+The **label-agreement report** carries `soleOperatorReview: true` when this
+mode was used. That report MUST state:
+
+- label agreement passed,
+- self-review mode was used,
+- independent QA was not established,
+- the result is suitable for sole-operator evaluation but NOT equivalent to
+  independent validation.
+
+The current C2 closure evaluator does not consume a label-agreement report and
+therefore does not propagate this field into `c2-closure-report`. The
+sole-operator flag MUST NOT be added to a closure artifact by caller-supplied
+metadata. Until the closure evaluator accepts and validates a hash-bound
+agreement report, sole-operator mode cannot by itself satisfy the final C2
+closure claim.
+
+A future closure integration may accept the agreement report only after it
+verifies the report schema, artifact bytes, baseline-metrics binding, terminal
+outcome, and `soleOperatorReview` value. That integration must carry the
+self-review limitation into its closure output and must not describe the
+result as independently validated.
+
+### Restoring independent validation
+
+If a second human reviewer is later recruited, the project owner can:
+
+1. Have the new reviewer label the 40 entries independently.
+2. Run `computeLabelAgreement` WITHOUT the `soleOperatorReview` option.
+3. Produce a new agreement report with distinct actor IDs.
+4. The new report supersedes the sole-operator report for any future closure
+   integration.
+
+The transition from sole-operator to independent validation is a one-way
+upgrade: once independent validation exists, sole-operator mode should not be
+reverted to without an explicit spec amendment documenting why.

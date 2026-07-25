@@ -127,6 +127,8 @@ Subcommands:
               --runs <dir> --scorecards <dir>
                               Offline. Evaluate the 9 closure checks (C1-C9)
                               and write eval/c2/baseline/closure-report.json.
+                              (soleOperatorReview is derived from the label-
+                              agreement report, not set via CLI flag.)
 
 Environment:
   C2_NETWORK_AUDIT=<path>     If set, the CLI appends one line per attempted

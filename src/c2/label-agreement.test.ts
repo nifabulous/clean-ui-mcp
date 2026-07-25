@@ -200,6 +200,71 @@ describe("computeLabelAgreement", () => {
     ).toThrow(/actor|independent/i);
   });
 
+  it("computeLabelAgreement accepts same-actor submissions in sole-operator mode", () => {
+    const selection = makeSelection();
+    const gold = makeSubmission(selection, "Gold Label Owner", "reviewer.same");
+    const qa = makeSubmission(selection, "QA", "reviewer.same");
+    const baseline = makeBaselineMetrics();
+
+    const report = computeLabelAgreement(
+      gold,
+      qa,
+      selection,
+      baseline,
+      makeResolvedHashes(),
+      undefined,
+      { soleOperatorReview: true },
+    );
+
+    expect(report.goldOwnerActorId).toBe(report.qaActorId);
+    expect(report.soleOperatorReview).toBe(true);
+    // The report MUST still validate through the agreement schema.
+    expect(C2LabelAgreementReportSchema.safeParse(report).success).toBe(true);
+  });
+
+  it("same-role submissions remain rejected in sole-operator mode", () => {
+    const selection = makeSelection();
+    // Same actor AND same role — even with soleOperatorReview, the role checks
+    // must still fire because distinct roles are required for metric computation.
+    const gold = makeSubmission(selection, "Gold Label Owner", "reviewer.same");
+    const qa = makeSubmission(selection, "Gold Label Owner", "reviewer.same");
+    const baseline = makeBaselineMetrics();
+
+    expect(() =>
+      computeLabelAgreement(
+        gold,
+        qa,
+        selection,
+        baseline,
+        makeResolvedHashes(),
+        undefined,
+        { soleOperatorReview: true },
+      ),
+    ).toThrow(/role/i);
+  });
+
+  it("reversed Gold/QA roles remain rejected in sole-operator mode", () => {
+    const selection = makeSelection();
+    // Single actor, but roles swapped (gold=QA, qa=Gold). Canonical order is
+    // required for correct precision/recall assignment, even in sole-operator
+    // mode.
+    const gold = makeSubmission(selection, "QA", "reviewer.same");
+    const qa = makeSubmission(selection, "Gold Label Owner", "reviewer.same");
+    const baseline = makeBaselineMetrics();
+
+    expect(() =>
+      computeLabelAgreement(
+        gold,
+        qa,
+        selection,
+        baseline,
+        makeResolvedHashes(),
+        undefined,
+        { soleOperatorReview: true },
+      ),
+    ).toThrow(/role/i);
+  });
+
   it("rejects same-role submissions (both Gold Label Owner)", () => {
     const selection = makeSelection();
     const gold = makeSubmission(selection, "Gold Label Owner", "reviewer.gold-1");

@@ -6,7 +6,7 @@
 // same gold/qa label arrays, and asserts the four baseline-bound metric values
 // are identical. If you ever edit the script's math, this test catches drift.
 import { describe, expect, it } from "vitest";
-import { writeFileSync, mkdtempSync } from "node:fs";
+import { writeFileSync, mkdtempSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -300,5 +300,27 @@ describe("CLI --json output", () => {
     expect(parsed["domain-tags-recall"]).toBe(1);
     expect(parsed.entryCount).toBe(40);
     expect(parsed.disagreementCount).toBe(0);
+  });
+});
+
+describe("missing-schema fail-closed", () => {
+  it("exits 1 with an actionable error when dist schemas cannot be loaded", () => {
+    // The dist import resolves relative to the script file (../dist/...).
+    // Copy the script to a temp dir where ../dist/ does not exist, then run it
+    // as a subprocess and assert it fails closed with the build hint.
+    const tmp = mkdtempSync(join(tmpdir(), "cbm-nodist-"));
+    const scriptCopy = join(tmp, "compute-baseline-metrics.mjs");
+    copyFileSync(join(process.cwd(), "scripts/compute-baseline-metrics.mjs"), scriptCopy);
+    let err;
+    try {
+      execFileSync("node", [scriptCopy, "/dev/null", "/dev/null"], { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeDefined();
+    expect(err.status).toBe(1);
+    const stderr = err.stderr || "";
+    expect(stderr).toMatch(/cannot load production schemas/i);
+    expect(stderr).toMatch(/npm run build|npx tsc/);
   });
 });

@@ -48,10 +48,11 @@ import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
 // Production schema — imported from the built dist so validation is identical to
-// what computeLabelAgreement enforces. Falls back to unvalidated bare-label
-// parsing only if dist is unavailable.
-let C2IndependentLabelSubmissionSchema = null;
-let EntryLabelSchema = null;
+// what computeLabelAgreement enforces. This tool feeds parent-authority baseline
+// values, so validation is MANDATORY: if dist is unavailable the script fails
+// closed rather than computing metrics from unvalidated input.
+let C2IndependentLabelSubmissionSchema;
+let EntryLabelSchema;
 try {
   const mod = await import("../dist/c2/evaluation-contracts.js");
   C2IndependentLabelSubmissionSchema = mod.C2IndependentLabelSubmissionSchema;
@@ -59,10 +60,14 @@ try {
   // labels array element so bare-label inputs validate through the same rules
   // (non-empty unique sets, stable IDs, enum critiqueQuality, strict object).
   EntryLabelSchema = C2IndependentLabelSubmissionSchema.shape.labels.element;
-} catch {
-  // dist not built — validation is skipped for ALL input shapes. Print a
-  // warning so the operator knows the results may be computed on unvalidated data.
-  console.error("warning: dist/c2/evaluation-contracts.js not found; schema validation skipped for all inputs. Run `npx tsc` to enable it.");
+} catch (err) {
+  // Fail closed: dist not built (e.g. fresh checkout). This tool's outputs can
+  // feed parent-authority baseline-metrics, so computing from unvalidated input
+  // is worse than refusing to run.
+  console.error(`error: cannot load production schemas from dist/c2/evaluation-contracts.js — validation is mandatory for this tool.`);
+  console.error(`  cause: ${err && err.message ? err.message : err}`);
+  console.error(`  fix: run \`npm run build\` (or \`npx tsc\`) first, then re-run this script.`);
+  process.exit(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -191,8 +196,10 @@ function assertUniqueEntryIds(labels, which) {
 
 function extractLabels(filePath) {
   const raw = JSON.parse(readFileSync(filePath, "utf-8"));
-  // Full submission artifact?
+  // Full submission artifact — validate through the production schema.
   if (raw.artifactType === "c2-independent-label-submission") {
+    // Schema is always loaded (the loader fails closed at module init if dist
+    // is missing). The guard is defensive depth against a future refactor.
     if (C2IndependentLabelSubmissionSchema) {
       const parsed = C2IndependentLabelSubmissionSchema.safeParse(raw);
       if (!parsed.success) {
@@ -200,7 +207,9 @@ function extractLabels(filePath) {
       }
       return parsed.data.labels;
     }
-    return raw.labels;
+    // Unreachable when the loader is intact; fail closed rather than silently
+    // returning unvalidated labels.
+    throw new Error(`${filePath}: schema unavailable — dist not built. Run \`npm run build\` first.`);
   }
   // Bare { labels: [...] } shape.
   const labels = Array.isArray(raw?.labels) ? raw.labels : Array.isArray(raw) ? raw : null;
@@ -209,7 +218,8 @@ function extractLabels(filePath) {
   }
   // Validate each bare label through EntryLabelSchema so non-array categories,
   // empty/missing sets, bad enums, etc. are caught — matching what full
-  // submissions get. Skipped only when dist is unavailable (warning printed).
+  // submissions get. Validation is mandatory (the loader fails closed at module
+  // init if dist is missing); the guard is defensive depth.
   if (EntryLabelSchema) {
     labels.forEach((label, i) => {
       const parsed = EntryLabelSchema.safeParse(label);

@@ -1,0 +1,286 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "design-source-snapshot",
+  "artifactId": "c2-snapshot-migration-saas-dashboard-v1",
+  "projectId": "migration-saas-dashboard",
+  "source": {
+    "kind": "user-supplied-public-reference",
+    "origin": "https://example.com",
+    "startingUrls": [
+      "https://example.com/c2-saas-pilot/"
+    ]
+  },
+  "capturedAt": "2026-07-18T00:00:00.000Z",
+  "crawl": {
+    "maxRoutes": 4,
+    "sameOrigin": true,
+    "authenticated": false,
+    "mutationAllowed": false
+  },
+  "coverage": [
+    {
+      "url": "https://example.com/c2-saas-pilot/",
+      "status": "inspected",
+      "reason": "Marketing home; carries the navigation order and primary-action placement that disagree across desktop and mobile.",
+      "archetype": "marketing-home",
+      "viewports": ["desktop", "tablet", "mobile"]
+    },
+    {
+      "url": "https://example.com/c2-saas-pilot/features",
+      "status": "inspected",
+      "reason": "Marketing features route; carries the same navigation and primary-action treatment as the home route.",
+      "archetype": "marketing-features",
+      "viewports": ["desktop", "mobile"]
+    },
+    {
+      "url": "https://example.com/c2-saas-pilot/app/dashboard",
+      "status": "blocked",
+      "reason": "Authenticated dashboard route; crawl is unauthenticated so this route was not inspected and the dashboard itself must not be claimed as observed.",
+      "archetype": null,
+      "viewports": ["desktop"]
+    },
+    {
+      "url": "https://example.com/c2-saas-pilot/legal/privacy",
+      "status": "inspected",
+      "reason": "Public privacy route; corroborates the consent-banner provenance observed on the marketing surface.",
+      "archetype": "legal-privacy",
+      "viewports": ["desktop"]
+    }
+  ],
+  "foundations": {
+    "colors": [
+      {
+        "id": "finding:color:primary-action-accent",
+        "value": "single saturated accent reserved for the primary call-to-action across inspected marketing routes",
+        "role": "primary-action-accent",
+        "confidence": "high",
+        "evidenceIds": ["evidence:home:primary-action", "evidence:features:primary-action"]
+      },
+      {
+        "id": "finding:color:neutral-surface",
+        "value": "neutral marketing surface with one accent; no branded gradient",
+        "role": "surface-palette",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:home:primary-action", "evidence:features:hero"]
+      }
+    ],
+    "typography": [
+      {
+        "id": "finding:type:hero-scale",
+        "value": "marketing hero headline roughly 3x the body scale on desktop",
+        "role": "hero-headline-scale",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:features:hero"]
+      }
+    ],
+    "spacing": [
+      {
+        "id": "finding:spacing:section-rhythm",
+        "value": "consistent vertical section rhythm across inspected marketing routes",
+        "role": "section-rhythm",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:features:hero", "evidence:home:primary-action"]
+      }
+    ],
+    "radii": [
+      {
+        "id": "finding:radii:button-radius",
+        "value": "moderate button radius reused on the primary action and secondary controls",
+        "role": "control-radius",
+        "confidence": "low",
+        "evidenceIds": ["evidence:home:primary-action"]
+      }
+    ],
+    "shadows": [
+      {
+        "id": "finding:shadow:consent-elevation",
+        "value": "the consent banner carries a single elevation level to separate it from page content",
+        "role": "banner-elevation",
+        "confidence": "medium",
+        "evidenceIds": ["evidence:home:consent-banner"]
+      }
+    ],
+    "layout": [
+      {
+        "id": "finding:layout:nav-primary-desktop",
+        "value": "on desktop the top navigation order is [Product, Pricing, Docs, Sign in] with the primary 'Start free trial' action at the right",
+        "role": "desktop-nav-order",
+        "confidence": "high",
+        "evidenceIds": ["evidence:home:nav-desktop", "evidence:features:nav-desktop"]
+      },
+      {
+        "id": "finding:layout:nav-primary-mobile-disagreement",
+        "value": "on mobile the navigation order becomes [Pricing, Product, Docs] and the primary action relocates below the fold behind a hamburger menu; this DISAGREES with the desktop order and placement",
+        "role": "mobile-nav-disagreement",
+        "confidence": "high",
+        "evidenceIds": ["evidence:home:nav-mobile", "evidence:home:primary-action-mobile"]
+      },
+      {
+        "id": "finding:layout:consent-banner-bottom",
+        "value": "consent banner anchored to the bottom of the viewport, full-width, above the page footer",
+        "role": "consent-placement",
+        "confidence": "high",
+        "evidenceIds": ["evidence:home:consent-banner"]
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "finding:component:primary-nav",
+      "value": "top navigation bar repeated on every inspected marketing route; order disagrees across desktop and mobile",
+      "role": "primary-navigation",
+      "confidence": "high",
+      "evidenceIds": ["evidence:home:nav-desktop", "evidence:home:nav-mobile", "evidence:features:nav-desktop"]
+    },
+    {
+      "id": "finding:component:primary-action",
+      "value": "single primary 'Start free trial' call-to-action; placement relocates on mobile behind the hamburger menu",
+      "role": "primary-cta",
+      "confidence": "high",
+      "evidenceIds": ["evidence:home:primary-action", "evidence:home:primary-action-mobile"]
+    },
+    {
+      "id": "finding:component:consent-banner",
+      "value": "cookie consent banner with 'Accept all' prominent, a 'Reject all' present but less visually prominent, and an expandable preferences panel with non-essential categories pre-ticked",
+      "role": "consent-management",
+      "confidence": "high",
+      "evidenceIds": ["evidence:home:consent-banner", "evidence:home:consent-preferences", "evidence:legal:consent-provenance"]
+    }
+  ],
+  "responsiveFindings": [
+    {
+      "id": "finding:responsive:nav-order-disagreement",
+      "value": "desktop and mobile navigation orders disagree (Product-first on desktop, Pricing-first on mobile); the adaptation must resolve which order to adopt and record the decision",
+      "role": "nav-order-disagreement",
+      "confidence": "high",
+      "evidenceIds": ["evidence:home:nav-desktop", "evidence:home:nav-mobile"]
+    },
+    {
+      "id": "finding:responsive:primary-action-relocation",
+      "value": "the primary 'Start free trial' action moves below the fold on mobile, disagreeing with desktop placement where it is always visible top-right",
+      "role": "primary-action-disagreement",
+      "confidence": "high",
+      "evidenceIds": ["evidence:home:primary-action", "evidence:home:primary-action-mobile"]
+    }
+  ],
+  "accessibility": [
+    {
+      "id": "finding:a11y:consent-reject-prominence",
+      "value": "the 'Reject all' control is present but smaller and lower-contrast than 'Accept all', making refusal harder; the adaptation must make reject at least as prominent as accept",
+      "role": "consent-balance",
+      "confidence": "high",
+      "evidenceIds": ["evidence:home:consent-banner"]
+    },
+    {
+      "id": "finding:a11y:focus-visible",
+      "value": "visible focus outline present on interactive elements on the inspected marketing routes",
+      "role": "focus-visibility",
+      "confidence": "medium",
+      "evidenceIds": ["evidence:home:primary-action", "evidence:features:hero"]
+    }
+  ],
+  "motion": [
+    {
+      "id": "finding:motion:banner-enter",
+      "value": "the consent banner slides up from the bottom on page load; no other meaningful motion on the inspected marketing pages",
+      "role": "banner-motion",
+      "confidence": "low",
+      "evidenceIds": ["evidence:home:consent-banner"]
+    }
+  ],
+  "voice": [
+    {
+      "id": "finding:voice:marketing-imperative",
+      "value": "short imperative marketing copy; 'Start free trial' as the primary CTA label",
+      "role": "marketing-voice",
+      "confidence": "low",
+      "evidenceIds": ["evidence:home:primary-action"]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "evidence:home:primary-action",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-saas-pilot/",
+      "summary": "On desktop a single 'Start free trial' call-to-action carries the saturated accent at the top-right of the hero.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:home:primary-action-mobile",
+      "kind": "screenshot-observation",
+      "route": "https://example.com/c2-saas-pilot/",
+      "summary": "On mobile the primary 'Start free trial' action is not above the fold; it sits behind the hamburger menu, disagreeing with the always-visible desktop placement.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:home:nav-desktop",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-saas-pilot/",
+      "summary": "Desktop top navigation order is [Product, Pricing, Docs, Sign in] left-to-right.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:home:nav-mobile",
+      "kind": "screenshot-observation",
+      "route": "https://example.com/c2-saas-pilot/",
+      "summary": "Mobile navigation order inside the hamburger menu is [Pricing, Product, Docs], disagreeing with the desktop order.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:home:consent-banner",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-saas-pilot/",
+      "summary": "Bottom-anchored cookie consent banner; 'Accept all' is large and accent-colored, 'Reject all' is present but smaller and lower-contrast.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:home:consent-preferences",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-saas-pilot/",
+      "summary": "Expandable preferences panel surfaces non-essential cookie categories with several pre-ticked to 'on' by default.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:features:nav-desktop",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-saas-pilot/features",
+      "summary": "Features route repeats the desktop navigation order [Product, Pricing, Docs, Sign in] and the top-right primary action.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:features:primary-action",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-saas-pilot/features",
+      "summary": "Primary 'Start free trial' action carries the same saturated accent as on the home route.",
+      "basis": "visible"
+    },
+    {
+      "id": "evidence:features:hero",
+      "kind": "dom-signal",
+      "route": "https://example.com/c2-saas-pilot/features",
+      "summary": "Features hero headline is roughly 3x body scale on desktop with consistent section rhythm.",
+      "basis": "dom-grounded"
+    },
+    {
+      "id": "evidence:legal:consent-provenance",
+      "kind": "public-content",
+      "route": "https://example.com/c2-saas-pilot/legal/privacy",
+      "summary": "Public privacy route names the consent-management approach and corroborates the banner observed on the marketing surface.",
+      "basis": "declared"
+    },
+    {
+      "id": "evidence:limitation:no-dashboard",
+      "kind": "public-content",
+      "route": "https://example.com/c2-saas-pilot/app/dashboard",
+      "summary": "The authenticated dashboard route was blocked and NOT inspected. No claim may rely on having observed an authenticated product screen.",
+      "basis": "inferred"
+    }
+  ],
+  "limitations": [
+    "The crawl was unauthenticated; the authenticated dashboard route at https://example.com/c2-saas-pilot/app/dashboard was blocked and was NOT inspected, so no claim may rely on having observed it.",
+    "Only the marketing home, features, and legal/privacy routes were inspected; the authenticated product dashboard was NOT inspected.",
+    "The observed navigation order and primary-action placement DISAGREE across desktop and mobile; the adaptation must resolve this explicitly rather than cloning either variant.",
+    "The observed consent banner pre-ticks non-essential categories and makes 'Reject all' less prominent than 'Accept all'; the adaptation must not reproduce these vendor defaults.",
+    "The snapshot is non-mutating; no cookie preference was saved and no form submission was attempted during capture."
+  ]
+}

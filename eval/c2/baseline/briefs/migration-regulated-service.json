@@ -64,6 +64,6 @@
     "artifactId": "c2-snapshot-migration-regulated-service-v1",
     "artifactType": "design-source-snapshot",
     "path": "eval/c2/baseline/source-snapshots/migration-regulated-service.json",
-    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    "sha256": "a1a18ec65974609e74fffbb802ace411820720ddce93fcaf35cb4a024e3cc468"
   }
 }

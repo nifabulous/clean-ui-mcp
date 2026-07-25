@@ -139,7 +139,7 @@
       "brief": {
         "artifactId": "c2-brief-migration-content-product-v1",
         "path": "eval/c2/baseline/briefs/migration-content-product.json",
-        "sha256": "eb51d3bb5dd475c956db52357a32434ceb94948345a17f69171c4c60b18083fc"
+        "sha256": "13b130aba5d07ed7ae099fbd020602cde42a26c86d417dbc7473f5becda0f95c"
       },
       "label": {
         "artifactId": "c2-label-migration-content-product-v1",
@@ -149,7 +149,7 @@
       "sourceSnapshot": {
         "artifactId": "c2-snapshot-migration-content-product-v1",
         "path": "eval/c2/baseline/source-snapshots/migration-content-product.json",
-        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        "sha256": "6fe0a38a30729b1b17333337b48713114fdc2d0444bf6dd310099214cc986111"
       },
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-migration-content-product-v1",
@@ -167,7 +167,7 @@
       "brief": {
         "artifactId": "c2-brief-migration-documentation-site-v1",
         "path": "eval/c2/baseline/briefs/migration-documentation-site.json",
-        "sha256": "33594e59600af4b8fba622525ef73effd4cbda67350b49a32cda9f0e8df463af"
+        "sha256": "848a7bbc34653fdcf6aa27e766f3777fd07bd6c1a08949e7506bba825faf89ac"
       },
       "label": {
         "artifactId": "c2-label-migration-documentation-site-v1",
@@ -177,7 +177,7 @@
       "sourceSnapshot": {
         "artifactId": "c2-snapshot-migration-documentation-site-v1",
         "path": "eval/c2/baseline/source-snapshots/migration-documentation-site.json",
-        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        "sha256": "ed37dd749d0da59136c319f39739d81c083ddf1ce7e79978aa6f2b924a2a915e"
       },
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-migration-documentation-site-v1",
@@ -195,7 +195,7 @@
       "brief": {
         "artifactId": "c2-brief-migration-regulated-service-v1",
         "path": "eval/c2/baseline/briefs/migration-regulated-service.json",
-        "sha256": "a8a339c890dc18727252c59eb355f9fb48f77d1a434dd89e9f4c7f54b497b30c"
+        "sha256": "aadd65280957994f12e6770f935d156b2e6acc75dcae3697444ab6159d9075ab"
       },
       "label": {
         "artifactId": "c2-label-migration-regulated-service-v1",
@@ -205,7 +205,7 @@
       "sourceSnapshot": {
         "artifactId": "c2-snapshot-migration-regulated-service-v1",
         "path": "eval/c2/baseline/source-snapshots/migration-regulated-service.json",
-        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        "sha256": "a1a18ec65974609e74fffbb802ace411820720ddce93fcaf35cb4a024e3cc468"
       },
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-migration-regulated-service-v1",
@@ -223,7 +223,7 @@
       "brief": {
         "artifactId": "c2-brief-migration-saas-dashboard-v1",
         "path": "eval/c2/baseline/briefs/migration-saas-dashboard.json",
-        "sha256": "a257f694248961fcce9e9afd2b73c93f95fb6645b5d070cbc863f15478ebfeb2"
+        "sha256": "1347c585c89a337ea057c806dd21bbceeeddb240440fcebbf93ffc54a2587a99"
       },
       "label": {
         "artifactId": "c2-label-migration-saas-dashboard-v1",
@@ -233,7 +233,7 @@
       "sourceSnapshot": {
         "artifactId": "c2-snapshot-migration-saas-dashboard-v1",
         "path": "eval/c2/baseline/source-snapshots/migration-saas-dashboard.json",
-        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        "sha256": "c8d4c4519ab83e025ffdd5d406eb7e6436604a7e7bf59b0cc5f1144a7e78b7f1"
       },
       "goldEvidenceDescriptor": {
         "artifactId": "c2-evidence-migration-saas-dashboard-v1",
@@ -652,37 +652,8 @@
   "frozenCalibrationRef": {
     "artifactId": "c2-frozen-calibration-pilot-v1",
     "path": "eval/c2/calibration/frozen.json",
-    "sha256": "bc0561b5c8be36f82397577c58aafc2b1e893407df822272758ed35281a7c51f"
+    "sha256": "c154e55eb2ae2d099da98bad6a7d49fb4b06fc83cb11f87681ff0b5b20b2c10d"
   },
-  "manifestSha256": "1728f003e180a579046f63492d8fb2e40f2223eea7c6293fdfe77044a9550061",
-  "stagedSections": [
-    {
-      "section": "migration-source-snapshot:migration-content-product",
-      "reason": "Snapshot file eval/c2/baseline/source-snapshots/migration-content-product.json does not exist yet; brief declares placeholder sha256. Execution (prepare/run) will fail closed until the file is authored and the brief's sourceSnapshotRef.sha256 is updated.",
-      "affectedCaseIds": [
-        "migration-content-product"
-      ]
-    },
-    {
-      "section": "migration-source-snapshot:migration-documentation-site",
-      "reason": "Snapshot file eval/c2/baseline/source-snapshots/migration-documentation-site.json does not exist yet; brief declares placeholder sha256. Execution (prepare/run) will fail closed until the file is authored and the brief's sourceSnapshotRef.sha256 is updated.",
-      "affectedCaseIds": [
-        "migration-documentation-site"
-      ]
-    },
-    {
-      "section": "migration-source-snapshot:migration-regulated-service",
-      "reason": "Snapshot file eval/c2/baseline/source-snapshots/migration-regulated-service.json does not exist yet; brief declares placeholder sha256. Execution (prepare/run) will fail closed until the file is authored and the brief's sourceSnapshotRef.sha256 is updated.",
-      "affectedCaseIds": [
-        "migration-regulated-service"
-      ]
-    },
-    {
-      "section": "migration-source-snapshot:migration-saas-dashboard",
-      "reason": "Snapshot file eval/c2/baseline/source-snapshots/migration-saas-dashboard.json does not exist yet; brief declares placeholder sha256. Execution (prepare/run) will fail closed until the file is authored and the brief's sourceSnapshotRef.sha256 is updated.",
-      "affectedCaseIds": [
-        "migration-saas-dashboard"
-      ]
-    }
-  ]
+  "manifestSha256": "779b53caa0233278323bebca55c75eb68e5cd481d9a566d088ae115b2dfcf964",
+  "stagedSections": []
 }

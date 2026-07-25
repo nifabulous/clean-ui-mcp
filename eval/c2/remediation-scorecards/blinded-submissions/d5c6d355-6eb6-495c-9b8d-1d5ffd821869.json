@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-blind-score-submission",
+  "reviewId": "d5c6d355-6eb6-495c-9b8d-1d5ffd821869",
+  "reviewerActorId": "nifabulous",
+  "reviewerActorKind": "human",
+  "scores": [
+    {
+      "dimension": "product-appropriateness",
+      "score": 5,
+      "rationale": "Directly serves the brief's required journeys and audience hierarchy with clear product fit."
+    },
+    {
+      "dimension": "cross-screen-coherence",
+      "score": 4,
+      "rationale": "Generally coherent across screens with minor inconsistencies."
+    },
+    {
+      "dimension": "implementation-clarity",
+      "score": 4,
+      "rationale": "Mostly clear with minor gaps in state or recovery detail."
+    },
+    {
+      "dimension": "originality",
+      "score": 4,
+      "rationale": "Original treatment with minor reference-adjacent patterns."
+    },
+    {
+      "dimension": "accessibility-and-failure-states",
+      "score": 4,
+      "rationale": "Good accessibility coverage with minor gaps in failure-state detail."
+    },
+    {
+      "dimension": "evidence-discipline",
+      "score": 3,
+      "rationale": "Partial evidence grounding with several unsupported decisions."
+    }
+  ],
+  "submittedAt": "2026-07-24T20:00:00.000Z"
+}

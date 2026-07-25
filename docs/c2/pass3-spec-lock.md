@@ -426,8 +426,8 @@ self-consistent, not that the labels are independently validated.
 
 ### Closure semantics
 
-The closure report carries `soleOperatorReview: true` when this mode was used.
-A closure result with this flag MUST state:
+The **label-agreement report** carries `soleOperatorReview: true` when this
+mode was used. That report MUST state:
 
 - label agreement passed,
 - self-review mode was used,
@@ -435,8 +435,18 @@ A closure result with this flag MUST state:
 - the result is suitable for sole-operator evaluation but NOT equivalent to
   independent validation.
 
-`overallPassed` may be `true` in sole-operator mode when all gates pass, but
-the closure artifact must not be described as independently validated.
+The current C2 closure evaluator does not consume a label-agreement report and
+therefore does not propagate this field into `c2-closure-report`. The
+sole-operator flag MUST NOT be added to a closure artifact by caller-supplied
+metadata. Until the closure evaluator accepts and validates a hash-bound
+agreement report, sole-operator mode cannot by itself satisfy the final C2
+closure claim.
+
+A future closure integration may accept the agreement report only after it
+verifies the report schema, artifact bytes, baseline-metrics binding, terminal
+outcome, and `soleOperatorReview` value. That integration must carry the
+self-review limitation into its closure output and must not describe the
+result as independently validated.
 
 ### Restoring independent validation
 
@@ -445,7 +455,8 @@ If a second human reviewer is later recruited, the project owner can:
 1. Have the new reviewer label the 40 entries independently.
 2. Run `computeLabelAgreement` WITHOUT the `soleOperatorReview` option.
 3. Produce a new agreement report with distinct actor IDs.
-4. The new report supersedes the sole-operator report for closure purposes.
+4. The new report supersedes the sole-operator report for any future closure
+   integration.
 
 The transition from sole-operator to independent validation is a one-way
 upgrade: once independent validation exists, sole-operator mode should not be

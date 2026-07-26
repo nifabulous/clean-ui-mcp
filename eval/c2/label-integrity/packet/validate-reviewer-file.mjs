@@ -98,8 +98,8 @@ if (!Array.isArray(labelsIn)) {
 }
 if (labelsIn.length !== 40) errors.push(`expected 40 labels, found ${labelsIn.length}`);
 
-const reviewer = (raw.reviewer ?? "").toString().trim();
-if (!reviewer || reviewer.startsWith("<FILL")) {
+const reviewer = (raw.reviewer ?? raw.actorId ?? "").toString().trim();
+if (!strictMode && (!reviewer || reviewer.startsWith("<FILL"))) {
   errors.push("`reviewer` is unset — each reviewer needs a distinct id");
 }
 if (raw.selectionSha256 && raw.selectionSha256 !== PINNED_SELECTION_SHA) {
@@ -181,6 +181,7 @@ const ENVELOPE_FIELDS = [
   "selectionSha256", "submissionVersion", "actorId", "actorKind",
   "reviewerRole", "sealedAt",
 ];
+let strictSubmission = null;
 if (strictMode) {
   const strictResult = C2IndependentLabelSubmissionSchema.safeParse(raw);
   if (!strictResult.success) {
@@ -200,6 +201,7 @@ if (strictMode) {
       errors.push(`envelope ${field}: MISSING — required for a complete C2IndependentLabelSubmission`);
     }
   }
+  if (strictResult.success) strictSubmission = strictResult.data;
 }
 
 /* Vocabulary-gap flags: validated for shape, then kept OUT of the clean label
@@ -267,16 +269,11 @@ if (gaps.length) {
   console.log("  (kept out of the label file; they do not affect the metrics)");
 }
 if (outPath) {
-  const out = {
-    labelingMethod: raw.labelingMethod ?? "independent-human-review",
-    parentAuthority: raw.parentAuthority ?? false,
-    provenanceDoc: "eval/c2/label-integrity/PROVENANCE.md",
-    reviewer,
-    selectionArtifactId: selection.artifactId,
-    selectionSha256: PINNED_SELECTION_SHA,
-    labels: clean,
-  };
-  fs.writeFileSync(outPath, `${JSON.stringify(out, null, 2)}\n`);
+  if (!strictSubmission) {
+    console.error("strict validation did not produce a submission — refusing to write output");
+    process.exit(1);
+  }
+  fs.writeFileSync(outPath, `${JSON.stringify(strictSubmission, null, 2)}\n`);
   console.log(`wrote clean file: ${outPath}`);
 }
 if (gapsPath) {

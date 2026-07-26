@@ -139,6 +139,16 @@ validator runs in diagnostic mode (labels only) — useful for checking vocabula
 and schema shape on a draft, but it does not confirm the file is a valid
 submission.
 
+Browser exports are packet label files, not production submissions: they contain
+the reviewer id and packet metadata but do not contain the required production
+envelope. Before using `--strict`, create the submission envelope with the exact
+`C2IndependentLabelSubmission` fields (`schemaVersion`, `artifactType`,
+`artifactId`, `selectionArtifactId`, `selectionSha256`, `submissionVersion`,
+`actorId`, `actorKind`, `reviewerRole`, and `sealedAt`). Do not add packet-only
+fields such as `reviewer`, `labelingMethod`, or `parentAuthority` to that strict
+input. With a valid strict input, `--out` writes the schema-parsed submission
+envelope rather than a packet wrapper.
+
 When `--out` or `--gaps` is supplied, image verification is mandatory and a
 missing or mismatched PNG exits non-zero before anything is written. Diagnostic
 validation without output may omit `--verify-images` when the private bundle is

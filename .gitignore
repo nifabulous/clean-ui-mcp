@@ -131,6 +131,24 @@ eval/c2/calibration/*
 !eval/c2/label-integrity/
 eval/c2/label-integrity/*
 !eval/c2/label-integrity/selection.json
+# Labeling packet process files: the vocabulary spec, validator, HTML labeling
+# sheet, and gap analysis. These define the reproducible labeling process — no
+# prompt/evidence/raw content, no secrets, no reviewer judgments. Tracked so the
+# vocabulary is version-controlled and a fresh clone can reproduce the labeling.
+# Label submissions (reviewer-*.json, expert-draft-labels.json) and baseline
+# metrics stay gitignored — they carry reviewer judgments.
+!eval/c2/label-integrity/VOCABULARY-GAPS.md
+!eval/c2/label-integrity/packet/
+eval/c2/label-integrity/packet/*
+!eval/c2/label-integrity/packet/VOCABULARY.md
+!eval/c2/label-integrity/packet/validate-reviewer-file.mjs
+!eval/c2/label-integrity/packet/label.html
+!eval/c2/label-integrity/packet/README.md
+!eval/c2/label-integrity/packet/reviewer-template.json
+!eval/c2/label-integrity/packet/summarize-gaps.mjs
+!eval/c2/label-integrity/packet/open-sheet
+!eval/c2/label-integrity/packet/review-draft.html
+!eval/c2/label-integrity/packet/verify-image-bundle.mjs
 # C2 Pass 2 frozen-calibration evidence bundle: the run manifests + human
 # scorecards the frozen calibration binds by hash. These are hash-only
 # metadata (no prompt/evidence/raw content, no secrets) — verified to pass

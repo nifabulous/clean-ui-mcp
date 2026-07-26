@@ -1,0 +1,983 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>C2 label-integrity — reviewer sheet</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfa;         --panel: #fff;      --ink: #16171a;
+  --muted: #6b6f76;      --line: #e3e4e7;    --line-strong: #c9cbd0;
+  --accent: #2d6cdf;     --accent-ink: #fff; --accent-soft: #2d6cdf14;
+  --danger: #c0392b;     --ok: #1c7c4a;
+  --r: 8px; --r-lg: 12px;
+  --shadow: 0 1px 2px #0000000a, 0 4px 14px #0000000a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131417;        --panel: #191b1f;   --ink: #e9eaec;
+    --muted: #9a9ea6;     --line: #2a2d33;    --line-strong: #3b3f47;
+    --accent: #6ea0ff;    --accent-ink: #10131a; --accent-soft: #6ea0ff1f;
+    --danger: #ff7b6b;    --ok: #5fce97;
+    --shadow: 0 1px 2px #0000003d, 0 4px 14px #00000030;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: 88px; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1240px; margin: 0 auto; padding: 0 24px 96px; }
+
+/* ---------- header ---------- */
+header {
+  position: sticky; top: 0; z-index: 40;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.bar { max-width: 1240px; margin: 0 auto; padding: 12px 24px;
+       display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.bar h1 { font-size: 15px; font-weight: 650; margin: 0; letter-spacing: -.01em; }
+.spacer { flex: 1; }
+.count { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+.meter { width: 132px; height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.meter > i { display: block; height: 100%; width: 0%; background: var(--accent);
+             transition: width .25s ease; }
+button, .btn {
+  font: inherit; font-size: 13.5px; padding: 7px 13px; border-radius: var(--r);
+  border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink);
+  cursor: pointer; transition: background .12s, border-color .12s;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.primary:hover { filter: brightness(1.06); }
+.idbox { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+.idbox input {
+  font: inherit; font-size: 13.5px; width: 128px; padding: 6px 10px;
+  border: 1px solid var(--line-strong); border-radius: var(--r);
+  background: var(--panel); color: var(--ink);
+}
+
+/* ---------- notices ---------- */
+.notice { border-radius: var(--r-lg); padding: 14px 18px; margin: 20px 0; font-size: 14px;
+          border: 1px solid var(--line); background: var(--panel); }
+.notice.warn { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--panel)); }
+.notice strong { font-weight: 650; }
+.notice code { font-size: 12.5px; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+[hidden] { display: none !important; }
+
+/* ---------- entry card ---------- */
+.entry {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+  box-shadow: var(--shadow); margin: 18px 0; overflow: hidden;
+  transition: border-color .15s;
+}
+.entry.done { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.entry-head {
+  display: flex; align-items: center; gap: 10px; padding: 12px 18px;
+  border-bottom: 1px solid var(--line); flex-wrap: wrap;
+}
+.seq { font-variant-numeric: tabular-nums; font-weight: 650; font-size: 13px; color: var(--muted); }
+.eid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+       color: var(--muted); word-break: break-all; }
+.tag { font-size: 11px; letter-spacing: .02em; text-transform: uppercase; font-weight: 600;
+       border: 1px solid var(--line-strong); border-radius: 99px; padding: 2px 9px; color: var(--muted); }
+.tag.challenge { border-color: var(--accent); color: var(--accent); }
+.tick { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--ok); }
+
+/* landscape: image on top, controls below. portrait: side by side. */
+.body { display: grid; gap: 22px; padding: 18px; }
+.body.landscape { grid-template-columns: 1fr; }
+.body.portrait  { grid-template-columns: minmax(240px, 340px) 1fr; align-items: start; }
+@media (max-width: 900px) { .body.portrait { grid-template-columns: 1fr; } }
+
+.shot { position: relative; }
+.shot button.zoom {
+  position: absolute; top: 8px; right: 8px; opacity: 0; transition: opacity .15s;
+  font-size: 12px; padding: 4px 9px;
+}
+.shot:hover button.zoom, .shot:focus-within button.zoom { opacity: 1; }
+.shot img { display: block; width: 100%; height: auto; border-radius: var(--r);
+            border: 1px solid var(--line); background: #8881; cursor: zoom-in; }
+.landscape .shot img { max-height: 70vh; width: auto; max-width: 100%; margin: 0 auto; }
+
+/* phone-ish framing so tall captures read as a device, not a wall of pixels */
+.portrait .shot { position: sticky; top: 88px; }
+.portrait .shot img {
+  max-height: 74vh; width: auto; max-width: 100%; margin: 0 auto;
+  border-radius: 18px; border: 6px solid var(--line-strong); box-shadow: var(--shadow);
+}
+.dims { text-align: center; font-size: 11.5px; color: var(--muted); margin-top: 7px;
+        font-variant-numeric: tabular-nums; }
+
+/* ---------- fields ---------- */
+.fields { display: grid; gap: 16px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+.field > .lbl { font-size: 12px; font-weight: 650; letter-spacing: .02em; text-transform: uppercase;
+                color: var(--muted); margin-bottom: 6px; display: flex; gap: 6px; align-items: baseline; }
+.field > .lbl .hint { font-weight: 500; text-transform: none; letter-spacing: 0; font-size: 11.5px; }
+.field.missing > .lbl { color: var(--danger); }
+
+/* segmented control for short closed sets */
+.seg { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.seg label { border: 1px solid var(--line-strong); border-radius: var(--r); padding: 6px 12px;
+             font-size: 13.5px; cursor: pointer; user-select: none; background: var(--panel); }
+.seg label:hover { border-color: var(--accent); }
+.seg input { position: absolute; opacity: 0; width: 0; height: 0; }
+.seg label:has(input:checked) { background: var(--accent); border-color: var(--accent);
+                                color: var(--accent-ink); font-weight: 600; }
+
+/* text inputs */
+input.text { font: inherit; width: 100%; padding: 8px 11px; border-radius: var(--r);
+             border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); }
+input.text:focus, .cb.open .cb-input { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* ---------- searchable combobox ---------- */
+.cb { position: relative; }
+.cb-pills { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+.cb-pills:empty { display: none; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px;
+        background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+        color: var(--ink); border-radius: 99px; padding: 3px 5px 3px 11px; }
+.pill button { all: unset; cursor: pointer; line-height: 1; padding: 0 4px; border-radius: 99px;
+               color: var(--muted); font-size: 15px; }
+.pill button:hover { color: var(--danger); }
+.cb-input { font: inherit; width: 100%; padding: 8px 11px; border-radius: var(--r);
+            border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); }
+.cb-input::placeholder { color: var(--muted); }
+.cb-menu {
+  position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 4px);
+  max-height: 260px; overflow-y: auto; background: var(--panel);
+  border: 1px solid var(--line-strong); border-radius: var(--r); box-shadow: var(--shadow);
+  padding: 4px;
+}
+.cb:not(.open) .cb-menu { display: none; }
+.cb-opt { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 6px;
+          cursor: pointer; font-size: 14px; }
+.cb-opt[aria-selected="true"] { font-weight: 650; }
+.cb-opt[aria-selected="true"]::after { content: "✓"; margin-left: auto; color: var(--accent); }
+.cb-opt.active { background: var(--accent-soft); }
+.cb-empty { padding: 10px; color: var(--muted); font-size: 13.5px; }
+
+/* ---------- vocabulary-gap escape hatch ---------- */
+.gapwrap { border-top: 1px dashed var(--line-strong); padding-top: 14px; margin-top: 2px; }
+.gaplist { display: grid; gap: 6px; margin-bottom: 9px; }
+.gapitem { display: flex; gap: 9px; align-items: center; font-size: 13px;
+           background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+           border-radius: 6px; padding: 6px 8px 6px 11px; }
+.gapitem code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.gapitem .note { color: var(--muted); }
+.gapitem button { all: unset; cursor: pointer; margin-left: auto; color: var(--muted);
+                  font-size: 15px; padding: 0 4px; }
+.gapitem button:hover { color: var(--danger); }
+.gapform { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.gapform select, .gapform input {
+  font: inherit; font-size: 13.5px; padding: 7px 10px; border-radius: var(--r);
+  border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink);
+}
+.gapform input { flex: 1; min-width: 170px; }
+.linkbtn { all: unset; cursor: pointer; color: var(--accent); font-size: 13px; font-weight: 600; }
+.linkbtn:hover { text-decoration: underline; }
+.flagchip { font-size: 11px; font-weight: 700; letter-spacing: .02em; border-radius: 99px;
+            padding: 2px 9px; background: var(--accent); color: var(--accent-ink); }
+
+.notice.draft { border-color: var(--accent); background: var(--accent-soft); }
+.rationale { font-size: 13.5px; color: var(--muted); font-style: italic;
+             border-left: 3px solid var(--line-strong); padding: 2px 0 2px 12px; }
+.tag.conf-high { border-color: var(--ok); color: var(--ok); }
+.tag.conf-medium { border-color: var(--muted); }
+.tag.conf-low { border-color: var(--danger); color: var(--danger); }
+
+/* ---------- lightbox ---------- */
+#lightbox { position: fixed; inset: 0; z-index: 100; background: #000000e8;
+            display: none; align-items: center; justify-content: center; padding: 24px; cursor: zoom-out; }
+#lightbox.on { display: flex; }
+#lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
+#lightbox .cap { position: fixed; bottom: 14px; left: 0; right: 0; text-align: center;
+                 color: #fff; font-size: 12.5px; opacity: .8; }
+</style>
+
+<header>
+  <div class="bar">
+    <h1>C2 label-integrity — reviewer sheet</h1>
+    <div class="meter" title="completion"><i id="meterfill"></i></div>
+    <span class="count" id="progress"></span>
+    <span class="count" id="gapcount" title="vocabulary gaps flagged"></span>
+    <div class="spacer"></div>
+    <button id="jump">Next incomplete</button>
+    <button id="importbtn" title="load a draft or a previous export">Import</button>
+    <button id="clearbtn" title="wipe all labels in this browser">Clear</button>
+    <input type="file" id="importfile" accept="application/json,.json" hidden>
+    <span class="idbox">reviewer <input type="text" id="reviewer" placeholder="e.g. jdoe" spellcheck="false"></span>
+    <button class="primary" id="export">Export JSON</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="notice warn" id="nostore" hidden>
+    <strong>Autosave is unavailable in this browser.</strong> Your work is held in memory only and
+    will be lost if you close or reload this tab. Open this file in Chrome or Firefox, or serve the
+    folder over <code>http://localhost</code> — storage works on a real origin. Otherwise export
+    partial progress often.
+  </div>
+  
+  <div class="notice">
+    Read <strong>VOCABULARY.md</strong> first, especially the tie-break rules in §6. Every list is
+    closed — type to filter, click or press Enter to pick. Work autosaves as you go. Do not compare
+    notes with the other reviewer.
+  </div>
+  <div class="notice">
+    <strong>If nothing in a list fits, still pick the nearest value — then flag the gap.</strong>
+    Every entry has a <em>Flag a missing option</em> control at the bottom. Flags are collected
+    separately and do not affect your labels or the agreement measurement; they are how we find out
+    where the vocabulary itself is wrong. The lists are known to be incomplete — the corpus they
+    came from was machine-tagged, and its own notes describe components it has no tag for.
+  </div>
+  <main id="app"></main>
+</div>
+
+<div id="lightbox"><img alt=""><div class="cap"></div></div>
+
+<script>
+var VOCAB = {"patternType":["auth","calculator","chat-interface","checkout","command-palette","dashboard","data-table","editor-canvas","empty-state","forms","gallery","interstitial","landing-page","marketing-hero","mobile-nav","modal","navigation","notifications","onboarding","pricing","profile","search","settings"],"categories":["auth","chat-interface","checkout","dashboard","data-table","editor-canvas","empty-state","forms","landing-page","marketing-hero","mobile-nav","navigation","notifications","onboarding","pricing","profile","search","settings"],"components":["area-chart","avatar","avatar-group","badge","banner","bar-chart","bottom-nav","carousel","card-list","chart","checklist","command-palette","cta-button","data-table","donut-chart","drawer","empty-state","feed-list","filter-controls","form-controls","icon-button","illustration","kpi-card","line-chart","list-row","media-grid","metric-grid","modal-dialog","notification-bell","pricing-card","primary-button","progress-bar","report-list","search-command","search-input","segmented-control","sidebar-nav","status-chip","stepper","summary-card","tab-nav","timeline","toggle-switch","top-nav"],"domainTags":["ai-ml","analytics","banking","communication","crypto","developer-tools","ecommerce","education","enterprise-saas","fintech","healthcare","hr","infrastructure","insurance","investing","marketing","media","payments","productivity","recruiting","security","social"],"density":["sparse","moderate","dense"],"color-scheme":["light","dark","mixed"],"layout":["single-column","two-column","three-column","modal-overlay"],"critiqueQuality":["insufficient","acceptable","strong"],"accessibilityEvidenceIds":["a11y:visible-focus","a11y:skip-link","a11y:contrast-control"]};
+var ENTRIES = [{"entryId":"hume-hume-12","image":"../../../../corpus/images-private/hume-ai-web-apr-2026-15-4.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"cash-app-cash-app-42","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-138.png","cohort":"reproducible","width":1284,"height":2778,"orientation":"portrait"},{"entryId":"leatherback-co-leatherback-co-group-9d4feb511b-desktop-2026-07-06","image":"../../../../corpus/images-private/leatherback-co-leatherback-co-group-9d4feb511b-desktop-2026-07-06.png","cohort":"reproducible","width":1440,"height":1960,"orientation":"portrait"},{"entryId":"alan-alan-ios-screens-29-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 29.png","cohort":"reproducible","width":1179,"height":2556,"orientation":"portrait"},{"entryId":"wealthsimple-wealthsimple-ios-screens-11-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Wealthsimple iOS Screens/Wealthsimple iOS Screens 11.png","cohort":"reproducible","width":1125,"height":2436,"orientation":"portrait"},{"entryId":"wealthsimple-wealthsimple-ios-screens-64-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Wealthsimple iOS Screens/Wealthsimple iOS Screens 64.png","cohort":"reproducible","width":1125,"height":2436,"orientation":"portrait"},{"entryId":"stackai-stackai-web-screens-42-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/StackAI Web Screens/StackAI Web Screens 42.png","cohort":"reproducible","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"wealthsimple-wealthsimple-ios-screens-31-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Wealthsimple iOS Screens/Wealthsimple iOS Screens 31.png","cohort":"reproducible","width":1125,"height":2436,"orientation":"portrait"},{"entryId":"alan-alan-ios-screens-120-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 120.png","cohort":"reproducible","width":1179,"height":2556,"orientation":"portrait"},{"entryId":"alan-alan-ios-screens-109-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 109.png","cohort":"reproducible","width":1179,"height":2556,"orientation":"portrait"},{"entryId":"alan-alan-ios-screens-105-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 105.png","cohort":"reproducible","width":1179,"height":2556,"orientation":"portrait"},{"entryId":"alan-alan-ios-screens-22-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Alan iOS Screens/Alan iOS Screens 22.png","cohort":"reproducible","width":1180,"height":2556,"orientation":"portrait"},{"entryId":"mercury-mercury-web-screens-61-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Mercury Web Screens/Mercury Web Screens 61.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"mercury-mercury-web-screens-55-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Mercury Web Screens/Mercury Web Screens 55.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"wise-wise-32","image":"../../../../corpus/images-private/wise-web-screens-17-2.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"arcade-arcade-web-screens-35-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 35.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"arcade-arcade-web-screens-85-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 85.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"quicken-quicken-web-screens-9-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Quicken Web Screens/Quicken Web Screens 9.png","cohort":"reproducible","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"quicken-quicken-web-screens-15-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Quicken Web Screens/Quicken Web Screens 15.png","cohort":"reproducible","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"arcade-arcade-web-screens-14-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 14.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"arcade-arcade-web-screens-72-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 72.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"arcade-arcade-web-screens-11-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Arcade Web Screens/Arcade Web Screens 11.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"cash-app-cash-app-64","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-161.png","cohort":"reproducible","width":1284,"height":2778,"orientation":"portrait"},{"entryId":"cash-app-cash-app-44","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-52.png","cohort":"reproducible","width":1284,"height":2778,"orientation":"portrait"},{"entryId":"cash-app-cash-app-47","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-60.png","cohort":"reproducible","width":1284,"height":2778,"orientation":"portrait"},{"entryId":"paycheck-paycheck-2","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-62.png","cohort":"reproducible","width":1284,"height":2778,"orientation":"portrait"},{"entryId":"blui-blui","image":"../../../../corpus/images-private/aboard-web-screens-70-3.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"we-we-12","image":"../../../../corpus/images-private/workable-web-screens-65.png","cohort":"reproducible","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"workable-workable-8","image":"../../../../corpus/images-private/workable-web-screens-9.png","cohort":"reproducible","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"jell-jell","image":"../../../../corpus/images-private/aboard-web-screens-7-3.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"wise-wise-15","image":"../../../../corpus/images-private/wise-web-screens-60.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"workable-workable-24","image":"../../../../corpus/images-private/workable-web-screens-63.png","cohort":"reproducible","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"cash-app-cash-app-11","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-29.png","cohort":"reproducible","width":1284,"height":2778,"orientation":"portrait"},{"entryId":"projects-projects","image":"../../../../corpus/images-private/juicebox-web-screens-43.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"untitled-untitled-14","image":"../../../../corpus/images-private/aboard-web-screens-60-2.png","cohort":"reproducible","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"wealthsimple-wealthsimple-ios-screens-40-2026-07-05","image":"../../../../corpus/images-private/new-products-batch/Wealthsimple iOS Screens/Wealthsimple iOS Screens 40.png","cohort":"challenge","width":1125,"height":2437,"orientation":"portrait"},{"entryId":"wise-wise-18","image":"../../../../corpus/images-private/wise-web-screens-120.png","cohort":"challenge","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"workable-workable-2","image":"../../../../corpus/images-private/workable-web-screens-2.png","cohort":"challenge","width":1920,"height":1205,"orientation":"landscape"},{"entryId":"juicebox-juicebox-2","image":"../../../../corpus/images-private/juicebox-web-screens-46.png","cohort":"challenge","width":1920,"height":1200,"orientation":"landscape"},{"entryId":"cash-app-cash-app-4","image":"../../../../corpus/images-private/cash-app-ios-nov-2025-17.png","cohort":"challenge","width":1284,"height":2778,"orientation":"portrait"}];
+var SELECTION_ARTIFACT_ID = "c2-label-integrity-selection-v1";
+var SELECTION_SHA = "9ed6ff2d74c0078706c67037910a8f3fcd3c519d9f0d724902022ac2acbe00b7";
+var KEY = "c2-label-integrity-v1";
+var SEED = null;
+var ANNOTATIONS = null;
+
+/* localStorage throws on opaque origins (Safari + file://). Degrade to memory
+   and say so, rather than dying on load or silently losing 40 entries. */
+var store = null;
+try {
+  window.localStorage.setItem(KEY + ":probe", "1");
+  window.localStorage.removeItem(KEY + ":probe");
+  store = window.localStorage;
+} catch (err) { store = null; }
+
+function loadState() {
+  if (!store) return {};
+  try { return JSON.parse(store.getItem(KEY) || "{}"); } catch (err) { return {}; }
+}
+var state = loadState();
+if (!state.__gaps) state.__gaps = {};
+
+/* Copies only schema-known fields. Shared by the seed path and Import, so a
+   draft can never smuggle an extra key into a label. */
+function copyLabelInto(dst, src) {
+  if (typeof src.patternType === "string") dst.patternType = src.patternType;
+  if (typeof src.critiqueQuality === "string") dst.critiqueQuality = src.critiqueQuality;
+  var lists = ["categories", "components", "domainTags", "accessibilityEvidenceIds", "groundedClaimIds"];
+  for (var k = 0; k < lists.length; k++) {
+    if (Array.isArray(src[lists[k]])) dst[lists[k]] = src[lists[k]].slice();
+  }
+  if (src.visualFields) {
+    var vk = ["density", "color-scheme", "typography", "layout"];
+    for (var v = 0; v < vk.length; v++) {
+      if (typeof src.visualFields[vk[v]] === "string") dst.visualFields[vk[v]] = src.visualFields[vk[v]];
+    }
+  }
+  dst.protectedFieldExpectation = "unchanged";
+}
+
+/* Fields a reviewer can flag as having no adequate option. These are exactly
+   the closed-list fields; typography is free text so it cannot have a gap. */
+var GAP_FIELDS = ["patternType", "categories", "components", "domainTags",
+                  "layout", "density", "color-scheme", "critiqueQuality"];
+
+function gapsFor(entryId) { return state.__gaps[entryId] || []; }
+function totalGaps() {
+  var n = 0;
+  for (var k in state.__gaps) if (state.__gaps.hasOwnProperty(k)) n += state.__gaps[k].length;
+  return n;
+}
+
+function blank() {
+  return {
+    patternType: "", categories: [], components: [], domainTags: [],
+    visualFields: { density: "", "color-scheme": "", typography: "", layout: "" },
+    groundedClaimIds: ["claim:visual-inspection"], accessibilityEvidenceIds: [],
+    critiqueQuality: "", protectedFieldExpectation: "unchanged"
+  };
+}
+function complete(l) {
+  if (!l) return false;
+  var vf = l.visualFields;
+  return !!l.patternType && l.categories.length > 0 && l.components.length > 0 &&
+    l.domainTags.length > 0 && !!l.critiqueQuality &&
+    !!(vf.density || "").trim() && !!(vf["color-scheme"] || "").trim() &&
+    !!(vf.typography || "").trim() && !!(vf.layout || "").trim();
+}
+function save() {
+  if (store) {
+    try { store.setItem(KEY, JSON.stringify(state)); }
+    catch (err) { store = null; document.getElementById("nostore").hidden = false; }
+  }
+  paint();
+}
+if (!store) document.getElementById("nostore").hidden = false;
+
+function paint() {
+  var done = 0;
+  for (var i = 0; i < ENTRIES.length; i++) {
+    var e = ENTRIES[i];
+    var ok = complete(state[e.entryId]);
+    if (ok) done++;
+    var card = document.getElementById("row-" + e.entryId);
+    if (card) {
+      card.classList.toggle("done", ok);
+      card.querySelector(".tick").textContent = ok ? "complete" : "";
+      /* Only flag gaps once the reviewer has started this entry. Marking all
+         eight fields red on an untouched card is noise, not signal. */
+      var started = touched(state[e.entryId]);
+      var fields = card.querySelectorAll(".field[data-req]");
+      for (var j = 0; j < fields.length; j++) {
+        var f = fields[j];
+        f.classList.toggle("missing", started && !fieldFilled(state[e.entryId], f.dataset.req));
+      }
+    }
+  }
+  document.getElementById("progress").textContent = done + " / " + ENTRIES.length;
+  document.getElementById("meterfill").style.width = (done / ENTRIES.length * 100) + "%";
+  var g = totalGaps();
+  document.getElementById("gapcount").textContent = g ? "· " + g + " gap" + (g === 1 ? "" : "s") + " flagged" : "";
+}
+function touched(l) {
+  if (!l) return false;
+  var vf = l.visualFields;
+  return !!l.patternType || !!l.critiqueQuality ||
+    l.categories.length > 0 || l.components.length > 0 || l.domainTags.length > 0 ||
+    l.accessibilityEvidenceIds.length > 0 ||
+    !!(vf.density || vf["color-scheme"] || (vf.typography || "").trim() || (vf.layout || "").trim());
+}
+function fieldFilled(l, name) {
+  if (!l) return false;
+  if (name === "patternType" || name === "critiqueQuality") return !!l[name];
+  if (name === "density" || name === "color-scheme" || name === "typography" || name === "layout") {
+    return !!(l.visualFields[name] || "").trim();
+  }
+  return (l[name] || []).length > 0;
+}
+
+/* ---------- searchable combobox ---------- */
+function combobox(opts) {
+  var options = opts.options, multi = opts.multi, get = opts.get, set = opts.set;
+  var root = document.createElement("div");
+  root.className = "cb";
+  var pills = document.createElement("div");
+  pills.className = "cb-pills";
+  var input = document.createElement("input");
+  input.className = "cb-input";
+  input.type = "text";
+  input.spellcheck = false;
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-expanded", "false");
+  var menu = document.createElement("div");
+  menu.className = "cb-menu";
+  menu.setAttribute("role", "listbox");
+  root.append(pills, input, menu);
+
+  var active = -1;
+  var visible = options.slice();
+
+  function selected() { return multi ? get() : (get() ? [get()] : []); }
+  function placeholder() {
+    var n = selected().length;
+    if (!multi) return n ? "change…" : "search " + options.length + " options…";
+    return "search " + options.length + " options…";
+  }
+  function renderPills() {
+    pills.textContent = "";
+    var vals = selected();
+    for (var i = 0; i < vals.length; i++) {
+      (function (value) {
+        var pill = document.createElement("span");
+        pill.className = "pill";
+        pill.append(document.createTextNode(value));
+        var x = document.createElement("button");
+        x.type = "button";
+        x.textContent = "×";
+        x.title = "remove " + value;
+        x.onclick = function (ev) { ev.stopPropagation(); toggle(value); };
+        pill.append(x);
+        pills.append(pill);
+      })(vals[i]);
+    }
+    input.placeholder = placeholder();
+  }
+  function renderMenu() {
+    var q = input.value.trim().toLowerCase();
+    visible = options.filter(function (o) { return o.indexOf(q) !== -1; });
+    menu.textContent = "";
+    if (!visible.length) {
+      var none = document.createElement("div");
+      none.className = "cb-empty";
+      none.textContent = 'no match for "' + input.value.trim() + '" — the list is closed, pick the nearest value';
+      menu.append(none);
+      return;
+    }
+    if (active >= visible.length) active = visible.length - 1;
+    var chosen = selected();
+    for (var i = 0; i < visible.length; i++) {
+      (function (value, index) {
+        var row = document.createElement("div");
+        row.className = "cb-opt" + (index === active ? " active" : "");
+        row.setAttribute("role", "option");
+        row.setAttribute("aria-selected", chosen.indexOf(value) !== -1 ? "true" : "false");
+        row.textContent = value;
+        row.onmousedown = function (ev) { ev.preventDefault(); toggle(value); };
+        row.onmouseenter = function () { active = index; highlight(); };
+        menu.append(row);
+      })(visible[i], i);
+    }
+  }
+  function highlight() {
+    var rows = menu.querySelectorAll(".cb-opt");
+    for (var i = 0; i < rows.length; i++) rows[i].classList.toggle("active", i === active);
+    if (rows[active]) rows[active].scrollIntoView({ block: "nearest" });
+  }
+  function toggle(value) {
+    if (multi) {
+      var cur = get().slice();
+      var at = cur.indexOf(value);
+      if (at === -1) cur.push(value); else cur.splice(at, 1);
+      set(cur);
+    } else {
+      set(get() === value ? "" : value);
+      close();
+    }
+    renderPills();
+    renderMenu();
+    save();
+  }
+  function open() { root.classList.add("open"); input.setAttribute("aria-expanded", "true"); active = -1; renderMenu(); }
+  function close() { root.classList.remove("open"); input.setAttribute("aria-expanded", "false"); input.value = ""; }
+
+  input.onfocus = open;
+  input.onblur = function () { setTimeout(close, 120); };
+  input.oninput = function () { active = 0; renderMenu(); };
+  input.onkeydown = function (ev) {
+    if (ev.key === "ArrowDown") { ev.preventDefault(); active = Math.min(active + 1, visible.length - 1); highlight(); }
+    else if (ev.key === "ArrowUp") { ev.preventDefault(); active = Math.max(active - 1, 0); highlight(); }
+    else if (ev.key === "Enter") { ev.preventDefault(); if (visible[active]) toggle(visible[active]); }
+    else if (ev.key === "Escape") { input.blur(); }
+    else if (ev.key === "Backspace" && !input.value && multi) {
+      var cur = get();
+      if (cur.length) toggle(cur[cur.length - 1]);
+    }
+  };
+  renderPills();
+  return root;
+}
+
+/* ---------- segmented control ---------- */
+function segmented(opts) {
+  var wrap = document.createElement("div");
+  wrap.className = "seg";
+  for (var i = 0; i < opts.options.length; i++) {
+    (function (value) {
+      var lab = document.createElement("label");
+      var box = document.createElement("input");
+      box.type = opts.multi ? "checkbox" : "radio";
+      box.name = opts.name;
+      box.checked = opts.multi ? opts.get().indexOf(value) !== -1 : opts.get() === value;
+      box.onchange = function () {
+        if (opts.multi) {
+          var cur = opts.get().slice();
+          var at = cur.indexOf(value);
+          if (box.checked && at === -1) cur.push(value);
+          if (!box.checked && at !== -1) cur.splice(at, 1);
+          opts.set(cur);
+        } else {
+          opts.set(value);
+        }
+        save();
+      };
+      lab.append(box, document.createTextNode(value));
+      wrap.append(lab);
+    })(opts.options[i]);
+  }
+  return wrap;
+}
+
+/* ---------- vocabulary-gap escape hatch ----------
+   A reviewer who finds no adequate option still picks the nearest value (so the
+   agreement metric stays computable) and records what was missing here. Flags
+   are exported alongside the labels, never inside them. */
+function gapSection(entryId, flagChip) {
+  var wrap = document.createElement("div");
+  wrap.className = "field gapwrap";
+
+  var list = document.createElement("div");
+  list.className = "gaplist";
+
+  var form = document.createElement("div");
+  form.className = "gapform";
+  form.hidden = true;
+
+  var pick = document.createElement("select");
+  pick.append(new Option("which field?", ""));
+  for (var i = 0; i < GAP_FIELDS.length; i++) pick.append(new Option(GAP_FIELDS[i], GAP_FIELDS[i]));
+
+  var wanted = document.createElement("input");
+  wanted.type = "text";
+  wanted.placeholder = "what you wanted, e.g. bottom-nav";
+  wanted.spellcheck = false;
+
+  var note = document.createElement("input");
+  note.type = "text";
+  note.placeholder = "optional — why the nearest value is wrong";
+
+  var add = document.createElement("button");
+  add.type = "button";
+  add.textContent = "Add";
+
+  var cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "Cancel";
+
+  var open = document.createElement("button");
+  open.type = "button";
+  open.className = "linkbtn";
+  open.textContent = "⚑ Flag a missing option";
+
+  function render() {
+    list.textContent = "";
+    var gaps = gapsFor(entryId);
+    flagChip.textContent = gaps.length ? gaps.length + " flagged" : "";
+    flagChip.hidden = gaps.length === 0;
+    for (var i = 0; i < gaps.length; i++) {
+      (function (gap, index) {
+        var row = document.createElement("div");
+        row.className = "gapitem";
+        var f = document.createElement("code");
+        f.textContent = gap.field;
+        var w = document.createElement("span");
+        w.textContent = "wanted “" + gap.wanted + "”";
+        row.append(f, w);
+        if (gap.note) {
+          var n = document.createElement("span");
+          n.className = "note";
+          n.textContent = "— " + gap.note;
+          row.append(n);
+        }
+        var del = document.createElement("button");
+        del.type = "button";
+        del.textContent = "×";
+        del.title = "remove this flag";
+        del.onclick = function () {
+          state.__gaps[entryId].splice(index, 1);
+          if (!state.__gaps[entryId].length) delete state.__gaps[entryId];
+          render();
+          save();
+        };
+        row.append(del);
+        list.append(row);
+      })(gaps[i], i);
+    }
+  }
+
+  open.onclick = function () { form.hidden = false; open.hidden = true; pick.focus(); };
+  cancel.onclick = function () {
+    form.hidden = true; open.hidden = false;
+    pick.value = ""; wanted.value = ""; note.value = "";
+  };
+  add.onclick = function () {
+    if (!pick.value) { alert("Pick which field the gap is in."); return; }
+    if (!wanted.value.trim()) { alert("Say what value you wanted."); return; }
+    if (!state.__gaps[entryId]) state.__gaps[entryId] = [];
+    state.__gaps[entryId].push({
+      field: pick.value,
+      wanted: wanted.value.trim(),
+      note: note.value.trim()
+    });
+    pick.value = ""; wanted.value = ""; note.value = "";
+    form.hidden = true; open.hidden = false;
+    render();
+    save();
+  };
+
+  form.append(pick, wanted, note, add, cancel);
+  wrap.append(list, form, open);
+  render();
+  return wrap;
+}
+
+function field(title, hint, node, reqName) {
+  var d = document.createElement("div");
+  d.className = "field";
+  if (reqName) d.dataset.req = reqName;
+  var l = document.createElement("div");
+  l.className = "lbl";
+  l.append(document.createTextNode(title));
+  if (hint) {
+    var h = document.createElement("span");
+    h.className = "hint";
+    h.textContent = hint;
+    l.append(h);
+  }
+  d.append(l, node);
+  return d;
+}
+function textInput(entryId, key, placeholder) {
+  var box = document.createElement("input");
+  box.type = "text";
+  box.className = "text";
+  box.placeholder = placeholder;
+  box.value = state[entryId].visualFields[key];
+  box.oninput = function () { state[entryId].visualFields[key] = box.value; save(); };
+  return box;
+}
+
+/* Seed from the baked-in draft, but only on a genuinely fresh sheet — never
+   clobber work already in this browser. */
+function applySeed() {
+  if (!SEED || !Array.isArray(SEED.labels)) return;
+  var anyWork = false;
+  for (var i = 0; i < ENTRIES.length; i++) {
+    if (touched(state[ENTRIES[i].entryId])) { anyWork = true; break; }
+  }
+  if (anyWork) return;
+  for (var j = 0; j < SEED.labels.length; j++) {
+    var src = SEED.labels[j];
+    if (!src || !src.entryId) continue;
+    if (!state[src.entryId]) state[src.entryId] = blank();
+    copyLabelInto(state[src.entryId], src);
+  }
+  state.__gaps = {};
+  var gaps = Array.isArray(SEED.vocabularyGaps) ? SEED.vocabularyGaps : [];
+  for (var g = 0; g < gaps.length; g++) {
+    var gap = gaps[g];
+    if (!gap.entryId || !gap.field || !gap.wanted) continue;
+    if (!state.__gaps[gap.entryId]) state.__gaps[gap.entryId] = [];
+    state.__gaps[gap.entryId].push({ field: gap.field, wanted: gap.wanted, note: gap.note || "" });
+  }
+}
+applySeed();
+
+/* ---------- build ---------- */
+var app = document.getElementById("app");
+function renderAll() {
+app.textContent = "";
+ENTRIES.forEach(function (e, i) {
+  if (!state[e.entryId]) state[e.entryId] = blank();
+  var L = state[e.entryId];
+
+  var card = document.createElement("section");
+  card.className = "entry";
+  card.id = "row-" + e.entryId;
+
+  var head = document.createElement("div");
+  head.className = "entry-head";
+  var seq = document.createElement("span");
+  seq.className = "seq";
+  seq.textContent = (i + 1) + " / " + ENTRIES.length;
+  var eid = document.createElement("span");
+  eid.className = "eid";
+  eid.textContent = e.entryId;
+  var cohort = document.createElement("span");
+  cohort.className = "tag" + (e.cohort === "challenge" ? " challenge" : "");
+  cohort.textContent = e.cohort;
+  var device = document.createElement("span");
+  device.className = "tag";
+  device.textContent = e.orientation === "portrait" ? "mobile" : "desktop";
+  var ann = ANNOTATIONS ? ANNOTATIONS[e.entryId] : null;
+  var confChip = null;
+  if (ann && ann.confidence) {
+    confChip = document.createElement("span");
+    confChip.className = "tag conf-" + ann.confidence;
+    confChip.textContent = ann.confidence + " confidence";
+  }
+  var flagChip = document.createElement("span");
+  flagChip.className = "flagchip";
+  flagChip.hidden = true;
+  var tick = document.createElement("span");
+  tick.className = "tick";
+  head.append(seq, eid, cohort, device);
+  if (confChip) head.append(confChip);
+  head.append(flagChip, tick);
+
+  var body = document.createElement("div");
+  body.className = "body " + e.orientation;
+
+  var shot = document.createElement("div");
+  shot.className = "shot";
+  var img = document.createElement("img");
+  img.src = e.image;
+  img.loading = "lazy";
+  img.decoding = "async";
+  img.width = e.width;
+  img.height = e.height;
+  img.alt = "screenshot for " + e.entryId;
+  img.onclick = function () { lightbox(e); };
+  // Preflight: detect missing image bundle (corpus/images-private/ is
+  // gitignored). Mark the entry so the banner can count it.
+  img.onerror = function () {
+    shot.classList.add("img-missing");
+    img.style.display = "none";
+    if (!window.__missingImages) window.__missingImages = 0;
+    window.__missingImages++;
+    showImageBundleBanner();
+  };
+  var zoom = document.createElement("button");
+  zoom.className = "zoom";
+  zoom.type = "button";
+  zoom.textContent = "Zoom";
+  zoom.onclick = function () { lightbox(e); };
+  var dims = document.createElement("div");
+  dims.className = "dims";
+  dims.textContent = e.width + " × " + e.height;
+  shot.append(img, zoom, dims);
+
+  var fields = document.createElement("div");
+  fields.className = "fields";
+
+  if (ann && ann.rationale) {
+    var why = document.createElement("div");
+    why.className = "rationale";
+    why.textContent = "Draft reasoning: " + ann.rationale;
+    fields.append(why);
+  }
+
+  fields.append(field("patternType", "exactly one", combobox({
+    options: VOCAB.patternType, multi: false,
+    get: function () { return L.patternType; },
+    set: function (v) { L.patternType = v; }
+  }), "patternType"));
+
+  fields.append(field("categories", "1–4", combobox({
+    options: VOCAB.categories, multi: true,
+    get: function () { return L.categories; },
+    set: function (v) { L.categories = v; }
+  }), "categories"));
+
+  fields.append(field("components", "1–8, only what is visible", combobox({
+    options: VOCAB.components, multi: true,
+    get: function () { return L.components; },
+    set: function (v) { L.components = v; }
+  }), "components"));
+
+  fields.append(field("domainTags", "1–4", combobox({
+    options: VOCAB.domainTags, multi: true,
+    get: function () { return L.domainTags; },
+    set: function (v) { L.domainTags = v; }
+  }), "domainTags"));
+
+  var row = document.createElement("div");
+  row.className = "grid2";
+  row.append(
+    field("density", "", segmented({
+      options: VOCAB.density, name: "density-" + i,
+      get: function () { return L.visualFields.density; },
+      set: function (v) { L.visualFields.density = v; }
+    }), "density"),
+    field("color-scheme", "", segmented({
+      options: VOCAB["color-scheme"], name: "scheme-" + i,
+      get: function () { return L.visualFields["color-scheme"]; },
+      set: function (v) { L.visualFields["color-scheme"] = v; }
+    }), "color-scheme")
+  );
+  fields.append(row);
+
+  /* critiqueQuality gets its own row — its three option labels are long enough
+     to wrap badly inside a three-up grid. */
+  fields.append(field("critiqueQuality", "how well this screenshot alone supports a critique", segmented({
+    options: VOCAB.critiqueQuality, name: "critique-" + i,
+    get: function () { return L.critiqueQuality; },
+    set: function (v) { L.critiqueQuality = v; }
+  }), "critiqueQuality"));
+
+  var row2 = document.createElement("div");
+  row2.className = "grid2";
+  row2.append(
+    field("layout", "overall column form", combobox({
+      options: VOCAB.layout, multi: false,
+      get: function () { return L.visualFields.layout; },
+      set: function (v) { L.visualFields.layout = v; }
+    }), "layout"),
+    field("typography", "free text", textInput(e.entryId, "typography", "geometric sans, tight tracking"), "typography")
+  );
+  fields.append(row2);
+
+  fields.append(field("accessibilityEvidenceIds", "only if visibly rendered", segmented({
+    options: VOCAB.accessibilityEvidenceIds, name: "a11y-" + i, multi: true,
+    get: function () { return L.accessibilityEvidenceIds; },
+    set: function (v) { L.accessibilityEvidenceIds = v; }
+  })));
+
+  fields.append(gapSection(e.entryId, flagChip));
+
+  body.append(shot, fields);
+  card.append(head, body);
+  app.append(card);
+});
+paint();
+}
+renderAll();
+
+/* ---------- image-bundle preflight banner ----------
+   corpus/images-private/ is gitignored (rights-bound screenshots). A fresh
+   clone has no images, so the labeling sheet shows broken images. This banner
+   detects that and tells the reviewer exactly what they need. The image bundle
+   is delivered separately — see README.md "Image delivery".
+*/
+function showImageBundleBanner() {
+  if (window.__bannerShown) return;
+  var missing = window.__missingImages || 0;
+  if (missing < 3) return; // tolerate 1-2 stragglers; 3+ means the bundle is absent
+  window.__bannerShown = true;
+  var b = document.createElement("div");
+  b.style.cssText = "position:sticky;top:0;z-index:9999;background:#fee;border:2px solid #c33;color:#300;padding:16px 24px;font:14px/1.5 system-ui;margin:0;";
+  b.innerHTML = "<strong>Image bundle missing.</strong> " + missing + " of 40 screenshots failed to load. " +
+    "The <code>corpus/images-private/</code> directory is gitignored (rights-bound). " +
+    "Obtain the image bundle separately and place the 40 PNGs at <code>corpus/images-private/</code> " +
+    "(see <code>eval/c2/label-integrity/packet/README.md</code> → \"Image delivery\"). " +
+    "Labeling without images is not possible.";
+  document.body.insertBefore(b, document.body.firstChild);
+}
+
+/* ---------- lightbox ---------- */
+var lb = document.getElementById("lightbox");
+function lightbox(e) {
+  lb.querySelector("img").src = e.image;
+  lb.querySelector(".cap").textContent = e.entryId + " — " + e.width + " × " + e.height + " — click or press Esc to close";
+  lb.classList.add("on");
+}
+lb.onclick = function () { lb.classList.remove("on"); };
+document.addEventListener("keydown", function (ev) {
+  if (ev.key === "Escape") lb.classList.remove("on");
+});
+
+/* ---------- header controls ---------- */
+var reviewerBox = document.getElementById("reviewer");
+reviewerBox.value = state.__reviewer || "";
+reviewerBox.oninput = function () { state.__reviewer = reviewerBox.value.trim(); save(); };
+
+/* ---------- import / clear ----------
+   Import accepts anything shaped like a reviewer export: a labels array, and
+   optionally vocabularyGaps. Used to review a pre-filled draft in this UI, or
+   to resume from an earlier export on another machine. Only fields the schema
+   knows are copied; anything else in the file is ignored. */
+var VISUAL_KEYS = ["density", "color-scheme", "typography", "layout"];
+function applyImport(raw) {
+  var incoming = Array.isArray(raw) ? raw : raw.labels;
+  if (!Array.isArray(incoming)) { alert("That file has no labels array."); return; }
+  var known = {};
+  for (var i = 0; i < ENTRIES.length; i++) known[ENTRIES[i].entryId] = true;
+
+  var applied = 0, unknown = 0;
+  for (var j = 0; j < incoming.length; j++) {
+    var src = incoming[j];
+    if (!src || !known[src.entryId]) { unknown++; continue; }
+    var dst = state[src.entryId] || (state[src.entryId] = blank());
+    copyLabelInto(dst, src);
+    applied++;
+  }
+
+  var gapCount = 0;
+  if (Array.isArray(raw.vocabularyGaps)) {
+    state.__gaps = {};
+    for (var g = 0; g < raw.vocabularyGaps.length; g++) {
+      var gap = raw.vocabularyGaps[g];
+      if (!known[gap.entryId] || !gap.field || !gap.wanted) continue;
+      if (!state.__gaps[gap.entryId]) state.__gaps[gap.entryId] = [];
+      state.__gaps[gap.entryId].push({ field: gap.field, wanted: gap.wanted, note: gap.note || "" });
+      gapCount++;
+    }
+  }
+
+  save();
+  renderAll();
+  alert("Imported " + applied + " label(s) and " + gapCount + " gap flag(s)." +
+        (unknown ? "\n" + unknown + " entr(y/ies) were skipped — not in this selection." : ""));
+}
+
+document.getElementById("importbtn").onclick = function () {
+  var anyWork = ENTRIES.some(function (e) { return touched(state[e.entryId]); });
+  if (anyWork && !confirm("Importing overwrites the labels currently in this browser. Continue?")) return;
+  document.getElementById("importfile").click();
+};
+document.getElementById("importfile").onchange = function (ev) {
+  var file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function () {
+    try { applyImport(JSON.parse(reader.result)); }
+    catch (err) { alert("Could not read that file: " + err.message); }
+  };
+  reader.readAsText(file);
+  ev.target.value = "";
+};
+
+document.getElementById("clearbtn").onclick = function () {
+  if (!confirm("Wipe every label and flag stored in this browser? This cannot be undone.")) return;
+  for (var i = 0; i < ENTRIES.length; i++) state[ENTRIES[i].entryId] = blank();
+  state.__gaps = {};
+  save();
+  renderAll();
+};
+
+document.getElementById("jump").onclick = function () {
+  for (var i = 0; i < ENTRIES.length; i++) {
+    if (!complete(state[ENTRIES[i].entryId])) {
+      document.getElementById("row-" + ENTRIES[i].entryId).scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+  }
+  alert("All 40 entries are complete.");
+};
+
+window.addEventListener("beforeunload", function (ev) {
+  if (store) return;
+  var any = ENTRIES.some(function (e) { return complete(state[e.entryId]); });
+  if (any) { ev.preventDefault(); ev.returnValue = ""; }
+});
+
+document.getElementById("export").onclick = function () {
+  var reviewer = (state.__reviewer || "").trim();
+  if (!reviewer) { alert("Set a reviewer id first."); return; }
+  var missing = ENTRIES.filter(function (e) { return !complete(state[e.entryId]); });
+  if (missing.length && !confirm(missing.length + " entries are incomplete. Export anyway?")) return;
+  var out = {
+    labelingMethod: "independent-human-review",
+    reviewer: reviewer,
+    selectionArtifactId: SELECTION_ARTIFACT_ID,
+    selectionSha256: SELECTION_SHA,
+    labels: ENTRIES.map(function (e) {
+      var l = state[e.entryId];
+      return {
+        entryId: e.entryId,
+        patternType: l.patternType,
+        categories: l.categories,
+        components: l.components,
+        domainTags: l.domainTags,
+        visualFields: l.visualFields,
+        groundedClaimIds: l.groundedClaimIds,
+        accessibilityEvidenceIds: l.accessibilityEvidenceIds,
+        critiqueQuality: l.critiqueQuality,
+        protectedFieldExpectation: l.protectedFieldExpectation
+      };
+    }),
+    /* Sits beside the labels array, never inside one — EntryLabelSchema is
+       strict, and these must not reach the agreement computation. */
+    vocabularyGaps: ENTRIES.reduce(function (acc, e) {
+      var gaps = gapsFor(e.entryId);
+      for (var i = 0; i < gaps.length; i++) {
+        acc.push({ entryId: e.entryId, field: gaps[i].field, wanted: gaps[i].wanted, note: gaps[i].note });
+      }
+      return acc;
+    }, [])
+  };
+  var url = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2) + "\n"], { type: "application/json" }));
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = "reviewer-" + reviewer + ".json";
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+paint();
+</script>

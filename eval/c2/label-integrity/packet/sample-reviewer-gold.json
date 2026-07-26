@@ -1,0 +1,785 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-independent-label-submission",
+  "artifactId": "c2-submission-reviewer-gold-v1",
+  "selectionArtifactId": "c2-label-integrity-selection-v1",
+  "selectionSha256": "9ed6ff2d74c0078706c67037910a8f3fcd3c519d9f0d724902022ac2acbe00b7",
+  "submissionVersion": 1,
+  "actorId": "reviewer-gold",
+  "actorKind": "human",
+  "reviewerRole": "Gold Label Owner",
+  "sealedAt": "2026-01-01T00:00:00.000Z",
+  "labels": [
+    {
+      "entryId": "hume-hume-12",
+      "patternType": "gallery",
+      "categories": [
+        "dashboard"
+      ],
+      "components": [
+        "sidebar-nav",
+        "top-nav",
+        "media-grid",
+        "icon-button",
+        "avatar"
+      ],
+      "domainTags": [
+        "ai-ml",
+        "developer-tools"
+      ],
+      "visualFields": {
+        "density": "moderate",
+        "color-scheme": "light",
+        "typography": "geometric sans, generous heading scale",
+        "layout": "two-column"
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "strong",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "cash-app-cash-app-42",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "leatherback-co-leatherback-co-group-9d4feb511b-desktop-2026-07-06",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "alan-alan-ios-screens-29-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wealthsimple-wealthsimple-ios-screens-11-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wealthsimple-wealthsimple-ios-screens-64-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "stackai-stackai-web-screens-42-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wealthsimple-wealthsimple-ios-screens-31-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "alan-alan-ios-screens-120-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "alan-alan-ios-screens-109-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "alan-alan-ios-screens-105-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "alan-alan-ios-screens-22-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "mercury-mercury-web-screens-61-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "mercury-mercury-web-screens-55-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wise-wise-32",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "arcade-arcade-web-screens-35-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "arcade-arcade-web-screens-85-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "quicken-quicken-web-screens-9-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "quicken-quicken-web-screens-15-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "arcade-arcade-web-screens-14-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "arcade-arcade-web-screens-72-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "arcade-arcade-web-screens-11-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "cash-app-cash-app-64",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "cash-app-cash-app-44",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "cash-app-cash-app-47",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "paycheck-paycheck-2",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "blui-blui",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "we-we-12",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "workable-workable-8",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "jell-jell",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wise-wise-15",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "workable-workable-24",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "cash-app-cash-app-11",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "projects-projects",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "untitled-untitled-14",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wealthsimple-wealthsimple-ios-screens-40-2026-07-05",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "wise-wise-18",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "workable-workable-2",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "juicebox-juicebox-2",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    },
+    {
+      "entryId": "cash-app-cash-app-4",
+      "patternType": "",
+      "categories": [],
+      "components": [],
+      "domainTags": [],
+      "visualFields": {
+        "density": "",
+        "color-scheme": "",
+        "typography": "",
+        "layout": ""
+      },
+      "groundedClaimIds": [
+        "claim:visual-inspection"
+      ],
+      "accessibilityEvidenceIds": [],
+      "critiqueQuality": "",
+      "protectedFieldExpectation": "unchanged"
+    }
+  ]
+}

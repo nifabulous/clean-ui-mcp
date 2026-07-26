@@ -4,8 +4,8 @@
  * Pass 1 landed contract schemas and the three-package pilot under
  * `eval/c2/pilot/` as provisional foundation work. C2 governance is now
  * declared separately by the readiness recipe and a hash-only evidence
- * manifest; human approvals remain a distinct, later step. The pilot files
- * remain outside browser-downloadable public assets.
+ * manifest; the append-only human approvals remain separate ledger artifacts.
+ * The pilot files remain outside browser-downloadable public assets.
  *
  * The tests pin the boundary between machine-verifiable C2 evidence and human
  * approval, as well as the absence of public-site pilot exposure.
@@ -23,7 +23,7 @@ describe("C2 governance scope boundary", () => {
     expect(Object.keys(CHECKPOINT_POLICIES).sort()).toEqual(["C0", "C1", "C2"]);
   });
 
-  it("tracks only the hash-only C2 evidence manifest before approval", () => {
+  it("tracks the evidence manifest and append-only approval ledgers", () => {
     const governanceRoot = resolve(root, "quality-contracts/agent-readiness");
     const manifest = JSON.parse(
       readFileSync(resolve(governanceRoot, "c2-evidence-manifest-v1.json"), "utf8"),
@@ -31,9 +31,17 @@ describe("C2 governance scope boundary", () => {
     expect(manifest.artifactType).toBe("c2-evidence-manifest");
     expect(manifest.checkpoint).toBe("C2");
     expect(manifest.evidence).toHaveLength(6);
-    expect(
-      readdirSync(governanceRoot).filter((file) => file.startsWith("checkpoint-approvals-v3")),
-    ).toEqual([]);
+    expect(readdirSync(governanceRoot).filter((file) => file.match(/^checkpoint-approvals-v[34]\.json$/))).toEqual([
+      "checkpoint-approvals-v3.json",
+      "checkpoint-approvals-v4.json",
+    ]);
+    const ledger = JSON.parse(
+      readFileSync(resolve(governanceRoot, "checkpoint-approvals-v4.json"), "utf8"),
+    );
+    expect(ledger.approvals.filter((approval: { checkpoint: string }) => approval.checkpoint === "C2").map((approval: { role: string }) => approval.role)).toEqual([
+      "Gold Label Owner",
+      "QA",
+    ]);
   });
 
   it("keeps pilot files outside browser-downloadable public assets", () => {

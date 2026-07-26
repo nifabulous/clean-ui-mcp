@@ -43,7 +43,7 @@ const VISUAL_VOCAB = {
 
 const [, , inputArg, ...rest] = process.argv;
 if (!inputArg) {
-  console.error("usage: validate-reviewer-file.mjs <filled.json> [--out <clean.json>] [--gaps <gaps.json>]");
+  console.error("usage: validate-reviewer-file.mjs <filled.json> [--out <clean.json>] [--gaps <gaps.json>] [--verify-images]");
   process.exit(2);
 }
 const outIndex = rest.indexOf("--out");
@@ -213,6 +213,23 @@ if (errors.length) {
   for (const e of errors.slice(0, 40)) console.error(`  - ${e}`);
   if (errors.length > 40) console.error(`  … and ${errors.length - 40} more`);
   process.exit(1);
+}
+
+// Image-bundle preflight (non-blocking warning): verify every PNG against
+// selection.json's imageSha256. This catches stale/swapped images that would
+// pass validation while referring to the wrong screenshot. Opt-in via
+// --verify-images because the validator may run without the bundle present
+// (CI, post-hoc validation). The labeling-time enforcement is in open-sheet,
+// which refuses to open the sheet if the preflight fails.
+if (rest.includes("--verify-images")) {
+  const { spawnSync } = await import("node:child_process");
+  const preflightExe = path.join(REPO_ROOT, "eval/c2/label-integrity/packet/verify-image-bundle.mjs");
+  const preflight = spawnSync("node", [preflightExe], { encoding: "utf-8" });
+  if (preflight.status !== 0) {
+    console.log(`warn  image-bundle preflight failed (exit ${preflight.status}) — labels may reference wrong screenshots:`);
+    for (const line of (preflight.stdout || "").trim().split("\n")) if (line) console.log(`      ${line}`);
+    console.log("      Run: node eval/c2/label-integrity/packet/verify-image-bundle.mjs");
+  }
 }
 
 console.log(`OK — 40 labels, reviewer "${reviewer}", vocabulary and schema clean.`);

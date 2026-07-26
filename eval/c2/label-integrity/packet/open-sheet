@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Serves the repo over localhost and opens a labeling sheet in a browser.
 #
-#   open-sheet              # the AI draft, pre-filled, for review (default if present)
-#   open-sheet blank        # an empty sheet, for a real reviewer pass
-#   open-sheet draft 8080   # pick the port too
+#   open-sheet              # a BLANK sheet, for an independent reviewer pass (default)
+#   open-sheet draft        # the AI draft, pre-filled, for review/correction
+#   open-sheet blank 8080   # pick the port too
+#
+# The default is BLANK because both reviewers must label independently — opening
+# the AI draft by default risks both reviewers starting from the same pre-filled
+# labels, which inflates agreement. Use 'draft' only when you intentionally want
+# to review/correct the AI's pass.
 #
 # Why serve instead of double-clicking the file: a page opened straight from
 # disk is an "opaque origin", and Safari refuses local storage there — the sheet
@@ -11,7 +16,7 @@
 # normally. Serving also sidesteps any file:// path confusion.
 set -euo pipefail
 
-WHICH="draft"
+WHICH="blank"
 PORT="8765"
 for arg in "$@"; do
   case "$arg" in
@@ -55,6 +60,18 @@ fi
 if [ "$BYTES" -lt 10000 ]; then
   echo "warning: that file looks too small — the packet may not have generated correctly." >&2
 fi
+
+# Image-bundle preflight: verify every screenshot PNG against selection.json's
+# imageSha256 before opening the sheet. A stale or swapped image at a valid
+# path would otherwise produce labels for the wrong screen.
+echo "verifying image bundle..."
+if ! node "$HERE/verify-image-bundle.mjs" --quiet; then
+  echo "error: image bundle preflight failed. Run without --quiet for details:" >&2
+  echo "  node $HERE/verify-image-bundle.mjs" >&2
+  echo "Aborting — do not label against unverified images." >&2
+  exit 1
+fi
+echo "image bundle verified."
 
 cd "$REPO"
 python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 &

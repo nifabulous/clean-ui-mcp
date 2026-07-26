@@ -188,10 +188,12 @@ See `../PROVENANCE.md` for the current state.
 
 | File | Role |
 | --- | --- |
-| `open-sheet` | serves the repo on localhost and opens the sheet — the reliable way in |
+| `open-sheet` | serves the repo on localhost and opens the sheet — the reliable way in. **Default is `blank`** (independent reviewer pass); use `open-sheet draft` to review the AI draft. Runs the image-bundle preflight before opening. |
 | `README.md` | this file |
 | `VOCABULARY.md` | closed vocabulary + tie-break rules — **edit §6 before labeling** |
 | `label.html` | browser labeling sheet, exports a reviewer file |
+| `review-draft.html` | AI draft pre-filled sheet, for review/correction only |
 | `reviewer-template.json` | 40 empty stubs for manual editing |
-| `validate-reviewer-file.mjs` | validates a filled file, emits a clean copy + a gaps report |
+| `validate-reviewer-file.mjs` | validates a filled file, emits a clean copy + a gaps report. Add `--verify-images` to also preflight the image bundle. |
+| `verify-image-bundle.mjs` | preflight: hashes every PNG against `selection.json.imageSha256`. Run before labeling or validation to catch stale/swapped screenshots. |
 | `summarize-gaps.mjs` | merges both reviewers' gap reports into a ranked shortlist |

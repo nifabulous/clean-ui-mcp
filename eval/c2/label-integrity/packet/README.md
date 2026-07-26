@@ -31,13 +31,14 @@ would rather not use a browser.
 
 ### Option A — browser sheet (recommended)
 
-Open `label.html` directly from this directory (double-click, or
-`open eval/c2/label-integrity/packet/label.html`). It shows all 40 screenshots
-with the closed vocabulary as dropdowns and chips — no typing tags, so no
-spelling drift.
+Run `open-sheet` from this directory (or `./open-sheet` from the repo root).
+It verifies the image bundle against the frozen selection before opening the
+sheet. Do not double-click `label.html`, because that bypasses the image-hash
+preflight. It shows all 40 screenshots with the closed vocabulary as dropdowns
+and chips — no typing tags, so no spelling drift.
 
 - Enter your reviewer id at the top first.
-- **Type to filter.** `components` has 28 values and `patternType` 21 — type a
+- **Type to filter.** `components` has 44 values and `patternType` 23 — type a
   few letters, then click or press Enter. Arrow keys move, Backspace on an empty
   box removes the last pick, Escape closes. There is no free-text entry: the
   lists are closed by design.
@@ -109,18 +110,23 @@ npm run build
 node eval/c2/label-integrity/packet/validate-reviewer-file.mjs \
   path/to/reviewer-one.json \
   --out eval/c2/label-integrity/human-labels-gold.json \
-  --gaps eval/c2/label-integrity/gaps-gold.json
+  --gaps eval/c2/label-integrity/gaps-gold.json \
+  --verify-images
 
 node eval/c2/label-integrity/packet/validate-reviewer-file.mjs \
   path/to/reviewer-two.json \
   --out eval/c2/label-integrity/human-labels-qa.json \
-  --gaps eval/c2/label-integrity/gaps-qa.json
+  --gaps eval/c2/label-integrity/gaps-qa.json \
+  --verify-images
 ```
 
 The validator checks entryId set and order against the frozen selection, closed
 vocabulary membership, completeness, and a parse through the production schema.
 It strips the packet-only `_image` / `_cohort` keys, which the strict production
-schema would reject. It exits non-zero on any error and writes nothing.
+schema would reject. When `--out` or `--gaps` is supplied, image verification is
+mandatory and a missing or mismatched PNG exits non-zero before anything is
+written. Diagnostic validation without output may omit `--verify-images` when the
+private bundle is unavailable.
 
 Then compute the four metrics:
 
@@ -191,9 +197,9 @@ See `../PROVENANCE.md` for the current state.
 | `open-sheet` | serves the repo on localhost and opens the sheet — the reliable way in. **Default is `blank`** (independent reviewer pass); use `open-sheet draft` to review the AI draft. Runs the image-bundle preflight before opening. |
 | `README.md` | this file |
 | `VOCABULARY.md` | closed vocabulary + tie-break rules — **edit §6 before labeling** |
-| `label.html` | browser labeling sheet, exports a reviewer file |
+| `label.html` | browser labeling sheet, opened through `open-sheet` after image verification |
 | `review-draft.html` | AI draft pre-filled sheet, for review/correction only |
 | `reviewer-template.json` | 40 empty stubs for manual editing |
-| `validate-reviewer-file.mjs` | validates a filled file, emits a clean copy + a gaps report. Add `--verify-images` to also preflight the image bundle. |
+| `validate-reviewer-file.mjs` | validates a filled file, emits a clean copy + a gaps report. Output mode always preflights the image bundle. |
 | `verify-image-bundle.mjs` | preflight: hashes every PNG against `selection.json.imageSha256`. Run before labeling or validation to catch stale/swapped screenshots. |
 | `summarize-gaps.mjs` | merges both reviewers' gap reports into a ranked shortlist |

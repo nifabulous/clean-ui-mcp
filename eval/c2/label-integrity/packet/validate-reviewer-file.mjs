@@ -50,6 +50,8 @@ const outIndex = rest.indexOf("--out");
 const outPath = outIndex === -1 ? null : rest[outIndex + 1];
 const gapsIndex = rest.indexOf("--gaps");
 const gapsPath = gapsIndex === -1 ? null : rest[gapsIndex + 1];
+const hasOutput = Boolean(outPath || gapsPath);
+const verifyImages = rest.includes("--verify-images") || hasOutput;
 
 const distPath = path.join(REPO_ROOT, "dist/c2/evaluation-contracts.js");
 if (!fs.existsSync(distPath)) {
@@ -215,20 +217,19 @@ if (errors.length) {
   process.exit(1);
 }
 
-// Image-bundle preflight (non-blocking warning): verify every PNG against
-// selection.json's imageSha256. This catches stale/swapped images that would
-// pass validation while referring to the wrong screenshot. Opt-in via
-// --verify-images because the validator may run without the bundle present
-// (CI, post-hoc validation). The labeling-time enforcement is in open-sheet,
-// which refuses to open the sheet if the preflight fails.
-if (rest.includes("--verify-images")) {
+// Image-bundle preflight: verify every PNG against selection.json's imageSha256.
+// A reviewer artifact must never be emitted without this binding. Diagnostic
+// validation without --out/--gaps may omit the check when the private bundle is
+// unavailable (for example, in CI); any command that writes output verifies it.
+if (verifyImages) {
   const { spawnSync } = await import("node:child_process");
   const preflightExe = path.join(REPO_ROOT, "eval/c2/label-integrity/packet/verify-image-bundle.mjs");
   const preflight = spawnSync("node", [preflightExe], { encoding: "utf-8" });
   if (preflight.status !== 0) {
-    console.log(`warn  image-bundle preflight failed (exit ${preflight.status}) — labels may reference wrong screenshots:`);
-    for (const line of (preflight.stdout || "").trim().split("\n")) if (line) console.log(`      ${line}`);
-    console.log("      Run: node eval/c2/label-integrity/packet/verify-image-bundle.mjs");
+    console.error(`\nimage-bundle preflight failed (exit ${preflight.status ?? "unknown"}) — refusing to emit reviewer artifacts:`);
+    for (const line of `${preflight.stdout || ""}\n${preflight.stderr || ""}`.trim().split("\n")) if (line) console.error(`  ${line}`);
+    console.error("  Run: node eval/c2/label-integrity/packet/verify-image-bundle.mjs");
+    process.exit(1);
   }
 }
 

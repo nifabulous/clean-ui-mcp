@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "approval-actor-registry",
+  "artifactId": "actors-c1-v3",
+  "createdAt": "2026-07-26T20:15:01.000Z",
+  "createdByRole": "repository-maintainer",
+  "sourceGitSha": "fcc21fc803863ad19686044f8a1ae01b384546cf",
+  "inputHashes": {},
+  "registryVersion": "3.0",
+  "previousRegistry": {
+    "registryVersion": "2.0",
+    "sha256": "8244c15689a30a8dfc4405a028d8b00e799153d6bb0a0c9a97488533b4a4a286"
+  },
+  "actors": [
+    {
+      "actorId": "impl-agent-1",
+      "actorKind": "agent",
+      "roles": [
+        "Engineering"
+      ]
+    },
+    {
+      "actorId": "repo-maintainer-1",
+      "actorKind": "human",
+      "roles": [
+        "Repository Maintainer",
+        "Product",
+        "Engineering"
+      ]
+    },
+    {
+      "actorId": "pm-1",
+      "actorKind": "human",
+      "roles": [
+        "PM"
+      ]
+    },
+    {
+      "actorId": "reviewer-gold",
+      "actorKind": "human",
+      "roles": [
+        "Gold Label Owner"
+      ]
+    },
+    {
+      "actorId": "reviewer-qa",
+      "actorKind": "human",
+      "roles": [
+        "QA"
+      ]
+    }
+  ],
+  "governanceMode": "separation-of-duties"
+}

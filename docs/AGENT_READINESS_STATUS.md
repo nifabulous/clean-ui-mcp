@@ -1,7 +1,7 @@
 # Agent Readiness — Status
 
-Single source of truth for the Agent Readiness Phases 0–1C checkpoints and the
-C1 executable-contract work. Updated as work lands. The product roadmap
+Single source of truth for the Agent Readiness Phases 0–1C checkpoints, C2
+Gold readiness, and the C1 executable-contract work. Updated as work lands. The product roadmap
 (`ROADMAP.md`) and changelog (`CHANGELOG.md`) reference this file for the
 readiness-specific stream so shipped work and priorities do not drift between
 locations.
@@ -19,7 +19,7 @@ locations.
 |---|---|---|
 | **C0** Foundation freeze | ✅ Closed | Validated by a Git-bound checkpoint recipe that recomputes the canonical target from recorded-commit bytes (see R0). C1 working-tree edits to the live spec/plan do **not** reopen C0. |
 | **C1** Agent contract lock | ✅ Closed | Closed by registry/index/ledger v2 (`quality-contracts/agent-readiness/checkpoint-approvals-v2.json`). The registry v2 declares `sole-maintainer-bootstrap` governance with owner `repo-maintainer-1`; Product and Engineering are two role-specific approvals by that single human identity (not two independent people). C0 prefix remains closed and byte-identical. Runtime still advertises the legacy 14-tool surface by design until Phase 1B. |
-| C2 Gold readiness | ⬜ Open | Pre-C2 grounded-design foundations have landed (see "Pre-C2 grounded-design foundations" below); C2 itself remains open pending gold execution and Gold Label Owner + QA approval. |
+| **C2** Gold readiness | ✅ Closed | Closed by the distinct `reviewer-gold` and `reviewer-qa` approvals in `quality-contracts/agent-readiness/checkpoint-approvals-v4.json`, bound to target `5aed64c695cab715b853ba2219df8b72fffee822607179eea51a488217b4ffed`. Public and private readiness validation pass. |
 | C3 MCP + create_ui_spec + skill | ⬜ Open | Not started (gated on C1). |
 | C4 Terminal 1A outcome + dogfood | ⬜ Open | Not started. |
 | C5 Corpus disposition | ⬜ Open | Not started. |
@@ -84,9 +84,9 @@ The governance pass is complete and C1 is closed: C0/C1 closed-world policies, t
 
 The following grounded-design workspace tasks landed on
 `feat/grounded-design-pre-c2` as **pre-C2 foundation work** — they are
-foundations for the C2 (Gold readiness) checkpoint, **not** C2 completion. C2
-itself remains open pending gold execution and the Gold Label Owner + QA
-approvals named in the parent plan. The design authority for this foundation
+foundations for the C2 (Gold readiness) checkpoint, **not** C2 completion at
+that historical stage. The Gold Label Owner + QA approvals named in the parent
+plan were subsequently recorded. The design authority for this foundation
 work is `docs/superpowers/specs/2026-07-18-grounded-design-workspace-design.md`.
 
 | # | Commit | Description |
@@ -145,9 +145,9 @@ explicitly does **not** close C2.
 - No corpus mutation occurred.
 - No approval was issued.
 
-**Checkpoint state:** **C2 remains Open.** C0 remains Closed and C1 remains
-Closed; Pass 1 added no checkpoint recipe, policy, approval, registry, index, or
-ledger artifact for C2.
+**Historical checkpoint state:** **C2 was Open at Pass 1.** C0 remains Closed
+and C1 remains Closed; the later C2 recipe, evidence manifest, registry/index
+chain, and approval ledger are recorded in the current checkpoint summary above.
 
 **Pass 2:** is the evaluation-harness and pilot-calibration plan and must be
 designed from the Pass 1 evidence (the three pilot packages and the contract
@@ -201,9 +201,9 @@ does **not** execute any paid provider call.
 - No approval or freeze authorization was issued against real evidence.
 - No retagging is authorized; the corpus is unchanged.
 
-**Checkpoint state:** **C2 remains Open.** C0 remains Closed and C1 remains
-Closed; PR 1 added no checkpoint recipe, policy, approval, registry, index, or
-ledger artifact for C2, and mutated no readiness-governance or corpus bytes.
+**Historical checkpoint state:** **C2 was Open at PR 1.** C0 remains Closed and
+C1 remains Closed; the later C2 recipe, evidence manifest, registry/index chain,
+and approval ledger are recorded in the current checkpoint summary above.
 **Paid pilot calibration remains an explicit operational gate** (Task 10 / PR 2):
 it requires freshly verified official pricing, valid provider credentials, real
 human scorecards, and an explicit freeze authorization before any frozen

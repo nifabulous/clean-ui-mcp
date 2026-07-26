@@ -414,6 +414,33 @@ export const ArtifactIndex = BaseArtifactHeader.extend({
   implementationActorIds: z.array(z.string().min(1)).min(1),
 }).strict();
 
+/**
+ * Public C2 evidence inventory. The manifest contains hashes and repository
+ * paths only; the underlying reviewer judgments remain private and are
+ * verified separately in private readiness mode.
+ */
+export const C2EvidenceManifest = BaseArtifactHeader.extend({
+  artifactType: z.literal("c2-evidence-manifest"),
+  checkpoint: z.literal("C2"),
+  evidence: z
+    .array(
+      z
+        .object({
+          artifactId: z.string().min(1),
+          artifactType: z.string().min(1),
+          sha256: Sha256,
+          path: z
+            .string()
+            .regex(/^eval\/c2\/[A-Za-z0-9._/-]+\.json$/)
+            .refine((path) => !path.split("/").includes(".."), {
+              message: "C2 evidence paths may not contain parent-directory traversal",
+            }),
+        })
+        .strict(),
+    )
+    .min(1),
+}).strict();
+
 // ---------------------------------------------------------------------------
 // Discriminated union
 // ---------------------------------------------------------------------------
@@ -425,6 +452,7 @@ export const TrackedArtifact = z.discriminatedUnion("artifactType", [
   ApprovalActorRegistry,
   CheckpointApprovals,
   ArtifactIndex,
+  C2EvidenceManifest,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -613,5 +641,6 @@ export type ApprovalActorRegistryT = z.infer<typeof ApprovalActorRegistry>;
 export type GovernanceModeT = z.infer<typeof GovernanceMode>;
 export type CheckpointApprovalsT = z.infer<typeof CheckpointApprovals>;
 export type ArtifactIndexT = z.infer<typeof ArtifactIndex>;
+export type C2EvidenceManifestT = z.infer<typeof C2EvidenceManifest>;
 export type SnapshotPredecessorT = z.infer<typeof SnapshotPredecessor>;
 export type TrackedArtifactT = z.infer<typeof TrackedArtifact>;

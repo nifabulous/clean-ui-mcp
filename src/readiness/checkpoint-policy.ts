@@ -52,7 +52,7 @@ export interface GitSourceResolver {
 // ---------------------------------------------------------------------------
 
 /** Identifier for a checkpoint whose recipe and policy are declared in code. */
-export type CheckpointId = "C0" | "C1";
+export type CheckpointId = "C0" | "C1" | "C2";
 
 /**
  * The complete recipe for recomputing a checkpoint's canonical target.
@@ -360,6 +360,61 @@ export const C1_RECIPE: CheckpointRecipe = {
 };
 
 // ---------------------------------------------------------------------------
+// C2 recipe — Gold/QA evidence and approval provenance
+// ---------------------------------------------------------------------------
+
+/**
+ * C2 source bindings are anchored to the reviewed tree that already contains
+ * the Pass 3 plan, gold-readiness spec, and C2 implementation. The readiness
+ * recipe itself is validator policy; the bound C2 sources below are the
+ * artifacts the Gold/QA approval is claiming to review.
+ */
+export const C2_SOURCE_GIT_SHA = "fcc21fc803863ad19686044f8a1ae01b384546cf";
+
+const C2_PLAN_BINDING: CheckpointSourceBinding = {
+  key: "c2-pass3-plan.md",
+  repositoryPath: "docs/superpowers/plans/2026-07-22-c2-pass3-execution-and-closure.md",
+  gitCommit: C2_SOURCE_GIT_SHA,
+};
+
+const C2_SPEC_BINDING: CheckpointSourceBinding = {
+  key: "c2-gold-readiness-spec.md",
+  repositoryPath: "docs/superpowers/specs/2026-07-19-c2-gold-readiness-design.md",
+  gitCommit: C2_SOURCE_GIT_SHA,
+};
+
+const C2_CONTRACT_BINDINGS: readonly CheckpointSourceBinding[] = [
+  { key: "src/c2/candidate-contracts.ts", repositoryPath: "src/c2/candidate-contracts.ts", gitCommit: C2_SOURCE_GIT_SHA },
+  { key: "src/c2/case-contracts.ts", repositoryPath: "src/c2/case-contracts.ts", gitCommit: C2_SOURCE_GIT_SHA },
+  { key: "src/c2/condition-contracts.ts", repositoryPath: "src/c2/condition-contracts.ts", gitCommit: C2_SOURCE_GIT_SHA },
+  { key: "src/c2/evaluation-contracts.ts", repositoryPath: "src/c2/evaluation-contracts.ts", gitCommit: C2_SOURCE_GIT_SHA },
+  { key: "src/c2/governance-contracts.ts", repositoryPath: "src/c2/governance-contracts.ts", gitCommit: C2_SOURCE_GIT_SHA },
+  { key: "src/c2/remediation-contracts.ts", repositoryPath: "src/c2/remediation-contracts.ts", gitCommit: C2_SOURCE_GIT_SHA },
+  { key: "src/c2/closure-evaluator.ts", repositoryPath: "src/c2/closure-evaluator.ts", gitCommit: C2_SOURCE_GIT_SHA },
+  { key: "src/c2/label-agreement.ts", repositoryPath: "src/c2/label-agreement.ts", gitCommit: C2_SOURCE_GIT_SHA },
+];
+
+export const C2_ARTIFACTS = [
+  { artifactId: "actors-c1-v3", artifactType: "approval-actor-registry" },
+  { artifactId: "index-c1-v3", artifactType: "artifact-index" },
+  { artifactId: "c2-evidence-v1", artifactType: "c2-evidence-manifest" },
+] as const;
+
+/** C2 closes only with distinct Gold Label Owner and QA actors. */
+export const C2_RECIPE: CheckpointRecipe = {
+  checkpoint: "C2",
+  baselineGitSha: C0_BASELINE_GIT_SHA,
+  sourceGitSha: C2_SOURCE_GIT_SHA,
+  artifacts: C2_ARTIFACTS,
+  planBinding: C2_PLAN_BINDING,
+  specBinding: C2_SPEC_BINDING,
+  contractBindings: C2_CONTRACT_BINDINGS,
+  inputHashKeys: [],
+  inputHashBindings: [],
+  targetIncludesInputHashes: false,
+};
+
+// ---------------------------------------------------------------------------
 // Closed-world policies — derived from recipes, no duplicated keys
 // ---------------------------------------------------------------------------
 
@@ -399,10 +454,18 @@ export const CHECKPOINT_POLICIES: Record<CheckpointId, CheckpointPolicy> = {
     requiredInputHashKeys: C1_RECIPE.inputHashKeys,
     requiredRoles: ["Product", "Engineering"],
   },
+  C2: {
+    requiredArtifactTypes: artifactTypes(C2_RECIPE),
+    requiredSourceKeys: sourceKeys(C2_RECIPE),
+    requiredContractKeys: contractKeys(C2_RECIPE),
+    requiredInputHashKeys: C2_RECIPE.inputHashKeys,
+    requiredRoles: ["Gold Label Owner", "QA"],
+  },
 };
 
 /** All known recipes keyed by checkpoint id. */
 export const CHECKPOINT_RECIPES: Record<CheckpointId, CheckpointRecipe> = {
   C0: C0_RECIPE,
   C1: C1_RECIPE,
+  C2: C2_RECIPE,
 };

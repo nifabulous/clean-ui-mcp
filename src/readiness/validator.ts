@@ -492,6 +492,11 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
       }
     }
 
+    // C2's public evidence manifest contains only hashes and repo-relative
+    // paths. In private mode, resolve those paths and verify the underlying
+    // ignored evidence bytes before any C2 approval can contribute to closure.
+    verifyPrivateC2Evidence(artifacts, opts, issues);
+
     // 8. Approvals and checkpoint closure
     if (ledgerEntry && registry) {
       validateApprovalsAndCheckpoint(
@@ -568,6 +573,78 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
     checkedArtifacts: artifacts.size,
     issues,
   };
+}
+
+function verifyPrivateC2Evidence(
+  artifacts: Map<string, ParsedArtifact>,
+  opts: ValidateReadinessOptions,
+  issues: ValidationIssue[],
+): void {
+  if (opts.mode !== "private") return;
+
+  const manifest = [...artifacts.values()].find(
+    (entry) => entry.type === "c2-evidence-manifest",
+  );
+  if (!manifest) return;
+
+  const repoRoot = realpathSync(resolve(opts.repoRoot ?? opts.artifactRoot));
+  const evidence = (manifest.data.evidence as Array<Record<string, string>>) ?? [];
+  for (const ref of evidence) {
+    const relativePath = ref.path;
+    const filePath = resolve(repoRoot, relativePath);
+    const relativeToRoot = relative(repoRoot, filePath);
+    if (
+      relativeToRoot.startsWith(".." + sep) ||
+      relativeToRoot === ".." ||
+      relativeToRoot.startsWith(sep)
+    ) {
+      issues.push({
+        code: "c2-evidence-path-escape",
+        artifactId: String(manifest.data.artifactId),
+        path: relativePath,
+        message: `C2 evidence path escapes the repository root: ${relativePath}`,
+      });
+      continue;
+    }
+
+    try {
+      const realPath = realpathSync(filePath);
+      const realRelative = relative(repoRoot, realPath);
+      if (
+        realRelative.startsWith(".." + sep) ||
+        realRelative === ".." ||
+        realRelative.startsWith(sep)
+      ) {
+        throw new Error("resolved path escapes repository root");
+      }
+      const actualSha = fileSha256(realPath);
+      if (actualSha !== ref.sha256) {
+        issues.push({
+          code: "c2-evidence-hash-mismatch",
+          artifactId: String(manifest.data.artifactId),
+          path: relativePath,
+          message: `C2 evidence ${relativePath} hash ${actualSha} does not match manifest ${ref.sha256}`,
+        });
+        continue;
+      }
+      const raw = JSON.parse(readFileSync(realPath, "utf-8")) as Record<string, unknown>;
+      if (raw.artifactId !== ref.artifactId || raw.artifactType !== ref.artifactType) {
+        issues.push({
+          code: "c2-evidence-identity-mismatch",
+          artifactId: String(manifest.data.artifactId),
+          path: relativePath,
+          message: `C2 evidence ${relativePath} identity does not match ${ref.artifactId}/${ref.artifactType}`,
+        });
+      }
+    } catch (error) {
+      issues.push({
+        code: "c2-evidence-unavailable",
+        artifactId: String(manifest.data.artifactId),
+        path: relativePath,
+        message: `cannot resolve C2 evidence ${relativePath}: ${(error as Error).message}`,
+      });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

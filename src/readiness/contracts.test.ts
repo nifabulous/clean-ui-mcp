@@ -10,6 +10,7 @@ import {
   ApprovalActorRegistry,
   CheckpointApprovals,
   ArtifactIndex,
+  C2EvidenceManifest,
   TrackedArtifact,
   sha256Hex,
   canonicalJsonStringify,
@@ -681,6 +682,40 @@ describe("ArtifactIndex", () => {
         { artifactId: "phase0-20260714", artifactType: "phase0-summary", sha256: VALID_SHA256, path: "x.json" },
       ],
       implementationActorIds: [],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("C2EvidenceManifest", () => {
+  it("accepts hash-only C2 evidence references", () => {
+    const result = C2EvidenceManifest.safeParse({
+      ...baseHeader("c2-evidence-manifest", "c2-evidence-v1"),
+      checkpoint: "C2",
+      evidence: [
+        {
+          artifactId: "c2-submission-reviewer-gold-v1",
+          artifactType: "c2-independent-label-submission",
+          sha256: VALID_SHA256,
+          path: "eval/c2/label-integrity/parent-evidence/reviewer-gold-pass3.json",
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects absolute or traversing evidence paths", () => {
+    const result = C2EvidenceManifest.safeParse({
+      ...baseHeader("c2-evidence-manifest", "c2-evidence-v1"),
+      checkpoint: "C2",
+      evidence: [
+        {
+          artifactId: "evidence",
+          artifactType: "c2-evidence",
+          sha256: VALID_SHA256,
+          path: "eval/c2/../evidence.json",
+        },
+      ],
     });
     expect(result.success).toBe(false);
   });

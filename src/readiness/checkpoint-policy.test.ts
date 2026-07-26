@@ -14,7 +14,9 @@ describe("checkpoint recipes", () => {
     expect(C1_CONTRACT_SHA).toBe("022a3f229a4aeba74b9b140142fd2d3a0aa6c4be");
     expect(C1_MERGE_SHA).toBe("7609e3c14daddd4448d6bdf37c9a6a337a7241d0");
     expect(C1_RECIPE.sourceGitSha).toBe(C1_CONTRACT_SHA);
-    expect(CHECKPOINT_RECIPES).toEqual({ C0: C0_RECIPE, C1: C1_RECIPE });
+    expect(CHECKPOINT_RECIPES).toHaveProperty("C0", C0_RECIPE);
+    expect(CHECKPOINT_RECIPES).toHaveProperty("C1", C1_RECIPE);
+    expect(CHECKPOINT_RECIPES).toHaveProperty("C2");
   });
 
   it("binds every C1 contract source to the reviewed commit", () => {
@@ -63,6 +65,12 @@ describe("checkpoint recipes", () => {
     expect(CHECKPOINT_POLICIES.C1.requiredArtifactTypes).toEqual([
       "approval-actor-registry",
       "artifact-index",
+    ]);
+    expect(CHECKPOINT_POLICIES.C2.requiredRoles).toEqual(["Gold Label Owner", "QA"]);
+    expect(CHECKPOINT_POLICIES.C2.requiredArtifactTypes).toEqual([
+      "approval-actor-registry",
+      "artifact-index",
+      "c2-evidence-manifest",
     ]);
   });
 });

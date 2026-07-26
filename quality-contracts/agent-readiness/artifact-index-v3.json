@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "artifact-index",
+  "artifactId": "index-c1-v3",
+  "createdAt": "2026-07-26T20:15:01.000Z",
+  "createdByRole": "repository-maintainer",
+  "sourceGitSha": "fcc21fc803863ad19686044f8a1ae01b384546cf",
+  "inputHashes": {},
+  "artifacts": [
+    {
+      "artifactId": "actors-20260714",
+      "artifactType": "approval-actor-registry",
+      "sha256": "7e849be131f34928e8191bea8ebefe5fb8e690a7e9f64b103e434767acafa45d",
+      "path": "quality-contracts/agent-readiness/approval-actor-registry-v1.json"
+    },
+    {
+      "artifactId": "ownership-20260714",
+      "artifactType": "ownership-map",
+      "sha256": "4e32063e9ab6e7e8f4621c6f8d92e69e000892c7bac47b16d47417619dc060f1",
+      "path": "quality-contracts/agent-readiness/ownership-map-v1.json"
+    },
+    {
+      "artifactId": "phase0-20260714",
+      "artifactType": "phase0-summary",
+      "sha256": "cbaafd09f35ca4aff3842a8a1bc2ab20aafe82130a5af095556684e570cac1dd",
+      "path": "quality-contracts/agent-readiness/phase0-summary-v1.json"
+    },
+    {
+      "artifactId": "taxonomy-20260714",
+      "artifactType": "taxonomy-digest",
+      "sha256": "58d612d11acbaa5ab751d34e69e35d3bdf3f758192c9845f14825ee23c407dfb",
+      "path": "quality-contracts/agent-readiness/taxonomy-digest-v1.json"
+    },
+    {
+      "artifactId": "actors-c1-v2",
+      "artifactType": "approval-actor-registry",
+      "sha256": "8244c15689a30a8dfc4405a028d8b00e799153d6bb0a0c9a97488533b4a4a286",
+      "path": "quality-contracts/agent-readiness/approval-actor-registry-v2.json"
+    },
+    {
+      "artifactId": "actors-c1-v3",
+      "artifactType": "approval-actor-registry",
+      "sha256": "1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6",
+      "path": "quality-contracts/agent-readiness/approval-actor-registry-v3.json"
+    },
+    {
+      "artifactId": "c2-evidence-v1",
+      "artifactType": "c2-evidence-manifest",
+      "sha256": "ac5b06d749b4b2f6dea4d5e06db473d4a765bbbf70720e16a08efebc1198c76e",
+      "path": "quality-contracts/agent-readiness/c2-evidence-manifest-v1.json"
+    }
+  ],
+  "implementationActorIds": [
+    "impl-agent-1"
+  ],
+  "ordinalVersion": 3,
+  "predecessor": {
+    "version": "2",
+    "sha256": "a2d0c874bc8d336ebd6a65bfcbfd3dfdd6a09cfab8494d430380b8ebfbf05898"
+  }
+}

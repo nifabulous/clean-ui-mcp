@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "c2-evidence-manifest",
+  "artifactId": "c2-evidence-v1",
+  "createdAt": "2026-07-26T20:15:01.000Z",
+  "createdByRole": "repository-maintainer",
+  "sourceGitSha": "fcc21fc803863ad19686044f8a1ae01b384546cf",
+  "inputHashes": {},
+  "checkpoint": "C2",
+  "evidence": [
+    {
+      "artifactId": "c2-label-integrity-selection-v1",
+      "artifactType": "c2-label-integrity-selection",
+      "sha256": "9ed6ff2d74c0078706c67037910a8f3fcd3c519d9f0d724902022ac2acbe00b7",
+      "path": "eval/c2/label-integrity/selection.json"
+    },
+    {
+      "artifactId": "c2-submission-reviewer-gold-v1",
+      "artifactType": "c2-independent-label-submission",
+      "sha256": "616cf46a502eb7be96937c1d93926be5d2fdf0676160ff01ea0b29cb0a275d45",
+      "path": "eval/c2/label-integrity/parent-evidence/reviewer-gold-pass3.json"
+    },
+    {
+      "artifactId": "c2-submission-reviewer-qa-v1",
+      "artifactType": "c2-independent-label-submission",
+      "sha256": "2f23f41e881fbc910f8c0b2bf1dca4ff582786345241cb1c2cb45b58706a65e7",
+      "path": "eval/c2/label-integrity/parent-evidence/reviewer-qa-pass3.json"
+    },
+    {
+      "artifactId": "c2-label-integrity-baseline-metrics-v1",
+      "artifactType": "c2-label-integrity-baseline-metrics",
+      "sha256": "d7100f324352ab8b7b96be0c364f3f5bfb6274e384a98ce1c529ff1a57f66e94",
+      "path": "eval/c2/label-integrity/baseline-metrics.json"
+    },
+    {
+      "artifactId": "c2-adjudication-v1",
+      "artifactType": "c2-label-agreement-adjudication",
+      "sha256": "6992be78c7908e766807611313a4175f2e56e9678af0d2ce8b7bfe3873421f6a",
+      "path": "eval/c2/label-integrity/adjudication.json"
+    },
+    {
+      "artifactId": "c2-label-agreement-report-v1",
+      "artifactType": "c2-label-agreement-report",
+      "sha256": "1bb34cc7476d9d37bfe1ab11f0f075f1a6e2016773831f6a5df28d583ae3a047",
+      "path": "eval/c2/label-integrity/agreement-report.json"
+    }
+  ]
+}

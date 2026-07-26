@@ -1,7 +1,8 @@
 # C2 label-integrity — reviewer packet
 
-Two reviewers independently label the same 40 UI screenshots. Their agreement
-becomes the baseline floor for the C2 Pass 3 label-integrity gate.
+Two reviewers independently label the same 40 UI screenshots. Their observed
+agreement is evaluated against the separate, parent-authority baseline-metrics
+artifact for the C2 Pass 3 label-integrity gate.
 
 ## Before anyone labels — operator checklist
 
@@ -12,13 +13,15 @@ becomes the baseline floor for the C2 Pass 3 label-integrity gate.
    embedded in `label.html` / `reviewer-template.json` before reviewers begin.
    The browser sheet shows a red banner if images are missing. **Do not commit
    private images without rights clearance.**
-2. **Edit the tie-break rules.** `VOCABULARY.md` §6 is a draft written from a
-   prior labeling that scored only 0.625 agreement on `patternType`. Decide each
-   rule, then freeze the file. Changing rules mid-labeling invalidates completed
-   passes.
-3. **Pick two distinct reviewers.** They need different `reviewer` ids. If one
-   person does both passes, that is sole-operator mode — self-consistency, not
-   independent validation — and must be recorded as such.
+2. **Freeze the tie-break rules.** `VOCABULARY.md` §6 contains rules derived
+   from diagnostic disagreement analysis, not a canonical baseline. Review and
+   freeze each rule before labeling. Changing rules mid-labeling invalidates
+   completed passes.
+3. **Pick two distinct reviewers.** They need distinct human actor IDs and
+   canonical roles in their sealed submission envelopes. Different display
+   names alone are not evidence of independence. If one person does both
+   passes, that is sole-operator mode — self-consistency, not independent
+   validation — and must be recorded as such.
 4. **Decide directionality and keep it.** Reviewer 1 is *gold* (predicted),
    reviewer 2 is *qa* (reference). Swapping them changes both recall values.
 5. **Build once:** `npm run build`. The validator refuses to run without
@@ -109,12 +112,14 @@ npm run build
 
 node eval/c2/label-integrity/packet/validate-reviewer-file.mjs \
   path/to/reviewer-one.json \
+  --strict \
   --out eval/c2/label-integrity/human-labels-gold.json \
   --gaps eval/c2/label-integrity/gaps-gold.json \
   --verify-images
 
 node eval/c2/label-integrity/packet/validate-reviewer-file.mjs \
   path/to/reviewer-two.json \
+  --strict \
   --out eval/c2/label-integrity/human-labels-qa.json \
   --gaps eval/c2/label-integrity/gaps-qa.json \
   --verify-images
@@ -123,12 +128,25 @@ node eval/c2/label-integrity/packet/validate-reviewer-file.mjs \
 The validator checks entryId set and order against the frozen selection, closed
 vocabulary membership, completeness, and a parse through the production schema.
 It strips the packet-only `_image` / `_cohort` keys, which the strict production
-schema would reject. When `--out` or `--gaps` is supplied, image verification is
-mandatory and a missing or mismatched PNG exits non-zero before anything is
-written. Diagnostic validation without output may omit `--verify-images` when the
-private bundle is unavailable.
+schema would reject.
 
-Then compute the four metrics:
+**`--strict` is required when emitting output (`--out` / `--gaps`)**. It validates
+the reviewer's file as a complete `C2IndependentLabelSubmission` — not just the
+labels, but the full envelope: `actorId`, `actorKind`, `reviewerRole`, `sealedAt`,
+`submissionVersion`, `artifactId`, `artifactType`. A file that is only labels
+(missing the envelope) cannot produce a clean artifact. Without `--strict`, the
+validator runs in diagnostic mode (labels only) — useful for checking vocabulary
+and schema shape on a draft, but it does not confirm the file is a valid
+submission.
+
+When `--out` or `--gaps` is supplied, image verification is mandatory and a
+missing or mismatched PNG exits non-zero before anything is written. Diagnostic
+validation without output may omit `--verify-images` when the private bundle is
+unavailable.
+
+Then compute the four observed agreement metrics. These values describe this
+reviewer pair; they do **not** create or replace the parent-authority
+`baseline-metrics.json` artifact.
 
 ```bash
 node scripts/compute-baseline-metrics.mjs \
@@ -138,10 +156,11 @@ node scripts/compute-baseline-metrics.mjs \
 
 ## Vocabulary gaps — the corpus-enrichment output
 
-The closed lists come from the corpus taxonomy, which was machine-generated and
-is demonstrably incomplete (37 corpus entries describe a bottom nav or tab bar
-that the component list has no tag for). Reviewers therefore pick the nearest
-value **and** flag what was missing, via the ⚑ control on each entry.
+The closed lists began with the machine-generated corpus taxonomy and remain
+deliberately finite. Earlier corpus audits found primitives that taxonomy could
+not represent; some, including `bottom-nav`, are now in the measurement list,
+while others remain gap candidates. Reviewers therefore pick the nearest value
+**and** flag what was missing, via the ⚑ control on each entry.
 
 Those flags travel in a `vocabularyGaps` array beside the labels, never inside
 them — `EntryLabelSchema` is strict and the agreement computation never sees
@@ -160,14 +179,17 @@ evidence base for a **separate** corpus-enrichment pass.
 
 Keep the two jobs apart. Measurement wants a narrow, unambiguous vocabulary
 (maximum agreement, clean floor); enrichment wants a rich one (captures what is
-actually on screen). Enriching mid-measurement serves neither, and note the
-direction of the damage: `components-recall` and `domain-tags-recall` have no
-fixed floor, so a wider list lowers their baseline and **loosens** the gate.
+actually on screen). Enriching mid-measurement serves neither: a wider list can
+lower the pair's observed agreement, and changing it after labeling invalidates
+the pass. It does not rewrite the parent-authority baseline or legitimately
+loosen the gate.
 
-Finally, repoint `sourceArtifactRefs` in
-`eval/c2/label-integrity/baseline-metrics.json` at the two new files, refresh
-their `sha256` values, update `PROVENANCE.md`, and recompute
-`baselineMetricsSha256` last. Nothing else in the pipeline changes.
+Keep the two artifacts' exact paths and hashes in the agreement inputs. Do not
+repoint `sourceArtifactRefs` in
+`eval/c2/label-integrity/baseline-metrics.json` at these submissions: that file
+must remain derived from parent-authority evidence. If parent-authority evidence
+is still missing, the label-agreement gate remains blocked even when both
+reviewer submissions are valid.
 
 ## Reading the result
 
@@ -178,16 +200,18 @@ under-specified for this corpus, and the fix is tighter rules in `VOCABULARY.md`
 Note which way the floors move. `pattern-type-exact-accuracy` and
 `categories-macro-f1` resolve to `max(fixedFloor, baseline)` against fixed
 floors of 0.90 and 0.85, so a weak baseline there is absorbed.
-`components-recall` and `domain-tags-recall` have **no** fixed floor — whatever
-the two reviewers agree on becomes the entire bar.
+`components-recall` and `domain-tags-recall` have **no** fixed floor — the
+parent-authority baseline value is the entire bar. The current pair's observed
+agreement is compared with that bar; it does not redefine it.
 
 ## Provenance
 
-Whoever labels, record honestly what happened. Two independent humans is a fresh
-independently-authored baseline, not an inherited prior consensus freeze — the
-spec's parent-authority requirement asks for evidence that exists independently
-of Pass 3, and a baseline created now to unblock the gate is still somewhat
-circular. Nothing in the code checks any of this; it is entirely an attestation.
+Whoever labels, record honestly what happened. Two independent humans produce a
+valid reviewer pair for the agreement computation, not parent-authority baseline
+evidence. The spec requires the baseline-metrics artifact to exist independently
+of Pass 3; a baseline created now from these submissions would be circular and
+must not be used. Nothing in the code can establish that provenance; it is an
+attestation that must be backed by the delivery packet.
 See `../PROVENANCE.md` for the current state.
 
 ## Files
@@ -200,6 +224,6 @@ See `../PROVENANCE.md` for the current state.
 | `label.html` | browser labeling sheet, opened through `open-sheet` after image verification |
 | `review-draft.html` | AI draft pre-filled sheet, for review/correction only |
 | `reviewer-template.json` | 40 empty stubs for manual editing |
-| `validate-reviewer-file.mjs` | validates a filled file, emits a clean copy + a gaps report. Output mode always preflights the image bundle. |
+| `validate-reviewer-file.mjs` | validates a filled file, emits a clean copy + a gaps report. `--strict` (required for `--out`) validates the full `C2IndependentLabelSubmission` envelope. Output mode always preflights the image bundle. |
 | `verify-image-bundle.mjs` | preflight: hashes every PNG against `selection.json.imageSha256`. Run before labeling or validation to catch stale/swapped screenshots. |
 | `summarize-gaps.mjs` | merges both reviewers' gap reports into a ranked shortlist |

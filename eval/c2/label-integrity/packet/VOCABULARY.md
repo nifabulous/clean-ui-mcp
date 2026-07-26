@@ -37,6 +37,12 @@ screen's nature with the closest categories value instead (e.g. a `modal`
 sign-in dialog is `patternType: modal`, `categories: [auth]`, not
 `categories: [modal]`).
 
+Use one category by default. Add a second only when the screen genuinely spans
+two distinct patterns. Use three or four only when each one describes a
+substantial, visible part of the screen; do not add categories merely because
+the product or its chrome could be described that way. This is guidance only:
+the schema still permits 1–4 values.
+
 ## 3. components — 1 to 8, only what is visibly rendered
 
 ```
@@ -53,6 +59,23 @@ timeline  toggle-switch  top-nav
 Do not infer components that are plausibly present but not on screen. If a chart
 type is unclear, use the generic `chart` rather than guessing `line-chart`.
 
+### Component disambiguation
+
+Use the narrowest visibly supported value. These close pairs are deliberately
+different:
+
+| Component | Use it when | Do not use it for |
+| --- | --- | --- |
+| `kpi-card` | A compact tile shows one quantitative metric and its label, such as `Revenue $12,450`. | A general account, status, or descriptive summary without one primary metric. |
+| `summary-card` | A compact tile summarizes an account, status, balance, or state. | A repeated collection of cards or a single isolated metric tile. |
+| `card-list` | A visible collection of repeated cards is arranged as a list or grid. | One card, or a page that merely contains several unrelated panels. |
+| `cta-button` | The primary conversion or promotional action on a marketing, upsell, or feature-education screen. | The main submit or confirm action inside a functional workflow. |
+| `primary-button` | The main submit, confirm, or task action in a functional workflow. | A promotional action whose role is conversion rather than task completion. |
+
+`card-list` describes the collection; `kpi-card` and `summary-card` describe its
+visible children. Use both only when both levels are actually rendered and
+clear. Do not infer a component from a likely interaction that is not visible.
+
 ## 4. domainTags — 1 to 4
 
 ```
@@ -64,6 +87,12 @@ social
 
 Tag the product's domain, not the screen's function. A payments company's
 settings page is still `fintech` / `payments`.
+
+Tag the product's primary domain and at most one clearly evidenced secondary
+domain. Do not add `banking` to every fintech or payments screen: use it only
+when accounts, cards, balances, or banking operations are a distinct visible
+function. `payments` describes money moving between parties; `banking`
+describes holding or managing money.
 
 Unlike the three lists above, this one is **not** inherited from the corpus
 taxonomy — the corpus populates `domainTags` on only 2 of the 40 entries. It was
@@ -120,17 +149,18 @@ element — consistent with the §6a overlay rule.
 
 ## 6. Tie-break rules for `patternType`
 
-These are not hypothetical. A prior two-pass labeling of this exact 40-entry
-selection scored **0.625** exact agreement on `patternType`, and 15 of the 15
-disagreements fell into the three patterns below. Settle them here or repeat the
-result.
+The rules below come from a diagnostic disagreement analysis of this selection.
+The underlying reviewer files were not a canonical, independently sealed pair,
+so its counts and metrics are not a baseline and must not be used as evidence
+for the C2 gate. The rules are being recorded because they address recurring
+ambiguities; freeze this document before the next labeling pass.
 
-### 6a. Overlay vs. what is underneath — 6 of 15 disagreements
+### 6a. Overlay vs. what is underneath
 
-Cases seen: `modal` vs `auth`, `modal` vs `forms` (×2 each), `modal` vs
-`dashboard`, `modal` vs `search`.
+Diagnostic examples included `modal` vs `auth`, `modal` vs `forms`,
+`modal` vs `dashboard`, and `modal` vs `search`.
 
-**Rule (draft): the overlay wins.** If a dialog, sheet, or drawer is the focused
+**Rule: the overlay wins.** If a dialog, sheet, or drawer is the focused
 foreground element, `patternType` is `modal` regardless of what it contains or
 what is dimmed behind it. Record the content's nature in `categories` — a
 sign-in dialog is `patternType: modal`, `categories: [auth]`.
@@ -139,32 +169,31 @@ Note that `modal` exists in the §1 patternType list but **not** in the §2
 categories list, because §2 is the corpus taxonomy verbatim and the corpus has
 no such category. So do not try to repeat `modal` in `categories`; `patternType`
 already carries it. Add `modal-dialog` to `components` instead — that one does
-exist, and it is where the overlay shows up as a rendered element.
+exist, and it is where the overlay shows up as a rendered element. If you are
+tempted to classify by the dialog's content, remember: content goes in
+`categories`; the focused overlay determines `patternType`.
 
-*Invert this if you would rather classify by purpose — but then `modal` should
-be used only for a dialog whose content has no better label.*
+### 6b. `onboarding` as a catch-all
 
-### 6b. `onboarding` as a catch-all — 8 of 15 disagreements
+Diagnostic examples included `onboarding` paired against `empty-state`,
+`editor-canvas`, `forms`, `modal`, and `dashboard`.
 
-Cases seen: `onboarding` paired against `empty-state` (×3), `editor-canvas`,
-`forms`, `modal`, `dashboard`.
-
-**Rule (draft): `onboarding` requires visible first-run scaffolding** — a step
+**Rule: `onboarding` requires visible first-run scaffolding** — a step
 indicator, a numbered progress trail, an explicit welcome/setup heading, or a
 skip control. A screen that is merely unpopulated, or that a new user happens to
 meet first, is not `onboarding`. Label it by what it structurally is.
 
-### 6c. `empty-state` vs the populated pattern — 3 of 15 disagreements
+### 6c. `empty-state` vs the populated pattern
 
-**Rule (draft): `empty-state` wins when the screen's primary content region is
+**Rule: `empty-state` wins when the screen's primary content region is
 empty and shows a zero-state message or illustration.** Chrome that is still
 visible (nav, sidebar) goes in `components`, not `patternType`.
 
 ### 6d. Chrome vs content
 
-Seen once as `mobile-nav` vs `dashboard`.
+Diagnostic example: `mobile-nav` vs `dashboard`.
 
-**Rule (draft): classify by the content region, not the chrome.** A dashboard
+**Rule: classify by the content region, not the chrome.** A dashboard
 behind a top nav is `dashboard`; `top-nav` goes in `components`. Use
 `navigation` or `mobile-nav` as `patternType` only when navigation *is* the
 screen — a full-screen menu, a nav drawer covering the viewport.
@@ -180,27 +209,30 @@ which is the point.
 Two values were added to §1 to resolve recurring gaps flagged across the
 40-entry selection:
 
-- **`gallery`** — a browsable catalog or grid of items grouped for browsing,
-  where browsing/discovery is the primary purpose (not metrics or status).
-  Use when the screen is a browsable collection of presets, products, or
-  assets. Distinguishes from `dashboard` (which implies metrics/KPIs) and
-  `data-table` (which implies rows of structured data).
+- **`gallery`** — a browsable catalog or grid of non-metric items grouped for
+  discovery, such as presets, products, integrations, or assets. Use it when
+  browsing the items is the primary purpose. If KPI or metric tiles are the
+  primary content, use `dashboard`; if rows of structured records are the
+  primary content, use `data-table`.
 
 - **`interstitial`** — a dismissible full-screen in-app promotional or
-  feature-education screen. Use for authenticated in-product upsells,
-  feature intros, and dismissible education overlays. Distinguishes from
-  `marketing-hero` (which implies a public marketing/landing page) and
-  `onboarding` (which requires first-run scaffolding per §6b).
+  feature-education screen whose primary purpose is promotion or education.
+  Use it for authenticated upsells, feature introductions, and dismissible
+  education overlays. Do not use it for a functional screen that merely fills
+  the viewport: use `checkout`, `profile`, `forms`, or another content pattern
+  when that is the screen's primary purpose. It also differs from
+  `marketing-hero` (public marketing/landing content) and `onboarding` (which
+  requires first-run scaffolding per §6b).
 
 ## 7. When nothing in a list fits — flag the gap
 
 **These lists are known to be incomplete.** They were lifted from the corpus
 taxonomy, and that taxonomy was machine-generated: across the 40 entries,
 `provenance.taggedBy` is `auto` on 24, absent on 15 and `auto-reviewed` on 1.
-It already fails its own coverage — 37 corpus entries have written critiques
-describing a bottom navigation or tab bar, and there is no such component in the
-list. `carousel`, `list-row`, `avatar`, `badge`, `stepper` and `breadcrumb` are
-missing too.
+An earlier audit found many descriptions of bottom navigation, tab bars, and
+other primitives that the original taxonomy could not represent. The current
+measurement vocabulary now includes `bottom-nav`, `carousel`, `list-row`,
+`avatar`, `badge`, and `stepper`; `breadcrumb` remains unrepresented.
 
 So when no option is right:
 
@@ -208,6 +240,10 @@ So when no option is right:
    measurement; a near-miss does not.
 2. **Then click “⚑ Flag a missing option”** at the bottom of that entry, choose
    the field, and name the value you actually wanted.
+
+Do not add a new vocabulary value during an active pass. Gap flags are evidence
+for a later operator amendment; after an amendment, both reviewers must use the
+same frozen revision or the pass must be repeated.
 
 Flags are exported alongside your labels, never inside them. They have **no
 effect** on your labels, on the agreement metrics, or on whether an entry counts

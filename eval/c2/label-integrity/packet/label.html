@@ -205,6 +205,7 @@ input.text:focus, .cb.open .cb-input { outline: 2px solid var(--accent); outline
     <div class="meter" title="completion"><i id="meterfill"></i></div>
     <span class="count" id="progress"></span>
     <span class="count" id="gapcount" title="vocabulary gaps flagged"></span>
+    
     <div class="spacer"></div>
     <button id="jump">Next incomplete</button>
     <button id="importbtn" title="load a draft or a previous export">Import</button>
@@ -713,15 +714,6 @@ ENTRIES.forEach(function (e, i) {
   img.height = e.height;
   img.alt = "screenshot for " + e.entryId;
   img.onclick = function () { lightbox(e); };
-  // Preflight: detect missing image bundle (corpus/images-private/ is
-  // gitignored). Mark the entry so the banner can count it.
-  img.onerror = function () {
-    shot.classList.add("img-missing");
-    img.style.display = "none";
-    if (!window.__missingImages) window.__missingImages = 0;
-    window.__missingImages++;
-    showImageBundleBanner();
-  };
   var zoom = document.createElement("button");
   zoom.className = "zoom";
   zoom.type = "button";
@@ -817,27 +809,6 @@ ENTRIES.forEach(function (e, i) {
 paint();
 }
 renderAll();
-
-/* ---------- image-bundle preflight banner ----------
-   corpus/images-private/ is gitignored (rights-bound screenshots). A fresh
-   clone has no images, so the labeling sheet shows broken images. This banner
-   detects that and tells the reviewer exactly what they need. The image bundle
-   is delivered separately — see README.md "Image delivery".
-*/
-function showImageBundleBanner() {
-  if (window.__bannerShown) return;
-  var missing = window.__missingImages || 0;
-  if (missing < 3) return; // tolerate 1-2 stragglers; 3+ means the bundle is absent
-  window.__bannerShown = true;
-  var b = document.createElement("div");
-  b.style.cssText = "position:sticky;top:0;z-index:9999;background:#fee;border:2px solid #c33;color:#300;padding:16px 24px;font:14px/1.5 system-ui;margin:0;";
-  b.innerHTML = "<strong>Image bundle missing.</strong> " + missing + " of 40 screenshots failed to load. " +
-    "The <code>corpus/images-private/</code> directory is gitignored (rights-bound). " +
-    "Obtain the image bundle separately and place the 40 PNGs at <code>corpus/images-private/</code> " +
-    "(see <code>eval/c2/label-integrity/packet/README.md</code> → \"Image delivery\"). " +
-    "Labeling without images is not possible.";
-  document.body.insertBefore(b, document.body.firstChild);
-}
 
 /* ---------- lightbox ---------- */
 var lb = document.getElementById("lightbox");

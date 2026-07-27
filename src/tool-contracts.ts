@@ -475,7 +475,7 @@ const CitedDecision = z.object({
   sourceId: z.string().optional(),
 }).strict();
 
-const DesignSystemIdentity = z.object({
+export const DesignSystemIdentitySchema = z.object({
   status: z.enum(["none", "identified"]),
   registry: z.string().optional(),
   library: z.string().optional(),
@@ -487,6 +487,7 @@ const DesignSystemIdentity = z.object({
   if (val.status === "none" && (val.registry || val.library))
     ctx.addIssue({ code: "custom", message: "status 'none' must not include registry or library", path: ["status"] });
 });
+export type DesignSystemIdentity = z.infer<typeof DesignSystemIdentitySchema>;
 
 const ColorTokens = z.object({
   primary: z.string().min(1),
@@ -545,7 +546,7 @@ const SpecContext = z.object({
   productContext: z.string().trim().min(1),
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
   implementationFramework: z.string().optional(),
-  designSystem: DesignSystemIdentity.optional(),
+  designSystem: DesignSystemIdentitySchema.optional(),
   constraints: z.array(z.string().trim().min(1)).default([]),
 }).strict();
 
@@ -691,7 +692,7 @@ export const CreateUiSpecInput = z.object({
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
   implementationFramework: z.string().optional(),
   serializationFormat: z.enum(["brief", "tokens"]).default("brief"),
-  designSystem: DesignSystemIdentity.optional(),
+  designSystem: DesignSystemIdentitySchema.optional(),
   constraints: z.array(z.string().trim().min(1)).default([]),
 }).strict();
 

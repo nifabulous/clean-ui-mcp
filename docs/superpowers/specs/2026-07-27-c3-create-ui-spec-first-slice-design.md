@@ -34,6 +34,9 @@ integration, or multi-user hosting.
   moving identity fields into the schema during this slice.
 - Use the focused composer Playground layout: brief first, then result and
   downloads. Do not add project or revision UI yet.
+- Treat `outputFormat: "markdown" | "json"` as the new tool presentation
+  option. Do not reuse the legacy `brief`/`tokens` terminology for the new
+  handoff contract.
 
 ## Architecture
 
@@ -61,6 +64,16 @@ the injected `CorpusReader`. Automatic selection uses the existing relevance
 path and product-diversity rule, with a maximum of five references. It returns
 truthful retrieval metadata, including fallback and sparse-coverage states.
 
+The `create_ui_spec` descriptor must be updated to allow the evidence retrieval
+states actually used by this resolver: `hybrid/text`, `keyword/text`,
+`keyword/metadata`, `structured-fallback/metadata`, and `none/none`. The
+automatic path reports the real state and attempted modes. Explicit reference
+selection reports `none/none`. The descriptor gets an explicit
+`allowNoneWithPositiveResult` capability because the primary result is one
+spec artifact even when no retrieval operation was needed. Contract tests must
+cover both paths; the envelope must never report `none/none` for automatic
+retrieval merely to satisfy the old policy.
+
 Explicit IDs are validated against the reader and bounded by the input schema.
 Missing or inaccessible references do not get silently replaced with a
 different identity. The resolver either records the bounded omission and uses
@@ -82,8 +95,17 @@ response-scoped evidence:
   corpus observations.
 
 The resulting evidence IDs are local to the response, such as `evidence-1`.
-Internal corpus IDs are never echoed into `citedReferences`, `referenceIds`,
-`DESIGN.md`, JSON, browser DOM, logs, or analytics.
+They are distinct from `citedReferences` and top-level `referenceIds`:
+
+- `evidence-1`-style IDs appear in the standard MCP `evidence` array, the
+  `UiSpec` evidence links, and the artifact envelope's `publicEvidenceIds`;
+- `citedReferences` and `provenance.sourceReferences` contain only safe,
+  user-supplied or public documentation references;
+- private corpus IDs are never copied into either category.
+
+The renderer must label response-scoped evidence as “Cited evidence”, not
+“Cited references”. Internal corpus IDs are never echoed into `DESIGN.md`,
+JSON, browser DOM, logs, or analytics.
 
 ## Provider and assembly model
 
@@ -102,8 +124,11 @@ artifact hash, or permission to claim evidence membership.
 Two providers are required:
 
 1. **Deterministic provider:** offline and reproducible. It uses the brief,
-   sanitized evidence, existing aggregation/rule helpers, and explicit
-   editorial defaults. Fields that cannot be supported remain unavailable.
+   sanitized evidence, existing aggregation/rule helpers, and the checked-in
+   `c3-fallback-v1` recipe. The recipe pins the field-by-field assembly rules,
+   warning codes, unavailable decisions, and one machine-rule acceptance
+   criterion. Fields that cannot be supported remain unavailable; no implicit
+   color, typography, or corpus claim is invented.
 2. **Live provider:** opt-in and provider-neutral. It uses the existing model
    call boundary with a pinned provider/model, bounded prompt and output size,
    strict JSON parsing, and no automatic provider fallback or repair call.
@@ -124,6 +149,10 @@ Provider identity, prompt hashes, usage, and failure diagnostics are private
 operator diagnostics. They do not enter the public `UiSpec`, `DESIGN.md`, JSON
 handoff, or browser response.
 
+The deterministic recipe version and SHA-256 are safe provenance. They are
+included in the artifact identity input so a recipe change cannot silently
+reuse an old artifact identity.
+
 ## Artifact contract
 
 `UiSpec` 1.0 remains the semantic source of truth. The producer creates a safe
@@ -133,31 +162,68 @@ handoff, or browser response.
 artifactVersion: "1.0"
 artifactId: deterministic hash-derived identifier
 generatedAt: ISO timestamp
+producerVersion: pinned producer/recipe version
+assemblyRulesSha256: hash of the checked-in assembly recipe
 spec: validated UiSpec 1.0
 handoff: validated web target and motion intents
 designMarkdown: deterministic DESIGN.md bytes
 designJson: deterministic JSON handoff bytes
 specSha256: hash of canonical spec bytes
 designMarkdownSha256: hash of exact markdown bytes
+designJsonSha256: hash of exact JSON handoff bytes
+publicEvidenceIds: response-scoped evidence IDs only
 retrieval: truthful safe retrieval metadata
 warnings: typed public warnings
 ```
 
-`artifactId` is derived from canonical semantic content and handoff inputs, not
-wall-clock time. `generatedAt` is metadata only. The existing deterministic
-handoff renderer remains the sole renderer for both output formats.
+`canonicalSpecBytes` are the UTF-8 bytes of `canonicalJsonStringify(spec)`.
+`specSha256` hashes those bytes. The two rendering hashes use the exact UTF-8
+bytes returned by the existing renderers. `artifactId` is
+`uispec-<sha256>` over canonical JSON containing `artifactVersion`,
+`producerVersion`, `assemblyRulesSha256`, `specSha256`, the canonical handoff
+inputs, and the rendering format version. `generatedAt` is excluded from the
+identity. The existing deterministic handoff renderer remains the sole
+renderer for both output formats.
 
 The MCP adapter registers the beta `create_ui_spec` contract. Its structured
 `data` is the validated `UiSpec`; `content[0]` is the requested rendering:
 
-- `serializationFormat: "brief"` returns `DESIGN.md`;
-- `serializationFormat: "tokens"` returns the stable JSON handoff.
+- `outputFormat: "markdown"` returns `DESIGN.md`;
+- `outputFormat: "json"` returns the stable JSON handoff.
+
+The MCP envelope's `referenceIds` remain the safe references extracted from
+`UiSpec.citedReferences`; response-scoped evidence IDs are carried by the
+standard `evidence` array and `UiSpec` evidence links. The descriptor tests must
+assert that the two ID domains cannot be substituted for each other.
 
 The HTTP adapter returns the safe artifact envelope with both renderings so the
 Playground can offer downloads without another generation request. The public
 beta catalog follows the existing no-alias rule: the old
 `generate_design_prompt` implementation may remain as an internal helper, but
 it is not a second public name for the new tool.
+
+## Integration and local serving
+
+The implementation must make the producer boundary concrete in these files:
+
+- `src/create-ui-spec.ts`: shared service, input normalization, resolver,
+  sanitizer, providers, assembler, artifact envelope, and hash construction;
+- `src/server-factory.ts`: register `create_ui_spec` through the canonical
+  descriptor contract and remove `generate_design_prompt` from the public beta
+  registration; keep legacy generation helpers private;
+- `src/scripts/ui-server.ts`: add `POST /api/create-ui-spec` and serve the
+  Playground/API through the same operator-controlled local process;
+- `site/vite.config.ts`: development proxy for `/api` to the loopback UI
+  server; production dogfood uses the same-origin served build rather than a
+  browser-visible private-corpus API on another origin;
+- `src/create-ui-spec.test.ts`, MCP contract tests, and browser tests: prove
+  both adapters invoke the same service and no second renderer exists.
+
+The local API binds to `127.0.0.1` only. It rejects unexpected `Origin` values
+using an explicit local allowlist and requires a per-process CSRF nonce in a
+request header for POST requests. Live provider calls are disabled unless the
+operator explicitly enables them. The API never accepts credentials, cookies,
+or authorization headers from the browser.
 
 ## Playground experience
 
@@ -206,6 +272,9 @@ fallback path instead of entering the fatal state.
 - Sanitization runs before model calls, rendering, and response serialization.
 - Private markers, paths, source URLs, and internal IDs are rejected by
   boundary tests over the complete serialized envelope.
+- Retrieval logging records counts, modes, warning codes, and aggregate hashes
+  only. It never persists corpus entry IDs, explicit reference IDs, or raw
+  briefs. The existing result-ID query logger must not be reused by this path.
 - User screenshots, uploads, credentials, and raw provider output are outside
   this slice and are not persisted.
 - Multi-tenant authentication, tenant isolation, retention policy, and BYOK
@@ -231,7 +300,9 @@ fallback path instead of entering the fatal state.
 - standard envelope invariants;
 - `data` equals the validated `UiSpec`;
 - `content[0]` matches the requested rendering;
-- retrieval metadata and warning coupling;
+- automatic and explicit-reference retrieval metadata and warning coupling;
+- response-scoped evidence IDs cannot appear as private corpus IDs or unsafe
+  source references;
 - beta catalog contains the intended public names and no legacy alias.
 
 ### HTTP and browser
@@ -246,6 +317,7 @@ fallback path instead of entering the fatal state.
 
 - default tests and builds make zero network or paid provider calls;
 - live provider use requires explicit configuration;
+- local API origin and CSRF checks pass;
 - `npm test`, site tests, typecheck, build, and public-boundary checks pass;
 - local dogfood records the exact build SHA and provider/configuration state.
 

@@ -216,14 +216,24 @@ export const EvidenceIdSchema = z.string().regex(/^evidence-[0-9]+$/);
  *    sourceUrl/publicReference may be populated.
  *  - public-reference: an explicit, user-supplied or otherwise public input.
  *    May carry `publicReference`.
+ *  - recipe-system: the deterministic c3-fallback-v1 recipe itself (operator
+ *    content). This is the honest editorial-guidance grounding for the echo-
+ *    product-context designDirection and the zero-match structured fallback.
+ *    It carries NO `publicReference` (the recipe is operator content, not a
+ *    user/public reference) and is NOT a corpus observation. It grounds
+ *    editorial-authority decisions, never corpus-evidence decisions.
  */
-export const EvidenceKindSchema = z.enum(["corpus-observation", "public-reference"]);
+export const EvidenceKindSchema = z.enum(["corpus-observation", "public-reference", "recipe-system"]);
 
 /**
  * Closed basis enum for the fallback recipe:
  *  - visible: directly observable in the source.
  *  - aggregate: derived from counts/structure across the source.
  *  - user-supplied: provided explicitly by the requester.
+ *
+ * The recipe-system kind reuses `aggregate`: the recipe is a deterministic
+ * aggregate of operator-authored assembly rules (not visible in any single
+ * source, not user-supplied). No new basis value is needed.
  */
 export const EvidenceBasisSchema = z.enum(["visible", "aggregate", "user-supplied"]);
 
@@ -273,6 +283,25 @@ export const SanitizedEvidenceSchema = z
       ctx.addIssue({
         code: "custom",
         message: "public-reference basis must be user-supplied",
+        path: ["basis"],
+      });
+    }
+    // recipe-system is operator content (the deterministic c3-fallback-v1
+    // recipe), NOT a public/user reference. It must NOT carry a publicReference
+    // (that would falsely label the recipe as a user/public citation) and it
+    // must NOT use the user-supplied basis (the requester supplied nothing).
+    // The recipe grounds editorial-authority decisions only.
+    if (val.kind === "recipe-system" && val.publicReference !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "recipe-system must not populate publicReference",
+        path: ["publicReference"],
+      });
+    }
+    if (val.kind === "recipe-system" && val.basis === "user-supplied") {
+      ctx.addIssue({
+        code: "custom",
+        message: "recipe-system basis must not be user-supplied",
         path: ["basis"],
       });
     }

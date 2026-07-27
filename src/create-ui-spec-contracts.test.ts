@@ -172,6 +172,43 @@ describe("SanitizedEvidenceSchema", () => {
     expect(SanitizedEvidenceSchema.safeParse(validPublicReferenceEvidence()).success).toBe(true);
   });
 
+  it("parses a valid recipe-system evidence (editorial grounding for the deterministic fallback)", () => {
+    // The recipe/system evidence grounds the echo-product-context designDirection
+    // under editorial authority. It is operator content (the c3-fallback-v1
+    // recipe), NOT a user/public reference and NOT a corpus observation.
+    const e = {
+      id: "evidence-1",
+      kind: "recipe-system",
+      basis: "aggregate",
+      summary: "Deterministic c3-fallback-v1 recipe",
+      structuredFacts: {},
+    };
+    expect(SanitizedEvidenceSchema.safeParse(e).success).toBe(true);
+  });
+
+  it("rejects a recipe-system evidence with a publicReference (the recipe is NOT a public citation)", () => {
+    const e = {
+      id: "evidence-1",
+      kind: "recipe-system",
+      basis: "aggregate",
+      summary: "Deterministic c3-fallback-v1 recipe",
+      structuredFacts: {},
+      publicReference: "c3-fallback-v1",
+    };
+    expect(SanitizedEvidenceSchema.safeParse(e).success).toBe(false);
+  });
+
+  it("rejects a recipe-system evidence with a user-supplied basis (the requester supplied nothing)", () => {
+    const e = {
+      id: "evidence-1",
+      kind: "recipe-system",
+      basis: "user-supplied",
+      summary: "Deterministic c3-fallback-v1 recipe",
+      structuredFacts: {},
+    };
+    expect(SanitizedEvidenceSchema.safeParse(e).success).toBe(false);
+  });
+
   it("accepts an evidence id matching the response-scoped regex", () => {
     const e = validCorpusEvidence();
     e.id = "evidence-42";

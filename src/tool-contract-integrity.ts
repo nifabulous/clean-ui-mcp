@@ -12,9 +12,17 @@ import type { z } from "zod";
 
 export type RetrievalMode = "hybrid" | "vector" | "keyword" | "structured-fallback" | "none";
 export type RetrievalModality = "text" | "image" | "metadata" | "none";
+/**
+ * The shared fallback-reason vocabulary. `no-results` is the truthful reason
+ * for a structured-fallback where automatic retrieval SUCCEEDED but returned
+ * zero matches (nothing was missing — the index was queried and simply had no
+ * hits). The other reasons describe an actual retrieval failure (missing
+ * index, incompatible index, missing provider key, community edition, provider
+ * error, no image evidence).
+ */
 export type FallbackReason =
   | "missing-index" | "incompatible-index" | "missing-provider-key"
-  | "community-edition" | "provider-error" | "no-image-evidence";
+  | "community-edition" | "provider-error" | "no-image-evidence" | "no-results";
 
 export interface RetrievalPolicyState {
   readonly mode: RetrievalMode;

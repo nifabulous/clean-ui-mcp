@@ -74,6 +74,34 @@ import {
 // Public interface
 // ===========================================================================
 
+/**
+ * The stable, response-scoped id of the recipe/system evidence item the
+ * deterministic fallback ALWAYS emits (the c3-fallback-v1 recipe is operator
+ * content that grounds the echo-product-context designDirection under
+ * editorial authority, and the zero-match structured fallback). Emitted FIRST
+ * so the recipe id is stable across responses regardless of how many corpus
+ * observations are retrieved. Must match {@link EvidenceIdSchema}
+ * (^evidence-[0-9]+$).
+ */
+export const RECIPE_EVIDENCE_ID = "evidence-1";
+
+/**
+ * Build the single recipe/system evidence item (editorial-guidance grounding).
+ * The summary is recipe-owned text — NOT corpus prose, NOT a user/public
+ * citation. The recipe is operator content, so `kind: "recipe-system"` and
+ * `basis: "aggregate"` (a deterministic aggregate of operator-authored
+ * assembly rules), and NO `publicReference` is populated.
+ */
+function buildRecipeSystemEvidence(): SanitizedEvidence {
+  return {
+    id: RECIPE_EVIDENCE_ID,
+    kind: "recipe-system",
+    basis: "aggregate",
+    summary: "Deterministic c3-fallback-v1 recipe",
+    structuredFacts: {},
+  };
+}
+
 export interface CreateUiSpecDependencies {
   readonly reader: CorpusReader;
   /**
@@ -150,13 +178,19 @@ interface ResolvedEvidence {
   readonly omittedReferenceTokens: readonly string[];
   /** True when automatic keyword retrieval produced results. */
   readonly automaticRetrieved: boolean;
-  /** Retrieval state fields derived from the resolution. */
+  /**
+   * Retrieval state fields derived from the resolution. `fallbackReason` is
+   * either "missing-index" (a genuine retrieval failure was masked — not
+   * currently emitted by the producer) or "no-results" (the truthful reason for
+   * a zero-match structured fallback: automatic retrieval SUCCEEDED but
+   * returned zero matches; nothing was missing).
+   */
   readonly retrieval: {
     readonly mode: "keyword" | "structured-fallback" | "none";
     readonly modality: "metadata" | "none";
     readonly resultCount: number;
     readonly fallbackUsed: boolean;
-    readonly fallbackReason?: "missing-index";
+    readonly fallbackReason?: "missing-index" | "no-results";
     readonly attemptedCount: number;
     readonly attemptedModes: readonly "keyword"[];
   };
@@ -184,9 +218,11 @@ async function resolveExplicitReferences(
 ): Promise<ResolvedEvidence> {
   const resolvedTokens: string[] = [];
   const omittedTokens: string[] = [];
-  const sanitized: SanitizedEvidence[] = [];
+  // The recipe/system evidence is ALWAYS emitted first (evidence-1); explicit
+  // public references follow at evidence-2, evidence-3, ...
+  const sanitized: SanitizedEvidence[] = [buildRecipeSystemEvidence()];
 
-  let nextId = 1;
+  let nextId = 2;
   for (const token of request.referenceIds) {
     const internalId = dependencies.resolveReferenceToken(token);
     if (internalId === undefined) {
@@ -226,7 +262,9 @@ async function resolveExplicitReferences(
     retrieval: {
       mode: "none",
       modality: "none",
-      resultCount: sanitized.length,
+      // resultCount counts ONLY the explicit references (the recipe evidence is
+      // editorial grounding, not a retrieved reference).
+      resultCount: resolvedTokens.length,
       fallbackUsed: false,
       attemptedCount: 0,
       attemptedModes: [],
@@ -255,39 +293,41 @@ async function resolveAutomaticRetrieval(
   const sliced = results.slice(0, 20);
   const diverse = pickDiverse(sliced as SearchResult[], 5, 2);
 
-  const sanitized: SanitizedEvidence[] = [];
-  let nextId = 1;
+  // The recipe/system evidence is ALWAYS emitted first (evidence-1); retrieved
+  // corpus observations follow at evidence-2, evidence-3, ... The recipe
+  // grounds the echo-product-context designDirection under editorial authority
+  // (the direction echoes the requester's brief, not corpus content). Corpus
+  // observations are recorded in provenance + the corpusEvidence lane without a
+  // designDirection authority claim in this slice.
+  const sanitized: SanitizedEvidence[] = [buildRecipeSystemEvidence()];
+  let nextId = 2;
+  let corpusCount = 0;
   for (const r of diverse) {
     const id = `evidence-${nextId++}`;
     sanitized.push(sanitizeCorpusObservation(id, r.entry));
+    corpusCount++;
   }
 
-  if (sanitized.length === 0) {
-    // Zero matches — structured-fallback + sparse-evidence warning. Emit ONE
-    // editorial grounding evidence so the envelope's publicEvidenceIds.min(1)
-    // is satisfied honestly: the fallback is grounded in the public, checked-in
-    // c3-fallback-v1 recipe (a legitimate public reference). The corpus is NOT
-    // cited (nothing was retrieved). provenance.evidenceIds tracks this same id
-    // so the spec stays internally consistent.
-    const fallbackEvidence: SanitizedEvidence = {
-      id: "evidence-1",
-      kind: "public-reference",
-      basis: "user-supplied",
-      summary: "Deterministic fallback recipe grounded the produced spec; no corpus evidence was retrieved.",
-      structuredFacts: {},
-      publicReference: RECIPE.recipeVersion,
-    };
+  if (corpusCount === 0) {
+    // Zero matches — the query SUCCEEDED but returned zero results. The honest
+    // structured-fallback state: the deterministic c3-fallback-v1 recipe
+    // grounded the produced spec (the only emitted evidence is the recipe/
+    // system item), and a sparse-evidence warning fires. Nothing was missing —
+    // the index was queried and simply had no hits — so `fallbackReason` is the
+    // truthful "no-results", NOT "missing-index". The corpus is NOT cited.
     return {
-      sanitized: [fallbackEvidence],
+      sanitized,
       resolvedReferenceTokens: [],
       omittedReferenceTokens: [],
       automaticRetrieved: false,
       retrieval: {
         mode: "structured-fallback",
         modality: "metadata",
+        // resultCount counts ONLY retrieved corpus observations (zero here).
+        // The recipe evidence is editorial grounding, not a retrieved result.
         resultCount: 0,
         fallbackUsed: true,
-        fallbackReason: "missing-index",
+        fallbackReason: "no-results",
         attemptedCount: 1,
         attemptedModes: ["keyword"],
       },
@@ -302,7 +342,8 @@ async function resolveAutomaticRetrieval(
     retrieval: {
       mode: "keyword",
       modality: "metadata",
-      resultCount: sanitized.length,
+      // resultCount counts ONLY retrieved corpus observations.
+      resultCount: corpusCount,
       fallbackUsed: false,
       // No fallback attempted: attemptedModes is empty (the RetrievalState
       // schema forbids attemptedModes containing the current mode).
@@ -411,24 +452,28 @@ export function buildFallbackCandidate(
   recipe: { readonly recipeVersion: string },
 ): CreateUiSpecCandidate {
   void recipe; // recipeVersion is unused; the recipe's rules are read via RECIPE.
-  const corpusEvidenceIds = sanitizedEvidence
-    .filter((e) => e.kind === "corpus-observation")
-    .map((e) => e.id)
-    .slice(0, 8);
+  // The designDirection echoes the requester's productContext (the recipe's
+  // echo-product-context strategy) — it is NOT corpus-grounded. It cites ONLY
+  // the recipe/system evidence id under editorial authority. Corpus
+  // observations that were retrieved are recorded in provenance + the
+  // corpusEvidence lane but do NOT ground the echo-only direction.
+  const recipeEvidence = sanitizedEvidence.find((e) => e.kind === "recipe-system");
+  const designDirectionEvidenceIds = recipeEvidence ? [recipeEvidence.id] : [];
 
   const designDirection = buildDesignDirectionSummary(request, RECIPE);
 
   // Build the candidate as a plain object; parseCreateUiSpecCandidate validates
   // it through CreateUiSpecCandidateSchema + evidence membership.
   const decisions: CreateUiSpecCandidate["decisions"] = [
-    // The designDirection decision is the only corpus-grounded decision the
-    // fallback emits — it cites up to 8 response-scoped corpus evidence ids.
+    // The designDirection decision echoes the requester's brief under the
+    // deterministic fallback recipe — it cites ONLY the recipe/system evidence
+    // id (editorial authority), NEVER corpus ids.
     {
       field: "designDirection",
       id: "fallback-designDirection",
       value: designDirection,
       rationale: recipeRationale("designDirection"),
-      evidenceIds: corpusEvidenceIds,
+      evidenceIds: designDirectionEvidenceIds,
     },
     // The fixed-empty array fields (truthful zero-evidence state, cite nothing).
     ...buildFixedEmptyArrayDecisions(),
@@ -576,11 +621,15 @@ function assembleSpec(
   // ----- Map the parsed candidate's decisions into UiSpec fields -----
   const specFields = mapCandidateToSpecFields(parsedCandidate);
 
-  // Cited decisions: corpus observations ground the designDirection when
-  // available; explicit references ground it via the editorial lane otherwise.
+  // Cited decisions: the designDirection ALWAYS echoes the requester's brief
+  // under the deterministic fallback recipe (editorial authority), citing ONLY
+  // the recipe/system evidence id. Corpus observations that were retrieved are
+  // recorded in provenance + the corpusEvidence lane but do NOT ground the
+  // echo-only direction. Explicit public references sit in the editorial lane
+  // alongside the recipe id.
   const corpusLane = corpusEvidenceIds;
-  const editorialLane = [...publicReferenceIds];
-  const citedDecisions = buildCitedDecisions(corpusLane, editorialLane);
+  const editorialLane = [RECIPE_EVIDENCE_ID, ...publicReferenceIds];
+  const citedDecisions = buildCitedDecisions(editorialLane);
 
   // Unavailable decisions (model-dependent fields) — recipe-owned reasons.
   const unavailableDecisions: UiSpecT["unavailableDecisions"] = RECIPE.unavailableDecisions.map(
@@ -705,43 +754,35 @@ function mapCandidateToSpecFields(
 }
 
 /**
- * Build the citedDecisions block: corpus observations ground the designDirection
- * when available; explicit references ground it via the editorial lane
- * otherwise. The fallback recipe cites NO invented authority — only the echoed
- * product context carries a (zero-evidence) cited decision so the spec is
- * non-empty and internally consistent. When neither lane is populated, the
- * fallback carries zero citedDecisions.
+ * Build the citedDecisions block. The designDirection ALWAYS echoes the
+ * requester's productContext under the deterministic c3-fallback-v1 recipe —
+ * it is editorial authority, citing ONLY the recipe/system evidence id. The
+ * fallback recipe cites NO corpus-evidence authority for the direction (the
+ * direction is not corpus-grounded), and invents no authority. Retrieved corpus
+ * observations are recorded in provenance + the corpusEvidence lane by the
+ * assembler without a designDirection authority claim.
+ *
+ * `editorialLane` is passed only to satisfy the UiSpec superRefine
+ * (editorial-authority decisions must cite an evidence id present in the
+ * editorialGuidance lane); the recipe id is always the first entry there.
  */
 function buildCitedDecisions(
-  corpusLane: readonly string[],
   editorialLane: readonly string[],
 ): UiSpecT["citedDecisions"] {
-  // Ensure the editorial lane is non-empty so an editorial citedDecision can
-  // reference it (UiSpec requires editorial-authority decisions to cite an
-  // editorial-lane evidence id).
-  if (corpusLane.length > 0) {
-    return [
-      {
-        id: "design-direction-corpus",
-        field: "designDirection",
-        authority: "corpus-evidence",
-        evidenceIds: corpusLane.slice(0, 8),
-        readiness: "available",
-      },
-    ];
+  // The recipe/system evidence id must be in the editorial lane so the
+  // editorial-authority citedDecision references a lane member.
+  if (!editorialLane.includes(RECIPE_EVIDENCE_ID)) {
+    return [];
   }
-  if (editorialLane.length > 0) {
-    return [
-      {
-        id: "design-direction-editorial",
-        field: "designDirection",
-        authority: "editorial",
-        evidenceIds: editorialLane.slice(0, 8),
-        readiness: "available",
-      },
-    ];
-  }
-  return [];
+  return [
+    {
+      id: "design-direction-editorial",
+      field: "designDirection",
+      authority: "editorial",
+      evidenceIds: [RECIPE_EVIDENCE_ID],
+      readiness: "available",
+    },
+  ];
 }
 
 // ===========================================================================
@@ -801,10 +842,10 @@ function buildEnvelope(
   const warnings = buildWarnings(resolved);
 
   // publicEvidenceIds: every emitted evidence id, in response order. The
-  // resolved evidence always carries at least one row — in the structured-
-  // fallback (zero-match) case, a single editorial grounding evidence (the
-  // public recipe) is emitted so publicEvidenceIds.min(1) is satisfied
-  // honestly and provenance.evidenceIds stays consistent.
+  // resolved evidence always carries at least one row — the recipe/system
+  // evidence (evidence-1) is ALWAYS emitted first so publicEvidenceIds.min(1)
+  // is satisfied honestly, with retrieved corpus observations / explicit
+  // references following. provenance.evidenceIds tracks these same ids.
   const publicEvidenceIds = resolved.sanitized.map((e) => e.id);
 
   // The `as DesignArtifactEnvelope` assertion narrows ResolvedEvidence's

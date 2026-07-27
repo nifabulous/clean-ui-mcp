@@ -38,7 +38,7 @@ export const RetrievalModality = z.enum([
 ]);
 export const FallbackReason = z.enum([
   "missing-index", "incompatible-index", "missing-provider-key",
-  "community-edition", "provider-error", "no-image-evidence",
+  "community-edition", "provider-error", "no-image-evidence", "no-results",
 ]);
 
 const ALLOWED_MODE_MODALITY: Record<string, readonly string[]> = {

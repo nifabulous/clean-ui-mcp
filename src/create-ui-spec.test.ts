@@ -32,7 +32,7 @@ import {
 } from "./create-ui-spec-contracts.js";
 import { CreateUiSpecRequestSchema } from "./create-ui-spec-contracts.js";
 import { canonicalJsonStringify, sha256Hex } from "./readiness/contracts.js";
-import { createUiSpec, buildFallbackCandidate, type CreateUiSpecDependencies } from "./create-ui-spec.js";
+import { createUiSpec, buildFallbackCandidate, RECIPE_EVIDENCE_ID, type CreateUiSpecDependencies } from "./create-ui-spec.js";
 import recipe from "./c3/fallback-recipe-v1.json" with { type: "json" };
 import type { SanitizedEvidence } from "./create-ui-spec-contracts.js";
 
@@ -183,7 +183,9 @@ describe("create-ui-spec producer — automatic retrieval", () => {
   afterEach(() => { vi.clearAllMocks(); });
 
   it("caps automatic retrieval at five product-diverse references", async () => {
-    // 8 diverse-product entries — only 5 kept.
+    // 8 diverse-product entries — only 5 corpus observations kept. The recipe/
+    // system evidence (evidence-1) is ALWAYS emitted first, so the envelope
+    // carries 1 recipe id + at most 5 corpus ids.
     const corpus: FixtureEntry[] = [];
     const ranked: { entry: FixtureEntry; score: number }[] = [];
     for (let i = 0; i < 8; i++) {
@@ -193,8 +195,11 @@ describe("create-ui-spec producer — automatic retrieval", () => {
     }
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
-    // At most 5 evidence ids in the envelope.
-    expect(parsed.publicEvidenceIds.length).toBeLessThanOrEqual(5);
+    // At most 5 CORPUS evidence ids (the recipe id is separate).
+    const corpusIds = parsed.publicEvidenceIds.filter((id) => id !== RECIPE_EVIDENCE_ID);
+    expect(corpusIds.length).toBeLessThanOrEqual(5);
+    // The recipe/system evidence id is always present (editorial grounding).
+    expect(parsed.publicEvidenceIds).toContain(RECIPE_EVIDENCE_ID);
   });
 
   it("slices to 20 before pickDiverse and pins keyword-only searchMode", async () => {
@@ -216,7 +221,9 @@ describe("create-ui-spec producer — automatic retrieval", () => {
   });
 
   it("enforces max two per product with backfill to five", async () => {
-    // 6 entries: 3 from product-A (top scores), 1 each from B, C, D.
+    // 6 entries: 3 from product-A (top scores), 1 each from B, C, D. The recipe/
+    // system evidence (evidence-1) is always emitted first, so the envelope
+    // carries 1 recipe id + 5 corpus ids (backfilled to five).
     const corpus: FixtureEntry[] = [];
     const ranked: { entry: FixtureEntry; score: number }[] = [];
     const eA1 = entry("a1", "product-A"); corpus.push(eA1); ranked.push({ entry: eA1, score: 5.0 });
@@ -227,13 +234,15 @@ describe("create-ui-spec producer — automatic retrieval", () => {
     const eD = entry("d1", "product-D"); corpus.push(eD); ranked.push({ entry: eD, score: 4.5 });
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
-    expect(parsed.publicEvidenceIds.length).toBe(5);
-    // The corpus observations feed evidence ids; we can't read the productName,
-    // but the count is capped and backfilled to 5.
+    // 5 corpus ids + the recipe id.
+    const corpusIds = parsed.publicEvidenceIds.filter((id) => id !== RECIPE_EVIDENCE_ID);
+    expect(corpusIds.length).toBe(5);
   });
 
   it("deterministic backfill when the fixture contains too few products", async () => {
-    // Only 2 distinct products, 4 entries — backfill selects all up to 4.
+    // Only 2 distinct products, 4 entries — backfill selects all up to 4. The
+    // recipe/system evidence (evidence-1) is always emitted first, so the
+    // envelope carries 1 recipe id + 4 corpus ids.
     const corpus: FixtureEntry[] = [];
     const ranked: { entry: FixtureEntry; score: number }[] = [];
     const e1 = entry("a1", "product-A"); corpus.push(e1); ranked.push({ entry: e1, score: 5 });
@@ -242,8 +251,10 @@ describe("create-ui-spec producer — automatic retrieval", () => {
     const e4 = entry("b2", "product-B"); corpus.push(e4); ranked.push({ entry: e4, score: 2 });
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
-    // Fewer than 5 available — backfill returns min(available, 5).
-    expect(parsed.publicEvidenceIds.length).toBe(4);
+    // Fewer than 5 available — backfill returns min(available, 5) = 4 corpus
+    // ids, plus the always-present recipe id.
+    const corpusIds = parsed.publicEvidenceIds.filter((id) => id !== RECIPE_EVIDENCE_ID);
+    expect(corpusIds.length).toBe(4);
     expect(parsed.retrieval.mode).toBe("keyword");
     expect(parsed.retrieval.modality).toBe("metadata");
   });
@@ -263,7 +274,10 @@ describe("create-ui-spec producer — automatic retrieval", () => {
     expect(parsed.retrieval.mode).toBe("structured-fallback");
     expect(parsed.retrieval.modality).toBe("metadata");
     expect(parsed.retrieval.fallbackUsed).toBe(true);
-    expect(parsed.retrieval.fallbackReason).toBe("missing-index");
+    // Honest zero-match state: the query SUCCEEDED but returned zero results,
+    // so fallbackReason is the truthful "no-results", NOT "missing-index"
+    // (nothing was missing — the index was queried and simply had no hits).
+    expect(parsed.retrieval.fallbackReason).toBe("no-results");
     expect(parsed.warnings.some((w) => w.code === "sparseCoverage")).toBe(true);
   });
 });
@@ -409,8 +423,9 @@ describe("create-ui-spec producer — privacy and evidence scoping", () => {
     }
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
-    // The first three ids are evidence-1, evidence-2, evidence-3 (response order).
-    expect(parsed.publicEvidenceIds.slice(0, 3)).toEqual(["evidence-1", "evidence-2", "evidence-3"]);
+    // The recipe/system evidence is always evidence-1 (emitted first); the
+    // three corpus observations follow at evidence-2, evidence-3, evidence-4.
+    expect(parsed.publicEvidenceIds.slice(0, 4)).toEqual(["evidence-1", "evidence-2", "evidence-3", "evidence-4"]);
   });
 });
 
@@ -537,21 +552,33 @@ describe("create-ui-spec producer — candidate pipeline (parseCreateUiSpecCandi
     expect(fields).toContain("techniques");
   });
 
-  it("buildFallbackCandidate cites corpus evidence ids, and the parser accepts them when bound", () => {
+  it("buildFallbackCandidate cites ONLY the recipe/system evidence id for designDirection (echo direction is editorial, not corpus-grounded)", () => {
+    // The designDirection echoes the requester's brief under the deterministic
+    // fallback recipe — it cites ONLY the recipe/system evidence id (editorial
+    // authority), NEVER corpus ids. Corpus observations are retrieved and
+    // recorded in provenance/lanes but do NOT ground the echo-only direction.
+    const recipeEvidence: SanitizedEvidence = {
+      id: RECIPE_EVIDENCE_ID,
+      kind: "recipe-system",
+      basis: "aggregate",
+      summary: "Deterministic c3-fallback-v1 recipe",
+      structuredFacts: {},
+    };
     const corpusEvidence: SanitizedEvidence = {
-      id: "evidence-1",
+      id: "evidence-2",
       kind: "corpus-observation",
       basis: "visible",
       summary: "dashboard reference",
       structuredFacts: { pattern: "dashboard" },
     };
     const req = CreateUiSpecRequestSchema.parse(validInput());
-    const candidate = buildFallbackCandidate(req, [corpusEvidence], recipe);
-    // The designDirection decision cites the corpus evidence id.
+    const candidate = buildFallbackCandidate(req, [recipeEvidence, corpusEvidence], recipe);
+    // The designDirection decision cites ONLY the recipe/system evidence id.
     const dd = candidate.decisions.find((d) => d.field === "designDirection");
-    expect(dd?.evidenceIds).toContain("evidence-1");
-    // Parses clean when evidence-1 is in the allowed set.
-    expect(() => parseCreateUiSpecCandidate(candidate, new Set(["evidence-1"]))).not.toThrow();
+    expect(dd?.evidenceIds).toContain(RECIPE_EVIDENCE_ID);
+    expect(dd?.evidenceIds).not.toContain("evidence-2");
+    // Parses clean when the recipe id is in the allowed set.
+    expect(() => parseCreateUiSpecCandidate(candidate, new Set([RECIPE_EVIDENCE_ID, "evidence-2"]))).not.toThrow();
   });
 
   it("parseCreateUiSpecCandidate REJECTS a candidate citing an unbound evidence id", () => {
@@ -703,5 +730,113 @@ describe("create-ui-spec producer — sparse-evidence matrix (table-driven)", ()
 describe("CreateUiSpecRequestSchema integration", () => {
   it("does not accept outputFormat (presentation adapters own it)", () => {
     expect(CreateUiSpecRequestSchema.safeParse({ ...validInput(), outputFormat: "markdown" }).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P1 provenance-truthfulness: editorial authority for the echo-only direction
+// + an honest zero-match retrieval state. These cover the controller-specified
+// assertions for both fixes.
+// ---------------------------------------------------------------------------
+
+describe("create-ui-spec producer — provenance truthfulness (echo direction is editorial, not corpus-grounded)", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { vi.clearAllMocks(); });
+
+  it("designDirection is NEVER corpus-evidence authority when corpus results exist (it echoes the brief)", async () => {
+    // Corpus results are present, yet the direction is an echo of the requester's
+    // brief — it MUST be editorial authority, never corpus-evidence authority.
+    const e = entry("e1", "product-A");
+    const env = await createUiSpec(validInput(), deps([e], [{ entry: e, score: 5 }]));
+    const parsed = parseDesignArtifactEnvelope(env);
+    const dd = parsed.spec.citedDecisions.find((d) => d.field === "designDirection");
+    expect(dd).toBeDefined();
+    expect(dd?.authority).toBe("editorial");
+    expect(dd?.authority).not.toBe("corpus-evidence");
+  });
+
+  it("the echo-only designDirection cites ONLY the recipe/system evidence id (never a corpus evidence-N id)", async () => {
+    const e1 = entry("e1", "product-A");
+    const e2 = entry("e2", "product-B");
+    const env = await createUiSpec(validInput(), deps([e1, e2], [
+      { entry: e1, score: 5 },
+      { entry: e2, score: 4 },
+    ]));
+    const parsed = parseDesignArtifactEnvelope(env);
+    const dd = parsed.spec.citedDecisions.find((d) => d.field === "designDirection");
+    expect(dd?.evidenceIds).toContain(RECIPE_EVIDENCE_ID);
+    // No corpus evidence-N id grounds the direction. The corpus observations
+    // are recorded in the corpusEvidence lane + provenance, but NOT cited here.
+    for (const eid of dd?.evidenceIds ?? []) {
+      expect(eid).not.toMatch(/^evidence-[2-9][0-9]*$/);
+    }
+    // The retrieved corpus observations still appear in the corpusEvidence lane
+    // and provenance (they were retrieved; they just don't ground the direction).
+    expect(parsed.spec.authorityLanes.corpusEvidence.length).toBe(2);
+    for (const cid of parsed.spec.authorityLanes.corpusEvidence) {
+      expect(parsed.spec.provenance.evidenceIds).toContain(cid);
+    }
+  });
+
+  it("editorial authority passes schema validation (the full envelope parses through parseDesignArtifactEnvelope without throwing)", async () => {
+    // With corpus results present, the editorial-authority direction + the
+    // recipe/system evidence in the editorial lane must round-trip the
+    // re-render/re-hash verification.
+    const e = entry("e1", "product-A");
+    const env = await createUiSpec(validInput(), deps([e], [{ entry: e, score: 5 }]));
+    expect(() => parseDesignArtifactEnvelope(env)).not.toThrow();
+  });
+
+  it("the recipe/system evidence id is in authorityLanes.editorialGuidance and NO corpus-observation sits in the editorial lane (cross-lane integrity)", async () => {
+    const e = entry("e1", "product-A");
+    const env = await createUiSpec(validInput(), deps([e], [{ entry: e, score: 5 }]));
+    const parsed = parseDesignArtifactEnvelope(env);
+    expect(parsed.spec.authorityLanes.editorialGuidance).toContain(RECIPE_EVIDENCE_ID);
+    // The editorial lane must not contain any corpus-observation id — those sit
+    // ONLY in the corpusEvidence lane.
+    const corpusSet = new Set(parsed.spec.authorityLanes.corpusEvidence);
+    for (const eid of parsed.spec.authorityLanes.editorialGuidance) {
+      expect(corpusSet.has(eid)).toBe(false);
+    }
+  });
+});
+
+describe("create-ui-spec producer — honest zero-match retrieval state (no fabricated evidence, no false labels)", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { vi.clearAllMocks(); });
+
+  it("zero automatic results emit ONLY the recipe/system evidence (no fake user-supplied public-reference)", async () => {
+    const env = await createUiSpec(validInput(), deps([], []));
+    const parsed = parseDesignArtifactEnvelope(env);
+    // The ONLY emitted evidence is the recipe/system item.
+    expect(parsed.publicEvidenceIds).toEqual([RECIPE_EVIDENCE_ID]);
+    // No public-reference evidence was fabricated on the automatic path (the
+    // requester supplied nothing). The serialized envelope carries no
+    // publicReference field and no "user-supplied" basis claim.
+    const serialized = JSON.stringify(env);
+    expect(serialized).not.toContain("user-supplied");
+    expect(serialized).not.toContain("publicReference");
+  });
+
+  it("zero-match retrieval state is honest: fallbackReason is 'no-results' (the query succeeded; nothing was missing)", async () => {
+    const env = await createUiSpec(validInput(), deps([], []));
+    const parsed = parseDesignArtifactEnvelope(env);
+    expect(parsed.retrieval.mode).toBe("structured-fallback");
+    expect(parsed.retrieval.modality).toBe("metadata");
+    expect(parsed.retrieval.resultCount).toBe(0);
+    expect(parsed.retrieval.fallbackUsed).toBe(true);
+    // NOT "missing-index" — the index was queried successfully and returned zero
+    // matches. The truthful reason is "no-results".
+    expect(parsed.retrieval.fallbackReason).toBe("no-results");
+    expect(parsed.retrieval.fallbackReason).not.toBe("missing-index");
+    // The sparse-evidence warning still fires (the honest user-facing signal).
+    expect(parsed.warnings.some((w) => w.code === "sparseCoverage")).toBe(true);
+    // The recipe/system evidence grounds the echo direction editorially.
+    expect(parsed.spec.authorityLanes.editorialGuidance).toContain(RECIPE_EVIDENCE_ID);
+  });
+
+  it("the zero-match spec still parses (re-render + re-hash verification passes)", async () => {
+    const env = await createUiSpec(validInput(), deps([], []));
+    expect(() => parseDesignArtifactEnvelope(env)).not.toThrow();
   });
 });

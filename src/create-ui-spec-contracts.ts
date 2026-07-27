@@ -52,6 +52,8 @@ import {
   MotionIntentSchema,
   NEUTRAL_WEB_TARGET,
   WebTargetId,
+  type WebTargetIdT,
+  type WebTargetProfile,
   parseDesignHandoff,
 } from "./design-target-contracts.js";
 import {
@@ -76,6 +78,57 @@ import {
 export function sha256Canonical(value: unknown): string {
   return sha256Hex(Buffer.from(canonicalJsonStringify(value), "utf-8"));
 }
+
+// ===========================================================================
+// 1b. CANONICAL_WEB_TARGET_PROFILES — single source of truth for target ids
+// ===========================================================================
+
+/**
+ * The canonical WebTargetProfile for each closed WebTargetId. This is the SINGLE
+ * source of truth consumed by BOTH the producer (which builds the trusted
+ * handoff from the profile) AND parseDesignArtifactEnvelope (which reconstructs
+ * the profile from the stored id during re-render verification).
+ *
+ * - `neutral-web` reuses the exported NEUTRAL_WEB_TARGET literal (the documented
+ *   default; `parseDesignHandoff` substitutes it when the producer omits the
+ *   target).
+ * - `astro-react` / `astro-vue` are the canonical capability combinations the
+ *   registry (resolveWebTarget) accepts. Both satisfy WebTargetProfileSchema and
+ *   pass the registry's capability checks, so the envelope's re-render step
+ *   byte-reproduces the producer's renderings.
+ *
+ * Because the envelope persists ONLY the target id (per the Task 1 handoff
+ * shape), every id MUST map to exactly one canonical profile here — otherwise
+ * the producer and the envelope parser would diverge and the re-render/
+ * re-hash verification would throw.
+ */
+const ASTRO_REACT_TARGET: WebTargetProfile = {
+  id: "astro-react",
+  platform: "web",
+  siteFramework: "astro",
+  runtime: "react",
+  styling: "tailwind",
+  componentSource: "shadcn",
+  motion: "css",
+  islandStrategy: "client:visible",
+};
+
+const ASTRO_VUE_TARGET: WebTargetProfile = {
+  id: "astro-vue",
+  platform: "web",
+  siteFramework: "astro",
+  runtime: "vue",
+  styling: "vanilla-css",
+  componentSource: "native-html",
+  motion: "css",
+  islandStrategy: "client:visible",
+};
+
+export const CANONICAL_WEB_TARGET_PROFILES: Readonly<Record<WebTargetIdT, WebTargetProfile>> = {
+  "neutral-web": { ...NEUTRAL_WEB_TARGET },
+  "astro-react": { ...ASTRO_REACT_TARGET },
+  "astro-vue": { ...ASTRO_VUE_TARGET },
+};
 
 // ===========================================================================
 // 2. SafeErrorMessage — operator-safe, bounded error text
@@ -683,25 +736,23 @@ export function parseDesignArtifactEnvelope(raw: unknown): DesignArtifactEnvelop
 /**
  * Resolve the canonical WebTargetProfile for a stored target id. The envelope
  * persists only the id (per the plan's handoff shape); the parser reconstructs
- * the full profile from the id. neutral-web maps to the canonical
- * NEUTRAL_WEB_TARGET literal (the documented default and the only target
- * exercised in Task 1's scope). astro-react/astro-vue producers must use the
- * canonical registry profile at production time; the re-render verification
- * below rejects any profile that does not byte-reproduce.
+ * the full profile from the id via CANONICAL_WEB_TARGET_PROFILES — the SAME
+ * registry the producer consumes. This guarantees the re-render/re-hash step
+ * byte-reproduces the producer's renderings for neutral-web, astro-react, and
+ * astro-vue.
+ *
+ * WebTargetId is a closed enum, so every valid id has a canonical profile; the
+ * throw below is defensive only and should never fire for an envelope whose
+ * handoff.target passed EnvelopeHandoffSchema.
  */
-function resolveTargetProfile(targetId: z.infer<typeof WebTargetId>): Record<string, unknown> {
-  if (targetId === "neutral-web") {
-    return { ...NEUTRAL_WEB_TARGET };
+function resolveTargetProfile(targetId: z.infer<typeof WebTargetId>): WebTargetProfile {
+  const profile = CANONICAL_WEB_TARGET_PROFILES[targetId];
+  if (profile === undefined) {
+    throw new Error(
+      `design artifact envelope integrity check failed: unknown web target id "${targetId}"`,
+    );
   }
-  // astro-react / astro-vue: the full WebTargetProfile is not deterministic
-  // from the id alone (componentSource/styling/motion vary). The envelope
-  // stores only the id per the Task 1 contract shape; producers (Task 3) must
-  // use the canonical registry profile, and the re-render verification below
-  // rejects any inconsistency. For Task 1's scope (neutral-web only), we throw
-  // a clear contract error for astro targets to surface the limitation.
-  throw new Error(
-    "design artifact envelope integrity check failed: astro target reconstruction requires the full profile (not yet stored in the envelope handoff shape)",
-  );
+  return { ...profile };
 }
 
 // ===========================================================================

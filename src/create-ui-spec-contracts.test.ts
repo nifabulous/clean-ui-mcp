@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ArtifactMetadataSchema,
+  CANONICAL_WEB_TARGET_PROFILES,
   CreateUiSpecCandidateSchema,
   CreateUiSpecErrorSchema,
   CreateUiSpecRequestSchema,
@@ -692,21 +693,18 @@ describe("ArtifactMetadataSchema", () => {
   });
 });
 
-/** Build a fully valid envelope (renderings + hashes computed from a real handoff). */
-function buildValidEnvelope(): Record<string, unknown> {
+/**
+ * Build a fully valid envelope (renderings + hashes computed from a real
+ * handoff). The target id resolves the canonical profile from the shared
+ * CANONICAL_WEB_TARGET_PROFILES registry (the same registry the producer and
+ * parseDesignArtifactEnvelope consult), defaulting to neutral-web.
+ */
+function buildValidEnvelope(targetId: keyof typeof CANONICAL_WEB_TARGET_PROFILES = "neutral-web"): Record<string, unknown> {
   const spec = UiSpec.parse(validUiSpec()) as import("./tool-contracts.js").UiSpecT;
+  const target = CANONICAL_WEB_TARGET_PROFILES[targetId];
   const handoff = parseDesignHandoff({
     spec,
-    target: {
-      id: "neutral-web",
-      platform: "web",
-      siteFramework: "none",
-      runtime: "none",
-      styling: "vanilla-css",
-      componentSource: "native-html",
-      motion: "css",
-      islandStrategy: null,
-    },
+    target,
     motionIntents: [],
     generatedAt: "2026-07-15T00:00:00Z",
   });
@@ -722,7 +720,7 @@ function buildValidEnvelope(): Record<string, unknown> {
     producerVersion: "1.2.3",
     assemblyRulesSha256: "a".repeat(64),
     spec,
-    handoff: { target: "neutral-web", motionIntents: [] },
+    handoff: { target: targetId, motionIntents: [] },
     designMarkdown,
     designJson,
     specSha256: specSha,
@@ -777,6 +775,23 @@ describe("parseDesignArtifactEnvelope", () => {
   it("parses a valid envelope and returns it", () => {
     const parsed = parseDesignArtifactEnvelope(buildValidEnvelope());
     expect(parsed.artifactId).toBe("art-1");
+    expect(parsed.spec.specVersion).toBe("1.0");
+  });
+
+  it("re-renders + re-verifies an astro-react envelope end-to-end (no throw)", () => {
+    // The envelope stores only handoff.target === "astro-react"; the parser must
+    // reconstruct the canonical astro-react profile from the shared registry and
+    // byte-reproduce the renderings. Previously this threw (Task 1 limitation).
+    const env = buildValidEnvelope("astro-react");
+    const parsed = parseDesignArtifactEnvelope(env);
+    expect(parsed.handoff.target).toBe("astro-react");
+    expect(parsed.spec.specVersion).toBe("1.0");
+  });
+
+  it("re-renders + re-verifies an astro-vue envelope end-to-end (no throw)", () => {
+    const env = buildValidEnvelope("astro-vue");
+    const parsed = parseDesignArtifactEnvelope(env);
+    expect(parsed.handoff.target).toBe("astro-vue");
     expect(parsed.spec.specVersion).toBe("1.0");
   });
 

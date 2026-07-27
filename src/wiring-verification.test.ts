@@ -310,16 +310,6 @@ const ALLOWLIST = new Set<string>([
   // manifest symbols above, which the src/*.ts regex scan cannot see. Will be
   // removed from this allowlist when the MCP tool registration lands.
   "createUiSpec",
-  // c3/safe-aggregator.ts — aggregatePatternHistogram (closed-vocabulary
-  // pattern-type histogram) and buildRationale (bounded recipe-owned rationale)
-  // are library helpers for future corpus-evidence decisions. They are exercised
-  // by safe-aggregator.test.ts (the type-boundary + determinism suite) and are
-  // the foundation for corpus-grounded decisions in a later C3 milestone (the
-  // c3-fallback-v1 recipe currently emits zero-evidence arrays). Listed here
-  // rather than wired to a placeholder caller to avoid fake coupling, per the
-  // same precedent as computeLabelAgreement above.
-  "aggregatePatternHistogram",
-  "buildRationale",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

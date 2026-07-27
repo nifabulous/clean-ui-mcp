@@ -39,6 +39,8 @@ import type { SearchResult } from "./corpus.js";
 import {
   CreateUiSpecErrorSchema,
   CreateUiSpecRequestSchema,
+  CANONICAL_WEB_TARGET_PROFILES,
+  type CreateUiSpecCandidate,
   type CreateUiSpecRequest,
   type CreateUiSpecError,
   type DesignArtifactEnvelope,
@@ -339,12 +341,165 @@ function sanitizeCorpusObservation(id: string, entry: CorpusEntryT): SanitizedEv
 }
 
 // ===========================================================================
+// 3b. Candidate construction — route the deterministic recipe through the
+//     evidence-aware candidate parser (the safety spine) before mapping any
+//     decision into UiSpec.
+// ===========================================================================
+
+/**
+ * The recipe-owned rationale text for a decision field, bounded to the
+ * candidate schema's DecisionRationale limit (1_000 chars). Reads ONLY the
+ * recipe's assembly-rule note (never corpus prose); falls back to a generic
+ * deterministic string when the recipe carries no note.
+ */
+function recipeRationale(field: string): string {
+  const rule = RECIPE.assemblyRules[field];
+  const note = rule?.note?.trim();
+  const base = note && note.length > 0
+    ? note
+    : `Deterministic fallback decision for ${field}; no corpus- or model-derived evidence was invented.`;
+  return base.length <= 1_000 ? base : base.slice(0, 1_000);
+}
+
+/**
+ * Build the deterministic fallback candidate (the Task 1 15-variant
+ * discriminated-union shape) from the recipe + sanitized evidence + request.
+ *
+ * The candidate is an INTERMEDIATE representation of the same recipe — every
+ * value it carries is derived from the recipe's fixed assembly rules or echoed
+ * from requester-supplied input. It is then parsed through
+ * `parseCreateUiSpecCandidate(candidate, allowedEvidenceIds)` (the safety spine:
+ * enforces evidence membership, rejects duplicate decision ids, rejects private
+ * markers) BEFORE any decision is mapped into UiSpec. Routing the deterministic
+ * recipe through this parser on trusted input proves the candidate → UiSpec map
+ * works before untrusted live provider input exercises it in Phase 2.
+ *
+ * Decisions emitted:
+ *  - `designDirection` (echo-product-context): value = echoed productContext;
+ *    cites the response-scoped corpus evidence ids (when present).
+ *  - The fixed-empty array fields whose candidate shape maps cleanly to their
+ *    UiSpec destination (`layoutRegions`, `responsiveBehavior`,
+ *    `componentInventory`, `interactions`, `accessibilityConstraints`,
+ *    `techniques`, `antiPatterns`): value = [] (the truthful zero-evidence
+ *    state); cite no evidence.
+ *  - `frameworkNotes` ONLY when the requester supplied an implementationFramework
+ *    (the recipe's omit strategy otherwise): value = the framework note string.
+ *
+ * Fields the recipe marks unavailable (colorTokens, typographyTokens, motion)
+ * or omits (contentVoiceGuidance; frameworkNotes when unsupplied) produce NO
+ * candidate decision — the assembler emits the `unavailableDecisions` + null
+ * tokens / omissions for them directly. `rejectedDefaults` is also direct: its
+ * candidate variant is a single string summary, which cannot carry the recipe's
+ * empty-array state.
+ */
+export function buildFallbackCandidate(
+  request: CreateUiSpecRequest,
+  sanitizedEvidence: readonly SanitizedEvidence[],
+  recipe: { readonly recipeVersion: string },
+): CreateUiSpecCandidate {
+  void recipe; // recipeVersion is unused; the recipe's rules are read via RECIPE.
+  const corpusEvidenceIds = sanitizedEvidence
+    .filter((e) => e.kind === "corpus-observation")
+    .map((e) => e.id)
+    .slice(0, 8);
+
+  const designDirection = buildDesignDirectionSummary(request, RECIPE);
+
+  // Build the candidate as a plain object; parseCreateUiSpecCandidate validates
+  // it through CreateUiSpecCandidateSchema + evidence membership.
+  const decisions: CreateUiSpecCandidate["decisions"] = [
+    {
+      field: "designDirection",
+      id: "fallback-designDirection",
+      value: designDirection,
+      rationale: recipeRationale("designDirection"),
+      evidenceIds: corpusEvidenceIds,
+    },
+    {
+      field: "layoutRegions",
+      id: "fallback-layoutRegions",
+      value: [],
+      rationale: recipeRationale("layoutRegions"),
+      evidenceIds: [],
+    },
+    {
+      field: "responsiveBehavior",
+      id: "fallback-responsiveBehavior",
+      value: [],
+      rationale: recipeRationale("responsiveBehavior"),
+      evidenceIds: [],
+    },
+    {
+      field: "componentInventory",
+      id: "fallback-componentInventory",
+      value: [],
+      rationale: recipeRationale("componentInventory"),
+      evidenceIds: [],
+    },
+    {
+      field: "interactions",
+      id: "fallback-interactions",
+      value: [],
+      rationale: recipeRationale("interactions"),
+      evidenceIds: [],
+    },
+    {
+      field: "accessibilityConstraints",
+      id: "fallback-accessibilityConstraints",
+      value: [],
+      rationale: recipeRationale("accessibilityConstraints"),
+      evidenceIds: [],
+    },
+    {
+      field: "techniques",
+      id: "fallback-techniques",
+      value: [],
+      rationale: recipeRationale("techniques"),
+      evidenceIds: [],
+    },
+    {
+      field: "antiPatterns",
+      id: "fallback-antiPatterns",
+      value: [],
+      rationale: recipeRationale("antiPatterns"),
+      evidenceIds: [],
+    },
+  ];
+
+  // frameworkNotes is emitted ONLY when the requester supplied an
+  // implementationFramework (the recipe's omit strategy otherwise).
+  if (request.implementationFramework !== undefined) {
+    decisions.push({
+      field: "frameworkNotes",
+      id: "fallback-frameworkNotes",
+      value: `Implementation framework: ${request.implementationFramework}`,
+      rationale: recipeRationale("frameworkNotes"),
+      evidenceIds: [],
+    });
+  }
+
+  return {
+    candidateVersion: "1.0",
+    decisions,
+  };
+}
+
+// ===========================================================================
 // 4. Deterministic assembly (UiSpec 1.0)
 // ===========================================================================
 
 /**
  * Assemble the validated UiSpec 1.0 from the recipe + sanitized evidence. The
  * deterministic c3-fallback-v1 recipe is the ONLY provider path this milestone.
+ *
+ * Pipeline: the recipe is first materialized as a CreateUiSpecCandidate
+ * (buildFallbackCandidate), then parsed through parseCreateUiSpecCandidate —
+ * the safety spine that enforces evidence membership, rejects duplicate
+ * decision ids, and rejects private markers BEFORE any decision touches UiSpec.
+ * The parsed candidate's decisions are then mapped into UiSpec fields. Fields
+ * the candidate does not cover (envelope fields, unavailable/omit fields) are
+ * constructed directly. If the candidate parser throws (an internal-producer
+ * bug — the recipe is deterministic), it is wrapped as INVALID_INPUT.
  *
  * Authority/evidence membership:
  *  - corpus-derived decisions reference ONLY response-scoped evidence-* ids.
@@ -368,8 +523,38 @@ function assembleSpec(
     .map((e) => e.id);
   const citedReferences = [...resolved.resolvedReferenceTokens];
 
+  // ----- Candidate pipeline (recipe → candidate → evidence-aware parse) -----
+  // The candidate is the deterministic recipe materialized as the Task 1
+  // discriminated-union shape; parsing it proves evidence membership + rejects
+  // structural problems before anything maps into UiSpec.
+  const candidate = buildFallbackCandidate(request, evidence, RECIPE);
+  const allowedEvidenceIds = new Set(evidenceIds);
+  let parsedCandidate: CreateUiSpecCandidate;
+  try {
+    parsedCandidate = parseCreateUiSpecCandidate(candidate, allowedEvidenceIds);
+  } catch {
+    // The recipe is deterministic, so this should never fire. Surface as an
+    // internal INVALID_INPUT rather than letting a raw Error escape.
+    throw invalidInput("deterministic fallback candidate failed evidence-aware parse");
+  }
+
+  // ----- Map the parsed candidate's decisions into UiSpec fields -----
+  // designDirection (string → string) + the fixed-empty array fields ([] → []).
+  const decisionsByField = new Map(parsedCandidate.decisions.map((d) => [d.field, d]));
+  const designDirection = decisionsByField.get("designDirection")?.value as string;
+  const layoutRegions = (decisionsByField.get("layoutRegions")?.value ?? []) as unknown[];
+  const responsiveBehavior = (decisionsByField.get("responsiveBehavior")?.value ?? []) as unknown[];
+  const componentInventory = (decisionsByField.get("componentInventory")?.value ?? []) as unknown[];
+  const interactions = (decisionsByField.get("interactions")?.value ?? []) as unknown[];
+  const accessibilityConstraints = (decisionsByField.get("accessibilityConstraints")?.value ?? []) as unknown[];
+  const techniques = (decisionsByField.get("techniques")?.value ?? []) as unknown[];
+  const antiPatterns = (decisionsByField.get("antiPatterns")?.value ?? []) as unknown[];
+  const frameworkNotesCandidate = decisionsByField.get("frameworkNotes")?.value as string | undefined;
+
+  // rejectedDefaults is NOT a candidate decision (its candidate variant is a
+  // single string summary, which cannot carry the recipe's empty-array state).
+  // Construct it directly from the recipe's fixed-empty rule.
   const arrays = buildFixedEmptyArrays(RECIPE);
-  const designDirection = buildDesignDirectionSummary(request, RECIPE);
 
   // Cited decisions: corpus observations ground the designDirection when
   // available; explicit references ground it via the editorial lane otherwise.
@@ -432,21 +617,19 @@ function assembleSpec(
     },
     designDirection,
     rejectedDefaults: arrays.rejectedDefaults,
-    layoutRegions: arrays.layoutRegions,
-    responsiveBehavior: arrays.responsiveBehavior,
-    componentInventory: arrays.componentInventory,
+    layoutRegions,
+    responsiveBehavior,
+    componentInventory,
     colorTokens: null,
     colorTokenAuthority: "editorial",
     typographyTokens: null,
     typographyTokenAuthority: "editorial",
-    interactions: arrays.interactions,
+    interactions,
     motionGuidance: { notes: [], evidenceUnavailable: true },
-    accessibilityConstraints: arrays.accessibilityConstraints,
-    ...(request.implementationFramework !== undefined
-      ? { frameworkNotes: `Implementation framework: ${request.implementationFramework}` }
-      : {}),
-    techniques: arrays.techniques,
-    antiPatterns: arrays.antiPatterns,
+    accessibilityConstraints,
+    ...(frameworkNotesCandidate !== undefined ? { frameworkNotes: frameworkNotesCandidate } : {}),
+    techniques,
+    antiPatterns,
     unavailableDecisions,
     acceptanceCriteria,
     citedReferences,
@@ -493,8 +676,8 @@ function buildEnvelope(
 
   // Target resolution: pass undefined for neutral-web/absent so the handoff
   // parser substitutes the canonical NEUTRAL_WEB_TARGET. For astro targets,
-  // construct the minimal canonical profile (Task 1 forward-note — astro
-  // reconstruction from the id alone is a known contract gap).
+  // resolve the canonical profile from the shared CANONICAL_WEB_TARGET_PROFILES
+  // registry (the same registry parseDesignArtifactEnvelope consults).
   const targetId = request.target ?? "neutral-web";
   const handoffTarget = resolveHandoffTarget(targetId);
 
@@ -558,46 +741,20 @@ function buildEnvelope(
 }
 
 /**
- * Resolve the handoff target. Returns `undefined` for neutral-web/absent (the
- * handoff parser substitutes NEUTRAL_WEB_TARGET). For astro targets, constructs
- * the minimal canonical profile.
- *
- * NOTE (Task 1 contract gap): parseDesignArtifactEnvelope's internal
- * resolveTargetProfile cannot reconstruct the full astro profile from the id
- * alone, so the final re-parse will throw for astro targets. This is a known
- * Task 1 limitation; the minimal fix is to extend resolveTargetProfile to map
- * each id to its canonical profile. Neutral-web (this milestone's only
- * exercised target) is fully supported.
+ * Resolve the handoff target profile for the request's target id. Returns
+ * `undefined` for neutral-web (so the handoff parser substitutes the canonical
+ * NEUTRAL_WEB_TARGET — matching how the envelope parser reconstructs the
+ * profile from the id). For astro targets, returns the canonical profile from
+ * the SHARED CANONICAL_WEB_TARGET_PROFILES registry (the same registry
+ * parseDesignArtifactEnvelope consults), guaranteeing the re-render/re-hash
+ * verification byte-reproduces this render.
  */
 function resolveHandoffTarget(
   targetId: string,
 ): Record<string, unknown> | undefined {
   if (targetId === "neutral-web") return undefined;
-  if (targetId === "astro-react") {
-    return {
-      id: "astro-react",
-      platform: "web",
-      siteFramework: "astro",
-      runtime: "react",
-      styling: "tailwind",
-      componentSource: "shadcn",
-      motion: "css",
-      islandStrategy: "client:visible",
-    };
-  }
-  if (targetId === "astro-vue") {
-    return {
-      id: "astro-vue",
-      platform: "web",
-      siteFramework: "astro",
-      runtime: "vue",
-      styling: "vanilla-css",
-      componentSource: "native-html",
-      motion: "css",
-      islandStrategy: "client:visible",
-    };
-  }
-  return undefined;
+  const profile = CANONICAL_WEB_TARGET_PROFILES[targetId as keyof typeof CANONICAL_WEB_TARGET_PROFILES];
+  return profile !== undefined ? { ...profile } : undefined;
 }
 
 /**

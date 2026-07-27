@@ -22,7 +22,6 @@ import recipe from "./fallback-recipe-v1.json" with { type: "json" };
 // ---------------------------------------------------------------------------
 
 const DESIGN_DIRECTION_MAX = 2_000;
-const RATIONALE_MAX = 1_000;
 
 /**
  * The checked-in recipe, typed by structural projection. The producer imports
@@ -57,39 +56,11 @@ export const RECIPE: FallbackRecipe = recipe as unknown as FallbackRecipe;
 // Closed-vocabulary aggregation
 // ---------------------------------------------------------------------------
 
-/**
- * A pattern-type histogram row. `pattern` comes ONLY from the sanitized
- * evidence's allowlisted `structuredFacts.pattern` field — never from raw
- * corpus prose.
- */
-export interface PatternHistogramRow {
-  readonly pattern: string;
-  readonly count: number;
-}
-
-/**
- * Aggregate a closed-vocabulary pattern-type histogram from sanitized evidence.
- * Entries without a `structuredFacts.pattern` are omitted. Output is ordered
- * deterministically: by pattern ascending, then by count descending.
- *
- * Accepts ONLY `SanitizedEvidence[]` — raw `CorpusEntryT[]` is a type error.
- */
-export function aggregatePatternHistogram(
-  evidence: readonly SanitizedEvidence[],
-): PatternHistogramRow[] {
-  const counts = new Map<string, number>();
-  for (const e of evidence) {
-    const pattern = e.structuredFacts?.pattern;
-    if (typeof pattern !== "string" || pattern.length === 0) continue;
-    counts.set(pattern, (counts.get(pattern) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .map(([pattern, count]) => ({ pattern, count }))
-    .sort((a, b) => {
-      if (a.pattern !== b.pattern) return a.pattern < b.pattern ? -1 : 1;
-      return b.count - a.count;
-    });
-}
+// NOTE: the previous aggregatePatternHistogram helper was removed as dead code
+// (YAGNI) — it had zero production call sites and was exercised only by its own
+// unit test. The c3-fallback-v1 recipe emits zero-evidence arrays, so no
+// pattern histogram is computed. If a later milestone grounds decisions in
+// corpus patterns, reintroduce the helper alongside its production caller.
 
 // ---------------------------------------------------------------------------
 // Recipe-owned summaries
@@ -109,19 +80,10 @@ export function buildDesignDirectionSummary(
   return ctx.length <= DESIGN_DIRECTION_MAX ? ctx : ctx.slice(0, DESIGN_DIRECTION_MAX);
 }
 
-/**
- * Build a bounded, recipe-owned rationale for a decision field. The rationale
- * is recipe-owned text (never corpus prose); when the recipe carries a note for
- * the field it is used, otherwise a generic deterministic fallback is emitted.
- */
-export function buildRationale(field: string, recipe: FallbackRecipe): string {
-  const rule = recipe.assemblyRules[field];
-  const note = rule?.note?.trim();
-  const base = note && note.length > 0
-    ? note
-    : `Deterministic fallback decision for ${field}; no corpus- or model-derived evidence was invented.`;
-  return base.length <= RATIONALE_MAX ? base : base.slice(0, RATIONALE_MAX);
-}
+// NOTE: the previous buildRationale helper was removed as dead code (YAGNI) —
+// it had zero production call sites (the c3-fallback-v1 recipe emits its own
+// recipe-owned text directly) and was exercised only by its own unit test. The
+// recipe's assembly-rule notes are read inline where needed.
 
 /**
  * The fixed-empty/unavailable strategy output for the array-shaped decision

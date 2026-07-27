@@ -27,12 +27,14 @@ import type { CorpusReader } from "./corpus-reader.js";
 import type { CorpusEntryT } from "./schema.js";
 import {
   parseDesignArtifactEnvelope,
+  parseCreateUiSpecCandidate,
   buildSemanticSpecInput,
 } from "./create-ui-spec-contracts.js";
 import { CreateUiSpecRequestSchema } from "./create-ui-spec-contracts.js";
 import { canonicalJsonStringify, sha256Hex } from "./readiness/contracts.js";
-import { createUiSpec, type CreateUiSpecDependencies } from "./create-ui-spec.js";
+import { createUiSpec, buildFallbackCandidate, type CreateUiSpecDependencies } from "./create-ui-spec.js";
 import recipe from "./c3/fallback-recipe-v1.json" with { type: "json" };
+import type { SanitizedEvidence } from "./create-ui-spec-contracts.js";
 
 // ---------------------------------------------------------------------------
 // Frozen recipe identity (mirrors fallback-recipe-v1.test.ts).
@@ -467,6 +469,128 @@ describe("create-ui-spec producer — determinism and boundaries", () => {
     await expect(
       createUiSpec(validInput({ referenceIds: ["dup", "dup"] }), deps([], [])),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+});
+
+describe("create-ui-spec producer — astro targets (end-to-end)", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { vi.clearAllMocks(); });
+
+  it("produces a parseable envelope for target: astro-react", async () => {
+    // Previously the producer accepted the request but parseDesignArtifactEnvelope
+    // threw on the final integrity check (resolveTargetProfile only handled
+    // neutral-web). With the shared canonical-profile registry, astro-react now
+    // round-trips end-to-end.
+    const env = await createUiSpec(
+      validInput({ target: "astro-react" }),
+      deps([], []),
+    );
+    const parsed = parseDesignArtifactEnvelope(env);
+    expect(parsed.handoff.target).toBe("astro-react");
+    expect(parsed.artifactId.startsWith("uispec-")).toBe(true);
+    // Identity invariants: the assemblyRulesSha256 matches the recipe SHA, and
+    // the stored semanticSpecSha256 re-verifies (parseDesignArtifactEnvelope
+    // re-derives it).
+    expect(parsed.assemblyRulesSha256).toBe(EXPECTED_RECIPE_SHA256);
+  });
+
+  it("produces a parseable envelope for target: astro-vue", async () => {
+    const env = await createUiSpec(
+      validInput({ target: "astro-vue" }),
+      deps([], []),
+    );
+    const parsed = parseDesignArtifactEnvelope(env);
+    expect(parsed.handoff.target).toBe("astro-vue");
+    expect(parsed.artifactId.startsWith("uispec-")).toBe(true);
+  });
+
+  it("astro-react produces a distinct artifactId from neutral-web (target is part of identity)", async () => {
+    const neutral = await createUiSpec(validInput(), deps([], []));
+    const astro = await createUiSpec(validInput({ target: "astro-react" }), deps([], []));
+    expect(neutral.handoff.target).toBe("neutral-web");
+    expect(astro.handoff.target).toBe("astro-react");
+    expect(neutral.artifactId).not.toBe(astro.artifactId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Candidate pipeline — proves the deterministic recipe routes through the
+// evidence-aware candidate parser (the safety spine) before mapping into UiSpec.
+// ---------------------------------------------------------------------------
+
+describe("create-ui-spec producer — candidate pipeline (parseCreateUiSpecCandidate)", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { vi.clearAllMocks(); });
+
+  it("buildFallbackCandidate produces a structurally valid candidate", () => {
+    const req = CreateUiSpecRequestSchema.parse(validInput());
+    const candidate = buildFallbackCandidate(req, [], recipe);
+    // Parses clean with an empty allowed-evidence set (the fallback candidate
+    // cites no evidence when no corpus observations are present).
+    const parsed = parseCreateUiSpecCandidate(candidate, new Set());
+    expect(parsed.candidateVersion).toBe("1.0");
+    // The candidate carries a designDirection decision + the fixed-empty array
+    // decisions.
+    const fields = parsed.decisions.map((d) => d.field);
+    expect(fields).toContain("designDirection");
+    expect(fields).toContain("layoutRegions");
+    expect(fields).toContain("techniques");
+  });
+
+  it("buildFallbackCandidate cites corpus evidence ids, and the parser accepts them when bound", () => {
+    const corpusEvidence: SanitizedEvidence = {
+      id: "evidence-1",
+      kind: "corpus-observation",
+      basis: "visible",
+      summary: "dashboard reference",
+      structuredFacts: { pattern: "dashboard" },
+    };
+    const req = CreateUiSpecRequestSchema.parse(validInput());
+    const candidate = buildFallbackCandidate(req, [corpusEvidence], recipe);
+    // The designDirection decision cites the corpus evidence id.
+    const dd = candidate.decisions.find((d) => d.field === "designDirection");
+    expect(dd?.evidenceIds).toContain("evidence-1");
+    // Parses clean when evidence-1 is in the allowed set.
+    expect(() => parseCreateUiSpecCandidate(candidate, new Set(["evidence-1"]))).not.toThrow();
+  });
+
+  it("parseCreateUiSpecCandidate REJECTS a candidate citing an unbound evidence id", () => {
+    // Inject an unbound evidence id into the candidate (simulating a producer
+    // bug or untrusted Phase-2 provider). The parser must reject it BEFORE any
+    // decision reaches UiSpec.
+    const req = CreateUiSpecRequestSchema.parse(validInput());
+    const candidate = buildFallbackCandidate(req, [], recipe);
+    const tampered = {
+      ...candidate,
+      decisions: candidate.decisions.map((d) =>
+        d.field === "designDirection"
+          ? { ...d, evidenceIds: ["evidence-99"] }
+          : d,
+      ),
+    };
+    expect(() => parseCreateUiSpecCandidate(tampered, new Set())).toThrow();
+  });
+
+  it("the producer never emits a spec citing an evidence id outside publicEvidenceIds", async () => {
+    // End-to-end: the producer's assembled spec + provenance cite ONLY ids that
+    // appear in the envelope's publicEvidenceIds. This proves the candidate
+    // pipeline (buildFallbackCandidate + parseCreateUiSpecCandidate) is wired
+    // into the producer and enforces evidence membership on trusted input.
+    const e = entry("e1", "product-A");
+    const env = await createUiSpec(validInput(), deps([e], [{ entry: e, score: 5 }]));
+    const parsed = parseDesignArtifactEnvelope(env);
+    const publicIds = new Set(parsed.publicEvidenceIds);
+    expect(publicIds.size).toBeGreaterThan(0);
+    // Every provenance evidence id is public.
+    for (const id of parsed.spec.provenance.evidenceIds) {
+      expect(publicIds.has(id)).toBe(true);
+    }
+    // Every citedDecision evidence id is public.
+    for (const cd of parsed.spec.citedDecisions) {
+      for (const id of cd.evidenceIds) {
+        expect(publicIds.has(id)).toBe(true);
+      }
+    }
   });
 });
 

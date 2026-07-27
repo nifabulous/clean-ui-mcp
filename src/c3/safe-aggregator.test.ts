@@ -4,11 +4,15 @@
  *
  * The safe aggregator accepts ONLY branded `SanitizedEvidence[]` (+ the parsed
  * request + the checked-in recipe). It must NEVER receive raw `CorpusEntryT`
- * prose — the type boundary is the safety guarantee. This suite covers:
- *  - closed-vocabulary aggregation (pattern-type histogram),
- *  - deterministic ordering (pattern, then evidence id),
- *  - recipe-owned summaries (echo productContext, fixed-empty arrays),
+ * prose — the type boundary is the safety guarantee. This suite covers the
+ * helpers the producer actually consumes:
+ *  - recipe-owned summaries (echo productContext, fixed-empty arrays, corpus-
+ *    observation summary template),
  *  - a raw-corpus type-boundary test (`@ts-expect-error` proves the boundary).
+ *
+ * NOTE: aggregatePatternHistogram and buildRationale were removed as dead code
+ * (YAGNI) — they had zero production call sites and were exercised only by
+ * their own unit tests.
  */
 import { describe, expect, it } from "vitest";
 import type { CreateUiSpecRequest } from "../create-ui-spec-contracts.js";
@@ -16,9 +20,8 @@ import type { SanitizedEvidence } from "../create-ui-spec-contracts.js";
 import type { CorpusEntryT } from "../schema.js";
 import recipe from "./fallback-recipe-v1.json" with { type: "json" };
 import {
-  aggregatePatternHistogram,
+  buildCorpusObservationSummary,
   buildDesignDirectionSummary,
-  buildRationale,
   buildFixedEmptyArrays,
 } from "./safe-aggregator.js";
 
@@ -43,42 +46,33 @@ function request(over: Partial<CreateUiSpecRequest> = {}): CreateUiSpecRequest {
   };
 }
 
-describe("aggregatePatternHistogram", () => {
-  it("returns an empty histogram for no evidence", () => {
-    const h = aggregatePatternHistogram([]);
-    expect(h).toEqual([]);
+describe("buildCorpusObservationSummary", () => {
+  it("builds a pattern + region-count summary when both facts are present", () => {
+    const summary = buildCorpusObservationSummary(
+      evidence({ structuredFacts: { pattern: "dashboard", regionCount: 3 } }),
+    );
+    expect(summary).toBe("dashboard reference with 3 regions");
   });
 
-  it("counts only the closed structuredFacts.pattern key", () => {
-    const h = aggregatePatternHistogram([
-      evidence({ structuredFacts: { pattern: "dashboard" } }, "evidence-1"),
-      evidence({ structuredFacts: { pattern: "dashboard" } }, "evidence-2"),
-      evidence({ structuredFacts: { pattern: "pricing" } }, "evidence-3"),
-      evidence({ structuredFacts: {} }, "evidence-4"),
-    ]);
-    // Sorted by pattern ascending; entries without a pattern are omitted.
-    expect(h).toEqual([
-      { pattern: "dashboard", count: 2 },
-      { pattern: "pricing", count: 1 },
-    ]);
+  it("builds a pattern-only summary when regionCount is absent", () => {
+    const summary = buildCorpusObservationSummary(
+      evidence({ structuredFacts: { pattern: "pricing" } }),
+    );
+    expect(summary).toBe("pricing reference");
   });
 
-  it("orders deterministically (pattern ascending, ties broken by count then id)", () => {
-    const h = aggregatePatternHistogram([
-      evidence({ structuredFacts: { pattern: "pricing" } }, "evidence-1"),
-      evidence({ structuredFacts: { pattern: "dashboard" } }, "evidence-2"),
-      evidence({ structuredFacts: { pattern: "dashboard" } }, "evidence-3"),
-    ]);
-    expect(h.map((r) => r.pattern)).toEqual(["dashboard", "pricing"]);
+  it("falls back to a generic, pattern-free summary when no pattern is set", () => {
+    const summary = buildCorpusObservationSummary(evidence({ structuredFacts: {} }));
+    expect(summary).toBe("Corpus observation reference");
   });
 
   it("never reads raw corpus prose (type boundary)", () => {
-    // @ts-expect-error — CorpusEntryT[] is NOT assignable to SanitizedEvidence[].
+    // @ts-expect-error — CorpusEntryT is NOT assignable to SanitizedEvidence.
     // The function signature enforces the branded-evidence type boundary; raw
     // corpus entries must not be passed (sanitizing after raw-corpus synthesis
     // is explicitly out of bounds).
-    const rawCorpus: CorpusEntryT[] = [] as unknown as CorpusEntryT[];
-    aggregatePatternHistogram(rawCorpus);
+    const rawCorpus: CorpusEntryT = {} as unknown as CorpusEntryT;
+    buildCorpusObservationSummary(rawCorpus);
     expect(true).toBe(true);
   });
 });
@@ -97,15 +91,6 @@ describe("buildDesignDirectionSummary", () => {
     // parses.
     expect(dir.length).toBeLessThanOrEqual(2_000);
     expect(dir.startsWith("x")).toBe(true);
-  });
-});
-
-describe("buildRationale", () => {
-  it("produces a bounded recipe-owned rationale string", () => {
-    const r = buildRationale("designDirection", recipe);
-    expect(typeof r).toBe("string");
-    expect(r.length).toBeGreaterThanOrEqual(1);
-    expect(r.length).toBeLessThanOrEqual(1_000);
   });
 });
 

@@ -121,6 +121,22 @@ generate(candidateInput): Promise<CreateUiSpecCandidate>
 decisions, prose, and evidence IDs. It has no authority lane, private identity,
 artifact hash, or permission to claim evidence membership.
 
+The candidate schema is strict and bounded. It contains
+`candidateVersion: "1.0"`, optional proposed values for the UiSpec sections,
+and a `decisions` array of at most 32 entries. Each decision is a
+field-specific discriminated union over `designDirection`, `rejectedDefaults`,
+`layoutRegions`, `responsiveBehavior`, `componentInventory`, `colorTokens`,
+`typographyTokens`, `interactions`, `motionGuidance`,
+`accessibilityConstraints`, `contentVoiceGuidance`, `techniques`,
+`antiPatterns`, `frameworkNotes`, and `acceptanceCriteria`. There is no generic
+`z.unknown()` value escape hatch. Each variant has a non-empty `id`, a
+field-appropriate bounded value, a bounded rationale, and at most eight
+`evidenceIds`. Text values, array lengths, region/component counts, and nested
+evidence-ID counts have explicit maxima in the Zod schema. Unknown keys,
+unrecognized fields, empty IDs, structural Markdown, private-path markers,
+and evidence IDs outside the sanitized set are rejected before assembly. The
+model candidate is never accepted through a type assertion.
+
 Two providers are required:
 
 1. **Deterministic provider:** offline and reproducible. It uses the brief,
@@ -176,14 +192,28 @@ retrieval: truthful safe retrieval metadata
 warnings: typed public warnings
 ```
 
-`canonicalSpecBytes` are the UTF-8 bytes of `canonicalJsonStringify(spec)`.
-`specSha256` hashes those bytes. The two rendering hashes use the exact UTF-8
+`canonicalSpecBytes` are the UTF-8 bytes of `canonicalJsonStringify(spec)`;
+`specSha256` hashes those exact emitted bytes. Because UiSpec 1.0 includes
+`provenance.generatedAt`, this hash is an artifact-instance hash and may differ
+between requests. `semanticSpecBytes` are the same canonical object with
+timestamp-only provenance normalized out; `semanticSpecSha256` is the stable
+semantic hash used for identity. The two rendering hashes use the exact UTF-8
 bytes returned by the existing renderers. `artifactId` is
 `uispec-<sha256>` over canonical JSON containing `artifactVersion`,
-`producerVersion`, `assemblyRulesSha256`, `specSha256`, the canonical handoff
-inputs, and the rendering format version. `generatedAt` is excluded from the
-identity. The existing deterministic handoff renderer remains the sole
-renderer for both output formats.
+`producerVersion`, `assemblyRulesSha256`, `semanticSpecSha256`, the canonical
+handoff inputs, and the rendering format version. `generatedAt` is excluded
+from identity. Repeated rendering of the same validated envelope is
+byte-identical; timestamp-only reruns have stable semantic identity but may
+have different instance hashes and JSON `generated_at` bytes.
+
+The public artifact envelope is itself a strict schema and has one constructor:
+`DesignArtifactEnvelopeSchema` and `parseDesignArtifactEnvelope()`, located in
+`src/create-ui-spec-contracts.ts`. The parser validates the nested UiSpec and
+handoff, checks every SHA-256 against the exact bytes, checks that
+`publicEvidenceIds` are unique response-scoped IDs, validates retrieval and
+warning coupling, and rejects private markers. HTTP responses and MCP adapter
+outputs are created only from this parsed envelope. Operator diagnostics are a
+separate non-serializable value and cannot enter the public envelope.
 
 The MCP adapter registers the beta `create_ui_spec` contract. Its structured
 `data` is the validated `UiSpec`; `content[0]` is the requested rendering:
@@ -206,24 +236,50 @@ it is not a second public name for the new tool.
 
 The implementation must make the producer boundary concrete in these files:
 
+- `src/create-ui-spec-contracts.ts`: strict candidate and artifact-envelope
+  schemas, canonical hash helpers, and the sole artifact parser;
+- `src/c3/fallback-recipe-v1.json`: checked-in canonical fallback field rules,
+  warning codes, unavailable decisions, and the machine-rule acceptance
+  criterion;
+- `src/c3/fallback-recipe-v1.test.ts`: canonical-byte and expected-SHA test for
+  the fallback recipe;
 - `src/create-ui-spec.ts`: shared service, input normalization, resolver,
   sanitizer, providers, assembler, artifact envelope, and hash construction;
+- `src/tool-contracts.ts`: replace `serializationFormat` with `outputFormat`,
+  update the create-tool retrieval policy and `allowNoneWithPositiveResult`,
+  remove the legacy name from the beta descriptor, and preserve strict
+  reference/evidence invariants;
+- `src/__fixtures__/tool-contract-fixtures.ts`, `src/tool-contracts.test.ts`,
+  `src/tool-contract-docs.test.ts`, and catalog tests: update fixtures, docs,
+  exact tool names, and retrieval-policy coverage;
 - `src/server-factory.ts`: register `create_ui_spec` through the canonical
   descriptor contract and remove `generate_design_prompt` from the public beta
   registration; keep legacy generation helpers private;
 - `src/scripts/ui-server.ts`: add `POST /api/create-ui-spec` and serve the
   Playground/API through the same operator-controlled local process;
-- `site/vite.config.ts`: development proxy for `/api` to the loopback UI
-  server; production dogfood uses the same-origin served build rather than a
-  browser-visible private-corpus API on another origin;
-- `src/create-ui-spec.test.ts`, MCP contract tests, and browser tests: prove
+- `site/vite.config.ts`: proxy `/api` to
+  `http://127.0.0.1:${CLEAN_UI_PORT:-3131}` during development;
+- `site/src/data/create-ui-spec.ts`, `site/src/pages/PlaygroundPage.tsx`, and
+  `site/tests/site-browser.test.ts`: use the same-origin API and prove the
+  focused composer states;
+- `src/create-ui-spec.test.ts`, envelope tests, MCP contract tests, and browser
+  tests: prove
   both adapters invoke the same service and no second renderer exists.
+
+The production dogfood command is explicit: build the site with `npm run
+site:build`, start the loopback UI server with `CLEAN_UI_SITE_DIST=site/dist
+npm run ui`, and serve `/clean-ui-mcp/*` from that same process alongside
+`/api/*`. The Vite dev server is only a development convenience; it is never
+the production privacy boundary.
 
 The local API binds to `127.0.0.1` only. It rejects unexpected `Origin` values
 using an explicit local allowlist and requires a per-process CSRF nonce in a
-request header for POST requests. Live provider calls are disabled unless the
-operator explicitly enables them. The API never accepts credentials, cookies,
-or authorization headers from the browser.
+request header for POST requests. `GET /api/csrf` issues the nonce only to an
+allowed origin; the browser sends it in `X-Clean-UI-CSRF` on
+`POST /api/create-ui-spec`. The nonce is process-local and invalidated on
+restart. Live provider calls are disabled unless the operator explicitly
+enables them. The API never accepts credentials, cookies, or authorization
+headers from the browser.
 
 ## Playground experience
 
@@ -290,8 +346,11 @@ fallback path instead of entering the fatal state.
 - candidate evidence membership and deterministic authority assignment;
 - deterministic behavior for absent, malformed, timed-out, and rejected
   providers;
+- strict candidate-schema rejection for unknown keys, oversized fields,
+  Markdown, private markers, and unbound evidence IDs;
 - strict `UiSpec` validation;
-- stable artifact IDs and byte-identical JSON/Markdown rendering;
+- envelope hash verification, stable semantic artifact IDs, and byte-identical
+  repeated rendering of one envelope;
 - absence of private markers and raw corpus material.
 
 ### MCP
@@ -310,6 +369,9 @@ fallback path instead of entering the fatal state.
 - adapter mapping uses the same producer service;
 - idle, generating, success, fallback, validation-error, and retry states;
 - downloaded bytes match returned hashes;
+- same-origin production serving and Vite proxy behavior;
+- CSRF nonce issuance, origin rejection, nonce-restart invalidation, and no
+  browser-supplied credentials;
 - keyboard-complete controls, visible focus, live status, and mobile layout;
 - no private evidence appears in DOM or HTTP response.
 

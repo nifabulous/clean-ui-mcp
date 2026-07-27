@@ -371,6 +371,54 @@ describe("CreateUiSpecCandidateSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  // Boundary-inclusive: the max() limits are ACCEPTED at the exact boundary.
+  // Mirrors the rejection tests above (which assert the exclusive side).
+  it("accepts exactly 32 decisions (boundary-inclusive)", () => {
+    const decisions = Array.from({ length: 32 }, (_, i) => ({
+      field: "designDirection", id: `d-${i}`, value: "x", rationale: "r.", evidenceIds: [],
+    }));
+    const result = CreateUiSpecCandidateSchema.safeParse({
+      candidateVersion: "1.0",
+      decisions,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts exactly 8 evidenceIds on a decision (boundary-inclusive)", () => {
+    const result = CreateUiSpecCandidateSchema.safeParse({
+      candidateVersion: "1.0",
+      decisions: [{
+        field: "designDirection", id: "d-1", value: "x", rationale: "r.",
+        evidenceIds: Array.from({ length: 8 }, (_, i) => `evidence-${i + 1}`),
+      }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts exactly 2000-char value on a bounded-text variant (boundary-inclusive)", () => {
+    // BoundedTextValue is the value shape for designDirection (max 2_000).
+    const result = CreateUiSpecCandidateSchema.safeParse({
+      candidateVersion: "1.0",
+      decisions: [{
+        field: "designDirection", id: "d-1", rationale: "r.", evidenceIds: [],
+        value: "x".repeat(2_000),
+      }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts exactly 1000-char rationale (boundary-inclusive)", () => {
+    // DecisionRationale is shared by every variant (max 1_000).
+    const result = CreateUiSpecCandidateSchema.safeParse({
+      candidateVersion: "1.0",
+      decisions: [{
+        field: "designDirection", id: "d-1", value: "x", evidenceIds: [],
+        rationale: "r".repeat(1_000),
+      }],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects duplicate decision ids (candidate-level superRefine)", () => {
     const result = CreateUiSpecCandidateSchema.safeParse({
       candidateVersion: "1.0",

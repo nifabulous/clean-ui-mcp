@@ -53,17 +53,9 @@ export interface FallbackRecipe {
 export const RECIPE: FallbackRecipe = recipe as unknown as FallbackRecipe;
 
 // ---------------------------------------------------------------------------
-// Closed-vocabulary aggregation
-// ---------------------------------------------------------------------------
-
-// NOTE: the previous aggregatePatternHistogram helper was removed as dead code
-// (YAGNI) — it had zero production call sites and was exercised only by its own
-// unit test. The c3-fallback-v1 recipe emits zero-evidence arrays, so no
-// pattern histogram is computed. If a later milestone grounds decisions in
-// corpus patterns, reintroduce the helper alongside its production caller.
-
-// ---------------------------------------------------------------------------
-// Recipe-owned summaries
+// Recipe-owned summaries (the c3-fallback-v1 recipe emits zero-evidence arrays
+// and its own recipe-owned text directly — no corpus pattern histogram or
+// rationale helper is computed here).
 // ---------------------------------------------------------------------------
 
 /**
@@ -79,11 +71,6 @@ export function buildDesignDirectionSummary(
   const ctx = request.productContext.trim();
   return ctx.length <= DESIGN_DIRECTION_MAX ? ctx : ctx.slice(0, DESIGN_DIRECTION_MAX);
 }
-
-// NOTE: the previous buildRationale helper was removed as dead code (YAGNI) —
-// it had zero production call sites (the c3-fallback-v1 recipe emits its own
-// recipe-owned text directly) and was exercised only by its own unit test. The
-// recipe's assembly-rule notes are read inline where needed.
 
 /**
  * The fixed-empty/unavailable strategy output for the array-shaped decision

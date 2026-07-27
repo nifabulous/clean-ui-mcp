@@ -109,7 +109,7 @@ export async function createUiSpec(
 
   // ----- 3/4/5. Assemble + build envelope -----
   const generatedAt = (dependencies.now?.() ?? new Date()).toISOString();
-  const envelope = buildEnvelope(request, resolved, generatedAt, dependencies);
+  const envelope = buildEnvelope(request, resolved, generatedAt);
   // Re-validate + re-render + re-hash before returning.
   return parseDesignArtifactEnvelope(envelope);
 }
@@ -224,7 +224,9 @@ async function resolveExplicitReferences(
 }
 
 function readById(reader: CorpusReader, internalId: string): CorpusEntryT | undefined {
-  // Wrapped so a reader.getById exception surfaces as RETRIEVAL_UNAVAILABLE.
+  // Synchronous lookup; any thrown error propagates to createUiSpec's catch,
+  // which wraps it as RETRIEVAL_UNAVAILABLE. This wrapper does NOT itself wrap
+  // exceptions — it exists as a single call site for explicit-token resolution.
   return reader.getById(internalId);
 }
 
@@ -408,6 +410,8 @@ export function buildFallbackCandidate(
   // Build the candidate as a plain object; parseCreateUiSpecCandidate validates
   // it through CreateUiSpecCandidateSchema + evidence membership.
   const decisions: CreateUiSpecCandidate["decisions"] = [
+    // The designDirection decision is the only corpus-grounded decision the
+    // fallback emits — it cites up to 8 response-scoped corpus evidence ids.
     {
       field: "designDirection",
       id: "fallback-designDirection",
@@ -415,6 +419,43 @@ export function buildFallbackCandidate(
       rationale: recipeRationale("designDirection"),
       evidenceIds: corpusEvidenceIds,
     },
+    // The fixed-empty array fields (truthful zero-evidence state, cite nothing).
+    ...buildFixedEmptyArrayDecisions(),
+  ];
+
+  // frameworkNotes is emitted ONLY when the requester supplied an
+  // implementationFramework (the recipe's omit strategy otherwise).
+  if (request.implementationFramework !== undefined) {
+    decisions.push({
+      field: "frameworkNotes",
+      id: "fallback-frameworkNotes",
+      value: `Implementation framework: ${request.implementationFramework}`,
+      rationale: recipeRationale("frameworkNotes"),
+      evidenceIds: [],
+    });
+  }
+
+  return {
+    candidateVersion: "1.0",
+    decisions,
+  };
+}
+
+/**
+ * Emit the array-compatible fixed-empty fallback decisions — the fields whose
+ * candidate variant is an array and whose recipe strategy is the truthful
+ * zero-evidence empty array. Each cites no evidence. Order matches the original
+ * inline declaration so the produced candidate (and thus the assembled UiSpec)
+ * is byte-identical to the pre-refactor output.
+ *
+ * The text-valued decisions (`designDirection`, `frameworkNotes`) stay inline in
+ * {@link buildFallbackCandidate} because they carry request-derived values; the
+ * recipe-owned unavailable fields (`colorTokens`, `typographyTokens`, `motion`,
+ * `contentVoiceGuidance`) produce NO candidate decision (the assembler emits the
+ * `unavailableDecisions` + null tokens directly).
+ */
+function buildFixedEmptyArrayDecisions(): CreateUiSpecCandidate["decisions"] {
+  return [
     {
       field: "layoutRegions",
       id: "fallback-layoutRegions",
@@ -465,23 +506,6 @@ export function buildFallbackCandidate(
       evidenceIds: [],
     },
   ];
-
-  // frameworkNotes is emitted ONLY when the requester supplied an
-  // implementationFramework (the recipe's omit strategy otherwise).
-  if (request.implementationFramework !== undefined) {
-    decisions.push({
-      field: "frameworkNotes",
-      id: "fallback-frameworkNotes",
-      value: `Implementation framework: ${request.implementationFramework}`,
-      rationale: recipeRationale("frameworkNotes"),
-      evidenceIds: [],
-    });
-  }
-
-  return {
-    candidateVersion: "1.0",
-    decisions,
-  };
 }
 
 // ===========================================================================
@@ -539,52 +563,13 @@ function assembleSpec(
   }
 
   // ----- Map the parsed candidate's decisions into UiSpec fields -----
-  // designDirection (string → string) + the fixed-empty array fields ([] → []).
-  const decisionsByField = new Map(parsedCandidate.decisions.map((d) => [d.field, d]));
-  const designDirection = decisionsByField.get("designDirection")?.value as string;
-  const layoutRegions = (decisionsByField.get("layoutRegions")?.value ?? []) as unknown[];
-  const responsiveBehavior = (decisionsByField.get("responsiveBehavior")?.value ?? []) as unknown[];
-  const componentInventory = (decisionsByField.get("componentInventory")?.value ?? []) as unknown[];
-  const interactions = (decisionsByField.get("interactions")?.value ?? []) as unknown[];
-  const accessibilityConstraints = (decisionsByField.get("accessibilityConstraints")?.value ?? []) as unknown[];
-  const techniques = (decisionsByField.get("techniques")?.value ?? []) as unknown[];
-  const antiPatterns = (decisionsByField.get("antiPatterns")?.value ?? []) as unknown[];
-  const frameworkNotesCandidate = decisionsByField.get("frameworkNotes")?.value as string | undefined;
-
-  // rejectedDefaults is NOT a candidate decision (its candidate variant is a
-  // single string summary, which cannot carry the recipe's empty-array state).
-  // Construct it directly from the recipe's fixed-empty rule.
-  const arrays = buildFixedEmptyArrays(RECIPE);
+  const specFields = mapCandidateToSpecFields(parsedCandidate);
 
   // Cited decisions: corpus observations ground the designDirection when
   // available; explicit references ground it via the editorial lane otherwise.
-  // The fallback recipe cites NO invented authority — only the echoed product
-  // context carries a (zero-evidence) cited decision so the spec is non-empty
-  // and internally consistent.
   const corpusLane = corpusEvidenceIds;
   const editorialLane = [...publicReferenceIds];
-  // Ensure the editorial lane is non-empty so an editorial citedDecision can
-  // reference it (UiSpec requires editorial-authority decisions to cite an
-  // editorial-lane evidence id). When no public reference resolved, the
-  // fallback carries zero citedDecisions.
-  const citedDecisions: UiSpecT["citedDecisions"] = [];
-  if (corpusLane.length > 0) {
-    citedDecisions.push({
-      id: "design-direction-corpus",
-      field: "designDirection",
-      authority: "corpus-evidence",
-      evidenceIds: corpusLane.slice(0, 8),
-      readiness: "available",
-    });
-  } else if (editorialLane.length > 0) {
-    citedDecisions.push({
-      id: "design-direction-editorial",
-      field: "designDirection",
-      authority: "editorial",
-      evidenceIds: editorialLane.slice(0, 8),
-      readiness: "available",
-    });
-  }
+  const citedDecisions = buildCitedDecisions(corpusLane, editorialLane);
 
   // Unavailable decisions (model-dependent fields) — recipe-owned reasons.
   const unavailableDecisions: UiSpecT["unavailableDecisions"] = RECIPE.unavailableDecisions.map(
@@ -604,6 +589,7 @@ function assembleSpec(
     manualSteps: [...(c.manualSteps ?? [])],
   }));
 
+  // ----- Envelope-only fields: context, provenance, authorityLanes, tokens -----
   const spec: Record<string, unknown> = {
     specVersion: "1.0",
     context: {
@@ -615,21 +601,21 @@ function assembleSpec(
       ...(request.designSystem !== undefined ? { designSystem: request.designSystem } : {}),
       constraints: request.constraints,
     },
-    designDirection,
-    rejectedDefaults: arrays.rejectedDefaults,
-    layoutRegions,
-    responsiveBehavior,
-    componentInventory,
+    designDirection: specFields.designDirection,
+    rejectedDefaults: specFields.rejectedDefaults,
+    layoutRegions: specFields.layoutRegions,
+    responsiveBehavior: specFields.responsiveBehavior,
+    componentInventory: specFields.componentInventory,
     colorTokens: null,
     colorTokenAuthority: "editorial",
     typographyTokens: null,
     typographyTokenAuthority: "editorial",
-    interactions,
+    interactions: specFields.interactions,
     motionGuidance: { notes: [], evidenceUnavailable: true },
-    accessibilityConstraints,
-    ...(frameworkNotesCandidate !== undefined ? { frameworkNotes: frameworkNotesCandidate } : {}),
-    techniques,
-    antiPatterns,
+    accessibilityConstraints: specFields.accessibilityConstraints,
+    ...(specFields.frameworkNotes !== undefined ? { frameworkNotes: specFields.frameworkNotes } : {}),
+    techniques: specFields.techniques,
+    antiPatterns: specFields.antiPatterns,
     unavailableDecisions,
     acceptanceCriteria,
     citedReferences,
@@ -658,6 +644,95 @@ function assembleSpec(
   return parsed.data;
 }
 
+/**
+ * The set of UiSpec fields whose values are extracted from the parsed
+ * candidate's decisions (designDirection + the seven fixed-empty array fields
+ * + the optional frameworkNotes). Fields NOT covered here (colorTokens,
+ * typographyTokens, motion, contentVoiceGuidance) are constructed directly in
+ * {@link assembleSpec} because the recipe marks them unavailable/omitted.
+ */
+interface CandidateSpecFields {
+  readonly designDirection: string;
+  readonly rejectedDefaults: readonly never[];
+  readonly layoutRegions: readonly unknown[];
+  readonly responsiveBehavior: readonly unknown[];
+  readonly componentInventory: readonly unknown[];
+  readonly interactions: readonly unknown[];
+  readonly accessibilityConstraints: readonly unknown[];
+  readonly techniques: readonly unknown[];
+  readonly antiPatterns: readonly unknown[];
+  readonly frameworkNotes: string | undefined;
+}
+
+/**
+ * Extract the parsed candidate's decision values into the UiSpec fields they
+ * map to. `designDirection` maps string→string; the seven array fields map
+ * []→[] (the recipe's truthful zero-evidence state). `rejectedDefaults` is NOT
+ * a candidate decision (its candidate variant is a single string summary,
+ * which cannot carry the recipe's empty-array state) — it is constructed
+ * directly from the recipe's fixed-empty rule.
+ */
+function mapCandidateToSpecFields(
+  parsedCandidate: CreateUiSpecCandidate,
+): CandidateSpecFields {
+  const decisionsByField = new Map(parsedCandidate.decisions.map((d) => [d.field, d]));
+  // rejectedDefaults comes from the recipe's fixed-empty rule (NOT a candidate
+  // decision — see the interface doc).
+  const arrays = buildFixedEmptyArrays(RECIPE);
+  return {
+    designDirection: decisionsByField.get("designDirection")?.value as string,
+    rejectedDefaults: arrays.rejectedDefaults,
+    layoutRegions: (decisionsByField.get("layoutRegions")?.value ?? []) as unknown[],
+    responsiveBehavior: (decisionsByField.get("responsiveBehavior")?.value ?? []) as unknown[],
+    componentInventory: (decisionsByField.get("componentInventory")?.value ?? []) as unknown[],
+    interactions: (decisionsByField.get("interactions")?.value ?? []) as unknown[],
+    accessibilityConstraints: (decisionsByField.get("accessibilityConstraints")?.value ?? []) as unknown[],
+    techniques: (decisionsByField.get("techniques")?.value ?? []) as unknown[],
+    antiPatterns: (decisionsByField.get("antiPatterns")?.value ?? []) as unknown[],
+    frameworkNotes: decisionsByField.get("frameworkNotes")?.value as string | undefined,
+  };
+}
+
+/**
+ * Build the citedDecisions block: corpus observations ground the designDirection
+ * when available; explicit references ground it via the editorial lane
+ * otherwise. The fallback recipe cites NO invented authority — only the echoed
+ * product context carries a (zero-evidence) cited decision so the spec is
+ * non-empty and internally consistent. When neither lane is populated, the
+ * fallback carries zero citedDecisions.
+ */
+function buildCitedDecisions(
+  corpusLane: readonly string[],
+  editorialLane: readonly string[],
+): UiSpecT["citedDecisions"] {
+  // Ensure the editorial lane is non-empty so an editorial citedDecision can
+  // reference it (UiSpec requires editorial-authority decisions to cite an
+  // editorial-lane evidence id).
+  if (corpusLane.length > 0) {
+    return [
+      {
+        id: "design-direction-corpus",
+        field: "designDirection",
+        authority: "corpus-evidence",
+        evidenceIds: corpusLane.slice(0, 8),
+        readiness: "available",
+      },
+    ];
+  }
+  if (editorialLane.length > 0) {
+    return [
+      {
+        id: "design-direction-editorial",
+        field: "designDirection",
+        authority: "editorial",
+        evidenceIds: editorialLane.slice(0, 8),
+        readiness: "available",
+      },
+    ];
+  }
+  return [];
+}
+
 // ===========================================================================
 // 5. Envelope construction
 // ===========================================================================
@@ -670,7 +745,6 @@ function buildEnvelope(
   request: CreateUiSpecRequest,
   resolved: ResolvedEvidence,
   generatedAt: string,
-  _dependencies: CreateUiSpecDependencies,
 ): DesignArtifactEnvelope {
   const spec = assembleSpec(request, resolved, generatedAt);
 
@@ -697,17 +771,20 @@ function buildEnvelope(
   const markdownSha = sha256Hex(Buffer.from(designMarkdown, "utf-8"));
   const jsonSha = sha256Hex(Buffer.from(designJson, "utf-8"));
 
+  // The recipe's assembly-rules SHA, hoisted once and reused for both the
+  // artifactId identity object and the stored assemblyRulesSha256 field.
+  const assemblyRulesSha = recipeSha256();
+
   // Identity — artifactId hashes the canonical identity object (generatedAt
   // excluded). The handoff target id + motionIntents are part of the identity.
   const identity = buildArtifactIdentityInput({
     producerVersion: RECIPE.recipeVersion,
-    assemblyRulesSha256: recipeSha256(),
+    assemblyRulesSha256: assemblyRulesSha,
     semanticSpecSha256: semanticSha,
     target: targetId,
     motionIntents: request.motionIntents,
   });
   const artifactId = `uispec-${sha256Canonical(identity)}`;
-  const assemblyRulesSha256 = recipeSha256();
 
   // Warnings.
   const warnings = buildWarnings(resolved);
@@ -719,12 +796,17 @@ function buildEnvelope(
   // honestly and provenance.evidenceIds stays consistent.
   const publicEvidenceIds = resolved.sanitized.map((e) => e.id);
 
+  // The `as DesignArtifactEnvelope` assertion narrows ResolvedEvidence's
+  // readonly retrieval shape (readonly arrays) onto the mutable RetrievalState
+  // output type. It is IMMEDIATELY verified by the caller's
+  // parseDesignArtifactEnvelope, which re-validates the whole envelope through
+  // DesignArtifactEnvelopeSchema (no redundant safeParse added here).
   const envelope: DesignArtifactEnvelope = {
     artifactVersion: "1.0",
     artifactId,
     generatedAt,
     producerVersion: RECIPE.recipeVersion,
-    assemblyRulesSha256,
+    assemblyRulesSha256: assemblyRulesSha,
     spec,
     handoff: { target: targetId, motionIntents: request.motionIntents },
     designMarkdown,

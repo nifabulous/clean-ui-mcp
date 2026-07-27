@@ -109,9 +109,20 @@ export async function createUiSpec(
 
   // ----- 3/4/5. Assemble + build envelope -----
   const generatedAt = (dependencies.now?.() ?? new Date()).toISOString();
-  const envelope = buildEnvelope(request, resolved, generatedAt);
-  // Re-validate + re-render + re-hash before returning.
-  return parseDesignArtifactEnvelope(envelope);
+  let envelope: DesignArtifactEnvelope;
+  try {
+    envelope = buildEnvelope(request, resolved, generatedAt);
+    // Re-validate + re-render + re-hash before returning.
+    return parseDesignArtifactEnvelope(envelope);
+  } catch (err) {
+    if (isCreateUiSpecError(err)) throw err;
+    // Assembly or integrity-verification failure. The deterministic producer
+    // should never hit this on a valid recipe; surface a bounded INVALID_INPUT
+    // rather than leaking the raw parser error (a bare Error) to callers. This
+    // is the load-bearing fix for the typed-error contract: every in-pipeline
+    // failure reaches the caller as a CreateUiSpecError, never an untyped Error.
+    throw invalidInput("assembled artifact failed integrity verification");
+  }
 }
 
 // ===========================================================================

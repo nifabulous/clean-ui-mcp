@@ -80,6 +80,24 @@ export function sha256Canonical(value: unknown): string {
 }
 
 // ===========================================================================
+// 1a. RECIPE_SHA256 — single source of truth for the frozen recipe identity
+// ===========================================================================
+
+/**
+ * Frozen canonical-JSON SHA-256 of `src/c3/fallback-recipe-v1.json`. Pinned from
+ * the checked-in bytes (sorted keys, compact UTF-8). This is the SINGLE source
+ * of truth the envelope parser consumes to verify `assemblyRulesSha256`, so the
+ * producer, the parser, and the recipe-pinning test can never drift.
+ *
+ * If the recipe ever changes, recompute via `sha256Canonical(recipe)` (or
+ * `sha256Hex(Buffer.from(canonicalJsonStringify(recipe), "utf-8"))`) and replace
+ * this literal — the same way `EXPECTED_RECIPE_SHA256`'s comment in
+ * `fallback-recipe-v1.test.ts` instructs.
+ */
+export const RECIPE_SHA256 =
+  "1f86dc4aa8848c101680f2a8804c8a72c66ecaed204515e997c5ab14d3587099";
+
+// ===========================================================================
 // 1b. CANONICAL_WEB_TARGET_PROFILES — single source of truth for target ids
 // ===========================================================================
 
@@ -731,6 +749,37 @@ export function parseDesignArtifactEnvelope(raw: unknown): DesignArtifactEnvelop
   }
   if (env.designJson !== renderedJson) {
     throw new Error("design artifact envelope integrity check failed: designJson bytes");
+  }
+
+  // ----- Identity verification: artifactId + assemblyRulesSha256 -----
+  // The assembly-rules hash is a frozen constant (RECIPE_SHA256). Any deviation
+  // means the recipe drifted from what the artifact claims to have been
+  // assembled with — fail-closed.
+  if (env.assemblyRulesSha256 !== RECIPE_SHA256) {
+    throw new Error(
+      "design artifact envelope integrity check failed: assemblyRulesSha256 does not match the frozen recipe",
+    );
+  }
+  // Recompute the canonical identity the EXACT way the producer does
+  // (create-ui-spec.ts buildEnvelope): the typed buildArtifactIdentityInput
+  // helper fed artifactVersion/producerVersion/assemblyRulesSha256/
+  // semanticSpecSha256 + the stored handoff target/motionIntents +
+  // renderingFormatVersion "web-1.0". The stored artifactId MUST equal the
+  // recomputed `uispec-<sha256>` — otherwise a self-consistent forged envelope
+  // could pass the hash + byte-equality checks with a bogus identity.
+  const expectedArtifactId = `uispec-${sha256Canonical(
+    buildArtifactIdentityInput({
+      producerVersion: env.producerVersion,
+      assemblyRulesSha256: env.assemblyRulesSha256,
+      semanticSpecSha256: semanticSha,
+      target: env.handoff.target,
+      motionIntents: env.handoff.motionIntents,
+    }),
+  )}`;
+  if (env.artifactId !== expectedArtifactId) {
+    throw new Error(
+      "design artifact envelope integrity check failed: artifactId does not match the recomputed identity",
+    );
   }
 
   return env;

@@ -13,13 +13,17 @@
  * accompanied by an update to EXPECTED_RECIPE_SHA256.
  */
 import { describe, expect, it } from "vitest";
-import { sha256Canonical } from "../create-ui-spec-contracts.js";
+import { sha256Canonical, RECIPE_SHA256 } from "../create-ui-spec-contracts.js";
 import recipe from "./fallback-recipe-v1.json" with { type: "json" };
 
 /**
  * Frozen canonical-JSON SHA-256 of the recipe. Pinned from the checked-in
  * bytes of src/c3/fallback-recipe-v1.json. If the recipe changes, recompute
  * and replace this literal.
+ *
+ * This literal is kept as a belt-and-suspenders cross-check against
+ * {@link RECIPE_SHA256} (the single source the envelope parser consumes); the
+ * test below asserts they are equal so the two can never silently drift.
  */
 const EXPECTED_RECIPE_SHA256 =
   "1f86dc4aa8848c101680f2a8804c8a72c66ecaed204515e997c5ab14d3587099";
@@ -28,6 +32,11 @@ describe("c3-fallback-v1 recipe identity", () => {
   it("has stable canonical bytes and recipe identity", () => {
     expect(recipe.recipeVersion).toBe("c3-fallback-v1");
     expect(sha256Canonical(recipe)).toBe(EXPECTED_RECIPE_SHA256);
+    // The contracts module's RECIPE_SHA256 is the single source the envelope
+    // parser consumes; it MUST agree with both the frozen literal and the
+    // actual recipe bytes.
+    expect(RECIPE_SHA256).toBe(EXPECTED_RECIPE_SHA256);
+    expect(sha256Canonical(recipe)).toBe(RECIPE_SHA256);
   });
 
   it("only emits warning codes the create_ui_spec tool documents", () => {

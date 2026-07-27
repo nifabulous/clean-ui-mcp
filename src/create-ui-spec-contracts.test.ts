@@ -15,6 +15,7 @@ import {
   CreateUiSpecErrorSchema,
   CreateUiSpecRequestSchema,
   DesignArtifactEnvelopeSchema,
+  RECIPE_SHA256,
   SanitizedEvidenceSchema,
   buildArtifactIdentityInput,
   buildSemanticSpecInput,
@@ -742,10 +743,16 @@ describe("ArtifactMetadataSchema", () => {
 });
 
 /**
- * Build a fully valid envelope (renderings + hashes computed from a real
- * handoff). The target id resolves the canonical profile from the shared
+ * Build a fully valid envelope (renderings + hashes + the REAL artifactId
+ * computed from the canonical identity object, exactly as the producer does).
+ * The target id resolves the canonical profile from the shared
  * CANONICAL_WEB_TARGET_PROFILES registry (the same registry the producer and
  * parseDesignArtifactEnvelope consult), defaulting to neutral-web.
+ *
+ * `assemblyRulesSha256` uses the shared {@link RECIPE_SHA256} constant (the
+ * single source the parser verifies against), and `artifactId` is recomputed
+ * via `buildArtifactIdentityInput` + `sha256Canonical` — so this fixture is a
+ * known-good state the tamper tests can mutate from.
  */
 function buildValidEnvelope(targetId: keyof typeof CANONICAL_WEB_TARGET_PROFILES = "neutral-web"): Record<string, unknown> {
   const spec = UiSpec.parse(validUiSpec()) as import("./tool-contracts.js").UiSpecT;
@@ -761,14 +768,26 @@ function buildValidEnvelope(targetId: keyof typeof CANONICAL_WEB_TARGET_PROFILES
   const semantic = buildSemanticSpecInput(spec);
   const specSha = sha256Hex(Buffer.from(canonicalJsonStringify(spec), "utf-8"));
   const semanticSha = sha256Canonical(semantic);
+  const motionIntents: never[] = [];
+  // Recompute the canonical identity the EXACT way the producer does
+  // (create-ui-spec.ts buildEnvelope). The stored artifactId MUST match this.
+  const artifactId = `uispec-${sha256Canonical(
+    buildArtifactIdentityInput({
+      producerVersion: "1.2.3",
+      assemblyRulesSha256: RECIPE_SHA256,
+      semanticSpecSha256: semanticSha,
+      target: targetId,
+      motionIntents,
+    }),
+  )}`;
   return {
     artifactVersion: "1.0",
-    artifactId: "art-1",
+    artifactId,
     generatedAt: "2026-07-15T00:00:00Z",
     producerVersion: "1.2.3",
-    assemblyRulesSha256: "a".repeat(64),
+    assemblyRulesSha256: RECIPE_SHA256,
     spec,
-    handoff: { target: targetId, motionIntents: [] },
+    handoff: { target: targetId, motionIntents },
     designMarkdown,
     designJson,
     specSha256: specSha,
@@ -821,9 +840,37 @@ describe("DesignArtifactEnvelopeSchema", () => {
 
 describe("parseDesignArtifactEnvelope", () => {
   it("parses a valid envelope and returns it", () => {
-    const parsed = parseDesignArtifactEnvelope(buildValidEnvelope());
-    expect(parsed.artifactId).toBe("art-1");
+    const env = buildValidEnvelope();
+    const parsed = parseDesignArtifactEnvelope(env);
+    // The parser now VERIFIES artifactId (recomputed from the canonical identity)
+    // and assemblyRulesSha256 (must equal the frozen RECIPE_SHA256). The fixture
+    // carries the real recomputed id, so it round-trips unchanged.
+    expect(parsed.artifactId).toBe(env.artifactId);
+    expect(parsed.artifactId.startsWith("uispec-")).toBe(true);
+    expect(parsed.assemblyRulesSha256).toBe(RECIPE_SHA256);
     expect(parsed.spec.specVersion).toBe("1.0");
+  });
+
+  it("rejects a tampered artifactId", () => {
+    // Start from a known-good envelope (real artifactId + RECIPE_SHA256), then
+    // swap in a bogus artifactId while leaving every stored hash + the stored
+    // assemblyRulesSha256 correct. Previously this self-consistent forgery
+    // passed the parser; the parser now recomputes the canonical identity and
+    // demands equality.
+    const env = buildValidEnvelope();
+    env.artifactId = `uispec-${"d".repeat(64)}`;
+    expect(() => parseDesignArtifactEnvelope(env)).toThrow();
+  });
+
+  it("rejects a tampered assemblyRulesSha256", () => {
+    // Start from a known-good envelope, then swap in a different 64-hex
+    // assemblyRulesSha256 (and recompute nothing). The parser now demands the
+    // frozen RECIPE_SHA256 — this also implicitly catches a stale recipe drift
+    // (the artifact claims an assembly-rules hash the frozen recipe no longer
+    // matches).
+    const env = buildValidEnvelope();
+    env.assemblyRulesSha256 = "b".repeat(64);
+    expect(() => parseDesignArtifactEnvelope(env)).toThrow();
   });
 
   it("re-renders + re-verifies an astro-react envelope end-to-end (no throw)", () => {

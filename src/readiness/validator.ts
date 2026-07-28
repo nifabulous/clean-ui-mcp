@@ -513,6 +513,27 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
     verifyPrivateC2Evidence(artifacts, opts, issues);
 
     // 8. Approvals and checkpoint closure
+    //
+    // Gated on a resolved ledger head AND a resolved registry head, which also
+    // gates the two temporal provenance invariants inside. That gating is
+    // intended and fail-closed: without a resolved registry there is no
+    // authoritative actor list, so no approval can be validated and no
+    // checkpoint can be marked closed (checkpointStatus defaults to "open").
+    //
+    // A ledger with no resolvable registry head is reported here as
+    // `missing-registry`. `selectChain` returns no issues for an EMPTY family
+    // (chains.ts), so an artifact graph carrying an index and a ledger full of
+    // approvals but no registry artifact would otherwise produce zero issues:
+    // `ok: true` and exit code 0 with every approval uninspected. Emitting the
+    // signal keeps the skip fail-closed on `ok` as well as on checkpointStatus.
+    if (ledgerEntry && !registry) {
+      issues.push({
+        code: "missing-registry",
+        artifactId: String(ledgerEntry.data.artifactId),
+        message:
+          "approval ledger present but no approval-actor-registry chain head resolved; no approval can be validated and no checkpoint can close",
+      });
+    }
     if (ledgerEntry && registry) {
       validateApprovalsAndCheckpoint(
         ledgerEntry,
@@ -644,11 +665,17 @@ function verifyPrivateC2Evidence(
   const repoRoot = realpathSync(resolve(opts.repoRoot ?? opts.artifactRoot));
   const evidence = (manifest.data.evidence as Array<Record<string, string>>) ?? [];
   const resolvedById = new Map<string, ResolvedC2Evidence>();
+  // Duplicate detection runs BEFORE any file resolution, so it must use its own
+  // seen-set. `resolvedById` is only populated further down (after hashing), so
+  // consulting it here would make the duplicate-id check permanently dead —
+  // mirror the sibling `seenPaths` pattern instead.
+  const seenIds = new Set<string>();
   const seenPaths = new Set<string>();
   for (const ref of evidence) {
-    if (resolvedById.has(ref.artifactId)) {
+    if (seenIds.has(ref.artifactId)) {
       issues.push({ code: "c2-evidence-duplicate-id", artifactId: String(manifest.data.artifactId), path: ref.path, message: `C2 evidence artifactId is duplicated: ${ref.artifactId}` });
     }
+    seenIds.add(ref.artifactId);
     if (seenPaths.has(ref.path)) {
       issues.push({ code: "c2-evidence-duplicate-path", artifactId: String(manifest.data.artifactId), path: ref.path, message: `C2 evidence path is duplicated: ${ref.path}` });
     }
@@ -891,6 +918,28 @@ function validateApprovalsAndCheckpoint(
   const supersededApprovalIds = new Set(
     approvals.flatMap((approval) => approval.supersedesApprovalId ? [approval.supersedesApprovalId] : []),
   );
+
+  // Per-approval set of issue codes that this approval produced. An approval
+  // with any issue cannot contribute to closure. Declared BEFORE the provenance
+  // checks below so they can taint an approval: a checkpoint must never report
+  // "closed" on the strength of an approval whose provenance is invalid.
+  const approvalIssueCodes = new Map<string, Set<string>>();
+  const noteApprovalIssue = (approvalId: string, code: string) => {
+    let set = approvalIssueCodes.get(approvalId);
+    if (!set) {
+      set = new Set();
+      approvalIssueCodes.set(approvalId, set);
+    }
+    set.add(code);
+  };
+
+  // NOTE ON TAINTING: `ledger-supersession-not-later` (the temporal check
+  // below) taints its approval via `noteApprovalIssue`, so the checkpoint cannot
+  // close on it. The two structural `ledger-invalid-supersession` pushes do NOT
+  // taint — pre-existing behaviour, deliberately left unchanged here. They make
+  // `ok` false but not `checkpointStatus` open. Tracked as hole 1 of TODOS.md
+  // § "Approval provenance holes the content-only validator cannot close",
+  // which links back to this comment.
   for (const approval of approvals) {
     if (approval.supersedesApprovalId !== undefined) {
       const priorIndex = approvals.findIndex((candidate) => candidate.approvalId === approval.supersedesApprovalId);
@@ -902,9 +951,47 @@ function validateApprovalsAndCheckpoint(
         if (prior.checkpoint !== approval.checkpoint || prior.role !== approval.role || prior.actorId !== approval.actorId) {
           issues.push({ code: "ledger-invalid-supersession", artifactId: approval.approvalId, message: `approval ${approval.approvalId} must supersede an earlier approval for the same checkpoint, role, and actor` });
         }
+        // Temporal invariant: a replacement decision must be made STRICTLY
+        // LATER than the decision it replaces. A successor that copies (or
+        // predates) the superseded `decidedAt` while binding a different
+        // target claims a decision was taken before the thing it decides
+        // existed — ledger position alone cannot detect that.
+        const priorDecidedAt = Date.parse(prior.decidedAt);
+        const decidedAt = Date.parse(approval.decidedAt);
+        if (
+          Number.isFinite(priorDecidedAt) &&
+          Number.isFinite(decidedAt) &&
+          decidedAt <= priorDecidedAt
+        ) {
+          issues.push({
+            code: "ledger-supersession-not-later",
+            artifactId: approval.approvalId,
+            message: `approval ${approval.approvalId} decidedAt (${approval.decidedAt}) must be strictly later than superseded approval ${prior.approvalId} decidedAt (${prior.decidedAt})`,
+          });
+          // Taint the SUPERSEDING approval (the active one). A provenance-
+          // invalid decision record cannot contribute to closure, so the
+          // checkpoint it would have closed reports "open".
+          noteApprovalIssue(approval.approvalId, "ledger-supersession-not-later");
+        }
       }
     }
   }
+
+  // Temporal invariant: an approval's decidedAt cannot precede the DECLARED
+  // createdAt of an artifact version it binds. Applies to every approval
+  // (including superseded ones, which remain historical evidence) and to every
+  // checkpoint, independent of whether a recipe exists for it. The same pass
+  // reports an ACTIVE approval whose bound row resolves to no on-disk artifact
+  // version when its checkpoint has no recipe — the only place such a binding is
+  // checked at all. See the function's docstring for exactly what this does and
+  // does not detect.
+  verifyApprovalArtifactTimestamps(
+    approvals,
+    artifacts,
+    supersededApprovalIds,
+    issues,
+    noteApprovalIssue,
+  );
 
   // ------------------------------------------------------------------
   // Git-bound recomputation of the canonical checkpoint target(s).
@@ -916,18 +1003,6 @@ function validateApprovalsAndCheckpoint(
   const activeApprovals = approvals.filter((approval) => !supersededApprovalIds.has(approval.approvalId));
   const activeCheckpoints = new Set(activeApprovals.map((a) => a.checkpoint));
   const recompute = computeCanonicalTargets(artifacts, absRoot, opts, activeCheckpoints, activeApprovals, registryByVersion);
-
-  // Per-approval set of issue codes that this approval produced. An approval
-  // with any issue cannot contribute to closure.
-  const approvalIssueCodes = new Map<string, Set<string>>();
-  const noteApprovalIssue = (approvalId: string, code: string) => {
-    let set = approvalIssueCodes.get(approvalId);
-    if (!set) {
-      set = new Set();
-      approvalIssueCodes.set(approvalId, set);
-    }
-    set.add(code);
-  };
 
   // Each approval pins the exact registry version + digest it was issued
   // against. Retain the resolved registry for every approval so the actor-
@@ -1193,6 +1268,151 @@ function validateApprovalsAndCheckpoint(
           message:
             "C2 closure assumes the QA reviewer actor ID is a genuinely external human. The validator enforces distinct, non-implementation actors but cannot verify externality; it must be established out-of-band (e.g. distinct signed commit authors, distinct GitHub accounts, or a signed attestation).",
         });
+      }
+    }
+  }
+}
+
+/**
+ * Compare each approval's `decidedAt` against the DECLARED `createdAt` of every
+ * artifact version it binds via `approvedArtifacts`, and emit
+ * `approved-artifact-created-after-decision` when the decision precedes the
+ * declared creation.
+ *
+ * ## What this detects
+ *
+ * Exactly one thing: a bound artifact whose own `createdAt` field claims a
+ * creation time LATER than the approval's `decidedAt`, for the artifact version
+ * the approval actually approved (`bound.sha256` must equal the on-disk bytes'
+ * hash — see "resolution" below).
+ *
+ * ## What this does NOT detect — do not read this as target provenance
+ *
+ * - **A stale `createdAt`.** `createdAt` is self-declared, unverified content of
+ *   the artifact. An artifact rewritten in a later commit without bumping
+ *   `createdAt` still declares the old time, so an approval of the new bytes
+ *   compares against a creation time that is not the real one and passes. This
+ *   is not hypothetical: it is the shape of the very defect that motivated this
+ *   invariant (`c2-*-v2` in `checkpoint-approvals-v5.json` bind bytes first
+ *   written on 2026-07-28 while both artifacts still declare
+ *   `createdAt: 2026-07-26T20:15:01.000Z`). That defect is caught by
+ *   `ledger-supersession-not-later`, NOT by this check. An approval binding
+ *   freshly-rewritten bytes with an unchanged `createdAt` and no supersession
+ *   relation is caught by nothing here.
+ * - **`checkpointTargetSha256` provenance.** The origin time of a target hash is
+ *   not derivable from artifact content at all; a target hash carries no
+ *   timestamp and the artifacts it is computed over need not have been created
+ *   when it was computed. This check never looks at
+ *   `checkpointTargetSha256`. Establishing when a target hash first existed
+ *   requires evidence outside the artifact graph (commit/authoring dates,
+ *   signed attestations, a countersigned timestamp) and remains an open hole.
+ *
+ * Strengthening either of the above needs an out-of-band provenance source, so
+ * it is deliberately out of scope for a content-only validator. Both are
+ * tracked as hole 2 of TODOS.md § "Approval provenance holes the content-only
+ * validator cannot close", which links back to this docstring.
+ *
+ * ## Resolution
+ *
+ * A bound row resolves ONLY when `bound.artifactId` names a parsed artifact AND
+ * that artifact's hash equals `bound.sha256` — i.e. the on-disk bytes are the
+ * version this approval approved. Comparing against a different version's
+ * `createdAt` would be comparing against a document the approval never saw, and
+ * would make a historically legitimate approval of an earlier version fail the
+ * moment that artifact is rewritten with an honest, later `createdAt`.
+ *
+ * Rows that do not resolve — unknown `artifactId`, a `sha256` that is not the
+ * on-disk version, a missing/unparseable `createdAt`, or an unparseable
+ * `decidedAt` — are SKIPPED for the TEMPORAL comparison, because there is no
+ * version-correct `createdAt` to compare against.
+ *
+ * ## Where an unresolvable binding IS reported
+ *
+ * Skipping the temporal comparison never leaves a broken binding unreported for
+ * an ACTIVE approval:
+ *
+ * - **Checkpoint HAS a recipe (C0–C2).** `verifyApprovedArtifactSet` reports it:
+ *   an id outside the recipe set as `approved-artifact-unknown`, a stale hash as
+ *   `approved-artifact-hash-mismatch`. An id that IS in the recipe set but has no
+ *   parsed artifact hits `if (!entry) continue;` there, and surfaces as
+ *   `checkpoint-target-mismatch` instead — the recomputed target substitutes
+ *   `sha256: ""` for the missing artifact. When recomputation itself failed, every
+ *   approval of that checkpoint is disqualified by the recompute-failure code, so
+ *   closure is blocked even though the individual row is not inspected. This
+ *   function therefore does NOT re-report those rows: doing so would double-report.
+ * - **Checkpoint has NO recipe (C3–C5).** Nothing downstream inspects the
+ *   bindings at all: `verifyApprovedArtifactSet`, `verifyCheckpointPolicy` and
+ *   target recomputation all sit behind `recipe && …`, and closure for these
+ *   checkpoints goes through the presence-only `FUTURE_CHECKPOINT_ROLES` path.
+ *   This function reports the row itself, as
+ *   `approved-artifact-version-unresolved`, and taints the approval.
+ *
+ * SUPERSEDED approvals keep the plain skip in both cases. They are immutable
+ * historical records that cannot contribute to closure, and the on-disk graph
+ * has no way to reconstruct the version they bound, so the residual exposure is
+ * a historical-record gap, not a closure gap. Tracked as hole 3 of TODOS.md
+ * § "Approval provenance holes the content-only validator cannot close", which
+ * links back to this docstring.
+ *
+ * A violation of either invariant taints the approval via `note`, so a
+ * checkpoint cannot report "closed" on the strength of an approval carrying a
+ * provenance issue.
+ */
+function verifyApprovalArtifactTimestamps(
+  approvals: readonly z.infer<typeof CheckpointApproval>[],
+  artifacts: Map<string, ParsedArtifact>,
+  supersededApprovalIds: ReadonlySet<string>,
+  issues: ValidationIssue[],
+  note: (approvalId: string, code: string) => void,
+): void {
+  // Recipes are declared for C0–C2 only. Widened to a string index so a
+  // checkpoint id outside the recipe table (C3–C5) is a lookup miss rather than
+  // a type error, and so adding a recipe automatically moves that checkpoint to
+  // the verifyApprovedArtifactSet path below.
+  const recipes: Partial<Record<string, CheckpointRecipe>> = CHECKPOINT_RECIPES;
+
+  for (const approval of approvals) {
+    const decidedAt = Date.parse(approval.decidedAt);
+    // An ACTIVE approval of a checkpoint with no recipe has no other check
+    // looking at its approvedArtifacts rows; one WITH a recipe is covered by
+    // verifyApprovedArtifactSet / the recomputation path (see docstring).
+    const reportUnresolved =
+      !supersededApprovalIds.has(approval.approvalId) &&
+      recipes[approval.checkpoint] === undefined;
+
+    for (const bound of approval.approvedArtifacts) {
+      const entry = artifacts.get(bound.artifactId);
+      // Version gate: only the approved version's createdAt is meaningful for
+      // the temporal comparison. An unresolvable row is a broken binding, and
+      // for a recipeless checkpoint this is the only place it is reported.
+      if (!entry || entry.sha !== bound.sha256) {
+        if (reportUnresolved) {
+          const code = "approved-artifact-version-unresolved";
+          issues.push({
+            code,
+            artifactId: approval.approvalId,
+            ...(entry ? { path: entry.filePath } : {}),
+            message: entry
+              ? `approval ${approval.approvalId}: approvedArtifact ${bound.artifactId} sha256 ${bound.sha256} is not the on-disk version (${entry.sha}); checkpoint ${approval.checkpoint} has no recipe, so this binding is verified nowhere else`
+              : `approval ${approval.approvalId}: approvedArtifact ${bound.artifactId} (sha256 ${bound.sha256}) names no parsed artifact; checkpoint ${approval.checkpoint} has no recipe, so this binding is verified nowhere else`,
+          });
+          note(approval.approvalId, code);
+        }
+        continue;
+      }
+      if (!Number.isFinite(decidedAt)) continue;
+      const createdAtRaw = entry.data.createdAt;
+      if (typeof createdAtRaw !== "string") continue;
+      const createdAt = Date.parse(createdAtRaw);
+      if (!Number.isFinite(createdAt)) continue;
+      if (decidedAt < createdAt) {
+        issues.push({
+          code: "approved-artifact-created-after-decision",
+          artifactId: approval.approvalId,
+          path: entry.filePath,
+          message: `approval ${approval.approvalId}: decidedAt (${approval.decidedAt}) precedes createdAt (${createdAtRaw}) of approved artifact ${bound.artifactId}`,
+        });
+        note(approval.approvalId, "approved-artifact-created-after-decision");
       }
     }
   }

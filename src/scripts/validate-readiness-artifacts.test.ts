@@ -7,8 +7,10 @@ import {
   computeTaxonomyDigest,
   buildCheckpointTarget,
   computeCheckpointTargetSha256,
+  canonicalJsonStringify,
   sha256Hex,
 } from "../readiness/contracts.js";
+import { C2_HARD_GATE_IDS } from "../c2/evaluation-contracts.js";
 import {
   C0_RECIPE,
   C1_RECIPE,
@@ -224,6 +226,22 @@ function writeSyntheticSources(repoRoot: string): SyntheticSources {
 function buildValidGraph(opts?: {
   withApprovals?: boolean;
   resolver?: FakeGitResolver;
+  /**
+   * Pin phase0-summary to a real corpus file. Supplying this lets private-mode
+   * tests validate a graph with NO corpus-hash/count issues, so a private-mode
+   * assertion can require an empty issue list. Omitted = the historical
+   * placeholder values (SHA_A / 787).
+   */
+  corpus?: { sha256: string; entryCount: number };
+  /**
+   * Override ONLY the ownership-map artifact's `createdAt`. Applied before the
+   * file is written, so every downstream hash (index row, phase0 inputHashes,
+   * checkpoint target, approvedArtifacts binding) is recomputed over the
+   * modified bytes and the graph stays internally consistent. This is what lets
+   * a test make exactly ONE of the four bound artifacts violate the
+   * approval-vs-artifact temporal invariant.
+   */
+  ownershipCreatedAt?: string;
 }): FixtureRoot & {
   phase0Path: string;
   ownershipPath: string;
@@ -274,6 +292,7 @@ function buildValidGraph(opts?: {
   // Ownership map
   const ownership = {
     ...baseHeader,
+    ...(opts?.ownershipCreatedAt ? { createdAt: opts.ownershipCreatedAt } : {}),
     artifactType: "ownership-map",
     artifactId: "ownership-20260714",
     entries: [
@@ -284,7 +303,8 @@ function buildValidGraph(opts?: {
   writeArtifact(artifactRoot, "ownership-map-v1.json", ownership);
   const ownershipPath = join(artifactRoot, "ownership-map-v1.json");
 
-  const corpusSha256 = SHA_A;
+  const corpusSha256 = opts?.corpus?.sha256 ?? SHA_A;
+  const corpusEntryCount = opts?.corpus?.entryCount ?? 787;
 
   // phase0-summary inputHashes: keys must equal the recipe inputHashKeys.
   // Artifact-root aliases resolve from in-memory .sha; git-file aliases from
@@ -304,7 +324,7 @@ function buildValidGraph(opts?: {
     artifactType: "phase0-summary",
     artifactId: "phase0-20260714",
     corpusSha256,
-    corpusEntryCount: 787,
+    corpusEntryCount,
     taxonomySha256: taxonomyAggregate,
     inputHashes,
     environment: {
@@ -790,6 +810,127 @@ function writeRegistryAndIndexV3(
   };
   const v3IndexFilename = "artifact-index-v3.json";
   writeArtifact(fixture.artifactRoot, v3IndexFilename, v3Index);
+}
+
+// ---------------------------------------------------------------------------
+// Test-only C3 fixture builder (recipeless checkpoint)
+// ---------------------------------------------------------------------------
+
+/**
+ * Write a v2 governance snapshot (registry + index + ledger) carrying synthetic
+ * C3 approvals. C3 has NO recipe (`CHECKPOINT_RECIPES` covers C0–C2 only), so
+ * none of the recomputation, policy, or `approvedArtifacts`-set checks run for
+ * these approvals — closure goes through the presence-only role path. That
+ * makes this fixture the only way to exercise the binding checks that must
+ * still apply to a checkpoint without a recipe.
+ *
+ * `staleApprovalIds` rewrites the named approvals' `ownership-20260714` bound
+ * row to a sha256 that is not the on-disk version (the "approved a version that
+ * is not on disk" case). `supersedeQa` appends a strictly-later `c3-qa-v2`
+ * superseding `c3-qa`, so the stale row lands on a SUPERSEDED (historical)
+ * approval instead of an active one.
+ *
+ * All files are written below the fixture's temp root only.
+ */
+function addSyntheticC3Approvals(
+  fixture: ReturnType<typeof buildValidGraph>,
+  options: { staleApprovalIds?: string[]; supersedeQa?: boolean } = {},
+): { registryPath: string; indexPath: string; ledgerPath: string } {
+  const { staleApprovalIds = [], supersedeQa = false } = options;
+
+  // 1. Registry v2 — adds the three actors C3 closure requires.
+  const v1Registry = readJson<
+    { actors: Array<{ actorId: string; actorKind: string; roles: string[] }> } & Record<string, unknown>
+  >(fixture.registryPath);
+  const v2Registry = {
+    ...v1Registry,
+    artifactId: "actors-c3-v2",
+    registryVersion: "2.0",
+    previousRegistry: { registryVersion: "1.0", sha256: fileSha(fixture.registryPath) },
+    actors: [
+      ...v1Registry.actors,
+      { actorId: "product-1", actorKind: "human", roles: ["Product"] },
+      { actorId: "qa-1", actorKind: "human", roles: ["QA"] },
+      { actorId: "engineering-1", actorKind: "human", roles: ["Engineering"] },
+    ],
+  };
+  const v2RegistryFilename = "approval-actor-registry-v2.json";
+  const v2RegistryPath = join(fixture.artifactRoot, v2RegistryFilename);
+  writeArtifact(fixture.artifactRoot, v2RegistryFilename, v2Registry);
+  const v2RegistrySha = fileSha(v2RegistryPath);
+
+  // 2. Index v2 — every non-index/non-ledger artifact, including both registries.
+  const v1Index = readJson<Record<string, unknown>>(fixture.indexPath);
+  const v2Index = {
+    ...v1Index,
+    artifactId: "index-c3-v2",
+    ordinalVersion: 2,
+    predecessor: { version: "1", sha256: fileSha(fixture.indexPath) },
+    artifacts: [
+      { artifactId: "phase0-20260714", artifactType: "phase0-summary", sha256: fileSha(fixture.phase0Path), path: "quality-contracts/agent-readiness/phase0-summary-v1.json" },
+      { artifactId: "ownership-20260714", artifactType: "ownership-map", sha256: fileSha(fixture.ownershipPath), path: "quality-contracts/agent-readiness/ownership-map-v1.json" },
+      { artifactId: "taxonomy-20260714", artifactType: "taxonomy-digest", sha256: fileSha(fixture.taxonomyPath), path: "quality-contracts/agent-readiness/taxonomy-digest-v1.json" },
+      { artifactId: "actors-20260714", artifactType: "approval-actor-registry", sha256: fileSha(fixture.registryPath), path: "quality-contracts/agent-readiness/approval-actor-registry-v1.json" },
+      { artifactId: "actors-c3-v2", artifactType: "approval-actor-registry", sha256: v2RegistrySha, path: `quality-contracts/agent-readiness/${v2RegistryFilename}` },
+    ],
+  };
+  const v2IndexFilename = "artifact-index-v2.json";
+  const v2IndexPath = join(fixture.artifactRoot, v2IndexFilename);
+  writeArtifact(fixture.artifactRoot, v2IndexFilename, v2Index);
+
+  // 3. Ledger v2 — the v1 C0 approvals unchanged (append-only) plus three C3
+  //    approvals. C3 has no recipe, so the target/plan/spec hashes are opaque
+  //    placeholders: nothing recomputes them. All three share one target sha so
+  //    the divergent-targets check passes.
+  const boundRows = (approvalId: string) => [
+    {
+      artifactId: "ownership-20260714",
+      sha256: staleApprovalIds.includes(approvalId) ? "f".repeat(64) : fileSha(fixture.ownershipPath),
+    },
+    { artifactId: "phase0-20260714", sha256: fileSha(fixture.phase0Path) },
+  ];
+  const c3Base = {
+    approvalKind: "checkpoint",
+    checkpoint: "C3",
+    decision: "approved",
+    actorKind: "human",
+    actorRegistryVersion: "2.0",
+    actorRegistrySha256: v2RegistrySha,
+    checkpointTargetSha256: SHA_A,
+    planSha256: fixture.planSha,
+    specSha256: fixture.specSha,
+    contractHashes: {},
+  };
+  const c3Approvals: Array<Record<string, unknown>> = [
+    { ...c3Base, approvalId: "c3-product", actorId: "product-1", role: "Product", approvedArtifacts: boundRows("c3-product"), decidedAt: "2026-07-16T10:00:00Z" },
+    { ...c3Base, approvalId: "c3-qa", actorId: "qa-1", role: "QA", approvedArtifacts: boundRows("c3-qa"), decidedAt: "2026-07-16T10:01:00Z" },
+    { ...c3Base, approvalId: "c3-engineering", actorId: "engineering-1", role: "Engineering", approvedArtifacts: boundRows("c3-engineering"), decidedAt: "2026-07-16T10:02:00Z" },
+  ];
+  if (supersedeQa) {
+    c3Approvals.push({
+      ...c3Base,
+      approvalId: "c3-qa-v2",
+      actorId: "qa-1",
+      role: "QA",
+      approvedArtifacts: boundRows("c3-qa-v2"),
+      decidedAt: "2026-07-16T11:00:00Z",
+      supersedesApprovalId: "c3-qa",
+    });
+  }
+
+  const v1Ledger = readJson<{ approvals: unknown[] } & Record<string, unknown>>(fixture.ledgerPath!);
+  const v2Ledger = {
+    ...v1Ledger,
+    artifactId: "approvals-c3-v2",
+    ordinalVersion: 2,
+    predecessor: { version: "1", sha256: fileSha(fixture.ledgerPath!) },
+    approvals: [...v1Ledger.approvals, ...c3Approvals],
+  };
+  const v2LedgerFilename = "checkpoint-approvals-v2.json";
+  const v2LedgerPath = join(fixture.artifactRoot, v2LedgerFilename);
+  writeArtifact(fixture.artifactRoot, v2LedgerFilename, v2Ledger);
+
+  return { registryPath: v2RegistryPath, indexPath: v2IndexPath, ledgerPath: v2LedgerPath };
 }
 
 // ---------------------------------------------------------------------------
@@ -1500,6 +1641,23 @@ describe("governance snapshot chains", () => {
     expect(result.issues.some((i) => i.code === "chain-duplicate-key" || i.code === "chain-fork")).toBe(true);
   });
 
+  it("reports missing-registry when a ledger exists but no registry resolves", () => {
+    // A graph with an index and a ledger full of approvals but NO registry:
+    // every approval check (and therefore every provenance check) is gated on a
+    // resolved registry head, so without this signal the graph validated clean
+    // with zero approvals inspected and exit code 0.
+    fixture = buildValidGraph({ withApprovals: true });
+    rmSync(fixture.registryPath);
+    mutateJson<{ artifacts: Array<{ artifactId: string }> }>(fixture.indexPath, (d) => {
+      d.artifacts = d.artifacts.filter((a) => a.artifactId !== "actors-20260714");
+      return d;
+    });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "missing-registry")).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.checkpointStatus.C0).toBe("open");
+  });
+
   it.each([
     ["deletion", (approvals: unknown[]) => approvals.slice(1), "ledger-approval-deleted"],
     ["mutation", (approvals: { rationale?: string }[]) => [{ ...approvals[0]!, rationale: "rewritten" }, ...approvals.slice(1)], "ledger-approval-mutated"],
@@ -1735,5 +1893,796 @@ describe("per-approval registry resolution and closed-world policy", () => {
     expect(result.issues.some((i) => i.code === "registry-hash-mismatch")).toBe(false);
     expect(result.issues.some((i) => i.code === "registry-error")).toBe(true);
     expect(result.checkpointStatus.C1).toBe("open");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — approval temporal provenance
+//
+// Two invariants, both about "a decision cannot predate the thing it decides":
+//   1. supersession: B.decidedAt must be STRICTLY LATER than A.decidedAt when
+//      B declares supersedesApprovalId: A.
+//   2. approved artifacts: an approval's decidedAt must not precede the
+//      createdAt of any artifact it binds via approvedArtifacts.
+// ---------------------------------------------------------------------------
+
+describe("approval temporal provenance", () => {
+  let fixture: ReturnType<typeof buildValidGraph>;
+
+  afterEach(() => {
+    if (fixture) cleanup(fixture.root);
+  });
+
+  function validate(f: ReturnType<typeof buildValidGraph>) {
+    return validateReadinessArtifacts({
+      artifactRoot: f.artifactRoot,
+      repoRoot: f.repoRoot,
+      gitSourceResolver: f.resolver,
+      mode: "public",
+    });
+  }
+
+  /**
+   * Append a superseding copy of the C0 Repository Maintainer approval as
+   * ledger v2, carrying the supplied `decidedAt`. Checkpoint, role, and actor
+   * are identical to the superseded approval, so the ONLY thing under test is
+   * the timestamp relation between the two records.
+   */
+  function supersedeRepoMaintainer(decidedAt: string): void {
+    const v1 = readJson<{ approvals: Array<Record<string, unknown>> }>(fixture.ledgerPath!);
+    const prior = v1.approvals.find((a) => a.approvalId === "c0-repo-maintainer")!;
+    writeLedgerV2(fixture, [
+      ...v1.approvals,
+      {
+        ...prior,
+        approvalId: "c0-repo-maintainer-v2",
+        supersedesApprovalId: "c0-repo-maintainer",
+        decidedAt,
+      },
+    ]);
+  }
+
+  it("rejects a superseding approval whose decidedAt equals the superseded approval's", () => {
+    // This is the shape of the verified defect in checkpoint-approvals-v5.json:
+    // the v2 approval binds new content but copies the v1 decidedAt verbatim.
+    fixture = buildValidGraph({ withApprovals: true });
+    supersedeRepoMaintainer("2026-07-14T10:00:00Z"); // byte-identical to the prior record
+    const result = validate(fixture);
+    expect(result.ok).toBe(false);
+    const flagged = result.issues.filter((i) => i.code === "ledger-supersession-not-later");
+    expect(flagged.length).toBe(1);
+    expect(flagged[0]!.artifactId).toBe("c0-repo-maintainer-v2");
+  });
+
+  it("rejects a superseding approval whose decidedAt precedes the superseded approval's", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    supersedeRepoMaintainer("2026-07-14T09:59:00Z");
+    const result = validate(fixture);
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((i) => i.code === "ledger-supersession-not-later")).toBe(true);
+  });
+
+  it("accepts a superseding approval whose decidedAt is strictly later", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    supersedeRepoMaintainer("2026-07-14T11:00:00Z");
+    const result = validate(fixture);
+    expect(result.issues).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.checkpointStatus.C0).toBe("closed");
+  });
+
+  it("rejects an approval decided before an artifact it binds was created", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    mutateJson<{ approvals: Array<{ decidedAt: string }> }>(fixture.ledgerPath!, (d) => {
+      // Every fixture artifact carries createdAt 2026-07-14T09:30:00Z, so this
+      // decision predates all four artifacts the approval binds.
+      d.approvals[0]!.decidedAt = "2026-07-13T00:00:00Z";
+      return d;
+    });
+    const result = validate(fixture);
+    expect(result.ok).toBe(false);
+    const flagged = result.issues.filter(
+      (i) => i.code === "approved-artifact-created-after-decision",
+    );
+    expect(flagged.length).toBe(4);
+    expect(flagged.every((i) => i.artifactId === "c0-repo-maintainer")).toBe(true);
+  });
+
+  it("accepts an approval decided exactly at a bound artifact's createdAt", () => {
+    // Boundary: the invariant is "must not PRECEDE", so equality is allowed.
+    fixture = buildValidGraph({ withApprovals: true });
+    mutateJson<{ approvals: Array<{ decidedAt: string }> }>(fixture.ledgerPath!, (d) => {
+      d.approvals[0]!.decidedAt = "2026-07-14T09:30:00Z";
+      return d;
+    });
+    const result = validate(fixture);
+    expect(
+      result.issues.some((i) => i.code === "approved-artifact-created-after-decision"),
+    ).toBe(false);
+    expect(result.issues).toEqual([]);
+  });
+
+  it("does not flag an approval whose approvedArtifacts cannot be resolved", () => {
+    // Unresolvable rows are reported by the approved-artifact-* checks; the
+    // temporal check must skip them rather than fail on a missing createdAt.
+    fixture = buildValidGraph({ withApprovals: true });
+    mutateJson<{ approvals: Array<{ approvedArtifacts: Array<Record<string, string>> }> }>(
+      fixture.ledgerPath!,
+      (d) => {
+        d.approvals[0]!.approvedArtifacts = [
+          { artifactId: "not-a-real-artifact", sha256: "a".repeat(64) },
+        ];
+        return d;
+      },
+    );
+    const result = validate(fixture);
+    expect(
+      result.issues.some((i) => i.code === "approved-artifact-created-after-decision"),
+    ).toBe(false);
+    expect(result.issues.some((i) => i.code === "approved-artifact-unknown")).toBe(true);
+  });
+
+  it("skips a bound row whose sha256 is not the on-disk artifact version", () => {
+    // An approval that bound an EARLIER version of an artifact is comparing its
+    // decidedAt against bytes it never approved. The on-disk `createdAt` belongs
+    // to a different version, so the row is genuinely unresolvable for temporal
+    // purposes and must be skipped — not reported as a temporal violation. The
+    // stale binding itself is still reported, by approved-artifact-hash-mismatch.
+    fixture = buildValidGraph({ withApprovals: true });
+    mutateJson<{
+      approvals: Array<{
+        decidedAt: string;
+        approvedArtifacts: Array<{ artifactId: string; sha256: string }>;
+      }>;
+    }>(fixture.ledgerPath!, (d) => {
+      d.approvals[0]!.decidedAt = "2026-07-13T00:00:00Z";
+      const row = d.approvals[0]!.approvedArtifacts.find(
+        (a) => a.artifactId === "ownership-20260714",
+      )!;
+      row.sha256 = "f".repeat(64);
+      return d;
+    });
+    const result = validate(fixture);
+    const flagged = result.issues.filter(
+      (i) => i.code === "approved-artifact-created-after-decision",
+    );
+    // 3, not 4: the stale-hash row is skipped, the other three still resolve.
+    expect(flagged.length).toBe(3);
+    expect(flagged.some((i) => i.message.includes("ownership-20260714"))).toBe(false);
+    expect(
+      result.issues.some(
+        (i) =>
+          i.code === "approved-artifact-hash-mismatch" &&
+          i.message.includes("ownership-20260714"),
+      ),
+    ).toBe(true);
+  });
+
+  it("flags only the offending bound row and names it in the issue", () => {
+    // ownership-map is created at 10:00:30; the other three artifacts at
+    // 09:30:00. c0-repo-maintainer decided at 10:00:00 (before ownership-map,
+    // after the rest) and c0-pm at 10:01:00 (after everything). Exactly ONE
+    // issue must be emitted, for one approval and one artifact.
+    fixture = buildValidGraph({
+      withApprovals: true,
+      ownershipCreatedAt: "2026-07-14T10:00:30Z",
+    });
+    const result = validate(fixture);
+    const flagged = result.issues.filter(
+      (i) => i.code === "approved-artifact-created-after-decision",
+    );
+    expect(flagged.length).toBe(1);
+    expect(flagged[0]!.artifactId).toBe("c0-repo-maintainer");
+    // The message must name the OFFENDING artifact, not just the approval.
+    expect(flagged[0]!.message).toContain("ownership-20260714");
+    expect(flagged[0]!.message).toContain("2026-07-14T10:00:30Z");
+    expect(flagged[0]!.path).toContain("ownership-map-v1.json");
+  });
+
+  it("blocks checkpoint closure when a superseding approval is not strictly later", () => {
+    // A provenance-invalid approval must not count toward closure. Before this
+    // was wired through noteApprovalIssue, ok:false coexisted with C0 "closed".
+    fixture = buildValidGraph({ withApprovals: true });
+    supersedeRepoMaintainer("2026-07-14T10:00:00Z");
+    const result = validate(fixture);
+    expect(result.ok).toBe(false);
+    expect(result.checkpointStatus.C0).toBe("open");
+  });
+
+  it("blocks checkpoint closure when an approval predates a bound artifact", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    mutateJson<{ approvals: Array<{ decidedAt: string }> }>(fixture.ledgerPath!, (d) => {
+      d.approvals[0]!.decidedAt = "2026-07-13T00:00:00Z";
+      return d;
+    });
+    const result = validate(fixture);
+    expect(result.ok).toBe(false);
+    expect(result.checkpointStatus.C0).toBe("open");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — approval bindings for checkpoints WITHOUT a recipe (C3–C5)
+//
+// C0–C2 bindings are verified by verifyApprovedArtifactSet (behind a resolved
+// recipe). C3–C5 have no recipe, so nothing downstream inspects their
+// approvedArtifacts rows: the binding checks below are the only coverage.
+// ---------------------------------------------------------------------------
+
+describe("recipeless-checkpoint approval bindings", () => {
+  let fixture: ReturnType<typeof buildValidGraph>;
+
+  afterEach(() => {
+    if (fixture) cleanup(fixture.root);
+  });
+
+  function validate(f: ReturnType<typeof buildValidGraph>) {
+    return validateReadinessArtifacts({
+      artifactRoot: f.artifactRoot,
+      repoRoot: f.repoRoot,
+      gitSourceResolver: f.resolver,
+      mode: "public",
+    });
+  }
+
+  it("closes C3 when every bound row resolves to the on-disk artifact version", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    addSyntheticC3Approvals(fixture);
+    const result = validate(fixture);
+    expect(
+      result.issues.some((i) => i.code === "approved-artifact-version-unresolved"),
+    ).toBe(false);
+    expect(result.issues).toEqual([]);
+    expect(result.checkpointStatus.C3).toBe("closed");
+  });
+
+  it("reports and taints an ACTIVE C3 approval binding a version that is not on disk", () => {
+    // The hole the version gate opened: C3 has no recipe, so
+    // approved-artifact-hash-mismatch can never fire for this row, and the
+    // temporal check skipped it. C3 would close on an unverified binding.
+    fixture = buildValidGraph({ withApprovals: true });
+    addSyntheticC3Approvals(fixture, { staleApprovalIds: ["c3-qa"] });
+    const result = validate(fixture);
+    const flagged = result.issues.filter(
+      (i) => i.code === "approved-artifact-version-unresolved",
+    );
+    expect(flagged.length).toBe(1);
+    expect(flagged[0]!.artifactId).toBe("c3-qa");
+    expect(flagged[0]!.message).toContain("ownership-20260714");
+    expect(flagged[0]!.message).toContain("f".repeat(64));
+    expect(result.ok).toBe(false);
+    expect(result.checkpointStatus.C3).toBe("open");
+  });
+
+  it("reports an ACTIVE C3 approval binding an artifactId that does not exist", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const { ledgerPath } = addSyntheticC3Approvals(fixture);
+    mutateJson<{
+      approvals: Array<{
+        approvalId: string;
+        approvedArtifacts: Array<{ artifactId: string; sha256: string }>;
+      }>;
+    }>(ledgerPath, (d) => {
+      const qa = d.approvals.find((a) => a.approvalId === "c3-qa")!;
+      qa.approvedArtifacts = [{ artifactId: "not-a-real-artifact", sha256: "f".repeat(64) }];
+      return d;
+    });
+    const result = validate(fixture);
+    const flagged = result.issues.filter(
+      (i) => i.code === "approved-artifact-version-unresolved",
+    );
+    expect(flagged.length).toBe(1);
+    expect(flagged[0]!.artifactId).toBe("c3-qa");
+    expect(flagged[0]!.message).toContain("not-a-real-artifact");
+    expect(result.checkpointStatus.C3).toBe("open");
+  });
+
+  it("still skips an unresolvable binding on a SUPERSEDED approval", () => {
+    // Superseded records are immutable history and cannot contribute to
+    // closure, so their bindings stay skipped — the deliberate carve-out.
+    fixture = buildValidGraph({ withApprovals: true });
+    addSyntheticC3Approvals(fixture, {
+      staleApprovalIds: ["c3-qa"],
+      supersedeQa: true,
+    });
+    const result = validate(fixture);
+    expect(
+      result.issues.some((i) => i.code === "approved-artifact-version-unresolved"),
+    ).toBe(false);
+    expect(result.checkpointStatus.C3).toBe("closed");
+  });
+
+  it("does not double-report a recipe-backed checkpoint's stale binding", () => {
+    // C0 HAS a recipe: the same stale row must be reported exactly once, by
+    // approved-artifact-hash-mismatch, not also by the recipeless check.
+    fixture = buildValidGraph({ withApprovals: true });
+    mutateJson<{
+      approvals: Array<{ approvedArtifacts: Array<{ artifactId: string; sha256: string }> }>;
+    }>(fixture.ledgerPath!, (d) => {
+      d.approvals[0]!.approvedArtifacts.find(
+        (a) => a.artifactId === "ownership-20260714",
+      )!.sha256 = "f".repeat(64);
+      return d;
+    });
+    const result = validate(fixture);
+    expect(
+      result.issues.some((i) => i.code === "approved-artifact-version-unresolved"),
+    ).toBe(false);
+    expect(
+      result.issues.filter((i) => i.code === "approved-artifact-hash-mismatch").length,
+    ).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test-only private C2 evidence fixture builder
+//
+// The private readiness gate resolves the C2 evidence manifest's repo-relative
+// paths, hashes the referenced bytes, schema-validates them, and then checks
+// the cross-artifact bindings between them. These helpers synthesize that whole
+// evidence set INSIDE the fixture's temp repo root — the tracked
+// eval/c2/label-integrity files are never read or written.
+// ---------------------------------------------------------------------------
+
+/** Repo-relative paths of the closed C2 evidence set (mirrors REQUIRED_C2_EVIDENCE). */
+const C2_PATHS = {
+  selection: "eval/c2/label-integrity/selection.json",
+  goldPass3: "eval/c2/label-integrity/parent-evidence/reviewer-gold-pass3.json",
+  qaPass3: "eval/c2/label-integrity/parent-evidence/reviewer-qa-pass3.json",
+  parentGold: "eval/c2/label-integrity/parent-evidence/reviewer-gold.json",
+  parentQa: "eval/c2/label-integrity/parent-evidence/reviewer-qa.json",
+  baseline: "eval/c2/label-integrity/baseline-metrics.json",
+  adjudication: "eval/c2/label-integrity/adjudication.json",
+  agreement: "eval/c2/label-integrity/agreement-report.json",
+} as const;
+
+const C2_SELECTION_ID = "c2-label-integrity-selection-v1";
+const C2_ENTRY_IDS = Array.from(
+  { length: 40 },
+  (_, i) => `entry-${String(i + 1).padStart(3, "0")}`,
+);
+
+interface C2ManifestRow {
+  artifactId: string;
+  artifactType: string;
+  sha256: string;
+  path: string;
+}
+
+/** Write one evidence JSON file under the fixture repo root; return its sha256. */
+function writeEvidenceFile(repoRoot: string, relPath: string, payload: unknown): string {
+  const abs = join(repoRoot, ...relPath.split("/"));
+  mkdirSync(join(abs, ".."), { recursive: true });
+  const bytes = JSON.stringify(payload, null, 2) + "\n";
+  writeFileSync(abs, bytes, "utf-8");
+  return sha256Hex(Buffer.from(bytes, "utf-8"));
+}
+
+/** 40-entry selection artifact: 35 reproducible + 5 challenge, as the schema requires. */
+function buildC2Selection(): Record<string, unknown> {
+  return {
+    schemaVersion: "1.0",
+    artifactType: "c2-label-integrity-selection",
+    artifactId: C2_SELECTION_ID,
+    selectionVersion: 1,
+    seed: "clean-ui-retag-v1",
+    corpusGitSha: "b".repeat(40),
+    corpusSha256: "c".repeat(64),
+    entries: C2_ENTRY_IDS.map((entryId, i) => ({
+      entryId,
+      cohort: i < 35 ? "reproducible" : "challenge",
+      stratum: i < 35 ? "stratum-reproducible" : "stratum-challenge",
+      selectionReason: "synthetic fixture entry",
+      imageSha256: sha256Hex(Buffer.from(entryId, "utf-8")),
+    })),
+  };
+}
+
+function buildC2Submission(opts: {
+  artifactId: string;
+  actorId: string;
+  reviewerRole: "Gold Label Owner" | "QA";
+  selectionSha256: string;
+}): Record<string, unknown> {
+  return {
+    schemaVersion: "1.0",
+    artifactType: "c2-independent-label-submission",
+    artifactId: opts.artifactId,
+    selectionArtifactId: C2_SELECTION_ID,
+    selectionSha256: opts.selectionSha256,
+    submissionVersion: 1,
+    actorId: opts.actorId,
+    actorKind: "human",
+    reviewerRole: opts.reviewerRole,
+    sealedAt: "2026-07-26T18:00:00.000Z",
+    labels: C2_ENTRY_IDS.map((entryId) => ({
+      entryId,
+      patternType: "dashboard",
+      categories: ["analytics"],
+      components: ["table"],
+      domainTags: ["fintech"],
+      visualFields: { layout: "two-column grid" },
+      groundedClaimIds: ["claim-1"],
+      accessibilityEvidenceIds: [],
+      critiqueQuality: "acceptable",
+      protectedFieldExpectation: "unchanged",
+    })),
+  };
+}
+
+/**
+ * The 8 frozen metric IDs with the baseline values the fixture's
+ * baseline-metrics artifact publishes. `fixedFloor` mirrors
+ * C2_REPLACEMENT_METRIC_FLOORS (0 = metric has no fixed floor), so
+ * requiredFloor / passed satisfy MetricSchema's superRefine.
+ */
+const C2_METRIC_PLAN = [
+  { metricId: "pattern-type-exact-accuracy", baselineValue: 0.9, fixedFloor: 0.9 },
+  { metricId: "categories-macro-f1", baselineValue: 0.85, fixedFloor: 0.85 },
+  { metricId: "components-precision", baselineValue: null, fixedFloor: 0.9 },
+  { metricId: "components-recall", baselineValue: 0.8, fixedFloor: 0 },
+  { metricId: "domain-tags-precision", baselineValue: null, fixedFloor: 0.9 },
+  { metricId: "domain-tags-recall", baselineValue: 0.8, fixedFloor: 0 },
+  { metricId: "structured-critique-schema-validity", baselineValue: null, fixedFloor: 1 },
+  { metricId: "scorable-recommendation-citation-rate", baselineValue: null, fixedFloor: 0.9 },
+] as const;
+
+/**
+ * Options that inject exactly one provenance defect into the synthetic C2
+ * evidence set. Each maps to one issue code the private gate must emit.
+ */
+interface C2EvidenceOptions {
+  /** Point baseline sourceArtifactRefs at a Pass-3 submission instead of parent-authority baseline evidence. */
+  baselineSourceIsPass3?: boolean;
+  /** Keep the report's selectionRef well-formed but no longer exactly bound in the manifest. */
+  unbindReportSelectionRef?: boolean;
+  /** Replace the report's selectionRef with a non-object (also makes the report schema-invalid). */
+  invalidReportSelectionRef?: boolean;
+  /** Make the adjudication cite a different gold submission than the agreement report. */
+  adjudicationSubmissionMismatch?: boolean;
+  /** Row surgery applied after every evidence file is written and hashed. */
+  editManifestRows?: (rows: C2ManifestRow[]) => C2ManifestRow[];
+}
+
+/**
+ * Write the full private C2 evidence set plus its public manifest artifact, and
+ * index the manifest so the graph stays complete. Returns the manifest path and
+ * the manifest rows actually written.
+ */
+function writeC2PrivateEvidence(
+  fixture: ReturnType<typeof buildValidGraph>,
+  options: C2EvidenceOptions = {},
+): { manifestPath: string; rows: C2ManifestRow[] } {
+  const repoRoot = fixture.repoRoot;
+
+  const selectionSha = writeEvidenceFile(repoRoot, C2_PATHS.selection, buildC2Selection());
+
+  const goldPass3Sha = writeEvidenceFile(
+    repoRoot,
+    C2_PATHS.goldPass3,
+    buildC2Submission({
+      artifactId: "c2-submission-reviewer-gold-v1",
+      actorId: "reviewer-gold",
+      reviewerRole: "Gold Label Owner",
+      selectionSha256: selectionSha,
+    }),
+  );
+  const qaPass3Sha = writeEvidenceFile(
+    repoRoot,
+    C2_PATHS.qaPass3,
+    buildC2Submission({
+      artifactId: "c2-submission-reviewer-qa-v1",
+      actorId: "reviewer-qa",
+      reviewerRole: "QA",
+      selectionSha256: selectionSha,
+    }),
+  );
+  const parentGoldSha = writeEvidenceFile(
+    repoRoot,
+    C2_PATHS.parentGold,
+    buildC2Submission({
+      artifactId: "c2-parent-baseline-reviewer-gold-v1",
+      actorId: "reviewer-gold",
+      reviewerRole: "Gold Label Owner",
+      selectionSha256: selectionSha,
+    }),
+  );
+  const parentQaSha = writeEvidenceFile(
+    repoRoot,
+    C2_PATHS.parentQa,
+    buildC2Submission({
+      artifactId: "c2-parent-baseline-reviewer-qa-v1",
+      actorId: "reviewer-qa",
+      reviewerRole: "QA",
+      selectionSha256: selectionSha,
+    }),
+  );
+
+  // Baseline metrics must derive from PARENT-AUTHORITY evidence. The defect
+  // option swaps one source ref for the Pass-3 gold submission — still exactly
+  // bound in the manifest, so only the parent-authority rule can catch it.
+  const baselineSourceRefs = options.baselineSourceIsPass3
+    ? [{ artifactId: "c2-submission-reviewer-gold-v1", path: C2_PATHS.goldPass3, sha256: goldPass3Sha }]
+    : [
+        { artifactId: "c2-parent-baseline-reviewer-gold-v1", path: C2_PATHS.parentGold, sha256: parentGoldSha },
+        { artifactId: "c2-parent-baseline-reviewer-qa-v1", path: C2_PATHS.parentQa, sha256: parentQaSha },
+      ];
+  const baselineDraft: Record<string, unknown> = {
+    schemaVersion: "1.0",
+    artifactType: "c2-label-integrity-baseline-metrics",
+    artifactId: "c2-label-integrity-baseline-metrics-v1",
+    selectionArtifactId: C2_SELECTION_ID,
+    selectionSha256: selectionSha,
+    "pattern-type-exact-accuracy": 0.9,
+    "categories-macro-f1": 0.85,
+    "components-recall": 0.8,
+    "domain-tags-recall": 0.8,
+    sourceArtifactRefs: baselineSourceRefs,
+    computedAt: "2026-07-26T19:00:00.000Z",
+    baselineMetricsSha256: "0".repeat(64),
+  };
+  // The private gate does not recompute this self-seal, but compute it anyway
+  // so the fixture is internally honest.
+  baselineDraft.baselineMetricsSha256 = sha256Hex(
+    Buffer.from(canonicalJsonStringify({ ...baselineDraft, baselineMetricsSha256: "" }), "utf-8"),
+  );
+  const baselineSha = writeEvidenceFile(repoRoot, C2_PATHS.baseline, baselineDraft);
+
+  const adjudicationSha = writeEvidenceFile(repoRoot, C2_PATHS.adjudication, {
+    schemaVersion: "1.0",
+    artifactType: "c2-label-agreement-adjudication",
+    artifactId: "c2-adjudication-v1",
+    selectionArtifactId: C2_SELECTION_ID,
+    selectionSha256: selectionSha,
+    goldOwnerSubmissionArtifactId: options.adjudicationSubmissionMismatch
+      ? "c2-parent-baseline-reviewer-gold-v1"
+      : "c2-submission-reviewer-gold-v1",
+    qaSubmissionArtifactId: "c2-submission-reviewer-qa-v1",
+    disagreementEntryIds: [],
+    status: "recorded-not-adjudicated",
+    rationale: "synthetic fixture: no disagreements recorded",
+    recordedAt: "2026-07-26T19:30:00.000Z",
+  });
+
+  let selectionRef: unknown = {
+    artifactId: C2_SELECTION_ID,
+    path: C2_PATHS.selection,
+    sha256: selectionSha,
+  };
+  if (options.unbindReportSelectionRef) {
+    selectionRef = { artifactId: C2_SELECTION_ID, path: C2_PATHS.selection, sha256: "0".repeat(64) };
+  }
+  if (options.invalidReportSelectionRef) {
+    selectionRef = "not-an-object";
+  }
+  const agreementSha = writeEvidenceFile(repoRoot, C2_PATHS.agreement, {
+    schemaVersion: "1.0",
+    artifactType: "c2-label-agreement-report",
+    artifactId: "c2-label-agreement-report-v1",
+    selectionRef,
+    goldOwnerSubmissionRef: {
+      artifactId: "c2-submission-reviewer-gold-v1",
+      path: C2_PATHS.goldPass3,
+      sha256: goldPass3Sha,
+    },
+    qaSubmissionRef: {
+      artifactId: "c2-submission-reviewer-qa-v1",
+      path: C2_PATHS.qaPass3,
+      sha256: qaPass3Sha,
+    },
+    baselineMetricsRef: {
+      artifactId: "c2-label-integrity-baseline-metrics-v1",
+      path: C2_PATHS.baseline,
+      sha256: baselineSha,
+    },
+    goldOwnerActorId: "reviewer-gold",
+    qaActorId: "reviewer-qa",
+    submissionsUnsealedAt: "2026-07-26T20:00:00.000Z",
+    metrics: C2_METRIC_PLAN.map((m) => {
+      const requiredFloor = Math.max(m.fixedFloor, m.baselineValue ?? 0);
+      return {
+        metricId: m.metricId,
+        value: 1,
+        baselineValue: m.baselineValue,
+        requiredFloor,
+        passed: 1 >= requiredFloor,
+      };
+    }),
+    hardGates: C2_HARD_GATE_IDS.map((gateId) => ({
+      gateId,
+      passed: true,
+      evidence: "synthetic fixture gate evidence",
+    })),
+    disagreementEntryIds: [],
+    adjudicationRef: {
+      artifactId: "c2-adjudication-v1",
+      path: C2_PATHS.adjudication,
+      sha256: adjudicationSha,
+    },
+    terminalOutcome: "Qualified",
+  });
+
+  // Manifest rows in the exact order/identity REQUIRED_C2_EVIDENCE declares.
+  let rows: C2ManifestRow[] = [
+    { artifactId: C2_SELECTION_ID, artifactType: "c2-label-integrity-selection", sha256: selectionSha, path: C2_PATHS.selection },
+    { artifactId: "c2-submission-reviewer-gold-v1", artifactType: "c2-independent-label-submission", sha256: goldPass3Sha, path: C2_PATHS.goldPass3 },
+    { artifactId: "c2-submission-reviewer-qa-v1", artifactType: "c2-independent-label-submission", sha256: qaPass3Sha, path: C2_PATHS.qaPass3 },
+    { artifactId: "c2-parent-baseline-reviewer-gold-v1", artifactType: "c2-independent-label-submission", sha256: parentGoldSha, path: C2_PATHS.parentGold },
+    { artifactId: "c2-parent-baseline-reviewer-qa-v1", artifactType: "c2-independent-label-submission", sha256: parentQaSha, path: C2_PATHS.parentQa },
+    { artifactId: "c2-label-integrity-baseline-metrics-v1", artifactType: "c2-label-integrity-baseline-metrics", sha256: baselineSha, path: C2_PATHS.baseline },
+    { artifactId: "c2-adjudication-v1", artifactType: "c2-label-agreement-adjudication", sha256: adjudicationSha, path: C2_PATHS.adjudication },
+    { artifactId: "c2-label-agreement-report-v1", artifactType: "c2-label-agreement-report", sha256: agreementSha, path: C2_PATHS.agreement },
+  ];
+  if (options.editManifestRows) rows = options.editManifestRows(rows);
+
+  const manifestFilename = "c2-evidence-manifest-v1.json";
+  writeArtifact(fixture.artifactRoot, manifestFilename, {
+    schemaVersion: "1.0",
+    artifactType: "c2-evidence-manifest",
+    artifactId: "c2-evidence-v1",
+    createdAt: "2026-07-26T20:15:01.000Z",
+    createdByRole: "repository-maintainer",
+    sourceGitSha: FROZEN_SHA,
+    inputHashes: {},
+    checkpoint: "C2",
+    evidence: rows,
+  });
+  const manifestPath = join(fixture.artifactRoot, manifestFilename);
+
+  // Index the manifest so the head index stays complete. The C0 checkpoint
+  // target does not include the index itself, so this does not disturb closure.
+  mutateJson<{ artifacts: C2ManifestRow[] }>(fixture.indexPath, (d) => {
+    d.artifacts.push({
+      artifactId: "c2-evidence-v1",
+      artifactType: "c2-evidence-manifest",
+      sha256: fileSha(manifestPath),
+      path: `quality-contracts/agent-readiness/${manifestFilename}`,
+    });
+    return d;
+  });
+
+  return { manifestPath, rows };
+}
+
+// ---------------------------------------------------------------------------
+// Tests — private C2 evidence verification
+// ---------------------------------------------------------------------------
+
+describe("private C2 evidence verification", () => {
+  let fixture: ReturnType<typeof buildValidGraph>;
+  let corpusPath: string;
+  const corpusRoots: string[] = [];
+
+  beforeEach(() => {
+    // Create the corpus first so the graph can pin its real hash/count, making
+    // a fully issue-free private-mode validation possible.
+    const corpusRoot = mkdtempSync(join(tmpdir(), "readiness-corpus-"));
+    corpusPath = join(corpusRoot, "entries.json");
+    writeFileSync(
+      corpusPath,
+      JSON.stringify({ version: 2, entries: [{ id: "corpus-entry-1" }, { id: "corpus-entry-2" }] }),
+    );
+    fixture = buildValidGraph({
+      withApprovals: true,
+      corpus: { sha256: fileSha(corpusPath), entryCount: 2 },
+    });
+    // Tracked separately from the fixture root so cleanup removes both.
+    corpusRoots.push(corpusRoot);
+  });
+
+  afterEach(() => {
+    if (fixture) cleanup(fixture.root);
+    while (corpusRoots.length > 0) cleanup(corpusRoots.pop()!);
+  });
+
+  function validate(f: ReturnType<typeof buildValidGraph>) {
+    return validateReadinessArtifacts({
+      artifactRoot: f.artifactRoot,
+      repoRoot: f.repoRoot,
+      gitSourceResolver: f.resolver,
+      mode: "private",
+      corpusPath,
+    });
+  }
+
+  it("accepts a complete, correctly bound C2 evidence set", () => {
+    writeC2PrivateEvidence(fixture);
+    const result = validate(fixture);
+    expect(result.issues).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not resolve C2 evidence in public mode", () => {
+    // The manifest carries hashes only; path resolution is private-mode work.
+    writeC2PrivateEvidence(fixture, {
+      editManifestRows: (rows) => rows.map((r) => ({ ...r, sha256: "0".repeat(64) })),
+    });
+    const result = validateReadinessArtifacts({
+      artifactRoot: fixture.artifactRoot,
+      repoRoot: fixture.repoRoot,
+      gitSourceResolver: fixture.resolver,
+      mode: "public",
+    });
+    expect(result.issues.filter((i) => i.code.startsWith("c2-"))).toEqual([]);
+  });
+
+  it("reports c2-evidence-duplicate-id for a repeated artifactId", () => {
+    writeC2PrivateEvidence(fixture, {
+      editManifestRows: (rows) => [
+        ...rows,
+        { ...rows[0]!, path: "eval/c2/label-integrity/selection-copy.json" },
+      ],
+    });
+    const result = validate(fixture);
+    expect(result.ok).toBe(false);
+    const flagged = result.issues.filter((i) => i.code === "c2-evidence-duplicate-id");
+    expect(flagged.length).toBe(1);
+    expect(flagged[0]!.message).toContain(C2_SELECTION_ID);
+  });
+
+  it("reports c2-evidence-duplicate-path for a repeated path", () => {
+    writeC2PrivateEvidence(fixture, {
+      editManifestRows: (rows) => [
+        ...rows,
+        { ...rows[0]!, artifactId: "c2-evidence-extra-v1" },
+      ],
+    });
+    const result = validate(fixture);
+    expect(result.ok).toBe(false);
+    const flagged = result.issues.filter((i) => i.code === "c2-evidence-duplicate-path");
+    expect(flagged.length).toBe(1);
+    expect(flagged[0]!.path).toBe(C2_PATHS.selection);
+  });
+
+  it("reports c2-evidence-set-mismatch when a required evidence row is absent", () => {
+    writeC2PrivateEvidence(fixture, {
+      editManifestRows: (rows) => rows.filter((r) => r.artifactId !== "c2-adjudication-v1"),
+    });
+    const result = validate(fixture);
+    expect(result.ok).toBe(false);
+    const flagged = result.issues.filter((i) => i.code === "c2-evidence-set-mismatch");
+    expect(flagged.some((i) => i.message.includes("c2-adjudication-v1"))).toBe(true);
+    expect(flagged.some((i) => i.message.includes("exactly 8 evidence rows"))).toBe(true);
+  });
+
+  it("reports c2-evidence-nested-ref-unbound when a report ref is not exactly bound", () => {
+    writeC2PrivateEvidence(fixture, { unbindReportSelectionRef: true });
+    const result = validate(fixture);
+    expect(result.ok).toBe(false);
+    const flagged = result.issues.filter((i) => i.code === "c2-evidence-nested-ref-unbound");
+    expect(flagged.length).toBe(1);
+    expect(flagged[0]!.artifactId).toBe("c2-label-agreement-report-v1");
+  });
+
+  it("reports c2-evidence-nested-ref-invalid when a nested ref is not an object", () => {
+    // A non-object nested ref is necessarily schema-invalid too, so
+    // c2-evidence-schema-invalid is expected alongside this code.
+    writeC2PrivateEvidence(fixture, { invalidReportSelectionRef: true });
+    const result = validate(fixture);
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((i) => i.code === "c2-evidence-nested-ref-invalid")).toBe(true);
+  });
+
+  it("reports c2-baseline-source-not-parent when baseline metrics derive from a Pass-3 submission", () => {
+    writeC2PrivateEvidence(fixture, { baselineSourceIsPass3: true });
+    const result = validate(fixture);
+    expect(result.ok).toBe(false);
+    const flagged = result.issues.filter((i) => i.code === "c2-baseline-source-not-parent");
+    expect(flagged.length).toBe(1);
+    expect(flagged[0]!.message).toContain("c2-submission-reviewer-gold-v1");
+    // The offending ref IS exactly bound in the manifest — only the
+    // parent-authority rule can catch it.
+    expect(result.issues.some((i) => i.code === "c2-evidence-nested-ref-unbound")).toBe(false);
+  });
+
+  it("reports c2-adjudication-submissions-mismatch when adjudication cites other submissions", () => {
+    writeC2PrivateEvidence(fixture, { adjudicationSubmissionMismatch: true });
+    const result = validate(fixture);
+    expect(result.ok).toBe(false);
+    const flagged = result.issues.filter(
+      (i) => i.code === "c2-adjudication-submissions-mismatch",
+    );
+    expect(flagged.length).toBe(1);
+    expect(flagged[0]!.artifactId).toBe("c2-adjudication-v1");
   });
 });

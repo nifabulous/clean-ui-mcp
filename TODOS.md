@@ -183,3 +183,58 @@ caveat is honest and the closure is provisional-on-trust.
 `src/readiness/validator.ts`; likely add an attestation artifact type to the
 readiness contracts. The caveat (`c2-external-qa-unverifiable`) stays as the
 fallback when the stronger check is not yet configured.
+
+---
+
+## Approval provenance holes the content-only validator cannot close
+
+**What:** Three known gaps in the approval checks of
+`src/readiness/validator.ts`. Each hole is back-linked from the exact comment
+that describes it in the code (and each of those comments links here):
+
+| Hole | Code back-link |
+|---|---|
+| 1 | the `NOTE ON TAINTING` comment above the supersession loop in `validateApprovalsAndCheckpoint` |
+| 2 | the "What this does NOT detect" section of the `verifyApprovalArtifactTimestamps` docstring |
+| 3 | the "SUPERSEDED approvals keep the plain skip" paragraph of the same docstring |
+
+1. **`ledger-invalid-supersession` does not taint its approval.** The two
+   structural supersession pushes make `ok` false but leave `checkpointStatus`
+   unchanged, so a checkpoint can still report `closed` while carrying a
+   structurally invalid supersession. `ledger-supersession-not-later` (the
+   temporal check) does taint. Pre-existing behaviour, deliberately left
+   unchanged rather than widened without a decision.
+2. **`checkpointTargetSha256` provenance is unverifiable from content.** A target
+   hash carries no timestamp, and the artifacts it is computed over need not have
+   existed when it was computed, so nothing in the artifact graph establishes when
+   a target hash first existed. Relatedly, `createdAt` is self-declared: an
+   artifact rewritten in a later commit without bumping `createdAt` still declares
+   the old time, so an approval binding freshly-rewritten bytes with no
+   supersession relation is caught by nothing.
+3. **A SUPERSEDED approval's unresolvable binding is reported by nothing.** When
+   a bound `(artifactId, sha256)` row of a superseded approval names no on-disk
+   artifact version, `verifyApprovalArtifactTimestamps` skips it (there is no
+   version-correct `createdAt` to compare against) and every other
+   `approvedArtifacts` check sits behind `if (isSuperseded) continue;`. Active
+   approvals are fully covered — `approved-artifact-hash-mismatch` /
+   `approved-artifact-unknown` / `checkpoint-target-mismatch` for checkpoints
+   with a recipe, `approved-artifact-version-unresolved` for those without — so
+   this is a historical-record gap, not a closure gap: a superseded approval
+   cannot contribute to closure. Closing it needs the historical bytes, which the
+   on-disk graph does not retain.
+
+**Live instance of (2):** `artifact-index-v3.json` (`index-c1-v3`) and
+`c2-evidence-manifest-v1.json` (`c2-evidence-v1`) were rewritten in commit
+`e176e85` on 2026-07-28 but still declare
+`createdAt: 2026-07-26T20:15:01.000Z`. Both are published on `origin/main`, so
+correcting them requires new artifact versions rather than an in-place edit.
+
+**Why it matters:** holes 1 and 2 are the ones through which the withdrawn
+`c2-*-v2` approvals passed content validation while claiming a decision made
+before their target existed. Hole 3 blocks no closure; it only limits how much
+of the historical record the validator can re-verify.
+
+**Candidate approaches (holes 1–2):** commit/authoring-date evidence from git, signed
+attestations binding a decision to a time, or a countersigned timestamp
+authority. All require an out-of-band provenance source, which is why a
+content-only validator cannot close them.

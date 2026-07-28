@@ -14,6 +14,7 @@
  * recipe's fixed assembly rules or echoed from requester-supplied input.
  */
 import type { CreateUiSpecRequest, SanitizedEvidence } from "../create-ui-spec-contracts.js";
+import { z } from "zod";
 import recipe from "./fallback-recipe-v1.json" with { type: "json" };
 
 // ---------------------------------------------------------------------------
@@ -23,34 +24,72 @@ import recipe from "./fallback-recipe-v1.json" with { type: "json" };
 
 const DESIGN_DIRECTION_MAX = 2_000;
 
+const CitedDecisionRecipeSchema = z.object({
+  field: z.string().trim().min(1),
+  authority: z.literal("editorial"),
+  evidenceKind: z.literal("recipe-system"),
+  note: z.string().trim().min(1).optional(),
+}).strict();
+
 /**
  * The checked-in recipe, typed by structural projection. The producer imports
  * the same JSON; this typed view is what the aggregator reads from.
  */
-export interface FallbackRecipe {
-  readonly recipeVersion: string;
-  readonly assemblyRules: Readonly<Record<string, {
-    readonly strategy: string;
-    readonly value?: unknown;
-    readonly note?: string;
-  }>>;
-  readonly unavailableDecisions: readonly { readonly field: string; readonly reason: string }[];
-  readonly warningCodes: readonly string[];
-  readonly allowedEvidenceKinds: readonly string[];
-  readonly acceptanceCriteria: readonly {
-    readonly id: string;
-    readonly subject: string;
-    readonly assertion: string;
-    readonly expectedOutcome: string;
-    readonly verifier: string;
-    readonly priority: string;
-    readonly evidenceIds: readonly string[];
-    readonly manualSteps?: readonly string[];
-  }[];
-}
+const FallbackRecipeSchema = z.object({
+  recipeVersion: z.string().trim().min(1),
+  description: z.string().trim().min(1),
+  assemblyRules: z.record(z.string(), z.object({
+    strategy: z.string().trim().min(1),
+    value: z.unknown().optional(),
+    note: z.string().trim().min(1).optional(),
+  }).strict()),
+  unavailableDecisions: z.array(z.object({ field: z.string().trim().min(1), reason: z.string().trim().min(1) }).strict()),
+  warningCodes: z.array(z.string().trim().min(1)),
+  allowedEvidenceKinds: z.array(z.string().trim().min(1)),
+  recipeEvidence: z.object({
+    id: z.string().regex(/^evidence-[0-9]+$/),
+    kind: z.literal("recipe-system"),
+    basis: z.literal("aggregate"),
+    summary: z.string().trim().min(1).max(500),
+    structuredFacts: z.object({}).strict(),
+    note: z.string().trim().min(1).optional(),
+  }).strict(),
+  acceptanceCriteria: z.array(z.object({
+    id: z.string().trim().min(1),
+    subject: z.string().trim().min(1),
+    assertion: z.string().trim().min(1),
+    expectedOutcome: z.string().trim().min(1),
+    verifier: z.string().trim().min(1),
+    priority: z.string().trim().min(1),
+    evidenceIds: z.array(z.string()),
+    manualSteps: z.array(z.string()).optional(),
+  }).strict()),
+}).strict();
+
+export type FallbackRecipe = z.infer<typeof FallbackRecipeSchema>;
 
 /** The imported recipe, re-typed for structural access. */
-export const RECIPE: FallbackRecipe = recipe as unknown as FallbackRecipe;
+export const RECIPE: FallbackRecipe = FallbackRecipeSchema.parse(recipe);
+
+/**
+ * Read the cited-decision recipe through a narrower runtime contract than the
+ * generic assembly-rule map. The producer may only emit recipe/system,
+ * editorial-authority decisions in this slice; a changed recipe must fail at
+ * load time rather than silently being normalized back to the old behavior.
+ */
+export function getCitedDecisionRecipe(
+  recipe: FallbackRecipe,
+): readonly z.infer<typeof CitedDecisionRecipeSchema>[] {
+  const rule = recipe.assemblyRules.citedDecisions;
+  if (!rule || rule.strategy !== "recipe-editorial") {
+    throw new Error("fallback recipe citedDecisions must use recipe-editorial strategy");
+  }
+  const parsed = z.array(CitedDecisionRecipeSchema).safeParse(rule.value);
+  if (!parsed.success || parsed.data.length === 0) {
+    throw new Error("fallback recipe must declare at least one cited decision");
+  }
+  return parsed.data;
+}
 
 // ---------------------------------------------------------------------------
 // Recipe-owned summaries (the c3-fallback-v1 recipe emits zero-evidence arrays
@@ -66,8 +105,11 @@ export const RECIPE: FallbackRecipe = recipe as unknown as FallbackRecipe;
  */
 export function buildDesignDirectionSummary(
   request: Pick<CreateUiSpecRequest, "productContext">,
-  _recipe: FallbackRecipe,
+  recipe: FallbackRecipe,
 ): string {
+  if (recipe.assemblyRules.designDirection?.strategy !== "echo-product-context") {
+    throw new Error("fallback recipe designDirection must use echo-product-context strategy");
+  }
   const ctx = request.productContext.trim();
   return ctx.length <= DESIGN_DIRECTION_MAX ? ctx : ctx.slice(0, DESIGN_DIRECTION_MAX);
 }
@@ -95,18 +137,22 @@ export interface FixedEmptyArrays {
  * encodes these as the truthful zero-evidence state; the producer maps them
  * into the candidate. No corpus identity is referenced.
  */
-export function buildFixedEmptyArrays(_recipe: FallbackRecipe): FixedEmptyArrays {
+export function buildFixedEmptyArrays(recipe: FallbackRecipe): FixedEmptyArrays {
+  const empty = (field: string): readonly never[] => {
+    const rule = recipe.assemblyRules[field];
+    return rule?.strategy === "fixed-empty" && Array.isArray(rule.value) ? rule.value as unknown as readonly never[] : [];
+  };
   return {
-    rejectedDefaults: [],
-    layoutRegions: [],
-    responsiveBehavior: [],
-    componentInventory: [],
-    interactions: [],
-    accessibilityConstraints: [],
-    techniques: [],
-    antiPatterns: [],
-    citedDecisions: [],
-    citedReferences: [],
+    rejectedDefaults: empty("rejectedDefaults"),
+    layoutRegions: empty("layoutRegions"),
+    responsiveBehavior: empty("responsiveBehavior"),
+    componentInventory: empty("componentInventory"),
+    interactions: empty("interactions"),
+    accessibilityConstraints: empty("accessibilityConstraints"),
+    techniques: empty("techniques"),
+    antiPatterns: empty("antiPatterns"),
+    citedDecisions: empty("citedDecisions"),
+    citedReferences: empty("citedReferences"),
   };
 }
 

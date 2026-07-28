@@ -23,6 +23,8 @@ import {
   buildCorpusObservationSummary,
   buildDesignDirectionSummary,
   buildFixedEmptyArrays,
+  getCitedDecisionRecipe,
+  RECIPE,
 } from "./safe-aggregator.js";
 
 function evidence(over: Partial<SanitizedEvidence> = {}, id = "evidence-1"): SanitizedEvidence {
@@ -110,5 +112,21 @@ describe("buildFixedEmptyArrays", () => {
     expect(arrays.antiPatterns).toEqual([]);
     expect(arrays.citedDecisions).toEqual([]);
     expect(arrays.citedReferences).toEqual([]);
+  });
+});
+
+describe("getCitedDecisionRecipe", () => {
+  it("rejects a recipe that changes the producer-owned authority contract", () => {
+    const drifted = {
+      ...RECIPE,
+      assemblyRules: {
+        ...RECIPE.assemblyRules,
+        citedDecisions: {
+          ...RECIPE.assemblyRules.citedDecisions,
+          value: [{ field: "designDirection", authority: "corpus-evidence", evidenceKind: "corpus-observation" }],
+        },
+      },
+    };
+    expect(() => getCitedDecisionRecipe(drifted)).toThrow();
   });
 });

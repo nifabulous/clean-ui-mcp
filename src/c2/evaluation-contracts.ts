@@ -177,6 +177,20 @@ export const C2LabelIntegrityBaselineMetricsSchema = z.object({
   baselineMetricsSha256: Sha256,
 }).strict();
 
+export const C2LabelAgreementAdjudicationSchema = z.object({
+  schemaVersion: z.literal("1.0"),
+  artifactType: z.literal("c2-label-agreement-adjudication"),
+  artifactId: StableId,
+  selectionArtifactId: StableId,
+  selectionSha256: Sha256,
+  goldOwnerSubmissionArtifactId: StableId,
+  qaSubmissionArtifactId: StableId,
+  disagreementEntryIds: z.array(StableId).refine(hasUniqueStrings, "disagreement IDs must be unique"),
+  status: z.literal("recorded-not-adjudicated"),
+  rationale: NonEmptyText,
+  recordedAt: z.string().datetime(),
+}).strict();
+
 export const C2LabelAgreementReportSchema = z.object({
   schemaVersion: z.literal("1.0"),
   artifactType: z.literal("c2-label-agreement-report"),

@@ -19,7 +19,7 @@ locations.
 |---|---|---|
 | **C0** Foundation freeze | ✅ Closed | Validated by a Git-bound checkpoint recipe that recomputes the canonical target from recorded-commit bytes (see R0). C1 working-tree edits to the live spec/plan do **not** reopen C0. |
 | **C1** Agent contract lock | ✅ Closed | Closed by registry/index/ledger v2 (`quality-contracts/agent-readiness/checkpoint-approvals-v2.json`). The registry v2 declares `sole-maintainer-bootstrap` governance with owner `repo-maintainer-1`; Product and Engineering are two role-specific approvals by that single human identity (not two independent people). C0 prefix remains closed and byte-identical. Runtime still advertises the legacy 14-tool surface by design until Phase 1B. |
-| **C2** Gold readiness | ✅ Closed | Closed by the distinct `reviewer-gold` and `reviewer-qa` approvals in `quality-contracts/agent-readiness/checkpoint-approvals-v4.json`, bound to target `5aed64c695cab715b853ba2219df8b72fffee822607179eea51a488217b4ffed`. Public and private readiness validation pass. |
+| **C2** Gold readiness | ✅ Closed | Closed by the active distinct `reviewer-gold` and `reviewer-qa` approvals in `quality-contracts/agent-readiness/checkpoint-approvals-v5.json`, bound to target `cf55fee06a3a1f34da7d90672c3f62d3704fbda7026cf0de2de9c2aba3c78ac0`. Private readiness validation passes and surfaces the documented external-QA unverifiability warning. |
 | C3 MCP + create_ui_spec + skill | ⬜ Open | Not started (gated on C1). |
 | C4 Terminal 1A outcome + dogfood | ⬜ Open | Not started. |
 | C5 Corpus disposition | ⬜ Open | Not started. |

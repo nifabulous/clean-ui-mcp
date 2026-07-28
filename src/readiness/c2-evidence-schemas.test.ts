@@ -11,11 +11,13 @@ describe("C2_EVIDENCE_SCHEMAS registry", () => {
   it("covers every C2 evidence artifactType that has a dedicated production schema", () => {
     // The manifest references these artifactTypes (see
     // quality-contracts/agent-readiness/c2-evidence-manifest-v1.json).
-    // Adjudication has no dedicated schema and is intentionally absent.
+    // Adjudication is part of the closed C2 evidence set and has its own
+    // production schema, so a hash-valid but malformed record cannot pass.
     expect(C2_EVIDENCE_SCHEMAS["c2-label-integrity-selection"]).toBeDefined();
     expect(C2_EVIDENCE_SCHEMAS["c2-independent-label-submission"]).toBeDefined();
     expect(C2_EVIDENCE_SCHEMAS["c2-label-integrity-baseline-metrics"]).toBeDefined();
     expect(C2_EVIDENCE_SCHEMAS["c2-label-agreement-report"]).toBeDefined();
+    expect(C2_EVIDENCE_SCHEMAS["c2-label-agreement-adjudication"]).toBeDefined();
   });
 
   it("rejects a well-identity'd but structurally invalid submission (hash+identity alone would miss this)", () => {

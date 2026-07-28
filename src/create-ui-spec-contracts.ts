@@ -65,6 +65,7 @@ import {
   canonicalJsonStringify,
   sha256Hex,
 } from "./readiness/contracts.js";
+import { PatternType } from "./schema.js";
 
 // ===========================================================================
 // 1. sha256Canonical — canonical-JSON SHA-256 (reuses the two helpers)
@@ -244,7 +245,7 @@ export const EvidenceBasisSchema = z.enum(["visible", "aggregate", "user-supplie
  */
 const StructuredFactsSchema = z
   .object({
-    pattern: z.string().trim().min(1).max(60).optional(),
+    pattern: PatternType.optional(),
     regionCount: z.number().int().nonnegative().max(50).optional(),
     columnCount: z.number().int().nonnegative().max(20).optional(),
     usesStickyHeader: z.boolean().optional(),
@@ -563,6 +564,14 @@ export const DesignArtifactEnvelopeSchema = z
       ctx.addIssue({
         code: "custom",
         message: "publicEvidenceIds must be unique",
+        path: ["publicEvidenceIds"],
+      });
+    }
+    const provenanceEvidenceIds = val.spec.provenance.evidenceIds;
+    if (provenanceEvidenceIds.length !== val.publicEvidenceIds.length || provenanceEvidenceIds.some((id, index) => id !== val.publicEvidenceIds[index])) {
+      ctx.addIssue({
+        code: "custom",
+        message: "publicEvidenceIds must exactly match spec.provenance.evidenceIds",
         path: ["publicEvidenceIds"],
       });
     }

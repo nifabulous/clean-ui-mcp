@@ -95,7 +95,7 @@ export function sha256Canonical(value: unknown): string {
  * `fallback-recipe-v1.test.ts` instructs.
  */
 export const RECIPE_SHA256 =
-  "1f86dc4aa8848c101680f2a8804c8a72c66ecaed204515e997c5ab14d3587099";
+  "4c78f2f261b5d1e988e692d3b32a19762991a4eee0789734a54b3d6029d510f3";
 
 // ===========================================================================
 // 1b. CANONICAL_WEB_TARGET_PROFILES — single source of truth for target ids

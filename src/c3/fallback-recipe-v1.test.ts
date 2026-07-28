@@ -26,7 +26,7 @@ import recipe from "./fallback-recipe-v1.json" with { type: "json" };
  * test below asserts they are equal so the two can never silently drift.
  */
 const EXPECTED_RECIPE_SHA256 =
-  "1f86dc4aa8848c101680f2a8804c8a72c66ecaed204515e997c5ab14d3587099";
+  "4c78f2f261b5d1e988e692d3b32a19762991a4eee0789734a54b3d6029d510f3";
 
 describe("c3-fallback-v1 recipe identity", () => {
   it("has stable canonical bytes and recipe identity", () => {
@@ -52,10 +52,43 @@ describe("c3-fallback-v1 recipe identity", () => {
   });
 
   it("only allows evidence kinds the contract permits", () => {
-    const ALLOWED = new Set(["corpus-observation", "public-reference"]);
+    const ALLOWED = new Set([
+      "corpus-observation",
+      "public-reference",
+      "recipe-system",
+    ]);
     for (const kind of recipe.allowedEvidenceKinds as readonly string[]) {
       expect(ALLOWED.has(kind)).toBe(true);
     }
+  });
+
+  it("declares the recipe-editorial cited decision that matches the producer's emission", () => {
+    // Drift guard: the recipe MUST honestly describe what the producer emits for
+    // citedDecisions. The deterministic producer always emits ONE
+    // editorial-authority designDirection decision grounded in the recipe/system
+    // evidence (not corpus-evidence, since the direction echoes the brief). If
+    // this test fails, the recipe and producer have diverged — reconcile one to
+    // the other rather than silencing the test.
+    const cited = (recipe.assemblyRules as { citedDecisions: {
+      strategy: string;
+      value: ReadonlyArray<{ field: string; authority: string; evidenceKind: string }>;
+    } }).citedDecisions;
+    expect(cited.strategy).toBe("recipe-editorial");
+    expect(cited.value.length).toBe(1);
+    expect(cited.value[0]!.field).toBe("designDirection");
+    expect(cited.value[0]!.authority).toBe("editorial");
+    expect(cited.value[0]!.evidenceKind).toBe("recipe-system");
+  });
+
+  it("declares a recipeEvidence block matching the producer's recipe/system evidence", () => {
+    const rec = recipe.recipeEvidence as {
+      id: string;
+      kind: string;
+      basis: string;
+    };
+    expect(rec.id).toMatch(/^evidence-[0-9]+$/);
+    expect(rec.kind).toBe("recipe-system");
+    expect(rec.basis).toBe("aggregate");
   });
 
   it("declares color, typography, and motion as model-dependent and unavailable", () => {

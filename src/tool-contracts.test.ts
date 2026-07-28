@@ -382,6 +382,23 @@ describe("adversarial probe matrix", () => {
     assertRejectsAt(p, "retrieval");
   });
 
+  it("2b: fallback with zero results ACCEPTED when reason is no-results (honest empty-set state)", () => {
+    // Counterpart to test 2: a zero-result fallback with reason "no-results" is
+    // the truthful semantic for "the query succeeded and returned an empty set"
+    // (e.g. C3 keyword-only retrieval that found no matches). It must pass the
+    // shared validator, unlike a zero-result fallback with a recovery reason
+    // (missing-index etc.) which is still a failed recovery.
+    const p = cloneToolResult(makeValidSuccess("search_ui_references")) as Record<string, unknown>;
+    const r = p.retrieval as Record<string, unknown>;
+    r.mode = "structured-fallback"; r.modality = "metadata"; r.fallbackUsed = true;
+    r.fallbackReason = "no-results"; r.attemptedCount = 1; r.attemptedModes = ["keyword"];
+    (p.data as Record<string, unknown>).results = [];
+    r.resultCount = 0;
+    p.referenceIds = [];
+    const result = ToolResultSchemas["search_ui_references"].safeParse(p);
+    expect(result.success).toBe(true);
+  });
+
   it("3: terminal error records attempted paths without fallback (accepted)", () => {
     const p = makeValidError("search_ui_references");
     if (!p) return;

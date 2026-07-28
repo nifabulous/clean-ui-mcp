@@ -53,7 +53,7 @@ const sha256Hex = readinessMod?.sha256Hex;
 // Frozen recipe identity (mirrors src/c3/fallback-recipe-v1.test.ts).
 const EXPECTED_RECIPE_VERSION = "c3-fallback-v1";
 const EXPECTED_RECIPE_SHA256 =
-  "1f86dc4aa8848c101680f2a8804c8a72c66ecaed204515e997c5ab14d3587099";
+  "4c78f2f261b5d1e988e692d3b32a19762991a4eee0789734a54b3d6029d510f3";
 
 // Distinctive private markers the serialized envelope must NEVER contain.
 const PRIVATE_MARKERS = [

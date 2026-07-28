@@ -107,10 +107,14 @@ export function validateEnvelopeRetrieval(
 
   // Success + fallback: requires positive resultCount, a valid reason, and attempted modes
   if (status === "ok" && retrieval.fallbackUsed) {
-    if (retrieval.resultCount === 0) {
+    // Zero-result fallback is allowed ONLY with reason "no-results" — the
+    // honest semantic for "the query succeeded and returned an empty set" (e.g.
+    // C3's keyword-only retrieval that found no matches). For every other
+    // reason a zero-result fallback is still a failed recovery, not a success.
+    if (retrieval.resultCount === 0 && retrieval.fallbackReason !== "no-results") {
       ctx.addIssue({
         code: "custom",
-        message: "fallback with zero results is not a successful fallback",
+        message: "fallback with zero results is not a successful fallback (use fallbackReason \"no-results\" for an honest empty-set state)",
         path: ["retrieval", "resultCount"],
       });
     }

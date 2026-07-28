@@ -71,9 +71,16 @@
       "note": "Motion guidance is model-dependent; the producer truthfully marks evidenceUnavailable=true and lists the decision in unavailableDecisions."
     },
     "citedDecisions": {
-      "strategy": "empty",
-      "value": [],
-      "note": "No cited decisions are invented; the fallback cites no corpus- or reference-derived authority."
+      "strategy": "recipe-editorial",
+      "value": [
+        {
+          "field": "designDirection",
+          "authority": "editorial",
+          "evidenceKind": "recipe-system",
+          "note": "The direction echoes the requester's productContext under the deterministic recipe, so its authority is editorial (recipe/system), not corpus-evidence. Corpus observations that were retrieved are recorded in authorityLanes.corpusEvidence and provenance, but they do NOT ground the echo-only direction."
+        }
+      ],
+      "note": "The fallback emits exactly ONE editorial-authority cited decision for designDirection, grounded in the recipe/system evidence (recipeEvidence.id). It does NOT claim corpus-evidence authority for the echoed direction."
     },
     "citedReferences": {
       "strategy": "empty",
@@ -101,8 +108,17 @@
   ],
   "allowedEvidenceKinds": [
     "corpus-observation",
-    "public-reference"
+    "public-reference",
+    "recipe-system"
   ],
+  "recipeEvidence": {
+    "id": "evidence-1",
+    "kind": "recipe-system",
+    "basis": "aggregate",
+    "summary": "Deterministic c3-fallback-v1 recipe",
+    "structuredFacts": {},
+    "note": "The recipe/system evidence item the producer always emits first. It grounds the editorial-authority designDirection cited decision and lives in authorityLanes.editorialGuidance. It is NOT a corpus observation and NOT a user-supplied public reference."
+  },
   "acceptanceCriteria": [
     {
       "id": "fallback-manual-spec-review",

@@ -46,7 +46,7 @@
     {
       "artifactId": "c2-evidence-v1",
       "artifactType": "c2-evidence-manifest",
-      "sha256": "ac5b06d749b4b2f6dea4d5e06db473d4a765bbbf70720e16a08efebc1198c76e",
+      "sha256": "c4e4b0402c23c1c701369c89450c5c2e89b029d37451939a7a1d257525387cb7",
       "path": "quality-contracts/agent-readiness/c2-evidence-manifest-v1.json"
     }
   ],

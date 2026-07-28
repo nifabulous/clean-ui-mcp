@@ -63,7 +63,7 @@ function validUiSpec(): Record<string, unknown> {
     citedReferences: [],
     citedDecisions: [],
     authorityLanes: { corpusEvidence: [], machineRules: [], editorialGuidance: [] },
-    provenance: { generatedAt: "2026-07-15T00:00:00Z", toolVersion: "0.2.0", sourceReferences: [], evidenceIds: [] },
+    provenance: { generatedAt: "2026-07-15T00:00:00Z", toolVersion: "0.2.0", sourceReferences: [], evidenceIds: ["evidence-1"] },
   };
 }
 
@@ -266,6 +266,12 @@ describe("SanitizedEvidenceSchema", () => {
   it("rejects a free-form prose field outside structuredFacts (strict object)", () => {
     const e = validCorpusEvidence();
     (e as Record<string, unknown>).notes = "free prose";
+    expect(SanitizedEvidenceSchema.safeParse(e).success).toBe(false);
+  });
+
+  it("rejects a structured pattern outside the closed corpus vocabulary", () => {
+    const e = validCorpusEvidence();
+    e.structuredFacts = { pattern: "private-corpus-pattern" };
     expect(SanitizedEvidenceSchema.safeParse(e).success).toBe(false);
   });
 });
@@ -897,6 +903,12 @@ describe("parseDesignArtifactEnvelope", () => {
     const env = buildValidEnvelope();
     env.artifactId = `uispec-${"d".repeat(64)}`;
     expect(() => parseDesignArtifactEnvelope(env)).toThrow();
+  });
+
+  it("rejects public evidence ids that are not the spec provenance ids", () => {
+    const env = buildValidEnvelope();
+    env.publicEvidenceIds = ["evidence-2"];
+    expect(DesignArtifactEnvelopeSchema.safeParse(env).success).toBe(false);
   });
 
   it("rejects a tampered assemblyRulesSha256", () => {

@@ -25,7 +25,8 @@
  * Hard constraints (plan Global Constraints):
  *  - Private corpus ids/paths/urls/product identities NEVER enter public output.
  *  - Corpus observations are cited ONLY by response-scoped evidence-* ids.
- *  - citedReferences/sourceReferences come ONLY from explicit public references.
+ *  - citedReferences/sourceReferences contain ONLY deterministic opaque digests
+ *    derived from explicit public-reference tokens.
  *  - The deterministic c3-fallback-v1 recipe always produces the base candidate.
  *  - artifactId hashes the canonical identity object; generatedAt excluded.
  *
@@ -45,6 +46,7 @@ import {
   type CreateUiSpecError,
   type DesignArtifactEnvelope,
   type SanitizedEvidence,
+  SanitizedEvidenceSchema,
   buildArtifactIdentityInput,
   buildSemanticSpecInput,
   parseCreateUiSpecCandidate,
@@ -62,12 +64,13 @@ import {
 } from "./design-handoff.js";
 import { canonicalJsonStringify, sha256Hex } from "./readiness/contracts.js";
 import { UiSpec, type UiSpecT } from "./tool-contracts.js";
-import recipe from "./c3/fallback-recipe-v1.json" with { type: "json" };
 import {
   buildCorpusObservationSummary,
   buildDesignDirectionSummary,
   buildFixedEmptyArrays,
+  getCitedDecisionRecipe,
   RECIPE,
+  type FallbackRecipe,
 } from "./c3/safe-aggregator.js";
 
 // ===========================================================================
@@ -83,7 +86,7 @@ import {
  * observations are retrieved. Must match {@link EvidenceIdSchema}
  * (^evidence-[0-9]+$).
  */
-export const RECIPE_EVIDENCE_ID = "evidence-1";
+export const RECIPE_EVIDENCE_ID = RECIPE.recipeEvidence.id;
 
 /**
  * Build the single recipe/system evidence item (editorial-guidance grounding).
@@ -93,13 +96,8 @@ export const RECIPE_EVIDENCE_ID = "evidence-1";
  * assembly rules), and NO `publicReference` is populated.
  */
 function buildRecipeSystemEvidence(): SanitizedEvidence {
-  return {
-    id: RECIPE_EVIDENCE_ID,
-    kind: "recipe-system",
-    basis: "aggregate",
-    summary: "Deterministic c3-fallback-v1 recipe",
-    structuredFacts: {},
-  };
+  const { id, kind, basis, summary, structuredFacts } = RECIPE.recipeEvidence;
+  return SanitizedEvidenceSchema.parse({ id, kind, basis, summary, structuredFacts });
 }
 
 export interface CreateUiSpecDependencies {
@@ -230,23 +228,24 @@ async function resolveExplicitReferences(
       continue;
     }
     // Validate the internal id maps to a real entry. The corpus content is NOT
-    // projected into the public reference — only the user-supplied token is
-    // retained as the public citation.
+    // projected into the public reference — only a deterministic opaque digest
+    // of the user token is retained as the public citation.
     const entry = readById(dependencies.reader, internalId);
     if (entry === undefined) {
       omittedTokens.push(token);
       continue;
     }
     const id = `evidence-${nextId++}`;
+    const publicReference = `ref-${sha256Hex(Buffer.from(token.trim(), "utf-8"))}`;
     sanitized.push({
       id,
       kind: "public-reference",
       basis: "user-supplied",
       summary: `User-supplied public reference.`,
       structuredFacts: {},
-      publicReference: token,
+      publicReference,
     });
-    resolvedTokens.push(token);
+    resolvedTokens.push(publicReference);
   }
 
   if (resolvedTokens.length === 0) {
@@ -406,8 +405,8 @@ function sanitizeCorpusObservation(id: string, entry: CorpusEntryT): SanitizedEv
  * recipe's assembly-rule note (never corpus prose); falls back to a generic
  * deterministic string when the recipe carries no note.
  */
-function recipeRationale(field: string): string {
-  const rule = RECIPE.assemblyRules[field];
+function recipeRationale(field: string, recipe: FallbackRecipe = RECIPE): string {
+  const rule = recipe.assemblyRules[field];
   const note = rule?.note?.trim();
   const base = note && note.length > 0
     ? note
@@ -430,7 +429,7 @@ function recipeRationale(field: string): string {
  *
  * Decisions emitted:
  *  - `designDirection` (echo-product-context): value = echoed productContext;
- *    cites the response-scoped corpus evidence ids (when present).
+ *    cites the recipe/system evidence declared by the recipe.
  *  - The fixed-empty array fields whose candidate shape maps cleanly to their
  *    UiSpec destination (`layoutRegions`, `responsiveBehavior`,
  *    `componentInventory`, `interactions`, `accessibilityConstraints`,
@@ -449,9 +448,8 @@ function recipeRationale(field: string): string {
 export function buildFallbackCandidate(
   request: CreateUiSpecRequest,
   sanitizedEvidence: readonly SanitizedEvidence[],
-  recipe: { readonly recipeVersion: string },
+  recipe: FallbackRecipe,
 ): CreateUiSpecCandidate {
-  void recipe; // recipeVersion is unused; the recipe's rules are read via RECIPE.
   // The designDirection echoes the requester's productContext (the recipe's
   // echo-product-context strategy) — it is NOT corpus-grounded. It cites ONLY
   // the recipe/system evidence id under editorial authority. Corpus
@@ -460,7 +458,7 @@ export function buildFallbackCandidate(
   const recipeEvidence = sanitizedEvidence.find((e) => e.kind === "recipe-system");
   const designDirectionEvidenceIds = recipeEvidence ? [recipeEvidence.id] : [];
 
-  const designDirection = buildDesignDirectionSummary(request, RECIPE);
+  const designDirection = buildDesignDirectionSummary(request, recipe);
 
   // Build the candidate as a plain object; parseCreateUiSpecCandidate validates
   // it through CreateUiSpecCandidateSchema + evidence membership.
@@ -472,11 +470,11 @@ export function buildFallbackCandidate(
       field: "designDirection",
       id: "fallback-designDirection",
       value: designDirection,
-      rationale: recipeRationale("designDirection"),
+      rationale: recipeRationale("designDirection", recipe),
       evidenceIds: designDirectionEvidenceIds,
     },
     // The fixed-empty array fields (truthful zero-evidence state, cite nothing).
-    ...buildFixedEmptyArrayDecisions(),
+    ...buildFixedEmptyArrayDecisions(recipe),
   ];
 
   // frameworkNotes is emitted ONLY when the requester supplied an
@@ -486,7 +484,7 @@ export function buildFallbackCandidate(
       field: "frameworkNotes",
       id: "fallback-frameworkNotes",
       value: `Implementation framework: ${request.implementationFramework}`,
-      rationale: recipeRationale("frameworkNotes"),
+      rationale: recipeRationale("frameworkNotes", recipe),
       evidenceIds: [],
     });
   }
@@ -510,55 +508,56 @@ export function buildFallbackCandidate(
  * `contentVoiceGuidance`) produce NO candidate decision (the assembler emits the
  * `unavailableDecisions` + null tokens directly).
  */
-function buildFixedEmptyArrayDecisions(): CreateUiSpecCandidate["decisions"] {
+function buildFixedEmptyArrayDecisions(recipe: FallbackRecipe): CreateUiSpecCandidate["decisions"] {
+  const arrays = buildFixedEmptyArrays(recipe);
   return [
     {
       field: "layoutRegions",
       id: "fallback-layoutRegions",
-      value: [],
-      rationale: recipeRationale("layoutRegions"),
+      value: [...arrays.layoutRegions],
+      rationale: recipeRationale("layoutRegions", recipe),
       evidenceIds: [],
     },
     {
       field: "responsiveBehavior",
       id: "fallback-responsiveBehavior",
-      value: [],
-      rationale: recipeRationale("responsiveBehavior"),
+      value: [...arrays.responsiveBehavior],
+      rationale: recipeRationale("responsiveBehavior", recipe),
       evidenceIds: [],
     },
     {
       field: "componentInventory",
       id: "fallback-componentInventory",
-      value: [],
-      rationale: recipeRationale("componentInventory"),
+      value: [...arrays.componentInventory],
+      rationale: recipeRationale("componentInventory", recipe),
       evidenceIds: [],
     },
     {
       field: "interactions",
       id: "fallback-interactions",
-      value: [],
-      rationale: recipeRationale("interactions"),
+      value: [...arrays.interactions],
+      rationale: recipeRationale("interactions", recipe),
       evidenceIds: [],
     },
     {
       field: "accessibilityConstraints",
       id: "fallback-accessibilityConstraints",
-      value: [],
-      rationale: recipeRationale("accessibilityConstraints"),
+      value: [...arrays.accessibilityConstraints],
+      rationale: recipeRationale("accessibilityConstraints", recipe),
       evidenceIds: [],
     },
     {
       field: "techniques",
       id: "fallback-techniques",
-      value: [],
-      rationale: recipeRationale("techniques"),
+      value: [...arrays.techniques],
+      rationale: recipeRationale("techniques", recipe),
       evidenceIds: [],
     },
     {
       field: "antiPatterns",
       id: "fallback-antiPatterns",
-      value: [],
-      rationale: recipeRationale("antiPatterns"),
+      value: [...arrays.antiPatterns],
+      rationale: recipeRationale("antiPatterns", recipe),
       evidenceIds: [],
     },
   ];
@@ -583,8 +582,8 @@ function buildFixedEmptyArrayDecisions(): CreateUiSpecCandidate["decisions"] {
  *
  * Authority/evidence membership:
  *  - corpus-derived decisions reference ONLY response-scoped evidence-* ids.
- *  - explicit public references populate citedReferences/sourceReferences and
- *    the editorial lane.
+ *  - deterministic opaque digests of explicit public references populate
+ *    citedReferences/sourceReferences and the editorial lane.
  *  - colorTokenAuthority/typographyTokenAuthority = "editorial" (null tokens).
  *  - motionGuidance.evidenceUnavailable = true (truthful).
  */
@@ -754,13 +753,10 @@ function mapCandidateToSpecFields(
 }
 
 /**
- * Build the citedDecisions block. The designDirection ALWAYS echoes the
- * requester's productContext under the deterministic c3-fallback-v1 recipe —
- * it is editorial authority, citing ONLY the recipe/system evidence id. The
- * fallback recipe cites NO corpus-evidence authority for the direction (the
- * direction is not corpus-grounded), and invents no authority. Retrieved corpus
- * observations are recorded in provenance + the corpusEvidence lane by the
- * assembler without a designDirection authority claim.
+ * Build the citedDecisions block from the checked-in recipe. The current
+ * recipe declares editorial recipe/system decisions only; that constraint is
+ * parsed at runtime so a future recipe cannot be silently rewritten into this
+ * producer's old hardcoded authority shape.
  *
  * `editorialLane` is passed only to satisfy the UiSpec superRefine
  * (editorial-authority decisions must cite an evidence id present in the
@@ -768,21 +764,24 @@ function mapCandidateToSpecFields(
  */
 function buildCitedDecisions(
   editorialLane: readonly string[],
+  recipe: FallbackRecipe = RECIPE,
 ): UiSpecT["citedDecisions"] {
+  const recipeEvidenceId = recipe.recipeEvidence.id;
   // The recipe/system evidence id must be in the editorial lane so the
   // editorial-authority citedDecision references a lane member.
-  if (!editorialLane.includes(RECIPE_EVIDENCE_ID)) {
+  if (!editorialLane.includes(recipeEvidenceId)) {
     return [];
   }
-  return [
-    {
-      id: "design-direction-editorial",
-      field: "designDirection",
-      authority: "editorial",
-      evidenceIds: [RECIPE_EVIDENCE_ID],
-      readiness: "available",
-    },
-  ];
+  const values = getCitedDecisionRecipe(recipe);
+  return values.map((row, index) => {
+    return {
+      id: `${row.field}-editorial-${index + 1}`,
+      field: row.field,
+      authority: row.authority,
+      evidenceIds: [recipeEvidenceId],
+      readiness: "available" as const,
+    };
+  });
 }
 
 // ===========================================================================
@@ -918,7 +917,7 @@ function buildWarnings(resolved: ResolvedEvidence): DesignArtifactEnvelope["warn
 
 /** Frozen canonical-JSON SHA-256 of the checked-in recipe. */
 function recipeSha256(): string {
-  return sha256Hex(Buffer.from(canonicalJsonStringify(recipe), "utf-8"));
+  return sha256Canonical(RECIPE);
 }
 
 /** Construct an INVALID_INPUT error (retryable:false) with a safe message. */

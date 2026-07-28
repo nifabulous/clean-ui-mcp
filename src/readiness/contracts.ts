@@ -134,6 +134,7 @@ export const CheckpointApproval = z
     contractHashes: z.record(z.string().min(1), Sha256),
     decidedAt: z.string().datetime(),
     rationale: z.string().optional(),
+    supersedesApprovalId: z.string().min(1).optional(),
   })
   .strict();
 

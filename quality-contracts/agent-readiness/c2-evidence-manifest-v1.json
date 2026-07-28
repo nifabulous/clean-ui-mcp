@@ -27,9 +27,21 @@
       "path": "eval/c2/label-integrity/parent-evidence/reviewer-qa-pass3.json"
     },
     {
+      "artifactId": "c2-parent-baseline-reviewer-gold-v1",
+      "artifactType": "c2-independent-label-submission",
+      "sha256": "05996321da048abc5c900d51b51c001cf4a14282ca7fd8d0ef4931edabae7af3",
+      "path": "eval/c2/label-integrity/parent-evidence/reviewer-gold.json"
+    },
+    {
+      "artifactId": "c2-parent-baseline-reviewer-qa-v1",
+      "artifactType": "c2-independent-label-submission",
+      "sha256": "31d4c668912f89e0c042e89fb10af5a2305288e80ea03ae0fcc8c30d7d4edd57",
+      "path": "eval/c2/label-integrity/parent-evidence/reviewer-qa.json"
+    },
+    {
       "artifactId": "c2-label-integrity-baseline-metrics-v1",
       "artifactType": "c2-label-integrity-baseline-metrics",
-      "sha256": "d7100f324352ab8b7b96be0c364f3f5bfb6274e384a98ce1c529ff1a57f66e94",
+      "sha256": "1eb7d808c54ac8332671ff671d66681fd0c7434d56ab182ea1e9e8d6be903c25",
       "path": "eval/c2/label-integrity/baseline-metrics.json"
     },
     {
@@ -41,7 +53,7 @@
     {
       "artifactId": "c2-label-agreement-report-v1",
       "artifactType": "c2-label-agreement-report",
-      "sha256": "1bb34cc7476d9d37bfe1ab11f0f075f1a6e2016773831f6a5df28d583ae3a047",
+      "sha256": "ce879914eb818233e18b58cf30f608c9b9bafa2f5eede72077c909964d5272e4",
       "path": "eval/c2/label-integrity/agreement-report.json"
     }
   ]

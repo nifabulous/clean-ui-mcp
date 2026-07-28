@@ -30,15 +30,16 @@ describe("C2 governance scope boundary", () => {
     );
     expect(manifest.artifactType).toBe("c2-evidence-manifest");
     expect(manifest.checkpoint).toBe("C2");
-    expect(manifest.evidence).toHaveLength(6);
-    expect(readdirSync(governanceRoot).filter((file) => file.match(/^checkpoint-approvals-v[34]\.json$/))).toEqual([
+    expect(manifest.evidence).toHaveLength(8);
+    expect(readdirSync(governanceRoot).filter((file) => file.match(/^checkpoint-approvals-v[345]\.json$/))).toEqual([
       "checkpoint-approvals-v3.json",
       "checkpoint-approvals-v4.json",
+      "checkpoint-approvals-v5.json",
     ]);
     const ledger = JSON.parse(
-      readFileSync(resolve(governanceRoot, "checkpoint-approvals-v4.json"), "utf8"),
+      readFileSync(resolve(governanceRoot, "checkpoint-approvals-v5.json"), "utf8"),
     );
-    expect(ledger.approvals.filter((approval: { checkpoint: string }) => approval.checkpoint === "C2").map((approval: { role: string }) => approval.role)).toEqual([
+    expect(ledger.approvals.filter((approval: { checkpoint: string; supersedesApprovalId?: string }) => approval.checkpoint === "C2" && approval.supersedesApprovalId === undefined).map((approval: { role: string }) => approval.role)).toEqual([
       "Gold Label Owner",
       "QA",
     ]);

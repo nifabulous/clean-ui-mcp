@@ -302,6 +302,8 @@ describe("create-ui-spec producer — explicit references", () => {
     expect(parsed.publicEvidenceIds.length).toBeGreaterThanOrEqual(1);
     // The explicit reference populates citedReferences.
     expect(parsed.spec.citedReferences.length).toBe(1);
+    expect(parsed.spec.citedReferences[0]).toMatch(/^ref-[0-9a-f]{64}$/);
+    expect(JSON.stringify(parsed)).not.toContain("opaque-token-1");
   });
 
   it("resolves partial references to none/none, omitting unresolvable tokens", async () => {

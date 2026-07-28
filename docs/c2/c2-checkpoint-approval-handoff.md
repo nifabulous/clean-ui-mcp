@@ -3,15 +3,19 @@
 ## Current Evidence
 
 The final independent Gold/QA pair is strict-schema valid and the production
-agreement report is `Qualified`:
+agreement report is `Qualified`. The agreement pair and the parent-authority
+baseline source pair are distinct, so the baseline is not silently derived
+from the agreement submissions:
 
 | Artifact | Path | SHA-256 |
 |---|---|---|
 | Gold submission | `eval/c2/label-integrity/parent-evidence/reviewer-gold-pass3.json` | `616cf46a502eb7be96937c1d93926be5d2fdf0676160ff01ea0b29cb0a275d45` |
 | QA submission | `eval/c2/label-integrity/parent-evidence/reviewer-qa-pass3.json` | `2f23f41e881fbc910f8c0b2bf1dca4ff582786345241cb1c2cb45b58706a65e7` |
-| Baseline metrics | `eval/c2/label-integrity/baseline-metrics.json` | `d7100f324352ab8b7b96be0c364f3f5bfb6274e384a98ce1c529ff1a57f66e94` |
+| Parent baseline Gold | `eval/c2/label-integrity/parent-evidence/reviewer-gold.json` | `05996321da048abc5c900d51b51c001cf4a14282ca7fd8d0ef4931edabae7af3` |
+| Parent baseline QA | `eval/c2/label-integrity/parent-evidence/reviewer-qa.json` | `31d4c668912f89e0c042e89fb10af5a2305288e80ea03ae0fcc8c30d7d4edd57` |
+| Baseline metrics | `eval/c2/label-integrity/baseline-metrics.json` | `1eb7d808c54ac8332671ff671d66681fd0c7434d56ab182ea1e9e8d6be903c25` |
 | Adjudication record | `eval/c2/label-integrity/adjudication.json` | `6992be78c7908e766807611313a4175f2e56e9678af0d2ce8b7bfe3873421f6a` |
-| Agreement report | `eval/c2/label-integrity/agreement-report.json` | `1bb34cc7476d9d37bfe1ab11f0f075f1a6e2016773831f6a5df28d583ae3a047` |
+| Agreement report | `eval/c2/label-integrity/agreement-report.json` | `ce879914eb818233e18b58cf30f608c9b9bafa2f5eede72077c909964d5272e4` |
 
 The report contains nine disagreement entries, all metrics pass, and all eight
 hard gates pass. The adjudication record states that the independent labels
@@ -19,10 +23,10 @@ were preserved and not rewritten after sealing.
 
 ## Required Approvals
 
-The readiness validator still reports C2 as open because the checkpoint ledger
-has no C2 checkpoint approvals. Do **not** edit the immutable v2 ledger. Create
-an append-only `checkpoint-approvals-v3.json` after both reviewers explicitly
-approve the target below. The human-readable review packet is
+The readiness validator requires the active C2 approvals to bind the target
+below. Do **not** edit the immutable earlier ledgers. The append-only
+`checkpoint-approvals-v5.json` records the active replacements after both
+reviewers explicitly approved the target. The human-readable review packet is
 `docs/c2/c2-approval-target-v1.md`.
 
 - `checkpoint: "C2"`, `approvalKind: "checkpoint"`, `decision: "approved"`,
@@ -34,7 +38,7 @@ Each approval must use the real approver actor ID from
 `approval-actor-registry-v3.json` and bind this exact target:
 
 ```text
-checkpointTargetSha256: 5aed64c695cab715b853ba2219df8b72fffee822607179eea51a488217b4ffed
+checkpointTargetSha256: cf55fee06a3a1f34da7d90672c3f62d3704fbda7026cf0de2de9c2aba3c78ac0
 actorRegistryVersion: 3.0
 actorRegistrySha256: 1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6
 planSha256: 09253f91cd90a540eee3cc41200f5c0b4384bd07b897d586f95c83598b4360a1
@@ -62,9 +66,12 @@ The C2 contract hashes currently bound by that recipe are:
 The approvals should explicitly accept the nine disagreements as recorded
 agreement evidence. No labels should be changed as part of checkpoint approval.
 
-Current ledger state: both `reviewer-gold` and `reviewer-qa` have approved the
-same target in `checkpoint-approvals-v4.json`. Public and private readiness
-validation now report C2 closed with no issues.
+Current ledger state: both `reviewer-gold` and `reviewer-qa` have active
+approvals in `checkpoint-approvals-v5.json`; each v2 approval supersedes its
+earlier v1 approval and binds target
+`cf55fee06a3a1f34da7d90672c3f62d3704fbda7026cf0de2de9c2aba3c78ac0`.
+Public and private readiness validation report C2 closed; private validation
+also surfaces the expected out-of-band external-QA warning.
 
 ## After Approval
 

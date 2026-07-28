@@ -337,6 +337,14 @@ describe("CheckpointApproval", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("accepts an explicit append-only supersession reference", () => {
+    const result = CheckpointApproval.safeParse({
+      ...validApproval(),
+      supersedesApprovalId: "c0-repo-maintainer-v1",
+    });
+    expect(result.success).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

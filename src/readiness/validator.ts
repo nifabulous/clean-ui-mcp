@@ -43,6 +43,7 @@ import {
   C2IndependentLabelSubmissionSchema,
   C2LabelIntegrityBaselineMetricsSchema,
   C2LabelAgreementReportSchema,
+  C2LabelAgreementAdjudicationSchema,
 } from "../c2/evaluation-contracts.js";
 
 // ---------------------------------------------------------------------------
@@ -596,15 +597,37 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
  * validator may encounter. Used to schema-validate referenced evidence files
  * in addition to the hash + identity checks — a well-hashed but structurally
  * invalid payload must still be rejected. Types without a dedicated production
- * schema (e.g. adjudication, which is referenced but not independently
- * schema'd) are omitted and fall back to the identity check only.
+ * schema. The registry is intentionally closed over every C2 artifact type
+ * currently accepted by the private evidence manifest.
  */
 export const C2_EVIDENCE_SCHEMAS: Readonly<Record<string, z.ZodType>> = {
   "c2-label-integrity-selection": C2LabelIntegritySelectionSchema,
   "c2-independent-label-submission": C2IndependentLabelSubmissionSchema,
   "c2-label-integrity-baseline-metrics": C2LabelIntegrityBaselineMetricsSchema,
   "c2-label-agreement-report": C2LabelAgreementReportSchema,
+  "c2-label-agreement-adjudication": C2LabelAgreementAdjudicationSchema,
 };
+
+const REQUIRED_C2_EVIDENCE = [
+  { artifactId: "c2-label-integrity-selection-v1", artifactType: "c2-label-integrity-selection", path: "eval/c2/label-integrity/selection.json" },
+  { artifactId: "c2-submission-reviewer-gold-v1", artifactType: "c2-independent-label-submission", path: "eval/c2/label-integrity/parent-evidence/reviewer-gold-pass3.json" },
+  { artifactId: "c2-submission-reviewer-qa-v1", artifactType: "c2-independent-label-submission", path: "eval/c2/label-integrity/parent-evidence/reviewer-qa-pass3.json" },
+  { artifactId: "c2-parent-baseline-reviewer-gold-v1", artifactType: "c2-independent-label-submission", path: "eval/c2/label-integrity/parent-evidence/reviewer-gold.json" },
+  { artifactId: "c2-parent-baseline-reviewer-qa-v1", artifactType: "c2-independent-label-submission", path: "eval/c2/label-integrity/parent-evidence/reviewer-qa.json" },
+  { artifactId: "c2-label-integrity-baseline-metrics-v1", artifactType: "c2-label-integrity-baseline-metrics", path: "eval/c2/label-integrity/baseline-metrics.json" },
+  { artifactId: "c2-adjudication-v1", artifactType: "c2-label-agreement-adjudication", path: "eval/c2/label-integrity/adjudication.json" },
+  { artifactId: "c2-label-agreement-report-v1", artifactType: "c2-label-agreement-report", path: "eval/c2/label-integrity/agreement-report.json" },
+] as const;
+
+type ResolvedC2Evidence = {
+  ref: Record<string, string>;
+  raw: Record<string, unknown>;
+  path: string;
+};
+
+function sameC2Ref(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  return a.artifactId === b.artifactId && (a.artifactType === undefined || a.artifactType === b.artifactType) && a.path === b.path && a.sha256 === b.sha256;
+}
 
 function verifyPrivateC2Evidence(
   artifacts: Map<string, ParsedArtifact>,
@@ -620,6 +643,26 @@ function verifyPrivateC2Evidence(
 
   const repoRoot = realpathSync(resolve(opts.repoRoot ?? opts.artifactRoot));
   const evidence = (manifest.data.evidence as Array<Record<string, string>>) ?? [];
+  const resolvedById = new Map<string, ResolvedC2Evidence>();
+  const seenPaths = new Set<string>();
+  for (const ref of evidence) {
+    if (resolvedById.has(ref.artifactId)) {
+      issues.push({ code: "c2-evidence-duplicate-id", artifactId: String(manifest.data.artifactId), path: ref.path, message: `C2 evidence artifactId is duplicated: ${ref.artifactId}` });
+    }
+    if (seenPaths.has(ref.path)) {
+      issues.push({ code: "c2-evidence-duplicate-path", artifactId: String(manifest.data.artifactId), path: ref.path, message: `C2 evidence path is duplicated: ${ref.path}` });
+    }
+    seenPaths.add(ref.path);
+  }
+  if (evidence.length !== REQUIRED_C2_EVIDENCE.length) {
+    issues.push({ code: "c2-evidence-set-mismatch", artifactId: String(manifest.data.artifactId), message: `C2 evidence manifest must contain exactly ${REQUIRED_C2_EVIDENCE.length} evidence rows` });
+  }
+  for (const expected of REQUIRED_C2_EVIDENCE) {
+    const matches = evidence.filter((ref) => ref.artifactId === expected.artifactId);
+    if (matches.length !== 1 || matches[0]?.artifactType !== expected.artifactType || matches[0]?.path !== expected.path) {
+      issues.push({ code: "c2-evidence-set-mismatch", artifactId: String(manifest.data.artifactId), path: expected.path, message: `C2 evidence manifest is missing or misbinding ${expected.artifactId}` });
+    }
+  }
   for (const ref of evidence) {
     const relativePath = ref.path;
     const filePath = resolve(repoRoot, relativePath);
@@ -673,6 +716,7 @@ function verifyPrivateC2Evidence(
       // necessary but not sufficient — they cannot catch a well-hashed but
       // schema-invalid payload.
       const schemaForType = C2_EVIDENCE_SCHEMAS[ref.artifactType];
+      let parsed = raw;
       if (schemaForType) {
         const schemaResult = schemaForType.safeParse(raw);
         if (!schemaResult.success) {
@@ -684,8 +728,11 @@ function verifyPrivateC2Evidence(
             path: relativePath,
             message: `C2 evidence ${relativePath} (${ref.artifactType}) failed schema validation at ${at}: ${firstIssue?.message ?? "unknown"}`,
           });
+        } else {
+          parsed = schemaResult.data as Record<string, unknown>;
         }
       }
+      resolvedById.set(ref.artifactId, { ref, raw: parsed, path: relativePath });
     } catch (error) {
       issues.push({
         code: "c2-evidence-unavailable",
@@ -693,6 +740,43 @@ function verifyPrivateC2Evidence(
         path: relativePath,
         message: `cannot resolve C2 evidence ${relativePath}: ${(error as Error).message}`,
       });
+    }
+  }
+
+  const manifestRef = (artifactId: string): Record<string, unknown> | undefined => resolvedById.get(artifactId)?.ref;
+  const requireManifestRef = (owner: string, nested: unknown): void => {
+    if (!nested || typeof nested !== "object") {
+      issues.push({ code: "c2-evidence-nested-ref-invalid", artifactId: owner, message: "nested C2 evidence reference is not an object" });
+      return;
+    }
+    const nestedRef = nested as Record<string, unknown>;
+    const bound = manifestRef(String(nestedRef.artifactId));
+    if (!bound || !sameC2Ref(nestedRef, bound)) {
+      issues.push({ code: "c2-evidence-nested-ref-unbound", artifactId: owner, message: `nested C2 evidence reference is not exactly bound in the manifest: ${String(nestedRef.artifactId)}` });
+    }
+  };
+
+  const baseline = resolvedById.get("c2-label-integrity-baseline-metrics-v1")?.raw;
+  if (baseline && Array.isArray(baseline.sourceArtifactRefs)) {
+    for (const sourceRef of baseline.sourceArtifactRefs) {
+      requireManifestRef("c2-label-integrity-baseline-metrics-v1", sourceRef);
+      const sourceId = typeof sourceRef === "object" && sourceRef !== null ? String((sourceRef as Record<string, unknown>).artifactId) : "";
+      if (!sourceId.startsWith("c2-parent-baseline-")) {
+        issues.push({ code: "c2-baseline-source-not-parent", artifactId: "c2-label-integrity-baseline-metrics-v1", message: `baseline metric source must be parent-authority evidence: ${sourceId}` });
+      }
+    }
+  }
+
+  const agreement = resolvedById.get("c2-label-agreement-report-v1")?.raw;
+  if (agreement) {
+    for (const key of ["selectionRef", "goldOwnerSubmissionRef", "qaSubmissionRef", "baselineMetricsRef", "adjudicationRef"]) {
+      requireManifestRef("c2-label-agreement-report-v1", agreement[key]);
+    }
+  }
+  const adjudication = resolvedById.get("c2-adjudication-v1")?.raw;
+  if (adjudication && agreement) {
+    if (adjudication.goldOwnerSubmissionArtifactId !== (agreement.goldOwnerSubmissionRef as Record<string, unknown>)?.artifactId || adjudication.qaSubmissionArtifactId !== (agreement.qaSubmissionRef as Record<string, unknown>)?.artifactId) {
+      issues.push({ code: "c2-adjudication-submissions-mismatch", artifactId: "c2-adjudication-v1", message: "adjudication submissions do not match the agreement report" });
     }
   }
 }
@@ -804,6 +888,23 @@ function validateApprovalsAndCheckpoint(
   }
 
   const approvals = ledgerData.data.approvals;
+  const supersededApprovalIds = new Set(
+    approvals.flatMap((approval) => approval.supersedesApprovalId ? [approval.supersedesApprovalId] : []),
+  );
+  for (const approval of approvals) {
+    if (approval.supersedesApprovalId !== undefined) {
+      const priorIndex = approvals.findIndex((candidate) => candidate.approvalId === approval.supersedesApprovalId);
+      const currentIndex = approvals.indexOf(approval);
+      if (priorIndex < 0 || priorIndex >= currentIndex) {
+        issues.push({ code: "ledger-invalid-supersession", artifactId: approval.approvalId, message: `approval ${approval.approvalId} supersedes a missing or later approval` });
+      } else {
+        const prior = approvals[priorIndex]!;
+        if (prior.checkpoint !== approval.checkpoint || prior.role !== approval.role || prior.actorId !== approval.actorId) {
+          issues.push({ code: "ledger-invalid-supersession", artifactId: approval.approvalId, message: `approval ${approval.approvalId} must supersede an earlier approval for the same checkpoint, role, and actor` });
+        }
+      }
+    }
+  }
 
   // ------------------------------------------------------------------
   // Git-bound recomputation of the canonical checkpoint target(s).
@@ -812,8 +913,9 @@ function validateApprovalsAndCheckpoint(
   // checkpoint (e.g. C1) stays open without producing spurious issues
   // from unresolved sources.
   // ------------------------------------------------------------------
-  const activeCheckpoints = new Set(approvals.map((a) => a.checkpoint));
-  const recompute = computeCanonicalTargets(artifacts, absRoot, opts, activeCheckpoints, approvals, registryByVersion);
+  const activeApprovals = approvals.filter((approval) => !supersededApprovalIds.has(approval.approvalId));
+  const activeCheckpoints = new Set(activeApprovals.map((a) => a.checkpoint));
+  const recompute = computeCanonicalTargets(artifacts, absRoot, opts, activeCheckpoints, activeApprovals, registryByVersion);
 
   // Per-approval set of issue codes that this approval produced. An approval
   // with any issue cannot contribute to closure.
@@ -842,6 +944,7 @@ function validateApprovalsAndCheckpoint(
 
   for (const approval of approvals) {
     const iid = approval.approvalId;
+    const isSuperseded = supersededApprovalIds.has(iid);
 
     // Implementer cannot approve (checked first — independent of registry
     // resolution so all applicable errors are reported).
@@ -868,6 +971,11 @@ function validateApprovalsAndCheckpoint(
     if (resolvedRegistry) {
       resolvedRegistryByApprovalId.set(iid, resolvedRegistry);
     }
+
+    // Superseded approvals remain immutable historical evidence, but no longer
+    // participate in target, role, or closure calculations. Their replacement
+    // must be appended with an explicit supersedesApprovalId.
+    if (isSuperseded) continue;
 
     // Actor existence / role / kind checks use the approval's resolved
     // registry. When the registry cannot be resolved we still run the
@@ -1006,7 +1114,7 @@ function validateApprovalsAndCheckpoint(
     // ALL approved checkpoint-kind approvals for this checkpoint — used for
     // the closed-world role-set check (duplicates/extras are structural and
     // must be visible even when an approval is tainted by another issue).
-    const allCpApproved = approvals.filter(
+    const allCpApproved = activeApprovals.filter(
       (a) =>
         a.checkpoint === cp &&
         a.decision === "approved" &&

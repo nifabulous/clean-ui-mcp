@@ -8,7 +8,7 @@ product work.
 ## Target Identity
 
 ```text
-checkpointTargetSha256: 5aed64c695cab715b853ba2219df8b72fffee822607179eea51a488217b4ffed
+checkpointTargetSha256: cf55fee06a3a1f34da7d90672c3f62d3704fbda7026cf0de2de9c2aba3c78ac0
 sourceGitSha: fcc21fc803863ad19686044f8a1ae01b384546cf
 actorRegistryVersion: 3.0
 actorRegistrySha256: 1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6
@@ -33,12 +33,12 @@ are not part of the target hash.
     {
       "artifactId": "c2-evidence-v1",
       "artifactType": "c2-evidence-manifest",
-      "sha256": "ac5b06d749b4b2f6dea4d5e06db473d4a765bbbf70720e16a08efebc1198c76e"
+      "sha256": "c4e4b0402c23c1c701369c89450c5c2e89b029d37451939a7a1d257525387cb7"
     },
     {
       "artifactId": "index-c1-v3",
       "artifactType": "artifact-index",
-      "sha256": "4c638a9939cf954397edf3763ecc3ce3346409650f7ee391bc8ed0f9d7b08081"
+      "sha256": "c60390e01de336ba4bc4f6ec4a5f18bfa39af1e6b7ff8a969b0d518113c37445"
     }
   ],
   "planSha256": "09253f91cd90a540eee3cc41200f5c0b4384bd07b897d586f95c83598b4360a1",
@@ -82,8 +82,8 @@ reviewer's entry is appended to the immutable ledger:
 
 | Role | Actor | Decision | Decided at | Signature / confirmation |
 |---|---|---|---|---|
-| Gold Label Owner | `reviewer-gold` | Approved | `2026-07-26T21:18:07.000Z` | Recorded as `c2-gold-reviewer-gold-v1` |
-| QA | `reviewer-qa` | Approved | `2026-07-26T21:20:11.000Z` | Recorded as `c2-qa-reviewer-qa-v1` |
+| Gold Label Owner | `reviewer-gold` | Approved | `2026-07-26T21:18:07.000Z` | Recorded as `c2-gold-reviewer-gold-v2` |
+| QA | `reviewer-qa` | Approved | `2026-07-26T21:20:11.000Z` | Recorded as `c2-qa-reviewer-qa-v2` |
 
 Approval means: “I reviewed this exact C2 evidence target and accept it for the
 C2 readiness checkpoint.” It does not mean that C2 has authorized paid

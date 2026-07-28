@@ -28,7 +28,11 @@ interface NavEntry {
 
 const PRIMARY_NAV: readonly NavEntry[] = [
   { id: "product", label: "Product", to: "/", href: null },
+  // Playground is the C3 create_ui_spec composer; Browse is the corpus search it
+  // replaced at that route (C3 Task 6). Both are first-class destinations — the
+  // composer produces a handoff, Browse inspects the evidence behind one.
   { id: "playground", label: "Playground", to: "/playground", href: null },
+  { id: "browse", label: "Browse", to: "/browse", href: null },
   { id: "docs", label: "Docs", to: null, href: "https://github.com/olaniyi-oladokun/clean-ui-mcp#readme" },
   { id: "changelog", label: "Changelog", to: null, href: "https://github.com/olaniyi-oladokun/clean-ui-mcp/releases" },
   { id: "github", label: "GitHub", to: null, href: "https://github.com/olaniyi-oladokun/clean-ui-mcp" },

@@ -1,0 +1,671 @@
+/**
+ * create-ui-spec.ts — the browser-side client for the loopback
+ * `POST /api/create-ui-spec` route (C3 Task 6).
+ *
+ * WHAT THIS MODULE IS ALLOWED TO DO. Obtain the process-local CSRF nonce, send
+ * one bounded brief to the same-origin loopback route, CHECK the response shape,
+ * and project the checked response onto an explicit display-safe view. It never
+ * assembles a `UiSpec`, never imports the corpus, never reads a credential, and
+ * never opens a request to anything but a relative `/api/*` path.
+ *
+ * THE RESPONSE IS UNTRUSTED UNTIL ITS SHAPE IS CHECKED. The server runs a
+ * fail-closed gate before serving, and that gate screens ID and PATH *shape* —
+ * it is not a prose screen. So two things follow, and both are implemented here:
+ *
+ *  1. This client re-checks the shape it depends on, positively: the artifact
+ *     version literal, four 64-hex digests, both rendering strings, a non-empty
+ *     list of `evidence-<n>` ids, the retrieval block's numeric/boolean fields,
+ *     and the shape of every row it renders. A response that fails any of these
+ *     is refused WHOLE — there is no partial render, because a half-checked
+ *     artifact is exactly the thing the operator would mistake for a result.
+ *
+ *  2. Display is an ALLOWLIST PROJECTION, not a scrub. {@link SafeArtifact} is
+ *     built field by field from checked positions, so a field the producer adds
+ *     later cannot reach the DOM by default — it simply is not on the projected
+ *     object. Nothing carries `sourceId`, `sourceIds`, `sourceReferences`,
+ *     `citedReferences`, `evidenceIds`, `provenance`, `componentInventory`, an
+ *     image path, or a screenshot, because none of those is projected.
+ *
+ * `spec.context.productContext` and `spec.designDirection` echo the CALLER'S OWN
+ * brief. That is the operator's data, not corpus content — but the projection
+ * still drops `context` entirely, because showing an operator their own brief
+ * back is not a result. `designDirection` IS projected: it is the producer's
+ * direction statement and the design names it as displayable. It is producer free
+ * text, so this module makes no claim to have screened its prose; the only prose
+ * claim made anywhere in this client is about ID/path SHAPE.
+ *
+ * NO SERVER FREE TEXT ON THE FAILURE PATH. The route's bounded error body carries
+ * a `message`. It is deliberately never surfaced: failures are described by a
+ * CLIENT-authored code ({@link CreateUiSpecFailureCode}) that the UI turns into
+ * its own copy. A server string cannot become UI copy through this module.
+ *
+ * NO PERSISTENCE, NO ANALYTICS. The nonce lives in a module-scope variable for
+ * the life of the page. Nothing is written to `localStorage`, `sessionStorage`,
+ * `document.cookie`, or any analytics sink, and this module logs nothing at all —
+ * a `console.*` call here would put the operator's brief in the devtools console.
+ */
+
+// ---------------------------------------------------------------------------
+// Request contract — mirrors CreateUiSpecHttpRequestSchema's bounds.
+// ---------------------------------------------------------------------------
+
+/** The CSRF header name the loopback server requires on every mutating call. */
+export const CSRF_HEADER = "X-Clean-UI-CSRF";
+
+/** Same-origin, relative paths. Never an absolute origin. */
+const CSRF_PATH = "/api/csrf";
+const CREATE_UI_SPEC_PATH = "/api/create-ui-spec";
+
+/** `productContext` bounds, from `CreateUiSpecRequestSchema`. */
+export const BRIEF_MIN_LENGTH = 8;
+export const BRIEF_MAX_LENGTH = 8_000;
+/**
+ * `constraints`, `referenceIds` and `implementationFramework` bounds. Only the
+ * COUNT limits are exported — the composer shows them as hints. The per-item
+ * length limits are enforced by {@link briefValidationMessage} and have no caller
+ * outside this module, so they stay private rather than becoming unused surface.
+ */
+export const MAX_CONSTRAINTS = 12;
+const MAX_CONSTRAINT_LENGTH = 500;
+export const MAX_REFERENCE_IDS = 5;
+const MAX_REFERENCE_ID_LENGTH = 200;
+const MAX_FRAMEWORK_LENGTH = 120;
+
+export type BriefPlatform = "web" | "mobile" | "tablet";
+
+export interface BriefDesignSystem {
+  readonly status: "none" | "identified";
+  readonly registry?: string;
+  readonly library?: string;
+}
+
+/** What the composer collects. Optional fields are omitted from the request. */
+export interface DesignBrief {
+  readonly productContext: string;
+  readonly platform?: BriefPlatform;
+  readonly implementationFramework?: string;
+  readonly designSystem?: BriefDesignSystem;
+  readonly constraints?: readonly string[];
+  readonly referenceIds?: readonly string[];
+}
+
+/**
+ * Client-side validity gate. Returns an actionable message, or `null` when the
+ * brief may be submitted. The server validates independently — this exists so
+ * Generate can stay disabled and so an obviously-invalid brief never leaves the
+ * browser, not as a substitute for the server contract.
+ */
+export function briefValidationMessage(brief: DesignBrief): string | null {
+  const productContext = brief.productContext.trim();
+  if (productContext.length < BRIEF_MIN_LENGTH) {
+    return `Describe the product in at least ${BRIEF_MIN_LENGTH} characters.`;
+  }
+  if (productContext.length > BRIEF_MAX_LENGTH) {
+    return `The brief is limited to ${BRIEF_MAX_LENGTH} characters.`;
+  }
+  const framework = brief.implementationFramework?.trim() ?? "";
+  if (framework.length > MAX_FRAMEWORK_LENGTH) {
+    return `The implementation framework is limited to ${MAX_FRAMEWORK_LENGTH} characters.`;
+  }
+  const constraints = brief.constraints ?? [];
+  if (constraints.length > MAX_CONSTRAINTS) {
+    return `Use at most ${MAX_CONSTRAINTS} constraints (one per line).`;
+  }
+  if (constraints.some((c) => c.length > MAX_CONSTRAINT_LENGTH)) {
+    return `Each constraint is limited to ${MAX_CONSTRAINT_LENGTH} characters.`;
+  }
+  const referenceIds = brief.referenceIds ?? [];
+  if (referenceIds.length > MAX_REFERENCE_IDS) {
+    return `Use at most ${MAX_REFERENCE_IDS} explicit references (one per line).`;
+  }
+  if (referenceIds.some((r) => r.length > MAX_REFERENCE_ID_LENGTH)) {
+    return `Each explicit reference is limited to ${MAX_REFERENCE_ID_LENGTH} characters.`;
+  }
+  if (new Set(referenceIds).size !== referenceIds.length) {
+    return "Explicit references must be unique.";
+  }
+  if (brief.designSystem?.status === "identified") {
+    const registry = brief.designSystem.registry?.trim() ?? "";
+    const library = brief.designSystem.library?.trim() ?? "";
+    if (registry.length === 0 && library.length === 0) {
+      return "An identified design system needs a registry or a library name.";
+    }
+  }
+  return null;
+}
+
+/** Build the request body, omitting every field the operator left blank. */
+function requestBodyFor(brief: DesignBrief): Record<string, unknown> {
+  const body: Record<string, unknown> = { productContext: brief.productContext.trim() };
+  if (brief.platform !== undefined) body.platform = brief.platform;
+  const framework = brief.implementationFramework?.trim() ?? "";
+  if (framework.length > 0) body.implementationFramework = framework;
+  if (brief.designSystem !== undefined) {
+    const designSystem: Record<string, unknown> = { status: brief.designSystem.status };
+    const registry = brief.designSystem.registry?.trim() ?? "";
+    const library = brief.designSystem.library?.trim() ?? "";
+    // `status: "none"` must not carry registry/library (DesignSystemIdentitySchema).
+    if (brief.designSystem.status === "identified") {
+      if (registry.length > 0) designSystem.registry = registry;
+      if (library.length > 0) designSystem.library = library;
+    }
+    body.designSystem = designSystem;
+  }
+  const constraints = brief.constraints ?? [];
+  if (constraints.length > 0) body.constraints = [...constraints];
+  const referenceIds = brief.referenceIds ?? [];
+  if (referenceIds.length > 0) body.referenceIds = [...referenceIds];
+  return body;
+}
+
+// ---------------------------------------------------------------------------
+// The display-safe projection.
+// ---------------------------------------------------------------------------
+
+/** A key decision, reduced to its structured positions. No `sourceId`. */
+export interface SafeDecision {
+  readonly id: string;
+  readonly field: string;
+  readonly authority: string;
+  readonly readiness: string;
+}
+
+/** An acceptance criterion, without its evidence-id links. */
+export interface SafeAcceptanceCriterion {
+  readonly id: string;
+  readonly subject: string;
+  readonly assertion: string;
+  readonly expectedOutcome: string;
+  readonly verifier: string;
+  readonly priority: string;
+}
+
+/** A producer warning whose code is inside the closed set. */
+export interface SafeWarning {
+  readonly code: WarningCode;
+  readonly message: string;
+}
+
+/** A field the producer could not decide, and the reason it gave. */
+export interface SafeUnavailableDecision {
+  readonly field: string;
+  readonly reason: string;
+}
+
+/**
+ * The AGGREGATE evidence summary — counts and closed-enum retrieval metadata
+ * only. The response-scoped `evidence-<n>` ids are counted, never listed, and no
+ * per-row evidence summary is requested from or served by this route.
+ */
+export interface EvidenceSummary {
+  readonly evidenceCount: number;
+  readonly retrievalMode: string;
+  readonly retrievalModality: string;
+  readonly corpusResultCount: number;
+  readonly attemptedCount: number;
+  readonly fallbackUsed: boolean;
+  readonly fallbackReason: string | null;
+}
+
+/**
+ * Everything the composer may render, plus the EXACT rendering bytes the
+ * response contained. Downloads read `designMarkdown` / `designJson` straight
+ * off this object, so a download can never trigger a second generation (which
+ * would carry a different `generatedAt` and a different artifact identity than
+ * the one the operator just reviewed).
+ */
+export interface SafeArtifact {
+  readonly artifactId: string;
+  readonly generatedAt: string;
+  readonly producerVersion: string;
+  readonly designDirection: string;
+  readonly decisions: readonly SafeDecision[];
+  readonly acceptanceCriteria: readonly SafeAcceptanceCriterion[];
+  readonly warnings: readonly SafeWarning[];
+  readonly unavailableDecisions: readonly SafeUnavailableDecision[];
+  readonly evidence: EvidenceSummary;
+  /** True when the artifact leans on the deterministic fallback or is incomplete. */
+  readonly partial: boolean;
+  readonly designMarkdown: string;
+  readonly designJson: string;
+  readonly specSha256: string;
+  readonly semanticSpecSha256: string;
+  readonly designMarkdownSha256: string;
+  readonly designJsonSha256: string;
+}
+
+/** The closed warning-code set, mirroring `WarningSchema`. */
+const WARNING_CODES = [
+  "sparseCoverage",
+  "insufficientCorpusEvidence",
+  "motionEvidenceUnavailable",
+  "authorityConflict",
+] as const;
+export type WarningCode = (typeof WARNING_CODES)[number];
+
+/** Client-authored failure codes. No server string ever becomes one of these. */
+export type CreateUiSpecFailureCode =
+  | "INVALID_INPUT"
+  | "PROVIDER_ERROR"
+  | "CSRF_REJECTED"
+  | "NETWORK"
+  | "MALFORMED_RESPONSE";
+
+export interface CreateUiSpecFailure {
+  readonly code: CreateUiSpecFailureCode;
+  readonly retryable: boolean;
+}
+
+export type CreateUiSpecResult =
+  | { readonly ok: true; readonly artifact: SafeArtifact }
+  | { readonly ok: false; readonly failure: CreateUiSpecFailure };
+
+/**
+ * The REAL client-observable phases. There is exactly one server round trip, so
+ * the client cannot observe the producer's internal stages — inventing a ticking
+ * "assembling / validating / rendering" sequence would be fabricated progress.
+ * These three are the phases this module actually enters.
+ */
+export type LifecyclePhase = "authorizing" | "submitting" | "validating";
+
+export interface RequestOptions {
+  readonly fetchImpl?: typeof fetch;
+  readonly onPhase?: (phase: LifecyclePhase) => void;
+}
+
+/**
+ * The process-local nonce, cached for the life of the page. Module scope, never
+ * persisted: the server mints a NEW nonce when the operator restarts it, and a
+ * persisted stale nonce would fail every submit until storage was cleared.
+ */
+let cachedNonce: string | null = null;
+
+/** Discard the cached nonce (exported for tests and for the re-mint path). */
+export function resetCachedNonce(): void {
+  cachedNonce = null;
+}
+
+async function fetchNonce(fetchImpl: typeof fetch): Promise<string | null> {
+  const response = await fetchImpl(CSRF_PATH, {
+    method: "GET",
+    headers: { accept: "application/json" },
+    cache: "no-store",
+    // Send NO ambient credential. `fetch`'s default (`same-origin`) would attach
+    // any cookie another local server left on this host — cookies are host-scoped,
+    // not port-scoped, so a Vite or Next dev server on the same loopback host can
+    // set one. The route never reads a cookie, and `omit` means the browser never
+    // offers one either.
+    credentials: "omit",
+  });
+  if (!response.ok) return null;
+  const body: unknown = await response.json().catch(() => null);
+  const nonce = isRecord(body) ? body.nonce : undefined;
+  return typeof nonce === "string" && nonce.length > 0 ? nonce : null;
+}
+
+/**
+ * Submit one brief and return either the checked, projected artifact or a
+ * client-authored failure. Never throws: a transport rejection becomes a
+ * retryable `NETWORK` failure.
+ */
+export async function requestDesignArtifact(
+  brief: DesignBrief,
+  options: RequestOptions = {},
+): Promise<CreateUiSpecResult> {
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const onPhase = options.onPhase ?? ((): void => {});
+
+  // Refuse locally so an obviously-invalid brief never leaves the browser.
+  if (briefValidationMessage(brief) !== null) {
+    return { ok: false, failure: { code: "INVALID_INPUT", retryable: false } };
+  }
+
+  const body = JSON.stringify(requestBodyFor(brief));
+
+  try {
+    // One re-mint, then stop. The nonce is process-local, so an operator restart
+    // invalidates the cached one exactly once; looping would hammer the server.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      onPhase("authorizing");
+      if (cachedNonce === null) cachedNonce = await fetchNonce(fetchImpl);
+      if (cachedNonce === null) {
+        return { ok: false, failure: { code: "CSRF_REJECTED", retryable: true } };
+      }
+
+      onPhase("submitting");
+      const response = await fetchImpl(CREATE_UI_SPEC_PATH, {
+        method: "POST",
+        // See fetchNonce: no ambient credential is offered, and no authorization
+        // header is ever set (the route refuses one outright).
+        credentials: "omit",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json",
+          [CSRF_HEADER]: cachedNonce,
+        },
+        cache: "no-store",
+        body,
+      });
+
+      if (response.status === 403) {
+        // The nonce was rejected — the server restarted. Re-mint once.
+        cachedNonce = null;
+        continue;
+      }
+
+      if (!response.ok) {
+        return { ok: false, failure: mapErrorResponse(response.status, await readJson(response)) };
+      }
+
+      onPhase("validating");
+      const payload = await readJson(response);
+      const artifact = projectSafeArtifact(payload);
+      if (artifact === null) {
+        return { ok: false, failure: { code: "MALFORMED_RESPONSE", retryable: false } };
+      }
+      return { ok: true, artifact };
+    }
+    return { ok: false, failure: { code: "CSRF_REJECTED", retryable: true } };
+  } catch {
+    // A transport rejection (server down, connection reset). Nothing derived from
+    // the exception is surfaced or logged — its text can quote the request.
+    return { ok: false, failure: { code: "NETWORK", retryable: true } };
+  }
+}
+
+async function readJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Map a non-2xx response to a client-authored failure. The server's `retryable`
+ * flag is honoured when present and boolean (the integrity refusal is a
+ * deterministic 503 that must NOT be retried), but its `message` is discarded.
+ */
+function mapErrorResponse(status: number, payload: unknown): CreateUiSpecFailure {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : null;
+  const retryableFlag = error !== null && typeof error.retryable === "boolean" ? error.retryable : null;
+  if (status === 400) return { code: "INVALID_INPUT", retryable: false };
+  if (status === 503) return { code: "PROVIDER_ERROR", retryable: retryableFlag ?? true };
+  // Any other status is not part of this route's contract.
+  return { code: "MALFORMED_RESPONSE", retryable: false };
+}
+
+// ---------------------------------------------------------------------------
+// Shape checks. Deliberately hand-written and explicit: this is the browser's
+// own boundary, and every accepted position is visible in one place.
+// ---------------------------------------------------------------------------
+
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+/** Response-scoped evidence ids. A path or a raw corpus id cannot match this. */
+const RESPONSE_SCOPED_EVIDENCE_ID = /^evidence-[0-9]+$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function str(value: unknown, max = 8_000): string | null {
+  if (typeof value !== "string") return null;
+  if (value.length === 0 || value.length > max) return null;
+  return value;
+}
+
+function sha(value: unknown): string | null {
+  return typeof value === "string" && SHA256_PATTERN.test(value) ? value : null;
+}
+
+function count(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/**
+ * Check the served payload and project it onto {@link SafeArtifact}. Returns
+ * `null` — refusing the whole response — when any checked position is absent or
+ * the wrong shape.
+ */
+function projectSafeArtifact(payload: unknown): SafeArtifact | null {
+  if (!isRecord(payload)) return null;
+  if (payload.artifactVersion !== "1.0") return null;
+
+  const artifactId = str(payload.artifactId, 200);
+  const generatedAt = str(payload.generatedAt, 64);
+  const producerVersion = str(payload.producerVersion, 120);
+  if (artifactId === null || generatedAt === null || producerVersion === null) return null;
+
+  // Both renderings must be present as strings. `""` is not a handoff, so the
+  // non-empty check in `str` is the right gate here.
+  const designMarkdown = typeof payload.designMarkdown === "string" ? payload.designMarkdown : null;
+  const designJson = typeof payload.designJson === "string" ? payload.designJson : null;
+  if (designMarkdown === null || designJson === null) return null;
+  if (designMarkdown.length === 0 || designJson.length === 0) return null;
+
+  const specSha256 = sha(payload.specSha256);
+  const semanticSpecSha256 = sha(payload.semanticSpecSha256);
+  const designMarkdownSha256 = sha(payload.designMarkdownSha256);
+  const designJsonSha256 = sha(payload.designJsonSha256);
+  if (
+    specSha256 === null ||
+    semanticSpecSha256 === null ||
+    designMarkdownSha256 === null ||
+    designJsonSha256 === null
+  ) {
+    return null;
+  }
+
+  // Response-scoped evidence ids. Checked POSITIVELY: every id must match the
+  // `evidence-<n>` shape, so a filesystem path or a raw corpus id sitting in this
+  // position refuses the response rather than being counted.
+  const rawEvidenceIds = payload.publicEvidenceIds;
+  if (!Array.isArray(rawEvidenceIds) || rawEvidenceIds.length === 0) return null;
+  for (const id of rawEvidenceIds) {
+    if (typeof id !== "string" || !RESPONSE_SCOPED_EVIDENCE_ID.test(id)) return null;
+  }
+
+  const retrieval = payload.retrieval;
+  if (!isRecord(retrieval)) return null;
+  const retrievalMode = str(retrieval.mode, 40);
+  const retrievalModality = str(retrieval.modality, 40);
+  const corpusResultCount = count(retrieval.resultCount);
+  const attemptedCount = count(retrieval.attemptedCount);
+  if (
+    retrievalMode === null ||
+    retrievalModality === null ||
+    corpusResultCount === null ||
+    attemptedCount === null ||
+    typeof retrieval.fallbackUsed !== "boolean"
+  ) {
+    return null;
+  }
+  const fallbackReason = typeof retrieval.fallbackReason === "string" ? str(retrieval.fallbackReason, 60) : null;
+
+  const spec = payload.spec;
+  if (!isRecord(spec)) return null;
+  if (spec.specVersion !== "1.0") return null;
+  const designDirection = str(spec.designDirection);
+  if (designDirection === null) return null;
+
+  const decisions = projectDecisions(spec.citedDecisions);
+  if (decisions === null) return null;
+  const acceptanceCriteria = projectAcceptanceCriteria(spec.acceptanceCriteria);
+  if (acceptanceCriteria === null || acceptanceCriteria.length === 0) return null;
+  const unavailableDecisions = projectUnavailableDecisions(spec.unavailableDecisions);
+  if (unavailableDecisions === null) return null;
+  const warnings = projectWarnings(payload.warnings);
+  if (warnings === null) return null;
+
+  const evidence: EvidenceSummary = {
+    evidenceCount: rawEvidenceIds.length,
+    retrievalMode,
+    retrievalModality,
+    corpusResultCount,
+    attemptedCount,
+    fallbackUsed: retrieval.fallbackUsed,
+    fallbackReason,
+  };
+
+  return {
+    artifactId,
+    generatedAt,
+    producerVersion,
+    designDirection,
+    decisions,
+    acceptanceCriteria,
+    warnings,
+    unavailableDecisions,
+    evidence,
+    // An artifact is PARTIAL when the deterministic fallback carried it, or when
+    // the producer raised a warning. Labelling either as a complete result would
+    // misrepresent the artifact.
+    //
+    // `unavailableDecisions` deliberately does NOT make an artifact partial. A
+    // brief with no design system ALWAYS yields `colorTokens`/`typographyTokens`
+    // unavailable decisions — that is the producer honestly declining to invent
+    // tokens, not a degraded run. They are always displayed; they just do not
+    // change the lifecycle label.
+    partial: retrieval.fallbackUsed || warnings.length > 0,
+    designMarkdown,
+    designJson,
+    specSha256,
+    semanticSpecSha256,
+    designMarkdownSha256,
+    designJsonSha256,
+  };
+}
+
+function projectDecisions(raw: unknown): SafeDecision[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: SafeDecision[] = [];
+  for (const row of raw) {
+    if (!isRecord(row)) return null;
+    const id = str(row.id, 200);
+    const field = str(row.field, 200);
+    const authority = str(row.authority, 60);
+    const readiness = str(row.readiness, 60);
+    if (id === null || field === null || authority === null || readiness === null) return null;
+    // `row.sourceId` is deliberately NOT read.
+    out.push({ id, field, authority, readiness });
+  }
+  return out;
+}
+
+function projectAcceptanceCriteria(raw: unknown): SafeAcceptanceCriterion[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: SafeAcceptanceCriterion[] = [];
+  for (const row of raw) {
+    if (!isRecord(row)) return null;
+    const id = str(row.id, 200);
+    const subject = str(row.subject, 500);
+    const assertion = str(row.assertion, 60);
+    const expectedOutcome = str(row.expectedOutcome, 1_000);
+    const verifier = str(row.verifier, 40);
+    const priority = str(row.priority, 20);
+    if (
+      id === null ||
+      subject === null ||
+      assertion === null ||
+      expectedOutcome === null ||
+      verifier === null ||
+      priority === null
+    ) {
+      return null;
+    }
+    // `row.evidenceIds`, `row.selector`, `row.command`, `row.manualSteps` are NOT
+    // read: a selector or a command is a machine-verifier detail, and the
+    // evidence links are aggregated instead of listed.
+    out.push({ id, subject, assertion, expectedOutcome, verifier, priority });
+  }
+  return out;
+}
+
+function projectUnavailableDecisions(raw: unknown): SafeUnavailableDecision[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: SafeUnavailableDecision[] = [];
+  for (const row of raw) {
+    if (!isRecord(row)) return null;
+    const field = str(row.field, 200);
+    const reason = str(row.reason, 1_000);
+    if (field === null || reason === null) return null;
+    out.push({ field, reason });
+  }
+  return out;
+}
+
+/**
+ * Project the warning list. A row whose `code` is outside the closed set is
+ * DROPPED rather than refusing the response: an unknown code is a producer
+ * vocabulary addition, not a corrupt artifact, and rendering an unrecognised
+ * code would put an unmapped server token in the UI.
+ */
+function projectWarnings(raw: unknown): SafeWarning[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: SafeWarning[] = [];
+  for (const row of raw) {
+    if (!isRecord(row)) return null;
+    const code = row.code;
+    const message = str(row.message, 500);
+    if (typeof code !== "string" || message === null) return null;
+    if (!(WARNING_CODES as readonly string[]).includes(code)) continue;
+    out.push({ code: code as WarningCode, message });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Downloads — the exact returned bytes, no second request.
+// ---------------------------------------------------------------------------
+
+export const DESIGN_MARKDOWN_FILENAME = "DESIGN.md";
+export const DESIGN_JSON_FILENAME = "DESIGN.json";
+export const DESIGN_MARKDOWN_MIME = "text/markdown;charset=utf-8";
+export const DESIGN_JSON_MIME = "application/json;charset=utf-8";
+
+/** Injection seam so the download path is assertable without a real navigation. */
+export interface DownloadEnv {
+  readonly createObjectURL: (blob: Blob) => string;
+  readonly revokeObjectURL: (url: string) => void;
+  readonly doc?: Document;
+}
+
+function defaultDownloadEnv(): DownloadEnv {
+  return {
+    createObjectURL: (blob) => URL.createObjectURL(blob),
+    revokeObjectURL: (url) => URL.revokeObjectURL(url),
+  };
+}
+
+/**
+ * Save `contents` as `filename`.
+ *
+ * The bytes come from the caller — which is always the {@link SafeArtifact}
+ * already in component state — so a download NEVER issues a request of any kind.
+ * That is the whole point: re-generating would produce a different `generatedAt`
+ * and therefore a different artifact identity than the one the operator reviewed.
+ * There is no `fetch` in this function, and the artifact it reads from is
+ * immutable state.
+ *
+ * Returns the anchor element it clicked so a test can assert the filename.
+ */
+export function downloadExactBytes(
+  filename: string,
+  contents: string,
+  mimeType: string,
+  env: DownloadEnv = defaultDownloadEnv(),
+): HTMLAnchorElement {
+  const doc = env.doc ?? document;
+  const blob = new Blob([contents], { type: mimeType });
+  const url = env.createObjectURL(blob);
+  const anchor = doc.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = "noopener";
+  anchor.style.display = "none";
+  doc.body.appendChild(anchor);
+  anchor.click();
+  doc.body.removeChild(anchor);
+  env.revokeObjectURL(url);
+  return anchor;
+}

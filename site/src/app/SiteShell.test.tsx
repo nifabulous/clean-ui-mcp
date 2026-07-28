@@ -63,6 +63,10 @@ describe("SiteShell — landmarks and navigation", () => {
     // Product, Playground, Docs, Changelog, GitHub are anchor links.
     expect(within(nav).getByRole("link", { name: /product/i })).toBeInTheDocument();
     expect(within(nav).getByRole("link", { name: /playground/i })).toBeInTheDocument();
+    // C3 Task 6: Browse is a first-class nav entry — the corpus-search surface
+    // that /playground used to host now lives at its own route.
+    const browse = within(nav).getByRole("link", { name: /browse/i });
+    expect(browse).toHaveAttribute("href", "/browse");
     expect(within(nav).getByRole("link", { name: /docs/i })).toBeInTheDocument();
     expect(within(nav).getByRole("link", { name: /changelog/i })).toBeInTheDocument();
     expect(within(nav).getByRole("link", { name: /github/i })).toBeInTheDocument();

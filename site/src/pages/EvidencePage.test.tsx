@@ -151,7 +151,11 @@ describe("EvidencePage — contract", () => {
     expect(backLinks.length).toBeGreaterThanOrEqual(1);
     for (const back of backLinks) {
       const href = back.getAttribute("href") ?? "";
-      expect(href).toContain("/playground");
+      // C3 Task 6: results live at /browse now, not /playground (which became
+      // the create_ui_spec composer). A back-link still pointing at /playground
+      // would drop the search state into a page that cannot use it.
+      expect(href).toContain("/browse");
+      expect(href).not.toContain("/playground");
       expect(href).toContain("q=pricing");
       expect(href).toContain("platform=web");
     }

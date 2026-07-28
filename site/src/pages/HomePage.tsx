@@ -68,6 +68,11 @@ export function HomePage(): ReactElement {
             <Link className="home__action home__action--secondary" to="/install">
               Install MCP
             </Link>
+            {/* The corpus search moved to /browse when /playground became the
+                create_ui_spec composer (C3 Task 6). Keep it discoverable here. */}
+            <Link className="home__action home__action--secondary" to="/browse">
+              Browse the corpus
+            </Link>
           </div>
         </div>
 
@@ -222,10 +227,12 @@ export function HomePage(): ReactElement {
             </p>
           </article>
           <article className="home__faq-item">
-            <h3>Does the Playground send my queries anywhere?</h3>
+            <h3>Does the Playground send my brief anywhere?</h3>
             <p>
-              No. The public Playground searches the tracked snapshot entirely in your browser. The
-              MCP server runs locally over stdio when you install it.
+              Not off your machine. Browse searches the tracked snapshot entirely in your browser
+              and sends nothing at all. The Playground composer posts your brief to the loopback
+              server you started yourself — bound to 127.0.0.1, never to us and never to a
+              third-party provider. The MCP server runs locally over stdio when you install it.
             </p>
           </article>
           <article className="home__faq-item">
@@ -238,7 +245,7 @@ export function HomePage(): ReactElement {
         </div>
       </section>
 
-      {/* 8. Final Playground/install CTA */}
+      {/* 8. Final Playground/install/browse CTA */}
       <section className="home__cta" aria-labelledby="home-cta-title">
         <h2 id="home-cta-title">Give your agent design judgment</h2>
         <p>
@@ -251,6 +258,9 @@ export function HomePage(): ReactElement {
           </Link>
           <Link className="home__action home__action--secondary" to="/install">
             Install MCP
+          </Link>
+          <Link className="home__action home__action--secondary" to="/browse">
+            Browse the corpus
           </Link>
         </div>
       </section>
@@ -271,7 +281,7 @@ function SnapshotPreview({ state }: { readonly state: LoadState }): ReactElement
     return (
       <p className="home__state" role="status">
         The corpus preview could not load.{" "}
-        <Link to="/playground">Open the Playground</Link> to search instead.
+        <Link to="/browse">Browse the corpus</Link> to search instead.
       </p>
     );
   }

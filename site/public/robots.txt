@@ -1,6 +1,8 @@
-# clean-ui-mcp is a single-page application. The homepage, install page, and
-# playground are crawlable; evidence detail routes are client-rendered from the
-# snapshot, so we do not enumerate them here (no per-entry static pages exist).
+# clean-ui-mcp is a single-page application. The homepage, install page, browse
+# page, and playground are crawlable; evidence detail routes are client-rendered
+# from the snapshot, so we do not enumerate them here (no per-entry static pages
+# exist). The playground composer needs the operator's own loopback API to
+# generate anything — the statically hosted copy renders its idle state only.
 User-agent: *
 Allow: /
 

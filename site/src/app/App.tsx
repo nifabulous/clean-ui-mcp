@@ -4,10 +4,14 @@ import { HomePage } from "../pages/HomePage";
 import { InstallPage } from "../pages/InstallPage";
 import { SiteShell } from "./SiteShell";
 
-// Route-level code splitting (spec §12 performance). Playground and Evidence
-// detail are the heaviest surfaces — they pull in the MiniSearch index and the
-// full evidence-section tree — so they are lazy-loaded to keep the initial
-// bundle under the 150KB gzip budget. Each dynamic import becomes its own chunk.
+// Route-level code splitting (spec §12 performance). Browse, the Playground
+// composer, and Evidence detail are the heaviest surfaces — Browse pulls in the
+// MiniSearch index, Evidence the full evidence-section tree — so they are
+// lazy-loaded to keep the initial bundle under the 150KB gzip budget. Each
+// dynamic import becomes its own chunk.
+const BrowsePage = lazy(() =>
+  import("../pages/BrowsePage").then((module) => ({ default: module.BrowsePage })),
+);
 const PlaygroundPage = lazy(() =>
   import("../pages/PlaygroundPage").then((module) => ({ default: module.PlaygroundPage })),
 );
@@ -43,11 +47,22 @@ export function AppRoutes(): ReactElement {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/install" element={<InstallPage />} />
+        {/* /playground is the C3 create_ui_spec composer. The corpus-search
+            surface that used to live here moved to /browse (C3 Task 6) with its
+            search, filters and query-string contract unchanged. */}
         <Route
           path="/playground"
           element={
             <Suspense fallback={null}>
               <PlaygroundPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/browse"
+          element={
+            <Suspense fallback={null}>
+              <BrowsePage />
             </Suspense>
           }
         />

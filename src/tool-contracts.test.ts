@@ -5,7 +5,7 @@ import {
   TOOL_DESCRIPTORS, TOOL_CATALOG, ToolResultSchemas, ToolInputSchemas,
   parseToolResult, RetrievalState, Evidence, UiSpec, CreateUiSpecInput,
   ALLOWED_RETRIEVAL_STATES, CATALOG_DIGEST, LEGACY_TO_BETA_MAP,
-  REMOVED_TOOL_NAMES,
+  REMOVED_TOOL_NAMES, findUnsafeCreateUiSpecLeaves,
 } from "./tool-contracts.js";
 import {
   VALID_TOOL_INPUTS, makeValidSuccess, makeValidError, cloneToolResult,
@@ -635,7 +635,7 @@ describe("adversarial probe matrix", () => {
   it("30: duplicate provenance evidenceIds rejected", () => {
     const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as Record<string, unknown>;
     const data = p.data as Record<string, unknown>;
-    (data.provenance as Record<string, unknown>).evidenceIds = ["evidence-corpus-a", "evidence-corpus-a"];
+    (data.provenance as Record<string, unknown>).evidenceIds = ["evidence-1", "evidence-1"];
     assertRejectsAt(p, "data");
   });
 
@@ -904,11 +904,11 @@ describe("R4: evidence-kind authority prerequisites", () => {
     // (operator-authored recipe content). editorial-guidance is NOT in this
     // tool's evidenceKinds, so the lying-lane probe uses the real vocabulary.
     env.evidence.push({
-      id: "evidence-edit-lie", kind: "recipe-system",
+      id: "evidence-9", kind: "recipe-system",
       summary: "Recipe-authored guidance about accent color", basis: "aggregate",
     });
     // provenance.evidenceIds must exactly match envelope evidence IDs
-    env.data.provenance.evidenceIds = ["evidence-corpus-a", "evidence-edit-lie"];
+    env.data.provenance.evidenceIds = ["evidence-1", "evidence-9"];
     return env;
   }
 
@@ -918,11 +918,11 @@ describe("R4: evidence-kind authority prerequisites", () => {
     // corpus-evidence decision backed ONLY by the editorial-grounding evidence
     env.data.citedDecisions = [{
       id: "cd-lie", field: "color-accent", authority: "corpus-evidence",
-      evidenceIds: ["evidence-edit-lie"], readiness: "available", sourceId: SAFE_PUBLIC_REFERENCE,
+      evidenceIds: ["evidence-9"], readiness: "available", sourceId: SAFE_PUBLIC_REFERENCE,
     }];
     // Lying partition: editorial evidence placed in the corpus lane
     env.data.authorityLanes = {
-      corpusEvidence: ["evidence-corpus-a", "evidence-edit-lie"],
+      corpusEvidence: ["evidence-1", "evidence-9"],
       machineRules: [], editorialGuidance: [],
     };
     // colorTokenAuthority is corpus-evidence in the fixture; the valid corpus decision
@@ -930,7 +930,7 @@ describe("R4: evidence-kind authority prerequisites", () => {
     // keep colorTokenAuthority valid and isolate the failure to cd-lie.
     env.data.citedDecisions.unshift({
       id: "cd-color", field: "color-primary", authority: "corpus-evidence",
-      evidenceIds: ["evidence-corpus-a"], readiness: "available", sourceId: SAFE_PUBLIC_REFERENCE,
+      evidenceIds: ["evidence-1"], readiness: "available", sourceId: SAFE_PUBLIC_REFERENCE,
     });
     const r = ToolResultSchemas.create_ui_spec.safeParse(p);
     expect(r.success).toBe(false);
@@ -940,7 +940,7 @@ describe("R4: evidence-kind authority prerequisites", () => {
   });
 
   it("anti-regression: corpus-evidence decision backed by corpus-observation-kind evidence passes", () => {
-    // The valid fixture already models this (cd1 cites evidence-corpus-a, kind corpus-observation).
+    // The valid fixture already models this (cd1 cites evidence-1, kind corpus-observation).
     const p = cloneToolResult(makeValidSuccess("create_ui_spec"));
     const r = ToolResultSchemas.create_ui_spec.safeParse(p);
     expect(r.success).toBe(true);
@@ -955,12 +955,12 @@ describe("R4: evidence-kind authority prerequisites", () => {
     // editorial decision backed ONLY by the corpus-observation evidence
     data.citedDecisions = [{
       id: "cd-bad-edit", field: "color-accent", authority: "editorial",
-      evidenceIds: ["evidence-corpus-a"], readiness: "available",
+      evidenceIds: ["evidence-1"], readiness: "available",
     }];
     // Place the corpus-observation evidence in the editorial lane (lying partition)
     data.authorityLanes = {
       corpusEvidence: [], machineRules: [],
-      editorialGuidance: ["evidence-corpus-a"],
+      editorialGuidance: ["evidence-1"],
     };
     const r = ToolResultSchemas.create_ui_spec.safeParse(p);
     expect(r.success).toBe(false);
@@ -978,12 +978,12 @@ describe("R4: evidence-kind authority prerequisites", () => {
     // corpus-evidence decision backed by corpus-observation evidence (kind is correct)
     data.citedDecisions = [{
       id: "cd-disagree", field: "color-primary", authority: "corpus-evidence",
-      evidenceIds: ["evidence-corpus-a"], readiness: "available", sourceId: SAFE_PUBLIC_REFERENCE,
+      evidenceIds: ["evidence-1"], readiness: "available", sourceId: SAFE_PUBLIC_REFERENCE,
     }];
     // BUT place that corpus-observation evidence in the WRONG (editorial) lane
     data.authorityLanes = {
       corpusEvidence: [], machineRules: [],
-      editorialGuidance: ["evidence-corpus-a"],
+      editorialGuidance: ["evidence-1"],
     };
     const r = ToolResultSchemas.create_ui_spec.safeParse(p);
     expect(r.success).toBe(false);
@@ -1012,18 +1012,18 @@ describe("R4 Part C: authorityConflict warning", () => {
     };
     // Add a recipe-system (editorial-grounding) item alongside the corpus-observation one.
     env.evidence.push({
-      id: "evidence-edit", kind: "recipe-system",
+      id: "evidence-8", kind: "recipe-system",
       summary: "Recipe-authored accent guidance", basis: "aggregate",
     });
-    env.data.provenance.evidenceIds = ["evidence-corpus-a", "evidence-edit"];
+    env.data.provenance.evidenceIds = ["evidence-1", "evidence-8"];
     // Two decisions for the SAME exact field with different authorities.
     env.data.citedDecisions = [
-      { id: "cd-corpus", field: "color-accent", authority: "corpus-evidence", evidenceIds: ["evidence-corpus-a"], readiness: "available", sourceId: SAFE_PUBLIC_REFERENCE },
-      { id: "cd-edit", field: "color-accent", authority: "editorial", evidenceIds: ["evidence-edit"], readiness: "available" },
+      { id: "cd-corpus", field: "color-accent", authority: "corpus-evidence", evidenceIds: ["evidence-1"], readiness: "available", sourceId: SAFE_PUBLIC_REFERENCE },
+      { id: "cd-edit", field: "color-accent", authority: "editorial", evidenceIds: ["evidence-8"], readiness: "available" },
     ];
     env.data.authorityLanes = {
-      corpusEvidence: ["evidence-corpus-a"], machineRules: [],
-      editorialGuidance: ["evidence-edit"],
+      corpusEvidence: ["evidence-1"], machineRules: [],
+      editorialGuidance: ["evidence-8"],
     };
     return p;
   }
@@ -1408,7 +1408,10 @@ describe("C3: shared evidence contract", () => {
     const r = ToolResultSchemas.create_ui_spec.safeParse(p);
     expect(r.success).toBe(false);
     if (!r.success) {
-      expect(r.error.issues.some(i => /corpus-observation evidence "evidence-2".*editorialGuidance/i.test(i.message))).toBe(true);
+      // The message names the POSITION and withholds the value (Task 1b: an
+      // error string that repeats an offending ID is itself a leak channel).
+      expect(r.error.issues.some(i => /corpus-observation evidence ID must not be partitioned into the editorialGuidance lane/i.test(i.message))).toBe(true);
+      expect(r.error.issues.some(i => /"evidence-2"/.test(i.message))).toBe(false);
     }
   });
 
@@ -1600,5 +1603,229 @@ describe("C3: status \"error\" requires empty evidence (error-branch reference-s
     const p = errorEnvelopeWithEvidence([]);
     const r = ToolResultSchemas.create_ui_spec.safeParse(p);
     expect(r.success, r.success ? "" : JSON.stringify(r.error.issues)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 1b: the structural leaf-value gate.
+//
+// Rounds 1-3 of the Task 1 review each found the same leak class on a different
+// axis (missed reference positions, then the unguarded error branch, then the
+// evidence-ID domain having no positive shape rule). The mechanism was always
+// the same: a hand-maintained list of coordinates, so the next added field is
+// unprotected by default.
+//
+// The gate replaces that with ONE walker over every string leaf reachable under
+// `data`, `referenceIds` and `evidence`, classifying each leaf position into
+// exactly three classes and REJECTING anything unclassified. The fail-closed
+// default is the property that ends the class: a field added by a later task is
+// refused until someone classifies it deliberately.
+// ---------------------------------------------------------------------------
+
+describe("Task 1b: structural leaf-value gate (create_ui_spec)", () => {
+  const PRIVATE_PATH = "/Users/olaniyi/corpus/images-private/dribbble-4471.png";
+  const SOURCE_URL = "https://dribbble.com/shots/123-private";
+  const RAW_CORPUS_ID = "ent_9f2a-dribbble-4471";
+
+  const UNSAFE_VALUES: Array<[string, string]> = [
+    ["a private filesystem path", PRIVATE_PATH],
+    ["a source URL", SOURCE_URL],
+    ["a raw corpus entry ID", RAW_CORPUS_ID],
+  ];
+
+  /**
+   * Rename evidence[index].id to `value` in the evidence row AND in every
+   * position the ID propagates to, so the membership rules stay satisfied and
+   * the ONLY thing that can reject the envelope is the value-shape gate.
+   */
+  function renameEvidenceId(p: JsonObject, index: number, value: string): JsonObject {
+    const data = p.data as Record<string, unknown>;
+    const evidence = p.evidence as Array<Record<string, unknown>>;
+    const old = evidence[index]!.id as string;
+    evidence[index]!.id = value;
+    const swap = (ids: readonly string[]) => ids.map(id => (id === old ? value : id));
+    const prov = data.provenance as Record<string, string[]>;
+    prov.evidenceIds = swap(prov.evidenceIds);
+    const lanes = data.authorityLanes as Record<string, string[]>;
+    lanes.corpusEvidence = swap(lanes.corpusEvidence);
+    lanes.machineRules = swap(lanes.machineRules);
+    lanes.editorialGuidance = swap(lanes.editorialGuidance);
+    for (const cd of data.citedDecisions as Array<Record<string, unknown>>)
+      cd.evidenceIds = swap(cd.evidenceIds as string[]);
+    for (const ac of data.acceptanceCriteria as Array<Record<string, unknown>>)
+      ac.evidenceIds = swap(ac.evidenceIds as string[]);
+    return p;
+  }
+
+  function issues(p: JsonObject) {
+    const r = ToolResultSchemas.create_ui_spec.safeParse(p);
+    return r.success ? null : r.error.issues;
+  }
+
+  // --- Class 1: public evidence ID (^evidence-[0-9]+$) --------------------
+
+  it("positive: the producer's evidence-N IDs are accepted in every evidence-ID position", () => {
+    expect(ToolResultSchemas.create_ui_spec.safeParse(makeCreateUiSpecAutomatic()).success).toBe(true);
+    expect(ToolResultSchemas.create_ui_spec.safeParse(makeCreateUiSpecExplicitReferences()).success).toBe(true);
+    expect(ToolResultSchemas.create_ui_spec.safeParse(makeCreateUiSpecZeroResultFallback()).success).toBe(true);
+  });
+
+  for (const [label, value] of UNSAFE_VALUES) {
+    it(`negative: rejects ${label} as evidence[].id (and its four propagation positions)`, () => {
+      const found = issues(renameEvidenceId(makeCreateUiSpecAutomatic(), 0, value));
+      expect(found).not.toBeNull();
+      expect(found!.some(i => /must be a response-scoped public evidence ID/.test(i.message))).toBe(true);
+      // The message must never reproduce the offending value.
+      expect(found!.some(i => i.message.includes(value))).toBe(false);
+    });
+  }
+
+  it("negative: rejects a safe public reference ID in an evidence-ID position (domains stay separate)", () => {
+    const found = issues(renameEvidenceId(makeCreateUiSpecAutomatic(), 0, SAFE_PUBLIC_REFERENCE));
+    expect(found).not.toBeNull();
+    expect(found!.some(i => /must be a response-scoped public evidence ID/.test(i.message))).toBe(true);
+  });
+
+  it("negative: rejects a private path in data.provenance.evidenceIds alone", () => {
+    const p = makeCreateUiSpecAutomatic();
+    ((p.data as Record<string, unknown>).provenance as Record<string, string[]>).evidenceIds = [PRIVATE_PATH];
+    const found = issues(p);
+    expect(found).not.toBeNull();
+    expect(found!.some(i => /data\.provenance\.evidenceIds\[\] must be a response-scoped public evidence ID/.test(i.message))).toBe(true);
+    expect(found!.some(i => i.message.includes(PRIVATE_PATH))).toBe(false);
+  });
+
+  it("negative: rejects a private path in each remaining evidence-ID position, without echoing it", () => {
+    const positions: Array<[string, (data: Record<string, unknown>) => void]> = [
+      ["data.authorityLanes.corpusEvidence[]", d => { (d.authorityLanes as Record<string, string[]>).corpusEvidence = [PRIVATE_PATH]; }],
+      ["data.authorityLanes.machineRules[]", d => { (d.authorityLanes as Record<string, string[]>).machineRules = [PRIVATE_PATH]; }],
+      ["data.authorityLanes.editorialGuidance[]", d => { (d.authorityLanes as Record<string, string[]>).editorialGuidance = [PRIVATE_PATH]; }],
+      ["data.citedDecisions[].evidenceIds[]", d => { (d.citedDecisions as Array<Record<string, unknown>>)[0]!.evidenceIds = [PRIVATE_PATH]; }],
+      ["data.acceptanceCriteria[].evidenceIds[]", d => { (d.acceptanceCriteria as Array<Record<string, unknown>>)[0]!.evidenceIds = [PRIVATE_PATH]; }],
+    ];
+    for (const [position, mutate] of positions) {
+      const p = makeCreateUiSpecAutomatic();
+      mutate(p.data as Record<string, unknown>);
+      const found = issues(p);
+      expect(found, position).not.toBeNull();
+      expect(found!.some(i => i.message.includes(`${position} must be a response-scoped public evidence ID`)), position).toBe(true);
+      expect(found!.some(i => i.message.includes(PRIVATE_PATH)), position).toBe(false);
+    }
+  });
+
+  // --- Class 2: safe public reference (^ref-[0-9a-f]{64}$) ----------------
+
+  it("negative: rejects a private path in every reference position, without echoing it", () => {
+    const positions: Array<[string, (p: JsonObject) => void]> = [
+      ["referenceIds[]", p => { p.referenceIds = [PRIVATE_PATH]; }],
+      ["data.citedReferences[]", p => { ((p.data as Record<string, unknown>).citedReferences as string[])[0] = PRIVATE_PATH; }],
+      ["data.provenance.sourceReferences[]", p => { ((p.data as Record<string, unknown>).provenance as Record<string, string[]>).sourceReferences = [PRIVATE_PATH]; }],
+      ["evidence[].referenceId", p => { (p.evidence as Array<Record<string, unknown>>)[1]!.referenceId = PRIVATE_PATH; }],
+      ["data.citedDecisions[].sourceId", p => { (((p.data as Record<string, unknown>).citedDecisions) as Array<Record<string, unknown>>)[0]!.sourceId = PRIVATE_PATH; }],
+      ["data.techniques[].sourceIds[]", p => { ((p.data as Record<string, unknown>).techniques as Array<Record<string, unknown>>).push({ text: "t", sourceIds: [PRIVATE_PATH] }); }],
+      ["data.antiPatterns[].sourceIds[]", p => { ((p.data as Record<string, unknown>).antiPatterns as Array<Record<string, unknown>>).push({ text: "a", sourceIds: [PRIVATE_PATH] }); }],
+      ["data.componentInventory[].sourceId", p => { ((p.data as Record<string, unknown>).componentInventory as Array<Record<string, unknown>>).push({ name: "n", pattern: "p", sourceId: PRIVATE_PATH }); }],
+    ];
+    for (const [position, mutate] of positions) {
+      const p = makeCreateUiSpecExplicitReferences();
+      mutate(p);
+      const found = issues(p);
+      expect(found, position).not.toBeNull();
+      expect(found!.some(i => i.message.includes(`${position} must be a safe public reference ID`)), position).toBe(true);
+      expect(found!.some(i => i.message.includes(PRIVATE_PATH)), position).toBe(false);
+    }
+  });
+
+  it("negative: rejects a public evidence ID in a reference position (domains stay separate)", () => {
+    const p = makeCreateUiSpecExplicitReferences();
+    (p.data as Record<string, unknown>).citedReferences = ["evidence-1"];
+    const found = issues(p);
+    expect(found).not.toBeNull();
+    expect(found!.some(i => /data\.citedReferences\[\]/.test(i.message))).toBe(true);
+  });
+
+  // --- Class 3: free text, only at allowlisted positions ------------------
+
+  it("positive: arbitrary text is accepted at allowlisted free-text positions", () => {
+    const p = makeCreateUiSpecAutomatic();
+    const data = p.data as Record<string, unknown>;
+    data.designDirection = "Slashes / colons: and https:// prose are fine in the brief echo";
+    (data.context as Record<string, unknown>).productContext = "A dashboard for /admin with C:\\legacy paths";
+    data.interactions = ["Hover reveals a tooltip — arbitrary prose"];
+    expect(ToolResultSchemas.create_ui_spec.safeParse(p).success).toBe(true);
+  });
+
+  // --- The whole point: fail closed on an unclassified position -----------
+
+  it("FAIL-CLOSED: a string leaf at an unclassified path is rejected", () => {
+    const found = findUnsafeCreateUiSpecLeaves({
+      data: { specVersion: "1.0", futureFieldTask2Adds: PRIVATE_PATH },
+      referenceIds: [],
+      evidence: [],
+    });
+    expect(found.some(v => v.position === "data.futureFieldTask2Adds")).toBe(true);
+    expect(found.some(v => /not a classified/.test(v.message))).toBe(true);
+    expect(found.some(v => v.message.includes(PRIVATE_PATH))).toBe(false);
+  });
+
+  it("FAIL-CLOSED: an unclassified nested string leaf is rejected", () => {
+    const found = findUnsafeCreateUiSpecLeaves({
+      data: { provenance: { newProvenanceField: SOURCE_URL } },
+      referenceIds: [],
+      evidence: [{ newEvidenceField: RAW_CORPUS_ID }],
+    });
+    expect(found.map(v => v.position)).toEqual(
+      expect.arrayContaining(["data.provenance.newProvenanceField", "evidence[].newEvidenceField"]),
+    );
+  });
+
+  it("FAIL-CLOSED: an unclassified leaf inside an array of objects is rejected", () => {
+    const found = findUnsafeCreateUiSpecLeaves({
+      data: { citedDecisions: [{ id: "cd1", newDecisionField: PRIVATE_PATH }] },
+      referenceIds: [],
+      evidence: [],
+    });
+    expect(found.some(v => v.position === "data.citedDecisions[].newDecisionField")).toBe(true);
+  });
+
+  it("the gate is wired into the envelope schema, not merely exported", () => {
+    // Every violation the gate finds must surface as a parse issue.
+    const p = renameEvidenceId(makeCreateUiSpecAutomatic(), 0, PRIVATE_PATH);
+    const found = findUnsafeCreateUiSpecLeaves({ data: p.data, referenceIds: p.referenceIds, evidence: p.evidence });
+    expect(found.length).toBeGreaterThan(0);
+    const parsed = issues(p);
+    expect(parsed).not.toBeNull();
+    for (const v of found) expect(parsed!.some(i => i.message === v.message)).toBe(true);
+  });
+
+  it("the gate runs on the error branch too (no branch condition can skip it)", () => {
+    // The error branch is closed by construction (data null, referenceIds [],
+    // evidence []), so the gate finds nothing — but it still RUNS: an error
+    // envelope carrying data leaves is reported by the gate as well.
+    const found = findUnsafeCreateUiSpecLeaves({
+      data: { provenance: { evidenceIds: [PRIVATE_PATH] } },
+      referenceIds: [],
+      evidence: [],
+    });
+    expect(found.some(v => v.position === "data.provenance.evidenceIds[]")).toBe(true);
+    const p = makeValidError("create_ui_spec")!;
+    expect(ToolResultSchemas.create_ui_spec.safeParse(p).success).toBe(true);
+  });
+
+  it("non-string leaves (numbers, booleans, null) are not flagged", () => {
+    expect(findUnsafeCreateUiSpecLeaves({
+      data: { motionGuidance: { notes: [], evidenceUnavailable: true }, colorTokens: null },
+      referenceIds: [],
+      evidence: [],
+    })).toEqual([]);
+  });
+
+  it("anti-regression: the eleven other tools' fixtures still validate", () => {
+    for (const desc of TOOL_DESCRIPTORS) {
+      if (desc.name === "create_ui_spec") continue;
+      const schema = (ToolResultSchemas as Record<string, z.ZodType>)[desc.name]!;
+      const ok = schema.safeParse(cloneToolResult(makeValidSuccess(desc.name as never)));
+      expect(ok.success, desc.name).toBe(true);
+    }
   });
 });

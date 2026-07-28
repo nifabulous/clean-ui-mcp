@@ -199,10 +199,15 @@ export function makeValidSuccess(tool: ToolName): JsonObject {
       return env;
     }
 
-    // NOTE: this envelope stays LEGACY-SHAPED on purpose (a non-response-scoped
-    // evidence id that carries a referenceId), so it doubles as the regression
-    // proof that pre-C3 evidence rows still validate. Its public reference uses
-    // the safe `ref-<sha256>` shape because create_ui_spec now requires it.
+    // NOTE: this envelope is the CORPUS-GROUNDED shape (real color/typography
+    // tokens under corpus-evidence authority, sourceIds on techniques and on the
+    // citedDecision) — the complement of the three deterministic-fallback
+    // envelopes below. Its evidence id is response-scoped (`evidence-1`) and its
+    // public reference is the safe `ref-<sha256>` digest because Task 1b's
+    // structural leaf gate requires both shapes for this tool. The
+    // regression proof that pre-C3 (non-response-scoped) evidence rows still
+    // validate against the SHARED Evidence schema now lives on the
+    // plan_ui_direction and critique_ui fixtures, which are not gated.
     case "create_ui_spec": {
       const env = successEnvelope(tool, {
         specVersion: "1.0",
@@ -225,21 +230,21 @@ export function makeValidSuccess(tool: ToolName): JsonObject {
         acceptanceCriteria: [{
           id: "ac1", subject: "contrast", assertion: "meets-contrast",
           expectedOutcome: "4.5:1", verifier: "axe", priority: "must",
-          evidenceIds: ["evidence-corpus-a"],
+          evidenceIds: ["evidence-1"],
         }],
         citedReferences: [SAFE_PUBLIC_REFERENCE],
         citedDecisions: [{
           id: "cd1", field: "color-primary", authority: "corpus-evidence",
-          evidenceIds: ["evidence-corpus-a"], readiness: "available", sourceId: SAFE_PUBLIC_REFERENCE,
+          evidenceIds: ["evidence-1"], readiness: "available", sourceId: SAFE_PUBLIC_REFERENCE,
         }],
-        authorityLanes: { corpusEvidence: ["evidence-corpus-a"], machineRules: [], editorialGuidance: [] },
+        authorityLanes: { corpusEvidence: ["evidence-1"], machineRules: [], editorialGuidance: [] },
         provenance: {
           generatedAt: "2026-07-15T00:00:00Z", toolVersion: "0.2.0",
-          sourceReferences: [SAFE_PUBLIC_REFERENCE], evidenceIds: ["evidence-corpus-a"],
+          sourceReferences: [SAFE_PUBLIC_REFERENCE], evidenceIds: ["evidence-1"],
         },
       }, [SAFE_PUBLIC_REFERENCE], 1);
       (env as JsonObject).evidence = [
-        { id: "evidence-corpus-a", referenceId: SAFE_PUBLIC_REFERENCE, kind: "corpus-observation", summary: "Uses a 12-column grid.", basis: "visible" },
+        { id: "evidence-1", kind: "corpus-observation", summary: "Uses a 12-column grid.", basis: "visible" },
       ];
       (env as JsonObject).warnings = [{ code: "motionEvidenceUnavailable", message: "No DOM motion evidence available" }];
       return env;

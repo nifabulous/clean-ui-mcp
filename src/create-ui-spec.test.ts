@@ -35,6 +35,9 @@ import { canonicalJsonStringify, sha256Hex } from "./readiness/contracts.js";
 import { createUiSpec, buildFallbackCandidate, RECIPE_EVIDENCE_ID, type CreateUiSpecDependencies } from "./create-ui-spec.js";
 import recipe from "./c3/fallback-recipe-v1.json" with { type: "json" };
 import type { SanitizedEvidence } from "./create-ui-spec-contracts.js";
+import type { DesignArtifactEnvelope } from "./create-ui-spec-contracts.js";
+import { ToolResultSchemas, findUnsafeCreateUiSpecLeaves } from "./tool-contracts.js";
+import type { UiSpecT } from "./tool-contracts.js";
 
 // ---------------------------------------------------------------------------
 // Frozen recipe identity (mirrors fallback-recipe-v1.test.ts).
@@ -841,4 +844,95 @@ describe("create-ui-spec producer — honest zero-match retrieval state (no fabr
     const env = await createUiSpec(validInput(), deps([], []));
     expect(() => parseDesignArtifactEnvelope(env)).not.toThrow();
   });
+});
+
+// ---------------------------------------------------------------------------
+// Task 1b: the MCP structural leaf gate must accept the REAL producer's output.
+//
+// The producer is the definition of correct: if the gate rejects genuine
+// createUiSpec() output, the gate is wrong. These tests run the real producer
+// (no hand-written envelope) and check its output twice:
+//
+//   1. directly against the gate — every string leaf of the real spec must be a
+//      CLASSIFIED position carrying a value of that position's shape; and
+//   2. through the full MCP envelope schema.
+//
+// The evidence-row projection below is TEST-LOCAL on purpose. The core envelope
+// carries `publicEvidenceIds` but not the sanitized rows, and the production
+// projection is Task 2's deliverable; this reconstructs the rows from the spec's
+// own authority lanes exactly as the producer partitions them
+// (editorialGuidance = [recipe, ...publicReferences], corpusEvidence =
+// corpus observations) so the gate sees real IDs in real positions.
+// ---------------------------------------------------------------------------
+
+describe("create-ui-spec producer — MCP leaf gate accepts real producer output", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { vi.clearAllMocks(); });
+
+  function projectEvidenceRows(spec: UiSpecT): Array<Record<string, unknown>> {
+    const corpusLane = new Set(spec.authorityLanes.corpusEvidence);
+    const citedReferences = [...spec.citedReferences];
+    return spec.provenance.evidenceIds.map((id) => {
+      if (id === RECIPE_EVIDENCE_ID)
+        return { id, kind: "recipe-system", basis: "aggregate", summary: "Deterministic recipe row." };
+      if (corpusLane.has(id))
+        return { id, kind: "corpus-observation", basis: "visible", summary: "Sanitized corpus observation." };
+      return {
+        id, kind: "public-reference", basis: "user-supplied",
+        summary: "User-supplied public reference.",
+        referenceId: citedReferences.shift(),
+      };
+    });
+  }
+
+  function projectMcpEnvelope(env: DesignArtifactEnvelope): Record<string, unknown> {
+    const spec = env.spec;
+    return {
+      tool: "create_ui_spec",
+      schemaVersion: "1.0",
+      status: "ok",
+      summary: "Design spec produced.",
+      data: spec,
+      referenceIds: [...spec.citedReferences],
+      // resultCount is the ARTIFACT count (one spec), not the retrieval match
+      // count the core records — the adapter concern Task 3 owns.
+      retrieval: { ...env.retrieval, resultCount: 1 },
+      warnings: env.warnings.map((w) => ({ code: w.code, message: w.message })),
+      evidence: projectEvidenceRows(spec),
+    };
+  }
+
+  const CASES: Array<[string, () => Promise<DesignArtifactEnvelope>]> = [
+    ["automatic retrieval with matches", async () => {
+      const corpus = [entry("internal-1", "product-A"), entry("internal-2", "product-B")];
+      return createUiSpec(validInput(), deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))));
+    }],
+    ["zero-match structured fallback", async () => createUiSpec(validInput(), deps([], []))],
+    ["explicit public references", async () => {
+      const e = entry("internal-1", "product-A");
+      return createUiSpec(
+        validInput({ referenceIds: ["opaque-token-1"] }),
+        deps([e], [], (t: string) => (t === "opaque-token-1" ? "internal-1" : undefined)),
+      );
+    }],
+  ];
+
+  for (const [label, produce] of CASES) {
+    it(`gate finds no unclassified or unsafe leaf in real output: ${label}`, async () => {
+      const env = parseDesignArtifactEnvelope(await produce());
+      const evidence = projectEvidenceRows(env.spec);
+      const found = findUnsafeCreateUiSpecLeaves({
+        data: env.spec,
+        referenceIds: [...env.spec.citedReferences],
+        evidence,
+      });
+      expect(found.map((v) => `${v.position}: ${v.message}`)).toEqual([]);
+    });
+
+    it(`the full MCP envelope built from real output validates: ${label}`, async () => {
+      const env = parseDesignArtifactEnvelope(await produce());
+      const r = ToolResultSchemas.create_ui_spec.safeParse(projectMcpEnvelope(env));
+      expect(r.success, r.success ? "" : JSON.stringify(r.error.issues, null, 2)).toBe(true);
+    });
+  }
 });

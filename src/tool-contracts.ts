@@ -125,6 +125,14 @@ export const EvidenceBasis = z.enum([
  * This pattern separates the two ID domains mechanically. A value matching it
  * is a PUBLIC EVIDENCE ID and may never appear as a `referenceId` (which is
  * always a safe public reference), and vice versa.
+ *
+ * BOTH directions are enforced, in two places. The shared `Evidence` schema
+ * below refuses this shape in `referenceId` for every evidence tool. The
+ * positive direction — an evidence-ID position must POSITIVELY match this
+ * pattern, so a filesystem path, a source URL or a raw corpus ID cannot sit
+ * there — is enforced for create_ui_spec by the structural leaf-value gate
+ * (`findUnsafeCreateUiSpecLeaves`), which applies it at every evidence-ID
+ * position at once rather than field by field.
  */
 const RESPONSE_SCOPED_EVIDENCE_ID = /^evidence-[0-9]+$/;
 
@@ -188,7 +196,7 @@ const EvidenceArray = z.array(Evidence).superRefine((arr, ctx) => {
   const seen = new Set<string>();
   arr.forEach((e, i) => {
     if (seen.has(e.id))
-      ctx.addIssue({ code: "custom", message: `duplicate evidence id "${e.id}"`, path: [i, "id"] });
+      ctx.addIssue({ code: "custom", message: `duplicate evidence id at evidence[${i}].id (value withheld)`, path: [i, "id"] });
     seen.add(e.id);
   });
 });
@@ -717,7 +725,7 @@ export const UiSpec = z.object({
   const refSet = new Set(val.citedReferences);
   for (const cd of val.citedDecisions) {
     if (cd.sourceId !== undefined && !refSet.has(cd.sourceId))
-      ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" sourceId "${cd.sourceId}" not in citedReferences`, path: ["citedDecisions"] });
+      ctx.addIssue({ code: "custom", message: `citedDecisions[].sourceId not in citedReferences (value withheld)`, path: ["citedDecisions"] });
   }
 });
 
@@ -866,6 +874,241 @@ const EDITORIAL_AUTHORITY_KINDS: readonly string[] = ["editorial-guidance", "rec
  */
 const SAFE_PUBLIC_REFERENCE_ID = /^ref-[0-9a-f]{64}$/;
 
+// ===========================================================================
+// The create_ui_spec structural leaf-value gate
+// ===========================================================================
+//
+// WHY THIS EXISTS (and why it is not another per-position check).
+//
+// Three review rounds on the Task 1 migration each found the same leak class on
+// a different axis: round 1 found four of eight reference positions guarded,
+// round 2 found one of two branches guarded, round 3 found one of two ID domains
+// guarded. Every instance had the same mechanism — a MEMBERSHIP rule written
+// where a SHAPE rule was needed, in a hand-maintained list of coordinates over
+// {reference domain, evidence domain} x {shape, transitive membership} x {field}.
+// A field added by a later task is unprotected by default in that design.
+//
+// This gate inverts the default. It walks EVERY string leaf reachable under
+// `data`, `referenceIds` and `evidence`, classifies each leaf by its normalized
+// POSITION, and rejects anything it does not recognize. Adding a field to
+// `UiSpec` without classifying its position here fails the suite — which is the
+// property none of the three per-position fixes had.
+//
+// Three classes, and only three:
+//   * public evidence ID    — must match RESPONSE_SCOPED_EVIDENCE_ID
+//   * safe public reference — must match SAFE_PUBLIC_REFERENCE_ID
+//   * free text             — arbitrary, and ONLY at an allowlisted position
+//
+// The two ID domains stay separate BY CONSTRUCTION: each position demands its
+// own shape, so an `evidence-N` in a reference position and a `ref-<sha256>` in
+// an evidence-ID position are both rejected. The domains are never unioned.
+//
+// SCOPED TO create_ui_spec. The legacy retrieval tools publish real corpus entry
+// IDs in `referenceIds` and non-response-scoped evidence IDs, so the gate is
+// attached to this one descriptor (see `gateResultLeaves`), never to
+// `makeEnvelope` for all tools.
+
+/** A normalized leaf position: array indices collapse to `[]`. */
+type LeafPosition = string;
+
+/**
+ * Positions holding a PUBLIC EVIDENCE ID. Every one is also membership-checked
+ * against the envelope's `evidence[].id` set elsewhere; membership guarantees
+ * the positions agree, this set guarantees the agreed value is safe.
+ */
+const CREATE_UI_SPEC_EVIDENCE_ID_LEAVES: ReadonlySet<LeafPosition> = new Set<LeafPosition>([
+  "evidence[].id",
+  "data.provenance.evidenceIds[]",
+  "data.authorityLanes.corpusEvidence[]",
+  "data.authorityLanes.machineRules[]",
+  "data.authorityLanes.editorialGuidance[]",
+  "data.citedDecisions[].evidenceIds[]",
+  "data.acceptanceCriteria[].evidenceIds[]",
+]);
+
+/**
+ * Positions holding a SAFE PUBLIC REFERENCE — the core's opaque
+ * `ref-${sha256Hex(...)}` digest (src/create-ui-spec.ts). These are the eight
+ * reference-carrying positions enumerated by the round-2 review.
+ */
+const CREATE_UI_SPEC_SAFE_REFERENCE_LEAVES: ReadonlySet<LeafPosition> = new Set<LeafPosition>([
+  "referenceIds[]",
+  "data.citedReferences[]",
+  "data.provenance.sourceReferences[]",
+  "evidence[].referenceId",
+  "data.citedDecisions[].sourceId",
+  "data.techniques[].sourceIds[]",
+  "data.antiPatterns[].sourceIds[]",
+  "data.componentInventory[].sourceId",
+]);
+
+/**
+ * The FREE-TEXT ALLOWLIST: the only positions where an arbitrary string is
+ * permitted. Each entry carries the reason arbitrary text is safe there, so a
+ * reviewer can audit the whole free-text surface in one place. Nothing outside
+ * this record (and the two ID sets above) may hold a string at all.
+ *
+ * Two recurring reasons, stated per entry rather than by group so an added entry
+ * cannot inherit a justification it does not deserve:
+ *   (a) CLOSED VOCABULARY — the Zod schema pins the value to a literal or enum,
+ *       so "arbitrary" is a formality; the gate simply does not re-encode it.
+ *   (b) PROSE — recipe-owned (operator-authored) or requester-owned text that is
+ *       descriptive, carries no identity, and is not a corpus projection. The
+ *       core bounds every one of these at the producer
+ *       (create-ui-spec-contracts.ts); the corpus-derived path additionally
+ *       passes SanitizedEvidence, which forbids private identity fields.
+ */
+const CREATE_UI_SPEC_FREE_TEXT_LEAVES: Readonly<Record<LeafPosition, string>> = {
+  // --- closed vocabularies (reason a) ---
+  "data.specVersion": "closed z.literal(\"1.0\")",
+  "data.context.platform": "closed enum web|mobile|tablet",
+  "data.context.designSystem.status": "closed enum none|identified",
+  "data.colorTokenAuthority": "closed TokenAuthority enum",
+  "data.typographyTokenAuthority": "closed TokenAuthority enum",
+  "data.acceptanceCriteria[].assertion": "closed AcceptanceAssertion enum",
+  "data.acceptanceCriteria[].verifier": "closed discriminator literal",
+  "data.acceptanceCriteria[].priority": "closed must|should enum",
+  "data.citedDecisions[].authority": "closed authority enum",
+  "data.citedDecisions[].readiness": "closed available|proposed|unavailable enum",
+  "evidence[].kind": "closed EvidenceKind enum",
+  "evidence[].basis": "closed EvidenceBasis enum",
+  "data.provenance.generatedAt": "z.string().datetime() — a timestamp, no identity",
+  // --- requester-owned prose, echoed back to its own author (reason b) ---
+  "data.context.productContext": "the caller's own brief, echoed back to the caller; never corpus-derived",
+  "data.context.implementationFramework": "caller-supplied framework name",
+  "data.context.designSystem.registry": "caller-supplied design-system registry name",
+  "data.context.designSystem.library": "caller-supplied design-system library name",
+  "data.context.constraints[]": "caller-supplied constraint prose",
+  "data.designDirection": "under the deterministic recipe this restates the caller's own brief",
+  // --- recipe/operator-owned prose: descriptive, carries no identity (reason b) ---
+  "data.rejectedDefaults[]": "recipe-owned prose naming a rejected default",
+  "data.layoutRegions[].name": "recipe-owned region label",
+  "data.layoutRegions[].type": "recipe-owned region type label",
+  "data.layoutRegions[].components[]": "recipe-owned component label",
+  "data.layoutRegions[].responsive[]": "recipe-owned responsive-behavior prose",
+  "data.responsiveBehavior[]": "recipe-owned responsive-behavior prose",
+  "data.componentInventory[].name": "recipe-owned component label",
+  "data.componentInventory[].pattern": "recipe-owned pattern label",
+  "data.colorTokens.primary": "a color value, not an identity",
+  "data.colorTokens.surface": "a color value, not an identity",
+  "data.colorTokens.ink": "a color value, not an identity",
+  "data.colorTokens.muted": "a color value, not an identity",
+  "data.colorTokens.accent": "a color value, not an identity",
+  "data.typographyTokens.heading": "a font-family name, not an identity",
+  "data.typographyTokens.body": "a font-family name, not an identity",
+  "data.typographyTokens.mono": "a font-family name, not an identity",
+  "data.interactions[]": "recipe-owned interaction prose",
+  "data.motionGuidance.notes[]": "recipe-owned motion prose",
+  "data.accessibilityConstraints[]": "recipe-owned accessibility prose",
+  "data.contentVoiceGuidance": "recipe-owned voice prose",
+  "data.techniques[].text": "recipe-owned technique prose (its citation lives in sourceIds)",
+  "data.antiPatterns[].text": "recipe-owned anti-pattern prose (its citation lives in sourceIds)",
+  "data.frameworkNotes": "recipe-owned framework prose",
+  "data.unavailableDecisions[].field": "names a UiSpec field, response-local",
+  "data.unavailableDecisions[].reason": "recipe-owned reason prose",
+  "data.acceptanceCriteria[].id": "response-local criterion label from the recipe",
+  "data.acceptanceCriteria[].subject": "recipe-owned subject label",
+  "data.acceptanceCriteria[].expectedOutcome": "recipe-owned expectation prose",
+  "data.acceptanceCriteria[].selector": "recipe-owned DOM selector for the playwright verifier",
+  "data.acceptanceCriteria[].command": "recipe-owned verification command for the static-analysis verifier; operator-authored, never a corpus projection",
+  "data.acceptanceCriteria[].manualSteps[]": "recipe-owned manual verification steps",
+  "data.citedDecisions[].id": "response-local decision label from the recipe",
+  "data.citedDecisions[].field": "names a UiSpec field, response-local",
+  "data.provenance.toolVersion": "the recipe version string (e.g. c3-fallback-v1)",
+  "evidence[].summary": "SanitizedEvidence summary — bounded at 500 chars by the core and forbidden from carrying private identity fields",
+};
+
+/** The three classes. There is no fourth, and there is no default. */
+type CreateUiSpecLeafClass = "public-evidence-id" | "safe-public-reference" | "free-text";
+
+function classifyCreateUiSpecLeaf(position: LeafPosition): CreateUiSpecLeafClass | undefined {
+  if (CREATE_UI_SPEC_EVIDENCE_ID_LEAVES.has(position)) return "public-evidence-id";
+  if (CREATE_UI_SPEC_SAFE_REFERENCE_LEAVES.has(position)) return "safe-public-reference";
+  if (Object.prototype.hasOwnProperty.call(CREATE_UI_SPEC_FREE_TEXT_LEAVES, position)) return "free-text";
+  return undefined;
+}
+
+/**
+ * One rejected leaf. `message` NEVER reproduces the offending value: the
+ * envelope is refused, so an error string that repeated a private path would be
+ * the only channel through which that path still reached the caller.
+ */
+export interface UnsafeResultLeaf {
+  /** The normalized position (array indices as `[]`) — stable across indices. */
+  readonly position: LeafPosition;
+  /** The concrete Zod issue path, with real indices. */
+  readonly path: PropertyKey[];
+  /** Position-naming, value-free message. */
+  readonly message: string;
+}
+
+/**
+ * Depth beyond which the walker refuses rather than recurses. `UiSpec` is a
+ * closed, finite-depth object (its deepest string leaf is four keys down), so
+ * exceeding this means the value is not the shape the gate was written for —
+ * and the fail-closed answer is to reject, not to stop looking.
+ */
+const MAX_LEAF_DEPTH = 12;
+
+/**
+ * The gate. Walks every string leaf under `data`, `referenceIds` and `evidence`
+ * and returns one entry per leaf that is not provably safe.
+ *
+ * Pure: it takes the three roots and returns violations, so it can be exercised
+ * directly against a SIMULATED future field (which `.strict()` makes
+ * unreachable through the schema) as well as through the envelope.
+ */
+export function findUnsafeCreateUiSpecLeaves(roots: {
+  data: unknown;
+  referenceIds: unknown;
+  evidence: unknown;
+}): UnsafeResultLeaf[] {
+  const found: UnsafeResultLeaf[] = [];
+
+  const checkString = (value: string, position: LeafPosition, path: PropertyKey[]): void => {
+    switch (classifyCreateUiSpecLeaf(position)) {
+      case "public-evidence-id":
+        if (!RESPONSE_SCOPED_EVIDENCE_ID.test(value))
+          found.push({ position, path, message: `${position} must be a response-scoped public evidence ID (evidence-N); the offending value is withheld from this message` });
+        return;
+      case "safe-public-reference":
+        if (!SAFE_PUBLIC_REFERENCE_ID.test(value))
+          found.push({ position, path, message: `${position} must be a safe public reference ID (ref-<sha256>); the offending value is withheld from this message` });
+        return;
+      case "free-text":
+        return;
+      default:
+        // FAIL CLOSED. A string at a position nobody classified is refused, so a
+        // field added by a later task cannot publish anything until its position
+        // is deliberately declared above.
+        found.push({ position, path, message: `${position} is not a classified create_ui_spec output position — declare it as a public evidence ID, a safe public reference, or explicit free text before it can be published; the offending value is withheld from this message` });
+    }
+  };
+
+  const visit = (value: unknown, position: LeafPosition, path: PropertyKey[], depth: number): void => {
+    if (depth > MAX_LEAF_DEPTH) {
+      found.push({ position, path, message: `${position} exceeds the maximum inspected depth for create_ui_spec output` });
+      return;
+    }
+    if (typeof value === "string") { checkString(value, position, path); return; }
+    if (Array.isArray(value)) {
+      value.forEach((item, i) => visit(item, `${position}[]`, [...path, i], depth + 1));
+      return;
+    }
+    if (value !== null && typeof value === "object") {
+      for (const [key, child] of Object.entries(value as Record<string, unknown>))
+        visit(child, `${position}.${key}`, [...path, key], depth + 1);
+      return;
+    }
+    // numbers, booleans, null and undefined carry no text and cannot leak.
+  };
+
+  visit(roots.data, "data", ["data"], 0);
+  visit(roots.referenceIds, "referenceIds", ["referenceIds"], 0);
+  visit(roots.evidence, "evidence", ["evidence"], 0);
+  return found;
+}
+
 /**
  * Prose rows for the §5.5 per-tool contract reference. These mirror the
  * authoritative human wording in the design spec; the mechanical renderer in
@@ -938,6 +1181,16 @@ export interface ToolDescriptor {
   refineData?: (data: unknown, ctx: z.RefinementCtx) => void;
   /** Envelope-level refinement — has access to warnings, evidence, referenceIds. */
   refineEnvelope?: (val: { data: unknown; warnings: unknown[]; referenceIds: string[]; evidence?: unknown[]; retrievalInfo?: { mode: string; fallbackUsed: boolean } }, ctx: z.RefinementCtx) => void;
+  /**
+   * Structural leaf-value gate over every string leaf under `data`,
+   * `referenceIds` and `evidence`. Unlike `refineData`/`refineEnvelope` (rules
+   * 12-13, which only run on the success branch) this is invoked on EVERY
+   * branch, before any status branch is entered — no branch condition can skip
+   * it. Returns one entry per unsafe or UNCLASSIFIED leaf; makeEnvelope turns
+   * each into an issue verbatim, so the gate owns the message wording and can
+   * guarantee no offending value is echoed.
+   */
+  readonly gateResultLeaves?: (roots: { data: unknown; referenceIds: unknown; evidence: unknown }) => readonly UnsafeResultLeaf[];
 }
 
 export const TOOL_DESCRIPTORS = [
@@ -1252,6 +1505,12 @@ export const TOOL_DESCRIPTORS = [
       referenceIds: "`citedReferences` only — safe public reference IDs. Response-scoped evidence IDs (`evidence-N`) are a separate domain and never appear here",
     },
     extractPrimaryIds: () => [],
+    // The structural leaf-value gate: every string leaf under data/referenceIds/
+    // evidence must be a classified position, and must satisfy that position's
+    // shape. Attached here (not in makeEnvelope) because the legacy retrieval
+    // tools legitimately publish raw corpus entry IDs and non-response-scoped
+    // evidence IDs.
+    gateResultLeaves: findUnsafeCreateUiSpecLeaves,
     // ONLY citedReferences. Evidence IDs live in a separate domain (provenance,
     // authority lanes, evidence rows) and must never become referenceIds.
     extractReferenceIds: (d) => (d as { citedReferences?: string[] })?.citedReferences ?? [],
@@ -1300,6 +1559,15 @@ export const TOOL_DESCRIPTORS = [
       // evidence outright rather than by re-running this check.) The offending
       // value is NOT echoed into the issue message: the message would itself
       // become output carrying the path.
+      //
+      // TASK 1b: these three per-position checks are now ALSO covered, on every
+      // branch and in all eight reference positions, by the structural leaf gate
+      // (`findUnsafeCreateUiSpecLeaves`, rule 0 in makeEnvelope). They are kept
+      // deliberately, not left by oversight: the gate reports "position X must be
+      // a safe public reference", while these distinguish the two ID domains in
+      // the message ("...is a response-scoped evidence ID, not a public reference
+      // ID"), which is diagnostically different information. Removing them would
+      // need an equivalence proof the gate cannot give.
       citedRefs.forEach((ref, i) => {
         if (RESPONSE_SCOPED_EVIDENCE_ID.test(ref))
           ctx.addIssue({ code: "custom", message: `citedReference "${ref}" is a response-scoped evidence ID, not a public reference ID`, path: ["data", "citedReferences", i] });
@@ -1332,7 +1600,7 @@ export const TOOL_DESCRIPTORS = [
       validateEvidenceReferences(knownEvidence, cdRefs, ctx);
       for (const cd of data?.citedDecisions ?? []) {
         if (cd.sourceId !== undefined && !citedSet.has(cd.sourceId))
-          ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" sourceId "${cd.sourceId}" not in citedReferences`, path: ["data", "citedDecisions"] });
+          ctx.addIssue({ code: "custom", message: `citedDecisions[].sourceId not in citedReferences (value withheld)`, path: ["data", "citedDecisions"] });
       }
       // Check authorityLanes evidence IDs (membership + dedup)
       const lanes = data?.authorityLanes;
@@ -1370,7 +1638,7 @@ export const TOOL_DESCRIPTORS = [
           // inconsistent partition).
           for (const eid of evIds) {
             if (evidenceKindById.get(eid) === "corpus-observation" && !corpusLane.has(eid))
-              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" references corpus-observation evidence "${eid}" but it is not in the corpusEvidence lane`, path: ["data", "citedDecisions"] });
+              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" references a corpus-observation evidence ID (position citedDecisions[].evidenceIds[], value withheld) that is not in the corpusEvidence lane`, path: ["data", "citedDecisions"] });
           }
         } else if (cd.authority === "editorial") {
           // At least one referenced evidence item must carry an editorial-grounding
@@ -1383,7 +1651,7 @@ export const TOOL_DESCRIPTORS = [
           for (const eid of evIds) {
             const kind = evidenceKindById.get(eid);
             if (kind !== undefined && EDITORIAL_AUTHORITY_KINDS.includes(kind) && !editorialLane.has(eid))
-              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" references ${kind} evidence "${eid}" but it is not in the editorialGuidance lane`, path: ["data", "citedDecisions"] });
+              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" references a ${kind} evidence ID (position citedDecisions[].evidenceIds[], value withheld) that is not in the editorialGuidance lane`, path: ["data", "citedDecisions"] });
             // Corpus-lane agreement, the mirror of the corpus-evidence branch: a
             // corpus observation may never CO-ground an editorial decision. Having
             // one editorial-grounding row present is not a licence to also cite
@@ -1391,7 +1659,7 @@ export const TOOL_DESCRIPTORS = [
             // the laundering direction the R4 checks exist to prevent, and it is
             // rejected regardless of which lane the corpus row sits in.
             if (kind === "corpus-observation")
-              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has editorial authority but references corpus-observation evidence "${eid}"`, path: ["data", "citedDecisions"] });
+              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has editorial authority but references a corpus-observation evidence ID (position citedDecisions[].evidenceIds[], value withheld)`, path: ["data", "citedDecisions"] });
           }
         }
       }
@@ -1401,7 +1669,7 @@ export const TOOL_DESCRIPTORS = [
       // and corpus observations into corpusEvidence (src/create-ui-spec.ts).
       for (const eid of editorialLane) {
         if (evidenceKindById.get(eid) === "corpus-observation")
-          ctx.addIssue({ code: "custom", message: `corpus-observation evidence "${eid}" must not be partitioned into the editorialGuidance lane`, path: ["data", "authorityLanes", "editorialGuidance"] });
+          ctx.addIssue({ code: "custom", message: `a corpus-observation evidence ID must not be partitioned into the editorialGuidance lane (position authorityLanes.editorialGuidance[], value withheld)`, path: ["data", "authorityLanes", "editorialGuidance"] });
       }
       // --- R4 Part C: same-field conflicting authority lanes require an
       // authorityConflict warning. Two citedDecisions for the SAME exact field
@@ -1429,20 +1697,20 @@ export const TOOL_DESCRIPTORS = [
       for (const tech of data?.techniques ?? []) {
         for (const sid of tech.sourceIds ?? []) {
           if (!citedSet.has(sid))
-            ctx.addIssue({ code: "custom", message: `technique sourceId "${sid}" not in citedReferences`, path: ["data", "techniques"] });
+            ctx.addIssue({ code: "custom", message: `techniques[].sourceIds[] not in citedReferences (value withheld)`, path: ["data", "techniques"] });
         }
       }
       // Check antiPatterns sourceIds against citedReferences
       for (const ap of data?.antiPatterns ?? []) {
         for (const sid of ap.sourceIds ?? []) {
           if (!citedSet.has(sid))
-            ctx.addIssue({ code: "custom", message: `antiPattern sourceId "${sid}" not in citedReferences`, path: ["data", "antiPatterns"] });
+            ctx.addIssue({ code: "custom", message: `antiPatterns[].sourceIds[] not in citedReferences (value withheld)`, path: ["data", "antiPatterns"] });
         }
       }
       // Check componentInventory sourceId against citedReferences
       for (const comp of data?.componentInventory ?? []) {
         if (comp.sourceId !== undefined && !citedSet.has(comp.sourceId))
-          ctx.addIssue({ code: "custom", message: `component sourceId "${comp.sourceId}" not in citedReferences`, path: ["data", "componentInventory"] });
+          ctx.addIssue({ code: "custom", message: `componentInventory[].sourceId not in citedReferences (value withheld)`, path: ["data", "componentInventory"] });
       }
       // provenance.evidenceIds must match envelope evidence IDs exactly (derived echo, not authority)
       const provEvIds = data?.provenance?.evidenceIds ?? [];
@@ -1750,6 +2018,22 @@ function makeEnvelope<const D extends ToolDescriptor>(desc: D) {
     evidence: desc.hasEvidence ? EvidenceArray : z.never().optional(),
     error: desc.errorSchema.optional(),
   }).strict().superRefine((val, ctx) => {
+    // 0. Structural leaf-value gate. Runs FIRST and OUTSIDE every status branch,
+    // so neither the ok nor the error branch can skip it and no future branch
+    // condition can either. Fail-closed: an unclassified string position is
+    // rejected. On the error branch `data` is null and both containers are
+    // forced empty (rules 2/2b below), so the walk finds nothing there — but it
+    // still runs, which is what keeps that branch closed if a container rule is
+    // ever relaxed.
+    if (desc.gateResultLeaves) {
+      for (const leaf of desc.gateResultLeaves({
+        data: val.data,
+        referenceIds: val.referenceIds,
+        evidence: val.evidence,
+      })) {
+        ctx.addIssue({ code: "custom", message: leaf.message, path: leaf.path });
+      }
+    }
     // 1. status ok → non-null data, no error
     if (val.status === "ok") {
       if (val.data === null)
@@ -1837,7 +2121,7 @@ function makeEnvelope<const D extends ToolDescriptor>(desc: D) {
             ctx.addIssue({ code: "custom", message: `evidence kind "${ev.kind}" not allowed for ${desc.name}`, path: ["evidence", i, "kind"] });
           // 10. evidence referenceId membership
           if (ev.referenceId && !val.referenceIds.includes(ev.referenceId))
-            ctx.addIssue({ code: "custom", message: `evidence referenceId "${ev.referenceId}" not in referenceIds`, path: ["evidence", i, "referenceId"] });
+            ctx.addIssue({ code: "custom", message: `evidence[${i}].referenceId not in referenceIds (value withheld)`, path: ["evidence", i, "referenceId"] });
         }
         // 11. empty evidence requires insufficientCorpusEvidence warning
         if (val.evidence.length === 0) {

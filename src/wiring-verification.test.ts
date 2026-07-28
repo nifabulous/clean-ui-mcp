@@ -310,6 +310,23 @@ const ALLOWLIST = new Set<string>([
   // manifest symbols above, which the src/*.ts regex scan cannot see. Will be
   // removed from this allowlist when the MCP tool registration lands.
   "createUiSpec",
+  // create-ui-spec-contracts.ts — the ONE safe projection from core
+  // SanitizedEvidence onto the shared MCP `Evidence` rows (Task 2 of the C3
+  // slice). Its production callers are the two transport adapters: the MCP
+  // adapter (Task 3) and the loopback HTTP adapter (Task 5), neither of which
+  // exists yet. Listed here explicitly rather than left to the regex scan —
+  // which currently matches the by-name mention in `createUiSpecForAdapter`'s
+  // doc comment in create-ui-spec.ts, i.e. fake coupling, not a call site.
+  // Remove this entry when either adapter lands and calls it for real.
+  "projectSanitizedEvidenceToMcpEvidence",
+  // create-ui-spec-contracts.ts — the ONE mapping from the envelope's retrieval
+  // metadata onto the transport `retrieval` block (Task 2 of the C3 slice). Same
+  // situation as the projection above: its production callers are the MCP adapter
+  // (Task 3) and the loopback HTTP adapter (Task 5), neither of which exists yet.
+  // It is pinned by tests today (src/create-ui-spec.test.ts) so the resultCount
+  // semantics cannot drift before those adapters land. Remove this entry when
+  // either adapter lands and calls it for real.
+  "projectRetrievalStateForTransport",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

@@ -274,6 +274,83 @@ describe("SanitizedEvidenceSchema", () => {
     e.structuredFacts = { pattern: "private-corpus-pattern" };
     expect(SanitizedEvidenceSchema.safeParse(e).success).toBe(false);
   });
+
+  // --- summary content screen -----------------------------------------------
+  //
+  // `summary` is the ONE free-text value a transport adapter PUBLISHES from a
+  // sanitized row (`evidence[].summary`). It travels BESIDE the envelope, so the
+  // envelope's containsPrivateMarker sweep never sees it, and the create_ui_spec
+  // leaf gate classifies that position as free text (returns immediately). The
+  // screen therefore has to live here, at construction — otherwise a poisoned
+  // summary is published verbatim.
+
+  it("rejects a summary carrying a private corpus id marker", () => {
+    const e = validCorpusEvidence();
+    e.summary = "dashboard reference private-corpus-id-7";
+    expect(SanitizedEvidenceSchema.safeParse(e).success).toBe(false);
+  });
+
+  it("rejects a summary carrying a private image path", () => {
+    const e = validCorpusEvidence();
+    e.summary = "dashboard reference images-private/secret.png";
+    expect(SanitizedEvidenceSchema.safeParse(e).success).toBe(false);
+  });
+
+  it("rejects a summary carrying a source URL", () => {
+    const e = validCorpusEvidence();
+    e.summary = "dashboard reference https://private.example.com/secret";
+    expect(SanitizedEvidenceSchema.safeParse(e).success).toBe(false);
+  });
+
+  it("rejects a summary carrying a filesystem path or a corpus-prefixed identifier", () => {
+    for (const summary of [
+      "dashboard reference /corpus/private/entry.json",
+      "dashboard reference corpus-entry-4711",
+    ]) {
+      const e = validCorpusEvidence();
+      e.summary = summary;
+      expect(SanitizedEvidenceSchema.safeParse(e).success, summary).toBe(false);
+    }
+  });
+
+  it("the summary rejection message never echoes the offending value", () => {
+    const e = validCorpusEvidence();
+    e.summary = "dashboard reference images-private/secret.png";
+    const parsed = SanitizedEvidenceSchema.safeParse(e);
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    for (const issue of parsed.error.issues) {
+      expect(issue.message).not.toContain("images-private/secret.png");
+      expect(issue.message).not.toContain("secret.png");
+    }
+  });
+
+  it("still accepts every summary the production templates emit", () => {
+    // The three real producer templates (safe-aggregator.buildCorpusObservationSummary,
+    // the frozen recipe row, and the fixed explicit-reference string). The screen
+    // must not narrow the production path.
+    for (const summary of [
+      "dashboard reference with 3 regions",
+      "landing-page reference",
+      "Corpus observation reference",
+      "Deterministic c3-fallback-v1 recipe",
+      "User-supplied public reference.",
+    ]) {
+      const e = validCorpusEvidence();
+      e.summary = summary;
+      expect(SanitizedEvidenceSchema.safeParse(e).success, summary).toBe(true);
+    }
+  });
+
+  it("rejects a publicReference carrying a private corpus marker", () => {
+    // A private marker is never a legitimate public reference value, whatever
+    // shape the field takes. (A public URL IS legitimate at this layer — see the
+    // "parses a valid public reference" case above; the PUBLISHED channel is
+    // narrowed to `ref-<sha256>` by projectSanitizedEvidenceToMcpEvidence.)
+    const e = validPublicReferenceEvidence();
+    e.publicReference = "corpus/images-private/secret.png";
+    expect(SanitizedEvidenceSchema.safeParse(e).success).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -1015,7 +1015,36 @@ const CREATE_UI_SPEC_FREE_TEXT_LEAVES: Readonly<Record<LeafPosition, string>> = 
   "data.citedDecisions[].id": "response-local decision label from the recipe",
   "data.citedDecisions[].field": "names a UiSpec field, response-local",
   "data.provenance.toolVersion": "the recipe version string (e.g. c3-fallback-v1)",
-  "evidence[].summary": "SanitizedEvidence summary — bounded at 500 chars by the core and forbidden from carrying private identity fields",
+  // Production-reachable since Task 2: the ONE projection
+  // (`projectSanitizedEvidenceToMcpEvidence` in create-ui-spec-contracts.ts)
+  // carries this value through from a core SanitizedEvidence row and re-parses
+  // BOTH sides — SanitizedEvidenceSchema in, shared `Evidence` out.
+  //
+  // ENFORCED, and by which layer. `SanitizedEvidenceSchema` (create-ui-spec-
+  // contracts.ts) is the enforcing layer for all three of these, at construction
+  // AND again on the projection's inbound re-parse:
+  //   1. length — `z.string().trim().min(1).max(500)`;
+  //   2. no private identity FIELD — `.strict()` refuses
+  //      privateCorpusId/sourceUrl/screenshot/corpusId on the row;
+  //   3. no private CONTENT in this string — the schema's superRefine rejects the
+  //      row when `containsPrivateMarker(summary)` holds (private corpus id
+  //      markers, `.c2-private/`, `/corpus/private/`, `images-private/`) or when
+  //      the summary matches SafeErrorMessage's PATH_OR_URL_PATTERN (any path
+  //      separator, `://`, `node_modules`, `dist/`, `private`, `corpus-`).
+  // The leaf gate itself checks NOTHING here — "free-text" returns immediately —
+  // so (3) is the reason a poisoned summary cannot reach this position, not the
+  // gate.
+  //
+  // INTENDED, not enforced (stated in those words deliberately): that the value is
+  // recipe-owned TEMPLATE text. Today it is, by producer convention — the only
+  // three sources are `buildCorpusObservationSummary` (a fixed template over the
+  // closed StructuredFacts allowlist), the frozen recipe row's own string, and the
+  // fixed explicit-reference string.
+  // Nothing prevents a future builder from interpolating a corpus-derived value
+  // that happens to carry none of the screened markers (e.g. a title fragment).
+  // The screen bounds the leak CLASS; provenance is still the builder's
+  // responsibility, and a new summary builder must be reviewed as such.
+  "evidence[].summary": "SanitizedEvidence summary — bounded at 500 chars, refused a private identity field by .strict(), and content-screened for private-corpus markers, paths and urls by SanitizedEvidenceSchema's superRefine; that it is recipe-owned template prose is a producer convention, not an enforced bound",
 };
 
 /** The three classes. There is no fourth, and there is no default. */

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -118,6 +118,39 @@ describe("HomePage — contract", () => {
     expect(browseLinks.length).toBeGreaterThanOrEqual(1);
     for (const link of browseLinks) {
       expect(link.getAttribute("href")).toBe("/browse");
+    }
+  });
+
+  // Fix round 1, review Important 1: `ProductPreview` is rendered by Home, and its
+  // footnote link still pointed at `/playground` after the migration. A visitor
+  // scanning the corpus preview would click "Open the full …" expecting the full
+  // search surface and land on the composer with no search UI at all.
+  it("points the corpus preview's footnote link at the search surface, not the composer", async () => {
+    renderHome();
+    await waitFor(() => expect(screen.queryByTestId("product-preview")).toBeInTheDocument());
+
+    const preview = screen.getByTestId("product-preview");
+    const links = within(preview).getAllByRole("link");
+    expect(links.length).toBeGreaterThanOrEqual(1);
+    for (const link of links) {
+      expect(link.getAttribute("href")).toBe("/browse");
+    }
+  });
+
+  // Fix round 1, review Important 4c: only ONE of the two hero actions works when
+  // the site is hosted statically — generation needs the operator's own loopback
+  // server. So browsing is the primary public action and the composer is secondary.
+  it("makes browsing the primary hero action and the composer secondary", async () => {
+    renderHome();
+    await waitFor(() => expect(screen.queryByRole("status")).toBeInTheDocument());
+
+    for (const link of screen.getAllByRole("link", { name: /browse the corpus/i })) {
+      expect(link.className).toContain("home__action--primary");
+      expect(link.className).not.toContain("home__action--secondary");
+    }
+    for (const link of screen.getAllByRole("link", { name: /try playground/i })) {
+      expect(link.className).toContain("home__action--secondary");
+      expect(link.className).not.toContain("home__action--primary");
     }
   });
 

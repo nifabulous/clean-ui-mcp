@@ -234,6 +234,25 @@ describe("public site — base-path deployment", () => {
     await ctx.close();
   }, 45_000);
 
+  it("forwards a previously-shareable /playground search URL to /browse", async () => {
+    // `/playground?q=…` was the canonical shareable corpus-search URL before the
+    // migration. Landing on the composer would silently discard every parameter,
+    // so those URLs are forwarded with the query intact (review Minor 4).
+    const ctx = await newTracingContext();
+    const page = await ctx.newPage();
+    const response = await page.goto(`${baseUrl}playground?q=pricing&style=minimal`);
+    expect(response?.status()).toBe(200);
+    await rootH1Text(page);
+    await page.getByLabel(/ask the corpus/i).waitFor({ state: "visible", timeout: 30_000 });
+
+    const url = page.url();
+    expect(url).toContain("/browse");
+    expect(url).not.toContain("/playground");
+    expect(url).toContain("q=pricing");
+    expect(url).toContain("style=minimal");
+    await ctx.close();
+  }, 45_000);
+
   it("never serves a corpus entry asset (no /entries/ request across the journey)", async () => {
     // The public corpus bundle is intentionally empty until a separately cleared
     // collection exists. Across a home -> browse journey, NO observed request path
@@ -520,6 +539,21 @@ beforeAll(async () => {
   fallback = await fallbackArtifact(COMPOSER_BRIEF);
 }, 60_000);
 
+/**
+ * Strings the REAL `DESIGN.md` rendering contains and the composer's own UI never
+ * renders — YAML front matter keys and section headers from
+ * `renderDesignHandoffMarkdown`. Any control that publishes the handoff bytes into
+ * the document puts these in the page, so they are a precise leak probe that does
+ * not depend on the seeded corpus entry surfacing anything.
+ */
+const HANDOFF_ONLY_MARKERS: readonly string[] = [
+  "handoff_version:",
+  "target_profile:",
+  "## Rejected defaults",
+  "## Dependency manifest",
+  "## Source manifest",
+];
+
 describe("public site — C3 composer", () => {
   it("keeps generation disabled until the brief meets the required minimum", async () => {
     const ctx = await newTracingContext();
@@ -781,6 +815,114 @@ describe("public site — C3 composer", () => {
     }
     // Response-scoped evidence ids are aggregated to a count, never listed.
     expect(await page.locator("#root").innerText()).not.toMatch(/evidence-\d/);
+    await ctx.close();
+  }, 60_000);
+
+  // Review Important 4b. Static, always present, no probe: a hosted copy of this
+  // page has no `/api` beside it, and the requirement has to be readable BEFORE
+  // the operator writes a brief.
+  it("states the local-server requirement before any submission", async () => {
+    const ctx = await newTracingContext();
+    const page = await ctx.newPage();
+    await stubApi(page, [{ status: 200, body: matched.body }]);
+    await openComposer(page);
+
+    const requirement = await page.locator("[data-testid='playground-requirement']").innerText();
+    expect(requirement).toMatch(/npm run ui/);
+    expect(requirement).toMatch(/cannot generate/i);
+    await ctx.close();
+  }, 45_000);
+
+  // Review Important 4a. This is the SHIPPED static-hosting failure path, and it
+  // was untested: `GET /api/csrf` resolves to the host's 404 document, which used
+  // to be reported as "the local server ... may have restarted".
+  it("names the real cause when the origin has no local API at all", async () => {
+    const ctx = await newTracingContext();
+    const page = await ctx.newPage();
+    const posts: string[] = [];
+    // Exactly what a static host answers for an unknown path.
+    await page.route("**/api/csrf", (route) =>
+      route.fulfill({ status: 404, contentType: "text/html", body: "<!doctype html>Not found" }),
+    );
+    await page.route("**/api/create-ui-spec", (route) => {
+      posts.push(route.request().method());
+      return route.fulfill({ status: 200, contentType: "application/json", body: matched.body });
+    });
+    await openComposer(page);
+    await submitBrief(page);
+
+    await page.waitForFunction(
+      () => /npm run ui/.test(document.querySelector(".outcome__status")?.textContent ?? ""),
+      undefined,
+      { timeout: 30_000 },
+    );
+    const status = await statusText(page);
+    expect(status).not.toMatch(/restarted/i);
+    expect(status).toMatch(/own machine/i);
+    // The brief never left the browser: there was nothing to send it to.
+    expect(posts).toEqual([]);
+    // And no artifact was shown.
+    expect(await page.getByRole("heading", { level: 3, name: /design handoff/i }).count()).toBe(0);
+    await ctx.close();
+  }, 60_000);
+
+  // Review Important 2. `designMarkdown` is the SERVER's rendering, not the
+  // client's allowlist projection — it carries `spec.context.productContext`,
+  // `spec.citedReferences`, the profile's sourceId/URL lines and the technique /
+  // anti-pattern / component-inventory text. A copy control whose failure path
+  // prints its value into the DOM therefore publishes all of it. This forces the
+  // documented failure — Chrome's "Document is not focused" rejection — and then
+  // re-runs the marker sweep.
+  it("publishes nothing when the clipboard write rejects", async () => {
+    const ctx = await newTracingContext();
+    const page = await ctx.newPage();
+    const consoleText: string[] = [];
+    page.on("console", (message) => consoleText.push(message.text()));
+
+    // The probe is only meaningful if these strings really are in the bytes.
+    for (const marker of HANDOFF_ONLY_MARKERS) {
+      expect(matched.envelope.designMarkdown as string).toContain(marker);
+    }
+
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: () => Promise.reject(new Error("Document is not focused")),
+        },
+      });
+    });
+    await stubApi(page, [{ status: 200, body: matched.body }]);
+    await openComposer(page);
+    await submitBrief(page);
+    await page.getByRole("heading", { level: 3, name: /design handoff/i }).waitFor({
+      timeout: 30_000,
+    });
+
+    await page.getByRole("button", { name: /copy markdown/i }).click();
+    // Wait for ANY reaction to the rejection — this control's note, or the shared
+    // component's value-rendering fallback. Waiting for either is deliberate: it
+    // keeps the assertions below (not the wait) the thing that fails if a control
+    // that dumps the value is ever wired in here.
+    await page.waitForFunction(
+      () => document.querySelector(".copy-handoff__note, .copy-action__fallback-value") !== null,
+      undefined,
+      { timeout: 15_000 },
+    );
+
+    const serialized = await page.content();
+    for (const marker of [...HANDOFF_ONLY_MARKERS, ...PRIVATE_MARKERS]) {
+      expect(serialized).not.toContain(marker);
+    }
+    expect(consoleText.join("\n")).not.toMatch(/handoff_version|target_profile/);
+    // No value-rendering fallback element exists on this surface at all.
+    expect(await page.locator(".copy-action__fallback-value").count()).toBe(0);
+    // And the control did say something — the operator is not left with a dead button.
+    expect(await page.locator(".copy-handoff__note").innerText()).toMatch(
+      /clipboard is not available/i,
+    );
+    // The same bytes are still saveable, which is what the copy note says.
+    expect(await page.getByRole("button", { name: /download DESIGN\.md/i }).isEnabled()).toBe(true);
     await ctx.close();
   }, 60_000);
 });

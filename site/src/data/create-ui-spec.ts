@@ -19,12 +19,27 @@
  *     is refused WHOLE — there is no partial render, because a half-checked
  *     artifact is exactly the thing the operator would mistake for a result.
  *
- *  2. Display is an ALLOWLIST PROJECTION, not a scrub. {@link SafeArtifact} is
+ *  2. The RENDERED fields are an ALLOWLIST PROJECTION, not a scrub. The
+ *     display-safe half of {@link SafeArtifact} — `designDirection`, `decisions`,
+ *     `acceptanceCriteria`, `warnings`, `unavailableDecisions`, `evidence` — is
  *     built field by field from checked positions, so a field the producer adds
- *     later cannot reach the DOM by default — it simply is not on the projected
- *     object. Nothing carries `sourceId`, `sourceIds`, `sourceReferences`,
+ *     later cannot reach a rendered element by default: it simply is not on the
+ *     projected object. None of `sourceId`, `sourceIds`, `sourceReferences`,
  *     `citedReferences`, `evidenceIds`, `provenance`, `componentInventory`, an
- *     image path, or a screenshot, because none of those is projected.
+ *     image path, or a screenshot is projected.
+ *
+ *     WHAT THE PROJECTION DOES *NOT* COVER, stated exactly. `designMarkdown` and
+ *     `designJson` are carried through WHOLE and unprojected — they are the
+ *     server's own renderings, and the download guarantee requires the exact
+ *     bytes. `renderDesignHandoffMarkdown` (src/design-handoff.ts) renders
+ *     `spec.context.productContext`, `spec.citedReferences`, the target profile's
+ *     `sourceId` + URL lines, and `spec.techniques[].text`,
+ *     `spec.antiPatterns[].text` and `spec.componentInventory` — i.e. fields this
+ *     projection deliberately does not read. So these two strings are
+ *     DOWNLOAD/CLIPBOARD PAYLOADS ONLY. No caller may render them into the DOM,
+ *     and the composer does not: the copy control writes them to the clipboard and
+ *     falls back to pointing at the download, never to printing the value as
+ *     selectable text. Treating them as displayable would defeat (2) entirely.
  *
  * `spec.context.productContext` and `spec.designDirection` echo the CALLER'S OWN
  * brief. That is the operator's data, not corpus content — but the projection
@@ -213,6 +228,9 @@ export interface EvidenceSummary {
  * off this object, so a download can never trigger a second generation (which
  * would carry a different `generatedAt` and a different artifact identity than
  * the one the operator just reviewed).
+ *
+ * `designMarkdown` / `designJson` are NOT projected and must never be rendered —
+ * see the module header. Every other field on this object is display-safe.
  */
 export interface SafeArtifact {
   readonly artifactId: string;
@@ -222,10 +240,15 @@ export interface SafeArtifact {
   readonly decisions: readonly SafeDecision[];
   readonly acceptanceCriteria: readonly SafeAcceptanceCriterion[];
   readonly warnings: readonly SafeWarning[];
+  /**
+   * Warnings the producer emitted whose `code` is outside {@link WARNING_CODES}.
+   * They are NOT rendered (an unmapped server token must not become UI copy) but
+   * they ARE counted: a warned artifact stays a warned artifact, so the lifecycle
+   * label cannot invert to "complete" the day the producer adds a fifth code.
+   */
+  readonly droppedWarningCount: number;
   readonly unavailableDecisions: readonly SafeUnavailableDecision[];
   readonly evidence: EvidenceSummary;
-  /** True when the artifact leans on the deterministic fallback or is incomplete. */
-  readonly partial: boolean;
   readonly designMarkdown: string;
   readonly designJson: string;
   readonly specSha256: string;
@@ -243,10 +266,21 @@ const WARNING_CODES = [
 ] as const;
 export type WarningCode = (typeof WARNING_CODES)[number];
 
-/** Client-authored failure codes. No server string ever becomes one of these. */
+/**
+ * Client-authored failure codes. No server string ever becomes one of these.
+ *
+ * `LOCAL_API_UNAVAILABLE` and `CSRF_REJECTED` are deliberately DISTINCT. The
+ * first means there is no loopback API on this origin at all — `GET /api/csrf`
+ * answered with a non-2xx, or with a 2xx that is not the nonce document (a static
+ * host's 404 page or SPA fallback). That is the state of every HOSTED copy of this
+ * site, so collapsing it into `CSRF_REJECTED` told visitors "the local server may
+ * have restarted" about a server that was never there. The second means the route
+ * IS there and refused the nonce twice.
+ */
 export type CreateUiSpecFailureCode =
   | "INVALID_INPUT"
   | "PROVIDER_ERROR"
+  | "LOCAL_API_UNAVAILABLE"
   | "CSRF_REJECTED"
   | "NETWORK"
   | "MALFORMED_RESPONSE";
@@ -285,7 +319,14 @@ export function resetCachedNonce(): void {
   cachedNonce = null;
 }
 
-async function fetchNonce(fetchImpl: typeof fetch): Promise<string | null> {
+/**
+ * The outcome of asking for a nonce. `absent` is the "there is no loopback API on
+ * this origin" case — it must not be reported as a CSRF rejection, because the
+ * remedy is completely different (start the server, versus retry the submit).
+ */
+type NonceResult = { readonly kind: "nonce"; readonly nonce: string } | { readonly kind: "absent" };
+
+async function fetchNonce(fetchImpl: typeof fetch): Promise<NonceResult> {
   const response = await fetchImpl(CSRF_PATH, {
     method: "GET",
     headers: { accept: "application/json" },
@@ -297,10 +338,14 @@ async function fetchNonce(fetchImpl: typeof fetch): Promise<string | null> {
     // offers one either.
     credentials: "omit",
   });
-  if (!response.ok) return null;
+  // A non-2xx here is a static host's 404 page, not a rejected nonce.
+  if (!response.ok) return { kind: "absent" };
+  // A 2xx that will not parse as the `{ nonce }` document is a static host's SPA
+  // fallback (`index.html` served for an unknown path), which is likewise not a
+  // rejected nonce.
   const body: unknown = await response.json().catch(() => null);
   const nonce = isRecord(body) ? body.nonce : undefined;
-  return typeof nonce === "string" && nonce.length > 0 ? nonce : null;
+  return typeof nonce === "string" && nonce.length > 0 ? { kind: "nonce", nonce } : { kind: "absent" };
 }
 
 /**
@@ -327,9 +372,14 @@ export async function requestDesignArtifact(
     // invalidates the cached one exactly once; looping would hammer the server.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       onPhase("authorizing");
-      if (cachedNonce === null) cachedNonce = await fetchNonce(fetchImpl);
       if (cachedNonce === null) {
-        return { ok: false, failure: { code: "CSRF_REJECTED", retryable: true } };
+        const minted = await fetchNonce(fetchImpl);
+        if (minted.kind === "absent") {
+          // No loopback API on this origin. Retryable in the sense that starting
+          // the server makes it work — the UI copy says exactly that.
+          return { ok: false, failure: { code: "LOCAL_API_UNAVAILABLE", retryable: true } };
+        }
+        cachedNonce = minted.nonce;
       }
 
       onPhase("submitting");
@@ -414,6 +464,25 @@ function str(value: unknown, max = 8_000): string | null {
   return value;
 }
 
+/**
+ * A non-empty string with NO maximum, for positions the server schema leaves
+ * unbounded (`z.string().trim().min(1)` with no `.max()`).
+ *
+ * A client maximum tighter than the schema's is not a safety property — it is a
+ * way to refuse a LEGAL artifact whole, and the operator would see only "the
+ * response did not match the expected artifact shape" with no way to tell that
+ * apart from a corrupt one. The rule this encodes: the client may only ever refuse
+ * something the SERVER would also refuse. `src/create-ui-spec-client-bounds.test.ts`
+ * pins these positions against the real schema so the two cannot drift.
+ *
+ * The safety property does not come from length at all: it comes from the fields
+ * being ABSENT from the projection, plus the positive ID/path shape checks.
+ */
+function unboundedText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return value.length === 0 ? null : value;
+}
+
 function sha(value: unknown): string | null {
   return typeof value === "string" && SHA256_PATTERN.test(value) ? value : null;
 }
@@ -480,6 +549,13 @@ function projectSafeArtifact(payload: unknown): SafeArtifact | null {
   ) {
     return null;
   }
+  // `fallbackReason` DEGRADES rather than refusing, deliberately. It is a short
+  // producer token (`"no-results"` / `"missing-index"`); if a future one exceeds
+  // this bound the projection reports the reason as unknown and the UI says
+  // "used (reason not reported)". That is the right trade HERE and only here,
+  // because the alternative — refusing the whole artifact over an over-long
+  // parenthetical — would throw away a generation for a cosmetic detail. Every
+  // position the operator actually reads is unbounded instead (see unboundedText).
   const fallbackReason = typeof retrieval.fallbackReason === "string" ? str(retrieval.fallbackReason, 60) : null;
 
   const spec = payload.spec;
@@ -494,8 +570,8 @@ function projectSafeArtifact(payload: unknown): SafeArtifact | null {
   if (acceptanceCriteria === null || acceptanceCriteria.length === 0) return null;
   const unavailableDecisions = projectUnavailableDecisions(spec.unavailableDecisions);
   if (unavailableDecisions === null) return null;
-  const warnings = projectWarnings(payload.warnings);
-  if (warnings === null) return null;
+  const projectedWarnings = projectWarnings(payload.warnings);
+  if (projectedWarnings === null) return null;
 
   const evidence: EvidenceSummary = {
     evidenceCount: rawEvidenceIds.length,
@@ -514,19 +590,19 @@ function projectSafeArtifact(payload: unknown): SafeArtifact | null {
     designDirection,
     decisions,
     acceptanceCriteria,
-    warnings,
+    warnings: projectedWarnings.warnings,
+    droppedWarningCount: projectedWarnings.droppedCount,
     unavailableDecisions,
     evidence,
-    // An artifact is PARTIAL when the deterministic fallback carried it, or when
-    // the producer raised a warning. Labelling either as a complete result would
-    // misrepresent the artifact.
+    // There is deliberately NO collapsed `partial` flag. "The deterministic
+    // fallback carried this" and "the producer raised warnings" are different
+    // claims, and the lifecycle label has to keep them apart — a single boolean
+    // cannot, and the one this object used to carry had no production reader.
     //
-    // `unavailableDecisions` deliberately does NOT make an artifact partial. A
-    // brief with no design system ALWAYS yields `colorTokens`/`typographyTokens`
-    // unavailable decisions — that is the producer honestly declining to invent
-    // tokens, not a degraded run. They are always displayed; they just do not
-    // change the lifecycle label.
-    partial: retrieval.fallbackUsed || warnings.length > 0,
+    // `unavailableDecisions` deliberately affects neither. A brief with no design
+    // system ALWAYS yields `colorTokens`/`typographyTokens` unavailable decisions —
+    // that is the producer honestly declining to invent tokens, not a degraded run.
+    // They are always displayed; they just do not change the lifecycle label.
     designMarkdown,
     designJson,
     specSha256,
@@ -541,8 +617,10 @@ function projectDecisions(raw: unknown): SafeDecision[] | null {
   const out: SafeDecision[] = [];
   for (const row of raw) {
     if (!isRecord(row)) return null;
-    const id = str(row.id, 200);
-    const field = str(row.field, 200);
+    // `id`/`field`: unbounded in the schema (src/tool-contracts.ts CitedDecision).
+    const id = unboundedText(row.id);
+    const field = unboundedText(row.field);
+    // `authority`/`readiness` ARE closed enums server-side, so a bound is honest.
     const authority = str(row.authority, 60);
     const readiness = str(row.readiness, 60);
     if (id === null || field === null || authority === null || readiness === null) return null;
@@ -557,10 +635,13 @@ function projectAcceptanceCriteria(raw: unknown): SafeAcceptanceCriterion[] | nu
   const out: SafeAcceptanceCriterion[] = [];
   for (const row of raw) {
     if (!isRecord(row)) return null;
-    const id = str(row.id, 200);
-    const subject = str(row.subject, 500);
+    // `id`/`subject`/`expectedOutcome`: unbounded in the schema
+    // (src/tool-contracts.ts AcceptanceCriterion). `assertion`/`verifier`/
+    // `priority` are closed enums server-side, so those bounds are honest.
+    const id = unboundedText(row.id);
+    const subject = unboundedText(row.subject);
     const assertion = str(row.assertion, 60);
-    const expectedOutcome = str(row.expectedOutcome, 1_000);
+    const expectedOutcome = unboundedText(row.expectedOutcome);
     const verifier = str(row.verifier, 40);
     const priority = str(row.priority, 20);
     if (
@@ -586,32 +667,49 @@ function projectUnavailableDecisions(raw: unknown): SafeUnavailableDecision[] | 
   const out: SafeUnavailableDecision[] = [];
   for (const row of raw) {
     if (!isRecord(row)) return null;
-    const field = str(row.field, 200);
-    const reason = str(row.reason, 1_000);
+    // Both unbounded in the schema (src/tool-contracts.ts UnavailableDecision).
+    const field = unboundedText(row.field);
+    const reason = unboundedText(row.reason);
     if (field === null || reason === null) return null;
     out.push({ field, reason });
   }
   return out;
 }
 
+interface ProjectedWarnings {
+  readonly warnings: SafeWarning[];
+  readonly droppedCount: number;
+}
+
 /**
- * Project the warning list. A row whose `code` is outside the closed set is
- * DROPPED rather than refusing the response: an unknown code is a producer
- * vocabulary addition, not a corrupt artifact, and rendering an unrecognised
- * code would put an unmapped server token in the UI.
+ * Project the warning list.
+ *
+ * A row whose `code` is outside the closed set is not RENDERED — an unknown code
+ * is a producer vocabulary addition rather than a corrupt artifact, and putting an
+ * unmapped server token in the UI would make the producer's vocabulary into UI
+ * copy. But it is still COUNTED. Dropping it from the count too would invert the
+ * lifecycle label: a future producer emitting a fifth code on its own would make
+ * the live region announce "Generated a complete design handoff" for an artifact
+ * the producer explicitly flagged as degraded — the same truthfulness inversion
+ * the three-way label exists to prevent, arrived at from the other direction.
  */
-function projectWarnings(raw: unknown): SafeWarning[] | null {
+function projectWarnings(raw: unknown): ProjectedWarnings | null {
   if (!Array.isArray(raw)) return null;
-  const out: SafeWarning[] = [];
+  const warnings: SafeWarning[] = [];
+  let droppedCount = 0;
   for (const row of raw) {
     if (!isRecord(row)) return null;
     const code = row.code;
+    // `message` max 500 matches WarningSchema's own bound exactly.
     const message = str(row.message, 500);
     if (typeof code !== "string" || message === null) return null;
-    if (!(WARNING_CODES as readonly string[]).includes(code)) continue;
-    out.push({ code: code as WarningCode, message });
+    if (!(WARNING_CODES as readonly string[]).includes(code)) {
+      droppedCount += 1;
+      continue;
+    }
+    warnings.push({ code: code as WarningCode, message });
   }
-  return out;
+  return { warnings, droppedCount };
 }
 
 // ---------------------------------------------------------------------------
@@ -628,6 +726,11 @@ export interface DownloadEnv {
   readonly createObjectURL: (blob: Blob) => string;
   readonly revokeObjectURL: (url: string) => void;
   readonly doc?: Document;
+  /**
+   * How the revoke is scheduled. Kept as a seam so a test can still assert that
+   * the URL IS revoked; production always defers (see {@link downloadExactBytes}).
+   */
+  readonly defer?: (task: () => void) => void;
 }
 
 function defaultDownloadEnv(): DownloadEnv {
@@ -635,6 +738,19 @@ function defaultDownloadEnv(): DownloadEnv {
     createObjectURL: (blob) => URL.createObjectURL(blob),
     revokeObjectURL: (url) => URL.revokeObjectURL(url),
   };
+}
+
+/**
+ * The default revoke schedule: a macrotask after the click.
+ *
+ * Not zero — `setTimeout(…, 0)` is already a later task than the click dispatch,
+ * which is the property that matters, and a small delay gives an engine that
+ * starts the fetch of the blob asynchronously room to begin reading it.
+ */
+const REVOKE_DELAY_MS = 1_000;
+
+function defaultDefer(task: () => void): void {
+  setTimeout(task, REVOKE_DELAY_MS);
 }
 
 /**
@@ -646,6 +762,15 @@ function defaultDownloadEnv(): DownloadEnv {
  * and therefore a different artifact identity than the one the operator reviewed.
  * There is no `fetch` in this function, and the artifact it reads from is
  * immutable state.
+ *
+ * THE REVOKE IS DEFERRED PAST THE CLICK. Chromium starts the download
+ * synchronously while dispatching the synthetic click, so revoking in the same
+ * task happens to work there — but other engines start it in a later task, and a
+ * same-task revoke there produces a failed or zero-byte file with nothing
+ * surfacing the error. A silently empty save is the worst possible outcome for a
+ * surface whose promise is "the reviewed bytes are the only bytes that can be
+ * saved", so the revoke is scheduled instead of inlined. It still happens — the
+ * object URL is not leaked for the life of the page.
  *
  * Returns the anchor element it clicked so a test can assert the filename.
  */
@@ -666,6 +791,7 @@ export function downloadExactBytes(
   doc.body.appendChild(anchor);
   anchor.click();
   doc.body.removeChild(anchor);
-  env.revokeObjectURL(url);
+  const defer = env.defer ?? defaultDefer;
+  defer(() => env.revokeObjectURL(url));
   return anchor;
 }

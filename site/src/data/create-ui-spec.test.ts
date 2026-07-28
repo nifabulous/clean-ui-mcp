@@ -385,7 +385,11 @@ describe("requestDesignArtifact — safe projection", () => {
     });
   });
 
-  it("flags a structured-fallback artifact as partial rather than fully generated", async () => {
+  // The projection carries the two claims the label must keep APART — "the
+  // deterministic fallback carried this" and "the producer raised warnings" — and
+  // no collapsed `partial` flag. A single boolean cannot express the three-way
+  // label, and the one it used to carry had no production reader (review Minor 1).
+  it("carries the fallback claim separately from the warning count", async () => {
     const envelope = envelopeFixture({
       retrieval: {
         mode: "structured-fallback",
@@ -400,9 +404,112 @@ describe("requestDesignArtifact — safe projection", () => {
     const { fetchImpl } = stubFetch(okQueue(envelope));
     const result = await requestDesignArtifact(BRIEF, { fetchImpl });
     if (!result.ok) throw new Error("expected success");
-    expect(result.artifact.partial).toBe(true);
     expect(result.artifact.evidence.fallbackUsed).toBe(true);
     expect(result.artifact.evidence.fallbackReason).toBe("no-results");
+    expect(result.artifact.warnings).toHaveLength(1);
+    expect(result.artifact.droppedWarningCount).toBe(0);
+    // No collapsed flag: nothing in the UI reads one, and it would hide the
+    // distinction the three-way label exists to make.
+    expect("partial" in result.artifact).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The client's shape check must never be NARROWER than the server's schema:
+// a position the schema leaves unbounded cannot carry a client-side maximum,
+// because exceeding it refuses a LEGAL artifact whole and the operator sees only
+// "the response did not match the expected artifact shape". (Review Important 6;
+// the pin against the real schema lives in
+// src/create-ui-spec-client-bounds.test.ts.)
+// ---------------------------------------------------------------------------
+
+describe("requestDesignArtifact — client bounds are not tighter than the schema", () => {
+  beforeEach(() => {
+    resetCachedNonce();
+  });
+
+  const long = (n: number): string => "x".repeat(n);
+
+  it("accepts long strings in every position the server schema leaves unbounded", async () => {
+    const envelope = envelopeFixture();
+    const spec = envelope.spec as Record<string, unknown>;
+    spec.acceptanceCriteria = [
+      {
+        id: long(400),
+        subject: long(900),
+        assertion: "has-accessible-name",
+        expectedOutcome: long(1_200),
+        verifier: "axe",
+        priority: "must",
+        evidenceIds: ["evidence-1"],
+      },
+    ];
+    spec.unavailableDecisions = [{ field: long(400), reason: long(3_000) }];
+    spec.citedDecisions = [
+      {
+        id: long(400),
+        field: long(400),
+        authority: "corpus-evidence",
+        evidenceIds: ["evidence-1"],
+        readiness: "available",
+      },
+    ];
+
+    const { fetchImpl } = stubFetch(okQueue(envelope));
+    const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+    if (!result.ok) throw new Error("expected the client to accept a schema-legal artifact");
+
+    expect(result.artifact.acceptanceCriteria[0].subject).toHaveLength(900);
+    expect(result.artifact.acceptanceCriteria[0].expectedOutcome).toHaveLength(1_200);
+    expect(result.artifact.unavailableDecisions[0].reason).toHaveLength(3_000);
+    expect(result.artifact.decisions[0].id).toHaveLength(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// An unmapped warning code must not become "no warnings". Review Important 3:
+// `successLabel` branches on the warning COUNT, so silently dropping an unknown
+// code inverts the announcement to "Generated a complete design handoff" for an
+// artifact the producer explicitly flagged as degraded.
+// ---------------------------------------------------------------------------
+
+describe("requestDesignArtifact — unmapped warning codes stay counted", () => {
+  beforeEach(() => {
+    resetCachedNonce();
+  });
+
+  it("counts a dropped unknown code instead of erasing it", async () => {
+    const { fetchImpl } = stubFetch(
+      okQueue(
+        envelopeFixture({
+          warnings: [{ code: "imageEvidenceUnavailable", message: "A future producer code." }],
+        }),
+      ),
+    );
+    const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+    if (!result.ok) throw new Error("expected success");
+    // Not RENDERED (an unmapped server token must not reach the UI) …
+    expect(result.artifact.warnings).toEqual([]);
+    // … but not erased either: the artifact is still a warned artifact.
+    expect(result.artifact.droppedWarningCount).toBe(1);
+  });
+
+  it("counts known and unknown codes separately", async () => {
+    const { fetchImpl } = stubFetch(
+      okQueue(
+        envelopeFixture({
+          warnings: [
+            { code: "sparseCoverage", message: "Known." },
+            { code: "somethingNew", message: "Unknown." },
+            { code: "somethingElseNew", message: "Also unknown." },
+          ],
+        }),
+      ),
+    );
+    const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+    if (!result.ok) throw new Error("expected success");
+    expect(result.artifact.warnings.map((w) => w.code)).toEqual(["sparseCoverage"]);
+    expect(result.artifact.droppedWarningCount).toBe(2);
   });
 });
 
@@ -539,6 +646,49 @@ describe("requestDesignArtifact — failures", () => {
     expect(calls).toHaveLength(4);
   });
 
+  // Review Important 4a. A 404 (or a 200 that is not the nonce document) on
+  // `GET /api/csrf` means there is NO local API on this origin at all — the
+  // statically hosted copy of this site is the shipped case. Reporting it as
+  // CSRF_REJECTED told the visitor "the local server may have restarted" and
+  // invited unbounded retries against a server that was never there.
+  it("reports a missing local API distinctly from a rejected nonce", async () => {
+    const { calls, fetchImpl } = stubFetch([{ status: 404, json: { message: "Not found" } }]);
+    const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+    expect(result).toEqual({
+      ok: false,
+      failure: { code: "LOCAL_API_UNAVAILABLE", retryable: true },
+    });
+    // Nothing was posted: there is no server to post the brief to.
+    expect(calls.map((c) => c.url)).toEqual(["/api/csrf"]);
+  });
+
+  it("treats a 200 that is not the nonce document as a missing local API", async () => {
+    // A static host can answer an unknown path with its SPA fallback document:
+    // status 200, but not the `{ nonce }` body the loopback route writes.
+    const { fetchImpl } = stubFetch([{ status: 200, json: { notANonce: true } }]);
+    const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+    expect(result).toEqual({
+      ok: false,
+      failure: { code: "LOCAL_API_UNAVAILABLE", retryable: true },
+    });
+  });
+
+  it("treats an unparseable nonce response as a missing local API", async () => {
+    const fetchImpl = (async () =>
+      ({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("Unexpected token < in JSON at position 0");
+        },
+      }) as unknown as Response) as unknown as typeof fetch;
+    const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+    expect(result).toEqual({
+      ok: false,
+      failure: { code: "LOCAL_API_UNAVAILABLE", retryable: true },
+    });
+  });
+
   it("maps a transport failure to a retryable network failure", async () => {
     const fetchImpl = (async () => {
       throw new TypeError("Failed to fetch");
@@ -574,7 +724,10 @@ describe("downloadExactBytes", () => {
     vi.restoreAllMocks();
   });
 
-  function env(): Parameters<typeof downloadExactBytes>[3] {
+  function recorders(): Pick<
+    NonNullable<Parameters<typeof downloadExactBytes>[3]>,
+    "createObjectURL" | "revokeObjectURL"
+  > {
     return {
       createObjectURL: (blob: Blob) => {
         blobs.push(blob);
@@ -586,6 +739,12 @@ describe("downloadExactBytes", () => {
         revoked.push(url);
       },
     };
+  }
+
+  // Most tests want the revoke to be observable inline, so they collapse the
+  // deferral seam. The DEFAULT deferral is pinned by its own test below.
+  function env(): Parameters<typeof downloadExactBytes>[3] {
+    return { ...recorders(), defer: (task: () => void) => task() };
   }
 
   it("writes the exact bytes it was handed and makes no network request", async () => {
@@ -605,5 +764,34 @@ describe("downloadExactBytes", () => {
     expect(anchor.download).toBe(DESIGN_JSON_FILENAME);
     expect(blobs[0].type).toContain("application/json");
     expect(await blobs[0].text()).toBe(JSON_BYTES);
+  });
+
+  // Review Important 5. Chromium starts the download synchronously on click
+  // dispatch, so revoking in the same task happens to work there — and Chromium is
+  // the ONLY engine the browser suite launches. Other engines start the download in
+  // a later task, where a same-task revoke yields a failed or zero-byte save with
+  // nothing surfacing the error. Given the whole premise is "the reviewed bytes are
+  // the only bytes that can be saved", a silently empty save is the worst outcome.
+  it("defers revoking the blob URL past the click, and still revokes it", async () => {
+    vi.useFakeTimers();
+    try {
+      // No `defer` override: this exercises the module's own default.
+      const anchor = downloadExactBytes(
+        DESIGN_MARKDOWN_FILENAME,
+        MARKDOWN_BYTES,
+        "text/markdown",
+        recorders(),
+      );
+      expect(anchor.download).toBe(DESIGN_MARKDOWN_FILENAME);
+      expect(created).toHaveLength(1);
+      // Not yet: the engine may not have started reading the blob.
+      expect(revoked).toEqual([]);
+      // But it is not leaked either.
+      vi.runAllTimers();
+      expect(revoked).toEqual(created);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await blobs[0].text()).toBe(MARKDOWN_BYTES);
   });
 });

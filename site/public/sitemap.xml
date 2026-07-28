@@ -6,6 +6,12 @@
   <url>
     <loc>https://nifabulous.github.io/clean-ui-mcp/</loc>
   </url>
+  <!-- /playground stays listed DELIBERATELY. It is the C3 composer, which can only
+       generate when the operator's own loopback server serves this site; a hosted
+       copy cannot. Delisting it would not help, because four in-product links point
+       there — so the surface states the requirement itself (the always-present
+       notice on the page) and reports a missing local API as exactly that, rather
+       than as "the server may have restarted". -->
   <url>
     <loc>https://nifabulous.github.io/clean-ui-mcp/playground</loc>
   </url>

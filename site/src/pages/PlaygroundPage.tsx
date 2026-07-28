@@ -6,8 +6,7 @@ import {
   type FormEvent,
   type ReactElement,
 } from "react";
-import { Link } from "react-router-dom";
-import { CopyAction } from "../components/CopyAction";
+import { Link, Navigate, useLocation } from "react-router-dom";
 import {
   BRIEF_MAX_LENGTH,
   BRIEF_MIN_LENGTH,
@@ -36,14 +35,30 @@ import "../styles/playground.css";
  * project list, no revision history, and no dashboard: the approved design is a
  * composer, and anything else here would be a surface with no producer behind it.
  *
- * WHAT REACHES THE DOM. Only {@link SafeArtifact}, the allowlist projection built
- * by the client from CHECKED response positions: the design direction, the key
- * decisions' structured positions, the acceptance criteria, the producer's
- * warnings, the fields it could not decide, and an AGGREGATE evidence summary
- * (counts plus retrieval metadata). No raw corpus id, source identity, product
- * name, image path, screenshot, critique, provider diagnostic, credential, or
- * filesystem path is projected, so none can be rendered — not because a scrubber
- * removed it, but because the object this component reads does not carry it.
+ * WHAT REACHES THE DOM. Only the DISPLAY-SAFE half of {@link SafeArtifact}, the
+ * allowlist projection built by the client from CHECKED response positions: the
+ * design direction, the key decisions' structured positions, the acceptance
+ * criteria, the producer's warnings, the fields it could not decide, and an
+ * AGGREGATE evidence summary (counts plus retrieval metadata). No raw corpus id,
+ * source identity, product name, image path, screenshot, critique, provider
+ * diagnostic, credential, or filesystem path is projected, so none can be
+ * rendered — not because a scrubber removed it, but because the object this
+ * component reads does not carry it.
+ *
+ * `artifact.designMarkdown` / `artifact.designJson` are the EXCEPTION, and the
+ * exception is enforced rather than asserted. They are the server's own
+ * renderings, carried through whole and unprojected because the download
+ * guarantee needs the exact bytes — and `renderDesignHandoffMarkdown` prints
+ * `spec.context.productContext`, `spec.citedReferences`, the profile's `sourceId`
+ * and URL lines, and `spec.techniques[].text` / `spec.antiPatterns[].text` /
+ * `spec.componentInventory`, i.e. positions the projection deliberately does not
+ * read. So this component treats those two strings as DOWNLOAD/CLIPBOARD PAYLOADS
+ * ONLY: they are passed to {@link downloadExactBytes} and to the clipboard, and to
+ * nothing that renders. {@link CopyHandoffAction} exists precisely because the
+ * shared `CopyAction` (site/src/components/CopyAction.tsx) answers a clipboard
+ * failure by printing its `value` into the DOM as selectable text, which would
+ * publish every one of those fields. A copy control on this page must have NO
+ * value-rendering fallback.
  *
  * The producer echoes the caller's own brief into `spec.context.productContext`.
  * The projection drops it: an operator's own brief read back is not a result. The
@@ -160,8 +175,11 @@ function successLabel(artifact: SafeArtifact): string {
   if (artifact.evidence.fallbackUsed) {
     return "Generated a design handoff using the deterministic fallback — automatic retrieval matched nothing. This is not a fully model-generated artifact; the unavailable fields are listed below.";
   }
-  if (artifact.warnings.length > 0) {
-    const count = artifact.warnings.length;
+  // Warnings the client could not MAP are still warnings. Counting only the mapped
+  // ones would announce "complete" for an artifact the producer flagged as
+  // degraded, the moment the producer adds a code this client does not know.
+  const count = artifact.warnings.length + artifact.droppedWarningCount;
+  if (count > 0) {
     return `Generated a design handoff with ${count} ${count === 1 ? "warning" : "warnings"}. Some fields were unavailable — see below.`;
   }
   return "Generated a complete design handoff.";
@@ -186,8 +204,12 @@ function failureLabel(failure: CreateUiSpecFailure): string {
       return failure.retryable
         ? "Generation could not run right now. Your brief is unchanged — try again."
         : "Generation could not run and retrying would fail the same way. Check the local server output.";
+    case "LOCAL_API_UNAVAILABLE":
+      // NOT "the server may have restarted": there was no server. This is the
+      // state of every hosted copy of this page, and the remedy is to run one.
+      return "No clean-ui server answered on this address, so nothing was generated. Generation runs on your own machine only: start the server with npm run ui and open the address it prints. A hosted copy of this page has no server to call.";
     case "CSRF_REJECTED":
-      return "Generation could not be authorized by the local server. It may have restarted — try again.";
+      return "The local server did not authorize this generation. It may have restarted — try again.";
     case "NETWORK":
       return "Generation could not reach the local server. Confirm it is running, then try again.";
     case "MALFORMED_RESPONSE":
@@ -204,7 +226,33 @@ function id(suffix: string): string {
   return `composer-${suffix}`;
 }
 
+/**
+ * The corpus-search query-string keys, mirrored from `site/src/search/search.ts`
+ * (`PARAM_QUERY`/`PARAM_CATEGORY`/`PARAM_STYLE`/`PARAM_DOMAIN`/`PARAM_PLATFORM`).
+ *
+ * They are DUPLICATED rather than imported on purpose: `search.ts` pulls in
+ * MiniSearch at module scope, and importing it here would drag the whole search
+ * index into the composer's route chunk for the sake of five string literals.
+ */
+const SEARCH_PARAM_KEYS = ["q", "category", "style", "domain", "platform"] as const;
+
+/**
+ * `/playground?q=…` was the canonical shareable corpus-search URL before C3 Task 6
+ * moved search to `/browse`. Such a URL now lands on the composer, which has no
+ * search UI and would silently discard every parameter — so it is forwarded, query
+ * intact. A `/playground` with no search parameters (or with unrelated ones, e.g.
+ * campaign tags) is a genuine composer visit and is left alone.
+ */
 export function PlaygroundPage(): ReactElement {
+  const { search } = useLocation();
+  const params = new URLSearchParams(search);
+  if (SEARCH_PARAM_KEYS.some((key) => params.has(key))) {
+    return <Navigate to={`/browse${search}`} replace />;
+  }
+  return <PlaygroundComposer />;
+}
+
+function PlaygroundComposer(): ReactElement {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [lifecycle, setLifecycle] = useState<Lifecycle>({ kind: "idle" });
 
@@ -280,6 +328,18 @@ export function PlaygroundPage(): ReactElement {
           the curated corpus and returns both handoffs — Markdown and JSON — in one response. The
           brief stays on this machine: it is sent to the loopback server beside this page and
           nowhere else.
+        </p>
+        {/* STATIC, ALWAYS PRESENT, NO PROBE. Generation is a POST to the loopback
+            server that serves this page; a hosted copy has no such server, and
+            without this notice its only signal was a failure after the operator
+            had already written a brief and pressed Generate. Probing `/api` on
+            mount would be a request made on the operator's behalf for a fact that
+            is already knowable — so the requirement is simply stated. */}
+        <p className="playground__requirement" data-testid="playground-requirement">
+          <strong>Generation runs on your own machine.</strong> This page can only generate while
+          your local clean-ui server is serving it — start it with <code>npm run ui</code> and open
+          the address it prints. A hosted copy of this page cannot generate, because there is no
+          server beside it to call. Browsing the corpus works anywhere.
         </p>
         <p className="playground__crosslink">
           Looking for the corpus itself? <Link to="/browse">Browse the corpus</Link>.
@@ -477,8 +537,98 @@ export function PlaygroundPage(): ReactElement {
 }
 
 /**
- * The result view. Renders {@link SafeArtifact} and nothing else — it has no
- * access to the raw response, so it cannot render a field the projection dropped.
+ * Copy the handoff to the clipboard WITHOUT a value-rendering fallback.
+ *
+ * WHY THIS IS NOT THE SHARED `CopyAction`. That component's documented fallback
+ * renders its `value` into the DOM as selectable text
+ * (`<code>{value}</code>`) when `navigator.clipboard.writeText` rejects — which
+ * Chrome does routinely with "Document is not focused" — or when the async
+ * Clipboard API is absent. For a public entry's agent prompt that is a reasonable
+ * affordance. For `designMarkdown` it is a publication: those bytes are the
+ * server's own rendering and carry `spec.context.productContext`,
+ * `spec.citedReferences`, the profile's `sourceId` and URL lines, and
+ * `spec.techniques[].text` / `spec.antiPatterns[].text` /
+ * `spec.componentInventory` — the exact positions the client's allowlist
+ * projection refuses to read. Rendering them on a clipboard failure would defeat
+ * the projection through the back door, and would leave the guarantee resting on
+ * those producer arrays happening to be empty in this milestone.
+ *
+ * So `value` NEVER reaches an element here. It goes to `clipboard.writeText` and
+ * nowhere else; there is no hidden textarea and no `execCommand` path either,
+ * because a transient element would still put the bytes in the document. When the
+ * clipboard is unavailable this control says so and points at the download, which
+ * saves the very same bytes with the very same hash.
+ */
+type CopyHandoffState = "idle" | "copied" | "unavailable";
+
+function CopyHandoffAction({
+  value,
+  label,
+}: {
+  readonly value: string;
+  readonly label: string;
+}): ReactElement {
+  const [state, setState] = useState<CopyHandoffState>("idle");
+
+  // Return to idle after a successful copy so the control can be reused. The
+  // unavailable state is sticky: the operator has to act on it (use the download).
+  useEffect(() => {
+    if (state !== "copied") return;
+    const timer = window.setTimeout(() => setState("idle"), 2_400);
+    return () => window.clearTimeout(timer);
+  }, [state]);
+
+  const copy = async (): Promise<void> => {
+    setState("idle");
+    const clipboard = (
+      navigator as Navigator & {
+        clipboard?: { writeText?: (data: string) => Promise<void> };
+      }
+    ).clipboard;
+    if (!clipboard || typeof clipboard.writeText !== "function") {
+      setState("unavailable");
+      return;
+    }
+    try {
+      // Called as a method so `this` is the clipboard holder, as some engines
+      // require — and so a test spy on `navigator.clipboard.writeText` observes it.
+      await clipboard.writeText(value);
+      setState("copied");
+    } catch {
+      // A rejection (document not focused, permission, insecure context). Nothing
+      // derived from the exception is rendered or logged: its text can quote the
+      // request. Never throw into the page.
+      setState("unavailable");
+    }
+  };
+
+  return (
+    <span className="copy-handoff">
+      {/* The accessible name is CONSTANT, for the same reason the Generate
+          button's is: a control that renames itself mid-interaction reads as a
+          different control to anyone who returns to it. The outcome is announced
+          by the live region below instead. */}
+      <button type="button" className="artifact__action" onClick={() => void copy()}>
+        {label}
+      </button>
+      {state !== "idle" && (
+        // Rendered only when non-idle: the page's lifecycle live region is the
+        // only `role="status"` present at rest.
+        <span className="copy-handoff__note" role="status">
+          {state === "copied"
+            ? `Copied ${DESIGN_MARKDOWN_FILENAME} to the clipboard.`
+            : `The clipboard is not available here, and the handoff is not shown as text — use Download ${DESIGN_MARKDOWN_FILENAME} instead. It saves the same bytes, under the same hash.`}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * The result view. Renders the display-safe half of {@link SafeArtifact} and
+ * nothing else — it has no access to the raw response, so it cannot render a field
+ * the projection dropped, and it passes `designMarkdown` / `designJson` only to the
+ * download and clipboard paths (see the module header).
  */
 function ArtifactView({
   artifact,
@@ -515,7 +665,7 @@ function ArtifactView({
         >
           Download {DESIGN_JSON_FILENAME}
         </button>
-        <CopyAction value={artifact.designMarkdown} label="Copy markdown" />
+        <CopyHandoffAction value={artifact.designMarkdown} label="Copy markdown" />
         <button type="button" className="artifact__action" onClick={onStartOver}>
           Start over
         </button>
@@ -621,7 +771,16 @@ function ArtifactView({
             </dd>
           </div>
           <div className="artifact__fact">
-            <dt>Corpus observations retrieved</dt>
+            {/* `resultCount` counts different things in different retrieval
+                states. In `none/none` — the explicit-reference override, which
+                this composer exposes under Advanced — it counts RESOLVED
+                REFERENCE TOKENS, not corpus observations, so the corpus label
+                would be false there. Label per state rather than once. */}
+            <dt>
+              {artifact.evidence.retrievalMode === "none"
+                ? "Explicit references resolved"
+                : "Corpus observations retrieved"}
+            </dt>
             <dd>{artifact.evidence.corpusResultCount}</dd>
           </div>
           <div className="artifact__fact">

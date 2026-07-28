@@ -61,17 +61,23 @@ export function HomePage(): ReactElement {
             corpus and gets back a decision, the evidence behind it, what to steal, what to avoid,
             and where it came from.
           </p>
+          {/* PRIMARY = the action that works wherever this page is served.
+              /browse searches an already-published snapshot in the browser, so it
+              works on a hosted copy. /playground is the C3 composer: it can only
+              generate when this page is served BY the operator's own loopback
+              server (`npm run ui`), because generation is a POST to that server's
+              /api/create-ui-spec. Advertising the composer as the primary public
+              action promised something a hosted copy cannot do, so it is
+              secondary here and the composer states the requirement itself. */}
           <div className="home__actions">
-            <Link className="home__action home__action--primary" to="/playground">
-              Try Playground
+            <Link className="home__action home__action--primary" to="/browse">
+              Browse the corpus
             </Link>
             <Link className="home__action home__action--secondary" to="/install">
               Install MCP
             </Link>
-            {/* The corpus search moved to /browse when /playground became the
-                create_ui_spec composer (C3 Task 6). Keep it discoverable here. */}
-            <Link className="home__action home__action--secondary" to="/browse">
-              Browse the corpus
+            <Link className="home__action home__action--secondary" to="/playground">
+              Try Playground
             </Link>
           </div>
         </div>
@@ -249,18 +255,20 @@ export function HomePage(): ReactElement {
       <section className="home__cta" aria-labelledby="home-cta-title">
         <h2 id="home-cta-title">Give your agent design judgment</h2>
         <p>
-          Try the Playground now, or install the MCP server and let your agent call clean-ui
-          directly.
+          Search the corpus now, or install the MCP server and let your agent call clean-ui
+          directly. The Playground composer generates handoffs once the server is running on your
+          own machine.
         </p>
+        {/* Same primary/secondary reasoning as the hero above. */}
         <div className="home__cta-actions">
-          <Link className="home__action home__action--primary" to="/playground">
-            Try Playground
+          <Link className="home__action home__action--primary" to="/browse">
+            Browse the corpus
           </Link>
           <Link className="home__action home__action--secondary" to="/install">
             Install MCP
           </Link>
-          <Link className="home__action home__action--secondary" to="/browse">
-            Browse the corpus
+          <Link className="home__action home__action--secondary" to="/playground">
+            Try Playground
           </Link>
         </div>
       </section>

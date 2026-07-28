@@ -675,6 +675,15 @@ describe("create_ui_spec MCP registration — the contract gate runs before anyt
     // variants, so `INVALID_INPUT` + `retryable: true` is a contradiction the gate
     // rejects. Mutating the shared table is heavy-handed, so it is restored in a
     // `finally` and the restoration is re-verified by a real call below.
+    //
+    // This mutate-then-restore pattern is only safe under two invariants this
+    // file does not otherwise state: (1) tests within a file run SERIALLY
+    // (vitest.config.ts documents this, and nothing here uses `.concurrent`),
+    // so no other test can observe the table between the mutation and the
+    // `finally`; and (2) vitest isolates the module graph PER FILE, so the
+    // mutation cannot bleed into other test files. If this file ever adds
+    // `.concurrent` or a config flip sets `isolate: false`, this test would
+    // need a different lever — the window described here would become real.
     const original = ERROR_RETRYABLE.INVALID_INPUT;
     expect(original).toBe(false);
     let message = "";

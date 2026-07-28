@@ -84,6 +84,24 @@ const isEmittedOutput = (name: string): boolean => name.endsWith(".js");
  * Fail loudly when `dist/` is missing or older than `src/`. Called from
  * `beforeAll` (so a stale build cannot be silently exercised by any test in this
  * file) and asserted again as a named test (so the report says WHY).
+ *
+ * This is a heuristic, not a proof of correctness: erring toward a loud false
+ * ALARM over a silent false green is the right trade here, but the mtime
+ * comparison has three undocumented false-PASS modes where it stays quiet over
+ * a build that does not actually match `src/`:
+ *  (a) a source file DELETED from `src/` leaves its stale `dist/*.js` in
+ *      place and bumps no `src` mtime — max-src stays older than max-dist, so
+ *      the guard is satisfied by a `dist/` containing a module that no longer
+ *      exists;
+ *  (b) a system clock moved BACKWARD makes a genuinely newer edit carry an
+ *      older mtime than the build it should invalidate;
+ *  (c) an mtime-PRESERVING restore (e.g. `rsync --times`, some tarball
+ *      extractions) changes file content without advancing mtime at all.
+ * None of these are proof the compiled server matches `src/` — only that the
+ * timestamps did not disagree. The narrower tool-list marker below (the exact
+ * 14-name set with `generate_design_prompt` absent) backstops the case that
+ * matters most, but does not close the general gap; an exact answer would
+ * need a content-hash manifest, which this suite does not maintain.
  */
 function assertCompiledServerIsCurrent(): void {
   const newestSource = newestFile(SRC_DIR, isEmittedSource);

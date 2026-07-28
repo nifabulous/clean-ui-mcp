@@ -21,22 +21,41 @@
  * rather than dressed up as a typed caller-facing error — the response is
  * refused, never served.
  *
- * TWO SERVED SURFACES, TWO CONTROLS:
- *  - `structuredContent` is the shared result envelope. Every string leaf under
- *    `data` / `referenceIds` / `evidence` is walked by the leaf gate; the
- *    envelope's own `.strict()` shape means this adapter cannot introduce a
- *    top-level field the gate has not been taught about (adding one would
- *    require extending the walker's roots deliberately, which this task does
- *    not do).
- *  - `content[0].text` is the producer's rendering, byte-identical to
- *    `envelope.designMarkdown` or `envelope.designJson` from the SAME producer
- *    invocation — never re-rendered or re-serialized here. The leaf gate does
- *    NOT walk it (its roots are the three above), so its control is
- *    `DesignArtifactEnvelopeSchema`'s private-marker sweep over every string in
- *    the envelope, which `parseDesignArtifactEnvelope` has already applied. This
- *    adapter restates that one screen at the transport boundary
- *    ({@link assertRenderingIsServable}) so the single served string the gate
- *    cannot see is not the one unguarded position.
+ * WHAT THE LEAF GATE ACTUALLY SCREENS, AND WHAT IT DOES NOT. The Task 1b leaf
+ * gate walks `data` / `referenceIds` / `evidence` and checks each string leaf
+ * against ID/path/domain SHAPE patterns (fail-closed default) — it does not
+ * screen prose, in any position. A free-text field under `data` (e.g.
+ * `spec.designDirection`) is exactly as unscreened by the gate as
+ * `content[0]` is; relocating text under `data` does not bring it under gate
+ * authority. So `structuredContent`'s actual protections are (1) the gate's
+ * shape screen on the positions it walks, and (2) the envelope's own
+ * `.strict()` shape, which stops this adapter introducing an untaught
+ * top-level field.
+ *
+ * `content[0].text` is `renderDesignHandoffMarkdown`/`renderDesignHandoffJson`
+ * over `parseDesignHandoff({ spec, target, motionIntents, generatedAt })`
+ * (see create-ui-spec.ts), and `parseDesignArtifactEnvelope` re-derives both
+ * renderings from those same four inputs and demands byte equality against
+ * the stored hashes before the envelope is accepted. `target` is a closed
+ * enum resolved to producer constants. So `content[0]` cannot carry anything
+ * that is not derivable from spec + closed enum + caller motionIntents + a
+ * timestamp — producer-derived corpus content can reach `content[0]` ONLY via
+ * `spec`, and if it does, the same string is simultaneously present in
+ * `structuredContent.data`. There is no corpus-data channel unique to the
+ * rendering.
+ *
+ * The one input that genuinely reaches `content[0]` and nowhere else is
+ * caller-supplied `handoff.motionIntents`: it is rendered into `content[0]`
+ * but never copied into `spec` (`spec.motionGuidance` is hardcoded
+ * `{ notes: [], evidenceUnavailable: true }` in create-ui-spec.ts). Its
+ * fields are unbounded strings, not walked by the leaf gate, and screened
+ * only by the same `containsPrivateMarker` sweep
+ * ({@link assertRenderingIsServable}) that covers the rest of the rendering —
+ * no length bound beyond an 8-entry cap. It is not a leak, because it is the
+ * caller's own request data reflected back to the caller, not corpus data —
+ * but it is the one served position with no walker and no length bound, and
+ * it is worth naming so nobody assumes `structuredContent`'s gate coverage
+ * extends to it.
  *
  * WHAT NEVER REACHES A SURFACE. `ResolvedEvidence.omittedReferenceTokens` holds
  * the caller's RAW refused tokens; it is deliberately not read here and has no

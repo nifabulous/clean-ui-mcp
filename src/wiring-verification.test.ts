@@ -327,6 +327,23 @@ const ALLOWLIST = new Set<string>([
   // semantics cannot drift before those adapters land. Remove this entry when
   // either adapter lands and calls it for real.
   "projectRetrievalStateForTransport",
+  // create-ui-spec-dependencies.ts — the ONE adapter dependency constructor and
+  // the ONE explicit-reference policy (Task 2a of the C3 slice). Its production
+  // callers are the two transport adapters, NEITHER of which exists yet:
+  //   - the MCP adapter (Task 3) — will call it in the create_ui_spec tool
+  //     registration in src/server-factory.ts (where every other
+  //     register*(server, reader) lives), reached from src/server.ts's
+  //     createServer(buildReader(mode));
+  //   - the loopback HTTP adapter (Task 5) — will call it in the operator
+  //     create-ui-spec route in src/scripts/ui-server.ts.
+  // Wiring either call site NOW would mean creating the adapter it feeds, which
+  // is those tasks' work, so the factory is exported + test-covered
+  // (src/create-ui-spec-dependencies.test.ts) and listed here explicitly rather
+  // than coupled to a placeholder caller. This entry is DELIBERATE, not
+  // incidental: the scan currently finds no match at all for the symbol (its own
+  // doc comment does not name it), so removing this entry fails the test until
+  // Task 3 or Task 5 calls it for real. Remove it then.
+  "makeCreateUiSpecDependencies",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

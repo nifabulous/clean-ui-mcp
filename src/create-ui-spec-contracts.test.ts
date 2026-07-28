@@ -313,6 +313,26 @@ describe("SanitizedEvidenceSchema", () => {
     }
   });
 
+  it("rejects a summary carrying a RELATIVE path (no leading slash, no marker word)", () => {
+    // Pins PATH_OR_URL_PATTERN's PATH role independently of its corpus-marker
+    // role. Round-2 review of Task 2 found that PATH_OR_URL_PATTERN now serves
+    // two concerns, and that dropping its `[/\\]` character class left all the
+    // other summary cases green: every one of them is caught first by
+    // containsPrivateMarker ("images-private/"), by `://`, by the literal
+    // "private" alternative, or by "corpus-". Only `corpus-entry-4711` pinned a
+    // single alternative, and nothing pinned `[/\\]`. These two values contain a
+    // path separator and NOTHING else the pattern or the marker list matches, so
+    // they fail if and only if the character class is present.
+    for (const summary of [
+      "dashboard reference assets/hero.png",
+      "dashboard reference //cdn.example.com/x.png",
+    ]) {
+      const e = validCorpusEvidence();
+      e.summary = summary;
+      expect(SanitizedEvidenceSchema.safeParse(e).success, summary).toBe(false);
+    }
+  });
+
   it("the summary rejection message never echoes the offending value", () => {
     const e = validCorpusEvidence();
     e.summary = "dashboard reference images-private/secret.png";

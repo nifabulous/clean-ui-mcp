@@ -30,9 +30,37 @@
  *      importing them into the reader would create a path from a public-mode
  *      tool to private similarity scores + private entry counts.
  *
+ *   3. `src/create-ui-spec-dependencies.ts` — the one adapter dependency
+ *      constructor (Task 2a) — must NOT import the unrestricted corpus loader
+ *      or anything (value or type) from `./corpus.js`, `./persistence.js`, or
+ *      `./embeddings.js`. This module sits in the same public tool-registration
+ *      path as `server-factory.ts` (both adapters call it to build the
+ *      `CreateUiSpecDependencies` the core producer consumes), so it needs the
+ *      same static guard: a caller-supplied token must only ever be checked
+ *      against the injected reader, never a fallback loader.
+ *
  * These checks are scoped to actual import statements (not comments or string
  * literals) so documentation that mentions a symbol by name doesn't trip the
  * boundary. The import-statement regexes below require `import ... from "..."`.
+ *
+ * Non-transitivity (all three checks above): each check inspects only the
+ * named file's OWN import lines. None of them follow what that file's imports
+ * themselves import. Today this is sound for `create-ui-spec-dependencies.ts`
+ * because both of its imports (`corpus-reader.js`, `create-ui-spec.js`) are
+ * `import type` — fully erased at runtime, so there is no actual runtime edge
+ * to chase. But the check itself does not verify that; it would stay green if
+ * a future edit added a value import of a small wrapper module (e.g.
+ * `./corpus-helper.js`) that itself re-exports `loadCorpus` from `./corpus.js`
+ * — one level of indirection defeats a direct-import check. Making this fully
+ * transitive would require resolving each relative import to its file on
+ * disk, distinguishing type-only from value imports at every hop (a naive
+ * walk that does not distinguish them false-positives immediately: both
+ * `create-ui-spec.ts` and `recommend.ts` have their own legitimate `import
+ * type { SearchResult } from "./corpus.js"`), and recursing with cycle
+ * protection — effectively a small module-graph analyzer, not a regex over
+ * one file. That is out of scope for this test; the direct check below is
+ * the same strength as the two above it, and this comment is the honest
+ * record of what it does not prove.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -183,6 +211,43 @@ describe("public import boundary — no private loader leaks into the public ser
     expect(
       embeddingsImportLines,
       `corpus-reader.ts imports from ./embeddings.js: ${JSON.stringify(embeddingsImportLines)}`,
+    ).toEqual([]);
+  });
+
+  it("create-ui-spec-dependencies.ts does not import the unrestricted loader or corpus.js/persistence.js/embeddings.js", () => {
+    const source = stripComments(readSrc("create-ui-spec-dependencies.ts"));
+
+    // (a) Must NOT import the unrestricted loader symbols from anywhere. These
+    // are the live-corpus entry points; wiring them into the one adapter
+    // dependency constructor would let ANY caller (private or public) reach
+    // the unrestricted loader directly, bypassing the injected reader entirely
+    // — the exact widening this module's doc comment says can never happen.
+    const loaderHits = importMatches(
+      source,
+      ["loadCorpus", "loadCorpusSafe", "tryReadCorpus"],
+      /.*/,
+    );
+    expect(
+      loaderHits,
+      `unrestricted loader imports: ${JSON.stringify(loaderHits)}`,
+    ).toEqual([]);
+
+    // (b) Must NOT import anything (value or type) from ./corpus.js,
+    // ./persistence.js, or ./embeddings.js. The module's only job is to close
+    // over the injected reader and its `getById`; a corpus/persistence/index
+    // import here would give the resolver a second, un-reviewed route to
+    // corpus data that no adapter test could see from outside.
+    const forbiddenModuleImportLines = source
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) =>
+        /^import\b.*from\s+["'](?:\.\/corpus\.js|\.\/persistence\.js|\.\/embeddings\.js)["']/.test(
+          l,
+        ),
+      );
+    expect(
+      forbiddenModuleImportLines,
+      `create-ui-spec-dependencies.ts imports from a forbidden module: ${JSON.stringify(forbiddenModuleImportLines)}`,
     ).toEqual([]);
   });
 

@@ -51,7 +51,7 @@
  * literals) so documentation that mentions a symbol by name doesn't trip the
  * boundary. The import-statement regexes below require `import ... from "..."`.
  *
- * Non-transitivity (all three checks above): each check inspects only the
+ * Non-transitivity (all FOUR checks above): each check inspects only the
  * named file's OWN import lines. None of them follow what that file's imports
  * themselves import. Today this is sound for `create-ui-spec-dependencies.ts`
  * because both of its imports (`corpus-reader.js`, `create-ui-spec.js`) are

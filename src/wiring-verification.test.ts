@@ -302,14 +302,29 @@ const ALLOWLIST = new Set<string>([
   // precedent as computeLabelAgreement / assertAgreementMatchesSubmissions /
   // computeManifestSha256 above.
   "validateBaselineCompatibility",
-  // create-ui-spec.ts — the envelope-only public core function. NOTE: the MCP
-  // adapter that landed in Task 3 (src/create-ui-spec-mcp.ts) calls
-  // `createUiSpecForAdapter`, NOT this function, so this entry is still
-  // load-bearing for `createUiSpec` itself: its only non-test consumers are the
-  // compiled-runtime probe (scripts/c3-runtime-probe.mjs, via the deferred
-  // dist/create-ui-spec.js import — the same .mjs-via-dist pattern as the C2
-  // manifest symbols above, which the src/*.ts regex scan cannot see) and the
-  // loopback HTTP adapter still to come in Task 5. Re-evaluate when that lands.
+  // create-ui-spec.ts — the envelope-only public core function.
+  //
+  // THIS ENTRY IS INERT, AND THAT IS WORSE THAN IT SOUNDS. The scan resolves
+  // `createUiSpec` via two word-boundary matches in
+  // src/create-ui-spec-contracts.ts — and BOTH are inside doc comments. So the
+  // check already returns true for this symbol whether or not it is allowlisted:
+  // removing this entry would leave the test green, and the entry suppresses
+  // nothing. This is exactly the comment-defeat limitation this file's own header
+  // warns about (see "What it does NOT catch"), which means the guard cannot see
+  // `createUiSpec`'s real production wiring AT ALL — allowlisted or not. Do not
+  // read this entry as "the symbol is under guard".
+  //
+  // Its genuine non-test consumers, neither of which the src/*.ts regex scan can
+  // see: the compiled-runtime probe (scripts/c3-runtime-probe.mjs, via the
+  // deferred dist/create-ui-spec.js import — the same .mjs-via-dist pattern as
+  // the C2 manifest symbols above) and the loopback HTTP adapter still to come in
+  // Task 5. The Task 3 MCP adapter (src/create-ui-spec-mcp.ts) calls
+  // `createUiSpecForAdapter`, NOT this function, so it is not one of them.
+  //
+  // Kept rather than deleted only so this explanation has a home. If the two
+  // doc-comment mentions in create-ui-spec-contracts.ts ever disappear, this
+  // entry becomes the thing that keeps the test green — at which point re-derive
+  // whether a real caller exists instead of trusting the suppression.
   "createUiSpec",
   // REMOVED in Task 3 (do not re-add without a reason):
   //   - projectSanitizedEvidenceToMcpEvidence

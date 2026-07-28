@@ -842,8 +842,9 @@ keys + `RUN_LIVE_INTEGRATION=1`).
 | `npm run benchmark-image-embeddings` | Benchmark the configured image-embedding provider against the critique fixtures |
 | `npm run site:dev` | Vite dev server for the public site (`site/`) at the production base path |
 | `npm run site:build` | Production build of the public site into `site/dist` |
-| `npm run site:test` | Public-site unit/component tests (jsdom); excludes the e2e browser suite |
+| `npm run site:test` | Public-site unit/component tests (jsdom); excludes the e2e browser suites |
 | `npm run site:test:browser` | End-to-end Playwright suite against a built `site/dist` served by `vite preview` |
+| `npm run site:test:browser:production` | End-to-end Playwright suite against the real loopback server (`dist/scripts/ui-server.js` with `CLEAN_UI_SITE_DIST=site/dist`), which serves the built site and `/api/*` from one origin |
 
 ---
 
@@ -861,7 +862,10 @@ npm test                 # all tests
 npx vitest run           # unit tests only
 ```
 
-CI runs on every PR: `npm ci` → Playwright install → `build` → `validate-corpus` → `test`.
+CI runs on every PR (`.github/workflows/ci.yml`): `npm ci` → Playwright install →
+`validate-references` → `build` → `validate-corpus` → `test` →
+`test:critique-quality` → the public-site gate (`site:test` → `site:build` →
+`site:test:browser` → `site:test:browser:production` → `check-site-budget`).
 
 ---
 
@@ -876,19 +880,43 @@ The public-site quality gate mirrors the curator gate and runs in CI after
 `npm test`:
 
 ```bash
-npm run site:test            # jsdom unit/component tests (excludes e2e)
-npm run site:build           # production build → site/dist
-npm run site:test:browser    # Playwright e2e against `vite preview` (base-path routing + a11y)
-node scripts/check-site-budget.mjs   # initial-JS gzip budget (≤ 150 KB, lazy chunks excluded)
+npm run site:test                     # jsdom unit/component tests (excludes both e2e suites)
+npm run site:build                    # production build → site/dist
+npm run site:test:browser             # Playwright e2e against `vite preview` (base-path routing + a11y)
+npm run site:test:browser:production  # Playwright e2e against the real loopback server (site + /api/* on one origin)
+node scripts/check-site-budget.mjs    # initial-JS gzip budget (≤ 150 KB, lazy chunks excluded)
 ```
 
-The browser suite (`site/tests/site-browser.test.ts`) spawns one shared Chromium
+`.github/workflows/ci.yml` runs these five steps in exactly this order on every
+PR. The order is load-bearing: `site/dist` is gitignored, so on a fresh checkout
+it does not exist when `site:test` runs. Both browser suites read a built
+`site/dist`, so `site/vite.config.ts` excludes `tests/**/*browser*.test.ts` from
+`site:test` **as a class** — a new browser suite inherits the exclusion from its
+filename rather than needing the list extended (it did not get extended once, and
+the result was green locally / red on CI).
+
+**Preview suite** — `site/tests/site-browser.test.ts`. Spawns one shared Chromium
 instance + one `vite preview` server and asserts base-path routing, no 404s on
 assets/snapshot/images across a full navigation journey, and the accessibility
 contract (skip-link order, mobile-menu focus return, live-region announcement,
-theme persistence, reduced-motion respect, no 320px overflow). It requires a
-built `site/dist`, so it runs after `site:build` and is excluded from
-`site:test` (which must be able to run before a build).
+theme persistence, reduced-motion respect, no 320px overflow).
+
+**Production suite** — `site/tests/site-production-browser.test.ts`. Not redundant
+with the preview suite, and not replaceable by it. `vite preview` is a static dev
+server with no `/api/*` at all, so the preview suite must intercept those calls,
+and it resolves static paths through Vite's middleware rather than the server's
+traversal-safe resolver — a green preview run is compatible with a completely
+broken production serving path. This suite instead spawns
+`dist/scripts/ui-server.js` with `CLEAN_UI_SITE_DIST=site/dist` (the operator's
+own dogfood form, `CLEAN_UI_SITE_DIST=site/dist npm run ui`) and drives real
+Chromium against it, asserting that `/clean-ui-mcp/playground` and
+`/clean-ui-mcp/browse` resolve through the production SPA fallback, that the
+`/browse` query string round-trips, that the same process owns `/api/*` (real
+CSRF nonce, real 403 without it), and that no provider credential reaches the
+served document. It spawns the child with every provider key cleared and
+`C2_NO_DOTENV=1`, so it makes no network or provider call. A regression in
+`serveSiteAsset`, the SPA fallback, or the `/api/*`-before-static ordering fails
+here and nowhere else.
 
 ---
 

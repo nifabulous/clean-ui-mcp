@@ -92,6 +92,24 @@ interface ProductionServer {
 }
 
 /**
+ * The spawned child, published the INSTANT it exists — before readiness polling,
+ * before `startProductionServer()` resolves.
+ *
+ * `beforeAll` has a 90s budget. If startup exceeds it, vitest fails the hook and
+ * the `server = await startProductionServer()` assignment never happens, so an
+ * `afterAll` that could only see `server` would be a no-op while a child holds a
+ * listening socket for the rest of the run (the child is not `detached`, so a
+ * parent exit does not reap it either). Publishing the handle here — not on
+ * resolve — is what makes the child reachable for teardown on EVERY failure mode:
+ * throw, reject, and hook timeout alike.
+ *
+ * `stop()` is idempotent (it returns early once the process has exited or been
+ * signalled), so the readiness `catch` calling it and `afterAll` calling it again
+ * is safe.
+ */
+let spawnedServer: ProductionServer | undefined;
+
+/**
  * Start the production loopback server and resolve once it answers.
  *
  * Readiness is a real HTTP 200 for the base path, not a log line: the log is
@@ -147,6 +165,11 @@ async function startProductionServer(): Promise<ProductionServer> {
     clearTimeout(escalate);
   };
 
+  const handle: ProductionServer = { baseUrl, port, proc, stop };
+  // Reachable for teardown from here on — see `spawnedServer` above. This
+  // assignment must precede the readiness loop, which is the part that can hang.
+  spawnedServer = handle;
+
   // Readiness is a real HTTP 200, not a log line. Any failure from here on MUST
   // stop the child first: `beforeAll` throwing means `afterAll` never receives a
   // handle to it, so a bare `throw` would leak the process (and its port) for the
@@ -161,14 +184,22 @@ async function startProductionServer(): Promise<ProductionServer> {
         );
       }
       try {
-        const response = await fetch(baseUrl);
+        // PER-ATTEMPT TIMEOUT, NOT OPTIONAL. Without a signal, undici's default
+        // header/body timeout is 300s, so a child that BINDS the port but never
+        // answers (wedged corpus load, saturated machine) parks this `await`
+        // forever — the `Date.now() > deadline` check below never executes and the
+        // 30s deadline is unreachable. 3s is far above a loopback response time
+        // and keeps the deadline the real bound: ~9 attempts, then a clean throw
+        // that runs `stop()` instead of a hook timeout that cannot.
+        const response = await fetch(baseUrl, { signal: AbortSignal.timeout(3_000) });
         if (response.status === 200) {
           // Drain the body so the socket closes cleanly.
           await response.text();
           break;
         }
       } catch {
-        // Not listening yet.
+        // Not listening yet, or this attempt timed out. Either way, re-check the
+        // deadline below rather than retrying unbounded.
       }
       if (Date.now() > deadline) {
         throw new Error(`production server did not become ready: ${output.join("")}`);
@@ -180,7 +211,7 @@ async function startProductionServer(): Promise<ProductionServer> {
     throw error;
   }
 
-  return { baseUrl, port, proc, stop };
+  return handle;
 }
 
 let browser: Browser | undefined;
@@ -227,8 +258,17 @@ beforeAll(async () => {
 }, 90_000);
 
 afterAll(async () => {
-  await browser?.close();
-  await server?.stop();
+  // EACH RESOURCE IS RELEASED INDEPENDENTLY. Playwright rejects on flaky teardown
+  // ("Target closed"), and without the `finally` that rejection propagates out of
+  // the hook before the server is stopped — leaking the child and holding its port
+  // for the rest of the run, the same leak class as the readiness hang. The server
+  // is stopped via `spawnedServer`, not `server`, so it is released even when
+  // `beforeAll` never got far enough to assign `server`.
+  try {
+    await browser?.close();
+  } finally {
+    await spawnedServer?.stop();
+  }
 });
 
 describe("production loopback server — built site", () => {

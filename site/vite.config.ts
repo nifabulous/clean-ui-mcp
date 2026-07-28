@@ -56,17 +56,28 @@ export default defineConfig({
     // whole suite headroom on cold/loaded CI runners without masking genuine
     // hangs (which would still blow past this).
     testTimeout: 15_000,
-    // The end-to-end browser suite (tests/site-browser.test.ts) spawns a real
-    // Chromium + `vite preview` server against a BUILT site/dist, so it must run
-    // AFTER `site:build` and only via the dedicated `site:test:browser` script
-    // (which uses the root vitest config + an explicit file path, so this exclude
-    // does not affect it). Excluding it here keeps `site:test` self-contained —
+    // EXCLUDED AS A CLASS, NOT BY FILENAME. Every end-to-end browser suite in
+    // `tests/` spawns a real Chromium against a BUILT site/dist (the preview
+    // fixture via `vite preview`, the production fixture via
+    // dist/scripts/ui-server.js), so each must run AFTER `site:build` and only via
+    // its dedicated `site:test:browser*` script — those use
+    // tests/vitest.browser.config.ts plus explicit file paths, so this exclude
+    // does not affect them. Excluding them here keeps `site:test` self-contained:
     // it can run before the build in the gate (site:test → site:build →
-    // site:test:browser) without failing on a missing/ stale dist.
+    // site:test:browser → site:test:browser:production) without failing on a
+    // missing/stale dist.
+    //
+    // The pattern is `*browser*.test.ts` rather than the known filenames because
+    // the by-filename form silently regressed once already: `site:test` began
+    // globbing tests/site-production-browser.test.ts the moment that file landed,
+    // which is green locally (a dev has a dist) and red on a fresh CI checkout.
+    // A THIRD browser suite must inherit the exclusion automatically — name it
+    // `*browser*.test.ts` and it does. `tests/preview-url-parse.test.ts` is a pure
+    // unit test (no dist, no Chromium) and deliberately stays in `site:test`.
     exclude: [
       "**/node_modules/**",
       "**/dist/**",
-      "tests/site-browser.test.ts",
+      "tests/**/*browser*.test.ts",
     ],
   },
 });

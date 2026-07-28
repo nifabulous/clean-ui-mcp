@@ -21,12 +21,29 @@ jobs:
       - run: npm run validate-corpus
       - run: npm test
       - run: npm run test:critique-quality
-      # Public-site gate (spec §12 + §13): unit tests for the site app, a
-      # production build (so .vite/manifest.json + hashed assets exist), the
-      # end-to-end base-path + accessibility browser suite against `vite preview`,
-      # and the gzip bundle-budget check (initial JS must stay under 150KB gz,
-      # excluding the lazy Playground/Evidence chunks).
+      # Public-site gate (spec §12 + §13). ORDER IS LOAD-BEARING: site:test is the
+      # jsdom suite and must be able to run BEFORE the build (site/dist is
+      # gitignored, so it does not exist on a fresh checkout — which is why
+      # site/vite.config.ts excludes tests/**/*browser*.test.ts as a class). Both
+      # browser suites read a built site/dist, so both run AFTER site:build:
+      #   site:test                    unit/component tests for the site app
+      #   site:build                   production build (.vite/manifest.json + hashed assets)
+      #   site:test:browser            base-path + accessibility e2e via `vite preview`
+      #   site:test:browser:production e2e via the REAL loopback server (see below)
+      #   check-site-budget            initial-JS gzip budget (<150KB, lazy chunks excluded)
+      #
+      # site:test:browser:production is NOT redundant with site:test:browser. The
+      # preview suite runs against `vite preview`, a static dev server with no
+      # `/api/*` at all, so it has to intercept those calls and it resolves static
+      # paths with Vite's middleware rather than the server's traversal-safe
+      # resolver. It is therefore compatible with a completely broken production
+      # serving path. The production suite spawns dist/scripts/ui-server.js with
+      # CLEAN_UI_SITE_DIST=site/dist — what the operator runs — so a regression in
+      # serveSiteAsset, the SPA fallback, or the `/api/*`-before-static ordering
+      # fails here and nowhere else. Chromium is already installed above and the
+      # site is already built, so the marginal cost is one server spawn.
       - run: npm run site:test
       - run: npm run site:build
       - run: npm run site:test:browser
+      - run: npm run site:test:browser:production
       - run: node scripts/check-site-budget.mjs

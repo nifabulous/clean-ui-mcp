@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import "../env.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync, readdirSync, rmSync } from "node:fs";
-import { createHash } from "node:crypto";
-import { extname, resolve, join } from "node:path";
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { extname, resolve, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 // SSRF guard extracted to ../ssrf.ts (shared with the CLI capture path).
 // The dns.lookup import that lived here previously moved with it.
@@ -26,6 +26,21 @@ import {
   listSnapshots, loadCorpusSafe, persistEntries,
   type LoadedCorpus,
 } from "../persistence.js";
+// C3 Task 5: the create_ui_spec loopback route. The HANDLER lives in
+// ../create-ui-spec-http.ts (a thin transport adapter over the sole producer);
+// this file owns only the HTTP plumbing — method/path routing, the CSRF gate, a
+// bounded body read, and writing the adapter's already-validated bytes.
+import { PrivateCorpusReader, type CorpusReader } from "../corpus-reader.js";
+import { handleCreateUiSpecHttp } from "../create-ui-spec-http.js";
+// The SHARED core→transport error mapping (also used by the MCP adapter). The
+// pre-adapter refusals below build their bodies from it rather than restating a
+// code, message or retryable flag — a second copy here is exactly the drift the
+// shared module exists to prevent.
+import {
+  createUiSpecIntegrityRefusalError,
+  createUiSpecTransportError,
+  type CreateUiSpecTransportError,
+} from "../create-ui-spec-transport-errors.js";
 
 const PORT = Number(process.env.CLEAN_UI_PORT ?? 3131);
 const APP_PATH = resolve(PROJECT_ROOT, "index-2.html");
@@ -158,6 +173,107 @@ export function sameOrigin(req: IncomingMessage): boolean {
   }
 }
 
+// ─── CSRF nonce (C3 Task 5) ───────────────────────────────────────────────────
+//
+// WHY A NONCE ON TOP OF THE ORIGIN GUARD. `sameOrigin` above lets a request with
+// NO `Origin` header through, because that is how a non-browser client (curl, a
+// node script, a test) looks — and that allowance is the entire hole. Several
+// browser-driven request shapes reach a server without an `Origin` header or
+// with one the server cannot distinguish, and every mutating route here writes
+// the corpus on disk or launches a browser. A nonce closes it from the other
+// side: a cross-site page can *send* a request, but it cannot *read* the
+// same-origin `GET /api/csrf` response, so it cannot learn the value it must
+// echo. The two guards are complementary and both stay.
+//
+// PROCESS-LOCAL, MEMORY-ONLY, INVALIDATED ON RESTART. One nonce per process,
+// generated lazily from `randomBytes(32)`, held in a module variable and written
+// nowhere — not to disk, not to an env var, not to a log. A restart therefore
+// invalidates it by construction: the new process mints a new one, and every
+// pre-restart nonce stops being accepted anywhere. Clients handle that by
+// re-fetching on a 403 (see `apiFetch` in ui/app.js and ui/classic-app.js).
+//
+// WHICH ROUTES IT COVERS: every mutating (POST/PUT/PATCH/DELETE) `/api/*`
+// request, with NO exemption — the new C3 route and all of the existing curator
+// routes alike. There is deliberately no per-route opt-out: the only thing that
+// ever distinguished a "non-browser caller" here was the absence of an `Origin`
+// header, which is not an authorization signal and which no route ever explicitly
+// relied on. A non-browser caller keeps working exactly as a browser does, by
+// performing the same two-step exchange (`GET /api/csrf`, then send the nonce).
+
+/** The required header name. Exported so tests and clients cannot mistype it. */
+export const CSRF_HEADER = "X-Clean-UI-CSRF";
+const CSRF_HEADER_LOWER = CSRF_HEADER.toLowerCase();
+
+/**
+ * The process-local nonce. `null` until first requested; never reset within a
+ * process, never persisted. Lazy so importing this module (as every test in this
+ * suite does) does not consume entropy for a server that may never start.
+ */
+let csrfNonce: string | null = null;
+
+function currentCsrfNonce(): string {
+  if (csrfNonce === null) {
+    // 32 bytes = 256 bits of CSPRNG output, hex-encoded.
+    csrfNonce = randomBytes(32).toString("hex");
+  }
+  return csrfNonce;
+}
+
+/**
+ * Constant-time full-value equality against the process nonce.
+ *
+ * The failure modes this is written to avoid, each of which a naive check hits:
+ *  - a MISSING header (`undefined`) compared loosely against a missing expected
+ *    value — rejected here by the explicit `typeof !== "string"` test;
+ *  - the EMPTY STRING treated as a match — rejected by the length check, which
+ *    also makes `timingSafeEqual` safe to call (it throws on length mismatch);
+ *  - PREFIX / SUBSTRING acceptance — `timingSafeEqual` compares the whole buffer,
+ *    and unequal lengths are rejected before it, so neither a proper prefix nor a
+ *    nonce-plus-suffix can pass;
+ *  - CASE folding or trimming — neither is applied, so `NONCE`, ` nonce ` and a
+ *    tab-padded nonce are all refused;
+ *  - a DUPLICATED header — node joins repeated header values with ", ", producing
+ *    a longer string that fails the length check.
+ *
+ * The comparison is timing-safe. That is belt-and-braces for a loopback-only,
+ * single-operator server, but the nonce is the only thing standing between a
+ * malicious page and a corpus write, so it is not the place to be clever.
+ */
+function csrfNonceMatches(req: IncomingMessage): boolean {
+  const supplied = req.headers[CSRF_HEADER_LOWER];
+  if (typeof supplied !== "string" || supplied.length === 0) return false;
+  const expected = Buffer.from(currentCsrfNonce(), "utf-8");
+  const actual = Buffer.from(supplied, "utf-8");
+  if (actual.length !== expected.length) return false;
+  return timingSafeEqual(actual, expected);
+}
+
+// ─── the create_ui_spec reader (C3 Task 5) ────────────────────────────────────
+//
+// This server had NO `CorpusReader` at all before Task 5 — every corpus access
+// went through `loadCorpusSafe`/`corpus.ts` directly. `makeCreateUiSpecDependencies`
+// cannot enforce an isolation the reader it is handed does not have, so the
+// operator route needs a real reader, and this is where it is constructed.
+//
+// PRIVATE, deliberately: this is the operator's own loopback curator server,
+// bound to 127.0.0.1, serving the same private corpus the rest of this file
+// already reads and writes. There is no public-mode variant of THIS surface — the
+// public surface is the MCP server (src/server.ts), which resolves
+// `PrivateCorpusReader` / `PublicCorpusReader` from `CLEAN_UI_CORPUS_MODE` and
+// injects it into `registerCreateUiSpec`. Making the operator route follow that
+// env var would let an operator silently narrow their OWN tool while the rest of
+// this server kept full private access — a confusing half-mode, not a safer one.
+//
+// The reader is the SINGLE authority for what the route can reach: the adapter
+// imports neither corpus.ts nor a global index (asserted in
+// public-import-boundary.test.ts), so widening the route's view would require
+// changing this one line.
+let createUiSpecReader: CorpusReader | null = null;
+function readerForCreateUiSpec(): CorpusReader {
+  if (createUiSpecReader === null) createUiSpecReader = new PrivateCorpusReader();
+  return createUiSpecReader;
+}
+
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -174,13 +290,13 @@ function sendText(res: ServerResponse, status: number, text: string): void {
   res.end(text);
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+function readBody(req: IncomingMessage, maxBytes: number = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolveBody, reject) => {
     let size = 0;
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > maxBytes) {
         reject(new Error("Request body too large"));
         req.destroy();
         return;
@@ -921,6 +1037,356 @@ export function promoteTempImage(tempPath: string, permanentSlug: string): { pat
   };
 }
 
+// ─── POST /api/create-ui-spec (C3 Task 5) ─────────────────────────────────────
+
+/**
+ * Body cap for the C3 route: 64 KiB. The request is a handful of bounded strings
+ * (`productContext` maxes at 8 000 characters, `constraints` at 12 × 500, up to 8
+ * motion intents), so 64 KiB is generous for a legitimate call and refuses an
+ * arbitrarily large one long before the 20 MiB screenshot-upload cap that the
+ * curator routes need. Bounded input is part of the route's contract, not a
+ * courtesy.
+ */
+const CREATE_UI_SPEC_MAX_BODY_BYTES = 64 * 1024;
+
+/**
+ * Request headers this route REFUSES outright. The C3 surface accepts no
+ * browser-supplied credentials: it reads the operator's own local corpus through
+ * the injected reader and calls no provider, so an explicitly-attached credential
+ * can only be a mistake or an attempt to have the server act as a confused
+ * deputy. Refusing is louder than ignoring — an ignored `Authorization` header
+ * looks accepted. Nothing sends these headers by accident: a browser attaches
+ * neither on its own.
+ *
+ * COOKIES ARE DELIBERATELY *NOT* IN THIS LIST — they are IGNORED instead.
+ * Cookies are HOST-scoped, not port-scoped (RFC 6265 §8.5), so a cookie set by
+ * any other dev server on `localhost`/`127.0.0.1` (Vite on 5173, Next on 3000) is
+ * attached by the browser to this request, and `fetch` sends it because a POST
+ * from the served site to `/api/create-ui-spec` is same-origin. Refusing on the
+ * mere PRESENCE of a cookie would 400 the playground for any operator who has
+ * ever run another local server, with a body byte-identical to a bad-brief
+ * refusal and (correctly) nothing logged — an undiagnosable break. The constraint
+ * is that no browser-supplied credential is USED, and this route never reads
+ * `cookie` at all: not to authenticate, not to log, not to forward. Never reading
+ * a header is a stronger guarantee than refusing a request because it exists.
+ *
+ * A cookie is also not the shape that needs refusing. A cross-site page's request
+ * is refused by the CSRF nonce (which it cannot read), and ambient
+ * authentication is impossible here because nothing in this process ever consults
+ * a cookie.
+ */
+const REFUSED_C3_REQUEST_HEADERS = ["authorization", "proxy-authorization"] as const;
+
+/**
+ * The bounded typed error this route serves for anything it refuses before the
+ * adapter runs. Deliberately IDENTICAL in shape and content to the adapter's own
+ * `INVALID_INPUT` body (see create-ui-spec-transport-errors.ts) so a client sees
+ * one error contract, not two — and so nothing about WHY it was refused becomes a
+ * probing oracle (a credential-bearing request and an unparseable body are
+ * indistinguishable to the caller).
+ *
+ * Nothing derived from the request reaches it: no header value, no body excerpt,
+ * no exception text, no zod issues.
+ */
+function sendCreateUiSpecInputError(res: ServerResponse): void {
+  sendCreateUiSpecTransportError(res, 400, createUiSpecTransportError("INVALID_INPUT"));
+}
+
+/**
+ * Write one of the shared transport-error triples. The triple is always produced
+ * by create-ui-spec-transport-errors.ts — the module the adapter and the MCP
+ * surface also use — so this route cannot drift from them on a code, a message or
+ * a retryable flag. This function chooses only the status and the wrapper.
+ */
+function sendCreateUiSpecTransportError(
+  res: ServerResponse,
+  status: 400 | 503,
+  error: CreateUiSpecTransportError,
+): void {
+  const { code: errorCode, message, retryable } = error;
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+  });
+  res.end(JSON.stringify({ error: { code: errorCode, message, retryable } }));
+}
+
+/**
+ * Serve one `POST /api/create-ui-spec`.
+ *
+ * The CSRF gate has ALREADY run in handleUiRequest before this function is
+ * entered — deliberately, so a nonceless request consumes no body bytes here.
+ *
+ * NOTHING IS LOGGED. Not the brief, not a header, not an exception. The catch-all
+ * in handleUiRequest does `console.error(error)`, and a `JSON.parse` failure's
+ * message quotes the offending input — which for this route is the caller's
+ * brief. So every failure is handled locally and the outer catch is never
+ * reached: JSON parsing, the body cap, and the adapter's integrity refusal all
+ * terminate here. The brief exists in this process only for the duration of the
+ * call, in memory, and is never written anywhere.
+ */
+async function handleCreateUiSpecRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  for (const header of REFUSED_C3_REQUEST_HEADERS) {
+    if (req.headers[header] !== undefined) {
+      sendCreateUiSpecInputError(res);
+      return;
+    }
+  }
+
+  let raw: string;
+  try {
+    raw = await readBody(req, CREATE_UI_SPEC_MAX_BODY_BYTES);
+  } catch {
+    // Oversized or aborted. The reason is not published (see above).
+    sendCreateUiSpecInputError(res);
+    return;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = raw.length > 0 ? JSON.parse(raw) : {};
+  } catch {
+    // The SyntaxError message quotes the caller's own bytes — discarded here.
+    sendCreateUiSpecInputError(res);
+    return;
+  }
+
+  let result: Awaited<ReturnType<typeof handleCreateUiSpecHttp>>;
+  try {
+    result = await handleCreateUiSpecHttp(parsed, readerForCreateUiSpec());
+  } catch {
+    // The adapter THROWS only when the envelope about to be served fails its
+    // integrity re-check — a producer/adapter defect, never caller error. Refuse
+    // rather than serving a response the gate rejected. A fixed literal is logged
+    // so the operator sees it; the thrown message itself is not logged, so no
+    // future change to it can leak a value.
+    //
+    // NON-RETRYABLE, unlike every other PROVIDER_ERROR: this refusal is
+    // deterministic for the same request, so telling a client to retry would send
+    // it round a loop that fails identically forever. Same code, same message
+    // (the client must not learn it was a producer defect); honest flag.
+    console.error(
+      "[create_ui_spec] response refused by the design-artifact integrity re-check; nothing was served",
+    );
+    sendCreateUiSpecTransportError(res, 503, createUiSpecIntegrityRefusalError());
+    return;
+  }
+
+  // The adapter validated these exact BYTES — write them verbatim, never
+  // re-serialize (a re-serialization would be an unvalidated payload).
+  res.writeHead(result.status, {
+    "content-type": result.contentType,
+    "cache-control": "no-store",
+  });
+  res.end(result.body);
+}
+
+// ─── production static site under /clean-ui-mcp/ (C3 Task 5) ──────────────────
+
+/** The single URL prefix the built site is mounted under. */
+const SITE_BASE_PATH = "/clean-ui-mcp";
+
+/**
+ * The built-site root, or `null` when the site is not being served.
+ *
+ * Read from the environment PER REQUEST rather than captured at module load, so
+ * the presence of the site is an operational choice (and so tests can exercise
+ * both branches against one server). When `CLEAN_UI_SITE_DIST` is absent or blank
+ * the site path 404s and every existing curator UI route behaves exactly as it
+ * did before this task.
+ */
+function siteDistRoot(): string | null {
+  const raw = process.env.CLEAN_UI_SITE_DIST;
+  if (typeof raw !== "string" || raw.trim().length === 0) return null;
+  return resolve(raw.trim());
+}
+
+/** `true` when `candidate` is `root` itself or lies beneath it. */
+function isWithinRoot(root: string, candidate: string): boolean {
+  if (candidate === root) return true;
+  return candidate.startsWith(root.endsWith(sep) ? root : root + sep);
+}
+
+/**
+ * Content types for built-site assets. Kept SEPARATE from `mimeFor` (which serves
+ * corpus images and defaults to `image/jpeg`): a site dist carries fonts, source
+ * maps, manifests and json, and a wrong default there is a real bug. Unknown
+ * extensions fall back to `application/octet-stream` — never to a type the
+ * browser will execute or render.
+ */
+function siteMimeFor(path: string): string {
+  const ext = extname(path).toLowerCase();
+  switch (ext) {
+    case ".html": return "text/html; charset=utf-8";
+    case ".css": return "text/css; charset=utf-8";
+    case ".js":
+    case ".mjs": return "text/javascript; charset=utf-8";
+    case ".json":
+    case ".map": return "application/json; charset=utf-8";
+    case ".webmanifest": return "application/manifest+json; charset=utf-8";
+    case ".svg": return "image/svg+xml";
+    case ".png": return "image/png";
+    case ".jpg":
+    case ".jpeg": return "image/jpeg";
+    case ".webp": return "image/webp";
+    case ".avif": return "image/avif";
+    case ".gif": return "image/gif";
+    case ".ico": return "image/x-icon";
+    case ".woff2": return "font/woff2";
+    case ".woff": return "font/woff";
+    case ".ttf": return "font/ttf";
+    case ".txt": return "text/plain; charset=utf-8";
+    default: return "application/octet-stream";
+  }
+}
+
+/**
+ * Resolve one request path under the site root to a real file, or `null` if it
+ * cannot be served. FIVE independent refusals, in this order, because each one
+ * catches something the others do not:
+ *
+ *  1. DECODE FIRST, then inspect. A check performed on the still-encoded path is
+ *     the classic bypass: `%2e%2e%2f` contains no `..` until it is decoded. So the
+ *     segment is percent-decoded once up front, and a malformed encoding (which
+ *     `decodeURIComponent` throws on) is a refusal rather than a pass-through.
+ *     A DOUBLE-encoded `%252e%252e%252f` decodes to the literal text `%2e%2e%2f`,
+ *     which is not a traversal and is left to resolve harmlessly inside the root.
+ *  2. NUL byte. `foo.html%00.png` is a truncation trick against consumers that
+ *     treat the string as C-style; refused outright rather than reasoned about.
+ *  3. ABSOLUTE paths and TRAVERSAL segments in the decoded text. `resolve()` would
+ *     happily honour a leading `/`, discarding the root entirely.
+ *  4. PREFIX CONTAINMENT after `resolve()`. Belt to (3)'s braces: any normalization
+ *     that produced a path outside the root is refused even if the text looked
+ *     innocent. The comparison appends a separator, so `/root-evil` is not treated
+ *     as being inside `/root`.
+ *  5. REALPATH CONTAINMENT. (4) is a check on the STRING; a symlink inside the
+ *     root pointing out of it satisfies the string check and still escapes — and
+ *     `existsSync` follows symlinks, so an existence test would happily serve it.
+ *     Both the root and the candidate are realpath'd and the containment check is
+ *     repeated on the resolved truth. This covers a symlinked file AND a symlinked
+ *     directory component.
+ *
+ * Finally the target must be a regular FILE — a directory is not servable content.
+ *
+ * @param relative the request path with the `/clean-ui-mcp/` prefix removed, still
+ *   percent-encoded exactly as it arrived.
+ * @returns the absolute real path to serve, or `null` to refuse.
+ *
+ * EXPORTED for direct testing. That is deliberate rather than incidental: the
+ * WHATWG URL parser normalizes SOME traversal forms away before any handler runs
+ * (a literal `..` segment and a `%2e%2e` segment are both collapsed by
+ * `new URL()`), so an HTTP-level test cannot distinguish "this function refused
+ * it" from "the URL parser removed it". Calling it directly is the only way to
+ * prove the containment rules themselves hold.
+ */
+export function resolveSiteAsset(root: string, relative: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(relative);
+  } catch {
+    return null;
+  }
+  if (decoded.includes("\0")) return null;
+  const target = decoded === "" ? "index.html" : decoded;
+  if (target.startsWith("/") || target.startsWith("\\")) return null;
+  if (/(?:^|[/\\])\.\.(?:[/\\]|$)/.test(target)) return null;
+
+  const candidate = resolve(root, target);
+  if (!isWithinRoot(root, candidate)) return null;
+
+  let realRoot: string;
+  let realCandidate: string;
+  try {
+    realRoot = realpathSync(root);
+    realCandidate = realpathSync(candidate);
+  } catch {
+    // Missing file, or a broken/unreadable link — nothing to serve.
+    return null;
+  }
+  if (!isWithinRoot(realRoot, realCandidate)) return null;
+
+  try {
+    if (!statSync(realCandidate).isFile()) return null;
+  } catch {
+    return null;
+  }
+  return realCandidate;
+}
+
+/**
+ * Read a resolved site asset, or `null` if the bytes cannot be obtained.
+ *
+ * WHY THE READ IS FALLIBLE EVEN AFTER {@link resolveSiteAsset} SUCCEEDED.
+ * `statSync().isFile()` needs no READ permission, so a mode-`000` file inside the
+ * dist resolves cleanly and then fails at `readFileSync` with
+ * `EACCES: permission denied, open '<absolute path>'`. Unhandled, that message
+ * reaches the catch-all in {@link handleUiRequest}, which writes `error.message`
+ * into a 500 body and `console.error`s the whole error — putting an absolute
+ * filesystem path into both a response and the operator's terminal, which this
+ * surface must never do. (It is worse than a leak: the 200 header has already been
+ * written by then, so the response cannot be rewritten and the request hangs.)
+ * The same shape covers a file unlinked between the stat and the read.
+ *
+ * So the read happens HERE, before any header is written, and a failure is simply
+ * "not servable" — indistinguishable from a missing file, with nothing logged.
+ */
+function readSiteAsset(asset: string): Buffer | null {
+  try {
+    return readFileSync(asset);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Serve the built site for a `GET` under `/clean-ui-mcp`.
+ *
+ * SPA fallback is deliberately NARROW: only an EXTENSIONLESS path falls back to
+ * `index.html`. A missing `.js`/`.css`/`.png` must 404, because answering a broken
+ * asset import with an HTML document turns a loud build error into a silent,
+ * baffling runtime one. The fallback path itself is resolved through
+ * {@link resolveSiteAsset}, so it is subject to the same containment rules.
+ *
+ * Every byte is read BEFORE the response head is written, so an unreadable file
+ * falls through to the caller's 404 instead of stranding a half-written 200.
+ *
+ * @returns `true` when this function wrote the response.
+ */
+function serveSiteAsset(res: ServerResponse, pathname: string): boolean {
+  const root = siteDistRoot();
+  if (root === null) return false;
+  // The bare `SITE_BASE_PATH` is 301'd to the trailing-slash form before this is
+  // reached; the empty-relative case is kept so this function stays correct on its
+  // own terms rather than depending on that redirect.
+  const relative =
+    pathname === SITE_BASE_PATH ? "" : pathname.slice(SITE_BASE_PATH.length + 1);
+
+  const asset = resolveSiteAsset(root, relative);
+  if (asset !== null) {
+    const bytes = readSiteAsset(asset);
+    if (bytes !== null) {
+      res.writeHead(200, { "content-type": siteMimeFor(asset), "cache-control": "no-store" });
+      res.end(bytes);
+      return true;
+    }
+    // Unreadable: fall through to the 404 rather than the SPA shell — an
+    // unreadable `.js` is still a broken asset, and must fail loudly.
+    return false;
+  }
+  if (extname(relative) === "") {
+    const shell = resolveSiteAsset(root, "index.html");
+    if (shell !== null) {
+      const bytes = readSiteAsset(shell);
+      if (bytes !== null) {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        res.end(bytes);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   const entries = loadEntries();
 
@@ -1549,11 +2015,14 @@ async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promi
     }
 
     // Same-origin preflight: allow the methods/headers the app actually uses.
+    // `x-clean-ui-csrf` MUST be advertised here — a browser will refuse to send a
+    // header the preflight did not allow, which would make every mutation fail
+    // with a 403 that looks like a server bug.
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
         "access-control-allow-origin": `http://${req.headers.host}`,
-        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
-        "access-control-allow-headers": "content-type",
+        "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+        "access-control-allow-headers": `content-type, ${CSRF_HEADER_LOWER}`,
         "access-control-max-age": "600",
       });
       res.end();
@@ -1562,6 +2031,46 @@ async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promi
 
     const url = parseUrl(req);
     if (url.pathname.startsWith("/api/")) {
+      // The nonce mint. A GET, so it does not require a nonce itself; handled
+      // before the dispatch below so it never loads the corpus.
+      if (req.method === "GET" && url.pathname === "/api/csrf") {
+        sendJson(res, 200, { nonce: currentCsrfNonce() });
+        return;
+      }
+
+      // ─── THE CSRF GATE ───────────────────────────────────────────────────────
+      // Placed HERE, and nowhere else, for two reasons:
+      //
+      //  1. BEFORE ANY BODY IS READ. Every route below reads its body inside its
+      //     own handler (`readJson` / `readBody`), so a rejection at this point
+      //     consumes no body bytes: a nonceless request cannot make this process
+      //     buffer up to 20 MiB, and a malformed body is never parsed (so its
+      //     SyntaxError — which quotes the caller's bytes — is never produced).
+      //  2. BEFORE ANY MUTATION, and before `serialized()`. Not one corpus load,
+      //     write, snapshot, image copy, or browser launch happens on the far side
+      //     of this check, and it does not sit inside any single route's branch, so
+      //     no route can be added later that quietly skips it.
+      //
+      // It covers EVERY mutating /api/* route with no exemption — the C3 route and
+      // all pre-existing curator routes. See the CSRF_HEADER block above for why
+      // there is no non-browser opt-out.
+      if (isMutatingMethod(req.method) && !csrfNonceMatches(req)) {
+        sendJson(res, 403, {
+          code: "CSRF_REQUIRED",
+          error: `Missing or invalid ${CSRF_HEADER} header. Fetch GET /api/csrf and send its nonce on every mutating request.`,
+        });
+        return;
+      }
+
+      // The C3 create_ui_spec route. Handled before the curator dispatch so it
+      // does not pay `handleApi`'s corpus load and does not enter `serialized()`
+      // — it mutates nothing, so serializing it behind corpus writes would only
+      // add latency.
+      if (req.method === "POST" && url.pathname === "/api/create-ui-spec") {
+        await handleCreateUiSpecRequest(req, res);
+        return;
+      }
+
       // Mutating requests run end-to-end inside `serialized` so their
       // loadEntries() → await (dedup/vision) → saveEntries sequence cannot
       // interleave with another mutation. loadEntries() is the FIRST statement
@@ -1573,6 +2082,35 @@ async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promi
       } else {
         await handleApi(req, res, url);
       }
+      return;
+    }
+
+    // The built public site, when CLEAN_UI_SITE_DIST is set. Reached only AFTER
+    // the `/api/` branch above, so `/api/*` is always the loopback API and can
+    // never be shadowed by a file in the dist — even one literally named
+    // `dist/api/config`. When the variable is unset this falls through to the
+    // existing curator routes below, unchanged.
+    if (req.method === "GET" && (url.pathname === SITE_BASE_PATH || url.pathname.startsWith(`${SITE_BASE_PATH}/`))) {
+      // TRAILING-SLASH REDIRECT. `/clean-ui-mcp` and `/clean-ui-mcp/` serve the
+      // same shell, but the browser resolves RELATIVE asset urls against them
+      // differently: from `/clean-ui-mcp`, `./assets/app.js` becomes
+      // `/assets/app.js` — outside this branch entirely, so a build whose `base`
+      // emits relative urls 404s every asset when entered without the slash.
+      // Redirecting makes the two entry points equivalent whatever `base` a build
+      // uses. Only when the site is actually served; with CLEAN_UI_SITE_DIST unset
+      // the path 404s exactly as it did before. `url.search` is carried over (it
+      // already includes its `?`); nothing derived from the filesystem appears in
+      // the Location.
+      if (url.pathname === SITE_BASE_PATH && siteDistRoot() !== null) {
+        res.writeHead(301, {
+          location: `${SITE_BASE_PATH}/${url.search}`,
+          "cache-control": "no-store",
+        });
+        res.end();
+        return;
+      }
+      if (serveSiteAsset(res, url.pathname)) return;
+      sendText(res, 404, "Not found");
       return;
     }
 
@@ -1589,8 +2127,18 @@ async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promi
         sendText(res, 404, "Not found");
         return;
       }
+      // Same EACCES shape as the C3 site branch (see `readSiteAsset`): `existsSync`
+      // needs no read permission, so a mode-000 file resolves as present. Read the
+      // bytes BEFORE writing any header, and fall through to the same 404 on
+      // failure — an unreadable file must not leak its path via a post-head 500,
+      // nor strand a half-written response.
+      const bytes = readSiteAsset(abs);
+      if (bytes === null) {
+        sendText(res, 404, "Not found");
+        return;
+      }
       res.writeHead(200, { "content-type": mimeFor(abs), "cache-control": "no-store" });
-      res.end(readFileSync(abs));
+      res.end(bytes);
       return;
     }
 

@@ -1,12 +1,30 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const UI_CLIENT_DIR = resolve(__dirname, "../..", "ui");
+
+/**
+ * Every client script under ui/, globbed rather than hard-coded.
+ *
+ * Both CSRF guards below (the static call-site audit, and the stub-vs-real
+ * path-coverage guard) used to declare their own literal
+ * `["app.js", "classic-app.js"]`. A curator client added later would not
+ * appear in either literal and would ship completely unguarded — passing both
+ * suites while carrying a raw, nonce-less `fetch(`. Globbing means a new
+ * `ui/*.js` file is covered the moment it exists, by both guards, with no
+ * second place to remember to update.
+ */
+function listUiClientFiles(): string[] {
+  return readdirSync(UI_CLIENT_DIR)
+    .filter((f) => f.endsWith(".js"))
+    .sort();
+}
 // The SPA (index-2.html) is the specimen-ledger browser; the form + bulk
 // import flows live in the classic workbench (index-classic.html + classic-*).
 // Both shells are loaded below — classic-flow tests point at /index-classic.html,
@@ -40,6 +58,34 @@ function json(res: ServerResponse, status: number, payload: unknown): void {
   res.end(JSON.stringify(payload));
 }
 
+// ─── the CSRF contract, MIRRORED from the real server (C3 Task 5) ─────────────
+//
+// The production server requires `X-Clean-UI-CSRF` on every mutating /api/*
+// request and mints the nonce at `GET /api/csrf`. This stub must mirror BOTH
+// halves, and mirroring only the mint would be the more dangerous half-fix:
+// serving the nonce without checking it would let a mutation added with a raw
+// `fetch(` (bypassing the clients' nonce-bearing `apiFetch`) pass every browser
+// test and then 403 in production. That is exactly the integration-seam false
+// confidence this file exists to prevent, so the stub ENFORCES the header — and
+// enforces it before reading the body, in the same order production does.
+const CSRF_HEADER_LOWER = "x-clean-ui-csrf";
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+/** The stub's nonce. Any fixed value works; the clients must fetch and echo it. */
+const STUB_CSRF_NONCE = "stub-nonce-" + createHash("sha256").update("ui-browser-csrf").digest("hex");
+
+/**
+ * Every mutating /api/* request the stub observed, with the nonce it carried (or
+ * `undefined`). Accumulates across ALL describe blocks in this file, so the audit
+ * test at the bottom can assert the property over every flow any test exercised.
+ */
+const observedMutations: Array<{ method: string; path: string; nonce: string | undefined }> = [];
+
+/**
+ * The path used by the "is the guard real?" self-test, which deliberately sends a
+ * nonce-less mutation. Excluded from the audit below for that reason and no other.
+ */
+const CSRF_SELFTEST_PATH = "/api/csrf-selftest";
+
 async function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolveBody) => {
     let body = "";
@@ -54,6 +100,31 @@ describe("curator app browser smoke", () => {
   beforeAll(async () => {
     const server = createServer(async (req, res) => {
       const url = new URL(req.url ?? "/", "http://localhost");
+
+      // ─── CSRF gate, mirroring production placement ────────────────────────
+      // Positioned before every /api/ route AND before any `readBody`, exactly
+      // as the real server's gate is, so a nonce-less mutation is refused
+      // without its body being consumed.
+      if (url.pathname.startsWith("/api/")) {
+        if (url.pathname === "/api/csrf" && req.method === "GET") {
+          return json(res, 200, { nonce: STUB_CSRF_NONCE });
+        }
+        if (MUTATING_METHODS.has(req.method ?? "")) {
+          const supplied = req.headers[CSRF_HEADER_LOWER];
+          observedMutations.push({
+            method: req.method ?? "",
+            path: url.pathname,
+            nonce: typeof supplied === "string" ? supplied : undefined,
+          });
+          if (supplied !== STUB_CSRF_NONCE) {
+            return json(res, 403, {
+              code: "CSRF_REQUIRED",
+              error: "Missing or invalid X-Clean-UI-CSRF header",
+            });
+          }
+        }
+      }
+
       if (url.pathname === "/index-classic.html") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end(classicHtml);
@@ -979,6 +1050,363 @@ describe("dashboard shell and navigation", () => {
     const overviewDesc = await page.locator("#pageDesc").textContent();
     expect(overviewDesc!.length).toBeGreaterThan(0);
     await page.close();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CSRF seam audit (C3 Task 5, fix round 1)
+//
+// THE BUG THIS BLOCK EXISTS TO CATCH. Task 5 made `X-Clean-UI-CSRF` mandatory on
+// every mutating /api/* request. The server-side suite proved the gate works, but
+// it proved it with a TEST HELPER that supplies the nonce — so it could not have
+// noticed a curator client that fails to send one. A mutation added with a raw
+// `fetch(` instead of the clients' nonce-bearing `apiFetch(` would pass every
+// server test and 403 only in a real browser, in production.
+//
+// This block closes that seam from the browser side, in two complementary ways:
+//
+//  1. NEGATIVE (already load-bearing above): the stub server ENFORCES the nonce,
+//     so any UI flow that mutates without one now fails its own test outright —
+//     no separate assertion needed, and no way to add such a flow silently.
+//  2. POSITIVE (below): an audit over every mutating request the stub actually
+//     observed across the whole file. This catches the case that (1) alone would
+//     miss — a new mutating flow that has no test of its own would contribute no
+//     observation, so the audit also asserts BREADTH, not just correctness of
+//     what happened to be exercised.
+//
+// Placed last so it sees the accumulated observations from every describe block
+// above (vitest runs describe blocks in file order).
+// ═══════════════════════════════════════════════════════════════════════════
+describe("CSRF seam: every browser-issued mutation carries the nonce", () => {
+  it("the stub's gate is REAL — a raw fetch() mutation from the page is refused", async () => {
+    // Without this, the enforcement above could silently become a no-op (e.g. a
+    // typo'd header name comparing undefined to undefined) and the audit below
+    // would still pass vacuously. This asserts the guard actually refuses.
+    const page = await browser!.newPage();
+    await page.goto(baseUrl + "/");
+    const result = await page.evaluate(async (probePath) => {
+      const withoutNonce = await fetch(probePath, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ probe: true }),
+      });
+      const bodyWithout = await withoutNonce.json().catch(() => ({}));
+      // And with the right nonce it is NOT refused — so the 403 was the header,
+      // not the path being unknown to the stub.
+      const nonce = (await (await fetch("/api/csrf")).json()).nonce;
+      const withNonce = await fetch(probePath, {
+        method: "POST",
+        headers: { "content-type": "application/json", "X-Clean-UI-CSRF": nonce },
+        body: JSON.stringify({ probe: true }),
+      });
+      return { statusWithout: withoutNonce.status, codeWithout: bodyWithout.code, statusWith: withNonce.status };
+    }, CSRF_SELFTEST_PATH);
+
+    expect(result.statusWithout).toBe(403);
+    expect(result.codeWithout).toBe("CSRF_REQUIRED");
+    expect(result.statusWith).not.toBe(403);
+    await page.close();
+  });
+
+  it("every mutating request the curator UI made carried the correct nonce", async () => {
+    // The self-test above deliberately sends a nonce-less mutation; it is the ONLY
+    // exclusion, and it is excluded by exact path so nothing else can hide here.
+    const fromUi = observedMutations.filter((m) => m.path !== CSRF_SELFTEST_PATH);
+
+    const missing = fromUi.filter((m) => m.nonce !== STUB_CSRF_NONCE);
+    expect(
+      missing,
+      `mutating requests that did NOT carry ${CSRF_HEADER_LOWER}: ${JSON.stringify(missing)}\n` +
+        "Fix: route the call through apiFetch() in ui/app.js / ui/classic-app.js — a raw fetch() bypasses the nonce.",
+    ).toEqual([]);
+  });
+
+  it("the audit is not vacuous — the flows above really did mutate, across several routes", async () => {
+    // Guards against a future refactor that breaks the flows so thoroughly that
+    // ZERO mutations are observed, which would make the audit pass while proving
+    // nothing. Pinned to the routes the suites above genuinely exercise.
+    const fromUi = observedMutations.filter((m) => m.path !== CSRF_SELFTEST_PATH);
+    expect(fromUi.length).toBeGreaterThanOrEqual(8);
+
+    const paths = new Set(fromUi.map((m) => m.path));
+    for (const required of ["/api/upload-image", "/api/auto-tag", "/api/entries"]) {
+      expect(paths, `no mutating request was observed for ${required}`).toContain(required);
+    }
+    // More than one distinct verb/route combination, so a single flow cannot
+    // satisfy the whole audit on its own.
+    expect(paths.size).toBeGreaterThanOrEqual(3);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GLOB, NOT HARD-CODED (C3 Task 5, fix round 3)
+//
+// Both guards below used to declare `const CLIENTS = ["app.js",
+// "classic-app.js"] as const;` independently. A third curator client added
+// later would appear in neither literal and would be completely unguarded —
+// a raw, nonce-less `fetch(` in it would pass both suites in full green.
+// `listUiClientFiles()` (module scope, above) globs `ui/*.js` instead. These
+// tests pin two properties a glob refactor can silently break:
+//   1. the glob must find a REAL, non-empty set — a glob that silently
+//      matches nothing would disable both guards while staying green;
+//   2. a file added to ui/ after this test was written must appear in the
+//      derived list without editing this file — proven by actually creating
+//      one, not by asserting the glob "should" work.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("client list is globbed (ui/*.js), not a hard-coded literal", () => {
+  const injectedName = "zq-glob-coverage-injected-8821.js";
+  const injectedPath = resolve(UI_CLIENT_DIR, injectedName);
+
+  afterEach(() => {
+    if (existsSync(injectedPath)) unlinkSync(injectedPath);
+  });
+
+  it("finds a non-empty, real client set — not silently disabled", () => {
+    const clients = listUiClientFiles();
+    expect(
+      clients.length,
+      "ui/*.js glob matched no files — both CSRF guards would silently cover nothing",
+    ).toBeGreaterThan(0);
+    expect(clients).toContain("app.js");
+    expect(clients).toContain("classic-app.js");
+  });
+
+  it("a NEW ui/*.js file is covered automatically, not silently unguarded", () => {
+    expect(listUiClientFiles()).not.toContain(injectedName);
+    writeFileSync(
+      injectedPath,
+      "const API = '/api';\nasync function bad() {\n  await fetch(API + '/entries', { method: 'POST' });\n}\n",
+    );
+    expect(
+      listUiClientFiles(),
+      "a file added to ui/ must appear in the globbed client set without editing this test",
+    ).toContain(injectedName);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STATIC CSRF audit over the curator clients (C3 Task 5, fix round 1)
+//
+// WHY THE RUNTIME AUDIT ABOVE IS NOT ENOUGH. It can only observe flows that some
+// browser test actually drives. Verified, not assumed: the entry-RENAME flow
+// (`POST /api/entries/:id/rename`) has NO browser test at all, so reverting it to
+// a raw `fetch(` produced zero failures in the runtime audit — a regression of
+// exactly the reported class would have shipped again. Coverage of the browser
+// suite is therefore the wrong thing to depend on for this property.
+//
+// So this block reads the client SOURCE and requires, mechanically, that every
+// mutating call site routes through the nonce-bearing helpers. It holds for flows
+// with no test, flows behind a `confirm()`, and flows added tomorrow.
+//
+// The two helpers that attach the nonce:
+//   - `apiFetch(url, opts)` — the wrapper; fetches/caches the nonce.
+//   - `request(path, opts)` — the error-aware JSON helper, which delegates to
+//     `apiFetch` (asserted below, so this indirection cannot silently rot).
+// ═══════════════════════════════════════════════════════════════════════════
+describe("CSRF seam (static): every mutating call site in ui/*.js is nonce-bearing", () => {
+  const CLIENTS = listUiClientFiles();
+  const NONCE_BEARING = new Set(["apiFetch", "request"]);
+
+  function readClient(name: string): string {
+    return readFileSync(resolve(__dirname, "../..", "ui", name), "utf-8");
+  }
+
+  /**
+   * Every mutating call site, with the call helper that opens it. Finds each
+   * `method: "POST"|"PUT"|"PATCH"|"DELETE"` literal and walks BACKWARDS to the
+   * nearest enclosing call opener — the same mechanical enumeration used to audit
+   * the fix by hand, encoded so it runs on every commit.
+   */
+  function mutatingCallSites(source: string): Array<{ line: number; caller: string; text: string }> {
+    const lines = source.split("\n");
+    const out: Array<{ line: number; caller: string; text: string }> = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (!/method\s*:\s*['"](?:POST|PUT|PATCH|DELETE)['"]/.test(lines[i]!)) continue;
+      let caller = "UNKNOWN";
+      for (let j = i; j >= Math.max(0, i - 12); j--) {
+        const m = /\b(apiFetch|request|fetch|XMLHttpRequest|sendBeacon)\s*\(/.exec(lines[j]!);
+        if (m) { caller = m[1]!; break; }
+      }
+      out.push({ line: i + 1, caller, text: lines[i]!.trim().slice(0, 90) });
+    }
+    return out;
+  }
+
+  for (const client of CLIENTS) {
+    it(`ui/${client}: no mutating call site uses a raw fetch()`, () => {
+      const sites = mutatingCallSites(readClient(client));
+      // Not vacuous: each client really does have mutating call sites.
+      expect(sites.length, `no mutating call sites found in ui/${client} — has the parse broken?`).toBeGreaterThan(0);
+      const offenders = sites.filter((s) => !NONCE_BEARING.has(s.caller));
+      expect(
+        offenders,
+        `ui/${client} has mutating call sites that bypass the CSRF nonce:\n` +
+          offenders.map((o) => `  line ${o.line} (via ${o.caller}): ${o.text}`).join("\n") +
+          `\nFix: call apiFetch(...) or request(...) instead of fetch(...).`,
+      ).toEqual([]);
+    });
+
+    it(`ui/${client}: request() delegates to apiFetch (the indirection is real)`, () => {
+      // `request` is trusted above as nonce-bearing ONLY because it delegates. If
+      // someone changes it back to a bare fetch, most mutations in both clients
+      // would silently lose the nonce while the audit above still passed.
+      const source = readClient(client);
+      const body = /async function request\s*\([^)]*\)\s*\{[\s\S]{0,600}?\n\}/.exec(source)?.[0];
+      expect(body, `could not locate request() in ui/${client}`).toBeDefined();
+      expect(body!).toMatch(/await\s+apiFetch\(/);
+      expect(body!).not.toMatch(/await\s+fetch\(/);
+    });
+
+    it(`ui/${client}: uses no mutation channel that bypasses fetch entirely`, () => {
+      // A FormData/XHR/sendBeacon upload would need the header attached
+      // separately; none exists today, and this fails if one is introduced
+      // without being taught about the nonce.
+      const source = readClient(client);
+      for (const channel of ["XMLHttpRequest", "sendBeacon"]) {
+        expect(source, `ui/${client} introduced a ${channel} channel — it must attach ${CSRF_HEADER_LOWER} too`).not.toContain(channel);
+      }
+    });
+  }
+
+  it("both clients fetch the nonce from GET /api/csrf and send the exact header name", () => {
+    for (const client of CLIENTS) {
+      const source = readClient(client);
+      expect(source, `ui/${client} does not fetch the nonce`).toContain("/api/csrf");
+      // The header name must match the server's, case-insensitively.
+      expect(source.toLowerCase(), `ui/${client} does not reference the nonce header`).toContain(CSRF_HEADER_LOWER);
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STUB-vs-REAL divergence guard (C3 Task 5, fix round 2)
+//
+// WHAT WENT WRONG, AND WHY THIS IS THE CHEAP FIX FOR THE CLASS. The real server
+// gained a required route (`GET /api/csrf`) and this file's hand-written stub did
+// not. Every one of the ten resulting failures looked like a UI bug. The
+// structural fix — driving this suite against the real `startServer()` — is a
+// follow-up (it needs real corpus and private-image isolation for a browser
+// suite, which fights this repo's corpus-isolation rule). This is the cheap
+// version that closes the same class today: every `/api/*` path the CLIENTS
+// reference must be either implemented by the stub or explicitly listed as
+// un-stubbed. A new shared route added to the clients therefore fails HERE, with
+// a message naming the path, instead of surfacing as ten mystery timeouts.
+//
+// It reads source only — no browser, no server — so it holds for flows with no
+// browser test.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("stub-vs-real: the stub implements every /api/* path the clients call", () => {
+  const CLIENTS = listUiClientFiles();
+
+  /**
+   * Paths the clients call that the stub deliberately does NOT implement, because
+   * no browser test drives the flow. Listing one is a DECISION, not a default: an
+   * unlisted, unstubbed path fails the first test below. Entries must stay
+   * accurate in both directions — the last two tests fail on a stale entry and on
+   * an entry that is in fact stubbed.
+   */
+  const KNOWN_UNSTUBBED = new Set([
+    // Decision Lab — no browser test covers it.
+    "/api/decisions",
+    "/api/decisions/:param",
+    "/api/decisions/:param/analyze",
+    "/api/decision-upload-image",
+    // Capture triage / cleanup — no browser test covers these flows.
+    "/api/capture-batches",
+    "/api/capture-triage",
+    "/api/capture-cleanup",
+    "/api/capture-cleanup-temp",
+    // Bulk re-tag and the entry edit/rename/delete flows — no browser test.
+    "/api/auto-retag",
+    "/api/entries/:param",
+    "/api/entries/:param/rename",
+  ]);
+
+  function readClient(name: string): string {
+    return readFileSync(resolve(__dirname, "../..", "ui", name), "utf-8");
+  }
+
+  /** The client's `const API = '…'` prefix, which `request()` prepends. */
+  function apiBase(source: string): string {
+    return /^const API = ['"]([^'"]*)['"]/m.exec(source)?.[1] ?? "";
+  }
+
+  /** Query stripped, `${…}` segments collapsed to `:param`, no trailing slash. */
+  function normalizePath(path: string): string {
+    return path.split("?")[0]!.replace(/\$\{[^}]*\}/g, ":param").replace(/\/+$/, "");
+  }
+
+  /** Every `/api/*` path a client references, however it is spelled. */
+  function referencedApiPaths(source: string): Set<string> {
+    const base = apiBase(source);
+    const found = new Set<string>();
+    const add = (path: string) => {
+      const normalized = normalizePath(path);
+      // `${API}${path}` inside the helpers themselves normalizes to `/api:param`,
+      // which is a helper definition rather than a call site.
+      if (normalized.startsWith("/api/")) found.add(normalized);
+    };
+    // `request('<path>')` — relative to the client's API base.
+    for (const m of source.matchAll(/\brequest\(\s*(['"`])([^'"`]*)\1/g)) add(base + m[2]!);
+    // `apiFetch(<path>)` / `fetch(<path>)` — absolute, possibly `${API}`-prefixed.
+    for (const m of source.matchAll(/\b(?:apiFetch|fetch)\(\s*(['"`])([^'"`]*)\1/g)) {
+      const raw = m[2]!.replace(/^\$\{API\}/, base);
+      if (raw.startsWith("/")) add(raw);
+    }
+    // Any other literal `/api/…` reference (a url built outside a call opener).
+    for (const m of source.matchAll(/['"`](\/api\/[^'"`\s]*)/g)) add(m[1]!);
+    return found;
+  }
+
+  /**
+   * The stub's route set, extracted from THIS file's own source. Reading the
+   * source rather than a duplicated list is what keeps the guard honest: it sees
+   * the routes the stub actually matches on, so removing one is visible here.
+   */
+  function stubbedApiPaths(): Set<string> {
+    const self = readFileSync(resolve(__dirname, "ui-browser.test.ts"), "utf-8");
+    const paths = new Set<string>();
+    for (const m of self.matchAll(/url\.pathname ===\s*"(\/api\/[^"]*)"/g)) paths.add(m[1]!);
+    return paths;
+  }
+
+  it("extracts a non-vacuous path set from both clients (the parse still works)", () => {
+    for (const client of CLIENTS) {
+      const paths = referencedApiPaths(readClient(client));
+      expect(paths.size, `no /api/* paths found in ui/${client} — has the parse broken?`).toBeGreaterThan(8);
+      // The route whose absence caused the regression this guard exists for.
+      expect([...paths], `ui/${client} no longer fetches the nonce`).toContain("/api/csrf");
+    }
+    expect(stubbedApiPaths().size, "no stub routes found — has the extraction broken?").toBeGreaterThan(8);
+  });
+
+  for (const client of CLIENTS) {
+    it(`every /api/* path ui/${client} calls is stubbed or knowingly un-stubbed`, () => {
+      const stubbed = stubbedApiPaths();
+      const missing = [...referencedApiPaths(readClient(client))]
+        .filter((p) => !stubbed.has(p) && !KNOWN_UNSTUBBED.has(p))
+        .sort();
+      expect(
+        missing,
+        `ui/${client} calls /api/* paths this stub server does not implement:\n` +
+          missing.map((p) => `  ${p}`).join("\n") +
+          `\nEither add the route to the stub (if a browser test drives the flow — a\n` +
+          `missing route surfaces as a mystery timeout, not a clear 404) or add it to\n` +
+          `KNOWN_UNSTUBBED with the reason no test covers it.`,
+      ).toEqual([]);
+    });
+  }
+
+  it("lists no KNOWN_UNSTUBBED path that the stub actually implements", () => {
+    const stubbed = stubbedApiPaths();
+    const redundant = [...KNOWN_UNSTUBBED].filter((p) => stubbed.has(p)).sort();
+    expect(redundant, `these paths ARE stubbed — remove them from KNOWN_UNSTUBBED:\n${redundant.join("\n")}`).toEqual([]);
+  });
+
+  it("lists no KNOWN_UNSTUBBED path the clients no longer call", () => {
+    const referenced = new Set(CLIENTS.flatMap((c) => [...referencedApiPaths(readClient(c))]));
+    const stale = [...KNOWN_UNSTUBBED].filter((p) => !referenced.has(p)).sort();
+    expect(stale, `no client calls these any more — remove them from KNOWN_UNSTUBBED:\n${stale.join("\n")}`).toEqual([]);
   });
 });
 

@@ -304,6 +304,59 @@ describe("public import boundary — no private loader leaks into the public ser
     );
   });
 
+  it("create-ui-spec-http.ts does not import the unrestricted loader or corpus.js/persistence.js/embeddings.js", () => {
+    // Task 5: the create_ui_spec loopback HTTP adapter. It belongs in this guarded
+    // set for a reason specific to its host: it is mounted inside
+    // src/scripts/ui-server.ts, which DOES import the unrestricted loader and
+    // persistence directly (it is the operator's curator server and legitimately
+    // writes the corpus). So the adapter sits one import away from an unrestricted
+    // route to corpus data, and "the reader is the single authority" is only true
+    // for it while this stays clean. A corpus/persistence/embeddings import here
+    // would give the route a second view that no reader swap could narrow.
+    const source = stripComments(readSrc("create-ui-spec-http.ts"));
+
+    const loaderHits = importMatches(
+      source,
+      ["loadCorpus", "loadCorpusSafe", "tryReadCorpus"],
+      /.*/,
+    );
+    expect(
+      loaderHits,
+      `unrestricted loader imports: ${JSON.stringify(loaderHits)}`,
+    ).toEqual([]);
+
+    const forbiddenModuleImportLines = source
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) =>
+        /^import\b.*from\s+["'](?:\.\/corpus\.js|\.\/persistence\.js|\.\/embeddings\.js|\.\/image-index\.js)["']/.test(
+          l,
+        ),
+      );
+    expect(
+      forbiddenModuleImportLines,
+      `create-ui-spec-http.ts imports from a forbidden module: ${JSON.stringify(forbiddenModuleImportLines)}`,
+    ).toEqual([]);
+
+    // The adapter must reach the corpus ONLY through the INJECTED reader, so its
+    // corpus-reader.js import is type-only — it never constructs a reader of its
+    // own. (ui-server.ts constructs the one PrivateCorpusReader and injects it;
+    // that is the single, reviewable place the route's view is decided.)
+    const readerImports = source
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /^import\b.*from\s+["']\.\/corpus-reader\.js["']/.test(l));
+    expect(readerImports.length).toBe(1);
+    expect(readerImports[0]).toMatch(
+      /^import\s+type\s+\{\s*CorpusReader\s*\}\s+from\s+["']\.\/corpus-reader\.js["']/,
+    );
+
+    // And it authors no dependency value: the ONE constructor is imported.
+    expect(source).toMatch(
+      /import\s+\{\s*makeCreateUiSpecDependencies\s*\}\s+from\s+["']\.\/create-ui-spec-dependencies\.js["']/,
+    );
+  });
+
   it("sanity: the stripComments + importMatches helpers actually catch a violation", () => {
     // A regression in the helper itself would silently turn this boundary test
     // into a no-op. Pin the helpers against a known-positive synthetic snippet

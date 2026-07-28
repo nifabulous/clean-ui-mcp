@@ -1,15 +1,64 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { cleanupBatch, findDuplicateAtCommit, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { CSRF_HEADER, cleanupBatch, resolveSiteAsset, findDuplicateAtCommit, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
 import { setCorpusRootForTesting } from "../persistence.js";
 import type { IncomingMessage } from "node:http";
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { privateImageDir, setPrivateImageDirForTesting } from "../paths.js";
+import { join, sep } from "node:path";
+import { PROJECT_ROOT, privateImageDir, setPrivateImageDirForTesting } from "../paths.js";
+import { setCorpusForTesting } from "../corpus.js";
+import { containsPrivateMarker, parseDesignArtifactEnvelope } from "../create-ui-spec-contracts.js";
 import type { CorpusEntryT } from "../schema.js";
 
 function req(headers: Record<string, string | undefined>): IncomingMessage {
   return { headers } as unknown as IncomingMessage;
+}
+
+// ─── forcing the C3 integrity refusal (the 503 branch) ────────────────────────
+//
+// `handleCreateUiSpecHttp` throws in exactly one situation: the envelope about to
+// be served fails its integrity re-check — a producer/adapter DEFECT. That branch
+// is unreachable from a legitimate request, so the only honest way to test the
+// route's handling of it is to make the adapter throw on demand. The mock is a
+// passthrough unless the flag is set, so every other test in this file exercises
+// the real adapter.
+const c3Adapter = vi.hoisted(() => ({ forceIntegrityFailure: false }));
+
+vi.mock("../create-ui-spec-http.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../create-ui-spec-http.js")>();
+  return {
+    ...actual,
+    handleCreateUiSpecHttp: async (...args: Parameters<typeof actual.handleCreateUiSpecHttp>) => {
+      if (c3Adapter.forceIntegrityFailure) {
+        // The adapter's real refusal message, verbatim, so the test also proves
+        // the route publishes nothing derived from it.
+        throw new Error(
+          "create_ui_spec response failed the design-artifact envelope integrity re-check and was not served (values withheld)",
+        );
+      }
+      return actual.handleCreateUiSpecHttp(...args);
+    },
+  };
+});
+
+// ─── THE CSRF TEST HELPER ─────────────────────────────────────────────────────
+//
+// Every mutating /api/* request now requires the `X-Clean-UI-CSRF` header, and
+// the nonce is process-local and cryptographically random, so no test can hard-
+// code one. This helper is the documented way a test supplies it: it performs the
+// SAME two-step exchange a browser page performs — GET /api/csrf over the real
+// socket, then send the returned nonce on the mutation. Nothing test-only is
+// exported from the server to make this work; there is no back door into the
+// nonce, which is the point (a test that could read the nonce out of module state
+// would not be exercising the control a browser has to satisfy).
+//
+// Callers should fetch once per server and reuse, exactly as the UI caches it.
+async function csrfHeader(baseUrl: string): Promise<Record<string, string>> {
+  const res = await fetch(`${baseUrl}/api/csrf`);
+  if (!res.ok) throw new Error(`GET /api/csrf failed: ${res.status}`);
+  const body = await res.json() as { nonce?: string };
+  if (!body.nonce) throw new Error("GET /api/csrf returned no nonce");
+  return { [CSRF_HEADER.toLowerCase()]: body.nonce };
 }
 
 const baseEntry = {
@@ -684,10 +733,14 @@ describe("concurrent mutation serialization", () => {
     };
   }
 
+  // The nonce for this suite's mutations, fetched once in beforeAll (see the
+  // csrfHeader helper at the top of this file).
+  let csrf: Record<string, string> = {};
+
   async function postEntry(payload: ReturnType<typeof newEntryPayload>): Promise<{ id: string }> {
     const res = await fetch(`${baseUrl}/api/entries`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...csrf },
       body: JSON.stringify(payload),
     });
     const body = await res.json() as { entry?: { id: string }; error?: string };
@@ -718,6 +771,7 @@ describe("concurrent mutation serialization", () => {
     const addr = server.address();
     if (!addr || typeof addr !== "object") throw new Error("server did not bind");
     baseUrl = `http://127.0.0.1:${addr.port}`;
+    csrf = await csrfHeader(baseUrl);
   });
 
   afterAll(async () => {
@@ -850,7 +904,11 @@ describe("orphan endpoints (T-REV-2)", () => {
   });
 
   it("DELETE /api/orphans deletes the orphan but not captures or referenced images", async () => {
-    const res = await fetch(`${baseUrl}/api/orphans`, { method: "DELETE" });
+    // DELETE is a mutating method, so it carries the nonce (see csrfHeader).
+    const res = await fetch(`${baseUrl}/api/orphans`, {
+      method: "DELETE",
+      headers: await csrfHeader(baseUrl),
+    });
     expect(res.status).toBe(200);
     const body = await res.json() as { deleted: string[]; count: number };
     expect(body.deleted).toContain(`images-private/${imgSubdir}/orphan.png`);
@@ -860,5 +918,1120 @@ describe("orphan endpoints (T-REV-2)", () => {
     expect(existsSync(join(imgDirAbs, "kept.png"))).toBe(true);
     // The orphan is gone.
     expect(existsSync(join(imgDirAbs, "orphan.png"))).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Task 5 (C3): CSRF nonce, the create_ui_spec loopback route, and production
+// static serving.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * A schema-valid corpus entry stuffed with DISTINCTIVE private markers. Used by
+ * the create_ui_spec route tests so the private-marker assertions are real: the
+ * producer genuinely retrieves this entry, so anything that leaks corpus content
+ * leaks one of these strings.
+ */
+const PRIVATE_MARKED_ENTRY = {
+  ...baseEntry,
+  id: "internal-zq-1",
+  title: "Analytics dashboard",
+  source: {
+    productName: "product-Alpha-zq",
+    url: "https://private.example.zq/secret-zq",
+    capturedAt: "2026-07-01",
+    capturedBy: "self",
+  },
+  image: { visibility: "private", path: "images-private/secret-zq.png", width: 1440, height: 1000 },
+  critique:
+    "private-corpus-id-zq This interface uses a direct visual hierarchy, restrained surfaces, and clear grouping to make repeated scanning feel calm and predictable.",
+  whatToSteal: ["private-corpus-id-zq Use quiet grouping and consistent spacing to make dense product interfaces easier to scan."],
+  reviewStatus: "approved",
+  qualityTier: "exceptional",
+} as unknown as CorpusEntryT;
+
+/** Every marker that must never appear in a create_ui_spec HTTP response. */
+const C3_BANNED_MARKERS = [
+  "internal-zq-1",
+  "product-Alpha-zq",
+  "https://private.example.zq/secret-zq",
+  "private.example.zq",
+  "images-private/",
+  "secret-zq.png",
+  "private-corpus-id-zq",
+];
+
+describe("CSRF nonce issuance (GET /api/csrf)", () => {
+  let server: import("node:http").Server;
+  let baseUrl: string;
+  let base: string;
+
+  beforeAll(async () => {
+    base = mkdtempSync(join(tmpdir(), "ui-server-csrf-"));
+    writeFileSync(join(base, "entries.json"), JSON.stringify({ version: 2, entries: [] }));
+    setCorpusRootForTesting(base);
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+    setCorpusRootForTesting(null);
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("issues a cryptographically-sized random nonce to a same-origin caller", async () => {
+    const res = await fetch(`${baseUrl}/api/csrf`, { headers: { origin: baseUrl } });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { nonce: string };
+    // 32 random bytes as hex. Long enough that guessing is not a strategy.
+    expect(body.nonce).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("returns the SAME nonce for the life of the process (process-local, not per-request)", async () => {
+    const a = await (await fetch(`${baseUrl}/api/csrf`)).json() as { nonce: string };
+    const b = await (await fetch(`${baseUrl}/api/csrf`)).json() as { nonce: string };
+    expect(a.nonce).toBe(b.nonce);
+  });
+
+  it("carries no field beyond the nonce and is never cached", async () => {
+    const res = await fetch(`${baseUrl}/api/csrf`);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const body = await res.json() as Record<string, unknown>;
+    expect(Object.keys(body)).toEqual(["nonce"]);
+  });
+
+  it("rejects a cross-origin request for the nonce", async () => {
+    const res = await fetch(`${baseUrl}/api/csrf`, { headers: { origin: "https://evil.example.com" } });
+    expect(res.status).toBe(403);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.nonce).toBeUndefined();
+  });
+
+  it("holds the nonce ONLY in memory — it is never written to the corpus root", async () => {
+    const { nonce } = await (await fetch(`${baseUrl}/api/csrf`)).json() as { nonce: string };
+    // Walk everything the server could have persisted under the corpus root.
+    const seen: string[] = [];
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else seen.push(readFileSync(p, "utf-8"));
+      }
+    };
+    walk(base);
+    for (const contents of seen) expect(contents.includes(nonce)).toBe(false);
+  });
+
+  it("advertises the nonce header on the same-origin preflight (otherwise browsers block it)", async () => {
+    const res = await fetch(`${baseUrl}/api/entries`, {
+      method: "OPTIONS",
+      headers: { origin: baseUrl, "access-control-request-method": "POST" },
+    });
+    expect(res.status).toBe(204);
+    expect((res.headers.get("access-control-allow-headers") ?? "").toLowerCase()).toContain(
+      CSRF_HEADER.toLowerCase(),
+    );
+  });
+});
+
+describe("CSRF enforcement on mutating /api/* requests", () => {
+  let server: import("node:http").Server;
+  let baseUrl: string;
+  let base: string;
+  let nonce: string;
+
+  /** A schema-valid new-entry payload the server would accept if it got that far. */
+  function entryPayload(title: string): Record<string, unknown> {
+    return {
+      ...baseEntry,
+      id: "",
+      title,
+      image: { ...baseEntry.image, path: "images-private/csrf-probe.png", width: 32, height: 32 },
+    };
+  }
+
+  async function entryCount(): Promise<number> {
+    const res = await fetch(`${baseUrl}/api/entries`);
+    const body = await res.json() as { entries: CorpusEntryT[] };
+    return body.entries.length;
+  }
+
+  beforeAll(async () => {
+    base = mkdtempSync(join(tmpdir(), "ui-server-csrf-enforce-"));
+    writeFileSync(join(base, "entries.json"), JSON.stringify({ version: 2, entries: [] }));
+    setCorpusRootForTesting(base);
+    setPrivateImageDirForTesting(mkdtempSync(join(tmpdir(), "ui-server-csrf-img-")));
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+    nonce = (await (await fetch(`${baseUrl}/api/csrf`)).json() as { nonce: string }).nonce;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+    setCorpusRootForTesting(null);
+    rmSync(base, { recursive: true, force: true });
+    const overrideDir = privateImageDir();
+    setPrivateImageDirForTesting(null);
+    if (existsSync(overrideDir)) rmSync(overrideDir, { recursive: true, force: true });
+  });
+
+  it("does NOT require the nonce on read (GET) requests", async () => {
+    for (const path of ["/api/entries", "/api/stats", "/api/health", "/api/schema", "/api/orphans"]) {
+      const res = await fetch(`${baseUrl}${path}`);
+      expect(res.status, `GET ${path}`).toBe(200);
+    }
+  });
+
+  // The nonce-comparison trap cases. Each of these is a mistake a hand-rolled
+  // equality check makes: accepting the empty string, accepting undefined ==
+  // undefined, prefix/substring matching, case-insensitive matching.
+  it("rejects every malformed or near-miss nonce on a mutating request", async () => {
+    const cases: Array<[label: string, headers: Record<string, string>]> = [
+      ["missing header entirely", {}],
+      ["empty string", { [CSRF_HEADER]: "" }],
+      ["whitespace only", { [CSRF_HEADER]: "   " }],
+      ["literal 'undefined'", { [CSRF_HEADER]: "undefined" }],
+      ["literal 'null'", { [CSRF_HEADER]: "null" }],
+      ["wrong nonce of the same length", { [CSRF_HEADER]: "f".repeat(64) }],
+      ["proper prefix of the nonce", { [CSRF_HEADER]: () => nonce.slice(0, 32) } as never],
+      ["nonce with a trailing character", { [CSRF_HEADER]: () => `${nonce}a` } as never],
+      ["nonce with a leading character", { [CSRF_HEADER]: () => `a${nonce}` } as never],
+      ["case-flipped nonce", { [CSRF_HEADER]: () => nonce.toUpperCase() } as never],
+      // Same length, one byte different in the middle — the case a prefix or
+      // substring comparison would wave through.
+      ["nonce with an internal space", { [CSRF_HEADER]: () => `${nonce.slice(0, 32)} ${nonce.slice(33)}` } as never],
+    ];
+    for (const [label, rawHeaders] of cases) {
+      // Lazily-computed header values (they depend on the runtime nonce).
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      for (const [k, v] of Object.entries(rawHeaders)) {
+        headers[k] = typeof v === "function" ? (v as () => string)() : v;
+      }
+      const before = await entryCount();
+      const res = await fetch(`${baseUrl}/api/entries`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(entryPayload(`Csrf ${label}`)),
+      });
+      expect(res.status, `POST with ${label}`).toBe(403);
+      const body = await res.json() as { code?: string };
+      expect(body.code, `POST with ${label}`).toBe("CSRF_REQUIRED");
+      // And nothing mutated.
+      expect(await entryCount(), `POST with ${label} mutated the corpus`).toBe(before);
+    }
+  });
+
+  it("accepts a whitespace-PADDED nonce, because the HTTP layer strips it before we see it", async () => {
+    // Documenting an actual layer boundary rather than asserting a fiction. RFC
+    // 9110 lets a recipient strip the optional whitespace around a field value,
+    // and node's HTTP parser does, so `" <nonce> "` reaches the application as
+    // the exact nonce bytes. The comparison itself does NO trimming (an internal
+    // space is rejected, above) — this test exists so nobody "fixes" the padded
+    // case by adding a `.trim()`, which is the change that would then also accept
+    // a tab- or newline-mangled value at the application layer.
+    //
+    // A non-mutating mutation for the probe: DELETE /api/orphans with no orphans.
+    const res = await fetch(`${baseUrl}/api/orphans`, {
+      method: "DELETE",
+      headers: { [CSRF_HEADER]: ` ${nonce} ` },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("accepts the exact nonce", async () => {
+    writeFileSync(join(privateImageDir(), "csrf-probe.png"), Buffer.from("fake-png-csrf"));
+    const res = await fetch(`${baseUrl}/api/entries`, {
+      method: "POST",
+      headers: { "content-type": "application/json", [CSRF_HEADER]: nonce },
+      body: JSON.stringify(entryPayload("Csrf accepted")),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it("requires the nonce on PUT, PATCH and DELETE as well as POST", async () => {
+    for (const method of ["PUT", "PATCH", "DELETE"] as const) {
+      const res = await fetch(`${baseUrl}/api/entries/csrf-accepted`, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: method === "DELETE" ? undefined : JSON.stringify({ id: "csrf-accepted" }),
+      });
+      expect(res.status, `${method} without a nonce`).toBe(403);
+    }
+    // The existing orphan-delete route is covered too.
+    const orphans = await fetch(`${baseUrl}/api/orphans`, { method: "DELETE" });
+    expect(orphans.status).toBe(403);
+  });
+
+  // ── ORDERING: the check runs BEFORE the body is read and BEFORE any mutation ──
+  //
+  // This is the property a "check somewhere in the handler" implementation gets
+  // wrong. The proof is a contrast pair on a body the server CANNOT parse:
+  //   - no nonce  → 403, because the check ran first and the body was never read;
+  //   - valid nonce → a parse failure, because the body WAS read.
+  // If the nonce check ran after readJson, the first case would surface the parse
+  // failure too, and this pair would be indistinguishable.
+  it("rejects a missing nonce BEFORE reading the body (malformed-body contrast pair)", async () => {
+    const malformed = '{ "id": "x", this is not json';
+
+    const withoutNonce = await fetch(`${baseUrl}/api/entries`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: malformed,
+    });
+    expect(withoutNonce.status).toBe(403);
+    expect((await withoutNonce.json() as { code?: string }).code).toBe("CSRF_REQUIRED");
+
+    const withNonce = await fetch(`${baseUrl}/api/entries`, {
+      method: "POST",
+      headers: { "content-type": "application/json", [CSRF_HEADER]: nonce },
+      body: malformed,
+    });
+    // The body was read and failed to parse — a DIFFERENT outcome, which is only
+    // possible if the nonce check precedes the read.
+    expect(withNonce.status).not.toBe(403);
+    expect(withNonce.status).toBeGreaterThanOrEqual(400);
+  });
+
+  it("rejects a missing nonce BEFORE mutating, even for a payload that would succeed", async () => {
+    writeFileSync(join(privateImageDir(), "csrf-would-succeed.png"), Buffer.from("fake-png-would"));
+    const payload = {
+      ...entryPayload("Csrf would succeed"),
+      image: { ...baseEntry.image, path: "images-private/csrf-would-succeed.png", width: 32, height: 32 },
+    };
+    const before = await entryCount();
+    const blocked = await fetch(`${baseUrl}/api/entries`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    expect(blocked.status).toBe(403);
+    expect(await entryCount()).toBe(before);
+
+    // The SAME payload with the nonce lands — so the 403 was the nonce, not the
+    // payload, and the mutation really was prevented rather than merely delayed.
+    const allowed = await fetch(`${baseUrl}/api/entries`, {
+      method: "POST",
+      headers: { "content-type": "application/json", [CSRF_HEADER]: nonce },
+      body: JSON.stringify(payload),
+    });
+    expect(allowed.status).toBe(201);
+    expect(await entryCount()).toBe(before + 1);
+  });
+
+  it("rejects a duplicated nonce header (a browser cannot smuggle two values)", async () => {
+    // Node joins repeated headers with ", " — the joined value must not match.
+    const res = await fetch(`${baseUrl}/api/entries`, {
+      method: "POST",
+      headers: [
+        ["content-type", "application/json"],
+        [CSRF_HEADER, nonce],
+        [CSRF_HEADER, nonce],
+      ] as unknown as HeadersInit,
+      body: JSON.stringify(entryPayload("Csrf duplicated")),
+    });
+    expect(res.status).toBe(403);
+  });
+});
+
+// The nonce dies with the process. A module instance IS the process's copy of
+// that state, so re-instantiating the module is the faithful in-suite equivalent
+// of a restart: it proves the nonce lives in module memory and nowhere durable.
+describe("CSRF nonce invalidation across a restart", () => {
+  let base: string;
+
+  beforeAll(() => {
+    base = mkdtempSync(join(tmpdir(), "ui-server-csrf-restart-"));
+    writeFileSync(join(base, "entries.json"), JSON.stringify({ version: 2, entries: [] }));
+  });
+
+  afterAll(() => {
+    setCorpusRootForTesting(null);
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("issues a DIFFERENT nonce after a restart and rejects the pre-restart nonce", async () => {
+    setCorpusRootForTesting(base);
+    const first = await startServer(0);
+    const firstAddr = first.address();
+    if (!firstAddr || typeof firstAddr !== "object") throw new Error("server did not bind");
+    const firstUrl = `http://127.0.0.1:${firstAddr.port}`;
+    const staleNonce = (await (await fetch(`${firstUrl}/api/csrf`)).json() as { nonce: string }).nonce;
+    await new Promise<void>((r) => first.close(() => r()));
+
+    // Restart: a fresh module instance, i.e. a fresh process's worth of state.
+    vi.resetModules();
+    const restarted = await import("./ui-server.js");
+    const { setCorpusRootForTesting: setRootFresh } = await import("../persistence.js");
+    setRootFresh(base);
+    const second = await restarted.startServer(0);
+    try {
+      const secondAddr = second.address();
+      if (!secondAddr || typeof secondAddr !== "object") throw new Error("server did not bind");
+      const secondUrl = `http://127.0.0.1:${secondAddr.port}`;
+
+      const freshNonce = (await (await fetch(`${secondUrl}/api/csrf`)).json() as { nonce: string }).nonce;
+      expect(freshNonce).not.toBe(staleNonce);
+
+      // The pre-restart nonce is no longer accepted anywhere.
+      const res = await fetch(`${secondUrl}/api/entries`, {
+        method: "POST",
+        headers: { "content-type": "application/json", [CSRF_HEADER]: staleNonce },
+        body: JSON.stringify({ ...baseEntry, id: "" }),
+      });
+      expect(res.status).toBe(403);
+      expect((await res.json() as { code?: string }).code).toBe("CSRF_REQUIRED");
+    } finally {
+      await new Promise<void>((r) => second.close(() => r()));
+    }
+  });
+});
+
+describe("POST /api/create-ui-spec (the C3 loopback route)", () => {
+  let server: import("node:http").Server;
+  let baseUrl: string;
+  let base: string;
+  let csrf: Record<string, string>;
+
+  async function postSpec(
+    body: unknown,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<{ status: number; text: string }> {
+    const res = await fetch(`${baseUrl}/api/create-ui-spec`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...csrf, ...extraHeaders },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+    return { status: res.status, text: await res.text() };
+  }
+
+  const VALID_BODY = { productContext: "A calm analytics dashboard for a fintech team" };
+
+  beforeAll(async () => {
+    base = mkdtempSync(join(tmpdir(), "ui-server-c3-"));
+    writeFileSync(join(base, "entries.json"), JSON.stringify({ version: 2, entries: [] }));
+    setCorpusRootForTesting(base);
+    // The route reads through PrivateCorpusReader → corpus.ts. Inject the
+    // private-marker-laden fixture so retrieval really returns corpus content
+    // and the leak assertions have something to catch.
+    setCorpusForTesting([PRIVATE_MARKED_ENTRY]);
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+    csrf = await csrfHeader(baseUrl);
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+    setCorpusForTesting(null);
+    setCorpusRootForTesting(null);
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("returns 200 with a body that passes parseDesignArtifactEnvelope()", async () => {
+    const { status, text } = await postSpec(VALID_BODY);
+    expect(status).toBe(200);
+    const envelope = parseDesignArtifactEnvelope(JSON.parse(text));
+    expect(envelope.artifactVersion).toBe("1.0");
+    expect(envelope.designMarkdown.length).toBeGreaterThan(0);
+    expect(envelope.designJson.length).toBeGreaterThan(0);
+    expect(envelope.publicEvidenceIds.length).toBeGreaterThan(0);
+  });
+
+  it("adds no adapter field — the served key set is the envelope's own", async () => {
+    const { text } = await postSpec(VALID_BODY);
+    const served = JSON.parse(text) as Record<string, unknown>;
+    for (const forbidden of ["summary", "tool", "schemaVersion", "status", "data", "evidence", "error", "isError", "content", "structuredContent", "outputFormat", "nonce"]) {
+      expect(Object.keys(served), `served envelope carries ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it("carries no private corpus marker anywhere in the complete response", async () => {
+    const { text } = await postSpec(VALID_BODY);
+    for (const marker of C3_BANNED_MARKERS) {
+      expect(text.includes(marker), `response contains ${marker}`).toBe(false);
+    }
+    expect(containsPrivateMarker(text)).toBe(false);
+  });
+
+  it("still produces a servable artifact when retrieval matches nothing", async () => {
+    // A brief with no lexical overlap with the single fixture entry.
+    const { status, text } = await postSpec({
+      productContext: "Zqxk wombat telemetry harness for subterranean freight",
+    });
+    expect(status).toBe(200);
+    const envelope = parseDesignArtifactEnvelope(JSON.parse(text));
+    expect(["structured-fallback", "keyword"]).toContain(envelope.retrieval.mode);
+    for (const marker of C3_BANNED_MARKERS) expect(text.includes(marker)).toBe(false);
+  });
+
+  it("returns a bounded typed 400 for invalid input", async () => {
+    const { status, text } = await postSpec({ productContext: "tiny" });
+    expect(status).toBe(400);
+    const body = JSON.parse(text) as { error: { code: string; message: string; retryable: boolean } };
+    expect(body.error.code).toBe("INVALID_INPUT");
+    expect(body.error.retryable).toBe(false);
+    expect(Object.keys(body)).toEqual(["error"]);
+    // No zod issue array (issues quote the caller's own values).
+    expect(text.includes("issues")).toBe(false);
+  });
+
+  it("rejects an outputFormat field (HTTP returns both renderings)", async () => {
+    const { status, text } = await postSpec({ ...VALID_BODY, outputFormat: "json" });
+    expect(status).toBe(400);
+    expect((JSON.parse(text) as { error: { code: string } }).error.code).toBe("INVALID_INPUT");
+  });
+
+  it("rejects a malformed JSON body with a typed error and no exception text", async () => {
+    const { status, text } = await postSpec("{ not json");
+    expect(status).toBe(400);
+    const body = JSON.parse(text) as { error: { code: string } };
+    expect(body.error.code).toBe("INVALID_INPUT");
+    // The JSON.parse failure message quotes the offending input — it must not leak.
+    expect(text.includes("not json")).toBe(false);
+    expect(text.toLowerCase().includes("unexpected token")).toBe(false);
+  });
+
+  it("refuses browser-supplied credential headers", async () => {
+    for (const header of [
+      { authorization: "Bearer sk-live-not-a-real-token" },
+      { "proxy-authorization": "Basic Zm9vOmJhcg==" },
+    ]) {
+      const { status, text } = await postSpec(VALID_BODY, header);
+      expect(status, `header ${Object.keys(header)[0]} was accepted`).toBe(400);
+      const body = JSON.parse(text) as { error: { code: string } };
+      expect(body.error.code).toBe("INVALID_INPUT");
+      // Nothing from the credential is echoed.
+      expect(text.includes("sk-live")).toBe(false);
+      expect(text.includes("Zm9vOmJhcg")).toBe(false);
+      // And no artifact was produced.
+      expect(text.includes("artifactVersion")).toBe(false);
+    }
+  });
+
+  it("IGNORES a cookie header instead of refusing the request", async () => {
+    // Cookies are HOST-scoped, not port-scoped (RFC 6265 §8.5). A cookie set by
+    // ANY other dev server on localhost — Vite on 5173, Next on 3000 — is
+    // attached by the browser to this request, and `fetch` sends it because a POST
+    // from the site to /api/create-ui-spec is same-origin. Refusing on the mere
+    // PRESENCE of a cookie would therefore 400 the playground for any operator who
+    // has ever run another local server, with a body byte-identical to the
+    // bad-brief refusal and nothing logged — undiagnosable.
+    //
+    // The constraint is that no browser-supplied credential is USED. This route
+    // never reads the header at all, which satisfies it more strongly than a 400
+    // does, and this test pins BOTH halves: the request succeeds, and nothing from
+    // the cookie reaches the response or the console.
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation(() => {}),
+    );
+    try {
+      const { status, text } = await postSpec(VALID_BODY, {
+        cookie: "unrelated_dev_server_session=zq-cookie-marker-4417; theme=dark",
+      });
+      expect(status, "a cookie-bearing request was refused").toBe(200);
+      parseDesignArtifactEnvelope(JSON.parse(text));
+      expect(text.includes("zq-cookie-marker-4417")).toBe(false);
+      expect(text.includes("unrelated_dev_server_session")).toBe(false);
+      expect(text.toLowerCase().includes("cookie")).toBe(false);
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it("never READS a cookie header anywhere in the server (the constraint, mechanically)", () => {
+    // "Ignoring is safe" is only true while nothing consults the header. This is
+    // the static half of the test above: no cookie value may be authenticated on,
+    // logged, forwarded, or refused on. It fails if any future edit reaches for it
+    // — including re-adding `cookie` to the refused-header list, whose 400 would
+    // silently break the playground again.
+    const source = readFileSync(new URL("./ui-server.ts", import.meta.url), "utf-8");
+    expect(source).not.toMatch(/headers\s*\.\s*cookie/i);
+    expect(source).not.toMatch(/headers\s*\[\s*['"`]\s*cookie/i);
+    expect(source).not.toMatch(/REFUSED_C3_REQUEST_HEADERS[^;]*['"`]cookie/i);
+  });
+
+  it("serves a NON-retryable 503 when the integrity re-check refuses the response", async () => {
+    // A deterministic refusal: the same request reproduces it exactly, so a client
+    // that honours `retryable` must NOT retry. The code and message stay the
+    // shared PROVIDER_ERROR pair (a caller must not learn it was a producer
+    // defect); only the flag is honest about repeatability.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    c3Adapter.forceIntegrityFailure = true;
+    try {
+      const { status, text } = await postSpec(VALID_BODY);
+      expect(status).toBe(503);
+      const body = JSON.parse(text) as { error: { code: string; message: string; retryable: boolean } };
+      expect(body.error.code).toBe("PROVIDER_ERROR");
+      expect(body.error.retryable).toBe(false);
+      expect(Object.keys(body)).toEqual(["error"]);
+      // Nothing from the thrown message reaches the wire.
+      expect(text.includes("integrity")).toBe(false);
+      expect(text.includes("values withheld")).toBe(false);
+      // The log is a FIXED literal: no request value, no exception text.
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0]).toEqual([
+        "[create_ui_spec] response refused by the design-artifact integrity re-check; nothing was served",
+      ]);
+    } finally {
+      c3Adapter.forceIntegrityFailure = false;
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("serves the SAME error body for a pre-adapter refusal as the adapter itself does", async () => {
+    // The route refuses some requests before the adapter runs (a credential
+    // header, an unparseable body, an oversized body). Those bodies must be the
+    // adapter's own INVALID_INPUT body, byte for byte — otherwise a client faces
+    // two error contracts, and the two can drift silently.
+    const fromAdapter = await postSpec({ productContext: "tiny" });
+    const fromRoute = await postSpec(VALID_BODY, { authorization: "Bearer x" });
+    const fromParseFailure = await postSpec("{ not json");
+    expect(fromRoute.status).toBe(fromAdapter.status);
+    expect(fromRoute.text).toBe(fromAdapter.text);
+    expect(fromParseFailure.text).toBe(fromAdapter.text);
+  });
+
+  it("rejects a screenshot or provider configuration in the body", async () => {
+    for (const extra of [
+      { screenshot: "data:image/png;base64,AAAA" },
+      { critiqueProvider: "openai" },
+      { apiKey: "sk-live-not-a-real-key" },
+    ]) {
+      const { status, text } = await postSpec({ ...VALID_BODY, ...extra });
+      expect(status, `body field ${Object.keys(extra)[0]} was accepted`).toBe(400);
+      expect(text.includes("sk-live")).toBe(false);
+    }
+  });
+
+  it("requires the CSRF nonce", async () => {
+    const res = await fetch(`${baseUrl}/api/create-ui-spec`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(VALID_BODY),
+    });
+    expect(res.status).toBe(403);
+    const text = await res.text();
+    expect((JSON.parse(text) as { code?: string }).code).toBe("CSRF_REQUIRED");
+    expect(text.includes("artifactVersion")).toBe(false);
+  });
+
+  it("rejects an unexpected origin", async () => {
+    const res = await fetch(`${baseUrl}/api/create-ui-spec`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...csrf, origin: "https://evil.example.com" },
+      body: JSON.stringify(VALID_BODY),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.text()).includes("artifactVersion")).toBe(false);
+  });
+
+  it("writes nothing about the request to the server console", async () => {
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation(() => {}),
+    );
+    try {
+      await postSpec({ productContext: "zq-server-log-brief-marker-7719 dashboard for a fintech" });
+      await postSpec({ productContext: "tiny" });
+      await postSpec("{ not json");
+      for (const spy of spies) {
+        expect(spy).not.toHaveBeenCalled();
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it("is served by the loopback API, not the static site", async () => {
+    // GET on the route is not an API surface — it must not fall through to a
+    // static handler or the SPA shell.
+    const res = await fetch(`${baseUrl}/api/create-ui-spec`);
+    expect(res.status).toBe(404);
+    expect((await res.text()).includes("<html")).toBe(false);
+  });
+});
+
+describe("production static serving under /clean-ui-mcp/ (CLEAN_UI_SITE_DIST)", () => {
+  let server: import("node:http").Server;
+  let baseUrl: string;
+  let base: string;
+  let outside: string;
+  let dist: string;
+  const priorEnv = process.env.CLEAN_UI_SITE_DIST;
+
+  const SECRET = "zq-outside-the-root-secret-6604";
+
+  beforeAll(async () => {
+    base = mkdtempSync(join(tmpdir(), "ui-server-site-"));
+    writeFileSync(join(base, "entries.json"), JSON.stringify({ version: 2, entries: [] }));
+    setCorpusRootForTesting(base);
+
+    // The "outside" tree holds the file every traversal case is trying to reach.
+    outside = mkdtempSync(join(tmpdir(), "ui-server-site-outside-"));
+    writeFileSync(join(outside, "secret.txt"), SECRET);
+
+    dist = join(base, "site-dist");
+    mkdirSync(join(dist, "assets"), { recursive: true });
+    mkdirSync(join(dist, "api"), { recursive: true });
+    mkdirSync(join(dist, "sub"), { recursive: true });
+    writeFileSync(join(dist, "index.html"), "<!doctype html><title>site shell</title>");
+    writeFileSync(join(dist, "assets", "app.js"), "export const x = 1;");
+    writeFileSync(join(dist, "assets", "app.css"), ".a{color:red}");
+    writeFileSync(join(dist, "manifest.json"), '{"name":"site"}');
+    // A file that shadows the API path — the API must still win.
+    writeFileSync(join(dist, "api", "config"), "STATIC-SHADOW-OF-THE-API");
+    // An asset that STATS fine but cannot be READ. statSync needs no read
+    // permission, so the resolver returns it and the read is what fails.
+    writeFileSync(join(dist, "assets", "locked.js"), "zq-unreadable-asset-body-8821");
+    chmodSync(join(dist, "assets", "locked.js"), 0o000);
+    // Symlink escapes: one file link, one directory link.
+    symlinkSync(join(outside, "secret.txt"), join(dist, "escape.txt"));
+    symlinkSync(outside, join(dist, "escapedir"));
+
+    process.env.CLEAN_UI_SITE_DIST = dist;
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+    if (priorEnv === undefined) delete process.env.CLEAN_UI_SITE_DIST;
+    else process.env.CLEAN_UI_SITE_DIST = priorEnv;
+    setCorpusRootForTesting(null);
+    // Restore the modes the EACCES tests changed, so the tree removes cleanly even
+    // if one of those tests failed before its own restore ran.
+    chmodSync(join(dist, "assets", "locked.js"), 0o644);
+    chmodSync(join(dist, "index.html"), 0o644);
+    rmSync(base, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("serves index.html at the site root, with and without the trailing slash", async () => {
+    for (const path of ["/clean-ui-mcp/", "/clean-ui-mcp"]) {
+      const res = await fetch(`${baseUrl}${path}`);
+      expect(res.status, path).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/html");
+      expect(await res.text()).toContain("site shell");
+    }
+  });
+
+  it("301-redirects the bare site path to the trailing-slash form", async () => {
+    // Without this, a build whose `base` emits RELATIVE asset urls resolves
+    // `./assets/app.js` against `/clean-ui-mcp` → `/assets/app.js`, which is
+    // outside the site branch and 404s. Entering at `/clean-ui-mcp/` works, so the
+    // redirect makes both entry points equivalent (Task 6 inherits a working
+    // mount rather than this trap).
+    const res = await fetch(`${baseUrl}/clean-ui-mcp`, { redirect: "manual" });
+    expect(res.status).toBe(301);
+    expect(res.headers.get("location")).toBe("/clean-ui-mcp/");
+    // No filesystem path in a redirect either.
+    expect(res.headers.get("location")!.includes(dist)).toBe(false);
+  });
+
+  it("preserves the query string across the trailing-slash redirect", async () => {
+    const res = await fetch(`${baseUrl}/clean-ui-mcp?tab=playground`, { redirect: "manual" });
+    expect(res.status).toBe(301);
+    expect(res.headers.get("location")).toBe("/clean-ui-mcp/?tab=playground");
+  });
+
+  it("404s an UNREADABLE asset without leaking its filesystem path", async () => {
+    // `statSync().isFile()` succeeds on a mode-000 file (stat needs no read
+    // permission), so the resolver returns it and `readFileSync` throws EACCES —
+    // whose message carries the absolute path. Unhandled, that path lands in both
+    // the 500 body and the operator's console. It must 404 silently instead.
+    if (process.getuid?.() === 0) return; // root ignores file modes
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation(() => {}),
+    );
+    try {
+      const res = await fetch(`${baseUrl}/clean-ui-mcp/assets/locked.js`);
+      const text = await res.text();
+      expect(res.status).toBe(404);
+      expect(text).not.toContain("zq-unreadable-asset-body-8821");
+      expect(text).not.toContain(dist);
+      expect(text).not.toContain("locked.js");
+      expect(text.toUpperCase()).not.toContain("EACCES");
+      for (const spy of spies) {
+        for (const call of spy.mock.calls) {
+          const line = call
+            .map((arg) => (arg instanceof Error ? `${arg.name}: ${arg.message}` : String(arg)))
+            .join(" ");
+          expect(line, "a filesystem path reached the console").not.toContain(dist);
+          expect(line, "a path-shaped string reached the console").not.toMatch(
+            /(?:^|\s)\/(?:Users|private|var|tmp|home)\//,
+          );
+        }
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it("404s an extensionless route whose SHELL is unreadable, rather than 500ing", async () => {
+    // The SPA fallback reads index.html through the same path. Same EACCES shape.
+    if (process.getuid?.() === 0) return;
+    const shell = join(dist, "index.html");
+    chmodSync(shell, 0o000);
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation(() => {}),
+    );
+    try {
+      const res = await fetch(`${baseUrl}/clean-ui-mcp/playground`);
+      const text = await res.text();
+      expect(res.status).toBe(404);
+      expect(text).not.toContain(dist);
+      expect(text.toUpperCase()).not.toContain("EACCES");
+      for (const spy of spies) {
+        for (const call of spy.mock.calls) {
+          const line = call
+            .map((arg) => (arg instanceof Error ? `${arg.name}: ${arg.message}` : String(arg)))
+            .join(" ");
+          expect(line).not.toContain(dist);
+        }
+      }
+    } finally {
+      chmodSync(shell, 0o644);
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it("serves hashed assets with correct content types", async () => {
+    const js = await fetch(`${baseUrl}/clean-ui-mcp/assets/app.js`);
+    expect(js.status).toBe(200);
+    expect(js.headers.get("content-type")).toContain("text/javascript");
+    expect(await js.text()).toContain("export const x");
+
+    const css = await fetch(`${baseUrl}/clean-ui-mcp/assets/app.css`);
+    expect(css.headers.get("content-type")).toContain("text/css");
+
+    const json = await fetch(`${baseUrl}/clean-ui-mcp/manifest.json`);
+    expect(json.status).toBe(200);
+    expect(json.headers.get("content-type")).toContain("application/json");
+  });
+
+  it("falls back to the SPA shell for an extensionless route", async () => {
+    const res = await fetch(`${baseUrl}/clean-ui-mcp/playground`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("site shell");
+  });
+
+  it("404s a missing ASSET rather than serving the shell (a broken import must fail loudly)", async () => {
+    const res = await fetch(`${baseUrl}/clean-ui-mcp/assets/missing.js`);
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain("site shell");
+  });
+
+  // ── PATH TRAVERSAL ──
+  // Every case must refuse: no SECRET in the body, and no 200-with-content.
+  it("refuses every traversal, encoding and symlink escape", async () => {
+    const cases = [
+      "/clean-ui-mcp/../secret.txt",
+      "/clean-ui-mcp/..%2Fsecret.txt",
+      "/clean-ui-mcp/%2e%2e%2fsecret.txt",
+      "/clean-ui-mcp/%2e%2e/secret.txt",
+      "/clean-ui-mcp/%252e%252e%252fsecret.txt",
+      "/clean-ui-mcp/sub/..%2f..%2fsecret.txt",
+      "/clean-ui-mcp/sub/%2e%2e/%2e%2e/secret.txt",
+      "/clean-ui-mcp/..\\secret.txt",
+      "/clean-ui-mcp/%2e%2e%5csecret.txt",
+      `/clean-ui-mcp/${encodeURIComponent(join(outside, "secret.txt"))}`,
+      `/clean-ui-mcp/%2f${encodeURIComponent(join(outside, "secret.txt").replace(/^\//, ""))}`,
+      "/clean-ui-mcp/escape.txt",
+      "/clean-ui-mcp/escapedir/secret.txt",
+      "/clean-ui-mcp/index.html%00.png",
+      "/clean-ui-mcp/%00index.html",
+    ];
+    for (const path of cases) {
+      const res = await fetch(`${baseUrl}${path}`);
+      const text = await res.text();
+      expect(text.includes(SECRET), `${path} served the out-of-root secret`).toBe(false);
+    }
+  });
+
+  it("refuses a symlink escape even though the link target exists", async () => {
+    // Named separately so the failure message is unambiguous: existsSync on a
+    // symlink follows it, so an existence check alone would happily serve this.
+    const res = await fetch(`${baseUrl}/clean-ui-mcp/escape.txt`);
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain(SECRET);
+  });
+
+  it("keeps /api/* on the loopback API even when a static file shadows it", async () => {
+    const res = await fetch(`${baseUrl}/api/config`);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain("STATIC-SHADOW-OF-THE-API");
+    expect(JSON.parse(text)).toHaveProperty("cleanUiPort");
+  });
+
+  it("still binds loopback only with the site served", async () => {
+    const addr = server.address();
+    expect(addr && typeof addr === "object" ? addr.address : null).toBe("127.0.0.1");
+  });
+});
+
+describe("static site absent (CLEAN_UI_SITE_DIST unset) — curator UI retained", () => {
+  let server: import("node:http").Server;
+  let baseUrl: string;
+  let base: string;
+  const priorEnv = process.env.CLEAN_UI_SITE_DIST;
+
+  beforeAll(async () => {
+    base = mkdtempSync(join(tmpdir(), "ui-server-nosite-"));
+    writeFileSync(join(base, "entries.json"), JSON.stringify({ version: 2, entries: [] }));
+    setCorpusRootForTesting(base);
+    delete process.env.CLEAN_UI_SITE_DIST;
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+    if (priorEnv !== undefined) process.env.CLEAN_UI_SITE_DIST = priorEnv;
+    setCorpusRootForTesting(null);
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("404s the site path", async () => {
+    const res = await fetch(`${baseUrl}/clean-ui-mcp/`);
+    expect(res.status).toBe(404);
+  });
+
+  it("still serves the curator app shell and its static assets", async () => {
+    const app = await fetch(`${baseUrl}/`);
+    expect(app.status).toBe(200);
+    expect(app.headers.get("content-type")).toContain("text/html");
+
+    const asset = await fetch(`${baseUrl}/static/app.js`);
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get("content-type")).toContain("text/javascript");
+  });
+
+  it("still serves the curator API", async () => {
+    const res = await fetch(`${baseUrl}/api/schema`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toHaveProperty("categories");
+  });
+
+  it("still issues a CSRF nonce", async () => {
+    const res = await fetch(`${baseUrl}/api/csrf`);
+    expect(res.status).toBe(200);
+    expect((await res.json() as { nonce: string }).nonce).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe("static /static/ route — EACCES safety", () => {
+  // The `/static/` branch (extracted CSS/JS served from ui/) has the IDENTICAL
+  // shape to the `/clean-ui-mcp/` site branch's pre-fix bug: `existsSync` (like
+  // `statSync`) needs no read permission, so a mode-000 file resolves as
+  // present, the 200 head gets written, and `readFileSync` throws EACCES —
+  // whose message carries the absolute path — AFTER the head is sent. That
+  // means the catch-all's `sendJson(res, 500, …)` throws
+  // `ERR_HTTP_HEADERS_SENT` and the request hangs, on top of the path leaking
+  // into the body and the console. STATIC_DIR is a fixed constant
+  // (`resolve(PROJECT_ROOT, "ui")`, not overridable per-test), so the locked
+  // file is created inside — and removed from — the real `ui/` directory.
+  let server: import("node:http").Server;
+  let baseUrl: string;
+  let base: string;
+  const priorEnv = process.env.CLEAN_UI_SITE_DIST;
+  const lockedName = "zq-static-eacces-locked-8821.js";
+  const lockedPath = join(PROJECT_ROOT, "ui", lockedName);
+  const canChmod = process.getuid?.() !== 0; // root ignores file modes
+
+  beforeAll(async () => {
+    base = mkdtempSync(join(tmpdir(), "ui-server-static-eacces-"));
+    writeFileSync(join(base, "entries.json"), JSON.stringify({ version: 2, entries: [] }));
+    setCorpusRootForTesting(base);
+    delete process.env.CLEAN_UI_SITE_DIST;
+    if (canChmod) {
+      // Defensive: a prior crashed/hung run (e.g. the pre-fix ERR_HTTP_HEADERS_SENT
+      // hang) could leave a mode-000 leftover behind, which would make this
+      // writeFileSync itself throw EACCES.
+      if (existsSync(lockedPath)) {
+        chmodSync(lockedPath, 0o644);
+        unlinkSync(lockedPath);
+      }
+      writeFileSync(lockedPath, "zq-unreadable-static-body-8821");
+      chmodSync(lockedPath, 0o000);
+    }
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+    if (priorEnv === undefined) delete process.env.CLEAN_UI_SITE_DIST;
+    else process.env.CLEAN_UI_SITE_DIST = priorEnv;
+    setCorpusRootForTesting(null);
+    if (canChmod && existsSync(lockedPath)) {
+      chmodSync(lockedPath, 0o644);
+      unlinkSync(lockedPath);
+    }
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("404s an UNREADABLE /static/ asset without leaking its filesystem path or hanging", async () => {
+    if (!canChmod) return; // root ignores file modes — nothing to prove here
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation(() => {}),
+    );
+    try {
+      const res = await fetch(`${baseUrl}/static/${lockedName}`);
+      const text = await res.text();
+      expect(res.status).toBe(404);
+      expect(text).not.toContain("zq-unreadable-static-body-8821");
+      expect(text).not.toContain(join(PROJECT_ROOT, "ui"));
+      expect(text).not.toContain(lockedName);
+      expect(text.toUpperCase()).not.toContain("EACCES");
+      for (const spy of spies) {
+        for (const call of spy.mock.calls) {
+          const line = call
+            .map((arg) => (arg instanceof Error ? `${arg.name}: ${arg.message}` : String(arg)))
+            .join(" ");
+          expect(line, "a filesystem path reached the console").not.toContain(join(PROJECT_ROOT, "ui"));
+          expect(line, "a path-shaped string reached the console").not.toMatch(
+            /(?:^|\s)\/(?:Users|private|var|tmp|home)\//,
+          );
+        }
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+});
+
+// The HTTP cases above prove "the secret never reaches the wire". But WHATWG URL
+// parsing normalizes some traversal forms away before any handler sees them (a
+// literal `..` segment, and a `%2e%2e` segment, are collapsed by `new URL()`), so
+// those cases do not prove the RESOLVER refuses anything. These tests call the
+// resolver directly with the exact post-prefix string, so every refusal below is
+// unambiguously this code's.
+describe("resolveSiteAsset — traversal containment (direct)", () => {
+  let root: string;
+  let outside: string;
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "resolve-site-root-"));
+    outside = mkdtempSync(join(tmpdir(), "resolve-site-outside-"));
+    mkdirSync(join(root, "assets"), { recursive: true });
+    mkdirSync(join(root, "sub"), { recursive: true });
+    writeFileSync(join(root, "index.html"), "<!doctype html>");
+    writeFileSync(join(root, "assets", "app.js"), "x");
+    writeFileSync(join(outside, "secret.txt"), "secret");
+    symlinkSync(join(outside, "secret.txt"), join(root, "escape.txt"));
+    symlinkSync(outside, join(root, "escapedir"));
+    // A sibling directory whose name merely starts with the root's name. A prefix
+    // check that forgets the path separator would treat this as inside the root.
+    mkdirSync(`${root}-evil`, { recursive: true });
+    writeFileSync(join(`${root}-evil`, "secret.txt"), "secret");
+    // …reached through an IN-ROOT symlink, which is the only way a request can
+    // actually land there: with no `..` and no leading separator, `resolve()`
+    // cannot produce a path outside the root, so the string containment check is
+    // only reachable via a realpath that leaves it. See the test below.
+    symlinkSync(`${root}-evil`, join(root, "evildir"));
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+    rmSync(`${root}-evil`, { recursive: true, force: true });
+  });
+
+  it("resolves a legitimate asset and the implicit index", () => {
+    expect(resolveSiteAsset(root, "assets/app.js")).toBe(join(realpathSync(root), "assets", "app.js"));
+    expect(resolveSiteAsset(root, "")).toBe(join(realpathSync(root), "index.html"));
+    expect(resolveSiteAsset(root, "index.html")).toBe(join(realpathSync(root), "index.html"));
+  });
+
+  it("refuses a literal traversal segment", () => {
+    for (const rel of ["../secret.txt", "..", "../", "sub/../../secret.txt", "a/../../secret.txt", "..\\secret.txt"]) {
+      expect(resolveSiteAsset(root, rel), rel).toBeNull();
+    }
+  });
+
+  it("refuses a traversal that only appears AFTER percent-decoding", () => {
+    // The bypass this ordering exists to stop: none of these contain `..` until
+    // they are decoded, so a check performed on the raw string passes them.
+    for (const rel of [
+      "%2e%2e%2fsecret.txt",
+      "%2E%2E%2Fsecret.txt",
+      "..%2fsecret.txt",
+      "..%2Fsecret.txt",
+      "%2e%2e%5csecret.txt",
+      "sub%2f..%2f..%2fsecret.txt",
+      "sub/%2e%2e/%2e%2e/secret.txt",
+    ]) {
+      expect(resolveSiteAsset(root, rel), rel).toBeNull();
+    }
+  });
+
+  it("refuses an absolute path, decoded or not", () => {
+    const abs = join(outside, "secret.txt");
+    for (const rel of [abs, encodeURIComponent(abs), `%2f${abs.replace(/^\//, "")}`, "/etc/passwd", "\\etc\\passwd"]) {
+      expect(resolveSiteAsset(root, rel), rel).toBeNull();
+    }
+  });
+
+  it("refuses a NUL byte", () => {
+    for (const rel of ["index.html%00.png", "%00index.html", "assets/%00app.js"]) {
+      expect(resolveSiteAsset(root, rel), rel).toBeNull();
+    }
+  });
+
+  it("refuses a malformed percent-encoding rather than passing it through", () => {
+    for (const rel of ["%", "%zz", "%e0%a4%a", "index%.html"]) {
+      expect(resolveSiteAsset(root, rel), rel).toBeNull();
+    }
+  });
+
+  it("refuses a symlink that escapes the root — file AND directory", () => {
+    // existsSync() FOLLOWS symlinks, so an existence check alone would serve
+    // both of these. The realpath containment check is what refuses them.
+    expect(existsSync(join(root, "escape.txt"))).toBe(true); // the trap is real
+    expect(resolveSiteAsset(root, "escape.txt")).toBeNull();
+    expect(resolveSiteAsset(root, "escapedir/secret.txt")).toBeNull();
+  });
+
+  it("refuses a sibling directory that merely shares the root's name prefix", () => {
+    // `<root>-evil/secret.txt` starts with `<root>` as a STRING but is not inside
+    // it, so ONLY a separator-aware containment check refuses it. Reaching that
+    // check requires a realpath that leaves the root: `evildir` is an in-root
+    // symlink to the sibling, so the decoded text contains no `..` and no leading
+    // separator, `resolve()` stays inside the root, and the refusal is
+    // unambiguously the separator-aware `isWithinRoot(realRoot, realCandidate)`
+    // comparison. Falsified: replacing that comparison with a bare
+    // `candidate.startsWith(root)` makes this case RESOLVE.
+    expect(existsSync(join(root, "evildir", "secret.txt"))).toBe(true); // the trap is real
+    expect(resolveSiteAsset(root, "evildir/secret.txt")).toBeNull();
+
+    // The `../<basename>-evil/...` spelling is refused EARLIER, by the `..` text
+    // check — it proves the traversal rule, not the containment rule. Kept as a
+    // regression case with an accurate label rather than deleted.
+    expect(resolveSiteAsset(root, `../${[...root.split(sep)].pop()}-evil/secret.txt`)).toBeNull();
+  });
+
+  it("leaves a DOUBLE-encoded traversal as a harmless in-root miss", () => {
+    // `%252e%252e%252f` decodes ONCE to the literal text `%2e%2e%2f`, which is not
+    // a traversal — decoding twice would be the bug. It resolves inside the root
+    // and simply does not exist.
+    expect(resolveSiteAsset(root, "%252e%252e%252fsecret.txt")).toBeNull();
+  });
+
+  it("refuses a directory, even a legitimate in-root one", () => {
+    expect(resolveSiteAsset(root, "assets")).toBeNull();
+    expect(resolveSiteAsset(root, "sub")).toBeNull();
   });
 });

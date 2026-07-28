@@ -8,6 +8,66 @@
 'use strict';
 
 const API = ''; // same-origin
+
+// ─── CSRF nonce (C3 Task 5) ──────────────────────────────────────────────────
+//
+// Every mutating /api/* request must carry the X-Clean-UI-CSRF header. The nonce
+// is process-local to the curator server and readable only by a SAME-ORIGIN
+// caller, so another site can send a request to this server but can never read
+// GET /api/csrf to learn the value it would have to echo.
+//
+// Cached for the lifetime of the page, with one in-flight fetch shared across a
+// concurrent burst — the bulk re-tag / bulk commit flows fire many mutations at
+// once and must not each mint their own request.
+//
+// A server RESTART mints a new nonce and invalidates ours, which would otherwise
+// leave an open tab permanently unable to save. So a 403 carrying
+// `code: "CSRF_REQUIRED"` clears the cache and retries exactly ONCE. That retry
+// is safe, not a double-submit risk: the server rejects a bad nonce BEFORE it
+// reads the request body and before any mutation, so the first attempt provably
+// had no effect. The retry is skipped for a non-string body (nothing here sends
+// one) since a consumed stream could not be replayed.
+const CSRF_HEADER = 'X-Clean-UI-CSRF';
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+let csrfNoncePromise = null;
+
+function csrfNonce(){
+  if(!csrfNoncePromise){
+    csrfNoncePromise = fetch('/api/csrf', { headers: { accept: 'application/json' } })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Could not obtain a CSRF nonce'))))
+      .then((d) => {
+        if(!d || typeof d.nonce !== 'string' || !d.nonce) throw new Error('Could not obtain a CSRF nonce');
+        return d.nonce;
+      })
+      .catch((err) => { csrfNoncePromise = null; throw err; });
+  }
+  return csrfNoncePromise;
+}
+
+/**
+ * fetch() for the curator API. Read requests pass straight through; mutating
+ * requests acquire the nonce and send it. Use this instead of bare fetch() for
+ * ANY POST/PUT/PATCH/DELETE against /api/*.
+ */
+async function apiFetch(url, options = {}){
+  const method = String(options.method || 'GET').toUpperCase();
+  if(!MUTATING_METHODS.has(method)) return fetch(url, options);
+  const send = async (nonce) => fetch(url, {
+    ...options,
+    headers: { ...(options.headers || {}), [CSRF_HEADER]: nonce },
+  });
+  let response = await send(await csrfNonce());
+  const replayable = options.body === undefined || options.body === null || typeof options.body === 'string';
+  if(response.status === 403 && replayable){
+    const body = await response.clone().json().catch(() => ({}));
+    if(body && body.code === 'CSRF_REQUIRED'){
+      csrfNoncePromise = null; // the server restarted — re-mint and retry once.
+      response = await send(await csrfNonce());
+    }
+  }
+  return response;
+}
+
 let E = [];     // entries (live, mapped to the shape components expect)
 let SCHEMA = { categories: [], styleTags: [], components: [], domainTags: [], patternTypes: [], spacingDensities: [], cornerStyles: [], imageVisibilities: [] };
 let HEALTH = { entryCount: 0, snapshotCount: 0, newestSnapshotEpoch: null, newestSnapshotAgeMs: null };
@@ -223,7 +283,7 @@ async function setTier(id, tier){
   body.qualityTier = tier;
   if(tier === 'cautionary' && (body.qualityScore ?? 5) > 2) body.qualityScore = 2;
   if(tier === 'exceptional' && (body.qualityScore ?? 0) < 3) body.qualityScore = 3;
-  const r = await fetch(`${API}/api/entries/${encodeURIComponent(id)}`, {
+  const r = await apiFetch(`${API}/api/entries/${encodeURIComponent(id)}`, {
     method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
   });
   return r.ok;
@@ -270,7 +330,7 @@ async function retagMany(ids, provider){
   retagBusy = true;
   setBulkButtonsDisabled(true);
   setBulkProgress(true, 0, ids.length, 0);
-  const tasks = ids.map(id => () => fetch(`${API}/api/auto-retag`, {
+  const tasks = ids.map(id => () => apiFetch(`${API}/api/auto-retag`, {
     method:'POST', headers:{'content-type':'application/json'},
     body: JSON.stringify({ id, extractionProvider: provider, critiqueProvider: provider }),
   }).then(r => r.json()));
@@ -565,7 +625,9 @@ const lines = (v) => String(v||'').split('\n').map(l=>l.trim()).filter(Boolean);
 // so server-side validation errors surface as thrown Errors with the server's
 // message (issues array or error string) rather than silent failures.
 async function request(path, options={}){
-  const response = await fetch(`${API}${path}`, {
+  // Routed through apiFetch so every mutation carries the CSRF nonce; reads are
+  // passed straight through unchanged.
+  const response = await apiFetch(`${API}${path}`, {
     headers: { 'content-type':'application/json', ...(options.headers||{}) },
     ...options,
   });
@@ -862,7 +924,7 @@ function openDetail(x){
     const newId = prompt('New entry id (kebab-case):', x.id);
     if (!newId || newId.trim() === x.id) return;
     try {
-      const r = await fetch(`/api/entries/${encodeURIComponent(x.id)}/rename`, {
+      const r = await apiFetch(`/api/entries/${encodeURIComponent(x.id)}/rename`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ newId: newId.trim() }),
@@ -2390,7 +2452,7 @@ function bindDecisionSetup() {
   if (!form) return;
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const resp = await fetch('/api/decisions', {
+    const resp = await apiFetch('/api/decisions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -2423,7 +2485,7 @@ function bindDecisionBuilder() {
       if (!file) return;
       const reader = new FileReader();
       reader.onload = async () => {
-        const resp = await fetch('/api/decision-upload-image', {
+        const resp = await apiFetch('/api/decision-upload-image', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ filename: file.name, dataUrl: reader.result }),
@@ -2459,7 +2521,7 @@ function bindDecisionBuilder() {
     analyzeBtn.textContent = 'Analyzing…';
     analyzeBtn.disabled = true;
     try {
-      const resp = await fetch(`/api/decisions/${currentDecision.id}/analyze`, { method: 'POST' });
+      const resp = await apiFetch(`/api/decisions/${currentDecision.id}/analyze`, { method: 'POST' });
       const data = await resp.json();
       if (data.error) { toast(data.error); return; }
       currentDecision = data.decision;
@@ -2498,7 +2560,7 @@ function bindDecisionReport() {
 async function persistDecision() {
   if (!currentDecision) return;
   try {
-    const resp = await fetch(`/api/decisions/${currentDecision.id}`, {
+    const resp = await apiFetch(`/api/decisions/${currentDecision.id}`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ directions: currentDecision.directions }),

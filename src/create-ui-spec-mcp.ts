@@ -72,11 +72,14 @@ import {
   projectSanitizedEvidenceToMcpEvidence,
   projectRetrievalStateForTransport,
   containsPrivateMarker,
-  CreateUiSpecErrorSchema,
-  SafeErrorMessage,
   type DesignArtifactEnvelope,
 } from "./create-ui-spec-contracts.js";
-import { CreateUiSpecInput, parseToolResult, ERROR_RETRYABLE } from "./tool-contracts.js";
+import {
+  createUiSpecTransportError,
+  mapCoreErrorToTransportError,
+  type CreateUiSpecTransportError,
+} from "./create-ui-spec-transport-errors.js";
+import { CreateUiSpecInput, parseToolResult } from "./tool-contracts.js";
 
 /** The MCP tool result this adapter serves. No field beyond these three. */
 export interface CreateUiSpecMcpResult {
@@ -97,31 +100,12 @@ const OK_SUMMARY = "Design spec produced from the deterministic assembly recipe.
 /** The bounded error summary. Fixed for the same reason as {@link OK_SUMMARY}. */
 const ERROR_SUMMARY = "No design spec was produced.";
 
-/**
- * Fallback messages used only if a core message somehow fails
- * {@link SafeErrorMessage} (defensive — the core validates its own messages
- * through the same schema). Never derived from an exception.
- */
-const FALLBACK_MESSAGE: Readonly<Record<McpErrorCode, string>> = {
-  INVALID_INPUT: "The create_ui_spec request could not be accepted.",
-  PROVIDER_ERROR: "Design spec assembly is temporarily unavailable.",
-};
-
-/**
- * The transport error codes this tool may publish — exactly the descriptor's
- * `errorCodes` for create_ui_spec. No new transport error code is introduced.
- */
-type McpErrorCode = "INVALID_INPUT" | "PROVIDER_ERROR";
-
-/**
- * The ONE core→transport error mapping. Core `INVALID_INPUT` becomes the
- * existing non-retryable MCP `INVALID_INPUT`; core `RETRIEVAL_UNAVAILABLE`
- * becomes the existing retryable `PROVIDER_ERROR`.
- */
-const CORE_TO_MCP_ERROR: Readonly<Record<"INVALID_INPUT" | "RETRIEVAL_UNAVAILABLE", McpErrorCode>> = {
-  INVALID_INPUT: "INVALID_INPUT",
-  RETRIEVAL_UNAVAILABLE: "PROVIDER_ERROR",
-};
+// The transport error codes this tool may publish — exactly the descriptor's
+// `errorCodes` for create_ui_spec — along with the fixed fallback messages, the
+// core→transport code mapping and the retryable flag, all live in
+// create-ui-spec-transport-errors.ts, shared with the loopback HTTP adapter so
+// the two transports cannot drift on any of the three error decisions. Only the
+// MCP-shaped ENVELOPE around the triple ({@link errorResult}) is owned here.
 
 /**
  * The retrieval block an error envelope carries. `none/none` with
@@ -204,7 +188,7 @@ export async function handleCreateUiSpec(
   const parsedInput = CreateUiSpecInput.safeParse(rawArgs);
   if (!parsedInput.success) {
     // The zod issues are NOT forwarded: they can echo the caller's own values.
-    return errorResult("INVALID_INPUT", FALLBACK_MESSAGE.INVALID_INPUT);
+    return errorResult(createUiSpecTransportError("INVALID_INPUT"));
   }
   // `outputFormat` is ADAPTER-LOCAL presentation selection and is deliberately
   // destructured away here: the core request contract has no such field, and
@@ -313,36 +297,28 @@ function assertRenderingIsServable(rendering: string): void {
 }
 
 /**
- * Map a thrown producer failure onto the standard error envelope.
+ * Map a thrown producer failure onto the standard MCP error envelope.
  *
- * The thrown value is validated through {@link CreateUiSpecErrorSchema} — the
- * core's own error contract — so both the code and the bounded, path-free
- * message are the core's, not a re-interpretation. Anything that does NOT parse
- * as a typed core error is an unexpected internal fault: it becomes
- * `PROVIDER_ERROR` with a FIXED message, and its raw text (which can carry a
- * path, a url or a stack) is discarded rather than surfaced.
+ * The core→transport decision (code, bounded message, retryable) is the SHARED
+ * {@link mapCoreErrorToTransportError}; this function only wraps the resulting
+ * triple in the MCP envelope. See create-ui-spec-transport-errors.ts for why the
+ * decision is shared and the envelope is not.
  */
 function mapCoreError(err: unknown): CreateUiSpecMcpResult {
-  const typed = CreateUiSpecErrorSchema.safeParse(err);
-  if (!typed.success) {
-    return errorResult("PROVIDER_ERROR", FALLBACK_MESSAGE.PROVIDER_ERROR);
-  }
-  const code = CORE_TO_MCP_ERROR[typed.data.code];
-  // The core already validates its messages through SafeErrorMessage; re-assert
-  // it here so this boundary does not depend on that remaining true.
-  const safe = SafeErrorMessage.safeParse(typed.data.message);
-  return errorResult(code, safe.success ? safe.data : FALLBACK_MESSAGE[code]);
+  return errorResult(mapCoreErrorToTransportError(err));
 }
 
 /**
  * Build the standard error envelope. Shape is exactly what the shared envelope's
  * error branch requires: `data: null`, empty `referenceIds`, empty `evidence`,
- * empty `warnings`, `none/none` retrieval with `resultCount: 0`, and a `code` ↔
- * `retryable` pair taken from the shared {@link ERROR_RETRYABLE} table so the two
- * cannot drift. Gate-validated before it is served, exactly like a success
- * result.
+ * empty `warnings`, `none/none` retrieval with `resultCount: 0`, and the
+ * `code`/`message`/`retryable` triple exactly as the shared mapping produced it
+ * (the retryable flag is the shared `ERROR_RETRYABLE` table's, so a code and its
+ * retryability cannot drift). Gate-validated before it is served, exactly like a
+ * success result.
  */
-function errorResult(code: McpErrorCode, message: string): CreateUiSpecMcpResult {
+function errorResult(transportError: CreateUiSpecTransportError): CreateUiSpecMcpResult {
+  const { code, message, retryable } = transportError;
   const payload: Record<string, unknown> = {
     tool: "create_ui_spec",
     schemaVersion: "1.0",
@@ -353,7 +329,7 @@ function errorResult(code: McpErrorCode, message: string): CreateUiSpecMcpResult
     retrieval: { ...ERROR_RETRIEVAL, attemptedModes: [] },
     warnings: [],
     evidence: [],
-    error: { code, message, retryable: ERROR_RETRYABLE[code]! },
+    error: { code, message, retryable },
   };
   assertPassesContractGate(payload);
   return {

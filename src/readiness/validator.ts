@@ -80,6 +80,13 @@ export interface ValidationResult {
   checkpointStatus: Record<string, "open" | "closed">;
   checkedArtifacts: number;
   issues: ValidationIssue[];
+  /**
+   * Non-blocking caveats surfaced alongside the result. These do NOT affect
+   * `ok` or the exit code — they document limits the validator cannot enforce
+   * (e.g. C2 externality is asserted but not machine-verifiable). Callers
+   * SHOULD surface them in the report so the closure claim is honest.
+   */
+  warnings: ValidationIssue[];
 }
 
 /**
@@ -243,6 +250,7 @@ function findLeaks(
 
 export function validateReadinessArtifacts(opts: ValidateReadinessOptions): ValidationResult {
   const issues: ValidationIssue[] = [];
+  const warnings: ValidationIssue[] = [];
   const checkpointStatus: Record<string, "open" | "closed"> = {
     C0: "open",
     C1: "open",
@@ -263,7 +271,7 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
       .sort();
   } catch {
     issues.push({ code: "artifact-root-missing", path: absRoot, message: `cannot read artifact root: ${absRoot}` });
-    return { ok: false, checkpointStatus, checkedArtifacts: 0, issues };
+    return { ok: false, checkpointStatus, checkedArtifacts: 0, issues, warnings };
   }
 
   // 2. Parse each artifact
@@ -514,6 +522,7 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
         opts,
         issues,
         checkpointStatus,
+        warnings,
       );
     }
 
@@ -578,6 +587,7 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
     checkpointStatus,
     checkedArtifacts: artifacts.size,
     issues,
+    warnings,
   };
 }
 
@@ -785,6 +795,7 @@ function validateApprovalsAndCheckpoint(
   opts: ValidateReadinessOptions,
   issues: ValidationIssue[],
   checkpointStatus: Record<string, "open" | "closed">,
+  warnings: ValidationIssue[],
 ): void {
   const ledgerData = CheckpointApprovals.safeParse(ledgerEntry.data);
   if (!ledgerData.success) {
@@ -1058,6 +1069,23 @@ function validateApprovalsAndCheckpoint(
 
     if (allRolesPresent && actorCardinalityValid) {
       checkpointStatus[cp] = "closed";
+      // C2 externality caveat: the validator enforces distinct actor IDs and
+      // that the QA actor is not an implementation actor, but it CANNOT verify
+      // that the QA actor ID corresponds to a genuinely external human (the
+      // design spec requires "QA approval by an external human who is
+      // registered truthfully"). A sole operator can create two distinct human
+      // actor IDs and obtain C2 closure. Surface this as a warning so the
+      // readiness report is honest about the limit rather than silently
+      // asserting externality the validator never checked. The check still
+      // PASSES — externality must be established out-of-band (signed
+      // attestations, distinct GitHub accounts, etc.; see TODOS.md).
+      if (cp === "C2") {
+        warnings.push({
+          code: "c2-external-qa-unverifiable",
+          message:
+            "C2 closure assumes the QA reviewer actor ID is a genuinely external human. The validator enforces distinct, non-implementation actors but cannot verify externality; it must be established out-of-band (e.g. distinct signed commit authors, distinct GitHub accounts, or a signed attestation).",
+        });
+      }
     }
   }
 }

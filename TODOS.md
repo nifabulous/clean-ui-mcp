@@ -150,3 +150,36 @@ typecheck, build, compiled probe).
 
 **Source:** plan-eng-review + codex outside-voice, 2026-07-27. Artifacts:
 `~/.gstack/projects/<slug>/` eng-review test plan + tasks JSONL.
+
+---
+
+## C2 external-QA enforceability
+
+**What:** Strengthen the C2 closure gate so the "external human QA reviewer"
+requirement is machine-verifiable, not merely asserted. The validator currently
+enforces distinct, non-implementation actor IDs and surfaces a
+`c2-external-qa-unverifiable` non-blocking caveat on every C2 closure
+(`src/readiness/validator.ts`, `docs/superpowers/specs/2026-07-19-c2-gold-readiness-design.md:11`),
+but a sole operator can still create two human actor IDs and close C2.
+
+**Why:** The design spec requires "QA approval by an external human who is
+registered truthfully and is not an implementation actor." Externality is a
+real governance property; the current caveat makes the gap visible but does
+not close it.
+
+**Candidate approaches:**
+- Require distinct git commit authors for the Gold vs QA approval artifacts
+  (weak but real signal available in the local validator).
+- Require a signed attestation (e.g. GPG/Sigstore) from the QA actor that
+  binds their identity to the approval.
+- Bind actor IDs to distinct GitHub accounts verified via the GitHub API
+  (requires network access; out of scope for the offline validator).
+
+**Trigger (build when):** C2 closure becomes a release gate for a multi-person
+team, OR when an auditor challenges the externality claim. Until then the
+caveat is honest and the closure is provisional-on-trust.
+
+**Scope when triggered:** extend `validateApprovalsAndCheckpoint` in
+`src/readiness/validator.ts`; likely add an attestation artifact type to the
+readiness contracts. The caveat (`c2-external-qa-unverifiable`) stays as the
+fallback when the stronger check is not yet configured.

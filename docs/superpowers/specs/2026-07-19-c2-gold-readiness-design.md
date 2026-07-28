@@ -289,6 +289,16 @@ Formal C2 closure requires two role-specific approvals bound to identical frozen
 - Gold Label Owner approval by the maintainer.
 - QA approval by an external human who is registered truthfully and is not an implementation actor.
 
+> **Known limitation — externality is not machine-verifiable.** The readiness
+> validator enforces that the QA actor is distinct from implementation actors
+> and that two role-specific approvals exist, but it cannot prove the QA actor
+> ID corresponds to a genuinely external human. A sole operator can create two
+> distinct human actor IDs and obtain C2 closure. The validator surfaces this
+> as a non-blocking `c2-external-qa-unverifiable` caveat on every C2 closure so
+> the report is honest about the limit. Genuine externality must be established
+> out-of-band (signed commit authors, distinct GitHub accounts, or a signed
+> attestation).
+
 The external QA reviewer independently labels all 40 entries in the label-integrity set before adjudication. For the decision-quality set, the reviewer examines all 25 frozen cases, all disputed decisions, every safety case, every promoted retag, and a randomized sample of undisputed evidence/label decisions. The reviewer need not relabel the corpus outside the frozen 40-entry set.
 
 Both approvals bind the case-set, labels, corpus snapshot, retrieval index, scorer, harness, prompt, provider/model configuration, run manifests, candidate outputs, scorecards, adjudication report, remediation records, and rollback evidence. A material change creates a new artifact version and invalidates prior approval for the new version.

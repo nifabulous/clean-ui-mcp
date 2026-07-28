@@ -126,7 +126,7 @@ function writeLedgerV2(fixture: ReturnType<typeof buildValidGraph>, approvals: u
   const v1 = readJson<Record<string, unknown>>(fixture.ledgerPath!);
   const ledger = {
     ...v1,
-    artifactId: "approvals-c1-v2",
+    artifactId: "fixture-approvals-v2",
     ordinalVersion: 2,
     predecessor: { version: "1", sha256: fileSha(fixture.ledgerPath!) },
     approvals,
@@ -425,7 +425,7 @@ function buildValidGraph(opts?: {
     writeArtifact(artifactRoot, "checkpoint-approvals-v1.json", {
       ...baseHeader,
       artifactType: "checkpoint-approvals",
-      artifactId: "approvals-20260714",
+      artifactId: "fixture-approvals-v1",
       approvals: [
         {
           approvalId: "c0-repo-maintainer",
@@ -739,7 +739,7 @@ function addValidSyntheticC1Approvals(
   ];
   const v2Ledger = {
     ...v1Ledger,
-    artifactId: "approvals-c1-v2",
+    artifactId: "fixture-approvals-v2",
     ordinalVersion: 2,
     predecessor: { version: "1", sha256: fileSha(fixture.ledgerPath!) },
     approvals: [...v1Ledger.approvals, ...c1Approvals],
@@ -1637,7 +1637,7 @@ describe("governance snapshot chains", () => {
     fixture = buildValidGraph({ withApprovals: true });
     const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
     writeLedgerV2(fixture, v1.approvals);
-    writeLedgerV2(fixture, v1.approvals, { artifactId: "approvals-c1-v2-fork" });
+    writeLedgerV2(fixture, v1.approvals, { artifactId: "fixture-approvals-v2-fork" });
     const result = validate(fixture);
     expect(result.issues.some((i) => i.code === "chain-duplicate-key" || i.code === "chain-fork")).toBe(true);
   });
@@ -1987,12 +1987,16 @@ describe("approval temporal provenance", () => {
     // The finding is therefore UNCONDITIONAL: a temporally-impossible
     // supersession blocks whether or not something later supersedes it. A
     // durable record that a governance defect occurred is the entire value of
-    // this invariant. "Durable" means: no change confined to
-    // `quality-contracts/` can clear it — a successor ledger cannot drop the
-    // record (append-only prefix check) and the head ledger's own rows cannot be
-    // edited in place (the approval-row pin in src/readiness/ledger-pins.ts,
-    // which the append-only check does NOT cover). It is not durable against a
-    // change that also edits the source pin; see that module. Clearing it
+    // this invariant. "Durable" is defined by the five attacks enumerated in
+    // TODOS.md § "How durable, exactly" and reproduced against the real graph:
+    // a successor ledger cannot drop the record (append-only prefix check), a
+    // tracked ledger's own rows cannot be edited in place (the approval-row pins
+    // in src/readiness/ledger-pins.ts, which the append-only check does NOT
+    // cover), and neither a rename nor an unpinned new head releases the chain
+    // (step 7c's coverage rule). It is NOT durable against a change that also
+    // edits the source pins, and nothing is claimed beyond those five attacks —
+    // "durable against any change confined to `quality-contracts/`" was asserted
+    // here once and falsified by the rename. Clearing it
     // legitimately requires an explicit retraction act — see TODOS.md
     // § "Approval retraction vocabulary (the ledger cannot say \"withdrawn\")".
     fixture = buildValidGraph({ withApprovals: true });
@@ -2127,17 +2131,22 @@ describe("approval temporal provenance", () => {
     expect(result.warnings.map((w) => w.code)).toEqual([]);
   });
 
-  // ─── the head-ledger approval-row pin ──────────────────────────────────────
+  // ─── ledger approval-row pins: coverage, then comparison ───────────────────
   //
   // The append-only prefix check compares each ledger against its PREDECESSOR's
   // approvals, so the chain HEAD's own rows are compared against nothing. The
   // ledger family is exempt from index membership, and a ledger's
   // `predecessor.sha256` pins its predecessor rather than itself — so before the
   // pin, nothing in the artifact graph attested the head's rows, and editing a
-  // single `decidedAt` in place cleared a blocking governance finding. These
-  // tests pin both halves: the defect (an edit validates clean when the head is
-  // unpinned) and the fix (the same edit is refused when it is pinned).
-  describe("head-ledger approval-row pin", () => {
+  // single `decidedAt` in place cleared a blocking governance finding.
+  //
+  // Comparison alone was not enough, because the lookup key (`artifactId`) is a
+  // field inside the artifact being pinned: an unpinned ledger was skipped, so a
+  // rename or an appended head released the chain silently. Two further
+  // evasions were reproduced against a copy of the real graph and are pinned
+  // here in fixture form — the rename (below) and the unpinned appended head.
+  // Coverage is checked first and blocks on its own.
+  describe("ledger approval-row pins", () => {
     /** Move the C0 Repository Maintainer approval's decision LATER, in place. */
     function editHeadDecidedAt(f: ReturnType<typeof buildValidGraph>): void {
       mutateJson<{ approvals: Array<Record<string, unknown>> }>(f.ledgerPath!, (d) => {
@@ -2170,7 +2179,7 @@ describe("approval temporal provenance", () => {
     it("accepts a head ledger whose approval rows match their pin", () => {
       fixture = buildValidGraph({ withApprovals: true });
       const result = validateWithPin(fixture, {
-        "approvals-20260714": headRowsDigest(fixture),
+        "fixture-approvals-v1": headRowsDigest(fixture),
       });
       expect(result.issues).toEqual([]);
       expect(result.ok).toBe(true);
@@ -2191,10 +2200,10 @@ describe("approval temporal provenance", () => {
       fixture = buildValidGraph({ withApprovals: true });
       const pin = headRowsDigest(fixture);
       editHeadDecidedAt(fixture);
-      const result = validateWithPin(fixture, { "approvals-20260714": pin });
+      const result = validateWithPin(fixture, { "fixture-approvals-v1": pin });
       const flagged = result.issues.filter((i) => i.code === "ledger-approval-pin-mismatch");
       expect(flagged.length).toBe(1);
-      expect(flagged[0]!.artifactId).toBe("approvals-20260714");
+      expect(flagged[0]!.artifactId).toBe("fixture-approvals-v1");
       expect(result.ok).toBe(false);
       // The message must name the artifact and the defect class, never echo an
       // approval's contents.
@@ -2216,7 +2225,7 @@ describe("approval temporal provenance", () => {
         d.approvals = d.approvals.slice(1);
         return d;
       });
-      const result = validateWithPin(fixture, { "approvals-20260714": pin });
+      const result = validateWithPin(fixture, { "fixture-approvals-v1": pin });
       expect(result.issues.some((i) => i.code === "ledger-approval-pin-mismatch")).toBe(true);
       expect(result.ok).toBe(false);
     });
@@ -2227,7 +2236,7 @@ describe("approval temporal provenance", () => {
       // Re-serialise the whole file with different indentation.
       const data = readJson<Record<string, unknown>>(fixture.ledgerPath!);
       writeFileSync(fixture.ledgerPath!, JSON.stringify(data, null, 4));
-      const result = validateWithPin(fixture, { "approvals-20260714": pin });
+      const result = validateWithPin(fixture, { "fixture-approvals-v1": pin });
       expect(result.issues.some((i) => i.code === "ledger-approval-pin-mismatch")).toBe(false);
     });
 
@@ -2238,10 +2247,129 @@ describe("approval temporal provenance", () => {
       fixture = buildValidGraph({ withApprovals: true });
       const pin = headRowsDigest(fixture);
       const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
-      writeLedgerV2(fixture, v1.approvals);
+      const v2 = writeLedgerV2(fixture, v1.approvals);
       editHeadDecidedAt(fixture);
-      const result = validateWithPin(fixture, { "approvals-20260714": pin });
-      expect(result.issues.some((i) => i.code === "ledger-approval-pin-mismatch")).toBe(true);
+      // Both ledgers are pinned, so the only finding is the row edit itself —
+      // coverage is satisfied and does not confound the assertion.
+      const result = validateWithPin(fixture, {
+        "fixture-approvals-v1": pin,
+        "fixture-approvals-v2": ledgerApprovalRowsDigest(
+          (v2.data as { approvals: unknown[] }).approvals,
+        ),
+      });
+      const codes = result.issues.map((i) => i.code);
+      expect(codes).toContain("ledger-approval-pin-mismatch");
+      expect(codes).not.toContain("ledger-approval-pin-missing");
+      expect(result.ok).toBe(false);
+    });
+
+    // ─── coverage: an unpinned ledger in a pinned chain is itself blocking ───
+    //
+    // Both cases below validate CLEAN under comparison alone, because the pin is
+    // looked up by a key the editor controls and a missing key was skipped. Both
+    // were reproduced against a worktree copy of the real artifact graph before
+    // the coverage rule existed: the rename produced `ok: true` with every
+    // checkpoint closed and zero issues, and the appended head let its own new
+    // rows be rewritten in place with byte-identical gate output.
+
+    it("THE RENAME EVASION: renaming a ledger's artifactId is a coverage failure, not a skip", () => {
+      fixture = buildValidGraph({ withApprovals: true });
+      const v1Pin = headRowsDigest(fixture);
+      const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
+      const v2 = writeLedgerV2(fixture, v1.approvals);
+      const v2Pin = ledgerApprovalRowsDigest((v2.data as { approvals: unknown[] }).approvals);
+      // The attack: rename the head so its pin key no longer matches. Nothing
+      // else in the graph constrains a ledger's artifactId — the family is
+      // exempt from index membership and `predecessor.sha256` pins the
+      // PREDECESSOR, so the head's own header is unconstrained.
+      mutateJson<Record<string, unknown>>(v2.path, (d) => {
+        d.artifactId = "fixture-approvals-v2-remediated";
+        return d;
+      });
+      const result = validateWithPin(fixture, {
+        "fixture-approvals-v1": v1Pin,
+        "fixture-approvals-v2": v2Pin,
+      });
+      const missing = result.issues.filter((i) => i.code === "ledger-approval-pin-missing");
+      expect(missing.length).toBe(1);
+      expect(missing[0]!.artifactId).toBe("fixture-approvals-v2-remediated");
+      expect(result.ok).toBe(false);
+      // Blocking, not advisory: closure is suppressed for every checkpoint and
+      // no closure-only caveat is raised.
+      expect(result.checkpointStatus).toEqual({
+        C0: "open", C1: "open", C2: "open", C3: "open", C4: "open", C5: "open",
+      });
+      expect(result.warnings.map((w) => w.code)).toEqual([]);
+    });
+
+    it("THE UNPINNED HEAD: appending a successor without registering its pin is blocking", () => {
+      fixture = buildValidGraph({ withApprovals: true });
+      const v1Pin = headRowsDigest(fixture);
+      const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
+      writeLedgerV2(fixture, v1.approvals); // legitimate append, pin NOT added
+      const result = validateWithPin(fixture, { "fixture-approvals-v1": v1Pin });
+      const missing = result.issues.filter((i) => i.code === "ledger-approval-pin-missing");
+      expect(missing.length).toBe(1);
+      expect(missing[0]!.artifactId).toBe("fixture-approvals-v2");
+      // The message must tell the operator what to do, and must not echo any
+      // approval's contents.
+      expect(missing[0]!.message).toContain("TRACKED_LEDGER_APPROVAL_PINS");
+      expect(result.ok).toBe(false);
+      expect(result.checkpointStatus).toEqual({
+        C0: "open", C1: "open", C2: "open", C3: "open", C4: "open", C5: "open",
+      });
+      expect(result.warnings.map((w) => w.code)).toEqual([]);
+    });
+
+    it("registering the appended head's pin in the same change validates clean", () => {
+      // The documented remediation: keep every existing entry, add the new one.
+      fixture = buildValidGraph({ withApprovals: true });
+      const v1Pin = headRowsDigest(fixture);
+      const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
+      const v2 = writeLedgerV2(fixture, v1.approvals);
+      const result = validateWithPin(fixture, {
+        "fixture-approvals-v1": v1Pin,
+        "fixture-approvals-v2": ledgerApprovalRowsDigest(
+          (v2.data as { approvals: unknown[] }).approvals,
+        ),
+      });
+      expect(result.issues).toEqual([]);
+      expect(result.ok).toBe(true);
+    });
+
+    it("leaves a chain with no pinned ledger alone — coverage is opt-in per chain", () => {
+      // Coverage must not turn every untracked graph red. It activates only once
+      // some ledger in the resolved chain matches a pin key.
+      fixture = buildValidGraph({ withApprovals: true });
+      const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
+      writeLedgerV2(fixture, v1.approvals);
+      const result = validate(fixture);
+      expect(result.issues).toEqual([]);
+      expect(result.ok).toBe(true);
+    });
+
+    it("checks coverage in private mode too", () => {
+      // Step 7c sits in the mode-independent body. Private mode adds checks; it
+      // must not be the only mode in which the chain is attested, nor the only
+      // one in which it is not.
+      fixture = buildValidGraph({ withApprovals: true });
+      const v1Pin = headRowsDigest(fixture);
+      const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
+      writeLedgerV2(fixture, v1.approvals);
+      const corpusPath = join(fixture.root, "corpus", "entries.json");
+      mkdirSync(join(fixture.root, "corpus"), { recursive: true });
+      writeFileSync(corpusPath, JSON.stringify({ version: 2, entries: [{ id: "e1" }] }));
+      const result = validateReadinessArtifacts({
+        artifactRoot: fixture.artifactRoot,
+        repoRoot: fixture.repoRoot,
+        gitSourceResolver: fixture.resolver,
+        mode: "private",
+        corpusPath,
+        additionalLedgerApprovalPins: { "fixture-approvals-v1": v1Pin },
+      });
+      expect(
+        result.issues.filter((i) => i.code === "ledger-approval-pin-missing").length,
+      ).toBe(1);
       expect(result.ok).toBe(false);
     });
   });

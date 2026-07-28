@@ -333,7 +333,14 @@ describe("loopback Host allowlist", () => {
     expect(hostIsLoopback(req({}))).toBe(false);
   });
 
-  it("rejects a duplicated Host header (node joins repeats with ', ')", () => {
+  it("rejects a comma-joined authority, which node never produces for Host", () => {
+    // NOT a duplicate-Host test, despite appearances. Node treats `host` as a
+    // discard-duplicates field in `_addHeaderLine`: two `Host` lines leave
+    // `req.headers.host` equal to the FIRST value, never a joined string
+    // (verified over a raw socket). This asserts the guard rejects the joined
+    // shape anyway — a non-Node front end could hand it to us — and it is the
+    // only thing it asserts. See the `hostIsLoopback` docblock for what Node's
+    // first-wins rule means live.
     expect(hostIsLoopback(req({ host: "localhost:3131, evil.example" }))).toBe(false);
   });
 });

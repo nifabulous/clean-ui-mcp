@@ -12,9 +12,28 @@
 // `CLEAN_UI_SITE_DIST` contract. A green preview suite is therefore compatible with
 // a completely broken production serving path.
 //
-// So this suite starts `dist/scripts/ui-server.js` with `CLEAN_UI_SITE_DIST=site/dist`
-// — the exact process `npm run ui` runs (`npm run ui` === `tsc && node
-// dist/scripts/ui-server.js`) — and drives a real Chromium against it.
+// So this suite starts the same SERVER ENTRYPOINT the operator runs —
+// `node dist/scripts/ui-server.js`, which is the second half of
+// `npm run ui` (`tsc && node dist/scripts/ui-server.js`) — and drives a real
+// Chromium against it.
+//
+// IT IS NOT THE EXACT `npm run ui` INVOCATION, and an earlier revision of this
+// header wrongly said it was. Four deliberate differences:
+//   - `CLEAN_UI_SITE_DIST=site/dist` is set here; `package.json`'s `ui` script
+//     sets nothing, so plain `npm run ui` serves no site at all. The operator's
+//     equivalent dogfood form is `CLEAN_UI_SITE_DIST=site/dist npm run ui`
+//     (README § "Production suite").
+//   - `tsc` is not re-run in-process; `site:test:browser:production` does the
+//     build first, and `startProductionServer` fails loudly if the entrypoint is
+//     missing rather than serving a stale one.
+//   - every provider key is stripped from the child's env, and
+//   - `C2_NO_DOTENV=1` is set, because `src/env.ts` auto-loads `.env` with
+//     `override: true` at module scope — without it a maintainer's `.env` would
+//     re-inject the very credentials this suite asserts never reach the wire.
+//     An operator reproducing this fixture by hand needs both: `env -u` for the
+//     provider keys and `C2_NO_DOTENV=1`.
+// What the suite is evidence for is the server's own behaviour — routing, the
+// SPA fallback, `/api/*` ownership, asset resolution — not for the npm script.
 //
 // It asserts the two properties the route migration in Task 6 put at risk:
 //   1. `/clean-ui-mcp/playground` loads the focused C3 composer.

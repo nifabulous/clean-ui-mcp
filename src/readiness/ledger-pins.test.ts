@@ -1,5 +1,5 @@
 /**
- * Unit tests for the head-ledger approval-row pin.
+ * Unit tests for the ledger approval-row pins.
  *
  * WHY THIS MODULE EXISTS AT ALL — the defect it closes was reproduced end to
  * end. The append-only chain check (`validateLedgerAppendOnly`) iterates the
@@ -17,6 +17,12 @@
  * catch. It follows the `RECIPE_SHA256` convention already in the repo
  * (`src/create-ui-spec-contracts.ts`): a frozen canonical-JSON SHA-256 literal
  * in source, single source of truth, recomputed and replaced deliberately.
+ *
+ * Pinning the head alone was not enough. The lookup key is a field inside the
+ * artifact being pinned, so an unpinned ledger was skipped and a rename released
+ * the chain. The table now covers the chain root to head and `validator.ts` step
+ * 7c treats an unpinned chain ledger as blocking; the coverage rule itself is
+ * exercised end to end in `src/scripts/validate-readiness-artifacts.test.ts`.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -64,10 +70,22 @@ describe("ledgerApprovalRowsDigest", () => {
 });
 
 describe("TRACKED_LEDGER_APPROVAL_PINS", () => {
-  it("pins the tracked chain head", () => {
-    // If a successor ledger is ever appended, the new head must be pinned here
-    // too — its own appended suffix is unattested until then.
-    expect(TRACKED_LEDGER_APPROVAL_PINS["approvals-c2-v5"]).toMatch(/^[0-9a-f]{64}$/);
+  it("pins every ledger in the tracked chain, root to head", () => {
+    // COVERAGE IS THE INVARIANT. A pin table with a gap is evadable by rename:
+    // the validator can only tell a tracked chain from an untracked one by a
+    // pin key matching, so a chain in which some member may legitimately be
+    // unpinned cannot distinguish "renamed" from "not ours". If a successor
+    // ledger is appended, its entry belongs here in the same change.
+    expect(Object.keys(TRACKED_LEDGER_APPROVAL_PINS).sort()).toEqual([
+      "approvals-20260714",
+      "approvals-c1-v2",
+      "approvals-c2-v3",
+      "approvals-c2-v4",
+      "approvals-c2-v5",
+    ]);
+    for (const digest of Object.values(TRACKED_LEDGER_APPROVAL_PINS)) {
+      expect(digest).toMatch(/^[0-9a-f]{64}$/);
+    }
   });
 });
 

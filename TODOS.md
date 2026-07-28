@@ -290,28 +290,48 @@ closed on a clean gate. That is the accepted tradeoff, decided by the repository
 owner on 2026-07-28: a durable record that a governance defect occurred is worth
 more than a remediable gate.
 
-**How durable, exactly** (an earlier version of this section said "permanently",
-which was verified false and is corrected here). Two mechanisms, covering two
-different edits:
+**How durable, exactly — the attacks that were actually run.** Two earlier
+versions of this section overstated this: first "permanently", then "durable
+against any change confined to `quality-contracts/`". Both were falsified by a
+reproduction. What follows is only what has been attacked, each against a
+throwaway `git worktree` copy of the real artifact graph, each edit confined to
+`quality-contracts/`, each now reported **blocking with every checkpoint held
+open**:
 
-- A **successor ledger** cannot drop or rewrite the records:
-  `validateLedgerAppendOnly` requires the prior approvals as an unchanged prefix
-  (`ledger-approval-deleted`), and a forked ordinal emits `chain-duplicate-key` /
-  `chain-fork` / `chain-multiple-heads`.
-- An **in-place edit of the head ledger's own rows** is caught by the
-  approval-row pin in `src/readiness/ledger-pins.ts`
-  (`ledger-approval-pin-mismatch`, blocking, and it also stops every checkpoint
-  from reporting `closed`). This mechanism was added because the append-only
-  check iterates the *predecessor's* approvals, leaving the chain head's appended
-  suffix attested by nothing: editing the two `decidedAt` fields in
-  `checkpoint-approvals-v5.json` was verified end to end to flip the real gate to
-  `ok: true`, `C2: closed`, `All checks passed.`, exit 0.
+1. **Drop or rewrite the defective records in a successor ledger** →
+   `ledger-approval-deleted` / `ledger-approval-mutated` (`validateLedgerAppendOnly`
+   requires the prior approvals as an unchanged prefix); a forked ordinal emits
+   `chain-duplicate-key` / `chain-fork` / `chain-multiple-heads`.
+2. **Edit the two `decidedAt` fields of the head ledger in place** →
+   `ledger-approval-pin-mismatch`, from the approval-row pins in
+   `src/readiness/ledger-pins.ts`. Before those pins existed this produced
+   `ok: true`, `C2: closed`, `All checks passed.`, exit 0.
+3. **Rename the head ledger's `artifactId` and apply the same two edits** →
+   `ledger-approval-pin-missing`. Before the coverage rule (`validator.ts` step
+   7c) this produced `ok: true`, `C0`/`C1`/`C2` all `closed`, zero issues, exit 0
+   — the pin was keyed on a field inside the artifact it was pinning and was
+   simply never consulted.
+4. **Append a `checkpoint-approvals-v6.json` without registering its pin** — the
+   append the handoff doc's own step 1 instructs — **and rewrite its new rows in
+   place** → `ledger-approval-pin-missing`. Before the coverage rule, the edited
+   and unedited v6 produced byte-identical gate output.
+5. **Rename the earlier ledgers too, to disguise the chain as untracked** →
+   `chain-predecessor-hash-mismatch`. Their bytes, `artifactId` included, are
+   pinned by their successors' `predecessor.sha256`.
 
-So: `ok: false` is durable against **any change confined to `quality-contracts/`**.
-It is **not** durable against a change that also edits
-`TRACKED_LEDGER_APPROVAL_PINS` in source — that is a source diff, reviewable as
-code, not a mechanical impossibility. Do not describe the block as
-"permanent"/"unfakeable" without that qualification.
+**What is not covered, stated plainly:**
+
+- The pins are a **declaration in source, not a signature**. A change that edits
+  `quality-contracts/` *and* `TRACKED_LEDGER_APPROVAL_PINS` goes green. That is a
+  reviewable source diff, not a mechanical impossibility.
+- Coverage recognises a tracked chain only by a pin key matching one of its
+  ledgers, so attack 5 is closed by the chain being five ledgers long with four
+  of them byte-pinned by successors. A **single-ledger** chain could be renamed
+  wholesale and coverage would not activate. This chain is not one.
+- Nothing beyond the five attacks above is claimed. Do not restate this as
+  durability against "any change confined to `quality-contracts/`", and do not
+  describe the block as "permanent" or "unfakeable" — each of those absolutes has
+  been asserted here once and falsified once.
 
 **Do not:** fabricate an approval, timestamp, actor, or rationale to close the
 gap; retraction is a real recorded act. And do not reintroduce a supersession- or

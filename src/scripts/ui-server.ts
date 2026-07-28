@@ -206,8 +206,18 @@ export function sameOrigin(req: IncomingMessage): boolean {
  * Rejected by construction: any name that merely embeds a literal
  * (`127.0.0.1.evil.example`), any suffixed form (`localhost.evil.example`), the
  * trailing-dot absolute form of an attacker name, a routable address, a
- * duplicated `Host` header (node joins repeats with ", ", which parses as a
- * single malformed authority), and a missing or unparseable `Host`.
+ * comma-joined authority, and a missing or unparseable `Host`.
+ *
+ * DUPLICATED `Host` HEADERS, PRECISELY. Node does NOT join repeats for this
+ * field: `host` is on `_addHeaderLine`'s discard-duplicates list, so the FIRST
+ * value wins and later ones are dropped (verified over a raw socket — two `Host`
+ * lines yield `req.headers.host === "localhost:1"`, the first). So this function
+ * never sees a comma-joined `Host` in production; it rejects one anyway, because
+ * it is a shape a non-Node front end could produce. The live consequence of
+ * Node's first-wins rule is that `Host: localhost:PORT` followed by
+ * `Host: evil.example` is ACCEPTED here — which is not a hole: a rebound browser
+ * sends exactly one `Host`, and a handcrafted request with two would then be
+ * rejected by `sameOrigin` on the `Origin`/`Host` mismatch.
  */
 export function hostIsLoopback(req: IncomingMessage): boolean {
   const host = req.headers.host;

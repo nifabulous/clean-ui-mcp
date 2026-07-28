@@ -21,10 +21,24 @@
  * docstring on that block for why that is a data-availability gate and not a
  * relaxed expectation.
  *
- * WHEN THIS TEST FAILS, THE FIX IS ALMOST NEVER THE ASSERTION. A diff here
- * means either (a) the tracked governance data changed, in which case update
- * the expectations AND every document that states the checkpoint state, or
- * (b) a real regression. Do not relax an expectation to make the suite green.
+ * WHEN THIS TEST FAILS, THE FIX IS NEVER THE ASSERTION ALONE. Work out which of
+ * two things happened before touching anything:
+ *
+ *   (a) A REGRESSION — the validator changed behaviour against unchanged data.
+ *       Fix the validator. Do not relax the expectation.
+ *   (b) THE TRACKED GOVERNANCE DATA CHANGED. Then the question is whether the
+ *       change was legitimate. The ONLY legitimate way this chain grows is by
+ *       APPENDING a successor ledger, which leaves every existing approval row
+ *       byte-identical; that is a real governance event, and it is updated here
+ *       AND in every document that states the checkpoint state, in the same
+ *       change, together with the new ledger's entry in
+ *       `TRACKED_LEDGER_APPROVAL_PINS`. An in-place edit to an existing row is
+ *       NOT legitimate, and the per-test docstring at the pin tripwire below
+ *       spells out the consequence: do not update the pinned digest to match
+ *       edited data.
+ *
+ * Neither branch is "make the suite green". Nothing here is a literal to be
+ * refreshed until it stops complaining.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -101,7 +115,7 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
     expect((result.warnings ?? []).map((w) => w.code)).toEqual([]);
   });
 
-  it("holds the tracked chain head's approval rows to their source pin", () => {
+  it("holds every tracked ledger's approval rows to its source pin", () => {
     // THE TRIPWIRE FOR AN IN-PLACE LEDGER EDIT. Editing two `decidedAt` fields
     // in `checkpoint-approvals-v5.json` used to flip this whole gate from
     // `ok: false` / `C2: open` to `ok: true` / `C2: closed` / no issues, because
@@ -115,14 +129,42 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
     // growth), which leaves these rows byte-identical and this assertion green.
     // A mismatch means rows were edited in place — the defect class this pin
     // exists to catch.
-    const head = JSON.parse(
-      readFileSync(resolve(artifactRoot, "checkpoint-approvals-v5.json"), "utf-8"),
-    ) as { artifactId: string; approvals: unknown[] };
-    expect(head.artifactId).toBe("approvals-c2-v5");
-    expect(ledgerApprovalRowsDigest(head.approvals)).toBe(
-      TRACKED_LEDGER_APPROVAL_PINS["approvals-c2-v5"],
-    );
+    for (let v = 1; v <= 5; v++) {
+      const ledger = JSON.parse(
+        readFileSync(resolve(artifactRoot, `checkpoint-approvals-v${v}.json`), "utf-8"),
+      ) as { artifactId: string; approvals: unknown[] };
+      expect(TRACKED_LEDGER_APPROVAL_PINS[ledger.artifactId]).toBe(
+        ledgerApprovalRowsDigest(ledger.approvals),
+      );
+    }
     expect(result.issues.some((i) => i.code === "ledger-approval-pin-mismatch")).toBe(false);
+  });
+
+  it("has a pin registered for every ledger in the resolved chain", () => {
+    // COVERAGE, THE OTHER HALF OF THE PIN. Comparison alone failed open: the
+    // lookup key is a field inside the artifact being pinned, so renaming the
+    // head's `artifactId` skipped the pin and the same two `decidedAt` edits
+    // then produced `ok: true` with every checkpoint closed (reproduced against
+    // a worktree copy of this graph). `validator.ts` step 7c now emits a
+    // blocking `ledger-approval-pin-missing` for any unpinned ledger in a chain
+    // where some ledger IS pinned, so a rename becomes a coverage failure and an
+    // appended head with no registered pin fails loudly.
+    //
+    // The assertion below is the same invariant read from the data side: every
+    // tracked ledger file's id is a key in the table, and the gate reports no
+    // coverage failure. IF A NEW LEDGER IS APPENDED, add its pin — do not delete
+    // this assertion or drop a ledger from the table.
+    expect(result.issues.some((i) => i.code === "ledger-approval-pin-missing")).toBe(false);
+    const chainIds = [1, 2, 3, 4, 5].map(
+      (v) =>
+        (
+          JSON.parse(
+            readFileSync(resolve(artifactRoot, `checkpoint-approvals-v${v}.json`), "utf-8"),
+          ) as { artifactId: string }
+        ).artifactId,
+    );
+    expect(chainIds.every((id) => id in TRACKED_LEDGER_APPROVAL_PINS)).toBe(true);
+    expect(Object.keys(TRACKED_LEDGER_APPROVAL_PINS).sort()).toEqual([...chainIds].sort());
   });
 });
 

@@ -302,48 +302,23 @@ const ALLOWLIST = new Set<string>([
   // precedent as computeLabelAgreement / assertAgreementMatchesSubmissions /
   // computeManifestSha256 above.
   "validateBaselineCompatibility",
-  // create-ui-spec.ts — the evidence-grounded C3 producer. Its production
-  // caller is the MCP tool registration (deferred to a later milestone per the
-  // C3 plan: "No HTTP server, MCP registration... changed"). It is consumed by
-  // the compiled-runtime probe (scripts/c3-runtime-probe.mjs) via the deferred
+  // create-ui-spec.ts — the envelope-only public core function. NOTE: the MCP
+  // adapter that landed in Task 3 (src/create-ui-spec-mcp.ts) calls
+  // `createUiSpecForAdapter`, NOT this function, so this entry is still
+  // load-bearing for `createUiSpec` itself: its only non-test consumers are the
+  // compiled-runtime probe (scripts/c3-runtime-probe.mjs, via the deferred
   // dist/create-ui-spec.js import — the same .mjs-via-dist pattern as the C2
-  // manifest symbols above, which the src/*.ts regex scan cannot see. Will be
-  // removed from this allowlist when the MCP tool registration lands.
+  // manifest symbols above, which the src/*.ts regex scan cannot see) and the
+  // loopback HTTP adapter still to come in Task 5. Re-evaluate when that lands.
   "createUiSpec",
-  // create-ui-spec-contracts.ts — the ONE safe projection from core
-  // SanitizedEvidence onto the shared MCP `Evidence` rows (Task 2 of the C3
-  // slice). Its production callers are the two transport adapters: the MCP
-  // adapter (Task 3) and the loopback HTTP adapter (Task 5), neither of which
-  // exists yet. Listed here explicitly rather than left to the regex scan —
-  // which currently matches the by-name mention in `createUiSpecForAdapter`'s
-  // doc comment in create-ui-spec.ts, i.e. fake coupling, not a call site.
-  // Remove this entry when either adapter lands and calls it for real.
-  "projectSanitizedEvidenceToMcpEvidence",
-  // create-ui-spec-contracts.ts — the ONE mapping from the envelope's retrieval
-  // metadata onto the transport `retrieval` block (Task 2 of the C3 slice). Same
-  // situation as the projection above: its production callers are the MCP adapter
-  // (Task 3) and the loopback HTTP adapter (Task 5), neither of which exists yet.
-  // It is pinned by tests today (src/create-ui-spec.test.ts) so the resultCount
-  // semantics cannot drift before those adapters land. Remove this entry when
-  // either adapter lands and calls it for real.
-  "projectRetrievalStateForTransport",
-  // create-ui-spec-dependencies.ts — the ONE adapter dependency constructor and
-  // the ONE explicit-reference policy (Task 2a of the C3 slice). Its production
-  // callers are the two transport adapters, NEITHER of which exists yet:
-  //   - the MCP adapter (Task 3) — will call it in the create_ui_spec tool
-  //     registration in src/server-factory.ts (where every other
-  //     register*(server, reader) lives), reached from src/server.ts's
-  //     createServer(buildReader(mode));
-  //   - the loopback HTTP adapter (Task 5) — will call it in the operator
-  //     create-ui-spec route in src/scripts/ui-server.ts.
-  // Wiring either call site NOW would mean creating the adapter it feeds, which
-  // is those tasks' work, so the factory is exported + test-covered
-  // (src/create-ui-spec-dependencies.test.ts) and listed here explicitly rather
-  // than coupled to a placeholder caller. This entry is DELIBERATE, not
-  // incidental: the scan currently finds no match at all for the symbol (its own
-  // doc comment does not name it), so removing this entry fails the test until
-  // Task 3 or Task 5 calls it for real. Remove it then.
-  "makeCreateUiSpecDependencies",
+  // REMOVED in Task 3 (do not re-add without a reason):
+  //   - projectSanitizedEvidenceToMcpEvidence
+  //   - projectRetrievalStateForTransport
+  //   - makeCreateUiSpecDependencies
+  // All three now have a REAL production call site in
+  // src/create-ui-spec-mcp.ts (the create_ui_spec MCP adapter), which
+  // src/server-factory.ts's createServer() registers. Leaving them allowlisted
+  // would silence this guard for exactly the symbols it was added to protect.
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

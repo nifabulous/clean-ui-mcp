@@ -199,11 +199,15 @@ that describes it in the code (and each of those comments links here):
 | 3 | the "SUPERSEDED approvals keep the plain skip" paragraph of the same docstring |
 
 1. **`ledger-invalid-supersession` does not taint its approval.** The two
-   structural supersession pushes make `ok` false but leave `checkpointStatus`
-   unchanged, so a checkpoint can still report `closed` while carrying a
-   structurally invalid supersession. `ledger-supersession-not-later` (the
-   temporal check) does taint. Pre-existing behaviour, deliberately left
-   unchanged rather than widened without a decision.
+   structural supersession pushes make `ok` false without calling
+   `noteApprovalIssue`, so the taint map does not record them.
+   `ledger-supersession-not-later` (the temporal check) does taint. Pre-existing
+   behaviour, deliberately left unchanged rather than widened without a decision.
+   **No longer a `checkpointStatus` hole:** the closure gate reads the issue list
+   as well as the taint map, so a blocking finding on a checkpoint-kind approval
+   holds its checkpoint `open` whether or not the emitting check tainted. What
+   remains is that a downstream consumer of the taint map itself (rather than of
+   `checkpointStatus` or `ok`) still would not see these two codes.
 2. **`checkpointTargetSha256` provenance is unverifiable from content.** A target
    hash carries no timestamp, and the artifacts it is computed over need not have
    existed when it was computed, so nothing in the artifact graph establishes when
@@ -257,10 +261,16 @@ bind). The withdrawal could not be represented:
   `"approved" | "rejected"`. "Rejected" is wrong semantics — the reviewers did
   not reject the target, they never decided on it.
 
-So the withdrawal is currently *implied by a permanently failing invariant*
+So the withdrawal is currently *implied by a blocking invariant*
 (`ledger-supersession-not-later` blocks, C2 reports open) rather than stated. An
 operator reading the ledger sees two approved records and a red gate, with no
-record of the retraction decision or its reason.
+record of the retraction decision or its reason. Note precisely what "withdrawal"
+means here: **no ledger bytes were changed and no record was removed**. The two
+records still read `decision: "approved"`; the block comes entirely from a
+validator check (`ledger-supersession-not-later`, added in `e373351`) that
+recognises their `decidedAt` as impossible. The withdrawal exists as prose in
+`docs/c2/c2-checkpoint-approval-handoff.md` and as that check — not as anything
+recorded in the artifact graph.
 
 **Scope when triggered:** decide whether retraction is a new record kind in the
 approvals ledger, a separate artifact type, or a field on a successor ledger, and
@@ -273,13 +283,35 @@ record had itself been superseded, and that was removed as fail-open — a
 fabricated record dated one second later was enough to flip the real gate to
 `ok: true` with `issues: []` and C2 closed.
 
-**Consequence until this lands:** because `validateLedgerAppendOnly` keeps the
-defective records in the chain forever and the finding is unconditional, the
-readiness gate stays `ok: false` **permanently** — real reviewer decisions on
+**Consequence until this lands:** the readiness gate stays `ok: false` for as
+long as the defective records are in the chain — real reviewer decisions on
 `cf55fee0…` are necessary but NOT sufficient to make it green, and C2 cannot be
 closed on a clean gate. That is the accepted tradeoff, decided by the repository
-owner on 2026-07-28: a durable, unfakeable record that a governance defect
-occurred is worth more than a remediable gate.
+owner on 2026-07-28: a durable record that a governance defect occurred is worth
+more than a remediable gate.
+
+**How durable, exactly** (an earlier version of this section said "permanently",
+which was verified false and is corrected here). Two mechanisms, covering two
+different edits:
+
+- A **successor ledger** cannot drop or rewrite the records:
+  `validateLedgerAppendOnly` requires the prior approvals as an unchanged prefix
+  (`ledger-approval-deleted`), and a forked ordinal emits `chain-duplicate-key` /
+  `chain-fork` / `chain-multiple-heads`.
+- An **in-place edit of the head ledger's own rows** is caught by the
+  approval-row pin in `src/readiness/ledger-pins.ts`
+  (`ledger-approval-pin-mismatch`, blocking, and it also stops every checkpoint
+  from reporting `closed`). This mechanism was added because the append-only
+  check iterates the *predecessor's* approvals, leaving the chain head's appended
+  suffix attested by nothing: editing the two `decidedAt` fields in
+  `checkpoint-approvals-v5.json` was verified end to end to flip the real gate to
+  `ok: true`, `C2: closed`, `All checks passed.`, exit 0.
+
+So: `ok: false` is durable against **any change confined to `quality-contracts/`**.
+It is **not** durable against a change that also edits
+`TRACKED_LEDGER_APPROVAL_PINS` in source — that is a source diff, reviewable as
+code, not a mechanical impossibility. Do not describe the block as
+"permanent"/"unfakeable" without that qualification.
 
 **Do not:** fabricate an approval, timestamp, actor, or rationale to close the
 gap; retraction is a real recorded act. And do not reintroduce a supersession- or

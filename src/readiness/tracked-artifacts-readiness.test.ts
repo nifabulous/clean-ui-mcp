@@ -31,6 +31,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { validateReadinessArtifacts } from "./validator.js";
+import { TRACKED_LEDGER_APPROVAL_PINS, ledgerApprovalRowsDigest } from "./ledger-pins.js";
 import type { GitSourceResolver } from "./checkpoint-policy.js";
 
 const repoRoot = resolve(__dirname, "../..");
@@ -98,6 +99,30 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
     // Asserting its ABSENCE pins the coupling: if this warning reappears while
     // the C2 expectation above still says "open", the two have drifted apart.
     expect((result.warnings ?? []).map((w) => w.code)).toEqual([]);
+  });
+
+  it("holds the tracked chain head's approval rows to their source pin", () => {
+    // THE TRIPWIRE FOR AN IN-PLACE LEDGER EDIT. Editing two `decidedAt` fields
+    // in `checkpoint-approvals-v5.json` used to flip this whole gate from
+    // `ok: false` / `C2: open` to `ok: true` / `C2: closed` / no issues, because
+    // the append-only check compares each ledger against its PREDECESSOR's rows
+    // and the head's own rows were attested by nothing in the artifact graph.
+    // `TRACKED_LEDGER_APPROVAL_PINS` anchors them from outside the graph.
+    //
+    // IF THIS FAILS, DO NOT UPDATE THE LITERAL TO MATCH THE DATA. A diff here
+    // means the tracked ledger's approval rows changed. The only legitimate way
+    // to change them is to APPEND a successor ledger (the chain's append-only
+    // growth), which leaves these rows byte-identical and this assertion green.
+    // A mismatch means rows were edited in place — the defect class this pin
+    // exists to catch.
+    const head = JSON.parse(
+      readFileSync(resolve(artifactRoot, "checkpoint-approvals-v5.json"), "utf-8"),
+    ) as { artifactId: string; approvals: unknown[] };
+    expect(head.artifactId).toBe("approvals-c2-v5");
+    expect(ledgerApprovalRowsDigest(head.approvals)).toBe(
+      TRACKED_LEDGER_APPROVAL_PINS["approvals-c2-v5"],
+    );
+    expect(result.issues.some((i) => i.code === "ledger-approval-pin-mismatch")).toBe(false);
   });
 });
 

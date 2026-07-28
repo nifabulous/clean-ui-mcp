@@ -704,8 +704,18 @@ const SAFE_PUBLIC_REFERENCE_DIGEST = /^ref-[0-9a-f]{64}$/;
 
 /**
  * The ONE projection from core {@link SanitizedEvidence} onto the shared MCP
- * {@link Evidence} rows. Both transport adapters call this; neither builds a row
- * by hand.
+ * {@link Evidence} rows. Every transport that publishes evidence rows calls this;
+ * none builds a row by hand.
+ *
+ * WHICH TRANSPORTS THOSE ARE — stated exactly, because an earlier revision of
+ * this line said "both transport adapters call this" and that was false. The MCP
+ * adapter calls it (`create-ui-spec-mcp.ts`). The HTTP adapter does NOT, and
+ * deliberately: it serves the `DesignArtifactEnvelope` itself, which carries only
+ * `publicEvidenceIds` and no evidence rows at all, so there is nothing for this
+ * projection to map. `create-ui-spec-http.ts` records the same fact at its own
+ * "WHAT NEVER REACHES THIS SURFACE" note. If a third transport ever publishes
+ * rows, it calls this — the rule is "no hand-built rows", not "every adapter
+ * calls it".
  *
  * What it does, and nothing else:
  *  - `id`, `kind`, `basis`, `summary` are carried through unchanged (strictly: as
@@ -793,8 +803,36 @@ export function projectSanitizedEvidenceToMcpEvidence(
 
 /**
  * The ONE mapping from the envelope's retrieval metadata onto the transport
- * `retrieval` block both adapters publish. Both call this; neither writes
- * `retrieval: envelope.retrieval`.
+ * `retrieval` block of the **create_ui_spec tool response**.
+ *
+ * WHO CALLS IT, AND WHO CORRECTLY DOES NOT. An earlier revision of this docblock
+ * said "Both call this; neither writes `retrieval: envelope.retrieval`". That was
+ * wrong in both halves, and wrong in the module whose job is to stop transport
+ * drift, so it is spelled out here:
+ *
+ *  - **MCP calls this** (`create-ui-spec-mcp.ts`). Its response is the published
+ *    create_ui_spec tool contract, whose `resultCount` the descriptor documents as
+ *    an ARTIFACT count. Forwarding the envelope's corpus-scoped value there would
+ *    contradict the descriptor. Hence the re-scoping below.
+ *  - **HTTP does not, and must not.** `create-ui-spec-http.ts` serves the
+ *    `DesignArtifactEnvelope` itself (`serializeEnvelope(produced.envelope)`),
+ *    verified byte-for-byte against the producer's envelope by
+ *    `assertServedBytesAreEnvelope`. Its `retrieval` block IS
+ *    `envelope.retrieval`, corpus-scoped, and that is correct: the envelope is a
+ *    persisted artifact with its own documented semantics, not a tool response.
+ *    Substituting an artifact-scoped `resultCount` there would silently change the
+ *    meaning of a persisted field, and the byte-equality assertion would not
+ *    object because the value stays schema-legal.
+ *
+ * SO THE TWO SURFACES REPORT DIFFERENT NUMBERS FOR THE SAME REQUEST — 1 over MCP,
+ * the corpus-observation count over HTTP — and both are truthful under their own
+ * scoping (see the "envelope block is corpus-scoped, transport block is
+ * artifact-scoped" note earlier in this module). This is a difference of
+ * DOCUMENT KIND, not a transport inconsistency: there is no request for which the
+ * same document reports two values. **Do not "fix" the HTTP adapter by making it
+ * call this function.** If the divergence ever needs to close, it closes by
+ * changing what the envelope's own field means, which is an artifact-contract
+ * change, not an adapter change.
  *
  * WHY IT EXISTS. Two different meanings share the field name `resultCount`:
  *  - `envelope.retrieval.resultCount` counts RETRIEVED CORPUS OBSERVATIONS (3 on

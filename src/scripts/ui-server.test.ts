@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CSRF_HEADER, cleanupBatch, resolveSiteAsset, findDuplicateAtCommit, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
+import { CSRF_HEADER, cleanupBatch, resolveSiteAsset, findDuplicateAtCommit, hostIsLoopback, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
 import { setCorpusRootForTesting } from "../persistence.js";
+import { request as httpRequest } from "node:http";
 import type { IncomingMessage } from "node:http";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -289,6 +290,125 @@ describe("same-origin guard", () => {
 
   it("rejects when Origin is present but Host is missing", () => {
     expect(sameOrigin(req({ origin: "http://localhost:3131" }))).toBe(false);
+  });
+});
+
+// ─── I4: the Host allowlist (DNS-rebinding defence) ───────────────────────────
+//
+// `sameOrigin` compares Origin against Host, so under DNS rebinding they MATCH:
+// a page on `evil.example` whose name has been re-resolved to 127.0.0.1 sends
+// `Origin: http://evil.example` AND `Host: evil.example`. The guard passes, the
+// page is genuinely same-origin from the browser's point of view, and it can
+// read `GET /api/csrf` and echo the nonce. Only the Host name itself
+// distinguishes the two cases — a rebound attacker cannot present a loopback
+// literal, because a literal IP is never DNS-resolved.
+describe("loopback Host allowlist", () => {
+  it.each([
+    ["127.0.0.1 with a port", "127.0.0.1:3131"],
+    ["127.0.0.1 bare", "127.0.0.1"],
+    ["localhost with a port", "localhost:3131"],
+    ["localhost bare", "localhost"],
+    ["case-folded localhost (DNS names are case-insensitive)", "LocalHost:3131"],
+    ["bracketed IPv6 loopback", "[::1]:3131"],
+    ["bracketed IPv6 loopback, bare", "[::1]"],
+  ])("allows %s", (_label, host) => {
+    expect(hostIsLoopback(req({ host }))).toBe(true);
+  });
+
+  it.each([
+    ["a rebound attacker name", "evil.example"],
+    ["a rebound attacker name with the server's port", "evil.example:3131"],
+    ["a name that merely embeds a loopback literal", "127.0.0.1.evil.example"],
+    ["a name suffixed onto localhost", "localhost.evil.example"],
+    ["a trailing-dot absolute form of an attacker name", "evil.example."],
+    ["a routable address", "192.168.1.9:3131"],
+    ["an unbracketed IPv6 loopback (not a legal Host)", "::1"],
+    ["a garbage Host", "@@@"],
+    ["an empty Host", ""],
+  ])("rejects %s", (_label, host) => {
+    expect(hostIsLoopback(req({ host }))).toBe(false);
+  });
+
+  it("rejects a missing Host header", () => {
+    expect(hostIsLoopback(req({}))).toBe(false);
+  });
+
+  it("rejects a duplicated Host header (node joins repeats with ', ')", () => {
+    expect(hostIsLoopback(req({ host: "localhost:3131, evil.example" }))).toBe(false);
+  });
+});
+
+describe("Host allowlist over the wire (DNS rebinding cannot read the nonce)", () => {
+  let server: import("node:http").Server;
+  let port: number;
+  let base: string;
+
+  beforeAll(async () => {
+    base = mkdtempSync(join(tmpdir(), "ui-server-host-"));
+    writeFileSync(join(base, "entries.json"), JSON.stringify({ version: 2, entries: [] }));
+    setCorpusRootForTesting(base);
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    port = addr.port;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+    setCorpusRootForTesting(null);
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  // `fetch` derives Host from the URL and forbids overriding it, so the forged
+  // Host has to go through the low-level client.
+  function rawRequest(
+    path: string,
+    headers: Record<string, string>,
+    method = "GET",
+  ): Promise<{ status: number; body: string }> {
+    return new Promise((resolvePromise, reject) => {
+      const r = httpRequest(
+        { host: "127.0.0.1", port, path, method, headers, setHost: false },
+        (res) => {
+          let body = "";
+          res.setEncoding("utf-8");
+          res.on("data", (c: string) => { body += c; });
+          res.on("end", () => resolvePromise({ status: res.statusCode ?? 0, body }));
+        },
+      );
+      r.on("error", reject);
+      r.end();
+    });
+  }
+
+  it("refuses GET /api/csrf when the Host is a rebound attacker name", async () => {
+    const res = await rawRequest("/api/csrf", {
+      host: "evil.example",
+      origin: "http://evil.example",
+    });
+    expect(res.status).toBe(403);
+    // The nonce must not leak in the refusal body under any key.
+    expect(res.body).not.toMatch(/[0-9a-f]{64}/);
+  });
+
+  it("refuses a mutating route when the Host is a rebound attacker name", async () => {
+    const res = await rawRequest("/api/entries", { host: "evil.example" }, "POST");
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses the CORS preflight when the Host is a rebound attacker name", async () => {
+    const res = await rawRequest(
+      "/api/entries",
+      { host: "evil.example", origin: "http://evil.example", "access-control-request-method": "POST" },
+      "OPTIONS",
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("still serves the nonce to a loopback Host", async () => {
+    const res = await rawRequest("/api/csrf", { host: `127.0.0.1:${port}` });
+    expect(res.status).toBe(200);
+    expect((JSON.parse(res.body) as { nonce: string }).nonce).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 

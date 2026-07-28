@@ -10,6 +10,7 @@ import {
   canonicalJsonStringify,
   sha256Hex,
 } from "../readiness/contracts.js";
+import { ledgerApprovalRowsDigest } from "../readiness/ledger-pins.js";
 import { C2_HARD_GATE_IDS } from "../c2/evaluation-contracts.js";
 import {
   C0_RECIPE,
@@ -1984,11 +1985,16 @@ describe("approval temporal provenance", () => {
     // `issues: []` and the checkpoint reported closed.
     //
     // The finding is therefore UNCONDITIONAL: a temporally-impossible
-    // supersession blocks forever, whether or not something later supersedes
-    // it. The permanent, unfakeable record that a governance defect occurred is
-    // the entire value of this invariant. Clearing it requires an explicit
-    // retraction act — see TODOS.md § "Approval retraction vocabulary (the
-    // ledger cannot say \"withdrawn\")".
+    // supersession blocks whether or not something later supersedes it. A
+    // durable record that a governance defect occurred is the entire value of
+    // this invariant. "Durable" means: no change confined to
+    // `quality-contracts/` can clear it — a successor ledger cannot drop the
+    // record (append-only prefix check) and the head ledger's own rows cannot be
+    // edited in place (the approval-row pin in src/readiness/ledger-pins.ts,
+    // which the append-only check does NOT cover). It is not durable against a
+    // change that also edits the source pin; see that module. Clearing it
+    // legitimately requires an explicit retraction act — see TODOS.md
+    // § "Approval retraction vocabulary (the ledger cannot say \"withdrawn\")".
     fixture = buildValidGraph({ withApprovals: true });
     const v1 = readJson<{ approvals: Array<Record<string, unknown>> }>(fixture.ledgerPath!);
     const prior = v1.approvals.find((a) => a.approvalId === "c0-repo-maintainer")!;
@@ -2060,14 +2066,184 @@ describe("approval temporal provenance", () => {
         .map((i) => i.artifactId),
     ).toEqual(["c0-repo-maintainer-v2"]);
 
-    // Documented residual, pinned so it is intentional rather than accidental:
-    // the taint lands on the defective record, and checkpoint CLOSURE is
-    // computed over the EFFECTIVE approval set, so a superseded defect leaves
-    // `checkpointStatus` reading "closed" while `ok` — the value CI and the
-    // review hooks consume — is false. Making the checkpoint report "open" too
-    // would require tainting the defective record's effective descendants; see
-    // the block comment at the check in src/readiness/validator.ts.
-    expect(result.checkpointStatus.C0).toBe("closed");
+    // A CHECKPOINT CARRYING A BLOCKING PROVENANCE ISSUE CANNOT REPORT "closed".
+    // This assertion previously required "closed" and documented it as an
+    // accepted residual: the taint lands on the defective record while closure
+    // is computed over the EFFECTIVE approval set, so a superseded defect left
+    // `checkpointStatus` reading "closed" beside two blocking issues and exit 1.
+    // A consumer reading `checkpointStatus` rather than `ok` was told the
+    // checkpoint was closed while the gate failed — and the repository's own
+    // documented C2 remediation step produces exactly this shape. Closure is now
+    // additionally gated on the checkpoint carrying no blocking issue on ANY of
+    // its approvals, superseded or effective, so the two channels agree.
+    expect(result.checkpointStatus.C0).toBe("open");
+  });
+
+  it("holds a checkpoint open when a structural supersession defect blocks the gate", () => {
+    // `ledger-invalid-supersession` does not call `noteApprovalIssue`, so before
+    // the closure gate learned to read the ISSUE LIST as well as the taint map,
+    // nothing in the closure path saw it. Honest note on this test's power: for
+    // this particular shape the closed-world role check also taints (the
+    // superseded id does not exist, so the original approval stays active and its
+    // role duplicates), so C0 reported `open` incidentally before the change too.
+    // It is kept as a regression guard on the general invariant — a blocking
+    // provenance finding on a checkpoint-kind approval holds its checkpoint open
+    // — not as a discriminating test of the issue-list read.
+    fixture = buildValidGraph({ withApprovals: true });
+    const v1 = readJson<{ approvals: Array<Record<string, unknown>> }>(fixture.ledgerPath!);
+    const prior = v1.approvals.find((a) => a.approvalId === "c0-repo-maintainer")!;
+    writeLedgerV2(fixture, [
+      ...v1.approvals,
+      {
+        // Structurally invalid: supersedes an approval that is not in the ledger.
+        ...prior,
+        approvalId: "c0-repo-maintainer-v2",
+        supersedesApprovalId: "c0-repo-maintainer-does-not-exist",
+        decidedAt: "2026-07-14T12:00:00Z",
+      },
+    ]);
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "ledger-invalid-supersession")).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.checkpointStatus.C0).toBe("open");
+  });
+
+  it("emits no externality caveat for a checkpoint held open by a blocking issue", () => {
+    // The C2 externality warning is emitted only on closure. If a checkpoint is
+    // held open by a provenance defect, the warning must not appear either —
+    // otherwise following the documented remediation re-raises a caveat that
+    // `src/readiness/tracked-artifacts-readiness.test.ts` asserts must be absent
+    // while the checkpoint is open.
+    fixture = buildValidGraph({ withApprovals: true });
+    const v1 = readJson<{ approvals: Array<Record<string, unknown>> }>(fixture.ledgerPath!);
+    const prior = v1.approvals.find((a) => a.approvalId === "c0-repo-maintainer")!;
+    writeLedgerV2(fixture, [
+      ...v1.approvals,
+      { ...prior, approvalId: "c0-repo-maintainer-v2", supersedesApprovalId: "c0-repo-maintainer", decidedAt: "2026-07-14T10:00:00Z" },
+      { ...prior, approvalId: "c0-repo-maintainer-v3", supersedesApprovalId: "c0-repo-maintainer-v2", decidedAt: "2026-07-14T10:00:01Z" },
+    ]);
+    const result = validate(fixture);
+    expect(result.checkpointStatus.C0).toBe("open");
+    expect(result.warnings.map((w) => w.code)).toEqual([]);
+  });
+
+  // ─── the head-ledger approval-row pin ──────────────────────────────────────
+  //
+  // The append-only prefix check compares each ledger against its PREDECESSOR's
+  // approvals, so the chain HEAD's own rows are compared against nothing. The
+  // ledger family is exempt from index membership, and a ledger's
+  // `predecessor.sha256` pins its predecessor rather than itself — so before the
+  // pin, nothing in the artifact graph attested the head's rows, and editing a
+  // single `decidedAt` in place cleared a blocking governance finding. These
+  // tests pin both halves: the defect (an edit validates clean when the head is
+  // unpinned) and the fix (the same edit is refused when it is pinned).
+  describe("head-ledger approval-row pin", () => {
+    /** Move the C0 Repository Maintainer approval's decision LATER, in place. */
+    function editHeadDecidedAt(f: ReturnType<typeof buildValidGraph>): void {
+      mutateJson<{ approvals: Array<Record<string, unknown>> }>(f.ledgerPath!, (d) => {
+        for (const a of d.approvals) {
+          if (a.approvalId === "c0-repo-maintainer") a.decidedAt = "2026-07-20T10:00:00Z";
+        }
+        return d;
+      });
+    }
+
+    function headRowsDigest(f: ReturnType<typeof buildValidGraph>): string {
+      return ledgerApprovalRowsDigest(
+        readJson<{ approvals: unknown[] }>(f.ledgerPath!).approvals,
+      );
+    }
+
+    function validateWithPin(
+      f: ReturnType<typeof buildValidGraph>,
+      pins: Record<string, string>,
+    ) {
+      return validateReadinessArtifacts({
+        artifactRoot: f.artifactRoot,
+        repoRoot: f.repoRoot,
+        gitSourceResolver: f.resolver,
+        mode: "public",
+        additionalLedgerApprovalPins: pins,
+      });
+    }
+
+    it("accepts a head ledger whose approval rows match their pin", () => {
+      fixture = buildValidGraph({ withApprovals: true });
+      const result = validateWithPin(fixture, {
+        "approvals-20260714": headRowsDigest(fixture),
+      });
+      expect(result.issues).toEqual([]);
+      expect(result.ok).toBe(true);
+    });
+
+    it("THE DEFECT: an in-place decidedAt edit on an UNPINNED head validates clean", () => {
+      // Reproduces, in fixture form, the verified real-artifact result: the head
+      // ledger's rows are attested by nothing, so the edit leaves no trace.
+      fixture = buildValidGraph({ withApprovals: true });
+      editHeadDecidedAt(fixture);
+      const result = validate(fixture);
+      expect(result.issues).toEqual([]);
+      expect(result.ok).toBe(true);
+      expect(result.checkpointStatus.C0).toBe("closed");
+    });
+
+    it("THE FIX: the same edit is refused against the pin, and the gate cannot go green", () => {
+      fixture = buildValidGraph({ withApprovals: true });
+      const pin = headRowsDigest(fixture);
+      editHeadDecidedAt(fixture);
+      const result = validateWithPin(fixture, { "approvals-20260714": pin });
+      const flagged = result.issues.filter((i) => i.code === "ledger-approval-pin-mismatch");
+      expect(flagged.length).toBe(1);
+      expect(flagged[0]!.artifactId).toBe("approvals-20260714");
+      expect(result.ok).toBe(false);
+      // The message must name the artifact and the defect class, never echo an
+      // approval's contents.
+      expect(flagged[0]!.message).not.toContain("2026-07-20T10:00:00Z");
+      // FAIL CLOSED ON CLOSURE TOO. Rows that are not the pinned rows make the
+      // whole ledger non-authoritative, so no checkpoint may report "closed" and
+      // no closure-only caveat may be raised. Otherwise the gate would print
+      // `ok: false` beside `✓ C0: closed`.
+      expect(result.checkpointStatus).toEqual({
+        C0: "open", C1: "open", C2: "open", C3: "open", C4: "open", C5: "open",
+      });
+      expect(result.warnings.map((w) => w.code)).toEqual([]);
+    });
+
+    it("refuses a DELETED head-ledger row, which no successor exists to catch", () => {
+      fixture = buildValidGraph({ withApprovals: true });
+      const pin = headRowsDigest(fixture);
+      mutateJson<{ approvals: unknown[] }>(fixture.ledgerPath!, (d) => {
+        d.approvals = d.approvals.slice(1);
+        return d;
+      });
+      const result = validateWithPin(fixture, { "approvals-20260714": pin });
+      expect(result.issues.some((i) => i.code === "ledger-approval-pin-mismatch")).toBe(true);
+      expect(result.ok).toBe(false);
+    });
+
+    it("is insensitive to reformatting that leaves every approval row unchanged", () => {
+      fixture = buildValidGraph({ withApprovals: true });
+      const pin = headRowsDigest(fixture);
+      // Re-serialise the whole file with different indentation.
+      const data = readJson<Record<string, unknown>>(fixture.ledgerPath!);
+      writeFileSync(fixture.ledgerPath!, JSON.stringify(data, null, 4));
+      const result = validateWithPin(fixture, { "approvals-20260714": pin });
+      expect(result.issues.some((i) => i.code === "ledger-approval-pin-mismatch")).toBe(false);
+    });
+
+    it("pins a non-head ledger in the chain too, when one is named", () => {
+      // The pin is keyed on artifactId, not on head-ness: appending a successor
+      // does not release the pinned rows. That is what makes the CHAIN's
+      // append-only prefix check terminate in an anchor instead of in nothing.
+      fixture = buildValidGraph({ withApprovals: true });
+      const pin = headRowsDigest(fixture);
+      const v1 = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
+      writeLedgerV2(fixture, v1.approvals);
+      editHeadDecidedAt(fixture);
+      const result = validateWithPin(fixture, { "approvals-20260714": pin });
+      expect(result.issues.some((i) => i.code === "ledger-approval-pin-mismatch")).toBe(true);
+      expect(result.ok).toBe(false);
+    });
   });
 
   it("rejects an approval decided before an artifact it binds was created", () => {

@@ -92,13 +92,22 @@ reviewer's entry is appended to the immutable ledger:
 
 | Role | Actor | Decision | Decided at | Signature / confirmation |
 |---|---|---|---|---|
-| Gold Label Owner | `reviewer-gold` | **Not decided** | — | Pending. `c2-gold-reviewer-gold-v2` is withdrawn. |
-| QA | `reviewer-qa` | **Not decided** | — | Pending. `c2-qa-reviewer-qa-v2` is withdrawn. |
+| Gold Label Owner | `reviewer-gold` | **Not decided** | — | Pending. `c2-gold-reviewer-gold-v2` is withdrawn (see the note below on what "withdrawn" means here). |
+| QA | `reviewer-qa` | **Not decided** | — | Pending. `c2-qa-reviewer-qa-v2` is withdrawn (see the note below). |
 
 **Neither reviewer has approved this target.** The two ledger records that bind
 it (`c2-gold-reviewer-gold-v2`, `c2-qa-reviewer-qa-v2`) each copied the
 `decidedAt` of the earlier v1 approval they supersede, so each asserts a decision
-made before this target existed. Both are withdrawn; C2 is open. Do not fill in a
+made before this target existed. Both are withdrawn; C2 is open.
+
+**"Withdrawn" here means invalidated by a validator check, not removed from the
+ledger.** Both records are still present in
+`quality-contracts/agent-readiness/checkpoint-approvals-v5.json` and still read
+`decision: "approved"`; no `quality-contracts/` bytes were changed. What withdraws
+them is the `ledger-supersession-not-later` check, which reports their `decidedAt`
+as temporally impossible and blocks the gate. The ledger has no vocabulary for
+recording a retraction yet — tracked in `TODOS.md` § "Approval retraction
+vocabulary". Do not fill in a
 `Decided at` value that is not the actual wall-clock time of a real review. See
 `docs/c2/c2-checkpoint-approval-handoff.md` for the ledger mechanics and what
 would close C2.

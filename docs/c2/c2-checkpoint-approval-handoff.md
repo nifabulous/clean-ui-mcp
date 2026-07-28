@@ -116,10 +116,42 @@ reasons:
    plus a strictly-later `decidedAt`, i.e. a reviewer decision that was never
    made. Nothing was invented to work around this.
 
-So the withdrawal stands as documentation plus a **permanently** failing gate:
-the approvals remain on disk as the historical record of an invalid append, C2
-reports open, and `ok` stays false even after real decisions replace them — see
-"What would close C2" below.
+So the withdrawal stands as documentation plus a failing gate. **The withdrawal's
+mechanism is the temporal invariant, not any change to the ledger.** No ledger
+bytes were edited and no record was removed: `git diff origin/main..HEAD --
+quality-contracts/` is empty, and both records still read `decision: "approved"`.
+What produces `ok: false` / `C2: open` is the `ledger-supersession-not-later`
+check added in commit `e373351`, which recognises the copied `decidedAt` as
+temporally impossible. The commit whose subject reads "withdraw the un-decided v2
+approvals" (`46109d3`) changed **zero executable lines** — every `+`/`-` in its
+`src/readiness/validator.ts` diff is comment or docstring. Nothing in the
+artifact graph says "withdrawn"; that vocabulary does not exist yet (see
+`TODOS.md` § "Approval retraction vocabulary"). The approvals remain on disk as
+the historical record of an invalid append, C2 reports open, and `ok` stays false
+even after real decisions replace them — see "What would close C2" below.
+
+**How durable that block is, stated precisely.** An earlier version of this
+section said "permanently"; that was verified false and is corrected here. Two
+mechanisms cover two different edits:
+
+- A **successor ledger** cannot drop or rewrite the records (the prefix rule
+  above → `ledger-approval-deleted`; a forked ordinal → `chain-duplicate-key` /
+  `chain-fork` / `chain-multiple-heads`).
+- An **in-place edit of the head ledger's own rows** is caught by the
+  approval-row pin in `src/readiness/ledger-pins.ts`. It has to be: the
+  append-only check iterates the *predecessor's* approvals, so the chain head's
+  appended suffix was attested by nothing — no `artifact-index` row lists a
+  ledger, and `predecessor.sha256` pins the predecessor rather than the file
+  declaring it. Editing just the two `decidedAt` fields in
+  `checkpoint-approvals-v5.json` was verified end to end to yield `ok: true`,
+  `C2: closed`, `All checks passed.`, exit 0. It now yields
+  `ledger-approval-pin-mismatch`, blocking, with every checkpoint reported open.
+
+So `ok: false` is durable against **any change confined to `quality-contracts/`**.
+It is **not** durable against a change that also edits
+`TRACKED_LEDGER_APPROVAL_PINS` in source — that is a source diff, reviewed as
+code. Do not restate the block as "permanent" or "unfakeable" without that
+qualification.
 
 ### What would close C2 — two things, not one
 
@@ -132,6 +164,25 @@ approvals forward unchanged and appending `c2-gold-reviewer-gold-v3` /
 `c2-qa-reviewer-qa-v3` that supersede the v2 records. Do not invent actor IDs,
 registry hashes, target hashes, or approval timestamps.
 
+Two things to expect when you do this, so the output does not read as a bug:
+
+- **`ok` is the gate. Read `ok`, not the exit banner alone.** The gate will still
+  report `ok: false` with the two `ledger-supersession-not-later` issues, because
+  step 2 below has not landed. `checkpointStatus.C2` will read `open` alongside
+  it — the two channels agree. (They did not always: closure is computed over the
+  *effective* approval set, and the taint lands on the now-superseded v2 records,
+  so this exact append used to print `✓ C2: closed` directly above two blocking
+  issues with exit 1. Closure is now additionally gated on the checkpoint carrying
+  no blocking issue on any of its approvals, superseded or effective, so following
+  these instructions no longer produces that contradiction. `ok` remains the
+  authoritative value for CI and the review hooks.)
+- **Add the new head's approval-row pin in the same change.** The chain head's own
+  rows are attested only by `TRACKED_LEDGER_APPROVAL_PINS`
+  (`src/readiness/ledger-pins.ts`). Appending v6 leaves the v5 pin matching — keep
+  that entry, it is what stops the defective rows being rewritten while appending
+  — and add an entry for `approvals-c2-v6`, or the new head's rows will be
+  unattested exactly as v5's were.
+
 **2. A retraction mechanism, which does not exist yet.** Real decisions alone
 will NOT return the gate to `ok: true`. `ledger-supersession-not-later` is
 unconditional and blocking: it reports the two defective v2 records whether or
@@ -142,8 +193,9 @@ fabricated record dated one second after a defective one was enough to flip the
 real gate to `ok: true` with `issues: []` and C2 closed, which reduced the cost
 of hiding a governance defect from "impossible" to "append one record".
 
-So until the ledger can record a retraction, the readiness gate stays red
-permanently and C2 cannot be closed on a clean gate. This is the accepted
+So until the ledger can record a retraction, the readiness gate stays red and C2
+cannot be closed on a clean gate — durable against any change confined to
+`quality-contracts/`, per "How durable that block is" above. This is the accepted
 tradeoff, decided by the repository owner on 2026-07-28. Tracked in
 `TODOS.md` § "Approval retraction vocabulary (the ledger cannot say
 'withdrawn')". Do not restore remediability by weakening the check.

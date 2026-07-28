@@ -160,6 +160,11 @@ export function stampProvenance(
  * cross-origin browser fetch will be blocked from reading the response by the
  * same-origin policy, and we additionally reject mutations whose Origin is not
  * the app itself. This turns the previous `allow: *` into a closed surface.
+ *
+ * WHAT THIS GUARD DOES NOT COVER. It compares Origin against Host, so it passes
+ * whenever the two agree — including the DNS-rebinding case where they agree on
+ * an ATTACKER's name. {@link hostIsLoopback} is the guard for that; see its
+ * docblock. Neither guard subsumes the other and both run.
  */
 export function sameOrigin(req: IncomingMessage): boolean {
   const origin = req.headers.origin;
@@ -173,6 +178,53 @@ export function sameOrigin(req: IncomingMessage): boolean {
   }
 }
 
+/**
+ * Loopback `Host` allowlist — the DNS-rebinding guard.
+ *
+ * THE ATTACK `sameOrigin` CANNOT SEE. A page on `evil.example` whose name the
+ * attacker re-resolves to 127.0.0.1 reaches this server with
+ * `Origin: http://evil.example` and `Host: evil.example`. Those two MATCH, so
+ * `sameOrigin` passes; worse, the browser now considers the page genuinely
+ * same-origin with this server, so it can READ responses — including
+ * `GET /api/csrf` — and echo the nonce on a mutating request. Origin/Host
+ * comparison is structurally incapable of catching this, because the attacker
+ * controls both halves of the comparison.
+ *
+ * WHAT SEPARATES THE TWO CASES IS THE HOST NAME ITSELF. A rebound attacker must
+ * present its own DNS name in `Host` (that is what the browser puts there), and
+ * a loopback LITERAL is never the product of a DNS lookup, so it cannot be
+ * rebound. We therefore accept only the loopback literals and the reserved
+ * `localhost` name, and reject every other `Host` before any route runs — the
+ * nonce mint, the curator routes, the CORS preflight, and the static site alike.
+ *
+ * PORTS ARE NOT PART OF THE DECISION, DELIBERATELY. The server binds 127.0.0.1
+ * only (see `startServer`), so any request that arrives at all arrived over
+ * loopback; the port carries no security signal, and pinning it would break
+ * every ephemeral-port test and any operator who sets `CLEAN_UI_PORT`. The host
+ * NAME is the whole control.
+ *
+ * Rejected by construction: any name that merely embeds a literal
+ * (`127.0.0.1.evil.example`), any suffixed form (`localhost.evil.example`), the
+ * trailing-dot absolute form of an attacker name, a routable address, a
+ * duplicated `Host` header (node joins repeats with ", ", which parses as a
+ * single malformed authority), and a missing or unparseable `Host`.
+ */
+export function hostIsLoopback(req: IncomingMessage): boolean {
+  const host = req.headers.host;
+  if (typeof host !== "string" || host.length === 0) return false;
+  // Parse the authority with the WHATWG parser rather than by hand: it applies
+  // the same host-parsing rules the browser used to build the header, including
+  // IPv6 bracket handling and rejection of illegal authority characters.
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${host}`).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  // `new URL("http://::1")` does not parse, and `[::1]` normalizes to `[::1]`.
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
+}
+
 // ─── CSRF nonce (C3 Task 5) ───────────────────────────────────────────────────
 //
 // WHY A NONCE ON TOP OF THE ORIGIN GUARD. `sameOrigin` above lets a request with
@@ -181,9 +233,20 @@ export function sameOrigin(req: IncomingMessage): boolean {
 // browser-driven request shapes reach a server without an `Origin` header or
 // with one the server cannot distinguish, and every mutating route here writes
 // the corpus on disk or launches a browser. A nonce closes it from the other
-// side: a cross-site page can *send* a request, but it cannot *read* the
-// same-origin `GET /api/csrf` response, so it cannot learn the value it must
-// echo. The two guards are complementary and both stay.
+// side: a cross-site page cannot learn the value it must echo unless it can READ
+// the same-origin `GET /api/csrf` response.
+//
+// WHAT THE NONCE DOES AND DOES NOT COVER — STATED PRECISELY, BECAUSE AN EARLIER
+// REVISION OF THIS COMMENT OVERCLAIMED IT. The nonce stops a plain cross-site
+// page: its `fetch` to `GET /api/csrf` is cross-origin, so the same-origin
+// policy withholds the response body and it never learns the nonce. It does NOT
+// by itself stop DNS rebinding, because a rebound page IS same-origin from the
+// browser's point of view and can read `/api/csrf` like the real app does. The
+// guard for that case is `hostIsLoopback` above, which runs first and refuses
+// the request before the mint is reached. Three guards, three distinct jobs,
+// none of them redundant: `hostIsLoopback` (rebinding), `sameOrigin`
+// (declared-cross-origin callers), the nonce (same-origin-policy-blind request
+// shapes with no usable `Origin`). All three stay.
 //
 // PROCESS-LOCAL, MEMORY-ONLY, INVALIDATED ON RESTART. One nonce per process,
 // generated lazily from `randomBytes(32)`, held in a module variable and written
@@ -1999,6 +2062,19 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
 
 async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
+    // ─── THE HOST ALLOWLIST ────────────────────────────────────────────────────
+    // FIRST, before the origin guard, before the preflight branch, before any
+    // route and before the nonce mint. A rebound `Host` must not reach ANY
+    // handler — most sharply not `GET /api/csrf`, whose response body is the one
+    // secret this process holds. See `hostIsLoopback` for why Origin/Host
+    // comparison cannot catch this case. Every legitimate caller (the curator
+    // client, the built site, tests, curl) addresses this server by a loopback
+    // literal or `localhost`, so nothing legitimate is refused here.
+    if (!hostIsLoopback(req)) {
+      sendJson(res, 403, { error: "Requests must address this server on loopback" });
+      return;
+    }
+
     // Same-origin guard. The app is served from this server; no legitimate
     // caller is cross-origin. A missing Origin (non-browser clients) is allowed
     // through; a present-but-mismatched Origin is rejected.

@@ -38,52 +38,55 @@
  */
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+import {
+  assertCompiledServerIsCurrent as assertCompiledServerIsCurrentFor,
+  type NewestFileInfo,
+} from "./build-currency.js";
+import {
+  BUILD_CURRENCY_SRC_MTIME_ENV,
+  BUILD_CURRENCY_SRC_PATH_ENV,
+} from "./build-currency-global-setup.js";
 
 const REPO_ROOT = resolve(import.meta.dirname ?? __dirname, "..");
 const SRC_DIR = resolve(REPO_ROOT, "src");
 const DIST_DIR = resolve(REPO_ROOT, "dist");
 const SERVER_PATH = resolve(DIST_DIR, "server.js");
-const REBUILD_HINT = "Run `npx tsc` (or `npm run build`) and re-run this suite.";
 
 /**
- * The newest mtime (ms) of any file under `dir` whose name satisfies `include`,
- * plus the path that carried it. Returns `null` when the directory does not exist
- * or contains no matching file.
+ * Reads the pre-test-run source-mtime snapshot published by
+ * build-currency-global-setup.ts's `setup()` (see vitest.config.ts's
+ * `globalSetup`). Throws — rather than falling back to a live re-scan under
+ * `SRC_DIR` — if the env var is entirely unset, because a silent fallback
+ * would quietly reintroduce the order-dependent bug this file exists to fix:
+ * `src/references/generated.ts` is a tracked source file that
+ * `src/references/generated.test.ts` rewrites mid-suite (write "// drift"
+ * then restore, for its own drift-detection assertions), so a live re-scan at
+ * assertion time reports STALE BUILD or not depending purely on whether that
+ * rewrite already ran.
  */
-function newestFile(dir: string, include: (name: string) => boolean): { path: string; mtimeMs: number } | null {
-  let newest: { path: string; mtimeMs: number } | null = null;
-  let entries: ReturnType<typeof readdirSync>;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return null; // missing directory — the caller reports it
+function readSourceSnapshotFromEnv(): NewestFileInfo | null {
+  const mtimeRaw = process.env[BUILD_CURRENCY_SRC_MTIME_ENV];
+  if (mtimeRaw === undefined) {
+    throw new Error(
+      `Build-currency snapshot missing: ${BUILD_CURRENCY_SRC_MTIME_ENV} is unset. This suite requires ` +
+      `vitest.config.ts's globalSetup ["./src/build-currency-global-setup.ts"] to run before any test ` +
+      `file — if you invoked Vitest with a config that omits it, add it back rather than computing ` +
+      `src/ mtime live here (that reintroduces the order-dependent STALE BUILD bug fixed by this ` +
+      `snapshot mechanism).`,
+    );
   }
-  for (const entry of entries) {
-    const full = resolve(dir, entry.name);
-    if (entry.isDirectory()) {
-      const nested = newestFile(full, include);
-      if (nested && (!newest || nested.mtimeMs > newest.mtimeMs)) newest = nested;
-      continue;
-    }
-    if (!entry.isFile() || !include(entry.name)) continue;
-    const { mtimeMs } = statSync(full);
-    if (!newest || mtimeMs > newest.mtimeMs) newest = { path: full, mtimeMs };
-  }
-  return newest;
+  if (mtimeRaw === "") return null; // globalSetup ran and found no emitted source under src/
+  const path = process.env[BUILD_CURRENCY_SRC_PATH_ENV] ?? "<unknown>";
+  return { path, mtimeMs: Number(mtimeRaw) };
 }
 
-/** Emitted sources only: `*.test.ts` is excluded by tsconfig, so it emits nothing. */
-const isEmittedSource = (name: string): boolean =>
-  name.endsWith(".ts") && !name.endsWith(".test.ts") && !name.endsWith(".d.ts");
-
-const isEmittedOutput = (name: string): boolean => name.endsWith(".js");
-
 /**
- * Fail loudly when `dist/` is missing or older than `src/`. Called from
- * `beforeAll` (so a stale build cannot be silently exercised by any test in this
- * file) and asserted again as a named test (so the report says WHY).
+ * Fail loudly when `dist/` is missing or older than the pre-captured `src/`
+ * snapshot (see readSourceSnapshotFromEnv above for why it's a snapshot, not
+ * a live re-scan). Called from `beforeAll` (so a stale build cannot be
+ * silently exercised by any test in this file) and asserted again as a named
+ * test (so the report says WHY).
  *
  * This is a heuristic, not a proof of correctness: erring toward a loud false
  * ALARM over a silent false green is the right trade here, but the mtime
@@ -104,26 +107,11 @@ const isEmittedOutput = (name: string): boolean => name.endsWith(".js");
  * need a content-hash manifest, which this suite does not maintain.
  */
 function assertCompiledServerIsCurrent(): void {
-  const newestSource = newestFile(SRC_DIR, isEmittedSource);
-  if (!newestSource) {
-    throw new Error(`No emitted TypeScript source found under ${SRC_DIR} — cannot verify build currency.`);
-  }
-  const newestOutput = newestFile(DIST_DIR, isEmittedOutput);
-  if (!newestOutput) {
-    throw new Error(
-      `The compiled server is missing: no emitted .js found under ${DIST_DIR}. ` +
-      `This suite tests the COMPILED artifact, not the TypeScript sources. ${REBUILD_HINT}`,
-    );
-  }
-  if (newestSource.mtimeMs > newestOutput.mtimeMs) {
-    throw new Error(
-      `STALE BUILD: the compiled server under test is older than its sources, so this ` +
-      `suite would validate a build that no longer matches src/ and report a FALSE GREEN.\n` +
-      `  newest source: ${newestSource.path} (${new Date(newestSource.mtimeMs).toISOString()})\n` +
-      `  newest output: ${newestOutput.path} (${new Date(newestOutput.mtimeMs).toISOString()})\n` +
-      `${REBUILD_HINT}`,
-    );
-  }
+  assertCompiledServerIsCurrentFor({
+    srcDir: SRC_DIR,
+    distDir: DIST_DIR,
+    sourceSnapshot: readSourceSnapshotFromEnv(),
+  });
 }
 
 interface MCPResponse {

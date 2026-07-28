@@ -63,6 +63,16 @@ describe("TOOL_CATALOG", () => {
   it("is frozen", () => {
     expect(Object.isFrozen(TOOL_CATALOG)).toBe(true);
   });
+
+  // C3: create_ui_spec is the public beta name for spec synthesis.
+  // `generate_design_prompt` survives ONLY as a row in the documented migration
+  // table (LEGACY_TO_BETA_MAP below) — it is not a catalog name, so it cannot be
+  // registered as a public tool from the descriptor list.
+  it("create_ui_spec is a public catalog name and generate_design_prompt is not", () => {
+    expect(TOOL_CATALOG).toContain("create_ui_spec");
+    expect(TOOL_CATALOG).not.toContain("generate_design_prompt" as unknown as ToolName);
+    expect(TOOL_DESCRIPTORS.some((d) => d.name === "generate_design_prompt")).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

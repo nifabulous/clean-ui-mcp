@@ -100,10 +100,50 @@ export function isAllowedRetrievalState(s: Record<string, unknown>): boolean {
 export const EvidenceKind = z.enum([
   "corpus-observation", "screen-observation", "dom-signal",
   "machine-rule", "editorial-guidance",
+  // C3 producer vocabulary — mirrors EvidenceKindSchema in
+  // create-ui-spec-contracts.ts. `public-reference` is an explicit
+  // user-supplied input; `recipe-system` is the deterministic operator-authored
+  // recipe, which grounds editorial-authority decisions and is never a corpus
+  // observation.
+  "public-reference", "recipe-system",
 ]);
 export const EvidenceBasis = z.enum([
   "visible", "inferred", "dom-grounded", "editorial",
+  // C3 producer vocabulary — mirrors EvidenceBasisSchema in
+  // create-ui-spec-contracts.ts. `aggregate` is derived from structure/counts
+  // rather than a single visible source; `user-supplied` is the only
+  // public-input basis.
+  "aggregate", "user-supplied",
 ]);
+
+/**
+ * The response-scoped public evidence-ID shape. Mirrors `EvidenceIdSchema` in
+ * create-ui-spec-contracts.ts: corpus observations and public references both
+ * receive a fresh, response-local `evidence-N` id so no upstream corpus
+ * identity ever reaches public output.
+ *
+ * This pattern separates the two ID domains mechanically. A value matching it
+ * is a PUBLIC EVIDENCE ID and may never appear as a `referenceId` (which is
+ * always a safe public reference), and vice versa.
+ */
+const RESPONSE_SCOPED_EVIDENCE_ID = /^evidence-[0-9]+$/;
+
+/**
+ * Explicit kind-to-basis allowlist. This replaces the previous per-kind
+ * deny-lists, which would have silently admitted the two new C3 bases
+ * (`aggregate`, `user-supplied`) on every legacy kind. Each legacy row is the
+ * exact complement of its old deny-list, so legacy behavior is unchanged.
+ */
+const EVIDENCE_KIND_BASES: Record<string, readonly string[]> = {
+  "corpus-observation": ["visible", "inferred"],
+  "screen-observation": ["visible", "inferred"],
+  "dom-signal": ["dom-grounded", "visible"],
+  "editorial-guidance": ["editorial"],
+  "machine-rule": ["inferred", "editorial"],
+  // C3 kinds: the producer emits exactly one basis for each.
+  "public-reference": ["user-supplied"],
+  "recipe-system": ["aggregate"],
+};
 
 export const Evidence = z.object({
   id: z.string().trim().min(1),
@@ -112,18 +152,35 @@ export const Evidence = z.object({
   summary: z.string().trim().min(1),
   basis: EvidenceBasis,
 }).strict().superRefine((val, ctx) => {
-  if (val.kind === "corpus-observation" && !val.referenceId)
-    ctx.addIssue({ code: "custom", message: "corpus-observation requires referenceId", path: ["referenceId"] });
-  if (val.kind === "corpus-observation" && (val.basis === "editorial" || val.basis === "dom-grounded"))
-    ctx.addIssue({ code: "custom", message: "corpus-observation basis must be visible or inferred", path: ["basis"] });
-  if (val.kind === "screen-observation" && (val.basis === "editorial" || val.basis === "dom-grounded"))
-    ctx.addIssue({ code: "custom", message: "screen-observation basis must be visible or inferred", path: ["basis"] });
-  if (val.kind === "dom-signal" && (val.basis === "editorial" || val.basis === "inferred"))
-    ctx.addIssue({ code: "custom", message: "dom-signal basis must be dom-grounded or visible", path: ["basis"] });
-  if (val.kind === "editorial-guidance" && val.basis !== "editorial")
-    ctx.addIssue({ code: "custom", message: "editorial-guidance basis must be editorial", path: ["basis"] });
-  if (val.kind === "machine-rule" && (val.basis === "visible" || val.basis === "dom-grounded"))
-    ctx.addIssue({ code: "custom", message: "machine-rule basis must be inferred or editorial", path: ["basis"] });
+  const allowedBases = EVIDENCE_KIND_BASES[val.kind];
+  if (allowedBases && !allowedBases.includes(val.basis))
+    ctx.addIssue({ code: "custom", message: `${val.kind} basis must be ${allowedBases.join(" or ")}`, path: ["basis"] });
+
+  const responseScoped = RESPONSE_SCOPED_EVIDENCE_ID.test(val.id);
+
+  if (val.kind === "corpus-observation") {
+    if (responseScoped) {
+      // A response-scoped corpus observation carries NO public citation — the
+      // same rule create-ui-spec-contracts.ts enforces on `publicReference`.
+      // Attaching one would either leak a corpus identity or falsely claim the
+      // private entry is publicly citable.
+      if (val.referenceId !== undefined)
+        ctx.addIssue({ code: "custom", message: "response-scoped corpus-observation must not carry referenceId", path: ["referenceId"] });
+    } else if (!val.referenceId) {
+      // Legacy (non-response-scoped) corpus rows keep their original requirement.
+      ctx.addIssue({ code: "custom", message: "corpus-observation requires referenceId", path: ["referenceId"] });
+    }
+  }
+  // A public reference is exactly that: the safe public citation is mandatory.
+  if (val.kind === "public-reference" && !val.referenceId)
+    ctx.addIssue({ code: "custom", message: "public-reference requires referenceId", path: ["referenceId"] });
+  // The recipe is operator content, not a user/public citation.
+  if (val.kind === "recipe-system" && val.referenceId !== undefined)
+    ctx.addIssue({ code: "custom", message: "recipe-system must not carry referenceId", path: ["referenceId"] });
+  // ID-domain separation: a public evidence ID may never be substituted for a
+  // safe public reference ID.
+  if (val.referenceId !== undefined && RESPONSE_SCOPED_EVIDENCE_ID.test(val.referenceId))
+    ctx.addIssue({ code: "custom", message: "referenceId must be a safe public reference, not a response-scoped evidence ID", path: ["referenceId"] });
 });
 
 // Evidence array with unique-ID enforcement
@@ -685,15 +742,47 @@ const CompareInput = z.object({
   responseFormat: z.enum(["concise", "detailed"]).optional(),
 }).strict();
 
+// ---------------------------------------------------------------------------
+// create_ui_spec transport input.
+//
+// Every field except `outputFormat` is a pass-through to
+// `CreateUiSpecRequestSchema` (create-ui-spec-contracts.ts) and MUST carry the
+// CORE bounds, so transport input that parses here cannot be rejected later by
+// the producer. `outputFormat` is adapter-local: it selects which validated
+// rendering the transport returns and never reaches the core request.
+//
+// `target` and `motionIntents` are MIRRORS of `WebTargetId` and
+// `MotionIntentSchema` from design-target-contracts.ts rather than imports:
+// that module imports `UiSpec` from this one, so importing it back would create
+// an evaluation cycle whose TDZ failure depends on which module loads first.
+// The mirrors are pinned by a mechanical JSON-Schema drift gate in
+// tool-contracts.test.ts ("every core request field is mirrored with identical
+// bounds"), so divergence fails the suite instead of passing silently.
+// ---------------------------------------------------------------------------
+const CreateUiSpecTargetId = z.enum(["neutral-web", "astro-react", "astro-vue"]);
+
+const CreateUiSpecMotionIntent = z.object({
+  id: z.string().min(1),
+  trigger: z.string().min(1),
+  properties: z.array(z.string()),
+  durationToken: z.string().min(1),
+  easingToken: z.string().min(1),
+  interruptible: z.boolean(),
+  reducedMotion: z.string().min(1),
+}).strict();
+
 export const CreateUiSpecInput = z.object({
-  productContext: z.string().trim().min(8),
-  referenceIds: z.array(z.string().trim().min(1)).max(5).default([])
+  productContext: z.string().trim().min(8).max(8_000),
+  referenceIds: z.array(z.string().trim().min(1).max(200)).max(5).default([])
     .refine(a => new Set(a).size === a.length, "referenceIds must be unique"),
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
-  implementationFramework: z.string().optional(),
-  serializationFormat: z.enum(["brief", "tokens"]).default("brief"),
+  implementationFramework: z.string().trim().min(1).max(120).optional(),
   designSystem: DesignSystemIdentitySchema.optional(),
-  constraints: z.array(z.string().trim().min(1)).default([]),
+  constraints: z.array(z.string().trim().min(1).max(500)).max(12).default([]),
+  target: CreateUiSpecTargetId.optional(),
+  motionIntents: z.array(CreateUiSpecMotionIntent).max(8).default([]),
+  /** Adapter-local presentation selection — never part of the core request. */
+  outputFormat: z.enum(["markdown", "json"]).default("markdown"),
 }).strict();
 
 const PlanInput = z.object({
@@ -747,6 +836,35 @@ const PlanDataSchema = z.object({
 // Helper: all evidence kinds for synthesis tools
 const ALL_SYNTHESIS_KINDS = ["corpus-observation", "machine-rule", "editorial-guidance"] as const;
 const CRITIQUE_KINDS = ["corpus-observation", "screen-observation", "dom-signal", "machine-rule", "editorial-guidance"] as const;
+/**
+ * The exact evidence vocabulary the create_ui_spec adapter can project from the
+ * producer's validated SanitizedEvidence rows: sanitized corpus observations,
+ * explicit public references, and the operator-authored recipe. The producer
+ * emits no machine-rule or editorial-guidance rows, so neither is accepted.
+ */
+const CREATE_UI_SPEC_KINDS = ["corpus-observation", "public-reference", "recipe-system"] as const;
+/**
+ * Evidence kinds that can ground an `editorial`-authority citedDecision.
+ * `recipe-system` is the operator-authored deterministic recipe, documented in
+ * create-ui-spec-contracts.ts as grounding editorial-authority decisions and
+ * never corpus-evidence decisions.
+ */
+const EDITORIAL_AUTHORITY_KINDS: readonly string[] = ["editorial-guidance", "recipe-system"];
+
+/**
+ * The ONLY safe public reference shape create_ui_spec may publish: the opaque
+ * SHA-256 digest of the requester's own token, built by the core as
+ * `ref-${sha256Hex(...)}` (src/create-ui-spec.ts). Requiring this positively —
+ * rather than merely rejecting the response-scoped `evidence-N` shape — is what
+ * makes a raw corpus entry ID, a source URL, an image path or any other
+ * filesystem path inexpressible in this tool's public reference positions.
+ *
+ * DELIBERATELY NOT a shared-envelope rule: legacy retrieval tools
+ * (search_ui_references, get_ui_reference, browse_ui_patterns, the research
+ * aggregations) publish real corpus entry IDs in `referenceIds`, so this shape
+ * is enforced only inside the create_ui_spec descriptor's refineEnvelope.
+ */
+const SAFE_PUBLIC_REFERENCE_ID = /^ref-[0-9a-f]{64}$/;
 
 /**
  * Prose rows for the §5.5 per-tool contract reference. These mirror the
@@ -779,6 +897,17 @@ export interface ToolDescriptor {
   readonly retrieval: readonly { mode: string; modality: string; fallbackReasons?: readonly string[] }[];
   /** Allowed attempted-mode values for terminal errors and fallback records. */
   readonly allowedAttemptedModes: readonly string[];
+  /**
+   * Retrieval-capable tools normally cannot report `mode: "none"` with a
+   * positive `resultCount` — for a search-shaped tool that combination claims
+   * results that nothing retrieved. Set this ONLY for a tool whose single result
+   * artifact exists independently of automatic retrieval, so `none/none` with
+   * one artifact is the truthful state (create_ui_spec's explicit-reference
+   * path: the requester supplied the references, so no retrieval ran).
+   *
+   * Omitted (or false) preserves the original rule exactly.
+   */
+  readonly allowNoneWithPositiveResult?: boolean;
   readonly evidenceKinds: readonly string[];
   readonly warningSchema: z.ZodType;
   readonly errorSchema: z.ZodType;
@@ -1092,21 +1221,39 @@ export const TOOL_DESCRIPTORS = [
     legacyNames: ["generate_design_prompt"],
     inputSchema: CreateUiSpecInput,
     dataSchema: UiSpec,
-    retrieval: [{ mode: "none", modality: "none" }],
-    allowedAttemptedModes: [],
-    evidenceKinds: [...ALL_SYNTHESIS_KINDS],
+    // The producer's real states: automatic retrieval is keyword/metadata; zero
+    // matches are the structured fallback with the honest "no-results" reason;
+    // explicit references run no retrieval at all (none/none). hybrid/text is
+    // the enriched primary path. The adapter reports the producer's actual
+    // state — it never normalizes one state into another.
+    retrieval: [
+      { mode: "hybrid", modality: "text" },
+      { mode: "keyword", modality: "metadata" },
+      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["no-results"] },
+      { mode: "none", modality: "none" },
+    ],
+    allowedAttemptedModes: ["keyword"],
+    // none/none carries one spec artifact on the explicit-reference path.
+    allowNoneWithPositiveResult: true,
+    // Exactly the kinds the adapter can project from validated SanitizedEvidence.
+    evidenceKinds: [...CREATE_UI_SPEC_KINDS],
     warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "motionEvidenceUnavailable", "authorityConflict"]),
-    errorSchema: makeErrorSchema(["INVALID_INPUT"]),
-    errorCodes: ["INVALID_INPUT"],
+    // Core INVALID_INPUT maps to the non-retryable MCP INVALID_INPUT; core
+    // RETRIEVAL_UNAVAILABLE maps to the existing retryable PROVIDER_ERROR. No
+    // new transport error code, and no raw core message is exposed.
+    errorSchema: makeErrorSchema(["INVALID_INPUT", "PROVIDER_ERROR"]),
+    errorCodes: ["INVALID_INPUT", "PROVIDER_ERROR"],
     contractDocs: {
-      input: "productContext (required, min 8), referenceIds? (max 5), platform?, implementationFramework?, serializationFormat (default brief)?, designSystem?, constraints?",
+      input: "productContext (required, min 8, max 8000), referenceIds? (max 5, each max 200), platform?, implementationFramework? (max 120), designSystem?, constraints? (max 12, each max 500), target? (neutral-web | astro-react | astro-vue), motionIntents? (max 8, structured), outputFormat (markdown | json, default markdown)?",
       successData: "see §5.4 — UiSpec with layoutRegions, colorTokens, typographyTokens, acceptanceCriteria (verifiers: axe, playwright, static-analysis, manual), citedReferences, citedDecisions, authorityLanes, provenance",
       empty: "n/a — synthesis produces one spec artifact or errors",
-      partial: "sparseCoverage / insufficientCorpusEvidence / motionEvidenceUnavailable typed warnings; null tokens require editorial authority + unavailableDecision",
+      partial: "sparseCoverage / insufficientCorpusEvidence / motionEvidenceUnavailable typed warnings; zero automatic matches are reported as structured-fallback/metadata with fallbackReason \"no-results\"; null tokens require editorial authority + unavailableDecision",
       resultCount: "1 when a complete spec artifact exists, otherwise 0",
-      referenceIds: "`citedReferences`",
+      referenceIds: "`citedReferences` only — safe public reference IDs. Response-scoped evidence IDs (`evidence-N`) are a separate domain and never appear here",
     },
     extractPrimaryIds: () => [],
+    // ONLY citedReferences. Evidence IDs live in a separate domain (provenance,
+    // authority lanes, evidence rows) and must never become referenceIds.
     extractReferenceIds: (d) => (d as { citedReferences?: string[] })?.citedReferences ?? [],
     countResults: (d) => (d as { specVersion?: unknown })?.specVersion ? 1 : 0,
     refineEnvelope: (val, ctx) => {
@@ -1138,6 +1285,41 @@ export const TOOL_DESCRIPTORS = [
       const citedRefs = data?.citedReferences ?? [];
       if (new Set(citedRefs).size !== citedRefs.length)
         ctx.addIssue({ code: "custom", message: "citedReferences must be unique", path: ["data", "citedReferences"] });
+      // ID-domain separation: citedReferences (and therefore the envelope's
+      // referenceIds, which must equal them as sets) hold safe PUBLIC REFERENCE
+      // ids only. A response-scoped public evidence id substituted here would
+      // conflate the two domains.
+      // Beyond that, a public reference must POSITIVELY be a safe public
+      // reference: the core's opaque `ref-<sha256>` digest. Anything else — a raw
+      // corpus entry ID, a source URL, an image or filesystem path — is refused
+      // here so it can never be expressed in this tool's success-envelope
+      // reference positions, even if a projection bug upstream tries to publish
+      // it. (The status "error" branch has its own, narrower guard: see the
+      // "status error requires empty evidence" check above, which is what makes
+      // this positive claim true for the error branch too — by forbidding
+      // evidence outright rather than by re-running this check.) The offending
+      // value is NOT echoed into the issue message: the message would itself
+      // become output carrying the path.
+      citedRefs.forEach((ref, i) => {
+        if (RESPONSE_SCOPED_EVIDENCE_ID.test(ref))
+          ctx.addIssue({ code: "custom", message: `citedReference "${ref}" is a response-scoped evidence ID, not a public reference ID`, path: ["data", "citedReferences", i] });
+        else if (!SAFE_PUBLIC_REFERENCE_ID.test(ref))
+          ctx.addIssue({ code: "custom", message: `citedReferences[${i}] is not a safe public reference ID (expected ref-<sha256>)`, path: ["data", "citedReferences", i] });
+      });
+      val.referenceIds.forEach((ref, i) => {
+        if (RESPONSE_SCOPED_EVIDENCE_ID.test(ref))
+          ctx.addIssue({ code: "custom", message: `referenceId "${ref}" is a response-scoped evidence ID, not a public reference ID`, path: ["referenceIds", i] });
+        else if (!SAFE_PUBLIC_REFERENCE_ID.test(ref))
+          ctx.addIssue({ code: "custom", message: `referenceIds[${i}] is not a safe public reference ID (expected ref-<sha256>)`, path: ["referenceIds", i] });
+      });
+      // Every evidence row's public citation is checked at the row level too:
+      // rule 10 only ties it to referenceIds (set membership), which would pass a
+      // whole envelope whose referenceIds are themselves unsafe. (The shared
+      // Evidence schema separately refuses the `evidence-N` shape here.)
+      ((val.evidence as Array<{ referenceId?: string }> | undefined) ?? []).forEach((e, i) => {
+        if (e.referenceId !== undefined && !SAFE_PUBLIC_REFERENCE_ID.test(e.referenceId))
+          ctx.addIssue({ code: "custom", message: `evidence[${i}].referenceId is not a safe public reference ID (expected ref-<sha256>)`, path: ["evidence", i, "referenceId"] });
+      });
       // Check acceptance criteria evidenceIds (membership + dedup) — whole-array form
       const acRefs = (data?.acceptanceCriteria ?? []).map((ac, i) =>
         ({ path: ["data", "acceptanceCriteria", i, "evidenceIds"] as PropertyKey[], ids: ac.evidenceIds ?? [] }),
@@ -1191,17 +1373,35 @@ export const TOOL_DESCRIPTORS = [
               ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" references corpus-observation evidence "${eid}" but it is not in the corpusEvidence lane`, path: ["data", "citedDecisions"] });
           }
         } else if (cd.authority === "editorial") {
-          // At least one referenced evidence item must be kind editorial-guidance.
-          const hasEditorialKind = evIds.some(eid => evidenceKindById.get(eid) === "editorial-guidance");
+          // At least one referenced evidence item must carry an editorial-grounding
+          // kind (editorial-guidance, or the operator-authored recipe-system).
+          const hasEditorialKind = evIds.some(eid => EDITORIAL_AUTHORITY_KINDS.includes(evidenceKindById.get(eid) ?? ""));
           if (!hasEditorialKind)
-            ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has editorial authority but no referenced evidence of kind editorial-guidance`, path: ["data", "citedDecisions"] });
-          // Lane/kind consistency: every referenced editorial-guidance evidence must
-          // sit in the editorialGuidance lane.
+            ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has editorial authority but no referenced evidence of kind ${EDITORIAL_AUTHORITY_KINDS.join(" or ")}`, path: ["data", "citedDecisions"] });
+          // Lane/kind consistency: every referenced editorial-grounding evidence
+          // must sit in the editorialGuidance lane.
           for (const eid of evIds) {
-            if (evidenceKindById.get(eid) === "editorial-guidance" && !editorialLane.has(eid))
-              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" references editorial-guidance evidence "${eid}" but it is not in the editorialGuidance lane`, path: ["data", "citedDecisions"] });
+            const kind = evidenceKindById.get(eid);
+            if (kind !== undefined && EDITORIAL_AUTHORITY_KINDS.includes(kind) && !editorialLane.has(eid))
+              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" references ${kind} evidence "${eid}" but it is not in the editorialGuidance lane`, path: ["data", "citedDecisions"] });
+            // Corpus-lane agreement, the mirror of the corpus-evidence branch: a
+            // corpus observation may never CO-ground an editorial decision. Having
+            // one editorial-grounding row present is not a licence to also cite
+            // corpus-derived evidence under editorial authority — that is exactly
+            // the laundering direction the R4 checks exist to prevent, and it is
+            // rejected regardless of which lane the corpus row sits in.
+            if (kind === "corpus-observation")
+              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has editorial authority but references corpus-observation evidence "${eid}"`, path: ["data", "citedDecisions"] });
           }
         }
+      }
+      // Lane partition integrity: corpus-derived evidence never belongs in the
+      // editorialGuidance lane, whether or not any decision cites it. The real
+      // producer partitions the recipe row and public references into that lane
+      // and corpus observations into corpusEvidence (src/create-ui-spec.ts).
+      for (const eid of editorialLane) {
+        if (evidenceKindById.get(eid) === "corpus-observation")
+          ctx.addIssue({ code: "custom", message: `corpus-observation evidence "${eid}" must not be partitioned into the editorialGuidance lane`, path: ["data", "authorityLanes", "editorialGuidance"] });
       }
       // --- R4 Part C: same-field conflicting authority lanes require an
       // authorityConflict warning. Two citedDecisions for the SAME exact field
@@ -1568,11 +1768,21 @@ function makeEnvelope<const D extends ToolDescriptor>(desc: D) {
       // Error envelopes must have empty referenceIds
       if (val.referenceIds.length > 0)
         ctx.addIssue({ code: "custom", message: 'status "error" requires empty referenceIds', path: ["referenceIds"] });
+      // Error envelopes must have empty evidence. Rules 4-13 below (including
+      // refineEnvelope, the safe-public-reference checks and the per-tool
+      // evidenceKinds check) only run when status is "ok" — without this check
+      // an error envelope's evidence array would be a second, unguarded channel
+      // for a private path, a source URL, a raw corpus ID or an out-of-vocabulary
+      // evidence kind. Every existing error fixture already uses evidence: [],
+      // so this is non-breaking.
+      if (desc.hasEvidence && val.evidence && val.evidence.length > 0)
+        ctx.addIssue({ code: "custom", message: 'status "error" requires empty evidence', path: ["evidence"] });
     }
     // 2b. Retrieval-capable tools: mode "none" on success requires resultCount 0
     // (none-only tools like get/compare/taxonomy legitimately have none+count 1)
     const isRetrievalCapable = desc.retrieval.length > 1 || (desc.retrieval.length === 1 && desc.retrieval[0]!.mode !== "none");
-    if (val.status === "ok" && isRetrievalCapable && val.retrieval.mode === "none" && val.retrieval.resultCount > 0)
+    if (val.status === "ok" && isRetrievalCapable && desc.allowNoneWithPositiveResult !== true
+      && val.retrieval.mode === "none" && val.retrieval.resultCount > 0)
       ctx.addIssue({ code: "custom", message: "retrieval-capable tool cannot have mode none with positive resultCount on success", path: ["retrieval"] });
     // 3. Retrieval eligibility + fallback truth + attempted-mode policy
     // Delegate to the shared integrity validator for complete checks

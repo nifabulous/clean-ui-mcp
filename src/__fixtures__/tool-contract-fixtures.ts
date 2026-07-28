@@ -6,6 +6,14 @@ import type { ToolName } from "../tool-contracts.js";
 
 export type JsonObject = Record<string, unknown>;
 
+/**
+ * A synthetic safe public reference — the opaque `ref-<sha256>` digest shape the
+ * create_ui_spec core emits and the only shape that tool's public reference
+ * positions accept. Declared here because the legacy create_ui_spec envelope
+ * uses it too.
+ */
+export const SAFE_PUBLIC_REFERENCE = `ref-${"0123456789abcdef".repeat(4)}`;
+
 export const VALID_TOOL_INPUTS = {
   search_ui_references: {},
   get_ui_reference: { id: "ref-a" },
@@ -191,6 +199,10 @@ export function makeValidSuccess(tool: ToolName): JsonObject {
       return env;
     }
 
+    // NOTE: this envelope stays LEGACY-SHAPED on purpose (a non-response-scoped
+    // evidence id that carries a referenceId), so it doubles as the regression
+    // proof that pre-C3 evidence rows still validate. Its public reference uses
+    // the safe `ref-<sha256>` shape because create_ui_spec now requires it.
     case "create_ui_spec": {
       const env = successEnvelope(tool, {
         specVersion: "1.0",
@@ -207,7 +219,7 @@ export function makeValidSuccess(tool: ToolName): JsonObject {
         interactions: [],
         motionGuidance: { notes: [], evidenceUnavailable: true },
         accessibilityConstraints: ["Contrast meets WCAG AA"],
-        techniques: [{ text: "Use 8px spacing", sourceIds: ["ref-a"] }],
+        techniques: [{ text: "Use 8px spacing", sourceIds: [SAFE_PUBLIC_REFERENCE] }],
         antiPatterns: [],
         unavailableDecisions: [{ field: "motion", reason: "No DOM motion evidence available" }],
         acceptanceCriteria: [{
@@ -215,19 +227,19 @@ export function makeValidSuccess(tool: ToolName): JsonObject {
           expectedOutcome: "4.5:1", verifier: "axe", priority: "must",
           evidenceIds: ["evidence-corpus-a"],
         }],
-        citedReferences: ["ref-a"],
+        citedReferences: [SAFE_PUBLIC_REFERENCE],
         citedDecisions: [{
           id: "cd1", field: "color-primary", authority: "corpus-evidence",
-          evidenceIds: ["evidence-corpus-a"], readiness: "available", sourceId: "ref-a",
+          evidenceIds: ["evidence-corpus-a"], readiness: "available", sourceId: SAFE_PUBLIC_REFERENCE,
         }],
         authorityLanes: { corpusEvidence: ["evidence-corpus-a"], machineRules: [], editorialGuidance: [] },
         provenance: {
           generatedAt: "2026-07-15T00:00:00Z", toolVersion: "0.2.0",
-          sourceReferences: ["ref-a"], evidenceIds: ["evidence-corpus-a"],
+          sourceReferences: [SAFE_PUBLIC_REFERENCE], evidenceIds: ["evidence-corpus-a"],
         },
-      }, ["ref-a"], 1);
+      }, [SAFE_PUBLIC_REFERENCE], 1);
       (env as JsonObject).evidence = [
-        { id: "evidence-corpus-a", referenceId: "ref-a", kind: "corpus-observation", summary: "Uses a 12-column grid.", basis: "visible" },
+        { id: "evidence-corpus-a", referenceId: SAFE_PUBLIC_REFERENCE, kind: "corpus-observation", summary: "Uses a 12-column grid.", basis: "visible" },
       ];
       (env as JsonObject).warnings = [{ code: "motionEvidenceUnavailable", message: "No DOM motion evidence available" }];
       return env;
@@ -286,6 +298,159 @@ export function makeValidSuccess(tool: ToolName): JsonObject {
       throw new Error(`No fixture for tool: ${_exhaustive}`);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// C3 create_ui_spec envelopes — the three retrieval states the real producer
+// (src/create-ui-spec.ts) can emit. These model the actual adapter output:
+// response-scoped evidence IDs (`evidence-N`), corpus observations that carry
+// NO referenceId, the operator-authored recipe evidence that grounds editorial
+// decisions, and safe `ref-<sha256>` public references for explicit inputs.
+// ---------------------------------------------------------------------------
+
+/** The recipe/system evidence row: operator content, no public citation. */
+const recipeSystemEvidence = (id: string): JsonObject => ({
+  id,
+  kind: "recipe-system",
+  basis: "aggregate",
+  summary: "Deterministic c3-fallback-v1 recipe.",
+});
+
+/** A response-scoped corpus observation: no referenceId, ever. */
+const responseScopedCorpusEvidence = (id: string): JsonObject => ({
+  id,
+  kind: "corpus-observation",
+  basis: "visible",
+  summary: "Dashboard pattern with 3 layout regions.",
+});
+
+/** An explicit public reference row: carries the safe public reference only. */
+const publicReferenceEvidence = (id: string, referenceId: string): JsonObject => ({
+  id,
+  kind: "public-reference",
+  basis: "user-supplied",
+  summary: "User-supplied public reference.",
+  referenceId,
+});
+
+/**
+ * The deterministic fallback UiSpec: null tokens under editorial authority, the
+ * recipe evidence grounding the editorial designDirection decision, and corpus
+ * observations recorded in the corpusEvidence lane without grounding decisions.
+ */
+function c3SpecData(opts: {
+  corpusEvidenceIds: string[];
+  editorialLane: string[];
+  citedReferences: string[];
+  evidenceIds: string[];
+}): JsonObject {
+  return {
+    specVersion: "1.0",
+    context: { productContext: "A synthetic analytics dashboard", constraints: [] },
+    designDirection: "A synthetic analytics dashboard",
+    rejectedDefaults: [],
+    layoutRegions: [{ name: "Main", type: "content", components: ["chart"], responsive: [] }],
+    responsiveBehavior: [],
+    componentInventory: [],
+    colorTokens: null,
+    colorTokenAuthority: "editorial",
+    typographyTokens: null,
+    typographyTokenAuthority: "editorial",
+    interactions: [],
+    motionGuidance: { notes: [], evidenceUnavailable: true },
+    accessibilityConstraints: ["Keyboard operable"],
+    techniques: [],
+    antiPatterns: [],
+    unavailableDecisions: [
+      { field: "colorTokens", reason: "No corpus color evidence was retrieved." },
+      { field: "typographyTokens", reason: "No corpus typography evidence was retrieved." },
+      { field: "motion", reason: "Motion guidance is model-dependent." },
+    ],
+    acceptanceCriteria: [{
+      id: "ac-direction", subject: "designDirection", assertion: "exists",
+      expectedOutcome: "The brief is restated without invention", verifier: "manual",
+      priority: "must", evidenceIds: [opts.editorialLane[0]!],
+      manualSteps: ["Read the design direction against the submitted brief."],
+    }],
+    citedReferences: opts.citedReferences,
+    citedDecisions: [{
+      id: "designDirection-editorial-1", field: "designDirection", authority: "editorial",
+      evidenceIds: [opts.editorialLane[0]!], readiness: "available",
+    }],
+    authorityLanes: {
+      corpusEvidence: opts.corpusEvidenceIds,
+      machineRules: [],
+      editorialGuidance: opts.editorialLane,
+    },
+    provenance: {
+      generatedAt: "2026-07-15T00:00:00Z", toolVersion: "c3-fallback-v1",
+      sourceReferences: opts.citedReferences, evidenceIds: opts.evidenceIds,
+    },
+  };
+}
+
+const MOTION_WARNING = { code: "motionEvidenceUnavailable", message: "Motion guidance is model-dependent." };
+
+/** Automatic keyword retrieval that found matches: keyword/metadata, no fallback. */
+export function makeCreateUiSpecAutomatic(): JsonObject {
+  const env = successEnvelope(
+    "create_ui_spec",
+    c3SpecData({
+      corpusEvidenceIds: ["evidence-2"],
+      editorialLane: ["evidence-1"],
+      citedReferences: [],
+      evidenceIds: ["evidence-1", "evidence-2"],
+    }),
+    [], 1, "keyword", "metadata",
+  );
+  env.evidence = [recipeSystemEvidence("evidence-1"), responseScopedCorpusEvidence("evidence-2")];
+  env.warnings = [MOTION_WARNING];
+  return env;
+}
+
+/** Automatic retrieval that found nothing: structured-fallback/metadata + no-results. */
+export function makeCreateUiSpecZeroResultFallback(): JsonObject {
+  const env = successEnvelope(
+    "create_ui_spec",
+    c3SpecData({
+      corpusEvidenceIds: [],
+      editorialLane: ["evidence-1"],
+      citedReferences: [],
+      evidenceIds: ["evidence-1"],
+    }),
+    [], 1, "structured-fallback", "metadata",
+  );
+  env.retrieval = {
+    mode: "structured-fallback", modality: "metadata", resultCount: 1,
+    fallbackUsed: true, fallbackReason: "no-results",
+    attemptedCount: 1, attemptedModes: ["keyword"],
+  };
+  env.evidence = [recipeSystemEvidence("evidence-1")];
+  env.warnings = [
+    { code: "sparseCoverage", message: "Automatic retrieval returned zero matches." },
+    MOTION_WARNING,
+  ];
+  return env;
+}
+
+/** Explicit references: none/none with one spec artifact and safe public references. */
+export function makeCreateUiSpecExplicitReferences(): JsonObject {
+  const env = successEnvelope(
+    "create_ui_spec",
+    c3SpecData({
+      corpusEvidenceIds: [],
+      editorialLane: ["evidence-1", "evidence-2"],
+      citedReferences: [SAFE_PUBLIC_REFERENCE],
+      evidenceIds: ["evidence-1", "evidence-2"],
+    }),
+    [SAFE_PUBLIC_REFERENCE], 1, "none", "none",
+  );
+  env.evidence = [
+    recipeSystemEvidence("evidence-1"),
+    publicReferenceEvidence("evidence-2", SAFE_PUBLIC_REFERENCE),
+  ];
+  env.warnings = [MOTION_WARNING];
+  return env;
 }
 
 export function makeValidError(tool: ToolName): JsonObject | null {

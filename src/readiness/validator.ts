@@ -38,6 +38,12 @@ import {
   type ChainNode,
   type ChainNodeResult,
 } from "./chains.js";
+import {
+  C2LabelIntegritySelectionSchema,
+  C2IndependentLabelSubmissionSchema,
+  C2LabelIntegrityBaselineMetricsSchema,
+  C2LabelAgreementReportSchema,
+} from "../c2/evaluation-contracts.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -575,6 +581,21 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
   };
 }
 
+/**
+ * Production schemas for each C2 evidence artifactType the private readiness
+ * validator may encounter. Used to schema-validate referenced evidence files
+ * in addition to the hash + identity checks — a well-hashed but structurally
+ * invalid payload must still be rejected. Types without a dedicated production
+ * schema (e.g. adjudication, which is referenced but not independently
+ * schema'd) are omitted and fall back to the identity check only.
+ */
+export const C2_EVIDENCE_SCHEMAS: Readonly<Record<string, z.ZodType>> = {
+  "c2-label-integrity-selection": C2LabelIntegritySelectionSchema,
+  "c2-independent-label-submission": C2IndependentLabelSubmissionSchema,
+  "c2-label-integrity-baseline-metrics": C2LabelIntegrityBaselineMetricsSchema,
+  "c2-label-agreement-report": C2LabelAgreementReportSchema,
+};
+
 function verifyPrivateC2Evidence(
   artifacts: Map<string, ParsedArtifact>,
   opts: ValidateReadinessOptions,
@@ -635,6 +656,25 @@ function verifyPrivateC2Evidence(
           path: relativePath,
           message: `C2 evidence ${relativePath} identity does not match ${ref.artifactId}/${ref.artifactType}`,
         });
+      }
+      // Schema validation: parse the artifact through its production schema so a
+      // structurally malformed submission/baseline/agreement with the right
+      // hash + identity fields is still rejected. Hash + identity checks are
+      // necessary but not sufficient — they cannot catch a well-hashed but
+      // schema-invalid payload.
+      const schemaForType = C2_EVIDENCE_SCHEMAS[ref.artifactType];
+      if (schemaForType) {
+        const schemaResult = schemaForType.safeParse(raw);
+        if (!schemaResult.success) {
+          const firstIssue = schemaResult.error.issues[0];
+          const at = firstIssue ? firstIssue.path.join(".") || "(root)" : "(root)";
+          issues.push({
+            code: "c2-evidence-schema-invalid",
+            artifactId: String(manifest.data.artifactId),
+            path: relativePath,
+            message: `C2 evidence ${relativePath} (${ref.artifactType}) failed schema validation at ${at}: ${firstIssue?.message ?? "unknown"}`,
+          });
+        }
       }
     } catch (error) {
       issues.push({

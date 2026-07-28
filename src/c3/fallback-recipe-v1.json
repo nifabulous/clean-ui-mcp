@@ -1,0 +1,139 @@
+{
+  "recipeVersion": "c3-fallback-v1",
+  "description": "Deterministic fallback recipe for the create-ui-spec tool. Pinning field-by-field assembly rules, unavailable model-dependent decisions, allowed warning codes, allowed evidence kinds, and the single offline acceptance criterion. The producer (Task 3) imports this recipe directly via a NodeNext JSON import attribute and emits decisions purely from it — no model is consulted and no corpus claim is invented.",
+  "assemblyRules": {
+    "designDirection": {
+      "strategy": "echo-product-context",
+      "note": "Re-statement of the requester's productContext as the canonical design direction; no invented direction."
+    },
+    "rejectedDefaults": {
+      "strategy": "fixed-empty",
+      "value": [],
+      "note": "The deterministic fallback rejects no defaults by invention; an empty array is the truthful zero-evidence state."
+    },
+    "layoutRegions": {
+      "strategy": "fixed-empty",
+      "value": [],
+      "note": "No layout regions are synthesized without corpus evidence."
+    },
+    "responsiveBehavior": {
+      "strategy": "fixed-empty",
+      "value": [],
+      "note": "No responsive behavior statements are invented."
+    },
+    "componentInventory": {
+      "strategy": "fixed-empty",
+      "value": [],
+      "note": "No components are invented without corpus evidence."
+    },
+    "interactions": {
+      "strategy": "fixed-empty",
+      "value": [],
+      "note": "No interaction statements are invented."
+    },
+    "accessibilityConstraints": {
+      "strategy": "fixed-empty",
+      "value": [],
+      "note": "Accessibility statements are not invented; the producer surfaces a single manual acceptance criterion instead."
+    },
+    "contentVoiceGuidance": {
+      "strategy": "omit",
+      "note": "Voice guidance is omitted unless explicitly supplied by the requester; no editorial voice is invented."
+    },
+    "techniques": {
+      "strategy": "fixed-empty",
+      "value": [],
+      "note": "No stealable techniques are invented without corpus evidence."
+    },
+    "antiPatterns": {
+      "strategy": "fixed-empty",
+      "value": [],
+      "note": "No anti-patterns are invented without corpus evidence."
+    },
+    "frameworkNotes": {
+      "strategy": "omit",
+      "note": "Framework notes are omitted unless the requester supplies an implementationFramework."
+    },
+    "colorTokens": {
+      "strategy": "unavailable",
+      "note": "Color tokens are model-dependent; no implicit color is invented. The producer emits null tokens with editorial authority and lists the decision in unavailableDecisions."
+    },
+    "typographyTokens": {
+      "strategy": "unavailable",
+      "note": "Typography tokens are model-dependent; no implicit typography is invented. The producer emits null tokens with editorial authority and lists the decision in unavailableDecisions."
+    },
+    "motionGuidance": {
+      "strategy": "evidence-unavailable",
+      "value": {
+        "notes": [],
+        "evidenceUnavailable": true
+      },
+      "note": "Motion guidance is model-dependent; the producer truthfully marks evidenceUnavailable=true and lists the decision in unavailableDecisions."
+    },
+    "citedDecisions": {
+      "strategy": "recipe-editorial",
+      "value": [
+        {
+          "field": "designDirection",
+          "authority": "editorial",
+          "evidenceKind": "recipe-system",
+          "note": "The direction echoes the requester's productContext under the deterministic recipe, so its authority is editorial (recipe/system), not corpus-evidence. Corpus observations that were retrieved are recorded in authorityLanes.corpusEvidence and provenance, but they do NOT ground the echo-only direction."
+        }
+      ],
+      "note": "The fallback emits exactly ONE editorial-authority cited decision for designDirection, grounded in the recipe/system evidence (recipeEvidence.id). It does NOT claim corpus-evidence authority for the echoed direction."
+    },
+    "citedReferences": {
+      "strategy": "empty",
+      "value": [],
+      "note": "No references are cited unless the requester supplied explicit public references."
+    }
+  },
+  "unavailableDecisions": [
+    {
+      "field": "colorTokens",
+      "reason": "Color tokens are model-dependent and cannot be produced deterministically; no implicit color is invented."
+    },
+    {
+      "field": "typographyTokens",
+      "reason": "Typography tokens are model-dependent and cannot be produced deterministically; no implicit typography is invented."
+    },
+    {
+      "field": "motion",
+      "reason": "Motion guidance is model-dependent; no motion direction is invented and evidence is marked unavailable."
+    }
+  ],
+  "warningCodes": [
+    "sparseCoverage",
+    "motionEvidenceUnavailable"
+  ],
+  "allowedEvidenceKinds": [
+    "corpus-observation",
+    "public-reference",
+    "recipe-system"
+  ],
+  "recipeEvidence": {
+    "id": "evidence-1",
+    "kind": "recipe-system",
+    "basis": "aggregate",
+    "summary": "Deterministic c3-fallback-v1 recipe",
+    "structuredFacts": {},
+    "note": "The recipe/system evidence item the producer always emits first. It grounds the editorial-authority designDirection cited decision and lives in authorityLanes.editorialGuidance. It is NOT a corpus observation and NOT a user-supplied public reference."
+  },
+  "acceptanceCriteria": [
+    {
+      "id": "fallback-manual-spec-review",
+      "subject": "produced create-ui-spec",
+      "assertion": "exists",
+      "expectedOutcome": "A human operator confirms the produced spec is internally consistent and does not claim corpus or model-derived evidence that was not supplied.",
+      "verifier": "manual",
+      "priority": "must",
+      "evidenceIds": [],
+      "manualSteps": [
+        "Open the produced create-ui-spec and confirm every decision field is either empty/omitted, null with editorial authority, or echoes supplied requester input.",
+        "Confirm colorTokens and typographyTokens are null with editorial authority and no specific color or font values are asserted.",
+        "Confirm motionGuidance.evidenceUnavailable is true and no motion direction is asserted.",
+        "Confirm no corpus ids, source urls, screenshot paths, or product identities appear in the spec."
+      ]
+    }
+  ]
+}

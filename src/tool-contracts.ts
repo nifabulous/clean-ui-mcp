@@ -38,7 +38,7 @@ export const RetrievalModality = z.enum([
 ]);
 export const FallbackReason = z.enum([
   "missing-index", "incompatible-index", "missing-provider-key",
-  "community-edition", "provider-error", "no-image-evidence",
+  "community-edition", "provider-error", "no-image-evidence", "no-results",
 ]);
 
 const ALLOWED_MODE_MODALITY: Record<string, readonly string[]> = {
@@ -475,7 +475,7 @@ const CitedDecision = z.object({
   sourceId: z.string().optional(),
 }).strict();
 
-const DesignSystemIdentity = z.object({
+export const DesignSystemIdentitySchema = z.object({
   status: z.enum(["none", "identified"]),
   registry: z.string().optional(),
   library: z.string().optional(),
@@ -487,6 +487,7 @@ const DesignSystemIdentity = z.object({
   if (val.status === "none" && (val.registry || val.library))
     ctx.addIssue({ code: "custom", message: "status 'none' must not include registry or library", path: ["status"] });
 });
+export type DesignSystemIdentity = z.infer<typeof DesignSystemIdentitySchema>;
 
 const ColorTokens = z.object({
   primary: z.string().min(1),
@@ -545,7 +546,7 @@ const SpecContext = z.object({
   productContext: z.string().trim().min(1),
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
   implementationFramework: z.string().optional(),
-  designSystem: DesignSystemIdentity.optional(),
+  designSystem: DesignSystemIdentitySchema.optional(),
   constraints: z.array(z.string().trim().min(1)).default([]),
 }).strict();
 
@@ -691,7 +692,7 @@ export const CreateUiSpecInput = z.object({
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
   implementationFramework: z.string().optional(),
   serializationFormat: z.enum(["brief", "tokens"]).default("brief"),
-  designSystem: DesignSystemIdentity.optional(),
+  designSystem: DesignSystemIdentitySchema.optional(),
   constraints: z.array(z.string().trim().min(1)).default([]),
 }).strict();
 
@@ -823,7 +824,7 @@ export const TOOL_DESCRIPTORS = [
       { mode: "vector", modality: "text" },
       { mode: "keyword", modality: "text", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
       { mode: "keyword", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
-      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "community-edition", "provider-error"] },
+      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "community-edition", "provider-error", "no-results"] },
       { mode: "none", modality: "none" },
     ],
     allowedAttemptedModes: ["hybrid", "vector", "keyword", "structured-fallback"],
@@ -883,7 +884,7 @@ export const TOOL_DESCRIPTORS = [
     dataSchema: z.object({ results: z.array(SimilarReference) }).strict(),
     retrieval: [
       { mode: "vector", modality: "text" },
-      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "community-edition", "provider-error"] },
+      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "community-edition", "provider-error", "no-results"] },
       { mode: "none", modality: "none" },
     ],
     allowedAttemptedModes: ["vector", "structured-fallback"],
@@ -1056,7 +1057,7 @@ export const TOOL_DESCRIPTORS = [
       { mode: "hybrid", modality: "text" },
       { mode: "keyword", modality: "text", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
       { mode: "keyword", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "provider-error"] },
-      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "community-edition", "provider-error"] },
+      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "community-edition", "provider-error", "no-results"] },
       { mode: "none", modality: "none" },
     ],
     allowedAttemptedModes: ["hybrid", "keyword", "structured-fallback"],
@@ -1354,7 +1355,7 @@ export const TOOL_DESCRIPTORS = [
     dataSchema: CritiqueDataSchema,
     retrieval: [
       { mode: "vector", modality: "image" },
-      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "community-edition", "provider-error", "no-image-evidence"] },
+      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["missing-index", "incompatible-index", "missing-provider-key", "community-edition", "provider-error", "no-image-evidence", "no-results"] },
       { mode: "none", modality: "none" },
     ],
     allowedAttemptedModes: ["vector", "structured-fallback"],

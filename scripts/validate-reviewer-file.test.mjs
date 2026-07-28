@@ -72,6 +72,32 @@ describe("validate-reviewer-file strict mode", () => {
     expect(runValidator(inputPath)).toContain("OK — 40 labels");
   });
 
+  it("accepts a complete submission that includes vocabularyGaps (the --strict --gaps workflow)", () => {
+    // The browser exporter (label.html) always writes a top-level
+    // `vocabularyGaps` array alongside `labels`. The strict production schema
+    // must not reject the exported file for the unknown key — gaps are validated
+    // separately and kept out of the clean label data. This is the documented
+    // `--strict --gaps` workflow; regressing it breaks the reviewer export path.
+    const inputPath = writeFixture({
+      schemaVersion: "1.0",
+      artifactType: "c2-independent-label-submission",
+      artifactId: "c2-independent-label-submission-test-v1",
+      selectionArtifactId: selection.artifactId,
+      selectionSha256,
+      submissionVersion: 1,
+      actorId: "test-human-reviewer",
+      actorKind: "human",
+      reviewerRole: "Gold Label Owner",
+      sealedAt: "2026-07-26T00:00:00.000Z",
+      labels: makeLabels(),
+      vocabularyGaps: [
+        { entryId: selection.entries[0].entryId, field: "components", wanted: "chips", note: "term not in vocabulary" },
+      ],
+    });
+
+    expect(runValidator(inputPath)).toContain("OK — 40 labels");
+  });
+
   it("rejects a browser packet export instead of treating labels as a submission", () => {
     const inputPath = writeFixture({
       labelingMethod: "human",

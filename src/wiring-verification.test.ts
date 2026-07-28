@@ -302,6 +302,14 @@ const ALLOWLIST = new Set<string>([
   // precedent as computeLabelAgreement / assertAgreementMatchesSubmissions /
   // computeManifestSha256 above.
   "validateBaselineCompatibility",
+  // create-ui-spec.ts — the evidence-grounded C3 producer. Its production
+  // caller is the MCP tool registration (deferred to a later milestone per the
+  // C3 plan: "No HTTP server, MCP registration... changed"). It is consumed by
+  // the compiled-runtime probe (scripts/c3-runtime-probe.mjs) via the deferred
+  // dist/create-ui-spec.js import — the same .mjs-via-dist pattern as the C2
+  // manifest symbols above, which the src/*.ts regex scan cannot see. Will be
+  // removed from this allowlist when the MCP tool registration lands.
+  "createUiSpec",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

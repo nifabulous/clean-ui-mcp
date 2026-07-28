@@ -12,9 +12,17 @@ import type { z } from "zod";
 
 export type RetrievalMode = "hybrid" | "vector" | "keyword" | "structured-fallback" | "none";
 export type RetrievalModality = "text" | "image" | "metadata" | "none";
+/**
+ * The shared fallback-reason vocabulary. `no-results` is the truthful reason
+ * for a structured-fallback where automatic retrieval SUCCEEDED but returned
+ * zero matches (nothing was missing — the index was queried and simply had no
+ * hits). The other reasons describe an actual retrieval failure (missing
+ * index, incompatible index, missing provider key, community edition, provider
+ * error, no image evidence).
+ */
 export type FallbackReason =
   | "missing-index" | "incompatible-index" | "missing-provider-key"
-  | "community-edition" | "provider-error" | "no-image-evidence";
+  | "community-edition" | "provider-error" | "no-image-evidence" | "no-results";
 
 export interface RetrievalPolicyState {
   readonly mode: RetrievalMode;
@@ -99,10 +107,14 @@ export function validateEnvelopeRetrieval(
 
   // Success + fallback: requires positive resultCount, a valid reason, and attempted modes
   if (status === "ok" && retrieval.fallbackUsed) {
-    if (retrieval.resultCount === 0) {
+    // Zero-result fallback is allowed ONLY with reason "no-results" — the
+    // honest semantic for "the query succeeded and returned an empty set" (e.g.
+    // C3's keyword-only retrieval that found no matches). For every other
+    // reason a zero-result fallback is still a failed recovery, not a success.
+    if (retrieval.resultCount === 0 && retrieval.fallbackReason !== "no-results") {
       ctx.addIssue({
         code: "custom",
-        message: "fallback with zero results is not a successful fallback",
+        message: "fallback with zero results is not a successful fallback (use fallbackReason \"no-results\" for an honest empty-set state)",
         path: ["retrieval", "resultCount"],
       });
     }

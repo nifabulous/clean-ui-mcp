@@ -138,6 +138,18 @@ if (args.json) {
       console.log(`  [${issue.code}]${loc ? ` ${loc}` : ""}: ${issue.message}`);
     }
   }
+
+  // Non-blocking caveats: surfaced so the closure claim is honest, but they do
+  // not affect the exit code (the validator cannot enforce what they describe).
+  const warnings = result.warnings ?? [];
+  if (warnings.length > 0) {
+    console.log("");
+    console.log(`${warnings.length} caveat(s) (non-blocking):`);
+    for (const w of warnings) {
+      const loc = [w.artifactId, w.path].filter(Boolean).join(" @ ");
+      console.log(`  [${w.code}]${loc ? ` ${loc}` : ""}: ${w.message}`);
+    }
+  }
 }
 
 process.exit(result.ok ? 0 : 1);

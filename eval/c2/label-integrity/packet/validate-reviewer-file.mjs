@@ -183,7 +183,14 @@ const ENVELOPE_FIELDS = [
 ];
 let strictSubmission = null;
 if (strictMode) {
-  const strictResult = C2IndependentLabelSubmissionSchema.safeParse(raw);
+  // `vocabularyGaps` is a sibling of `labels` in the exported file (see
+  // label.html), kept out of the clean label data and validated separately
+  // below. The production submission schema is strict, so it would reject the
+  // unknown `vocabularyGaps` key before the gap-extraction step ever runs —
+  // breaking the documented `--strict --gaps` workflow. Strip it here and let
+  // the dedicated gap validation below handle it.
+  const { vocabularyGaps: _gapsForSeparateValidation, ...strictInput } = raw;
+  const strictResult = C2IndependentLabelSubmissionSchema.safeParse(strictInput);
   if (!strictResult.success) {
     for (const issue of strictResult.error.issues) {
       const at = issue.path.join(".") || "(root)";

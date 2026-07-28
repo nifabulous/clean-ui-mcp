@@ -238,3 +238,50 @@ of the historical record the validator can re-verify.
 attestations binding a decision to a time, or a countersigned timestamp
 authority. All require an out-of-band provenance source, which is why a
 content-only validator cannot close them.
+
+## Approval retraction vocabulary (the ledger cannot say "withdrawn")
+
+**What:** Give the readiness governance ledger a way to record that a prior
+approval is retracted — by whom, when, and why — without editing or deleting the
+retracted record.
+
+**Why:** On 2026-07-28 the repository owner decided to withdraw
+`c2-gold-reviewer-gold-v2` and `c2-qa-reviewer-qa-v2` from
+`checkpoint-approvals-v5.json` (their `decidedAt` predates the target they
+bind). The withdrawal could not be represented:
+
+- `validateLedgerAppendOnly` (`src/readiness/contracts.ts`) enforces append-only
+  as an unchanged PREFIX, so appending a `v6` ledger that omits the two records
+  emits `ledger-approval-deleted` twice. A bad record can never leave the chain.
+- `decision` (`src/readiness/contracts.ts:122`) admits only
+  `"approved" | "rejected"`. "Rejected" is wrong semantics — the reviewers did
+  not reject the target, they never decided on it.
+
+So the withdrawal is currently *implied by a permanently failing invariant*
+(`ledger-supersession-not-later` blocks, C2 reports open) rather than stated. An
+operator reading the ledger sees two approved records and a red gate, with no
+record of the retraction decision or its reason.
+
+**Scope when triggered:** decide whether retraction is a new record kind in the
+approvals ledger, a separate artifact type, or a field on a successor ledger, and
+justify it against the prefix rule; then teach `validateApprovalsAndCheckpoint`
+(`src/readiness/validator.ts`) that a retracted approval cannot contribute to
+closure. A recorded retraction should become the ONLY thing that can clear a
+`ledger-supersession-not-later` finding. That check is unconditional and
+blocking today: an earlier revision demoted it to a warning once the defective
+record had itself been superseded, and that was removed as fail-open — a
+fabricated record dated one second later was enough to flip the real gate to
+`ok: true` with `issues: []` and C2 closed.
+
+**Consequence until this lands:** because `validateLedgerAppendOnly` keeps the
+defective records in the chain forever and the finding is unconditional, the
+readiness gate stays `ok: false` **permanently** — real reviewer decisions on
+`cf55fee0…` are necessary but NOT sufficient to make it green, and C2 cannot be
+closed on a clean gate. That is the accepted tradeoff, decided by the repository
+owner on 2026-07-28: a durable, unfakeable record that a governance defect
+occurred is worth more than a remediable gate.
+
+**Do not:** fabricate an approval, timestamp, actor, or rationale to close the
+gap; retraction is a real recorded act. And do not reintroduce a supersession- or
+severity-based escape hatch in `validateApprovalsAndCheckpoint` to restore
+remediability — the retraction record is the mechanism.

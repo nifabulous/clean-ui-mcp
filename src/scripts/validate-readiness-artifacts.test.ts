@@ -1971,6 +1971,105 @@ describe("approval temporal provenance", () => {
     expect(result.checkpointStatus.C0).toBe("closed");
   });
 
+  it("still blocks a temporal defect after the defective approval is itself superseded", () => {
+    // THIS IS THE REGRESSION GUARD FOR AN EXPLOIT THAT WAS REPRODUCED
+    // END-TO-END. An earlier revision demoted this finding to a non-blocking
+    // warning once the defective record had been superseded. Because a
+    // superseding record only has to be strictly LATER than the record it
+    // corrects — one millisecond suffices — and because `createdAt` is
+    // self-declared (so the sibling invariant
+    // `approved-artifact-created-after-decision` cannot backstop a stale
+    // `createdAt`), appending one fabricated record dated a second after the
+    // bad one flipped the real gate from `ok: false` to `ok: true` with
+    // `issues: []` and the checkpoint reported closed.
+    //
+    // The finding is therefore UNCONDITIONAL: a temporally-impossible
+    // supersession blocks forever, whether or not something later supersedes
+    // it. The permanent, unfakeable record that a governance defect occurred is
+    // the entire value of this invariant. Clearing it requires an explicit
+    // retraction act — see TODOS.md § "Approval retraction vocabulary (the
+    // ledger cannot say \"withdrawn\")".
+    fixture = buildValidGraph({ withApprovals: true });
+    const v1 = readJson<{ approvals: Array<Record<string, unknown>> }>(fixture.ledgerPath!);
+    const prior = v1.approvals.find((a) => a.approvalId === "c0-repo-maintainer")!;
+    writeLedgerV2(fixture, [
+      ...v1.approvals,
+      {
+        // Defective: copies the superseded record's decidedAt verbatim (the
+        // fixture's c0-repo-maintainer is decided at 2026-07-14T10:00:00Z).
+        // This is the exact shape of the two C2 v2 records in v5.
+        ...prior,
+        approvalId: "c0-repo-maintainer-v2",
+        supersedesApprovalId: "c0-repo-maintainer",
+        decidedAt: "2026-07-14T10:00:00Z",
+      },
+      {
+        // The would-be remediation: structurally valid, strictly later than the
+        // record it supersedes. It does NOT clear the defect.
+        ...prior,
+        approvalId: "c0-repo-maintainer-v3",
+        supersedesApprovalId: "c0-repo-maintainer-v2",
+        decidedAt: "2026-07-14T12:00:00Z",
+      },
+    ]);
+    const result = validate(fixture);
+
+    // The defect stays on the BLOCKING channel, naming the defective record.
+    const flagged = result.issues.filter((i) => i.code === "ledger-supersession-not-later");
+    expect(flagged.length).toBe(1);
+    expect(flagged[0]!.artifactId).toBe("c0-repo-maintainer-v2");
+    expect(result.ok).toBe(false);
+
+    // Nothing is routed to the non-blocking channel.
+    expect(
+      (result.warnings ?? []).filter((w) => w.code === "ledger-supersession-not-later"),
+    ).toEqual([]);
+  });
+
+  it("blocks a one-second-later fabricated remediation (the reproduced exploit)", () => {
+    // Minimised form of the exploit: the remediating record is dated exactly
+    // ONE SECOND after the defective one, which is all the strictly-later rule
+    // demands. Under the demotion this yielded ok: true / issues: [] / the
+    // checkpoint closed. A 2-entry chain cannot express this shape — the
+    // defective record must be superseded for the demotion branch to be
+    // reachable at all — so the 3-record chain is the minimum that catches it.
+    fixture = buildValidGraph({ withApprovals: true });
+    const v1 = readJson<{ approvals: Array<Record<string, unknown>> }>(fixture.ledgerPath!);
+    const prior = v1.approvals.find((a) => a.approvalId === "c0-repo-maintainer")!;
+    writeLedgerV2(fixture, [
+      ...v1.approvals,
+      {
+        ...prior,
+        approvalId: "c0-repo-maintainer-v2",
+        supersedesApprovalId: "c0-repo-maintainer",
+        decidedAt: "2026-07-14T10:00:00Z",
+      },
+      {
+        ...prior,
+        approvalId: "c0-repo-maintainer-v3",
+        supersedesApprovalId: "c0-repo-maintainer-v2",
+        decidedAt: "2026-07-14T10:00:01Z", // one second — the minimum bump
+      },
+    ]);
+    const result = validate(fixture);
+
+    expect(result.ok).toBe(false);
+    expect(
+      result.issues
+        .filter((i) => i.code === "ledger-supersession-not-later")
+        .map((i) => i.artifactId),
+    ).toEqual(["c0-repo-maintainer-v2"]);
+
+    // Documented residual, pinned so it is intentional rather than accidental:
+    // the taint lands on the defective record, and checkpoint CLOSURE is
+    // computed over the EFFECTIVE approval set, so a superseded defect leaves
+    // `checkpointStatus` reading "closed" while `ok` — the value CI and the
+    // review hooks consume — is false. Making the checkpoint report "open" too
+    // would require tainting the defective record's effective descendants; see
+    // the block comment at the check in src/readiness/validator.ts.
+    expect(result.checkpointStatus.C0).toBe("closed");
+  });
+
   it("rejects an approval decided before an artifact it binds was created", () => {
     fixture = buildValidGraph({ withApprovals: true });
     mutateJson<{ approvals: Array<{ decidedAt: string }> }>(fixture.ledgerPath!, (d) => {

@@ -934,8 +934,11 @@ function validateApprovalsAndCheckpoint(
   };
 
   // NOTE ON TAINTING: `ledger-supersession-not-later` (the temporal check
-  // below) taints its approval via `noteApprovalIssue`, so the checkpoint cannot
-  // close on it. The two structural `ledger-invalid-supersession` pushes do NOT
+  // below) always pushes a BLOCKING issue and always taints its approval via
+  // `noteApprovalIssue`, whether or not that approval has itself been
+  // superseded — see the block comment at the check for why the finding is
+  // unconditional and what the accepted consequence is.
+  // The two structural `ledger-invalid-supersession` pushes do NOT
   // taint — pre-existing behaviour, deliberately left unchanged here. They make
   // `ok` false but not `checkpointStatus` open. Tracked as hole 1 of TODOS.md
   // § "Approval provenance holes the content-only validator cannot close",
@@ -956,6 +959,52 @@ function validateApprovalsAndCheckpoint(
         // predates) the superseded `decidedAt` while binding a different
         // target claims a decision was taken before the thing it decides
         // existed — ledger position alone cannot detect that.
+        //
+        // THE FINDING IS UNCONDITIONAL AND BLOCKING — DO NOT SCOPE IT.
+        //
+        // An earlier revision demoted this to a non-blocking warning once the
+        // defective record had itself been superseded, so that a later valid
+        // decision could restore a green gate. That was a fail-open hole and was
+        // reproduced end-to-end: a superseding record only has to be strictly
+        // LATER than the record it corrects (one millisecond suffices), and
+        // `createdAt` is self-declared, so the sibling invariant
+        // `approved-artifact-created-after-decision` cannot backstop a stale
+        // `createdAt` (both `index-c1-v3` and `c2-evidence-v1` declare
+        // 2026-07-26T20:15:01.000Z for bytes first written 2026-07-28).
+        // Appending one fabricated record dated a second after the bad one
+        // flipped the real gate from `ok: false` to `ok: true`, `issues: []`,
+        // C2 closed — the defect surviving only as a warning. Reducing the cost
+        // of hiding a governance defect from "impossible" to "append one record"
+        // destroys the whole value of the invariant, which is to be a durable,
+        // unfakeable record that something went wrong.
+        //
+        // THE CONSEQUENCE IS ACCEPTED, NOT WORKED AROUND. `validateLedgerAppendOnly`
+        // (contracts.ts) requires every prior approval to survive as an unchanged
+        // PREFIX of its successor ledger, so a defective record can never be
+        // edited or dropped from the chain — appending a ledger that omits it
+        // produces `ledger-approval-deleted`. An unconditional block therefore
+        // makes `ok: false` PERMANENT: the gate stays red even after a
+        // legitimate future re-approval, and the affected checkpoint cannot be
+        // closed on a clean gate until an explicit retraction mechanism exists.
+        // The repository owner decided that tradeoff deliberately. Clearing this
+        // finding requires the retraction vocabulary tracked in TODOS.md
+        // § "Approval retraction vocabulary (the ledger cannot say
+        // \"withdrawn\")" — a recorded act naming who retracted what, when, and
+        // why. Do NOT reintroduce an escape hatch here to restore remediability.
+        //
+        // Residual, deliberately in scope only as documented: the taint below
+        // lands on the defective record itself, and checkpoint CLOSURE is
+        // computed over the effective approval set (`activeApprovals`). So when
+        // the defective record has been superseded, `ok` is false (the gate CI
+        // and the review hooks consume) while `checkpointStatus` for that
+        // checkpoint may still read "closed" on the strength of the effective
+        // successor. Today's two C2 records are effective, so both taint and
+        // C2 reports "open".
+        //
+        // The sibling invariant `approved-artifact-created-after-decision`
+        // (`verifyApprovalArtifactTimestamps`) is unconditional in the same way,
+        // for the same reason. The two are deliberately consistent; if you are
+        // about to scope either one, read this comment first.
         const priorDecidedAt = Date.parse(prior.decidedAt);
         const decidedAt = Date.parse(approval.decidedAt);
         if (
@@ -968,9 +1017,8 @@ function validateApprovalsAndCheckpoint(
             artifactId: approval.approvalId,
             message: `approval ${approval.approvalId} decidedAt (${approval.decidedAt}) must be strictly later than superseded approval ${prior.approvalId} decidedAt (${prior.decidedAt})`,
           });
-          // Taint the SUPERSEDING approval (the active one). A provenance-
-          // invalid decision record cannot contribute to closure, so the
-          // checkpoint it would have closed reports "open".
+          // Taint the defective record. While it is still effective this is what
+          // a checkpoint would close on, so the checkpoint reports "open".
           noteApprovalIssue(approval.approvalId, "ledger-supersession-not-later");
         }
       }
@@ -1295,10 +1343,13 @@ function validateApprovalsAndCheckpoint(
  *   is not hypothetical: it is the shape of the very defect that motivated this
  *   invariant (`c2-*-v2` in `checkpoint-approvals-v5.json` bind bytes first
  *   written on 2026-07-28 while both artifacts still declare
- *   `createdAt: 2026-07-26T20:15:01.000Z`). That defect is caught by
- *   `ledger-supersession-not-later`, NOT by this check. An approval binding
- *   freshly-rewritten bytes with an unchanged `createdAt` and no supersession
- *   relation is caught by nothing here.
+ *   `createdAt: 2026-07-26T20:15:01.000Z`). That defect is caught ONLY by
+ *   `ledger-supersession-not-later`, NOT by this check — which is precisely why
+ *   that check is unconditional and blocking for every approval, superseded or
+ *   not: it is the sole detector of this defect class, so a demotion there is
+ *   backstopped by nothing here. An approval binding freshly-rewritten bytes
+ *   with an unchanged `createdAt` and no supersession relation is caught by
+ *   nothing at all.
  * - **`checkpointTargetSha256` provenance.** The origin time of a target hash is
  *   not derivable from artifact content at all; a target hash carries no
  *   timestamp and the artifacts it is computed over need not have been created
@@ -1353,6 +1404,31 @@ function validateApprovalsAndCheckpoint(
  * a historical-record gap, not a closure gap. Tracked as hole 3 of TODOS.md
  * § "Approval provenance holes the content-only validator cannot close", which
  * links back to this docstring.
+ *
+ * ## Supersession scoping — what is and is not scoped, and why
+ *
+ * Two different decisions live in this function and they are deliberately
+ * asymmetric:
+ *
+ * - `approved-artifact-created-after-decision` is UNCONDITIONAL. It runs over
+ *   every approval, superseded or not, and always blocks and always taints.
+ *   This matches its sibling `ledger-supersession-not-later` in
+ *   `validateApprovalsAndCheckpoint` exactly: both are temporal-impossibility
+ *   findings, both are permanent because `validateLedgerAppendOnly` keeps every
+ *   record in the chain forever, and in both cases the durable, unfakeable
+ *   record that a governance defect occurred IS the point. A supersession-based
+ *   demotion was tried on the sibling and proved exploitable — one fabricated
+ *   record dated a millisecond later suffices to hide the defect. Do not
+ *   reintroduce it on either check. Clearing such a finding requires the
+ *   retraction vocabulary tracked in TODOS.md § "Approval retraction vocabulary
+ *   (the ledger cannot say \"withdrawn\")".
+ * - `approved-artifact-version-unresolved` (via `reportUnresolved` below) IS
+ *   scoped to active approvals. That is not a severity demotion: it is a
+ *   detectability limit. The check needs the exact bytes the approval bound in
+ *   order to say anything at all, and for a superseded approval those bytes are
+ *   gone from the on-disk graph — there is no version-correct artifact to
+ *   compare against, so the finding cannot be computed rather than being
+ *   computed and then softened.
  *
  * A violation of either invariant taints the approval via `note`, so a
  * checkpoint cannot report "closed" on the strength of an approval carrying a

@@ -483,7 +483,13 @@ All tools are read-only over the corpus, organized into three tiers:
 | Tool | Purpose |
 |---|---|
 | `recommend_ui_direction(productContext, count?, category?, qualityTier?, platform?, framework?)` | "Design advisor." Embeds your description, finds relevant entries with product diversity, synthesizes a direction. Deterministic — no LLM call. |
-| `generate_design_prompt(ids, framework?, context?)` | Synthesize a design brief across 2-5 specific ids. Paste-ready color tokens, typography, layout, voice, techniques, anti-patterns. `framework:"tokens"` for JSON. |
+| `create_ui_spec(productContext, referenceIds?, platform?, implementationFramework?, designSystem?, constraints?, target?, motionIntents?, outputFormat?)` | Evidence-grounded UI spec: layout regions, color/typography tokens, component inventory, motion guidance, acceptance criteria with named verifiers, provenance. `referenceIds` (max 5) grounds it in entries you already know; omit it and the tool retrieves. Returns no corpus content, path, url or product identity — grounding appears only as opaque `ref-<sha256>` citations. `outputFormat:"json"` for JSON. |
+
+> **Migration:** `generate_design_prompt` was a public tool until the C3 slice and is now
+> deregistered — `createServer()` does not register it and a `tools/call` for it is rejected.
+> `create_ui_spec` replaces it; the public count stays 14. `generate_design_prompt(ids)` becomes
+> `create_ui_spec({ productContext, referenceIds: ids })`, with `productContext` now required.
+> The name survives in `LEGACY_TO_BETA_MAP` as a migration row only.
 
 ### Aggregation
 
@@ -719,7 +725,7 @@ clean-ui-mcp/
 │   ├── schema.ts               # Zod schema (the data model)
 │   ├── corpus.ts               # load / search / similar / compare
 │   ├── server.ts               # MCP server: 14 tools
-│   ├── design-prompt.ts        # generate_design_prompt synthesis
+│   ├── design-prompt.ts        # design-brief synthesis (module-private since C3)
 │   ├── recommend.ts            # recommend_ui_direction synthesis
 │   ├── aggregations.ts         # anti-patterns / palettes / techniques / browse
 │   ├── embeddings.ts           # Voyage AI client + cosine + index I/O

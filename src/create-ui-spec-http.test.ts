@@ -49,7 +49,7 @@ import {
 import { parseDesignHandoff } from "./design-target-contracts.js";
 import { renderDesignHandoffMarkdown, renderDesignHandoffJson } from "./design-handoff.js";
 import { sha256Hex } from "./readiness/contracts.js";
-import { ERROR_RETRYABLE } from "./tool-contracts.js";
+import { ERROR_RETRYABLE, ToolResultSchemas } from "./tool-contracts.js";
 import {
   createUiSpecIntegrityRefusalError,
   createUiSpecTransportError,
@@ -693,56 +693,56 @@ describe("create_ui_spec HTTP reference/evidence ID-shape gate", () => {
 // PROFILES`. It recomputes every hash and rendering from the POISONED spec, so
 // the returned envelope passes `parseDesignArtifactEnvelope` end to end.
 // ---------------------------------------------------------------------------
-describe("create_ui_spec — a self-consistent poisoned envelope (m3(r4))", () => {
-  /**
-   * Rebuild every hash-derived and rendered field of `envelope` around a
-   * (possibly poisoned) spec, using the SAME exported building blocks
-   * `parseDesignArtifactEnvelope` uses to verify them (design-target-
-   * contracts.ts's `parseDesignHandoff`, design-handoff.ts's two renderers,
-   * and create-ui-spec-contracts.ts's `buildSemanticSpecInput` /
-   * `buildArtifactIdentityInput` / `sha256Canonical`). The result is a
-   * self-consistent envelope: it passes `parseDesignArtifactEnvelope` even
-   * though `spec` may carry a poisoned leaf, because every stored hash and
-   * rendering was recomputed FROM that same poisoned spec — exactly the
-   * producer-regression scenario m3(r4) names.
-   */
-  function rebuildEnvelopeAroundSpec(
-    envelope: DesignArtifactEnvelope,
-    poisonSpec: (spec: DesignArtifactEnvelope["spec"]) => DesignArtifactEnvelope["spec"],
-  ): DesignArtifactEnvelope {
-    const spec = poisonSpec(envelope.spec);
-    const targetProfile = CANONICAL_WEB_TARGET_PROFILES[envelope.handoff.target];
-    const handoff = parseDesignHandoff({
-      spec,
-      target: targetProfile,
-      motionIntents: envelope.handoff.motionIntents,
-      generatedAt: envelope.generatedAt,
-    });
-    const designMarkdown = renderDesignHandoffMarkdown(handoff);
-    const designJson = renderDesignHandoffJson(handoff);
-    const semanticSpecSha256 = sha256Canonical(buildSemanticSpecInput(spec));
-    const artifactId = `uispec-${sha256Canonical(
-      buildArtifactIdentityInput({
-        producerVersion: envelope.producerVersion,
-        assemblyRulesSha256: envelope.assemblyRulesSha256,
-        semanticSpecSha256,
-        target: envelope.handoff.target,
-        motionIntents: envelope.handoff.motionIntents,
-      }),
-    )}`;
-    return {
-      ...envelope,
-      spec,
-      designMarkdown,
-      designJson,
-      specSha256: sha256Canonical(spec),
+/**
+ * Rebuild every hash-derived and rendered field of `envelope` around a
+ * (possibly poisoned) spec, using the SAME exported building blocks
+ * `parseDesignArtifactEnvelope` uses to verify them (design-target-
+ * contracts.ts's `parseDesignHandoff`, design-handoff.ts's two renderers,
+ * and create-ui-spec-contracts.ts's `buildSemanticSpecInput` /
+ * `buildArtifactIdentityInput` / `sha256Canonical`). The result is a
+ * self-consistent envelope: it passes `parseDesignArtifactEnvelope` even
+ * though `spec` may carry a poisoned leaf, because every stored hash and
+ * rendering was recomputed FROM that same poisoned spec — exactly the
+ * producer-regression scenario m3(r4) names.
+ */
+function rebuildEnvelopeAroundSpec(
+  envelope: DesignArtifactEnvelope,
+  poisonSpec: (spec: DesignArtifactEnvelope["spec"]) => DesignArtifactEnvelope["spec"],
+): DesignArtifactEnvelope {
+  const spec = poisonSpec(envelope.spec);
+  const targetProfile = CANONICAL_WEB_TARGET_PROFILES[envelope.handoff.target];
+  const handoff = parseDesignHandoff({
+    spec,
+    target: targetProfile,
+    motionIntents: envelope.handoff.motionIntents,
+    generatedAt: envelope.generatedAt,
+  });
+  const designMarkdown = renderDesignHandoffMarkdown(handoff);
+  const designJson = renderDesignHandoffJson(handoff);
+  const semanticSpecSha256 = sha256Canonical(buildSemanticSpecInput(spec));
+  const artifactId = `uispec-${sha256Canonical(
+    buildArtifactIdentityInput({
+      producerVersion: envelope.producerVersion,
+      assemblyRulesSha256: envelope.assemblyRulesSha256,
       semanticSpecSha256,
-      designMarkdownSha256: sha256Hex(Buffer.from(designMarkdown, "utf-8")),
-      designJsonSha256: sha256Hex(Buffer.from(designJson, "utf-8")),
-      artifactId,
-    };
-  }
+      target: envelope.handoff.target,
+      motionIntents: envelope.handoff.motionIntents,
+    }),
+  )}`;
+  return {
+    ...envelope,
+    spec,
+    designMarkdown,
+    designJson,
+    specSha256: sha256Canonical(spec),
+    semanticSpecSha256,
+    designMarkdownSha256: sha256Hex(Buffer.from(designMarkdown, "utf-8")),
+    designJsonSha256: sha256Hex(Buffer.from(designJson, "utf-8")),
+    artifactId,
+  };
+}
 
+describe("create_ui_spec — a self-consistent poisoned envelope (m3(r4))", () => {
   it("sanity check: the rebuild helper reproduces the UNPOISONED envelope byte-for-byte", async () => {
     // Proves the helper is a faithful reconstruction, not a stand-in that
     // happens to satisfy the schema — before trusting it to build a poisoned
@@ -783,4 +783,163 @@ describe("create_ui_spec — a self-consistent poisoned envelope (m3(r4))", () =
       /create_ui_spec result failed the contract gate/,
     );
   });
+});
+
+// ---------------------------------------------------------------------------
+// I3(r5): WHICH ENVELOPE CHECKS THIS TRANSPORT DOES NOT PERFORM.
+//
+// The `create_ui_spec` descriptor's `refineEnvelope` block (tool-contracts.ts)
+// is invoked only from `makeEnvelope`, reachable only through `parseToolResult`
+// — i.e. only on the MCP path. This adapter imports exactly two symbols from
+// that module (`CreateUiSpecInput`, `findUnsafeCreateUiSpecLeaves`) and never
+// calls it. The ID-SHAPE subset of that block is recovered here by the leaf
+// gate (the Task-5 fix). SIX CITATION-CONSISTENCY CHECKS ARE NOT, even though
+// every input they read is present in the body this route serves.
+//
+// This block pins the asymmetry rather than asserting parity that does not
+// exist. For each of the six rules it proves three things on the SAME poison:
+//
+//   1. CONTROL — `parseDesignArtifactEnvelope` accepts the poisoned envelope on
+//      its own, so no other HTTP screen would have caught it anyway. Without
+//      this the rest would prove nothing.
+//   2. MCP REFUSES, and refuses for THE NAMED RULE — asserted against
+//      `ToolResultSchemas.create_ui_spec`, the same schema object
+//      `parseToolResult` dispatches to (create-ui-spec-mcp.ts), with the exact
+//      message, not a generic gate failure. Each poison is constructed to leave
+//      every OTHER rule satisfied, so the message list is exactly one entry.
+//   3. HTTP SERVES IT — `handleCreateUiSpecHttp` resolves, i.e. a dangling or
+//      duplicate citation link reaches the operator with 200.
+//
+// WHAT IS AND IS NOT AT STAKE. No private data escapes: the leaf gate still
+// enforces `ref-<sha256>` shape on all eight reference positions and
+// `containsPrivateMarker` still sweeps the whole body — both poisoned refs
+// below are well-formed `ref-` digests precisely so the leaf gate cannot be
+// the thing that catches them. What escapes is PROVENANCE INTEGRITY: a
+// technique or component that cites a source the artifact does not cite.
+//
+// IF A FUTURE CHANGE CLOSES THE GAP, THESE ASSERTIONS MUST BE INVERTED, NOT
+// DELETED. `expect(...).resolves` becoming a rejection is the signal that HTTP
+// started validating; flip it to a refusal assertion and update the docblock in
+// create-ui-spec-http.ts. Deleting the block would remove the only record that
+// the transports ever differed here.
+// ---------------------------------------------------------------------------
+describe("create_ui_spec HTTP — the six refineEnvelope citation checks are MCP-only (I3(r5))", () => {
+  /** Well-formed public reference digests: correct SHAPE, wrong MEMBERSHIP. */
+  const CITED_REF = `ref-${"a".repeat(64)}`;
+  const UNCITED_REF = `ref-${"b".repeat(64)}`;
+
+  type SpecT = DesignArtifactEnvelope["spec"];
+
+  /**
+   * One row per `refineEnvelope` rule that does not run on this transport. Each
+   * poison changes exactly what its rule reads and leaves the other five rules
+   * satisfied, so `message` below is the COMPLETE issue list on MCP — that is
+   * what makes "this specific check is the one missing here" a measurement
+   * rather than a claim.
+   */
+  const MCP_ONLY_CITATION_CHECKS: ReadonlyArray<{
+    readonly message: string;
+    readonly poison: (spec: SpecT) => SpecT;
+  }> = [
+    {
+      message: "citedReferences must be unique",
+      poison: (spec) => ({
+        ...spec,
+        citedReferences: [CITED_REF, CITED_REF],
+        provenance: { ...spec.provenance, sourceReferences: [CITED_REF] },
+      }),
+    },
+    {
+      message: "provenance.sourceReferences must be unique",
+      poison: (spec) => ({
+        ...spec,
+        citedReferences: [CITED_REF],
+        provenance: { ...spec.provenance, sourceReferences: [CITED_REF, CITED_REF] },
+      }),
+    },
+    {
+      message: "provenance.sourceReferences must exactly match citedReferences",
+      poison: (spec) => ({
+        ...spec,
+        citedReferences: [CITED_REF],
+        provenance: { ...spec.provenance, sourceReferences: [] },
+      }),
+    },
+    {
+      message: "techniques[].sourceIds[] not in citedReferences (value withheld)",
+      poison: (spec) => ({
+        ...spec,
+        citedReferences: [CITED_REF],
+        provenance: { ...spec.provenance, sourceReferences: [CITED_REF] },
+        techniques: [{ text: "8pt baseline grid across all regions", sourceIds: [UNCITED_REF] }],
+      }),
+    },
+    {
+      message: "antiPatterns[].sourceIds[] not in citedReferences (value withheld)",
+      poison: (spec) => ({
+        ...spec,
+        citedReferences: [CITED_REF],
+        provenance: { ...spec.provenance, sourceReferences: [CITED_REF] },
+        antiPatterns: [{ text: "low-contrast secondary text", sourceIds: [UNCITED_REF] }],
+      }),
+    },
+    {
+      message: "componentInventory[].sourceId not in citedReferences (value withheld)",
+      poison: (spec) => ({
+        ...spec,
+        citedReferences: [CITED_REF],
+        provenance: { ...spec.provenance, sourceReferences: [CITED_REF] },
+        componentInventory: [{ name: "MetricCard", pattern: "surface", sourceId: UNCITED_REF }],
+      }),
+    },
+  ];
+
+  it.each(MCP_ONLY_CITATION_CHECKS.map((c) => [c.message, c] as const))(
+    "MCP refuses %s and HTTP serves it",
+    async (_message, check) => {
+      const corpus = [fixtureEntry("internal-1", "product-Alpha")];
+
+      // Baseline production, then the MCP envelope for the same request. Both
+      // are UNPOISONED here; the poison is applied to each below.
+      await handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus));
+      const produced = spyState.produced[0]!.envelope;
+      const mcpResult = await handleCreateUiSpec(validBody(), makeReader(corpus, corpus));
+      const mcpEnvelope = (mcpResult as { structuredContent: Record<string, unknown> })
+        .structuredContent;
+
+      // ── 2. MCP refuses, for the named rule ────────────────────────────────
+      // `data` is the spec (identical key set), so the same poison drives both
+      // transports. `referenceIds` is re-derived because the envelope-level
+      // rule "referenceIds must exactly match data IDs (as sets)" is a
+      // DIFFERENT check that DOES have an HTTP counterpart — leaving it stale
+      // would let that unrelated rule supply the refusal and make this test a
+      // fiction.
+      const poisonedData = check.poison(
+        mcpEnvelope.data as SpecT,
+      ) as unknown as Record<string, unknown>;
+      const parsedMcp = ToolResultSchemas.create_ui_spec.safeParse({
+        ...mcpEnvelope,
+        data: poisonedData,
+        referenceIds: [...new Set(poisonedData.citedReferences as string[])],
+      });
+      expect(parsedMcp.success).toBe(false);
+      expect(
+        parsedMcp.success ? [] : parsedMcp.error.issues.map((i) => i.message),
+      ).toEqual([check.message]);
+
+      // ── 1. CONTROL: HTTP's own envelope screen accepts the poison ─────────
+      const poisonedEnvelope = rebuildEnvelopeAroundSpec(produced, check.poison);
+      expect(() => parseDesignArtifactEnvelope(poisonedEnvelope)).not.toThrow();
+
+      // ── 3. HTTP serves it ─────────────────────────────────────────────────
+      spyState.mutate = (result) => ({ ...result, envelope: poisonedEnvelope });
+      const served = await handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus));
+      expect(served.status).toBe(200);
+      // And the defective citation graph really is in the BYTES the route
+      // writes, not merely tolerated by an in-memory object: the served spec is
+      // the poisoned spec, field for field.
+      const servedSpec = (JSON.parse(served.body) as DesignArtifactEnvelope).spec;
+      expect(servedSpec).toEqual(poisonedEnvelope.spec);
+    },
+  );
 });

@@ -2341,7 +2341,7 @@ page('settings','Settings','transport · tools · maintenance', function(){
     ['compare_ui_examples','comparison table across dimensions'],
     ['list_categories','category index + counts'],
     ['list_style_tags','style tag index + counts'],
-    ['generate_design_prompt','synthesize a design brief across entries'],
+    ['create_ui_spec','evidence-grounded UI spec from a product description'],
     ['recommend_ui_direction','design advisor from a description'],
     ['get_anti_patterns','consensus mistakes to avoid'],
     ['get_color_palette','paste-ready color token sets'],

@@ -37,6 +37,51 @@
  *     raw corpus id in `spec.citedReferences` would have been refused over MCP
  *     and served with 200 here.
  *
+ * THIS ENUMERATION IS NOT COMPLETE, AND HERE IS EXACTLY WHAT IS MISSING. The two
+ * bullets above are the screens this adapter RUNS. They are not the whole
+ * `create_ui_spec` contract. The descriptor's `refineEnvelope` block
+ * (tool-contracts.ts) is invoked only from `makeEnvelope`, reachable only through
+ * `parseToolResult` — so it runs on the MCP path and on no screen here. Its
+ * ID-SHAPE subset IS recovered, by the leaf gate above; its CITATION-CONSISTENCY
+ * subset is not, and every input those six rules read is present in the body this
+ * route serves:
+ *
+ *   1. `citedReferences must be unique`
+ *   2. `techniques[].sourceIds[]` must be members of `citedReferences`
+ *   3. `antiPatterns[].sourceIds[]` must be members of `citedReferences`
+ *   4. `componentInventory[].sourceId` must be a member of `citedReferences`
+ *   5. `provenance.sourceReferences must be unique`
+ *   6. `provenance.sourceReferences` must equal `citedReferences` as sets
+ *
+ * `UiSpec.superRefine` DOES reach this transport (the envelope declares
+ * `spec: UiSpec`), but it covers only `citedDecisions[].sourceId` membership, the
+ * citedDecision authority prerequisites and the two lane-membership rules; the
+ * envelope schema covers `publicEvidenceIds` uniqueness and the
+ * `provenance.evidenceIds` element-for-element binding. NEITHER covers any of the
+ * six. (A further set of evidence-KIND authority checks is structurally
+ * inapplicable here, because this surface publishes no evidence rows — that part
+ * of the asymmetry is defensible and is not in the list.)
+ *
+ * SO: a producer regression emitting `techniques[0].sourceIds = ["ref-<sha>"]`
+ * where the digest is well-formed but absent from `spec.citedReferences`, or a
+ * `provenance.sourceReferences` that disagrees with `citedReferences`, is REFUSED
+ * over MCP and SERVED WITH 200 here. NO PRIVATE DATA IS AT STAKE — the leaf gate
+ * still enforces `ref-<sha256>` shape on all eight reference positions and
+ * `containsPrivateMarker` still sweeps the whole body. What is at stake is
+ * PROVENANCE INTEGRITY: a design artifact whose technique claims a source the
+ * artifact does not cite. All six are measured, not assumed, in
+ * create-ui-spec-http.test.ts's `I3(r5)` block, which proves for each rule that
+ * `parseDesignArtifactEnvelope` accepts the poison, that MCP refuses for that
+ * exact rule, and that this route serves it.
+ *
+ * WHY IT IS DISCLOSED RATHER THAN CLOSED. Running the six here would be
+ * validation-that-refuses, which is compatible with the byte-preserving
+ * constraint below — this is a scope decision, not a design impossibility, and
+ * the recommendation is to close it. It is NOT covered by either adjudicated
+ * exception: the retrieval-projection ruling is about `retrieval.resultCount` and
+ * the ID-shape parity ruling is about the leaf gate. If you close the gap, invert
+ * the assertions in that test block rather than deleting them.
+ *
  * The ID-shape screen VALIDATES AND REFUSES; it never rewrites. That matters,
  * because this surface serves the PERSISTED envelope and must not reshape it
  * (the separately adjudicated reason it does not call the MCP retrieval

@@ -530,7 +530,8 @@ function registerRecommendUiDirection(server: McpServer, reader: CorpusReader): 
         "synthesizes a design direction citing each one — why it was selected, what " +
         "it contributes, and the concrete decisions to borrow. Requires the embedding " +
         "index (npm run build-index). Use this when you don't know which specific " +
-        "entries to look at; use generate_design_prompt when you already have ids. " +
+        "entries to look at; use create_ui_spec when you want a full evidence-grounded " +
+        "spec (layout, tokens, components, acceptance criteria) rather than a direction. " +
         "Pass qualityTier:'cautionary' to recommend what to AVOID (the corpus's " +
         "cautionary entries are bad examples with critiques of why they fail).",
       inputSchema: {
@@ -660,7 +661,7 @@ function registerGetStealableTechniques(server: McpServer, reader: CorpusReader)
         "a pattern type and/or style tag. Deduped by theme so you get variety, not " +
         "repeats. Each technique cites its source entry. Use this when you want a " +
         "menu of specific ideas for a pattern ('what can I steal for a dense data " +
-        "table?') rather than a synthesized brief (use generate_design_prompt for that).",
+        "table?') rather than a synthesized spec (use create_ui_spec for that).",
       inputSchema: {
         patternType: PatternType.optional().describe("Scope to a UI pattern"),
         styleTag: StyleTag.optional().describe("Scope to a style"),

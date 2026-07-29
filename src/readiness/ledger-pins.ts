@@ -132,19 +132,53 @@
  *   - validating a COPY of the graph at a path that is not the tracked artifact
  *     root (`--artifact-root /tmp/copy/...`). The tracked table is not in force
  *     there, by the scoping rule above, and the CLI says so on stderr. This is
- *     a change to the invocation, not a change confined to `quality-contracts/`
- *     — but nothing MECHANICAL enforces the tracked-root invocation, and this
- *     bound must not be overstated a fourth time. `npm run validate-readiness-
- *     artifacts` (package.json) names no root at all; the CLI
- *     (validate-readiness-artifacts.ts) infers `resolve(process.cwd(),
- *     "quality-contracts", "agent-readiness")`, which lands on the tracked
- *     root only because `npm run` happens to set cwd to the package
- *     directory — a property of npm, not something the command states. No CI
- *     workflow runs this gate in any form today (`grep -rn
- *     "validate-readiness\|artifact-root" .github/` is empty; still open, see
- *     round-1 M11 / triage row 33 in review-branch-final-round3.md). So the
- *     residual this bullet describes is bounded by operator discipline and the
- *     stderr `notice:` above, and by nothing else.
+ *     a change to the invocation, not a change confined to `quality-contracts/`.
+ *
+ *     THE EXACT BOUND, ENUMERATED FROM THE CALL GRAPH — this bullet has been
+ *     wrong five times, in both directions, every time by reasoning from a grep
+ *     for a COMMAND NAME to a conclusion about what EXECUTES. The comparison is
+ *     performed in exactly one place, `validator.ts` step 7c
+ *     (`resolveLedgerApprovalPins` at :571, `ledgerApprovalRowsDigest` at :621),
+ *     and `validateReadinessArtifacts` has exactly one production caller —
+ *     the CLI at `validate-readiness-artifacts.ts:126`. So:
+ *
+ *       * THE CLI INVOCATION IS PINNED BY NOTHING. `npm run validate-readiness-
+ *         artifacts` (package.json:65) names no root; the CLI infers
+ *         `resolve(process.cwd(), "quality-contracts", "agent-readiness")`
+ *         (:66-68), which lands on the tracked root only because `npm run` sets
+ *         cwd to the package directory — a property of npm, not something the
+ *         command states — and `--artifact-root` overrides it outright. An
+ *         operator can point the CLI at a copy, and the only signal is the
+ *         stderr `notice:` above.
+ *       * `npm test` DOES re-derive these pins against the tracked root, and
+ *         `.github/workflows/ci.yml:22` runs `npm test`. Three suites reach the
+ *         tracked root with no argument, env var, or fixture indirection that
+ *         could redirect them:
+ *           - `tracked-artifacts-readiness.test.ts` hardcodes
+ *             `resolve(repoRoot, "quality-contracts/agent-readiness")` (:56) and
+ *             asserts the checkpoint map, `ok:false` with exactly the two
+ *             `ledger-supersession-not-later` issues, each pinned path's digest
+ *             re-derived from the file (:158-164), both coverage directions and
+ *             the exact five-key table (:183-194), and
+ *             `isTrackedArtifactRoot(artifactRoot) === true` (:203);
+ *           - `validate-readiness-artifacts-cli.test.ts:73-92` spawns the
+ *             COMPILED CLI's default invocation at the repo root and asserts an
+ *             EMPTY stderr — i.e. that the pins were in force — beside
+ *             `ok:false` / `C2:"open"` / exactly two of those issues;
+ *           - `ledger-pins.test.ts:128-132` asserts `scope === "tracked"` and
+ *             the exact table for `TRACKED_ARTIFACT_ROOT`.
+ *         So "validate a copy instead" does not escape mechanical detection: it
+ *         escapes the CLI run, not the suite that CI runs.
+ *
+ *     What remains true is narrow and it is only this: no script or workflow
+ *     pins the CLI INVOCATION's root, and `--json` carries no field telling a
+ *     machine consumer whether the pins were in force for that run (see
+ *     round-4 m5 / triage row 14). Do not restate that as "nothing mechanical
+ *     runs this gate" — `npm test` does, transitively, and a grep of
+ *     `.github/` for `validate-readiness` being empty is evidence about naming,
+ *     not about execution. Round-1 M11 / triage row 33 in
+ *     review-branch-final-round3.md rests on the same inverted inference and
+ *     should be re-derived before it is acted on.
  *
  * No claim is made here about changes that reach outside `quality-contracts/`,
  * and none about attacks not listed above.

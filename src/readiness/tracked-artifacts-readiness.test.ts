@@ -21,8 +21,34 @@
  * docstring on that block for why that is a data-availability gate and not a
  * relaxed expectation.
  *
+ * THIS TEST REQUIRES FULL GIT HISTORY, AND FULL HISTORY IS NOT ENOUGH. The
+ * public-mode block is unconditional, but it is NOT environment-independent: the
+ * checkpoint recipes bind historical commits (~325 commits back at the deepest)
+ * and the resolver above shells out to `git show <commit>:<path>` to recompute
+ * canonical targets. Two distinct environment failures follow, and they are
+ * often confused because both surface as `checkpoint-recompute-failed`:
+ *
+ *   DEPTH. In a shallow clone the bound objects are absent, the resolver throws,
+ *   and `validator.ts` fails closed for every active checkpoint — C0 AND C1 both
+ *   reported open, ~14 issues. `.github/workflows/ci.yml` therefore checks out
+ *   with `fetch-depth: 0`. Measured: that alone closes C1 and takes the count to
+ *   10.
+ *
+ *   REACHABILITY. `fetch-depth: 0` fetches every REMOTE ref and cannot conjure
+ *   an object no remote ref reaches. C0's recipe binds `C0_SOURCE_GIT_SHA`
+ *   (checkpoint-policy.ts), which at the time of writing is reachable only from
+ *   the UNPUSHED local branch `Website-design`. So C0 recomputes locally and not
+ *   on CI, and stays open there with two `checkpoint-recompute-failed` rows and
+ *   six `summary-input-hash-mismatch` rows, every one naming that one commit.
+ *   The fix is to push a ref that reaches it — a maintainer's publish decision,
+ *   not a test or workflow change.
+ *
+ * The tests are deliberately NOT guarded on either condition: a self-skip would
+ * make the only mechanical enforcement of C2-open silently inert exactly where it
+ * matters most.
+ *
  * WHEN THIS TEST FAILS, THE FIX IS NEVER THE ASSERTION ALONE. Work out which of
- * two things happened before touching anything:
+ * three things happened before touching anything:
  *
  *   (a) A REGRESSION — the validator changed behaviour against unchanged data.
  *       Fix the validator. Do not relax the expectation.
@@ -36,9 +62,18 @@
  *       NOT legitimate, and the per-test docstring at the pin tripwire below
  *       spells out the consequence: do not update the pinned digest to match
  *       edited data.
+ *   (c) THE ENVIRONMENT CANNOT RESOLVE THE BOUND COMMITS — a shallow clone, a
+ *       checkout with no `.git`, or a bound commit that no fetched ref reaches.
+ *       The tell is `checkpoint-recompute-failed` in the issue list together with
+ *       a checkpoint open that no data edit inside `quality-contracts/` could
+ *       open: C0 and C1 both open means DEPTH; C0 alone open with every failing
+ *       row naming one commit means REACHABILITY (see above). Fix the checkout —
+ *       `git fetch --unshallow` / `fetch-depth: 0` for the first, pushing a ref
+ *       that reaches the commit for the second. Do not skip the test and do not
+ *       relax the expectation.
  *
- * Neither branch is "make the suite green". Nothing here is a literal to be
- * refreshed until it stops complaining.
+ * No branch is "make the suite green". Nothing here is a literal to be refreshed
+ * until it stops complaining.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";

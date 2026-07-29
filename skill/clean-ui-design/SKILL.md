@@ -50,9 +50,11 @@ Then add to their MCP client config:
 
 ### Synthesis — generate a design direction
 - **`recommend_ui_direction(productContext, count?, category?, qualityTier?, platform?, framework?)`** — the "design advisor." Describe what you're building; it embeds the description, finds 3-5 relevant entries with product diversity, and synthesizes a brief. **Use this when the user has a description but no specific ids.** Pass `qualityTier:"cautionary"` to recommend what to AVOID.
-- **`generate_design_prompt(ids, framework?, context?)`** — synthesize a brief across 2-5 specific entry ids the user already knows. Returns paste-ready color tokens, typography, layout, voice, techniques, anti-patterns. **Use this when the user has ids** (e.g. "build me a pricing page like Stripe + Linear").
+- **`create_ui_spec(productContext, referenceIds?, platform?, implementationFramework?, designSystem?, constraints?, target?, motionIntents?, outputFormat?)`** — the full evidence-grounded spec: layout regions, color and typography tokens, component inventory, motion guidance, acceptance criteria with named verifiers (axe, playwright, static-analysis, manual), and provenance. Every decision traces to a response-scoped evidence id. `referenceIds` (max 5) grounds the spec in entries the user already named — e.g. "build me a pricing page like Stripe + Linear" becomes `create_ui_spec({ productContext: "...", referenceIds: [stripeId, linearId] })`. A reference that cannot be resolved is omitted; a request whose references ALL fail is rejected rather than silently substituted. Omit `referenceIds` and it retrieves for you. `outputFormat:"json"` returns the JSON rendering; the structured result is identical either way.
 
-**When to use which:** `recommend_ui_direction` searches for you (description in, direction out); `generate_design_prompt` synthesizes from entries you've already read and chosen (ids in, brief out). If a `recommend` result is strong, you can pass its cited ids into `generate_design_prompt` to re-synthesize with a different `context` or `framework`.
+> **`generate_design_prompt` is no longer a public tool** — `create_ui_spec` replaced it. Do not call it; the server rejects it. The migration is `generate_design_prompt(ids)` → `create_ui_spec({ productContext, referenceIds: ids })`, with `productContext` now required and a full spec (not a prose brief) coming back.
+
+**When to use which:** `recommend_ui_direction` searches for you and hands back a *direction* (description in, direction out); `create_ui_spec` hands back an implementable *spec* with acceptance criteria (description — plus optional ids — in, spec out). If a `recommend` result is strong, pass its cited ids to `create_ui_spec` as `referenceIds` to turn that direction into a spec. Note `create_ui_spec` never returns corpus content, paths, urls, or product identity: grounding appears only as opaque `ref-<sha256>` citations and evidence ids.
 
 ### Aggregation — surface corpus-wide knowledge
 - **`get_anti_patterns(patternType?, category?, limit?)`** — consensus mistakes to avoid for a pattern. The Mobbin-can't-offer feature: the corpus knows what NOT to do, ranked by how many entries raise each anti-pattern.
@@ -88,7 +90,7 @@ For the top 2-3 results, call `get_ui_example(id)`. Read carefully:
 
 ### 4. Synthesize
 
-If you've read specific entries and want a brief, call `generate_design_prompt(ids, context?)`. If you only have the user's description, call `recommend_ui_direction(productContext)`. **Do not hand-synthesize when these tools exist** — they aggregate consensus (color plurality, anti-pattern frequency) more reliably than reading 3 entries in sequence.
+If you've read specific entries and want something implementable, call `create_ui_spec({ productContext, referenceIds })`. If you only have the user's description and want a direction rather than a spec, call `recommend_ui_direction(productContext)`. **Do not hand-synthesize when these tools exist** — they aggregate consensus (color plurality, anti-pattern frequency) more reliably than reading 3 entries in sequence.
 
 ## Workflow state — drafts and review
 
@@ -129,5 +131,5 @@ capture (motion, interaction polish, design-system taxonomies). Apply at synthes
 ## Do not
 
 - Do NOT copy the screenshots. Do NOT reproduce the visual appearance. Extract the **shared structural decisions** and adapt them.
-- Do NOT hand-synthesize a brief when `generate_design_prompt` or `recommend_ui_direction` can do it deterministically.
+- Do NOT hand-synthesize a spec or brief when `create_ui_spec` or `recommend_ui_direction` can do it deterministically.
 - Do NOT use banned phrases (see references). They are the signal of generic AI output this corpus exists to replace.

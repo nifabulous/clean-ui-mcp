@@ -29,8 +29,32 @@ function listUiClientFiles(): string[] {
 // import flows live in the classic workbench (index-classic.html + classic-*).
 // Both shells are loaded below — classic-flow tests point at /index-classic.html,
 // SPA tests point at /.
-const classicHtml = readFileSync(resolve(__dirname, "../..", "index-classic.html"), "utf-8");
-const spaHtml = readFileSync(resolve(__dirname, "../..", "index-2.html"), "utf-8");
+//
+// READ WITH A RETRY, because this happens at COLLECTION time and another test
+// FILE can be holding these two files unreadable for a few milliseconds while it
+// runs: `ui-server.test.ts`'s app-shell EACCES block flips them to mode 000 for
+// the duration of one request (they are fixed constants resolved from
+// PROJECT_ROOT, so it cannot point the route at a temp copy), and vitest runs
+// files in parallel. Without the retry, landing in that window fails THIS file's
+// collection with an `EACCES` naming an innocent file — a confusing, rare flake
+// that reads like a browser-test regression. The retry is bounded and only ever
+// engages on failure, so a genuinely missing/locked file still fails loudly.
+function readShell(name: string): string {
+  const path = resolve(__dirname, "../..", name);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return readFileSync(path, "utf-8");
+    } catch (error) {
+      if (attempt >= 20) throw error;
+      // Synchronous sleep (this is module scope, so there is nothing to await
+      // into): 20 x 25ms covers a window measured in single-digit milliseconds
+      // with two orders of magnitude to spare, without spinning the CPU.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+}
+const classicHtml = readShell("index-classic.html");
+const spaHtml = readShell("index-2.html");
 
 // Hoisted so both describe blocks share the single browser + server launched in
 // the first block's beforeAll. Vitest runs describe blocks in file order.

@@ -374,36 +374,6 @@ remediability — the retraction record is the mechanism.
 
 ---
 
-## Served-tool-surface gate matches its removal marker against a truncation
-
-**What:** In `src/served-tool-surface.test.ts`, the `it.each(SHIPPED_SURFACES)`
-case titled "%s mentions an unregistered tool only in a block that marks it
-removed" computes `unregistered` from the **full** block but stores
-`block: block.trim().slice(0, 220)`, and the filter then tests
-`!REMOVAL_MARKER.test(row.block)` — i.e. against the truncated value. The
-220-character slice exists to keep the failure message readable; using it as the
-predicate input is the defect.
-
-**Consequence:** a shipped-surface block that names an unregistered tool and
-marks it removed **after** character 220 fails the assertion even though it
-satisfies the rule the test's own title states. This is fail-**closed** — it can
-produce a false failure, never a false pass — so nothing unsafe ships while it
-stands. It is not urgent; it is real.
-
-**Why it was not fixed on `fix/doc-truth-and-citations`:** that branch is
-doc/comment-only by construction, and changing the predicate changes what the
-test accepts. It is a genuine loosening (blocks that fail today would pass), so
-it deserves its own commit, its own test, and its own review rather than riding
-along in a documentation change. The branch reworded the README block instead,
-which satisfies both assertions in that `describe` on their merits.
-
-**Scope when triggered:** test `REMOVAL_MARKER` against the full block and keep
-the slice for display only. Add a case whose removal marker sits past character
-220 — without it the fix is unverified, since every current surface happens to
-mark removal early.
-
----
-
 ## Wiring-verification allowlist: redundant `validateReferenceRegistry` entry
 
 **What:** `"validateReferenceRegistry"` in the `ALLOWLIST` of

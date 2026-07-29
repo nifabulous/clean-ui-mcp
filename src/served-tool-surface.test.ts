@@ -117,6 +117,50 @@ function blocksOf(text: string): string[] {
   return text.split(/\n\s*\n/);
 }
 
+/** How much of an offending block the failure message quotes. DISPLAY ONLY. */
+const BLOCK_EXCERPT_CHARS = 220;
+
+/**
+ * The doc rule, as a callable predicate: every block of `text` that names a tool
+ * outside `registered` WITHOUT marking it removed.
+ *
+ * WHY THE 220-CHARACTER SLICE IS NOT THE PREDICATE'S INPUT. The earlier form of
+ * this check computed `unregistered` from the FULL block but stored
+ * `block: block.trim().slice(0, 220)` and then filtered on
+ * `!REMOVAL_MARKER.test(row.block)` — i.e. it sought the removal marker in the
+ * TRUNCATION while deriving the finding from the whole block. A block whose
+ * marker sits past character 220 therefore failed the assertion even though it
+ * satisfied the rule this test's own title states; a README draft tripped exactly
+ * that despite containing the word "removed". The slice exists to keep the failure
+ * message readable, which is the only thing it is used for now.
+ *
+ * THE FIX DOES NOT LOOSEN THE RULE. Truncating the marker search could only
+ * produce a FALSE FAILURE, never a false pass (searching less text can only find
+ * fewer markers, and fewer markers means more offenders). So restoring the full
+ * block as the predicate's input removes false failures and adds no false passes:
+ * `unregistered` is still computed from the full block, `REMOVAL_MARKER` is
+ * unchanged, and a block that names an unregistered tool with NO marker anywhere
+ * in it is still an offender. Both directions are pinned by the two cases below
+ * this `describe`'s `it.each`.
+ *
+ * Exported shape is a plain array so callers can assert on it directly — the
+ * synthetic cases exercise the predicate without needing a shipped file.
+ */
+function unmarkedUnregisteredBlocks(
+  text: string,
+  registered: ReadonlySet<string>,
+): Array<{ unregistered: string[]; block: string }> {
+  return blocksOf(text)
+    .map((block) => ({
+      unregistered: toolNamesMentionedIn(block).filter((n) => !registered.has(n)),
+      // The marker is sought in the SAME text the finding is derived from.
+      markedRemoved: REMOVAL_MARKER.test(block),
+      block: block.trim().slice(0, BLOCK_EXCERPT_CHARS),
+    }))
+    .filter((row) => row.unregistered.length > 0 && !row.markedRemoved)
+    .map(({ unregistered, block }) => ({ unregistered, block }));
+}
+
 describe("served tool surface — tools/list advertises only registered tools", () => {
   it("registers the exact 14-tool public set, with create_ui_spec and without generate_design_prompt", async () => {
     const served = await listServedTools();
@@ -176,12 +220,7 @@ describe("shipped tool surface — documentation and clients name only registere
     async (relPath) => {
       const registered = new Set((await listServedTools()).map((t) => t.name));
       const text = readFileSync(resolve(repoRoot, relPath), "utf-8");
-      const offenders = blocksOf(text)
-        .map((block) => ({
-          unregistered: toolNamesMentionedIn(block).filter((n) => !registered.has(n)),
-          block: block.trim().slice(0, 220),
-        }))
-        .filter((row) => row.unregistered.length > 0 && !REMOVAL_MARKER.test(row.block));
+      const offenders = unmarkedUnregisteredBlocks(text, registered);
       expect(
         offenders,
         `${relPath} refers to tool(s) createServer() does not register, with nothing marking ` +
@@ -190,6 +229,49 @@ describe("shipped tool surface — documentation and clients name only registere
       ).toEqual([]);
     },
   );
+
+  // ── The predicate itself, in both directions ──────────────────────────────
+  //
+  // Every surface that ships today happens to mark removal EARLY, so neither
+  // `it.each` above can tell the truncated predicate from the fixed one. These two
+  // cases are the fix's only real proof, and they pin it in both directions: the
+  // long marked block must PASS (the false failure that was the bug) and the
+  // genuine violation must FAIL (the property that must not be loosened).
+  describe("the doc predicate itself — marker position must not decide the verdict", () => {
+    /** In the vocabulary (a `LEGACY_TO_BETA_MAP` key) and not registered. */
+    const UNREGISTERED = "generate_design_prompt";
+
+    it("the vocabulary token used below really is unregistered — otherwise these two cases prove nothing", async () => {
+      const registered = new Set((await listServedTools()).map((t) => t.name));
+      expect(TOOL_NAME_VOCABULARY).toContain(UNREGISTERED);
+      expect(registered.has(UNREGISTERED)).toBe(false);
+    });
+
+    it("accepts a removal marker that sits PAST character 220 — the truncation bug", async () => {
+      const registered = new Set((await listServedTools()).map((t) => t.name));
+      // Filler carries no vocabulary token and no marker word, so the ONLY marker
+      // in the block is the one after it.
+      const filler = "Historical context sentence. ".repeat(12);
+      const block = `The ${UNREGISTERED} entry point. ${filler}It was removed; call create_ui_spec instead.`;
+      // The marker really is beyond the excerpt window, and really is inside the
+      // full block — otherwise this case would pass for the wrong reason.
+      expect(block.indexOf("removed")).toBeGreaterThan(BLOCK_EXCERPT_CHARS);
+      expect(REMOVAL_MARKER.test(block)).toBe(true);
+      expect(REMOVAL_MARKER.test(block.slice(0, BLOCK_EXCERPT_CHARS))).toBe(false);
+      expect(unmarkedUnregisteredBlocks(block, registered)).toEqual([]);
+    });
+
+    it("still refuses a genuine referral with NO removal marker anywhere in the block", async () => {
+      const registered = new Set((await listServedTools()).map((t) => t.name));
+      const filler = "Historical context sentence. ".repeat(12);
+      const block = `Call ${UNREGISTERED} when you already have ids. ${filler}It is the synthesis entry point.`;
+      expect(block.length).toBeGreaterThan(BLOCK_EXCERPT_CHARS);
+      const offenders = unmarkedUnregisteredBlocks(block, registered);
+      expect(offenders.map((o) => o.unregistered)).toEqual([[UNREGISTERED]]);
+      // The excerpt is still bounded — the display slice survived the fix.
+      expect(offenders[0]!.block.length).toBeLessThanOrEqual(BLOCK_EXCERPT_CHARS);
+    });
+  });
 
   it.each(SHIPPED_SURFACES)("%s names create_ui_spec, the synthesis entry point", async (relPath) => {
     // The complement of the check above: removing the stale referral without

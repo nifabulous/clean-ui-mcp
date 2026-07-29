@@ -540,6 +540,56 @@ describe("create_ui_spec HTTP typed errors", () => {
 /** Module-scoped so both this describe block and the m3(r4) block below can pin it. */
 const ID_SHAPE_REFUSAL = /failed the reference\/evidence ID-shape gate and was not served/;
 
+/**
+ * The MCP adapter's refusal, WITH its offending-position list captured.
+ *
+ * WHY THE GENERIC MESSAGE IS NOT ENOUGH. `assertPassesContractGate`
+ * (create-ui-spec-mcp.ts) emits ONE string —
+ * `create_ui_spec result failed the contract gate and was not served; offending
+ * positions: [...]` — for EVERY `parseToolResult` failure, whatever fired it. Two
+ * assertions in this file used to match only `/create_ui_spec result failed the
+ * contract gate/`, and both survive deleting the ID-shape gate outright: the same
+ * poison also trips the citation-consistency rule
+ * `provenance-sourceReferences-match-citedReferences`, whose issue produces the
+ * same generic sentence. So the assertions could not fail for the reason they were
+ * written for, exactly like the `/was not served/` trap this file already documents
+ * at m2(r4) for the HTTP side. Each assertion must name its own gate.
+ *
+ * WHAT IS NAMEABLE. The gate deliberately withholds every issue MESSAGE (some
+ * name the offending value) and publishes only the structural POSITIONS. So the
+ * discriminator is the position list: an ID-SHAPE violation of `citedReferences[0]`
+ * reports `data.citedReferences.0` (and `referenceIds.0` for the mirrored envelope
+ * position). The citation rules report their own, different positions
+ * (`data.citedReferences` with no index, `data.provenance.sourceReferences`,
+ * `data.techniques`, …), so a match on `data.citedReferences.0` is attributable to
+ * the ID-shape gate and to nothing else.
+ */
+const MCP_GATE_POSITIONS =
+  /create_ui_spec result failed the contract gate and was not served; offending positions: \[([^\]]*)\]/;
+
+/** The gate's published position list, or `[]` if `message` is not its refusal. */
+function mcpGateOffendingPositions(message: string): string[] {
+  const match = MCP_GATE_POSITIONS.exec(message);
+  if (match === null) return [];
+  return match[1]!
+    .split(",")
+    .map((position) => position.trim())
+    .filter((position) => position.length > 0);
+}
+
+/** Run `handleCreateUiSpec` and return the refusal message it threw (or ""). */
+async function mcpRefusalMessage(
+  body: unknown,
+  reader: CorpusReader,
+): Promise<string> {
+  try {
+    await handleCreateUiSpec(body, reader);
+    return "";
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
 describe("create_ui_spec HTTP reference/evidence ID-shape gate", () => {
 
   it("REFUSES to serve a spec whose citedReferences carry a raw private path", async () => {
@@ -682,9 +732,17 @@ describe("create_ui_spec HTTP reference/evidence ID-shape gate", () => {
         spec: { ...result.envelope.spec, citedReferences: [poison] },
       },
     });
-    await expect(handleCreateUiSpec(validBody(), makeReader(corpus, corpus))).rejects.toThrow(
-      /create_ui_spec result failed the contract gate/,
-    );
+    // Named gate, not the generic sentence — see {@link MCP_GATE_POSITIONS}. The
+    // ID-SHAPE gate is what must refuse `poison` at `citedReferences[0]`, so its
+    // own structural position is asserted; with that gate deleted the generic
+    // message still appears (a citation rule supplies it) but this position does
+    // not, which is the whole point.
+    const mcpMessage = await mcpRefusalMessage(validBody(), makeReader(corpus, corpus));
+    expect(mcpMessage).toMatch(/create_ui_spec result failed the contract gate/);
+    expect(mcpGateOffendingPositions(mcpMessage)).toContain("data.citedReferences.0");
+    expect(mcpGateOffendingPositions(mcpMessage)).toContain("referenceIds.0");
+    // The refusal names no value, on this transport either.
+    expect(mcpMessage).not.toContain(poison);
   });
 });
 
@@ -796,9 +854,16 @@ describe("create_ui_spec — a self-consistent poisoned envelope (m3(r4))", () =
     ).rejects.toThrow(ID_SHAPE_REFUSAL);
 
     spyState.mutate = (result) => ({ ...result, envelope: poisoned });
-    await expect(handleCreateUiSpec(validBody(), makeReader(corpus, corpus))).rejects.toThrow(
-      /create_ui_spec result failed the contract gate/,
-    );
+    // Same discipline as the m2(r4) case above: the ID-shape gate's own position,
+    // not the generic contract-gate sentence every parseToolResult failure emits.
+    // `stripe-pricing-2024` is a raw corpus id in `citedReferences[0]` — an
+    // ID-SHAPE violation — so `data.citedReferences.0` / `referenceIds.0` are the
+    // positions that must be reported.
+    const mcpMessage = await mcpRefusalMessage(validBody(), makeReader(corpus, corpus));
+    expect(mcpMessage).toMatch(/create_ui_spec result failed the contract gate/);
+    expect(mcpGateOffendingPositions(mcpMessage)).toContain("data.citedReferences.0");
+    expect(mcpGateOffendingPositions(mcpMessage)).toContain("referenceIds.0");
+    expect(mcpMessage).not.toContain("stripe-pricing-2024");
   });
 });
 

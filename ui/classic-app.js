@@ -3,6 +3,65 @@ if (window.location.protocol === "file:") {
 }
 
 const API = "/api";
+
+// ─── CSRF nonce (C3 Task 5) ──────────────────────────────────────────────────
+//
+// Every mutating /api/* request must carry the X-Clean-UI-CSRF header. The nonce
+// is process-local to the curator server and readable only by a SAME-ORIGIN
+// caller, so another site can send a request to this server but can never read
+// GET /api/csrf to learn the value it would have to echo.
+//
+// Cached for the lifetime of the page, with one in-flight fetch shared across a
+// concurrent burst — the bulk-import commit flow fires many POSTs at once and
+// must not each mint their own request.
+//
+// A server RESTART mints a new nonce and invalidates ours, which would otherwise
+// leave an open workbench tab permanently unable to save. So a 403 carrying
+// `code: "CSRF_REQUIRED"` clears the cache and retries exactly ONCE. That retry
+// is safe, not a double-submit risk: the server rejects a bad nonce BEFORE it
+// reads the request body and before any mutation, so the first attempt provably
+// had no effect. The retry is skipped for a non-string body (nothing here sends
+// one) since a consumed stream could not be replayed.
+const CSRF_HEADER = "X-Clean-UI-CSRF";
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+let csrfNoncePromise = null;
+
+function csrfNonce() {
+  if (!csrfNoncePromise) {
+    csrfNoncePromise = fetch("/api/csrf", { headers: { accept: "application/json" } })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Could not obtain a CSRF nonce"))))
+      .then((d) => {
+        if (!d || typeof d.nonce !== "string" || !d.nonce) throw new Error("Could not obtain a CSRF nonce");
+        return d.nonce;
+      })
+      .catch((err) => { csrfNoncePromise = null; throw err; });
+  }
+  return csrfNoncePromise;
+}
+
+/**
+ * fetch() for the curator API. Read requests pass straight through; mutating
+ * requests acquire the nonce and send it. Use this instead of bare fetch() for
+ * ANY POST/PUT/PATCH/DELETE against /api/*.
+ */
+async function apiFetch(url, options = {}) {
+  const method = String(options.method || "GET").toUpperCase();
+  if (!MUTATING_METHODS.has(method)) return fetch(url, options);
+  const send = async (nonce) => fetch(url, {
+    ...options,
+    headers: { ...(options.headers || {}), [CSRF_HEADER]: nonce },
+  });
+  let response = await send(await csrfNonce());
+  const replayable = options.body === undefined || options.body === null || typeof options.body === "string";
+  if (response.status === 403 && replayable) {
+    const body = await response.clone().json().catch(() => ({}));
+    if (body && body.code === "CSRF_REQUIRED") {
+      csrfNoncePromise = null; // the server restarted — re-mint and retry once.
+      response = await send(await csrfNonce());
+    }
+  }
+  return response;
+}
 const today = () => new Date().toISOString().slice(0, 10);
 const state = {
   entries: [],
@@ -40,7 +99,9 @@ const providerName = () => {
 };
 
 async function request(path, options = {}) {
-  const response = await fetch(`${API}${path}`, {
+  // Routed through apiFetch so every mutation carries the CSRF nonce; reads are
+  // passed straight through unchanged.
+  const response = await apiFetch(`${API}${path}`, {
     headers: { "content-type": "application/json", ...(options.headers || {}) },
     ...options,
   });
@@ -1478,7 +1539,7 @@ async function commitQueue() {
     // the live corpus). Read the response directly so a 409 duplicate can be
     // marked distinctly from a validation error — a duplicate isn't a failure,
     // it's the gate catching something the upload-time check missed.
-    const response = await fetch(`${API}/entries`, {
+    const response = await apiFetch(`${API}/entries`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),

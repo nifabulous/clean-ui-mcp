@@ -13,6 +13,7 @@ import { parseArgs } from "node:util";
 import { resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { validateReadinessArtifacts } from "../readiness/validator.js";
+import { TRACKED_ARTIFACT_ROOT, isTrackedArtifactRoot } from "../readiness/ledger-pins.js";
 import type { GitSourceResolver } from "../readiness/checkpoint-policy.js";
 
 const CHECKPOINTS = ["C0", "C1", "C2", "C3", "C4", "C5"] as const;
@@ -103,6 +104,23 @@ function makeGitSourceResolver(repoCwd: string): GitSourceResolver {
       });
     },
   };
+}
+
+// SAY SO WHEN THE LEDGER PINS ARE NOT IN FORCE. `TRACKED_LEDGER_APPROVAL_PINS`
+// is a statement about THIS repository's governance chain, so it applies to this
+// repository's artifact root and to no other directory (see
+// `isTrackedArtifactRoot`). Validating a copy of the graph somewhere else is a
+// legitimate thing to do — and it is also the one way left to run this gate with
+// the pins inert, so it must not be silent. Diagnostics go to stderr, leaving
+// `--json` stdout and the human report byte-identical for the tracked root.
+if (!isTrackedArtifactRoot(artifactRoot)) {
+  console.error(
+    `notice: ${artifactRoot} is not this repository's tracked artifact root ` +
+      `(${TRACKED_ARTIFACT_ROOT}), so TRACKED_LEDGER_APPROVAL_PINS is NOT in force ` +
+      `for this run: the ledger approval rows are not checked against their source ` +
+      `pins, and a deleted or renamed ledger file is not reported. Run against the ` +
+      `tracked root for the attested result.`,
+  );
 }
 
 const result = validateReadinessArtifacts({

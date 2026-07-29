@@ -9,6 +9,12 @@
  *
  * The tests pin the boundary between machine-verifiable C2 evidence and human
  * approval, as well as the absence of public-site pilot exposure.
+ *
+ * C2 IS CURRENTLY OPEN. The two effective C2 records in
+ * `checkpoint-approvals-v5.json` are provenance-invalid (each copied the
+ * `decidedAt` of the approval it supersedes), so no valid reviewer decision
+ * exists for the target they bind. The ledger assertions below describe that
+ * real state; they must not be relaxed to imply C2 is approved.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -16,6 +22,14 @@ import { describe, expect, it } from "vitest";
 import { CHECKPOINT_RECIPES, CHECKPOINT_POLICIES } from "../readiness/checkpoint-policy.js";
 
 const root = resolve(__dirname, "../..");
+
+interface C2Approval {
+  approvalId: string;
+  checkpoint: string;
+  role: string;
+  decidedAt: string;
+  supersedesApprovalId?: string;
+}
 
 describe("C2 governance scope boundary", () => {
   it("declares C2 governance without claiming approval", () => {
@@ -31,18 +45,58 @@ describe("C2 governance scope boundary", () => {
     expect(manifest.artifactType).toBe("c2-evidence-manifest");
     expect(manifest.checkpoint).toBe("C2");
     expect(manifest.evidence).toHaveLength(8);
-    expect(readdirSync(governanceRoot).filter((file) => file.match(/^checkpoint-approvals-v[345]\.json$/))).toEqual([
+    // Every ledger in the chain, not a hand-picked subset. A prior version
+    // matched only /v[345]/, so appending a v6 would not have registered here.
+    // The head ledger is v5 and the assertions below describe v5's contents —
+    // adding a ledger must therefore force a conscious update of this test.
+    expect(
+      readdirSync(governanceRoot)
+        .filter((file) => /^checkpoint-approvals-v\d+\.json$/.test(file))
+        .sort(),
+    ).toEqual([
+      "checkpoint-approvals-v1.json",
+      "checkpoint-approvals-v2.json",
       "checkpoint-approvals-v3.json",
       "checkpoint-approvals-v4.json",
       "checkpoint-approvals-v5.json",
     ]);
-    const ledger = JSON.parse(
+    const ledger: { approvals: C2Approval[] } = JSON.parse(
       readFileSync(resolve(governanceRoot, "checkpoint-approvals-v5.json"), "utf8"),
     );
-    expect(ledger.approvals.filter((approval: { checkpoint: string; supersedesApprovalId?: string }) => approval.checkpoint === "C2" && approval.supersedesApprovalId === undefined).map((approval: { role: string }) => approval.role)).toEqual([
-      "Gold Label Owner",
-      "QA",
+
+    // The EFFECTIVE approvals are those no later record supersedes. Note this is
+    // NOT `supersedesApprovalId === undefined` — that condition selects records
+    // which supersede nothing, i.e. the SUPERSEDED v1 pair. An earlier version
+    // of this test used it and therefore asserted the opposite of its stated
+    // intent; it passed only because both pairs carry the same two roles.
+    const supersededIds = new Set(
+      ledger.approvals.flatMap((a) => (a.supersedesApprovalId ? [a.supersedesApprovalId] : [])),
+    );
+    const effectiveC2 = ledger.approvals.filter(
+      (a) => a.checkpoint === "C2" && !supersededIds.has(a.approvalId),
+    );
+
+    expect(effectiveC2.map((a) => a.approvalId)).toEqual([
+      "c2-gold-reviewer-gold-v2",
+      "c2-qa-reviewer-qa-v2",
     ]);
+    expect(effectiveC2.map((a) => a.role)).toEqual(["Gold Label Owner", "QA"]);
+
+    // Both effective records are provenance-invalid: each copied the `decidedAt`
+    // of the v1 approval it supersedes, so each claims a decision taken before
+    // the target it binds (cf55fee0…) existed. C2 is therefore OPEN — the
+    // presence of two role-correct approvals does NOT mean C2 is approved.
+    // `src/readiness/tracked-artifacts-readiness.test.ts` asserts the resulting
+    // gate state; this assertion pins the underlying ledger defect.
+    for (const approval of effectiveC2) {
+      const superseded = ledger.approvals.find(
+        (a) => a.approvalId === approval.supersedesApprovalId,
+      );
+      expect(superseded).toBeDefined();
+      expect(Date.parse(approval.decidedAt)).toBeLessThanOrEqual(
+        Date.parse(superseded!.decidedAt),
+      );
+    }
   });
 
   it("keeps pilot files outside browser-downloadable public assets", () => {

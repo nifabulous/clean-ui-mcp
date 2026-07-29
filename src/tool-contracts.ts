@@ -100,10 +100,58 @@ export function isAllowedRetrievalState(s: Record<string, unknown>): boolean {
 export const EvidenceKind = z.enum([
   "corpus-observation", "screen-observation", "dom-signal",
   "machine-rule", "editorial-guidance",
+  // C3 producer vocabulary — mirrors EvidenceKindSchema in
+  // create-ui-spec-contracts.ts. `public-reference` is an explicit
+  // user-supplied input; `recipe-system` is the deterministic operator-authored
+  // recipe, which grounds editorial-authority decisions and is never a corpus
+  // observation.
+  "public-reference", "recipe-system",
 ]);
 export const EvidenceBasis = z.enum([
   "visible", "inferred", "dom-grounded", "editorial",
+  // C3 producer vocabulary — mirrors EvidenceBasisSchema in
+  // create-ui-spec-contracts.ts. `aggregate` is derived from structure/counts
+  // rather than a single visible source; `user-supplied` is the only
+  // public-input basis.
+  "aggregate", "user-supplied",
 ]);
+
+/**
+ * The response-scoped public evidence-ID shape. Mirrors `EvidenceIdSchema` in
+ * create-ui-spec-contracts.ts: corpus observations and public references both
+ * receive a fresh, response-local `evidence-N` id so no upstream corpus
+ * identity ever reaches public output.
+ *
+ * This pattern separates the two ID domains mechanically. A value matching it
+ * is a PUBLIC EVIDENCE ID and may never appear as a `referenceId` (which is
+ * always a safe public reference), and vice versa.
+ *
+ * BOTH directions are enforced, in two places. The shared `Evidence` schema
+ * below refuses this shape in `referenceId` for every evidence tool. The
+ * positive direction — an evidence-ID position must POSITIVELY match this
+ * pattern, so a filesystem path, a source URL or a raw corpus ID cannot sit
+ * there — is enforced for create_ui_spec by the structural leaf-value gate
+ * (`findUnsafeCreateUiSpecLeaves`), which applies it at every evidence-ID
+ * position at once rather than field by field.
+ */
+const RESPONSE_SCOPED_EVIDENCE_ID = /^evidence-[0-9]+$/;
+
+/**
+ * Explicit kind-to-basis allowlist. This replaces the previous per-kind
+ * deny-lists, which would have silently admitted the two new C3 bases
+ * (`aggregate`, `user-supplied`) on every legacy kind. Each legacy row is the
+ * exact complement of its old deny-list, so legacy behavior is unchanged.
+ */
+const EVIDENCE_KIND_BASES: Record<string, readonly string[]> = {
+  "corpus-observation": ["visible", "inferred"],
+  "screen-observation": ["visible", "inferred"],
+  "dom-signal": ["dom-grounded", "visible"],
+  "editorial-guidance": ["editorial"],
+  "machine-rule": ["inferred", "editorial"],
+  // C3 kinds: the producer emits exactly one basis for each.
+  "public-reference": ["user-supplied"],
+  "recipe-system": ["aggregate"],
+};
 
 export const Evidence = z.object({
   id: z.string().trim().min(1),
@@ -112,18 +160,35 @@ export const Evidence = z.object({
   summary: z.string().trim().min(1),
   basis: EvidenceBasis,
 }).strict().superRefine((val, ctx) => {
-  if (val.kind === "corpus-observation" && !val.referenceId)
-    ctx.addIssue({ code: "custom", message: "corpus-observation requires referenceId", path: ["referenceId"] });
-  if (val.kind === "corpus-observation" && (val.basis === "editorial" || val.basis === "dom-grounded"))
-    ctx.addIssue({ code: "custom", message: "corpus-observation basis must be visible or inferred", path: ["basis"] });
-  if (val.kind === "screen-observation" && (val.basis === "editorial" || val.basis === "dom-grounded"))
-    ctx.addIssue({ code: "custom", message: "screen-observation basis must be visible or inferred", path: ["basis"] });
-  if (val.kind === "dom-signal" && (val.basis === "editorial" || val.basis === "inferred"))
-    ctx.addIssue({ code: "custom", message: "dom-signal basis must be dom-grounded or visible", path: ["basis"] });
-  if (val.kind === "editorial-guidance" && val.basis !== "editorial")
-    ctx.addIssue({ code: "custom", message: "editorial-guidance basis must be editorial", path: ["basis"] });
-  if (val.kind === "machine-rule" && (val.basis === "visible" || val.basis === "dom-grounded"))
-    ctx.addIssue({ code: "custom", message: "machine-rule basis must be inferred or editorial", path: ["basis"] });
+  const allowedBases = EVIDENCE_KIND_BASES[val.kind];
+  if (allowedBases && !allowedBases.includes(val.basis))
+    ctx.addIssue({ code: "custom", message: `${val.kind} basis must be ${allowedBases.join(" or ")}`, path: ["basis"] });
+
+  const responseScoped = RESPONSE_SCOPED_EVIDENCE_ID.test(val.id);
+
+  if (val.kind === "corpus-observation") {
+    if (responseScoped) {
+      // A response-scoped corpus observation carries NO public citation — the
+      // same rule create-ui-spec-contracts.ts enforces on `publicReference`.
+      // Attaching one would either leak a corpus identity or falsely claim the
+      // private entry is publicly citable.
+      if (val.referenceId !== undefined)
+        ctx.addIssue({ code: "custom", message: "response-scoped corpus-observation must not carry referenceId", path: ["referenceId"] });
+    } else if (!val.referenceId) {
+      // Legacy (non-response-scoped) corpus rows keep their original requirement.
+      ctx.addIssue({ code: "custom", message: "corpus-observation requires referenceId", path: ["referenceId"] });
+    }
+  }
+  // A public reference is exactly that: the safe public citation is mandatory.
+  if (val.kind === "public-reference" && !val.referenceId)
+    ctx.addIssue({ code: "custom", message: "public-reference requires referenceId", path: ["referenceId"] });
+  // The recipe is operator content, not a user/public citation.
+  if (val.kind === "recipe-system" && val.referenceId !== undefined)
+    ctx.addIssue({ code: "custom", message: "recipe-system must not carry referenceId", path: ["referenceId"] });
+  // ID-domain separation: a public evidence ID may never be substituted for a
+  // safe public reference ID.
+  if (val.referenceId !== undefined && RESPONSE_SCOPED_EVIDENCE_ID.test(val.referenceId))
+    ctx.addIssue({ code: "custom", message: "referenceId must be a safe public reference, not a response-scoped evidence ID", path: ["referenceId"] });
 });
 
 // Evidence array with unique-ID enforcement
@@ -131,7 +196,7 @@ const EvidenceArray = z.array(Evidence).superRefine((arr, ctx) => {
   const seen = new Set<string>();
   arr.forEach((e, i) => {
     if (seen.has(e.id))
-      ctx.addIssue({ code: "custom", message: `duplicate evidence id "${e.id}"`, path: [i, "id"] });
+      ctx.addIssue({ code: "custom", message: `duplicate evidence id at evidence[${i}].id (value withheld)`, path: [i, "id"] });
     seen.add(e.id);
   });
 });
@@ -660,7 +725,7 @@ export const UiSpec = z.object({
   const refSet = new Set(val.citedReferences);
   for (const cd of val.citedDecisions) {
     if (cd.sourceId !== undefined && !refSet.has(cd.sourceId))
-      ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" sourceId "${cd.sourceId}" not in citedReferences`, path: ["citedDecisions"] });
+      ctx.addIssue({ code: "custom", message: `citedDecisions[].sourceId not in citedReferences (value withheld)`, path: ["citedDecisions"] });
   }
 });
 
@@ -685,15 +750,47 @@ const CompareInput = z.object({
   responseFormat: z.enum(["concise", "detailed"]).optional(),
 }).strict();
 
+// ---------------------------------------------------------------------------
+// create_ui_spec transport input.
+//
+// Every field except `outputFormat` is a pass-through to
+// `CreateUiSpecRequestSchema` (create-ui-spec-contracts.ts) and MUST carry the
+// CORE bounds, so transport input that parses here cannot be rejected later by
+// the producer. `outputFormat` is adapter-local: it selects which validated
+// rendering the transport returns and never reaches the core request.
+//
+// `target` and `motionIntents` are MIRRORS of `WebTargetId` and
+// `MotionIntentSchema` from design-target-contracts.ts rather than imports:
+// that module imports `UiSpec` from this one, so importing it back would create
+// an evaluation cycle whose TDZ failure depends on which module loads first.
+// The mirrors are pinned by a mechanical JSON-Schema drift gate in
+// tool-contracts.test.ts ("every core request field is mirrored with identical
+// bounds"), so divergence fails the suite instead of passing silently.
+// ---------------------------------------------------------------------------
+const CreateUiSpecTargetId = z.enum(["neutral-web", "astro-react", "astro-vue"]);
+
+const CreateUiSpecMotionIntent = z.object({
+  id: z.string().min(1),
+  trigger: z.string().min(1),
+  properties: z.array(z.string()),
+  durationToken: z.string().min(1),
+  easingToken: z.string().min(1),
+  interruptible: z.boolean(),
+  reducedMotion: z.string().min(1),
+}).strict();
+
 export const CreateUiSpecInput = z.object({
-  productContext: z.string().trim().min(8),
-  referenceIds: z.array(z.string().trim().min(1)).max(5).default([])
+  productContext: z.string().trim().min(8).max(8_000),
+  referenceIds: z.array(z.string().trim().min(1).max(200)).max(5).default([])
     .refine(a => new Set(a).size === a.length, "referenceIds must be unique"),
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
-  implementationFramework: z.string().optional(),
-  serializationFormat: z.enum(["brief", "tokens"]).default("brief"),
+  implementationFramework: z.string().trim().min(1).max(120).optional(),
   designSystem: DesignSystemIdentitySchema.optional(),
-  constraints: z.array(z.string().trim().min(1)).default([]),
+  constraints: z.array(z.string().trim().min(1).max(500)).max(12).default([]),
+  target: CreateUiSpecTargetId.optional(),
+  motionIntents: z.array(CreateUiSpecMotionIntent).max(8).default([]),
+  /** Adapter-local presentation selection — never part of the core request. */
+  outputFormat: z.enum(["markdown", "json"]).default("markdown"),
 }).strict();
 
 const PlanInput = z.object({
@@ -747,6 +844,461 @@ const PlanDataSchema = z.object({
 // Helper: all evidence kinds for synthesis tools
 const ALL_SYNTHESIS_KINDS = ["corpus-observation", "machine-rule", "editorial-guidance"] as const;
 const CRITIQUE_KINDS = ["corpus-observation", "screen-observation", "dom-signal", "machine-rule", "editorial-guidance"] as const;
+/**
+ * The exact evidence vocabulary the create_ui_spec adapter can project from the
+ * producer's validated SanitizedEvidence rows: sanitized corpus observations,
+ * explicit public references, and the operator-authored recipe. The producer
+ * emits no machine-rule or editorial-guidance rows, so neither is accepted.
+ */
+const CREATE_UI_SPEC_KINDS = ["corpus-observation", "public-reference", "recipe-system"] as const;
+/**
+ * Evidence kinds that can ground an `editorial`-authority citedDecision.
+ * `recipe-system` is the operator-authored deterministic recipe, documented in
+ * create-ui-spec-contracts.ts as grounding editorial-authority decisions and
+ * never corpus-evidence decisions.
+ */
+const EDITORIAL_AUTHORITY_KINDS: readonly string[] = ["editorial-guidance", "recipe-system"];
+
+/**
+ * The ONLY safe public reference shape create_ui_spec may publish: the opaque
+ * SHA-256 digest of the requester's own token, built by the core as
+ * `ref-${sha256Hex(...)}` (src/create-ui-spec.ts). Requiring this positively —
+ * rather than merely rejecting the response-scoped `evidence-N` shape — is what
+ * makes a raw corpus entry ID, a source URL, an image path or any other
+ * filesystem path inexpressible in this tool's public reference positions.
+ *
+ * DELIBERATELY NOT a shared-envelope rule: legacy retrieval tools
+ * (search_ui_references, get_ui_reference, browse_ui_patterns, the research
+ * aggregations) publish real corpus entry IDs in `referenceIds`, so this shape
+ * is enforced only inside the create_ui_spec descriptor's refineEnvelope.
+ */
+const SAFE_PUBLIC_REFERENCE_ID = /^ref-[0-9a-f]{64}$/;
+
+// ===========================================================================
+// The create_ui_spec structural leaf-value gate
+// ===========================================================================
+//
+// WHY THIS EXISTS (and why it is not another per-position check).
+//
+// Three review rounds on the Task 1 migration each found the same leak class on
+// a different axis: round 1 found four of eight reference positions guarded,
+// round 2 found one of two branches guarded, round 3 found one of two ID domains
+// guarded. Every instance had the same mechanism — a MEMBERSHIP rule written
+// where a SHAPE rule was needed, in a hand-maintained list of coordinates over
+// {reference domain, evidence domain} x {shape, transitive membership} x {field}.
+// A field added by a later task is unprotected by default in that design.
+//
+// This gate inverts the default. It walks EVERY string leaf reachable under
+// `data`, `referenceIds` and `evidence`, classifies each leaf by its normalized
+// POSITION, and rejects anything it does not recognize. Adding a field to
+// `UiSpec` without classifying its position here fails the suite — which is the
+// property none of the three per-position fixes had.
+//
+// Three classes, and only three:
+//   * public evidence ID    — must match RESPONSE_SCOPED_EVIDENCE_ID
+//   * safe public reference — must match SAFE_PUBLIC_REFERENCE_ID
+//   * free text             — arbitrary, and ONLY at an allowlisted position
+//
+// The two ID domains stay separate BY CONSTRUCTION: each position demands its
+// own shape, so an `evidence-N` in a reference position and a `ref-<sha256>` in
+// an evidence-ID position are both rejected. The domains are never unioned.
+//
+// SCOPED TO create_ui_spec. The legacy retrieval tools publish real corpus entry
+// IDs in `referenceIds` and non-response-scoped evidence IDs, so the gate is
+// attached to this one descriptor (see `gateResultLeaves`), never to
+// `makeEnvelope` for all tools.
+
+/** A normalized leaf position: array indices collapse to `[]`. */
+type LeafPosition = string;
+
+/**
+ * Positions holding a PUBLIC EVIDENCE ID. Every one is also membership-checked
+ * against the envelope's `evidence[].id` set elsewhere; membership guarantees
+ * the positions agree, this set guarantees the agreed value is safe.
+ */
+const CREATE_UI_SPEC_EVIDENCE_ID_LEAVES: ReadonlySet<LeafPosition> = new Set<LeafPosition>([
+  "evidence[].id",
+  "data.provenance.evidenceIds[]",
+  "data.authorityLanes.corpusEvidence[]",
+  "data.authorityLanes.machineRules[]",
+  "data.authorityLanes.editorialGuidance[]",
+  "data.citedDecisions[].evidenceIds[]",
+  "data.acceptanceCriteria[].evidenceIds[]",
+]);
+
+/**
+ * Positions holding a SAFE PUBLIC REFERENCE — the core's opaque
+ * `ref-${sha256Hex(...)}` digest (src/create-ui-spec.ts). These are the eight
+ * reference-carrying positions enumerated by the round-2 review.
+ */
+const CREATE_UI_SPEC_SAFE_REFERENCE_LEAVES: ReadonlySet<LeafPosition> = new Set<LeafPosition>([
+  "referenceIds[]",
+  "data.citedReferences[]",
+  "data.provenance.sourceReferences[]",
+  "evidence[].referenceId",
+  "data.citedDecisions[].sourceId",
+  "data.techniques[].sourceIds[]",
+  "data.antiPatterns[].sourceIds[]",
+  "data.componentInventory[].sourceId",
+]);
+
+/**
+ * The FREE-TEXT ALLOWLIST: the only positions where an arbitrary string is
+ * permitted. Each entry carries the reason arbitrary text is safe there, so a
+ * reviewer can audit the whole free-text surface in one place. Nothing outside
+ * this record (and the two ID sets above) may hold a string at all.
+ *
+ * Two recurring reasons, stated per entry rather than by group so an added entry
+ * cannot inherit a justification it does not deserve:
+ *   (a) CLOSED VOCABULARY — the Zod schema pins the value to a literal or enum,
+ *       so "arbitrary" is a formality; the gate simply does not re-encode it.
+ *   (b) PROSE — recipe-owned (operator-authored) or requester-owned text that is
+ *       descriptive, carries no identity, and is not a corpus projection. The
+ *       core bounds every one of these at the producer
+ *       (create-ui-spec-contracts.ts); the corpus-derived path additionally
+ *       passes SanitizedEvidence, which forbids private identity fields.
+ */
+const CREATE_UI_SPEC_FREE_TEXT_LEAVES: Readonly<Record<LeafPosition, string>> = {
+  // --- closed vocabularies (reason a) ---
+  "data.specVersion": "closed z.literal(\"1.0\")",
+  "data.context.platform": "closed enum web|mobile|tablet",
+  "data.context.designSystem.status": "closed enum none|identified",
+  "data.colorTokenAuthority": "closed TokenAuthority enum",
+  "data.typographyTokenAuthority": "closed TokenAuthority enum",
+  "data.acceptanceCriteria[].assertion": "closed AcceptanceAssertion enum",
+  "data.acceptanceCriteria[].verifier": "closed discriminator literal",
+  "data.acceptanceCriteria[].priority": "closed must|should enum",
+  "data.citedDecisions[].authority": "closed authority enum",
+  "data.citedDecisions[].readiness": "closed available|proposed|unavailable enum",
+  "evidence[].kind": "closed EvidenceKind enum",
+  "evidence[].basis": "closed EvidenceBasis enum",
+  "data.provenance.generatedAt": "z.string().datetime() — a timestamp, no identity",
+  // --- requester-owned prose, echoed back to its own author (reason b) ---
+  "data.context.productContext": "the caller's own brief, echoed back to the caller; never corpus-derived",
+  "data.context.implementationFramework": "caller-supplied framework name",
+  "data.context.designSystem.registry": "caller-supplied design-system registry name",
+  "data.context.designSystem.library": "caller-supplied design-system library name",
+  "data.context.constraints[]": "caller-supplied constraint prose",
+  "data.designDirection": "under the deterministic recipe this restates the caller's own brief",
+  // --- recipe/operator-owned prose: descriptive, carries no identity (reason b) ---
+  "data.rejectedDefaults[]": "recipe-owned prose naming a rejected default",
+  "data.layoutRegions[].name": "recipe-owned region label",
+  "data.layoutRegions[].type": "recipe-owned region type label",
+  "data.layoutRegions[].components[]": "recipe-owned component label",
+  "data.layoutRegions[].responsive[]": "recipe-owned responsive-behavior prose",
+  "data.responsiveBehavior[]": "recipe-owned responsive-behavior prose",
+  "data.componentInventory[].name": "recipe-owned component label",
+  "data.componentInventory[].pattern": "recipe-owned pattern label",
+  "data.colorTokens.primary": "a color value, not an identity",
+  "data.colorTokens.surface": "a color value, not an identity",
+  "data.colorTokens.ink": "a color value, not an identity",
+  "data.colorTokens.muted": "a color value, not an identity",
+  "data.colorTokens.accent": "a color value, not an identity",
+  "data.typographyTokens.heading": "a font-family name, not an identity",
+  "data.typographyTokens.body": "a font-family name, not an identity",
+  "data.typographyTokens.mono": "a font-family name, not an identity",
+  "data.interactions[]": "recipe-owned interaction prose",
+  "data.motionGuidance.notes[]": "recipe-owned motion prose",
+  "data.accessibilityConstraints[]": "recipe-owned accessibility prose",
+  "data.contentVoiceGuidance": "recipe-owned voice prose",
+  "data.techniques[].text": "recipe-owned technique prose (its citation lives in sourceIds)",
+  "data.antiPatterns[].text": "recipe-owned anti-pattern prose (its citation lives in sourceIds)",
+  "data.frameworkNotes": "recipe-owned framework prose",
+  "data.unavailableDecisions[].field": "names a UiSpec field, response-local",
+  "data.unavailableDecisions[].reason": "recipe-owned reason prose",
+  "data.acceptanceCriteria[].id": "response-local criterion label from the recipe",
+  "data.acceptanceCriteria[].subject": "recipe-owned subject label",
+  "data.acceptanceCriteria[].expectedOutcome": "recipe-owned expectation prose",
+  "data.acceptanceCriteria[].selector": "recipe-owned DOM selector for the playwright verifier",
+  "data.acceptanceCriteria[].command": "recipe-owned verification command for the static-analysis verifier; operator-authored, never a corpus projection",
+  "data.acceptanceCriteria[].manualSteps[]": "recipe-owned manual verification steps",
+  "data.citedDecisions[].id": "response-local decision label from the recipe",
+  "data.citedDecisions[].field": "names a UiSpec field, response-local",
+  "data.provenance.toolVersion": "the recipe version string (e.g. c3-fallback-v1)",
+  // Production-reachable since Task 2: the ONE projection
+  // (`projectSanitizedEvidenceToMcpEvidence` in create-ui-spec-contracts.ts)
+  // carries this value through from a core SanitizedEvidence row and re-parses
+  // BOTH sides — SanitizedEvidenceSchema in, shared `Evidence` out.
+  //
+  // ENFORCED, and by which layer. `SanitizedEvidenceSchema` (create-ui-spec-
+  // contracts.ts) is the enforcing layer for all three of these, at construction
+  // AND again on the projection's inbound re-parse:
+  //   1. length — `z.string().trim().min(1).max(500)`;
+  //   2. no private identity FIELD — `.strict()` refuses
+  //      privateCorpusId/sourceUrl/screenshot/corpusId on the row;
+  //   3. no private CONTENT in this string — the schema's superRefine rejects the
+  //      row when `containsPrivateMarker(summary)` holds (private corpus id
+  //      markers, `.c2-private/`, `/corpus/private/`, `images-private/`) or when
+  //      the summary matches SafeErrorMessage's PATH_OR_URL_PATTERN (any path
+  //      separator, `://`, `node_modules`, `dist/`, `private`, `corpus-`).
+  // The leaf gate itself checks NOTHING here — "free-text" returns immediately —
+  // so (3) is the reason a poisoned summary cannot reach this position, not the
+  // gate.
+  //
+  // INTENDED, not enforced (stated in those words deliberately): that the value is
+  // recipe-owned TEMPLATE text. Today it is, by producer convention — the only
+  // three sources are `buildCorpusObservationSummary` (a fixed template over the
+  // closed StructuredFacts allowlist), the frozen recipe row's own string, and the
+  // fixed explicit-reference string.
+  // Nothing prevents a future builder from interpolating a corpus-derived value
+  // that happens to carry none of the screened markers (e.g. a title fragment).
+  // The screen bounds the leak CLASS; provenance is still the builder's
+  // responsibility, and a new summary builder must be reviewed as such.
+  "evidence[].summary": "SanitizedEvidence summary — bounded at 500 chars, refused a private identity field by .strict(), and content-screened for private-corpus markers, paths and urls by SanitizedEvidenceSchema's superRefine; that it is recipe-owned template prose is a producer convention, not an enforced bound",
+};
+
+/** The three classes. There is no fourth, and there is no default. */
+type CreateUiSpecLeafClass = "public-evidence-id" | "safe-public-reference" | "free-text";
+
+function classifyCreateUiSpecLeaf(position: LeafPosition): CreateUiSpecLeafClass | undefined {
+  if (CREATE_UI_SPEC_EVIDENCE_ID_LEAVES.has(position)) return "public-evidence-id";
+  if (CREATE_UI_SPEC_SAFE_REFERENCE_LEAVES.has(position)) return "safe-public-reference";
+  if (Object.prototype.hasOwnProperty.call(CREATE_UI_SPEC_FREE_TEXT_LEAVES, position)) return "free-text";
+  return undefined;
+}
+
+/**
+ * One rejected leaf. `message` NEVER reproduces the offending value: the
+ * envelope is refused, so an error string that repeated a private path would be
+ * the only channel through which that path still reached the caller.
+ */
+export interface UnsafeResultLeaf {
+  /** The normalized position (array indices as `[]`) — stable across indices. */
+  readonly position: LeafPosition;
+  /** The concrete Zod issue path, with real indices. */
+  readonly path: PropertyKey[];
+  /** Position-naming, value-free message. */
+  readonly message: string;
+}
+
+/**
+ * Depth beyond which the walker refuses rather than recurses. `UiSpec` is a
+ * closed, finite-depth object (its deepest string leaf is four keys down), so
+ * exceeding this means the value is not the shape the gate was written for —
+ * and the fail-closed answer is to reject, not to stop looking.
+ */
+const MAX_LEAF_DEPTH = 12;
+
+/**
+ * The gate. Walks every string leaf under `data`, `referenceIds` and `evidence`
+ * and returns one entry per leaf that is not provably safe.
+ *
+ * Pure: it takes the three roots and returns violations, so it can be exercised
+ * directly against a SIMULATED future field (which `.strict()` makes
+ * unreachable through the schema) as well as through the envelope.
+ */
+export function findUnsafeCreateUiSpecLeaves(roots: {
+  data: unknown;
+  referenceIds: unknown;
+  evidence: unknown;
+}): UnsafeResultLeaf[] {
+  const found: UnsafeResultLeaf[] = [];
+
+  const checkString = (value: string, position: LeafPosition, path: PropertyKey[]): void => {
+    switch (classifyCreateUiSpecLeaf(position)) {
+      case "public-evidence-id":
+        if (!RESPONSE_SCOPED_EVIDENCE_ID.test(value))
+          found.push({ position, path, message: `${position} must be a response-scoped public evidence ID (evidence-N); the offending value is withheld from this message` });
+        return;
+      case "safe-public-reference":
+        if (!SAFE_PUBLIC_REFERENCE_ID.test(value))
+          found.push({ position, path, message: `${position} must be a safe public reference ID (ref-<sha256>); the offending value is withheld from this message` });
+        return;
+      case "free-text":
+        return;
+      default:
+        // FAIL CLOSED. A string at a position nobody classified is refused, so a
+        // field added by a later task cannot publish anything until its position
+        // is deliberately declared above.
+        found.push({ position, path, message: `${position} is not a classified create_ui_spec output position — declare it as a public evidence ID, a safe public reference, or explicit free text before it can be published; the offending value is withheld from this message` });
+    }
+  };
+
+  const visit = (value: unknown, position: LeafPosition, path: PropertyKey[], depth: number): void => {
+    if (depth > MAX_LEAF_DEPTH) {
+      found.push({ position, path, message: `${position} exceeds the maximum inspected depth for create_ui_spec output` });
+      return;
+    }
+    if (typeof value === "string") { checkString(value, position, path); return; }
+    if (Array.isArray(value)) {
+      value.forEach((item, i) => visit(item, `${position}[]`, [...path, i], depth + 1));
+      return;
+    }
+    if (value !== null && typeof value === "object") {
+      for (const [key, child] of Object.entries(value as Record<string, unknown>))
+        visit(child, `${position}.${key}`, [...path, key], depth + 1);
+      return;
+    }
+    // numbers, booleans, null and undefined carry no text and cannot leak.
+  };
+
+  visit(roots.data, "data", ["data"], 0);
+  visit(roots.referenceIds, "referenceIds", ["referenceIds"], 0);
+  visit(roots.evidence, "evidence", ["evidence"], 0);
+  return found;
+}
+
+// ===========================================================================
+// The create_ui_spec CITATION-CONSISTENCY predicate
+// ===========================================================================
+//
+// WHY IT IS A STANDALONE EXPORT AND NOT SIX INLINE CHECKS.
+//
+// These six rules lived inline in the create_ui_spec descriptor's
+// `refineEnvelope` below. `refineEnvelope` is invoked from `makeEnvelope`, which
+// only `parseToolResult` reaches — so they ran on the MCP transport and on NO
+// screen of the loopback HTTP route (create-ui-spec-http.ts), which serves the
+// persisted `DesignArtifactEnvelope` itself and therefore cannot use
+// `parseToolResult` at all. Every input the six read is present in the body that
+// route serves, so `POST /api/create-ui-spec` could return a design handoff whose
+// `techniques[].sourceIds`, `antiPatterns[].sourceIds`,
+// `componentInventory[].sourceId` or `provenance.sourceReferences` disagreed with
+// `citedReferences` — refused over MCP, served with 200 to a browser. Two
+// independent reviewers rated that P1.
+//
+// The ID-SHAPE half of that asymmetry was already closed by giving the HTTP
+// adapter the same leaf gate above. This closes the CITATION half the same way:
+// ONE implementation, called from both transports, so a rule cannot be enforced
+// on one surface and not the other. It is a PREDICATE, not a refinement — it
+// takes a value and returns violations, with no dependency on zod, on the tool
+// envelope, or on which transport is asking. Each transport then does what it
+// does with a violation: `refineEnvelope` turns it into a zod issue at
+// `["data", ...specPath]`; the HTTP adapter throws and serves nothing.
+//
+// IT VALIDATES AND REFUSES. It never rewrites, reorders or normalizes anything —
+// which is what makes it compatible with the adjudicated constraint that the HTTP
+// surface serves the persisted envelope byte-identically. On the success path it
+// returns `[]` and changes no byte.
+//
+// SCOPE. Exactly the six rules, no more: uniqueness of `citedReferences`,
+// membership of the three sourceId positions in `citedReferences`, uniqueness of
+// `provenance.sourceReferences`, and set-equality of `provenance.sourceReferences`
+// with `citedReferences`. ID SHAPE is the leaf gate's job (above) and evidence-ID
+// membership, evidence-KIND authority and the lane rules stay in `refineEnvelope`,
+// because they read the tool envelope's `evidence[]` rows — which do not exist on
+// the HTTP surface, so they are structurally inapplicable there rather than
+// missing.
+
+/** The six rules, as stable ids. A transport may name these in a refusal. */
+export type CreateUiSpecCitationRule =
+  | "citedReferences-unique"
+  | "techniques-sourceIds-cited"
+  | "antiPatterns-sourceIds-cited"
+  | "componentInventory-sourceId-cited"
+  | "provenance-sourceReferences-unique"
+  | "provenance-sourceReferences-match-citedReferences";
+
+/**
+ * One citation-consistency violation. Like {@link UnsafeResultLeaf}, `message`
+ * NEVER reproduces the offending value: both transports refuse the response, so
+ * an error string that repeated the value would be the only channel through which
+ * it still reached a caller.
+ */
+export interface CreateUiSpecCitationInconsistency {
+  /** Which of the six rules failed — stable, value-free, safe to publish. */
+  readonly rule: CreateUiSpecCitationRule;
+  /**
+   * The path of the offending field RELATIVE TO THE SPEC (no transport prefix),
+   * so each transport can map it into its own coordinate space — `refineEnvelope`
+   * prefixes `"data"`, the HTTP adapter has no prefix to add.
+   */
+  readonly specPath: readonly PropertyKey[];
+  /**
+   * The position-naming, value-free message. Byte-identical to what the six
+   * inline checks emitted before the extraction, because the MCP issue messages
+   * are a published contract that the drift gates pin.
+   */
+  readonly message: string;
+}
+
+/**
+ * The predicate. Pure: takes a (possibly malformed, possibly untrusted) value and
+ * returns one entry per citation-consistency violation.
+ *
+ * TOLERANT OF A MALFORMED SHAPE, DELIBERATELY. The HTTP adapter runs this on the
+ * RAW re-parsed served bytes, BEFORE `parseDesignArtifactEnvelope` has vouched for
+ * the shape, so a non-object `spec` or a non-array `techniques` must not make it
+ * throw. It reports nothing in that case and the envelope schema — which runs
+ * immediately afterwards on both transports — is what refuses a malformed shape.
+ * That keeps the overall gate fail-closed without this function having to
+ * duplicate the schema.
+ */
+export function findCreateUiSpecCitationInconsistencies(
+  spec: unknown,
+): CreateUiSpecCitationInconsistency[] {
+  const found: CreateUiSpecCitationInconsistency[] = [];
+  const data = spec as
+    | {
+        citedReferences?: unknown;
+        techniques?: unknown;
+        antiPatterns?: unknown;
+        componentInventory?: unknown;
+        provenance?: { sourceReferences?: unknown };
+      }
+    | null
+    | undefined;
+  const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+
+  const citedRefs = asArray(data?.citedReferences);
+  const citedSet = new Set(citedRefs);
+  if (citedSet.size !== citedRefs.length)
+    found.push({
+      rule: "citedReferences-unique",
+      specPath: ["citedReferences"],
+      message: "citedReferences must be unique",
+    });
+
+  for (const tech of asArray(data?.techniques)) {
+    for (const sid of asArray((tech as { sourceIds?: unknown } | null)?.sourceIds)) {
+      if (!citedSet.has(sid))
+        found.push({
+          rule: "techniques-sourceIds-cited",
+          specPath: ["techniques"],
+          message: "techniques[].sourceIds[] not in citedReferences (value withheld)",
+        });
+    }
+  }
+
+  for (const ap of asArray(data?.antiPatterns)) {
+    for (const sid of asArray((ap as { sourceIds?: unknown } | null)?.sourceIds)) {
+      if (!citedSet.has(sid))
+        found.push({
+          rule: "antiPatterns-sourceIds-cited",
+          specPath: ["antiPatterns"],
+          message: "antiPatterns[].sourceIds[] not in citedReferences (value withheld)",
+        });
+    }
+  }
+
+  for (const comp of asArray(data?.componentInventory)) {
+    const sourceId = (comp as { sourceId?: unknown } | null)?.sourceId;
+    if (sourceId !== undefined && !citedSet.has(sourceId))
+      found.push({
+        rule: "componentInventory-sourceId-cited",
+        specPath: ["componentInventory"],
+        message: "componentInventory[].sourceId not in citedReferences (value withheld)",
+      });
+  }
+
+  // The dedup check runs BEFORE the set compare — the Set-based comparison below
+  // collapses duplicates, so without this it would silently accept [ref, ref].
+  const sourceRefsRaw = asArray(data?.provenance?.sourceReferences);
+  const sourceRefs = new Set(sourceRefsRaw);
+  if (sourceRefs.size !== sourceRefsRaw.length)
+    found.push({
+      rule: "provenance-sourceReferences-unique",
+      specPath: ["provenance"],
+      message: "provenance.sourceReferences must be unique",
+    });
+  if (sourceRefs.size !== citedSet.size || ![...sourceRefs].every((id) => citedSet.has(id)))
+    found.push({
+      rule: "provenance-sourceReferences-match-citedReferences",
+      specPath: ["provenance"],
+      message: "provenance.sourceReferences must exactly match citedReferences",
+    });
+
+  return found;
+}
 
 /**
  * Prose rows for the §5.5 per-tool contract reference. These mirror the
@@ -779,6 +1331,17 @@ export interface ToolDescriptor {
   readonly retrieval: readonly { mode: string; modality: string; fallbackReasons?: readonly string[] }[];
   /** Allowed attempted-mode values for terminal errors and fallback records. */
   readonly allowedAttemptedModes: readonly string[];
+  /**
+   * Retrieval-capable tools normally cannot report `mode: "none"` with a
+   * positive `resultCount` — for a search-shaped tool that combination claims
+   * results that nothing retrieved. Set this ONLY for a tool whose single result
+   * artifact exists independently of automatic retrieval, so `none/none` with
+   * one artifact is the truthful state (create_ui_spec's explicit-reference
+   * path: the requester supplied the references, so no retrieval ran).
+   *
+   * Omitted (or false) preserves the original rule exactly.
+   */
+  readonly allowNoneWithPositiveResult?: boolean;
   readonly evidenceKinds: readonly string[];
   readonly warningSchema: z.ZodType;
   readonly errorSchema: z.ZodType;
@@ -809,6 +1372,16 @@ export interface ToolDescriptor {
   refineData?: (data: unknown, ctx: z.RefinementCtx) => void;
   /** Envelope-level refinement — has access to warnings, evidence, referenceIds. */
   refineEnvelope?: (val: { data: unknown; warnings: unknown[]; referenceIds: string[]; evidence?: unknown[]; retrievalInfo?: { mode: string; fallbackUsed: boolean } }, ctx: z.RefinementCtx) => void;
+  /**
+   * Structural leaf-value gate over every string leaf under `data`,
+   * `referenceIds` and `evidence`. Unlike `refineData`/`refineEnvelope` (rules
+   * 12-13, which only run on the success branch) this is invoked on EVERY
+   * branch, before any status branch is entered — no branch condition can skip
+   * it. Returns one entry per unsafe or UNCLASSIFIED leaf; makeEnvelope turns
+   * each into an issue verbatim, so the gate owns the message wording and can
+   * guarantee no offending value is echoed.
+   */
+  readonly gateResultLeaves?: (roots: { data: unknown; referenceIds: unknown; evidence: unknown }) => readonly UnsafeResultLeaf[];
 }
 
 export const TOOL_DESCRIPTORS = [
@@ -1092,21 +1665,45 @@ export const TOOL_DESCRIPTORS = [
     legacyNames: ["generate_design_prompt"],
     inputSchema: CreateUiSpecInput,
     dataSchema: UiSpec,
-    retrieval: [{ mode: "none", modality: "none" }],
-    allowedAttemptedModes: [],
-    evidenceKinds: [...ALL_SYNTHESIS_KINDS],
+    // The producer's real states: automatic retrieval is keyword/metadata; zero
+    // matches are the structured fallback with the honest "no-results" reason;
+    // explicit references run no retrieval at all (none/none). hybrid/text is
+    // the enriched primary path. The adapter reports the producer's actual
+    // state — it never normalizes one state into another.
+    retrieval: [
+      { mode: "hybrid", modality: "text" },
+      { mode: "keyword", modality: "metadata" },
+      { mode: "structured-fallback", modality: "metadata", fallbackReasons: ["no-results"] },
+      { mode: "none", modality: "none" },
+    ],
+    allowedAttemptedModes: ["keyword"],
+    // none/none carries one spec artifact on the explicit-reference path.
+    allowNoneWithPositiveResult: true,
+    // Exactly the kinds the adapter can project from validated SanitizedEvidence.
+    evidenceKinds: [...CREATE_UI_SPEC_KINDS],
     warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "motionEvidenceUnavailable", "authorityConflict"]),
-    errorSchema: makeErrorSchema(["INVALID_INPUT"]),
-    errorCodes: ["INVALID_INPUT"],
+    // Core INVALID_INPUT maps to the non-retryable MCP INVALID_INPUT; core
+    // RETRIEVAL_UNAVAILABLE maps to the existing retryable PROVIDER_ERROR. No
+    // new transport error code, and no raw core message is exposed.
+    errorSchema: makeErrorSchema(["INVALID_INPUT", "PROVIDER_ERROR"]),
+    errorCodes: ["INVALID_INPUT", "PROVIDER_ERROR"],
     contractDocs: {
-      input: "productContext (required, min 8), referenceIds? (max 5), platform?, implementationFramework?, serializationFormat (default brief)?, designSystem?, constraints?",
+      input: "productContext (required, min 8, max 8000), referenceIds? (max 5, each max 200), platform?, implementationFramework? (max 120), designSystem?, constraints? (max 12, each max 500), target? (neutral-web | astro-react | astro-vue), motionIntents? (max 8, structured), outputFormat (markdown | json, default markdown)?",
       successData: "see §5.4 — UiSpec with layoutRegions, colorTokens, typographyTokens, acceptanceCriteria (verifiers: axe, playwright, static-analysis, manual), citedReferences, citedDecisions, authorityLanes, provenance",
       empty: "n/a — synthesis produces one spec artifact or errors",
-      partial: "sparseCoverage / insufficientCorpusEvidence / motionEvidenceUnavailable typed warnings; null tokens require editorial authority + unavailableDecision",
+      partial: "sparseCoverage / insufficientCorpusEvidence / motionEvidenceUnavailable typed warnings; zero automatic matches are reported as structured-fallback/metadata with fallbackReason \"no-results\"; null tokens require editorial authority + unavailableDecision",
       resultCount: "1 when a complete spec artifact exists, otherwise 0",
-      referenceIds: "`citedReferences`",
+      referenceIds: "`citedReferences` only — safe public reference IDs. Response-scoped evidence IDs (`evidence-N`) are a separate domain and never appear here",
     },
     extractPrimaryIds: () => [],
+    // The structural leaf-value gate: every string leaf under data/referenceIds/
+    // evidence must be a classified position, and must satisfy that position's
+    // shape. Attached here (not in makeEnvelope) because the legacy retrieval
+    // tools legitimately publish raw corpus entry IDs and non-response-scoped
+    // evidence IDs.
+    gateResultLeaves: findUnsafeCreateUiSpecLeaves,
+    // ONLY citedReferences. Evidence IDs live in a separate domain (provenance,
+    // authority lanes, evidence rows) and must never become referenceIds.
     extractReferenceIds: (d) => (d as { citedReferences?: string[] })?.citedReferences ?? [],
     countResults: (d) => (d as { specVersion?: unknown })?.specVersion ? 1 : 0,
     refineEnvelope: (val, ctx) => {
@@ -1116,9 +1713,10 @@ export const TOOL_DESCRIPTORS = [
         provenance?: { evidenceIds?: string[]; sourceReferences?: string[] };
         citedReferences?: string[];
         authorityLanes?: { corpusEvidence?: string[]; machineRules?: string[]; editorialGuidance?: string[] };
-        techniques?: Array<{ sourceIds?: string[] }>;
-        antiPatterns?: Array<{ sourceIds?: string[] }>;
-        componentInventory?: Array<{ sourceId?: string }>;
+        // `techniques`, `antiPatterns` and `componentInventory` are deliberately
+        // absent: the only rules that read them are the six citation-consistency
+        // rules, which `findCreateUiSpecCitationInconsistencies` owns for both
+        // transports (see the delegation at the end of this block).
         motionGuidance?: { evidenceUnavailable?: boolean };
       };
       // Motion warning coupling: evidenceUnavailable ↔ motionEvidenceUnavailable
@@ -1134,10 +1732,56 @@ export const TOOL_DESCRIPTORS = [
         if (e.id) knownEvidence.add(e.id);
       // Cited references set
       const citedSet = new Set(data?.citedReferences ?? []);
-      // Check duplicate citedReferences
       const citedRefs = data?.citedReferences ?? [];
-      if (new Set(citedRefs).size !== citedRefs.length)
-        ctx.addIssue({ code: "custom", message: "citedReferences must be unique", path: ["data", "citedReferences"] });
+      // NOTE: `citedReferences` UNIQUENESS is no longer checked here. It is one of
+      // the six CITATION-CONSISTENCY rules now owned by the shared predicate
+      // `findCreateUiSpecCitationInconsistencies` (above), which BOTH transports
+      // call — see the delegation at the end of this block. The message and path it
+      // emits are byte-identical to what this line emitted.
+      // ID-domain separation: citedReferences (and therefore the envelope's
+      // referenceIds, which must equal them as sets) hold safe PUBLIC REFERENCE
+      // ids only. A response-scoped public evidence id substituted here would
+      // conflate the two domains.
+      // Beyond that, a public reference must POSITIVELY be a safe public
+      // reference: the core's opaque `ref-<sha256>` digest. Anything else — a raw
+      // corpus entry ID, a source URL, an image or filesystem path — is refused
+      // here so it can never be expressed in this tool's success-envelope
+      // reference positions, even if a projection bug upstream tries to publish
+      // it. (The status "error" branch has its own, narrower guard: see the
+      // "status error requires empty evidence" check above, which is what makes
+      // this positive claim true for the error branch too — by forbidding
+      // evidence outright rather than by re-running this check.) The offending
+      // value is NOT echoed into the issue message: the message would itself
+      // become output carrying the path.
+      //
+      // TASK 1b: these three per-position checks are now ALSO covered, on every
+      // branch and in all eight reference positions, by the structural leaf gate
+      // (`findUnsafeCreateUiSpecLeaves`, rule 0 in makeEnvelope). They are kept
+      // deliberately, not left by oversight: the gate reports "position X must be
+      // a safe public reference", while these distinguish the two ID domains in
+      // the message ("...is a response-scoped evidence ID, not a public reference
+      // ID"), which is diagnostically different information. Removing them would
+      // need an equivalence proof the gate cannot give.
+      citedRefs.forEach((ref, i) => {
+        if (RESPONSE_SCOPED_EVIDENCE_ID.test(ref))
+          ctx.addIssue({ code: "custom", message: `citedReference "${ref}" is a response-scoped evidence ID, not a public reference ID`, path: ["data", "citedReferences", i] });
+        else if (!SAFE_PUBLIC_REFERENCE_ID.test(ref))
+          ctx.addIssue({ code: "custom", message: `citedReferences[${i}] is not a safe public reference ID (expected ref-<sha256>)`, path: ["data", "citedReferences", i] });
+      });
+      val.referenceIds.forEach((ref, i) => {
+        if (RESPONSE_SCOPED_EVIDENCE_ID.test(ref))
+          ctx.addIssue({ code: "custom", message: `referenceId "${ref}" is a response-scoped evidence ID, not a public reference ID`, path: ["referenceIds", i] });
+        else if (!SAFE_PUBLIC_REFERENCE_ID.test(ref))
+          ctx.addIssue({ code: "custom", message: `referenceIds[${i}] is not a safe public reference ID (expected ref-<sha256>)`, path: ["referenceIds", i] });
+      });
+      // Every evidence row's public citation is checked at the row level too:
+      // rule 10 only ties it to referenceIds (set membership), which would pass a
+      // whole envelope whose referenceIds are themselves unsafe. (The shared
+      // Evidence schema separately refuses the `evidence-N` shape here.)
+      ((val.evidence as Array<{ referenceId?: string }> | undefined) ?? []).forEach((e, i) => {
+        if (e.referenceId !== undefined && !SAFE_PUBLIC_REFERENCE_ID.test(e.referenceId))
+          ctx.addIssue({ code: "custom", message: `evidence[${i}].referenceId is not a safe public reference ID (expected ref-<sha256>)`, path: ["evidence", i, "referenceId"] });
+      });
       // Check acceptance criteria evidenceIds (membership + dedup) — whole-array form
       const acRefs = (data?.acceptanceCriteria ?? []).map((ac, i) =>
         ({ path: ["data", "acceptanceCriteria", i, "evidenceIds"] as PropertyKey[], ids: ac.evidenceIds ?? [] }),
@@ -1150,7 +1794,7 @@ export const TOOL_DESCRIPTORS = [
       validateEvidenceReferences(knownEvidence, cdRefs, ctx);
       for (const cd of data?.citedDecisions ?? []) {
         if (cd.sourceId !== undefined && !citedSet.has(cd.sourceId))
-          ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" sourceId "${cd.sourceId}" not in citedReferences`, path: ["data", "citedDecisions"] });
+          ctx.addIssue({ code: "custom", message: `citedDecisions[].sourceId not in citedReferences (value withheld)`, path: ["data", "citedDecisions"] });
       }
       // Check authorityLanes evidence IDs (membership + dedup)
       const lanes = data?.authorityLanes;
@@ -1188,20 +1832,38 @@ export const TOOL_DESCRIPTORS = [
           // inconsistent partition).
           for (const eid of evIds) {
             if (evidenceKindById.get(eid) === "corpus-observation" && !corpusLane.has(eid))
-              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" references corpus-observation evidence "${eid}" but it is not in the corpusEvidence lane`, path: ["data", "citedDecisions"] });
+              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" references a corpus-observation evidence ID (position citedDecisions[].evidenceIds[], value withheld) that is not in the corpusEvidence lane`, path: ["data", "citedDecisions"] });
           }
         } else if (cd.authority === "editorial") {
-          // At least one referenced evidence item must be kind editorial-guidance.
-          const hasEditorialKind = evIds.some(eid => evidenceKindById.get(eid) === "editorial-guidance");
+          // At least one referenced evidence item must carry an editorial-grounding
+          // kind (editorial-guidance, or the operator-authored recipe-system).
+          const hasEditorialKind = evIds.some(eid => EDITORIAL_AUTHORITY_KINDS.includes(evidenceKindById.get(eid) ?? ""));
           if (!hasEditorialKind)
-            ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has editorial authority but no referenced evidence of kind editorial-guidance`, path: ["data", "citedDecisions"] });
-          // Lane/kind consistency: every referenced editorial-guidance evidence must
-          // sit in the editorialGuidance lane.
+            ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has editorial authority but no referenced evidence of kind ${EDITORIAL_AUTHORITY_KINDS.join(" or ")}`, path: ["data", "citedDecisions"] });
+          // Lane/kind consistency: every referenced editorial-grounding evidence
+          // must sit in the editorialGuidance lane.
           for (const eid of evIds) {
-            if (evidenceKindById.get(eid) === "editorial-guidance" && !editorialLane.has(eid))
-              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" references editorial-guidance evidence "${eid}" but it is not in the editorialGuidance lane`, path: ["data", "citedDecisions"] });
+            const kind = evidenceKindById.get(eid);
+            if (kind !== undefined && EDITORIAL_AUTHORITY_KINDS.includes(kind) && !editorialLane.has(eid))
+              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" references a ${kind} evidence ID (position citedDecisions[].evidenceIds[], value withheld) that is not in the editorialGuidance lane`, path: ["data", "citedDecisions"] });
+            // Corpus-lane agreement, the mirror of the corpus-evidence branch: a
+            // corpus observation may never CO-ground an editorial decision. Having
+            // one editorial-grounding row present is not a licence to also cite
+            // corpus-derived evidence under editorial authority — that is exactly
+            // the laundering direction the R4 checks exist to prevent, and it is
+            // rejected regardless of which lane the corpus row sits in.
+            if (kind === "corpus-observation")
+              ctx.addIssue({ code: "custom", message: `citedDecision "${cd.id}" has editorial authority but references a corpus-observation evidence ID (position citedDecisions[].evidenceIds[], value withheld)`, path: ["data", "citedDecisions"] });
           }
         }
+      }
+      // Lane partition integrity: corpus-derived evidence never belongs in the
+      // editorialGuidance lane, whether or not any decision cites it. The real
+      // producer partitions the recipe row and public references into that lane
+      // and corpus observations into corpusEvidence (src/create-ui-spec.ts).
+      for (const eid of editorialLane) {
+        if (evidenceKindById.get(eid) === "corpus-observation")
+          ctx.addIssue({ code: "custom", message: `a corpus-observation evidence ID must not be partitioned into the editorialGuidance lane (position authorityLanes.editorialGuidance[], value withheld)`, path: ["data", "authorityLanes", "editorialGuidance"] });
       }
       // --- R4 Part C: same-field conflicting authority lanes require an
       // authorityConflict warning. Two citedDecisions for the SAME exact field
@@ -1225,25 +1887,6 @@ export const TOOL_DESCRIPTORS = [
         ctx.addIssue({ code: "custom", message: `citedDecisions have conflicting authority lanes for field(s): ${[...conflictFields].join(", ")} — requires authorityConflict warning`, path: ["warnings"] });
       if (conflictFields.size === 0 && hasConflictWarn)
         ctx.addIssue({ code: "custom", message: "authorityConflict warning present but no citedDecisions have conflicting authority lanes", path: ["warnings"] });
-      // Check techniques sourceIds against citedReferences
-      for (const tech of data?.techniques ?? []) {
-        for (const sid of tech.sourceIds ?? []) {
-          if (!citedSet.has(sid))
-            ctx.addIssue({ code: "custom", message: `technique sourceId "${sid}" not in citedReferences`, path: ["data", "techniques"] });
-        }
-      }
-      // Check antiPatterns sourceIds against citedReferences
-      for (const ap of data?.antiPatterns ?? []) {
-        for (const sid of ap.sourceIds ?? []) {
-          if (!citedSet.has(sid))
-            ctx.addIssue({ code: "custom", message: `antiPattern sourceId "${sid}" not in citedReferences`, path: ["data", "antiPatterns"] });
-        }
-      }
-      // Check componentInventory sourceId against citedReferences
-      for (const comp of data?.componentInventory ?? []) {
-        if (comp.sourceId !== undefined && !citedSet.has(comp.sourceId))
-          ctx.addIssue({ code: "custom", message: `component sourceId "${comp.sourceId}" not in citedReferences`, path: ["data", "componentInventory"] });
-      }
       // provenance.evidenceIds must match envelope evidence IDs exactly (derived echo, not authority)
       const provEvIds = data?.provenance?.evidenceIds ?? [];
       if (new Set(provEvIds).size !== provEvIds.length)
@@ -1251,15 +1894,23 @@ export const TOOL_DESCRIPTORS = [
       const provenanceEvIds = new Set(provEvIds);
       if (provenanceEvIds.size !== knownEvidence.size || ![...provenanceEvIds].every(id => knownEvidence.has(id)))
         ctx.addIssue({ code: "custom", message: "provenance.evidenceIds must exactly match envelope evidence IDs", path: ["data", "provenance"] });
-      // provenance.sourceReferences must be unique AND match citedReferences exactly.
-      // The explicit dedup check runs BEFORE the set compare — the Set-based sameSet
-      // below collapses duplicates, so without this it would silently accept [ref, ref].
-      const sourceRefsRaw = data?.provenance?.sourceReferences ?? [];
-      if (new Set(sourceRefsRaw).size !== sourceRefsRaw.length)
-        ctx.addIssue({ code: "custom", message: "provenance.sourceReferences must be unique", path: ["data", "provenance"] });
-      const sourceRefs = new Set(sourceRefsRaw);
-      if (sourceRefs.size !== citedSet.size || ![...sourceRefs].every(id => citedSet.has(id)))
-        ctx.addIssue({ code: "custom", message: "provenance.sourceReferences must exactly match citedReferences", path: ["data", "provenance"] });
+      // --- The SIX CITATION-CONSISTENCY rules, delegated to the SHARED predicate. ---
+      // `citedReferences` uniqueness, the three sourceId-membership rules, and both
+      // `provenance.sourceReferences` rules used to be written out inline here. They
+      // now come from `findCreateUiSpecCitationInconsistencies`, which the loopback
+      // HTTP adapter (create-ui-spec-http.ts) also calls — that is the whole point
+      // of the extraction: `refineEnvelope` is reachable only through
+      // `parseToolResult`, so anything written inline here is an MCP-only rule, and
+      // these six read nothing but fields the HTTP surface also publishes.
+      //
+      // The messages and the `["data", ...]` paths are byte-identical to the inline
+      // versions; only the emission ORDER changed (the six are now contiguous, so
+      // `citedReferences must be unique` is reported after the evidence rules rather
+      // than before them). No test asserts a cross-rule ordering, and every poison
+      // whose message list is asserted exactly produces a single issue.
+      for (const violation of findCreateUiSpecCitationInconsistencies(val.data)) {
+        ctx.addIssue({ code: "custom", message: violation.message, path: ["data", ...violation.specPath] });
+      }
     },
   },
   {
@@ -1550,6 +2201,22 @@ function makeEnvelope<const D extends ToolDescriptor>(desc: D) {
     evidence: desc.hasEvidence ? EvidenceArray : z.never().optional(),
     error: desc.errorSchema.optional(),
   }).strict().superRefine((val, ctx) => {
+    // 0. Structural leaf-value gate. Runs FIRST and OUTSIDE every status branch,
+    // so neither the ok nor the error branch can skip it and no future branch
+    // condition can either. Fail-closed: an unclassified string position is
+    // rejected. On the error branch `data` is null and both containers are
+    // forced empty (rules 2/2b below), so the walk finds nothing there — but it
+    // still runs, which is what keeps that branch closed if a container rule is
+    // ever relaxed.
+    if (desc.gateResultLeaves) {
+      for (const leaf of desc.gateResultLeaves({
+        data: val.data,
+        referenceIds: val.referenceIds,
+        evidence: val.evidence,
+      })) {
+        ctx.addIssue({ code: "custom", message: leaf.message, path: leaf.path });
+      }
+    }
     // 1. status ok → non-null data, no error
     if (val.status === "ok") {
       if (val.data === null)
@@ -1568,11 +2235,21 @@ function makeEnvelope<const D extends ToolDescriptor>(desc: D) {
       // Error envelopes must have empty referenceIds
       if (val.referenceIds.length > 0)
         ctx.addIssue({ code: "custom", message: 'status "error" requires empty referenceIds', path: ["referenceIds"] });
+      // Error envelopes must have empty evidence. Rules 4-13 below (including
+      // refineEnvelope, the safe-public-reference checks and the per-tool
+      // evidenceKinds check) only run when status is "ok" — without this check
+      // an error envelope's evidence array would be a second, unguarded channel
+      // for a private path, a source URL, a raw corpus ID or an out-of-vocabulary
+      // evidence kind. Every existing error fixture already uses evidence: [],
+      // so this is non-breaking.
+      if (desc.hasEvidence && val.evidence && val.evidence.length > 0)
+        ctx.addIssue({ code: "custom", message: 'status "error" requires empty evidence', path: ["evidence"] });
     }
     // 2b. Retrieval-capable tools: mode "none" on success requires resultCount 0
     // (none-only tools like get/compare/taxonomy legitimately have none+count 1)
     const isRetrievalCapable = desc.retrieval.length > 1 || (desc.retrieval.length === 1 && desc.retrieval[0]!.mode !== "none");
-    if (val.status === "ok" && isRetrievalCapable && val.retrieval.mode === "none" && val.retrieval.resultCount > 0)
+    if (val.status === "ok" && isRetrievalCapable && desc.allowNoneWithPositiveResult !== true
+      && val.retrieval.mode === "none" && val.retrieval.resultCount > 0)
       ctx.addIssue({ code: "custom", message: "retrieval-capable tool cannot have mode none with positive resultCount on success", path: ["retrieval"] });
     // 3. Retrieval eligibility + fallback truth + attempted-mode policy
     // Delegate to the shared integrity validator for complete checks
@@ -1627,7 +2304,7 @@ function makeEnvelope<const D extends ToolDescriptor>(desc: D) {
             ctx.addIssue({ code: "custom", message: `evidence kind "${ev.kind}" not allowed for ${desc.name}`, path: ["evidence", i, "kind"] });
           // 10. evidence referenceId membership
           if (ev.referenceId && !val.referenceIds.includes(ev.referenceId))
-            ctx.addIssue({ code: "custom", message: `evidence referenceId "${ev.referenceId}" not in referenceIds`, path: ["evidence", i, "referenceId"] });
+            ctx.addIssue({ code: "custom", message: `evidence[${i}].referenceId not in referenceIds (value withheld)`, path: ["evidence", i, "referenceId"] });
         }
         // 11. empty evidence requires insufficientCorpusEvidence warning
         if (val.evidence.length === 0) {

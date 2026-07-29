@@ -14,8 +14,9 @@ import { createSearch, type SearchFilters } from "../search/search";
  *
  * The preview is intentionally compact: a query input, a live result count, and
  * a few result cards each showing title/product, pattern, quality, one critique
- * excerpt, and a link to the (Task 5) Playground. Full critique and filters
- * live on the Playground page.
+ * excerpt, and a link to the full corpus-search surface at `/browse`. Full
+ * critique and filters live there. (`/playground` is the C3 composer — C3 Task 6
+ * moved search to `/browse`, so this preview must not link to the composer.)
  */
 export interface ProductPreviewProps {
   /** A few representative parsed entries from the snapshot. */
@@ -93,8 +94,11 @@ export function ProductPreview({ snapshot }: ProductPreviewProps): ReactElement 
       </ul>
 
       <div className="product-preview__footnote">
-        <Link className="product-preview__more" to="/playground">
-          Open the full Playground →
+        {/* /browse, NOT /playground. `/playground` became the C3 create_ui_spec
+            composer (Task 6) and has no search UI, so sending a visitor there
+            from the corpus preview would silently drop them onto a generator. */}
+        <Link className="product-preview__more" to="/browse">
+          Browse the full corpus →
         </Link>
       </div>
     </div>

@@ -18,6 +18,15 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     testTimeout: 15_000,
+    // Snapshot the newest src/ mtime ONCE, before any test file runs, for
+    // mcp-smoke.test.ts's build-currency guard. Without this, the guard's
+    // verdict depends on test-file scheduling: src/references/generated.ts is
+    // a tracked source file that generated.test.ts rewrites mid-suite (write
+    // "// drift" then restore, for its own drift assertions), so a live
+    // re-scan of src/ at assertion time reports STALE BUILD or not depending
+    // on whether that rewrite already happened — with no source CONTENT ever
+    // having changed. See src/build-currency-global-setup.ts.
+    globalSetup: ["./src/build-currency-global-setup.ts"],
     // Exclude git worktrees — they contain stale copies of tests that vitest
     // picks up and double-counts (e.g. .worktrees/reference-synthesis/ still
     // has the deleted grok-eval.mjs tests).

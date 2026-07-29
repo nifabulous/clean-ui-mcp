@@ -31,10 +31,20 @@ import {
   buildSemanticSpecInput,
 } from "./create-ui-spec-contracts.js";
 import { CreateUiSpecRequestSchema } from "./create-ui-spec-contracts.js";
+import {
+  SanitizedEvidenceSchema,
+  containsPrivateMarker,
+  projectSanitizedEvidenceToMcpEvidence,
+  projectRetrievalStateForTransport,
+  type CreateUiSpecAdapterResult,
+} from "./create-ui-spec-contracts.js";
 import { canonicalJsonStringify, sha256Hex } from "./readiness/contracts.js";
-import { createUiSpec, buildFallbackCandidate, RECIPE_EVIDENCE_ID, type CreateUiSpecDependencies } from "./create-ui-spec.js";
+import { createUiSpec, createUiSpecForAdapter, buildFallbackCandidate, RECIPE_EVIDENCE_ID, type CreateUiSpecDependencies } from "./create-ui-spec.js";
 import recipe from "./c3/fallback-recipe-v1.json" with { type: "json" };
 import type { SanitizedEvidence } from "./create-ui-spec-contracts.js";
+import type { DesignArtifactEnvelope } from "./create-ui-spec-contracts.js";
+import { Evidence, ToolResultSchemas, findUnsafeCreateUiSpecLeaves } from "./tool-contracts.js";
+import type { UiSpecT } from "./tool-contracts.js";
 
 // ---------------------------------------------------------------------------
 // Frozen recipe identity (mirrors fallback-recipe-v1.test.ts).
@@ -97,9 +107,14 @@ function makeFixture(over: Partial<FixtureEntry> & { id: string }): FixtureEntry
   } as FixtureEntry;
 }
 
-/** Build a fixture entry with the given product + pattern. */
+/**
+ * Build a fixture entry with the given product + pattern. `patternType` is
+ * genuinely applied (it used to be ignored, so every caller silently got
+ * "dashboard"); `extra.patternType` still wins, which is how the out-of-enum
+ * leak case injects a value the closed PatternType enum does not contain.
+ */
 function entry(id: string, productName: string, patternType = "dashboard", extra: Partial<FixtureEntry> = {}): FixtureEntry {
-  return makeFixture({ id, ...extra, source: { ...makeFixture({ id }).source, productName, ...extra.source } });
+  return makeFixture({ id, patternType, ...extra, source: { ...makeFixture({ id }).source, productName, ...extra.source } });
 }
 
 // ---------------------------------------------------------------------------
@@ -840,5 +855,553 @@ describe("create-ui-spec producer — honest zero-match retrieval state (no fabr
   it("the zero-match spec still parses (re-render + re-hash verification passes)", async () => {
     const env = await createUiSpec(validInput(), deps([], []));
     expect(() => parseDesignArtifactEnvelope(env)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 1b: the MCP structural leaf gate must accept the REAL producer's output.
+//
+// The producer is the definition of correct: if the gate rejects genuine
+// createUiSpec() output, the gate is wrong. These tests run the real producer
+// (no hand-written envelope) and check its output twice:
+//
+//   1. directly against the gate — every string leaf of the real spec must be a
+//      CLASSIFIED position carrying a value of that position's shape; and
+//   2. through the full MCP envelope schema.
+//
+// The evidence-row projection below is TEST-LOCAL on purpose, and stays so now
+// that Task 2 has landed the production projection
+// (`projectSanitizedEvidenceToMcpEvidence`). It asserts a DIFFERENT property:
+// that `createUiSpec()`'s envelope-only output is by itself sufficient to derive
+// gate-clean evidence rows, reconstructed from the spec's own authority lanes
+// exactly as the producer partitions them (editorialGuidance =
+// [recipe, ...publicReferences], corpusEvidence = corpus observations). The
+// production projection — which reads the preserved `sanitizedEvidence` rows
+// rather than reconstructing them — is exercised over the same three producer
+// states by the Task 2 block below.
+// ---------------------------------------------------------------------------
+
+describe("create-ui-spec producer — MCP leaf gate accepts real producer output", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { vi.clearAllMocks(); });
+
+  function projectEvidenceRows(spec: UiSpecT): Array<Record<string, unknown>> {
+    const corpusLane = new Set(spec.authorityLanes.corpusEvidence);
+    const citedReferences = [...spec.citedReferences];
+    return spec.provenance.evidenceIds.map((id) => {
+      if (id === RECIPE_EVIDENCE_ID)
+        return { id, kind: "recipe-system", basis: "aggregate", summary: "Deterministic recipe row." };
+      if (corpusLane.has(id))
+        return { id, kind: "corpus-observation", basis: "visible", summary: "Sanitized corpus observation." };
+      return {
+        id, kind: "public-reference", basis: "user-supplied",
+        summary: "User-supplied public reference.",
+        referenceId: citedReferences.shift(),
+      };
+    });
+  }
+
+  function projectMcpEnvelope(env: DesignArtifactEnvelope): Record<string, unknown> {
+    const spec = env.spec;
+    return {
+      tool: "create_ui_spec",
+      schemaVersion: "1.0",
+      status: "ok",
+      summary: "Design spec produced.",
+      data: spec,
+      referenceIds: [...spec.citedReferences],
+      // resultCount is the ARTIFACT count (one spec), not the retrieval match
+      // count the core records — the adapter concern Task 3 owns.
+      retrieval: { ...env.retrieval, resultCount: 1 },
+      warnings: env.warnings.map((w) => ({ code: w.code, message: w.message })),
+      evidence: projectEvidenceRows(spec),
+    };
+  }
+
+  const CASES: Array<[string, () => Promise<DesignArtifactEnvelope>]> = [
+    ["automatic retrieval with matches", async () => {
+      const corpus = [entry("internal-1", "product-A"), entry("internal-2", "product-B")];
+      return createUiSpec(validInput(), deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))));
+    }],
+    ["zero-match structured fallback", async () => createUiSpec(validInput(), deps([], []))],
+    ["explicit public references", async () => {
+      const e = entry("internal-1", "product-A");
+      return createUiSpec(
+        validInput({ referenceIds: ["opaque-token-1"] }),
+        deps([e], [], (t: string) => (t === "opaque-token-1" ? "internal-1" : undefined)),
+      );
+    }],
+  ];
+
+  for (const [label, produce] of CASES) {
+    it(`gate finds no unclassified or unsafe leaf in real output: ${label}`, async () => {
+      const env = parseDesignArtifactEnvelope(await produce());
+      const evidence = projectEvidenceRows(env.spec);
+      const found = findUnsafeCreateUiSpecLeaves({
+        data: env.spec,
+        referenceIds: [...env.spec.citedReferences],
+        evidence,
+      });
+      expect(found.map((v) => `${v.position}: ${v.message}`)).toEqual([]);
+    });
+
+    it(`the full MCP envelope built from real output validates: ${label}`, async () => {
+      const env = parseDesignArtifactEnvelope(await produce());
+      const r = ToolResultSchemas.create_ui_spec.safeParse(projectMcpEnvelope(env));
+      expect(r.success, r.success ? "" : JSON.stringify(r.error.issues, null, 2)).toBe(true);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Task 2 — the adapter-facing evidence result path.
+//
+// Both transport adapters (MCP, Task 3; loopback HTTP, Task 5) need the SAME
+// validated, response-scoped evidence without re-running retrieval,
+// sanitization, assembly or rendering. `createUiSpecForAdapter()` is that
+// internal result path and `projectSanitizedEvidenceToMcpEvidence()` is the one
+// safe projection onto the shared MCP `Evidence` rows.
+//
+// `createUiSpec()` must keep its exact current behavior: it delegates to the
+// adapter path and returns only the envelope.
+// ---------------------------------------------------------------------------
+
+describe("create-ui-spec producer — Task 2 adapter-facing evidence result path", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { vi.clearAllMocks(); });
+
+  /** The exact SanitizedEvidence field set the core approves. */
+  const APPROVED_SANITIZED_FIELDS = new Set([
+    "id", "kind", "basis", "summary", "structuredFacts", "publicReference",
+  ]);
+  /** The exact shared MCP `Evidence` field set. */
+  const APPROVED_MCP_EVIDENCE_FIELDS = new Set([
+    "id", "referenceId", "kind", "summary", "basis",
+  ]);
+  const RESPONSE_SCOPED_ID_RE = /^evidence-[0-9]+$/;
+  const SAFE_PUBLIC_REFERENCE_RE = /^ref-[0-9a-f]{64}$/;
+
+  /**
+   * The three real producer states. Three corpus entries (not two) in the
+   * automatic case and two tokens (not one) in the explicit case, so an
+   * ordering or off-by-one defect in the id→referenceId mapping is detectable.
+   */
+  const ADAPTER_CASES: Array<[string, () => Promise<CreateUiSpecAdapterResult>]> = [
+    ["automatic retrieval with matches", async () => {
+      // Three genuinely different patternTypes, so the three rows' structuredFacts
+      // (and therefore their recipe-owned summaries) differ and an ordering slip
+      // in the id→row mapping is detectable.
+      const corpus = [
+        entry("internal-1", "product-Alpha", "dashboard"),
+        entry("internal-2", "product-Bravo", "landing-page"),
+        entry("internal-3", "product-Charlie", "settings"),
+      ];
+      return createUiSpecForAdapter(
+        validInput(),
+        deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+      );
+    }],
+    ["zero-match structured fallback", async () =>
+      createUiSpecForAdapter(validInput(), deps([], []))],
+    ["explicit public references", async () => {
+      const corpus = [entry("internal-1", "product-Alpha"), entry("internal-2", "product-Bravo")];
+      const map: Record<string, string> = {
+        "opaque-token-alpha": "internal-1",
+        "opaque-token-bravo": "internal-2",
+      };
+      return createUiSpecForAdapter(
+        validInput({ referenceIds: ["opaque-token-alpha", "opaque-token-bravo"] }),
+        deps(corpus, [], (t: string) => map[t]),
+      );
+    }],
+  ];
+
+  // --- createUiSpec() behavior preservation ---------------------------------
+
+  it("createUiSpec returns exactly the envelope the adapter path produces", async () => {
+    const corpus = [entry("internal-1", "product-Alpha"), entry("internal-2", "product-Bravo")];
+    const ranked = corpus.map((e) => ({ entry: e, score: 5 }));
+    const viaPublic = await createUiSpec(validInput(), deps(corpus, ranked));
+    const viaAdapter = await createUiSpecForAdapter(validInput(), deps(corpus, ranked));
+    expect(viaAdapter.envelope).toEqual(viaPublic);
+    // The public function returns the envelope itself — not a wrapper.
+    expect((viaPublic as unknown as Record<string, unknown>).sanitizedEvidence).toBeUndefined();
+  });
+
+  it("the adapter path raises the same typed errors as createUiSpec", async () => {
+    await expect(
+      createUiSpecForAdapter(validInput({ productContext: "short" }), deps([], [])),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT", retryable: false });
+    await expect(
+      createUiSpecForAdapter(validInput({ referenceIds: ["nope"] }), deps([], [])),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT", retryable: false });
+  });
+
+  for (const [label, produce] of ADAPTER_CASES) {
+    // --- the internal result path -----------------------------------------
+
+    it(`adapter evidence rows carry only approved SanitizedEvidence fields: ${label}`, async () => {
+      const { sanitizedEvidence } = await produce();
+      expect(sanitizedEvidence.length).toBeGreaterThan(0);
+      for (const row of sanitizedEvidence) {
+        for (const key of Object.keys(row))
+          expect(APPROVED_SANITIZED_FIELDS.has(key), `unexpected field "${key}"`).toBe(true);
+        // The schema is NOT an identity function by construction — `summary` and
+        // `publicReference` are `z.string().trim()` and `structuredFacts` has
+        // `.default({})`, so a re-parse CAN repair a row. What this asserts is
+        // that the producer's rows are already in that normal form, so the
+        // projection's inbound re-parse changes nothing on the production path.
+        expect(SanitizedEvidenceSchema.parse(row)).toEqual(row);
+        expect(row.id).toMatch(RESPONSE_SCOPED_ID_RE);
+      }
+    });
+
+    it(`adapter evidence ids equal envelope.publicEvidenceIds in order: ${label}`, async () => {
+      const { envelope, sanitizedEvidence } = await produce();
+      expect(sanitizedEvidence.map((e) => e.id)).toEqual([...envelope.publicEvidenceIds]);
+    });
+
+    // --- the single safe projection ----------------------------------------
+
+    it(`projection preserves ids, kind and truthful basis: ${label}`, async () => {
+      const { sanitizedEvidence } = await produce();
+      const rows = projectSanitizedEvidenceToMcpEvidence(sanitizedEvidence);
+      expect(rows.length).toBe(sanitizedEvidence.length);
+      rows.forEach((row, i) => {
+        const src = sanitizedEvidence[i];
+        expect(row.id).toBe(src.id);
+        expect(row.kind).toBe(src.kind);
+        expect(row.basis).toBe(src.basis);
+        expect(row.summary).toBe(src.summary);
+        for (const key of Object.keys(row))
+          expect(APPROVED_MCP_EVIDENCE_FIELDS.has(key), `unexpected field "${key}"`).toBe(true);
+        // Each projected row is a valid shared MCP Evidence row.
+        expect(Evidence.safeParse(row).success).toBe(true);
+      });
+    });
+
+    it(`every publicEvidenceId appears exactly once in the projection: ${label}`, async () => {
+      const { envelope, sanitizedEvidence } = await produce();
+      const rows = projectSanitizedEvidenceToMcpEvidence(sanitizedEvidence);
+      for (const id of envelope.publicEvidenceIds)
+        expect(rows.filter((r) => r.id === id).length, `id ${id}`).toBe(1);
+      expect(rows.length).toBe(envelope.publicEvidenceIds.length);
+    });
+
+    it(`recipe-system evidence is operator-authored and carries no referenceId: ${label}`, async () => {
+      const { sanitizedEvidence } = await produce();
+      const rows = projectSanitizedEvidenceToMcpEvidence(sanitizedEvidence);
+      const recipeRows = rows.filter((r) => r.id === RECIPE_EVIDENCE_ID);
+      expect(recipeRows.length).toBe(1);
+      expect(recipeRows[0].kind).toBe("recipe-system");
+      expect(recipeRows[0].basis).toBe("aggregate");
+      expect(recipeRows[0].referenceId).toBeUndefined();
+    });
+
+    // --- leak scan over the serialized adapter result ----------------------
+
+    it(`the serialized adapter result carries no private markers: ${label}`, async () => {
+      const { envelope, sanitizedEvidence } = await produce();
+      const serialized = JSON.stringify({
+        envelope,
+        sanitizedEvidence,
+        evidence: projectSanitizedEvidenceToMcpEvidence(sanitizedEvidence),
+      });
+      const banned = [
+        // private corpus identity markers
+        "private-corpus-id", "images-private/",
+        // raw corpus entry ids
+        "internal-1", "internal-2", "internal-3",
+        // product identities
+        "product-Alpha", "product-Bravo", "product-Charlie",
+        // source urls + image paths + critique/steal prose
+        "https://private.example.com/secret", "secret.png",
+        "critique prose must never leak", "stealable prose",
+        // the caller's raw reference tokens (only the digest is public)
+        "opaque-token-alpha", "opaque-token-bravo",
+      ];
+      for (const marker of banned)
+        expect(serialized.includes(marker), `leaked marker "${marker}"`).toBe(false);
+      for (const s of [...sanitizedEvidence.map((e) => e.summary)])
+        expect(containsPrivateMarker(s)).toBe(false);
+    });
+
+    // --- the structural leaf gate accepts the production projection -------
+
+    it(`the leaf gate accepts the production projection: ${label}`, async () => {
+      const { envelope, sanitizedEvidence } = await produce();
+      const found = findUnsafeCreateUiSpecLeaves({
+        data: envelope.spec,
+        referenceIds: [...envelope.spec.citedReferences],
+        evidence: projectSanitizedEvidenceToMcpEvidence(sanitizedEvidence),
+      });
+      expect(found.map((v) => `${v.position}: ${v.message}`)).toEqual([]);
+    });
+
+    it(`the full MCP result built from the production projection validates: ${label}`, async () => {
+      const { envelope, sanitizedEvidence } = await produce();
+      const r = ToolResultSchemas.create_ui_spec.safeParse({
+        tool: "create_ui_spec",
+        schemaVersion: "1.0",
+        status: "ok",
+        summary: "Design spec produced.",
+        data: envelope.spec,
+        referenceIds: [...envelope.spec.citedReferences],
+        // NOT `envelope.retrieval`: its resultCount counts retrieved corpus
+        // observations, while the published create_ui_spec contract documents
+        // resultCount as the artifact count ("1 when a complete spec artifact
+        // exists, otherwise 0"). The shared mapping re-scopes exactly that one
+        // field and preserves every other state value.
+        retrieval: projectRetrievalStateForTransport(envelope),
+        warnings: envelope.warnings.map((w) => ({ code: w.code, message: w.message })),
+        evidence: projectSanitizedEvidenceToMcpEvidence(sanitizedEvidence),
+      });
+      expect(r.success, r.success ? "" : JSON.stringify(r.error.issues, null, 2)).toBe(true);
+    });
+  }
+
+  // --- corpus vs. explicit-reference distinguishability --------------------
+
+  it("automatic corpus evidence carries no referenceId and no publicReference", async () => {
+    const corpus = [
+      entry("internal-1", "product-Alpha"),
+      // "landing-page", not "landing" — `entry` now really applies patternType,
+      // and only closed PatternType tokens survive SanitizedEvidenceSchema.
+      entry("internal-2", "product-Bravo", "landing-page"),
+      entry("internal-3", "product-Charlie", "settings"),
+    ];
+    const { sanitizedEvidence } = await createUiSpecForAdapter(
+      validInput(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const rows = projectSanitizedEvidenceToMcpEvidence(sanitizedEvidence);
+    const corpusRows = rows.filter((r) => r.kind === "corpus-observation");
+    expect(corpusRows.length).toBe(3);
+    for (const row of corpusRows) {
+      expect(row.referenceId).toBeUndefined();
+      expect(row.basis).toBe("visible");
+    }
+    for (const src of sanitizedEvidence.filter((e) => e.kind === "corpus-observation"))
+      expect(src.publicReference).toBeUndefined();
+    // No public-reference row exists on the automatic path.
+    expect(rows.some((r) => r.kind === "public-reference")).toBe(false);
+  });
+
+  it("explicit public references stay distinguishable from corpus evidence", async () => {
+    const corpus = [entry("internal-1", "product-Alpha"), entry("internal-2", "product-Bravo")];
+    const map: Record<string, string> = {
+      "opaque-token-alpha": "internal-1",
+      "opaque-token-bravo": "internal-2",
+    };
+    const { envelope, sanitizedEvidence } = await createUiSpecForAdapter(
+      validInput({ referenceIds: ["opaque-token-alpha", "opaque-token-bravo"] }),
+      deps(corpus, [], (t: string) => map[t]),
+    );
+    const rows = projectSanitizedEvidenceToMcpEvidence(sanitizedEvidence);
+    // Nothing on the explicit path is a corpus observation.
+    expect(rows.some((r) => r.kind === "corpus-observation")).toBe(false);
+    const publicRows = rows.filter((r) => r.kind === "public-reference");
+    expect(publicRows.length).toBe(2);
+    for (const row of publicRows) {
+      expect(row.basis).toBe("user-supplied");
+      expect(row.referenceId).toMatch(SAFE_PUBLIC_REFERENCE_RE);
+      // The two ID domains are never substituted for one another.
+      expect(row.referenceId).not.toMatch(RESPONSE_SCOPED_ID_RE);
+      expect(row.id).not.toMatch(SAFE_PUBLIC_REFERENCE_RE);
+    }
+    // Order-preserving: the projected referenceIds are the spec's citedReferences
+    // in the same order (a two-token case, so a swap is detectable).
+    expect(publicRows.map((r) => r.referenceId)).toEqual([...envelope.spec.citedReferences]);
+    expect(new Set(publicRows.map((r) => r.referenceId)).size).toBe(2);
+  });
+
+  it("a corpus patternType outside the closed enum cannot reach evidence[].summary", async () => {
+    // The adapter result path is what PUBLISHES evidence[].summary — the persisted
+    // envelope carries only `publicEvidenceIds`. The recipe-owned summary template
+    // interpolates structuredFacts.pattern verbatim (`"<pattern>" reference with N
+    // regions`), so an entry whose patternType is not a closed PatternType token
+    // would publish that raw string. Every sanitized row is therefore parsed
+    // through SanitizedEvidenceSchema at construction, whose StructuredFacts pins
+    // `pattern` to PatternType — so this is refused, not published.
+    const bogus = entry("internal-1", "product-Alpha", "dashboard", {
+      patternType: "private-corpus-id-leak-pattern",
+    });
+    await expect(
+      createUiSpecForAdapter(validInput(), deps([bogus], [{ entry: bogus, score: 5 }])),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT", retryable: false });
+    // Same for the envelope-only public function — one pipeline, one outcome.
+    await expect(
+      createUiSpec(validInput(), deps([bogus], [{ entry: bogus, score: 5 }])),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT", retryable: false });
+  });
+
+  it("the projection refuses a row that is not approved SanitizedEvidence", () => {
+    // A defective row: kind says recipe-system (operator content) but a
+    // publicReference is present. The core forbids that combination, so the
+    // projection refuses the row rather than silently dropping the field —
+    // fail-closed, and the message never reproduces the value.
+    const bad = {
+      id: "evidence-1", kind: "recipe-system", basis: "aggregate",
+      summary: "Deterministic recipe row.", structuredFacts: {},
+      publicReference: `ref-${"a".repeat(64)}`,
+    } as SanitizedEvidence;
+    expect(() => projectSanitizedEvidenceToMcpEvidence([bad])).toThrow(/not an approved SanitizedEvidence row/);
+    try {
+      projectSanitizedEvidenceToMcpEvidence([bad]);
+    } catch (err) {
+      expect(String((err as Error).message)).not.toContain("a".repeat(64));
+    }
+    // A row carrying a field outside the approved allowlist is refused too.
+    expect(() => projectSanitizedEvidenceToMcpEvidence([
+      {
+        id: "evidence-1", kind: "corpus-observation", basis: "visible",
+        summary: "Sanitized corpus observation.", structuredFacts: {},
+        privateCorpusId: "internal-1",
+      } as unknown as SanitizedEvidence,
+    ])).toThrow(/not an approved SanitizedEvidence row/);
+  });
+
+  it("the projection refuses a publicReference that is not a safe public reference", () => {
+    expect(() => projectSanitizedEvidenceToMcpEvidence([
+      {
+        id: "evidence-1", kind: "public-reference", basis: "user-supplied",
+        summary: "User-supplied public reference.", structuredFacts: {},
+        publicReference: "https://private.example.com/secret",
+      } as SanitizedEvidence,
+    ])).toThrow();
+  });
+
+  // --- evidence[].summary is a PUBLISHED channel and must be screened --------
+  //
+  // Task 2 makes `evidence[].summary` the first published string that does NOT
+  // pass DesignArtifactEnvelopeSchema's containsPrivateMarker sweep (the rows
+  // travel beside the envelope), and the create_ui_spec leaf gate classifies the
+  // position as free text, so it checks nothing. Screened at construction by
+  // SanitizedEvidenceSchema; the projection inherits the screen through its
+  // inbound re-parse.
+
+  it("the projection refuses a poisoned summary instead of publishing it verbatim", () => {
+    // The exact probe from the Task 2 review (§4, poisoned row 8): before the
+    // screen this row was ACCEPTED and its summary published verbatim.
+    const poisoned = {
+      id: "evidence-1", kind: "corpus-observation", basis: "visible",
+      summary: "private-corpus-id internal-1 images-private/secret.png https://private.example.com/secret",
+      structuredFacts: {},
+    } as unknown as SanitizedEvidence;
+    expect(() => projectSanitizedEvidenceToMcpEvidence([poisoned]))
+      .toThrow(/not an approved SanitizedEvidence row/);
+    try {
+      projectSanitizedEvidenceToMcpEvidence([poisoned]);
+    } catch (err) {
+      // The refusal must not become the channel the value escapes through.
+      expect(String((err as Error).message)).not.toContain("images-private/");
+      expect(String((err as Error).message)).not.toContain("private-corpus-id");
+      expect(String((err as Error).message)).not.toContain("private.example.com");
+    }
+  });
+
+  it("each private-content class in a summary is refused on its own", () => {
+    // Not just the combined probe: a raw corpus id marker, a private image path
+    // and a source URL each individually make the row unpublishable.
+    for (const summary of [
+      "dashboard reference private-corpus-id-7",
+      "dashboard reference images-private/secret.png",
+      "dashboard reference https://private.example.com/secret",
+    ]) {
+      expect(() => projectSanitizedEvidenceToMcpEvidence([
+        {
+          id: "evidence-1", kind: "corpus-observation", basis: "visible",
+          summary, structuredFacts: {},
+        } as unknown as SanitizedEvidence,
+      ]), summary).toThrow(/not an approved SanitizedEvidence row/);
+    }
+  });
+
+  it("the projection refuses duplicate evidence ids across rows", () => {
+    // The brief requires every publicEvidenceId to be represented EXACTLY once.
+    // `Evidence` is applied per row, so uniqueness has to be checked here.
+    const rows = [
+      { id: "evidence-2", kind: "corpus-observation", basis: "visible", summary: "dashboard reference", structuredFacts: {} },
+      { id: "evidence-2", kind: "corpus-observation", basis: "visible", summary: "settings reference", structuredFacts: {} },
+    ] as unknown as SanitizedEvidence[];
+    expect(() => projectSanitizedEvidenceToMcpEvidence(rows)).toThrow(/duplicate/i);
+  });
+
+  // --- the ONE transport retrieval mapping ---------------------------------
+  //
+  // `envelope.retrieval.resultCount` counts retrieved CORPUS OBSERVATIONS; the
+  // published create_ui_spec contract documents `resultCount` as "1 when a
+  // complete spec artifact exists, otherwise 0" (tool-contracts.ts descriptor).
+  // An adapter that writes `retrieval: envelope.retrieval` therefore contradicts
+  // the descriptor. One shared mapping, so neither adapter can diverge.
+
+  it("the transport retrieval mapping preserves the producer's real retrieval state", async () => {
+    for (const [label, produce] of ADAPTER_CASES) {
+      const { envelope } = await produce();
+      const mapped = projectRetrievalStateForTransport(envelope);
+      // Truthfulness: every state field is the producer's own value.
+      expect(mapped.mode, label).toBe(envelope.retrieval.mode);
+      expect(mapped.modality, label).toBe(envelope.retrieval.modality);
+      expect(mapped.fallbackUsed, label).toBe(envelope.retrieval.fallbackUsed);
+      expect(mapped.fallbackReason, label).toBe(envelope.retrieval.fallbackReason);
+      expect(mapped.attemptedCount, label).toBe(envelope.retrieval.attemptedCount);
+      expect(mapped.attemptedModes, label).toEqual([...envelope.retrieval.attemptedModes]);
+      // Only resultCount is re-scoped, to the documented artifact semantics.
+      expect(mapped.resultCount, label).toBe(1);
+    }
+  });
+
+  it("the three real retrieval states are preserved, not normalized", async () => {
+    const states = [] as Array<{ mode: string; modality: string; fallbackReason?: string }>;
+    for (const [, produce] of ADAPTER_CASES) {
+      const { envelope } = await produce();
+      const m = projectRetrievalStateForTransport(envelope);
+      states.push({ mode: m.mode, modality: m.modality, fallbackReason: m.fallbackReason });
+    }
+    expect(states).toEqual([
+      { mode: "keyword", modality: "metadata", fallbackReason: undefined },
+      { mode: "structured-fallback", modality: "metadata", fallbackReason: "no-results" },
+      { mode: "none", modality: "none", fallbackReason: undefined },
+    ]);
+  });
+
+  it("an adapter that passes envelope.retrieval through unchanged is refused by the published contract", async () => {
+    const corpus = [
+      entry("internal-1", "product-Alpha", "dashboard"),
+      entry("internal-2", "product-Bravo", "landing-page"),
+      entry("internal-3", "product-Charlie", "settings"),
+    ];
+    const { envelope, sanitizedEvidence } = await createUiSpecForAdapter(
+      validInput(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    // The two meanings genuinely differ on this input.
+    expect(envelope.retrieval.resultCount).toBe(3);
+    const mapped = projectRetrievalStateForTransport(envelope);
+    expect(mapped.resultCount).toBe(1);
+    expect(mapped).not.toEqual(envelope.retrieval);
+
+    const build = (retrieval: unknown) => ({
+      tool: "create_ui_spec",
+      schemaVersion: "1.0",
+      status: "ok",
+      summary: "Design spec produced.",
+      data: envelope.spec,
+      referenceIds: [...envelope.spec.citedReferences],
+      retrieval,
+      warnings: envelope.warnings.map((w) => ({ code: w.code, message: w.message })),
+      evidence: projectSanitizedEvidenceToMcpEvidence(sanitizedEvidence),
+    });
+    // Raw pass-through: rejected, and rejected FOR the resultCount contradiction
+    // (not incidentally for some other field).
+    const raw = ToolResultSchemas.create_ui_spec.safeParse(build(envelope.retrieval));
+    expect(raw.success).toBe(false);
+    if (!raw.success) {
+      const resultCountIssues = raw.error.issues.filter((i) => i.path.includes("resultCount"));
+      expect(resultCountIssues.length, JSON.stringify(raw.error.issues)).toBeGreaterThan(0);
+    }
+    // Shared mapping: accepted.
+    const ok = ToolResultSchemas.create_ui_spec.safeParse(build(mapped));
+    expect(ok.success, ok.success ? "" : JSON.stringify(ok.error.issues, null, 2)).toBe(true);
   });
 });

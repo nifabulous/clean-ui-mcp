@@ -99,9 +99,15 @@ export function InstallPage(): ReactElement {
         <h2 id="install-next">Then explore the corpus</h2>
         <p>
           No keys are required to start — the server serves keyword search over the shipped corpus
-          out of the box. Open the Playground to see the same search your agent will use.
+          out of the box. Browse the corpus to see the same search your agent will use, or — once
+          your own server is running with <code>npm run ui</code> — open the Playground to generate
+          a handoff from it. Generation needs that local server; a hosted copy of this site cannot
+          generate.
         </p>
         <div className="install__actions">
+          <Link className="install__action--secondary" to="/browse">
+            Browse the corpus
+          </Link>
           <Link className="install__action--primary" to="/playground">
             Try the Playground
           </Link>

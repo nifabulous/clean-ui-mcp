@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -101,6 +101,69 @@ describe("HomePage — contract", () => {
     // remain the dominant first-viewport affordances.
     expect(documentOrder(playgroundAction)).toBeLessThan(documentOrder(preview));
     expect(documentOrder(installAction)).toBeLessThan(documentOrder(preview));
+  });
+
+  // C3 Task 6: /playground is now the create_ui_spec composer and the corpus
+  // search lives at /browse. Home must send the operator to the composer AND keep
+  // browsing discoverable — dropping the browse entry point would orphan the
+  // surface the migration preserved.
+  it("points the primary action at the composer and keeps browsing discoverable", async () => {
+    renderHome();
+    await waitFor(() => expect(screen.queryByRole("status")).toBeInTheDocument());
+
+    for (const link of screen.getAllByRole("link", { name: /try playground/i })) {
+      expect(link.getAttribute("href")).toBe("/playground");
+    }
+    const browseLinks = screen.getAllByRole("link", { name: /browse the corpus/i });
+    expect(browseLinks.length).toBeGreaterThanOrEqual(1);
+    for (const link of browseLinks) {
+      expect(link.getAttribute("href")).toBe("/browse");
+    }
+  });
+
+  // Fix round 1, review Important 1: `ProductPreview` is rendered by Home, and its
+  // footnote link still pointed at `/playground` after the migration. A visitor
+  // scanning the corpus preview would click "Open the full …" expecting the full
+  // search surface and land on the composer with no search UI at all.
+  it("points the corpus preview's footnote link at the search surface, not the composer", async () => {
+    renderHome();
+    await waitFor(() => expect(screen.queryByTestId("product-preview")).toBeInTheDocument());
+
+    const preview = screen.getByTestId("product-preview");
+    const links = within(preview).getAllByRole("link");
+    expect(links.length).toBeGreaterThanOrEqual(1);
+    for (const link of links) {
+      expect(link.getAttribute("href")).toBe("/browse");
+    }
+  });
+
+  // Fix round 1, review Important 4c: only ONE of the two hero actions works when
+  // the site is hosted statically — generation needs the operator's own loopback
+  // server. So browsing is the primary public action and the composer is secondary.
+  it("makes browsing the primary hero action and the composer secondary", async () => {
+    renderHome();
+    await waitFor(() => expect(screen.queryByRole("status")).toBeInTheDocument());
+
+    for (const link of screen.getAllByRole("link", { name: /browse the corpus/i })) {
+      expect(link.className).toContain("home__action--primary");
+      expect(link.className).not.toContain("home__action--secondary");
+    }
+    for (const link of screen.getAllByRole("link", { name: /try playground/i })) {
+      expect(link.className).toContain("home__action--secondary");
+      expect(link.className).not.toContain("home__action--primary");
+    }
+  });
+
+  // The old FAQ answer said the Playground searches entirely in the browser and
+  // sends nothing anywhere. That is still true of /browse, but the composer posts
+  // the brief to the loopback server — so the answer must say so rather than make
+  // a privacy claim the surface no longer satisfies.
+  it("describes where the composer sends the brief", async () => {
+    renderHome();
+    await waitFor(() => expect(screen.queryByRole("status")).toBeInTheDocument());
+    const faq = screen.getByRole("heading", { name: /send my (queries|brief)/i }).parentElement;
+    expect(faq).not.toBeNull();
+    expect((faq as HTMLElement).textContent ?? "").toMatch(/loopback|local server|your own machine/i);
   });
 
   it("derives the proof count from the snapshot fixture, not a hard-coded number", async () => {

@@ -10,6 +10,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # LOAD-BEARING, NOT HOUSEKEEPING. `npm test` below collects
+          # src/readiness/tracked-artifacts-readiness.test.ts and
+          # src/scripts/validate-readiness-artifacts-cli.test.ts, both of which
+          # run the real readiness gate over the real artifact graph. The
+          # checkpoint recipes bind historical commits (374f7207 and 853151cc
+          # are ~325 commits back, bff60918 ~240, fcc21fc8 ~41, plus 022a3f22),
+          # and the gate resolves them with `git show <commit>:<path>`. Under
+          # the action's default depth-1 clone those objects do not exist, the
+          # resolver throws, the validator fails closed into
+          # `checkpoint-recompute-failed` for every active checkpoint, and the
+          # suite reports C0/C1 as OPEN with 14 issues — i.e. a clone-depth
+          # problem that presents as a governance regression. Full history also
+          # lets src/readiness/checkpoint-policy.test.ts's cross-commit byte
+          # comparison actually run instead of self-skipping, and lets
+          # `npm run validate-references` read HEAD^'s manifest.
+          #
+          # DEPTH IS NECESSARY BUT NOT SUFFICIENT, AND THE REMAINDER IS NOT
+          # FIXABLE HERE. `fetch-depth: 0` fetches every REMOTE ref; it cannot
+          # materialise an object that no remote ref reaches. C0's recipe binds
+          # `C0_SOURCE_GIT_SHA = 853151cc…` (src/readiness/checkpoint-policy.ts),
+          # and that commit is currently reachable only from the UNPUSHED local
+          # branch `Website-design` — `git ls-remote --heads origin` does not
+          # list it. Measured in a clone of this repository: depth-1 gives C0 and
+          # C1 both open with 14 issues; the same clone unshallowed gives C1
+          # CLOSED and 10 issues, with C0 still open on two
+          # `checkpoint-recompute-failed` rows plus six
+          # `summary-input-hash-mismatch` rows, all naming that one commit. CI
+          # therefore stays red on C0 until a ref that reaches `853151cc` is
+          # pushed (the branch itself, or a tag pinning the commit). That is a
+          # publish decision for a maintainer, not a workflow setting.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -21,12 +53,29 @@ jobs:
       - run: npm run validate-corpus
       - run: npm test
       - run: npm run test:critique-quality
-      # Public-site gate (spec §12 + §13): unit tests for the site app, a
-      # production build (so .vite/manifest.json + hashed assets exist), the
-      # end-to-end base-path + accessibility browser suite against `vite preview`,
-      # and the gzip bundle-budget check (initial JS must stay under 150KB gz,
-      # excluding the lazy Playground/Evidence chunks).
+      # Public-site gate (spec §12 + §13). ORDER IS LOAD-BEARING: site:test is the
+      # jsdom suite and must be able to run BEFORE the build (site/dist is
+      # gitignored, so it does not exist on a fresh checkout — which is why
+      # site/vite.config.ts excludes tests/**/*browser*.test.ts as a class). Both
+      # browser suites read a built site/dist, so both run AFTER site:build:
+      #   site:test                    unit/component tests for the site app
+      #   site:build                   production build (.vite/manifest.json + hashed assets)
+      #   site:test:browser            base-path + accessibility e2e via `vite preview`
+      #   site:test:browser:production e2e via the REAL loopback server (see below)
+      #   check-site-budget            initial-JS gzip budget (<150KB, lazy chunks excluded)
+      #
+      # site:test:browser:production is NOT redundant with site:test:browser. The
+      # preview suite runs against `vite preview`, a static dev server with no
+      # `/api/*` at all, so it has to intercept those calls and it resolves static
+      # paths with Vite's middleware rather than the server's traversal-safe
+      # resolver. It is therefore compatible with a completely broken production
+      # serving path. The production suite spawns dist/scripts/ui-server.js with
+      # CLEAN_UI_SITE_DIST=site/dist — what the operator runs — so a regression in
+      # serveSiteAsset, the SPA fallback, or the `/api/*`-before-static ordering
+      # fails here and nowhere else. Chromium is already installed above and the
+      # site is already built, so the marginal cost is one server spawn.
       - run: npm run site:test
       - run: npm run site:build
       - run: npm run site:test:browser
+      - run: npm run site:test:browser:production
       - run: node scripts/check-site-budget.mjs

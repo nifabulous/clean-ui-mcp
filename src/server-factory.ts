@@ -36,6 +36,7 @@ import { buildRecommendation, renderRecommendation } from "./recommend.js";
 import { aggregateAntiPatterns, collectPalettes, collectTechniques, browseByPattern, hueBand } from "./aggregations.js";
 import { readFileSync, existsSync } from "node:fs";
 import { CRITIQUE_UI_INPUT_SCHEMA, CRITIQUE_UI_OUTPUT_SCHEMA } from "./synthesis/contracts.js";
+import { registerCreateUiSpec } from "./create-ui-spec-mcp.js";
 import type { CorpusReader } from "./corpus-reader.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -72,7 +73,13 @@ export function createServer(reader: CorpusReader): McpServer {
   registerListDomainTags(server, reader);
   registerGetSimilarUiExamples(server, reader);
   registerCompareUiExamples(server, reader);
-  registerGenerateDesignPrompt(server, reader);
+  // `generate_design_prompt` is NO LONGER registered publicly — `create_ui_spec`
+  // supersedes it (see LEGACY_TO_BETA_MAP in tool-contracts.ts, the documented
+  // migration table, which deliberately keeps the legacy name as a row). Its
+  // implementation stays private in this module (registerGenerateDesignPrompt
+  // below) so internal callers and the migration story are unaffected; only the
+  // public registration is gone.
+  registerCreateUiSpec(server, reader);
   registerRecommendUiDirection(server, reader);
   registerGetAntiPatterns(server, reader);
   registerGetColorPalette(server, reader);
@@ -461,7 +468,20 @@ function registerCompareUiExamples(server: McpServer, reader: CorpusReader): voi
   );
 }
 
-// ─── 8. generate_design_prompt ────────────────────────────────────────────────
+// ─── 8. generate_design_prompt — RETAINED, NOT PUBLICLY REGISTERED ────────────
+//
+// `create_ui_spec` (registered from createServer above) supersedes this tool.
+// The registration call was removed from createServer; the function itself is
+// kept deliberately, not by oversight:
+//   - it is module-private, so it is not a public tool surface and the wiring
+//     verification test does not treat it as an export;
+//   - `LEGACY_TO_BETA_MAP["generate_design_prompt"]` remains the documented
+//     migration row, and this is the behavior that row describes;
+//   - the underlying implementation (generateBrief/renderBrief in
+//     design-prompt.ts) has other internal callers (recommend.ts) and is
+//     unchanged.
+// To re-expose it (e.g. behind an operator flag), call it from createServer
+// again — do not re-implement it.
 
 function registerGenerateDesignPrompt(server: McpServer, reader: CorpusReader): void {
   server.registerTool(
@@ -510,7 +530,8 @@ function registerRecommendUiDirection(server: McpServer, reader: CorpusReader): 
         "synthesizes a design direction citing each one — why it was selected, what " +
         "it contributes, and the concrete decisions to borrow. Requires the embedding " +
         "index (npm run build-index). Use this when you don't know which specific " +
-        "entries to look at; use generate_design_prompt when you already have ids. " +
+        "entries to look at; use create_ui_spec when you want a full evidence-grounded " +
+        "spec (layout, tokens, components, acceptance criteria) rather than a direction. " +
         "Pass qualityTier:'cautionary' to recommend what to AVOID (the corpus's " +
         "cautionary entries are bad examples with critiques of why they fail).",
       inputSchema: {
@@ -640,7 +661,7 @@ function registerGetStealableTechniques(server: McpServer, reader: CorpusReader)
         "a pattern type and/or style tag. Deduped by theme so you get variety, not " +
         "repeats. Each technique cites its source entry. Use this when you want a " +
         "menu of specific ideas for a pattern ('what can I steal for a dense data " +
-        "table?') rather than a synthesized brief (use generate_design_prompt for that).",
+        "table?') rather than a synthesized spec (use create_ui_spec for that).",
       inputSchema: {
         patternType: PatternType.optional().describe("Scope to a UI pattern"),
         styleTag: StyleTag.optional().describe("Scope to a style"),

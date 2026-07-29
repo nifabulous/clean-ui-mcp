@@ -197,7 +197,7 @@ export function validateEvidenceReferences(
       } else if (!authoritativeIds.has(id)) {
         ctx.addIssue({
           code: "custom",
-          message: `evidence ID "${id}" at ${ref.path.join(".")} not found in envelope evidence`,
+          message: `evidence ID at ${ref.path.join(".")} not found in envelope evidence (value withheld)`,
           path: ref.path,
         });
       }
@@ -208,7 +208,7 @@ export function validateEvidenceReferences(
       if (seen.has(id)) {
         ctx.addIssue({
           code: "custom",
-          message: `duplicate evidence ID "${id}" at ${ref.path.join(".")}`,
+          message: `duplicate evidence ID at ${ref.path.join(".")} (value withheld)`,
           path: ref.path,
         });
       }

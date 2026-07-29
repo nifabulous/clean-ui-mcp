@@ -62,14 +62,24 @@ are not part of the target hash.
 ## Evidence Being Approved
 
 The target approves the hash-only manifest
-`quality-contracts/agent-readiness/c2-evidence-manifest-v1.json`, which binds:
+`quality-contracts/agent-readiness/c2-evidence-manifest-v1.json`, which binds
+these eight artifacts — the enumeration below must match the manifest's
+`evidence` array exactly, in order:
 
-- The 40-entry selection.
-- The strict-valid Gold submission.
-- The strict-valid QA submission.
-- Parent-authority baseline metrics.
-- The adjudication record.
-- The agreement report and its nine recorded disagreements.
+| # | Artifact ID | Path | What it is |
+|---|---|---|---|
+| 1 | `c2-label-integrity-selection-v1` | `eval/c2/label-integrity/selection.json` | The 40-entry selection. |
+| 2 | `c2-submission-reviewer-gold-v1` | `eval/c2/label-integrity/parent-evidence/reviewer-gold-pass3.json` | The strict-valid Gold Pass-3 submission (agreement pair). |
+| 3 | `c2-submission-reviewer-qa-v1` | `eval/c2/label-integrity/parent-evidence/reviewer-qa-pass3.json` | The strict-valid QA Pass-3 submission (agreement pair). |
+| 4 | `c2-parent-baseline-reviewer-gold-v1` | `eval/c2/label-integrity/parent-evidence/reviewer-gold.json` | The Gold parent-authority baseline submission. |
+| 5 | `c2-parent-baseline-reviewer-qa-v1` | `eval/c2/label-integrity/parent-evidence/reviewer-qa.json` | The QA parent-authority baseline submission. |
+| 6 | `c2-label-integrity-baseline-metrics-v1` | `eval/c2/label-integrity/baseline-metrics.json` | Parent-authority baseline metrics. |
+| 7 | `c2-adjudication-v1` | `eval/c2/label-integrity/adjudication.json` | The adjudication record. |
+| 8 | `c2-label-agreement-report-v1` | `eval/c2/label-integrity/agreement-report.json` | The agreement report and its nine recorded disagreements. |
+
+Rows 4 and 5 are the distinct baseline source pair — the baseline is not derived
+from the agreement submissions in rows 2 and 3. An earlier version of this packet
+listed only six bindings and omitted that distinction.
 
 The underlying reviewer files remain private. Private readiness validation
 recomputes their SHA-256 values and checks their artifact identities against the
@@ -82,8 +92,25 @@ reviewer's entry is appended to the immutable ledger:
 
 | Role | Actor | Decision | Decided at | Signature / confirmation |
 |---|---|---|---|---|
-| Gold Label Owner | `reviewer-gold` | Approved | `2026-07-26T21:18:07.000Z` | Recorded as `c2-gold-reviewer-gold-v2` |
-| QA | `reviewer-qa` | Approved | `2026-07-26T21:20:11.000Z` | Recorded as `c2-qa-reviewer-qa-v2` |
+| Gold Label Owner | `reviewer-gold` | **Not decided** | — | Pending. `c2-gold-reviewer-gold-v2` is withdrawn (see the note below on what "withdrawn" means here). |
+| QA | `reviewer-qa` | **Not decided** | — | Pending. `c2-qa-reviewer-qa-v2` is withdrawn (see the note below). |
+
+**Neither reviewer has approved this target.** The two ledger records that bind
+it (`c2-gold-reviewer-gold-v2`, `c2-qa-reviewer-qa-v2`) each copied the
+`decidedAt` of the earlier v1 approval they supersede, so each asserts a decision
+made before this target existed. Both are withdrawn; C2 is open.
+
+**"Withdrawn" here means invalidated by a validator check, not removed from the
+ledger.** Both records are still present in
+`quality-contracts/agent-readiness/checkpoint-approvals-v5.json` and still read
+`decision: "approved"`; no `quality-contracts/` bytes were changed. What withdraws
+them is the `ledger-supersession-not-later` check, which reports their `decidedAt`
+as temporally impossible and blocks the gate. The ledger has no vocabulary for
+recording a retraction yet — tracked in `TODOS.md` § "Approval retraction
+vocabulary". Do not fill in a
+`Decided at` value that is not the actual wall-clock time of a real review. See
+`docs/c2/c2-checkpoint-approval-handoff.md` for the ledger mechanics and what
+would close C2.
 
 Approval means: “I reviewed this exact C2 evidence target and accept it for the
 C2 readiness checkpoint.” It does not mean that C2 has authorized paid

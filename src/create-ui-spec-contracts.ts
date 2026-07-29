@@ -37,6 +37,24 @@
  *  - parseDesignArtifactEnvelope(raw)
  *                                — re-render + re-hash verification; throws on
  *                                  any mismatch.
+ *  - projectSanitizedEvidenceToMcpEvidence(rows)
+ *                                — the ONE safe projection from core
+ *                                  SanitizedEvidence onto the shared MCP
+ *                                  `Evidence` rows both transport adapters
+ *                                  publish. Fail-closed on both sides; assigns no
+ *                                  authority and renders nothing.
+ *  - projectRetrievalStateForTransport(envelope)
+ *                                — the ONE mapping from the envelope's retrieval
+ *                                  metadata onto the transport `retrieval` block.
+ *                                  Preserves the producer's real state and
+ *                                  re-scopes only `resultCount` to the artifact
+ *                                  count the tool descriptor documents.
+ *
+ * Adapter-facing shape:
+ *  - CreateUiSpecAdapterResult   — { envelope, sanitizedEvidence }: what the core
+ *                                  hands a transport adapter. Carries NO
+ *                                  transport-only presentation field, and the
+ *                                  persisted envelope is unchanged in meaning.
  *
  * Reuse: RetrievalState (the state matrix), the existing Sha256 regex, the two
  * canonical hash helpers, and UiSpec 1.0 are all reused unchanged.
@@ -44,8 +62,10 @@
 import { z } from "zod";
 import {
   DesignSystemIdentitySchema,
+  Evidence,
   RetrievalState,
   UiSpec,
+  type EvidenceT,
   type UiSpecT,
 } from "./tool-contracts.js";
 import {
@@ -255,10 +275,13 @@ const StructuredFactsSchema = z
 
 /**
  * A sanitized evidence row. `id` is response-scoped. `summary` is a bounded
- * recipe-owned string (max 500). `structuredFacts` is a closed allowlist.
- * `publicReference` is accepted ONLY for public-reference kind. NO private
- * identity fields (privateCorpusId/sourceUrl/screenshot/corpusId) are allowed;
- * `.strict()` plus the discriminated refinement guarantees it.
+ * recipe-owned string (max 500) whose CONTENT is screened for private-corpus
+ * markers, paths and urls — it is the one arbitrary string a transport adapter
+ * publishes from this row. `structuredFacts` is a closed allowlist.
+ * `publicReference` is accepted ONLY for public-reference kind and is screened
+ * for private-corpus markers. NO private identity fields
+ * (privateCorpusId/sourceUrl/screenshot/corpusId) are allowed; `.strict()` plus
+ * the discriminated refinement guarantees it.
  */
 export const SanitizedEvidenceSchema = z
   .object({
@@ -271,6 +294,51 @@ export const SanitizedEvidenceSchema = z
   })
   .strict()
   .superRefine((val, ctx) => {
+    // ---- content screen on the published free-text channel -----------------
+    //
+    // `summary` is the ONE arbitrary string a transport adapter PUBLISHES from a
+    // sanitized row (`evidence[].summary`). Nothing downstream screens it: the
+    // rows travel BESIDE the envelope, so DesignArtifactEnvelopeSchema's
+    // containsPrivateMarker sweep never sees them, and the create_ui_spec leaf
+    // gate classifies that position as free text (it returns without a check, by
+    // design — the value is recipe-owned template prose). So the content screen
+    // has to be here, at construction: the projection's inbound re-parse then
+    // inherits it, and an adapter cannot publish an unscreened summary at all.
+    //
+    // Reuses the two checks that already exist in this module — the shared
+    // `containsPrivateMarker` helper (same marker set as the candidate/envelope
+    // superRefines and the c3-runtime-probe) and `SafeErrorMessage`'s
+    // PATH_OR_URL_PATTERN (paths, urls, corpus-prefixed identifiers). No second,
+    // divergent marker list. Messages name the position and withhold the value:
+    // the row is refused, so an error echoing the value would be the only channel
+    // through which it still reached a caller.
+    if (containsPrivateMarker(val.summary)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "summary must not contain private corpus markers",
+        path: ["summary"],
+      });
+    } else if (PATH_OR_URL_PATTERN.test(val.summary)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "summary must not contain paths, urls, or corpus identifiers",
+        path: ["summary"],
+      });
+    }
+    // `publicReference` is screened for private markers only. A public URL IS a
+    // legitimate value at THIS layer (the field's whole purpose is an explicit
+    // public input), and the PUBLISHED channel is separately narrowed to the
+    // opaque `ref-<sha256>` digest by projectSanitizedEvidenceToMcpEvidence — so
+    // applying the path/url pattern here would forbid a legitimate core value
+    // without adding any protection to a published position. A private-corpus
+    // marker, by contrast, is never a legitimate public reference.
+    if (val.publicReference !== undefined && containsPrivateMarker(val.publicReference)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "publicReference must not contain private corpus markers",
+        path: ["publicReference"],
+      });
+    }
     // corpus-observation MUST NOT carry any public source/citation field.
     if (val.kind === "corpus-observation" && val.publicReference !== undefined) {
       ctx.addIssue({
@@ -590,6 +658,229 @@ export const DesignArtifactEnvelopeSchema = z
     }
   });
 export type DesignArtifactEnvelope = z.infer<typeof DesignArtifactEnvelopeSchema>;
+
+// ===========================================================================
+// 9b. The adapter-facing result + the ONE safe evidence projection
+// ===========================================================================
+
+/**
+ * What a transport adapter receives from the core producer.
+ *
+ * Two adapters consume this — the MCP adapter and the loopback HTTP adapter —
+ * and NEITHER may re-run retrieval, sanitization, assembly or rendering. The
+ * core (`createUiSpecForAdapter` in create-ui-spec.ts) stays the sole producer;
+ * this shape only PRESERVES what it already validated.
+ *
+ * `envelope` is the parsed, re-render-verified {@link DesignArtifactEnvelope} —
+ * byte-identical to what `createUiSpec()` returns. It deliberately carries NO
+ * transport-only presentation field: an adapter's `resultCount`, `summary` or
+ * `outputFormat` concerns must never be persisted into the artifact envelope.
+ *
+ * The envelope's `retrieval` block is CORPUS-SCOPED: `resultCount` there counts
+ * retrieved corpus observations. An adapter must NOT publish it unchanged — call
+ * {@link projectRetrievalStateForTransport} to obtain the transport block, which
+ * preserves the real retrieval state and re-scopes `resultCount` to the artifact
+ * count the create_ui_spec descriptor documents.
+ *
+ * `sanitizedEvidence` is the response-scoped evidence list in response order
+ * (`evidence-1`, `evidence-2`, …), each row already parsed through
+ * {@link SanitizedEvidenceSchema}. Its ids are exactly `envelope.publicEvidenceIds`
+ * in the same order. The envelope stores only the ids because the rows are
+ * response-scoped presentation, not part of the persisted artifact's identity.
+ */
+export interface CreateUiSpecAdapterResult {
+  readonly envelope: DesignArtifactEnvelope;
+  readonly sanitizedEvidence: readonly SanitizedEvidence[];
+}
+
+/**
+ * The safe public reference shape — the core's opaque `ref-${sha256Hex(token)}`
+ * digest. Mirrors `SAFE_PUBLIC_REFERENCE_ID` in tool-contracts.ts (which is
+ * module-private there) and the `evidence[].referenceId` rule in the
+ * create_ui_spec structural leaf gate. Kept as a literal here rather than
+ * imported so this projection cannot be widened by a change on the other side.
+ */
+const SAFE_PUBLIC_REFERENCE_DIGEST = /^ref-[0-9a-f]{64}$/;
+
+/**
+ * The ONE projection from core {@link SanitizedEvidence} onto the shared MCP
+ * {@link Evidence} rows. Every transport that publishes evidence rows calls this;
+ * none builds a row by hand.
+ *
+ * WHICH TRANSPORTS THOSE ARE — stated exactly, because an earlier revision of
+ * this line said "both transport adapters call this" and that was false. The MCP
+ * adapter calls it (`create-ui-spec-mcp.ts`). The HTTP adapter does NOT, and
+ * deliberately: it serves the `DesignArtifactEnvelope` itself, which carries only
+ * `publicEvidenceIds` and no evidence rows at all, so there is nothing for this
+ * projection to map. `create-ui-spec-http.ts` records the same fact at its own
+ * "WHAT NEVER REACHES THIS SURFACE" note. If a third transport ever publishes
+ * rows, it calls this — the rule is "no hand-built rows", not "every adapter
+ * calls it".
+ *
+ * What it does, and nothing else:
+ *  - `id`, `kind`, `basis`, `summary` are carried through unchanged (strictly: as
+ *    {@link SanitizedEvidenceSchema} normalizes them — `summary` is
+ *    `z.string().trim()`, so a re-parse CAN trim a hand-built row; every value the
+ *    producer emits is already in that normal form). The basis is
+ *    NOT re-labelled: a corpus observation stays `visible`, the recipe stays
+ *    `aggregate`, an explicit reference stays `user-supplied`. The projection
+ *    never upgrades or invents an authority claim — `createUiSpec()` assigns
+ *    authority, this function only renames a field.
+ *  - `publicReference` → `referenceId`, and ONLY for a `public-reference` row.
+ *    The core already forbids `publicReference` on `corpus-observation` and
+ *    `recipe-system` rows; this restates that positively so the mapping cannot
+ *    become "forward it whenever it happens to be set".
+ *  - `structuredFacts` is DROPPED. The shared `Evidence` row has no home for it
+ *    and `.strict()` would refuse it; the summary already states those facts in
+ *    recipe-owned words.
+ *
+ * Fail-closed. Every row is re-parsed through {@link SanitizedEvidenceSchema} on
+ * the way in (so a hand-built or defective row cannot slip past the core's
+ * private-identity rules, and inherits that schema's content screen on `summary`
+ * — the one published free-text position) and through {@link Evidence} on the way
+ * out. A `publicReference` that is not a safe digest is REFUSED rather than
+ * published: the two ID domains (`evidence-N` vs `ref-<sha256>`) are separate, and
+ * a URL, filesystem path or raw corpus id in a reference position is exactly the
+ * leak the leaf gate exists to stop. A duplicate `id` is refused too — each public
+ * evidence id must be represented exactly once. Thrown messages never reproduce
+ * the value.
+ *
+ * @throws Error when a row is not approved sanitized evidence, when two rows share
+ * an `id`, when a `public-reference` row lacks a safe digest, or when the projected
+ * row is not a valid shared `Evidence` row.
+ */
+export function projectSanitizedEvidenceToMcpEvidence(
+  sanitizedEvidence: readonly SanitizedEvidence[],
+): readonly EvidenceT[] {
+  const seenIds = new Set<string>();
+  return sanitizedEvidence.map((raw, index) => {
+    const validated = SanitizedEvidenceSchema.safeParse(raw);
+    if (!validated.success) {
+      throw new Error(
+        `create_ui_spec evidence projection refused evidence[${index}]: not an approved SanitizedEvidence row (values withheld)`,
+      );
+    }
+    const row = validated.data;
+
+    // Each public evidence id must be represented EXACTLY once. `Evidence` is
+    // applied per row, so uniqueness lives here (the array-level `EvidenceArray`
+    // check is downstream of every adapter that projects rows one at a time).
+    if (seenIds.has(row.id)) {
+      throw new Error(
+        `create_ui_spec evidence projection refused evidence[${index}]: duplicate public evidence id (each id must appear exactly once; the offending value is withheld from this message)`,
+      );
+    }
+    seenIds.add(row.id);
+
+    // Only an explicit public reference may carry a public citation, and only a
+    // safe opaque digest counts as one.
+    let referenceId: string | undefined;
+    if (row.kind === "public-reference") {
+      if (row.publicReference === undefined || !SAFE_PUBLIC_REFERENCE_DIGEST.test(row.publicReference)) {
+        throw new Error(
+          `create_ui_spec evidence projection refused evidence[${index}].referenceId: a public-reference row must carry a safe public reference (ref-<sha256>); the offending value is withheld from this message`,
+        );
+      }
+      referenceId = row.publicReference;
+    }
+
+    const projected = {
+      id: row.id,
+      kind: row.kind,
+      summary: row.summary,
+      basis: row.basis,
+      ...(referenceId !== undefined ? { referenceId } : {}),
+    };
+    const parsed = Evidence.safeParse(projected);
+    if (!parsed.success) {
+      throw new Error(
+        `create_ui_spec evidence projection produced an invalid shared Evidence row at evidence[${index}] (values withheld)`,
+      );
+    }
+    return parsed.data;
+  });
+}
+
+/**
+ * The ONE mapping from the envelope's retrieval metadata onto the transport
+ * `retrieval` block of the **create_ui_spec tool response**.
+ *
+ * WHO CALLS IT, AND WHO CORRECTLY DOES NOT. An earlier revision of this docblock
+ * said "Both call this; neither writes `retrieval: envelope.retrieval`". That was
+ * wrong in both halves, and wrong in the module whose job is to stop transport
+ * drift, so it is spelled out here:
+ *
+ *  - **MCP calls this** (`create-ui-spec-mcp.ts`). Its response is the published
+ *    create_ui_spec tool contract, whose `resultCount` the descriptor documents as
+ *    an ARTIFACT count. Forwarding the envelope's corpus-scoped value there would
+ *    contradict the descriptor. Hence the re-scoping below.
+ *  - **HTTP does not, and must not.** `create-ui-spec-http.ts` serves the
+ *    `DesignArtifactEnvelope` itself (`serializeEnvelope(produced.envelope)`),
+ *    verified byte-for-byte against the producer's envelope by
+ *    `assertServedBytesAreEnvelope`. Its `retrieval` block IS
+ *    `envelope.retrieval`, corpus-scoped, and that is correct: the envelope is a
+ *    persisted artifact with its own documented semantics, not a tool response.
+ *    Substituting an artifact-scoped `resultCount` there would silently change the
+ *    meaning of a persisted field, and the byte-equality assertion would not
+ *    object because the value stays schema-legal.
+ *
+ * SO THE TWO SURFACES REPORT DIFFERENT NUMBERS FOR THE SAME REQUEST — 1 over MCP,
+ * the corpus-observation count over HTTP — and both are truthful under their own
+ * scoping (see the "envelope block is corpus-scoped, transport block is
+ * artifact-scoped" note earlier in this module). This is a difference of
+ * DOCUMENT KIND, not a transport inconsistency: there is no request for which the
+ * same document reports two values. **Do not "fix" the HTTP adapter by making it
+ * call this function.** If the divergence ever needs to close, it closes by
+ * changing what the envelope's own field means, which is an artifact-contract
+ * change, not an adapter change.
+ *
+ * WHY IT EXISTS. Two different meanings share the field name `resultCount`:
+ *  - `envelope.retrieval.resultCount` counts RETRIEVED CORPUS OBSERVATIONS (3 on
+ *    a three-match automatic run, 0 in the zero-match structured fallback);
+ *  - the published create_ui_spec contract documents `resultCount` as the
+ *    ARTIFACT count — "1 when a complete spec artifact exists, otherwise 0"
+ *    (the descriptor's `contractDocs.resultCount` in tool-contracts.ts, enforced
+ *    by that descriptor's `countResults`, which reads `data.specVersion`).
+ * An adapter that forwards the envelope's value unchanged therefore publishes a
+ * number that contradicts its own documented contract. This function is the
+ * single place that reconciles them, so Tasks 3 and 5 cannot diverge.
+ *
+ * WHAT IT PRESERVES. Everything else, verbatim: `mode`, `modality`,
+ * `fallbackUsed`, `fallbackReason`, `attemptedCount`, `attemptedModes`. The
+ * producer's actual retrieval state (`keyword`/`metadata`,
+ * `structured-fallback`/`metadata` with `no-results`, `none`/`none`) is published
+ * as it happened — a real state is NEVER normalized to satisfy a descriptor.
+ * `resultCount` is the only field re-scoped, and it is re-scoped to the meaning
+ * the descriptor documents, derived from the artifact itself
+ * (`envelope.spec.specVersion`) rather than from a hardcoded 1.
+ *
+ * Fail-closed: the result is re-parsed through the shared {@link RetrievalState}
+ * (whose superRefine holds the mode/modality and fallback-truth rules), so a
+ * mapping that produced a contradictory state would throw rather than publish.
+ *
+ * @throws Error when the mapped block is not a valid shared `RetrievalState`.
+ */
+export function projectRetrievalStateForTransport(
+  envelope: DesignArtifactEnvelope,
+): z.infer<typeof RetrievalStateSchema> {
+  const projected = {
+    ...envelope.retrieval,
+    // Written exactly as the descriptor's countResults computes it, so the two
+    // cannot drift. On this path it always evaluates to 1 — a parsed envelope
+    // carries a complete UiSpec by construction — and the 0 branch exists because
+    // the descriptor's rule, not this function, is the contract: an adapter with
+    // no artifact publishes status "error" with data: null, which never reaches
+    // here.
+    resultCount: envelope.spec.specVersion ? 1 : 0,
+  };
+  const parsed = RetrievalStateSchema.safeParse(projected);
+  if (!parsed.success) {
+    throw new Error(
+      "create_ui_spec transport retrieval projection produced an invalid RetrievalState (values withheld)",
+    );
+  }
+  return parsed.data;
+}
 
 // ===========================================================================
 // 10. buildSemanticSpecInput — timestamp-independent semantic identity

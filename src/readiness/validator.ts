@@ -38,6 +38,7 @@ import {
   type ChainNode,
   type ChainNodeResult,
 } from "./chains.js";
+import { ledgerApprovalRowsDigest, resolveLedgerApprovalPins } from "./ledger-pins.js";
 import {
   C2LabelIntegritySelectionSchema,
   C2IndependentLabelSubmissionSchema,
@@ -67,6 +68,15 @@ export interface ValidateReadinessOptions {
    * Callers without git must surface the failure rather than trust the ledger.
    */
   gitSourceResolver: GitSourceResolver;
+  /**
+   * EXTRA approval-row pins, keyed by the ledger's PATH within `artifactRoot`
+   * (e.g. "checkpoint-approvals-v1.json"), for artifact graphs this repository
+   * does not track (fixtures). Merged UNDER `TRACKED_LEDGER_APPROVAL_PINS` and
+   * only for the tracked root, so it can neither weaken a tracked pin nor
+   * declare the tracked chain untracked — see `resolveLedgerApprovalPins`. The
+   * CLI never sets this.
+   */
+  additionalLedgerApprovalPins?: Readonly<Record<string, string>>;
 }
 
 export interface ValidationIssue {
@@ -507,12 +517,184 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
       }
     }
 
+    // 7c. Approval-row pins — the anchor at the NEWEST end of the chain.
+    //
+    //     7b above compares each ledger against its PREDECESSOR's approvals, so
+    //     the head's own appended rows are compared against nothing. Combined
+    //     with the ledger family's exemption from index membership (step 3) and
+    //     the fact that `predecessor.sha256` pins the predecessor rather than
+    //     the file declaring it, the head ledger's rows were attested by nothing
+    //     at all — editing two `decidedAt` fields in place cleared two blocking
+    //     governance findings and turned the gate green. `ledger-pins.ts` holds
+    //     the anchor OUTSIDE the artifact graph, because an anchor inside it is
+    //     reachable by the same edit; that module's docblock states precisely
+    //     what the pin is and is not durable against.
+    //
+    //     KEYED ON THE LEDGER'S PATH WITHIN THE ARTIFACT ROOT, not on any field
+    //     the file declares about itself. Two prior revisions keyed on
+    //     `artifactId` and both were evaded by editing it — first by renaming
+    //     the head so its pin was never consulted, then, after a chain-coverage
+    //     rule was added, by renaming ALL FIVE ids and repairing the four
+    //     `predecessor.sha256` values in a loop (the link is keyed on the chain
+    //     ORDINAL, not on the predecessor's id, so the cascade repairs cleanly
+    //     and the head's file digest is pinned by nothing). Both evasions were
+    //     reproduced end to end and produced `ok: true` with `C2: closed` and
+    //     zero issues. A filename is held by the directory rather than by the
+    //     file's contents, so it is not editable from inside the file.
+    //
+    //     THREE RULES, ALL BLOCKING, RUN WHENEVER THE TABLE IS IN FORCE:
+    //
+    //       A. every `checkpoint-approvals` file under the root has a pin
+    //          → `ledger-approval-pin-missing`
+    //       B. every pinned path resolves to a parsed file
+    //          → `ledger-approval-pin-absent`
+    //       C. a pinned file's rows digest to the pinned value
+    //          → `ledger-approval-pin-mismatch`
+    //
+    //     Rule B is why deletion is now caught: the one-directional form of this
+    //     check iterated the chain and never the table, so `rm` of the three
+    //     newest ledgers erased both blocking findings and produced `ok: true`
+    //     with zero issues (reproduced). Rule A is why an appended head, or a
+    //     renamed ledger FILE, fails loudly instead of silently.
+    //
+    //     Whether the table is in force is decided OUTSIDE the artifact graph —
+    //     `resolveLedgerApprovalPins` compares the root being validated against
+    //     this repository's own artifact root, derived from the module's location
+    //     on disk — which is what makes rule B meaningful at all. No artifact's
+    //     contents participate in that decision, so no edit under
+    //     `quality-contracts/` can declare the chain untracked.
+    //
+    //     All three rules are mode-independent (the `opts.mode === "private"`
+    //     branch is far below) and all run BEFORE
+    //     `validateApprovalsAndCheckpoint`, so `ledgerRowsAuthoritative` is
+    //     already settled when closure is computed.
+    const { pins: approvalRowPins, scope: ledgerPinScope } = resolveLedgerApprovalPins({
+      absArtifactRoot: absRoot,
+      additional: opts.additionalLedgerApprovalPins,
+    });
+    let ledgerRowsAuthoritative = true;
+
+    if (ledgerPinScope !== "none") {
+      // Iterates EVERY parsed checkpoint-approvals artifact, not only the
+      // resolved chain: a ledger parked outside the chain is still a governance
+      // ledger sitting in the tracked directory, and requiring a pin for it does
+      // not depend on chain resolution having succeeded.
+      const pinnedPathsPresent = new Set<string>();
+
+      for (const ledger of [...artifacts.values()].filter(
+        (a) => a.type === "checkpoint-approvals",
+      )) {
+        const artifactId = String(ledger.data.artifactId);
+        const relPath = normalizeRepoPath(relative(absRoot, ledger.filePath));
+        const pin = approvalRowPins[relPath];
+
+        // ── rule A ──────────────────────────────────────────────────────────
+        if (pin === undefined) {
+          // FAIL CLOSED. An unpinned ledger file is not "not yet attested" — it
+          // is a ledger whose rows no anchor outside the graph covers, which is
+          // exactly the state the pin exists to prevent. It must not be a
+          // warning: a warning does not move `ok` and does not stop closure, so
+          // the operator would still read `All checks passed.`
+          ledgerRowsAuthoritative = false;
+          issues.push({
+            code: "ledger-approval-pin-missing",
+            artifactId,
+            path: relPath,
+            message:
+              `ledger file ${relPath} (${artifactId}) has no source pin. Every ` +
+              `checkpoint-approvals file under a pinned artifact root must be ` +
+              `pinned by PATH, root to head: an unpinned ledger's approval rows ` +
+              `are attested by nothing outside the artifact graph, so appending a ` +
+              `new head or renaming a ledger file would silently release the ` +
+              `chain. If this ledger was just appended, add its entry to ` +
+              `TRACKED_LEDGER_APPROVAL_PINS in src/readiness/ledger-pins.ts in ` +
+              `the same change. If the FILE was renamed, restore the filename — ` +
+              `the pinned rows are unchanged by a rename.`,
+          });
+          continue;
+        }
+        pinnedPathsPresent.add(relPath);
+
+        // ── rule C ──────────────────────────────────────────────────────────
+        const parsed = CheckpointApprovals.safeParse(ledger.data);
+        if (!parsed.success) continue; // schema errors already recorded
+        const actual = ledgerApprovalRowsDigest(parsed.data.approvals);
+        if (actual !== pin) {
+          // FAIL CLOSED ON CLOSURE, NOT JUST ON `ok`. If a pinned ledger's rows
+          // are not the pinned rows, nothing in that ledger is authoritative — an
+          // arbitrary edit could have added a role, moved an actor, or dated a
+          // decision. So no checkpoint may report "closed" and the C2 externality
+          // caveat (emitted only on closure) must not be raised either. Without
+          // this, the gate printed `ok: false` beside `✓ C2: closed`, which is the
+          // contradictory shape this branch is fixing elsewhere.
+          ledgerRowsAuthoritative = false;
+          issues.push({
+            code: "ledger-approval-pin-mismatch",
+            artifactId,
+            path: relPath,
+            // Names the file, the artifact and the digests only. Never echoes an
+            // approval's contents — an approval carries actor ids and rationale
+            // prose.
+            message:
+              `approval rows of ledger file ${relPath} (${artifactId}) do not ` +
+              `match their source pin (expected ${pin}, got ${actual}). The rows ` +
+              `were changed in place; the chain only permits growth by APPENDING ` +
+              `a successor ledger. See TRACKED_LEDGER_APPROVAL_PINS in ` +
+              `src/readiness/ledger-pins.ts.`,
+          });
+        }
+      }
+
+      // ── rule B ────────────────────────────────────────────────────────────
+      // The direction the earlier revision omitted. A pinned path with no
+      // parsed file behind it means the ledger was deleted, renamed, or failed
+      // to parse — in every case its approval rows are no longer in the graph,
+      // and the governance record the pin exists to preserve is gone.
+      for (const pinnedPath of Object.keys(approvalRowPins).sort()) {
+        if (pinnedPathsPresent.has(pinnedPath)) continue;
+        ledgerRowsAuthoritative = false;
+        issues.push({
+          code: "ledger-approval-pin-absent",
+          path: pinnedPath,
+          message:
+            `pinned ledger file ${pinnedPath} is not present as a parsed ` +
+            `checkpoint-approvals artifact under the artifact root. A pinned ` +
+            `ledger may never be deleted or renamed: the chain's approval record ` +
+            `is the governance record, and removing the file removes the rows ` +
+            `that hold a checkpoint open. Restore the file. Retiring a pin is a ` +
+            `deliberate source change to TRACKED_LEDGER_APPROVAL_PINS in ` +
+            `src/readiness/ledger-pins.ts and must be reviewed as one.`,
+        });
+      }
+    }
+
     // C2's public evidence manifest contains only hashes and repo-relative
     // paths. In private mode, resolve those paths and verify the underlying
     // ignored evidence bytes before any C2 approval can contribute to closure.
     verifyPrivateC2Evidence(artifacts, opts, issues);
 
     // 8. Approvals and checkpoint closure
+    //
+    // Gated on a resolved ledger head AND a resolved registry head, which also
+    // gates the two temporal provenance invariants inside. That gating is
+    // intended and fail-closed: without a resolved registry there is no
+    // authoritative actor list, so no approval can be validated and no
+    // checkpoint can be marked closed (checkpointStatus defaults to "open").
+    //
+    // A ledger with no resolvable registry head is reported here as
+    // `missing-registry`. `selectChain` returns no issues for an EMPTY family
+    // (chains.ts), so an artifact graph carrying an index and a ledger full of
+    // approvals but no registry artifact would otherwise produce zero issues:
+    // `ok: true` and exit code 0 with every approval uninspected. Emitting the
+    // signal keeps the skip fail-closed on `ok` as well as on checkpointStatus.
+    if (ledgerEntry && !registry) {
+      issues.push({
+        code: "missing-registry",
+        artifactId: String(ledgerEntry.data.artifactId),
+        message:
+          "approval ledger present but no approval-actor-registry chain head resolved; no approval can be validated and no checkpoint can close",
+      });
+    }
     if (ledgerEntry && registry) {
       validateApprovalsAndCheckpoint(
         ledgerEntry,
@@ -524,6 +706,7 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
         issues,
         checkpointStatus,
         warnings,
+        ledgerRowsAuthoritative,
       );
     }
 
@@ -644,11 +827,17 @@ function verifyPrivateC2Evidence(
   const repoRoot = realpathSync(resolve(opts.repoRoot ?? opts.artifactRoot));
   const evidence = (manifest.data.evidence as Array<Record<string, string>>) ?? [];
   const resolvedById = new Map<string, ResolvedC2Evidence>();
+  // Duplicate detection runs BEFORE any file resolution, so it must use its own
+  // seen-set. `resolvedById` is only populated further down (after hashing), so
+  // consulting it here would make the duplicate-id check permanently dead —
+  // mirror the sibling `seenPaths` pattern instead.
+  const seenIds = new Set<string>();
   const seenPaths = new Set<string>();
   for (const ref of evidence) {
-    if (resolvedById.has(ref.artifactId)) {
+    if (seenIds.has(ref.artifactId)) {
       issues.push({ code: "c2-evidence-duplicate-id", artifactId: String(manifest.data.artifactId), path: ref.path, message: `C2 evidence artifactId is duplicated: ${ref.artifactId}` });
     }
+    seenIds.add(ref.artifactId);
     if (seenPaths.has(ref.path)) {
       issues.push({ code: "c2-evidence-duplicate-path", artifactId: String(manifest.data.artifactId), path: ref.path, message: `C2 evidence path is duplicated: ${ref.path}` });
     }
@@ -880,6 +1069,17 @@ function validateApprovalsAndCheckpoint(
   issues: ValidationIssue[],
   checkpointStatus: Record<string, "open" | "closed">,
   warnings: ValidationIssue[],
+  /**
+   * False when step 7c found the ledger pins unsatisfied in ANY of its three
+   * directions: a pinned ledger's approval rows changed in place
+   * (`ledger-approval-pin-mismatch`), a ledger file with no pin
+   * (`ledger-approval-pin-missing`), or a pinned path with no file behind it
+   * (`ledger-approval-pin-absent`). Approval validation still runs — the
+   * diagnostics are worth having — but no checkpoint may close on a chain whose
+   * rows are not the attested rows, whose membership is not the attested
+   * membership, or which is missing a ledger outright.
+   */
+  ledgerRowsAuthoritative: boolean,
 ): void {
   const ledgerData = CheckpointApprovals.safeParse(ledgerEntry.data);
   if (!ledgerData.success) {
@@ -891,6 +1091,36 @@ function validateApprovalsAndCheckpoint(
   const supersededApprovalIds = new Set(
     approvals.flatMap((approval) => approval.supersedesApprovalId ? [approval.supersedesApprovalId] : []),
   );
+
+  // Per-approval set of issue codes that this approval produced. An approval
+  // with any issue cannot contribute to closure. Declared BEFORE the provenance
+  // checks below so they can taint an approval: a checkpoint must never report
+  // "closed" on the strength of an approval whose provenance is invalid.
+  const approvalIssueCodes = new Map<string, Set<string>>();
+  const noteApprovalIssue = (approvalId: string, code: string) => {
+    let set = approvalIssueCodes.get(approvalId);
+    if (!set) {
+      set = new Set();
+      approvalIssueCodes.set(approvalId, set);
+    }
+    set.add(code);
+  };
+
+  // NOTE ON TAINTING: `ledger-supersession-not-later` (the temporal check
+  // below) always pushes a BLOCKING issue and always taints its approval via
+  // `noteApprovalIssue`, whether or not that approval has itself been
+  // superseded — see the block comment at the check for why the finding is
+  // unconditional and what the accepted consequence is.
+  // The two structural `ledger-invalid-supersession` pushes still do NOT call
+  // `noteApprovalIssue` — pre-existing behaviour, deliberately left unchanged
+  // here so the taint semantics are not widened without a decision. They no
+  // longer leave a checkpoint reporting "closed", though: the closure gate below
+  // reads the ISSUE LIST as well as the taint map, so any blocking finding keyed
+  // to a checkpoint-kind approval of a checkpoint holds that checkpoint open
+  // whether or not the emitting check remembered to taint. See
+  // `checkpointHasBlockingIssue`. Hole 1 of TODOS.md § "Approval provenance holes
+  // the content-only validator cannot close" describes the taint-map gap that
+  // remains.
   for (const approval of approvals) {
     if (approval.supersedesApprovalId !== undefined) {
       const priorIndex = approvals.findIndex((candidate) => candidate.approvalId === approval.supersedesApprovalId);
@@ -902,9 +1132,138 @@ function validateApprovalsAndCheckpoint(
         if (prior.checkpoint !== approval.checkpoint || prior.role !== approval.role || prior.actorId !== approval.actorId) {
           issues.push({ code: "ledger-invalid-supersession", artifactId: approval.approvalId, message: `approval ${approval.approvalId} must supersede an earlier approval for the same checkpoint, role, and actor` });
         }
+        // Temporal invariant: a replacement decision must be made STRICTLY
+        // LATER than the decision it replaces. A successor that copies (or
+        // predates) the superseded `decidedAt` while binding a different
+        // target claims a decision was taken before the thing it decides
+        // existed — ledger position alone cannot detect that.
+        //
+        // THE FINDING IS UNCONDITIONAL AND BLOCKING — DO NOT SCOPE IT.
+        //
+        // An earlier revision demoted this to a non-blocking warning once the
+        // defective record had itself been superseded, so that a later valid
+        // decision could restore a green gate. That was a fail-open hole and was
+        // reproduced end-to-end: a superseding record only has to be strictly
+        // LATER than the record it corrects (one millisecond suffices), and
+        // `createdAt` is self-declared, so the sibling invariant
+        // `approved-artifact-created-after-decision` cannot backstop a stale
+        // `createdAt` (both `index-c1-v3` and `c2-evidence-v1` declare
+        // 2026-07-26T20:15:01.000Z for bytes first written 2026-07-28).
+        // Appending one fabricated record dated a second after the bad one
+        // flipped the real gate from `ok: false` to `ok: true`, `issues: []`,
+        // C2 closed — the defect surviving only as a warning. Reducing the cost
+        // of hiding a governance defect from "edit a source constant in a
+        // reviewable diff" to "append one record" destroys the whole value of the
+        // invariant, which is to be a durable record that something went wrong.
+        // ("Durable" is qualified precisely below — it does not mean unfakeable.)
+        //
+        // THE CONSEQUENCE IS ACCEPTED, NOT WORKED AROUND, AND WHAT ENFORCES IT
+        // IS NARROWER THAN AN EARLIER REVISION OF THIS COMMENT CLAIMED. Two
+        // mechanisms together keep the finding standing, and each covers a
+        // different edit:
+        //
+        //  - A SUCCESSOR LEDGER cannot drop or rewrite the defective record.
+        //    `validateLedgerAppendOnly` (contracts.ts) requires every prior
+        //    approval to survive as an unchanged PREFIX of its successor, so a
+        //    v(n+1) that omits it emits `ledger-approval-deleted` and a forked
+        //    ordinal emits `chain-duplicate-key` / `chain-fork` /
+        //    `chain-multiple-heads`.
+        //  - AN IN-PLACE EDIT OF A TRACKED LEDGER'S OWN ROWS is caught by the
+        //    approval-row pins in `ledger-pins.ts` (step 7c of
+        //    `validateReadinessArtifacts`). They have to exist, because
+        //    `validateLedgerAppendOnly` iterates the PREDECESSOR's approvals: the
+        //    head's appended suffix is compared against nothing until a successor
+        //    pins it. Before the pins existed, editing two `decidedAt` fields in
+        //    `checkpoint-approvals-v5.json` turned this gate green — verified end
+        //    to end. Do not describe the append-only check alone as making this
+        //    finding un-editable; it does not.
+        //  - A RENAMED LEDGER, A DELETED LEDGER OR AN UNPINNED NEW HEAD is caught
+        //    by step 7c's two COVERAGE directions. Both were fail-open holes and
+        //    both were reproduced. When the pin was looked up by the ledger's own
+        //    `artifactId`, renaming the head skipped the pin and the same two
+        //    edits produced `ok: true` with C0/C1/C2 closed and zero issues; and
+        //    when the chain was renamed WHOLESALE with the four
+        //    `predecessor.sha256` values repaired in a loop, the added
+        //    chain-coverage rule went inert and the result was the same. The pins
+        //    are therefore keyed on the ledger's FILE PATH, which no edit inside
+        //    the file can change. Separately, coverage that only iterated the
+        //    chain never noticed a pin whose file was gone: `rm` of the three
+        //    newest ledgers erased both blocking findings and produced `ok: true`
+        //    with zero issues. Rule B (every pinned path must resolve to a parsed
+        //    file) closes that direction.
+        //
+        // SO, PRECISELY — AND ONLY THIS: `ok: false` has been verified to survive
+        // the specific attacks enumerated, with their before/after gate output, in
+        // TODOS.md § "How durable, exactly", in
+        // docs/c2/c2-checkpoint-approval-handoff.md, and in the
+        // `ledger-pins.ts` docblock. Nothing here claims durability against a
+        // CLASS of attacks: every generalisation from a tested attack to a class
+        // made on this control has so far been falsified by the next variant. The
+        // gate stays red even after a legitimate future re-approval, and the
+        // affected checkpoint cannot be closed on a clean gate until an explicit
+        // retraction mechanism exists. It is NOT durable against a change that
+        // also edits `TRACKED_LEDGER_APPROVAL_PINS` in source; that remains
+        // reviewable-in-diff rather than mechanically impossible, and
+        // `ledger-pins.ts` says so plainly. Do not restate this as durability
+        // against "any change confined to `quality-contracts/`" — that absolute
+        // stood in this comment once and was falsified twice. The
+        // repository owner decided that tradeoff deliberately. Clearing this
+        // finding requires the
+        // retraction vocabulary tracked in TODOS.md § "Approval retraction
+        // vocabulary (the ledger cannot say \"withdrawn\")" — a recorded act
+        // naming who retracted what, when, and why. Do NOT reintroduce an escape
+        // hatch here to restore remediability.
+        //
+        // CLOSURE AGREES WITH `ok` — this used to be a documented residual and no
+        // longer is. The taint below lands on the defective record itself, and
+        // checkpoint CLOSURE is computed over the effective approval set
+        // (`activeApprovals`), so a SUPERSEDED defect once left `checkpointStatus`
+        // reading "closed" beside a blocking issue and exit 1. Closure is now
+        // additionally gated on the checkpoint carrying no blocking issue on ANY
+        // of its approvals (see `checkpointHasBlockingIssue` below), so a
+        // temporal defect holds its checkpoint open whether or not something
+        // supersedes it. `ok` is still the value CI and the review hooks consume;
+        // `checkpointStatus` no longer contradicts it.
+        //
+        // The sibling invariant `approved-artifact-created-after-decision`
+        // (`verifyApprovalArtifactTimestamps`) is unconditional in the same way,
+        // for the same reason. The two are deliberately consistent; if you are
+        // about to scope either one, read this comment first.
+        const priorDecidedAt = Date.parse(prior.decidedAt);
+        const decidedAt = Date.parse(approval.decidedAt);
+        if (
+          Number.isFinite(priorDecidedAt) &&
+          Number.isFinite(decidedAt) &&
+          decidedAt <= priorDecidedAt
+        ) {
+          issues.push({
+            code: "ledger-supersession-not-later",
+            artifactId: approval.approvalId,
+            message: `approval ${approval.approvalId} decidedAt (${approval.decidedAt}) must be strictly later than superseded approval ${prior.approvalId} decidedAt (${prior.decidedAt})`,
+          });
+          // Taint the defective record. While it is still effective this is what
+          // a checkpoint would close on, so the checkpoint reports "open".
+          noteApprovalIssue(approval.approvalId, "ledger-supersession-not-later");
+        }
       }
     }
   }
+
+  // Temporal invariant: an approval's decidedAt cannot precede the DECLARED
+  // createdAt of an artifact version it binds. Applies to every approval
+  // (including superseded ones, which remain historical evidence) and to every
+  // checkpoint, independent of whether a recipe exists for it. The same pass
+  // reports an ACTIVE approval whose bound row resolves to no on-disk artifact
+  // version when its checkpoint has no recipe — the only place such a binding is
+  // checked at all. See the function's docstring for exactly what this does and
+  // does not detect.
+  verifyApprovalArtifactTimestamps(
+    approvals,
+    artifacts,
+    supersededApprovalIds,
+    issues,
+    noteApprovalIssue,
+  );
 
   // ------------------------------------------------------------------
   // Git-bound recomputation of the canonical checkpoint target(s).
@@ -916,18 +1275,6 @@ function validateApprovalsAndCheckpoint(
   const activeApprovals = approvals.filter((approval) => !supersededApprovalIds.has(approval.approvalId));
   const activeCheckpoints = new Set(activeApprovals.map((a) => a.checkpoint));
   const recompute = computeCanonicalTargets(artifacts, absRoot, opts, activeCheckpoints, activeApprovals, registryByVersion);
-
-  // Per-approval set of issue codes that this approval produced. An approval
-  // with any issue cannot contribute to closure.
-  const approvalIssueCodes = new Map<string, Set<string>>();
-  const noteApprovalIssue = (approvalId: string, code: string) => {
-    let set = approvalIssueCodes.get(approvalId);
-    if (!set) {
-      set = new Set();
-      approvalIssueCodes.set(approvalId, set);
-    }
-    set.add(code);
-  };
 
   // Each approval pins the exact registry version + digest it was issued
   // against. Retain the resolved registry for every approval so the actor-
@@ -1175,7 +1522,49 @@ function validateApprovalsAndCheckpoint(
       }
     }
 
-    if (allRolesPresent && actorCardinalityValid) {
+    // ─── A CHECKPOINT CARRYING A BLOCKING PROVENANCE ISSUE CANNOT CLOSE ───────
+    //
+    // Closure is computed over the EFFECTIVE approval set (`activeApprovals`),
+    // and `approvalIssueCodes` is consulted only for those. A blocking issue on
+    // a SUPERSEDED approval therefore used to leave `checkpointStatus[cp]`
+    // reading "closed" while `ok` was false — and the repository's own
+    // documented C2 remediation (append a successor ledger whose new records are
+    // dated later than the defective ones) produces exactly that shape. A
+    // consumer reading `checkpointStatus` instead of `ok` was told the checkpoint
+    // was closed while the gate failed, and the C2 externality caveat was
+    // re-raised at the same time.
+    //
+    // The two channels now agree by construction: any approval of this
+    // checkpoint that produced a blocking issue holds the checkpoint open,
+    // whether or not something later supersedes it. This can only ever hold a
+    // checkpoint OPEN — it never closes one that was open before, so it cannot
+    // relax any gate. `ok` remains the value CI and the review hooks consume;
+    // `checkpointStatus` is now safe to read alongside it rather than instead of
+    // it.
+    // Two sources, because tainting and issue-emission are not the same set.
+    // `approvalIssueCodes` is what the per-approval checks record; the issue list
+    // additionally carries blocking findings that push WITHOUT tainting — the two
+    // structural `ledger-invalid-supersession` pushes are the live example, and
+    // any future check that forgets to taint would be covered here too. Reading
+    // the issue list makes the invariant hold by construction rather than by
+    // every author remembering to call `noteApprovalIssue`.
+    //
+    // Snapshotting here (inside the per-checkpoint loop) is deliberate: every
+    // per-approval check has already run by the time this loop starts, and this
+    // checkpoint's own role check has already pushed above.
+    const blockingIssueArtifactIds = new Set(
+      issues.map((i) => i.artifactId).filter((id): id is string => id !== undefined),
+    );
+    const checkpointHasBlockingIssue =
+      blockingIssueArtifactIds.has(cp) ||
+      approvals.some(
+        (a) =>
+          a.checkpoint === cp &&
+          a.approvalKind === "checkpoint" &&
+          (approvalIssueCodes.has(a.approvalId) || blockingIssueArtifactIds.has(a.approvalId)),
+      );
+
+    if (allRolesPresent && actorCardinalityValid && !checkpointHasBlockingIssue && ledgerRowsAuthoritative) {
       checkpointStatus[cp] = "closed";
       // C2 externality caveat: the validator enforces distinct actor IDs and
       // that the QA actor is not an implementation actor, but it CANNOT verify
@@ -1193,6 +1582,188 @@ function validateApprovalsAndCheckpoint(
           message:
             "C2 closure assumes the QA reviewer actor ID is a genuinely external human. The validator enforces distinct, non-implementation actors but cannot verify externality; it must be established out-of-band (e.g. distinct signed commit authors, distinct GitHub accounts, or a signed attestation).",
         });
+      }
+    }
+  }
+}
+
+/**
+ * Compare each approval's `decidedAt` against the DECLARED `createdAt` of every
+ * artifact version it binds via `approvedArtifacts`, and emit
+ * `approved-artifact-created-after-decision` when the decision precedes the
+ * declared creation.
+ *
+ * ## What this detects
+ *
+ * Exactly one thing: a bound artifact whose own `createdAt` field claims a
+ * creation time LATER than the approval's `decidedAt`, for the artifact version
+ * the approval actually approved (`bound.sha256` must equal the on-disk bytes'
+ * hash — see "resolution" below).
+ *
+ * ## What this does NOT detect — do not read this as target provenance
+ *
+ * - **A stale `createdAt`.** `createdAt` is self-declared, unverified content of
+ *   the artifact. An artifact rewritten in a later commit without bumping
+ *   `createdAt` still declares the old time, so an approval of the new bytes
+ *   compares against a creation time that is not the real one and passes. This
+ *   is not hypothetical: it is the shape of the very defect that motivated this
+ *   invariant (`c2-*-v2` in `checkpoint-approvals-v5.json` bind bytes first
+ *   written on 2026-07-28 while both artifacts still declare
+ *   `createdAt: 2026-07-26T20:15:01.000Z`). That defect is caught ONLY by
+ *   `ledger-supersession-not-later`, NOT by this check — which is precisely why
+ *   that check is unconditional and blocking for every approval, superseded or
+ *   not: it is the sole detector of this defect class, so a demotion there is
+ *   backstopped by nothing here. An approval binding freshly-rewritten bytes
+ *   with an unchanged `createdAt` and no supersession relation is caught by
+ *   nothing at all.
+ * - **`checkpointTargetSha256` provenance.** The origin time of a target hash is
+ *   not derivable from artifact content at all; a target hash carries no
+ *   timestamp and the artifacts it is computed over need not have been created
+ *   when it was computed. This check never looks at
+ *   `checkpointTargetSha256`. Establishing when a target hash first existed
+ *   requires evidence outside the artifact graph (commit/authoring dates,
+ *   signed attestations, a countersigned timestamp) and remains an open hole.
+ *
+ * Strengthening either of the above needs an out-of-band provenance source, so
+ * it is deliberately out of scope for a content-only validator. Both are
+ * tracked as hole 2 of TODOS.md § "Approval provenance holes the content-only
+ * validator cannot close", which links back to this docstring.
+ *
+ * ## Resolution
+ *
+ * A bound row resolves ONLY when `bound.artifactId` names a parsed artifact AND
+ * that artifact's hash equals `bound.sha256` — i.e. the on-disk bytes are the
+ * version this approval approved. Comparing against a different version's
+ * `createdAt` would be comparing against a document the approval never saw, and
+ * would make a historically legitimate approval of an earlier version fail the
+ * moment that artifact is rewritten with an honest, later `createdAt`.
+ *
+ * Rows that do not resolve — unknown `artifactId`, a `sha256` that is not the
+ * on-disk version, a missing/unparseable `createdAt`, or an unparseable
+ * `decidedAt` — are SKIPPED for the TEMPORAL comparison, because there is no
+ * version-correct `createdAt` to compare against.
+ *
+ * ## Where an unresolvable binding IS reported
+ *
+ * Skipping the temporal comparison never leaves a broken binding unreported for
+ * an ACTIVE approval:
+ *
+ * - **Checkpoint HAS a recipe (C0–C2).** `verifyApprovedArtifactSet` reports it:
+ *   an id outside the recipe set as `approved-artifact-unknown`, a stale hash as
+ *   `approved-artifact-hash-mismatch`. An id that IS in the recipe set but has no
+ *   parsed artifact hits `if (!entry) continue;` there, and surfaces as
+ *   `checkpoint-target-mismatch` instead — the recomputed target substitutes
+ *   `sha256: ""` for the missing artifact. When recomputation itself failed, every
+ *   approval of that checkpoint is disqualified by the recompute-failure code, so
+ *   closure is blocked even though the individual row is not inspected. This
+ *   function therefore does NOT re-report those rows: doing so would double-report.
+ * - **Checkpoint has NO recipe (C3–C5).** Nothing downstream inspects the
+ *   bindings at all: `verifyApprovedArtifactSet`, `verifyCheckpointPolicy` and
+ *   target recomputation all sit behind `recipe && …`, and closure for these
+ *   checkpoints goes through the presence-only `FUTURE_CHECKPOINT_ROLES` path.
+ *   This function reports the row itself, as
+ *   `approved-artifact-version-unresolved`, and taints the approval.
+ *
+ * SUPERSEDED approvals keep the plain skip in both cases. They are immutable
+ * historical records that cannot contribute to closure, and the on-disk graph
+ * has no way to reconstruct the version they bound, so the residual exposure is
+ * a historical-record gap, not a closure gap. Tracked as hole 3 of TODOS.md
+ * § "Approval provenance holes the content-only validator cannot close", which
+ * links back to this docstring.
+ *
+ * ## Supersession scoping — what is and is not scoped, and why
+ *
+ * Two different decisions live in this function and they are deliberately
+ * asymmetric:
+ *
+ * - `approved-artifact-created-after-decision` is UNCONDITIONAL. It runs over
+ *   every approval, superseded or not, and always blocks and always taints.
+ *   This matches its sibling `ledger-supersession-not-later` in
+ *   `validateApprovalsAndCheckpoint` exactly: both are temporal-impossibility
+ *   findings, both are durable against the attacks enumerated in TODOS.md
+ *   § "How durable, exactly" — `validateLedgerAppendOnly` keeps every record in
+ *   a ledger that is PRESENT, the approval-row pins in `ledger-pins.ts` keep a
+ *   tracked ledger's own rows from being edited in place (the append-only check
+ *   alone does not cover the head), and step 7c's three rules keep an unpinned
+ *   ledger file, a renamed ledger file and a DELETED ledger file from releasing
+ *   the chain (the append-only check cannot see a deletion — `rm` of the newest
+ *   ledgers erased both findings before rule B existed). In both cases the
+ *   durable record that a governance defect occurred IS the point. Neither is
+ *   durable against a change that also edits the source pins, and no durability
+ *   is claimed beyond the attacks actually run; see `ledger-pins.ts`. A
+ *   supersession-based
+ *   demotion was tried on the sibling and proved exploitable — one fabricated
+ *   record dated a millisecond later suffices to hide the defect. Do not
+ *   reintroduce it on either check. Clearing such a finding requires the
+ *   retraction vocabulary tracked in TODOS.md § "Approval retraction vocabulary
+ *   (the ledger cannot say \"withdrawn\")".
+ * - `approved-artifact-version-unresolved` (via `reportUnresolved` below) IS
+ *   scoped to active approvals. That is not a severity demotion: it is a
+ *   detectability limit. The check needs the exact bytes the approval bound in
+ *   order to say anything at all, and for a superseded approval those bytes are
+ *   gone from the on-disk graph — there is no version-correct artifact to
+ *   compare against, so the finding cannot be computed rather than being
+ *   computed and then softened.
+ *
+ * A violation of either invariant taints the approval via `note`, so a
+ * checkpoint cannot report "closed" on the strength of an approval carrying a
+ * provenance issue.
+ */
+function verifyApprovalArtifactTimestamps(
+  approvals: readonly z.infer<typeof CheckpointApproval>[],
+  artifacts: Map<string, ParsedArtifact>,
+  supersededApprovalIds: ReadonlySet<string>,
+  issues: ValidationIssue[],
+  note: (approvalId: string, code: string) => void,
+): void {
+  // Recipes are declared for C0–C2 only. Widened to a string index so a
+  // checkpoint id outside the recipe table (C3–C5) is a lookup miss rather than
+  // a type error, and so adding a recipe automatically moves that checkpoint to
+  // the verifyApprovedArtifactSet path below.
+  const recipes: Partial<Record<string, CheckpointRecipe>> = CHECKPOINT_RECIPES;
+
+  for (const approval of approvals) {
+    const decidedAt = Date.parse(approval.decidedAt);
+    // An ACTIVE approval of a checkpoint with no recipe has no other check
+    // looking at its approvedArtifacts rows; one WITH a recipe is covered by
+    // verifyApprovedArtifactSet / the recomputation path (see docstring).
+    const reportUnresolved =
+      !supersededApprovalIds.has(approval.approvalId) &&
+      recipes[approval.checkpoint] === undefined;
+
+    for (const bound of approval.approvedArtifacts) {
+      const entry = artifacts.get(bound.artifactId);
+      // Version gate: only the approved version's createdAt is meaningful for
+      // the temporal comparison. An unresolvable row is a broken binding, and
+      // for a recipeless checkpoint this is the only place it is reported.
+      if (!entry || entry.sha !== bound.sha256) {
+        if (reportUnresolved) {
+          const code = "approved-artifact-version-unresolved";
+          issues.push({
+            code,
+            artifactId: approval.approvalId,
+            ...(entry ? { path: entry.filePath } : {}),
+            message: entry
+              ? `approval ${approval.approvalId}: approvedArtifact ${bound.artifactId} sha256 ${bound.sha256} is not the on-disk version (${entry.sha}); checkpoint ${approval.checkpoint} has no recipe, so this binding is verified nowhere else`
+              : `approval ${approval.approvalId}: approvedArtifact ${bound.artifactId} (sha256 ${bound.sha256}) names no parsed artifact; checkpoint ${approval.checkpoint} has no recipe, so this binding is verified nowhere else`,
+          });
+          note(approval.approvalId, code);
+        }
+        continue;
+      }
+      if (!Number.isFinite(decidedAt)) continue;
+      const createdAtRaw = entry.data.createdAt;
+      if (typeof createdAtRaw !== "string") continue;
+      const createdAt = Date.parse(createdAtRaw);
+      if (!Number.isFinite(createdAt)) continue;
+      if (decidedAt < createdAt) {
+        issues.push({
+          code: "approved-artifact-created-after-decision",
+          artifactId: approval.approvalId,
+          path: entry.filePath,
+          message: `approval ${approval.approvalId}: decidedAt (${approval.decidedAt}) precedes createdAt (${createdAtRaw}) of approved artifact ${bound.artifactId}`,
+        });
+        note(approval.approvalId, "approved-artifact-created-after-decision");
       }
     }
   }

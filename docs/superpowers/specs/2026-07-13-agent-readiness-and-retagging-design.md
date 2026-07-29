@@ -394,13 +394,15 @@ Workflow routing and next-tool suggestions belong to the skill layer, not MCP re
 
 | Field | Type | Required | Bounds |
 |---|---|---|---|
-| `productContext` | string | required | min 8 chars |
-| `referenceIds` | string[] | optional | 0–5 unique non-empty IDs (0 = sparse/editorial-only) |
+| `productContext` | string | required | min 8, max 8000 chars |
+| `referenceIds` | string[] | optional | 0–5 unique non-empty IDs, each max 200 chars (0 = sparse/editorial-only) |
 | `platform` | enum web/mobile/tablet | optional | — |
-| `implementationFramework` | string | optional | e.g. "react", "swiftui" |
-| `serializationFormat` | enum brief/tokens | optional | default "brief" |
+| `implementationFramework` | string | optional | trim, min 1, max 120 chars; e.g. "react", "swiftui" |
+| `target` | enum neutral-web/astro-react/astro-vue | optional | closed vocabulary; mirrors the core request's target ID |
+| `outputFormat` | enum markdown/json | optional | default "markdown" |
 | `designSystem` | `{ status: "none"\|"identified", registry?, library? }` | optional | Design-system identity; "identified" requires registry or library |
-| `constraints` | string[] | optional | explicit project constraints |
+| `constraints` | string[] | optional | max 12 items, each max 500 chars; explicit project constraints |
+| `motionIntents` | structured motion-intent[] | optional | max 8 intents; default `[]`; each requires `id`, `trigger`, `properties`, `durationToken`, `easingToken`, `interruptible`, `reducedMotion` |
 
 **Output sections (each is a typed schema, not `z.unknown()`):**
 
@@ -551,16 +553,16 @@ These tables are the authoritative source for executable Zod schemas. The block 
 
 | Aspect | Contract |
 |---|---|
-| Input | productContext, referenceIds, default [], platform?, implementationFramework?, serializationFormat, default "brief", designSystem?, constraints, default [] |
+| Input | productContext, referenceIds, default [], platform?, implementationFramework?, designSystem?, constraints, default [], target?, motionIntents, default [], outputFormat, default "markdown" |
 | Success data | specVersion, context, designDirection, rejectedDefaults, layoutRegions, responsiveBehavior, componentInventory, colorTokens, colorTokenAuthority, typographyTokens, typographyTokenAuthority, interactions, motionGuidance, accessibilityConstraints, contentVoiceGuidance, techniques, antiPatterns, frameworkNotes, unavailableDecisions, acceptanceCriteria, citedReferences, citedDecisions, authorityLanes, provenance — see §5.4 — UiSpec with layoutRegions, colorTokens, typographyTokens, acceptanceCriteria (verifiers: axe, playwright, static-analysis, manual), citedReferences, citedDecisions, authorityLanes, provenance |
 | Empty | n/a — synthesis produces one spec artifact or errors |
-| Partial | sparseCoverage / insufficientCorpusEvidence / motionEvidenceUnavailable typed warnings; null tokens require editorial authority + unavailableDecision |
-| Errors | INVALID_INPUT (non-retryable) |
+| Partial | sparseCoverage / insufficientCorpusEvidence / motionEvidenceUnavailable typed warnings; zero automatic matches are reported as structured-fallback/metadata with fallbackReason "no-results"; null tokens require editorial authority + unavailableDecision |
+| Errors | INVALID_INPUT (non-retryable), PROVIDER_ERROR (retryable) |
 | Warnings | sparseCoverage, insufficientCorpusEvidence, motionEvidenceUnavailable, authorityConflict |
-| Retrieval | none/none |
-| Evidence | required (plan/spec/critique) (corpus-observation, machine-rule, editorial-guidance) |
+| Retrieval | hybrid/text; keyword/metadata; structured-fallback/metadata (reasons: no-results); none/none |
+| Evidence | required (plan/spec/critique) (corpus-observation, public-reference, recipe-system) |
 | resultCount | 1 when a complete spec artifact exists, otherwise 0 |
-| referenceIds | `citedReferences` |
+| referenceIds | `citedReferences` only — safe public reference IDs. Response-scoped evidence IDs (`evidence-N`) are a separate domain and never appear here |
 | Legacy names | generate_design_prompt |
 
 #### `research_ui_anti_patterns`

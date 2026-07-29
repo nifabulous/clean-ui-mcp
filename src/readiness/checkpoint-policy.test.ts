@@ -30,12 +30,17 @@ describe("checkpoint recipes", () => {
   });
 
   it("keeps reviewed and merged source bytes identical", () => {
-    // CI uses shallow clones (fetch-depth: 1) — neither the branch commit
-    // (C1_CONTRACT_SHA) nor the merge commit (C1_MERGE_SHA) may be reachable.
-    // The recipe SHA constants are content hashes that the validator resolves
-    // at runtime through the injected GitSourceResolver; this test only
-    // verifies them locally where full history is present. Skip gracefully in
-    // shallow clones.
+    // `.github/workflows/ci.yml` checks out with `fetch-depth: 0`, so both the
+    // branch commit (C1_CONTRACT_SHA) and the merge commit (C1_MERGE_SHA) ARE
+    // reachable on CI and this comparison really runs there. The guard below
+    // stays for other environments that may hand us a shallow clone or no
+    // history at all (an exported tarball, `--depth 1` locally): the recipe SHA
+    // constants are content hashes the validator resolves at runtime through the
+    // injected GitSourceResolver, so this cross-commit byte comparison is a
+    // local corroboration rather than the enforcement point. Do NOT copy this
+    // self-skip into src/readiness/tracked-artifacts-readiness.test.ts — that
+    // suite IS the enforcement point for C2-open and must fail, not skip, when
+    // it cannot resolve its commits.
     for (const sha of [C1_CONTRACT_SHA, C1_MERGE_SHA]) {
       try {
         execFileSync("git", ["cat-file", "-e", sha], { stdio: "pipe" });

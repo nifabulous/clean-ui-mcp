@@ -357,6 +357,55 @@ function expectNoPrivateData(text: string, context: string): void {
   expectNoPrivateIds(text, context);
 }
 
+// ─── per-surface scanners (Task 4) ───────────────────────────────────────────
+//
+// `responseText` above CONCATENATES `content` and `structuredContent`, which is
+// right for a single "did anything leak" scan but wrong when the claim is
+// per-surface. The two surfaces have different controls: the create_ui_spec leaf
+// gate walks `structuredContent.data`/`referenceIds`/`evidence` but NOT
+// `content[0]` (whose control is the envelope's private-marker sweep). A combined
+// scan lets the unguarded surface hide behind the guarded one, so the
+// create_ui_spec cases below assert each surface INDEPENDENTLY.
+
+/** `content[*].text` only — never structuredContent. */
+function contentOnlyText(resp: { content?: Array<{ type: string; text?: string }> }): string {
+  return (resp.content ?? []).map((c) => (typeof c.text === "string" ? c.text : "")).join("\n");
+}
+
+/** `structuredContent` only — never content. */
+function structuredOnlyText(resp: { structuredContent?: unknown }): string {
+  if (resp.structuredContent === undefined) return "";
+  try {
+    return JSON.stringify(resp.structuredContent);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Assert a set of needles is absent from BOTH served surfaces, checked
+ * separately, and report WHICH surface leaked.
+ */
+function expectAbsentFromBothSurfaces(
+  resp: { content?: Array<{ type: string; text?: string }>; structuredContent?: unknown },
+  needles: readonly string[],
+  context: string,
+): void {
+  for (const [surface, text] of [
+    ["content", contentOnlyText(resp)],
+    ["structuredContent", structuredOnlyText(resp)],
+  ] as Array<[string, string]>) {
+    for (const needle of needles) {
+      if (text.includes(needle)) {
+        throw new Error(
+          `LEAK in ${context}: ${surface} contains "${needle}".\n` +
+          `--- ${surface} (truncated to 2000 chars) ---\n${text.slice(0, 2000)}`,
+        );
+      }
+    }
+  }
+}
+
 // ─── the contract suite ──────────────────────────────────────────────────────
 
 describe("public MCP contract — no private marker leaks through any tool path", () => {
@@ -467,16 +516,146 @@ describe("public MCP contract — no private marker leaks through any tool path"
     expectNoPrivateMarkers(responseText(mixed), "compare_ui_examples (mixed ids)");
   });
 
-  // ── 8. generate_design_prompt ──────────────────────────────────────────────
-  it("generate_design_prompt: synthesizing across eligible + ineligible ids leaks nothing", async () => {
-    // generateBrief runs over the FOUND entries; only the eligible id resolves,
-    // so the brief cites just it. The missing-ids branch must name only ids the
-    // caller supplied (those are the caller's own words, not a leak), but to be
-    // safe we assert no marker text escapes regardless.
-    const resp = await call("generate_design_prompt", {
-      ids: [ELIGIBLE_ID, PRIVATE_ID, UNAPPROVED_ID],
+  // ── 8. create_ui_spec ──────────────────────────────────────────────────────
+  //
+  // WHY THIS REPLACED THE generate_design_prompt CASE (Task 4 of the C3 slice).
+  // Task 3 deregistered public `generate_design_prompt` and registered
+  // `create_ui_spec` in its slot. The old case here kept PASSING — VACUOUSLY: an
+  // unregistered tool yields a `{ isError: true, content: ["Tool … not found"] }`
+  // result, and "a not-found message contains no private marker" is trivially
+  // true. It would have passed just as happily if the tool had leaked the entire
+  // private corpus, because the tool was never reached. So the case is repointed
+  // at the tool that IS registered, and every case below asserts `isError` is
+  // FALSY (or asserts the specific typed error it expects) BEFORE scanning — a
+  // tool-not-found response can no longer satisfy any of them.
+  //
+  // WHAT MAKES THESE ASSERTIONS FALSIFIABLE, not just structurally guaranteed.
+  // The private/unapproved markers live in entries the exporter refused, so the
+  // PublicCorpusReader cannot serve them at all — that is the point of the suite,
+  // but it means those two needles alone would leave the case weak. So these
+  // cases ALSO assert that the ELIGIBLE entry's marker, id, product name and
+  // source url never appear. That entry IS in the snapshot and IS retrieved as
+  // evidence by this tool, so the assertion is genuinely falsifiable: it fires the
+  // moment the tool projects corpus prose or identity into either surface, which
+  // is exactly create_ui_spec's contract ("corpus grounding appears only as opaque
+  // evidence ids").
+  const ELIGIBLE_PRODUCT = `${ELIGIBLE_ID}-product`;
+  const ELIGIBLE_SOURCE_URL = "https://example.com";
+  /** Needles no create_ui_spec response may carry on EITHER served surface. */
+  const CREATE_UI_SPEC_FORBIDDEN = [
+    PRIVATE_MARKER, UNAPPROVED_MARKER, PRIVATE_ID, UNAPPROVED_ID,
+    ELIGIBLE_MARKER, ELIGIBLE_ID, ELIGIBLE_PRODUCT, ELIGIBLE_SOURCE_URL,
+    "images-public/", "images-private/", ".png",
+  ] as const;
+
+  it("create_ui_spec: automatic retrieval over the public snapshot leaks nothing through content or structuredContent", async () => {
+    const resp = await call("create_ui_spec", {
+      productContext: "A calm analytics dashboard for a fintech team",
     });
-    expectNoPrivateMarkers(responseText(resp), "generate_design_prompt (mixed ids)");
+
+    // ANTI-VACUITY: the tool must have RUN. Without this, a not-found or a
+    // validation refusal would satisfy every scan below.
+    expect(resp.isError, `create_ui_spec failed: ${responseText(resp).slice(0, 600)}`).toBeFalsy();
+    const env = resp.structuredContent as Record<string, unknown>;
+    expect(env, "create_ui_spec must return structuredContent").toBeDefined();
+    expect(env.tool).toBe("create_ui_spec");
+    expect(env.status).toBe("ok");
+    // It really reached the eligible entry: the retrieval state is the real
+    // keyword state and evidence rows beyond the recipe row exist.
+    const retrieval = env.retrieval as Record<string, unknown>;
+    expect(retrieval.mode).toBe("keyword");
+    const evidence = env.evidence as Array<Record<string, unknown>>;
+    expect(evidence.length).toBeGreaterThan(1);
+    // Corpus grounding appears ONLY as opaque response-scoped evidence ids.
+    for (const row of evidence) expect(String(row.id)).toMatch(/^evidence-\d+$/);
+
+    expectNoPrivateData(responseText(resp), "create_ui_spec (automatic retrieval)");
+    expectAbsentFromBothSurfaces(resp, CREATE_UI_SPEC_FORBIDDEN, "create_ui_spec (automatic retrieval)");
+  });
+
+  it("create_ui_spec: outputFormat json leaks nothing through content or structuredContent", async () => {
+    // `content[0]` is the rendering the leaf gate does NOT walk, and the JSON
+    // rendering embeds the whole handoff — the widest single served string this
+    // tool produces. Scanned as its own surface.
+    const resp = await call("create_ui_spec", {
+      productContext: "A calm analytics dashboard for a fintech team",
+      outputFormat: "json",
+    });
+    expect(resp.isError, `create_ui_spec(json) failed: ${responseText(resp).slice(0, 600)}`).toBeFalsy();
+    expect(() => JSON.parse(contentOnlyText(resp))).not.toThrow();
+    expectNoPrivateData(responseText(resp), "create_ui_spec (json)");
+    expectAbsentFromBothSurfaces(resp, CREATE_UI_SPEC_FORBIDDEN, "create_ui_spec (json)");
+  });
+
+  it("create_ui_spec: an explicit reference to the eligible entry is cited only as an opaque digest", async () => {
+    const resp = await call("create_ui_spec", {
+      productContext: "A calm analytics dashboard for a fintech team",
+      referenceIds: [ELIGIBLE_ID],
+    });
+    expect(resp.isError, `create_ui_spec(ref) failed: ${responseText(resp).slice(0, 600)}`).toBeFalsy();
+    const env = resp.structuredContent as Record<string, unknown>;
+    // The reference RESOLVED (so the raw-id-absence assertion is load-bearing:
+    // the id was accepted and used, and still must not appear).
+    const referenceIds = env.referenceIds as string[];
+    expect(referenceIds.length).toBe(1);
+    expect(referenceIds[0]).toMatch(/^ref-[0-9a-f]{64}$/);
+    expectNoPrivateData(responseText(resp), "create_ui_spec (explicit eligible reference)");
+    expectAbsentFromBothSurfaces(resp, CREATE_UI_SPEC_FORBIDDEN, "create_ui_spec (explicit eligible reference)");
+  });
+
+  it("create_ui_spec: private/unapproved ids are unresolvable in public mode and are not echoed", async () => {
+    // The publication policy kept both entries out of the snapshot, so
+    // `PublicCorpusReader.getById` returns undefined for both and the producer
+    // rejects the request rather than silently substituting automatic retrieval.
+    const resp = await call("create_ui_spec", {
+      productContext: "A calm analytics dashboard for a fintech team",
+      referenceIds: [PRIVATE_ID, UNAPPROVED_ID],
+    });
+    expect(resp.isError).toBe(true);
+    const env = resp.structuredContent as Record<string, unknown>;
+    expect(env.status).toBe("error");
+    expect(env.data).toBe(null);
+    expect(env.error).toMatchObject({ code: "INVALID_INPUT", retryable: false });
+    // No silent substitution: nothing was cited and no evidence was emitted.
+    expect(env.referenceIds).toEqual([]);
+    expect(env.evidence).toEqual([]);
+    expectNoPrivateMarkers(responseText(resp), "create_ui_spec (ineligible references)");
+    // The caller's own ids are not echoed back either — unlike the id-taking
+    // legacy tools, this tool never reflects a supplied token.
+    expectAbsentFromBothSurfaces(resp, CREATE_UI_SPEC_FORBIDDEN, "create_ui_spec (ineligible references)");
+  });
+
+  it("the per-surface scanner fires on BOTH surfaces (scanner self-check)", () => {
+    // The create_ui_spec cases above lean on `expectAbsentFromBothSurfaces`. A
+    // scanner whose `content` branch silently did nothing would make half of every
+    // one of those assertions vacuous, and no product sabotage proves otherwise:
+    // in the current renderings a leaked evidence summary shows up in
+    // `structuredContent` only, so the `content` branch would never be exercised
+    // by a real leak in this fixture. Assert both branches directly instead.
+    const contentLeak = { content: [{ type: "text", text: `spec …${PRIVATE_MARKER}…` }] };
+    expect(() => expectAbsentFromBothSurfaces(contentLeak, [PRIVATE_MARKER], "self-check"))
+      .toThrow(/content contains "PRIVATE_MARKER_4K7"/);
+    const structuredLeak = { structuredContent: { summary: `…${PRIVATE_MARKER}…` } };
+    expect(() => expectAbsentFromBothSurfaces(structuredLeak, [PRIVATE_MARKER], "self-check"))
+      .toThrow(/structuredContent contains "PRIVATE_MARKER_4K7"/);
+    // And it passes only when BOTH surfaces are clean.
+    expect(() => expectAbsentFromBothSurfaces(
+      { content: [{ type: "text", text: "clean" }], structuredContent: { summary: "clean" } },
+      [PRIVATE_MARKER], "self-check",
+    )).not.toThrow();
+  });
+
+  it("generate_design_prompt is no longer a callable public tool", async () => {
+    // The deregistration itself, asserted rather than left as the accidental
+    // reason a vacuous test passed. `LEGACY_TO_BETA_MAP["generate_design_prompt"]`
+    // deliberately survives as the migration table row — the CALL surface is what
+    // was removed.
+    const listed = (await f.client.listTools()).tools.map((t) => t.name);
+    expect(listed).not.toContain("generate_design_prompt");
+    expect(listed).toContain("create_ui_spec");
+    const resp = await call("generate_design_prompt", { ids: [ELIGIBLE_ID] });
+    expect(resp.isError).toBe(true);
+    expectNoPrivateMarkers(responseText(resp), "generate_design_prompt (deregistered)");
   });
 
   // ── 9. recommend_ui_direction ──────────────────────────────────────────────

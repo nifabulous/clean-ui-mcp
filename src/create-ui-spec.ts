@@ -30,6 +30,15 @@
  *  - The deterministic c3-fallback-v1 recipe always produces the base candidate.
  *  - artifactId hashes the canonical identity object; generatedAt excluded.
  *
+ * Two entry points, ONE pipeline:
+ *  - createUiSpec(input, deps)           → DesignArtifactEnvelope (unchanged)
+ *  - createUiSpecForAdapter(input, deps) → { envelope, sanitizedEvidence }
+ * The first delegates to the second and drops the evidence rows. Transport
+ * adapters (MCP, loopback HTTP) call the second so they never re-run retrieval,
+ * sanitization, assembly or rendering, and turn the rows into shared MCP
+ * `Evidence` via the single projection in create-ui-spec-contracts.ts. No
+ * transport-only presentation field is ever added to the persisted envelope.
+ *
  * Errors are typed: INVALID_INPUT (retryable:false) for unparseable input or
  * all-missing explicit references; RETRIEVAL_UNAVAILABLE (retryable:true) for
  * reader/search failures, wrapped with a safe message.
@@ -41,6 +50,7 @@ import {
   CreateUiSpecErrorSchema,
   CreateUiSpecRequestSchema,
   CANONICAL_WEB_TARGET_PROFILES,
+  type CreateUiSpecAdapterResult,
   type CreateUiSpecCandidate,
   type CreateUiSpecRequest,
   type CreateUiSpecError,
@@ -114,6 +124,12 @@ export interface CreateUiSpecDependencies {
 /**
  * Produce a re-render-verified design artifact envelope from a request + deps.
  *
+ * The envelope-only public core function. It delegates to
+ * {@link createUiSpecForAdapter} and returns ONLY the envelope, so existing
+ * callers (and the artifact-identity tests) see exactly the value they saw
+ * before the adapter result path existed. There is no second pipeline: this is
+ * the same retrieval, sanitization, assembly and rendering, projected down.
+ *
  * Throws a typed CreateUiSpecError on INVALID_INPUT (unparseable request or
  * all-missing explicit references) or RETRIEVAL_UNAVAILABLE (reader/search
  * failure, wrapped with a safe message).
@@ -122,6 +138,32 @@ export async function createUiSpec(
   input: unknown,
   dependencies: CreateUiSpecDependencies,
 ): Promise<DesignArtifactEnvelope> {
+  const { envelope } = await createUiSpecForAdapter(input, dependencies);
+  return envelope;
+}
+
+/**
+ * The internal result path both transport adapters use — the MCP adapter and the
+ * loopback HTTP adapter. It runs the SAME pipeline as {@link createUiSpec} and
+ * additionally preserves the response-scoped {@link SanitizedEvidence} rows the
+ * pipeline already produced and validated, so an adapter never has to re-run
+ * retrieval, sanitization, assembly or rendering to obtain them.
+ *
+ * It does NOT render a second handoff, assign any additional authority, or add
+ * a transport-only field to the envelope. The evidence rows are the core's own
+ * sanitized rows; an adapter turns them into shared MCP `Evidence` rows through
+ * the single `projectSanitizedEvidenceToMcpEvidence` projection exported by
+ * create-ui-spec-contracts.ts.
+ *
+ * `sanitizedEvidence` is in response order, and its ids are exactly
+ * `envelope.publicEvidenceIds` in the same order.
+ *
+ * Throws the same typed CreateUiSpecError values as {@link createUiSpec}.
+ */
+export async function createUiSpecForAdapter(
+  input: unknown,
+  dependencies: CreateUiSpecDependencies,
+): Promise<CreateUiSpecAdapterResult> {
   // ----- 1. Input normalization -----
   const request = parseRequest(input);
 
@@ -139,7 +181,13 @@ export async function createUiSpec(
   try {
     envelope = buildEnvelope(request, resolved, generatedAt);
     // Re-validate + re-render + re-hash before returning.
-    return parseDesignArtifactEnvelope(envelope);
+    return {
+      envelope: parseDesignArtifactEnvelope(envelope),
+      // Already parsed through SanitizedEvidenceSchema at construction (see
+      // ResolvedEvidence.sanitized for the two construction sites), so this is a
+      // preservation, not a second validation pass.
+      sanitizedEvidence: resolved.sanitized,
+    };
   } catch (err) {
     if (isCreateUiSpecError(err)) throw err;
     // Assembly or integrity-verification failure. The deterministic producer
@@ -168,7 +216,22 @@ function parseRequest(input: unknown): CreateUiSpecRequest {
 // ===========================================================================
 
 interface ResolvedEvidence {
-  /** Sanitized evidence rows in response order (evidence-1, evidence-2, ...). */
+  /**
+   * Sanitized evidence rows in response order (evidence-1, evidence-2, ...).
+   * EVERY row is parsed through `SanitizedEvidenceSchema` at construction, so
+   * this list is what {@link createUiSpecForAdapter} can preserve verbatim for a
+   * transport adapter. Two construction sites, deliberately different in how a
+   * failure surfaces:
+   *  - the corpus-observation and public-reference rows go through
+   *    {@link parseSanitizedEvidence}, which converts a schema failure into a
+   *    bounded INVALID_INPUT;
+   *  - the recipe row goes through `SanitizedEvidenceSchema.parse` directly in
+   *    {@link buildRecipeSystemEvidence} (the recipe is frozen JSON, so a failure
+   *    means the frozen artifact itself is wrong); its raw ZodError is caught by
+   *    `resolveEvidence`'s caller and surfaces as RETRIEVAL_UNAVAILABLE.
+   * Both paths guarantee the same property for this list: no row reaches it
+   * unvalidated.
+   */
   readonly sanitized: readonly SanitizedEvidence[];
   /** Public reference tokens that resolved (populate citedReferences). */
   readonly resolvedReferenceTokens: readonly string[];
@@ -237,14 +300,14 @@ async function resolveExplicitReferences(
     }
     const id = `evidence-${nextId++}`;
     const publicReference = `ref-${sha256Hex(Buffer.from(token.trim(), "utf-8"))}`;
-    sanitized.push({
+    sanitized.push(parseSanitizedEvidence({
       id,
       kind: "public-reference",
       basis: "user-supplied",
       summary: `User-supplied public reference.`,
       structuredFacts: {},
       publicReference,
-    });
+    }));
     resolvedTokens.push(publicReference);
   }
 
@@ -390,7 +453,33 @@ function sanitizeCorpusObservation(id: string, entry: CorpusEntryT): SanitizedEv
     structuredFacts,
   };
   evidence.summary = buildCorpusObservationSummary(evidence);
-  return evidence;
+  // Parse the finished row so EVERY row in ResolvedEvidence.sanitized is
+  // schema-validated. The adapter result path preserves this list verbatim, so
+  // the "already-schema-validated" guarantee has to hold at construction — not
+  // at the adapter boundary, which would put a validation concern in transport.
+  return parseSanitizedEvidence(evidence);
+}
+
+/**
+ * Parse a candidate row through {@link SanitizedEvidenceSchema}, converting a
+ * schema failure into a bounded INVALID_INPUT rather than letting a raw ZodError
+ * escape.
+ *
+ * This is NOT merely defensive. `buildCorpusObservationSummary` interpolates
+ * `structuredFacts.pattern` verbatim into the summary, and the summary is
+ * published at `evidence[].summary` by the adapter path (the persisted envelope
+ * carries only `publicEvidenceIds`). A reader that hands back an entry whose
+ * `patternType` is outside the closed `PatternType` enum would therefore publish
+ * that raw corpus string. StructuredFacts pins `pattern` to the enum, so parsing
+ * here refuses the row instead — the leak surface the preserved evidence list
+ * newly exposes is closed at construction, not at the transport boundary.
+ */
+function parseSanitizedEvidence(row: unknown): SanitizedEvidence {
+  const parsed = SanitizedEvidenceSchema.safeParse(row);
+  if (!parsed.success) {
+    throw invalidInput("sanitized evidence row failed SanitizedEvidence validation");
+  }
+  return parsed.data;
 }
 
 // ===========================================================================

@@ -30,9 +30,45 @@
  *      importing them into the reader would create a path from a public-mode
  *      tool to private similarity scores + private entry counts.
  *
+ *   3. `src/create-ui-spec-dependencies.ts` — the one adapter dependency
+ *      constructor (Task 2a) — must NOT import the unrestricted corpus loader
+ *      or anything (value or type) from `./corpus.js`, `./persistence.js`, or
+ *      `./embeddings.js`. This module sits in the same public tool-registration
+ *      path as `server-factory.ts` (both adapters call it to build the
+ *      `CreateUiSpecDependencies` the core producer consumes), so it needs the
+ *      same static guard: a caller-supplied token must only ever be checked
+ *      against the injected reader, never a fallback loader.
+ *
+ *   4. `src/create-ui-spec-mcp.ts` — the `create_ui_spec` MCP adapter (Task 3) —
+ *      must NOT import the unrestricted loader or anything from `./corpus.js` /
+ *      `./persistence.js` / `./embeddings.js`, and must take `CorpusReader`
+ *      type-only. It sits directly on the public tool-registration path
+ *      (`createServer` registers it in both modes) and forwards the injected
+ *      reader to the one dependency constructor, so public-mode isolation is
+ *      exactly as strong as this boundary.
+ *
  * These checks are scoped to actual import statements (not comments or string
  * literals) so documentation that mentions a symbol by name doesn't trip the
  * boundary. The import-statement regexes below require `import ... from "..."`.
+ *
+ * Non-transitivity (all FOUR checks above): each check inspects only the
+ * named file's OWN import lines. None of them follow what that file's imports
+ * themselves import. Today this is sound for `create-ui-spec-dependencies.ts`
+ * because both of its imports (`corpus-reader.js`, `create-ui-spec.js`) are
+ * `import type` — fully erased at runtime, so there is no actual runtime edge
+ * to chase. But the check itself does not verify that; it would stay green if
+ * a future edit added a value import of a small wrapper module (e.g.
+ * `./corpus-helper.js`) that itself re-exports `loadCorpus` from `./corpus.js`
+ * — one level of indirection defeats a direct-import check. Making this fully
+ * transitive would require resolving each relative import to its file on
+ * disk, distinguishing type-only from value imports at every hop (a naive
+ * walk that does not distinguish them false-positives immediately: both
+ * `create-ui-spec.ts` and `recommend.ts` have their own legitimate `import
+ * type { SearchResult } from "./corpus.js"`), and recursing with cycle
+ * protection — effectively a small module-graph analyzer, not a regex over
+ * one file. That is out of scope for this test; the direct check below is
+ * the same strength as the two above it, and this comment is the honest
+ * record of what it does not prove.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -184,6 +220,141 @@ describe("public import boundary — no private loader leaks into the public ser
       embeddingsImportLines,
       `corpus-reader.ts imports from ./embeddings.js: ${JSON.stringify(embeddingsImportLines)}`,
     ).toEqual([]);
+  });
+
+  it("create-ui-spec-dependencies.ts does not import the unrestricted loader or corpus.js/persistence.js/embeddings.js", () => {
+    const source = stripComments(readSrc("create-ui-spec-dependencies.ts"));
+
+    // (a) Must NOT import the unrestricted loader symbols from anywhere. These
+    // are the live-corpus entry points; wiring them into the one adapter
+    // dependency constructor would let ANY caller (private or public) reach
+    // the unrestricted loader directly, bypassing the injected reader entirely
+    // — the exact widening this module's doc comment says can never happen.
+    const loaderHits = importMatches(
+      source,
+      ["loadCorpus", "loadCorpusSafe", "tryReadCorpus"],
+      /.*/,
+    );
+    expect(
+      loaderHits,
+      `unrestricted loader imports: ${JSON.stringify(loaderHits)}`,
+    ).toEqual([]);
+
+    // (b) Must NOT import anything (value or type) from ./corpus.js,
+    // ./persistence.js, or ./embeddings.js. The module's only job is to close
+    // over the injected reader and its `getById`; a corpus/persistence/index
+    // import here would give the resolver a second, un-reviewed route to
+    // corpus data that no adapter test could see from outside.
+    const forbiddenModuleImportLines = source
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) =>
+        /^import\b.*from\s+["'](?:\.\/corpus\.js|\.\/persistence\.js|\.\/embeddings\.js)["']/.test(
+          l,
+        ),
+      );
+    expect(
+      forbiddenModuleImportLines,
+      `create-ui-spec-dependencies.ts imports from a forbidden module: ${JSON.stringify(forbiddenModuleImportLines)}`,
+    ).toEqual([]);
+  });
+
+  it("create-ui-spec-mcp.ts does not import the unrestricted loader or corpus.js/persistence.js/embeddings.js", () => {
+    // Task 3: the create_ui_spec MCP adapter. It belongs in this guarded set for
+    // the same reason server-factory.ts does — it is ON the public tool
+    // registration path (createServer calls registerCreateUiSpec in both modes),
+    // and public-mode isolation depends entirely on the INJECTED reader. A
+    // corpus/persistence/embeddings import here would give the adapter a second
+    // route to corpus data that no public-mode contract test could see from
+    // outside the process.
+    const source = stripComments(readSrc("create-ui-spec-mcp.ts"));
+
+    const loaderHits = importMatches(
+      source,
+      ["loadCorpus", "loadCorpusSafe", "tryReadCorpus"],
+      /.*/,
+    );
+    expect(
+      loaderHits,
+      `unrestricted loader imports: ${JSON.stringify(loaderHits)}`,
+    ).toEqual([]);
+
+    const forbiddenModuleImportLines = source
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) =>
+        /^import\b.*from\s+["'](?:\.\/corpus\.js|\.\/persistence\.js|\.\/embeddings\.js)["']/.test(
+          l,
+        ),
+      );
+    expect(
+      forbiddenModuleImportLines,
+      `create-ui-spec-mcp.ts imports from a forbidden module: ${JSON.stringify(forbiddenModuleImportLines)}`,
+    ).toEqual([]);
+
+    // The adapter must reach the corpus ONLY through the injected reader, so its
+    // corpus-reader.js import is type-only (it never constructs a reader).
+    const readerImports = source
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /^import\b.*from\s+["']\.\/corpus-reader\.js["']/.test(l));
+    expect(readerImports.length).toBe(1);
+    expect(readerImports[0]).toMatch(
+      /^import\s+type\s+\{\s*CorpusReader\s*\}\s+from\s+["']\.\/corpus-reader\.js["']/,
+    );
+  });
+
+  it("create-ui-spec-http.ts does not import the unrestricted loader or corpus.js/persistence.js/embeddings.js", () => {
+    // Task 5: the create_ui_spec loopback HTTP adapter. It belongs in this guarded
+    // set for a reason specific to its host: it is mounted inside
+    // src/scripts/ui-server.ts, which DOES import the unrestricted loader and
+    // persistence directly (it is the operator's curator server and legitimately
+    // writes the corpus). So the adapter sits one import away from an unrestricted
+    // route to corpus data, and "the reader is the single authority" is only true
+    // for it while this stays clean. A corpus/persistence/embeddings import here
+    // would give the route a second view that no reader swap could narrow.
+    const source = stripComments(readSrc("create-ui-spec-http.ts"));
+
+    const loaderHits = importMatches(
+      source,
+      ["loadCorpus", "loadCorpusSafe", "tryReadCorpus"],
+      /.*/,
+    );
+    expect(
+      loaderHits,
+      `unrestricted loader imports: ${JSON.stringify(loaderHits)}`,
+    ).toEqual([]);
+
+    const forbiddenModuleImportLines = source
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) =>
+        /^import\b.*from\s+["'](?:\.\/corpus\.js|\.\/persistence\.js|\.\/embeddings\.js|\.\/image-index\.js)["']/.test(
+          l,
+        ),
+      );
+    expect(
+      forbiddenModuleImportLines,
+      `create-ui-spec-http.ts imports from a forbidden module: ${JSON.stringify(forbiddenModuleImportLines)}`,
+    ).toEqual([]);
+
+    // The adapter must reach the corpus ONLY through the INJECTED reader, so its
+    // corpus-reader.js import is type-only — it never constructs a reader of its
+    // own. (ui-server.ts constructs the one PrivateCorpusReader and injects it;
+    // that is the single, reviewable place the route's view is decided.)
+    const readerImports = source
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /^import\b.*from\s+["']\.\/corpus-reader\.js["']/.test(l));
+    expect(readerImports.length).toBe(1);
+    expect(readerImports[0]).toMatch(
+      /^import\s+type\s+\{\s*CorpusReader\s*\}\s+from\s+["']\.\/corpus-reader\.js["']/,
+    );
+
+    // And it authors no dependency value: the ONE constructor is imported.
+    expect(source).toMatch(
+      /import\s+\{\s*makeCreateUiSpecDependencies\s*\}\s+from\s+["']\.\/create-ui-spec-dependencies\.js["']/,
+    );
   });
 
   it("sanity: the stripComments + importMatches helpers actually catch a violation", () => {

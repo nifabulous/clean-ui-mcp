@@ -17,8 +17,8 @@ import "../styles/evidence.css";
  *   - Structured Decision, Evidence, Steal, Avoid, Accessibility, and
  *     Provenance sections — the full critique renders here (unlike the scan view).
  *   - A copyable agent-ready prompt.
- *   - A "Back to results" link that returns to `/playground?<same params>` so
- *     the originating search state is preserved.
+ *   - A "Back to results" link that returns to `/browse?<same params>` so the
+ *     originating search state is preserved.
  *
  * Unknown entry ids render a defined not-found state (never a blank page).
  */
@@ -77,7 +77,7 @@ export function EvidencePage(): ReactElement {
           <h1>Evidence not found</h1>
           <p>
             No entry in the corpus matches <code>{entryId}</code>. It may have been removed or
-            unpublished. Return to the Playground to search the live corpus.
+            unpublished. Return to Browse to search the live corpus.
           </p>
           <Link className="evidence__not-found-link" to={backTarget(location.search)}>
             Back to results
@@ -253,12 +253,19 @@ function findEntry(snapshot: PublicSnapshot, id: string): PublicEntry | null {
   return null;
 }
 
-/** Build the playground back-target URL, preserving the originating search. */
+/**
+ * Build the back-target URL, preserving the originating search.
+ *
+ * Targets `/browse` — the corpus-search surface. It used to be `/playground`,
+ * which became the C3 create_ui_spec composer in Task 6; the composer takes no
+ * query parameters, so a back-link left pointing there would silently discard the
+ * whole search state.
+ */
 function backTarget(search: string): string {
-  if (!search || search === "?") return "/playground";
+  if (!search || search === "?") return "/browse";
   // Already includes the leading "?".
-  if (search.startsWith("?")) return `/playground${search}`;
-  return `/playground?${search}`;
+  if (search.startsWith("?")) return `/browse${search}`;
+  return `/browse?${search}`;
 }
 
 function buildAgentPrompt(entry: PublicEntry): string {

@@ -371,3 +371,59 @@ compiled CLI, each edit confined to `quality-contracts/`, each now reported
 gap; retraction is a real recorded act. And do not reintroduce a supersession- or
 severity-based escape hatch in `validateApprovalsAndCheckpoint` to restore
 remediability — the retraction record is the mechanism.
+
+---
+
+## Served-tool-surface gate matches its removal marker against a truncation
+
+**What:** In `src/served-tool-surface.test.ts`, the `it.each(SHIPPED_SURFACES)`
+case titled "%s mentions an unregistered tool only in a block that marks it
+removed" computes `unregistered` from the **full** block but stores
+`block: block.trim().slice(0, 220)`, and the filter then tests
+`!REMOVAL_MARKER.test(row.block)` — i.e. against the truncated value. The
+220-character slice exists to keep the failure message readable; using it as the
+predicate input is the defect.
+
+**Consequence:** a shipped-surface block that names an unregistered tool and
+marks it removed **after** character 220 fails the assertion even though it
+satisfies the rule the test's own title states. This is fail-**closed** — it can
+produce a false failure, never a false pass — so nothing unsafe ships while it
+stands. It is not urgent; it is real.
+
+**Why it was not fixed on `fix/doc-truth-and-citations`:** that branch is
+doc/comment-only by construction, and changing the predicate changes what the
+test accepts. It is a genuine loosening (blocks that fail today would pass), so
+it deserves its own commit, its own test, and its own review rather than riding
+along in a documentation change. The branch reworded the README block instead,
+which satisfies both assertions in that `describe` on their merits.
+
+**Scope when triggered:** test `REMOVAL_MARKER` against the full block and keep
+the slice for display only. Add a case whose removal marker sits past character
+220 — without it the fix is unverified, since every current surface happens to
+mark removal early.
+
+---
+
+## Wiring-verification allowlist: redundant `validateReferenceRegistry` entry
+
+**What:** `"validateReferenceRegistry"` in the `ALLOWLIST` of
+`src/wiring-verification.test.ts` is not load-bearing. `isReferencedInProduction`
+in that file deliberately includes the defining file and treats `>= 2`
+word-boundary matches there as wired; `src/references/loader.ts` has exactly two
+(the `export function validateReferenceRegistry` declaration, and the call inside
+its `import.meta.url === pathToFileURL(process.argv[1]).href` CLI main block).
+The scan therefore already returns `true` for this symbol and it would pass the
+check with the allowlist entry removed.
+
+**Why it is still there:** removing an allowlist entry changes what the test
+asserts, which is out of scope for a doc/comment-only branch. The entry's comment
+was corrected in place instead — it previously claimed the scan "does not count"
+the in-file CLI call, which was false and which also contradicted the
+`createUiSpec` entry in the same file, whose retained rationale depends on
+in-file/doc-comment mentions satisfying the same scan.
+
+**Scope when triggered:** drop the entry, confirm the suite stays green (the
+symbol must still be found by the defining-file rule), and keep a short comment
+at the removal site recording why no allowlist entry is needed — otherwise the
+next author re-adds it. If the CLI main block in `loader.ts` is ever deleted, the
+symbol drops to one match and genuinely does need an entry again.

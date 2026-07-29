@@ -289,6 +289,61 @@ npm run ui    # → http://localhost:3131
 - **Durability surface** — snapshot count and recovery info on the stats page
 - **SSRF guard** — URL capture rejects private/loopback/cloud-metadata addresses
 
+### Local HTTP API — CSRF nonce and `Host` allowlist
+
+Two guards, with different reach. The `Host` allowlist fronts **every** route this
+server serves (it is the first thing `handleUiRequest` does, and that handler is the
+whole server). The CSRF nonce applies only to **mutating `/api/*` requests** — it
+lives inside the `/api/*` branch and only fires for non-`GET` methods, so a `GET` or
+a static asset never sees it. Both return **403**, and both will break an external
+script or a bare `curl` that used to work.
+
+**1. Every mutating `/api/*` request needs the `X-Clean-UI-CSRF` header.** The nonce
+comes from `GET /api/csrf`, and the check covers every non-`GET` method
+(`POST`/`PUT`/`PATCH`/`DELETE`) on every `/api/*` route — not just the corpus
+mutations. There is no "non-browser caller" exemption **from the nonce**: a missing
+`Origin` header does not excuse a caller from presenting `X-Clean-UI-CSRF`, because
+that is exactly the shape a malicious non-browser caller has. (Scope that to the
+nonce and nothing else. The separate origin guard — `sameOrigin` in
+`src/scripts/ui-server.ts` — still *does* admit a missing `Origin` by design:
+`if (!origin) return true;`, for non-browser clients. A request with no `Origin`
+passes the origin guard and is then stopped by the nonce.) So
+`curl -X POST http://localhost:3131/api/...` returns 403 until it performs the
+two-step exchange:
+
+```bash
+NONCE=$(curl -s http://localhost:3131/api/csrf | node -pe 'JSON.parse(require("fs").readFileSync(0)).nonce')
+curl -X POST http://localhost:3131/api/create-ui-spec \
+  -H "content-type: application/json" \
+  -H "X-Clean-UI-CSRF: $NONCE" \
+  -d '{"productContext":"..."}'
+```
+
+The nonce is minted per process and held in memory only. The browser app does this
+exchange for you (`apiFetch` in `ui/app.js` and `ui/classic-app.js`, which re-fetches
+on a 403), so the dashboard is unaffected.
+
+**2. The server answers only on a loopback `Host`.** The `Host` header must be a
+loopback literal (`127.0.0.1`, `[::1]`) or `localhost`. This check runs **first** —
+before the origin guard, before the preflight branch, before any route, and before
+the nonce is minted — so a rebound `Host` cannot reach `GET /api/csrf` and read the
+one secret the process holds. **Consequence:** reaching the dashboard over your LAN
+IP (`http://192.168.1.20:3131`) or via a hostname alias in `/etc/hosts` no longer
+works; it returns `403 {"error":"Requests must address this server on loopback"}`.
+Use an SSH tunnel if you need remote access. Every legitimate caller — the curator
+client, the built site, the test suites, `curl` — already addresses the server by a
+loopback name, so nothing legitimate is refused.
+
+### `POST /api/create-ui-spec`
+
+The same `create_ui_spec` producer the MCP tool exposes, over loopback HTTP, so the
+Playground composer in the public site can call it without an MCP client. Both
+transports go through one function (`createUiSpecForAdapter`) and both apply the
+same serve-time gates — the ID-shape gate, the citation-consistency predicate, full
+envelope re-parse and hash re-check, and a private-marker sweep over the serialized
+body — so a spec that MCP refuses is not served over HTTP either. It is subject to
+both guards above.
+
 ---
 
 ## Two-pass auto-fill tagger
@@ -725,7 +780,10 @@ clean-ui-mcp/
 │   ├── schema.ts               # Zod schema (the data model)
 │   ├── corpus.ts               # load / search / similar / compare
 │   ├── server.ts               # MCP server: 14 tools
-│   ├── design-prompt.ts        # design-brief synthesis (module-private since C3)
+│   ├── design-prompt.ts        # design-brief synthesis — still exported, still
+│   │                           #   imported by recommend.ts and server-factory.ts.
+│   │                           #   C3 dropped the TOOL REGISTRATION, not this
+│   │                           #   module (see the Migration note under MCP tools)
 │   ├── recommend.ts            # recommend_ui_direction synthesis
 │   ├── aggregations.ts         # anti-patterns / palettes / techniques / browse
 │   ├── embeddings.ts           # Voyage AI client + cosine + index I/O
@@ -864,9 +922,32 @@ synthesis context/contracts/render, wiring verification) + Playwright browser
 tests (dashboard flows, bulk import, capture, candidate review, DOM motion).
 
 ```bash
-npm test                 # all tests
+npx tsc && npm test      # all tests — build FIRST, see below
 npx vitest run           # unit tests only
 ```
+
+### Two operator gotchas, both of which look like real failures
+
+**Run `npx tsc` before `npm test`.** `src/mcp-smoke.test.ts` carries a
+build-currency guard (`assertCompiledServerIsCurrent`) that compares the newest
+mtime under `src/` against the newest emitted `dist/**/*.js` and fails with
+`STALE BUILD` if any source is newer — it exists because a deregistered MCP tool
+once went green against a stale `dist/`. The wrinkle:
+`src/references/generated.ts` is a **tracked generated source file**, and
+`src/references/generated.test.ts` rewrites it mid-suite (writes `// drift`, then
+restores it) for its own drift-detection assertions. That bumps its mtime past
+`dist/`, so after *any* full-suite run the **next** run reports `STALE BUILD`
+even though nothing was edited. Rebuilding first clears it. (Within a single run
+the guard is immune — `vitest.config.ts`'s `globalSetup` snapshots the source
+mtime before any test executes, precisely so the result does not depend on
+whether the rewrite already ran.)
+
+**The suite is load-sensitive.** `testTimeout` is 15s per test against a suite
+that takes roughly 60s, and several tests spawn real child processes (the
+compiled CLI, `ui-server.js`, Chromium). Under concurrent load — another build,
+another agent, a busy laptop — tests exceed 15s and fail as timeouts with
+nothing actually broken. A timeout failure that does not reproduce on an idle
+machine is not a regression; re-run it before investigating.
 
 CI runs on every PR (`.github/workflows/ci.yml`): `npm ci` → Playwright install →
 `validate-references` → `build` → `validate-corpus` → `test` →
@@ -881,6 +962,14 @@ The tracked public application is a Vite + React SPA shipped at the base path
 `/clean-ui-mcp/` (for GitHub Pages). It consumes a publication-safe
 `site/public/snapshot.json` (never the curator corpus directly) and lazy-loads
 the Playground and Evidence routes so the initial JS budget stays small.
+
+**Route change (C3):** `/playground` is now the `create_ui_spec` composer — it posts
+to `POST /api/create-ui-spec` and renders the returned spec. The corpus-search
+surface that used to live at `/playground` **moved to `/browse`**, which owns the
+search filters and round-trips its query string. If you had `/playground` bookmarked
+for search, use `/browse`. Under the GitHub Pages base path these are
+`/clean-ui-mcp/playground` and `/clean-ui-mcp/browse`; the route table is
+`site/src/app/App.tsx`.
 
 The public-site quality gate mirrors the curator gate and runs in CI after
 `npm test`:

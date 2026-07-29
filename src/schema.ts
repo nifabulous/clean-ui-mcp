@@ -443,7 +443,9 @@ export const VisualAttributes = z.object({
  * CRITICAL — no `.default()` (decision D17): every field uses `.optional()` so
  * that an existing entry without a publication block survives the
  * `Corpus.parse → JSON.stringify` round-trip `persistEntries` performs WITHOUT
- * materializing the field. This is the `pinned` precedent (schema.ts:516) applied
+ * materializing the field. This is the precedent set by the `pinned` field in this
+ * same file — see its declaration and the comment above it, not the line number
+ * this once cited, which drifted — applied
  * to a whole sub-object. The policy evaluator (src/publication/policy.ts)
  * interprets absence as private/unreviewed at READ time — absent in stays absent
  * out, so a normal save does not churn all 787 entries.

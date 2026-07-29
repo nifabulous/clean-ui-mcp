@@ -136,37 +136,62 @@
  *
  *     THE EXACT BOUND, ENUMERATED FROM THE CALL GRAPH — this bullet has been
  *     wrong five times, in both directions, every time by reasoning from a grep
- *     for a COMMAND NAME to a conclusion about what EXECUTES. The comparison is
- *     performed in exactly one place, `validator.ts` step 7c
- *     (`resolveLedgerApprovalPins` at :571, `ledgerApprovalRowsDigest` at :621),
- *     and `validateReadinessArtifacts` has exactly one production caller —
- *     the CLI at `validate-readiness-artifacts.ts:126`. So:
+ *     for a COMMAND NAME to a conclusion about what EXECUTES.
  *
- *       * THE CLI INVOCATION IS PINNED BY NOTHING. `npm run validate-readiness-
- *         artifacts` (package.json:65) names no root; the CLI infers
- *         `resolve(process.cwd(), "quality-contracts", "agent-readiness")`
- *         (:66-68), which lands on the tracked root only because `npm run` sets
+ *     A NOTE ON THE CITATIONS BELOW. They used to be line numbers, and six of
+ *     them were found stale in a single review — one of them made stale by the
+ *     very commit that wrote it, and one pointing into the middle of a comment
+ *     block where a reader would look for an assertion. Every reference here is
+ *     now a SYMBOL or a test TITLE, which the tooling can locate and which a
+ *     merge cannot silently shift. Keep it that way: if you need to point at
+ *     something, name it. The same applies to COUNTS: the first version of this
+ *     rewrite said the readiness suite asserts these claims "across four `it`
+ *     blocks" and the real number was five, so the count is gone — the suite is
+ *     identified by its `describe` title and each claim by the `it` title that
+ *     carries it. Do not reintroduce a block count; it goes stale the moment
+ *     someone adds a case.
+ *
+ *     The comparison is performed in exactly one place, `validator.ts` step 7c
+ *     (its `resolveLedgerApprovalPins` call, then `ledgerApprovalRowsDigest` per
+ *     ledger), and `validateReadinessArtifacts` has exactly one production
+ *     caller — the sole `validateReadinessArtifacts({...})` call in
+ *     `src/scripts/validate-readiness-artifacts.ts`. So:
+ *
+ *       * THE CLI INVOCATION IS PINNED BY NOTHING. The
+ *         `validate-readiness-artifacts` script in `package.json` names no root;
+ *         the CLI's own `artifactRoot` const infers
+ *         `resolve(process.cwd(), "quality-contracts", "agent-readiness")`,
+ *         which lands on the tracked root only because `npm run` sets
  *         cwd to the package directory — a property of npm, not something the
  *         command states — and `--artifact-root` overrides it outright. An
  *         operator can point the CLI at a copy, and the only signal is the
  *         stderr `notice:` above.
  *       * `npm test` DOES re-derive these pins against the tracked root, and
- *         `.github/workflows/ci.yml:22` runs `npm test`. Three suites reach the
- *         tracked root with no argument, env var, or fixture indirection that
- *         could redirect them:
- *           - `tracked-artifacts-readiness.test.ts` hardcodes
- *             `resolve(repoRoot, "quality-contracts/agent-readiness")` (:56) and
- *             asserts the checkpoint map, `ok:false` with exactly the two
- *             `ledger-supersession-not-later` issues, each pinned path's digest
- *             re-derived from the file (:158-164), both coverage directions and
- *             the exact five-key table (:183-194), and
- *             `isTrackedArtifactRoot(artifactRoot) === true` (:203);
- *           - `validate-readiness-artifacts-cli.test.ts:73-92` spawns the
- *             COMPILED CLI's default invocation at the repo root and asserts an
- *             EMPTY stderr — i.e. that the pins were in force — beside
- *             `ok:false` / `C2:"open"` / exactly two of those issues;
- *           - `ledger-pins.test.ts:128-132` asserts `scope === "tracked"` and
- *             the exact table for `TRACKED_ARTIFACT_ROOT`.
+ *         `.github/workflows/ci.yml` runs `npm test` (its `- run: npm test`
+ *         step). Three suites reach the tracked root with no argument, env var,
+ *         or fixture indirection that could redirect them:
+ *           - `tracked-artifacts-readiness.test.ts` hardcodes its module-level
+ *             `artifactRoot` as `resolve(repoRoot, "quality-contracts/agent-readiness")`
+ *             and asserts, in its `describe("tracked readiness artifacts (real
+ *             data, read-only)")` suite: the checkpoint map ("reports the
+ *             checkpoint state the documentation claims") and `ok:false` with
+ *             exactly the two `ledger-supersession-not-later` issues ("reports
+ *             exactly the two known governance-provenance issues"); each pinned
+ *             path's digest re-derived from the file on disk
+ *             ("holds every tracked ledger's approval rows to its source pin");
+ *             both coverage directions and the exact five-key table ("has a pin
+ *             registered for every tracked ledger FILE, and a file for every
+ *             pin"); and `isTrackedArtifactRoot(artifactRoot) === true` ("runs
+ *             with the tracked pin table in force for this root");
+ *           - `validate-readiness-artifacts-cli.test.ts` spawns the COMPILED
+ *             CLI's default invocation at the repo root and asserts an EMPTY
+ *             stderr — i.e. that the pins were in force — beside `ok:false` /
+ *             `C2:"open"` / exactly two of those issues ("emits no pins-inert
+ *             notice for the tracked root — pins are engaged in the shipped dist
+ *             CLI");
+ *           - `ledger-pins.test.ts` asserts `scope === "tracked"` and the exact
+ *             table for `TRACKED_ARTIFACT_ROOT` ("puts the tracked table in
+ *             force for the tracked root").
  *         So "validate a copy instead" does not escape mechanical detection: it
  *         escapes the CLI run, not the suite that CI runs.
  *

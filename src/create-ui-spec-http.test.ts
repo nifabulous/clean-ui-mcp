@@ -653,8 +653,10 @@ describe("create_ui_spec HTTP reference/evidence ID-shape gate", () => {
     //
     // The regex below pins the SPECIFIC gate that must fire on each side, not
     // the generic `/was not served/` substring every refusal message shares —
-    // including the HTTP envelope-integrity refusal
-    // (`create-ui-spec-http.ts:277`), which this same mutation also trips
+    // including the HTTP envelope-integrity refusal raised by
+    // `assertServedBytesAreEnvelope` in `create-ui-spec-http.ts` (step 3 of its
+    // docblock, `parseDesignArtifactEnvelope` over the re-parsed bytes), which
+    // this same mutation also trips
     // (mutating `spec` after the producer hashed it moves `specSha256`). A
     // generic match here would still pass with the ID-shape gate deleted
     // entirely, because `assertServedBytesAreEnvelope` falls through to the

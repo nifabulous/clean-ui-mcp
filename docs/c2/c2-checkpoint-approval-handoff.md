@@ -53,7 +53,16 @@ recipe in `src/readiness/checkpoint-policy.ts` and the tracked
 `c2-evidence-manifest-v1.json`. Do not invent actor IDs, registry hashes,
 target hashes, or approval timestamps.
 
-The C2 contract hashes currently bound by that recipe are:
+The C2 contract hashes currently bound by that recipe are listed below. **They are
+Git-bound, not working-tree hashes.** `C2_CONTRACT_BINDINGS` in
+`src/readiness/checkpoint-policy.ts` resolves every one of them at
+`C2_SOURCE_GIT_SHA` (`fcc21fc803863ad19686044f8a1ae01b384546cf`), so the value to
+compare against is `git show <that sha>:<path> | shasum -a 256`, not
+`shasum -a 256 <path>`. Those two already differ for
+`src/c2/evaluation-contracts.ts` — the working-tree file has changed since the
+approvals were recorded, the Git-bound bytes have not, and the gate is unaffected
+because it never reads the working tree for these. Do not "correct" the table to
+working-tree values: that would falsify the approvals it exists to describe.
 
 | Contract | SHA-256 |
 |---|---|

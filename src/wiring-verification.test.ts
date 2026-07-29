@@ -148,7 +148,21 @@ const ALLOWLIST = new Set<string>([
   "loadEnv",                   // env.ts — used by .mjs scripts
   "setImageIndexForTesting",   // image-index.ts — test-only export
   "assertCorpusImagePath",     // paths.ts — used by scripts
-  "validateReferenceRegistry", // references/loader.ts — called internally at loader.ts:131
+  // references/loader.ts — its only non-test caller is loader.ts's own
+  // `import.meta.url === pathToFileURL(process.argv[1]).href` CLI main block.
+  // THIS ENTRY IS REDUNDANT UNDER THE CURRENT RULE, and the note here used to
+  // claim the opposite ("which the src/*.ts scan does not count as production
+  // wiring") — false: `isReferencedInProduction` deliberately includes the
+  // defining file and treats >= 2 word-boundary matches there as wired, and
+  // loader.ts has exactly 2 (the `export function` declaration, and the call in
+  // the main block). So the scan already counts this caller and the symbol would
+  // pass without the allowlist — same rule the `createUiSpec` block below relies
+  // on. The entry is left in place because removing it changes what the test
+  // asserts, which is out of scope for a documentation commit; it is recorded in
+  // TODOS.md § "Wiring-verification allowlist: redundant entry" instead.
+  // (Cited as "loader.ts:131" until that number went stale; name the symbol,
+  // not the line.)
+  "validateReferenceRegistry",
   "accessibilityRiskTextFields", // schema.ts — used by content-lint test
   "PatternDiscovery",          // schema.ts — Zod schema, used by scripts
   "AccessibilityRisk",         // schema.ts — Zod schema, used by schema validation
@@ -314,12 +328,18 @@ const ALLOWLIST = new Set<string>([
   // `createUiSpec`'s real production wiring AT ALL — allowlisted or not. Do not
   // read this entry as "the symbol is under guard".
   //
-  // Its genuine non-test consumers, neither of which the src/*.ts regex scan can
-  // see: the compiled-runtime probe (scripts/c3-runtime-probe.mjs, via the
-  // deferred dist/create-ui-spec.js import — the same .mjs-via-dist pattern as
-  // the C2 manifest symbols above) and the loopback HTTP adapter still to come in
-  // Task 5. The Task 3 MCP adapter (src/create-ui-spec-mcp.ts) calls
-  // `createUiSpecForAdapter`, NOT this function, so it is not one of them.
+  // Its genuine non-test consumer — ONE, not two — is the compiled-runtime probe
+  // `scripts/c3-runtime-probe.mjs`, which the src/*.ts regex scan cannot see
+  // because it imports `dist/create-ui-spec.js` (the same .mjs-via-dist pattern as
+  // the C2 manifest symbols above).
+  //
+  // An earlier version of this note also named "the loopback HTTP adapter still to
+  // come in Task 5" as a second consumer. Task 5 shipped and that consumer never
+  // materialised: `src/create-ui-spec-http.ts` calls `createUiSpecForAdapter`, not
+  // this function — the same choice `src/create-ui-spec-mcp.ts` (Task 3) made. So
+  // BOTH transport adapters go through `createUiSpecForAdapter`, and the probe is
+  // the only non-test caller of `createUiSpec` itself. The entry stays valid on the
+  // probe alone; do not expect a `src/` call site to appear.
   //
   // Kept rather than deleted only so this explanation has a home. If the two
   // doc-comment mentions in create-ui-spec-contracts.ts ever disappear, this

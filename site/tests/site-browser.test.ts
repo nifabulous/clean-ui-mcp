@@ -252,6 +252,59 @@ describe("public site — base-path deployment", () => {
     expect(url).toContain("style=minimal");
     await ctx.close();
   }, 45_000);
+  it("keeps the brand link inside the mounted base path from a deep route", async () => {
+    // The router is mounted with basename="/clean-ui-mcp". A raw <a href="/">
+    // brand link navigates the browser to the SERVER root, escaping the mounted
+    // site entirely: on the operator's loopback server that root serves the
+    // curator dashboard, and on a static host it is a 404. The brand must
+    // navigate through the router so the basename is preserved.
+    //
+    // `vite preview` hides the escape behind a convenience 302 from `/` to the
+    // base path, so asserting only the final URL would pass even while broken.
+    // The load-bearing assertion is therefore that the click never asks the
+    // server for a path outside the base at all: no document request to `/`, and
+    // no full-document reload (the pre-click sentinel on `window` survives).
+    const ctx = await newTracingContext();
+    const page = await ctx.newPage();
+    await page.goto(`${baseUrl}playground`);
+    await rootH1Text(page);
+
+    const documentRequests: string[] = [];
+    page.on("request", (request) => {
+      if (request.resourceType() === "document") documentRequests.push(request.url());
+    });
+    await page.evaluate(() => {
+      (window as unknown as { __brandNavSentinel?: boolean }).__brandNavSentinel = true;
+    });
+
+    await page.getByRole("link", { name: /clean-ui-mcp home/i }).click();
+
+    // 1. No request may leave the mounted base path. React Router resolves
+    //    `to="/"` under a basename to the basename itself (no trailing slash),
+    //    so both `/clean-ui-mcp` and `/clean-ui-mcp/` count as inside the base.
+    await page.waitForFunction(
+      () => /^\/clean-ui-mcp(\/|$)/.test(window.location.pathname),
+      null,
+      { timeout: 5000 },
+    );
+    const insideBase = /^\/clean-ui-mcp(\/|$)/;
+    const escaped = documentRequests.filter(
+      (url) => !insideBase.test(new URL(url).pathname),
+    );
+    expect(escaped).toEqual([]);
+    // 2. The navigation was routed in-app, not a document load off the base.
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __brandNavSentinel?: boolean }).__brandNavSentinel === true,
+      ),
+    ).toBe(true);
+    // 3. The public-site home renders — not the curator dashboard, and not a
+    //    static-host 404 page.
+    expect(new URL(page.url()).pathname).toMatch(insideBase);
+    expect(await rootH1Text(page)).toMatch(/design judgment for ai agents/i);
+    expect(failedOf(ctx)).toEqual([]);
+    await ctx.close();
+  }, 30_000);
 
   it("never serves a corpus entry asset (no /entries/ request across the journey)", async () => {
     // The public corpus bundle is intentionally empty until a separately cleared

@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 import { Link } from "react-router-dom";
 import { CopyAction } from "../components/CopyAction";
-import { repoMeta } from "../data/repo-meta";
+import { repoLinks, repoMeta } from "../data/repo-meta";
 import "../styles/install.css";
 
 /**
@@ -74,7 +74,7 @@ export function InstallPage(): ReactElement {
         <ul className="install__clients">
           <li>
             <a
-              href="https://github.com/olaniyi-oladokun/clean-ui-mcp#connect-to-an-mcp-client"
+              href={repoLinks.connectClient}
               rel="noreferrer noopener"
               target="_blank"
             >
@@ -84,7 +84,7 @@ export function InstallPage(): ReactElement {
           </li>
           <li>
             <a
-              href="https://github.com/olaniyi-oladokun/clean-ui-mcp#mcp-tools-14"
+              href={repoLinks.mcpTools}
               rel="noreferrer noopener"
               target="_blank"
             >
@@ -113,7 +113,7 @@ export function InstallPage(): ReactElement {
           </Link>
           <a
             className="install__action--secondary"
-            href={repoMeta.repositoryUrl}
+            href={repoLinks.repository}
             rel="noreferrer noopener"
             target="_blank"
           >

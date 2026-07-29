@@ -6,6 +6,7 @@ import {
   parseToolResult, RetrievalState, Evidence, UiSpec, CreateUiSpecInput,
   ALLOWED_RETRIEVAL_STATES, CATALOG_DIGEST, LEGACY_TO_BETA_MAP,
   REMOVED_TOOL_NAMES, findUnsafeCreateUiSpecLeaves,
+  findCreateUiSpecCitationInconsistencies,
 } from "./tool-contracts.js";
 import {
   VALID_TOOL_INPUTS, makeValidSuccess, makeValidError, cloneToolResult,
@@ -853,6 +854,138 @@ describe("R3: spec dup provenance.sourceReferences fails", () => {
       expect(r.error.issues.some(i => /sourceReferences must be unique/i.test(i.message))).toBe(true);
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// THE SHARED CITATION-CONSISTENCY PREDICATE — one implementation, both transports.
+//
+// The six citation rules below used to live INLINE in the create_ui_spec
+// descriptor's `refineEnvelope`, which `makeEnvelope` invokes and only
+// `parseToolResult` reaches — i.e. the MCP path and nothing else. The loopback
+// HTTP route (`POST /api/create-ui-spec`) therefore served a handoff whose
+// `techniques[].sourceIds`, `antiPatterns[].sourceIds`,
+// `componentInventory[].sourceId` or `provenance.sourceReferences` could disagree
+// with `citedReferences`. They now live in ONE exported pure predicate,
+// `findCreateUiSpecCitationInconsistencies`, called from `refineEnvelope` AND from
+// create-ui-spec-http.ts.
+//
+// This block is the MCP HALF of the parity proof (the HTTP half is
+// create-ui-spec-http.test.ts's "the six citation checks run on BOTH transports"):
+// for each rule it asserts the predicate reports it with the exact message and
+// spec-relative path, AND that `ToolResultSchemas.create_ui_spec` — the object
+// `parseToolResult` dispatches to — refuses the same poison with exactly that
+// message at exactly `["data", ...specPath]`. Nothing about MCP's observable
+// behaviour changed in the extraction, and that is what these assertions pin.
+//
+// It also makes the extraction non-neuterable: a predicate stubbed to return no
+// violations fails HERE as well as in the HTTP suite, so the shared gate cannot
+// silently become a no-op on either transport.
+// ---------------------------------------------------------------------------
+describe("shared create_ui_spec citation-consistency predicate", () => {
+  /** Correct SHAPE (so the leaf gate stays silent), wrong MEMBERSHIP. */
+  const UNCITED = `ref-${"b".repeat(64)}`;
+
+  type SpecPoison = {
+    readonly rule: string;
+    readonly message: string;
+    readonly specPath: readonly PropertyKey[];
+    readonly poison: (data: Record<string, unknown>) => void;
+  };
+
+  const CASES: readonly SpecPoison[] = [
+    {
+      rule: "citedReferences-unique",
+      message: "citedReferences must be unique",
+      specPath: ["citedReferences"],
+      poison: (data) => {
+        data.citedReferences = [SAFE_PUBLIC_REFERENCE, SAFE_PUBLIC_REFERENCE];
+      },
+    },
+    {
+      rule: "techniques-sourceIds-cited",
+      message: "techniques[].sourceIds[] not in citedReferences (value withheld)",
+      specPath: ["techniques"],
+      poison: (data) => {
+        data.techniques = [{ text: "Use 8px spacing", sourceIds: [UNCITED] }];
+      },
+    },
+    {
+      rule: "antiPatterns-sourceIds-cited",
+      message: "antiPatterns[].sourceIds[] not in citedReferences (value withheld)",
+      specPath: ["antiPatterns"],
+      poison: (data) => {
+        data.antiPatterns = [{ text: "low-contrast secondary text", sourceIds: [UNCITED] }];
+      },
+    },
+    {
+      rule: "componentInventory-sourceId-cited",
+      message: "componentInventory[].sourceId not in citedReferences (value withheld)",
+      specPath: ["componentInventory"],
+      poison: (data) => {
+        data.componentInventory = [{ name: "Chart", pattern: "bar-chart", sourceId: UNCITED }];
+      },
+    },
+    {
+      rule: "provenance-sourceReferences-unique",
+      message: "provenance.sourceReferences must be unique",
+      specPath: ["provenance"],
+      poison: (data) => {
+        const provenance = data.provenance as Record<string, unknown>;
+        provenance.sourceReferences = [SAFE_PUBLIC_REFERENCE, SAFE_PUBLIC_REFERENCE];
+      },
+    },
+    {
+      rule: "provenance-sourceReferences-match-citedReferences",
+      message: "provenance.sourceReferences must exactly match citedReferences",
+      specPath: ["provenance"],
+      poison: (data) => {
+        const provenance = data.provenance as Record<string, unknown>;
+        provenance.sourceReferences = [];
+      },
+    },
+  ];
+
+  it("reports NOTHING for the valid fixture spec (the control)", () => {
+    const payload = cloneToolResult(makeValidSuccess("create_ui_spec"));
+    expect(findCreateUiSpecCitationInconsistencies(payload.data)).toEqual([]);
+    expect(ToolResultSchemas.create_ui_spec.safeParse(payload).success).toBe(true);
+  });
+
+  it("reports NOTHING for a non-spec value rather than throwing (fail-closed elsewhere)", () => {
+    // The HTTP adapter runs this on the RAW re-parsed served bytes, BEFORE
+    // `parseDesignArtifactEnvelope` has vouched for the shape. A malformed value
+    // must not make the predicate throw a TypeError whose message could carry
+    // something the refusal path never inspected; the envelope schema is what
+    // refuses a malformed shape, immediately afterwards.
+    for (const notASpec of [undefined, null, "spec", 7, [], { citedReferences: "nope" }]) {
+      expect(findCreateUiSpecCitationInconsistencies(notASpec)).toEqual([]);
+    }
+  });
+
+  it.each(CASES.map((c) => [c.rule, c] as const))(
+    "%s: the predicate reports it AND the MCP envelope refuses it, same message and path",
+    (_rule, testCase) => {
+      const payload = cloneToolResult(makeValidSuccess("create_ui_spec"));
+      const data = payload.data as Record<string, unknown>;
+      testCase.poison(data);
+      // The envelope-level "referenceIds must match data IDs as sets" rule is a
+      // DIFFERENT check; leaving it stale would let it supply the refusal and make
+      // this a fiction.
+      payload.referenceIds = [...new Set(data.citedReferences as string[])];
+
+      const violations = findCreateUiSpecCitationInconsistencies(data);
+      expect(violations.map((v) => v.rule)).toEqual([testCase.rule]);
+      expect(violations.map((v) => v.message)).toEqual([testCase.message]);
+      expect(violations[0]!.specPath).toEqual(testCase.specPath);
+
+      const parsed = ToolResultSchemas.create_ui_spec.safeParse(payload);
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) {
+        expect(parsed.error.issues.map((i) => i.message)).toEqual([testCase.message]);
+        expect(parsed.error.issues.map((i) => i.path)).toEqual([["data", ...testCase.specPath]]);
+      }
+    },
+  );
 });
 
 describe("R3 anti-regression: shared referenced ID across aggregation rows passes", () => {

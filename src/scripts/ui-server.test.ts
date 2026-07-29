@@ -17,12 +17,15 @@ function req(headers: Record<string, string | undefined>): IncomingMessage {
 
 // ─── forcing the C3 integrity refusal (the 503 branch) ────────────────────────
 //
-// `handleCreateUiSpecHttp` throws in exactly one situation: the envelope about to
-// be served fails its integrity re-check — a producer/adapter DEFECT. That branch
-// is unreachable from a legitimate request, so the only honest way to test the
-// route's handling of it is to make the adapter throw on demand. The mock is a
-// passthrough unless the flag is set, so every other test in this file exercises
-// the real adapter.
+// `handleCreateUiSpecHttp` throws when the envelope about to be served fails any
+// of its FIVE serve-time gates — the reference/evidence ID-shape gate, the
+// citation-consistency gate, the design-artifact envelope integrity re-check, the
+// served-key-set check, or the private-marker sweep. All five are producer/adapter
+// DEFECTS and the route maps all five to the same bounded 503, which is why one
+// forced throw exercises the branch. Every gate is unreachable from a legitimate
+// request, so the only honest way to test the route's handling is to make the
+// adapter throw on demand. The mock is a passthrough unless the flag is set, so
+// every other test in this file exercises the real adapter.
 const c3Adapter = vi.hoisted(() => ({ forceIntegrityFailure: false }));
 
 vi.mock("../create-ui-spec-http.js", async (importOriginal) => {
@@ -1601,11 +1604,16 @@ describe("POST /api/create-ui-spec (the C3 loopback route)", () => {
       // Nothing from the thrown message reaches the wire.
       expect(text.includes("integrity")).toBe(false);
       expect(text.includes("values withheld")).toBe(false);
-      // The log is a FIXED literal: no request value, no exception text.
+      // The log is a FIXED literal: no request value, no exception text. It names
+      // the GATE FAMILY, not one gate — the adapter has five throw sites and this
+      // handler cannot tell them apart, so a literal naming the integrity re-check
+      // specifically (as it used to) would misattribute an ID-shape or
+      // citation-consistency refusal.
       expect(errorSpy).toHaveBeenCalledTimes(1);
       expect(errorSpy.mock.calls[0]).toEqual([
-        "[create_ui_spec] response refused by the design-artifact integrity re-check; nothing was served",
+        "[create_ui_spec] response refused by a serve-time integrity gate; nothing was served",
       ]);
+      expect(errorSpy.mock.calls[0]![0]).not.toContain("design-artifact");
     } finally {
       c3Adapter.forceIntegrityFailure = false;
       errorSpy.mockRestore();

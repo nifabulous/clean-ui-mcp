@@ -1138,6 +1138,168 @@ export function findUnsafeCreateUiSpecLeaves(roots: {
   return found;
 }
 
+// ===========================================================================
+// The create_ui_spec CITATION-CONSISTENCY predicate
+// ===========================================================================
+//
+// WHY IT IS A STANDALONE EXPORT AND NOT SIX INLINE CHECKS.
+//
+// These six rules lived inline in the create_ui_spec descriptor's
+// `refineEnvelope` below. `refineEnvelope` is invoked from `makeEnvelope`, which
+// only `parseToolResult` reaches — so they ran on the MCP transport and on NO
+// screen of the loopback HTTP route (create-ui-spec-http.ts), which serves the
+// persisted `DesignArtifactEnvelope` itself and therefore cannot use
+// `parseToolResult` at all. Every input the six read is present in the body that
+// route serves, so `POST /api/create-ui-spec` could return a design handoff whose
+// `techniques[].sourceIds`, `antiPatterns[].sourceIds`,
+// `componentInventory[].sourceId` or `provenance.sourceReferences` disagreed with
+// `citedReferences` — refused over MCP, served with 200 to a browser. Two
+// independent reviewers rated that P1.
+//
+// The ID-SHAPE half of that asymmetry was already closed by giving the HTTP
+// adapter the same leaf gate above. This closes the CITATION half the same way:
+// ONE implementation, called from both transports, so a rule cannot be enforced
+// on one surface and not the other. It is a PREDICATE, not a refinement — it
+// takes a value and returns violations, with no dependency on zod, on the tool
+// envelope, or on which transport is asking. Each transport then does what it
+// does with a violation: `refineEnvelope` turns it into a zod issue at
+// `["data", ...specPath]`; the HTTP adapter throws and serves nothing.
+//
+// IT VALIDATES AND REFUSES. It never rewrites, reorders or normalizes anything —
+// which is what makes it compatible with the adjudicated constraint that the HTTP
+// surface serves the persisted envelope byte-identically. On the success path it
+// returns `[]` and changes no byte.
+//
+// SCOPE. Exactly the six rules, no more: uniqueness of `citedReferences`,
+// membership of the three sourceId positions in `citedReferences`, uniqueness of
+// `provenance.sourceReferences`, and set-equality of `provenance.sourceReferences`
+// with `citedReferences`. ID SHAPE is the leaf gate's job (above) and evidence-ID
+// membership, evidence-KIND authority and the lane rules stay in `refineEnvelope`,
+// because they read the tool envelope's `evidence[]` rows — which do not exist on
+// the HTTP surface, so they are structurally inapplicable there rather than
+// missing.
+
+/** The six rules, as stable ids. A transport may name these in a refusal. */
+export type CreateUiSpecCitationRule =
+  | "citedReferences-unique"
+  | "techniques-sourceIds-cited"
+  | "antiPatterns-sourceIds-cited"
+  | "componentInventory-sourceId-cited"
+  | "provenance-sourceReferences-unique"
+  | "provenance-sourceReferences-match-citedReferences";
+
+/**
+ * One citation-consistency violation. Like {@link UnsafeResultLeaf}, `message`
+ * NEVER reproduces the offending value: both transports refuse the response, so
+ * an error string that repeated the value would be the only channel through which
+ * it still reached a caller.
+ */
+export interface CreateUiSpecCitationInconsistency {
+  /** Which of the six rules failed — stable, value-free, safe to publish. */
+  readonly rule: CreateUiSpecCitationRule;
+  /**
+   * The path of the offending field RELATIVE TO THE SPEC (no transport prefix),
+   * so each transport can map it into its own coordinate space — `refineEnvelope`
+   * prefixes `"data"`, the HTTP adapter has no prefix to add.
+   */
+  readonly specPath: readonly PropertyKey[];
+  /**
+   * The position-naming, value-free message. Byte-identical to what the six
+   * inline checks emitted before the extraction, because the MCP issue messages
+   * are a published contract that the drift gates pin.
+   */
+  readonly message: string;
+}
+
+/**
+ * The predicate. Pure: takes a (possibly malformed, possibly untrusted) value and
+ * returns one entry per citation-consistency violation.
+ *
+ * TOLERANT OF A MALFORMED SHAPE, DELIBERATELY. The HTTP adapter runs this on the
+ * RAW re-parsed served bytes, BEFORE `parseDesignArtifactEnvelope` has vouched for
+ * the shape, so a non-object `spec` or a non-array `techniques` must not make it
+ * throw. It reports nothing in that case and the envelope schema — which runs
+ * immediately afterwards on both transports — is what refuses a malformed shape.
+ * That keeps the overall gate fail-closed without this function having to
+ * duplicate the schema.
+ */
+export function findCreateUiSpecCitationInconsistencies(
+  spec: unknown,
+): CreateUiSpecCitationInconsistency[] {
+  const found: CreateUiSpecCitationInconsistency[] = [];
+  const data = spec as
+    | {
+        citedReferences?: unknown;
+        techniques?: unknown;
+        antiPatterns?: unknown;
+        componentInventory?: unknown;
+        provenance?: { sourceReferences?: unknown };
+      }
+    | null
+    | undefined;
+  const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+
+  const citedRefs = asArray(data?.citedReferences);
+  const citedSet = new Set(citedRefs);
+  if (citedSet.size !== citedRefs.length)
+    found.push({
+      rule: "citedReferences-unique",
+      specPath: ["citedReferences"],
+      message: "citedReferences must be unique",
+    });
+
+  for (const tech of asArray(data?.techniques)) {
+    for (const sid of asArray((tech as { sourceIds?: unknown } | null)?.sourceIds)) {
+      if (!citedSet.has(sid))
+        found.push({
+          rule: "techniques-sourceIds-cited",
+          specPath: ["techniques"],
+          message: "techniques[].sourceIds[] not in citedReferences (value withheld)",
+        });
+    }
+  }
+
+  for (const ap of asArray(data?.antiPatterns)) {
+    for (const sid of asArray((ap as { sourceIds?: unknown } | null)?.sourceIds)) {
+      if (!citedSet.has(sid))
+        found.push({
+          rule: "antiPatterns-sourceIds-cited",
+          specPath: ["antiPatterns"],
+          message: "antiPatterns[].sourceIds[] not in citedReferences (value withheld)",
+        });
+    }
+  }
+
+  for (const comp of asArray(data?.componentInventory)) {
+    const sourceId = (comp as { sourceId?: unknown } | null)?.sourceId;
+    if (sourceId !== undefined && !citedSet.has(sourceId))
+      found.push({
+        rule: "componentInventory-sourceId-cited",
+        specPath: ["componentInventory"],
+        message: "componentInventory[].sourceId not in citedReferences (value withheld)",
+      });
+  }
+
+  // The dedup check runs BEFORE the set compare — the Set-based comparison below
+  // collapses duplicates, so without this it would silently accept [ref, ref].
+  const sourceRefsRaw = asArray(data?.provenance?.sourceReferences);
+  const sourceRefs = new Set(sourceRefsRaw);
+  if (sourceRefs.size !== sourceRefsRaw.length)
+    found.push({
+      rule: "provenance-sourceReferences-unique",
+      specPath: ["provenance"],
+      message: "provenance.sourceReferences must be unique",
+    });
+  if (sourceRefs.size !== citedSet.size || ![...sourceRefs].every((id) => citedSet.has(id)))
+    found.push({
+      rule: "provenance-sourceReferences-match-citedReferences",
+      specPath: ["provenance"],
+      message: "provenance.sourceReferences must exactly match citedReferences",
+    });
+
+  return found;
+}
+
 /**
  * Prose rows for the §5.5 per-tool contract reference. These mirror the
  * authoritative human wording in the design spec; the mechanical renderer in
@@ -1551,9 +1713,10 @@ export const TOOL_DESCRIPTORS = [
         provenance?: { evidenceIds?: string[]; sourceReferences?: string[] };
         citedReferences?: string[];
         authorityLanes?: { corpusEvidence?: string[]; machineRules?: string[]; editorialGuidance?: string[] };
-        techniques?: Array<{ sourceIds?: string[] }>;
-        antiPatterns?: Array<{ sourceIds?: string[] }>;
-        componentInventory?: Array<{ sourceId?: string }>;
+        // `techniques`, `antiPatterns` and `componentInventory` are deliberately
+        // absent: the only rules that read them are the six citation-consistency
+        // rules, which `findCreateUiSpecCitationInconsistencies` owns for both
+        // transports (see the delegation at the end of this block).
         motionGuidance?: { evidenceUnavailable?: boolean };
       };
       // Motion warning coupling: evidenceUnavailable ↔ motionEvidenceUnavailable
@@ -1569,10 +1732,12 @@ export const TOOL_DESCRIPTORS = [
         if (e.id) knownEvidence.add(e.id);
       // Cited references set
       const citedSet = new Set(data?.citedReferences ?? []);
-      // Check duplicate citedReferences
       const citedRefs = data?.citedReferences ?? [];
-      if (new Set(citedRefs).size !== citedRefs.length)
-        ctx.addIssue({ code: "custom", message: "citedReferences must be unique", path: ["data", "citedReferences"] });
+      // NOTE: `citedReferences` UNIQUENESS is no longer checked here. It is one of
+      // the six CITATION-CONSISTENCY rules now owned by the shared predicate
+      // `findCreateUiSpecCitationInconsistencies` (above), which BOTH transports
+      // call — see the delegation at the end of this block. The message and path it
+      // emits are byte-identical to what this line emitted.
       // ID-domain separation: citedReferences (and therefore the envelope's
       // referenceIds, which must equal them as sets) hold safe PUBLIC REFERENCE
       // ids only. A response-scoped public evidence id substituted here would
@@ -1722,25 +1887,6 @@ export const TOOL_DESCRIPTORS = [
         ctx.addIssue({ code: "custom", message: `citedDecisions have conflicting authority lanes for field(s): ${[...conflictFields].join(", ")} — requires authorityConflict warning`, path: ["warnings"] });
       if (conflictFields.size === 0 && hasConflictWarn)
         ctx.addIssue({ code: "custom", message: "authorityConflict warning present but no citedDecisions have conflicting authority lanes", path: ["warnings"] });
-      // Check techniques sourceIds against citedReferences
-      for (const tech of data?.techniques ?? []) {
-        for (const sid of tech.sourceIds ?? []) {
-          if (!citedSet.has(sid))
-            ctx.addIssue({ code: "custom", message: `techniques[].sourceIds[] not in citedReferences (value withheld)`, path: ["data", "techniques"] });
-        }
-      }
-      // Check antiPatterns sourceIds against citedReferences
-      for (const ap of data?.antiPatterns ?? []) {
-        for (const sid of ap.sourceIds ?? []) {
-          if (!citedSet.has(sid))
-            ctx.addIssue({ code: "custom", message: `antiPatterns[].sourceIds[] not in citedReferences (value withheld)`, path: ["data", "antiPatterns"] });
-        }
-      }
-      // Check componentInventory sourceId against citedReferences
-      for (const comp of data?.componentInventory ?? []) {
-        if (comp.sourceId !== undefined && !citedSet.has(comp.sourceId))
-          ctx.addIssue({ code: "custom", message: `componentInventory[].sourceId not in citedReferences (value withheld)`, path: ["data", "componentInventory"] });
-      }
       // provenance.evidenceIds must match envelope evidence IDs exactly (derived echo, not authority)
       const provEvIds = data?.provenance?.evidenceIds ?? [];
       if (new Set(provEvIds).size !== provEvIds.length)
@@ -1748,15 +1894,23 @@ export const TOOL_DESCRIPTORS = [
       const provenanceEvIds = new Set(provEvIds);
       if (provenanceEvIds.size !== knownEvidence.size || ![...provenanceEvIds].every(id => knownEvidence.has(id)))
         ctx.addIssue({ code: "custom", message: "provenance.evidenceIds must exactly match envelope evidence IDs", path: ["data", "provenance"] });
-      // provenance.sourceReferences must be unique AND match citedReferences exactly.
-      // The explicit dedup check runs BEFORE the set compare — the Set-based sameSet
-      // below collapses duplicates, so without this it would silently accept [ref, ref].
-      const sourceRefsRaw = data?.provenance?.sourceReferences ?? [];
-      if (new Set(sourceRefsRaw).size !== sourceRefsRaw.length)
-        ctx.addIssue({ code: "custom", message: "provenance.sourceReferences must be unique", path: ["data", "provenance"] });
-      const sourceRefs = new Set(sourceRefsRaw);
-      if (sourceRefs.size !== citedSet.size || ![...sourceRefs].every(id => citedSet.has(id)))
-        ctx.addIssue({ code: "custom", message: "provenance.sourceReferences must exactly match citedReferences", path: ["data", "provenance"] });
+      // --- The SIX CITATION-CONSISTENCY rules, delegated to the SHARED predicate. ---
+      // `citedReferences` uniqueness, the three sourceId-membership rules, and both
+      // `provenance.sourceReferences` rules used to be written out inline here. They
+      // now come from `findCreateUiSpecCitationInconsistencies`, which the loopback
+      // HTTP adapter (create-ui-spec-http.ts) also calls — that is the whole point
+      // of the extraction: `refineEnvelope` is reachable only through
+      // `parseToolResult`, so anything written inline here is an MCP-only rule, and
+      // these six read nothing but fields the HTTP surface also publishes.
+      //
+      // The messages and the `["data", ...]` paths are byte-identical to the inline
+      // versions; only the emission ORDER changed (the six are now contiguous, so
+      // `citedReferences must be unique` is reported after the evidence rules rather
+      // than before them). No test asserts a cross-rule ordering, and every poison
+      // whose message list is asserted exactly produces a single issue.
+      for (const violation of findCreateUiSpecCitationInconsistencies(val.data)) {
+        ctx.addIssue({ code: "custom", message: violation.message, path: ["data", ...violation.specPath] });
+      }
     },
   },
   {

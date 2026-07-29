@@ -17,8 +17,8 @@
  * different: the parsed {@link DesignArtifactEnvelope} ITSELF, with both
  * renderings and the response-scoped evidence ids. `parseToolResult` describes a
  * shape this response does not have, so it cannot be the whole gate here. The
- * two screens are NOT ordered by strength — they are strong on different axes,
- * and this adapter runs BOTH:
+ * three screens below are NOT ordered by strength — they are strong on different
+ * axes, and this adapter runs ALL THREE:
  *
  *   * `parseDesignArtifactEnvelope` (envelope integrity) is stronger than the
  *     MCP result schema on structure: it re-derives the handoff from the spec,
@@ -36,15 +36,19 @@
  *     that was false on exactly this axis, and a producer regression emitting a
  *     raw corpus id in `spec.citedReferences` would have been refused over MCP
  *     and served with 200 here.
+ *   * `findCreateUiSpecCitationInconsistencies` (citation consistency) is the
+ *     SHARED predicate the `create_ui_spec` descriptor's `refineEnvelope` also
+ *     calls — ONE implementation, both transports, which is what makes the six
+ *     rules below non-divergent by construction rather than by two lists that
+ *     have to be kept in step.
  *
- * THIS ENUMERATION IS NOT COMPLETE, AND HERE IS EXACTLY WHAT IS MISSING. The two
- * bullets above are the screens this adapter RUNS. They are not the whole
- * `create_ui_spec` contract. The descriptor's `refineEnvelope` block
- * (tool-contracts.ts) is invoked only from `makeEnvelope`, reachable only through
- * `parseToolResult` — so it runs on the MCP path and on no screen here. Its
- * ID-SHAPE subset IS recovered, by the leaf gate above; its CITATION-CONSISTENCY
- * subset is not, and every input those six rules read is present in the body this
- * route serves:
+ * THE SIX CITATION RULES, AND WHY THEY ARE HERE NOW. `refineEnvelope` is invoked
+ * only from `makeEnvelope`, reachable only through `parseToolResult` — so
+ * anything written inline THERE is an MCP-only rule, and this adapter cannot use
+ * `parseToolResult` at all (it serves a different shape). Its ID-SHAPE subset was
+ * recovered by the leaf gate above; its CITATION-CONSISTENCY subset was NOT, even
+ * though every input those six rules read is present in the body this route
+ * serves:
  *
  *   1. `citedReferences must be unique`
  *   2. `techniques[].sourceIds[]` must be members of `citedReferences`
@@ -53,36 +57,39 @@
  *   5. `provenance.sourceReferences must be unique`
  *   6. `provenance.sourceReferences` must equal `citedReferences` as sets
  *
- * `UiSpec.superRefine` DOES reach this transport (the envelope declares
- * `spec: UiSpec`), but it covers only `citedDecisions[].sourceId` membership, the
- * citedDecision authority prerequisites and the two lane-membership rules; the
- * envelope schema covers `publicEvidenceIds` uniqueness and the
- * `provenance.evidenceIds` element-for-element binding. NEITHER covers any of the
- * six. (A further set of evidence-KIND authority checks is structurally
- * inapplicable here, because this surface publishes no evidence rows — that part
- * of the asymmetry is defensible and is not in the list.)
+ * A producer regression emitting `techniques[0].sourceIds = ["ref-<sha>"]` where
+ * the digest is well-formed but absent from `spec.citedReferences`, or a
+ * `provenance.sourceReferences` that disagrees with `citedReferences`, was
+ * REFUSED over MCP and SERVED WITH 200 here. No private data was at stake — the
+ * leaf gate enforces `ref-<sha256>` shape on all eight reference positions and
+ * `containsPrivateMarker` sweeps the whole body — but PROVENANCE INTEGRITY was: a
+ * design artifact whose technique claims a source the artifact does not cite,
+ * shipped to a browser. Two independent reviewers rated that P1, so the six were
+ * extracted into the shared predicate and are now enforced HERE TOO, as
+ * validation-that-refuses. All six are measured, not assumed, in
+ * create-ui-spec-http.test.ts's `I3(r5) closed` block, which proves for each rule
+ * that `parseDesignArtifactEnvelope` accepts the poison, that the leaf gate
+ * ignores it, that MCP refuses for that exact rule, and that this route now
+ * refuses it too.
  *
- * SO: a producer regression emitting `techniques[0].sourceIds = ["ref-<sha>"]`
- * where the digest is well-formed but absent from `spec.citedReferences`, or a
- * `provenance.sourceReferences` that disagrees with `citedReferences`, is REFUSED
- * over MCP and SERVED WITH 200 here. NO PRIVATE DATA IS AT STAKE — the leaf gate
- * still enforces `ref-<sha256>` shape on all eight reference positions and
- * `containsPrivateMarker` still sweeps the whole body. What is at stake is
- * PROVENANCE INTEGRITY: a design artifact whose technique claims a source the
- * artifact does not cite. All six are measured, not assumed, in
- * create-ui-spec-http.test.ts's `I3(r5)` block, which proves for each rule that
- * `parseDesignArtifactEnvelope` accepts the poison, that MCP refuses for that
- * exact rule, and that this route serves it.
+ * WHAT STILL DIFFERS, AND WHY THAT IS STRUCTURAL RATHER THAN A GAP.
+ * `refineEnvelope` retains the rules that read the TOOL ENVELOPE's `evidence[]`
+ * ROWS — evidence-ID membership, the evidence-KIND authority prerequisites, the
+ * lane/kind agreement rules and the warning-coupling rules. This surface
+ * publishes no evidence rows and no warnings array of its own (the envelope
+ * carries `publicEvidenceIds` only), so those rules have no inputs here: they are
+ * inapplicable, not skipped. `UiSpec.superRefine` DOES reach this transport (the
+ * envelope declares `spec: UiSpec`) and covers `citedDecisions[].sourceId`
+ * membership, the citedDecision authority prerequisites and the two
+ * lane-membership rules; the envelope schema covers `publicEvidenceIds`
+ * uniqueness and the `provenance.evidenceIds` element-for-element binding.
  *
- * WHY IT IS DISCLOSED RATHER THAN CLOSED. Running the six here would be
- * validation-that-refuses, which is compatible with the byte-preserving
- * constraint below — this is a scope decision, not a design impossibility, and
- * the recommendation is to close it. It is NOT covered by either adjudicated
- * exception: the retrieval-projection ruling is about `retrieval.resultCount` and
- * the ID-shape parity ruling is about the leaf gate. If you close the gap, invert
- * the assertions in that test block rather than deleting them.
+ * THE TWO ADJUDICATED EXCEPTIONS ARE UNCHANGED AND NARROW: the
+ * retrieval-projection ruling is about `retrieval.resultCount` (this surface
+ * serves the corpus-scoped count, unreshaped), and the ID-shape parity ruling is
+ * about the leaf gate. Neither ever covered the six.
  *
- * The ID-shape screen VALIDATES AND REFUSES; it never rewrites. That matters,
+ * EVERY SCREEN HERE VALIDATES AND REFUSES; none rewrites. That matters,
  * because this surface serves the PERSISTED envelope and must not reshape it
  * (the separately adjudicated reason it does not call the MCP retrieval
  * projection). A gate that throws changes no byte on the success path.
@@ -140,7 +147,11 @@ import {
   type CreateUiSpecTransportError,
   type CreateUiSpecTransportErrorCode,
 } from "./create-ui-spec-transport-errors.js";
-import { CreateUiSpecInput, findUnsafeCreateUiSpecLeaves } from "./tool-contracts.js";
+import {
+  CreateUiSpecInput,
+  findCreateUiSpecCitationInconsistencies,
+  findUnsafeCreateUiSpecLeaves,
+} from "./tool-contracts.js";
 
 /**
  * The HTTP request contract: the CORE request fields and NO `outputFormat`.
@@ -193,11 +204,17 @@ export interface CreateUiSpecHttpResult {
  *   constructor (used by tests to pin `generatedAt`; production omits it so the
  *   core's own `new Date()` applies).
  *
- * @throws Error when the envelope about to be served fails the integrity
- * re-check — a producer or adapter DEFECT, not caller error, so the response is
+ * @throws Error when the envelope about to be served fails ANY of the serve-time
+ * gates — the ID-shape gate, the citation-consistency gate, the envelope
+ * integrity re-check, the key-set check, or the private-marker sweep. Every one of
+ * them is a producer or adapter DEFECT, not caller error, so the response is
  * refused rather than dressed up as a typed caller-facing failure. The thrown
- * message names only structural positions; it never reproduces a value, the
- * caller's brief, or raw exception text.
+ * message names only structural positions or fixed rule ids; it never reproduces a
+ * value, the caller's brief, or raw exception text. The route
+ * (scripts/ui-server.ts) maps every one of them to the SAME bounded
+ * `createUiSpecIntegrityRefusalError()` — a NON-retryable `PROVIDER_ERROR` served
+ * with 503 — so a caller cannot tell the gates apart, and none of them tells it to
+ * retry a request that is deterministically refused.
  */
 export async function handleCreateUiSpecHttp(
   rawBody: unknown,
@@ -267,24 +284,31 @@ function serializeEnvelope(envelope: DesignArtifactEnvelope): string {
  *     identically on both transports. It runs FIRST and on the raw re-parsed
  *     value, so an unsafe reference is reported as what it is rather than as a
  *     downstream hash mismatch.
- *  2. `parseDesignArtifactEnvelope` over the re-parsed bytes — schema (including
+ *  2. the CITATION-CONSISTENCY gate
+ *     (`findCreateUiSpecCitationInconsistencies`) over the same re-parsed
+ *     `spec` — the same predicate the descriptor's `refineEnvelope` calls, so
+ *     the six citation rules hold identically on both transports. It runs after
+ *     the ID-shape gate for the same reason that gate runs first: membership is
+ *     only meaningful once shape holds.
+ *  3. `parseDesignArtifactEnvelope` over the re-parsed bytes — schema (including
  *     the strict shape, so an adapter-added field is refused), handoff
  *     reconstruction, both re-renders, all four hashes, and the private-marker
  *     sweep.
- *  3. the served key set is exactly the producer envelope's, asserted directly
+ *  4. the served key set is exactly the producer envelope's, asserted directly
  *     so the "no adapter-added envelope field" property does not rest solely on
  *     the schema staying strict.
- *  4. a final `containsPrivateMarker` sweep over the whole serialized body. The
+ *  5. a final `containsPrivateMarker` sweep over the whole serialized body. The
  *     envelope's own superRefine already walks its strings, so on the production
  *     path this is a no-op; it exists so the served bytes are not an unguarded
  *     position if that sweep is ever narrowed.
  *
- * WHY `spec` IS THE WHOLE ID-SHAPE SURFACE HERE, field by field. `spec` is the
+ * WHY `spec` IS THE WHOLE ID-SHAPE AND CITATION SURFACE HERE, field by field.
+ * `spec` is the
  * only envelope field carrying producer-authored identifiers.
  * `publicEvidenceIds` is bound by the envelope schema to exactly
  * `spec.provenance.evidenceIds` (element for element, in order) and every element
  * is `EvidenceIdSchema`, so gating `data.provenance.evidenceIds[]` gates it too.
- * `designMarkdown` / `designJson` are re-rendered FROM the gated spec by step 2
+ * `designMarkdown` / `designJson` are re-rendered FROM the gated spec by step 3
  * and asserted byte-equal, so they cannot carry a string the spec does not.
  * `artifactId`, `assemblyRulesSha256` and the four hashes are recomputed digests;
  * `handoff` is reconstructed from the spec; `retrieval` and `warnings` are closed
@@ -311,6 +335,23 @@ function assertServedBytesAreEnvelope(body: string, envelope: DesignArtifactEnve
     const positions = [...new Set(unsafeLeaves.map((leaf) => leaf.position))].slice(0, 12).join(", ");
     throw new Error(
       `create_ui_spec response failed the reference/evidence ID-shape gate and was not served; offending positions: [${positions}] (values withheld)`,
+    );
+  }
+
+  // The CITATION-CONSISTENCY gate, the shared predicate's other caller. Runs on
+  // the same re-parsed value and immediately after the ID-shape gate, because
+  // membership is only meaningful once shape holds: a raw corpus id in
+  // `citedReferences` should be reported as an unsafe reference, not as a dangling
+  // citation link. Its own message names its own gate and the stable rule ids, so a
+  // refusal here is never confusable with an ID-shape or hash refusal (and never
+  // reproduces a value — the rule ids are fixed literals).
+  const citationViolations = findCreateUiSpecCitationInconsistencies(
+    (rawServed as { spec?: unknown } | null)?.spec,
+  );
+  if (citationViolations.length > 0) {
+    const rules = [...new Set(citationViolations.map((violation) => violation.rule))].join(", ");
+    throw new Error(
+      `create_ui_spec response failed the citation-consistency gate and was not served; offending rules: [${rules}] (values withheld)`,
     );
   }
 

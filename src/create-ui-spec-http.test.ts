@@ -49,7 +49,13 @@ import {
 import { parseDesignHandoff } from "./design-target-contracts.js";
 import { renderDesignHandoffMarkdown, renderDesignHandoffJson } from "./design-handoff.js";
 import { sha256Hex } from "./readiness/contracts.js";
-import { ERROR_RETRYABLE, ToolResultSchemas } from "./tool-contracts.js";
+import {
+  ERROR_RETRYABLE,
+  ToolResultSchemas,
+  findCreateUiSpecCitationInconsistencies,
+  findUnsafeCreateUiSpecLeaves,
+  type CreateUiSpecCitationRule,
+} from "./tool-contracts.js";
 import {
   createUiSpecIntegrityRefusalError,
   createUiSpecTransportError,
@@ -295,6 +301,15 @@ describe("create_ui_spec HTTP success response", () => {
     const served = JSON.parse(result.body) as { retrieval: { mode: string; modality: string; resultCount: number } };
     expect(served.retrieval.mode).toBe("structured-fallback");
     expect(served.retrieval.modality).toBe("metadata");
+    // The envelope's `retrieval` block is CORPUS-SCOPED (create-ui-spec-
+    // contracts.ts): `resultCount` counts RETRIEVED CORPUS OBSERVATIONS, which is
+    // zero here — it is NOT the artifact-scoped count the published tool contract
+    // documents, and the separately adjudicated ruling is that this transport
+    // serves the persisted envelope unreshaped rather than applying the MCP
+    // retrieval projection. Asserting the value pins which of the two meanings
+    // this surface publishes, so a future "fix" that quietly substituted the
+    // artifact-scoped 1 would fail here instead of silently reshaping the bytes.
+    expect(served.retrieval.resultCount).toBe(0);
     parseDesignArtifactEnvelope(JSON.parse(result.body));
   });
 
@@ -786,44 +801,53 @@ describe("create_ui_spec — a self-consistent poisoned envelope (m3(r4))", () =
 });
 
 // ---------------------------------------------------------------------------
-// I3(r5): WHICH ENVELOPE CHECKS THIS TRANSPORT DOES NOT PERFORM.
+// I3(r5), CLOSED: the SIX CITATION-CONSISTENCY CHECKS NOW RUN ON BOTH
+// TRANSPORTS.
 //
-// The `create_ui_spec` descriptor's `refineEnvelope` block (tool-contracts.ts)
-// is invoked only from `makeEnvelope`, reachable only through `parseToolResult`
-// — i.e. only on the MCP path. This adapter imports exactly two symbols from
-// that module (`CreateUiSpecInput`, `findUnsafeCreateUiSpecLeaves`) and never
-// calls it. The ID-SHAPE subset of that block is recovered here by the leaf
-// gate (the Task-5 fix). SIX CITATION-CONSISTENCY CHECKS ARE NOT, even though
-// every input they read is present in the body this route serves.
+// HISTORY, kept because the inversion is the whole point of this block. The
+// `create_ui_spec` descriptor's `refineEnvelope` block (tool-contracts.ts) is
+// invoked only from `makeEnvelope`, reachable only through `parseToolResult` —
+// i.e. only on the MCP path. Its ID-SHAPE subset was recovered here by the leaf
+// gate (the Task-5 fix); its six CITATION-CONSISTENCY rules were NOT, and this
+// block used to PIN that asymmetry — "MCP refuses %s and HTTP serves it",
+// asserting 200 on a handoff whose `techniques[].sourceIds`,
+// `antiPatterns[].sourceIds`, `componentInventory[].sourceId` or
+// `provenance.sourceReferences` disagreed with `citedReferences`. Two
+// independent reviewers rated that P1 on a browser-facing route, so the six were
+// extracted into ONE shared pure predicate
+// (`findCreateUiSpecCitationInconsistencies`, tool-contracts.ts) that
+// `refineEnvelope` and this adapter both call. The assertions below are the same
+// poisons with the HTTP verdict INVERTED, exactly as the old docblock instructed.
 //
-// This block pins the asymmetry rather than asserting parity that does not
-// exist. For each of the six rules it proves three things on the SAME poison:
+// For each of the six rules this proves four things on the SAME poison:
 //
 //   1. CONTROL — `parseDesignArtifactEnvelope` accepts the poisoned envelope on
-//      its own, so no other HTTP screen would have caught it anyway. Without
-//      this the rest would prove nothing.
+//      its own, AND the ID-shape leaf gate finds nothing in it. So neither
+//      pre-existing HTTP screen would have caught it: the shared citation
+//      predicate is the only thing that can, which is what makes the HTTP
+//      refusal below attributable to this fix rather than to a hash mismatch.
 //   2. MCP REFUSES, and refuses for THE NAMED RULE — asserted against
 //      `ToolResultSchemas.create_ui_spec`, the same schema object
 //      `parseToolResult` dispatches to (create-ui-spec-mcp.ts), with the exact
 //      message, not a generic gate failure. Each poison is constructed to leave
 //      every OTHER rule satisfied, so the message list is exactly one entry.
-//   3. HTTP SERVES IT — `handleCreateUiSpecHttp` resolves, i.e. a dangling or
-//      duplicate citation link reaches the operator with 200.
+//   3. HTTP REFUSES TOO, for the SAME rule — a rejection matching
+//      {@link CITATION_REFUSAL} (the gate's OWN message, not the generic
+//      `/was not served/` substring every refusal shares) naming the shared
+//      predicate's stable rule id. Nothing is served.
+//   4. The refusal names NO VALUE — not the poisoned digest, not the brief.
 //
-// WHAT IS AND IS NOT AT STAKE. No private data escapes: the leaf gate still
-// enforces `ref-<sha256>` shape on all eight reference positions and
-// `containsPrivateMarker` still sweeps the whole body — both poisoned refs
-// below are well-formed `ref-` digests precisely so the leaf gate cannot be
-// the thing that catches them. What escapes is PROVENANCE INTEGRITY: a
-// technique or component that cites a source the artifact does not cite.
-//
-// IF A FUTURE CHANGE CLOSES THE GAP, THESE ASSERTIONS MUST BE INVERTED, NOT
-// DELETED. `expect(...).resolves` becoming a rejection is the signal that HTTP
-// started validating; flip it to a refusal assertion and update the docblock in
-// create-ui-spec-http.ts. Deleting the block would remove the only record that
-// the transports ever differed here.
+// WHAT WAS AT STAKE. No private data ever escaped: the leaf gate enforces
+// `ref-<sha256>` shape on all eight reference positions and
+// `containsPrivateMarker` sweeps the whole body — both poisoned refs below are
+// well-formed `ref-` digests precisely so the leaf gate cannot be the thing that
+// catches them. What escaped was PROVENANCE INTEGRITY: a technique or component
+// that cites a source the artifact does not cite. That is now refused.
 // ---------------------------------------------------------------------------
-describe("create_ui_spec HTTP — the six refineEnvelope citation checks are MCP-only (I3(r5))", () => {
+/** The citation gate's OWN refusal, distinct from every other refusal message. */
+const CITATION_REFUSAL = /failed the citation-consistency gate and was not served/;
+
+describe("create_ui_spec HTTP — the six citation checks run on BOTH transports (I3(r5) closed)", () => {
   /** Well-formed public reference digests: correct SHAPE, wrong MEMBERSHIP. */
   const CITED_REF = `ref-${"a".repeat(64)}`;
   const UNCITED_REF = `ref-${"b".repeat(64)}`;
@@ -831,18 +855,22 @@ describe("create_ui_spec HTTP — the six refineEnvelope citation checks are MCP
   type SpecT = DesignArtifactEnvelope["spec"];
 
   /**
-   * One row per `refineEnvelope` rule that does not run on this transport. Each
-   * poison changes exactly what its rule reads and leaves the other five rules
-   * satisfied, so `message` below is the COMPLETE issue list on MCP — that is
-   * what makes "this specific check is the one missing here" a measurement
-   * rather than a claim.
+   * One poison per shared citation rule. Each poison changes exactly what its
+   * rule reads and leaves the other five satisfied, so `message` below is the
+   * COMPLETE issue list on MCP and `rule` is the ONLY rule id in the HTTP
+   * refusal — that is what makes "this specific check now runs on both
+   * transports" a measurement rather than a claim.
    */
-  const MCP_ONLY_CITATION_CHECKS: ReadonlyArray<{
+  const SHARED_CITATION_CHECKS: ReadonlyArray<{
+    /** The exact MCP issue message, unchanged by the extraction. */
     readonly message: string;
+    /** The shared predicate's stable rule id, named in the HTTP refusal. */
+    readonly rule: CreateUiSpecCitationRule;
     readonly poison: (spec: SpecT) => SpecT;
   }> = [
     {
       message: "citedReferences must be unique",
+      rule: "citedReferences-unique",
       poison: (spec) => ({
         ...spec,
         citedReferences: [CITED_REF, CITED_REF],
@@ -851,6 +879,7 @@ describe("create_ui_spec HTTP — the six refineEnvelope citation checks are MCP
     },
     {
       message: "provenance.sourceReferences must be unique",
+      rule: "provenance-sourceReferences-unique",
       poison: (spec) => ({
         ...spec,
         citedReferences: [CITED_REF],
@@ -859,6 +888,7 @@ describe("create_ui_spec HTTP — the six refineEnvelope citation checks are MCP
     },
     {
       message: "provenance.sourceReferences must exactly match citedReferences",
+      rule: "provenance-sourceReferences-match-citedReferences",
       poison: (spec) => ({
         ...spec,
         citedReferences: [CITED_REF],
@@ -867,6 +897,7 @@ describe("create_ui_spec HTTP — the six refineEnvelope citation checks are MCP
     },
     {
       message: "techniques[].sourceIds[] not in citedReferences (value withheld)",
+      rule: "techniques-sourceIds-cited",
       poison: (spec) => ({
         ...spec,
         citedReferences: [CITED_REF],
@@ -876,6 +907,7 @@ describe("create_ui_spec HTTP — the six refineEnvelope citation checks are MCP
     },
     {
       message: "antiPatterns[].sourceIds[] not in citedReferences (value withheld)",
+      rule: "antiPatterns-sourceIds-cited",
       poison: (spec) => ({
         ...spec,
         citedReferences: [CITED_REF],
@@ -885,6 +917,7 @@ describe("create_ui_spec HTTP — the six refineEnvelope citation checks are MCP
     },
     {
       message: "componentInventory[].sourceId not in citedReferences (value withheld)",
+      rule: "componentInventory-sourceId-cited",
       poison: (spec) => ({
         ...spec,
         citedReferences: [CITED_REF],
@@ -894,8 +927,28 @@ describe("create_ui_spec HTTP — the six refineEnvelope citation checks are MCP
     },
   ];
 
-  it.each(MCP_ONLY_CITATION_CHECKS.map((c) => [c.message, c] as const))(
-    "MCP refuses %s and HTTP serves it",
+  it("serves a self-consistent UNPOISONED envelope, byte-for-byte — the gate refuses nothing else", async () => {
+    // The control for the whole block. Without it every refusal below would also
+    // pass against a gate that threw unconditionally. It is also the SUCCESS-PATH
+    // BYTE-IDENTITY assertion for this change: the same request through the same
+    // adapter, once with the producer's own envelope and once with a
+    // self-consistent rebuild of it, yields the identical body — the new gate
+    // validates and refuses, it never rewrites.
+    const corpus = [fixtureEntry("internal-1", "product-Alpha")];
+    const fixedClock = () => new Date("2026-07-28T00:00:00.000Z");
+    const first = await handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus), fixedClock);
+    const produced = spyState.produced[0]!.envelope;
+    const rebuilt = rebuildEnvelopeAroundSpec(produced, (spec) => spec);
+    spyState.mutate = (result) => ({ ...result, envelope: rebuilt });
+    const second = await handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus), fixedClock);
+    expect(second.status).toBe(200);
+    expect(second.body).toBe(first.body);
+    expect(second.body).toBe(JSON.stringify(produced));
+    expect(findCreateUiSpecCitationInconsistencies(produced.spec)).toEqual([]);
+  });
+
+  it.each(SHARED_CITATION_CHECKS.map((c) => [c.message, c] as const))(
+    "BOTH transports refuse %s",
     async (_message, check) => {
       const corpus = [fixtureEntry("internal-1", "product-Alpha")];
 
@@ -927,19 +980,36 @@ describe("create_ui_spec HTTP — the six refineEnvelope citation checks are MCP
         parsedMcp.success ? [] : parsedMcp.error.issues.map((i) => i.message),
       ).toEqual([check.message]);
 
-      // ── 1. CONTROL: HTTP's own envelope screen accepts the poison ─────────
+      // ── 1. CONTROL: neither PRE-EXISTING HTTP screen catches the poison ───
       const poisonedEnvelope = rebuildEnvelopeAroundSpec(produced, check.poison);
       expect(() => parseDesignArtifactEnvelope(poisonedEnvelope)).not.toThrow();
+      expect(
+        findUnsafeCreateUiSpecLeaves({
+          data: poisonedEnvelope.spec,
+          referenceIds: undefined,
+          evidence: undefined,
+        }),
+      ).toEqual([]);
+      // ...and the shared predicate DOES, for exactly this rule.
+      const violations = findCreateUiSpecCitationInconsistencies(poisonedEnvelope.spec);
+      expect(violations.map((v) => v.rule)).toEqual([check.rule]);
+      expect(violations.map((v) => v.message)).toEqual([check.message]);
 
-      // ── 3. HTTP serves it ─────────────────────────────────────────────────
+      // ── 3. HTTP refuses too, naming its own gate and the same rule ────────
       spyState.mutate = (result) => ({ ...result, envelope: poisonedEnvelope });
-      const served = await handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus));
-      expect(served.status).toBe(200);
-      // And the defective citation graph really is in the BYTES the route
-      // writes, not merely tolerated by an in-memory object: the served spec is
-      // the poisoned spec, field for field.
-      const servedSpec = (JSON.parse(served.body) as DesignArtifactEnvelope).spec;
-      expect(servedSpec).toEqual(poisonedEnvelope.spec);
+      let message = "";
+      try {
+        await handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus));
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message).toMatch(CITATION_REFUSAL);
+      expect(message).toContain(check.rule);
+
+      // ── 4. ...and names no value: not the digest, not the brief ───────────
+      expect(message).not.toContain(UNCITED_REF);
+      expect(message).not.toContain(CITED_REF);
+      expect(message).not.toContain("analytics dashboard for a fintech");
     },
   );
 });

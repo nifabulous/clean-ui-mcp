@@ -1200,9 +1200,9 @@ function sendCreateUiSpecTransportError(
  * in handleUiRequest does `console.error(error)`, and a `JSON.parse` failure's
  * message quotes the offending input — which for this route is the caller's
  * brief. So every failure is handled locally and the outer catch is never
- * reached: JSON parsing, the body cap, and the adapter's integrity refusal all
- * terminate here. The brief exists in this process only for the duration of the
- * call, in memory, and is never written anywhere.
+ * reached: JSON parsing, the body cap, and every one of the adapter's serve-time
+ * gate refusals all terminate here. The brief exists in this process only for the
+ * duration of the call, in memory, and is never written anywhere.
  */
 async function handleCreateUiSpecRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   for (const header of REFUSED_C3_REQUEST_HEADERS) {
@@ -1234,18 +1234,28 @@ async function handleCreateUiSpecRequest(req: IncomingMessage, res: ServerRespon
   try {
     result = await handleCreateUiSpecHttp(parsed, readerForCreateUiSpec());
   } catch {
-    // The adapter THROWS only when the envelope about to be served fails its
-    // integrity re-check — a producer/adapter defect, never caller error. Refuse
-    // rather than serving a response the gate rejected. A fixed literal is logged
-    // so the operator sees it; the thrown message itself is not logged, so no
-    // future change to it can leak a value.
+    // The adapter THROWS when the envelope about to be served fails ANY of its
+    // serve-time gates. There are FIVE, not one, and this handler deliberately
+    // does not distinguish them: the reference/evidence ID-shape gate, the
+    // citation-consistency gate, the design-artifact envelope integrity re-check,
+    // the served-key-set check, and the private-marker sweep over the served bytes
+    // (create-ui-spec-http.ts). Every one of them is a producer/adapter DEFECT,
+    // never caller error, and every one of them is deterministic for the same
+    // request. Refuse rather than serving a response a gate rejected.
     //
-    // NON-RETRYABLE, unlike every other PROVIDER_ERROR: this refusal is
+    // The logged literal is fixed and names the FAMILY rather than one gate — an
+    // earlier version named the integrity re-check specifically, which
+    // misattributed an ID-shape or citation refusal to a hash mismatch and would
+    // have sent an operator to the wrong place. The thrown message itself is NOT
+    // logged (each gate's own message identifies it in-process), so no future
+    // change to it can leak a value.
+    //
+    // NON-RETRYABLE, unlike every other PROVIDER_ERROR: these refusals are
     // deterministic for the same request, so telling a client to retry would send
     // it round a loop that fails identically forever. Same code, same message
     // (the client must not learn it was a producer defect); honest flag.
     console.error(
-      "[create_ui_spec] response refused by the design-artifact integrity re-check; nothing was served",
+      "[create_ui_spec] response refused by a serve-time integrity gate; nothing was served",
     );
     sendCreateUiSpecTransportError(res, 503, createUiSpecIntegrityRefusalError());
     return;

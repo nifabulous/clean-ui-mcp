@@ -675,7 +675,9 @@ export class PublicCorpusReader implements CorpusReader {
    * but NOT the resolved real path. A symlink under `images-public/` could
    * resolve outside the snapshot (e.g. to `images-private/secret.png`), and
    * `existsSync` would happily return true for it. This now mirrors the
-   * exporter's `resolveSafeAssetSource` (exporter.ts:101-139): resolve the real
+   * exporter's `resolveSafeAssetSource` (`src/publication/exporter.ts` — the path
+   * was cited as a bare `exporter.ts` line range, and there is no `src/exporter.ts`):
+   * resolve the real
    * path via `realpathSync`, confirm it's contained beneath the snapshot dir,
    * and require it to be a regular file. The snapshot dir itself is resolved
    * through realpath once (cached) so the containment comparison agrees on

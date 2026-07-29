@@ -23,8 +23,10 @@ describe("validate-readiness-artifacts CLI", () => {
 // 2. Nothing asserted `TRACKED_ARTIFACT_ROOT` resolves correctly from the
 //    SHIPPED `dist/` layout specifically. `ledger-pins.test.ts` only pins a
 //    tautology (`isTrackedArtifactRoot(TRACKED_ARTIFACT_ROOT)`, true for any
-//    value) and `tracked-artifacts-readiness.test.ts:185` only exercises the
-//    `src/` layout vitest runs against. The `npm run
+//    value) and the `isTrackedArtifactRoot(artifactRoot)` assertion in
+//    `tracked-artifacts-readiness.test.ts` ("runs with the tracked pin table in
+//    force for this root") only exercises the `src/` layout vitest runs
+//    against. The `npm run
 //    validate-readiness-artifacts` script runs the COMPILED `dist/` output —
 //    that is the exact path operators use — so a build-layout change
 //    (tsconfig `rootDir`/`outDir`, or moving `ledger-pins.ts` a directory
@@ -62,8 +64,10 @@ describe("validate-readiness-artifacts CLI — pins-inert notice and dist-layout
     // both two directories below the repository toplevel"). This imports the
     // BUILT file, not the TypeScript source, so a tsconfig rootDir/outDir
     // change or a file move that breaks that claim fails here even though the
-    // src-side test (tracked-artifacts-readiness.test.ts:185) would not
-    // notice.
+    // src-side test would not notice — that one is
+    // `tracked-artifacts-readiness.test.ts`'s "runs with the tracked pin table
+    // in force for this root", which checks the SRC-layout
+    // `isTrackedArtifactRoot(artifactRoot)` and nothing about `dist/`.
     const distModule = (await import(
       pathToFileURL(resolve(repoRoot, "dist/readiness/ledger-pins.js")).href
     )) as { TRACKED_ARTIFACT_ROOT: string };

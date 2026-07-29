@@ -369,6 +369,56 @@ function sendText(res: ServerResponse, status: number, text: string): void {
   res.end(text);
 }
 
+/**
+ * Render a thrown value for the OPERATOR CONSOLE without leaking anything a
+ * response, log, or DOM must never carry. Node `fs`/errno errors embed an
+ * absolute filesystem path in `.message` (e.g.
+ * `EACCES: permission denied, open '/Users/.../secret.png'`); several routes do
+ * unguarded reads/writes whose errors funnel into the single catch-all below, so
+ * any of them can reach it. We surface only the error's constructor name and,
+ * for errno errors, the `code` (`EACCES`, `ENOENT`, …) — neither carries a path
+ * or user data — and NEVER `.message`.
+ */
+export function describeInternalError(error: unknown): string {
+  if (!(error instanceof Error)) return `non-error thrown (${typeof error})`;
+  // `name` and `code` are userland-mutable — a crafted error could smuggle
+  // path-shaped data through either. Emit each only when it matches a
+  // conservative safe shape (short, alphanumeric plus `._-`, no path separators
+  // or whitespace), so this last-resort log line cannot carry a path REGARDLESS
+  // of what was thrown. Real errno codes (`EACCES`, `ENOENT`) and constructor
+  // names (`Error`, `TypeError`) pass; a `.name`/`.code` holding `/Users/…` does
+  // not.
+  const safe = (v: unknown): string | null =>
+    typeof v === "string" && v.length > 0 && v.length <= 40 && /^[A-Za-z0-9_.-]+$/.test(v) ? v : null;
+  const name = safe(error.name) ?? "Error";
+  const code = safe((error as NodeJS.ErrnoException).code);
+  return code ? `${name}: ${code}` : name;
+}
+
+/**
+ * Terminate a request whose handler threw, without leaking internal detail.
+ *
+ * The client gets a FIXED generic 500 body — never `error.message`, which for
+ * `fs` errors is an absolute path. The console gets only {@link
+ * describeInternalError}, never the raw error object (whose `.message`/`.stack`
+ * carry the path).
+ *
+ * If a route already wrote a response head (e.g. a 200 that then threw
+ * mid-body), the status cannot be rewritten: calling `writeHead` again throws
+ * `ERR_HTTP_HEADERS_SENT`, which escapes as an unhandled rejection that crashes
+ * the process and hangs the request. In that case we destroy the socket instead
+ * — the client sees a broken transfer, which is honest, rather than a truncated
+ * body masquerading as a well-formed 200.
+ */
+export function finishWithInternalError(res: ServerResponse, error: unknown): void {
+  console.error(`[ui-server] request handler failed: ${describeInternalError(error)}`);
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  sendJson(res, 500, { error: "Internal server error" });
+}
+
 function readBody(req: IncomingMessage, maxBytes: number = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolveBody, reject) => {
     let size = 0;
@@ -2290,8 +2340,10 @@ async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promi
 
     sendText(res, 404, "Not found");
   } catch (error) {
-    console.error(error);
-    sendJson(res, 500, { error: error instanceof Error ? error.message : "Internal server error" });
+    // Last-resort handler for EVERY route. Must not leak internal detail — see
+    // `finishWithInternalError` (sanitized console line, generic 500 body,
+    // headers-already-sent guard).
+    finishWithInternalError(res, error);
   }
 }
 

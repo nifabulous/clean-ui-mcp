@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CSRF_HEADER, cleanupBatch, resolveSiteAsset, findDuplicateAtCommit, hostIsLoopback, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
+import { CSRF_HEADER, cleanupBatch, describeInternalError, finishWithInternalError, resolveSiteAsset, findDuplicateAtCommit, hostIsLoopback, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
 import { setCorpusRootForTesting } from "../persistence.js";
 import { request as httpRequest } from "node:http";
 import type { IncomingMessage } from "node:http";
@@ -2191,7 +2191,11 @@ describe("resolveSiteAsset — traversal containment (direct)", () => {
 //   4. the server still answers the next request (proof it is alive and that the
 //      request did not hang — the fetch carries its own abort timeout, so a hang
 //      fails fast instead of stalling for the whole test timeout).
-const PATH_SHAPED = /(?:^|\s)\/(?:Users|private|var|tmp|home)\//;
+// Absolute-path detector for leak assertions. The delimiter class includes the
+// quote/paren/equals characters that bracket a path inside a real errno message
+// (`EACCES: … open '/Users/…'`) — a bare `(?:^|\s)` prefix would MISS that shape,
+// since the slash there is preceded by a single quote, not whitespace.
+const PATH_SHAPED = /(?:^|[\s'"(=])\/(?:Users|private|var|tmp|home)\//;
 
 function consoleSpies() {
   return (["log", "info", "warn", "error", "debug"] as const).map((m) =>
@@ -2435,6 +2439,222 @@ describe("curator app shells (/, /index-2.html, /index-classic.html) — EACCES 
       expect(res.status, route).toBe(200);
       expect(res.headers.get("content-type"), route).toContain("text/html");
       expect((await res.text()).length, route).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("catch-all 500 sanitization (describeInternalError / finishWithInternalError)", () => {
+  // Every route in `handleUiRequest` is wrapped by ONE catch-all. Several routes
+  // do unguarded `fs` reads/writes whose errno errors embed an ABSOLUTE PATH in
+  // `.message` ("EACCES: permission denied, open '/Users/.../secret.png'"). The
+  // project's hard rule: filesystem paths must NEVER appear in an HTTP response,
+  // the DOM, logs, or an error message. So the catch-all must neither surface
+  // `error.message` to the client NOR `console.error(error)` the whole object.
+  //
+  // These fixtures mirror the errno errors the five known fs sites can throw —
+  // scanOrphans (decisions/draft reads), the /api/image screenshot read, the
+  // batch-copy temp read, the base64 image writeFileSync, and a site-asset read.
+  // Each carries a DISTINCT fake absolute path so a leak from any one is visible.
+  type Errno = NodeJS.ErrnoException;
+  function errnoError(code: string, syscall: string, path: string): Errno {
+    const e = new Error(`${code}: permission denied, ${syscall} '${path}'`) as Errno;
+    e.code = code;
+    e.syscall = syscall;
+    e.path = path;
+    return e;
+  }
+  const SITE_ERRORS: ReadonlyArray<{ site: string; error: Errno }> = [
+    { site: "scanOrphans decisions/draft read", error: errnoError("EACCES", "open", "/Users/secret/corpus/decisions.json") },
+    { site: "/api/image screenshot read", error: errnoError("EACCES", "open", "/Users/secret/corpus/images-private/shot.png") },
+    { site: "batch-copy temp read", error: errnoError("ENOENT", "open", "/private/var/folders/secret/add-1/cand.png") },
+    { site: "base64 image writeFileSync", error: errnoError("EACCES", "open", "/Users/secret/corpus/images-private/upload.png") },
+    { site: "site-asset read", error: errnoError("EACCES", "open", "/Users/secret/dist/assets/locked.js") },
+  ];
+
+  /** A ServerResponse stand-in recording exactly what a route wrote. */
+  function fakeRes(headersSent: boolean) {
+    const calls = { writeHeadStatuses: [] as number[], bodies: [] as string[], destroyed: false };
+    const res = {
+      headersSent,
+      writeHead(status: number, _headers?: unknown) {
+        calls.writeHeadStatuses.push(status);
+        return res;
+      },
+      end(body?: unknown) {
+        if (body != null) calls.bodies.push(String(body));
+        return res;
+      },
+      destroy() {
+        calls.destroyed = true;
+        return res;
+      },
+    } as unknown as import("node:http").ServerResponse;
+    return { res, calls };
+  }
+
+  it("describeInternalError never returns the path or the raw message", () => {
+    for (const { site, error } of SITE_ERRORS) {
+      const rendered = describeInternalError(error);
+      expect(rendered, site).not.toContain(error.path!);
+      expect(rendered, site).not.toContain(error.message);
+      expect(rendered, site).not.toContain("secret");
+      expect(rendered, site).not.toMatch(PATH_SHAPED);
+      // Useful non-leaking detail IS allowed: the errno code aids debugging.
+      expect(rendered, site).toContain(error.code!);
+    }
+  });
+
+  it("describeInternalError tolerates a non-Error throw without leaking it", () => {
+    const rendered = describeInternalError({ path: "/Users/secret/x" });
+    expect(rendered).not.toContain("secret");
+    expect(rendered).not.toMatch(PATH_SHAPED);
+  });
+
+  it("describeInternalError strips a crafted path smuggled through name or code", () => {
+    // `name`/`code` are userland-mutable; a thrown error could carry a path in
+    // either. The safe-shape filter must drop them, not echo them to the log.
+    const crafted = Object.assign(new Error("boom"), {
+      name: "/Users/secret/attacker-named-error",
+      code: "/private/var/secret/leak",
+    });
+    const rendered = describeInternalError(crafted);
+    expect(rendered).not.toContain("secret");
+    expect(rendered).not.toContain("/Users/");
+    expect(rendered).not.toContain("/private/");
+    expect(rendered).not.toMatch(PATH_SHAPED);
+    // Falls back to the generic name and drops the unsafe code entirely.
+    expect(rendered).toBe("Error");
+  });
+
+  it("each fs site's error yields a generic 500 with no path in body or console", () => {
+    for (const { site, error } of SITE_ERRORS) {
+      const spies = consoleSpies();
+      const { res, calls } = fakeRes(false);
+      try {
+        finishWithInternalError(res, error);
+      } finally {
+        // restore before assertions so a failure prints
+        for (const spy of spies) spy.mockRestore();
+      }
+      expect(calls.writeHeadStatuses, site).toEqual([500]);
+      expect(calls.destroyed, site).toBe(false);
+      const body = calls.bodies.join("");
+      expect(body, site).toBe(JSON.stringify({ error: "Internal server error" }));
+      expect(body, site).not.toContain(error.path!);
+      expect(body, site).not.toContain("secret");
+      expect(body, site).not.toMatch(PATH_SHAPED);
+    }
+  });
+
+  it("logs only a sanitized line — no path, no raw message reaches the console", () => {
+    for (const { site, error } of SITE_ERRORS) {
+      const spies = consoleSpies();
+      finishWithInternalError(fakeRes(false).res, error);
+      const lines = consoleLines(spies);
+      for (const spy of spies) spy.mockRestore();
+      for (const line of lines) {
+        expect(line, `${site}: a path reached the console`).not.toContain(error.path!);
+        expect(line, `${site}: raw message reached the console`).not.toContain(error.message);
+        expect(line, `${site}: a path-shaped string reached the console`).not.toMatch(PATH_SHAPED);
+      }
+    }
+  });
+
+  it("when a head was already sent, destroys the socket instead of re-writing the head", () => {
+    // A route that wrote a 200 then threw mid-body cannot have its status
+    // rewritten; calling writeHead again throws ERR_HTTP_HEADERS_SENT, which
+    // crashes the process and hangs the request. The guard must destroy instead.
+    const spies = consoleSpies();
+    const { res, calls } = fakeRes(true);
+    finishWithInternalError(res, errnoError("EACCES", "read", "/Users/secret/mid-body.png"));
+    const lines = consoleLines(spies);
+    for (const spy of spies) spy.mockRestore();
+    expect(calls.writeHeadStatuses).toEqual([]);
+    expect(calls.destroyed).toBe(true);
+    expect(calls.bodies).toEqual([]);
+    // The console line is logged on BOTH branches; the destroy branch must be
+    // just as path-free as the generic-500 branch.
+    for (const line of lines) {
+      expect(line, "destroy branch leaked a path to the console").not.toContain("/Users/secret");
+      expect(line, "destroy branch leaked a path-shaped string").not.toMatch(PATH_SHAPED);
+    }
+  });
+});
+
+describe("catch-all 500 sanitization — end to end through a real route", () => {
+  // The helper-level tests above prove `finishWithInternalError` sanitizes, but
+  // NOT that the catch-all in `handleUiRequest` actually routes through it — a
+  // regression that reverted the catch-all to `sendJson(res, 500, { error:
+  // error.message })` would leave every helper test green while re-opening the
+  // leak. This block drives the leak end to end. `POST /api/upload-image` calls
+  // `handleUpload`, which does an UNGUARDED `writeFileSync` into
+  // `privateImageDir()` (test-injectable). A mode-000 image dir makes that throw
+  // `EACCES … '<abs path>'`, which propagates to the catch-all. We assert the
+  // 500 body and the console are both path-free. Fully isolated temp dirs — the
+  // real corpus is never touched.
+  //
+  // Why not `/api/orphans`: `scanOrphans` reads via the STATIC `CORPUS_ROOT`
+  // constant (paths.ts), which `setCorpusRootForTesting` (persistence.ts) does
+  // not override — so it always reads the real corpus and can't be pointed at a
+  // mode-000 fixture without touching tracked files.
+  let server: import("node:http").Server;
+  let baseUrl: string;
+  let imgDir: string;
+  let nonce: string;
+  const canChmod = process.getuid?.() !== 0; // root ignores file modes
+  // 1×1 PNG — a valid data URL so `handleUpload` reaches the write, not the 400.
+  const PNG_DATA_URL =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+  beforeAll(async () => {
+    imgDir = mkdtempSync(join(tmpdir(), "ui-server-catchall-img-"));
+    setPrivateImageDirForTesting(imgDir);
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+    nonce = (await (await fetch(`${baseUrl}/api/csrf`)).json() as { nonce: string }).nonce;
+  });
+
+  afterAll(async () => {
+    if (existsSync(imgDir)) chmodSync(imgDir, 0o755);
+    await new Promise<void>((r) => server.close(() => r()));
+    setPrivateImageDirForTesting(null);
+    if (existsSync(imgDir)) rmSync(imgDir, { recursive: true, force: true });
+  });
+
+  it("POST /api/upload-image returns a generic 500 with no path in body or console when the image dir is unwritable", async () => {
+    if (!canChmod) return;
+    // Sanity: the fixture path is genuinely path-shaped, so the assertions below
+    // aren't vacuous (they'd pass trivially if the leak string couldn't match).
+    expect(`open '${imgDir}/x.png'`).toMatch(PATH_SHAPED);
+    const spies = consoleSpies();
+    try {
+      chmodSync(imgDir, 0o000); // an unguarded write into this dir throws EACCES with its abs path
+      const res = await fetch(`${baseUrl}/api/upload-image`, {
+        method: "POST",
+        headers: { "content-type": "application/json", [CSRF_HEADER]: nonce },
+        body: JSON.stringify({ filename: "leak.png", dataUrl: PNG_DATA_URL, slug: "leak" }),
+      });
+      const text = await res.text();
+      chmodSync(imgDir, 0o755);
+      expect(res.status, "the write should have thrown into the catch-all").toBe(500);
+      expect(text).toBe(JSON.stringify({ error: "Internal server error" }));
+      expect(text).not.toContain(imgDir);
+      expect(text.toUpperCase()).not.toContain("EACCES");
+      const lines = consoleLines(spies);
+      for (const line of lines) {
+        expect(line, "a filesystem path reached the console").not.toContain(imgDir);
+        expect(line, "a path-shaped string reached the console").not.toMatch(PATH_SHAPED);
+        expect(line, "the raw errno message reached the console").not.toContain("permission denied");
+      }
+      // Server still alive after the sanitized failure.
+      const after = await fetch(`${baseUrl}/api/schema`);
+      expect(after.status, "server died after a sanitized 500").toBe(200);
+      await after.text();
+    } finally {
+      if (existsSync(imgDir)) chmodSync(imgDir, 0o755);
+      for (const spy of spies) spy.mockRestore();
     }
   });
 });

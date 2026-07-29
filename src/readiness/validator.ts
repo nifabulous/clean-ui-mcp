@@ -39,6 +39,7 @@ import {
   type ChainNodeResult,
 } from "./chains.js";
 import { ledgerApprovalRowsDigest, resolveLedgerApprovalPins } from "./ledger-pins.js";
+import type { LedgerPinScope } from "./ledger-pins.js";
 import {
   C2LabelIntegritySelectionSchema,
   C2IndependentLabelSubmissionSchema,
@@ -84,6 +85,28 @@ export interface ValidationIssue {
   artifactId?: string;
   path?: string;
   message: string;
+  /**
+   * The checkpoint this finding concerns, when the emitting check knows it.
+   *
+   * WHY THIS EXISTS AND WHY IT IS NOT `artifactId`. Closure attribution asks
+   * "which checkpoint does this issue hold open?" and answers it from
+   * identifiers on the issue (see the attribution block in
+   * `validateApprovalsAndCheckpoint`). `artifactId` cannot carry that answer: it
+   * means "the artifact this finding is about", and for most checks it is an
+   * ARTIFACT id — a string that can never equal a checkpoint name or an
+   * approvalId. Overloading it with a checkpoint id would make one field mean
+   * two things and would DESTROY the artifact identity in the reported issue
+   * (`c2-evidence-unavailable` would stop naming the evidence manifest), and for
+   * `divergent-targets` there is no artifact at all, so `artifactId: "C0"` would
+   * invent one.
+   *
+   * This field is therefore the attribution channel and `artifactId` stays the
+   * identity channel. It is OPTIONAL and fail-closed: an issue that sets neither
+   * this nor an attributable `artifactId` holds EVERY checkpoint open, and a
+   * value that is not one of `C0`–`C5` is not treated as an attribution at all
+   * (a typo over-blocks rather than silently attributing to nothing).
+   */
+  checkpoint?: string;
 }
 
 export interface ValidationResult {
@@ -98,6 +121,28 @@ export interface ValidationResult {
    * SHOULD surface them in the report so the closure claim is honest.
    */
   warnings: ValidationIssue[];
+  /**
+   * Which ledger approval-pin table was in force for this run.
+   *
+   * WHY THIS IS PART OF THE RESULT AND NOT JUST A DIAGNOSTIC. The pins
+   * (`TRACKED_LEDGER_APPROVAL_PINS`) are what anchor the governance ledger's
+   * approval rows from outside the artifact graph, and they apply to exactly one
+   * directory — this repository's own artifact root. Every other root runs the
+   * gate with those three rules inert. The CLI says so on stderr, but stderr is
+   * for humans: a machine consumer reading `--json` had NO way to tell an
+   * attested run from an unpinned one, so `ok:false` from a copy and `ok:false`
+   * from the tracked root were indistinguishable, and so were the `ok:true`
+   * cases. Emitting the scope alongside `ok` makes "were the pins in force?" a
+   * field rather than a stderr-parsing exercise.
+   *
+   * The value is decided by `resolveLedgerApprovalPins` from the resolved root
+   * and the caller's `additionalLedgerApprovalPins` alone — no artifact's
+   * contents participate, so nothing under `quality-contracts/` can change what
+   * this reports. `"tracked"` is the only value for which the tracked table
+   * applies; `"caller"` means only caller-supplied fixture pins were checked;
+   * `"none"` means all three pin rules were inert.
+   */
+  ledgerPinScope: LedgerPinScope;
 }
 
 /**
@@ -274,6 +319,18 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
   // Resolve artifact root — use realpath to match how file paths resolve
   const absRoot = realpathSync(resolve(opts.artifactRoot));
 
+  // WHICH PIN TABLE IS IN FORCE — resolved HERE, before a single artifact is
+  // read, because the answer depends only on the resolved root and the caller's
+  // fixture pins. Resolving it up front is what lets `ledgerPinScope` be
+  // reported on EVERY return path, including the early one below: a run that
+  // could not even enumerate the root still has to say whether it would have
+  // been an attested run. `approvalRowPins`/`ledgerPinScope` are consumed by
+  // step 7c far below; see the three rules documented there.
+  const { pins: approvalRowPins, scope: ledgerPinScope } = resolveLedgerApprovalPins({
+    absArtifactRoot: absRoot,
+    additional: opts.additionalLedgerApprovalPins,
+  });
+
   // 1. Enumerate JSON files deterministically
   let files: string[];
   try {
@@ -282,7 +339,7 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
       .sort();
   } catch {
     issues.push({ code: "artifact-root-missing", path: absRoot, message: `cannot read artifact root: ${absRoot}` });
-    return { ok: false, checkpointStatus, checkedArtifacts: 0, issues, warnings };
+    return { ok: false, checkpointStatus, checkedArtifacts: 0, issues, warnings, ledgerPinScope };
   }
 
   // 2. Parse each artifact
@@ -568,10 +625,9 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
     //     branch is far below) and all run BEFORE
     //     `validateApprovalsAndCheckpoint`, so `ledgerRowsAuthoritative` is
     //     already settled when closure is computed.
-    const { pins: approvalRowPins, scope: ledgerPinScope } = resolveLedgerApprovalPins({
-      absArtifactRoot: absRoot,
-      additional: opts.additionalLedgerApprovalPins,
-    });
+    //     The table itself is resolved at the TOP of this function (so
+    //     `ledgerPinScope` can be reported on every return path); this step
+    //     consumes `approvalRowPins`/`ledgerPinScope` and enforces the rules.
     let ledgerRowsAuthoritative = true;
 
     if (ledgerPinScope !== "none") {
@@ -756,6 +812,27 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
             }
           }
         } catch (e) {
+          // NO `checkpoint` AND NO `artifactId`, DELIBERATELY, AND ADDING EITHER
+          // WOULD BE INERT HERE. This is the commonest finding on a clean clone
+          // (`corpus/entries.json` is gitignored) and it is fully unattributable,
+          // so under the closure gate's widening it would hold EVERY checkpoint
+          // open — including C0 and C1, which nothing in the run impeaches. It
+          // does not, because this is step 9: closure was already computed by
+          // step 8's `validateApprovalsAndCheckpoint`, so this row moves `ok` and
+          // the exit code and holds no checkpoint open. Measured on a clean
+          // worktree, private mode: as-is `{C0 closed, C1 closed, C2 open}`; the
+          // identical unattributed row pushed before step 8 instead gives
+          // `{C0 open, C1 open, C2 open}`.
+          //
+          // So do not "fix" the missing attribution: a `checkpoint` field added
+          // here changes nothing (the map it would feed is already final), and
+          // `"C2"` would be the wrong value anyway — the corpus is a Phase-0
+          // input, bound by `phase0-summary.corpusSha256`, and no C2 record
+          // mentions it. If this check ever MOVES ahead of step 8, it must carry
+          // a truthful attribution at that point or it will reopen C0 and C1 on
+          // every clean clone. The same caveat covers `config-error`,
+          // `corpus-hash-mismatch`, `corpus-count-mismatch` and the private-mode
+          // `leak`; see the attribution block in `validateApprovalsAndCheckpoint`.
           issues.push({
             code: "corpus-unreadable",
             path: opts.corpusPath,
@@ -772,6 +849,7 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
     checkedArtifacts: artifacts.size,
     issues,
     warnings,
+    ledgerPinScope,
   };
 }
 
@@ -812,13 +890,41 @@ function sameC2Ref(a: Record<string, unknown>, b: Record<string, unknown>): bool
   return a.artifactId === b.artifactId && (a.artifactType === undefined || a.artifactType === b.artifactType) && a.path === b.path && a.sha256 === b.sha256;
 }
 
+/**
+ * Private-mode C2 evidence verification.
+ *
+ * EVERY FINDING THIS FUNCTION CAN EMIT CONCERNS C2, AND IS STAMPED `checkpoint:
+ * "C2"` HERE RATHER THAN AT EACH PUSH SITE. That is deliberate and it is the fix
+ * for a real regression: the inner checks key `artifactId` to the evidence
+ * MANIFEST's id (`c2-evidence-v1`) or to an individual evidence artifact's id,
+ * none of which closure attribution can resolve to a checkpoint. Left
+ * unattributed they were fail-closed against every checkpoint, so a checkout
+ * that simply does not carry the untracked private evidence (seven of the eight
+ * declared paths live under `eval/`, which `.gitignore` excludes) reported
+ * **C0 and C1 open** — checkpoints nothing in the run impeached.
+ *
+ * Stamping in one place instead of at the thirteen push sites makes the
+ * attribution structural: a fourteenth check added inside this C2-only function
+ * is attributed to C2 whether or not its author remembers to say so. The
+ * collector below must therefore stay C2-only — if a non-C2 finding is ever
+ * added to it, it must be pushed onto `issues` directly instead.
+ */
 function verifyPrivateC2Evidence(
   artifacts: Map<string, ParsedArtifact>,
   opts: ValidateReadinessOptions,
   issues: ValidationIssue[],
 ): void {
   if (opts.mode !== "private") return;
+  const c2Issues: ValidationIssue[] = [];
+  collectPrivateC2EvidenceIssues(artifacts, opts, c2Issues);
+  for (const issue of c2Issues) issues.push({ ...issue, checkpoint: "C2" });
+}
 
+function collectPrivateC2EvidenceIssues(
+  artifacts: Map<string, ParsedArtifact>,
+  opts: ValidateReadinessOptions,
+  issues: ValidationIssue[],
+): void {
   const manifest = [...artifacts.values()].find(
     (entry) => entry.type === "c2-evidence-manifest",
   );
@@ -1435,11 +1541,15 @@ function validateApprovalsAndCheckpoint(
     targetShas.get(approval.checkpoint)!.add(approval.checkpointTargetSha256);
   }
 
-  // Check divergent targets
+  // Check divergent targets. `checkpoint: cp` because the loop variable IS the
+  // affected checkpoint and the message already names it — without the field the
+  // finding was unattributable and held all six checkpoints open while naming
+  // one. Not `artifactId: cp`: there is no artifact here.
   for (const [cp, shas] of targetShas) {
     if (shas.size > 1) {
       issues.push({
         code: "divergent-targets",
+        checkpoint: cp,
         message: `checkpoint ${cp} has ${shas.size} different target SHAs`,
       });
     }
@@ -1447,6 +1557,85 @@ function validateApprovalsAndCheckpoint(
 
   // Verify phase0-summary inputHashes against resolved historical bytes.
   verifySummaryInputHashes(artifacts, recompute, issues);
+
+  // ─── ISSUE → CHECKPOINT ATTRIBUTION, AND WHAT HAPPENS WHEN IT FAILS ────────
+  //
+  // The closure gate below asks "does a blocking issue hold this checkpoint
+  // open?". It used to answer that by matching `issue.artifactId` against the
+  // checkpoint name or against a checkpoint-kind approvalId — and to treat every
+  // other issue as blocking NOTHING. That is fail-OPEN, and it is not a
+  // hypothetical: `issue.artifactId` is an ARTIFACT id for most checks
+  // (`index-path-mismatch` carries the index row's artifactId,
+  // `c2-evidence-unavailable` the evidence manifest's), some checks carry no
+  // `artifactId` at all (`malformed-json`, `symlink`, `path-escape`, and until
+  // this change `divergent-targets`), and none of those strings can ever equal "C2" or an
+  // approvalId. So `checkpointStatus` could report `closed` for a checkpoint
+  // whose own evidence the run had just failed to resolve, beside `ok: false`
+  // and exit 1 — precisely the two-channel disagreement the block below this one
+  // was written to eliminate, re-entering through the identifier space instead
+  // of through supersession.
+  //
+  // The rule is now: an issue is ATTRIBUTABLE when it carries an explicit
+  // `checkpoint` naming one of C0–C5, or when its `artifactId` names a
+  // checkpoint, or names an approval in this ledger (in which case it is
+  // attributed to that approval's checkpoint — regardless of `approvalKind`,
+  // since a defect on a non-checkpoint-kind approval is still a defect in that
+  // checkpoint's record; see the note on that at `checkpointHasBlockingIssue`).
+  // Anything else is UNATTRIBUTABLE and holds EVERY checkpoint open. Fail-closed
+  // by construction FOR ANY CHECK THAT RUNS BEFORE CLOSURE IS COMPUTED: such a
+  // check, if it forgets to key its issue to a checkpoint, over-blocks instead of
+  // under-blocking, and no allowlist of codes has to be maintained to keep that
+  // true. THE BOUND IS REAL AND IS NOT CLOSED HERE: this snapshot is taken inside
+  // `validateApprovalsAndCheckpoint`, and step 9's issues (`config-error`,
+  // `corpus-hash-mismatch`, `corpus-count-mismatch`, the private-mode `leak`,
+  // `corpus-unreadable`) are pushed AFTER that call returns, so they move `ok`
+  // and hold no checkpoint open at all. That ordering predates this block; a
+  // check placed after step 8 inherits the old fail-open behaviour and must key
+  // its own attribution or be moved.
+  //
+  // WHY THE EXPLICIT `checkpoint` FIELD IS NEEDED AT ALL, i.e. why "unattributed
+  // ⇒ block everything" is not sufficient on its own. Over-blocking is safe as a
+  // DEFAULT but wrong as an OUTCOME wherever the precise checkpoint is already
+  // known at the push site. The regression that forced this: `verifyPrivateC2Evidence`
+  // keys its findings to the evidence manifest's artifactId, so on any checkout
+  // lacking the untracked `eval/` evidence — which is every clean clone, seven of
+  // the eight declared paths being gitignored — seven `c2-evidence-unavailable`
+  // rows held **C0 and C1** open too. Measured on clean per-commit checkouts,
+  // private mode, same ten issues in each: before the field, {C0 open, C1 open};
+  // with it, {C0 closed, C1 closed, C2 open}, matching the tracked root and the
+  // documented status. The field carries the attribution the emitting check
+  // already had; `divergent-targets` is the same case (it names one checkpoint in
+  // its own message and used to block six).
+  //
+  // THIS ONLY EVER HOLDS A CHECKPOINT OPEN. It cannot close one that was open,
+  // so it cannot relax any gate. What it CAN do is stop a legitimate closure, so
+  // it was checked against the real graph in BOTH modes and on a clean checkout
+  // as well as a working tree carrying the untracked private evidence: the
+  // tracked root's only two ledger issues are keyed to C2 approvalIds
+  // (`ledger-supersession-not-later`), any `c2-evidence-*` findings are stamped
+  // `checkpoint: "C2"`, so C0 and C1 close and only C2 is held open in every one
+  // of those conditions. A copy at a non-tracked root, whose `index-path-mismatch`
+  // findings are keyed to artifact ids and describe the whole graph, still
+  // correctly holds every checkpoint open — the index there does not describe the
+  // files being validated, so nothing about that graph is attested.
+  //
+  // SNAPSHOT SEMANTICS. The unattributable flag is computed from the issues that
+  // exist BEFORE the per-checkpoint loop, so it does not depend on the order in
+  // which checkpoints are visited. Every issue the loop itself pushes (the role
+  // and actor-separation checks) is keyed to the checkpoint being examined, so
+  // those are picked up by the in-loop attributable check instead.
+  const CHECKPOINT_IDS: ReadonlySet<string> = new Set(["C0", "C1", "C2", "C3", "C4", "C5"]);
+  const checkpointOfApprovalId = new Map<string, string>(
+    approvals.map((a) => [a.approvalId, a.checkpoint]),
+  );
+  // An unrecognised `checkpoint` value is NOT an attribution: a typo'd "c2" must
+  // over-block (unattributable ⇒ every checkpoint open) rather than attribute to
+  // a checkpoint that does not exist and so hold nothing open.
+  const isAttributableToACheckpoint = (issue: ValidationIssue): boolean =>
+    (issue.checkpoint !== undefined && CHECKPOINT_IDS.has(issue.checkpoint)) ||
+    (issue.artifactId !== undefined &&
+      (CHECKPOINT_IDS.has(issue.artifactId) || checkpointOfApprovalId.has(issue.artifactId)));
+  const hasUnattributableBlockingIssue = issues.some((i) => !isAttributableToACheckpoint(i));
 
   // Determine checkpoint closure for C0–C5. Only approvals that are
   // (decision:"approved" + approvalKind:"checkpoint") AND produced no issue
@@ -1555,13 +1744,38 @@ function validateApprovalsAndCheckpoint(
     const blockingIssueArtifactIds = new Set(
       issues.map((i) => i.artifactId).filter((id): id is string => id !== undefined),
     );
+    // Four ways this checkpoint is held open by a blocking issue:
+    //   1. an issue this run could not attribute to ANY checkpoint (see the
+    //      attribution block above the loop) — fail-closed, holds every
+    //      checkpoint open;
+    //   2. an issue that explicitly names this checkpoint;
+    //   3. an issue keyed to this checkpoint's own name via `artifactId`;
+    //   4. an issue keyed to, or a taint recorded against, one of this
+    //      checkpoint's approvals.
+    //
+    // WHY (4)'s ISSUE-KEYED BRANCH DOES NOT REQUIRE `approvalKind === "checkpoint"`,
+    // AND MUST NOT. `checkpointOfApprovalId` above is built from ALL approvals
+    // regardless of kind, so an issue keyed to an `artifact-review` approval's
+    // approvalId is classified ATTRIBUTABLE and is therefore excluded from
+    // `hasUnattributableBlockingIssue`. If this branch then filtered on
+    // `approvalKind === "checkpoint"`, that issue would hold NO checkpoint open at
+    // all — the exact fail-open this block exists to close, re-entering through
+    // the kind space instead of the identifier space. The two predicates have to
+    // agree on which approvals count, and they do. None of the per-approval
+    // checks gate on `approvalKind`, so an `artifact-review` row can and does
+    // produce blocking findings; a defect in one is a defect in that checkpoint's
+    // record. The taint-only branch still requires checkpoint kind: a taint with
+    // no accompanying issue keyed to the approval cannot be attributed from the
+    // issue list, and narrowing it is the conservative half of this pair.
     const checkpointHasBlockingIssue =
+      hasUnattributableBlockingIssue ||
+      issues.some((i) => i.checkpoint === cp) ||
       blockingIssueArtifactIds.has(cp) ||
       approvals.some(
         (a) =>
           a.checkpoint === cp &&
-          a.approvalKind === "checkpoint" &&
-          (approvalIssueCodes.has(a.approvalId) || blockingIssueArtifactIds.has(a.approvalId)),
+          (blockingIssueArtifactIds.has(a.approvalId) ||
+            (a.approvalKind === "checkpoint" && approvalIssueCodes.has(a.approvalId))),
       );
 
     if (allRolesPresent && actorCardinalityValid && !checkpointHasBlockingIssue && ledgerRowsAuthoritative) {

@@ -207,11 +207,40 @@ rather than a mechanical impossibility. The tracked table is also in force only
 for **this repository's own artifact root**, which `ledger-pins.ts` derives from
 the module's location on disk — so it is inert when the gate is pointed at a copy
 of the graph somewhere else (`--artifact-root <copy>`), which is a change to the
-invocation rather than a change confined to `quality-contracts/`, and the CLI
-prints a `notice:` on stderr when it happens. What was observed on trying it:
-validating an edited copy still failed (exit 1, 7 x `index-path-mismatch`) while
-printing `C2: closed` beside the failure, and repairing those index rows to make
-the copy self-consistent then produced 2 x `checkpoint-target-mismatch` + 2 x
+invocation rather than a change confined to `quality-contracts/`. That is now an
+explicit opt-out rather than an accident of the working directory: the CLI
+defaults its artifact root to the tracked root derived from the module's own
+location on disk (it used to infer `resolve(process.cwd(), …)`, which landed on
+the tracked root only because `npm run` sets cwd). When a run IS pointed
+elsewhere the CLI prints a `notice:` on stderr and the `--json` result carries
+`"ledgerPinScope": "none"` (or `"caller"`), so a machine consumer can tell an
+attested run from an unpinned one.
+
+**One form of copy did not get that announcement until this commit.** The CLI
+resolves the git toplevel with `cwd` set to the artifact root and hard-stops when
+that fails, and the stop used to precede both the `notice:` and any JSON output.
+A plain directory copy outside every git worktree — the commonest way to point the
+gate at a copy — therefore exited 1 with zero bytes of stdout and no `notice:` at
+all (reproduced: `exit=1`, `stdout bytes: 0`, no `ledgerPinScope`), so the
+sentence above was false exactly where an operator was least likely to notice.
+Every copy previously exercised carried git context (an in-repo copy, an injected
+`GIT_DIR`/`GIT_WORK_TREE`, or a `git worktree`), which is why nothing caught it.
+The pin scope now precedes the hard stop on both channels: the `notice:` prints
+first, and with `--json` the failure path emits a complete result — `ok: false`,
+every checkpoint `open`, `checkedArtifacts: 0`, a single `config-error`, and the
+resolved `ledgerPinScope` — before exiting 1. **The git requirement is not
+weakened by this.** A run that cannot reach git cannot recompute any checkpoint
+target from recorded-commit bytes, so it validates nothing, closes nothing, and
+exits 1; all that changed is that it now says whether the pins would have been in
+force. The plain no-git copy is covered by
+`src/scripts/validate-readiness-artifacts-cli.test.ts`; the other pins-inert
+tests all supply git context and cannot detect a regression here. What was observed on trying it: validating an
+edited copy still failed (exit 1, 7 x `index-path-mismatch`) and, at the time,
+printed `C2: closed` beside the failure — that display defect is fixed, because
+`index-path-mismatch` is keyed to an index row's artifactId and so could not be
+attributed to any checkpoint; an issue the run cannot attribute to a checkpoint
+now holds every checkpoint open. Repairing those index rows to make the copy
+self-consistent then produced 2 x `checkpoint-target-mismatch` + 2 x
 `approved-artifact-hash-mismatch` with C2 back to `open`. Neither variant reached
 a clean gate; no claim is made that no variant can. Nothing beyond the cases above
 is claimed, and no generalisation from them to a class of attacks is made — that

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { validateReadinessArtifacts } from "../readiness/validator.js";
 import {
   computeTaxonomyDigest,
@@ -1480,6 +1480,21 @@ describe("validateReadinessArtifacts — closure completeness", () => {
     });
     expect(result.ok).toBe(false);
     expect(result.issues.some((i) => i.code === "index-path-mismatch")).toBe(true);
+    // AND IT HOLDS EVERY CHECKPOINT OPEN. `index-path-mismatch` is keyed to the
+    // index ROW's artifactId (`phase0-20260714` here) — a string that can never
+    // equal a checkpoint name or an approvalId — so the closure gate could not
+    // attribute it to any checkpoint and treated it as blocking nothing. This
+    // fixture is exactly the shape that produced `✓ C0: closed` on stdout beside
+    // `ok: false` and exit 1, which is the two-channel disagreement the closure
+    // gate exists to prevent. An issue the run cannot attribute to a checkpoint
+    // now holds them all open.
+    //
+    // NEUTER CHECK: revert `hasUnattributableBlockingIssue` out of
+    // `checkpointHasBlockingIssue` (validator.ts) and this assertion is the one
+    // that fails; every other assertion in this test still passes.
+    expect(result.checkpointStatus).toEqual({
+      C0: "open", C1: "open", C2: "open", C3: "open", C4: "open", C5: "open",
+    });
   });
 
   it("rejects duplicate index paths", () => {
@@ -1695,10 +1710,32 @@ describe("per-approval registry resolution and closed-world policy", () => {
   it("resolves an older approval against the registry version it recorded", () => {
     fixture = buildValidGraph({ withApprovals: true });
     const v1Ledger = readJson<{ approvals: unknown[] }>(fixture.ledgerPath!);
-    writeRegistryV2(fixture);
+    const v2Registry = writeRegistryV2(fixture);
+    // REGISTER THE v2 REGISTRY IN THE HEAD INDEX. `writeRegistryV2` drops a new
+    // approval-actor-registry artifact into the root and nothing else; the head
+    // index must list every non-index/non-ledger artifact, so leaving it out
+    // emits `missing-artifact` for `actors-c1-v2`. That finding is keyed to an
+    // ARTIFACT id, so it is not attributable to any checkpoint and now holds
+    // every checkpoint open (validator.ts, the attribution block above the
+    // closure loop) — it used to hold none, which is why this fixture could
+    // assert `C0: closed` beside `ok: false`. Completing the index keeps this
+    // test's subject — resolving an OLDER approval against the registry version
+    // it recorded — the only thing deciding closure.
+    mutateJson<{ artifacts: Array<Record<string, unknown>> }>(fixture.indexPath, (d) => {
+      d.artifacts.push({
+        artifactId: "actors-c1-v2",
+        artifactType: "approval-actor-registry",
+        sha256: fileSha(v2Registry.path),
+        path: `quality-contracts/agent-readiness/${basename(v2Registry.path)}`,
+      });
+      return d;
+    });
     writeLedgerV2(fixture, v1Ledger.approvals);
     const result = validate(fixture);
     expect(result.issues.some((i) => i.code === "registry-hash-mismatch")).toBe(false);
+    // The graph is now complete, so closure is decided by the approval
+    // resolution under test and nothing else.
+    expect(result.issues).toEqual([]);
     expect(result.checkpointStatus.C0).toBe("closed");
   });
 
@@ -2202,6 +2239,45 @@ describe("approval temporal provenance", () => {
       });
       expect(result.issues).toEqual([]);
       expect(result.ok).toBe(true);
+    });
+
+    // ── ledgerPinScope: the machine-readable answer to "were the pins in
+    //    force?" ─────────────────────────────────────────────────────────────
+    //
+    // Before this field the ONLY signal was the CLI's stderr `notice:`, which no
+    // programmatic consumer of `validateReadinessArtifacts` (and no reader of
+    // `--json`) can see. `ok:false` from an unpinned copy and `ok:false` from the
+    // attested tracked root were indistinguishable.
+    //
+    // These two cases pin the two UNTRACKED values against a fixture root, which
+    // is never the tracked root. The `"tracked"` value is asserted where it can
+    // only be produced honestly: `tracked-artifacts-readiness.test.ts` ("reports
+    // ledgerPinScope: tracked for the tracked artifact root") for the in-process
+    // validator, and `validate-readiness-artifacts-cli.test.ts` ("reports
+    // ledgerPinScope: tracked ... from a working directory that is NOT the
+    // repository root") for the shipped CLI. Asserting all three from different
+    // roots is what stops the field being hardcoded: no single literal satisfies
+    // "tracked" here, "caller" with fixture pins, and "none" without them.
+    it("reports ledgerPinScope: caller when only caller-supplied pins apply", () => {
+      fixture = buildValidGraph({ withApprovals: true });
+      const result = validateWithPin(fixture, {
+        [V1_FILE]: headRowsDigest(fixture),
+      });
+      expect(result.ledgerPinScope).toBe("caller");
+    });
+
+    it("reports ledgerPinScope: none for an untracked root with no caller pins", () => {
+      fixture = buildValidGraph({ withApprovals: true });
+      const result = validate(fixture);
+      expect(result.ledgerPinScope).toBe("none");
+      // And the three pin rules really were inert, which is what the value says.
+      for (const code of [
+        "ledger-approval-pin-missing",
+        "ledger-approval-pin-absent",
+        "ledger-approval-pin-mismatch",
+      ]) {
+        expect(result.issues.some((i) => i.code === code)).toBe(false);
+      }
     });
 
     it("THE DEFECT: an in-place decidedAt edit on an UNPINNED head validates clean", () => {
@@ -2717,6 +2793,116 @@ describe("recipeless-checkpoint approval bindings", () => {
     expect(result.checkpointStatus.C3).toBe("closed");
   });
 
+  it("holds a checkpoint open for a blocking issue on its ARTIFACT-REVIEW approval", () => {
+    // THE `approvalKind` WIDENING, PINNED. `checkpointHasBlockingIssue` used to
+    // require `a.approvalKind === "checkpoint"` before an issue keyed to an
+    // approvalId could hold that approval's checkpoint open. That guard was
+    // dropped, and it had to be: `checkpointOfApprovalId` is built from ALL
+    // approvals regardless of kind, so an issue keyed to an `artifact-review`
+    // approvalId is classified ATTRIBUTABLE and is therefore excluded from
+    // `hasUnattributableBlockingIssue`. With the guard in place such an issue
+    // would hold NO checkpoint open at all — the exact fail-open the attribution
+    // rule exists to close, re-entering through the kind space.
+    //
+    // Nothing in the suite exercised `approvalKind: "artifact-review"` at all
+    // (grep: the string appeared only in `contracts.ts`), so restoring the guard
+    // left all 2660 tests green. It does not now.
+    //
+    // NEUTER: put `a.approvalKind === "checkpoint" &&` back in front of
+    // `blockingIssueArtifactIds.has(a.approvalId)` and this test fails —
+    // `ledger-invalid-supersession` is reported, `ok` is false, and C3 reads
+    // `closed`.
+    //
+    // `ledger-invalid-supersession` is used deliberately: it pushes an issue
+    // keyed to the approvalId and does NOT call `noteApprovalIssue`, so the
+    // taint-map branch (which still requires checkpoint kind) cannot mask the
+    // branch under test.
+    fixture = buildValidGraph({ withApprovals: true });
+    const { registryPath, ledgerPath } = addSyntheticC3Approvals(fixture);
+    const registrySha = fileSha(registryPath);
+    mutateJson<{ approvals: Array<Record<string, unknown>> }>(ledgerPath, (d) => {
+      d.approvals.push({
+        approvalKind: "artifact-review",
+        approvalId: "c3-artifact-review-1",
+        checkpoint: "C3",
+        decision: "approved",
+        actorId: "qa-1",
+        actorKind: "human",
+        role: "QA",
+        actorRegistryVersion: "2.0",
+        actorRegistrySha256: registrySha,
+        checkpointTargetSha256: SHA_A,
+        planSha256: fixture.planSha,
+        specSha256: fixture.specSha,
+        contractHashes: {},
+        approvedArtifacts: [
+          { artifactId: "ownership-20260714", sha256: fileSha(fixture.ownershipPath) },
+          { artifactId: "phase0-20260714", sha256: fileSha(fixture.phase0Path) },
+        ],
+        decidedAt: "2026-07-16T10:03:00Z",
+        // Supersedes an approval that does not exist → `ledger-invalid-supersession`.
+        supersedesApprovalId: "c3-does-not-exist",
+      });
+      return d;
+    });
+    const result = validate(fixture);
+    expect(result.issues.map((i) => ({ code: i.code, artifactId: i.artifactId }))).toEqual([
+      { code: "ledger-invalid-supersession", artifactId: "c3-artifact-review-1" },
+    ]);
+    expect(result.ok).toBe(false);
+    // The checkpoint the defective artifact-review approval belongs to.
+    expect(result.checkpointStatus.C3).toBe("open");
+    // And only that one: the issue is attributable, so it must not hold C0 open.
+    expect(result.checkpointStatus.C0).toBe("closed");
+  });
+
+  it("holds ONLY the divergent checkpoint open, and closes the others", () => {
+    // TWO THINGS AT ONCE, AND BOTH ARE LOAD-BEARING.
+    //
+    // `divergent-targets` names its checkpoint in its own message but carried no
+    // identifier the closure gate could read, so under the fail-closed
+    // attribution rule it held all six checkpoints open — including C0, which
+    // nothing in the run impeached. It now carries `checkpoint: cp`.
+    //
+    // C3 OPEN pins the ATTRIBUTION REACHING CLOSURE: `checkpoint` makes the issue
+    // attributable, so it is no longer covered by
+    // `hasUnattributableBlockingIssue`, and the only thing left to hold C3 open is
+    // the `issues.some((i) => i.checkpoint === cp)` branch of
+    // `checkpointHasBlockingIssue`. Delete that branch and C3 CLOSES on divergent
+    // targets — a fail-open the attribution rule would otherwise have created.
+    // This is the same branch every `c2-evidence-*` finding depends on.
+    //
+    // C0 CLOSED pins the PRECISION: drop `checkpoint: cp` from the push site and
+    // the issue is unattributable again, C0 opens, and this assertion fails while
+    // the issue-code assertion still passes.
+    //
+    // The baseline is the sibling test above ("closes C3 when every bound row
+    // resolves…"), which asserts zero issues and `C3: closed` on this same
+    // fixture — so both assertions below are real, not restatements.
+    fixture = buildValidGraph({ withApprovals: true });
+    const { ledgerPath } = addSyntheticC3Approvals(fixture);
+    mutateJson<{ approvals: Array<{ approvalId: string; checkpointTargetSha256: string }> }>(
+      ledgerPath,
+      (d) => {
+        const qa = d.approvals.find((a) => a.approvalId === "c3-qa")!;
+        qa.checkpointTargetSha256 = "e".repeat(64);
+        return d;
+      },
+    );
+    const result = validate(fixture);
+    const divergent = result.issues.filter((i) => i.code === "divergent-targets");
+    expect(divergent.length).toBe(1);
+    expect(result.ok).toBe(false);
+    // Behaviour first, so a neuter fails on the closure map rather than on a
+    // field-shape assertion that happens to be checked earlier.
+    expect(result.checkpointStatus.C3).toBe("open");
+    expect(result.checkpointStatus.C0).toBe("closed");
+    expect(divergent[0]!.checkpoint).toBe("C3");
+    // No artifactId: there is no artifact here, and overloading that field would
+    // make it mean two things (see the `checkpoint` docstring on ValidationIssue).
+    expect(divergent[0]!.artifactId).toBeUndefined();
+  });
+
   it("reports and taints an ACTIVE C3 approval binding a version that is not on disk", () => {
     // The hole the version gate opened: C3 has no recipe, so
     // approved-artifact-hash-mismatch can never fire for this row, and the
@@ -3171,6 +3357,62 @@ describe("private C2 evidence verification", () => {
     const result = validate(fixture);
     expect(result.issues).toEqual([]);
     expect(result.ok).toBe(true);
+  });
+
+  it("reports c2-evidence-unavailable for a referenced evidence file that is gone, and attributes it to C2 without opening C0", () => {
+    // `c2-evidence-unavailable` is keyed to the evidence MANIFEST's artifactId
+    // (`c2-evidence-v1`) — a string that is neither a checkpoint name nor an
+    // approvalId, so the closure gate cannot resolve it to a checkpoint from
+    // `artifactId` alone. Two wrong answers are possible and both have been
+    // shipped: treat it as blocking NOTHING (the original fail-open — a
+    // checkpoint whose own evidence failed to resolve read `closed` beside
+    // `ok: false`), or treat it as blocking EVERYTHING (the fail-closed
+    // over-correction — C0 and C1 reported open on any checkout lacking the
+    // untracked evidence, which is every fresh clone). The finding is stamped
+    // `checkpoint: "C2"`, so it blocks C2 and only C2.
+    //
+    // C0 CLOSED IS THE LOAD-BEARING ASSERTION. This fixture's C0 does close —
+    // see "accepts a complete, correctly bound C2 evidence set", which asserts
+    // zero issues in the same private mode. NEUTER: remove the `checkpoint: "C2"`
+    // stamp in `verifyPrivateC2Evidence` and this assertion fails while the
+    // issue-code assertion still passes.
+    writeC2PrivateEvidence(fixture);
+    rmSync(join(fixture.repoRoot, ...C2_PATHS.baseline.split("/")));
+    const result = validate(fixture);
+    const flagged = result.issues.filter((i) => i.code === "c2-evidence-unavailable");
+    expect(flagged.length).toBe(1);
+    expect(flagged[0]!.artifactId).toBe("c2-evidence-v1");
+    expect(flagged[0]!.checkpoint).toBe("C2");
+    expect(result.ok).toBe(false);
+    expect(result.checkpointStatus.C0).toBe("closed");
+    expect(result.checkpointStatus.C2).toBe("open");
+  });
+
+  it("leaves C0 closed when EVERY declared evidence path is absent (the clean-checkout condition)", () => {
+    // THE CONDITION A MAINTAINER WORKING TREE CANNOT PRODUCE BY ACCIDENT. Seven
+    // of the eight real evidence paths live under `eval/`, which `.gitignore`
+    // excludes, so on a fresh clone the manifest is present and correct and
+    // EVERY path it declares is missing. That is not the single-file case above;
+    // it is eight simultaneous findings, and it is the shape that regressed
+    // (measured on clean per-commit worktrees: {C0 open, C1 open} where
+    // `origin/main` gave {C0 closed, C1 closed}). Asserted here at fixture level
+    // as well as end-to-end on the real graph in
+    // `src/readiness/tracked-artifacts-readiness.test.ts`, because a fixture test
+    // fails faster and names the mechanism.
+    writeC2PrivateEvidence(fixture);
+    for (const relPath of Object.values(C2_PATHS)) {
+      rmSync(join(fixture.repoRoot, ...relPath.split("/")));
+    }
+    const result = validate(fixture);
+    const flagged = result.issues.filter((i) => i.code === "c2-evidence-unavailable");
+    expect(flagged.map((i) => i.path).sort()).toEqual([...Object.values(C2_PATHS)].sort());
+    expect(flagged.every((i) => i.checkpoint === "C2")).toBe(true);
+    // Every issue in the run is a C2-evidence finding: nothing else is impeached,
+    // so C0 closing is the only correct report.
+    expect([...new Set(result.issues.map((i) => i.code))]).toEqual(["c2-evidence-unavailable"]);
+    expect(result.ok).toBe(false);
+    expect(result.checkpointStatus.C0).toBe("closed");
+    expect(result.checkpointStatus.C2).toBe("open");
   });
 
   it("does not resolve C2 evidence in public mode", () => {

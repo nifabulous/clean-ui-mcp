@@ -290,48 +290,82 @@ closed on a clean gate. That is the accepted tradeoff, decided by the repository
 owner on 2026-07-28: a durable record that a governance defect occurred is worth
 more than a remediable gate.
 
-**How durable, exactly — the attacks that were actually run.** Two earlier
+**How durable, exactly — the attacks that were actually run.** Three earlier
 versions of this section overstated this: first "permanently", then "durable
-against any change confined to `quality-contracts/`". Both were falsified by a
-reproduction. What follows is only what has been attacked, each against a
-throwaway `git worktree` copy of the real artifact graph, each edit confined to
-`quality-contracts/`, each now reported **blocking with every checkpoint held
-open**:
+against any change confined to `quality-contracts/`", then "attack 5 is closed by
+the chain being five ledgers long". All three were falsified by a reproduction.
+What follows is only what has been attacked, each against a throwaway
+`git worktree` copy of the real artifact graph driving that worktree's own
+compiled CLI, each edit confined to `quality-contracts/`, each now reported
+**blocking with every checkpoint held open**:
 
 1. **Drop or rewrite the defective records in a successor ledger** →
    `ledger-approval-deleted` / `ledger-approval-mutated` (`validateLedgerAppendOnly`
    requires the prior approvals as an unchanged prefix); a forked ordinal emits
-   `chain-duplicate-key` / `chain-fork` / `chain-multiple-heads`.
+   `chain-duplicate-key` / `chain-fork` / `chain-multiple-heads`. (Tested in an
+   earlier round; not re-run against the path-keyed pins, which do not change
+   this path.)
 2. **Edit the two `decidedAt` fields of the head ledger in place** →
-   `ledger-approval-pin-mismatch`, from the approval-row pins in
-   `src/readiness/ledger-pins.ts`. Before those pins existed this produced
+   1 x `ledger-approval-pin-mismatch`, every checkpoint open, exit 1. Before the
+   approval-row pins in `src/readiness/ledger-pins.ts` existed this produced
    `ok: true`, `C2: closed`, `All checks passed.`, exit 0.
 3. **Rename the head ledger's `artifactId` and apply the same two edits** →
-   `ledger-approval-pin-missing`. Before the coverage rule (`validator.ts` step
-   7c) this produced `ok: true`, `C0`/`C1`/`C2` all `closed`, zero issues, exit 0
-   — the pin was keyed on a field inside the artifact it was pinning and was
-   simply never consulted.
+   1 x `ledger-approval-pin-mismatch`, every checkpoint open, exit 1. The rename
+   itself is now inert: the pin is looked up by the ledger's FILE PATH, so
+   renaming the id moves no lookup key. Against the earlier `artifactId`-keyed
+   table this produced `ok: true`, C0/C1/C2 all closed, zero issues, exit 0.
 4. **Append a `checkpoint-approvals-v6.json` without registering its pin** — the
-   append the handoff doc's own step 1 instructs — **and rewrite its new rows in
-   place** → `ledger-approval-pin-missing`. Before the coverage rule, the edited
-   and unedited v6 produced byte-identical gate output.
-5. **Rename the earlier ledgers too, to disguise the chain as untracked** →
-   `chain-predecessor-hash-mismatch`. Their bytes, `artifactId` included, are
-   pinned by their successors' `predecessor.sha256`.
+   append the handoff doc's own step 1 instructs — → 1 x
+   `ledger-approval-pin-missing`, every checkpoint open, exit 1 (the two
+   `ledger-supersession-not-later` findings still reported beside it).
+5. **Rename EVERY ledger's `artifactId` and repair the four
+   `predecessor.sha256` values in a loop, plus the same two `decidedAt` edits** →
+   1 x `ledger-approval-pin-mismatch`, every checkpoint open, exit 1. Note what
+   this corrects: `predecessor` is `{ version, sha256 }` where `version` is the
+   chain ORDINAL, not the predecessor's `artifactId`, so the cascade repairs
+   cleanly in O(n) and the head's file digest is pinned by nothing —
+   `chain-predecessor-hash-mismatch` does NOT fire, and chain length is not a
+   defence. Only the naive form of this attack (renaming without repairing the
+   digests) produced `chain-predecessor-hash-mismatch`. Against the
+   `artifactId`-keyed table with a chain-coverage rule, the repaired form
+   produced `ok: true`, `C2: closed`, zero issues, exit 0.
+6. **`rm checkpoint-approvals-v{3,4,5}.json`** → 3 x
+   `ledger-approval-pin-absent`, every checkpoint open, exit 1. Before coverage
+   ran in both directions this produced `ok: true`, zero issues, exit 0, with
+   both `ledger-supersession-not-later` findings erased. The findings are still
+   absent under the new code — they live in a file that no longer exists — but
+   the absence of the pinned files is itself blocking, so the gate does not go
+   green and no checkpoint closes.
+7. **Rename the head ledger FILE** (leaving its `artifactId` alone) → 1 x
+   `ledger-approval-pin-absent` for the vacated path plus 1 x
+   `ledger-approval-pin-missing` for the new one, every checkpoint open, exit 1.
+   Under the `artifactId`-keyed table this was invisible: C0/C1 stayed closed and
+   only the two pre-existing findings were reported.
 
 **What is not covered, stated plainly:**
 
 - The pins are a **declaration in source, not a signature**. A change that edits
   `quality-contracts/` *and* `TRACKED_LEDGER_APPROVAL_PINS` goes green. That is a
   reviewable source diff, not a mechanical impossibility.
-- Coverage recognises a tracked chain only by a pin key matching one of its
-  ledgers, so attack 5 is closed by the chain being five ledgers long with four
-  of them byte-pinned by successors. A **single-ledger** chain could be renamed
-  wholesale and coverage would not activate. This chain is not one.
-- Nothing beyond the five attacks above is claimed. Do not restate this as
-  durability against "any change confined to `quality-contracts/`", and do not
-  describe the block as "permanent" or "unfakeable" — each of those absolutes has
-  been asserted here once and falsified once.
+- The tracked table is in force for **this repository's own artifact root**, which
+  `src/readiness/ledger-pins.ts` derives from the module's location on disk. It
+  is therefore inert when the gate is pointed at a COPY of the graph somewhere
+  else (`--artifact-root <copy>`), and the CLI prints a `notice:` on stderr
+  saying so. That is a change to the invocation, not a change confined to
+  `quality-contracts/`. What was observed when that was tried: validating an
+  edited copy still failed (`exit 1`, 7 x `index-path-mismatch`, because index
+  rows record repo-relative paths) while printing `C2: closed` beside it;
+  rewriting those index rows to make the copy self-consistent then produced
+  2 x `checkpoint-target-mismatch` + 2 x `approved-artifact-hash-mismatch`
+  (`index-c1-v3`'s bytes are pinned by the ledger's own `approvedArtifacts`) and
+  C2 back to `open`. Neither variant reached a clean gate; no claim is made that
+  no variant can.
+- Nothing beyond the attacks above is claimed. Do not restate this as durability
+  against "any change confined to `quality-contracts/`", and do not describe the
+  block as "permanent" or "unfakeable" — each of those absolutes has been
+  asserted here once and falsified once. Do not generalise from a tested attack
+  to a class of attacks: that has been done three times on this control and was
+  wrong all three times.
 
 **Do not:** fabricate an approval, timestamp, actor, or rationale to close the
 gap; retraction is a real recorded act. And do not reintroduce a supersession- or

@@ -69,10 +69,12 @@ export interface ValidateReadinessOptions {
    */
   gitSourceResolver: GitSourceResolver;
   /**
-   * EXTRA approval-row pins, keyed by ledger `artifactId`, for artifact graphs
-   * this repository does not track (fixtures). Merged UNDER
-   * `TRACKED_LEDGER_APPROVAL_PINS`, so it cannot weaken or redefine a tracked
-   * pin — see `resolveLedgerApprovalPins`. The CLI never sets this.
+   * EXTRA approval-row pins, keyed by the ledger's PATH within `artifactRoot`
+   * (e.g. "checkpoint-approvals-v1.json"), for artifact graphs this repository
+   * does not track (fixtures). Merged UNDER `TRACKED_LEDGER_APPROVAL_PINS` and
+   * only for the tracked root, so it can neither weaken a tracked pin nor
+   * declare the tracked chain untracked — see `resolveLedgerApprovalPins`. The
+   * CLI never sets this.
    */
   additionalLedgerApprovalPins?: Readonly<Record<string, string>>;
 }
@@ -528,89 +530,140 @@ export function validateReadinessArtifacts(opts: ValidateReadinessOptions): Vali
     //     reachable by the same edit; that module's docblock states precisely
     //     what the pin is and is not durable against.
     //
-    //     Keyed on `artifactId`, so a pinned ledger stays pinned after a
-    //     successor is appended, and so untracked (fixture) graphs are
-    //     unaffected unless they opt in.
+    //     KEYED ON THE LEDGER'S PATH WITHIN THE ARTIFACT ROOT, not on any field
+    //     the file declares about itself. Two prior revisions keyed on
+    //     `artifactId` and both were evaded by editing it — first by renaming
+    //     the head so its pin was never consulted, then, after a chain-coverage
+    //     rule was added, by renaming ALL FIVE ids and repairing the four
+    //     `predecessor.sha256` values in a loop (the link is keyed on the chain
+    //     ORDINAL, not on the predecessor's id, so the cascade repairs cleanly
+    //     and the head's file digest is pinned by nothing). Both evasions were
+    //     reproduced end to end and produced `ok: true` with `C2: closed` and
+    //     zero issues. A filename is held by the directory rather than by the
+    //     file's contents, so it is not editable from inside the file.
     //
-    //     TWO HALVES, COVERAGE FIRST. Comparison alone fails open, because the
-    //     lookup key is a field inside the artifact being pinned: renaming the
-    //     head's `artifactId` skipped the pin entirely and the same two
-    //     `decidedAt` edits then produced `ok: true` with every checkpoint
-    //     closed and zero issues (reproduced against a worktree copy of the real
-    //     graph). Keying on some other self-declared field inherits the flaw. So
-    //     coverage runs first and is blocking in its own right:
+    //     THREE RULES, ALL BLOCKING, RUN WHENEVER THE TABLE IS IN FORCE:
     //
-    //       once ANY ledger in the resolved chain matches a pin key, EVERY
-    //       ledger in that chain must have one.
+    //       A. every `checkpoint-approvals` file under the root has a pin
+    //          → `ledger-approval-pin-missing`
+    //       B. every pinned path resolves to a parsed file
+    //          → `ledger-approval-pin-absent`
+    //       C. a pinned file's rows digest to the pinned value
+    //          → `ledger-approval-pin-mismatch`
     //
-    //     A rename can then only turn a comparison failure into a coverage
-    //     failure, and an appended head with no pin registered fails loudly
-    //     instead of passing silently. Renaming the EARLIER ledgers to disguise
-    //     the chain as untracked is not available either: their bytes,
-    //     `artifactId` included, are pinned by their successors'
-    //     `predecessor.sha256` (step 6/chains.ts), so that breaks the chain.
+    //     Rule B is why deletion is now caught: the one-directional form of this
+    //     check iterated the chain and never the table, so `rm` of the three
+    //     newest ledgers erased both blocking findings and produced `ok: true`
+    //     with zero issues (reproduced). Rule A is why an appended head, or a
+    //     renamed ledger FILE, fails loudly instead of silently.
     //
-    //     Both halves are mode-independent (the `opts.mode === "private"` branch
-    //     is far below) and both run BEFORE `validateApprovalsAndCheckpoint`, so
-    //     `ledgerRowsAuthoritative` is already settled when closure is computed.
-    const approvalRowPins = resolveLedgerApprovalPins(opts.additionalLedgerApprovalPins);
+    //     Whether the table is in force is decided OUTSIDE the artifact graph —
+    //     `resolveLedgerApprovalPins` compares the root being validated against
+    //     this repository's own artifact root, derived from the module's location
+    //     on disk — which is what makes rule B meaningful at all. No artifact's
+    //     contents participate in that decision, so no edit under
+    //     `quality-contracts/` can declare the chain untracked.
+    //
+    //     All three rules are mode-independent (the `opts.mode === "private"`
+    //     branch is far below) and all run BEFORE
+    //     `validateApprovalsAndCheckpoint`, so `ledgerRowsAuthoritative` is
+    //     already settled when closure is computed.
+    const { pins: approvalRowPins, scope: ledgerPinScope } = resolveLedgerApprovalPins({
+      absArtifactRoot: absRoot,
+      additional: opts.additionalLedgerApprovalPins,
+    });
     let ledgerRowsAuthoritative = true;
 
-    const chainIsPinned = chains.orderedLedgers.some(
-      (l) => approvalRowPins[String(l.data.artifactId)] !== undefined,
-    );
-    if (chainIsPinned) {
-      for (const ledger of chains.orderedLedgers) {
-        const artifactId = String(ledger.data.artifactId);
-        if (approvalRowPins[artifactId] !== undefined) continue;
-        // FAIL CLOSED. An unpinned ledger in a pinned chain is not "not yet
-        // attested" — it is a ledger whose rows no anchor outside the graph
-        // covers, which is exactly the state the pin exists to prevent. It must
-        // not be a warning: a warning does not move `ok` and does not stop
-        // closure, so the operator would still read `All checks passed.`
-        ledgerRowsAuthoritative = false;
-        issues.push({
-          code: "ledger-approval-pin-missing",
-          artifactId,
-          message:
-            `ledger ${artifactId} is part of a pinned approval chain but has no ` +
-            `source pin. Every ledger in the chain must be pinned, root to head: ` +
-            `an unpinned ledger's approval rows are attested by nothing outside ` +
-            `the artifact graph, so renaming a ledger or appending a new head ` +
-            `would silently release the chain. If this ledger was just appended, ` +
-            `add its entry to TRACKED_LEDGER_APPROVAL_PINS in ` +
-            `src/readiness/ledger-pins.ts in the same change. If its id was ` +
-            `renamed, restore the id — the pinned rows are unchanged by a rename.`,
-        });
-      }
-    }
+    if (ledgerPinScope !== "none") {
+      // Iterates EVERY parsed checkpoint-approvals artifact, not only the
+      // resolved chain: a ledger parked outside the chain is still a governance
+      // ledger sitting in the tracked directory, and requiring a pin for it does
+      // not depend on chain resolution having succeeded.
+      const pinnedPathsPresent = new Set<string>();
 
-    for (const ledger of [...artifacts.values()].filter((a) => a.type === "checkpoint-approvals")) {
-      const artifactId = String(ledger.data.artifactId);
-      const pin = approvalRowPins[artifactId];
-      if (pin === undefined) continue;
-      const parsed = CheckpointApprovals.safeParse(ledger.data);
-      if (!parsed.success) continue; // schema errors already recorded
-      const actual = ledgerApprovalRowsDigest(parsed.data.approvals);
-      if (actual !== pin) {
-        // FAIL CLOSED ON CLOSURE, NOT JUST ON `ok`. If a pinned ledger's rows are
-        // not the pinned rows, nothing in that ledger is authoritative — an
-        // arbitrary edit could have added a role, moved an actor, or dated a
-        // decision. So no checkpoint may report "closed" and the C2 externality
-        // caveat (emitted only on closure) must not be raised either. Without
-        // this, the gate printed `ok: false` beside `✓ C2: closed`, which is the
-        // contradictory shape this branch is fixing elsewhere.
+      for (const ledger of [...artifacts.values()].filter(
+        (a) => a.type === "checkpoint-approvals",
+      )) {
+        const artifactId = String(ledger.data.artifactId);
+        const relPath = normalizeRepoPath(relative(absRoot, ledger.filePath));
+        const pin = approvalRowPins[relPath];
+
+        // ── rule A ──────────────────────────────────────────────────────────
+        if (pin === undefined) {
+          // FAIL CLOSED. An unpinned ledger file is not "not yet attested" — it
+          // is a ledger whose rows no anchor outside the graph covers, which is
+          // exactly the state the pin exists to prevent. It must not be a
+          // warning: a warning does not move `ok` and does not stop closure, so
+          // the operator would still read `All checks passed.`
+          ledgerRowsAuthoritative = false;
+          issues.push({
+            code: "ledger-approval-pin-missing",
+            artifactId,
+            path: relPath,
+            message:
+              `ledger file ${relPath} (${artifactId}) has no source pin. Every ` +
+              `checkpoint-approvals file under a pinned artifact root must be ` +
+              `pinned by PATH, root to head: an unpinned ledger's approval rows ` +
+              `are attested by nothing outside the artifact graph, so appending a ` +
+              `new head or renaming a ledger file would silently release the ` +
+              `chain. If this ledger was just appended, add its entry to ` +
+              `TRACKED_LEDGER_APPROVAL_PINS in src/readiness/ledger-pins.ts in ` +
+              `the same change. If the FILE was renamed, restore the filename — ` +
+              `the pinned rows are unchanged by a rename.`,
+          });
+          continue;
+        }
+        pinnedPathsPresent.add(relPath);
+
+        // ── rule C ──────────────────────────────────────────────────────────
+        const parsed = CheckpointApprovals.safeParse(ledger.data);
+        if (!parsed.success) continue; // schema errors already recorded
+        const actual = ledgerApprovalRowsDigest(parsed.data.approvals);
+        if (actual !== pin) {
+          // FAIL CLOSED ON CLOSURE, NOT JUST ON `ok`. If a pinned ledger's rows
+          // are not the pinned rows, nothing in that ledger is authoritative — an
+          // arbitrary edit could have added a role, moved an actor, or dated a
+          // decision. So no checkpoint may report "closed" and the C2 externality
+          // caveat (emitted only on closure) must not be raised either. Without
+          // this, the gate printed `ok: false` beside `✓ C2: closed`, which is the
+          // contradictory shape this branch is fixing elsewhere.
+          ledgerRowsAuthoritative = false;
+          issues.push({
+            code: "ledger-approval-pin-mismatch",
+            artifactId,
+            path: relPath,
+            // Names the file, the artifact and the digests only. Never echoes an
+            // approval's contents — an approval carries actor ids and rationale
+            // prose.
+            message:
+              `approval rows of ledger file ${relPath} (${artifactId}) do not ` +
+              `match their source pin (expected ${pin}, got ${actual}). The rows ` +
+              `were changed in place; the chain only permits growth by APPENDING ` +
+              `a successor ledger. See TRACKED_LEDGER_APPROVAL_PINS in ` +
+              `src/readiness/ledger-pins.ts.`,
+          });
+        }
+      }
+
+      // ── rule B ────────────────────────────────────────────────────────────
+      // The direction the earlier revision omitted. A pinned path with no
+      // parsed file behind it means the ledger was deleted, renamed, or failed
+      // to parse — in every case its approval rows are no longer in the graph,
+      // and the governance record the pin exists to preserve is gone.
+      for (const pinnedPath of Object.keys(approvalRowPins).sort()) {
+        if (pinnedPathsPresent.has(pinnedPath)) continue;
         ledgerRowsAuthoritative = false;
         issues.push({
-          code: "ledger-approval-pin-mismatch",
-          artifactId,
-          // Names the artifact and the digests only. Never echoes an approval's
-          // contents — an approval carries actor ids and rationale prose.
+          code: "ledger-approval-pin-absent",
+          path: pinnedPath,
           message:
-            `approval rows of ledger ${artifactId} do not match their source pin ` +
-            `(expected ${pin}, got ${actual}). The rows were changed in place; the ` +
-            `chain only permits growth by APPENDING a successor ledger. See ` +
-            `TRACKED_LEDGER_APPROVAL_PINS in src/readiness/ledger-pins.ts.`,
+            `pinned ledger file ${pinnedPath} is not present as a parsed ` +
+            `checkpoint-approvals artifact under the artifact root. A pinned ` +
+            `ledger may never be deleted or renamed: the chain's approval record ` +
+            `is the governance record, and removing the file removes the rows ` +
+            `that hold a checkpoint open. Restore the file. Retiring a pin is a ` +
+            `deliberate source change to TRACKED_LEDGER_APPROVAL_PINS in ` +
+            `src/readiness/ledger-pins.ts and must be reviewed as one.`,
         });
       }
     }
@@ -1017,9 +1070,14 @@ function validateApprovalsAndCheckpoint(
   checkpointStatus: Record<string, "open" | "closed">,
   warnings: ValidationIssue[],
   /**
-   * False when a pinned ledger's approval rows were changed in place (step 7c).
-   * Approval validation still runs — the diagnostics are worth having — but no
-   * checkpoint may close on rows that are not the pinned rows.
+   * False when step 7c found the ledger pins unsatisfied in ANY of its three
+   * directions: a pinned ledger's approval rows changed in place
+   * (`ledger-approval-pin-mismatch`), a ledger file with no pin
+   * (`ledger-approval-pin-missing`), or a pinned path with no file behind it
+   * (`ledger-approval-pin-absent`). Approval validation still runs — the
+   * diagnostics are worth having — but no checkpoint may close on a chain whose
+   * rows are not the attested rows, whose membership is not the attested
+   * membership, or which is missing a ledger outright.
    */
   ledgerRowsAuthoritative: boolean,
 ): void {
@@ -1119,26 +1177,36 @@ function validateApprovalsAndCheckpoint(
         //    `checkpoint-approvals-v5.json` turned this gate green — verified end
         //    to end. Do not describe the append-only check alone as making this
         //    finding un-editable; it does not.
-        //  - A RENAME OR AN UNPINNED NEW HEAD is caught by step 7c's COVERAGE
-        //    half. Comparison alone also failed open: the pin was looked up by
-        //    the ledger's own `artifactId`, so renaming the head to
-        //    `approvals-c2-v5-renamed` skipped the pin and the same two edits
-        //    again produced `ok: true` with C0/C1/C2 closed and zero issues —
-        //    also verified end to end. Every ledger in the resolved chain must
-        //    now carry a pin, so a rename becomes `ledger-approval-pin-missing`.
+        //  - A RENAMED LEDGER, A DELETED LEDGER OR AN UNPINNED NEW HEAD is caught
+        //    by step 7c's two COVERAGE directions. Both were fail-open holes and
+        //    both were reproduced. When the pin was looked up by the ledger's own
+        //    `artifactId`, renaming the head skipped the pin and the same two
+        //    edits produced `ok: true` with C0/C1/C2 closed and zero issues; and
+        //    when the chain was renamed WHOLESALE with the four
+        //    `predecessor.sha256` values repaired in a loop, the added
+        //    chain-coverage rule went inert and the result was the same. The pins
+        //    are therefore keyed on the ledger's FILE PATH, which no edit inside
+        //    the file can change. Separately, coverage that only iterated the
+        //    chain never noticed a pin whose file was gone: `rm` of the three
+        //    newest ledgers erased both blocking findings and produced `ok: true`
+        //    with zero issues. Rule B (every pinned path must resolve to a parsed
+        //    file) closes that direction.
         //
         // SO, PRECISELY — AND ONLY THIS: `ok: false` has been verified to survive
-        // five specific attacks confined to `quality-contracts/`, enumerated with
-        // their before/after gate output in TODOS.md § "How durable, exactly" and
-        // in docs/c2/c2-checkpoint-approval-handoff.md. The gate stays red even
-        // after a legitimate future re-approval, and the affected checkpoint
-        // cannot be closed on a clean gate until an explicit retraction mechanism
-        // exists. It is NOT durable against a change that also edits
-        // `TRACKED_LEDGER_APPROVAL_PINS` in source; that remains
+        // the specific attacks enumerated, with their before/after gate output, in
+        // TODOS.md § "How durable, exactly", in
+        // docs/c2/c2-checkpoint-approval-handoff.md, and in the
+        // `ledger-pins.ts` docblock. Nothing here claims durability against a
+        // CLASS of attacks: every generalisation from a tested attack to a class
+        // made on this control has so far been falsified by the next variant. The
+        // gate stays red even after a legitimate future re-approval, and the
+        // affected checkpoint cannot be closed on a clean gate until an explicit
+        // retraction mechanism exists. It is NOT durable against a change that
+        // also edits `TRACKED_LEDGER_APPROVAL_PINS` in source; that remains
         // reviewable-in-diff rather than mechanically impossible, and
         // `ledger-pins.ts` says so plainly. Do not restate this as durability
         // against "any change confined to `quality-contracts/`" — that absolute
-        // stood in this comment once and was falsified by the rename above. The
+        // stood in this comment once and was falsified twice. The
         // repository owner decided that tradeoff deliberately. Clearing this
         // finding requires the
         // retraction vocabulary tracked in TODOS.md § "Approval retraction
@@ -1612,15 +1680,18 @@ function validateApprovalsAndCheckpoint(
  *   every approval, superseded or not, and always blocks and always taints.
  *   This matches its sibling `ledger-supersession-not-later` in
  *   `validateApprovalsAndCheckpoint` exactly: both are temporal-impossibility
- *   findings, both are durable against the five attacks enumerated in TODOS.md
+ *   findings, both are durable against the attacks enumerated in TODOS.md
  *   § "How durable, exactly" — `validateLedgerAppendOnly` keeps every record in
- *   the chain, the approval-row pins in `ledger-pins.ts` keep a tracked ledger's
- *   own rows from being edited in place (the append-only check alone does not
- *   cover the head), and step 7c's coverage rule keeps a rename or an unpinned
- *   new head from releasing the chain. In both cases the durable record that a
- *   governance defect occurred IS the point. Neither is durable against a change
- *   that also edits the source pins, and no durability is claimed beyond those
- *   five attacks; see `ledger-pins.ts`. A supersession-based
+ *   a ledger that is PRESENT, the approval-row pins in `ledger-pins.ts` keep a
+ *   tracked ledger's own rows from being edited in place (the append-only check
+ *   alone does not cover the head), and step 7c's three rules keep an unpinned
+ *   ledger file, a renamed ledger file and a DELETED ledger file from releasing
+ *   the chain (the append-only check cannot see a deletion — `rm` of the newest
+ *   ledgers erased both findings before rule B existed). In both cases the
+ *   durable record that a governance defect occurred IS the point. Neither is
+ *   durable against a change that also edits the source pins, and no durability
+ *   is claimed beyond the attacks actually run; see `ledger-pins.ts`. A
+ *   supersession-based
  *   demotion was tried on the sibling and proved exploitable — one fabricated
  *   record dated a millisecond later suffices to hide the defect. Do not
  *   reintroduce it on either check. Clearing such a finding requires the

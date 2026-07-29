@@ -45,7 +45,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { validateReadinessArtifacts } from "./validator.js";
-import { TRACKED_LEDGER_APPROVAL_PINS, ledgerApprovalRowsDigest } from "./ledger-pins.js";
+import {
+  TRACKED_LEDGER_APPROVAL_PINS,
+  isTrackedArtifactRoot,
+  ledgerApprovalRowsDigest,
+} from "./ledger-pins.js";
 import type { GitSourceResolver } from "./checkpoint-policy.js";
 
 const repoRoot = resolve(__dirname, "../..");
@@ -129,42 +133,56 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
     // growth), which leaves these rows byte-identical and this assertion green.
     // A mismatch means rows were edited in place — the defect class this pin
     // exists to catch.
-    for (let v = 1; v <= 5; v++) {
+    // Re-derived from the file at each PINNED PATH — the same lookup the
+    // validator performs. Keying on the path rather than on the ledger's own
+    // `artifactId` is what makes a rename inert: the digest below is unchanged by
+    // any edit to the file's header.
+    for (const [pinnedPath, digest] of Object.entries(TRACKED_LEDGER_APPROVAL_PINS)) {
       const ledger = JSON.parse(
-        readFileSync(resolve(artifactRoot, `checkpoint-approvals-v${v}.json`), "utf-8"),
+        readFileSync(resolve(artifactRoot, pinnedPath), "utf-8"),
       ) as { artifactId: string; approvals: unknown[] };
-      expect(TRACKED_LEDGER_APPROVAL_PINS[ledger.artifactId]).toBe(
-        ledgerApprovalRowsDigest(ledger.approvals),
-      );
+      expect(digest).toBe(ledgerApprovalRowsDigest(ledger.approvals));
     }
     expect(result.issues.some((i) => i.code === "ledger-approval-pin-mismatch")).toBe(false);
   });
 
-  it("has a pin registered for every ledger in the resolved chain", () => {
-    // COVERAGE, THE OTHER HALF OF THE PIN. Comparison alone failed open: the
-    // lookup key is a field inside the artifact being pinned, so renaming the
-    // head's `artifactId` skipped the pin and the same two `decidedAt` edits
-    // then produced `ok: true` with every checkpoint closed (reproduced against
-    // a worktree copy of this graph). `validator.ts` step 7c now emits a
-    // blocking `ledger-approval-pin-missing` for any unpinned ledger in a chain
-    // where some ledger IS pinned, so a rename becomes a coverage failure and an
-    // appended head with no registered pin fails loudly.
+  it("has a pin registered for every tracked ledger FILE, and a file for every pin", () => {
+    // COVERAGE, IN BOTH DIRECTIONS. Comparison alone failed open twice, and each
+    // failure was reproduced against a worktree copy of this graph:
     //
-    // The assertion below is the same invariant read from the data side: every
-    // tracked ledger file's id is a key in the table, and the gate reports no
-    // coverage failure. IF A NEW LEDGER IS APPENDED, add its pin — do not delete
-    // this assertion or drop a ledger from the table.
+    //   - the lookup key used to be a field inside the artifact being pinned, so
+    //     renaming `artifactId` skipped the pin (and renaming ALL FIVE ids with
+    //     the four `predecessor.sha256` values repaired defeated the chain
+    //     coverage rule added to catch that). The key is now the file path.
+    //   - coverage used to iterate the chain and never the table, so `rm` of the
+    //     three newest ledgers erased both blocking findings and produced
+    //     `ok: true` with zero issues. Rule B now iterates the table.
+    //
+    // The assertions below are those two rules read from the data side: every
+    // tracked ledger file is pinned, every pin names a file that exists, and the
+    // gate reports neither coverage failure. IF A NEW LEDGER IS APPENDED, add its
+    // pin — do not delete these assertions or drop a ledger from the table.
     expect(result.issues.some((i) => i.code === "ledger-approval-pin-missing")).toBe(false);
-    const chainIds = [1, 2, 3, 4, 5].map(
-      (v) =>
-        (
-          JSON.parse(
-            readFileSync(resolve(artifactRoot, `checkpoint-approvals-v${v}.json`), "utf-8"),
-          ) as { artifactId: string }
-        ).artifactId,
-    );
-    expect(chainIds.every((id) => id in TRACKED_LEDGER_APPROVAL_PINS)).toBe(true);
-    expect(Object.keys(TRACKED_LEDGER_APPROVAL_PINS).sort()).toEqual([...chainIds].sort());
+    expect(result.issues.some((i) => i.code === "ledger-approval-pin-absent")).toBe(false);
+    for (const pinnedPath of Object.keys(TRACKED_LEDGER_APPROVAL_PINS)) {
+      expect(existsSync(resolve(artifactRoot, pinnedPath))).toBe(true);
+    }
+    expect(Object.keys(TRACKED_LEDGER_APPROVAL_PINS).sort()).toEqual([
+      "checkpoint-approvals-v1.json",
+      "checkpoint-approvals-v2.json",
+      "checkpoint-approvals-v3.json",
+      "checkpoint-approvals-v4.json",
+      "checkpoint-approvals-v5.json",
+    ]);
+  });
+
+  it("runs with the tracked pin table in force for this root", () => {
+    // The one thing that makes rule B (a pin whose file is gone is blocking)
+    // meaningful: the table is in force because the directory being validated IS
+    // this repository's artifact root, decided from the module's own location and
+    // from no file's contents. If this ever reports false, every pin rule above
+    // is inert and the two assertions in this block prove nothing.
+    expect(isTrackedArtifactRoot(artifactRoot)).toBe(true);
   });
 });
 

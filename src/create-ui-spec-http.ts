@@ -10,18 +10,37 @@
  * `makeCreateUiSpecDependencies()` is the only dependency constructor and the
  * only explicit-reference policy.
  *
- * THE SHAPE DIFFERENCE FROM MCP, AND WHY THE MCP GATE DOES NOT APPLY HERE.
+ * THE SHAPE DIFFERENCE FROM MCP, AND WHAT EACH TRANSPORT ACTUALLY ENFORCES.
  * The MCP adapter serves the standard tool envelope (`content` +
  * `structuredContent`) and validates it with `parseToolResult`, whose rule 0 is
  * the Task 1b fail-closed structural leaf gate. This adapter serves something
  * different: the parsed {@link DesignArtifactEnvelope} ITSELF, with both
  * renderings and the response-scoped evidence ids. `parseToolResult` describes a
- * shape this response does not have, so it cannot be the gate here.
- * `parseDesignArtifactEnvelope` is — and it is a STRONGER check on this shape
- * than the MCP result schema is on that one: it re-derives the handoff from the
- * spec, re-renders both renderings, recomputes all four hashes, demands exact
- * equality, and sweeps every string for private corpus markers. It also refuses
- * an adapter-added top-level field, because the envelope schema is `.strict()`.
+ * shape this response does not have, so it cannot be the whole gate here. The
+ * two screens are NOT ordered by strength — they are strong on different axes,
+ * and this adapter runs BOTH:
+ *
+ *   * `parseDesignArtifactEnvelope` (envelope integrity) is stronger than the
+ *     MCP result schema on structure: it re-derives the handoff from the spec,
+ *     re-renders both renderings, recomputes all four hashes, demands exact
+ *     equality, refuses an adapter-added top-level field (`.strict()`), and
+ *     sweeps every string for private corpus markers. MCP has no equivalent.
+ *   * `findUnsafeCreateUiSpecLeaves` (ID shape) is the ONLY screen on either
+ *     transport that enforces Global Constraints 19 and 20 — no raw corpus id,
+ *     url or path in a reference position, and the evidence-id and reference-id
+ *     domains kept disjoint. The envelope schema does NOT compensate for its
+ *     absence: `UiSpec.citedReferences` is `z.array(z.string())`
+ *     (tool-contracts.ts) and `containsPrivateMarker` is a fixed five-literal
+ *     marker list, not an ID-shape rule. An earlier revision of this adapter ran
+ *     only the first screen and claimed it was "STRONGER" without qualification;
+ *     that was false on exactly this axis, and a producer regression emitting a
+ *     raw corpus id in `spec.citedReferences` would have been refused over MCP
+ *     and served with 200 here.
+ *
+ * The ID-shape screen VALIDATES AND REFUSES; it never rewrites. That matters,
+ * because this surface serves the PERSISTED envelope and must not reshape it
+ * (the separately adjudicated reason it does not call the MCP retrieval
+ * projection). A gate that throws changes no byte on the success path.
  *
  * IT RUNS ON THE SERVED BYTES, NOT THE OBJECT. {@link handleCreateUiSpecHttp}
  * serializes the envelope to JSON, re-parses that STRING, and validates the
@@ -76,7 +95,7 @@ import {
   type CreateUiSpecTransportError,
   type CreateUiSpecTransportErrorCode,
 } from "./create-ui-spec-transport-errors.js";
-import { CreateUiSpecInput } from "./tool-contracts.js";
+import { CreateUiSpecInput, findUnsafeCreateUiSpecLeaves } from "./tool-contracts.js";
 
 /**
  * The HTTP request contract: the CORE request fields and NO `outputFormat`.
@@ -197,26 +216,62 @@ function serializeEnvelope(envelope: DesignArtifactEnvelope): string {
  * The serve-time gate. Runs on the STRING about to be written, not on the
  * in-memory object:
  *
- *  1. `parseDesignArtifactEnvelope` over the re-parsed bytes — schema (including
+ *  1. the ID-SHAPE gate (`findUnsafeCreateUiSpecLeaves`) over the served
+ *     `spec` — the same function and the same position table the MCP adapter
+ *     reaches through `parseToolResult`, so Global Constraints 19 and 20 hold
+ *     identically on both transports. It runs FIRST and on the raw re-parsed
+ *     value, so an unsafe reference is reported as what it is rather than as a
+ *     downstream hash mismatch.
+ *  2. `parseDesignArtifactEnvelope` over the re-parsed bytes — schema (including
  *     the strict shape, so an adapter-added field is refused), handoff
  *     reconstruction, both re-renders, all four hashes, and the private-marker
  *     sweep.
- *  2. the served key set is exactly the producer envelope's, asserted directly
+ *  3. the served key set is exactly the producer envelope's, asserted directly
  *     so the "no adapter-added envelope field" property does not rest solely on
  *     the schema staying strict.
- *  3. a final `containsPrivateMarker` sweep over the whole serialized body. The
+ *  4. a final `containsPrivateMarker` sweep over the whole serialized body. The
  *     envelope's own superRefine already walks its strings, so on the production
  *     path this is a no-op; it exists so the served bytes are not an unguarded
  *     position if that sweep is ever narrowed.
+ *
+ * WHY `spec` IS THE WHOLE ID-SHAPE SURFACE HERE, field by field. `spec` is the
+ * only envelope field carrying producer-authored identifiers.
+ * `publicEvidenceIds` is bound by the envelope schema to exactly
+ * `spec.provenance.evidenceIds` (element for element, in order) and every element
+ * is `EvidenceIdSchema`, so gating `data.provenance.evidenceIds[]` gates it too.
+ * `designMarkdown` / `designJson` are re-rendered FROM the gated spec by step 2
+ * and asserted byte-equal, so they cannot carry a string the spec does not.
+ * `artifactId`, `assemblyRulesSha256` and the four hashes are recomputed digests;
+ * `handoff` is reconstructed from the spec; `retrieval` and `warnings` are closed
+ * shapes with no reference position. There is no `referenceIds` field and no
+ * `evidence` rows on this transport, so those two gate roots are absent rather
+ * than unchecked — the same values live at `data.citedReferences[]`.
  *
  * Refuses rather than serves. Reports POSITIONS only — the underlying integrity
  * message can legitimately name a value for in-process diagnostics, and this
  * string must not become response or log content.
  */
 function assertServedBytesAreEnvelope(body: string, envelope: DesignArtifactEnvelope): void {
+  const rawServed = JSON.parse(body) as unknown;
+
+  const unsafeLeaves = findUnsafeCreateUiSpecLeaves({
+    data: (rawServed as { spec?: unknown } | null)?.spec,
+    // Absent on this transport (see the field-by-field note above), not skipped:
+    // the values MCP publishes as `referenceIds` are `spec.citedReferences`,
+    // which the `data` root walks, and there are no evidence rows here at all.
+    referenceIds: undefined,
+    evidence: undefined,
+  });
+  if (unsafeLeaves.length > 0) {
+    const positions = [...new Set(unsafeLeaves.map((leaf) => leaf.position))].slice(0, 12).join(", ");
+    throw new Error(
+      `create_ui_spec response failed the reference/evidence ID-shape gate and was not served; offending positions: [${positions}] (values withheld)`,
+    );
+  }
+
   let reparsed: DesignArtifactEnvelope;
   try {
-    reparsed = parseDesignArtifactEnvelope(JSON.parse(body) as unknown);
+    reparsed = parseDesignArtifactEnvelope(rawServed);
   } catch {
     throw new Error(
       "create_ui_spec response failed the design-artifact envelope integrity re-check and was not served (values withheld)",

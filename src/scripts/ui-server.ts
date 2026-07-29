@@ -215,9 +215,15 @@ export function sameOrigin(req: IncomingMessage): boolean {
  * never sees a comma-joined `Host` in production; it rejects one anyway, because
  * it is a shape a non-Node front end could produce. The live consequence of
  * Node's first-wins rule is that `Host: localhost:PORT` followed by
- * `Host: evil.example` is ACCEPTED here — which is not a hole: a rebound browser
- * sends exactly one `Host`, and a handcrafted request with two would then be
- * rejected by `sameOrigin` on the `Origin`/`Host` mismatch.
+ * `Host: evil.example` is ACCEPTED here, and `sameOrigin` does NOT backstop it:
+ * `sameOrigin` returns true when the request carries no `Origin` header at all,
+ * so a handcrafted request with two `Host` lines and no `Origin` passes both
+ * guards. (An earlier revision of this docblock claimed the mismatch would be
+ * rejected there; it would not.) What actually bounds this is who can send such
+ * a request: a rebound BROWSER sends exactly one `Host` and always an `Origin`
+ * on a mutating fetch, so the duplicate-`Host` shape requires a client that
+ * writes raw bytes to the loopback socket — which already defeats the
+ * origin model entirely and is out of this guard's threat model.
  */
 export function hostIsLoopback(req: IncomingMessage): boolean {
   const host = req.headers.host;

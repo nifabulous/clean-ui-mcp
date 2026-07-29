@@ -498,3 +498,154 @@ describe("create_ui_spec HTTP typed errors", () => {
     ).rejects.toThrow(/^(?!.*zq-tamper-marker-5541)/s);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The reference/evidence ID-shape gate — the SAME rules as MCP, on this
+// transport. Both adapters publish the same `spec` object; before this gate ran
+// here, Global Constraints 19 and 20 (no raw corpus id / url / path in a
+// reference position; the evidence-id and reference-id domains stay disjoint)
+// were enforced on MCP only, because the only caller of the leaf gate was
+// `parseToolResult` and this adapter does not serve a tool result. The mirror
+// cases are `create-ui-spec-mcp.test.ts` § "the contract gate runs before
+// anything is served".
+//
+// The mutations below also break the envelope hashes, so each of them WOULD be
+// refused by the integrity re-check. That is exactly why the ID-shape gate runs
+// first and carries its own message: the assertions below discriminate between
+// "refused because a reference was unsafe" and "refused because a hash moved".
+// ---------------------------------------------------------------------------
+describe("create_ui_spec HTTP reference/evidence ID-shape gate", () => {
+  const ID_SHAPE_REFUSAL = /failed the reference\/evidence ID-shape gate and was not served/;
+
+  it("REFUSES to serve a spec whose citedReferences carry a raw private path", async () => {
+    const poison = "/Users/secret/corpus/images-private/leak.png";
+    spyState.mutate = (result) => ({
+      ...result,
+      envelope: {
+        ...result.envelope,
+        spec: { ...result.envelope.spec, citedReferences: [poison] },
+      },
+    });
+    const corpus = [fixtureEntry("internal-1", "product-Alpha")];
+    await expect(
+      handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus)),
+    ).rejects.toThrow(ID_SHAPE_REFUSAL);
+  });
+
+  it("REFUSES to serve a spec whose citedReferences carry a raw corpus id", async () => {
+    // The scenario in the finding: a producer regression puts the corpus entry id
+    // itself in a reference position. `containsPrivateMarker` does not catch it
+    // (it is a fixed marker list) and `UiSpec.citedReferences` is
+    // `z.array(z.string())`, so the ID-shape rule is the only thing that does.
+    spyState.mutate = (result) => ({
+      ...result,
+      envelope: {
+        ...result.envelope,
+        spec: { ...result.envelope.spec, citedReferences: ["stripe-pricing-2024"] },
+      },
+    });
+    const corpus = [fixtureEntry("internal-1", "product-Alpha")];
+    await expect(
+      handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus)),
+    ).rejects.toThrow(ID_SHAPE_REFUSAL);
+  });
+
+  it("REFUSES a response-scoped evidence id substituted into a reference position", async () => {
+    // The two ID domains must stay disjoint on both transports.
+    spyState.mutate = (result) => ({
+      ...result,
+      envelope: {
+        ...result.envelope,
+        spec: { ...result.envelope.spec, citedReferences: ["evidence-1"] },
+      },
+    });
+    const corpus = [fixtureEntry("internal-1", "product-Alpha")];
+    await expect(
+      handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus)),
+    ).rejects.toThrow(ID_SHAPE_REFUSAL);
+  });
+
+  it("REFUSES a safe reference digest substituted into an evidence-id position", async () => {
+    // The other direction of the same disjointness rule.
+    spyState.mutate = (result) => ({
+      ...result,
+      envelope: {
+        ...result.envelope,
+        spec: {
+          ...result.envelope.spec,
+          provenance: {
+            ...result.envelope.spec.provenance,
+            evidenceIds: [`ref-${"a".repeat(64)}`],
+          },
+        },
+      },
+    });
+    const corpus = [fixtureEntry("internal-1", "product-Alpha")];
+    await expect(
+      handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus)),
+    ).rejects.toThrow(ID_SHAPE_REFUSAL);
+  });
+
+  it("the refusal names positions only — never the offending value or the brief", async () => {
+    const poison = "/Users/secret/corpus/images-private/leak.png";
+    spyState.mutate = (result) => ({
+      ...result,
+      envelope: {
+        ...result.envelope,
+        spec: { ...result.envelope.spec, citedReferences: [poison] },
+      },
+    });
+    const corpus = [fixtureEntry("internal-1", "product-Alpha")];
+    let message = "";
+    try {
+      await handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus));
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toMatch(ID_SHAPE_REFUSAL);
+    expect(message).toContain("data.citedReferences[]");
+    expect(message).not.toContain(poison);
+    expect(message).not.toContain("images-private");
+    expect(message).not.toContain("analytics dashboard for a fintech");
+  });
+
+  it("serves the unmutated producer output — the gate is not refusing everything", async () => {
+    // The control. Without this, every assertion above would also pass against a
+    // gate that threw unconditionally.
+    const corpus = [fixtureEntry("internal-1", "product-Alpha")];
+    const result = await handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus));
+    expect(result.status).toBe(200);
+    const served = parseDesignArtifactEnvelope(JSON.parse(result.body));
+    for (const ref of served.spec.citedReferences) {
+      expect(ref).toMatch(/^ref-[0-9a-f]{64}$/);
+    }
+  });
+
+  it("refuses the same shapes the MCP adapter refuses (no transport drift)", async () => {
+    // Both adapters publish the same `spec`. This asserts they agree on the
+    // VERDICT for the same poisoned spec, which is the property that was broken:
+    // MCP refused, HTTP served 200.
+    const poison = "https://private.example.com/secret";
+    spyState.mutate = (result) => ({
+      ...result,
+      envelope: {
+        ...result.envelope,
+        spec: { ...result.envelope.spec, citedReferences: [poison] },
+      },
+    });
+    const corpus = [fixtureEntry("internal-1", "product-Alpha")];
+    await expect(
+      handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus)),
+    ).rejects.toThrow(/was not served/);
+    spyState.mutate = (result) => ({
+      ...result,
+      envelope: {
+        ...result.envelope,
+        spec: { ...result.envelope.spec, citedReferences: [poison] },
+      },
+    });
+    await expect(handleCreateUiSpec(validBody(), makeReader(corpus, corpus))).rejects.toThrow(
+      /was not served/,
+    );
+  });
+});

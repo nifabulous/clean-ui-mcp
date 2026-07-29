@@ -3,7 +3,7 @@ import { CSRF_HEADER, cleanupBatch, resolveSiteAsset, findDuplicateAtCommit, hos
 import { setCorpusRootForTesting } from "../persistence.js";
 import { request as httpRequest } from "node:http";
 import type { IncomingMessage } from "node:http";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { PROJECT_ROOT, privateImageDir, setPrivateImageDirForTesting } from "../paths.js";
@@ -2168,5 +2168,273 @@ describe("resolveSiteAsset — traversal containment (direct)", () => {
   it("refuses a directory, even a legitimate in-root one", () => {
     expect(resolveSiteAsset(root, "assets")).toBeNull();
     expect(resolveSiteAsset(root, "sub")).toBeNull();
+  });
+});
+
+// ─── EACCES safety for the three remaining read-after-head sites ──────────────
+//
+// THE SHAPE (identical in all three, and identical to the already-fixed
+// `/clean-ui-mcp/` + `/static/` branches): an existence/stat check needs no READ
+// permission, so a mode-000 file passes it; the handler then writes the 200 head
+// and only THEN calls `readFileSync`, which throws
+// `EACCES: permission denied, open '<absolute path>'`. Because the head is
+// already on the wire, the catch-all's `sendJson(res, 500, …)` itself throws
+// `ERR_HTTP_HEADERS_SENT` from inside a `catch` block — so the absolute path
+// reaches `console.error`, the response is never ended (the client hangs), and
+// the rejection escapes `handleUiRequest` unhandled, which kills the process
+// under Node's default `--unhandled-rejections=throw`.
+//
+// Every test below therefore asserts FOUR things, not one:
+//   1. status 404 (not 200, not 500),
+//   2. no root, filename, `EACCES` or file CONTENT in the body,
+//   3. no path-shaped string in ANY console.* argument,
+//   4. the server still answers the next request (proof it is alive and that the
+//      request did not hang — the fetch carries its own abort timeout, so a hang
+//      fails fast instead of stalling for the whole test timeout).
+const PATH_SHAPED = /(?:^|\s)\/(?:Users|private|var|tmp|home)\//;
+
+function consoleSpies() {
+  return (["log", "info", "warn", "error", "debug"] as const).map((m) =>
+    vi.spyOn(console, m).mockImplementation(() => {}),
+  );
+}
+
+function consoleLines(spies: ReturnType<typeof consoleSpies>): string[] {
+  return spies.flatMap((spy) =>
+    spy.mock.calls.map((call) =>
+      call.map((arg) => (arg instanceof Error ? `${arg.name}: ${arg.message}\n${arg.stack ?? ""}` : String(arg))).join(" "),
+    ),
+  );
+}
+
+/** Fetch with a hard abort, so the pre-fix HANG fails in 4s rather than stalling. */
+function fetchBounded(url: string, timeoutMs = 4_000): Promise<Response> {
+  return fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+}
+
+// The lock-holding fetch inside `expectSilent404` chmods a TRACKED, SHARED file
+// (index-2.html / index-classic.html) to 000 before awaiting, so the file stays
+// unreadable for as long as this request takes to settle. `ui-browser.test.ts`'s
+// `readShell` polls the same files at collection time with a 500ms retry budget
+// specifically to survive that transient window (healthy case: ~3ms). A generic
+// 4s abort here means a MISSING guard — the exact regression this block exists
+// to catch — leaves the lock in place for ~4s, 8x readShell's budget, so a
+// concurrent collection of ui-browser.test.ts fails with an EACCES on an
+// innocent file instead of this block's own test failing. Capping this specific
+// fetch at 300ms (100x the healthy 3ms, comfortably under the 500ms budget)
+// closes that gap without touching the 4s default other callers still get: a
+// missing guard now fails ITS OWN test in ~300ms, and the lock never outlives
+// readShell's retry.
+const SHELL_LOCK_ABORT_MS = 300;
+
+describe("GET /api/image — EACCES safety", () => {
+  // `/api/image` resolves through `fromCorpusRelativeImagePath`, which honors
+  // `setPrivateImageDirForTesting` — so the mode-000 fixture lives entirely in a
+  // temp dir and no tracked file is touched by this block.
+  let server: import("node:http").Server;
+  let baseUrl: string;
+  let base: string;
+  let imgDir: string;
+  const priorEnv = process.env.CLEAN_UI_SITE_DIST;
+  const canChmod = process.getuid?.() !== 0; // root ignores file modes
+  const lockedName = "zq-image-eacces-locked-8821.png";
+  let lockedPath: string;
+
+  beforeAll(async () => {
+    base = mkdtempSync(join(tmpdir(), "ui-server-image-eacces-"));
+    writeFileSync(join(base, "entries.json"), JSON.stringify({ version: 2, entries: [] }));
+    setCorpusRootForTesting(base);
+    imgDir = join(base, "images-private");
+    mkdirSync(imgDir, { recursive: true });
+    setPrivateImageDirForTesting(imgDir);
+    delete process.env.CLEAN_UI_SITE_DIST;
+    lockedPath = join(imgDir, lockedName);
+    writeFileSync(lockedPath, "zq-unreadable-image-body-8821");
+    if (canChmod) chmodSync(lockedPath, 0o000);
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    // Restore shared state FIRST, and guard the close: if beforeAll threw before
+    // startServer resolved, `server` is undefined and an unguarded `.close()`
+    // would abort the rest of this teardown, leaking the env var and both
+    // path overrides into every later block in this file.
+    if (priorEnv === undefined) delete process.env.CLEAN_UI_SITE_DIST;
+    else process.env.CLEAN_UI_SITE_DIST = priorEnv;
+    setPrivateImageDirForTesting(null);
+    setCorpusRootForTesting(null);
+    if (existsSync(lockedPath)) chmodSync(lockedPath, 0o644);
+    rmSync(base, { recursive: true, force: true });
+    if (server) await new Promise<void>((r) => server.close(() => r()));
+  });
+
+  it("404s an UNREADABLE image without leaking its path, hanging, or killing the process", async () => {
+    if (!canChmod) return; // root ignores file modes — nothing to prove here
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    const spies = consoleSpies();
+    try {
+      const res = await fetchBounded(`${baseUrl}/api/image?path=images-private/${lockedName}`);
+      const text = await res.text();
+      expect(res.status).toBe(404);
+      expect(text).not.toContain("zq-unreadable-image-body-8821");
+      expect(text).not.toContain(imgDir);
+      expect(text).not.toContain(base);
+      expect(text).not.toContain(lockedName);
+      expect(text.toUpperCase()).not.toContain("EACCES");
+      const lines = consoleLines(spies);
+      for (const line of lines) {
+        expect(line, "a filesystem path reached the console").not.toContain(base);
+        expect(line, "a path-shaped string reached the console").not.toMatch(PATH_SHAPED);
+      }
+      // Strict, because the per-line sweep above passes VACUOUSLY when nothing
+      // was logged and so cannot tell "silent" from "not wired": an unreadable
+      // file is a normal 404 here, and a 404 logs nothing at all.
+      expect(lines, "the request logged something; it must be silent").toEqual([]);
+      // Still alive, still serving — the rejection did not escape.
+      const after = await fetchBounded(`${baseUrl}/api/schema`);
+      expect(after.status).toBe(200);
+      await after.text();
+      await new Promise((r) => setTimeout(r, 50)); // let any escaped rejection surface
+      expect(unhandled, "an unhandled rejection escaped the request").toEqual([]);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("still serves a READABLE image", async () => {
+    const okName = "zq-image-readable-8821.png";
+    writeFileSync(join(imgDir, okName), "readable-png-bytes");
+    const res = await fetchBounded(`${baseUrl}/api/image?path=images-private/${okName}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("image/png");
+    expect(await res.text()).toBe("readable-png-bytes");
+  });
+});
+
+describe("curator app shells (/, /index-2.html, /index-classic.html) — EACCES safety", () => {
+  // APP_PATH (`<root>/index-2.html`) and `<root>/index-classic.html` are fixed
+  // constants resolved from PROJECT_ROOT, not overridable per-test — the same
+  // constraint the `/static/` block above documents for STATIC_DIR. It is a
+  // WEAKER precedent than it looks, though: that block creates and deletes its
+  // OWN throwaway file inside `ui/`, whereas this one has to lock a file that is
+  // tracked and that another test file reads. So the mode is flipped for the
+  // duration of ONE bounded request and restored three ways — in the `try` body,
+  // again in `finally`, and defensively in `afterAll` from a mode captured by
+  // `statSync` in `beforeAll`.
+  //
+  // Two consequences of locking a shared file, both handled rather than assumed
+  // away:
+  //   • A run interrupted INSIDE the window (Ctrl-C, worker kill) leaves the file
+  //     at 000, and git will not report it — git tracks only the executable bit,
+  //     so the damage is INVISIBLE rather than harmless. `beforeAll` therefore
+  //     repairs a leftover 000 BEFORE capturing "the original mode", or this run
+  //     would cement 000 as the original and leave the curator UI 404ing on `/`.
+  //   • `ui-browser.test.ts` reads both files at COLLECTION time and vitest runs
+  //     files in parallel, so it could land inside the window. Its two reads
+  //     retry (see `readShell` there) specifically because of this block.
+  let server: import("node:http").Server;
+  let baseUrl: string;
+  let base: string;
+  const priorEnv = process.env.CLEAN_UI_SITE_DIST;
+  const canChmod = process.getuid?.() !== 0;
+  const spaPath = join(PROJECT_ROOT, "index-2.html");
+  const classicPath = join(PROJECT_ROOT, "index-classic.html");
+  const originalModes = new Map<string, number>();
+
+  beforeAll(async () => {
+    base = mkdtempSync(join(tmpdir(), "ui-server-shell-eacces-"));
+    writeFileSync(join(base, "entries.json"), JSON.stringify({ version: 2, entries: [] }));
+    setCorpusRootForTesting(base);
+    delete process.env.CLEAN_UI_SITE_DIST;
+    for (const p of [spaPath, classicPath]) {
+      // Repair-then-capture, never capture-a-leftover (see the block comment).
+      if (canChmod && (statSync(p).mode & 0o777) === 0o000) chmodSync(p, 0o644);
+      originalModes.set(p, statSync(p).mode & 0o777);
+    }
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    // Modes and shared state first, then the guarded close — same reasoning as
+    // the block above: an unguarded `server.close()` on an undefined `server`
+    // would abort this teardown and leave a tracked file at mode 000.
+    for (const [p, mode] of originalModes) {
+      if ((statSync(p).mode & 0o777) !== mode) chmodSync(p, mode);
+    }
+    if (priorEnv === undefined) delete process.env.CLEAN_UI_SITE_DIST;
+    else process.env.CLEAN_UI_SITE_DIST = priorEnv;
+    setCorpusRootForTesting(null);
+    rmSync(base, { recursive: true, force: true });
+    if (server) await new Promise<void>((r) => server.close(() => r()));
+  });
+
+  /** Lock `shellPath`, request `route`, assert the four properties, restore the mode. */
+  async function expectSilent404(route: string, shellPath: string): Promise<void> {
+    const mode = originalModes.get(shellPath)!;
+    const sentinel = readFileSync(shellPath, "utf-8").slice(0, 400);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    const spies = consoleSpies();
+    try {
+      chmodSync(shellPath, 0o000);
+      const res = await fetchBounded(`${baseUrl}${route}`, SHELL_LOCK_ABORT_MS);
+      const text = await res.text();
+      chmodSync(shellPath, mode);
+      expect(res.status, route).toBe(404);
+      expect(text, route).not.toContain(sentinel);
+      expect(text, route).not.toContain(PROJECT_ROOT);
+      expect(text, route).not.toContain(shellPath.split(sep).pop()!);
+      expect(text.toUpperCase(), route).not.toContain("EACCES");
+      const lines = consoleLines(spies);
+      for (const line of lines) {
+        expect(line, "a filesystem path reached the console").not.toContain(PROJECT_ROOT);
+        expect(line, "a path-shaped string reached the console").not.toMatch(PATH_SHAPED);
+      }
+      // Strict — see the identical assertion in the /api/image block above.
+      expect(lines, `${route}: the request logged something; it must be silent`).toEqual([]);
+      const after = await fetchBounded(`${baseUrl}/api/schema`);
+      expect(after.status, `${route}: server died`).toBe(200);
+      await after.text();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(unhandled, `${route}: an unhandled rejection escaped`).toEqual([]);
+    } finally {
+      chmodSync(shellPath, mode);
+      for (const spy of spies) spy.mockRestore();
+      process.off("unhandledRejection", onUnhandled);
+    }
+  }
+
+  it("404s GET / when the SPA shell is unreadable", async () => {
+    if (!canChmod) return;
+    await expectSilent404("/", spaPath);
+  });
+
+  it("404s GET /index-2.html when the SPA shell is unreadable", async () => {
+    if (!canChmod) return;
+    await expectSilent404("/index-2.html", spaPath);
+  });
+
+  it("404s GET /index-classic.html when the classic shell is unreadable", async () => {
+    if (!canChmod) return;
+    await expectSilent404("/index-classic.html", classicPath);
+  });
+
+  it("serves all three shells normally once the modes are back", async () => {
+    for (const route of ["/", "/index-2.html", "/index-classic.html"]) {
+      const res = await fetchBounded(`${baseUrl}${route}`);
+      expect(res.status, route).toBe(200);
+      expect(res.headers.get("content-type"), route).toContain("text/html");
+      expect((await res.text()).length, route).toBeGreaterThan(0);
+    }
   });
 });

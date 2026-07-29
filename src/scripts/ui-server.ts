@@ -1418,6 +1418,12 @@ export function resolveSiteAsset(root: string, relative: string): string | null 
  *
  * So the read happens HERE, before any header is written, and a failure is simply
  * "not servable" — indistinguishable from a missing file, with nothing logged.
+ *
+ * THIS IS THE SINGLE MECHANISM for every "read a file and write it to a response"
+ * site in this file, not just the C3 site branch it was introduced for: the
+ * `/static/` branch, `GET /api/image`, `GET /` + `/index-2.html`, and
+ * `/index-classic.html` all go through it. A second helper with the same job
+ * would be a second place for the bug to come back.
  */
 function readSiteAsset(asset: string): Buffer | null {
   try {
@@ -1649,8 +1655,19 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         sendText(res, 404, "Image not found");
         return;
       }
+      // Same EACCES shape as the C3 site branch (see `readSiteAsset`): `existsSync`
+      // needs no read permission, so a mode-000 image passes the check above, the
+      // 200 head goes out, and `readFileSync` then throws with the absolute path in
+      // its message — after the head, so the catch below cannot rewrite the
+      // response and the request hangs. Read the bytes FIRST; an unreadable image
+      // is indistinguishable from a missing one, with nothing logged.
+      const bytes = readSiteAsset(fullPath);
+      if (bytes === null) {
+        sendText(res, 404, "Image not found");
+        return;
+      }
       res.writeHead(200, { "content-type": mimeFor(fullPath), "cache-control": "no-store" });
-      res.end(readFileSync(fullPath));
+      res.end(bytes);
     } catch (error) {
       sendText(res, 400, error instanceof Error ? error.message : "Invalid image path");
     }
@@ -2245,8 +2262,14 @@ async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promi
     }
 
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index-2.html")) {
+      // Bytes BEFORE the head — see `readSiteAsset`. An unreadable (mode-000) or
+      // vanished shell must 404 silently, not write a 200 head and then throw
+      // `EACCES: … open '<absolute path>'` into the catch-all, which would
+      // console.error the path, fail to rewrite the sent head, and hang the request.
+      const bytes = readSiteAsset(APP_PATH);
+      if (bytes === null) { sendText(res, 404, "Not found"); return; }
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-      res.end(readFileSync(APP_PATH, "utf-8"));
+      res.end(bytes);
       return;
     }
 
@@ -2254,9 +2277,14 @@ async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promi
     // for those surfaces. Served from index-classic.html (parallel to APP_PATH).
     if (req.method === "GET" && url.pathname === "/index-classic.html") {
       const classicPath = resolve(PROJECT_ROOT, "index-classic.html");
-      if (!existsSync(classicPath)) { sendText(res, 404, "classic view not found"); return; }
+      // Bytes BEFORE the head — see `readSiteAsset`. This subsumes the previous
+      // `existsSync` pre-check (a missing file is just an unreadable one) and adds
+      // the case that check could never catch: present but mode-000, which passed
+      // it and then threw the absolute path after the 200 head was already sent.
+      const bytes = readSiteAsset(classicPath);
+      if (bytes === null) { sendText(res, 404, "classic view not found"); return; }
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-      res.end(readFileSync(classicPath, "utf-8"));
+      res.end(bytes);
       return;
     }
 

@@ -107,8 +107,13 @@ reasons:
    (`src/readiness/contracts.ts`) requires every approval of a predecessor
    ledger to survive at the same index with the same canonical bytes in its
    successor. A `checkpoint-approvals-v6.json` that omitted the two v2 records
-   was tested and produces two `ledger-approval-deleted` issues. The records
-   cannot be removed from the chain.
+   was tested and produces two `ledger-approval-deleted` issues. A successor
+   ledger cannot drop them without emitting `ledger-approval-deleted` — not
+   "cannot be removed from the chain" unqualified: deleting the ledger FILES
+   themselves (rather than superseding their rows) is a different move with a
+   different blocking issue, `ledger-approval-pin-absent` (see "2. A
+   retraction mechanism" below, which states the file-deletion case
+   explicitly).
 2. **There is no withdrawal state.** `CheckpointApproval.decision` admits only
    `approved` or `rejected`. The reviewers did not *reject* the target — they
    never decided on it, so recording `rejected` would be a false statement. A

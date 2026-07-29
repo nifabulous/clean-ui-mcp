@@ -132,8 +132,19 @@
  *   - validating a COPY of the graph at a path that is not the tracked artifact
  *     root (`--artifact-root /tmp/copy/...`). The tracked table is not in force
  *     there, by the scoping rule above, and the CLI says so on stderr. This is
- *     a change to the invocation, not a change confined to `quality-contracts/`:
- *     the operator command and CI both name the tracked root.
+ *     a change to the invocation, not a change confined to `quality-contracts/`
+ *     — but nothing MECHANICAL enforces the tracked-root invocation, and this
+ *     bound must not be overstated a fourth time. `npm run validate-readiness-
+ *     artifacts` (package.json) names no root at all; the CLI
+ *     (validate-readiness-artifacts.ts) infers `resolve(process.cwd(),
+ *     "quality-contracts", "agent-readiness")`, which lands on the tracked
+ *     root only because `npm run` happens to set cwd to the package
+ *     directory — a property of npm, not something the command states. No CI
+ *     workflow runs this gate in any form today (`grep -rn
+ *     "validate-readiness\|artifact-root" .github/` is empty; still open, see
+ *     round-1 M11 / triage row 33 in review-branch-final-round3.md). So the
+ *     residual this bullet describes is bounded by operator discipline and the
+ *     stderr `notice:` above, and by nothing else.
  *
  * No claim is made here about changes that reach outside `quality-contracts/`,
  * and none about attacks not listed above.

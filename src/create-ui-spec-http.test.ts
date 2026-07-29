@@ -39,8 +39,16 @@ import type { CorpusEntryT } from "./schema.js";
 import {
   parseDesignArtifactEnvelope,
   containsPrivateMarker,
+  buildSemanticSpecInput,
+  buildArtifactIdentityInput,
+  sha256Canonical,
+  CANONICAL_WEB_TARGET_PROFILES,
   type CreateUiSpecAdapterResult,
+  type DesignArtifactEnvelope,
 } from "./create-ui-spec-contracts.js";
+import { parseDesignHandoff } from "./design-target-contracts.js";
+import { renderDesignHandoffMarkdown, renderDesignHandoffJson } from "./design-handoff.js";
+import { sha256Hex } from "./readiness/contracts.js";
 import { ERROR_RETRYABLE } from "./tool-contracts.js";
 import {
   createUiSpecIntegrityRefusalError,
@@ -514,8 +522,10 @@ describe("create_ui_spec HTTP typed errors", () => {
 // first and carries its own message: the assertions below discriminate between
 // "refused because a reference was unsafe" and "refused because a hash moved".
 // ---------------------------------------------------------------------------
+/** Module-scoped so both this describe block and the m3(r4) block below can pin it. */
+const ID_SHAPE_REFUSAL = /failed the reference\/evidence ID-shape gate and was not served/;
+
 describe("create_ui_spec HTTP reference/evidence ID-shape gate", () => {
-  const ID_SHAPE_REFUSAL = /failed the reference\/evidence ID-shape gate and was not served/;
 
   it("REFUSES to serve a spec whose citedReferences carry a raw private path", async () => {
     const poison = "/Users/secret/corpus/images-private/leak.png";
@@ -625,6 +635,17 @@ describe("create_ui_spec HTTP reference/evidence ID-shape gate", () => {
     // Both adapters publish the same `spec`. This asserts they agree on the
     // VERDICT for the same poisoned spec, which is the property that was broken:
     // MCP refused, HTTP served 200.
+    //
+    // The regex below pins the SPECIFIC gate that must fire on each side, not
+    // the generic `/was not served/` substring every refusal message shares —
+    // including the HTTP envelope-integrity refusal
+    // (`create-ui-spec-http.ts:277`), which this same mutation also trips
+    // (mutating `spec` after the producer hashed it moves `specSha256`). A
+    // generic match here would still pass with the ID-shape gate deleted
+    // entirely, because `assertServedBytesAreEnvelope` falls through to the
+    // integrity re-check, whose message ALSO matches `/was not served/` — so
+    // this test could not have caught the transport drift it is named for
+    // (m2, round 4). Each assertion must name its own gate.
     const poison = "https://private.example.com/secret";
     spyState.mutate = (result) => ({
       ...result,
@@ -636,7 +657,7 @@ describe("create_ui_spec HTTP reference/evidence ID-shape gate", () => {
     const corpus = [fixtureEntry("internal-1", "product-Alpha")];
     await expect(
       handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus)),
-    ).rejects.toThrow(/was not served/);
+    ).rejects.toThrow(ID_SHAPE_REFUSAL);
     spyState.mutate = (result) => ({
       ...result,
       envelope: {
@@ -645,7 +666,121 @@ describe("create_ui_spec HTTP reference/evidence ID-shape gate", () => {
       },
     });
     await expect(handleCreateUiSpec(validBody(), makeReader(corpus, corpus))).rejects.toThrow(
-      /was not served/,
+      /create_ui_spec result failed the contract gate/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// m3(r4): a SELF-CONSISTENT poisoned envelope.
+//
+// Every case above mutates the envelope AFTER the producer computed its
+// hashes, so `specSha256` (and the rest) has already moved off the poisoned
+// spec — the design-artifact integrity re-check would refuse every one of them
+// even with the ID-shape gate deleted; only the REFUSAL MESSAGE discriminates.
+// That is not the scenario the finding names. The scenario is a PRODUCER
+// regression: a poisoned `spec` whose stored hashes and renderings are
+// mutually consistent WITH the poison, because they were computed over it.
+// There, the integrity re-check has nothing to catch, and the ID-shape gate is
+// the only screen — which is exactly why Global Constraints 19/20 needed their
+// own gate instead of resting on envelope integrity.
+//
+// `rebuildEnvelopeAroundSpec` mirrors the producer's own `buildEnvelope`
+// (create-ui-spec.ts, not exported) using only the exported building blocks
+// `parseDesignArtifactEnvelope` itself calls: `parseDesignHandoff`,
+// `renderDesignHandoffMarkdown`/`Json`, `buildSemanticSpecInput`,
+// `buildArtifactIdentityInput`, `sha256Canonical` and `CANONICAL_WEB_TARGET_
+// PROFILES`. It recomputes every hash and rendering from the POISONED spec, so
+// the returned envelope passes `parseDesignArtifactEnvelope` end to end.
+// ---------------------------------------------------------------------------
+describe("create_ui_spec — a self-consistent poisoned envelope (m3(r4))", () => {
+  /**
+   * Rebuild every hash-derived and rendered field of `envelope` around a
+   * (possibly poisoned) spec, using the SAME exported building blocks
+   * `parseDesignArtifactEnvelope` uses to verify them (design-target-
+   * contracts.ts's `parseDesignHandoff`, design-handoff.ts's two renderers,
+   * and create-ui-spec-contracts.ts's `buildSemanticSpecInput` /
+   * `buildArtifactIdentityInput` / `sha256Canonical`). The result is a
+   * self-consistent envelope: it passes `parseDesignArtifactEnvelope` even
+   * though `spec` may carry a poisoned leaf, because every stored hash and
+   * rendering was recomputed FROM that same poisoned spec — exactly the
+   * producer-regression scenario m3(r4) names.
+   */
+  function rebuildEnvelopeAroundSpec(
+    envelope: DesignArtifactEnvelope,
+    poisonSpec: (spec: DesignArtifactEnvelope["spec"]) => DesignArtifactEnvelope["spec"],
+  ): DesignArtifactEnvelope {
+    const spec = poisonSpec(envelope.spec);
+    const targetProfile = CANONICAL_WEB_TARGET_PROFILES[envelope.handoff.target];
+    const handoff = parseDesignHandoff({
+      spec,
+      target: targetProfile,
+      motionIntents: envelope.handoff.motionIntents,
+      generatedAt: envelope.generatedAt,
+    });
+    const designMarkdown = renderDesignHandoffMarkdown(handoff);
+    const designJson = renderDesignHandoffJson(handoff);
+    const semanticSpecSha256 = sha256Canonical(buildSemanticSpecInput(spec));
+    const artifactId = `uispec-${sha256Canonical(
+      buildArtifactIdentityInput({
+        producerVersion: envelope.producerVersion,
+        assemblyRulesSha256: envelope.assemblyRulesSha256,
+        semanticSpecSha256,
+        target: envelope.handoff.target,
+        motionIntents: envelope.handoff.motionIntents,
+      }),
+    )}`;
+    return {
+      ...envelope,
+      spec,
+      designMarkdown,
+      designJson,
+      specSha256: sha256Canonical(spec),
+      semanticSpecSha256,
+      designMarkdownSha256: sha256Hex(Buffer.from(designMarkdown, "utf-8")),
+      designJsonSha256: sha256Hex(Buffer.from(designJson, "utf-8")),
+      artifactId,
+    };
+  }
+
+  it("sanity check: the rebuild helper reproduces the UNPOISONED envelope byte-for-byte", async () => {
+    // Proves the helper is a faithful reconstruction, not a stand-in that
+    // happens to satisfy the schema — before trusting it to build a poisoned
+    // one. If this fails, the poisoned-envelope test below proves nothing.
+    const corpus = [fixtureEntry("internal-1", "product-Alpha")];
+    await handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus));
+    const produced = spyState.produced[0]!.envelope;
+    const rebuilt = rebuildEnvelopeAroundSpec(produced, (spec) => spec);
+    expect(rebuilt).toEqual(produced);
+    expect(() => parseDesignArtifactEnvelope(rebuilt)).not.toThrow();
+  });
+
+  it("REFUSES a self-consistent envelope whose poisoned citedReferences survive the integrity re-check", async () => {
+    // The producer-regression scenario: hashes and renderings are recomputed
+    // OVER the poisoned spec, so `parseDesignArtifactEnvelope` (specSha256,
+    // semanticSpecSha256, the two rendering hashes, the re-rendered bytes, and
+    // the recomputed artifactId) all agree with the poison. Only the ID-shape
+    // gate can refuse this.
+    const corpus = [fixtureEntry("internal-1", "product-Alpha")];
+    await handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus));
+    const produced = spyState.produced[0]!.envelope;
+    const poisoned = rebuildEnvelopeAroundSpec(produced, (spec) => ({
+      ...spec,
+      citedReferences: ["stripe-pricing-2024"],
+    }));
+    // Control: the self-consistent envelope passes the integrity re-check on
+    // its own — the ID-shape gate is genuinely the only screen for it here,
+    // not a second independent check that would have caught it anyway.
+    expect(() => parseDesignArtifactEnvelope(poisoned)).not.toThrow();
+
+    spyState.mutate = (result) => ({ ...result, envelope: poisoned });
+    await expect(
+      handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus)),
+    ).rejects.toThrow(ID_SHAPE_REFUSAL);
+
+    spyState.mutate = (result) => ({ ...result, envelope: poisoned });
+    await expect(handleCreateUiSpec(validBody(), makeReader(corpus, corpus))).rejects.toThrow(
+      /create_ui_spec result failed the contract gate/,
     );
   });
 });

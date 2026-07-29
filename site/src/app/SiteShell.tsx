@@ -5,8 +5,9 @@ import {
   type ReactElement,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import { ThemeToggle } from "../components/ThemeToggle";
+import { repoLinks } from "../data/repo-meta";
 import { initThemeSync } from "../theme/theme";
 import "../styles/shell.css";
 
@@ -33,9 +34,9 @@ const PRIMARY_NAV: readonly NavEntry[] = [
   // composer produces a handoff, Browse inspects the evidence behind one.
   { id: "playground", label: "Playground", to: "/playground", href: null },
   { id: "browse", label: "Browse", to: "/browse", href: null },
-  { id: "docs", label: "Docs", to: null, href: "https://github.com/olaniyi-oladokun/clean-ui-mcp#readme" },
-  { id: "changelog", label: "Changelog", to: null, href: "https://github.com/olaniyi-oladokun/clean-ui-mcp/releases" },
-  { id: "github", label: "GitHub", to: null, href: "https://github.com/olaniyi-oladokun/clean-ui-mcp" },
+  { id: "docs", label: "Docs", to: null, href: repoLinks.readme },
+  { id: "changelog", label: "Changelog", to: null, href: repoLinks.releases },
+  { id: "github", label: "GitHub", to: null, href: repoLinks.repository },
 ];
 
 /**
@@ -100,9 +101,16 @@ export function SiteShell({ children }: { children: ReactElement | ReactElement[
       </a>
       <header className="site-header">
         <div className="site-header__inner">
-          <a className="site-brand" href="/" aria-label="clean-ui-mcp home">
+          {/*
+            Router navigation, not a raw <a href="/">: the router is mounted with
+            basename="/clean-ui-mcp", so a raw root href would leave the mounted
+            site for the server root (the curator dashboard on the operator's
+            loopback server, a 404 on a static host). `Link to="/"` resolves
+            against the basename, so it stays correct if the basename changes.
+          */}
+          <Link className="site-brand" to="/" aria-label="clean-ui-mcp home">
             clean-ui-mcp
-          </a>
+          </Link>
           <button
             ref={triggerRef}
             type="button"

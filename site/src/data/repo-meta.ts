@@ -39,6 +39,34 @@ export const repoMeta: RepoMeta = {
   packageName: readString("VITE_REPO_PACKAGE_NAME", "clean-ui-mcp"),
   repositoryUrl: readString(
     "VITE_REPO_URL",
-    "https://github.com/olaniyi-oladokun/clean-ui-mcp",
+    "https://github.com/nifabulous/clean-ui-mcp",
   ),
 };
+
+/** `repositoryUrl` without a trailing slash, so derived paths join cleanly. */
+const repoBaseUrl = repoMeta.repositoryUrl.replace(/\/+$/, "");
+
+/**
+ * Every external repository destination the site links to, derived from the one
+ * `repoMeta.repositoryUrl` value.
+ *
+ * These were previously six independent literals, all naming an owner that does
+ * not exist — so every external link on the shipped site 404'd, and no single
+ * fix could have caught the other five. Deriving them means one value to verify.
+ *
+ * The README anchors are GitHub heading slugs: `## Connect to an MCP client` →
+ * `#connect-to-an-mcp-client`, and `## MCP tools (14)` → `#mcp-tools-14` (so the
+ * tools anchor carries `mcpToolCount`, keeping the link and its label in step).
+ */
+export const repoLinks = {
+  /** Repository root. */
+  repository: repoBaseUrl,
+  /** README (the site's Docs destination). */
+  readme: `${repoBaseUrl}#readme`,
+  /** Releases (the site's Changelog destination). */
+  releases: `${repoBaseUrl}/releases`,
+  /** README § Connect to an MCP client. */
+  connectClient: `${repoBaseUrl}#connect-to-an-mcp-client`,
+  /** README § MCP tools (<count>). */
+  mcpTools: `${repoBaseUrl}#mcp-tools-${repoMeta.mcpToolCount}`,
+} as const;

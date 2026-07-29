@@ -123,12 +123,62 @@ describe("validate-readiness-artifacts CLI — pins-inert notice and dist-layout
       ok: boolean;
       checkpointStatus: Record<string, string>;
       issues: Array<{ code: string }>;
+      ledgerPinScope: string;
     };
     expect(parsed.ok).toBe(false);
     expect(parsed.checkpointStatus.C2).toBe("open");
     expect(
       parsed.issues.filter((i) => i.code === "ledger-supersession-not-later"),
     ).toHaveLength(2);
+    // The machine-readable form of the empty-stderr claim above. Both are
+    // asserted deliberately: stderr proves the CLI printed no notice, the field
+    // proves the VALIDATOR agreed, and a regression that desynchronised them
+    // (e.g. a notice condition that stops matching the scope decision) fails
+    // here rather than passing on the strength of one channel.
+    expect(parsed.ledgerPinScope).toBe("tracked");
+  }, SPAWN_TIMEOUT_MS);
+
+  it("engages the pins from a working directory that is NOT the repository root", () => {
+    // WHY THIS EXISTS. The CLI used to default its artifact root to
+    // `resolve(process.cwd(), "quality-contracts", "agent-readiness")`, so the
+    // tracked pin table engaged only because `npm run` sets the child's cwd to
+    // the package directory. That is a property of npm, not of the command:
+    // the same CLI run from anywhere else inferred some other root, the pins
+    // went inert, and the only trace was a stderr `notice:` nobody reading
+    // stdout sees. The default is now `TRACKED_ARTIFACT_ROOT`, derived from the
+    // compiled module's own location, so validating anything else is an explicit
+    // `--artifact-root` opt-out.
+    //
+    // The cwd here is the OS temp directory, which contains no
+    // `quality-contracts/` at all — under the old default the run would have
+    // failed outright (no artifact root, no git toplevel) rather than merely
+    // losing the pins, so an empty stderr plus `ledgerPinScope: "tracked"` here
+    // cannot be produced by the old behaviour.
+    //
+    // NEUTER CHECK: restore the cwd-relative default in
+    // validate-readiness-artifacts.ts and this test is the one that fails.
+    const child = spawnSync(process.execPath, [cliPath, "--mode", "public", "--json"], {
+      cwd: tmpdir(),
+      encoding: "utf-8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (child.error) throw child.error;
+    expect(child.stderr ?? "").toBe("");
+    const parsed = JSON.parse(child.stdout ?? "") as {
+      ok: boolean;
+      checkpointStatus: Record<string, string>;
+      issues: Array<{ code: string }>;
+      ledgerPinScope: string;
+    };
+    expect(parsed.ledgerPinScope).toBe("tracked");
+    expect(parsed.ok).toBe(false);
+    expect(parsed.checkpointStatus).toEqual({
+      C0: "closed", C1: "closed", C2: "open", C3: "open", C4: "open", C5: "open",
+    });
+    expect(
+      parsed.issues.filter((i) => i.code === "ledger-supersession-not-later"),
+    ).toHaveLength(2);
+    expect(parsed.issues).toHaveLength(2);
   }, SPAWN_TIMEOUT_MS);
 
   it("emits the pins-inert notice on stderr for a byte-identical copy at a non-tracked root, with an otherwise IDENTICAL result", () => {
@@ -191,14 +241,22 @@ describe("validate-readiness-artifacts CLI — pins-inert notice and dist-layout
         ok: boolean;
         checkpointStatus: Record<string, string>;
         issues: Array<{ code: string; artifactId?: string }>;
+        ledgerPinScope: string;
       };
       const copyResult = JSON.parse(copy.stdout) as typeof trackedResult;
 
+      // THE SCOPE, ON THE MACHINE-READABLE CHANNEL. This is the assertion a
+      // programmatic consumer needs and could not previously make: the two runs
+      // differ in whether the pins were in force, and the JSON now says so.
+      // Asserting BOTH values in one test is what keeps the field from being
+      // hardcodable — no literal satisfies "tracked" and "none" at once.
+      expect(trackedResult.ledgerPinScope).toBe("tracked");
+      expect(copyResult.ledgerPinScope).toBe("none");
+
       // The notice describes an INERT PIN LAYER, not a different governance
-      // outcome — for byte-identical, unmodified data the checkpoint state and
-      // the ledger findings must agree either way.
+      // outcome — for byte-identical, unmodified data the LEDGER findings must
+      // agree either way.
       expect(copyResult.ok).toBe(trackedResult.ok);
-      expect(copyResult.checkpointStatus).toEqual(trackedResult.checkpointStatus);
       expect(
         copyResult.issues.filter((i) => i.code === "ledger-supersession-not-later"),
       ).toEqual(trackedResult.issues.filter((i) => i.code === "ledger-supersession-not-later"));
@@ -221,8 +279,141 @@ describe("validate-readiness-artifacts CLI — pins-inert notice and dist-layout
         copyResult.issues.filter((i) => i.code === "index-path-mismatch").length,
       ).toBeGreaterThan(0);
       expect(trackedResult.issues.some((i) => i.code === "index-path-mismatch")).toBe(false);
+
+      // AND THAT IS WHY THE CHECKPOINT MAPS ARE NOT COMPARED FOR EQUALITY.
+      // This test used to assert `copyResult.checkpointStatus` EQUALS the
+      // tracked one, which meant it was asserting that the copy printed
+      // `✓ C0: closed` and `✓ C1: closed` beside `ok: false` and exit 1 — the
+      // display defect, frozen into an expectation. `index-path-mismatch` is
+      // keyed to an index row's artifactId, so the closure gate could not
+      // attribute it to any checkpoint and it held none open; an index that does
+      // not describe the files being validated attests nothing, so every
+      // checkpoint is now correctly open for the copy.
+      //
+      // The tracked side is asserted here too, and it is the load-bearing half:
+      // widening what blocks closure must NOT stop a checkpoint that legitimately
+      // closes, and C0/C1 close on the tracked root because its only two issues
+      // are both keyed to C2 approvalIds and therefore attributable.
+      expect(trackedResult.checkpointStatus).toEqual({
+        C0: "closed", C1: "closed", C2: "open", C3: "open", C4: "open", C5: "open",
+      });
+      expect(copyResult.checkpointStatus).toEqual({
+        C0: "open", C1: "open", C2: "open", C3: "open", C4: "open", C5: "open",
+      });
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  }, SPAWN_TIMEOUT_MS);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // THE CASE NOTHING EXERCISED, WHICH IS WHY A FALSE CLAIM SURVIVED.
+  //
+  // The test above hands its copy the repository's git context explicitly
+  // (`GIT_DIR`/`GIT_WORK_TREE`), so it measures the FAVOURABLE form of "point the
+  // gate at a copy": one that can still resolve a git toplevel. A `git worktree`
+  // copy is the same favourable case. Neither is the commonest form — a plain
+  // `cp -R` of `quality-contracts/agent-readiness` to a directory outside any
+  // worktree, which carries no git context at all.
+  //
+  // For that form the CLI hit the `git rev-parse` hard stop BEFORE it printed the
+  // pins-inert `notice:` and before any `--json` output, so the documented claim
+  // (a copy is an explicit opt-out, "announced both by a `notice:` on stderr and
+  // by `\"ledgerPinScope\": \"none\"` in `--json`") was false there: measured
+  // `exit=1`, `stdout bytes: 0`, no `notice:`, no `ledgerPinScope`. Every
+  // pins-inert assertion in this file passed while that was true, because every
+  // one of them supplied git context.
+  //
+  // NEUTER CHECK: move the `notice:` block in
+  // `src/scripts/validate-readiness-artifacts.ts` back below the `git rev-parse`
+  // try/catch, or drop the `if (args.json)` failure payload from that catch, and
+  // this test is the one that fails. No other test in the repository covers it.
+  // ─────────────────────────────────────────────────────────────────────────────
+  it("publishes the pin scope on BOTH channels for a plain directory copy that carries no git context, then still fails hard", () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), "readiness-cli-nogit-"));
+    try {
+      const copyRoot = resolve(tmpRoot, "agent-readiness");
+      cpSync(trackedArtifactRoot, copyRoot, { recursive: true });
+
+      // The premise of this test, asserted rather than assumed: the copy really
+      // is outside every git worktree. If `TMPDIR` ever sat inside a checkout,
+      // `git rev-parse` would succeed and this test would silently degrade into a
+      // duplicate of the git-context case above.
+      const probe = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+        cwd: copyRoot,
+        encoding: "utf-8",
+        env: gitlessEnv(),
+      });
+      expect(probe.status).not.toBe(0);
+
+      const child = spawnSync(
+        process.execPath,
+        [cliPath, "--mode", "public", "--json", "--artifact-root", copyRoot],
+        { cwd: tmpRoot, encoding: "utf-8", env: gitlessEnv(), maxBuffer: 64 * 1024 * 1024 },
+      );
+      if (child.error) throw child.error;
+      const stdout = child.stdout ?? "";
+      const stderr = child.stderr ?? "";
+
+      // ── CHANNEL 1: the human channel, and its ORDER ────────────────────────
+      // Both lines must be present, and the notice must come FIRST: the whole
+      // defect was that the hard stop pre-empted the notice. Asserting only
+      // "contains both" would pass if a future change re-ordered them and left
+      // the notice buried under a fatal error the operator stops reading at.
+      expect(stderr).toMatch(/notice: .* is not this repository's tracked artifact root/);
+      expect(stderr).toContain("TRACKED_LEDGER_APPROVAL_PINS is NOT in force");
+      expect(stderr).toContain("error: could not resolve git repository root");
+      expect(stderr.indexOf("notice:")).toBeLessThan(stderr.indexOf("error: could not resolve"));
+
+      // ── CHANNEL 2: the machine channel ─────────────────────────────────────
+      // Previously zero bytes. A `--json` consumer had no way to distinguish
+      // "the pins were inert" from "the tool did not run", because it got
+      // neither statement.
+      expect(stdout).not.toBe("");
+      const parsed = JSON.parse(stdout) as {
+        ok: boolean;
+        checkpointStatus: Record<string, string>;
+        checkedArtifacts: number;
+        issues: Array<{ code: string; message: string }>;
+        warnings: unknown[];
+        ledgerPinScope: string;
+      };
+      expect(parsed.ledgerPinScope).toBe("none");
+
+      // ── AND THE HARD STOP IS STILL HARD ───────────────────────────────────
+      // Surfacing the diagnostic must not soften the gate: git is required to
+      // recompute checkpoint targets from recorded-commit bytes, so a run that
+      // cannot reach git validated nothing. Nothing may read `closed`, no
+      // artifact may be reported as checked, and the exit code stays 1.
+      expect(child.status).toBe(1);
+      expect(parsed.ok).toBe(false);
+      expect(parsed.checkedArtifacts).toBe(0);
+      expect(parsed.checkpointStatus).toEqual({
+        C0: "open", C1: "open", C2: "open", C3: "open", C4: "open", C5: "open",
+      });
+      expect(parsed.issues).toHaveLength(1);
+      expect(parsed.issues[0]!.code).toBe("config-error");
+      expect(parsed.issues[0]!.message).toContain("could not resolve git repository root");
+      expect(parsed.warnings).toEqual([]);
     } finally {
       rmSync(tmpRoot, { recursive: true, force: true });
     }
   }, SPAWN_TIMEOUT_MS);
 });
+
+/**
+ * `process.env` with every git-context variable stripped.
+ *
+ * Inheriting the ambient environment is not good enough for the no-git case: a
+ * `GIT_DIR`/`GIT_WORK_TREE` exported by the surrounding shell (or by the
+ * git-context test above, were it ever changed to mutate `process.env`) would
+ * hand the copy a resolvable toplevel and quietly delete the condition under
+ * test. `GIT_CEILING_DIRECTORIES` is not used here — the assertion on the probe
+ * is what proves the copy is outside git, and it uses this same environment.
+ */
+function gitlessEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) {
+    delete env[key];
+  }
+  return env;
+}

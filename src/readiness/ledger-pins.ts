@@ -131,8 +131,29 @@
  *     file that changed".
  *   - validating a COPY of the graph at a path that is not the tracked artifact
  *     root (`--artifact-root /tmp/copy/...`). The tracked table is not in force
- *     there, by the scoping rule above, and the CLI says so on stderr. This is
- *     a change to the invocation, not a change confined to `quality-contracts/`.
+ *     there, by the scoping rule above; the CLI says so on stderr AND the result
+ *     carries `ledgerPinScope` ("tracked" | "caller" | "none"), so a machine
+ *     consumer of `--json` can tell an attested run from an unpinned one without
+ *     parsing stderr. This is a change to the invocation, not a change confined
+ *     to `quality-contracts/` — and since the CLI now DEFAULTS to
+ *     {@link TRACKED_ARTIFACT_ROOT}, it is an explicit opt-out rather than
+ *     something a different working directory can cause by accident.
+ *
+ *     THE "SAYS SO" HALF OF THAT WAS FALSE FOR ONE FORM OF COPY, AND IT IS THE
+ *     COMMON ONE. The CLI resolves the git toplevel with `cwd` set to the
+ *     artifact root and hard-stops when that fails, and the stop used to precede
+ *     both the `notice:` and any `--json` output — so a plain directory copy
+ *     outside every git worktree exited 1 with zero bytes of stdout and no
+ *     `notice:`, announcing neither channel. Every copy the suite exercised
+ *     carried git context (in-repo, injected `GIT_DIR`, or a `git worktree`), so
+ *     nothing failed. Both channels now precede the hard stop: the `notice:` is
+ *     printed first, and with `--json` the failure path emits a complete result
+ *     carrying `ledgerPinScope` before exiting 1. The git requirement is
+ *     untouched — such a run recomputes no checkpoint target and closes nothing.
+ *     Regression cover: `validate-readiness-artifacts-cli.test.ts`, "publishes
+ *     the pin scope on BOTH channels for a plain directory copy that carries no
+ *     git context, then still fails hard" — the only test that supplies NO git
+ *     context, which is why the others could not catch this.
  *
  *     THE EXACT BOUND, ENUMERATED FROM THE CALL GRAPH — this bullet has been
  *     wrong five times, in both directions, every time by reasoning from a grep
@@ -157,15 +178,21 @@
  *     caller — the sole `validateReadinessArtifacts({...})` call in
  *     `src/scripts/validate-readiness-artifacts.ts`. So:
  *
- *       * THE CLI INVOCATION IS PINNED BY NOTHING. The
- *         `validate-readiness-artifacts` script in `package.json` names no root;
- *         the CLI's own `artifactRoot` const infers
- *         `resolve(process.cwd(), "quality-contracts", "agent-readiness")`,
- *         which lands on the tracked root only because `npm run` sets
+ *       * THE CLI INVOCATION DEFAULTS TO THE TRACKED ROOT. The
+ *         `validate-readiness-artifacts` script in `package.json` still names no
+ *         root, but the CLI's own `artifactRoot` const now defaults to
+ *         {@link TRACKED_ARTIFACT_ROOT} rather than to
+ *         `resolve(process.cwd(), "quality-contracts", "agent-readiness")`. That
+ *         former default landed on the tracked root only because `npm run` sets
  *         cwd to the package directory — a property of npm, not something the
- *         command states — and `--artifact-root` overrides it outright. An
- *         operator can point the CLI at a copy, and the only signal is the
- *         stderr `notice:` above.
+ *         command states — so the pins engaged by accident of invocation and went
+ *         inert whenever the same CLI was run from anywhere else. They are now in
+ *         force for every default invocation regardless of cwd
+ *         (`validate-readiness-artifacts-cli.test.ts`, "engages the pins from a
+ *         working directory that is NOT the repository root"). `--artifact-root`
+ *         still overrides outright, so an operator can still point the CLI at a
+ *         copy — that is now a stated opt-out, signalled BOTH by the stderr
+ *         `notice:` above and by `ledgerPinScope` in the result.
  *       * `npm test` DOES re-derive these pins against the tracked root, and
  *         `.github/workflows/ci.yml` runs `npm test` (its `- run: npm test`
  *         step). Three suites reach the tracked root with no argument, env var,
@@ -186,9 +213,12 @@
  *           - `validate-readiness-artifacts-cli.test.ts` spawns the COMPILED
  *             CLI's default invocation at the repo root and asserts an EMPTY
  *             stderr — i.e. that the pins were in force — beside `ok:false` /
- *             `C2:"open"` / exactly two of those issues ("emits no pins-inert
- *             notice for the tracked root — pins are engaged in the shipped dist
- *             CLI");
+ *             `C2:"open"` / exactly two of those issues / `ledgerPinScope:
+ *             "tracked"` ("emits no pins-inert notice for the tracked root —
+ *             pins are engaged in the shipped dist CLI"), and repeats the same
+ *             assertions with the child's cwd set to the OS temp directory
+ *             ("engages the pins from a working directory that is NOT the
+ *             repository root");
  *           - `ledger-pins.test.ts` asserts `scope === "tracked"` and the exact
  *             table for `TRACKED_ARTIFACT_ROOT` ("puts the tracked table in
  *             force for the tracked root").
@@ -196,10 +226,12 @@
  *         escapes the CLI run, not the suite that CI runs.
  *
  *     What remains true is narrow and it is only this: no script or workflow
- *     pins the CLI INVOCATION's root, and `--json` carries no field telling a
- *     machine consumer whether the pins were in force for that run (see
- *     round-4 m5 / triage row 14). Do not restate that as "nothing mechanical
- *     runs this gate" — `npm test` does, transitively, and a grep of
+ *     pins the CLI INVOCATION's root — `--artifact-root` can still send any run
+ *     at a copy. The two halves of round-4 m5 / triage row 14 that were true when
+ *     it was written are now closed: the default root no longer depends on cwd,
+ *     and `--json` carries `ledgerPinScope`, so a machine consumer can tell
+ *     whether the pins were in force. Do not restate any of this as "nothing
+ *     mechanical runs this gate" — `npm test` does, transitively, and a grep of
  *     `.github/` for `validate-readiness` being empty is evidence about naming,
  *     not about execution. Round-1 M11 / triage row 33 in
  *     review-branch-final-round3.md rests on the same inverted inference and

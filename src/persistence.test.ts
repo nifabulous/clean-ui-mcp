@@ -11,12 +11,12 @@
  *   - persistEntries refuses a read-only LoadedCorpus (write-protect).
  *   - the test seam (setCorpusForTesting) still works after consolidation.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { CorpusEntryT } from "./schema.js";
-import { setCorpusRootForTesting, loadCorpusSafe, persistEntries, writeAtomic } from "./persistence.js";
+import { setCorpusRootForTesting, loadCorpusSafe, persistEntries, writeAtomic, writeSnapshot } from "./persistence.js";
 import { setCorpusForTesting, getEntryById } from "./corpus.js";
 import { fixtures } from "./scripts/__fixtures__/corpus-fixtures.js";
 
@@ -239,5 +239,64 @@ describe("writeAtomic — atomicity primitive (T-REV-1)", () => {
     expect(existsSync(target)).toBe(false);
     writeAtomic(target, "fresh\n");
     expect(readFileSync(target, "utf-8")).toBe("fresh\n");
+  });
+});
+
+describe("writeSnapshot — a failed write never logs a filesystem path", () => {
+  const PATH = /(?:^|[\s'"(=])\/(?:Users|private|var|tmp|home)\//;
+  let dir: string;
+  let fileRoot: string;
+
+  beforeEach(() => {
+    // Point the corpus root at a regular FILE, not a directory: `mkdirSync(
+    // <fileRoot>/.snapshots)` then throws ENOTDIR with the path — deterministic
+    // and UID-independent (unlike chmod, which root ignores).
+    dir = mkdtempSync(join(tmpdir(), "corpus-snap-fail-"));
+    fileRoot = join(dir, "not-a-dir");
+    writeFileSync(fileRoot, "x");
+    setCorpusRootForTesting(fileRoot);
+  });
+  afterEach(() => {
+    setCorpusRootForTesting(null);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("logs a sanitized descriptor, not err.message, when the snapshot write fails", () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => { lines.push(a.map(String).join(" ")); });
+    writeSnapshot([{ id: "x" } as unknown as CorpusEntryT]); // catch is non-fatal — must not throw
+    spy.mockRestore();
+    expect(lines.some((l) => l.includes("snapshot write failed")), "the failure should have logged").toBe(true);
+    for (const line of lines) {
+      expect(line, "a filesystem path reached the console").not.toContain(fileRoot);
+      expect(line).not.toMatch(PATH);
+      expect(line.toUpperCase()).not.toContain("NO SUCH FILE");
+    }
+  });
+});
+
+describe("loadCorpusSafe — unsupported-newer error carries no absolute path", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "corpus-newer-"));
+    // A version far above the current one triggers the "unsupported-newer" throw.
+    writeFileSync(join(root, "entries.json"), JSON.stringify({ version: 9999, entries: [] }));
+    setCorpusRootForTesting(root);
+  });
+  afterEach(() => {
+    setCorpusRootForTesting(null);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("throws a message with the basename, not the absolute path (it feeds doctor diagnostics)", () => {
+    const PATH = /(?:^|[\s'"(=])\/(?:Users|private|var|tmp|home)\//;
+    let thrown: unknown;
+    try { loadCorpusSafe(); } catch (e) { thrown = e; }
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain("version 9999");
+    expect(message).toContain("entries.json"); // basename retained
+    expect(message).not.toContain(root); // but not the absolute path
+    expect(message).not.toMatch(PATH);
   });
 });

@@ -28,8 +28,9 @@
  *     the seed/snapshot → save → clobber path.
  */
 import { mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, basename } from "node:path";
 import { Corpus } from "./schema.js";
+import { describeError } from "./errors.js";
 import type { CorpusEntryT } from "./schema.js";
 import { CORPUS_ROOT as DEFAULT_CORPUS_ROOT } from "./paths.js";
 import {
@@ -137,8 +138,11 @@ function fromDecodeResult(result: CorpusDecodeResult): LoadedCorpus | null {
     case "corrupt":
       return null;
     case "unsupported-newer":
+      // Use the basename, not the absolute `result.path`: this message is copied
+      // verbatim into `doctor`'s operator-facing diagnostics (scripts/doctor.ts)
+      // and can propagate to error paths, so it must not carry a filesystem path.
       throw new Error(
-        `[corpus] ${result.path} is version ${result.version}, which this build cannot read `
+        `[corpus] ${basename(result.path)} is version ${result.version}, which this build cannot read `
         + `(current: ${CURRENT_CORPUS_VERSION}). Refusing to fall back — a silent fallback here `
         + `would risk overwriting the newer file. Upgrade clean-ui-mcp to read the unsupported newer version.`,
       );
@@ -178,9 +182,12 @@ export function loadCorpusSafe(): LoadedCorpus {
   for (const snap of listSnapshots()) {
     const recovered = tryReadCorpus(snap);
     if (recovered) {
+      // Log only the snapshot's basename — the absolute snapshot PATH must not
+      // reach the operator console (no-path-in-logs rule). The filename alone
+      // identifies which snapshot recovered.
       console.error(
         `[corpus] entries.json unreadable — recovered ${recovered.entries.length} entries `
-        + `from ${snap}. Primary NOT auto-rewritten; run restore-corpus to persist the recovery.`,
+        + `from snapshot ${basename(snap)}. Primary NOT auto-rewritten; run restore-corpus to persist the recovery.`,
       );
       return { ...recovered, source: "snapshot", writable: false };
     }
@@ -234,7 +241,9 @@ export function writeSnapshot(entries: CorpusEntryT[], version: number = CURRENT
   try {
     writeRawSnapshot(JSON.stringify({ version, entries }, null, 2));
   } catch (err) {
-    console.error("[corpus] snapshot write failed (non-fatal):", err instanceof Error ? err.message : err);
+    // SECURITY: never log `err.message` — an fs failure embeds the absolute
+    // snapshot tmp/dir PATH. Log only a sanitized descriptor.
+    console.error(`[corpus] snapshot write failed (non-fatal): ${describeError(err)}`);
   }
 }
 

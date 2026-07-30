@@ -196,6 +196,32 @@ describe("retrieveCritiqueEvidence", () => {
     expect(result.fallbackUsed).toBe(true);
   });
 
+  it("does not log a filesystem path when embedImage throws a path-bearing error", async () => {
+    const PATH = /(?:^|[\s'"(=])\/(?:Users|private|var|tmp|home)\//;
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => { lines.push(a.map(String).join(" ")); });
+    const result = await retrieveCritiqueEvidence({
+      reader,
+      imageProvider: {
+        name: "voyage", model: "m",
+        embedImage: async () => { throw Object.assign(new Error("EACCES: permission denied, open '/Users/secret/corpus/images-private/shot.png'"), { code: "EACCES" }); },
+      },
+      imageData: Buffer.from("fake"),
+      imageMimeType: "image/png",
+      extraction: { patternType: "dashboard" },
+      platform: "web",
+      imageIndex: { version: 1, model: "m", dimension: 1, entries: { e1: { vector: [1], hash: "x" } } },
+    });
+    spy.mockRestore();
+    expect(result.fallbackUsed).toBe(true); // still degrades gracefully
+    expect(lines.some((l) => l.includes("Image retrieval failed"))).toBe(true);
+    for (const line of lines) {
+      expect(line, "a path reached the console").not.toContain("/Users/secret");
+      expect(line).not.toMatch(PATH);
+      expect(line.toUpperCase()).not.toContain("PERMISSION DENIED");
+    }
+  });
+
   it("filters orphaned image-index entries (id not in corpus)", async () => {
     reader = makeReader({
       corpus: [

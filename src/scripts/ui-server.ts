@@ -854,7 +854,15 @@ export function cleanupBatch(batchId: string): { deleted: string } {
   return { deleted: batchId };
 }
 
-function explainCaptureError(error: unknown): string {
+// SECURITY: the DEFAULT arm must NEVER echo `error.message`. The errors that
+// reach this default are raw and untrusted — Playwright navigation failures
+// embed the full SOURCE URL (`page.goto: net::ERR_… at https://…`), and `fs`
+// errors embed absolute PATHS. Both are banned from any HTTP response body (and
+// the DOM toast this feeds). The classified branches above return curated,
+// leak-free strings and are the ONLY way a specific message reaches the client;
+// everything else collapses to a fixed generic string. Note: SSRF/parse errors
+// are handled by `handleCaptureUrl`'s own inner catch and never arrive here.
+export function explainCaptureError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/Timeout/i.test(message)) {
     return "Capture timed out. The page may require login, keep network requests open, or be blocked by a cookie/CAPTCHA wall.";
@@ -862,22 +870,56 @@ function explainCaptureError(error: unknown): string {
   if (/Executable doesn't exist|browserType.launch/i.test(message)) {
     return "Chromium is not installed for Playwright. Run `npx playwright install chromium`, then restart the app.";
   }
-  return message || "URL capture failed";
+  return "URL capture failed. Make sure the page is publicly reachable and try again.";
 }
 
-function explainTagError(error: unknown): string {
+// SECURITY: sanitize errors from `assertSafeCaptureTarget` before they reach the
+// 400 body / DOM toast on the capture routes. Its fixed messages (invalid URL,
+// bad protocol, blocked private/metadata address) are host-free and safe to
+// surface. Its resolve-failure message interpolates the user-submitted hostname
+// (`Could not resolve host: <hostname>` — a component of the SOURCE URL, banned
+// from responses), so that one is genericized. Fail closed: anything not on the
+// known-safe list collapses to the generic invalid-URL string rather than
+// echoing a raw message.
+export function explainCaptureTargetError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (
+    message === "Use a valid source URL" ||
+    message === "Only http and https URLs can be captured" ||
+    message === "Capture target resolves to a blocked metadata or private address"
+  ) {
+    return message;
+  }
+  if (/^Could not resolve host:/i.test(message)) {
+    return "Could not resolve that host. Check the URL and try again.";
+  }
+  return "Use a valid source URL";
+}
+
+// SECURITY: same rule as `explainCaptureError`. The DEFAULT arm must NEVER echo
+// `error.message`: the tagger builds errors from raw PROVIDER RESPONSE BODIES
+// (`throw new Error(\`OpenAI API error ${status}: ${await response.text()}\`)`),
+// so any non-classified status (500/503/odd 400) would spill provider
+// diagnostics into the 400 body and the DOM. The classified branches return
+// curated strings; the default is fixed and generic.
+export function explainTagError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/401|invalid_api_key|Incorrect API key/i.test(message)) return "The vision provider rejected the API key. Check your .env keys and restart the app.";
   if (/429|rate_limit|quota|RESOURCE_EXHAUSTED/i.test(message)) return "Vision provider rate limit or quota was reached. Try again later or use another key.";
   // Specific Gemini/OpenAI stop causes — surface these before the broad model
   // check, since a truncated JSON shows up as non-JSON and got mislabeled as a
   // generic "unusable draft" (the actual cause was MAX_TOKENS truncation).
-  if (/MAX_TOKENS|truncat/i.test(message)) return "The response was truncated before the JSON finished. The model's output cap is too low for this screenshot — raise MAX_OUTPUT_TOKENS in src/tagger.ts.";
+  if (/MAX_TOKENS|truncat/i.test(message)) return "The response was truncated before the JSON finished. The model's output cap is too low for this screenshot — raise the MAX_OUTPUT_TOKENS setting and try again.";
   if (/SAFETY|blocked the request|blockReason/i.test(message)) return "The vision provider blocked this image (safety filter). Try a different screenshot.";
-  if (/stopped early/i.test(message)) return message; // already user-facing, includes the finishReason
+  // A finish-reason stop. Do NOT echo `message`: a raw provider-body error can
+  // also contain the substring "stopped early" (the tagger builds errors from
+  // `response.text()`), so returning it verbatim would re-open the provider-body
+  // leak. MAX_TOKENS and SAFETY are already handled above, so the remaining
+  // reasons (STOP/RECITATION/OTHER) all map to the same fixed retry hint.
+  if (/stopped early/i.test(message)) return "The vision provider stopped early. Try Auto-fill again, or use a clearer screenshot.";
   if (/models\/.+is not found|model.*not found|not supported|unsupported/i.test(message)) return "The vision model was rejected. Check the model name in .env and restart the app.";
   if (/non-JSON/i.test(message)) return "The vision provider returned an unusable draft. Try Auto-fill again, or use a clearer screenshot.";
-  return message || "Auto-fill failed";
+  return "Auto-fill failed. Check your vision provider settings and try again.";
 }
 
 export function publicConfigStatus(status: EnvStatus = getEnvStatus()) {
@@ -1021,7 +1063,7 @@ async function handleCaptureUrl(req: IncomingMessage, res: ServerResponse) {
   try {
     sourceUrl = await assertSafeCaptureTarget(payload.url);
   } catch (error) {
-    sendJson(res, 400, { error: error instanceof Error ? error.message : "Invalid source URL" });
+    sendJson(res, 400, { error: explainCaptureTargetError(error) });
     return;
   }
 
@@ -1085,7 +1127,7 @@ async function handleCaptureCandidates(req: IncomingMessage, res: ServerResponse
   try {
     sourceUrl = await assertSafeCaptureTarget(payload.url);
   } catch (error) {
-    sendJson(res, 400, { error: error instanceof Error ? error.message : "Invalid source URL" });
+    sendJson(res, 400, { error: explainCaptureTargetError(error) });
     return;
   }
   const allowed = await isAllowedByRobots(sourceUrl.toString());

@@ -818,4 +818,32 @@ describe("public MCP contract — no private marker leaks through any tool path"
     expect(structured!.retrievalMode, "retrieval must be structured-fallback (imageIndex was null)").toBe("structured-fallback");
     expect(structured!.fallbackUsed, "fallbackUsed must be true (no image index in public mode)").toBe(true);
   });
+
+  it("critique_ui: a tagger failure whose message embeds a filesystem path does not leak it", async () => {
+    // The tagger reads the image file and calls a vision provider, so its errors
+    // can carry an absolute PATH (missing/unreadable image → ENOENT/EACCES) or a
+    // raw provider body. The handler must return a sanitized descriptor, never
+    // `e.message`. Drive the REAL handler path via callTool with the tagger
+    // stubbed to reject with an ENOENT path error.
+    const imageB64 = PNG_BYTES.toString("base64");
+    tagImageStub.mockRejectedValue(
+      Object.assign(
+        new Error("ENOENT: no such file or directory, open '/Users/secret/corpus/images-private/screenshot.png'"),
+        { code: "ENOENT" },
+      ),
+    );
+    const resp = await call("critique_ui", {
+      image_data: imageB64,
+      image_mime_type: "image/png",
+      product_context: "a calm analytics dashboard",
+      platform: "web",
+    });
+    const text = responseText(resp);
+    expect(resp.isError, "critique_ui should report the failure").toBeTruthy();
+    expect(text).not.toContain("/Users/secret");
+    expect(text).not.toContain("images-private/screenshot.png");
+    expect(text, "no absolute path may appear in the MCP response").not.toMatch(/(?:^|[\s'"(=])\/(?:Users|private|var|tmp|home)\//);
+    // A safe descriptor (errno code) still conveys the failure class.
+    expect(text).toContain("ENOENT");
+  });
 });

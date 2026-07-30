@@ -271,4 +271,31 @@ describe("analyzeDecision", () => {
     expect(tagImage).toHaveBeenCalledTimes(2);  // once per screen
     expect(searchRanked).toHaveBeenCalled();
   });
+
+  it("does not leak a filesystem path when every screen's extraction fails", async () => {
+    // A missing/unreadable screenshot makes tagImage throw an fs error whose
+    // message embeds an absolute PATH. analyzeDecision composes the per-screen
+    // failures into the error thrown when ALL screens fail; that message is
+    // surfaced in the decision-analyze HTTP 400 body, so it must carry no path.
+    vi.mocked(tagImage).mockRejectedValue(
+      Object.assign(
+        new Error("ENOENT: no such file or directory, open '/Users/secret/corpus/images-private/decisions/a.png'"),
+        { code: "ENOENT" },
+      ),
+    );
+    let thrown: unknown;
+    try {
+      await analyzeDecision(makeDecision());
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain("All screen extractions failed");
+    expect(message).not.toContain("/Users/secret");
+    expect(message).not.toContain("images-private/decisions/a.png");
+    expect(message).not.toMatch(/(?:^|[\s'"(=])\/(?:Users|private|var|tmp|home)\//);
+    // The sanitized descriptor still names the errno for each failed screen.
+    expect(message).toContain("ENOENT");
+  });
 });

@@ -13,6 +13,7 @@ import { chromium } from "playwright";
 import { CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT, type DirectionT } from "../schema.js";
 import { findVagueAntiPatterns } from "../content-lint.js";
 import { CORPUS_ROOT, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, privateImageDir, toCorpusRelativePath } from "../paths.js";
+import { describeError } from "../errors.js";
 import { safeOrphanPaths, type SafeOrphanResult } from "../orphans.js";
 import { checkDuplicateUpload, clearDuplicateBatch, computeDHash, loadDHashCache, rebuildDHashCache, findDuplicateAtCommit } from "../dedup.js";
 import { tagImage, generateCritique, hasVisionKey, hasCritiqueKey, activeModelName, activeProviderName } from "../tagger.js";
@@ -417,6 +418,32 @@ export function finishWithInternalError(res: ServerResponse, error: unknown): vo
     return;
   }
   sendJson(res, 500, { error: "Internal server error" });
+}
+
+/**
+ * Client-facing message for a `/api/decision-analyze` failure. `analyzeDecision`
+ * can throw errors whose message embeds an absolute PATH (fs) or a raw PROVIDER
+ * BODY (the synthesis text-model call), so this NEVER surfaces `error.message`.
+ * Instead it maps `analyzeDecision`'s known, path/provider-free failure classes
+ * (matched by a stable message prefix) to FIXED, actionable strings, and
+ * collapses everything else to a generic fallback. Fail-closed: an unrecognized
+ * (or drifted) message yields the generic fallback, never the raw text.
+ */
+export function explainAnalyzeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (message.startsWith("All screen extractions failed")) {
+    return "Could not analyze: none of the screenshots could be read. Check the images and try again.";
+  }
+  if (message.startsWith("No provider key set")) {
+    return "Decision Lab needs a provider key. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY and restart.";
+  }
+  if (message.startsWith("Synthesis provider returned unparseable JSON")) {
+    return "The analysis model returned malformed output. Try again.";
+  }
+  if (message.startsWith("Synthesis produced an invalid analysis")) {
+    return "The analysis result failed validation. Try again.";
+  }
+  return "Analysis failed. Check the decision's screens and try again.";
 }
 
 function readBody(req: IncomingMessage, maxBytes: number = MAX_BODY_BYTES): Promise<string> {
@@ -1693,7 +1720,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       saveDecision(updated);
       sendJson(res, 200, { decision: updated, brief });
     } catch (err) {
-      sendJson(res, 400, { error: err instanceof Error ? err.message : "Analysis failed" });
+      // SECURITY: never echo `err.message` — see `explainAnalyzeError`. Log only
+      // a safe descriptor.
+      console.error(`[decision-analyze] failed: ${describeError(err)}`);
+      sendJson(res, 400, { error: explainAnalyzeError(err) });
     }
     return;
   }

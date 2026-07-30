@@ -1879,13 +1879,21 @@ export function computeRetractedApprovalIds(
     // Authorization: the actor must resolve in the retraction's OWN pinned
     // registry (version + sha256 verified) as a human authorized for
     // Repository Maintainer. Any resolution failure is fail-closed →
-    // retraction-unauthorized (inert).
+    // retraction-unauthorized (inert). This mirrors `resolveApprovalRegistry`
+    // exactly, including its semantic pass (`validateRegistry`): a registry
+    // that is schema-valid but semantically corrupt (bad governance-mode /
+    // bootstrap-owner combination, a broken version chain) must not be
+    // trusted to authorize a retraction just because it wasn't trusted to
+    // authorize an approval — both paths share one notion of "a valid
+    // registry".
     const entry = registryByVersion.get(r.retractedBy.actorRegistryVersion);
     const registry =
       entry && entry.sha === r.retractedBy.actorRegistrySha256
         ? ApprovalActorRegistry.safeParse(entry.data)
         : undefined;
-    const actor = registry?.success
+    const registrySemanticallyValid =
+      registry?.success === true && validateRegistry(registry.data).length === 0;
+    const actor = registrySemanticallyValid
       ? registry.data.actors.find((a) => a.actorId === r.retractedBy.actorId)
       : undefined;
     if (!actor || actor.actorKind !== "human" || !actor.roles.includes("Repository Maintainer")) {

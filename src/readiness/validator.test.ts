@@ -233,6 +233,32 @@ describe("retraction validity", () => {
     expect(codesOf(issues)).toContain("retraction-unauthorized");
   });
 
+  it("a schema-valid but semantically corrupt registry (validateRegistry) is also unauthorized", () => {
+    // Mirrors resolveApprovalRegistry's own behavior: a registry that parses
+    // fine but fails validateRegistry's semantic pass (here, declaring
+    // sole-maintainer-bootstrap with no bootstrapOwnerActorId) cannot
+    // authorize an approval, and by the same "one notion of a valid
+    // registry" rule must not be trusted to authorize a retraction either.
+    const corruptRegistryData = {
+      ...registryV1Data,
+      governanceMode: "sole-maintainer-bootstrap",
+    };
+    const approval = makeApproval({ approvalId: "a1" });
+    const retraction = makeRetraction({ retractionId: "r1", retractsApprovalId: "a1" });
+    const allRows: LedgerRowT[] = [approval, retraction];
+    const issues: ValidationIssue[] = [];
+
+    const retracted = computeRetractedApprovalIds(
+      allRows,
+      [retraction],
+      new Map([["1.0", registryEntry(corruptRegistryData)]]),
+      issues,
+    );
+
+    expect(retracted.has("a1")).toBe(false);
+    expect(codesOf(issues)).toContain("retraction-unauthorized");
+  });
+
   it("retracting an approvalId that does not exist reports retraction-target-missing", () => {
     const approval = makeApproval({ approvalId: "a1" });
     const retraction = makeRetraction({

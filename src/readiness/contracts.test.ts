@@ -3,6 +3,9 @@ import {
   BaseArtifactHeader,
   CorpusBoundHeader,
   CheckpointApproval,
+  CheckpointRetraction,
+  isApprovalRow,
+  isRetractionRow,
   LiveCostApproval,
   Phase0Summary,
   OwnershipMap,
@@ -20,6 +23,10 @@ import {
   validateRegistry,
   validateLedgerAppendOnly,
 } from "./contracts.js";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const AR = resolve(__dirname, "..", "..", "quality-contracts", "agent-readiness");
 
 // ---------------------------------------------------------------------------
 // Shared constants
@@ -1051,5 +1058,93 @@ describe("versioned readiness snapshot schemas", () => {
       ordinalVersion: 2,
       predecessor: { version: "1", sha256: "bad" },
     }).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retraction schema + back-compatible discriminated union (Task 1)
+// ---------------------------------------------------------------------------
+
+const VALID_RETRACTION = {
+  recordKind: "retraction",
+  retractionId: "retraction-c2-gold-v2",
+  retractsApprovalId: "c2-gold-reviewer-gold-v2",
+  retractedBy: {
+    actorId: "repo-maintainer",
+    role: "Repository Maintainer",
+    actorKind: "human",
+    actorRegistryVersion: "3.0",
+    actorRegistrySha256: "a".repeat(64),
+  },
+  retractedAt: "2026-07-30T12:00:00.000Z",
+  reason: "decidedAt predates the bound target cf55fee0 (provenance defect, 2026-07-28).",
+};
+
+describe("CheckpointRetraction schema", () => {
+  it("accepts a well-formed retraction and rejects a non-maintainer / non-human retractor", () => {
+    expect(CheckpointRetraction.safeParse(VALID_RETRACTION).success).toBe(true);
+    expect(CheckpointRetraction.safeParse({ ...VALID_RETRACTION, retractedBy: { ...VALID_RETRACTION.retractedBy, role: "QA" } }).success).toBe(false);
+    expect(CheckpointRetraction.safeParse({ ...VALID_RETRACTION, retractedBy: { ...VALID_RETRACTION.retractedBy, actorKind: "agent" } }).success).toBe(false);
+    expect(CheckpointRetraction.safeParse({ ...VALID_RETRACTION, reason: "" }).success).toBe(false);
+  });
+});
+
+describe("ledger discriminated union — back-compat", () => {
+  it("parses a legacy approval row that omits recordKind as an approval", () => {
+    // v5 has NO recordKind on any row; the whole envelope must still parse.
+    const v5 = JSON.parse(readFileSync(resolve(AR, "checkpoint-approvals-v5.json"), "utf-8"));
+    const parsed = CheckpointApprovals.safeParse(v5);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.approvals.every(isApprovalRow)).toBe(true);
+      expect(parsed.data.approvals.some(isRetractionRow)).toBe(false);
+    }
+  });
+
+  it("parses a mixed envelope (approvals + a retraction) and classifies rows", () => {
+    const v5 = JSON.parse(readFileSync(resolve(AR, "checkpoint-approvals-v5.json"), "utf-8"));
+    const mixed = { ...v5, approvals: [...v5.approvals, VALID_RETRACTION] };
+    const parsed = CheckpointApprovals.safeParse(mixed);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.approvals.filter(isRetractionRow)).toHaveLength(1);
+    }
+  });
+
+  it("rejects a row with an unknown recordKind", () => {
+    const v5 = JSON.parse(readFileSync(resolve(AR, "checkpoint-approvals-v5.json"), "utf-8"));
+    const bad = { ...v5, approvals: [...v5.approvals, { recordKind: "bogus" }] };
+    expect(CheckpointApprovals.safeParse(bad).success).toBe(false);
+  });
+
+  it("v1..v5 all parse unchanged after the migration", () => {
+    for (const v of [1, 2, 3, 4, 5]) {
+      const j = JSON.parse(readFileSync(resolve(AR, `checkpoint-approvals-v${v}.json`), "utf-8"));
+      expect(CheckpointApprovals.safeParse(j).success, `v${v}`).toBe(true);
+    }
+  });
+
+  it("parsed approval rows are byte-identical to input (pin digests do not move)", () => {
+    // The whole reason for z.union over discriminatedUnion+default: parsing must
+    // NOT add recordKind, or every v1..v5 ledgerApprovalRowsDigest pin breaks.
+    const v5 = JSON.parse(readFileSync(resolve(AR, "checkpoint-approvals-v5.json"), "utf-8"));
+    const parsed = CheckpointApprovals.parse(v5);
+    // NOTE: canonicalJsonStringify (not raw JSON.stringify) is the correct
+    // comparison here. Zod's `.strict().object().parse()` always re-emits
+    // object keys in schema-declaration order regardless of input order
+    // (verified empirically), and several rows already persisted in
+    // checkpoint-approvals-v5.json (c1-product-repo-maintainer,
+    // c1-engineering-repo-maintainer, c2-gold-reviewer-gold-v2,
+    // c2-qa-reviewer-qa-v2) have raw key orders that differ from the schema's
+    // declared field order — pre-existing, unrelated to this migration. A raw
+    // JSON.stringify comparison would fail on real data for that reason alone.
+    // canonicalJsonStringify is what the production pin function
+    // (ledgerApprovalRowsDigest, src/readiness/ledger-pins.ts:258) actually
+    // hashes over — it sorts object keys and preserves array order — so this
+    // assertion matches the real invariant (no recordKind added, no field
+    // dropped/mutated, no reordering) without being sensitive to cosmetic key
+    // order that was already present before this task.
+    expect(canonicalJsonStringify(parsed.approvals)).toBe(canonicalJsonStringify(v5.approvals));
+    expect(parsed.approvals.every((r: unknown) => !(r && typeof r === "object" && "recordKind" in r))).toBe(true);
   });
 });

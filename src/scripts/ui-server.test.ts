@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CSRF_HEADER, cleanupBatch, describeInternalError, finishWithInternalError, resolveSiteAsset, findDuplicateAtCommit, hostIsLoopback, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
+import { CSRF_HEADER, cleanupBatch, describeInternalError, explainCaptureError, explainCaptureTargetError, explainTagError, finishWithInternalError, resolveSiteAsset, findDuplicateAtCommit, hostIsLoopback, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
 import { setCorpusRootForTesting } from "../persistence.js";
 import { request as httpRequest } from "node:http";
 import type { IncomingMessage } from "node:http";
@@ -2656,5 +2656,115 @@ describe("catch-all 500 sanitization — end to end through a real route", () =>
       if (existsSync(imgDir)) chmodSync(imgDir, 0o755);
       for (const spy of spies) spy.mockRestore();
     }
+  });
+});
+
+describe("explainCaptureError / explainTagError never leak raw error detail into 400 bodies", () => {
+  // Both helpers feed `sendJson(res, 400, { error: explain*(error) })` and the
+  // DOM toast. Their DEFAULT arm previously returned `error.message` verbatim,
+  // which for these routes is untrusted: Playwright nav errors embed the full
+  // SOURCE URL, and the tagger builds errors from raw PROVIDER RESPONSE BODIES.
+  // The default must collapse to a fixed generic string; only the curated
+  // classified branches may surface specifics.
+
+  describe("explainCaptureError", () => {
+    it("does not echo a source URL from a Playwright navigation error", () => {
+      const out = explainCaptureError(
+        new Error("page.goto: net::ERR_CONNECTION_REFUSED at https://secret-product.example.com/private/dashboard?token=abc123"),
+      );
+      expect(out).not.toContain("secret-product");
+      expect(out).not.toContain("https://");
+      expect(out).not.toContain("example.com");
+      expect(out).not.toContain("token=abc123");
+      expect(out).toBe("URL capture failed. Make sure the page is publicly reachable and try again.");
+    });
+
+    it("does not echo an absolute filesystem path from an fs error", () => {
+      const out = explainCaptureError(
+        Object.assign(new Error("EACCES: permission denied, open '/Users/secret/corpus/images-private/x.png'"), { code: "EACCES" }),
+      );
+      expect(out).not.toContain("/Users/secret");
+      expect(out).not.toMatch(PATH_SHAPED);
+    });
+
+    it("preserves the curated timeout and chromium-missing branches", () => {
+      expect(explainCaptureError(new Error("Timeout 45000ms exceeded"))).toMatch(/timed out/i);
+      expect(explainCaptureError(new Error("browserType.launch: Executable doesn't exist at /ms-playwright/chromium/headless_shell")))
+        .toMatch(/Chromium is not installed/i);
+    });
+  });
+
+  describe("explainTagError", () => {
+    it("does not echo a provider response body from a non-classified status", () => {
+      const out = explainTagError(
+        new Error('OpenAI API error 503: {"error":{"message":"upstream model overloaded on host gpu-42","request_id":"req_9f8e7d","org":"org-internal-secret"}}'),
+      );
+      expect(out).not.toContain("gpu-42");
+      expect(out).not.toContain("req_9f8e7d");
+      expect(out).not.toContain("org-internal-secret");
+      expect(out).not.toContain("{");
+      expect(out).toBe("Auto-fill failed. Check your vision provider settings and try again.");
+    });
+
+    it("does not echo a raw generic error message", () => {
+      const out = explainTagError(new Error("connect ECONNREFUSED 10.0.0.5:443 while calling https://api.vision-provider.internal/v1/generate"));
+      expect(out).not.toContain("10.0.0.5");
+      expect(out).not.toContain("vision-provider.internal");
+      expect(out).not.toContain("https://");
+      expect(out).toBe("Auto-fill failed. Check your vision provider settings and try again.");
+    });
+
+    it("preserves every curated classified branch", () => {
+      expect(explainTagError(new Error("OpenAI API error 401: invalid_api_key"))).toMatch(/rejected the API key/i);
+      expect(explainTagError(new Error("429 rate_limit_exceeded"))).toMatch(/rate limit or quota/i);
+      const maxTokens = explainTagError(new Error("finishReason: MAX_TOKENS"));
+      expect(maxTokens).toMatch(/truncated/i);
+      expect(maxTokens, "curated hint must not name a source path").not.toMatch(/\.ts\b|src\//);
+      expect(explainTagError(new Error("blockReason: SAFETY"))).toMatch(/safety filter/i);
+      expect(explainTagError(new Error("models/gemini-x is not found"))).toMatch(/model was rejected/i);
+      expect(explainTagError(new Error("Draft was non-JSON"))).toMatch(/unusable draft/i);
+      // A finish-reason stop returns a FIXED string — never the raw message.
+      expect(explainTagError(new Error("Gemini stopped early (RECITATION). Try Auto-fill again.")))
+        .toBe("The vision provider stopped early. Try Auto-fill again, or use a clearer screenshot.");
+    });
+
+    it("does not echo a provider body that merely CONTAINS the substring 'stopped early'", () => {
+      // The `stopped early` arm must not trust the substring: the tagger builds
+      // errors from raw provider bodies, one of which could contain that phrase
+      // without matching any earlier classified branch.
+      const out = explainTagError(
+        new Error('OpenAI API error 503: {"error":{"message":"stream stopped early on host gpu-42","request_id":"req_9f8e7d"}}'),
+      );
+      expect(out).not.toContain("gpu-42");
+      expect(out).not.toContain("req_9f8e7d");
+      expect(out).not.toContain("{");
+      expect(out).toBe("The vision provider stopped early. Try Auto-fill again, or use a clearer screenshot.");
+    });
+  });
+
+  describe("explainCaptureTargetError (SSRF / URL-validation 400s)", () => {
+    it("does not echo the source hostname from a DNS resolve failure", () => {
+      const out = explainCaptureTargetError(new Error("Could not resolve host: secret-product.example.com"));
+      expect(out).not.toContain("secret-product");
+      expect(out).not.toContain("example.com");
+      expect(out).toBe("Could not resolve that host. Check the URL and try again.");
+    });
+
+    it("preserves the host-free curated validation messages", () => {
+      for (const msg of [
+        "Use a valid source URL",
+        "Only http and https URLs can be captured",
+        "Capture target resolves to a blocked metadata or private address",
+      ]) {
+        expect(explainCaptureTargetError(new Error(msg))).toBe(msg);
+      }
+    });
+
+    it("fails closed: an unrecognized message collapses to the generic string, never echoed", () => {
+      const out = explainCaptureTargetError(new Error("page.goto: net::ERR at https://leak.example.com/x"));
+      expect(out).not.toContain("leak.example.com");
+      expect(out).not.toContain("https://");
+      expect(out).toBe("Use a valid source URL");
+    });
   });
 });

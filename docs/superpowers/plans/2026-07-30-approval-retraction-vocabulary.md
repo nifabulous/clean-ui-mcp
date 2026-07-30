@@ -213,8 +213,21 @@ Retype `validateLedgerAppendOnly` (line 602-603) params from `{ approvals: z.inf
 
 ```ts
     const rowId = (r: LedgerRowT): string =>
-      r.recordKind === "retraction" ? `retraction:${r.retractionId}` : r.approvalId;
+      isRetractionRow(r) ? `retraction:${r.retractionId}` : r.approvalId;
 ```
+
+**Correction (verified against the real union during Task 1):** the line above
+uses `isRetractionRow(r)`, NOT `r.recordKind === "retraction"`. `CheckpointApproval`
+has no `recordKind` field at all, so `.recordKind` on the `LedgerRowT` union is a
+TypeScript compile error (TS2339), and even if it were cast away, the comparison
+is always-false for real approval rows at runtime — so an expression written the
+other way would silently and permanently treat every approval as if it had no
+identity. Narrow with the exported type guards first (they are exactly why this
+task exports them); inside the guard body TypeScript narrows the type so the
+fields are accessible. Same correction applies everywhere else in this plan that
+compares `row.recordKind === "approval"` / `"retraction"` directly on a
+`LedgerRowT`-typed value (see Task 3's `computeRetractedApprovalIds` below) —
+use `isApprovalRow(row)` / `isRetractionRow(row)` instead.
 
 Compare `rowId(prior)` vs `rowId(next)` and use a kind-aware field-equality (retraction rows compare all their own fields; approval rows as before). Keep the existing "moved" fallback (`current.approvals.some(a => rowId(a) === rowId(prior))`). Prefix semantics are unchanged for the v1–v5 approval prefix; retraction rows only ever appear appended after it.
 
@@ -339,15 +352,23 @@ function computeRetractedApprovalIds(
   const retracted = new Set<string>();
 
   // First index of each approvalId in the mixed list.
+  // NOTE (correction, verified during Task 1): use the exported `isApprovalRow`
+  // / `isRetractionRow` guards, NOT `row.recordKind === "approval"` /
+  // `"retraction"` directly. `CheckpointApproval` has no `recordKind` field, so
+  // `row.recordKind === "approval"` is always `undefined === "approval"` →
+  // always false for every real approval row. Written literally as below, this
+  // function would never populate `approvalIndexById`, so EVERY retraction
+  // target lookup would fail and every valid retraction would be misclassified
+  // as `retraction-target-missing` — the whole validity feature would be inert.
   const approvalIndexById = new Map<string, number>();
   allRows.forEach((row, i) => {
-    if (row.recordKind === "approval" && !approvalIndexById.has(row.approvalId)) {
+    if (isApprovalRow(row) && !approvalIndexById.has(row.approvalId)) {
       approvalIndexById.set(row.approvalId, i);
     }
   });
   const retractionIndex = new Map<CheckpointRetractionT, number>();
   allRows.forEach((row, i) => {
-    if (row.recordKind === "retraction") retractionIndex.set(row, i);
+    if (isRetractionRow(row)) retractionIndex.set(row, i);
   });
 
   const push = (code: string, targetId: string, message: string) =>
@@ -381,7 +402,7 @@ function computeRetractedApprovalIds(
       // targetId names an approvalId; if it instead matches a retractionId (its
       // own — self — or another retraction's), it is not an approval.
       const namesARetraction = allRows.some(
-        (row) => row.recordKind === "retraction" && row.retractionId === targetId,
+        (row) => isRetractionRow(row) && row.retractionId === targetId,
       );
       push(namesARetraction ? "retraction-target-not-approval" : "retraction-target-missing", targetId, `retraction ${r.retractionId} names ${targetId}, which is not an earlier approval row`);
       continue;

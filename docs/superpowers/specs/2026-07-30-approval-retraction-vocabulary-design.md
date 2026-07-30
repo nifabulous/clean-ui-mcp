@@ -101,8 +101,11 @@ regression tests pin this (see Tests).
 - **Approval semantics operate over approval rows only.** Supersession
   computation (validator.ts:1197), the timestamp invariants
   (`verifyApprovalArtifactTimestamps`), actor/role/kind checks, target
-  recomputation, and the closure loop filter to `recordKind === "approval"`
-  rows. Introduce a single `approvalRows`/`retractionRows` partition near the top
+  recomputation, and the closure loop filter to approval rows (via
+  `isApprovalRow` — NOT a raw `row.recordKind === "approval"` check:
+  `CheckpointApproval` carries no `recordKind` field, so that comparison is
+  always false and would silently filter out every real approval row).
+  Introduce a single `approvalRows`/`retractionRows` partition near the top
   of `validateApprovalsAndCheckpoint` and thread it through; no semantic loop
   iterates a retraction row as if it were an approval.
 

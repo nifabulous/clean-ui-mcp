@@ -26,7 +26,7 @@ import {
   isApprovalRow,
   isRetractionRow,
 } from "./contracts.js";
-import type { CheckpointRetractionT } from "./contracts.js";
+import type { CheckpointRetractionT, LedgerRowT } from "./contracts.js";
 import type {
   CheckpointRecipe,
   GitSourceResolver,
@@ -1207,7 +1207,18 @@ function validateApprovalsAndCheckpoint(
   // is a pure refactor with no behavior change.
   const approvalRows = approvals.filter(isApprovalRow);
   const retractionRows: CheckpointRetractionT[] = approvals.filter(isRetractionRow);
-  void retractionRows; // consumed starting Task 3 (retraction semantics)
+  // Classifies retraction validity and returns the ids cleared by a VALID
+  // retraction. Not yet consumed by closure — that is Task 4. No real or
+  // existing-test ledger contains retraction rows yet, so this call is inert
+  // today: `retractionRows` is empty, `retractedApprovalIds` stays an empty
+  // set, and `issues` only grows when an actual retraction is invalid.
+  const retractedApprovalIds = computeRetractedApprovalIds(
+    approvals,
+    retractionRows,
+    registryByVersion,
+    issues,
+  );
+  void retractedApprovalIds; // consumed starting Task 4 (closure exclusion)
   const supersededApprovalIds = new Set(
     approvalRows.flatMap((approval) => approval.supersedesApprovalId ? [approval.supersedesApprovalId] : []),
   );
@@ -1813,6 +1824,109 @@ function validateApprovalsAndCheckpoint(
       }
     }
   }
+}
+
+/**
+ * Classify each retraction row as VALID or INVALID and return the set of
+ * approvalIds cleared by a valid retraction. This does NOT change closure
+ * (Task 4 consumes the returned set); it only classifies retractions and
+ * pushes one finding per invalid retraction.
+ *
+ * GOVERNING INVARIANT (fail-closed): a retraction only ever REMOVES an
+ * approval. Any resolution failure — retractor not resolvable/authorized,
+ * target missing, out-of-order, target-not-an-approval, duplicate — must NOT
+ * add the target to the returned set.
+ *
+ * Ordering uses each row's index in the ORIGINAL mixed `allRows` array (a
+ * retraction must follow the approval it names); `retractionRows` is the
+ * pre-filtered subset (via `isRetractionRow`) supplying the rows to classify.
+ *
+ * Retractor authorization mirrors `resolveApprovalRegistry` exactly: resolve
+ * the retraction's OWN pinned registry version, verify its content digest
+ * (`entry.sha === retractedBy.actorRegistrySha256`), parse it as an
+ * `ApprovalActorRegistry`, then require the named actor to be a `"human"`
+ * with the `"Repository Maintainer"` role IN THAT REGISTRY — not merely on
+ * the retraction row's self-declared `retractedBy.role`/`actorKind`, which is
+ * an audit trail, not an authorization source.
+ */
+export function computeRetractedApprovalIds(
+  allRows: LedgerRowT[],
+  retractionRows: CheckpointRetractionT[],
+  registryByVersion: ReadonlyMap<string, ParsedArtifact>,
+  issues: ValidationIssue[],
+): Set<string> {
+  const retracted = new Set<string>();
+
+  // First index of each approvalId in the mixed list.
+  const approvalIndexById = new Map<string, number>();
+  allRows.forEach((row, i) => {
+    if (isApprovalRow(row) && !approvalIndexById.has(row.approvalId)) {
+      approvalIndexById.set(row.approvalId, i);
+    }
+  });
+  const retractionIndex = new Map<CheckpointRetractionT, number>();
+  allRows.forEach((row, i) => {
+    if (isRetractionRow(row)) retractionIndex.set(row, i);
+  });
+
+  const push = (code: string, targetId: string, message: string) =>
+    issues.push({ code, artifactId: targetId, message });
+
+  for (const r of retractionRows) {
+    const rIdx = retractionIndex.get(r)!;
+    const targetId = r.retractsApprovalId;
+
+    // Authorization: the actor must resolve in the retraction's OWN pinned
+    // registry (version + sha256 verified) as a human authorized for
+    // Repository Maintainer. Any resolution failure is fail-closed →
+    // retraction-unauthorized (inert).
+    const entry = registryByVersion.get(r.retractedBy.actorRegistryVersion);
+    const registry =
+      entry && entry.sha === r.retractedBy.actorRegistrySha256
+        ? ApprovalActorRegistry.safeParse(entry.data)
+        : undefined;
+    const actor = registry?.success
+      ? registry.data.actors.find((a) => a.actorId === r.retractedBy.actorId)
+      : undefined;
+    if (!actor || actor.actorKind !== "human" || !actor.roles.includes("Repository Maintainer")) {
+      push(
+        "retraction-unauthorized",
+        targetId,
+        `retraction of ${targetId}: retractor ${r.retractedBy.actorId} is not an authorized human Repository Maintainer`,
+      );
+      continue;
+    }
+
+    // Classify the target: approval / retraction-row-or-self / absent.
+    const targetApprovalIdx = approvalIndexById.get(targetId);
+    if (targetApprovalIdx === undefined) {
+      // targetId names an approvalId; if it instead matches a retractionId
+      // (its own — self — or another retraction's), it is not an approval.
+      const namesARetraction = allRows.some(
+        (row) => isRetractionRow(row) && row.retractionId === targetId,
+      );
+      push(
+        namesARetraction ? "retraction-target-not-approval" : "retraction-target-missing",
+        targetId,
+        `retraction ${r.retractionId} names ${targetId}, which is not an earlier approval row`,
+      );
+      continue;
+    }
+    if (targetApprovalIdx >= rIdx) {
+      push(
+        "retraction-out-of-order",
+        targetId,
+        `retraction of ${targetId} must follow the approval it retracts`,
+      );
+      continue;
+    }
+    if (retracted.has(targetId)) {
+      push("retraction-duplicate", targetId, `duplicate retraction of ${targetId}`);
+      continue;
+    }
+    retracted.add(targetId);
+  }
+  return retracted;
 }
 
 /**

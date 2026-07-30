@@ -237,6 +237,30 @@ export interface TaggerOutput {
  * not model-guessed. The model receives these as ground truth and maps them to
  * semantic roles; it never invents hex values.
  */
+/**
+ * Render a caught error for the operator console WITHOUT leaking a filesystem
+ * path. Image decode/read failures (node-vibrant / sharp / `fs`) embed an
+ * absolute PATH in `.message` (`… open '/Users/.../shot.png'`), which the
+ * project bans from logs. Surface only the constructor name and, for errno
+ * errors, the `code` — and only when each matches a conservative safe shape
+ * (short, `[A-Za-z0-9_.-]`, no separators), so a userland-mutable `.name`/`.code`
+ * cannot smuggle a path either. Mirrors `describeInternalError` in the UI server.
+ */
+export function describeCaughtError(err: unknown): string {
+  if (!(err instanceof Error)) return `non-error (${typeof err})`;
+  // Shape gates are intentionally tighter than a generic character allowlist:
+  // `name` must look like an error constructor identifier and `code` like an
+  // errno / Node error code (`EACCES`, `ERR_*`). This rejects not only paths
+  // (which contain `/`) but also a separator-free but suspicious value such as
+  // `secret.png` smuggled through `.name`/`.code`. Anything off-shape drops to
+  // the generic `Error`, so this line can never carry attacker/path data.
+  const rawName = err.name;
+  const name = typeof rawName === "string" && rawName.length <= 40 && /^[A-Za-z][A-Za-z0-9]*$/.test(rawName) ? rawName : "Error";
+  const rawCode = (err as NodeJS.ErrnoException).code;
+  const code = typeof rawCode === "string" && rawCode.length <= 40 && /^[A-Z][A-Z0-9_]*$/.test(rawCode) ? rawCode : null;
+  return code ? `${name}: ${code}` : name;
+}
+
 export async function extractQuantizedColors(imagePath: string): Promise<string[]> {
   const palette = await Vibrant.from(imagePath).getPalette();
   return Object.values(palette)
@@ -2704,7 +2728,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   try {
     quantizedColors = await extractQuantizedColors(input.imagePath);
   } catch (err) {
-    console.error("[tagger] Color extraction failed, falling back to model-guessed colors:", err instanceof Error ? err.message : err);
+    console.error("[tagger] Color extraction failed, falling back to model-guessed colors:", describeCaughtError(err));
   }
 
   // ── PASS 1: extraction (facts + geometry, with ground-truth colors) ────────

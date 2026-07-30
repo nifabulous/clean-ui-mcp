@@ -1246,13 +1246,16 @@ function sendCreateUiSpecTransportError(
  * The CSRF gate has ALREADY run in handleUiRequest before this function is
  * entered — deliberately, so a nonceless request consumes no body bytes here.
  *
- * NOTHING IS LOGGED. Not the brief, not a header, not an exception. The catch-all
- * in handleUiRequest does `console.error(error)`, and a `JSON.parse` failure's
- * message quotes the offending input — which for this route is the caller's
- * brief. So every failure is handled locally and the outer catch is never
- * reached: JSON parsing, the body cap, and every one of the adapter's serve-time
- * gate refusals all terminate here. The brief exists in this process only for the
- * duration of the call, in memory, and is never written anywhere.
+ * NOTHING IS LOGGED. Not the brief, not a header, not an exception. Every failure
+ * is handled locally — JSON parsing, the body cap, and every one of the adapter's
+ * serve-time gate refusals all terminate here — so the outer catch-all is never
+ * reached with the brief in hand. The catch-all now sanitizes anyway (it logs
+ * only the error's name/errno code via `describeInternalError`, never
+ * `.message`, and returns a fixed generic body), but a `JSON.parse` failure's
+ * message quotes the offending input — which for this route is the caller's brief
+ * — so keeping every failure out of the outer handler entirely is the belt to
+ * that suspenders. The brief exists in this process only for the duration of the
+ * call, in memory, and is never written anywhere.
  */
 async function handleCreateUiSpecRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   for (const header of REFUSED_C3_REQUEST_HEADERS) {
@@ -1459,12 +1462,17 @@ export function resolveSiteAsset(root: string, relative: string): string | null 
  * `statSync().isFile()` needs no READ permission, so a mode-`000` file inside the
  * dist resolves cleanly and then fails at `readFileSync` with
  * `EACCES: permission denied, open '<absolute path>'`. Unhandled, that message
- * reaches the catch-all in {@link handleUiRequest}, which writes `error.message`
- * into a 500 body and `console.error`s the whole error — putting an absolute
- * filesystem path into both a response and the operator's terminal, which this
- * surface must never do. (It is worse than a leak: the 200 header has already been
- * written by then, so the response cannot be rewritten and the request hangs.)
- * The same shape covers a file unlinked between the stat and the read.
+ * would reach the catch-all in {@link handleUiRequest}. That catch-all is now
+ * sanitized — generic 500 body, logs only the error's name/errno code (never
+ * `.message`), and destroys the socket rather than re-writing an already-sent 200
+ * head — so it neither leaks the path nor hangs. But reading HERE is still the
+ * correct design: `resolveSiteAsset` succeeds after the `statSync`, the 200 head
+ * goes out, and only then does `readFileSync` throw, so by that point the
+ * catch-all can only abort a half-sent response. Reading before any header is
+ * written turns an unreadable file into a clean 404 ("not servable",
+ * indistinguishable from missing) and keeps the path out of the logs regardless
+ * of the catch-all. The same shape covers a file unlinked between the stat and
+ * the read.
  *
  * So the read happens HERE, before any header is written, and a failure is simply
  * "not servable" — indistinguishable from a missing file, with nothing logged.
@@ -2313,9 +2321,10 @@ async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promi
 
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index-2.html")) {
       // Bytes BEFORE the head — see `readSiteAsset`. An unreadable (mode-000) or
-      // vanished shell must 404 silently, not write a 200 head and then throw
-      // `EACCES: … open '<absolute path>'` into the catch-all, which would
-      // console.error the path, fail to rewrite the sent head, and hang the request.
+      // vanished shell must 404 silently. Writing a 200 head and then throwing
+      // `EACCES: … open '<absolute path>'` would leave the catch-all only able to
+      // abort a half-sent response (the head can no longer be rewritten); reading
+      // first keeps this a clean 404. The catch-all is sanitized regardless.
       const bytes = readSiteAsset(APP_PATH);
       if (bytes === null) { sendText(res, 404, "Not found"); return; }
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });

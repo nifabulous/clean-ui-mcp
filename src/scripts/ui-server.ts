@@ -369,6 +369,56 @@ function sendText(res: ServerResponse, status: number, text: string): void {
   res.end(text);
 }
 
+/**
+ * Render a thrown value for the OPERATOR CONSOLE without leaking anything a
+ * response, log, or DOM must never carry. Node `fs`/errno errors embed an
+ * absolute filesystem path in `.message` (e.g.
+ * `EACCES: permission denied, open '/Users/.../secret.png'`); several routes do
+ * unguarded reads/writes whose errors funnel into the single catch-all below, so
+ * any of them can reach it. We surface only the error's constructor name and,
+ * for errno errors, the `code` (`EACCES`, `ENOENT`, …) — neither carries a path
+ * or user data — and NEVER `.message`.
+ */
+export function describeInternalError(error: unknown): string {
+  if (!(error instanceof Error)) return `non-error thrown (${typeof error})`;
+  // `name` and `code` are userland-mutable — a crafted error could smuggle
+  // path-shaped data through either. Emit each only when it matches a
+  // conservative safe shape (short, alphanumeric plus `._-`, no path separators
+  // or whitespace), so this last-resort log line cannot carry a path REGARDLESS
+  // of what was thrown. Real errno codes (`EACCES`, `ENOENT`) and constructor
+  // names (`Error`, `TypeError`) pass; a `.name`/`.code` holding `/Users/…` does
+  // not.
+  const safe = (v: unknown): string | null =>
+    typeof v === "string" && v.length > 0 && v.length <= 40 && /^[A-Za-z0-9_.-]+$/.test(v) ? v : null;
+  const name = safe(error.name) ?? "Error";
+  const code = safe((error as NodeJS.ErrnoException).code);
+  return code ? `${name}: ${code}` : name;
+}
+
+/**
+ * Terminate a request whose handler threw, without leaking internal detail.
+ *
+ * The client gets a FIXED generic 500 body — never `error.message`, which for
+ * `fs` errors is an absolute path. The console gets only {@link
+ * describeInternalError}, never the raw error object (whose `.message`/`.stack`
+ * carry the path).
+ *
+ * If a route already wrote a response head (e.g. a 200 that then threw
+ * mid-body), the status cannot be rewritten: calling `writeHead` again throws
+ * `ERR_HTTP_HEADERS_SENT`, which escapes as an unhandled rejection that crashes
+ * the process and hangs the request. In that case we destroy the socket instead
+ * — the client sees a broken transfer, which is honest, rather than a truncated
+ * body masquerading as a well-formed 200.
+ */
+export function finishWithInternalError(res: ServerResponse, error: unknown): void {
+  console.error(`[ui-server] request handler failed: ${describeInternalError(error)}`);
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  sendJson(res, 500, { error: "Internal server error" });
+}
+
 function readBody(req: IncomingMessage, maxBytes: number = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolveBody, reject) => {
     let size = 0;
@@ -1196,13 +1246,16 @@ function sendCreateUiSpecTransportError(
  * The CSRF gate has ALREADY run in handleUiRequest before this function is
  * entered — deliberately, so a nonceless request consumes no body bytes here.
  *
- * NOTHING IS LOGGED. Not the brief, not a header, not an exception. The catch-all
- * in handleUiRequest does `console.error(error)`, and a `JSON.parse` failure's
- * message quotes the offending input — which for this route is the caller's
- * brief. So every failure is handled locally and the outer catch is never
- * reached: JSON parsing, the body cap, and every one of the adapter's serve-time
- * gate refusals all terminate here. The brief exists in this process only for the
- * duration of the call, in memory, and is never written anywhere.
+ * NOTHING IS LOGGED. Not the brief, not a header, not an exception. Every failure
+ * is handled locally — JSON parsing, the body cap, and every one of the adapter's
+ * serve-time gate refusals all terminate here — so the outer catch-all is never
+ * reached with the brief in hand. The catch-all now sanitizes anyway (it logs
+ * only the error's name/errno code via `describeInternalError`, never
+ * `.message`, and returns a fixed generic body), but a `JSON.parse` failure's
+ * message quotes the offending input — which for this route is the caller's brief
+ * — so keeping every failure out of the outer handler entirely is the belt to
+ * that suspenders. The brief exists in this process only for the duration of the
+ * call, in memory, and is never written anywhere.
  */
 async function handleCreateUiSpecRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   for (const header of REFUSED_C3_REQUEST_HEADERS) {
@@ -1409,12 +1462,17 @@ export function resolveSiteAsset(root: string, relative: string): string | null 
  * `statSync().isFile()` needs no READ permission, so a mode-`000` file inside the
  * dist resolves cleanly and then fails at `readFileSync` with
  * `EACCES: permission denied, open '<absolute path>'`. Unhandled, that message
- * reaches the catch-all in {@link handleUiRequest}, which writes `error.message`
- * into a 500 body and `console.error`s the whole error — putting an absolute
- * filesystem path into both a response and the operator's terminal, which this
- * surface must never do. (It is worse than a leak: the 200 header has already been
- * written by then, so the response cannot be rewritten and the request hangs.)
- * The same shape covers a file unlinked between the stat and the read.
+ * would reach the catch-all in {@link handleUiRequest}. That catch-all is now
+ * sanitized — generic 500 body, logs only the error's name/errno code (never
+ * `.message`), and destroys the socket rather than re-writing an already-sent 200
+ * head — so it neither leaks the path nor hangs. But reading HERE is still the
+ * correct design: `resolveSiteAsset` succeeds after the `statSync`, the 200 head
+ * goes out, and only then does `readFileSync` throw, so by that point the
+ * catch-all can only abort a half-sent response. Reading before any header is
+ * written turns an unreadable file into a clean 404 ("not servable",
+ * indistinguishable from missing) and keeps the path out of the logs regardless
+ * of the catch-all. The same shape covers a file unlinked between the stat and
+ * the read.
  *
  * So the read happens HERE, before any header is written, and a failure is simply
  * "not servable" — indistinguishable from a missing file, with nothing logged.
@@ -2263,9 +2321,10 @@ async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promi
 
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index-2.html")) {
       // Bytes BEFORE the head — see `readSiteAsset`. An unreadable (mode-000) or
-      // vanished shell must 404 silently, not write a 200 head and then throw
-      // `EACCES: … open '<absolute path>'` into the catch-all, which would
-      // console.error the path, fail to rewrite the sent head, and hang the request.
+      // vanished shell must 404 silently. Writing a 200 head and then throwing
+      // `EACCES: … open '<absolute path>'` would leave the catch-all only able to
+      // abort a half-sent response (the head can no longer be rewritten); reading
+      // first keeps this a clean 404. The catch-all is sanitized regardless.
       const bytes = readSiteAsset(APP_PATH);
       if (bytes === null) { sendText(res, 404, "Not found"); return; }
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
@@ -2290,8 +2349,10 @@ async function handleUiRequest(req: IncomingMessage, res: ServerResponse): Promi
 
     sendText(res, 404, "Not found");
   } catch (error) {
-    console.error(error);
-    sendJson(res, 500, { error: error instanceof Error ? error.message : "Internal server error" });
+    // Last-resort handler for EVERY route. Must not leak internal detail — see
+    // `finishWithInternalError` (sanitized console line, generic 500 body,
+    // headers-already-sent guard).
+    finishWithInternalError(res, error);
   }
 }
 

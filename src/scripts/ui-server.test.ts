@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CSRF_HEADER, cleanupBatch, describeInternalError, explainAnalyzeError, explainCaptureError, explainCaptureTargetError, explainTagError, finishWithInternalError, resolveSiteAsset, findDuplicateAtCommit, hostIsLoopback, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
+import { CSRF_HEADER, cleanupBatch, describeInternalError, entryIssues, explainAnalyzeError, explainCaptureError, explainCaptureTargetError, explainTagError, finishWithInternalError, sendRouteError, resolveSiteAsset, findDuplicateAtCommit, hostIsLoopback, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
 import { setCorpusRootForTesting } from "../persistence.js";
 import { request as httpRequest } from "node:http";
 import type { IncomingMessage } from "node:http";
@@ -2579,6 +2579,158 @@ describe("catch-all 500 sanitization (describeInternalError / finishWithInternal
       expect(line, "destroy branch leaked a path to the console").not.toContain("/Users/secret");
       expect(line, "destroy branch leaked a path-shaped string").not.toMatch(PATH_SHAPED);
     }
+  });
+});
+
+describe("entryIssues (/api/entries validation body)", () => {
+  const PATH = /(?:^|[\s'"(=])\/(?:Users|private|var|tmp|home)\//;
+
+  it("maps Zod issues verbatim (curated, path-free)", () => {
+    const zodErr = { issues: [{ path: ["source", "url"], message: "must be a URL" }, { path: [], message: "root problem" }] };
+    expect(entryIssues(zodErr)).toEqual(["source.url: must be a URL", "entry: root problem"]);
+  });
+
+  it("NEVER surfaces a non-Zod error's message (e.g. an fs write path)", () => {
+    const fsErr = Object.assign(
+      new Error("EACCES: permission denied, open '/Users/secret/corpus/entries.json.tmp-4242'"),
+      { code: "EACCES" },
+    );
+    const out = entryIssues(fsErr);
+    expect(out).toEqual(["Error: EACCES"]);
+    expect(out.join(" ")).not.toContain("/Users/secret");
+    expect(out.join(" ")).not.toContain("entries.json.tmp");
+    expect(out.join(" ")).not.toMatch(PATH);
+  });
+
+  it("tolerates a non-Error throw", () => {
+    expect(entryIssues("boom")).toEqual(["non-error (string)"]);
+  });
+});
+
+describe("POST /api/entries — an fs save failure does not leak the corpus path", () => {
+  // End-to-end proof of the entryIssues fix: a valid entry whose SAVE fails
+  // (corpus dir writable-bit cleared) must yield a 400 whose `issues` carry no
+  // absolute path. Reverting entryIssues to raw `.message` fails this.
+  let server: import("node:http").Server;
+  let baseUrl: string;
+  let base: string;
+  const canChmod = process.getuid?.() !== 0;
+
+  beforeAll(async () => {
+    base = mkdtempSync(join(tmpdir(), "ui-server-entries-fs-"));
+    writeFileSync(join(base, "entries.json"), JSON.stringify({ version: 2, entries: [] }));
+    setCorpusRootForTesting(base);
+    setPrivateImageDirForTesting(mkdtempSync(join(tmpdir(), "ui-server-entries-fs-img-")));
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    if (existsSync(base)) chmodSync(base, 0o755);
+    await new Promise<void>((r) => server.close(() => r()));
+    setCorpusRootForTesting(null);
+    const overrideDir = privateImageDir();
+    setPrivateImageDirForTesting(null);
+    if (existsSync(overrideDir)) rmSync(overrideDir, { recursive: true, force: true });
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("returns a 400 with path-free issues when saveEntries hits EACCES", async () => {
+    if (!canChmod) return;
+    const nonce = (await (await fetch(`${baseUrl}/api/csrf`)).json() as { nonce: string }).nonce;
+    // r-x (no write): loadEntries can still read entries.json, but the atomic
+    // save's temp writeFileSync throws EACCES with the corpus tmp path.
+    chmodSync(base, 0o555);
+    let status = 0;
+    let text = "";
+    try {
+      const res = await fetch(`${baseUrl}/api/entries`, {
+        method: "POST",
+        headers: { "content-type": "application/json", [CSRF_HEADER]: nonce },
+        body: JSON.stringify({ ...baseEntry, id: "", title: "FS Fail Probe", image: { ...baseEntry.image, path: "images-private/fs-probe.png", width: 32, height: 32 } }),
+      });
+      status = res.status;
+      text = await res.text();
+    } finally {
+      chmodSync(base, 0o755);
+    }
+    expect(status).toBe(400);
+    expect(text).not.toContain(base);
+    expect(text).not.toContain("entries.json.tmp");
+    expect(text.toUpperCase()).not.toContain("PERMISSION DENIED");
+    expect(text).not.toMatch(PATH_SHAPED);
+  });
+});
+
+describe("sendRouteError (triage/cleanup 4xx bodies)", () => {
+  const PATH = /(?:^|[\s'"(=])\/(?:Users|private|var|tmp|home)\//;
+
+  function fakeRes() {
+    const calls = { status: 0, body: "" };
+    const res = {
+      writeHead(status: number) { calls.status = status; return res; },
+      end(body?: unknown) { if (body != null) calls.body = String(body); return res; },
+    } as unknown as import("node:http").ServerResponse;
+    return { res, calls };
+  }
+
+  it("surfaces the message of an intentional (statusCode-bearing, curated) error", () => {
+    const { res, calls } = fakeRes();
+    sendRouteError(res, Object.assign(new Error("Batch not found"), { statusCode: 404 }), "Cleanup failed");
+    expect(calls.status).toBe(404);
+    expect(calls.body).toBe(JSON.stringify({ error: "Batch not found" }));
+  });
+
+  it("NEVER surfaces the message of an unexpected fs error (no statusCode) — generic + path-free", () => {
+    const spies = consoleSpies();
+    const { res, calls } = fakeRes();
+    const fsErr = Object.assign(
+      new Error("ENOENT: no such file or directory, rmdir '/Users/secret/corpus/images-private/captures/add-1'"),
+      { code: "ENOENT" },
+    );
+    sendRouteError(res, fsErr, "Cleanup failed");
+    const lines = consoleLines(spies);
+    for (const spy of spies) spy.mockRestore();
+    expect(calls.status).toBe(400);
+    expect(calls.body).toBe(JSON.stringify({ error: "Cleanup failed" }));
+    expect(calls.body).not.toContain("/Users/secret");
+    expect(calls.body).not.toMatch(PATH);
+    // Console gets only a sanitized descriptor.
+    for (const line of lines) {
+      expect(line).not.toContain("/Users/secret");
+      expect(line).not.toMatch(PATH);
+    }
+  });
+
+  it("treats a non-Error throw as unexpected (generic fallback)", () => {
+    const { res, calls } = fakeRes();
+    sendRouteError(res, "boom", "Triage update failed");
+    expect(calls.status).toBe(400);
+    expect(calls.body).toBe(JSON.stringify({ error: "Triage update failed" }));
+  });
+});
+
+describe("GET /api/image — an invalid path is genericized, never echoed", () => {
+  let server: import("node:http").Server;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+  afterAll(async () => { await new Promise<void>((r) => server.close(() => r())); });
+
+  it("returns a fixed 400 body for a traversal path, not the echoed input", async () => {
+    const res = await fetch(`${baseUrl}/api/image?path=${encodeURIComponent("../../etc/secret-sentinel.png")}`);
+    const text = await res.text();
+    expect(res.status).toBe(400);
+    expect(text).toBe("Invalid image path");
+    expect(text).not.toContain("secret-sentinel");
+    expect(text).not.toContain("etc/");
   });
 });
 

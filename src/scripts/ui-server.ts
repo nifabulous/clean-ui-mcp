@@ -446,6 +446,30 @@ export function explainAnalyzeError(error: unknown): string {
   return "Analysis failed. Check the decision's screens and try again.";
 }
 
+/**
+ * Respond to a route-handler error on the batch triage/cleanup routes.
+ *
+ * These handlers throw two kinds of error: INTENTIONAL ones carry a numeric
+ * `statusCode` and a CURATED, path-free message ("Invalid batchId", "Batch not
+ * found", "N item(s) still pending …") — safe to surface verbatim. An error
+ * WITHOUT a `statusCode` is UNEXPECTED — an fs/internal failure (`rmSync`,
+ * `readFileSync`) whose `.message` embeds an absolute batch-dir PATH — so it
+ * NEVER surfaces the message: the client gets `fallback` and the console gets
+ * only a sanitized descriptor.
+ *
+ * INVARIANT: any error thrown with a `statusCode` MUST keep its message free of
+ * filesystem paths / secrets (it is shown to the client verbatim).
+ */
+export function sendRouteError(res: ServerResponse, error: unknown, fallback: string): void {
+  const statusCode = (error as { statusCode?: unknown }).statusCode;
+  if (typeof statusCode === "number" && error instanceof Error) {
+    sendJson(res, statusCode, { error: error.message });
+    return;
+  }
+  console.error(`[ui-server] route error: ${describeError(error)}`);
+  sendJson(res, 400, { error: fallback });
+}
+
 function readBody(req: IncomingMessage, maxBytes: number = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolveBody, reject) => {
     let size = 0;
@@ -473,13 +497,17 @@ function parseUrl(req: IncomingMessage): URL {
   return new URL(req.url ?? "/", `http://${req.headers.host ?? `localhost:${PORT}`}`);
 }
 
-function entryIssues(error: unknown): string[] {
+export function entryIssues(error: unknown): string[] {
   if (error && typeof error === "object" && "issues" in error) {
     return (error as { issues: Array<{ path: Array<string | number>; message: string }> }).issues.map(
       (issue) => `${issue.path.join(".") || "entry"}: ${issue.message}`,
     );
   }
-  return [error instanceof Error ? error.message : String(error)];
+  // SECURITY: the non-Zod fallback is reached when a NON-validation error hits
+  // the /api/entries catch — notably `saveEntries` failing, whose errno message
+  // embeds the absolute `corpus/entries.json.tmp-<pid>` PATH. Never surface that:
+  // emit a sanitized descriptor (name + errno code) instead.
+  return [describeError(error)];
 }
 
 // Server-side draft-marker stripper. Mirrors the classic workbench's
@@ -1799,7 +1827,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       res.writeHead(200, { "content-type": mimeFor(fullPath), "cache-control": "no-store" });
       res.end(bytes);
     } catch (error) {
-      sendText(res, 400, error instanceof Error ? error.message : "Invalid image path");
+      sendText(res, 400, "Invalid image path");
     }
     return;
   }
@@ -1869,8 +1897,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       const triage = setTriageStatus(payload.batchId ?? "", payload.captureId ?? "", status);
       sendJson(res, 200, { ok: true, triage });
     } catch (error) {
-      const code = (error as { statusCode?: number }).statusCode ?? 400;
-      sendJson(res, code, { error: error instanceof Error ? error.message : "Triage update failed" });
+      sendRouteError(res, error, "Triage update failed");
     }
     return;
   }
@@ -1883,8 +1910,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       const result = cleanupBatch(payload.batchId ?? "");
       sendJson(res, 200, result);
     } catch (error) {
-      const code = (error as { statusCode?: number }).statusCode ?? 400;
-      sendJson(res, code, { error: error instanceof Error ? error.message : "Cleanup failed" });
+      sendRouteError(res, error, "Cleanup failed");
     }
     return;
   }
@@ -1922,8 +1948,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       rmSync(batchDir, { recursive: true, force: true });
       sendJson(res, 200, { deleted: batchId });
     } catch (error) {
-      const code = (error as { statusCode?: number }).statusCode ?? 400;
-      sendJson(res, code, { error: error instanceof Error ? error.message : "Cleanup failed" });
+      sendRouteError(res, error, "Cleanup failed");
     }
     return;
   }

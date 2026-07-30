@@ -31,6 +31,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { Category, StyleTag, PatternType, formatAccessibilityRisk, AccessibilityRiskT } from "./schema.js";
+import { describeError } from "./errors.js";
 import { generateBrief, renderBrief } from "./design-prompt.js";
 import { buildRecommendation, renderRecommendation } from "./recommend.js";
 import { aggregateAntiPatterns, collectPalettes, collectTechniques, browseByPattern, hueBand } from "./aggregations.js";
@@ -847,8 +848,11 @@ function registerCritiqueUi(server: McpServer, reader: CorpusReader): void {
           structuredContent: structuredResult,
         };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return { content: [{ type: "text", text: `❌ Critique failed: ${msg}` }], isError: true };
+        // SECURITY: never echo `e.message` — critique runs the tagger, which
+        // reads the image file and calls a vision provider, so the error can
+        // embed an absolute PATH or a raw provider body. Surface only a safe
+        // descriptor (name + errno code).
+        return { content: [{ type: "text", text: `❌ Critique failed: ${describeError(e)}` }], isError: true };
       }
     },
   );

@@ -16,6 +16,7 @@ import { DecisionAnalysis } from "./schema.js";
 import { hasCritiqueKey, activeProviderName, activeModelName, tagImage, callTextModel } from "./tagger.js";
 import { searchRanked } from "./corpus.js";
 import { fromCorpusRelativeImagePath } from "./paths.js";
+import { describeError } from "./errors.js";
 
 /** A screen's Pass-1 tagger extraction (the `tagging` field on DecisionScreen). */
 export interface ExtractedScreen {
@@ -393,7 +394,11 @@ export async function analyzeDecision(decision: DecisionT): Promise<AnalyzeResul
           },
         };
       } catch (err) {
-        failedScreens.push(`${direction.name}/${screen.id}: ${err instanceof Error ? err.message : "extraction failed"}`);
+        // SECURITY: `err` here is a tagger failure whose message can embed an
+        // absolute image PATH or a provider body. Record only a safe descriptor
+        // so the composed "All screen extractions failed" error (surfaced in an
+        // HTTP 400 body by the decision-analyze route) carries no path.
+        failedScreens.push(`${direction.name}/${screen.id}: ${describeError(err)}`);
       }
     }
   }

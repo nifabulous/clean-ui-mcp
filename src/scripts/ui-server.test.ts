@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CSRF_HEADER, cleanupBatch, describeInternalError, explainCaptureError, explainCaptureTargetError, explainTagError, finishWithInternalError, resolveSiteAsset, findDuplicateAtCommit, hostIsLoopback, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
+import { CSRF_HEADER, cleanupBatch, describeInternalError, explainAnalyzeError, explainCaptureError, explainCaptureTargetError, explainTagError, finishWithInternalError, resolveSiteAsset, findDuplicateAtCommit, hostIsLoopback, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
 import { setCorpusRootForTesting } from "../persistence.js";
 import { request as httpRequest } from "node:http";
 import type { IncomingMessage } from "node:http";
@@ -9,7 +9,8 @@ import { join, sep } from "node:path";
 import { PROJECT_ROOT, privateImageDir, setPrivateImageDirForTesting } from "../paths.js";
 import { setCorpusForTesting } from "../corpus.js";
 import { containsPrivateMarker, parseDesignArtifactEnvelope } from "../create-ui-spec-contracts.js";
-import type { CorpusEntryT } from "../schema.js";
+import type { CorpusEntryT, DecisionT } from "../schema.js";
+import { setDecisionsPathsForTesting, resetDecisionsPathsForTesting, saveDecision } from "../decisions.js";
 
 function req(headers: Record<string, string | undefined>): IncomingMessage {
   return { headers } as unknown as IncomingMessage;
@@ -2577,6 +2578,127 @@ describe("catch-all 500 sanitization (describeInternalError / finishWithInternal
     for (const line of lines) {
       expect(line, "destroy branch leaked a path to the console").not.toContain("/Users/secret");
       expect(line, "destroy branch leaked a path-shaped string").not.toMatch(PATH_SHAPED);
+    }
+  });
+});
+
+describe("explainAnalyzeError (decision-analyze 400 body)", () => {
+  const PATH = /(?:^|[\s'"(=])\/(?:Users|private|var|tmp|home)\//;
+  const FALLBACK = "Analysis failed. Check the decision's screens and try again.";
+
+  it("never surfaces the raw error message — only fixed strings", () => {
+    // Even the known 'All screen extractions failed' case returns a FIXED
+    // string, not the composed message — so nothing riding in that message
+    // (a provider body, a path, a free-form direction name) can escape.
+    const composed = "All screen extractions failed:\nA/s1: Error: ENOENT\nB/s2: Error: ENOENT";
+    const out = explainAnalyzeError(new Error(composed));
+    expect(out).toBe("Could not analyze: none of the screenshots could be read. Check the images and try again.");
+    expect(out).not.toBe(composed);
+  });
+
+  it("maps other known safe failure classes to fixed, actionable strings", () => {
+    expect(explainAnalyzeError(new Error("No provider key set for Decision Lab synthesis. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY.")))
+      .toMatch(/needs a provider key/i);
+    expect(explainAnalyzeError(new Error("Synthesis provider returned unparseable JSON.")))
+      .toMatch(/malformed output/i);
+    expect(explainAnalyzeError(new Error("Synthesis produced an invalid analysis: directionRubrics.0.score: expected number")))
+      .toMatch(/failed validation/i);
+  });
+
+  it("collapses any unrecognized throw (path OR provider body) to the generic fallback", () => {
+    // provider body
+    expect(explainAnalyzeError(new Error('OpenAI API error 500: {"error":"gpu-42 overloaded","request_id":"req_x"}'))).toBe(FALLBACK);
+    // fs path
+    expect(explainAnalyzeError(new Error("ENOENT: open '/Users/secret/corpus/x.png'"))).toBe(FALLBACK);
+    // non-Error
+    expect(explainAnalyzeError("boom")).toBe(FALLBACK);
+  });
+
+  it("no branch can leak a path, even a smuggled one", () => {
+    // A composed message that somehow carried a path still returns the FIXED
+    // string (we key on the prefix, never echo the body).
+    const smuggled = "All screen extractions failed:\nA/s1: open '/Users/secret/x.png'";
+    const invalid = "Synthesis produced an invalid analysis: /Users/secret/x.png";
+    for (const out of [explainAnalyzeError(new Error(smuggled)), explainAnalyzeError(new Error(invalid))]) {
+      expect(out).not.toMatch(PATH);
+      expect(out).not.toContain("secret");
+    }
+  });
+});
+
+describe("decision-analyze route — 400 body is path-free end to end", () => {
+  // Proves the WIRING of sink 3, not just the helper: POST the real
+  // /api/decisions/:id/analyze with a decision whose screenshots don't exist, so
+  // analyzeDecision throws "All screen extractions failed: …" (per-screen parts
+  // carry the missing-file ENOENT path). The 400 body must be the fixed message,
+  // never the raw thrown text. Reverting the route to `err.message` fails this.
+  let server: import("node:http").Server;
+  let baseUrl: string;
+  let base: string;
+  let decisionsFile: string;
+
+  beforeAll(async () => {
+    base = mkdtempSync(join(tmpdir(), "ui-server-analyze-"));
+    decisionsFile = join(base, "decisions.json");
+    setDecisionsPathsForTesting({ path: decisionsFile, snapshotDir: join(base, ".snapshots") });
+    saveDecision({
+      id: "leaky-decision",
+      title: "Leak probe",
+      createdAt: "2026-07-30",
+      updatedAt: "2026-07-30",
+      context: { targetUser: "u", businessGoal: "g", primaryKpi: "k" },
+      scope: "screen",
+      directions: [
+        { id: "dir-a", name: "A", screens: [{ id: "s1", order: 0, source: "upload", imageRef: "images-private/decisions/does-not-exist-a.png" }] },
+        { id: "dir-b", name: "B", screens: [{ id: "s2", order: 0, source: "upload", imageRef: "images-private/decisions/does-not-exist-b.png" }] },
+      ],
+    } as DecisionT);
+    server = await startServer(0);
+    const addr = server.address();
+    if (!addr || typeof addr !== "object") throw new Error("server did not bind");
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+    resetDecisionsPathsForTesting();
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("POST analyze on unreadable screenshots returns a fixed 400 body with no path", async () => {
+    // Fetch the CSRF nonce before spying so its request doesn't add console noise.
+    const nonce = (await (await fetch(`${baseUrl}/api/csrf`)).json() as { nonce: string }).nonce;
+    const spies = consoleSpies();
+    let status = 0;
+    let text = "";
+    let lines: string[] = [];
+    try {
+      const res = await fetch(`${baseUrl}/api/decisions/leaky-decision/analyze`, {
+        method: "POST",
+        headers: { "content-type": "application/json", [CSRF_HEADER]: nonce },
+      });
+      status = res.status;
+      text = await res.text();
+      lines = consoleLines(spies); // capture BEFORE mockRestore clears mock state
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+    expect(status).toBe(400);
+    // Fixed, path-free body — the exact string explainAnalyzeError returns.
+    expect(text).toContain("none of the screenshots could be read");
+    expect(text).not.toContain(base);
+    expect(text).not.toContain("does-not-exist");
+    expect(text.toUpperCase()).not.toContain("ENOENT");
+    expect(text).not.toMatch(PATH_SHAPED);
+    // This route's OWN log line must be path-free. (A separate `[tagger] Color
+    // extraction failed …` line can still carry a path here because this branch
+    // is off main and the tagger-log fix rides in PR #67 — that leak is out of
+    // scope for this route and covered there.)
+    const analyzeLogs = lines.filter((l) => l.includes("[decision-analyze]"));
+    expect(analyzeLogs.length, "the route should have logged its sanitized failure").toBeGreaterThan(0);
+    for (const line of analyzeLogs) {
+      expect(line, "a path reached the decision-analyze log").not.toContain(base);
+      expect(line).not.toMatch(PATH_SHAPED);
     }
   });
 });

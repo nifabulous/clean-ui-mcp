@@ -25,6 +25,7 @@
 import type { CorpusReader, ReaderImageIndex } from "./corpus-reader.js";
 import { cosine } from "./image-index.js";
 import type { ImageEmbeddingProvider, ValidatedImage } from "./image-embeddings.js";
+import { describeError } from "./errors.js";
 
 export interface CritiqueEntry {
   id: string;
@@ -119,7 +120,9 @@ export async function retrieveCritiqueEvidence(input: RetrieveCritiqueInput): Pr
         };
       }
     } catch (err) {
-      console.error("[critique-retrieval] Image retrieval failed, falling back to structured:", err instanceof Error ? err.message : err);
+      // SECURITY: never log `err.message` — image/provider retrieval failures
+      // can embed a path or provider diagnostics. Log a sanitized descriptor.
+      console.error(`[critique-retrieval] Image retrieval failed, falling back to structured: ${describeError(err)}`);
     }
   }
 

@@ -23,7 +23,10 @@ import {
   computeCheckpointTargetSha256,
   canonicalJsonStringify,
   sha256Hex,
+  isApprovalRow,
+  isRetractionRow,
 } from "./contracts.js";
+import type { CheckpointRetractionT } from "./contracts.js";
 import type {
   CheckpointRecipe,
   GitSourceResolver,
@@ -1194,8 +1197,19 @@ function validateApprovalsAndCheckpoint(
   }
 
   const approvals = ledgerData.data.approvals;
+  // Partition the mixed ledger once: approval semantics (supersession, actor/
+  // role checks, closure) iterate ONLY `approvalRows`. `approvals` itself stays
+  // available and MUST keep being read, unpartitioned, by tamper-evidence
+  // (`validateLedgerAppendOnly`, `ledgerApprovalRowsDigest`) elsewhere in this
+  // file — those verify the full mixed row sequence, not just approval rows.
+  // No retraction rows exist in any real or test ledger yet, so at runtime
+  // `approvalRows` is exactly `approvals` and `retractionRows` is empty; this
+  // is a pure refactor with no behavior change.
+  const approvalRows = approvals.filter(isApprovalRow);
+  const retractionRows: CheckpointRetractionT[] = approvals.filter(isRetractionRow);
+  void retractionRows; // consumed starting Task 3 (retraction semantics)
   const supersededApprovalIds = new Set(
-    approvals.flatMap((approval) => approval.supersedesApprovalId ? [approval.supersedesApprovalId] : []),
+    approvalRows.flatMap((approval) => approval.supersedesApprovalId ? [approval.supersedesApprovalId] : []),
   );
 
   // Per-approval set of issue codes that this approval produced. An approval
@@ -1227,14 +1241,14 @@ function validateApprovalsAndCheckpoint(
   // `checkpointHasBlockingIssue`. Hole 1 of TODOS.md § "Approval provenance holes
   // the content-only validator cannot close" describes the taint-map gap that
   // remains.
-  for (const approval of approvals) {
+  for (const approval of approvalRows) {
     if (approval.supersedesApprovalId !== undefined) {
-      const priorIndex = approvals.findIndex((candidate) => candidate.approvalId === approval.supersedesApprovalId);
-      const currentIndex = approvals.indexOf(approval);
+      const priorIndex = approvalRows.findIndex((candidate) => candidate.approvalId === approval.supersedesApprovalId);
+      const currentIndex = approvalRows.indexOf(approval);
       if (priorIndex < 0 || priorIndex >= currentIndex) {
         issues.push({ code: "ledger-invalid-supersession", artifactId: approval.approvalId, message: `approval ${approval.approvalId} supersedes a missing or later approval` });
       } else {
-        const prior = approvals[priorIndex]!;
+        const prior = approvalRows[priorIndex]!;
         if (prior.checkpoint !== approval.checkpoint || prior.role !== approval.role || prior.actorId !== approval.actorId) {
           issues.push({ code: "ledger-invalid-supersession", artifactId: approval.approvalId, message: `approval ${approval.approvalId} must supersede an earlier approval for the same checkpoint, role, and actor` });
         }
@@ -1364,7 +1378,7 @@ function validateApprovalsAndCheckpoint(
   // checked at all. See the function's docstring for exactly what this does and
   // does not detect.
   verifyApprovalArtifactTimestamps(
-    approvals,
+    approvalRows,
     artifacts,
     supersededApprovalIds,
     issues,
@@ -1378,7 +1392,7 @@ function validateApprovalsAndCheckpoint(
   // checkpoint (e.g. C1) stays open without producing spurious issues
   // from unresolved sources.
   // ------------------------------------------------------------------
-  const activeApprovals = approvals.filter((approval) => !supersededApprovalIds.has(approval.approvalId));
+  const activeApprovals = approvalRows.filter((approval) => !supersededApprovalIds.has(approval.approvalId));
   const activeCheckpoints = new Set(activeApprovals.map((a) => a.checkpoint));
   const recompute = computeCanonicalTargets(artifacts, absRoot, opts, activeCheckpoints, activeApprovals, registryByVersion);
 
@@ -1395,7 +1409,7 @@ function validateApprovalsAndCheckpoint(
   // Track target SHAs per checkpoint (for divergent-target detection)
   const targetShas = new Map<string, Set<string>>();
 
-  for (const approval of approvals) {
+  for (const approval of approvalRows) {
     const iid = approval.approvalId;
     const isSuperseded = supersededApprovalIds.has(iid);
 
@@ -1626,7 +1640,7 @@ function validateApprovalsAndCheckpoint(
   // those are picked up by the in-loop attributable check instead.
   const CHECKPOINT_IDS: ReadonlySet<string> = new Set(["C0", "C1", "C2", "C3", "C4", "C5"]);
   const checkpointOfApprovalId = new Map<string, string>(
-    approvals.map((a) => [a.approvalId, a.checkpoint]),
+    approvalRows.map((a) => [a.approvalId, a.checkpoint]),
   );
   // An unrecognised `checkpoint` value is NOT an attribution: a typo'd "c2" must
   // over-block (unattributable ⇒ every checkpoint open) rather than attribute to
@@ -1771,7 +1785,7 @@ function validateApprovalsAndCheckpoint(
       hasUnattributableBlockingIssue ||
       issues.some((i) => i.checkpoint === cp) ||
       blockingIssueArtifactIds.has(cp) ||
-      approvals.some(
+      approvalRows.some(
         (a) =>
           a.checkpoint === cp &&
           (blockingIssueArtifactIds.has(a.approvalId) ||

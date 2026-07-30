@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
-import { sanitizeTaggerPayload, tagImage, generateCritique, extractQuantizedColors, hasVisionKey, activeModelName, validateNoIconOnlyClaims, validateCritiqueComponentClaims, scrubProseIconOnly, callTextModelWithMetadata } from "./tagger.js";
+import { sanitizeTaggerPayload, tagImage, generateCritique, describeCaughtError, extractQuantizedColors, hasVisionKey, activeModelName, validateNoIconOnlyClaims, validateCritiqueComponentClaims, scrubProseIconOnly, callTextModelWithMetadata } from "./tagger.js";
 import { PRIVATE_IMAGE_DIR } from "./paths.js";
 
 describe("tagger sanitization", () => {
@@ -1703,5 +1703,103 @@ describe("Claude adaptive thinking (C2 path)", () => {
       maxOutputTokens: 4096,
       maxAttempts: 1,
     })).rejects.toThrow(/no text block was extracted|thinking/i);
+  });
+});
+
+describe("describeCaughtError never leaks a filesystem path into logs", () => {
+  const PATH_SHAPED = /(?:^|[\s'"(=])\/(?:Users|private|var|tmp|home)\//;
+
+  function errnoError(code: string, syscall: string, path: string): NodeJS.ErrnoException {
+    const e = new Error(`${code}: no such file or directory, ${syscall} '${path}'`) as NodeJS.ErrnoException;
+    e.code = code;
+    e.syscall = syscall;
+    e.path = path;
+    return e;
+  }
+
+  it("renders an errno error with no path and no raw message", () => {
+    const err = errnoError("ENOENT", "open", "/Users/secret/corpus/images-private/shot.png");
+    const out = describeCaughtError(err);
+    expect(out).not.toContain(err.path!);
+    expect(out).not.toContain(err.message);
+    expect(out).not.toContain("secret");
+    expect(out).not.toMatch(PATH_SHAPED);
+    expect(out).toBe("Error: ENOENT"); // name + code, nothing more
+  });
+
+  it("tolerates a non-Error throw without leaking it", () => {
+    expect(describeCaughtError({ path: "/Users/secret/x" })).not.toContain("secret");
+    expect(describeCaughtError("/private/var/secret/y")).not.toMatch(PATH_SHAPED);
+  });
+
+  it("strips a path smuggled through name or code", () => {
+    const crafted = Object.assign(new Error("boom"), {
+      name: "/Users/secret/named",
+      code: "/private/var/secret/code",
+    });
+    const out = describeCaughtError(crafted);
+    expect(out).not.toContain("secret");
+    expect(out).not.toMatch(PATH_SHAPED);
+    expect(out).toBe("Error");
+  });
+
+  it("drops a separator-free but off-shape name/code (e.g. a bare filename)", () => {
+    const crafted = Object.assign(new Error("boom"), { name: "secret.png", code: "leak.png" });
+    const out = describeCaughtError(crafted);
+    expect(out).not.toContain("secret");
+    expect(out).not.toContain("leak");
+    expect(out).toBe("Error"); // both off-shape → generic
+  });
+
+  it("sanitizes the REAL error extractQuantizedColors throws on an unreadable path", async () => {
+    // The exact threat at the tagger's color-extraction catch: a decode/read
+    // failure whose message names the file. Drive the real error shape through
+    // the sanitizer and confirm no path survives.
+    const badPath = join(tmpdir(), `no-such-dir-${Date.now()}`, "secret-leak.png");
+    let caught: unknown;
+    try {
+      await extractQuantizedColors(badPath);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught, "extractQuantizedColors should reject on a missing file").toBeInstanceOf(Error);
+    const out = describeCaughtError(caught);
+    expect(out).not.toContain(badPath);
+    expect(out).not.toContain("secret-leak");
+    expect(out).not.toMatch(PATH_SHAPED);
+  });
+
+  it("WIRING: tagImage's real color-extraction catch logs a sanitized line (no path)", async () => {
+    // Drives the PRODUCTION catch, not a replica. `readImageDimensions` swallows
+    // its error (returns nulls), so a non-existent imagePath flows to the color
+    // step, where node-vibrant throws `ENOENT … '<path>'`. That hits the catch at
+    // src/tagger.ts and logs `describeCaughtError(err)`. tagImage then rejects
+    // later (readImageForDetail) — we only assert the console line here. Reverting
+    // the catch to `err.message` would make this fail (the path would appear).
+    const savedKey = process.env.OPENAI_API_KEY;
+    const savedFetch = globalThis.fetch;
+    process.env.OPENAI_API_KEY = "test-key-unused"; // satisfy hasVisionKey()
+    globalThis.fetch = vi.fn(async () => { throw new Error("network blocked in test"); }) as unknown as typeof fetch;
+    // Non-existent file UNDER images-private so tagImage passes the visibility
+    // path check and reaches color extraction, which then throws ENOENT for it.
+    // Nothing is written — the corpus is not mutated.
+    const badPath = join(PRIVATE_IMAGE_DIR, `no-such-wiring-${Date.now()}-secret-shot.png`);
+    // Collect lines via the impl — `spy.mock.calls` is cleared by mockRestore().
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(" ")); });
+    try {
+      await tagImage({ imagePath: badPath, productName: "T", url: null });
+    } catch {
+      /* tagImage rejects downstream — expected; the fallback already logged */
+    } finally {
+      spy.mockRestore();
+      if (savedKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = savedKey;
+      globalThis.fetch = savedFetch;
+    }
+    const fallback = lines.find((l) => l.includes("Color extraction failed"));
+    expect(fallback, "the color-extraction fallback must have logged").toBeTruthy();
+    expect(fallback!).not.toContain(badPath);
+    expect(fallback!).not.toContain("secret-shot");
+    expect(fallback!).not.toMatch(PATH_SHAPED);
   });
 });

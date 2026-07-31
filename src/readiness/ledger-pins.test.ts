@@ -90,6 +90,7 @@ describe("TRACKED_LEDGER_APPROVAL_PINS", () => {
       "checkpoint-approvals-v3.json",
       "checkpoint-approvals-v4.json",
       "checkpoint-approvals-v5.json",
+      "checkpoint-approvals-v6.json",
     ]);
     for (const key of Object.keys(TRACKED_LEDGER_APPROVAL_PINS)) {
       // A path within the artifact root: no directory component, no traversal.

@@ -24,13 +24,15 @@ were preserved and not rewritten after sealing.
 ## Required Approvals
 
 The readiness validator requires the active C2 approvals to bind the target
-below. Do **not** edit the immutable earlier ledgers — every ledger from v1
-through v5 is published on `origin/main` and must stay byte-identical.
+below. Do **not** edit the immutable earlier ledgers — every ledger up to and
+including the current head, `checkpoint-approvals-v6.json`, must stay
+byte-identical once published; only a new successor ledger may add rows.
 
-`checkpoint-approvals-v5.json` does contain two records that bind the corrected
-target, but neither is a valid decision and C2 is **open** — see "Current ledger
-state" below before acting on anything in this section. The human-readable
-review packet is `docs/c2/c2-approval-target-v1.md`.
+`checkpoint-approvals-v5.json` (carried forward unchanged into v6) does contain
+two records that bind the corrected target, but neither is a valid decision;
+`checkpoint-approvals-v6.json` records both as retracted. C2 is **open** — see
+"Current ledger state" below before acting on anything in this section. The
+human-readable review packet is `docs/c2/c2-approval-target-v1.md`.
 
 - `checkpoint: "C2"`, `approvalKind: "checkpoint"`, `decision: "approved"`,
   `role: "Gold Label Owner"`
@@ -92,57 +94,61 @@ in commit `e176e85` on 2026-07-28. Both therefore claim a decision taken before
 the thing decided existed, and no documented reviewer decision for
 `cf55fee0…` exists anywhere in the repository.
 
-Readiness validation in both public and private modes reports:
+`checkpoint-approvals-v6.json` (`ordinalVersion: 6`, predecessor v5) carries all
+eight v5 approvals forward byte-identical and appends two **retraction**
+records: `retraction-c2-gold-v2` retracts `c2-gold-reviewer-gold-v2`,
+`retraction-c2-qa-v2` retracts `c2-qa-reviewer-qa-v2`. Both are authorized by
+`repo-maintainer-1` (Repository Maintainer — the same identity bound on
+`c0-repo-maintainer`), dated `2026-07-31T00:09:24.579Z`, and each gives the
+same reason: the retracted approval's `decidedAt` predates the target it binds,
+so no reviewer decision on `cf55fee0…` exists.
+
+Readiness validation in both public and private modes now reports:
 
 ```text
-ok: false
+ok: true
 checkpointStatus: { C0: closed, C1: closed, C2: open, C3: open, C4: open, C5: open }
-issues:
-  ledger-supersession-not-later  c2-gold-reviewer-gold-v2
-  ledger-supersession-not-later  c2-qa-reviewer-qa-v2
+issues: (none)
 warnings: (none)
+ledgerPinScope: tracked
 ```
 
-The external-QA unverifiability caveat is **not** emitted, because it is raised
-only when C2 actually closes.
+The two `ledger-supersession-not-later` findings that used to hold the gate at
+`ok: false` are gone — a validly-authorized retraction of an approval suppresses
+the temporal finding attached to it (`src/readiness/validator.ts`, the
+suppression path added alongside the retraction vocabulary). No `retraction-*`
+issue appears, meaning both retraction records themselves passed validation
+(authorized by an actor empowered to retract, correctly ordered after the
+approval they target, targeting an actual approval and not another retraction,
+and not a duplicate). The external-QA unverifiability caveat is **still not**
+emitted, because it is raised only when C2 actually closes, and C2 has not.
 
-### Withdrawal is recorded here, not in the ledger
+### Withdrawal is now recorded in the ledger (v6), not implied by a blocking check
 
-The repository owner's decision is to **withdraw** both v2 approvals. That
-withdrawal could not be expressed in the ledger itself, for two independent
-reasons:
+Earlier revisions of this document described the withdrawal as something the
+ledger vocabulary could not express — only a failing gate implied it, with no
+record in the artifact graph saying "withdrawn". That has changed:
+`checkpoint-approvals-v6.json`'s two retraction records ARE the recorded
+withdrawal. `recordKind: "retraction"` is a real, schema-validated ledger row
+(`src/readiness/contracts.ts`), distinct from an `approved`/`rejected`
+`CheckpointApproval`, so the repository owner's decision to withdraw
+`c2-gold-reviewer-gold-v2` and `c2-qa-reviewer-qa-v2` no longer stands as
+documentation plus a failing gate — it stands as two rows in
+`quality-contracts/agent-readiness/checkpoint-approvals-v6.json`, authorized by
+`repo-maintainer-1`, that the validator checks and accepts.
 
-1. **The ledger is append-only by prefix.** `validateLedgerAppendOnly`
-   (`src/readiness/contracts.ts`) requires every approval of a predecessor
-   ledger to survive at the same index with the same canonical bytes in its
-   successor. A `checkpoint-approvals-v6.json` that omitted the two v2 records
-   was tested and produces two `ledger-approval-deleted` issues. A successor
-   ledger cannot drop them without emitting `ledger-approval-deleted` — not
-   "cannot be removed from the chain" unqualified: deleting the ledger FILES
-   themselves (rather than superseding their rows) is a different move with a
-   different blocking issue, `ledger-approval-pin-absent` (see "2. A
-   retraction mechanism" below, which states the file-deletion case
-   explicitly).
-2. **There is no withdrawal state.** `CheckpointApproval.decision` admits only
-   `approved` or `rejected`. The reviewers did not *reject* the target — they
-   never decided on it, so recording `rejected` would be a false statement. A
-   superseding record would additionally require the same `actorId` and `role`
-   plus a strictly-later `decidedAt`, i.e. a reviewer decision that was never
-   made. Nothing was invented to work around this.
-
-So the withdrawal stands as documentation plus a failing gate. **The withdrawal's
-mechanism is the temporal invariant, not any change to the ledger.** No ledger
-bytes were edited and no record was removed: `git diff origin/main..HEAD --
-quality-contracts/` is empty, and both records still read `decision: "approved"`.
-What produces `ok: false` / `C2: open` is the `ledger-supersession-not-later`
-check added in commit `e373351`, which recognises the copied `decidedAt` as
-temporally impossible. The commit whose subject reads "withdraw the un-decided v2
-approvals" (`46109d3`) changed **zero executable lines** — every `+`/`-` in its
-`src/readiness/validator.ts` diff is comment or docstring. Nothing in the
-artifact graph says "withdrawn"; that vocabulary does not exist yet (see
-`TODOS.md` § "Approval retraction vocabulary"). The approvals remain on disk as
-the historical record of an invalid append, C2 reports open, and `ok` stays false
-even after real decisions replace them — see "What would close C2" below.
+**Retracting a superseding approval does not resurrect what it superseded.**
+This is why C2 stays open rather than flipping to closed the moment the
+retractions land: `computeRetractedApprovalIds` (`src/readiness/validator.ts`,
+Model B) removes a retracted approval from the effective set, but the approval
+it superseded (`c2-gold-reviewer-gold-v1` / `c2-qa-reviewer-qa-v1`) stays
+excluded too, because the retracted record's own `supersedesApprovalId` still
+names it. Neither Gold Label Owner nor QA has any valid approval left in the
+effective set for C2 as a result — C2 is open because no valid reviewer
+decision exists for its target, not because of a lingering blocking finding.
+That distinction — zero issues, still open, for an honest reason — is the
+state this document now describes, and it is verified by a read-only test in
+`src/readiness/tracked-artifacts-readiness.test.ts`.
 
 **How durable that block is — the attacks that were actually run.** Three earlier
 versions of this section overstated it: first "permanently", then "durable
@@ -171,10 +177,14 @@ is now reported **blocking, with all six checkpoints held open and exit 1**:
    the digest. Against the earlier `artifactId`-keyed table the rename skipped the
    pin entirely and produced `ok: true`, `C0`/`C1`/`C2` all `closed`, zero issues,
    exit 0.
-4. **Append a `checkpoint-approvals-v6.json` without registering its pin** — the
-   exact append step 1 below instructs → 1 x `ledger-approval-pin-missing`, with
-   the two `ledger-supersession-not-later` findings still reported beside it.
-   Before coverage existed, an edited and an unedited v6 produced byte-identical
+4. **Append a `checkpoint-approvals-v6.json` without registering its pin**
+   (tested in an earlier round, before the real `v6` retraction ledger existed —
+   "v6" here names the hypothetical next ledger under test, not the retraction
+   ledger this document now describes, which IS pinned; see "What would close
+   C2" below for the current next-ledger guidance, now `v7`) → 1 x
+   `ledger-approval-pin-missing`, with the two `ledger-supersession-not-later`
+   findings still reported beside it. Before coverage existed, an edited and an
+   unedited v6 produced byte-identical
    gate output; nothing told the operator the new head was unattested.
 5. **Rename EVERY ledger's `artifactId` and repair the four `predecessor.sha256`
    values in a loop, plus the same two `decidedAt` edits** → 1 x
@@ -248,62 +258,49 @@ generalisation has been made three times on this control and was wrong each time
 Do not restate the block as durable against "any change confined to
 `quality-contracts/`", "permanent", or "unfakeable".
 
-### What would close C2 — two things, not one
+### What would close C2 — one thing remains
 
-**1. Real reviewer decisions.** `reviewer-gold` and `reviewer-qa` must each
-independently review the target and evidence above and record a **real**
-decision, with the actual wall-clock time of that decision as `decidedAt`,
-appended as `checkpoint-approvals-v6.json` (`ordinalVersion: 6`,
-`predecessor: { version: "5", sha256: <v5 digest> }`) carrying all eight v5
-approvals forward unchanged and appending `c2-gold-reviewer-gold-v3` /
-`c2-qa-reviewer-qa-v3` that supersede the v2 records. Do not invent actor IDs,
-registry hashes, target hashes, or approval timestamps.
+Two things used to stand between here and closure. The second — a way for the
+ledger to record a retraction — has landed: `checkpoint-approvals-v6.json` now
+carries `retraction-c2-gold-v2` and `retraction-c2-qa-v2`, and the readiness
+gate reports `ok: true` with zero issues (see "Current ledger state" above).
+That was never going to be sufficient on its own — see "Retracting a
+superseding approval does not resurrect what it superseded" above — and it
+was not meant to be: it clears the false record, it does not supply the real
+decision the false record was standing in for.
 
-Two things to expect when you do this, so the output does not read as a bug:
+**What remains: real reviewer decisions.** `reviewer-gold` and `reviewer-qa`
+must each independently review the target and evidence above and record a
+**real** decision, with the actual wall-clock time of that decision as
+`decidedAt`, appended as `checkpoint-approvals-v7.json` (`ordinalVersion: 7`,
+`predecessor: { version: "6", sha256: <v6 digest> }`) carrying all ten v6 rows
+forward unchanged (eight approvals plus the two retraction records) and
+appending `c2-gold-reviewer-gold-v3` / `c2-qa-reviewer-qa-v3` that supersede
+the v2 records. Do not invent actor IDs, registry hashes, target hashes, or
+approval timestamps.
 
-- **`ok` is the gate. Read `ok`, not the exit banner alone.** The gate will still
-  report `ok: false` with the two `ledger-supersession-not-later` issues, because
-  step 2 below has not landed. `checkpointStatus.C2` will read `open` alongside
-  it — the two channels agree. (They did not always: closure is computed over the
-  *effective* approval set, and the taint lands on the now-superseded v2 records,
-  so this exact append used to print `✓ C2: closed` directly above two blocking
-  issues with exit 1. Closure is now additionally gated on the checkpoint carrying
-  no blocking issue on any of its approvals, superseded or effective, so following
-  these instructions no longer produces that contradiction. `ok` remains the
-  authoritative value for CI and the review hooks.)
-- **Add the new head's approval-row pin in the same change — the gate now
-  requires it.** A ledger's rows are attested only by
-  `TRACKED_LEDGER_APPROVAL_PINS` (`src/readiness/ledger-pins.ts`), and
-  `validator.ts` step 7c requires **every** `checkpoint-approvals` FILE under the
-  artifact root to have an entry. Appending v6 without one emits a blocking
-  `ledger-approval-pin-missing` and holds every checkpoint open, so this is no
-  longer a documentation-only obligation. Keep every existing entry (the v5 entry
-  is what stops the defective rows being rewritten while appending; removing an
-  entry whose file is still present makes that file unpinned, and removing the
-  file itself now emits `ledger-approval-pin-absent`) and add a new entry KEYED ON
-  THE FILE PATH — `"checkpoint-approvals-v6.json"`, not the artifact id — with
-  `ledgerApprovalRowsDigest(JSON.parse(readFileSync("quality-contracts/agent-readiness/checkpoint-approvals-v6.json", "utf-8")).approvals)`.
+**Add the new head's approval-row pin in the same change — the gate requires
+it.** A ledger's rows are attested only by `TRACKED_LEDGER_APPROVAL_PINS`
+(`src/readiness/ledger-pins.ts`), and `validator.ts` step 7c requires **every**
+`checkpoint-approvals` FILE under the artifact root to have an entry. Appending
+v7 without one emits a blocking `ledger-approval-pin-missing` and holds every
+checkpoint open. Keep every existing entry, including v6's (which is what
+stops the two retraction rows being rewritten while appending), and add a new
+entry KEYED ON THE FILE PATH — `"checkpoint-approvals-v7.json"`, not the
+artifact id — with
+`ledgerApprovalRowsDigest(JSON.parse(readFileSync("quality-contracts/agent-readiness/checkpoint-approvals-v7.json", "utf-8")).approvals)`.
 
-**2. A retraction mechanism, which does not exist yet.** Real decisions alone
-will NOT return the gate to `ok: true`. `ledger-supersession-not-later` is
-unconditional and blocking: it reports the two defective v2 records whether or
-not something later supersedes them, and `validateLedgerAppendOnly` keeps those
-records in the chain for as long as the chain's files exist. (Not "forever": the
-append-only check compares ledgers that are PRESENT and cannot see one being
-deleted — `rm` of the three newest ledgers erased both findings, verified. The
-pin table's presence rule, `ledger-approval-pin-absent`, is what makes the
-deletion blocking.) The check is deliberately unconditional — a
-supersession-based demotion was implemented and then removed, because a
-fabricated record dated one second after a defective one was enough to flip the
-real gate to `ok: true` with `issues: []` and C2 closed, which reduced the cost
-of hiding a governance defect from "impossible" to "append one record".
-
-So until the ledger can record a retraction, the readiness gate stays red and C2
-cannot be closed on a clean gate — durable against the attacks enumerated under
-"How durable that block is" above, and not claimed beyond them. This is the accepted
-tradeoff, decided by the repository owner on 2026-07-28. Tracked in
-`TODOS.md` § "Approval retraction vocabulary (the ledger cannot say
-'withdrawn')". Do not restore remediability by weakening the check.
+If `c2-gold-reviewer-gold-v3` and `c2-qa-reviewer-qa-v3` are both genuine,
+correctly-bound decisions, this is the change that closes C2 — no further
+mechanism is outstanding. **The unconditional temporal check is not weakened by
+any of this.** `ledger-supersession-not-later` still fires on any future
+approval whose `decidedAt` predates the target it binds, retracted or not; what
+changed is that a validly-authorized retraction now removes a specific
+already-flagged approval from the *effective* set instead of leaving no way to
+express "this one was withdrawn". A fabricated or backdated v3 approval is
+still caught by the same check that caught v2 — retraction authorizes
+withdrawing a named prior approval, it does not authorize a new one that lies
+about its own `decidedAt`.
 
 ### Known open provenance defect (out of scope here)
 
@@ -317,6 +314,22 @@ This is **not** corrected here. Editing the declared timestamps in place would
 newly fail the historically legitimate `c2-*-v1` approvals against the
 `approved-artifact-created-after-decision` invariant. Correcting it properly
 requires issuing new artifact versions — a decision that has not been made.
+
+## Known residual (deferred hardening)
+
+The retraction vocabulary is monotonic toward open on the **policy-backed**
+checkpoints (C0/C1/C2): a valid retraction can never erase a `policy-*` role
+blocker (fixed in `cb69e96`). One channel is **not yet** closed: on
+**presence-only** checkpoints (C3–C5, which have no policy role-set check), the
+actor-separation check reads the retracted-excluded set, so a valid retraction
+of an extra duplicate-actor approval could erase
+`checkpoint-actor-separation-violation` and manufacture closure. This is
+**unreachable today** — the ledger has zero C3/C4/C5 approvals, enforced by a
+tripwire test in `tracked-artifacts-readiness.test.ts` that fails the moment a
+C3+ approval lands. The structural fix (a clean two-set split plus a
+channel-agnostic monotonicity guard-test) is specced in
+`docs/superpowers/plans/2026-07-31-retraction-structural-monotonicity-followup.md`
+and deferred to its own PR. Do not land a C3+ approval without it.
 
 ## After Approval
 

@@ -86,6 +86,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { validateReadinessArtifacts } from "./validator.js";
+import { validateLedgerAppendOnly } from "./contracts.js";
 import {
   TRACKED_LEDGER_APPROVAL_PINS,
   isTrackedArtifactRoot,
@@ -120,11 +121,25 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
   });
 
   it("reports the checkpoint state the documentation claims", () => {
-    // C2 is OPEN. The two effective C2 approvals in checkpoint-approvals-v5.json
-    // (`c2-gold-reviewer-gold-v2`, `c2-qa-reviewer-qa-v2`) each copied the
-    // `decidedAt` of the v1 approval they supersede, so each claims a decision
-    // taken before the target it binds (cf55fee0…) existed. No valid reviewer
-    // decision for that target is recorded anywhere in the repository.
+    // C2 is OPEN, cleanly. `checkpoint-approvals-v6.json` (appended by Task 5)
+    // validly retracts both defective v2 approvals (`c2-gold-reviewer-gold-v2`,
+    // `c2-qa-reviewer-qa-v2` — each had copied the `decidedAt` of the v1
+    // approval it superseded, claiming a decision taken before the target it
+    // binds, cf55fee0…, existed). The retractions are authorized by the same
+    // human Repository Maintainer binding recorded on `c0-repo-maintainer`, so
+    // both temporal findings that used to hold C2 open are now suppressed for
+    // those two approval ids (see the next test).
+    //
+    // C2 does not flip to "closed" as a side effect of the retraction, though.
+    // Model B (validator.ts, `computeRetractedApprovalIds`) never resurrects an
+    // approval a later approval superseded: retracting `c2-gold-reviewer-gold-v2`
+    // removes IT from the effective set, but `c2-gold-reviewer-gold-v1` stays
+    // excluded too, because `c2-gold-reviewer-gold-v2`'s own
+    // `supersedesApprovalId` still names it (retracting a superseder does not
+    // undo the supersession). Same for QA. So neither role has ANY approval left
+    // in the effective set, and C2 is open for the honest reason — no valid
+    // reviewer decision exists for the target — not because of a lingering
+    // blocking issue.
     //
     // C2 closes only when `reviewer-gold` and `reviewer-qa` each record a real
     // decision on the corrected target with a truthful `decidedAt`. See
@@ -139,18 +154,18 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
     });
   });
 
-  it("reports exactly the two known governance-provenance issues", () => {
-    // Blocking issues are enumerated exactly — a NEW issue code appearing here
-    // is a regression, and a missing one means the governance data changed.
-    expect(
-      result.issues.map((i) => ({ code: i.code, artifactId: i.artifactId })).sort((a, b) =>
-        `${a.code}${a.artifactId}`.localeCompare(`${b.code}${b.artifactId}`),
-      ),
-    ).toEqual([
-      { code: "ledger-supersession-not-later", artifactId: "c2-gold-reviewer-gold-v2" },
-      { code: "ledger-supersession-not-later", artifactId: "c2-qa-reviewer-qa-v2" },
-    ]);
-    expect(result.ok).toBe(false);
+  it("reports zero blocking issues now that the two defective C2 approvals are validly retracted", () => {
+    // Before v6 (Task 5), this asserted exactly the two
+    // `ledger-supersession-not-later` issues on `c2-gold-reviewer-gold-v2` and
+    // `c2-qa-reviewer-qa-v2`. Appending v6's two valid retractions is the
+    // legitimate governance event that clears them (Task 4's suppression path),
+    // and no NEW issue code (in particular no `retraction-*` code, which would
+    // mean the retractions themselves were rejected as unauthorized,
+    // out-of-order, or malformed) takes their place. `ok: true` here reflects
+    // "no blocking issue", not "every checkpoint closed" — C2 is still "open"
+    // per the test above, honestly, because no valid approval exists for it.
+    expect(result.issues).toEqual([]);
+    expect(result.ok).toBe(true);
   });
 
   it("emits no external-QA closure caveat while C2 is open", () => {
@@ -214,6 +229,7 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
       "checkpoint-approvals-v3.json",
       "checkpoint-approvals-v4.json",
       "checkpoint-approvals-v5.json",
+      "checkpoint-approvals-v6.json",
     ]);
   });
 
@@ -241,6 +257,88 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
     // `validate-readiness-artifacts.test.ts` ("reports ledgerPinScope: caller
     // …" / "… none …") or with this.
     expect(result.ledgerPinScope).toBe("tracked");
+  });
+});
+
+/**
+ * Task 5's own tripwire: v6 is the real ledger that appends the two retractions
+ * of `c2-gold-reviewer-gold-v2` and `c2-qa-reviewer-qa-v2`. Unlike the block
+ * above (which reads the CURRENT gate result), this block asserts the two
+ * properties that make v6 a LEGITIMATE append rather than a rewrite:
+ *
+ *   1. v6's approvals are v5's approvals UNCHANGED, plus new rows after them
+ *      (`validateLedgerAppendOnly` reports no deletion/mutation/reorder of the
+ *      v5 prefix — the same check the real gate runs at every ledger boundary).
+ *   2. The v6 PIN in `TRACKED_LEDGER_APPROVAL_PINS` is the thing that actually
+ *      guards the two newly-appended retraction rows, NOT append-only.
+ *      `validateLedgerAppendOnly` only ever compares a ledger against its
+ *      PREDECESSOR's rows, so it can never see v6's own tail — exactly the hole
+ *      `ledger-pins.ts`'s module docblock documents for the head of the chain.
+ *      Once v6 has a real successor (v7+), append-only will start guarding v6's
+ *      full row set including the retractions; until then, the path-keyed pin
+ *      is the ONLY thing an editor of v6's retraction rows has to also edit
+ *      (and that edit shows up as a source diff in `ledger-pins.ts`, not as
+ *      silent governance data). So the control below is asserted against the
+ *      PIN, not against `validateLedgerAppendOnly` — asserting the latter here
+ *      would pass for the wrong reason and stop meaning anything the day v6
+ *      stops being the head.
+ */
+describe("checkpoint-approvals-v6.json (Task 5's retraction ledger)", () => {
+  const v5 = JSON.parse(
+    readFileSync(resolve(artifactRoot, "checkpoint-approvals-v5.json"), "utf-8"),
+  ) as { approvals: unknown[] };
+  const v6 = JSON.parse(
+    readFileSync(resolve(artifactRoot, "checkpoint-approvals-v6.json"), "utf-8"),
+  ) as { approvals: Record<string, unknown>[] };
+
+  it("carries v5's approvals unchanged as its prefix, with no deletion/mutation/reorder", () => {
+    expect(v6.approvals.slice(0, v5.approvals.length)).toEqual(v5.approvals);
+    expect(validateLedgerAppendOnly(v6 as never, v5 as never)).toEqual([]);
+  });
+
+  it("appends exactly the two expected retraction rows after the v5 prefix", () => {
+    const appended = v6.approvals.slice(v5.approvals.length);
+    expect(appended.map((r) => r["retractsApprovalId"])).toEqual([
+      "c2-gold-reviewer-gold-v2",
+      "c2-qa-reviewer-qa-v2",
+    ]);
+    expect(appended.every((r) => r["recordKind"] === "retraction")).toBe(true);
+  });
+
+  it("digests to exactly its registered pin", () => {
+    expect(ledgerApprovalRowsDigest(v6.approvals)).toBe(
+      TRACKED_LEDGER_APPROVAL_PINS["checkpoint-approvals-v6.json"],
+    );
+  });
+
+  it("CORRECT CONTROL: the v6 PIN — not append-only — is what would catch a mutated or dropped retraction", () => {
+    // A newly-appended row has no predecessor ledger to compare it against, so
+    // `validateLedgerAppendOnly` cannot see a mutation or deletion inside v6's
+    // own tail (see the block comment above). The path-keyed pin is the
+    // mechanism that actually holds these two rows immutable right now.
+    const pinEntry = TRACKED_LEDGER_APPROVAL_PINS["checkpoint-approvals-v6.json"];
+
+    const withReasonMutated = {
+      ...v6,
+      approvals: v6.approvals.map((r, i) =>
+        i === v6.approvals.length - 1 ? { ...r, reason: "a different reason" } : r,
+      ),
+    };
+    expect(ledgerApprovalRowsDigest(withReasonMutated.approvals)).not.toBe(pinEntry);
+
+    const withRetractionDropped = {
+      ...v6,
+      approvals: v6.approvals.slice(0, -1),
+    };
+    expect(ledgerApprovalRowsDigest(withRetractionDropped.approvals)).not.toBe(pinEntry);
+  });
+
+  it("leaves v5's own pin and digest untouched by the v6 migration", () => {
+    // Digest stability: appending v6 must not change what v5's rows digest to,
+    // or what pin they are held against.
+    expect(ledgerApprovalRowsDigest(v5.approvals)).toBe(
+      TRACKED_LEDGER_APPROVAL_PINS["checkpoint-approvals-v5.json"],
+    );
   });
 });
 
@@ -295,9 +393,11 @@ describe("tracked readiness artifacts, private mode (real data, read-only)", () 
     "reports the same checkpoint state and issues as public mode",
     () => {
       // The documentation states one C2 state, not one per mode. Private mode
-      // must agree with public mode: same checkpoint status, same blocking
-      // issues, same (empty) warnings. A private-only issue code appearing here
-      // is a real regression in the evidence or corpus data.
+      // must agree with public mode: same checkpoint status, same (now empty)
+      // blocking issues, same (empty) warnings — v6's two valid retractions
+      // clear the temporal findings in both modes identically. A private-only
+      // issue code appearing here is a real regression in the evidence or
+      // corpus data.
       expect(privateResult!.checkpointStatus).toEqual({
         C0: "closed",
         C1: "closed",
@@ -306,15 +406,8 @@ describe("tracked readiness artifacts, private mode (real data, read-only)", () 
         C4: "open",
         C5: "open",
       });
-      expect(
-        privateResult!.issues.map((i) => ({ code: i.code, artifactId: i.artifactId })).sort((a, b) =>
-          `${a.code}${a.artifactId}`.localeCompare(`${b.code}${b.artifactId}`),
-        ),
-      ).toEqual([
-        { code: "ledger-supersession-not-later", artifactId: "c2-gold-reviewer-gold-v2" },
-        { code: "ledger-supersession-not-later", artifactId: "c2-qa-reviewer-qa-v2" },
-      ]);
-      expect(privateResult!.ok).toBe(false);
+      expect(privateResult!.issues).toEqual([]);
+      expect(privateResult!.ok).toBe(true);
       expect((privateResult!.warnings ?? []).map((w) => w.code)).toEqual([]);
     },
   );
@@ -496,11 +589,41 @@ describe("tracked readiness artifacts, private mode with the private inputs ABSE
     for (const issue of cleanCheckoutResult.issues) {
       counts.set(issue.code, (counts.get(issue.code) ?? 0) + 1);
     }
+    // The two `ledger-supersession-not-later` rows are gone here too — v6's
+    // retractions clear them regardless of mode or of whether the private
+    // evidence is present, since they are evaluated purely from the ledger
+    // data. `ok` stays false on the strength of the absent-input rows alone.
     expect([...counts.entries()].sort()).toEqual([
       ["c2-evidence-unavailable", 8],
       ["corpus-unreadable", 1],
-      ["ledger-supersession-not-later", 2],
     ]);
     expect((cleanCheckoutResult.warnings ?? []).map((w) => w.code)).toEqual([]);
+  });
+});
+
+/**
+ * TRIPWIRE for a KNOWN, DEFERRED residual (see the KNOWN RESIDUAL comment at the
+ * actor-separation check in `validator.ts`, and
+ * `docs/superpowers/plans/2026-07-31-retraction-structural-monotonicity-followup.md`).
+ *
+ * The actor-separation check runs over the retracted-EXCLUDED closure set, so on
+ * a PRESENCE-ONLY checkpoint (C3–C5, no `CHECKPOINT_POLICIES` entry) a valid
+ * retraction of an extra duplicate-actor approval could ERASE
+ * `checkpoint-actor-separation-violation` and manufacture closure — the one thing
+ * a retraction must never do. That channel is UNREACHABLE only while no C3/C4/C5
+ * approval exists in the ledger. This test enforces that precondition: the day a
+ * C3+ approval lands, it fails loudly and forces the structural-monotonicity fix
+ * to land first.
+ */
+describe("tripwire: presence-only actor-separation manufacture-closure channel stays unreachable", () => {
+  it("has no C3/C4/C5 approval in the tracked ledger (else land the structural-monotonicity follow-up first)", () => {
+    const head = JSON.parse(
+      readFileSync(resolve(artifactRoot, "checkpoint-approvals-v6.json"), "utf-8"),
+    ) as { approvals: Array<{ recordKind?: string; checkpoint?: string }> };
+    const presenceOnlyApprovalCheckpoints = head.approvals
+      .filter((row) => row.recordKind !== "retraction")
+      .map((row) => row.checkpoint)
+      .filter((cp): cp is string => cp === "C3" || cp === "C4" || cp === "C5");
+    expect(presenceOnlyApprovalCheckpoints).toEqual([]);
   });
 });

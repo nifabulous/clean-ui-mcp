@@ -100,17 +100,19 @@ it (`c2-gold-reviewer-gold-v2`, `c2-qa-reviewer-qa-v2`) each copied the
 `decidedAt` of the earlier v1 approval they supersede, so each asserts a decision
 made before this target existed. Both are withdrawn; C2 is open.
 
-**"Withdrawn" here means invalidated by a validator check, not removed from the
-ledger.** Both records are still present in
-`quality-contracts/agent-readiness/checkpoint-approvals-v5.json` and still read
-`decision: "approved"`; no `quality-contracts/` bytes were changed. What withdraws
-them is the `ledger-supersession-not-later` check, which reports their `decidedAt`
-as temporally impossible and blocks the gate. The ledger has no vocabulary for
-recording a retraction yet — tracked in `TODOS.md` § "Approval retraction
-vocabulary". Do not fill in a
-`Decided at` value that is not the actual wall-clock time of a real review. See
-`docs/c2/c2-checkpoint-approval-handoff.md` for the ledger mechanics and what
-would close C2.
+**"Withdrawn" here means both invalidated by a validator check AND recorded as
+retracted.** Both records are still present, unedited, in
+`quality-contracts/agent-readiness/checkpoint-approvals-v5.json` (carried
+forward unchanged into `v6`) and still read `decision: "approved"`; no
+`quality-contracts/` bytes were changed in place. Two things now apply
+together: the `ledger-supersession-not-later` check still reports their
+`decidedAt` as temporally impossible, and `checkpoint-approvals-v6.json`
+additionally records `retraction-c2-gold-v2` and `retraction-c2-qa-v2` —
+authorized retraction records that clear the temporal finding from the gate's
+`ok` result without resurrecting the v1 approvals these v2 records superseded.
+Do not fill in a `Decided at` value that is not the actual wall-clock time of a
+real review. See `docs/c2/c2-checkpoint-approval-handoff.md` for the ledger
+mechanics and what still needs to happen to close C2.
 
 Approval means: “I reviewed this exact C2 evidence target and accept it for the
 C2 readiness checkpoint.” It does not mean that C2 has authorized paid

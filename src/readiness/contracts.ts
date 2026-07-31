@@ -138,6 +138,54 @@ export const CheckpointApproval = z
   })
   .strict();
 
+// ---------------------------------------------------------------------------
+// Retraction schema + back-compatible ledger discriminated union
+// ---------------------------------------------------------------------------
+
+/**
+ * A retraction row. Marks a prior approval as withdrawn without deleting or
+ * mutating it (the ledger stays append-only). Retraction rows carry
+ * `recordKind: "retraction"`; approval rows never carry `recordKind` at all
+ * (see `CheckpointApproval` below, which is intentionally left unchanged).
+ */
+export const CheckpointRetraction = z
+  .object({
+    recordKind: z.literal("retraction"),
+    retractionId: z.string().min(1), // this row's own stable id (distinct from any approvalId)
+    retractsApprovalId: z.string().min(1),
+    retractedBy: z
+      .object({
+        actorId: z.string().min(1),
+        role: z.literal("Repository Maintainer"),
+        actorKind: z.literal("human"),
+        actorRegistryVersion: z.string().min(1),
+        actorRegistrySha256: Sha256,
+      })
+      .strict(),
+    retractedAt: z.string().datetime(),
+    reason: z.string().min(1),
+  })
+  .strict();
+
+// Approval branch FIRST: a legacy approval row (no recordKind) matches it and is
+// returned UNCHANGED (no recordKind added → row digest byte-stable, so v1..v5
+// pins hold). A retraction row fails the strict approval branch (missing the
+// required approval fields + unknown `recordKind`/`retractsApprovalId`/`retractedBy`
+// keys) and routes to CheckpointRetraction.
+export const LedgerRow = z.union([CheckpointApproval, CheckpointRetraction]);
+
+export type CheckpointRetractionT = z.infer<typeof CheckpointRetraction>;
+export type LedgerRowT = z.infer<typeof LedgerRow>;
+
+// Retraction rows carry recordKind; approval rows never do. Presence of the
+// literal is the discriminant.
+export function isRetractionRow(row: LedgerRowT): row is CheckpointRetractionT {
+  return "recordKind" in row && (row as { recordKind?: unknown }).recordKind === "retraction";
+}
+export function isApprovalRow(row: LedgerRowT): row is CheckpointApprovalT {
+  return !isRetractionRow(row);
+}
+
 export const LiveCostApproval = z
   .object({
     approvalId: z.string().min(1),
@@ -396,7 +444,7 @@ const VersionedSnapshotFields = {
 export const CheckpointApprovals = BaseArtifactHeader.extend({
   artifactType: z.literal("checkpoint-approvals"),
   ...VersionedSnapshotFields,
-  approvals: z.array(CheckpointApproval),
+  approvals: z.array(LedgerRow),
 }).strict();
 
 export const ArtifactIndex = BaseArtifactHeader.extend({
@@ -600,26 +648,40 @@ export function validateRegistry(
  * reordered:") to `ledger-approval-*` issue codes.
  */
 export function validateLedgerAppendOnly(
-  current: { approvals: z.infer<typeof CheckpointApproval>[] },
-  previous: { approvals: z.infer<typeof CheckpointApproval>[] },
+  current: { approvals: LedgerRowT[] },
+  previous: { approvals: LedgerRowT[] },
 ): string[] {
   const issues: string[] = [];
 
+  // A row's stable identity for prefix comparison: an approval row's
+  // approvalId, or a retraction row's own retractionId (namespaced so it can
+  // never collide with an approvalId). Narrowing via the type guards — rather
+  // than accessing `.recordKind` on the LedgerRowT union directly — is
+  // required here: CheckpointApproval has no `recordKind` field, so the union
+  // has no common discriminant property to switch on without narrowing first.
+  const rowId = (r: LedgerRowT): string =>
+    isRetractionRow(r) ? `retraction:${r.retractionId}` : r.approvalId;
+
   for (let i = 0; i < previous.approvals.length; i++) {
     const prior = previous.approvals[i]!;
+    const priorId = rowId(prior);
     const next = current.approvals[i];
     if (!next) {
-      issues.push(`prior approval deleted: ${prior.approvalId}`);
-    } else if (next.approvalId !== prior.approvalId) {
-      // The slot no longer holds the same approval. If the prior approval still
-      // exists somewhere later in the current list, it was reordered; otherwise
-      // it was deleted and a different approval took its place.
-      const moved = current.approvals.some((a) => a.approvalId === prior.approvalId);
+      issues.push(`prior approval deleted: ${priorId}`);
+    } else if (rowId(next) !== priorId) {
+      // The slot no longer holds the same row. If the prior row still exists
+      // somewhere later in the current list, it was reordered; otherwise it
+      // was deleted and a different row took its place.
+      const moved = current.approvals.some((a) => rowId(a) === priorId);
       issues.push(
-        `${moved ? "prior approval reordered" : "prior approval deleted"}: ${prior.approvalId}`,
+        `${moved ? "prior approval reordered" : "prior approval deleted"}: ${priorId}`,
       );
     } else if (canonicalJsonStringify(next) !== canonicalJsonStringify(prior)) {
-      issues.push(`prior approval mutated: ${prior.approvalId}`);
+      // canonicalJsonStringify compares ALL of the row's own fields, so this
+      // is kind-aware without any extra branching: a retraction row's full
+      // retraction-specific fields are compared, an approval row's full
+      // approval fields are compared, exactly as before.
+      issues.push(`prior approval mutated: ${priorId}`);
     }
   }
 

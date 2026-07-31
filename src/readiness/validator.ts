@@ -23,7 +23,10 @@ import {
   computeCheckpointTargetSha256,
   canonicalJsonStringify,
   sha256Hex,
+  isApprovalRow,
+  isRetractionRow,
 } from "./contracts.js";
+import type { CheckpointRetractionT, LedgerRowT } from "./contracts.js";
 import type {
   CheckpointRecipe,
   GitSourceResolver,
@@ -1194,8 +1197,41 @@ function validateApprovalsAndCheckpoint(
   }
 
   const approvals = ledgerData.data.approvals;
+  // Partition the mixed ledger once: approval semantics (supersession, actor/
+  // role checks, closure) iterate ONLY `approvalRows`. `approvals` itself stays
+  // available and MUST keep being read, unpartitioned, by tamper-evidence
+  // (`validateLedgerAppendOnly`, `ledgerApprovalRowsDigest`) elsewhere in this
+  // file — those verify the full mixed row sequence, not just approval rows.
+  // No retraction rows exist in any real or test ledger yet, so at runtime
+  // `approvalRows` is exactly `approvals` and `retractionRows` is empty; this
+  // is a pure refactor with no behavior change.
+  const approvalRows = approvals.filter(isApprovalRow);
+  const retractionRows: CheckpointRetractionT[] = approvals.filter(isRetractionRow);
+  // Classifies retraction validity and returns the ids cleared by a VALID
+  // retraction. Consumed below (Task 4): a validly-retracted id is excluded
+  // from the effective approval set (`activeApprovals`) and suppresses the two
+  // temporal findings (`ledger-supersession-not-later`,
+  // `approved-artifact-created-after-decision`) for THAT approval only. An
+  // INVALID retraction (unauthorized/missing/out-of-order/duplicate) is never
+  // added to this set, so it has no effect on closure — both temporal findings
+  // still fire and the approval stays in the effective set, fail-closed.
+  const retractedApprovalIds = computeRetractedApprovalIds(
+    approvals,
+    retractionRows,
+    registryByVersion,
+    issues,
+  );
+  // Approvals that a later, later-decided approval supersedes. Computed from
+  // every approval row's own `supersedesApprovalId` over `approvalRows` — a
+  // retraction row never touches this set. THIS IS INTENTIONAL AND IS MODEL B:
+  // retracting a SUPERSEDER does not remove its `supersedesApprovalId`
+  // contribution, so the predecessor it superseded stays superseded even after
+  // the superseder is validly retracted. A retraction can only ever REMOVE an
+  // approval from the effective set (via `retractedApprovalIds` below); it must
+  // never ADD one back, i.e. never resurrect a superseded approval. Do not
+  // "fix" this by deleting a retracted superseder's contribution to this set.
   const supersededApprovalIds = new Set(
-    approvals.flatMap((approval) => approval.supersedesApprovalId ? [approval.supersedesApprovalId] : []),
+    approvalRows.flatMap((approval) => approval.supersedesApprovalId ? [approval.supersedesApprovalId] : []),
   );
 
   // Per-approval set of issue codes that this approval produced. An approval
@@ -1227,14 +1263,14 @@ function validateApprovalsAndCheckpoint(
   // `checkpointHasBlockingIssue`. Hole 1 of TODOS.md § "Approval provenance holes
   // the content-only validator cannot close" describes the taint-map gap that
   // remains.
-  for (const approval of approvals) {
+  for (const approval of approvalRows) {
     if (approval.supersedesApprovalId !== undefined) {
-      const priorIndex = approvals.findIndex((candidate) => candidate.approvalId === approval.supersedesApprovalId);
-      const currentIndex = approvals.indexOf(approval);
+      const priorIndex = approvalRows.findIndex((candidate) => candidate.approvalId === approval.supersedesApprovalId);
+      const currentIndex = approvalRows.indexOf(approval);
       if (priorIndex < 0 || priorIndex >= currentIndex) {
         issues.push({ code: "ledger-invalid-supersession", artifactId: approval.approvalId, message: `approval ${approval.approvalId} supersedes a missing or later approval` });
       } else {
-        const prior = approvals[priorIndex]!;
+        const prior = approvalRows[priorIndex]!;
         if (prior.checkpoint !== approval.checkpoint || prior.role !== approval.role || prior.actorId !== approval.actorId) {
           issues.push({ code: "ledger-invalid-supersession", artifactId: approval.approvalId, message: `approval ${approval.approvalId} must supersede an earlier approval for the same checkpoint, role, and actor` });
         }
@@ -1300,25 +1336,24 @@ function validateApprovalsAndCheckpoint(
         //
         // SO, PRECISELY — AND ONLY THIS: `ok: false` has been verified to survive
         // the specific attacks enumerated, with their before/after gate output, in
-        // TODOS.md § "How durable, exactly", in
-        // docs/c2/c2-checkpoint-approval-handoff.md, and in the
+        // docs/c2/c2-checkpoint-approval-handoff.md and in the
         // `ledger-pins.ts` docblock. Nothing here claims durability against a
         // CLASS of attacks: every generalisation from a tested attack to a class
-        // made on this control has so far been falsified by the next variant. The
-        // gate stays red even after a legitimate future re-approval, and the
-        // affected checkpoint cannot be closed on a clean gate until an explicit
-        // retraction mechanism exists. It is NOT durable against a change that
-        // also edits `TRACKED_LEDGER_APPROVAL_PINS` in source; that remains
+        // made on this control has so far been falsified by the next variant. It
+        // is NOT durable against a change that also edits
+        // `TRACKED_LEDGER_APPROVAL_PINS` in source; that remains
         // reviewable-in-diff rather than mechanically impossible, and
         // `ledger-pins.ts` says so plainly. Do not restate this as durability
         // against "any change confined to `quality-contracts/`" — that absolute
-        // stood in this comment once and was falsified twice. The
-        // repository owner decided that tradeoff deliberately. Clearing this
-        // finding requires the
-        // retraction vocabulary tracked in TODOS.md § "Approval retraction
-        // vocabulary (the ledger cannot say \"withdrawn\")" — a recorded act
-        // naming who retracted what, when, and why. Do NOT reintroduce an escape
-        // hatch here to restore remediability.
+        // stood in this comment once and was falsified twice. Clearing this
+        // finding requires a validly-authorized retraction record naming who
+        // retracted what, when, and why — implemented (`computeRetractedApprovalIds`,
+        // the `retraction-*` issue codes below), and exercised for real by
+        // `checkpoint-approvals-v6.json`, which retracts the two defective C2 v2
+        // approvals this way (see docs/c2/c2-checkpoint-approval-handoff.md and
+        // docs/AGENT_READINESS_STATUS.md for the resulting, still-open C2 state).
+        // Do NOT reintroduce a supersession- or severity-based escape hatch here
+        // to clear a finding without a retraction record.
         //
         // CLOSURE AGREES WITH `ok` — this used to be a documented residual and no
         // longer is. The taint below lands on the defective record itself, and
@@ -1335,6 +1370,14 @@ function validateApprovalsAndCheckpoint(
         // (`verifyApprovalArtifactTimestamps`) is unconditional in the same way,
         // for the same reason. The two are deliberately consistent; if you are
         // about to scope either one, read this comment first.
+        //
+        // Task 4 adds exactly ONE gate on top of the above, and it is NOT a
+        // supersession-based demotion: a VALID retraction (the approval's id is
+        // in `retractedApprovalIds`, i.e. an authorized Repository Maintainer
+        // retraction that named it, in order, with no prior retraction) is the
+        // sole way to suppress this finding. An INVALID retraction is never in
+        // that set, so the finding still fires unconditionally exactly as
+        // before — this is what keeps the invariant fail-closed.
         const priorDecidedAt = Date.parse(prior.decidedAt);
         const decidedAt = Date.parse(approval.decidedAt);
         if (
@@ -1342,14 +1385,16 @@ function validateApprovalsAndCheckpoint(
           Number.isFinite(decidedAt) &&
           decidedAt <= priorDecidedAt
         ) {
-          issues.push({
-            code: "ledger-supersession-not-later",
-            artifactId: approval.approvalId,
-            message: `approval ${approval.approvalId} decidedAt (${approval.decidedAt}) must be strictly later than superseded approval ${prior.approvalId} decidedAt (${prior.decidedAt})`,
-          });
-          // Taint the defective record. While it is still effective this is what
-          // a checkpoint would close on, so the checkpoint reports "open".
-          noteApprovalIssue(approval.approvalId, "ledger-supersession-not-later");
+          if (!retractedApprovalIds.has(approval.approvalId)) {
+            issues.push({
+              code: "ledger-supersession-not-later",
+              artifactId: approval.approvalId,
+              message: `approval ${approval.approvalId} decidedAt (${approval.decidedAt}) must be strictly later than superseded approval ${prior.approvalId} decidedAt (${prior.decidedAt})`,
+            });
+            // Taint the defective record. While it is still effective this is what
+            // a checkpoint would close on, so the checkpoint reports "open".
+            noteApprovalIssue(approval.approvalId, "ledger-supersession-not-later");
+          }
         }
       }
     }
@@ -1364,9 +1409,10 @@ function validateApprovalsAndCheckpoint(
   // checked at all. See the function's docstring for exactly what this does and
   // does not detect.
   verifyApprovalArtifactTimestamps(
-    approvals,
+    approvalRows,
     artifacts,
     supersededApprovalIds,
+    retractedApprovalIds,
     issues,
     noteApprovalIssue,
   );
@@ -1378,7 +1424,25 @@ function validateApprovalsAndCheckpoint(
   // checkpoint (e.g. C1) stays open without producing spurious issues
   // from unresolved sources.
   // ------------------------------------------------------------------
-  const activeApprovals = approvals.filter((approval) => !supersededApprovalIds.has(approval.approvalId));
+  // A validly-retracted approval stays VISIBLE here — only SUPERSEDED
+  // approvals are excluded, same as before retraction existed. This set feeds
+  // every STRUCTURAL/target/cardinality computation below (activeCheckpoints,
+  // computeCanonicalTargets, and — via `allCpApproved` further down —
+  // `comparePolicySet`'s closed-world role check and actor-cardinality). A
+  // retraction must be monotonic toward open: it can only ever REMOVE an
+  // approval's CONTRIBUTION TO CLOSURE, never remove a blocking finding it
+  // caused. Excluding retracted approvals from this set let a valid
+  // retraction of an EXTRA approval clear the `policy-unexpected-role`
+  // finding it tripped while the required roles stayed satisfied elsewhere —
+  // manufacturing closure (fail-open; see the "codex regression" describe
+  // block in validate-readiness-artifacts.test.ts). Retraction is excluded
+  // ONLY from role-satisfaction, at `cpApprovals` below — so it can still
+  // hold a checkpoint open, but can never close one. See the comment at
+  // `supersededApprovalIds` above for why retracting a SUPERSEDER does not
+  // put its predecessor back in this set (Model B).
+  const activeApprovals = approvalRows.filter(
+    (approval) => !supersededApprovalIds.has(approval.approvalId),
+  );
   const activeCheckpoints = new Set(activeApprovals.map((a) => a.checkpoint));
   const recompute = computeCanonicalTargets(artifacts, absRoot, opts, activeCheckpoints, activeApprovals, registryByVersion);
 
@@ -1395,7 +1459,7 @@ function validateApprovalsAndCheckpoint(
   // Track target SHAs per checkpoint (for divergent-target detection)
   const targetShas = new Map<string, Set<string>>();
 
-  for (const approval of approvals) {
+  for (const approval of approvalRows) {
     const iid = approval.approvalId;
     const isSuperseded = supersededApprovalIds.has(iid);
 
@@ -1626,7 +1690,7 @@ function validateApprovalsAndCheckpoint(
   // those are picked up by the in-loop attributable check instead.
   const CHECKPOINT_IDS: ReadonlySet<string> = new Set(["C0", "C1", "C2", "C3", "C4", "C5"]);
   const checkpointOfApprovalId = new Map<string, string>(
-    approvals.map((a) => [a.approvalId, a.checkpoint]),
+    approvalRows.map((a) => [a.approvalId, a.checkpoint]),
   );
   // An unrecognised `checkpoint` value is NOT an attribution: a typo'd "c2" must
   // over-block (unattributable ⇒ every checkpoint open) rather than attribute to
@@ -1680,10 +1744,16 @@ function validateApprovalsAndCheckpoint(
       );
     }
 
-    // Closure contribution: only approvals that produced NO issue. Re-derive
-    // the clean set AFTER the role check may have tainted approvals.
+    // Closure contribution: only approvals that produced NO issue AND are not
+    // validly retracted. Re-derive the clean set AFTER the role check may
+    // have tainted approvals. A retracted approval IS still seen by the
+    // closed-world role check (`comparePolicySet` reads `allRoles` from
+    // `allCpApproved`, which is retracted-INCLUSIVE via `activeApprovals`), so
+    // retraction can never erase a `policy-*` role blocker; but it must NOT
+    // count toward `allRolesPresent` — retraction only ever removes closure
+    // support, never a blocker.
     const cpApprovals = allCpApproved.filter(
-      (a) => !approvalIssueCodes.has(a.approvalId),
+      (a) => !approvalIssueCodes.has(a.approvalId) && !retractedApprovalIds.has(a.approvalId),
     );
     const cleanRoles = new Set<string>(cpApprovals.map((a) => a.role));
 
@@ -1693,6 +1763,21 @@ function validateApprovalsAndCheckpoint(
     // Distinct actors always satisfy separation; a single shared actor is valid
     // only when every contributing approval's pinned registry declares
     // sole-maintainer-bootstrap with that actor as the human owner.
+    //
+    // ── KNOWN RESIDUAL (deferred hardening — see the follow-up below) ────────
+    // Unlike the role check above, this separation check runs over the
+    // retracted-EXCLUDED `cpApprovals`. On PRESENCE-ONLY checkpoints (C3–C5,
+    // which have no `CHECKPOINT_POLICIES` entry, so the closed-world role check
+    // never runs), a valid retraction of an EXTRA separation-violating approval
+    // would ERASE `checkpoint-actor-separation-violation` while the required
+    // roles stay satisfied — a retraction manufacturing closure, which the
+    // governing invariant forbids. This channel is UNREACHABLE today: the real
+    // ledger has zero C3/C4/C5 approvals (asserted by the tripwire in
+    // tracked-artifacts-readiness.test.ts). The full fix (a clean two-set split
+    // so retraction is excluded ONLY from role-satisfaction, never from any
+    // structural blocker) is specced + patched in
+    // docs/superpowers/plans/2026-07-31-retraction-structural-monotonicity-followup.md
+    // and deferred to its own PR. Do NOT let a C3+ approval land without it.
     const actorCardinalityValid = approvalsSatisfyActorCardinality(
       cpApprovals,
       resolvedRegistryByApprovalId,
@@ -1771,7 +1856,7 @@ function validateApprovalsAndCheckpoint(
       hasUnattributableBlockingIssue ||
       issues.some((i) => i.checkpoint === cp) ||
       blockingIssueArtifactIds.has(cp) ||
-      approvals.some(
+      approvalRows.some(
         (a) =>
           a.checkpoint === cp &&
           (blockingIssueArtifactIds.has(a.approvalId) ||
@@ -1799,6 +1884,128 @@ function validateApprovalsAndCheckpoint(
       }
     }
   }
+}
+
+/**
+ * Classify each retraction row as VALID or INVALID and return the set of
+ * approvalIds cleared by a valid retraction. This does NOT change closure
+ * (Task 4 consumes the returned set); it only classifies retractions and
+ * pushes one finding per invalid retraction.
+ *
+ * GOVERNING INVARIANT (fail-closed): a retraction only ever REMOVES an
+ * approval. Any resolution failure — retractor not resolvable/authorized,
+ * target missing, out-of-order, target-not-an-approval, duplicate — must NOT
+ * add the target to the returned set.
+ *
+ * Ordering uses each row's index in the ORIGINAL mixed `allRows` array (a
+ * retraction must follow the approval it names); `retractionRows` is the
+ * pre-filtered subset (via `isRetractionRow`) supplying the rows to classify.
+ *
+ * Retractor authorization mirrors `resolveApprovalRegistry` exactly: resolve
+ * the retraction's OWN pinned registry version, verify its content digest
+ * (`entry.sha === retractedBy.actorRegistrySha256`), parse it as an
+ * `ApprovalActorRegistry`, then require the named actor to be a `"human"`
+ * with the `"Repository Maintainer"` role IN THAT REGISTRY — not merely on
+ * the retraction row's self-declared `retractedBy.role`/`actorKind`, which is
+ * an audit trail, not an authorization source.
+ */
+export function computeRetractedApprovalIds(
+  allRows: LedgerRowT[],
+  retractionRows: CheckpointRetractionT[],
+  registryByVersion: ReadonlyMap<string, ParsedArtifact>,
+  issues: ValidationIssue[],
+): Set<string> {
+  const retracted = new Set<string>();
+
+  // First index of each approvalId in the mixed list.
+  const approvalIndexById = new Map<string, number>();
+  allRows.forEach((row, i) => {
+    if (isApprovalRow(row) && !approvalIndexById.has(row.approvalId)) {
+      approvalIndexById.set(row.approvalId, i);
+    }
+  });
+  const retractionIndex = new Map<CheckpointRetractionT, number>();
+  allRows.forEach((row, i) => {
+    if (isRetractionRow(row)) retractionIndex.set(row, i);
+  });
+
+  const push = (code: string, targetId: string, message: string) =>
+    issues.push({ code, artifactId: targetId, message });
+
+  for (const r of retractionRows) {
+    // FAIL-CLOSED GUARD (not a `!` non-null assertion): every real caller
+    // passes `retractionRows` as a subset of `allRows` (production always
+    // supplies `approvals.filter(isRetractionRow)`), so `retractionIndex` has
+    // an entry for every row here today. But a `!` assertion would, for a
+    // hypothetical retraction row absent from `allRows`, resolve `rIdx` to
+    // `undefined` — and `targetApprovalIdx >= undefined` is always `false`,
+    // silently passing the out-of-order check and adding the target to
+    // `retracted` (fail-OPEN: an untethered retraction record could clear an
+    // approval). Skip the row instead — it names no position in the ledger, so
+    // it cannot be validated as in-order, and must not retract anything.
+    const rIdx = retractionIndex.get(r);
+    if (rIdx === undefined) continue;
+    const targetId = r.retractsApprovalId;
+
+    // Authorization: the actor must resolve in the retraction's OWN pinned
+    // registry (version + sha256 verified) as a human authorized for
+    // Repository Maintainer. Any resolution failure is fail-closed →
+    // retraction-unauthorized (inert). This mirrors `resolveApprovalRegistry`
+    // exactly, including its semantic pass (`validateRegistry`): a registry
+    // that is schema-valid but semantically corrupt (bad governance-mode /
+    // bootstrap-owner combination, a broken version chain) must not be
+    // trusted to authorize a retraction just because it wasn't trusted to
+    // authorize an approval — both paths share one notion of "a valid
+    // registry".
+    const entry = registryByVersion.get(r.retractedBy.actorRegistryVersion);
+    const registry =
+      entry && entry.sha === r.retractedBy.actorRegistrySha256
+        ? ApprovalActorRegistry.safeParse(entry.data)
+        : undefined;
+    const registrySemanticallyValid =
+      registry?.success === true && validateRegistry(registry.data).length === 0;
+    const actor = registrySemanticallyValid
+      ? registry.data.actors.find((a) => a.actorId === r.retractedBy.actorId)
+      : undefined;
+    if (!actor || actor.actorKind !== "human" || !actor.roles.includes("Repository Maintainer")) {
+      push(
+        "retraction-unauthorized",
+        targetId,
+        `retraction of ${targetId}: retractor ${r.retractedBy.actorId} is not an authorized human Repository Maintainer`,
+      );
+      continue;
+    }
+
+    // Classify the target: approval / retraction-row-or-self / absent.
+    const targetApprovalIdx = approvalIndexById.get(targetId);
+    if (targetApprovalIdx === undefined) {
+      // targetId names an approvalId; if it instead matches a retractionId
+      // (its own — self — or another retraction's), it is not an approval.
+      const namesARetraction = allRows.some(
+        (row) => isRetractionRow(row) && row.retractionId === targetId,
+      );
+      push(
+        namesARetraction ? "retraction-target-not-approval" : "retraction-target-missing",
+        targetId,
+        `retraction ${r.retractionId} names ${targetId}, which is not an earlier approval row`,
+      );
+      continue;
+    }
+    if (targetApprovalIdx >= rIdx) {
+      push(
+        "retraction-out-of-order",
+        targetId,
+        `retraction of ${targetId} must follow the approval it retracts`,
+      );
+      continue;
+    }
+    if (retracted.has(targetId)) {
+      push("retraction-duplicate", targetId, `duplicate retraction of ${targetId}`);
+      continue;
+    }
+    retracted.add(targetId);
+  }
+  return retracted;
 }
 
 /**
@@ -1890,12 +2097,20 @@ function validateApprovalsAndCheckpoint(
  * Two different decisions live in this function and they are deliberately
  * asymmetric:
  *
- * - `approved-artifact-created-after-decision` is UNCONDITIONAL. It runs over
- *   every approval, superseded or not, and always blocks and always taints.
+ * - `approved-artifact-created-after-decision` is UNCONDITIONAL WITH RESPECT TO
+ *   SUPERSESSION. It runs over every approval, superseded or not, and always
+ *   blocks and always taints. Task 4 adds exactly one further gate, shared with
+ *   `ledger-supersession-not-later`: a VALID retraction (the approval's id is
+ *   in `retractedApprovalIds`) suppresses this finding for that approval only.
+ *   An INVALID retraction is never in that set, so the finding still fires
+ *   exactly as before — see `computeRetractedApprovalIds`'s docstring for what
+ *   makes a retraction valid. This is not the supersession-based demotion
+ *   rejected below; retraction is a distinct, explicit, authorized act.
  *   This matches its sibling `ledger-supersession-not-later` in
  *   `validateApprovalsAndCheckpoint` exactly: both are temporal-impossibility
- *   findings, both are durable against the attacks enumerated in TODOS.md
- *   § "How durable, exactly" — `validateLedgerAppendOnly` keeps every record in
+ *   findings, both are durable against the attacks enumerated in
+ *   docs/c2/c2-checkpoint-approval-handoff.md —
+ *   `validateLedgerAppendOnly` keeps every record in
  *   a ledger that is PRESENT, the approval-row pins in `ledger-pins.ts` keep a
  *   tracked ledger's own rows from being edited in place (the append-only check
  *   alone does not cover the head), and step 7c's three rules keep an unpinned
@@ -1908,9 +2123,11 @@ function validateApprovalsAndCheckpoint(
  *   supersession-based
  *   demotion was tried on the sibling and proved exploitable — one fabricated
  *   record dated a millisecond later suffices to hide the defect. Do not
- *   reintroduce it on either check. Clearing such a finding requires the
- *   retraction vocabulary tracked in TODOS.md § "Approval retraction vocabulary
- *   (the ledger cannot say \"withdrawn\")".
+ *   reintroduce it on either check. Clearing such a finding requires a
+ *   validly-authorized retraction record targeting the specific approval (see
+ *   `computeRetractedApprovalIds` and the `retraction-*` issue codes below,
+ *   and `checkpoint-approvals-v6.json`, which retracts the two C2 v2
+ *   approvals this way).
  * - `approved-artifact-version-unresolved` (via `reportUnresolved` below) IS
  *   scoped to active approvals. That is not a severity demotion: it is a
  *   detectability limit. The check needs the exact bytes the approval bound in
@@ -1927,6 +2144,7 @@ function verifyApprovalArtifactTimestamps(
   approvals: readonly z.infer<typeof CheckpointApproval>[],
   artifacts: Map<string, ParsedArtifact>,
   supersededApprovalIds: ReadonlySet<string>,
+  retractedApprovalIds: ReadonlySet<string>,
   issues: ValidationIssue[],
   note: (approvalId: string, code: string) => void,
 ): void {
@@ -1970,7 +2188,7 @@ function verifyApprovalArtifactTimestamps(
       if (typeof createdAtRaw !== "string") continue;
       const createdAt = Date.parse(createdAtRaw);
       if (!Number.isFinite(createdAt)) continue;
-      if (decidedAt < createdAt) {
+      if (decidedAt < createdAt && !retractedApprovalIds.has(approval.approvalId)) {
         issues.push({
           code: "approved-artifact-created-after-decision",
           artifactId: approval.approvalId,

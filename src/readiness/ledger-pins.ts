@@ -336,6 +336,8 @@ export const TRACKED_LEDGER_APPROVAL_PINS: Readonly<Record<string, string>> = Ob
     "2449a51c6c6decf49415104bbe0fd85ebd44b1429b6258f36b3fd84646f33a26",
   "checkpoint-approvals-v5.json":
     "180d1c451a38b3def1371a0d4ddb41e6534bbd8d2df325ac0787af220b17b8ec",
+  "checkpoint-approvals-v6.json":
+    "6398ac4f0a4bc183b00dc0a95d1bc567e53aeb4e16b0c7b831ef352c56f4c262",
 });
 
 /**

@@ -2025,7 +2025,7 @@ describe("approval temporal provenance", () => {
     // supersession blocks whether or not something later supersedes it. A
     // durable record that a governance defect occurred is the entire value of
     // this invariant. "Durable" is defined by the attacks enumerated in
-    // TODOS.md § "How durable, exactly" and reproduced against the real graph:
+    // docs/c2/c2-checkpoint-approval-handoff.md and reproduced against the real graph:
     // a successor ledger cannot drop the record (append-only prefix check), a
     // tracked ledger's own rows cannot be edited in place (the approval-row pins
     // in src/readiness/ledger-pins.ts, which the append-only check does NOT
@@ -2037,8 +2037,10 @@ describe("approval temporal provenance", () => {
     // confined to `quality-contracts/`" was asserted here once and falsified by
     // a rename, and "closed by the chain being five ledgers long" was asserted
     // once and falsified by repairing the digest cascade in a loop. Clearing it
-    // legitimately requires an explicit retraction act — see TODOS.md
-    // § "Approval retraction vocabulary (the ledger cannot say \"withdrawn\")".
+    // legitimately requires an explicit, validly-authorized retraction record
+    // (see `computeRetractedApprovalIds` and the `retraction-*` issue codes in
+    // src/readiness/validator.ts; `checkpoint-approvals-v6.json` is the real
+    // ledger that uses this to retract the two defective C2 v2 approvals).
     fixture = buildValidGraph({ withApprovals: true });
     const v1 = readJson<{ approvals: Array<Record<string, unknown>> }>(fixture.ledgerPath!);
     const prior = v1.approvals.find((a) => a.approvalId === "c0-repo-maintainer")!;
@@ -2755,6 +2757,357 @@ describe("approval temporal provenance", () => {
     const result = validate(fixture);
     expect(result.ok).toBe(false);
     expect(result.checkpointStatus.C0).toBe("open");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — Task 4: retraction effect on closure
+//
+// Task 3 added the retraction row + `computeRetractedApprovalIds`, but left it
+// `void`'d — inert — at closure. Task 4 wires it in: a VALID retraction (1)
+// excludes its target from ROLE-SATISFACTION (`cpApprovals`, i.e. it cannot
+// CONTRIBUTE TO CLOSURE), and (2) suppresses the two temporal findings
+// (`ledger-supersession-not-later`, `approved-artifact-created-after-decision`)
+// FOR THAT APPROVAL ONLY. A retracted approval stays VISIBLE to every
+// structural/target/cardinality check (`activeApprovals`) so it can still
+// hold a checkpoint open, but never close one — see the P1 fix (a retraction
+// must be monotonic toward open) and the "codex regression" describe block
+// below this one, which pins exactly that. An INVALID retraction must have no
+// effect whatsoever — both findings still fire and the approval is still
+// active — which is the fail-closed half of the invariant this suite exists
+// to pin.
+//
+// The real governance defect this feature targets lives in
+// `checkpoint-approvals-v5.json` (C2's `c2-gold-reviewer-gold-v2` /
+// `c2-qa-reviewer-qa-v2`, each copying its predecessor's `decidedAt`
+// verbatim — see `src/readiness/tracked-artifacts-readiness.test.ts` and the
+// long comment at `ledger-supersession-not-later` in validator.ts). That shape
+// is reproduced here on C0's `c0-repo-maintainer` chain instead of C2's,
+// because C0 already has a complete, cheaply-buildable fixture in this file
+// (`buildValidGraph({ withApprovals: true })`, closes cleanly with a real
+// recomputed target) — this is the "lightest harness that actually exercises
+// the suppression + exclusion" the task brief asks for, not a claim that C2
+// itself is retested here (that real-data regression stays pinned by the
+// tracked-artifacts suite, unchanged by this feature).
+// ---------------------------------------------------------------------------
+
+describe("retraction effect on closure", () => {
+  let fixture: ReturnType<typeof buildValidGraph>;
+
+  afterEach(() => {
+    if (fixture) cleanup(fixture.root);
+  });
+
+  function validate(f: ReturnType<typeof buildValidGraph>) {
+    return validateReadinessArtifacts({
+      artifactRoot: f.artifactRoot,
+      repoRoot: f.repoRoot,
+      gitSourceResolver: f.resolver,
+      mode: "public",
+    });
+  }
+
+  /**
+   * Append a superseding copy of the C0 Repository Maintainer approval,
+   * carrying the supplied `decidedAt`, plus any extra rows (retractions), into
+   * a single v2 ledger snapshot. Mirrors `supersedeRepoMaintainer` in the
+   * "approval temporal provenance" describe above (same shape), duplicated
+   * locally so this describe block is self-contained. Returns the successor's
+   * approvalId ("c0-repo-maintainer-v2") for convenience at call sites.
+   */
+  function writeSuccessorLedger(
+    decidedAt: string,
+    extraRows: Array<Record<string, unknown>> = [],
+  ): string {
+    const v1 = readJson<{ approvals: Array<Record<string, unknown>> }>(fixture.ledgerPath!);
+    const prior = v1.approvals.find((a) => a.approvalId === "c0-repo-maintainer")!;
+    const successorId = "c0-repo-maintainer-v2";
+    const successor = {
+      ...prior,
+      approvalId: successorId,
+      supersedesApprovalId: "c0-repo-maintainer",
+      decidedAt,
+    };
+    writeLedgerV2(fixture, [...v1.approvals, successor, ...extraRows]);
+    return successorId;
+  }
+
+  function validRetraction(
+    retractsApprovalId: string,
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      recordKind: "retraction",
+      retractionId: "r1",
+      retractsApprovalId,
+      retractedBy: {
+        actorId: "repo-maintainer-1", // real fixture actor, Repository Maintainer
+        role: "Repository Maintainer",
+        actorKind: "human",
+        actorRegistryVersion: "1.0",
+        actorRegistrySha256: fileSha(fixture.registryPath),
+      },
+      retractedAt: "2026-07-20T00:00:00Z",
+      reason: "corrected the mis-dated supersession",
+      ...overrides,
+    };
+  }
+
+  function unauthorizedRetraction(retractsApprovalId: string): Record<string, unknown> {
+    // pm-1 is a real fixture actor, but only PM — not Repository Maintainer —
+    // in the registry. The row's own `retractedBy.role` self-declares
+    // "Repository Maintainer" (as the schema requires), but authorization
+    // checks the REGISTRY's actual role for the actorId, not the self-declared
+    // field, so this is rejected as retraction-unauthorized.
+    return validRetraction(retractsApprovalId, { retractionId: "r1", retractedBy: {
+      actorId: "pm-1",
+      role: "Repository Maintainer",
+      actorKind: "human",
+      actorRegistryVersion: "1.0",
+      actorRegistrySha256: fileSha(fixture.registryPath),
+    } });
+  }
+
+  it("valid path: suppresses both temporal findings, excludes the approval from the active set, and does not close the checkpoint", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    // decidedAt strictly earlier than BOTH the superseded approval's decidedAt
+    // (10:00:00Z) and every bound artifact's createdAt (09:30:00Z) — trips
+    // ledger-supersession-not-later AND approved-artifact-created-after-decision
+    // on the same approval, same as the real c2-*-v2 defect shape.
+    const successorId = writeSuccessorLedger("2026-07-14T09:00:00Z", [
+      validRetraction("c0-repo-maintainer-v2"),
+    ]);
+    expect(successorId).toBe("c0-repo-maintainer-v2");
+    const result = validate(fixture);
+
+    expect(
+      result.issues.filter((i) => i.code === "ledger-supersession-not-later"),
+    ).toEqual([]);
+    expect(
+      result.issues.filter((i) => i.code === "approved-artifact-created-after-decision"),
+    ).toEqual([]);
+    expect(result.issues.some((i) => i.code === "retraction-unauthorized")).toBe(false);
+
+    // EXCLUDED FROM CLOSURE, NOT RESURRECTED: c0-repo-maintainer-v2 is
+    // retracted, so it does not CONTRIBUTE TO CLOSURE (excluded from
+    // `cpApprovals`) even though it stays visible to the structural role
+    // check (`activeApprovals`/`allCpApproved`); c0-repo-maintainer stays
+    // superseded either way (Model B — see the dedicated test below). So
+    // NEITHER row satisfies the Repository Maintainer role for CLOSURE, and
+    // C0 — which requires it — must stay open. If a retraction ever "closed"
+    // a checkpoint, that would mean it made an approval COUNT TOWARD
+    // role-satisfaction, which is the one thing it must never do.
+    expect(result.checkpointStatus.C0).toBe("open");
+  });
+
+  it("fail-closed: an UNAUTHORIZED retraction leaves both temporal findings present and the checkpoint open", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    writeSuccessorLedger("2026-07-14T09:00:00Z", [
+      unauthorizedRetraction("c0-repo-maintainer-v2"),
+    ]);
+    const result = validate(fixture);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((i) => i.code === "retraction-unauthorized")).toBe(true);
+
+    // BOTH temporal findings still fire, unconditionally, exactly as they
+    // would with no retraction row present at all.
+    const supersessionFindings = result.issues.filter(
+      (i) => i.code === "ledger-supersession-not-later",
+    );
+    expect(supersessionFindings.length).toBe(1);
+    expect(supersessionFindings[0]!.artifactId).toBe("c0-repo-maintainer-v2");
+
+    const temporalFindings = result.issues.filter(
+      (i) => i.code === "approved-artifact-created-after-decision",
+    );
+    expect(temporalFindings.length).toBeGreaterThan(0);
+    expect(temporalFindings.every((i) => i.artifactId === "c0-repo-maintainer-v2")).toBe(true);
+
+    // Never demoted to closed: a checkpoint carrying a blocking issue on any
+    // of its approvals cannot report "closed".
+    expect(result.checkpointStatus.C0).toBe("open");
+  });
+
+  it("fail-closed: an UNAUTHORIZED retraction does not exclude the approval from the active set", () => {
+    // Same unauthorized retractor, but on a CLEAN supersession (no temporal
+    // defect) — isolates the exclusion question from the finding-suppression
+    // question. If the id had been (incorrectly) excluded from the active set,
+    // C0 would stay open for lack of a Repository Maintainer approval. It must
+    // instead close exactly as it would with no retraction row at all, proving
+    // the successor is still counted.
+    fixture = buildValidGraph({ withApprovals: true });
+    writeSuccessorLedger("2026-07-14T11:00:00Z", [
+      unauthorizedRetraction("c0-repo-maintainer-v2"),
+    ]);
+    const result = validate(fixture);
+
+    expect(result.issues.filter((i) => i.code !== "retraction-unauthorized")).toEqual([]);
+    expect(result.issues.some((i) => i.code === "retraction-unauthorized")).toBe(true);
+    expect(result.checkpointStatus.C0).toBe("open"); // ok is false (retraction-unauthorized), so closure stays gated
+    expect(result.ok).toBe(false);
+  });
+
+  it("Model B: retracting a SUPERSEDER does not resurrect the approval it superseded", () => {
+    // Clean supersession (no temporal defect): c0-repo-maintainer-v2 is valid
+    // and, together with c0-pm, closes C0 (pinned by the existing "accepts a
+    // superseding approval whose decidedAt is strictly later" test). Validly
+    // retracting the SUPERSEDER must not put its predecessor back into the
+    // ROLE-SATISFYING set — the checkpoint must go back to "open", not stay
+    // "closed" on the strength of the resurrected predecessor.
+    fixture = buildValidGraph({ withApprovals: true });
+    writeSuccessorLedger("2026-07-14T11:00:00Z", [
+      validRetraction("c0-repo-maintainer-v2"),
+    ]);
+    const result = validate(fixture);
+
+    // No provenance/authorization defect: the retraction is valid and the
+    // supersession is clean. Post-fix, a retracted approval stays VISIBLE to
+    // the structural role check (only superseded approvals are excluded from
+    // `activeApprovals` now — see the fix's file-level comment): c0-repo-
+    // maintainer-v2 (Repository Maintainer, retracted-but-not-superseded) and
+    // c0-pm (PM) together satisfy the required role SET exactly, so
+    // `comparePolicySet` finds no missing/unexpected role and pushes nothing.
+    // Zero issues is therefore the correct, non-defective result here — the
+    // point of this test is the checkpointStatus assertion below, not the
+    // issues list.
+    expect(result.issues).toEqual([]);
+    expect(result.issues.some((i) => i.code === "retraction-unauthorized")).toBe(false);
+    expect(
+      result.issues.some(
+        (i) =>
+          i.code === "ledger-supersession-not-later" ||
+          i.code === "approved-artifact-created-after-decision",
+      ),
+    ).toBe(false);
+
+    // c0-repo-maintainer (the predecessor, "A") stays superseded; c0-repo-
+    // maintainer-v2 (the superseder, "B") is retracted. Neither CONTRIBUTES TO
+    // CLOSURE (`cpApprovals` excludes both — A for supersession, B for
+    // retraction), so the Repository Maintainer role has no closure-eligible
+    // approval and C0 — which requires it — stays open, even though no
+    // blocking issue fired. A bug that resurrected A on B's retraction would
+    // make this "closed" instead (A alone satisfies Repository Maintainer, and
+    // c0-pm already satisfies PM); a bug that let B's retraction manufacture
+    // closure by suppressing a role check would also make this "closed" via a
+    // different path — this assertion catches both.
+    expect(result.checkpointStatus.C0).toBe("open");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — codex regression: a retraction must never manufacture closure via
+// a STRUCTURAL check (P1 fail-open, found by independent cross-model review)
+//
+// The defect: `activeApprovals` used to exclude retracted approvals, and that
+// same set fed `allCpApproved` → `comparePolicySet`'s closed-world role check
+// (`policy-missing-role` / `policy-unexpected-role` / `policy-duplicate-role`)
+// and the actor-cardinality check. So retracting an EXTRA approval that was
+// tripping `policy-unexpected-role` removed the blocker while the required
+// roles stayed satisfied elsewhere — the checkpoint CLOSED. A retraction must
+// be monotonic toward open: it may only ever REMOVE an approval's
+// contribution to closure, never remove a blocking finding it caused.
+//
+// C1 (required = {Product, Engineering}) is used here (rather than C0, used
+// by the "retraction effect on closure" suite above) because it needs a role
+// that exists in the fixture's actor registry but is UNEXPECTED for this
+// checkpoint: "Repository Maintainer" (repo-maintainer-1, already an
+// authorized human Repository Maintainer for C0) fits exactly.
+// ---------------------------------------------------------------------------
+
+describe("codex regression: retraction must not manufacture closure via a structural check", () => {
+  let fixture: ReturnType<typeof buildValidGraph>;
+
+  afterEach(() => {
+    if (fixture) cleanup(fixture.root);
+  });
+
+  function validate(f: ReturnType<typeof buildValidGraph>) {
+    return validateReadinessArtifacts({
+      artifactRoot: f.artifactRoot,
+      repoRoot: f.repoRoot,
+      gitSourceResolver: f.resolver,
+      mode: "public",
+    });
+  }
+
+  /**
+   * Clone C1's Product approval into an EXTRA Repository-Maintainer approval
+   * (an unexpected role for C1) and append it to the ledger. Returns the new
+   * approval's id for use as a retraction target.
+   */
+  function appendExtraRepoMaintainerApproval(
+    ledger: { approvals: Array<Record<string, unknown>> },
+  ): string {
+    const product = ledger.approvals.find(
+      (a) => a["checkpoint"] === "C1" && a["role"] === "Product",
+    )!;
+    const approvalId = "c1-repo-maintainer-extra";
+    ledger.approvals.push({
+      ...product,
+      approvalId,
+      role: "Repository Maintainer",
+      actorId: "repo-maintainer-1",
+      actorKind: "human",
+      decidedAt: "2026-07-15T10:02:00Z",
+    });
+    return approvalId;
+  }
+
+  it("sanity: an EXTRA unexpected-role C1 approval (no retraction) trips policy-unexpected-role and holds C1 open", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const c1 = addValidSyntheticC1Approvals(fixture);
+    mutateJson<{ approvals: Array<Record<string, unknown>> }>(c1.ledgerPath, (ledger) => {
+      appendExtraRepoMaintainerApproval(ledger);
+      return ledger;
+    });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "policy-unexpected-role")).toBe(true);
+    expect(result.checkpointStatus.C1).toBe("open");
+    expect(result.ok).toBe(false);
+  });
+
+  it("a VALID retraction of the extra approval must NOT clear policy-unexpected-role or close C1", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const c1 = addValidSyntheticC1Approvals(fixture);
+    mutateJson<{ approvals: Array<Record<string, unknown>> }>(c1.ledgerPath, (ledger) => {
+      const approvalId = appendExtraRepoMaintainerApproval(ledger);
+      // A VALID retraction, authorized by repo-maintainer-1 (a real human
+      // Repository Maintainer in the pinned v2 registry). If a retraction can
+      // ever close a checkpoint by clearing a structural finding, this is the
+      // shape that proves it — the retraction targets the very approval that
+      // tripped policy-unexpected-role, while Product + Engineering remain.
+      ledger.approvals.push({
+        recordKind: "retraction",
+        retractionId: "r1",
+        retractsApprovalId: approvalId,
+        retractedBy: {
+          actorId: "repo-maintainer-1",
+          role: "Repository Maintainer",
+          actorKind: "human",
+          actorRegistryVersion: "2.0",
+          actorRegistrySha256: fileSha(c1.registryPath),
+        },
+        retractedAt: "2026-07-20T00:00:00Z",
+        reason: "extra approval was submitted in error",
+      });
+      return ledger;
+    });
+    const result = validate(fixture);
+
+    // The retraction itself must be accepted (authorized, in-order, real
+    // target) — this is not a test of retraction validity, but of what a
+    // VALID retraction is and is not allowed to do.
+    expect(result.issues.some((i) => i.code === "retraction-unauthorized")).toBe(false);
+    expect(result.issues.some((i) => i.code === "retraction-out-of-order")).toBe(false);
+    expect(result.issues.some((i) => i.code === "retraction-target-missing")).toBe(false);
+
+    // The blocking structural finding must still be attributed to C1 and the
+    // checkpoint must still be open — a retraction can only ever REMOVE an
+    // approval's contribution to closure, never remove a blocker.
+    expect(result.issues.some((i) => i.code === "policy-unexpected-role")).toBe(true);
+    expect(result.checkpointStatus.C1).toBe("open");
+    expect(result.ok).toBe(false);
   });
 });
 

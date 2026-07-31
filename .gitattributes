@@ -1,0 +1,4 @@
+# Checked-in unified-diff patches carry required context/blank lines (a lone
+# " " marker) that `git diff --check` reads as trailing whitespace. Exclude them
+# from whitespace checks so the patch stays byte-valid and CI hygiene passes.
+docs/c2/followups/*.patch -whitespace

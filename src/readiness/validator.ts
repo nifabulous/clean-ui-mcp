@@ -1428,15 +1428,19 @@ function validateApprovalsAndCheckpoint(
   // approvals are excluded, same as before retraction existed. This set feeds
   // every STRUCTURAL/target/cardinality computation below (activeCheckpoints,
   // computeCanonicalTargets, and — via `allCpApproved` further down —
-  // `comparePolicySet`'s closed-world role check and actor-cardinality). A
-  // retraction must be monotonic toward open: it can only ever REMOVE an
-  // approval's CONTRIBUTION TO CLOSURE, never remove a blocking finding it
-  // caused. Excluding retracted approvals from this set let a valid
-  // retraction of an EXTRA approval clear the `policy-unexpected-role`
-  // finding it tripped while the required roles stayed satisfied elsewhere —
-  // manufacturing closure (fail-open; see the "codex regression" describe
-  // block in validate-readiness-artifacts.test.ts). Retraction is excluded
-  // ONLY from role-satisfaction, at `cpApprovals` below — so it can still
+  // `comparePolicySet`'s closed-world role check and, via `cpStructural`,
+  // actor-cardinality). A retraction must be monotonic toward open: it can
+  // only ever REMOVE an approval's CONTRIBUTION TO CLOSURE, never remove a
+  // blocking finding it caused. Excluding retracted approvals from this set
+  // let a valid retraction of an EXTRA approval clear the
+  // `policy-unexpected-role` finding it tripped while the required roles
+  // stayed satisfied elsewhere — manufacturing closure (fail-open; see the
+  // "codex regression" describe block in
+  // validate-readiness-artifacts.test.ts). The same class of bug recurred via
+  // the actor-separation check (round 2 — see the "codex round-2 regression"
+  // describe block); both channels are now closed by the `cpStructural` /
+  // `cpClosureContributors` split below. Retraction is excluded ONLY from
+  // role-satisfaction, at `cpClosureContributors` below — so it can still
   // hold a checkpoint open, but can never close one. See the comment at
   // `supersededApprovalIds` above for why retracting a SUPERSEDER does not
   // put its predecessor back in this set (Model B).
@@ -1744,54 +1748,71 @@ function validateApprovalsAndCheckpoint(
       );
     }
 
-    // Closure contribution: only approvals that produced NO issue AND are not
-    // validly retracted. Re-derive the clean set AFTER the role check may
-    // have tainted approvals. A retracted approval IS still seen by the
-    // closed-world role check (`comparePolicySet` reads `allRoles` from
-    // `allCpApproved`, which is retracted-INCLUSIVE via `activeApprovals`), so
-    // retraction can never erase a `policy-*` role blocker; but it must NOT
-    // count toward `allRolesPresent` — retraction only ever removes closure
-    // support, never a blocker.
-    const cpApprovals = allCpApproved.filter(
-      (a) => !approvalIssueCodes.has(a.approvalId) && !retractedApprovalIds.has(a.approvalId),
-    );
-    const cleanRoles = new Set<string>(cpApprovals.map((a) => a.role));
+    // STRUCTURAL set: clean (untainted) approvals INCLUDING retracted ones.
+    // Re-derive AFTER the role check above may have tainted approvals. Every
+    // STRUCTURAL blocker — actor-separation here, and the closed-world role
+    // check above via `allCpApproved` — runs over a retracted-INCLUDED set,
+    // AND its EMISSION is gated on `allRolesPresentStructural` (also
+    // retracted-included; see below), so a valid retraction can only ever ADD a
+    // blocker, never erase one that already fired. Closing this took three
+    // steps: round 1 kept retracted approvals visible to `comparePolicySet`;
+    // round 2 fed the actor-separation INPUT through this structural set; and
+    // channel #4 moved the actor-separation EMISSION gate off the
+    // retracted-EXCLUDED `allRolesPresent`. Round 1 alone still let
+    // the retracted-EXCLUDED set directly into
+    // `approvalsSatisfyActorCardinality`, so retracting an extra
+    // duplicate-actor approval still cleared
+    // `checkpoint-actor-separation-violation` on presence-only checkpoints.
+    const cpStructural = allCpApproved.filter((a) => !approvalIssueCodes.has(a.approvalId));
 
+    // CLOSURE-CONTRIBUTING set: the structural set MINUS retracted. This is
+    // the SOLE place a retraction removes an approval from consideration —
+    // ONLY from role-satisfaction, never from a blocker computation. A
+    // retracted approval must NOT count toward `allRolesPresent`: retraction
+    // only ever removes closure support, never a blocker.
+    const cpClosureContributors = cpStructural.filter(
+      (a) => !retractedApprovalIds.has(a.approvalId),
+    );
+    const cleanRoles = new Set<string>(cpClosureContributors.map((a) => a.role));
+
+    // Role-satisfaction for CLOSURE — over `cpClosureContributors` (retracted
+    // EXCLUDED). A checkpoint closes only if its real, non-retracted approvals
+    // cover every required role; this governs the close gate below (only).
     const allRolesPresent = required.every((r) => cleanRoles.has(r));
 
-    // Actor separation is enforced per approval against its OWN pinned registry.
-    // Distinct actors always satisfy separation; a single shared actor is valid
-    // only when every contributing approval's pinned registry declares
+    // Role-presence for STRUCTURAL-BLOCKER EMISSION — over `cpStructural`
+    // (retracted INCLUDED). The actor-separation finding below is a blocker, and
+    // a retraction must never erase a blocker. Gating its emission on the
+    // retracted-EXCLUDED `allRolesPresent` would let a retraction of a sole
+    // role-provider that is ALSO the separation offender drop role-presence to
+    // false and thereby suppress the violation (a valid retraction flipping
+    // `ok` false→true — the "channel #4" fail-open). Emit whenever the STRUCTURAL
+    // roles are complete and separation fails; closure still requires the
+    // stricter `allRolesPresent`.
+    const allRolesPresentStructural = required.every((r) =>
+      cpStructural.some((a) => a.role === r),
+    );
+
+    // Actor separation is a STRUCTURAL blocker, so it is enforced over
+    // `cpStructural` (retracted approvals INCLUDED) — a retraction of a
+    // separation-violating approval can never erase the violation. Distinct
+    // actors always satisfy separation; a single shared actor is valid only
+    // when every contributing approval's pinned registry declares
     // sole-maintainer-bootstrap with that actor as the human owner.
-    //
-    // ── KNOWN RESIDUAL (deferred hardening — see the follow-up below) ────────
-    // Unlike the role check above, this separation check runs over the
-    // retracted-EXCLUDED `cpApprovals`. On PRESENCE-ONLY checkpoints (C3–C5,
-    // which have no `CHECKPOINT_POLICIES` entry, so the closed-world role check
-    // never runs), a valid retraction of an EXTRA separation-violating approval
-    // would ERASE `checkpoint-actor-separation-violation` while the required
-    // roles stay satisfied — a retraction manufacturing closure, which the
-    // governing invariant forbids. This channel is UNREACHABLE today: the real
-    // ledger has zero C3/C4/C5 approvals (asserted by the tripwire in
-    // tracked-artifacts-readiness.test.ts). The full fix (a clean two-set split
-    // so retraction is excluded ONLY from role-satisfaction, never from any
-    // structural blocker) is specced + patched in
-    // docs/superpowers/plans/2026-07-31-retraction-structural-monotonicity-followup.md
-    // and deferred to its own PR. Do NOT let a C3+ approval land without it.
     const actorCardinalityValid = approvalsSatisfyActorCardinality(
-      cpApprovals,
+      cpStructural,
       resolvedRegistryByApprovalId,
       implementationActorIds,
     );
 
-    if (allRolesPresent && cpApprovals.length > 0 && !actorCardinalityValid) {
+    if (allRolesPresentStructural && cpStructural.length > 0 && !actorCardinalityValid) {
       const code = "checkpoint-actor-separation-violation";
       issues.push({
         code,
         artifactId: cp,
         message: `checkpoint ${cp} approvals do not satisfy the actor-separation mode of their pinned registries`,
       });
-      for (const approval of cpApprovals) {
+      for (const approval of cpStructural) {
         noteApprovalIssue(approval.approvalId, code);
       }
     }

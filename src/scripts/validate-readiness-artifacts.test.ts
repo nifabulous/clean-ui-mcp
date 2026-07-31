@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+} from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
-import { validateReadinessArtifacts } from "../readiness/validator.js";
+import { basename, join, resolve } from "node:path";
+import { validateReadinessArtifacts, type ValidationResult } from "../readiness/validator.js";
 import {
   computeTaxonomyDigest,
   buildCheckpointTarget,
@@ -932,6 +941,58 @@ function addSyntheticC3Approvals(
   writeArtifact(fixture.artifactRoot, v2LedgerFilename, v2Ledger);
 
   return { registryPath: v2RegistryPath, indexPath: v2IndexPath, ledgerPath: v2LedgerPath };
+}
+
+/**
+ * Clone C1's Product approval into an EXTRA Repository-Maintainer approval
+ * (an unexpected role for C1) and append it to the ledger. Returns the new
+ * approval's id for use as a retraction target. Module-scope so both the
+ * "codex regression" describe and the channel-agnostic monotonicity
+ * guard-test can build the same fixture shape.
+ */
+function appendExtraRepoMaintainerApproval(
+  ledger: { approvals: Array<Record<string, unknown>> },
+): string {
+  const product = ledger.approvals.find(
+    (a) => a["checkpoint"] === "C1" && a["role"] === "Product",
+  )!;
+  const approvalId = "c1-repo-maintainer-extra";
+  ledger.approvals.push({
+    ...product,
+    approvalId,
+    role: "Repository Maintainer",
+    actorId: "repo-maintainer-1",
+    actorKind: "human",
+    decidedAt: "2026-07-15T10:02:00Z",
+  });
+  return approvalId;
+}
+
+/**
+ * Clone C3's Product approval into an EXTRA approval that shares product-1's
+ * actor id (and its registered role, so no `actor-role-mismatch`). The
+ * required roles stay satisfied (Product / QA / Engineering are all still
+ * present via the three clean approvals), but the approval set now has 4 rows
+ * over 3 distinct actors — neither one-approval-per-actor nor a single shared
+ * actor — so `approvalsSatisfyActorCardinality` returns false and
+ * `checkpoint-actor-separation-violation` fires. Returns the new approval's
+ * id for use as a retraction target. Module-scope so both the "codex round-2
+ * regression" describe and the channel-agnostic monotonicity guard-test can
+ * build the same fixture shape.
+ */
+function appendExtraDuplicateActorC3Approval(
+  ledger: { approvals: Array<Record<string, unknown>> },
+): string {
+  const product = ledger.approvals.find(
+    (a) => a["checkpoint"] === "C3" && a["role"] === "Product",
+  )!;
+  const approvalId = "c3-product-extra";
+  ledger.approvals.push({
+    ...product,
+    approvalId,
+    decidedAt: "2026-07-16T10:03:00Z",
+  });
+  return approvalId;
 }
 
 // ---------------------------------------------------------------------------
@@ -3031,29 +3092,6 @@ describe("codex regression: retraction must not manufacture closure via a struct
     });
   }
 
-  /**
-   * Clone C1's Product approval into an EXTRA Repository-Maintainer approval
-   * (an unexpected role for C1) and append it to the ledger. Returns the new
-   * approval's id for use as a retraction target.
-   */
-  function appendExtraRepoMaintainerApproval(
-    ledger: { approvals: Array<Record<string, unknown>> },
-  ): string {
-    const product = ledger.approvals.find(
-      (a) => a["checkpoint"] === "C1" && a["role"] === "Product",
-    )!;
-    const approvalId = "c1-repo-maintainer-extra";
-    ledger.approvals.push({
-      ...product,
-      approvalId,
-      role: "Repository Maintainer",
-      actorId: "repo-maintainer-1",
-      actorKind: "human",
-      decidedAt: "2026-07-15T10:02:00Z",
-    });
-    return approvalId;
-  }
-
   it("sanity: an EXTRA unexpected-role C1 approval (no retraction) trips policy-unexpected-role and holds C1 open", () => {
     fixture = buildValidGraph({ withApprovals: true });
     const c1 = addValidSyntheticC1Approvals(fixture);
@@ -3108,6 +3146,731 @@ describe("codex regression: retraction must not manufacture closure via a struct
     expect(result.issues.some((i) => i.code === "policy-unexpected-role")).toBe(true);
     expect(result.checkpointStatus.C1).toBe("open");
     expect(result.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — codex round-2 regression: a retraction must never manufacture
+// closure via the ACTOR-SEPARATION check (P1 fail-open, round 2)
+//
+// Round 1 (above) closed the closed-world-role-check channel by keeping
+// retracted approvals visible to `comparePolicySet` via `activeApprovals`.
+// But the SAME retracted-EXCLUDED set (`cpApprovals`) still fed
+// `approvalsSatisfyActorCardinality` directly, so a valid retraction of an
+// EXTRA duplicate-actor approval still cleared
+// `checkpoint-actor-separation-violation` — the checkpoint closed. Same
+// fail-open CLASS as round 1, a different channel (found by independent
+// cross-model re-review).
+//
+// C3 (required = {Product, QA, Engineering}) is used deliberately: C3 has NO
+// entry in `CHECKPOINT_POLICIES`, so `comparePolicySet` never runs for it —
+// the ONLY structural check the extra approval can trip is actor-separation,
+// isolating the exact channel round 1 missed.
+// ---------------------------------------------------------------------------
+
+describe("codex round-2 regression: retraction must not manufacture closure via actor-separation", () => {
+  let fixture: ReturnType<typeof buildValidGraph>;
+
+  afterEach(() => {
+    if (fixture) cleanup(fixture.root);
+  });
+
+  function validate(f: ReturnType<typeof buildValidGraph>) {
+    return validateReadinessArtifacts({
+      artifactRoot: f.artifactRoot,
+      repoRoot: f.repoRoot,
+      gitSourceResolver: f.resolver,
+      mode: "public",
+    });
+  }
+
+  it("sanity: an EXTRA duplicate-actor C3 approval (no retraction) trips checkpoint-actor-separation-violation and holds C3 open", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const { ledgerPath } = addSyntheticC3Approvals(fixture);
+    mutateJson<{ approvals: Array<Record<string, unknown>> }>(ledgerPath, (ledger) => {
+      appendExtraDuplicateActorC3Approval(ledger);
+      return ledger;
+    });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "checkpoint-actor-separation-violation")).toBe(true);
+    expect(result.checkpointStatus.C3).toBe("open");
+    expect(result.ok).toBe(false);
+  });
+
+  it("a VALID retraction of the extra duplicate-actor approval must NOT clear checkpoint-actor-separation-violation or close C3", () => {
+    fixture = buildValidGraph({ withApprovals: true });
+    const { registryPath, ledgerPath } = addSyntheticC3Approvals(fixture);
+    mutateJson<{ approvals: Array<Record<string, unknown>> }>(ledgerPath, (ledger) => {
+      const approvalId = appendExtraDuplicateActorC3Approval(ledger);
+      // A VALID retraction, authorized by repo-maintainer-1 (a real human
+      // Repository Maintainer in the pinned v2 registry). If a retraction can
+      // ever close a checkpoint by clearing a STRUCTURAL actor-separation
+      // finding, this is the shape that proves it — the retraction targets
+      // the very approval that duplicates product-1's actor id, while
+      // Product/QA/Engineering remain satisfied via the three clean
+      // approvals.
+      ledger.approvals.push({
+        recordKind: "retraction",
+        retractionId: "r1",
+        retractsApprovalId: approvalId,
+        retractedBy: {
+          actorId: "repo-maintainer-1",
+          role: "Repository Maintainer",
+          actorKind: "human",
+          actorRegistryVersion: "2.0",
+          actorRegistrySha256: fileSha(registryPath),
+        },
+        retractedAt: "2026-07-20T00:00:00Z",
+        reason: "duplicate extra approval submitted in error",
+      });
+      return ledger;
+    });
+    const result = validate(fixture);
+
+    // The retraction itself must be accepted (authorized, in-order, real
+    // target) — this is not a test of retraction validity, but of what a
+    // VALID retraction is and is not allowed to do.
+    expect(result.issues.some((i) => i.code === "retraction-unauthorized")).toBe(false);
+    expect(result.issues.some((i) => i.code === "retraction-out-of-order")).toBe(false);
+    expect(result.issues.some((i) => i.code === "retraction-target-missing")).toBe(false);
+
+    // The structural actor-separation violation must still be attributed to
+    // C3 and the checkpoint must still be open — a retraction can only ever
+    // REMOVE an approval's contribution to closure, never remove a blocker,
+    // regardless of WHICH structural check produced the blocker.
+    expect(result.issues.some((i) => i.code === "checkpoint-actor-separation-violation")).toBe(true);
+    expect(result.checkpointStatus.C3).toBe("open");
+    expect(result.ok).toBe(false);
+  });
+
+  it("a VALID retraction of the SOLE role-provider (while a separation violation is present) must NOT erase the violation or flip ok (channel #4)", () => {
+    // Channel #4 (found by cross-model review): the actor-separation EMISSION
+    // gate used to read role-presence over the retracted-EXCLUDED set. Here the
+    // duplicate-actor offender (`c3-product-extra`, product-1 again) makes
+    // separation fail, and a VALID retraction targets `c3-qa` — the SOLE QA
+    // provider, a DIFFERENT approval. Retracting it drops closure role-presence
+    // (QA gone from the effective set), which pre-fix suppressed the emission →
+    // the blocking finding vanished and `ok` flipped false→true while the
+    // duplicate-actor condition was still live among the non-retracted rows.
+    // The emission gate now reads STRUCTURAL role-presence (retracted INCLUDED),
+    // so the violation stays and `ok` stays false. C3 never closes either way.
+    fixture = buildValidGraph({ withApprovals: true });
+    const { registryPath, ledgerPath } = addSyntheticC3Approvals(fixture);
+    mutateJson<{ approvals: Array<Record<string, unknown>> }>(ledgerPath, (ledger) => {
+      appendExtraDuplicateActorC3Approval(ledger);
+      ledger.approvals.push({
+        recordKind: "retraction",
+        retractionId: "r-qa",
+        retractsApprovalId: "c3-qa",
+        retractedBy: {
+          actorId: "repo-maintainer-1",
+          role: "Repository Maintainer",
+          actorKind: "human",
+          actorRegistryVersion: "2.0",
+          actorRegistrySha256: fileSha(registryPath),
+        },
+        retractedAt: "2026-07-20T00:00:00Z",
+        reason: "sole QA provider retracted while a separation violation is live",
+      });
+      return ledger;
+    });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "retraction-unauthorized")).toBe(false);
+    // The separation blocker MUST survive the retraction, and ok MUST stay false.
+    expect(result.issues.some((i) => i.code === "checkpoint-actor-separation-violation")).toBe(true);
+    expect(result.checkpointStatus.C3).toBe("open");
+    expect(result.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — channel-agnostic retraction monotonicity guard-test
+//
+// The two describe blocks above each prove ONE channel (policy-role,
+// actor-separation) cannot be exploited to manufacture closure. This test
+// states the GOVERNING INVARIANT itself over a table of adversarial fixtures:
+//
+//   (a) a valid retraction must never flip a checkpoint open -> closed;
+//   (b) a valid retraction must never make a blocking issue CODE's count
+//       drop, except `ledger-supersession-not-later` /
+//       `approved-artifact-created-after-decision` — the two temporal
+//       findings retraction exists to suppress.
+//
+// The two PROPERTIES are channel-agnostic, but the COVERAGE is only as strong
+// as the fixture SHAPES in the table. Each new manufacture-closure shape found
+// (round-2 = retract the separation OFFENDER; channel #4 = retract the sole
+// ROLE-PROVIDER while an offender is live) needed a fixture of that shape added
+// here — a shape the table did not already cover passes green. When a new
+// channel is discovered, add a fixture whose baseline exhibits the blocker and
+// whose effective retracts the triggering row; do NOT assume the existing rows
+// cover it.
+//
+// Each fixture below produces a BASELINE (the retraction row(s) removed —
+// i.e. the world as it was before anyone retracted anything) and an
+// EFFECTIVE result (the same ledger, retraction(s) applied), built as two
+// INDEPENDENT runs (not a single mutated-then-reverted ledger), and
+// `assertRetractionIsMonotonicTowardOpen` checks both properties on the pair.
+//
+// PROVEN TO HAVE TEETH: with the actor-separation check still routed through
+// the retracted-EXCLUDED set (the pre-fix defect this follow-up closes), the
+// "presence-only actor-separation" case below fails property (a) — C3 is
+// "open" at baseline and "closed" at effective. Verified by running this
+// block before the `cpStructural` / `cpClosureContributors` split landed in
+// validator.ts (see the fix commit for the exact RED output).
+// ---------------------------------------------------------------------------
+
+const MONOTONICITY_CHECKPOINT_IDS = ["C0", "C1", "C2", "C3", "C4", "C5"] as const;
+const RETRACTION_ALLOWED_SUPPRESSED_CODES = new Set([
+  "ledger-supersession-not-later",
+  "approved-artifact-created-after-decision",
+]);
+
+function assertRetractionIsMonotonicTowardOpen(
+  label: string,
+  baseline: ValidationResult,
+  effective: ValidationResult,
+): void {
+  const countsOf = (result: ValidationResult): Map<string, number> => {
+    const counts = new Map<string, number>();
+    for (const issue of result.issues) counts.set(issue.code, (counts.get(issue.code) ?? 0) + 1);
+    return counts;
+  };
+  const baselineCounts = countsOf(baseline);
+  const effectiveCounts = countsOf(effective);
+
+  // A valid retraction is ALLOWED to clear the two temporal codes for the
+  // approval it retracts. When that happens, a checkpoint whose ONLY hold-open
+  // was such a temporal finding may LEGITIMATELY close (the defect is removed at
+  // source, not hidden — e.g. retracting a redundant role-provider that carried
+  // `approved-artifact-created-after-decision` while other approvals still cover
+  // every role). That is NOT a manufactured closure. So property (a) carries the
+  // SAME temporal carve-out as property (b): an open->closed flip is a violation
+  // only when it is NOT explained by a temporal suppression. Property (b) below
+  // independently guarantees no NON-temporal blocker count dropped, so a flip
+  // accompanied by a temporal drop cannot have erased a real blocker.
+  const someTemporalCodeDropped = [...RETRACTION_ALLOWED_SUPPRESSED_CODES].some(
+    (code) => (effectiveCounts.get(code) ?? 0) < (baselineCounts.get(code) ?? 0),
+  );
+
+  // Property (a): no checkpoint flips open (baseline) -> closed (effective),
+  // UNLESS that flip is explained by a temporal suppression (see above).
+  for (const cp of MONOTONICITY_CHECKPOINT_IDS) {
+    if (
+      baseline.checkpointStatus[cp] === "open" &&
+      effective.checkpointStatus[cp] === "closed" &&
+      !someTemporalCodeDropped
+    ) {
+      throw new Error(
+        `${label}: checkpoint ${cp} flipped open (baseline) -> closed (effective) with no ` +
+          `temporal finding cleared — a retraction manufactured closure`,
+      );
+    }
+  }
+
+  // Property (b): no blocking-issue CODE's count drops, except the two
+  // temporal codes a valid retraction exists to suppress. This is the primary
+  // manufactured-closure guard: every channel found (policy-unexpected-role,
+  // policy-duplicate-role, actor-separation) manufactured closure by dropping a
+  // NON-temporal blocker's count, which this catches directly.
+  // NOTE — coverage is per fixture SHAPE, not automatic: policy-backed
+  // checkpoints (C0/C1/C2) are immune to the presence-only actor-separation and
+  // redundant-role-provider shapes because a redundant or extra role trips the
+  // non-suppressible closed-world `policy-*` check; the exposure those shapes
+  // probe is presence-only (C3-C5), which is why the fixtures live there.
+  for (const [code, baselineCount] of baselineCounts) {
+    const effectiveCount = effectiveCounts.get(code) ?? 0;
+    if (effectiveCount < baselineCount && !RETRACTION_ALLOWED_SUPPRESSED_CODES.has(code)) {
+      throw new Error(
+        `${label}: issue code "${code}" count dropped from ${baselineCount} (baseline) to ` +
+          `${effectiveCount} (effective) — only ledger-supersession-not-later / ` +
+          `approved-artifact-created-after-decision may be suppressed by a valid retraction`,
+      );
+    }
+  }
+}
+
+interface MonotonicityPair {
+  baseline: ValidationResult;
+  effective: ValidationResult;
+  teardown: () => void;
+}
+
+/** Case 1: policy-backed closed-world role check (C1, `policy-unexpected-role`). */
+function buildPolicyUnexpectedRoleCase(): MonotonicityPair {
+  const baselineFixture = buildValidGraph({ withApprovals: true });
+  const baselineC1 = addValidSyntheticC1Approvals(baselineFixture);
+  mutateJson<{ approvals: Array<Record<string, unknown>> }>(baselineC1.ledgerPath, (ledger) => {
+    appendExtraRepoMaintainerApproval(ledger);
+    return ledger;
+  });
+  const baseline = validateReadinessArtifacts({
+    artifactRoot: baselineFixture.artifactRoot,
+    repoRoot: baselineFixture.repoRoot,
+    gitSourceResolver: baselineFixture.resolver,
+    mode: "public",
+  });
+
+  const effectiveFixture = buildValidGraph({ withApprovals: true });
+  const effectiveC1 = addValidSyntheticC1Approvals(effectiveFixture);
+  mutateJson<{ approvals: Array<Record<string, unknown>> }>(effectiveC1.ledgerPath, (ledger) => {
+    const approvalId = appendExtraRepoMaintainerApproval(ledger);
+    ledger.approvals.push({
+      recordKind: "retraction",
+      retractionId: "r1",
+      retractsApprovalId: approvalId,
+      retractedBy: {
+        actorId: "repo-maintainer-1",
+        role: "Repository Maintainer",
+        actorKind: "human",
+        actorRegistryVersion: "2.0",
+        actorRegistrySha256: fileSha(effectiveC1.registryPath),
+      },
+      retractedAt: "2026-07-20T00:00:00Z",
+      reason: "extra approval was submitted in error",
+    });
+    return ledger;
+  });
+  const effective = validateReadinessArtifacts({
+    artifactRoot: effectiveFixture.artifactRoot,
+    repoRoot: effectiveFixture.repoRoot,
+    gitSourceResolver: effectiveFixture.resolver,
+    mode: "public",
+  });
+
+  return {
+    baseline,
+    effective,
+    teardown: () => {
+      cleanup(baselineFixture.root);
+      cleanup(effectiveFixture.root);
+    },
+  };
+}
+
+/** Case 2: policy-backed closed-world role check (C1, `policy-duplicate-role`). */
+function buildPolicyDuplicateRoleCase(): MonotonicityPair {
+  function appendDuplicateProductApproval(ledger: { approvals: Array<Record<string, unknown>> }): string {
+    const product = ledger.approvals.find(
+      (a) => a["checkpoint"] === "C1" && a["role"] === "Product",
+    )!;
+    const approvalId = "c1-product-duplicate";
+    ledger.approvals.push({ ...product, approvalId, actorId: "product-2" });
+    return approvalId;
+  }
+
+  const baselineFixture = buildValidGraph({ withApprovals: true });
+  const baselineC1 = addValidSyntheticC1Approvals(baselineFixture);
+  mutateJson<{ approvals: Array<Record<string, unknown>> }>(baselineC1.ledgerPath, (ledger) => {
+    appendDuplicateProductApproval(ledger);
+    return ledger;
+  });
+  const baseline = validateReadinessArtifacts({
+    artifactRoot: baselineFixture.artifactRoot,
+    repoRoot: baselineFixture.repoRoot,
+    gitSourceResolver: baselineFixture.resolver,
+    mode: "public",
+  });
+
+  const effectiveFixture = buildValidGraph({ withApprovals: true });
+  const effectiveC1 = addValidSyntheticC1Approvals(effectiveFixture);
+  mutateJson<{ approvals: Array<Record<string, unknown>> }>(effectiveC1.ledgerPath, (ledger) => {
+    const approvalId = appendDuplicateProductApproval(ledger);
+    ledger.approvals.push({
+      recordKind: "retraction",
+      retractionId: "r1",
+      retractsApprovalId: approvalId,
+      retractedBy: {
+        actorId: "repo-maintainer-1",
+        role: "Repository Maintainer",
+        actorKind: "human",
+        actorRegistryVersion: "2.0",
+        actorRegistrySha256: fileSha(effectiveC1.registryPath),
+      },
+      retractedAt: "2026-07-20T00:00:00Z",
+      reason: "duplicate approval submitted in error",
+    });
+    return ledger;
+  });
+  const effective = validateReadinessArtifacts({
+    artifactRoot: effectiveFixture.artifactRoot,
+    repoRoot: effectiveFixture.repoRoot,
+    gitSourceResolver: effectiveFixture.resolver,
+    mode: "public",
+  });
+
+  return {
+    baseline,
+    effective,
+    teardown: () => {
+      cleanup(baselineFixture.root);
+      cleanup(effectiveFixture.root);
+    },
+  };
+}
+
+/**
+ * Case 3: presence-only actor-separation (C3, `checkpoint-actor-separation-violation`).
+ * THE CASE THAT FAILS PRE-FIX — this is the channel this follow-up closes.
+ */
+function buildPresenceOnlyActorSeparationCase(): MonotonicityPair {
+  const baselineFixture = buildValidGraph({ withApprovals: true });
+  const { ledgerPath: baselineLedgerPath } = addSyntheticC3Approvals(baselineFixture);
+  mutateJson<{ approvals: Array<Record<string, unknown>> }>(baselineLedgerPath, (ledger) => {
+    appendExtraDuplicateActorC3Approval(ledger);
+    return ledger;
+  });
+  const baseline = validateReadinessArtifacts({
+    artifactRoot: baselineFixture.artifactRoot,
+    repoRoot: baselineFixture.repoRoot,
+    gitSourceResolver: baselineFixture.resolver,
+    mode: "public",
+  });
+
+  const effectiveFixture = buildValidGraph({ withApprovals: true });
+  const { registryPath: effectiveRegistryPath, ledgerPath: effectiveLedgerPath } =
+    addSyntheticC3Approvals(effectiveFixture);
+  mutateJson<{ approvals: Array<Record<string, unknown>> }>(effectiveLedgerPath, (ledger) => {
+    const approvalId = appendExtraDuplicateActorC3Approval(ledger);
+    ledger.approvals.push({
+      recordKind: "retraction",
+      retractionId: "r1",
+      retractsApprovalId: approvalId,
+      retractedBy: {
+        actorId: "repo-maintainer-1",
+        role: "Repository Maintainer",
+        actorKind: "human",
+        actorRegistryVersion: "2.0",
+        actorRegistrySha256: fileSha(effectiveRegistryPath),
+      },
+      retractedAt: "2026-07-20T00:00:00Z",
+      reason: "duplicate extra approval submitted in error",
+    });
+    return ledger;
+  });
+  const effective = validateReadinessArtifacts({
+    artifactRoot: effectiveFixture.artifactRoot,
+    repoRoot: effectiveFixture.repoRoot,
+    gitSourceResolver: effectiveFixture.resolver,
+    mode: "public",
+  });
+
+  return {
+    baseline,
+    effective,
+    teardown: () => {
+      cleanup(baselineFixture.root);
+      cleanup(effectiveFixture.root);
+    },
+  };
+}
+
+/**
+ * Case 4: the REAL tracked ledger. Effective = the real artifact root as
+ * committed (`checkpoint-approvals-v6.json`, head, carrying the two valid C2
+ * retractions). Baseline = a byte-identical copy of the real artifact root
+ * with ONLY `checkpoint-approvals-v6.json` removed, so the chain's head
+ * reverts to `checkpoint-approvals-v5.json` — the real pre-retraction state.
+ * Uses the REAL git resolver (shells `git show`) because the C0/C1 recipes
+ * recompute canonical targets from recorded-commit bytes; this is the same
+ * technique `tracked-artifacts-readiness.test.ts` uses for its clean-checkout
+ * condition.
+ */
+function buildRealV6VsV5Case(): MonotonicityPair {
+  const realRepoRoot = resolve(__dirname, "../..");
+  const trackedArtifactRoot = resolve(realRepoRoot, "quality-contracts/agent-readiness");
+  const realGitSourceResolver: GitSourceResolver = {
+    resolve(commit: string, repositoryPath: string): Uint8Array {
+      return execFileSync("git", ["show", `${commit}:${repositoryPath}`], {
+        cwd: realRepoRoot,
+        maxBuffer: 64 * 1024 * 1024,
+      });
+    },
+  };
+
+  const effective = validateReadinessArtifacts({
+    artifactRoot: trackedArtifactRoot,
+    repoRoot: realRepoRoot,
+    gitSourceResolver: realGitSourceResolver,
+    mode: "public",
+  });
+
+  const tmpRepoRoot = mkdtempSync(join(tmpdir(), "readiness-v5-baseline-"));
+  try {
+    const tmpArtifactRoot = join(tmpRepoRoot, "quality-contracts", "agent-readiness");
+    cpSync(trackedArtifactRoot, tmpArtifactRoot, { recursive: true });
+    rmSync(join(tmpArtifactRoot, "checkpoint-approvals-v6.json"), { force: true });
+
+    const baseline = validateReadinessArtifacts({
+      artifactRoot: tmpArtifactRoot,
+      repoRoot: tmpRepoRoot,
+      gitSourceResolver: realGitSourceResolver,
+      mode: "public",
+    });
+
+    return {
+      baseline,
+      effective,
+      teardown: () => rmSync(tmpRepoRoot, { recursive: true, force: true }),
+    };
+  } catch (err) {
+    // Nothing constructed a teardown closure yet (the failure happened before
+    // `return`), so clean up the temp dir here rather than leaking it.
+    rmSync(tmpRepoRoot, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+/**
+ * Case 5: Model B (retracting a SUPERSEDER does not resurrect the approval
+ * it superseded). Baseline = a clean supersession with NO retraction (C0
+ * closes). Effective = the same supersession, PLUS a valid retraction of the
+ * superseder (C0 goes back to open — a closed -> open transition, which
+ * property (a) permits; this case exercises property (b) and guards against
+ * a regression that resurrected the superseded predecessor instead).
+ */
+function buildModelBCase(): MonotonicityPair {
+  function fixtureWithSuccessor(includeRetraction: boolean): ReturnType<typeof buildValidGraph> {
+    const fixture = buildValidGraph({ withApprovals: true });
+    const v1 = readJson<{ approvals: Array<Record<string, unknown>> }>(fixture.ledgerPath!);
+    const prior = v1.approvals.find((a) => a["approvalId"] === "c0-repo-maintainer")!;
+    const successor = {
+      ...prior,
+      approvalId: "c0-repo-maintainer-v2",
+      supersedesApprovalId: "c0-repo-maintainer",
+      decidedAt: "2026-07-14T11:00:00Z", // strictly later than v1's 10:00:00Z
+    };
+    const extraRows = includeRetraction
+      ? [
+          {
+            recordKind: "retraction",
+            retractionId: "r1",
+            retractsApprovalId: "c0-repo-maintainer-v2",
+            retractedBy: {
+              actorId: "repo-maintainer-1",
+              role: "Repository Maintainer",
+              actorKind: "human",
+              actorRegistryVersion: "1.0",
+              actorRegistrySha256: fileSha(fixture.registryPath),
+            },
+            retractedAt: "2026-07-20T00:00:00Z",
+            reason: "corrected the mis-dated supersession",
+          },
+        ]
+      : [];
+    writeLedgerV2(fixture, [...v1.approvals, successor, ...extraRows]);
+    return fixture;
+  }
+
+  const baselineFixture = fixtureWithSuccessor(false);
+  const baseline = validateReadinessArtifacts({
+    artifactRoot: baselineFixture.artifactRoot,
+    repoRoot: baselineFixture.repoRoot,
+    gitSourceResolver: baselineFixture.resolver,
+    mode: "public",
+  });
+
+  const effectiveFixture = fixtureWithSuccessor(true);
+  const effective = validateReadinessArtifacts({
+    artifactRoot: effectiveFixture.artifactRoot,
+    repoRoot: effectiveFixture.repoRoot,
+    gitSourceResolver: effectiveFixture.resolver,
+    mode: "public",
+  });
+
+  return {
+    baseline,
+    effective,
+    teardown: () => {
+      cleanup(baselineFixture.root);
+      cleanup(effectiveFixture.root);
+    },
+  };
+}
+
+/**
+ * CHANNEL #4: the retracted approval is the SOLE provider of a required role
+ * while a SEPARATE approval trips the actor-separation blocker. Baseline: three
+ * clean C3 roles + an extra duplicate-actor approval (separation fails → C3 open,
+ * violation present). Effective: the same, plus a valid retraction of `c3-qa`
+ * (the sole QA provider — NOT the offender). Pre-fix, retracting QA dropped the
+ * emission gate's role-presence (it read the retracted-EXCLUDED set), so the
+ * `checkpoint-actor-separation-violation` count went 1→0 and `ok` flipped
+ * false→true — property (b) catches exactly this. The generic comparator needs
+ * this fixture because every other table case retracts a NON-role-provider.
+ */
+function buildChannel4SoleRoleProviderCase(): MonotonicityPair {
+  const baselineFixture = buildValidGraph({ withApprovals: true });
+  const { ledgerPath: baselineLedgerPath } = addSyntheticC3Approvals(baselineFixture);
+  mutateJson<{ approvals: Array<Record<string, unknown>> }>(baselineLedgerPath, (ledger) => {
+    appendExtraDuplicateActorC3Approval(ledger);
+    return ledger;
+  });
+  const baseline = validateReadinessArtifacts({
+    artifactRoot: baselineFixture.artifactRoot,
+    repoRoot: baselineFixture.repoRoot,
+    gitSourceResolver: baselineFixture.resolver,
+    mode: "public",
+  });
+
+  const effectiveFixture = buildValidGraph({ withApprovals: true });
+  const { registryPath: effectiveRegistryPath, ledgerPath: effectiveLedgerPath } =
+    addSyntheticC3Approvals(effectiveFixture);
+  mutateJson<{ approvals: Array<Record<string, unknown>> }>(effectiveLedgerPath, (ledger) => {
+    appendExtraDuplicateActorC3Approval(ledger);
+    ledger.approvals.push({
+      recordKind: "retraction",
+      retractionId: "r-qa",
+      retractsApprovalId: "c3-qa",
+      retractedBy: {
+        actorId: "repo-maintainer-1",
+        role: "Repository Maintainer",
+        actorKind: "human",
+        actorRegistryVersion: "2.0",
+        actorRegistrySha256: fileSha(effectiveRegistryPath),
+      },
+      retractedAt: "2026-07-20T00:00:00Z",
+      reason: "sole QA provider retracted while a separation violation is live",
+    });
+    return ledger;
+  });
+  const effective = validateReadinessArtifacts({
+    artifactRoot: effectiveFixture.artifactRoot,
+    repoRoot: effectiveFixture.repoRoot,
+    gitSourceResolver: effectiveFixture.resolver,
+    mode: "public",
+  });
+
+  return {
+    baseline,
+    effective,
+    teardown: () => {
+      cleanup(baselineFixture.root);
+      cleanup(effectiveFixture.root);
+    },
+  };
+}
+
+describe("monotonicity guard-test: a valid retraction can only push toward open, on ANY channel", () => {
+  const cases: Array<{ name: string; build: () => MonotonicityPair }> = [
+    { name: "policy unexpected-role (C1)", build: buildPolicyUnexpectedRoleCase },
+    { name: "policy duplicate-role (C1)", build: buildPolicyDuplicateRoleCase },
+    { name: "presence-only actor-separation (C3)", build: buildPresenceOnlyActorSeparationCase },
+    { name: "sole role-provider retraction amid separation violation (C3, channel #4)", build: buildChannel4SoleRoleProviderCase },
+    { name: "real v6-vs-v5 (tracked ledger)", build: buildRealV6VsV5Case },
+    { name: "Model B (superseder retraction)", build: buildModelBCase },
+  ];
+
+  // 30s timeout (default is 15s): the "real v6-vs-v5" case shells out to real
+  // `git show` twice per run (baseline + effective), each resolving several
+  // recorded commits. Measured comfortably under 5s warm, but a cold/
+  // contended CI runner can exceed the default. Applied to the whole table
+  // rather than singling out one case, since it only lengthens the timeout
+  // budget and does not weaken any assertion.
+  //
+  // NOTE — the timeout addresses SLOWNESS, not the deeper exposure: the
+  // "real v6-vs-v5" case recomputes canonical targets from recorded-commit
+  // bytes, so it REQUIRES FULL GIT HISTORY (the C0/C1 recipes bind commits
+  // hundreds back). On a shallow clone the `git show` resolver throws and the
+  // case fails with `checkpoint-recompute-failed`, exactly like the
+  // clean-checkout block in `tracked-artifacts-readiness.test.ts` — the two
+  // share the exposure, so if that suite passes in CI (`fetch-depth: 0`) this
+  // one will too. The other five cases are fully synthetic (temp fixtures, fake
+  // resolver) and carry no history dependency.
+  it.each(cases)(
+    "$name",
+    ({ name, build }) => {
+      const { baseline, effective, teardown } = build();
+      try {
+        assertRetractionIsMonotonicTowardOpen(name, baseline, effective);
+      } finally {
+        teardown();
+      }
+    },
+    30_000,
+  );
+});
+
+/**
+ * MIRROR-IMAGE DIRECTION, TESTED SEPARATELY. The table above proves a
+ * retraction can never ERASE a structural blocker (`cpStructural` must
+ * include retracted approvals). This test proves the other half: a
+ * retraction must ALSO stop the retracted approval from counting toward
+ * ROLE-SATISFACTION (`cleanRoles` must be built from `cpClosureContributors`,
+ * NOT `cpStructural`).
+ *
+ * This does NOT fit the generic `assertRetractionIsMonotonicTowardOpen`
+ * comparator: if `cleanRoles` were ever fed `cpStructural` by mistake, this
+ * fixture's baseline and effective runs would BOTH report C3 "closed" with
+ * an IDENTICAL empty issue list — property (a) requires baseline to be
+ * "open" to fire, and property (b) requires an issue-code count to change,
+ * and neither condition would be met. Confirmed by directly checking: the
+ * generic table's synthetic cases (unexpected-role, duplicate-role,
+ * presence-only actor-separation, Model B) all retract an EXTRA/duplicate
+ * approval, never the sole provider of a required role, so none of them
+ * exercises this direction independently of the real tracked ledger's
+ * incidental C2 retraction shape. Hence a dedicated, ledger-independent
+ * assertion here.
+ */
+describe("monotonicity guard-test: mirror-image direction (sole role-provider retraction)", () => {
+  it("retracting the SOLE QA approval on a presence-only checkpoint opens it, rather than leaving it closed via the structural set", () => {
+    const baselineFixture = buildValidGraph({ withApprovals: true });
+    addSyntheticC3Approvals(baselineFixture);
+    const baseline = validateReadinessArtifacts({
+      artifactRoot: baselineFixture.artifactRoot,
+      repoRoot: baselineFixture.repoRoot,
+      gitSourceResolver: baselineFixture.resolver,
+      mode: "public",
+    });
+
+    const effectiveFixture = buildValidGraph({ withApprovals: true });
+    const { registryPath, ledgerPath } = addSyntheticC3Approvals(effectiveFixture);
+    mutateJson<{ approvals: Array<Record<string, unknown>> }>(ledgerPath, (ledger) => {
+      ledger.approvals.push({
+        recordKind: "retraction",
+        retractionId: "r1",
+        retractsApprovalId: "c3-qa",
+        retractedBy: {
+          actorId: "repo-maintainer-1",
+          role: "Repository Maintainer",
+          actorKind: "human",
+          actorRegistryVersion: "2.0",
+          actorRegistrySha256: fileSha(registryPath),
+        },
+        retractedAt: "2026-07-20T00:00:00Z",
+        reason: "QA approval withdrawn; a corrected QA approval will follow",
+      });
+      return ledger;
+    });
+    const effective = validateReadinessArtifacts({
+      artifactRoot: effectiveFixture.artifactRoot,
+      repoRoot: effectiveFixture.repoRoot,
+      gitSourceResolver: effectiveFixture.resolver,
+      mode: "public",
+    });
+
+    try {
+      // Sanity: the baseline (no retraction) is a clean, fully-satisfied C3 —
+      // matches the existing "closes C3" fixture-level test elsewhere in this
+      // file, re-asserted here so a failure below is legible on its own.
+      expect(baseline.checkpointStatus.C3).toBe("closed");
+      expect(baseline.issues).toEqual([]);
+
+      // THE MIRROR-IMAGE ASSERTION. The retraction is valid (authorized, in
+      // order, real target), and it removes the SOLE QA approval from role-
+      // satisfaction. C3 requires QA, so it must go back to "open" — not stay
+      // "closed" on the strength of a retracted approval that should no
+      // longer count.
+      expect(effective.issues.some((i) => i.code === "retraction-unauthorized")).toBe(false);
+      expect(effective.issues.some((i) => i.code === "retraction-out-of-order")).toBe(false);
+      expect(effective.issues.some((i) => i.code === "retraction-target-missing")).toBe(false);
+      expect(effective.checkpointStatus.C3).toBe("open");
+      // No blocking issue either way: this is the "honest open" contract —
+      // C3 is open for lack of a QA approval, not because of a blocker.
+      expect(effective.issues).toEqual([]);
+    } finally {
+      cleanup(baselineFixture.root);
+      cleanup(effectiveFixture.root);
+    }
   });
 });
 

@@ -315,21 +315,45 @@ newly fail the historically legitimate `c2-*-v1` approvals against the
 `approved-artifact-created-after-decision` invariant. Correcting it properly
 requires issuing new artifact versions — a decision that has not been made.
 
-## Known residual (deferred hardening)
+## Retraction monotonicity — the manufacture-closure class is closed
 
-The retraction vocabulary is monotonic toward open on the **policy-backed**
-checkpoints (C0/C1/C2): a valid retraction can never erase a `policy-*` role
-blocker (fixed in `cb69e96`). One channel is **not yet** closed: on
-**presence-only** checkpoints (C3–C5, which have no policy role-set check), the
-actor-separation check reads the retracted-excluded set, so a valid retraction
-of an extra duplicate-actor approval could erase
-`checkpoint-actor-separation-violation` and manufacture closure. This is
-**unreachable today** — the ledger has zero C3/C4/C5 approvals, enforced by a
-tripwire test in `tracked-artifacts-readiness.test.ts` that fails the moment a
-C3+ approval lands. The structural fix (a clean two-set split plus a
-channel-agnostic monotonicity guard-test) is specced in
-`docs/superpowers/plans/2026-07-31-retraction-structural-monotonicity-followup.md`
-and deferred to its own PR. Do not land a C3+ approval without it.
+The retraction vocabulary is monotonic toward open on **every** checkpoint,
+policy-backed (C0/C1/C2) and presence-only (C3–C5) alike: a valid retraction
+can never erase a blocking finding, only ever remove an approval's
+CONTRIBUTION TO CLOSURE.
+
+- **Channel 1 — policy-backed closed-world role check.** A valid retraction
+  can never erase a `policy-*` role blocker (fixed in `cb69e96`).
+- **Channel 2 — presence-only actor-separation check.** On presence-only
+  checkpoints (C3–C5, which have no policy role-set check), the
+  actor-separation check used to read the retracted-EXCLUDED set, so a valid
+  retraction of an extra duplicate-actor approval could erase
+  `checkpoint-actor-separation-violation` and manufacture closure. **Closed**
+  by the structural fix specced in
+  `docs/superpowers/plans/2026-07-31-retraction-structural-monotonicity-followup.md`:
+  `validator.ts`'s closure loop now splits the closure-loop approval set into
+  `cpStructural` (retracted approvals INCLUDED — every structural blocker,
+  including actor-separation, runs over this) and `cpClosureContributors`
+  (`cpStructural` minus retracted — the ONLY set that satisfies roles).
+- **Channel #4 — the actor-separation EMISSION gate.** Fixing the INPUT set
+  was not enough: the violation was only PUSHED when `allRolesPresent` (computed
+  over the retracted-EXCLUDED `cpClosureContributors`) was true, so retracting
+  the SOLE provider of a required role — while a *separate* approval was the
+  separation offender — dropped role-presence to false and suppressed the
+  emission, flipping `ok` false→true with the offender still live. **Closed** by
+  gating the emission on `allRolesPresentStructural` (computed over
+  `cpStructural`, retracted INCLUDED); closure itself still requires the stricter
+  retracted-excluded `allRolesPresent`.
+
+  Regression coverage: the "codex round-2 regression" describe block in
+  `src/scripts/validate-readiness-artifacts.test.ts` (extra-offender AND
+  sole-role-provider/channel-#4 cases), and the "monotonicity guard-test"
+  describe block, whose two PROPERTIES are channel-agnostic but whose COVERAGE
+  is only as strong as its fixture SHAPES — it now includes policy
+  unexpected-role, policy duplicate-role, presence-only actor-separation,
+  sole-role-provider-amid-violation (channel #4), the real tracked v6-vs-v5
+  ledger, and Model B. A newly-discovered channel of a new shape still needs a
+  fixture of that shape added.
 
 ## After Approval
 

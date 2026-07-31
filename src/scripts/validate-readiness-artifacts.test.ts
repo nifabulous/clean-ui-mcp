@@ -3242,6 +3242,45 @@ describe("codex round-2 regression: retraction must not manufacture closure via 
     expect(result.checkpointStatus.C3).toBe("open");
     expect(result.ok).toBe(false);
   });
+
+  it("a VALID retraction of the SOLE role-provider (while a separation violation is present) must NOT erase the violation or flip ok (channel #4)", () => {
+    // Channel #4 (found by cross-model review): the actor-separation EMISSION
+    // gate used to read role-presence over the retracted-EXCLUDED set. Here the
+    // duplicate-actor offender (`c3-product-extra`, product-1 again) makes
+    // separation fail, and a VALID retraction targets `c3-qa` — the SOLE QA
+    // provider, a DIFFERENT approval. Retracting it drops closure role-presence
+    // (QA gone from the effective set), which pre-fix suppressed the emission →
+    // the blocking finding vanished and `ok` flipped false→true while the
+    // duplicate-actor condition was still live among the non-retracted rows.
+    // The emission gate now reads STRUCTURAL role-presence (retracted INCLUDED),
+    // so the violation stays and `ok` stays false. C3 never closes either way.
+    fixture = buildValidGraph({ withApprovals: true });
+    const { registryPath, ledgerPath } = addSyntheticC3Approvals(fixture);
+    mutateJson<{ approvals: Array<Record<string, unknown>> }>(ledgerPath, (ledger) => {
+      appendExtraDuplicateActorC3Approval(ledger);
+      ledger.approvals.push({
+        recordKind: "retraction",
+        retractionId: "r-qa",
+        retractsApprovalId: "c3-qa",
+        retractedBy: {
+          actorId: "repo-maintainer-1",
+          role: "Repository Maintainer",
+          actorKind: "human",
+          actorRegistryVersion: "2.0",
+          actorRegistrySha256: fileSha(registryPath),
+        },
+        retractedAt: "2026-07-20T00:00:00Z",
+        reason: "sole QA provider retracted while a separation violation is live",
+      });
+      return ledger;
+    });
+    const result = validate(fixture);
+    expect(result.issues.some((i) => i.code === "retraction-unauthorized")).toBe(false);
+    // The separation blocker MUST survive the retraction, and ok MUST stay false.
+    expect(result.issues.some((i) => i.code === "checkpoint-actor-separation-violation")).toBe(true);
+    expect(result.checkpointStatus.C3).toBe("open");
+    expect(result.ok).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -3249,15 +3288,22 @@ describe("codex round-2 regression: retraction must not manufacture closure via 
 //
 // The two describe blocks above each prove ONE channel (policy-role,
 // actor-separation) cannot be exploited to manufacture closure. This test
-// states the GOVERNING INVARIANT itself, channel-agnostically, over a table
-// of adversarial fixtures, so a THIRD channel discovered later is caught by
-// the same test rather than requiring a new bespoke regression:
+// states the GOVERNING INVARIANT itself over a table of adversarial fixtures:
 //
 //   (a) a valid retraction must never flip a checkpoint open -> closed;
 //   (b) a valid retraction must never make a blocking issue CODE's count
 //       drop, except `ledger-supersession-not-later` /
 //       `approved-artifact-created-after-decision` — the two temporal
 //       findings retraction exists to suppress.
+//
+// The two PROPERTIES are channel-agnostic, but the COVERAGE is only as strong
+// as the fixture SHAPES in the table. Each new manufacture-closure shape found
+// (round-2 = retract the separation OFFENDER; channel #4 = retract the sole
+// ROLE-PROVIDER while an offender is live) needed a fixture of that shape added
+// here — a shape the table did not already cover passes green. When a new
+// channel is discovered, add a fixture whose baseline exhibits the blocker and
+// whose effective retracts the triggering row; do NOT assume the existing rows
+// cover it.
 //
 // Each fixture below produces a BASELINE (the retraction row(s) removed —
 // i.e. the world as it was before anyone retracted anything) and an
@@ -3613,11 +3659,75 @@ function buildModelBCase(): MonotonicityPair {
   };
 }
 
+/**
+ * CHANNEL #4: the retracted approval is the SOLE provider of a required role
+ * while a SEPARATE approval trips the actor-separation blocker. Baseline: three
+ * clean C3 roles + an extra duplicate-actor approval (separation fails → C3 open,
+ * violation present). Effective: the same, plus a valid retraction of `c3-qa`
+ * (the sole QA provider — NOT the offender). Pre-fix, retracting QA dropped the
+ * emission gate's role-presence (it read the retracted-EXCLUDED set), so the
+ * `checkpoint-actor-separation-violation` count went 1→0 and `ok` flipped
+ * false→true — property (b) catches exactly this. The generic comparator needs
+ * this fixture because every other table case retracts a NON-role-provider.
+ */
+function buildChannel4SoleRoleProviderCase(): MonotonicityPair {
+  const baselineFixture = buildValidGraph({ withApprovals: true });
+  const { ledgerPath: baselineLedgerPath } = addSyntheticC3Approvals(baselineFixture);
+  mutateJson<{ approvals: Array<Record<string, unknown>> }>(baselineLedgerPath, (ledger) => {
+    appendExtraDuplicateActorC3Approval(ledger);
+    return ledger;
+  });
+  const baseline = validateReadinessArtifacts({
+    artifactRoot: baselineFixture.artifactRoot,
+    repoRoot: baselineFixture.repoRoot,
+    gitSourceResolver: baselineFixture.resolver,
+    mode: "public",
+  });
+
+  const effectiveFixture = buildValidGraph({ withApprovals: true });
+  const { registryPath: effectiveRegistryPath, ledgerPath: effectiveLedgerPath } =
+    addSyntheticC3Approvals(effectiveFixture);
+  mutateJson<{ approvals: Array<Record<string, unknown>> }>(effectiveLedgerPath, (ledger) => {
+    appendExtraDuplicateActorC3Approval(ledger);
+    ledger.approvals.push({
+      recordKind: "retraction",
+      retractionId: "r-qa",
+      retractsApprovalId: "c3-qa",
+      retractedBy: {
+        actorId: "repo-maintainer-1",
+        role: "Repository Maintainer",
+        actorKind: "human",
+        actorRegistryVersion: "2.0",
+        actorRegistrySha256: fileSha(effectiveRegistryPath),
+      },
+      retractedAt: "2026-07-20T00:00:00Z",
+      reason: "sole QA provider retracted while a separation violation is live",
+    });
+    return ledger;
+  });
+  const effective = validateReadinessArtifacts({
+    artifactRoot: effectiveFixture.artifactRoot,
+    repoRoot: effectiveFixture.repoRoot,
+    gitSourceResolver: effectiveFixture.resolver,
+    mode: "public",
+  });
+
+  return {
+    baseline,
+    effective,
+    teardown: () => {
+      cleanup(baselineFixture.root);
+      cleanup(effectiveFixture.root);
+    },
+  };
+}
+
 describe("monotonicity guard-test: a valid retraction can only push toward open, on ANY channel", () => {
   const cases: Array<{ name: string; build: () => MonotonicityPair }> = [
     { name: "policy unexpected-role (C1)", build: buildPolicyUnexpectedRoleCase },
     { name: "policy duplicate-role (C1)", build: buildPolicyDuplicateRoleCase },
     { name: "presence-only actor-separation (C3)", build: buildPresenceOnlyActorSeparationCase },
+    { name: "sole role-provider retraction amid separation violation (C3, channel #4)", build: buildChannel4SoleRoleProviderCase },
     { name: "real v6-vs-v5 (tracked ledger)", build: buildRealV6VsV5Case },
     { name: "Model B (superseder retraction)", build: buildModelBCase },
   ];
@@ -3625,10 +3735,19 @@ describe("monotonicity guard-test: a valid retraction can only push toward open,
   // 30s timeout (default is 15s): the "real v6-vs-v5" case shells out to real
   // `git show` twice per run (baseline + effective), each resolving several
   // recorded commits. Measured comfortably under 5s warm, but a cold/
-  // contended CI runner can exceed the default and fail for reasons wholly
-  // unrelated to the invariant this test checks. Applied to the whole table
+  // contended CI runner can exceed the default. Applied to the whole table
   // rather than singling out one case, since it only lengthens the timeout
   // budget and does not weaken any assertion.
+  //
+  // NOTE — the timeout addresses SLOWNESS, not the deeper exposure: the
+  // "real v6-vs-v5" case recomputes canonical targets from recorded-commit
+  // bytes, so it REQUIRES FULL GIT HISTORY (the C0/C1 recipes bind commits
+  // hundreds back). On a shallow clone the `git show` resolver throws and the
+  // case fails with `checkpoint-recompute-failed`, exactly like the
+  // clean-checkout block in `tracked-artifacts-readiness.test.ts` — the two
+  // share the exposure, so if that suite passes in CI (`fetch-depth: 0`) this
+  // one will too. The other five cases are fully synthetic (temp fixtures, fake
+  // resolver) and carry no history dependency.
   it.each(cases)(
     "$name",
     ({ name, build }) => {

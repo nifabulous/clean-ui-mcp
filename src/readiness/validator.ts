@@ -1752,9 +1752,13 @@ function validateApprovalsAndCheckpoint(
     // Re-derive AFTER the role check above may have tainted approvals. Every
     // STRUCTURAL blocker — actor-separation here, and the closed-world role
     // check above via `allCpApproved` — runs over a retracted-INCLUDED set,
-    // so a valid retraction can only ever ADD a blocker, never erase one that
-    // already fired. This is the fix for the round-2 "codex regression": round
-    // 1 kept retracted approvals visible to `comparePolicySet` but still fed
+    // AND its EMISSION is gated on `allRolesPresentStructural` (also
+    // retracted-included; see below), so a valid retraction can only ever ADD a
+    // blocker, never erase one that already fired. Closing this took three
+    // steps: round 1 kept retracted approvals visible to `comparePolicySet`;
+    // round 2 fed the actor-separation INPUT through this structural set; and
+    // channel #4 moved the actor-separation EMISSION gate off the
+    // retracted-EXCLUDED `allRolesPresent`. Round 1 alone still let
     // the retracted-EXCLUDED set directly into
     // `approvalsSatisfyActorCardinality`, so retracting an extra
     // duplicate-actor approval still cleared
@@ -1771,7 +1775,23 @@ function validateApprovalsAndCheckpoint(
     );
     const cleanRoles = new Set<string>(cpClosureContributors.map((a) => a.role));
 
+    // Role-satisfaction for CLOSURE — over `cpClosureContributors` (retracted
+    // EXCLUDED). A checkpoint closes only if its real, non-retracted approvals
+    // cover every required role; this governs the close gate below (only).
     const allRolesPresent = required.every((r) => cleanRoles.has(r));
+
+    // Role-presence for STRUCTURAL-BLOCKER EMISSION — over `cpStructural`
+    // (retracted INCLUDED). The actor-separation finding below is a blocker, and
+    // a retraction must never erase a blocker. Gating its emission on the
+    // retracted-EXCLUDED `allRolesPresent` would let a retraction of a sole
+    // role-provider that is ALSO the separation offender drop role-presence to
+    // false and thereby suppress the violation (a valid retraction flipping
+    // `ok` false→true — the "channel #4" fail-open). Emit whenever the STRUCTURAL
+    // roles are complete and separation fails; closure still requires the
+    // stricter `allRolesPresent`.
+    const allRolesPresentStructural = required.every((r) =>
+      cpStructural.some((a) => a.role === r),
+    );
 
     // Actor separation is a STRUCTURAL blocker, so it is enforced over
     // `cpStructural` (retracted approvals INCLUDED) — a retraction of a
@@ -1785,7 +1805,7 @@ function validateApprovalsAndCheckpoint(
       implementationActorIds,
     );
 
-    if (allRolesPresent && cpStructural.length > 0 && !actorCardinalityValid) {
+    if (allRolesPresentStructural && cpStructural.length > 0 && !actorCardinalityValid) {
       const code = "checkpoint-actor-separation-violation";
       issues.push({
         code,

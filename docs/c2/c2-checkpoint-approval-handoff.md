@@ -315,7 +315,7 @@ newly fail the historically legitimate `c2-*-v1` approvals against the
 `approved-artifact-created-after-decision` invariant. Correcting it properly
 requires issuing new artifact versions — a decision that has not been made.
 
-## Retraction monotonicity — both channels closed
+## Retraction monotonicity — the manufacture-closure class is closed
 
 The retraction vocabulary is monotonic toward open on **every** checkpoint,
 policy-backed (C0/C1/C2) and presence-only (C3–C5) alike: a valid retraction
@@ -335,12 +335,25 @@ CONTRIBUTION TO CLOSURE.
   `cpStructural` (retracted approvals INCLUDED — every structural blocker,
   including actor-separation, runs over this) and `cpClosureContributors`
   (`cpStructural` minus retracted — the ONLY set that satisfies roles).
+- **Channel #4 — the actor-separation EMISSION gate.** Fixing the INPUT set
+  was not enough: the violation was only PUSHED when `allRolesPresent` (computed
+  over the retracted-EXCLUDED `cpClosureContributors`) was true, so retracting
+  the SOLE provider of a required role — while a *separate* approval was the
+  separation offender — dropped role-presence to false and suppressed the
+  emission, flipping `ok` false→true with the offender still live. **Closed** by
+  gating the emission on `allRolesPresentStructural` (computed over
+  `cpStructural`, retracted INCLUDED); closure itself still requires the stricter
+  retracted-excluded `allRolesPresent`.
+
   Regression coverage: the "codex round-2 regression" describe block in
-  `src/scripts/validate-readiness-artifacts.test.ts`, and the channel-agnostic
-  "monotonicity guard-test" describe block in the same file, which states the
-  invariant once over a table of adversarial fixtures (policy
-  unexpected-role, policy duplicate-role, presence-only actor-separation, the
-  real tracked v6-vs-v5 ledger, and Model B) rather than per-channel.
+  `src/scripts/validate-readiness-artifacts.test.ts` (extra-offender AND
+  sole-role-provider/channel-#4 cases), and the "monotonicity guard-test"
+  describe block, whose two PROPERTIES are channel-agnostic but whose COVERAGE
+  is only as strong as its fixture SHAPES — it now includes policy
+  unexpected-role, policy duplicate-role, presence-only actor-separation,
+  sole-role-provider-amid-violation (channel #4), the real tracked v6-vs-v5
+  ledger, and Model B. A newly-discovered channel of a new shape still needs a
+  fixture of that shape added.
 
 ## After Approval
 

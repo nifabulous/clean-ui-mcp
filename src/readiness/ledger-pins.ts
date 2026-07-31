@@ -318,12 +318,20 @@ export function isTrackedArtifactRoot(absArtifactRoot: string): boolean {
  * `ledger-approval-pin-absent` if the file is removed with it. Recompute with
  * `ledgerApprovalRowsDigest(JSON.parse(readFileSync(<ledger>, "utf-8")).approvals)`.
  *
- * The chain is `quality-contracts/agent-readiness/checkpoint-approvals-v1..v5.json`
+ * The chain is `quality-contracts/agent-readiness/checkpoint-approvals-v1..v7.json`
  * (artifact ids `approvals-20260714`, `approvals-c1-v2`, `approvals-c2-v3`,
- * `approvals-c2-v4`, `approvals-c2-v5`). `checkpoint-approvals-v5.json` is the
- * head: eight approvals, of which `c2-gold-reviewer-gold-v2` and
- * `c2-qa-reviewer-qa-v2` carry the temporal defect that holds C2 open. Pinning
- * them is what makes that block survive an edit to the file.
+ * `approvals-c2-v4`, `approvals-c2-v5`, and two unversioned-artifactId ledgers,
+ * v6 and v7). `checkpoint-approvals-v5.json` carried the temporal defect that
+ * held C2 open (`c2-gold-reviewer-gold-v2` / `c2-qa-reviewer-qa-v2` each copied
+ * the `decidedAt` of the v1 approval they superseded, predating the target they
+ * bind). `checkpoint-approvals-v6.json` validly retracted both, which clears the
+ * temporal issue but does not itself close C2 (no valid approval remains once
+ * both v2s are retracted — see `tracked-artifacts-readiness.test.ts`).
+ * `checkpoint-approvals-v7.json` is the head: it appends
+ * `c2-gold-reviewer-gold-v3` and `c2-qa-reviewer-qa-v3`, real decisions on the
+ * corrected target with a `decidedAt` after the target existed, which pass the
+ * temporal check and close C2. Pinning every entry in the chain is what makes
+ * each of these row sets survive an edit to its file.
  */
 export const TRACKED_LEDGER_APPROVAL_PINS: Readonly<Record<string, string>> = Object.freeze({
   "checkpoint-approvals-v1.json":
@@ -338,6 +346,8 @@ export const TRACKED_LEDGER_APPROVAL_PINS: Readonly<Record<string, string>> = Ob
     "180d1c451a38b3def1371a0d4ddb41e6534bbd8d2df325ac0787af220b17b8ec",
   "checkpoint-approvals-v6.json":
     "6398ac4f0a4bc183b00dc0a95d1bc567e53aeb4e16b0c7b831ef352c56f4c262",
+  "checkpoint-approvals-v7.json":
+    "1ff25ecc594a74458708ebe612708ca56bd81fb51aa034e4efcd135345f317d3",
 });
 
 /**

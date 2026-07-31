@@ -3565,11 +3565,28 @@ function buildPresenceOnlyActorSeparationCase(): MonotonicityPair {
 }
 
 /**
- * Case 4: the REAL tracked ledger. Effective = the real artifact root as
- * committed (`checkpoint-approvals-v6.json`, head, carrying the two valid C2
- * retractions). Baseline = a byte-identical copy of the real artifact root
- * with ONLY `checkpoint-approvals-v6.json` removed, so the chain's head
- * reverts to `checkpoint-approvals-v5.json` — the real pre-retraction state.
+ * Case 4: the REAL tracked ledger's v5→v6 RETRACTION, isolated from v7.
+ *
+ * This case exists to guard the v6 retraction event specifically — v6 validly
+ * retracts the two temporally-defective v2 approvals over the v5 prefix — and
+ * that is a DIFFERENT event from v7's append (v7 adds two brand-new, valid C2
+ * approvals of the corrected target; it retracts nothing). Mixing the two
+ * would test the wrong thing: reading the real tracked root as-is for
+ * `effective` would pick up v7 and close C2 for a reason unrelated to the v6
+ * retraction (an unrelated valid approval, not the retraction under test), and
+ * removing only v6 from a copy that still has v7 would leave v7 an orphaned
+ * successor with a `predecessor.sha256` naming a file that no longer exists.
+ *
+ * So both sides are built from temp copies of the real tracked root with v7
+ * EXCLUDED:
+ *   - `effective` = tracked root copy with `checkpoint-approvals-v7.json`
+ *     removed, so the chain's head is `checkpoint-approvals-v6.json` — the
+ *     real post-retraction, pre-v7 state (C2 open, zero issues).
+ *   - `baseline`  = the same copy with `checkpoint-approvals-v6.json` ALSO
+ *     removed, so the chain's head reverts to `checkpoint-approvals-v5.json`
+ *     — the real pre-retraction state (C2 open, the two
+ *     `ledger-supersession-not-later` findings present).
+ *
  * Uses the REAL git resolver (shells `git show`) because the C0/C1 recipes
  * recompute canonical targets from recorded-commit bytes; this is the same
  * technique `tracked-artifacts-readiness.test.ts` uses for its clean-checkout
@@ -3587,22 +3604,28 @@ function buildRealV6VsV5Case(): MonotonicityPair {
     },
   };
 
-  const effective = validateReadinessArtifacts({
-    artifactRoot: trackedArtifactRoot,
-    repoRoot: realRepoRoot,
-    gitSourceResolver: realGitSourceResolver,
-    mode: "public",
-  });
-
-  const tmpRepoRoot = mkdtempSync(join(tmpdir(), "readiness-v5-baseline-"));
+  const effectiveRepoRoot = mkdtempSync(join(tmpdir(), "readiness-v6-effective-"));
+  const baselineRepoRoot = mkdtempSync(join(tmpdir(), "readiness-v5-baseline-"));
   try {
-    const tmpArtifactRoot = join(tmpRepoRoot, "quality-contracts", "agent-readiness");
-    cpSync(trackedArtifactRoot, tmpArtifactRoot, { recursive: true });
-    rmSync(join(tmpArtifactRoot, "checkpoint-approvals-v6.json"), { force: true });
+    const effectiveArtifactRoot = join(effectiveRepoRoot, "quality-contracts", "agent-readiness");
+    cpSync(trackedArtifactRoot, effectiveArtifactRoot, { recursive: true });
+    rmSync(join(effectiveArtifactRoot, "checkpoint-approvals-v7.json"), { force: true });
+
+    const effective = validateReadinessArtifacts({
+      artifactRoot: effectiveArtifactRoot,
+      repoRoot: effectiveRepoRoot,
+      gitSourceResolver: realGitSourceResolver,
+      mode: "public",
+    });
+
+    const baselineArtifactRoot = join(baselineRepoRoot, "quality-contracts", "agent-readiness");
+    cpSync(trackedArtifactRoot, baselineArtifactRoot, { recursive: true });
+    rmSync(join(baselineArtifactRoot, "checkpoint-approvals-v7.json"), { force: true });
+    rmSync(join(baselineArtifactRoot, "checkpoint-approvals-v6.json"), { force: true });
 
     const baseline = validateReadinessArtifacts({
-      artifactRoot: tmpArtifactRoot,
-      repoRoot: tmpRepoRoot,
+      artifactRoot: baselineArtifactRoot,
+      repoRoot: baselineRepoRoot,
       gitSourceResolver: realGitSourceResolver,
       mode: "public",
     });
@@ -3610,12 +3633,16 @@ function buildRealV6VsV5Case(): MonotonicityPair {
     return {
       baseline,
       effective,
-      teardown: () => rmSync(tmpRepoRoot, { recursive: true, force: true }),
+      teardown: () => {
+        rmSync(effectiveRepoRoot, { recursive: true, force: true });
+        rmSync(baselineRepoRoot, { recursive: true, force: true });
+      },
     };
   } catch (err) {
     // Nothing constructed a teardown closure yet (the failure happened before
-    // `return`), so clean up the temp dir here rather than leaking it.
-    rmSync(tmpRepoRoot, { recursive: true, force: true });
+    // `return`), so clean up both temp dirs here rather than leaking them.
+    rmSync(effectiveRepoRoot, { recursive: true, force: true });
+    rmSync(baselineRepoRoot, { recursive: true, force: true });
     throw err;
   }
 }

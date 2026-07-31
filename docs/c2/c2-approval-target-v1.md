@@ -87,32 +87,41 @@ manifest.
 
 ## Human Sign-Off
 
-Each reviewer should confirm the target and evidence independently before that
-reviewer's entry is appended to the immutable ledger:
+Each reviewer confirmed the target and evidence independently before that
+reviewer's entry was appended to the immutable ledger:
 
 | Role | Actor | Decision | Decided at | Signature / confirmation |
 |---|---|---|---|---|
-| Gold Label Owner | `reviewer-gold` | **Not decided** | — | Pending. `c2-gold-reviewer-gold-v2` is withdrawn (see the note below on what "withdrawn" means here). |
-| QA | `reviewer-qa` | **Not decided** | — | Pending. `c2-qa-reviewer-qa-v2` is withdrawn (see the note below). |
+| Gold Label Owner | `reviewer-gold` | **Approved** | `2026-07-31T19:10:32.000Z` | Recorded as `c2-gold-reviewer-gold-v3` in `checkpoint-approvals-v7.json`, superseding the withdrawn `c2-gold-reviewer-gold-v2` (see the note below on what "withdrawn" meant for that record). |
+| QA | `reviewer-qa` | **Approved** | `2026-07-31T19:15:32.000Z` | Recorded as `c2-qa-reviewer-qa-v3` in `checkpoint-approvals-v7.json`, superseding the withdrawn `c2-qa-reviewer-qa-v2` (see the note below). |
 
-**Neither reviewer has approved this target.** The two ledger records that bind
-it (`c2-gold-reviewer-gold-v2`, `c2-qa-reviewer-qa-v2`) each copied the
-`decidedAt` of the earlier v1 approval they supersede, so each asserts a decision
-made before this target existed. Both are withdrawn; C2 is open.
+**Both reviewers have now approved this target, and C2 is closed.** The two
+earlier ledger records that bound it (`c2-gold-reviewer-gold-v2`,
+`c2-qa-reviewer-qa-v2`) each copied the `decidedAt` of the earlier v1 approval
+they superseded, so each asserted a decision made before this target existed;
+both were withdrawn. The v3 records that replace them bear the actual
+wall-clock time of the real reviews (2026-07-31T19:10:32Z /
+2026-07-31T19:15:32Z), strictly after the target's 2026-07-28 origin, so they
+pass the same temporal check that caught the v2 defect.
 
 **"Withdrawn" here means both invalidated by a validator check AND recorded as
-retracted.** Both records are still present, unedited, in
+retracted.** The two v2 records are still present, unedited, in
 `quality-contracts/agent-readiness/checkpoint-approvals-v5.json` (carried
-forward unchanged into `v6`) and still read `decision: "approved"`; no
-`quality-contracts/` bytes were changed in place. Two things now apply
-together: the `ledger-supersession-not-later` check still reports their
-`decidedAt` as temporally impossible, and `checkpoint-approvals-v6.json`
-additionally records `retraction-c2-gold-v2` and `retraction-c2-qa-v2` —
-authorized retraction records that clear the temporal finding from the gate's
-`ok` result without resurrecting the v1 approvals these v2 records superseded.
-Do not fill in a `Decided at` value that is not the actual wall-clock time of a
-real review. See `docs/c2/c2-checkpoint-approval-handoff.md` for the ledger
-mechanics and what still needs to happen to close C2.
+forward unchanged into `v6` and `v7`) and still read `decision: "approved"`; no
+`quality-contracts/` bytes were changed in place. Two things applied together:
+the `ledger-supersession-not-later` check still reports their `decidedAt` as
+temporally impossible, and `checkpoint-approvals-v6.json` additionally records
+`retraction-c2-gold-v2` and `retraction-c2-qa-v2` — authorized retraction
+records that cleared the temporal finding from the gate's `ok` result without
+resurrecting the v1 approvals these v2 records superseded. That retraction
+alone did not close C2 (see `docs/c2/c2-checkpoint-approval-handoff.md`,
+"Retracting a superseding approval does not resurrect what it superseded");
+`checkpoint-approvals-v7.json`'s real v3 decisions are what actually closed it.
+The one thing the gate cannot verify is that `reviewer-gold` and `reviewer-qa`
+are genuinely the claimed external human reviewers — that remains an operator
+attestation, surfaced as the non-blocking `c2-external-qa-unverifiable`
+warning. See `docs/c2/c2-checkpoint-approval-handoff.md` for the full ledger
+mechanics and closure record.
 
 Approval means: “I reviewed this exact C2 evidence target and accept it for the
 C2 readiness checkpoint.” It does not mean that C2 has authorized paid

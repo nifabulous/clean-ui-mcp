@@ -337,4 +337,29 @@ describe("retraction validity", () => {
     expect(codesOf(issues)).toContain("retraction-duplicate");
     expect(codesOf(issues).filter((c) => c === "retraction-duplicate")).toHaveLength(1);
   });
+
+  it("a retraction row absent from allRows is NOT retracted (fail-closed hardening, Task 3 review fold-in)", () => {
+    // `retractionIndex` is built by scanning `allRows` for rows satisfying
+    // `isRetractionRow`. Every real caller passes `retractionRows` as a subset
+    // of `allRows`, but this row is deliberately withheld from `allRows` to
+    // exercise the hypothetical case flagged in Task 3's review: a `!`
+    // non-null assertion on the index lookup would leave `rIdx` `undefined`,
+    // and `targetApprovalIdx >= undefined` is always `false` — silently
+    // passing the out-of-order check and retracting the target (fail-OPEN).
+    // The hardened guard skips the row instead, so the target must stay out
+    // of the returned set and no issue is fabricated about it.
+    const approval = makeApproval({ approvalId: "a1" });
+    const retraction = makeRetraction({ retractionId: "r1", retractsApprovalId: "a1" });
+    const allRows: LedgerRowT[] = [approval]; // retraction is NOT included here
+    const issues: ValidationIssue[] = [];
+
+    const retracted = computeRetractedApprovalIds(
+      allRows,
+      [retraction],
+      defaultRegistryByVersion(),
+      issues,
+    );
+
+    expect(retracted.has("a1")).toBe(false);
+  });
 });

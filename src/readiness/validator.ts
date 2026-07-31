@@ -1208,17 +1208,28 @@ function validateApprovalsAndCheckpoint(
   const approvalRows = approvals.filter(isApprovalRow);
   const retractionRows: CheckpointRetractionT[] = approvals.filter(isRetractionRow);
   // Classifies retraction validity and returns the ids cleared by a VALID
-  // retraction. Not yet consumed by closure — that is Task 4. No real or
-  // existing-test ledger contains retraction rows yet, so this call is inert
-  // today: `retractionRows` is empty, `retractedApprovalIds` stays an empty
-  // set, and `issues` only grows when an actual retraction is invalid.
+  // retraction. Consumed below (Task 4): a validly-retracted id is excluded
+  // from the effective approval set (`activeApprovals`) and suppresses the two
+  // temporal findings (`ledger-supersession-not-later`,
+  // `approved-artifact-created-after-decision`) for THAT approval only. An
+  // INVALID retraction (unauthorized/missing/out-of-order/duplicate) is never
+  // added to this set, so it has no effect on closure — both temporal findings
+  // still fire and the approval stays in the effective set, fail-closed.
   const retractedApprovalIds = computeRetractedApprovalIds(
     approvals,
     retractionRows,
     registryByVersion,
     issues,
   );
-  void retractedApprovalIds; // consumed starting Task 4 (closure exclusion)
+  // Approvals that a later, later-decided approval supersedes. Computed from
+  // every approval row's own `supersedesApprovalId` over `approvalRows` — a
+  // retraction row never touches this set. THIS IS INTENTIONAL AND IS MODEL B:
+  // retracting a SUPERSEDER does not remove its `supersedesApprovalId`
+  // contribution, so the predecessor it superseded stays superseded even after
+  // the superseder is validly retracted. A retraction can only ever REMOVE an
+  // approval from the effective set (via `retractedApprovalIds` below); it must
+  // never ADD one back, i.e. never resurrect a superseded approval. Do not
+  // "fix" this by deleting a retracted superseder's contribution to this set.
   const supersededApprovalIds = new Set(
     approvalRows.flatMap((approval) => approval.supersedesApprovalId ? [approval.supersedesApprovalId] : []),
   );
@@ -1360,6 +1371,14 @@ function validateApprovalsAndCheckpoint(
         // (`verifyApprovalArtifactTimestamps`) is unconditional in the same way,
         // for the same reason. The two are deliberately consistent; if you are
         // about to scope either one, read this comment first.
+        //
+        // Task 4 adds exactly ONE gate on top of the above, and it is NOT a
+        // supersession-based demotion: a VALID retraction (the approval's id is
+        // in `retractedApprovalIds`, i.e. an authorized Repository Maintainer
+        // retraction that named it, in order, with no prior retraction) is the
+        // sole way to suppress this finding. An INVALID retraction is never in
+        // that set, so the finding still fires unconditionally exactly as
+        // before — this is what keeps the invariant fail-closed.
         const priorDecidedAt = Date.parse(prior.decidedAt);
         const decidedAt = Date.parse(approval.decidedAt);
         if (
@@ -1367,14 +1386,16 @@ function validateApprovalsAndCheckpoint(
           Number.isFinite(decidedAt) &&
           decidedAt <= priorDecidedAt
         ) {
-          issues.push({
-            code: "ledger-supersession-not-later",
-            artifactId: approval.approvalId,
-            message: `approval ${approval.approvalId} decidedAt (${approval.decidedAt}) must be strictly later than superseded approval ${prior.approvalId} decidedAt (${prior.decidedAt})`,
-          });
-          // Taint the defective record. While it is still effective this is what
-          // a checkpoint would close on, so the checkpoint reports "open".
-          noteApprovalIssue(approval.approvalId, "ledger-supersession-not-later");
+          if (!retractedApprovalIds.has(approval.approvalId)) {
+            issues.push({
+              code: "ledger-supersession-not-later",
+              artifactId: approval.approvalId,
+              message: `approval ${approval.approvalId} decidedAt (${approval.decidedAt}) must be strictly later than superseded approval ${prior.approvalId} decidedAt (${prior.decidedAt})`,
+            });
+            // Taint the defective record. While it is still effective this is what
+            // a checkpoint would close on, so the checkpoint reports "open".
+            noteApprovalIssue(approval.approvalId, "ledger-supersession-not-later");
+          }
         }
       }
     }
@@ -1392,6 +1413,7 @@ function validateApprovalsAndCheckpoint(
     approvalRows,
     artifacts,
     supersededApprovalIds,
+    retractedApprovalIds,
     issues,
     noteApprovalIssue,
   );
@@ -1403,7 +1425,13 @@ function validateApprovalsAndCheckpoint(
   // checkpoint (e.g. C1) stays open without producing spurious issues
   // from unresolved sources.
   // ------------------------------------------------------------------
-  const activeApprovals = approvalRows.filter((approval) => !supersededApprovalIds.has(approval.approvalId));
+  // A validly-retracted approval is excluded here too — a retraction can only
+  // ever REMOVE an approval from the effective set, same as supersession. See
+  // the comment at `supersededApprovalIds` above for why retracting a
+  // SUPERSEDER does not put its predecessor back in this set (Model B).
+  const activeApprovals = approvalRows.filter(
+    (approval) => !supersededApprovalIds.has(approval.approvalId) && !retractedApprovalIds.has(approval.approvalId),
+  );
   const activeCheckpoints = new Set(activeApprovals.map((a) => a.checkpoint));
   const recompute = computeCanonicalTargets(artifacts, absRoot, opts, activeCheckpoints, activeApprovals, registryByVersion);
 
@@ -1873,7 +1901,18 @@ export function computeRetractedApprovalIds(
     issues.push({ code, artifactId: targetId, message });
 
   for (const r of retractionRows) {
-    const rIdx = retractionIndex.get(r)!;
+    // FAIL-CLOSED GUARD (not a `!` non-null assertion): every real caller
+    // passes `retractionRows` as a subset of `allRows` (production always
+    // supplies `approvals.filter(isRetractionRow)`), so `retractionIndex` has
+    // an entry for every row here today. But a `!` assertion would, for a
+    // hypothetical retraction row absent from `allRows`, resolve `rIdx` to
+    // `undefined` — and `targetApprovalIdx >= undefined` is always `false`,
+    // silently passing the out-of-order check and adding the target to
+    // `retracted` (fail-OPEN: an untethered retraction record could clear an
+    // approval). Skip the row instead — it names no position in the ledger, so
+    // it cannot be validated as in-order, and must not retract anything.
+    const rIdx = retractionIndex.get(r);
+    if (rIdx === undefined) continue;
     const targetId = r.retractsApprovalId;
 
     // Authorization: the actor must resolve in the retraction's OWN pinned
@@ -2026,8 +2065,15 @@ export function computeRetractedApprovalIds(
  * Two different decisions live in this function and they are deliberately
  * asymmetric:
  *
- * - `approved-artifact-created-after-decision` is UNCONDITIONAL. It runs over
- *   every approval, superseded or not, and always blocks and always taints.
+ * - `approved-artifact-created-after-decision` is UNCONDITIONAL WITH RESPECT TO
+ *   SUPERSESSION. It runs over every approval, superseded or not, and always
+ *   blocks and always taints. Task 4 adds exactly one further gate, shared with
+ *   `ledger-supersession-not-later`: a VALID retraction (the approval's id is
+ *   in `retractedApprovalIds`) suppresses this finding for that approval only.
+ *   An INVALID retraction is never in that set, so the finding still fires
+ *   exactly as before — see `computeRetractedApprovalIds`'s docstring for what
+ *   makes a retraction valid. This is not the supersession-based demotion
+ *   rejected below; retraction is a distinct, explicit, authorized act.
  *   This matches its sibling `ledger-supersession-not-later` in
  *   `validateApprovalsAndCheckpoint` exactly: both are temporal-impossibility
  *   findings, both are durable against the attacks enumerated in TODOS.md
@@ -2063,6 +2109,7 @@ function verifyApprovalArtifactTimestamps(
   approvals: readonly z.infer<typeof CheckpointApproval>[],
   artifacts: Map<string, ParsedArtifact>,
   supersededApprovalIds: ReadonlySet<string>,
+  retractedApprovalIds: ReadonlySet<string>,
   issues: ValidationIssue[],
   note: (approvalId: string, code: string) => void,
 ): void {
@@ -2106,7 +2153,7 @@ function verifyApprovalArtifactTimestamps(
       if (typeof createdAtRaw !== "string") continue;
       const createdAt = Date.parse(createdAtRaw);
       if (!Number.isFinite(createdAt)) continue;
-      if (decidedAt < createdAt) {
+      if (decidedAt < createdAt && !retractedApprovalIds.has(approval.approvalId)) {
         issues.push({
           code: "approved-artifact-created-after-decision",
           artifactId: approval.approvalId,

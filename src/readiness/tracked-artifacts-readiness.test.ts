@@ -168,6 +168,22 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("reports no checkpoint-actor-separation-violation finding on the real gate", () => {
+    // The actor-separation check (validator.ts) now runs over the
+    // retracted-INCLUSIVE `cpStructural` set (structural-monotonicity fix, see
+    // `docs/superpowers/plans/2026-07-31-retraction-structural-monotonicity-followup.md`),
+    // so a valid retraction of a duplicate-actor approval can only ADD this
+    // finding, never erase one that already fired. This assertion is implied
+    // by the empty `result.issues` above, but is asserted explicitly here
+    // because it is the one finding the structural-monotonicity fix is about:
+    // if it ever reappears while the rest of this suite stays green, the
+    // regression is specifically in the actor-separation channel, not the
+    // policy-role channel the "codex regression" tests already cover.
+    expect(result.issues.some((i) => i.code === "checkpoint-actor-separation-violation")).toBe(
+      false,
+    );
+  });
+
   it("emits no external-QA closure caveat while C2 is open", () => {
     // `c2-external-qa-unverifiable` is emitted only when C2 actually closes.
     // Asserting its ABSENCE pins the coupling: if this warning reappears while
@@ -602,21 +618,23 @@ describe("tracked readiness artifacts, private mode with the private inputs ABSE
 });
 
 /**
- * TRIPWIRE for a KNOWN, DEFERRED residual (see the KNOWN RESIDUAL comment at the
- * actor-separation check in `validator.ts`, and
- * `docs/superpowers/plans/2026-07-31-retraction-structural-monotonicity-followup.md`).
- *
- * The actor-separation check runs over the retracted-EXCLUDED closure set, so on
- * a PRESENCE-ONLY checkpoint (C3–C5, no `CHECKPOINT_POLICIES` entry) a valid
+ * FACTUAL STATE CHECK for the presence-only checkpoints (C3–C5, no
+ * `CHECKPOINT_POLICIES` entry). This USED to be a tripwire guarding an
+ * unreachable-but-unfixed channel: the actor-separation check used to run over
+ * the retracted-EXCLUDED closure set, so on a presence-only checkpoint a valid
  * retraction of an extra duplicate-actor approval could ERASE
- * `checkpoint-actor-separation-violation` and manufacture closure — the one thing
- * a retraction must never do. That channel is UNREACHABLE only while no C3/C4/C5
- * approval exists in the ledger. This test enforces that precondition: the day a
- * C3+ approval lands, it fails loudly and forces the structural-monotonicity fix
- * to land first.
+ * `checkpoint-actor-separation-violation` and manufacture closure. That channel
+ * is now CLOSED structurally — the actor-separation check runs over the
+ * retracted-INCLUSIVE `cpStructural` set regardless of whether a C3+ approval
+ * exists (see
+ * `docs/superpowers/plans/2026-07-31-retraction-structural-monotonicity-followup.md`
+ * and the channel-agnostic monotonicity guard-test in
+ * `validate-readiness-artifacts.test.ts`), so this precondition is no longer
+ * load-bearing for that bug. It is kept as a plain factual record of today's
+ * tracked ledger contents, not as a guard.
  */
-describe("tripwire: presence-only actor-separation manufacture-closure channel stays unreachable", () => {
-  it("has no C3/C4/C5 approval in the tracked ledger (else land the structural-monotonicity follow-up first)", () => {
+describe("presence-only checkpoints (C3-C5): tracked ledger state", () => {
+  it("has no C3/C4/C5 approval in the tracked ledger today", () => {
     const head = JSON.parse(
       readFileSync(resolve(artifactRoot, "checkpoint-approvals-v6.json"), "utf-8"),
     ) as { approvals: Array<{ recordKind?: string; checkpoint?: string }> };

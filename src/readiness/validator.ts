@@ -1424,12 +1424,24 @@ function validateApprovalsAndCheckpoint(
   // checkpoint (e.g. C1) stays open without producing spurious issues
   // from unresolved sources.
   // ------------------------------------------------------------------
-  // A validly-retracted approval is excluded here too — a retraction can only
-  // ever REMOVE an approval from the effective set, same as supersession. See
-  // the comment at `supersededApprovalIds` above for why retracting a
-  // SUPERSEDER does not put its predecessor back in this set (Model B).
+  // A validly-retracted approval stays VISIBLE here — only SUPERSEDED
+  // approvals are excluded, same as before retraction existed. This set feeds
+  // every STRUCTURAL/target/cardinality computation below (activeCheckpoints,
+  // computeCanonicalTargets, and — via `allCpApproved` further down —
+  // `comparePolicySet`'s closed-world role check and actor-cardinality). A
+  // retraction must be monotonic toward open: it can only ever REMOVE an
+  // approval's CONTRIBUTION TO CLOSURE, never remove a blocking finding it
+  // caused. Excluding retracted approvals from this set let a valid
+  // retraction of an EXTRA approval clear the `policy-unexpected-role`
+  // finding it tripped while the required roles stayed satisfied elsewhere —
+  // manufacturing closure (fail-open; see the "codex regression" describe
+  // block in validate-readiness-artifacts.test.ts). Retraction is excluded
+  // ONLY from role-satisfaction, at `cpApprovals` below — so it can still
+  // hold a checkpoint open, but can never close one. See the comment at
+  // `supersededApprovalIds` above for why retracting a SUPERSEDER does not
+  // put its predecessor back in this set (Model B).
   const activeApprovals = approvalRows.filter(
-    (approval) => !supersededApprovalIds.has(approval.approvalId) && !retractedApprovalIds.has(approval.approvalId),
+    (approval) => !supersededApprovalIds.has(approval.approvalId),
   );
   const activeCheckpoints = new Set(activeApprovals.map((a) => a.checkpoint));
   const recompute = computeCanonicalTargets(artifacts, absRoot, opts, activeCheckpoints, activeApprovals, registryByVersion);
@@ -1732,10 +1744,15 @@ function validateApprovalsAndCheckpoint(
       );
     }
 
-    // Closure contribution: only approvals that produced NO issue. Re-derive
-    // the clean set AFTER the role check may have tainted approvals.
+    // Closure contribution: only approvals that produced NO issue AND are not
+    // validly retracted. Re-derive the clean set AFTER the role check may
+    // have tainted approvals. A retracted approval is still seen by
+    // `comparePolicySet` / actor-cardinality above (so any blocker it causes
+    // still fires — see `activeApprovals` above), but must NOT count toward
+    // `allRolesPresent`: retraction only ever removes closure support, never
+    // a blocker.
     const cpApprovals = allCpApproved.filter(
-      (a) => !approvalIssueCodes.has(a.approvalId),
+      (a) => !approvalIssueCodes.has(a.approvalId) && !retractedApprovalIds.has(a.approvalId),
     );
     const cleanRoles = new Set<string>(cpApprovals.map((a) => a.role));
 

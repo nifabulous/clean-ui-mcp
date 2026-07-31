@@ -3330,18 +3330,6 @@ function assertRetractionIsMonotonicTowardOpen(
   baseline: ValidationResult,
   effective: ValidationResult,
 ): void {
-  // Property (a): no checkpoint flips open (baseline) -> closed (effective).
-  for (const cp of MONOTONICITY_CHECKPOINT_IDS) {
-    if (baseline.checkpointStatus[cp] === "open" && effective.checkpointStatus[cp] === "closed") {
-      throw new Error(
-        `${label}: checkpoint ${cp} flipped open (baseline) -> closed (effective) — ` +
-          `a retraction manufactured closure`,
-      );
-    }
-  }
-
-  // Property (b): no blocking-issue CODE's count drops, except the two
-  // temporal codes a valid retraction exists to suppress.
   const countsOf = (result: ValidationResult): Map<string, number> => {
     const counts = new Map<string, number>();
     for (const issue of result.issues) counts.set(issue.code, (counts.get(issue.code) ?? 0) + 1);
@@ -3349,6 +3337,46 @@ function assertRetractionIsMonotonicTowardOpen(
   };
   const baselineCounts = countsOf(baseline);
   const effectiveCounts = countsOf(effective);
+
+  // A valid retraction is ALLOWED to clear the two temporal codes for the
+  // approval it retracts. When that happens, a checkpoint whose ONLY hold-open
+  // was such a temporal finding may LEGITIMATELY close (the defect is removed at
+  // source, not hidden — e.g. retracting a redundant role-provider that carried
+  // `approved-artifact-created-after-decision` while other approvals still cover
+  // every role). That is NOT a manufactured closure. So property (a) carries the
+  // SAME temporal carve-out as property (b): an open->closed flip is a violation
+  // only when it is NOT explained by a temporal suppression. Property (b) below
+  // independently guarantees no NON-temporal blocker count dropped, so a flip
+  // accompanied by a temporal drop cannot have erased a real blocker.
+  const someTemporalCodeDropped = [...RETRACTION_ALLOWED_SUPPRESSED_CODES].some(
+    (code) => (effectiveCounts.get(code) ?? 0) < (baselineCounts.get(code) ?? 0),
+  );
+
+  // Property (a): no checkpoint flips open (baseline) -> closed (effective),
+  // UNLESS that flip is explained by a temporal suppression (see above).
+  for (const cp of MONOTONICITY_CHECKPOINT_IDS) {
+    if (
+      baseline.checkpointStatus[cp] === "open" &&
+      effective.checkpointStatus[cp] === "closed" &&
+      !someTemporalCodeDropped
+    ) {
+      throw new Error(
+        `${label}: checkpoint ${cp} flipped open (baseline) -> closed (effective) with no ` +
+          `temporal finding cleared — a retraction manufactured closure`,
+      );
+    }
+  }
+
+  // Property (b): no blocking-issue CODE's count drops, except the two
+  // temporal codes a valid retraction exists to suppress. This is the primary
+  // manufactured-closure guard: every channel found (policy-unexpected-role,
+  // policy-duplicate-role, actor-separation) manufactured closure by dropping a
+  // NON-temporal blocker's count, which this catches directly.
+  // NOTE — coverage is per fixture SHAPE, not automatic: policy-backed
+  // checkpoints (C0/C1/C2) are immune to the presence-only actor-separation and
+  // redundant-role-provider shapes because a redundant or extra role trips the
+  // non-suppressible closed-world `policy-*` check; the exposure those shapes
+  // probe is presence-only (C3-C5), which is why the fixtures live there.
   for (const [code, baselineCount] of baselineCounts) {
     const effectiveCount = effectiveCounts.get(code) ?? 0;
     if (effectiveCount < baselineCount && !RETRACTION_ALLOWED_SUPPRESSED_CODES.has(code)) {

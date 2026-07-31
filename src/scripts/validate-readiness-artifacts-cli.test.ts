@@ -128,12 +128,14 @@ describe("validate-readiness-artifacts CLI — pins-inert notice and dist-layout
     // v6 (checkpoint-approvals-v6.json) records the two v2 approvals as
     // validly retracted, so the temporal defect they carried no longer blocks
     // closure: `ok` is true and the two `ledger-supersession-not-later`
-    // findings are gone. C2 itself is still open — retracting a superseder
-    // does not resurrect the approval it superseded (Model B), so neither
-    // Gold nor QA has any valid approval left for C2 — but that is now a
-    // "zero issues, still open" state, not a blocking-finding state.
+    // findings are gone. At v6, C2 stayed open — retracting a superseder does
+    // not resurrect the approval it superseded (Model B), so neither Gold nor
+    // QA had any valid approval left for C2. v7 (checkpoint-approvals-v7.json)
+    // appends real gold/QA approvals of the corrected target with a truthful
+    // `decidedAt` after the target existed, which pass the temporal check the
+    // v2s failed — so C2 now closes.
     expect(parsed.ok).toBe(true);
-    expect(parsed.checkpointStatus.C2).toBe("open");
+    expect(parsed.checkpointStatus.C2).toBe("closed");
     expect(
       parsed.issues.filter((i) => i.code === "ledger-supersession-not-later"),
     ).toHaveLength(0);
@@ -178,12 +180,12 @@ describe("validate-readiness-artifacts CLI — pins-inert notice and dist-layout
       ledgerPinScope: string;
     };
     expect(parsed.ledgerPinScope).toBe("tracked");
-    // Same post-v6 state as the previous test (retraction removes the
-    // temporal-defect findings; C2 stays open with zero issues) — see the
-    // comment there for why `ok: true` and "C2 open" are not contradictory.
+    // Same post-v7 state as the previous test: v6's retraction removes the
+    // temporal-defect findings, and v7's two corrected gold/QA approvals close
+    // C2 — see the comment there for the full history.
     expect(parsed.ok).toBe(true);
     expect(parsed.checkpointStatus).toEqual({
-      C0: "closed", C1: "closed", C2: "open", C3: "open", C4: "open", C5: "open",
+      C0: "closed", C1: "closed", C2: "closed", C3: "open", C4: "open", C5: "open",
     });
     expect(
       parsed.issues.filter((i) => i.code === "ledger-supersession-not-later"),
@@ -313,11 +315,21 @@ describe("validate-readiness-artifacts CLI — pins-inert notice and dist-layout
       //
       // The tracked side is asserted here too, and it is the load-bearing half:
       // widening what blocks closure must NOT stop a checkpoint that legitimately
-      // closes, and C0/C1 close on the tracked root because its only two issues
-      // are both keyed to C2 approvalIds and therefore attributable.
+      // closes. C0/C1 close on the tracked root because it carries zero issues at
+      // all post-v7 (the two `ledger-supersession-not-later` findings that v6
+      // cleared are gone, and no other issue is attributable to any checkpoint),
+      // and C2 now closes too — v7's two corrected gold/QA approvals pass the
+      // temporal check the retracted v2s failed.
       expect(trackedResult.checkpointStatus).toEqual({
-        C0: "closed", C1: "closed", C2: "open", C3: "open", C4: "open", C5: "open",
+        C0: "closed", C1: "closed", C2: "closed", C3: "open", C4: "open", C5: "open",
       });
+      // The copy's checkpoint map is UNCHANGED by v7: `index-path-mismatch` is an
+      // issue the closure gate cannot attribute to any single checkpoint, so it
+      // widens to hold EVERY checkpoint open (see the comment above) regardless
+      // of what the ledger's approval rows say — C2 having two valid v7 approvals
+      // does not override a global, unattributable blocking issue. Verified
+      // directly against the built CLI: the copy still reports all six
+      // checkpoints open.
       expect(copyResult.checkpointStatus).toEqual({
         C0: "open", C1: "open", C2: "open", C3: "open", C4: "open", C5: "open",
       });

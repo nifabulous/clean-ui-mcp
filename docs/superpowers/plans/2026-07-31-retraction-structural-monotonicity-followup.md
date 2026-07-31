@@ -1,16 +1,16 @@
-# Follow-up: retraction structural monotonicity (close the actor-separation manufacture-closure channel)
+# Follow-up: retraction structural monotonicity (landed in PR #72)
 
-> **Status:** DEFERRED from PR `feat/approval-retraction-vocabulary`. The branch
-> shipped with the policy-role channel fixed (commit `cb69e96`) and this
-> presence-only actor-separation channel documented + tripwired but NOT fixed,
-> by owner decision (unreachable today — zero C3/C4/C5 approvals). This doc is
-> the turnkey spec for the hardening PR.
+> **Status:** LANDED in PR #72 (`fix/retraction-structural-monotonicity`).
+> This was deferred from PR #71 after the policy-role channel was fixed in
+> `cb69e96`; PR #72 closed the presence-only actor-separation channel and the
+> later-discovered actor-separation emission-gate channel. This document is now
+> the landed design record, not an open implementation plan.
 
 **Goal:** make retraction *structurally* monotonic toward open so a valid
 retraction can never manufacture checkpoint closure through ANY channel, not
 just the closed-world role check already fixed in `cb69e96`.
 
-## Background — the invariant and the two channels
+## Background — the invariant and the channels
 Governing invariant: a valid retraction may only REMOVE an approval from
 role-satisfaction; it must NEVER remove a blocking finding (other than the two
 temporal findings it is built to clear) or move a checkpoint open→closed.
@@ -22,21 +22,22 @@ temporal findings it is built to clear) or move a checkpoint open→closed.
   making `activeApprovals` exclude SUPERSEDED only (retracted approvals stay
   visible to `allCpApproved` → `comparePolicySet`), while `cpApprovals` (role
   satisfaction) additionally excludes retracted.
-- **Channel 2 (THIS follow-up):** the actor-separation check
-  (`approvalsSatisfyActorCardinality`, validator.ts ~1765) is still fed the
-  retracted-EXCLUDED `cpApprovals`. On PRESENCE-ONLY checkpoints (C3–C5, no
+- **Channel 2 (FIXED in PR #72):** the actor-separation check
+  (`approvalsSatisfyActorCardinality`, validator.ts closure loop) was fed the
+  retracted-EXCLUDED closure set. On PRESENCE-ONLY checkpoints (C3-C5, no
   `CHECKPOINT_POLICIES` entry, so `comparePolicySet` never runs), a valid
-  retraction of an extra duplicate-actor approval erases
-  `checkpoint-actor-separation-violation` while required roles stay satisfied →
-  the checkpoint closes. Found by independent cross-model (/codex) re-review AND
-  independently flagged by the opus branch review.
+  retraction of an extra duplicate-actor approval erased
+  `checkpoint-actor-separation-violation` while required roles stayed satisfied,
+  closing the checkpoint. Fixed by feeding actor-separation from the
+  retracted-INCLUDED `cpStructural` set.
+- **Channel #4 (FIXED in PR #72):** fixing the actor-separation input set was
+  not enough. Its emission gate still read `allRolesPresent`, computed from the
+  retracted-EXCLUDED role-satisfaction set. Retracting the sole provider of a
+  required role while a separate separation offender remained live suppressed
+  the violation and flipped `ok` from false to true. Fixed by gating emission on
+  `allRolesPresentStructural`, computed from `cpStructural`.
 
-Why deferred: unreachable with current data (v6 ledger has zero C3/C4/C5
-approvals; the tripwire in `tracked-artifacts-readiness.test.ts` fails loudly the
-day a C3+ approval lands). Not a regression against `origin/main`. Owner chose
-ship-now-harden-later.
-
-## The fix — clean two-set split (closes the whole CLASS, not one channel)
+## The Fix — Clean Two-Set Split
 Enforce the invariant structurally: a retracted approval is excluded from
 **exactly ONE** computation — the `allRolesPresent` role-satisfaction test — and
 **included in every** structural/blocker computation (`comparePolicySet`,
@@ -45,8 +46,8 @@ including a retracted approval can only ADD a blocker (push open); excluding it
 from role-satisfaction can only REMOVE satisfaction (push open). Both edges are
 monotonic toward open, so no retraction can manufacture closure via ANY channel.
 
-In the closure loop (validator.ts ~1747-1781), replace the single `cpApprovals`
-with two named sets and route every use:
+In the closure loop, the old single `cpApprovals` set was replaced with two
+named sets:
 ```ts
 // STRUCTURAL set: clean (untainted) approvals INCLUDING retracted. Every
 // structural blocker runs over this (actor-separation here; the role-set check
@@ -56,53 +57,42 @@ const cpStructural = allCpApproved.filter((a) => !approvalIssueCodes.has(a.appro
 const cpClosureContributors = cpStructural.filter((a) => !retractedApprovalIds.has(a.approvalId));
 const cleanRoles = new Set<string>(cpClosureContributors.map((a) => a.role));
 const allRolesPresent = required.every((r) => cleanRoles.has(r));
+const allRolesPresentStructural = required.every((r) =>
+  cpStructural.some((a) => a.role === r),
+);
 const actorCardinalityValid = approvalsSatisfyActorCardinality(cpStructural, resolvedRegistryByApprovalId, implementationActorIds);
-if (allRolesPresent && cpStructural.length > 0 && !actorCardinalityValid) {
+if (allRolesPresentStructural && cpStructural.length > 0 && !actorCardinalityValid) {
   const code = "checkpoint-actor-separation-violation";
   issues.push({ code, artifactId: cp, message: /* unchanged */ });
   for (const approval of cpStructural) noteApprovalIssue(approval.approvalId, code);
 }
 ```
-After the edit there must be NO `cpApprovals` identifier left in the loop (rename
-fully so a future reader can't reintroduce the bug). Leave `activeApprovals`
-(superseded-only excluded, from `cb69e96`), the two temporal gates, and
-`computeRetractedApprovalIds` untouched.
 
-## Ready-made reference implementation
-A complete, RED-verified implementation of exactly this fix + guard-test was
-produced during the original branch (before deferral) and is saved as a patch:
-`docs/c2/followups/2026-07-31-retraction-structural-monotonicity.patch`
-(against `cb69e96`). Re-implement or apply-and-re-verify; do NOT trust the patch
-blind — re-run the RED/GREEN and the real gate.
+`activeApprovals` still excludes only superseded approvals. The two temporal
+gates and `computeRetractedApprovalIds` stay unchanged.
 
-## Tests (TDD, RED first)
-1. **Actor-separation regression (RED before fix):** a presence-only checkpoint
-   (C3, `FUTURE_CHECKPOINT_ROLES = {Product, QA, Engineering}`) with its roles
-   satisfied by clean DISTINCT-actor approvals PLUS an extra approval that
-   duplicates one actor (so `approvalsSatisfyActorCardinality` returns false →
-   `checkpoint-actor-separation-violation`, C3 open), then a VALID
-   Repository-Maintainer retraction of ONLY that extra approval. Assert: the
-   separation violation STILL present, `checkpointStatus.C3 === "open"`,
-   `ok === false`. Must FAIL pre-fix (C3 closes / violation gone).
-2. Keep the round-1 C1 `policy-unexpected-role` regression test green.
-3. **Monotonicity guard-test (channel-agnostic):** parameterized property test
-   over a table of adversarial fixtures (policy unexpected-role, policy
-   duplicate-role, presence-only actor-separation, real v6-vs-v5, Model B). For
-   each, compare `effective` (retractions applied) vs `baseline` (retraction rows
-   removed) and assert: (a) NO checkpoint flips open→closed; (b) no blocking
-   issue present in baseline is missing from effective EXCEPT
-   `ledger-supersession-not-later` / `approved-artifact-created-after-decision`
-   on a retracted approval. Show it goes RED under the channel-2 defect (route
-   actor-separation back to the retracted-excluded set → the presence-only
-   fixture fails property (a)).
-4. **Real-gate non-regression (MANDATORY):** private+public must stay `ok:true`,
-   `{C0 closed, C1 closed, C2 open, C3-5 open}`, ZERO issues, no `retraction-*`,
-   `ledgerPinScope: tracked`, empty stderr — byte-identical to today.
-5. Remove the KNOWN-RESIDUAL comment block at the actor-cardinality site and the
-   tripwire's "deferred" framing once this lands; full readiness suite + `tsc`
-   green.
+## Landed Tests
+PR #72 added or updated:
+
+1. **Policy-role regression:** C1 unexpected-role retraction cannot erase
+   `policy-unexpected-role` or close C1.
+2. **Presence-only actor-separation regression:** C3 duplicate-actor retraction
+   cannot erase `checkpoint-actor-separation-violation` or close C3.
+3. **Channel #4 regression:** retracting the sole QA provider while a separate
+   actor-separation offender remains live still emits
+   `checkpoint-actor-separation-violation` and keeps `ok: false`.
+4. **Channel-agnostic monotonicity guard-test:** table covers policy
+   unexpected-role, policy duplicate-role, presence-only actor-separation,
+   channel #4, real v6-vs-v5, and Model B. Its properties are general, but its
+   coverage is only as strong as the fixture shapes in the table.
+5. **Mirror-image role-satisfaction test:** retracting the sole QA approval on
+   a clean C3 opens the checkpoint honestly instead of letting a retracted
+   approval satisfy roles.
+6. **Real-gate non-regression:** public/private tracked readiness remains
+   `ok:true`, `{C0 closed, C1 closed, C2 open, C3-C5 open}`, zero issues,
+   `ledgerPinScope: tracked`.
 
 ## Commit
 ```
-fix(readiness): retracted approvals stay visible to ALL structural blockers + monotonicity guard-test (close manufacture-closure class)
+fix(readiness): close C3-C5 actor-separation manufacture-closure channel
 ```

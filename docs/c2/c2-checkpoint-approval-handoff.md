@@ -21,26 +21,32 @@ The report contains nine disagreement entries, all metrics pass, and all eight
 hard gates pass. The adjudication record states that the independent labels
 were preserved and not rewritten after sealing.
 
-## Required Approvals
+## Required Approvals — now satisfied by v7
 
-The readiness validator requires the active C2 approvals to bind the target
-below. Do **not** edit the immutable earlier ledgers — every ledger up to and
-including the current head, `checkpoint-approvals-v6.json`, must stay
+**C2 is CLOSED.** The two approvals this section used to describe as
+outstanding now exist, recorded in `checkpoint-approvals-v7.json`
+(`ordinalVersion: 7`), the current head. Do **not** edit the immutable earlier
+ledgers — every ledger up to and including the current head must stay
 byte-identical once published; only a new successor ledger may add rows.
 
-`checkpoint-approvals-v5.json` (carried forward unchanged into v6) does contain
-two records that bind the corrected target, but neither is a valid decision;
-`checkpoint-approvals-v6.json` records both as retracted. C2 is **open** — see
-"Current ledger state" below before acting on anything in this section. The
-human-readable review packet is `docs/c2/c2-approval-target-v1.md`.
+`checkpoint-approvals-v5.json` (carried forward unchanged into v6 and v7)
+contains two records that bound the corrected target but were not valid
+decisions (see "Current ledger state" below); `checkpoint-approvals-v6.json`
+records both as retracted. `checkpoint-approvals-v7.json` then appends the
+real decisions, `c2-gold-reviewer-gold-v3` and `c2-qa-reviewer-qa-v3`, which
+satisfy the two required approvals below. The human-readable review packet is
+`docs/c2/c2-approval-target-v1.md`.
 
 - `checkpoint: "C2"`, `approvalKind: "checkpoint"`, `decision: "approved"`,
-  `role: "Gold Label Owner"`
+  `role: "Gold Label Owner"` — satisfied by `c2-gold-reviewer-gold-v3`
+  (`reviewer-gold`, `decidedAt: 2026-07-31T19:10:32.000Z`)
 - `checkpoint: "C2"`, `approvalKind: "checkpoint"`, `decision: "approved"`,
-  `role: "QA"`
+  `role: "QA"` — satisfied by `c2-qa-reviewer-qa-v3` (`reviewer-qa`,
+  `decidedAt: 2026-07-31T19:15:32.000Z`)
 
-Each approval must use the real approver actor ID from
-`approval-actor-registry-v3.json` and bind this exact target:
+Each approval uses the real approver actor ID from
+`approval-actor-registry-v3.json` and binds this exact target, recorded below
+for reference:
 
 ```text
 checkpointTargetSha256: cf55fee06a3a1f34da7d90672c3f62d3704fbda7026cf0de2de9c2aba3c78ac0
@@ -80,19 +86,18 @@ working-tree values: that would falsify the approvals it exists to describe.
 The approvals should explicitly accept the nine disagreements as recorded
 agreement evidence. No labels should be changed as part of checkpoint approval.
 
-## Current ledger state — C2 is OPEN
+## Current ledger state — C2 is CLOSED (v7)
 
 `checkpoint-approvals-v5.json` contains two effective C2 records,
 `c2-gold-reviewer-gold-v2` (`reviewer-gold`) and `c2-qa-reviewer-qa-v2`
 (`reviewer-qa`). Each supersedes its earlier v1 approval and binds the corrected
 target `cf55fee06a3a1f34da7d90672c3f62d3704fbda7026cf0de2de9c2aba3c78ac0`.
 
-**Neither record is a valid decision.** Each copied its `decidedAt` verbatim
+**Neither record was a valid decision.** Each copied its `decidedAt` verbatim
 from the v1 approval it supersedes (`2026-07-26T21:18:07.000Z` and
 `2026-07-26T21:20:11.000Z`), while the target it binds first came into existence
-in commit `e176e85` on 2026-07-28. Both therefore claim a decision taken before
-the thing decided existed, and no documented reviewer decision for
-`cf55fee0…` exists anywhere in the repository.
+in commit `e176e85` on 2026-07-28. Both therefore claimed a decision taken before
+the thing decided existed.
 
 `checkpoint-approvals-v6.json` (`ordinalVersion: 6`, predecessor v5) carries all
 eight v5 approvals forward byte-identical and appends two **retraction**
@@ -101,15 +106,28 @@ records: `retraction-c2-gold-v2` retracts `c2-gold-reviewer-gold-v2`,
 `repo-maintainer-1` (Repository Maintainer — the same identity bound on
 `c0-repo-maintainer`), dated `2026-07-31T00:09:24.579Z`, and each gives the
 same reason: the retracted approval's `decidedAt` predates the target it binds,
-so no reviewer decision on `cf55fee0…` exists.
+so no reviewer decision on `cf55fee0…` exists at v6.
+
+`checkpoint-approvals-v7.json` (`ordinalVersion: 7`, predecessor v6) carries all
+ten v6 rows forward byte-identical and appends the real decisions:
+`c2-gold-reviewer-gold-v3` (`reviewer-gold`, Gold Label Owner,
+`decidedAt: 2026-07-31T19:10:32.000Z`, `supersedesApprovalId:
+c2-gold-reviewer-gold-v2`) and `c2-qa-reviewer-qa-v3` (`reviewer-qa`, QA,
+`decidedAt: 2026-07-31T19:15:32.000Z`, `supersedesApprovalId:
+c2-qa-reviewer-qa-v2`). Both bind the same corrected target `cf55fee0…`, and
+both `decidedAt` values are strictly after the target first existed (2026-07-28)
+— passing the exact temporal check that caught and retracted the v2s. The two
+actor IDs are distinct humans (`reviewer-gold`, `reviewer-qa`), satisfying
+actor-separation, and the closed-world C2 role set `{Gold Label Owner, QA}` is
+met.
 
 Readiness validation in both public and private modes now reports:
 
 ```text
 ok: true
-checkpointStatus: { C0: closed, C1: closed, C2: open, C3: open, C4: open, C5: open }
+checkpointStatus: { C0: closed, C1: closed, C2: closed, C3: open, C4: open, C5: open }
 issues: (none)
-warnings: (none)
+warnings: [ { code: "c2-external-qa-unverifiable" } ]
 ledgerPinScope: tracked
 ```
 
@@ -120,8 +138,14 @@ suppression path added alongside the retraction vocabulary). No `retraction-*`
 issue appears, meaning both retraction records themselves passed validation
 (authorized by an actor empowered to retract, correctly ordered after the
 approval they target, targeting an actual approval and not another retraction,
-and not a duplicate). The external-QA unverifiability caveat is **still not**
-emitted, because it is raised only when C2 actually closes, and C2 has not.
+and not a duplicate). The external-QA unverifiability caveat is **now emitted**,
+as a non-blocking warning: it is raised only when C2 actually closes
+(`src/readiness/validator.ts`, pushed inside the `cp === "C2"` branch of the
+closure loop), and at v7 it has. It states the documented boundary: the
+validator enforces distinct, non-implementation actor IDs but cannot verify
+that `reviewer-qa`'s actor ID corresponds to a genuinely external human — that
+must be established out-of-band (a signed attestation, distinct GitHub
+accounts, etc.), not by this gate.
 
 ### Withdrawal is now recorded in the ledger (v6), not implied by a blocking check
 
@@ -138,17 +162,21 @@ documentation plus a failing gate — it stands as two rows in
 `repo-maintainer-1`, that the validator checks and accepts.
 
 **Retracting a superseding approval does not resurrect what it superseded.**
-This is why C2 stays open rather than flipping to closed the moment the
-retractions land: `computeRetractedApprovalIds` (`src/readiness/validator.ts`,
+This is why C2 stayed open at v6 rather than flipping to closed the moment the
+retractions landed: `computeRetractedApprovalIds` (`src/readiness/validator.ts`,
 Model B) removes a retracted approval from the effective set, but the approval
-it superseded (`c2-gold-reviewer-gold-v1` / `c2-qa-reviewer-qa-v1`) stays
+it superseded (`c2-gold-reviewer-gold-v1` / `c2-qa-reviewer-qa-v1`) stayed
 excluded too, because the retracted record's own `supersedesApprovalId` still
-names it. Neither Gold Label Owner nor QA has any valid approval left in the
-effective set for C2 as a result — C2 is open because no valid reviewer
-decision exists for its target, not because of a lingering blocking finding.
-That distinction — zero issues, still open, for an honest reason — is the
-state this document now describes, and it is verified by a read-only test in
-`src/readiness/tracked-artifacts-readiness.test.ts`.
+names it. Neither Gold Label Owner nor QA had any valid approval left in the
+effective set for C2 as a result — at v6, C2 was open because no valid reviewer
+decision existed for its target, not because of a lingering blocking finding.
+That distinction — zero issues, still open, for an honest reason — was the
+state this document described between v6 and v7, and it is verified by a
+read-only test in `src/readiness/tracked-artifacts-readiness.test.ts` (the v6
+history is preserved there in a dedicated describe block; the current gate
+result is asserted against v7 in the block above it). **v7 is what actually
+supplies the missing valid decisions** — see "Current ledger state" above —
+so C2 is closed as of this ledger, not merely un-blocked.
 
 **How durable that block is — the attacks that were actually run.** Three earlier
 versions of this section overstated it: first "permanently", then "durable
@@ -179,12 +207,12 @@ is now reported **blocking, with all six checkpoints held open and exit 1**:
    exit 0.
 4. **Append a `checkpoint-approvals-v6.json` without registering its pin**
    (tested in an earlier round, before the real `v6` retraction ledger existed —
-   "v6" here names the hypothetical next ledger under test, not the retraction
-   ledger this document now describes, which IS pinned; see "What would close
-   C2" below for the current next-ledger guidance, now `v7`) → 1 x
-   `ledger-approval-pin-missing`, with the two `ledger-supersession-not-later`
-   findings still reported beside it. Before coverage existed, an edited and an
-   unedited v6 produced byte-identical
+   "v6" here names the hypothetical next ledger under test at the time, not the
+   retraction ledger this document describes, which IS pinned, nor `v7`, which
+   has since landed and is also pinned; see "Required Approvals — now satisfied
+   by v7" above) → 1 x `ledger-approval-pin-missing`, with the two
+   `ledger-supersession-not-later` findings still reported beside it. Before
+   coverage existed, an edited and an unedited v6 produced byte-identical
    gate output; nothing told the operator the new head was unattested.
 5. **Rename EVERY ledger's `artifactId` and repair the four `predecessor.sha256`
    values in a loop, plus the same two `decidedAt` edits** → 1 x
@@ -258,49 +286,58 @@ generalisation has been made three times on this control and was wrong each time
 Do not restate the block as durable against "any change confined to
 `quality-contracts/`", "permanent", or "unfakeable".
 
-### What would close C2 — one thing remains
+### What closed C2 — v7 (done)
 
 Two things used to stand between here and closure. The second — a way for the
-ledger to record a retraction — has landed: `checkpoint-approvals-v6.json` now
+ledger to record a retraction — landed first: `checkpoint-approvals-v6.json`
 carries `retraction-c2-gold-v2` and `retraction-c2-qa-v2`, and the readiness
-gate reports `ok: true` with zero issues (see "Current ledger state" above).
-That was never going to be sufficient on its own — see "Retracting a
-superseding approval does not resurrect what it superseded" above — and it
-was not meant to be: it clears the false record, it does not supply the real
+gate reported `ok: true` with zero issues at that point (see "Current ledger
+state" above). That was never sufficient on its own — see "Retracting a
+superseding approval does not resurrect what it superseded" above — and it was
+not meant to be: it cleared the false record, it did not supply the real
 decision the false record was standing in for.
 
-**What remains: real reviewer decisions.** `reviewer-gold` and `reviewer-qa`
-must each independently review the target and evidence above and record a
-**real** decision, with the actual wall-clock time of that decision as
-`decidedAt`, appended as `checkpoint-approvals-v7.json` (`ordinalVersion: 7`,
-`predecessor: { version: "6", sha256: <v6 digest> }`) carrying all ten v6 rows
-forward unchanged (eight approvals plus the two retraction records) and
-appending `c2-gold-reviewer-gold-v3` / `c2-qa-reviewer-qa-v3` that supersede
-the v2 records. Do not invent actor IDs, registry hashes, target hashes, or
-approval timestamps.
+**What remained — real reviewer decisions — has now landed as v7.**
+`reviewer-gold` and `reviewer-qa` each independently reviewed the target and
+evidence above and recorded a real decision, with the actual wall-clock time of
+that decision as `decidedAt`, appended as `checkpoint-approvals-v7.json`
+(`ordinalVersion: 7`, `predecessor: { version: "6", sha256: <v6 digest> }`)
+carrying all ten v6 rows forward unchanged (eight approvals plus the two
+retraction records) and appending `c2-gold-reviewer-gold-v3` /
+`c2-qa-reviewer-qa-v3`, which supersede the v2 records.
 
-**Add the new head's approval-row pin in the same change — the gate requires
-it.** A ledger's rows are attested only by `TRACKED_LEDGER_APPROVAL_PINS`
+**The new head's approval-row pin was added in the same change, as the gate
+requires.** A ledger's rows are attested only by `TRACKED_LEDGER_APPROVAL_PINS`
 (`src/readiness/ledger-pins.ts`), and `validator.ts` step 7c requires **every**
-`checkpoint-approvals` FILE under the artifact root to have an entry. Appending
-v7 without one emits a blocking `ledger-approval-pin-missing` and holds every
-checkpoint open. Keep every existing entry, including v6's (which is what
-stops the two retraction rows being rewritten while appending), and add a new
-entry KEYED ON THE FILE PATH — `"checkpoint-approvals-v7.json"`, not the
-artifact id — with
+`checkpoint-approvals` FILE under the artifact root to have an entry. An
+unpinned v7 would have emitted a blocking `ledger-approval-pin-missing` and
+held every checkpoint open. Every existing entry was kept, including v6's
+(which is what stops the two retraction rows being rewritten while appending),
+plus a new entry KEYED ON THE FILE PATH — `"checkpoint-approvals-v7.json"`,
+not the artifact id — computed as
 `ledgerApprovalRowsDigest(JSON.parse(readFileSync("quality-contracts/agent-readiness/checkpoint-approvals-v7.json", "utf-8")).approvals)`.
 
-If `c2-gold-reviewer-gold-v3` and `c2-qa-reviewer-qa-v3` are both genuine,
-correctly-bound decisions, this is the change that closes C2 — no further
-mechanism is outstanding. **The unconditional temporal check is not weakened by
-any of this.** `ledger-supersession-not-later` still fires on any future
-approval whose `decidedAt` predates the target it binds, retracted or not; what
-changed is that a validly-authorized retraction now removes a specific
-already-flagged approval from the *effective* set instead of leaving no way to
-express "this one was withdrawn". A fabricated or backdated v3 approval is
-still caught by the same check that caught v2 — retraction authorizes
-withdrawing a named prior approval, it does not authorize a new one that lies
-about its own `decidedAt`.
+`c2-gold-reviewer-gold-v3` and `c2-qa-reviewer-qa-v3` are genuine,
+correctly-bound decisions on the corrected target, so this is the change that
+closed C2 — no further mechanism was outstanding. **The unconditional temporal
+check was not weakened by any of this.** `ledger-supersession-not-later` still
+fires on any future approval whose `decidedAt` predates the target it binds,
+retracted or not; what changed with the retraction vocabulary is that a
+validly-authorized retraction removes a specific already-flagged approval from
+the *effective* set instead of leaving no way to express "this one was
+withdrawn". A fabricated or backdated approval would still be caught by the
+same check that caught v2 — retraction authorizes withdrawing a named prior
+approval, it does not authorize a new one that lies about its own `decidedAt`;
+v7's `decidedAt` values (2026-07-31T19:10:32Z / 19:15:32Z) are strictly after
+the target's 2026-07-28 origin, so they pass that check honestly.
+
+**The remaining, out-of-band limit.** The gate verifies structure, hashes,
+ordering, actor distinctness, and temporal validity — it does not and cannot
+verify that `reviewer-gold` and `reviewer-qa` are genuinely the claimed human
+reviewers, or that `reviewer-qa` is genuinely external to the implementation.
+That is surfaced as the `c2-external-qa-unverifiable` warning (see "Current
+ledger state" above) and remains an operator attestation, not a machine-checked
+property.
 
 ### Known open provenance defect (out of scope here)
 
@@ -357,7 +394,7 @@ CONTRIBUTION TO CLOSURE.
 
 ## After Approval
 
-Run the readiness validator in both public and private modes. If C2 closes,
-recheck credentials, freeze authorization, migration-snapshot/hash-drift
-status, and paid-campaign authorization separately. This document does not
-authorize paid calls.
+Run the readiness validator in both public and private modes. **C2 has now
+closed** (v7) — recheck credentials, freeze authorization,
+migration-snapshot/hash-drift status, and paid-campaign authorization
+separately. This document does not authorize paid calls.

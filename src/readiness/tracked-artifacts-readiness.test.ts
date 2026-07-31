@@ -49,7 +49,8 @@
  *   not a test or workflow change.
  *
  * The tests are deliberately NOT guarded on either condition: a self-skip would
- * make the only mechanical enforcement of C2-open silently inert exactly where it
+ * make the only mechanical enforcement of the real tracked checkpoint state (C2
+ * included, whichever way it currently reads) silently inert exactly where it
  * matters most.
  *
  * WHEN THIS TEST FAILS, THE FIX IS NEVER THE ASSERTION ALONE. Work out which of
@@ -121,33 +122,28 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
   });
 
   it("reports the checkpoint state the documentation claims", () => {
-    // C2 is OPEN, cleanly. `checkpoint-approvals-v6.json` (appended by Task 5)
-    // validly retracts both defective v2 approvals (`c2-gold-reviewer-gold-v2`,
+    // C2 is CLOSED. `checkpoint-approvals-v6.json` (appended by Task 5) validly
+    // retracted both defective v2 approvals (`c2-gold-reviewer-gold-v2`,
     // `c2-qa-reviewer-qa-v2` — each had copied the `decidedAt` of the v1
     // approval it superseded, claiming a decision taken before the target it
-    // binds, cf55fee0…, existed). The retractions are authorized by the same
-    // human Repository Maintainer binding recorded on `c0-repo-maintainer`, so
-    // both temporal findings that used to hold C2 open are now suppressed for
-    // those two approval ids (see the next test).
+    // binds, cf55fee0…, existed), which cleared the temporal issue but left
+    // neither role with a valid approval — retracting a superseder does not
+    // undo the supersession it names, so `c2-gold-reviewer-gold-v1` /
+    // `c2-qa-reviewer-qa-v1` stayed excluded too. C2 stayed open at v6 for the
+    // honest reason that no valid reviewer decision existed for the target, not
+    // because of a lingering blocking issue.
     //
-    // C2 does not flip to "closed" as a side effect of the retraction, though.
-    // Model B (validator.ts, `computeRetractedApprovalIds`) never resurrects an
-    // approval a later approval superseded: retracting `c2-gold-reviewer-gold-v2`
-    // removes IT from the effective set, but `c2-gold-reviewer-gold-v1` stays
-    // excluded too, because `c2-gold-reviewer-gold-v2`'s own
-    // `supersedesApprovalId` still names it (retracting a superseder does not
-    // undo the supersession). Same for QA. So neither role has ANY approval left
-    // in the effective set, and C2 is open for the honest reason — no valid
-    // reviewer decision exists for the target — not because of a lingering
-    // blocking issue.
-    //
-    // C2 closes only when `reviewer-gold` and `reviewer-qa` each record a real
-    // decision on the corrected target with a truthful `decidedAt`. See
-    // docs/c2/c2-checkpoint-approval-handoff.md.
+    // `checkpoint-approvals-v7.json` appends `c2-gold-reviewer-gold-v3` and
+    // `c2-qa-reviewer-qa-v3`: real decisions on the corrected target
+    // (cf55fee0…) with a `decidedAt` (2026-07-31T19:10:32Z / 19:15:32Z) AFTER the
+    // target first existed, which pass the temporal check the v2s failed.
+    // Distinct human actors (`reviewer-gold`, `reviewer-qa`) satisfy
+    // actor-separation and the closed-world C2 role set {Gold Label Owner, QA}
+    // is met, so C2 now closes. See docs/c2/c2-checkpoint-approval-handoff.md.
     expect(result.checkpointStatus).toEqual({
       C0: "closed",
       C1: "closed",
-      C2: "open",
+      C2: "closed",
       C3: "open",
       C4: "open",
       C5: "open",
@@ -162,8 +158,9 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
     // and no NEW issue code (in particular no `retraction-*` code, which would
     // mean the retractions themselves were rejected as unauthorized,
     // out-of-order, or malformed) takes their place. `ok: true` here reflects
-    // "no blocking issue", not "every checkpoint closed" — C2 is still "open"
-    // per the test above, honestly, because no valid approval exists for it.
+    // "no blocking issue" — at v6 that coexisted with C2 still "open" (no valid
+    // approval existed for it); at v7 (this branch) it coexists with C2 now
+    // CLOSED, per the corrected gold/QA approvals asserted in the test above.
     expect(result.issues).toEqual([]);
     expect(result.ok).toBe(true);
   });
@@ -184,11 +181,21 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
     );
   });
 
-  it("emits no external-QA closure caveat while C2 is open", () => {
-    // `c2-external-qa-unverifiable` is emitted only when C2 actually closes.
-    // Asserting its ABSENCE pins the coupling: if this warning reappears while
-    // the C2 expectation above still says "open", the two have drifted apart.
-    expect((result.warnings ?? []).map((w) => w.code)).toEqual([]);
+  it("emits the external-QA closure caveat now that C2 has actually closed", () => {
+    // `c2-external-qa-unverifiable` is emitted only when C2 actually closes
+    // (validator.ts: pushed inside the `cp === "C2"` branch of the closure
+    // loop, guarded by the same `checkpointStatus[cp] = "closed"` condition).
+    // At v6, C2 was still open (see the test above's history), so this warning
+    // was correctly ABSENT and asserting its absence pinned the coupling. At
+    // v7, C2 closes on the corrected gold/QA approvals, so the coupling now
+    // requires the OPPOSITE assertion: the warning must be PRESENT. It is
+    // non-blocking — `ok` stays true — and states the documented boundary: the
+    // validator enforces distinct, non-implementation actor IDs but cannot
+    // verify that `reviewer-qa`'s actor ID is a genuinely external human; that
+    // must be established out-of-band. If this warning ever disappears while
+    // the C2 expectation above still says "closed", the two have drifted apart.
+    expect((result.warnings ?? []).map((w) => w.code)).toEqual(["c2-external-qa-unverifiable"]);
+    expect(result.ok).toBe(true);
   });
 
   it("holds every tracked ledger's approval rows to its source pin", () => {
@@ -246,6 +253,7 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
       "checkpoint-approvals-v4.json",
       "checkpoint-approvals-v5.json",
       "checkpoint-approvals-v6.json",
+      "checkpoint-approvals-v7.json",
     ]);
   });
 
@@ -409,22 +417,25 @@ describe("tracked readiness artifacts, private mode (real data, read-only)", () 
     "reports the same checkpoint state and issues as public mode",
     () => {
       // The documentation states one C2 state, not one per mode. Private mode
-      // must agree with public mode: same checkpoint status, same (now empty)
-      // blocking issues, same (empty) warnings — v6's two valid retractions
-      // clear the temporal findings in both modes identically. A private-only
-      // issue code appearing here is a real regression in the evidence or
-      // corpus data.
+      // must agree with public mode: same checkpoint status, same (empty)
+      // blocking issues, same (single) warning — v7's two corrected gold/QA
+      // approvals close C2 identically in both modes, and the resulting
+      // external-QA closure caveat fires identically too, since it is keyed to
+      // C2 closing, not to the mode. A private-only issue or warning code
+      // appearing here is a real regression in the evidence or corpus data.
       expect(privateResult!.checkpointStatus).toEqual({
         C0: "closed",
         C1: "closed",
-        C2: "open",
+        C2: "closed",
         C3: "open",
         C4: "open",
         C5: "open",
       });
       expect(privateResult!.issues).toEqual([]);
       expect(privateResult!.ok).toBe(true);
-      expect((privateResult!.warnings ?? []).map((w) => w.code)).toEqual([]);
+      expect((privateResult!.warnings ?? []).map((w) => w.code)).toEqual([
+        "c2-external-qa-unverifiable",
+      ]);
     },
   );
 

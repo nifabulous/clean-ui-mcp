@@ -10,11 +10,15 @@
  * The tests pin the boundary between machine-verifiable C2 evidence and human
  * approval, as well as the absence of public-site pilot exposure.
  *
- * C2 IS CURRENTLY OPEN. The two effective C2 records in
- * `checkpoint-approvals-v5.json` are provenance-invalid (each copied the
- * `decidedAt` of the approval it supersedes), so no valid reviewer decision
- * exists for the target they bind. The ledger assertions below describe that
- * real state; they must not be relaxed to imply C2 is approved.
+ * C2 IS NOW CLOSED (checkpoint-approvals-v7.json). The two effective C2 records
+ * in `checkpoint-approvals-v5.json` were provenance-invalid (each copied the
+ * `decidedAt` of the approval it supersedes), so at v5 no valid reviewer
+ * decision existed for the target they bind; `checkpoint-approvals-v6.json`
+ * retracted them and `checkpoint-approvals-v7.json` appended the real Gold+QA
+ * decisions of the corrected target, which close C2. The ledger assertions
+ * below describe v5's OWN immutable contents — the historical defect — and must
+ * not be relaxed; they remain literally true because v5 is byte-identical under
+ * every later append-only ledger.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -46,11 +50,12 @@ describe("C2 governance scope boundary", () => {
     expect(manifest.checkpoint).toBe("C2");
     expect(manifest.evidence).toHaveLength(8);
     // Every ledger in the chain, not a hand-picked subset. A prior version
-    // matched only /v[345]/, so appending a v6 would not have registered here.
-    // v6 is now the head ledger (it retracts the two provenance-invalid v2
-    // approvals asserted below) but the assertions below still describe v5's
-    // OWN contents specifically — v5 is unchanged by v6's append-only
-    // retraction records, so those assertions remain literally true. Adding a
+    // matched only /v[345]/, so appending a later ledger would not have
+    // registered here. v7 is now the head ledger (v6 retracted the two
+    // provenance-invalid v2 approvals asserted below; v7 appended the real
+    // Gold+QA decisions that close C2) but the assertions below still describe
+    // v5's OWN contents specifically — v5 is unchanged by every later
+    // append-only ledger, so those assertions remain literally true. Adding a
     // further ledger must still force a conscious update of this list.
     expect(
       readdirSync(governanceRoot)
@@ -63,6 +68,7 @@ describe("C2 governance scope boundary", () => {
       "checkpoint-approvals-v4.json",
       "checkpoint-approvals-v5.json",
       "checkpoint-approvals-v6.json",
+      "checkpoint-approvals-v7.json",
     ]);
     const ledger: { approvals: C2Approval[] } = JSON.parse(
       readFileSync(resolve(governanceRoot, "checkpoint-approvals-v5.json"), "utf8"),
@@ -86,12 +92,13 @@ describe("C2 governance scope boundary", () => {
     ]);
     expect(effectiveC2.map((a) => a.role)).toEqual(["Gold Label Owner", "QA"]);
 
-    // Both effective records are provenance-invalid: each copied the `decidedAt`
-    // of the v1 approval it supersedes, so each claims a decision taken before
-    // the target it binds (cf55fee0…) existed. C2 is therefore OPEN — the
-    // presence of two role-correct approvals does NOT mean C2 is approved.
-    // `src/readiness/tracked-artifacts-readiness.test.ts` asserts the resulting
-    // gate state; this assertion pins the underlying ledger defect.
+    // Both effective records IN v5 are provenance-invalid: each copied the
+    // `decidedAt` of the v1 approval it supersedes, so each claims a decision
+    // taken before the target it binds (cf55fee0…) existed. At v5, C2 was
+    // therefore OPEN — two role-correct approvals did NOT mean C2 was approved.
+    // v6 retracted these and v7 appended the real decisions, so C2 is now
+    // CLOSED; `src/readiness/tracked-artifacts-readiness.test.ts` asserts that
+    // gate state. This assertion pins the underlying historical ledger defect.
     for (const approval of effectiveC2) {
       const superseded = ledger.approvals.find(
         (a) => a.approvalId === approval.supersedesApprovalId,

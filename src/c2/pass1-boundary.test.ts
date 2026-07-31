@@ -47,8 +47,11 @@ describe("C2 governance scope boundary", () => {
     expect(manifest.evidence).toHaveLength(8);
     // Every ledger in the chain, not a hand-picked subset. A prior version
     // matched only /v[345]/, so appending a v6 would not have registered here.
-    // The head ledger is v5 and the assertions below describe v5's contents —
-    // adding a ledger must therefore force a conscious update of this test.
+    // v6 is now the head ledger (it retracts the two provenance-invalid v2
+    // approvals asserted below) but the assertions below still describe v5's
+    // OWN contents specifically — v5 is unchanged by v6's append-only
+    // retraction records, so those assertions remain literally true. Adding a
+    // further ledger must still force a conscious update of this list.
     expect(
       readdirSync(governanceRoot)
         .filter((file) => /^checkpoint-approvals-v\d+\.json$/.test(file))
@@ -59,6 +62,7 @@ describe("C2 governance scope boundary", () => {
       "checkpoint-approvals-v3.json",
       "checkpoint-approvals-v4.json",
       "checkpoint-approvals-v5.json",
+      "checkpoint-approvals-v6.json",
     ]);
     const ledger: { approvals: C2Approval[] } = JSON.parse(
       readFileSync(resolve(governanceRoot, "checkpoint-approvals-v5.json"), "utf8"),

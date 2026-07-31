@@ -2025,7 +2025,7 @@ describe("approval temporal provenance", () => {
     // supersession blocks whether or not something later supersedes it. A
     // durable record that a governance defect occurred is the entire value of
     // this invariant. "Durable" is defined by the attacks enumerated in
-    // TODOS.md § "How durable, exactly" and reproduced against the real graph:
+    // docs/c2/c2-checkpoint-approval-handoff.md and reproduced against the real graph:
     // a successor ledger cannot drop the record (append-only prefix check), a
     // tracked ledger's own rows cannot be edited in place (the approval-row pins
     // in src/readiness/ledger-pins.ts, which the append-only check does NOT
@@ -2037,8 +2037,10 @@ describe("approval temporal provenance", () => {
     // confined to `quality-contracts/`" was asserted here once and falsified by
     // a rename, and "closed by the chain being five ledgers long" was asserted
     // once and falsified by repairing the digest cascade in a loop. Clearing it
-    // legitimately requires an explicit retraction act — see TODOS.md
-    // § "Approval retraction vocabulary (the ledger cannot say \"withdrawn\")".
+    // legitimately requires an explicit, validly-authorized retraction record
+    // (see `computeRetractedApprovalIds` and the `retraction-*` issue codes in
+    // src/readiness/validator.ts; `checkpoint-approvals-v6.json` is the real
+    // ledger that uses this to retract the two defective C2 v2 approvals).
     fixture = buildValidGraph({ withApprovals: true });
     const v1 = readJson<{ approvals: Array<Record<string, unknown>> }>(fixture.ledgerPath!);
     const prior = v1.approvals.find((a) => a.approvalId === "c0-repo-maintainer")!;

@@ -125,11 +125,18 @@ describe("validate-readiness-artifacts CLI — pins-inert notice and dist-layout
       issues: Array<{ code: string }>;
       ledgerPinScope: string;
     };
-    expect(parsed.ok).toBe(false);
+    // v6 (checkpoint-approvals-v6.json) records the two v2 approvals as
+    // validly retracted, so the temporal defect they carried no longer blocks
+    // closure: `ok` is true and the two `ledger-supersession-not-later`
+    // findings are gone. C2 itself is still open — retracting a superseder
+    // does not resurrect the approval it superseded (Model B), so neither
+    // Gold nor QA has any valid approval left for C2 — but that is now a
+    // "zero issues, still open" state, not a blocking-finding state.
+    expect(parsed.ok).toBe(true);
     expect(parsed.checkpointStatus.C2).toBe("open");
     expect(
       parsed.issues.filter((i) => i.code === "ledger-supersession-not-later"),
-    ).toHaveLength(2);
+    ).toHaveLength(0);
     // The machine-readable form of the empty-stderr claim above. Both are
     // asserted deliberately: stderr proves the CLI printed no notice, the field
     // proves the VALIDATOR agreed, and a regression that desynchronised them
@@ -171,14 +178,17 @@ describe("validate-readiness-artifacts CLI — pins-inert notice and dist-layout
       ledgerPinScope: string;
     };
     expect(parsed.ledgerPinScope).toBe("tracked");
-    expect(parsed.ok).toBe(false);
+    // Same post-v6 state as the previous test (retraction removes the
+    // temporal-defect findings; C2 stays open with zero issues) — see the
+    // comment there for why `ok: true` and "C2 open" are not contradictory.
+    expect(parsed.ok).toBe(true);
     expect(parsed.checkpointStatus).toEqual({
       C0: "closed", C1: "closed", C2: "open", C3: "open", C4: "open", C5: "open",
     });
     expect(
       parsed.issues.filter((i) => i.code === "ledger-supersession-not-later"),
-    ).toHaveLength(2);
-    expect(parsed.issues).toHaveLength(2);
+    ).toHaveLength(0);
+    expect(parsed.issues).toHaveLength(0);
   }, SPAWN_TIMEOUT_MS);
 
   it("emits the pins-inert notice on stderr for a byte-identical copy at a non-tracked root, with an otherwise IDENTICAL result", () => {
@@ -254,9 +264,20 @@ describe("validate-readiness-artifacts CLI — pins-inert notice and dist-layout
       expect(copyResult.ledgerPinScope).toBe("none");
 
       // The notice describes an INERT PIN LAYER, not a different governance
-      // outcome — for byte-identical, unmodified data the LEDGER findings must
-      // agree either way.
-      expect(copyResult.ok).toBe(trackedResult.ok);
+      // outcome for the LEDGER content specifically — for byte-identical,
+      // unmodified ledger data the LEDGER findings must agree either way,
+      // regardless of pin scope (both are empty post-v6: see below).
+      //
+      // `ok` itself is NOT compared for equality between the two runs. Post-v6
+      // the tracked run has zero issues at all (`ok: true`), but the copy still
+      // carries its own `index-path-mismatch` issues (asserted below) that are
+      // ORTHOGONAL to the ledger/pin question this test exists to answer — the
+      // artifact index declares paths rooted at the tracked location, so any
+      // copy elsewhere trips that unrelated, pre-existing check. Asserting the
+      // literal values here (rather than an equality that no longer holds for
+      // an unrelated reason) is the honest post-retraction expectation.
+      expect(trackedResult.ok).toBe(true);
+      expect(copyResult.ok).toBe(false);
       expect(
         copyResult.issues.filter((i) => i.code === "ledger-supersession-not-later"),
       ).toEqual(trackedResult.issues.filter((i) => i.code === "ledger-supersession-not-later"));

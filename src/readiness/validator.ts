@@ -1336,25 +1336,24 @@ function validateApprovalsAndCheckpoint(
         //
         // SO, PRECISELY — AND ONLY THIS: `ok: false` has been verified to survive
         // the specific attacks enumerated, with their before/after gate output, in
-        // TODOS.md § "How durable, exactly", in
-        // docs/c2/c2-checkpoint-approval-handoff.md, and in the
+        // docs/c2/c2-checkpoint-approval-handoff.md and in the
         // `ledger-pins.ts` docblock. Nothing here claims durability against a
         // CLASS of attacks: every generalisation from a tested attack to a class
-        // made on this control has so far been falsified by the next variant. The
-        // gate stays red even after a legitimate future re-approval, and the
-        // affected checkpoint cannot be closed on a clean gate until an explicit
-        // retraction mechanism exists. It is NOT durable against a change that
-        // also edits `TRACKED_LEDGER_APPROVAL_PINS` in source; that remains
+        // made on this control has so far been falsified by the next variant. It
+        // is NOT durable against a change that also edits
+        // `TRACKED_LEDGER_APPROVAL_PINS` in source; that remains
         // reviewable-in-diff rather than mechanically impossible, and
         // `ledger-pins.ts` says so plainly. Do not restate this as durability
         // against "any change confined to `quality-contracts/`" — that absolute
-        // stood in this comment once and was falsified twice. The
-        // repository owner decided that tradeoff deliberately. Clearing this
-        // finding requires the
-        // retraction vocabulary tracked in TODOS.md § "Approval retraction
-        // vocabulary (the ledger cannot say \"withdrawn\")" — a recorded act
-        // naming who retracted what, when, and why. Do NOT reintroduce an escape
-        // hatch here to restore remediability.
+        // stood in this comment once and was falsified twice. Clearing this
+        // finding requires a validly-authorized retraction record naming who
+        // retracted what, when, and why — implemented (`computeRetractedApprovalIds`,
+        // the `retraction-*` issue codes below), and exercised for real by
+        // `checkpoint-approvals-v6.json`, which retracts the two defective C2 v2
+        // approvals this way (see docs/c2/c2-checkpoint-approval-handoff.md and
+        // docs/AGENT_READINESS_STATUS.md for the resulting, still-open C2 state).
+        // Do NOT reintroduce a supersession- or severity-based escape hatch here
+        // to clear a finding without a retraction record.
         //
         // CLOSURE AGREES WITH `ok` — this used to be a documented residual and no
         // longer is. The taint below lands on the defective record itself, and
@@ -2076,8 +2075,9 @@ export function computeRetractedApprovalIds(
  *   rejected below; retraction is a distinct, explicit, authorized act.
  *   This matches its sibling `ledger-supersession-not-later` in
  *   `validateApprovalsAndCheckpoint` exactly: both are temporal-impossibility
- *   findings, both are durable against the attacks enumerated in TODOS.md
- *   § "How durable, exactly" — `validateLedgerAppendOnly` keeps every record in
+ *   findings, both are durable against the attacks enumerated in
+ *   docs/c2/c2-checkpoint-approval-handoff.md —
+ *   `validateLedgerAppendOnly` keeps every record in
  *   a ledger that is PRESENT, the approval-row pins in `ledger-pins.ts` keep a
  *   tracked ledger's own rows from being edited in place (the append-only check
  *   alone does not cover the head), and step 7c's three rules keep an unpinned
@@ -2090,9 +2090,11 @@ export function computeRetractedApprovalIds(
  *   supersession-based
  *   demotion was tried on the sibling and proved exploitable — one fabricated
  *   record dated a millisecond later suffices to hide the defect. Do not
- *   reintroduce it on either check. Clearing such a finding requires the
- *   retraction vocabulary tracked in TODOS.md § "Approval retraction vocabulary
- *   (the ledger cannot say \"withdrawn\")".
+ *   reintroduce it on either check. Clearing such a finding requires a
+ *   validly-authorized retraction record targeting the specific approval (see
+ *   `computeRetractedApprovalIds` and the `retraction-*` issue codes below,
+ *   and `checkpoint-approvals-v6.json`, which retracts the two C2 v2
+ *   approvals this way).
  * - `approved-artifact-version-unresolved` (via `reportUnresolved` below) IS
  *   scoped to active approvals. That is not a severity demotion: it is a
  *   detectability limit. The check needs the exact bytes the approval bound in

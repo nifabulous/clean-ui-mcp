@@ -1,0 +1,219 @@
+diff --git a/src/readiness/validator.ts b/src/readiness/validator.ts
+index 86811e6..a7ab664 100644
+--- a/src/readiness/validator.ts
++++ b/src/readiness/validator.ts
+@@ -1435,8 +1435,12 @@ function validateApprovalsAndCheckpoint(
+   // retraction of an EXTRA approval clear the `policy-unexpected-role`
+   // finding it tripped while the required roles stayed satisfied elsewhere —
+   // manufacturing closure (fail-open; see the "codex regression" describe
+-  // block in validate-readiness-artifacts.test.ts). Retraction is excluded
+-  // ONLY from role-satisfaction, at `cpApprovals` below — so it can still
++  // block in validate-readiness-artifacts.test.ts). The same class of bug
++  // recurred via the actor-separation check in round 2 (see the "codex
++  // round-2 regression" describe block) because that check was still fed the
++  // retracted-EXCLUDED set directly; the fix there is the `cpStructural` /
++  // `cpClosureContributors` split below. Retraction is excluded ONLY from
++  // role-satisfaction, at `cpClosureContributors` below — so it can still
+   // hold a checkpoint open, but can never close one. See the comment at
+   // `supersededApprovalIds` above for why retracting a SUPERSEDER does not
+   // put its predecessor back in this set (Model B).
+@@ -1744,38 +1748,51 @@ function validateApprovalsAndCheckpoint(
+       );
+     }
+ 
+-    // Closure contribution: only approvals that produced NO issue AND are not
+-    // validly retracted. Re-derive the clean set AFTER the role check may
+-    // have tainted approvals. A retracted approval is still seen by
+-    // `comparePolicySet` / actor-cardinality above (so any blocker it causes
+-    // still fires — see `activeApprovals` above), but must NOT count toward
+-    // `allRolesPresent`: retraction only ever removes closure support, never
+-    // a blocker.
+-    const cpApprovals = allCpApproved.filter(
+-      (a) => !approvalIssueCodes.has(a.approvalId) && !retractedApprovalIds.has(a.approvalId),
++    // STRUCTURAL set: clean (untainted) approvals INCLUDING retracted ones.
++    // Re-derive AFTER the role check above may have tainted approvals. Every
++    // STRUCTURAL blocker — actor-separation here, and the closed-world role
++    // check above via `allCpApproved` — runs over a retracted-INCLUDED set,
++    // so a valid retraction can only ever ADD a blocker, never erase one that
++    // already fired. This is the fix for the round-2 "codex regression": round
++    // 1 kept retracted approvals visible to `comparePolicySet` but still fed
++    // the retracted-EXCLUDED set directly into
++    // `approvalsSatisfyActorCardinality`, so retracting an extra
++    // duplicate-actor approval still cleared
++    // `checkpoint-actor-separation-violation` on presence-only checkpoints.
++    const cpStructural = allCpApproved.filter((a) => !approvalIssueCodes.has(a.approvalId));
++
++    // CLOSURE-CONTRIBUTING set: the structural set MINUS retracted. This is
++    // the SOLE place a retraction removes an approval from consideration —
++    // ONLY from role-satisfaction, never from a blocker computation. A
++    // retracted approval must NOT count toward `allRolesPresent`: retraction
++    // only ever removes closure support, never a blocker.
++    const cpClosureContributors = cpStructural.filter(
++      (a) => !retractedApprovalIds.has(a.approvalId),
+     );
+-    const cleanRoles = new Set<string>(cpApprovals.map((a) => a.role));
++    const cleanRoles = new Set<string>(cpClosureContributors.map((a) => a.role));
+ 
+     const allRolesPresent = required.every((r) => cleanRoles.has(r));
+ 
+-    // Actor separation is enforced per approval against its OWN pinned registry.
+-    // Distinct actors always satisfy separation; a single shared actor is valid
+-    // only when every contributing approval's pinned registry declares
++    // Actor separation is a STRUCTURAL blocker, so it is enforced over
++    // `cpStructural` (retracted approvals INCLUDED) — a retraction of a
++    // separation-violating approval can never erase the violation. Distinct
++    // actors always satisfy separation; a single shared actor is valid only
++    // when every contributing approval's pinned registry declares
+     // sole-maintainer-bootstrap with that actor as the human owner.
+     const actorCardinalityValid = approvalsSatisfyActorCardinality(
+-      cpApprovals,
++      cpStructural,
+       resolvedRegistryByApprovalId,
+       implementationActorIds,
+     );
+ 
+-    if (allRolesPresent && cpApprovals.length > 0 && !actorCardinalityValid) {
++    if (allRolesPresent && cpStructural.length > 0 && !actorCardinalityValid) {
+       const code = "checkpoint-actor-separation-violation";
+       issues.push({
+         code,
+         artifactId: cp,
+         message: `checkpoint ${cp} approvals do not satisfy the actor-separation mode of their pinned registries`,
+       });
+-      for (const approval of cpApprovals) {
++      for (const approval of cpStructural) {
+         noteApprovalIssue(approval.approvalId, code);
+       }
+     }
+diff --git a/src/scripts/validate-readiness-artifacts.test.ts b/src/scripts/validate-readiness-artifacts.test.ts
+index cdfb5ee..bca7eaa 100644
+--- a/src/scripts/validate-readiness-artifacts.test.ts
++++ b/src/scripts/validate-readiness-artifacts.test.ts
+@@ -3111,6 +3111,127 @@ describe("codex regression: retraction must not manufacture closure via a struct
+   });
+ });
+ 
++// ---------------------------------------------------------------------------
++// Tests — codex round-2 regression: a retraction must never manufacture
++// closure via the ACTOR-SEPARATION check (P1 fail-open, round 2)
++//
++// Round 1 (above) closed the closed-world-role-check channel by keeping
++// retracted approvals visible to `comparePolicySet` via `activeApprovals`.
++// But the SAME retracted-EXCLUDED set (`cpApprovals`) still fed
++// `approvalsSatisfyActorCardinality` directly, so a valid retraction of an
++// EXTRA duplicate-actor approval still cleared
++// `checkpoint-actor-separation-violation` — the checkpoint closed. Same
++// fail-open CLASS as round 1, a different channel (found by independent
++// cross-model re-review).
++//
++// C3 (required = {Product, QA, Engineering}) is used deliberately: C3 has NO
++// entry in `CHECKPOINT_POLICIES`, so `comparePolicySet` never runs for it —
++// the ONLY structural check the extra approval can trip is actor-separation,
++// isolating the exact channel round 1 missed.
++// ---------------------------------------------------------------------------
++
++describe("codex round-2 regression: retraction must not manufacture closure via actor-separation", () => {
++  let fixture: ReturnType<typeof buildValidGraph>;
++
++  afterEach(() => {
++    if (fixture) cleanup(fixture.root);
++  });
++
++  function validate(f: ReturnType<typeof buildValidGraph>) {
++    return validateReadinessArtifacts({
++      artifactRoot: f.artifactRoot,
++      repoRoot: f.repoRoot,
++      gitSourceResolver: f.resolver,
++      mode: "public",
++    });
++  }
++
++  /**
++   * Clone C3's Product approval into an EXTRA approval that shares
++   * product-1's actor id (and its registered role, so no
++   * `actor-role-mismatch`). The required roles stay satisfied (Product / QA /
++   * Engineering are all still present via the three clean approvals), but the
++   * approval set now has 4 rows over 3 distinct actors — neither
++   * one-approval-per-actor nor a single shared actor — so
++   * `approvalsSatisfyActorCardinality` returns false and
++   * `checkpoint-actor-separation-violation` fires. Returns the new approval's
++   * id for use as a retraction target.
++   */
++  function appendExtraDuplicateActorC3Approval(
++    ledger: { approvals: Array<Record<string, unknown>> },
++  ): string {
++    const product = ledger.approvals.find(
++      (a) => a["checkpoint"] === "C3" && a["role"] === "Product",
++    )!;
++    const approvalId = "c3-product-extra";
++    ledger.approvals.push({
++      ...product,
++      approvalId,
++      decidedAt: "2026-07-16T10:03:00Z",
++    });
++    return approvalId;
++  }
++
++  it("sanity: an EXTRA duplicate-actor C3 approval (no retraction) trips checkpoint-actor-separation-violation and holds C3 open", () => {
++    fixture = buildValidGraph({ withApprovals: true });
++    const { ledgerPath } = addSyntheticC3Approvals(fixture);
++    mutateJson<{ approvals: Array<Record<string, unknown>> }>(ledgerPath, (ledger) => {
++      appendExtraDuplicateActorC3Approval(ledger);
++      return ledger;
++    });
++    const result = validate(fixture);
++    expect(result.issues.some((i) => i.code === "checkpoint-actor-separation-violation")).toBe(true);
++    expect(result.checkpointStatus.C3).toBe("open");
++    expect(result.ok).toBe(false);
++  });
++
++  it("a VALID retraction of the extra duplicate-actor approval must NOT clear checkpoint-actor-separation-violation or close C3", () => {
++    fixture = buildValidGraph({ withApprovals: true });
++    const { registryPath, ledgerPath } = addSyntheticC3Approvals(fixture);
++    mutateJson<{ approvals: Array<Record<string, unknown>> }>(ledgerPath, (ledger) => {
++      const approvalId = appendExtraDuplicateActorC3Approval(ledger);
++      // A VALID retraction, authorized by repo-maintainer-1 (a real human
++      // Repository Maintainer in the pinned v2 registry). If a retraction can
++      // ever close a checkpoint by clearing a STRUCTURAL actor-separation
++      // finding, this is the shape that proves it — the retraction targets
++      // the very approval that duplicates product-1's actor id, while
++      // Product/QA/Engineering remain satisfied via the three clean
++      // approvals.
++      ledger.approvals.push({
++        recordKind: "retraction",
++        retractionId: "r1",
++        retractsApprovalId: approvalId,
++        retractedBy: {
++          actorId: "repo-maintainer-1",
++          role: "Repository Maintainer",
++          actorKind: "human",
++          actorRegistryVersion: "2.0",
++          actorRegistrySha256: fileSha(registryPath),
++        },
++        retractedAt: "2026-07-20T00:00:00Z",
++        reason: "duplicate extra approval submitted in error",
++      });
++      return ledger;
++    });
++    const result = validate(fixture);
++
++    // The retraction itself must be accepted (authorized, in-order, real
++    // target) — this is not a test of retraction validity, but of what a
++    // VALID retraction is and is not allowed to do.
++    expect(result.issues.some((i) => i.code === "retraction-unauthorized")).toBe(false);
++    expect(result.issues.some((i) => i.code === "retraction-out-of-order")).toBe(false);
++    expect(result.issues.some((i) => i.code === "retraction-target-missing")).toBe(false);
++
++    // The structural actor-separation violation must still be attributed to
++    // C3 and the checkpoint must still be open — a retraction can only ever
++    // REMOVE an approval's contribution to closure, never remove a blocker,
++    // regardless of WHICH structural check produced the blocker.
++    expect(result.issues.some((i) => i.code === "checkpoint-actor-separation-violation")).toBe(true);
++    expect(result.checkpointStatus.C3).toBe("open");
++    expect(result.ok).toBe(false);
++  });
++});
++
+ // ---------------------------------------------------------------------------
+ // Tests — approval bindings for checkpoints WITHOUT a recipe (C3–C5)
+ //

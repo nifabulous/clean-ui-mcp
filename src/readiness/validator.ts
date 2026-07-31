@@ -1746,11 +1746,12 @@ function validateApprovalsAndCheckpoint(
 
     // Closure contribution: only approvals that produced NO issue AND are not
     // validly retracted. Re-derive the clean set AFTER the role check may
-    // have tainted approvals. A retracted approval is still seen by
-    // `comparePolicySet` / actor-cardinality above (so any blocker it causes
-    // still fires — see `activeApprovals` above), but must NOT count toward
-    // `allRolesPresent`: retraction only ever removes closure support, never
-    // a blocker.
+    // have tainted approvals. A retracted approval IS still seen by the
+    // closed-world role check (`comparePolicySet` reads `allRoles` from
+    // `allCpApproved`, which is retracted-INCLUSIVE via `activeApprovals`), so
+    // retraction can never erase a `policy-*` role blocker; but it must NOT
+    // count toward `allRolesPresent` — retraction only ever removes closure
+    // support, never a blocker.
     const cpApprovals = allCpApproved.filter(
       (a) => !approvalIssueCodes.has(a.approvalId) && !retractedApprovalIds.has(a.approvalId),
     );
@@ -1762,6 +1763,21 @@ function validateApprovalsAndCheckpoint(
     // Distinct actors always satisfy separation; a single shared actor is valid
     // only when every contributing approval's pinned registry declares
     // sole-maintainer-bootstrap with that actor as the human owner.
+    //
+    // ── KNOWN RESIDUAL (deferred hardening — see the follow-up below) ────────
+    // Unlike the role check above, this separation check runs over the
+    // retracted-EXCLUDED `cpApprovals`. On PRESENCE-ONLY checkpoints (C3–C5,
+    // which have no `CHECKPOINT_POLICIES` entry, so the closed-world role check
+    // never runs), a valid retraction of an EXTRA separation-violating approval
+    // would ERASE `checkpoint-actor-separation-violation` while the required
+    // roles stay satisfied — a retraction manufacturing closure, which the
+    // governing invariant forbids. This channel is UNREACHABLE today: the real
+    // ledger has zero C3/C4/C5 approvals (asserted by the tripwire in
+    // tracked-artifacts-readiness.test.ts). The full fix (a clean two-set split
+    // so retraction is excluded ONLY from role-satisfaction, never from any
+    // structural blocker) is specced + patched in
+    // docs/superpowers/plans/2026-07-31-retraction-structural-monotonicity-followup.md
+    // and deferred to its own PR. Do NOT let a C3+ approval land without it.
     const actorCardinalityValid = approvalsSatisfyActorCardinality(
       cpApprovals,
       resolvedRegistryByApprovalId,

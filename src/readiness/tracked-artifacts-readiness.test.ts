@@ -600,3 +600,30 @@ describe("tracked readiness artifacts, private mode with the private inputs ABSE
     expect((cleanCheckoutResult.warnings ?? []).map((w) => w.code)).toEqual([]);
   });
 });
+
+/**
+ * TRIPWIRE for a KNOWN, DEFERRED residual (see the KNOWN RESIDUAL comment at the
+ * actor-separation check in `validator.ts`, and
+ * `docs/superpowers/plans/2026-07-31-retraction-structural-monotonicity-followup.md`).
+ *
+ * The actor-separation check runs over the retracted-EXCLUDED closure set, so on
+ * a PRESENCE-ONLY checkpoint (C3–C5, no `CHECKPOINT_POLICIES` entry) a valid
+ * retraction of an extra duplicate-actor approval could ERASE
+ * `checkpoint-actor-separation-violation` and manufacture closure — the one thing
+ * a retraction must never do. That channel is UNREACHABLE only while no C3/C4/C5
+ * approval exists in the ledger. This test enforces that precondition: the day a
+ * C3+ approval lands, it fails loudly and forces the structural-monotonicity fix
+ * to land first.
+ */
+describe("tripwire: presence-only actor-separation manufacture-closure channel stays unreachable", () => {
+  it("has no C3/C4/C5 approval in the tracked ledger (else land the structural-monotonicity follow-up first)", () => {
+    const head = JSON.parse(
+      readFileSync(resolve(artifactRoot, "checkpoint-approvals-v6.json"), "utf-8"),
+    ) as { approvals: Array<{ recordKind?: string; checkpoint?: string }> };
+    const presenceOnlyApprovalCheckpoints = head.approvals
+      .filter((row) => row.recordKind !== "retraction")
+      .map((row) => row.checkpoint)
+      .filter((cp): cp is string => cp === "C3" || cp === "C4" || cp === "C5");
+    expect(presenceOnlyApprovalCheckpoints).toEqual([]);
+  });
+});

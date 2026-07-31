@@ -315,6 +315,22 @@ newly fail the historically legitimate `c2-*-v1` approvals against the
 `approved-artifact-created-after-decision` invariant. Correcting it properly
 requires issuing new artifact versions — a decision that has not been made.
 
+## Known residual (deferred hardening)
+
+The retraction vocabulary is monotonic toward open on the **policy-backed**
+checkpoints (C0/C1/C2): a valid retraction can never erase a `policy-*` role
+blocker (fixed in `cb69e96`). One channel is **not yet** closed: on
+**presence-only** checkpoints (C3–C5, which have no policy role-set check), the
+actor-separation check reads the retracted-excluded set, so a valid retraction
+of an extra duplicate-actor approval could erase
+`checkpoint-actor-separation-violation` and manufacture closure. This is
+**unreachable today** — the ledger has zero C3/C4/C5 approvals, enforced by a
+tripwire test in `tracked-artifacts-readiness.test.ts` that fails the moment a
+C3+ approval lands. The structural fix (a clean two-set split plus a
+channel-agnostic monotonicity guard-test) is specced in
+`docs/superpowers/plans/2026-07-31-retraction-structural-monotonicity-followup.md`
+and deferred to its own PR. Do not land a C3+ approval without it.
+
 ## After Approval
 
 Run the readiness validator in both public and private modes. If C2 closes,

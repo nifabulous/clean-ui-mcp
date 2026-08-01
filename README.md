@@ -909,6 +909,7 @@ keys + `RUN_LIVE_INTEGRATION=1`).
 | `npm run site:test` | Public-site unit/component tests (jsdom); excludes the e2e browser suites |
 | `npm run site:test:browser` | End-to-end Playwright suite against a built `site/dist` served by `vite preview` |
 | `npm run site:test:browser:production` | End-to-end Playwright suite against the real loopback server (`dist/scripts/ui-server.js` with `CLEAN_UI_SITE_DIST=site/dist`), which serves the built site and `/api/*` from one origin |
+| `npm run ci:local` | Run the ten CI project-gate commands locally in CI order; append `-- --fast` to skip browser checks and the budget |
 
 ---
 

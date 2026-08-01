@@ -2,7 +2,7 @@
 #
 # ci-local.sh — run the CI gate locally, in CI's order.
 #
-# WHY THIS EXISTS. `.github/workflows/ci.yml` runs ten steps in an order that is
+# WHY THIS EXISTS. `.github/workflows/ci.yml` runs ten project gate commands in an order that is
 # load-bearing, and running them by hand in a different order produces failures
 # that look like real regressions but are not:
 #
@@ -11,25 +11,24 @@
 #     false green. Editing source and running the suite without rebuilding trips
 #     it. It is doing its job; the fix is to build first, which this script does.
 #
-#   - `site:test:browser` and `site:test:browser:production` both serve a BUILT
-#     `site/dist` and neither builds it. Run either against a stale dist and they
-#     fail on copy that was fixed commits ago. CI gets this right by running
-#     `site:build` between `site:test` and the browser suites; by hand it is easy
-#     to skip.
+#   - `site:test:browser` serves a BUILT `site/dist` and fails against a stale
+#     dist on copy that was fixed commits ago. The production command rebuilds
+#     the site internally, but CI still runs the explicit `site:build` before
+#     both browser commands so the preview suite has the right artifact.
 #
 #   - `site:test` must be able to run BEFORE `site:build`, because `site/dist` is
 #     gitignored and does not exist on a fresh checkout. That is why the site
 #     vitest config excludes `tests/**/*browser*.test.ts` as a class.
 #
-# This script is the single command that gets all of that right. It mirrors
-# ci.yml exactly; if you change one, change the other.
+# This script is the single command that gets all of that right. It mirrors the
+# ten project gate commands in ci.yml exactly; if you change one, change the other.
 #
 # NOT INCLUDED: `npm ci` and `npx playwright install`. CI runs both because it
 # starts from nothing. Locally they are slow and usually unnecessary, so this
 # script checks for Chromium and tells you what to run rather than doing it.
 #
 # USAGE
-#   npm run ci:local              every step
+#   npm run ci:local              every local gate step
 #   npm run ci:local -- --fast    skip the two Chromium suites and the budget
 #                                 check (the slow tail); useful mid-change
 
@@ -60,12 +59,18 @@ STEPS=(
   "browser|node scripts/check-site-budget.mjs"
 )
 
-if [ "$FAST" = "0" ] && ! npx playwright install --dry-run chromium >/dev/null 2>&1; then
-  # A missing browser surfaces as an opaque launch failure deep in a suite, so
-  # say it plainly up front instead.
-  echo "note: could not confirm Chromium is installed."
-  echo "      if the browser steps fail to launch, run: npx playwright install chromium"
-  echo
+if [ "$FAST" = "0" ]; then
+  chromium_path="$(node -e '
+    const { chromium } = require("playwright");
+    process.stdout.write(chromium.executablePath());
+  ' 2>/dev/null || true)"
+  if [ -z "$chromium_path" ] || [ ! -x "$chromium_path" ]; then
+    # A missing browser surfaces as an opaque launch failure deep in a suite, so
+    # say it plainly up front instead.
+    echo "note: could not confirm Chromium is installed."
+    echo "      if the browser steps fail to launch, run: npx playwright install chromium"
+    echo
+  fi
 fi
 
 total=0
@@ -100,7 +105,7 @@ for entry in "${STEPS[@]}"; do
     # CI is ubuntu-latest, where the mechanism does not exist. Say so rather
     # than retrying, because a silent retry would also hide a real break.
     case "$cmd" in
-      *site:test*|*npm\ test*)
+      "npm test"|"npm run site:test")
         printf '\nIf this step passes on its own, suspect local contention, not a regression:\n'
         printf '  %s\n' "$cmd"
         printf 'See issue #84 — on macOS, exclude this repo in Spotlight Privacy to avoid it.\n'
@@ -123,5 +128,5 @@ if [ "$FAST" = "1" ]; then
   printf '\nci:local (--fast) PASSED in %ds — Chromium suites and the budget check were SKIPPED.\n' "$elapsed"
   printf 'Run without --fast before pushing; CI runs them.\n'
 else
-  printf '\nci:local PASSED in %ds — every ci.yml step, in ci.yml order.\n' "$elapsed"
+  printf '\nci:local PASSED in %ds — all ten project gate commands mirrored from ci.yml, in ci.yml order.\n' "$elapsed"
 fi

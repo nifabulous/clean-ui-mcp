@@ -190,16 +190,20 @@ A model proposal must not be labeled `corpus-evidence` merely because the model
 saw corpus-derived context. The evidence that grounded a decision must remain
 explicit and cited. The model is a transformation, not the source observation.
 
-Before implementation, choose one of these authority policies:
+For the first implementation slice, the settled authority policy is **proposal-only**:
 
-- **Proposal-only:** model output is displayed as a proposal, tokens remain
+- **Selected: Proposal-only:** model output is displayed as a proposal, tokens remain
   unavailable until a caller or identified team design system supplies/accepts
   exact values. This requires the smallest contract change and is recommended.
-- **New model authority:** add a closed `model-proposal` authority and update
+
+The following alternatives remain recorded for rationale, not as choices to reopen
+while implementing this slice:
+
+- **Not selected for the first slice: New model authority:** add a closed `model-proposal` authority and update
   all authority-lane, citation, documentation, and null-token checks. This is
   appropriate only if model-generated values are intended to be first-class
   artifact decisions before human acceptance.
-- **Accepted constraint:** a caller supplies exact values and the model only
+- **Not selected for the first slice: Accepted constraint:** a caller supplies exact values and the model only
   formats or checks them. Authority remains `project-constraint`; the existing
   non-empty constraints prerequisite must remain true.
 

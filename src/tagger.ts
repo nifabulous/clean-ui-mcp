@@ -371,6 +371,8 @@ export interface TextModelRequest {
   endpoint: EndpointOverride & { model: string };
   maxOutputTokens: number;
   maxAttempts: number;
+  temperature?: number;
+  seed?: number;
 }
 
 /**
@@ -429,6 +431,10 @@ interface ProviderCallOptions {
   modelOverride?: string;
   maxOutputTokens?: number;
   maxAttempts?: number;
+  apiKeyOverride?: string;
+  baseUrlOverride?: string;
+  temperatureOverride?: number;
+  seedOverride?: number;
 }
 
 /**
@@ -1977,6 +1983,8 @@ async function callOpenAIWithMetadata(
 ): Promise<ProviderCallOutcome> {
   const cfg = cfgOverride ?? openaiConfigForPass(pass);
   if (!cfg.apiKey) throw new Error("OPENAI_API_KEY not set");
+  const resolvedTemperature = options?.temperatureOverride;
+  const resolvedSeed = options?.seedOverride;
 
   // If a base URL is set for this pass, route to the universal OpenAI-compatible
   // chat completions path (NVIDIA NIM, OpenRouter, Together, Groq, vLLM, etc.).
@@ -1993,17 +2001,20 @@ async function callOpenAIWithMetadata(
 
   const meta: { attempts: number } = { attempts: 0 };
   const startedAt = Date.now();
+  const body: Record<string, unknown> = {
+    model: cfg.model,
+    max_output_tokens: resolvedMaxTokens,
+    input: [
+      { role: "system", content: [{ type: "input_text", text: SYSTEM }] },
+      { role: "user", content: retryFeedback ? [...userContent, { type: "input_text", text: retryFeedback }] : userContent },
+    ],
+  };
+  if (resolvedTemperature !== undefined) body.temperature = resolvedTemperature;
+  if (resolvedSeed !== undefined) body.seed = resolvedSeed;
   const response = await fetchWithRetry(OPENAI_RESPONSES_API, {
     method: "POST",
     headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: cfg.model,
-      max_output_tokens: resolvedMaxTokens,
-      input: [
-        { role: "system", content: [{ type: "input_text", text: SYSTEM }] },
-        { role: "user", content: retryFeedback ? [...userContent, { type: "input_text", text: retryFeedback }] : userContent },
-      ],
-    }),
+    body: JSON.stringify(body),
   }, meta, options?.maxAttempts);
 
   if (!response.ok) throw new Error(`OpenAI API error ${response.status}: ${await response.text()}`);
@@ -2089,6 +2100,8 @@ async function callOpenAICompatibleWithMetadata(
 ): Promise<ProviderCallOutcome> {
   if (!cfg.apiKey) throw new Error(`OPENAI_API_KEY${pass === "extraction" ? "" : `_${pass.toUpperCase()}`} not set`);
   const resolvedMaxTokens = options?.maxOutputTokens ?? MAX_OUTPUT_TOKENS;
+  const resolvedTemperature = options?.temperatureOverride ?? 1;
+  const resolvedSeed = options?.seedOverride;
 
   // Build the user message. Vision via image_url part when the model supports
   // it (NIM endpoints generally do; OpenRouter routes it correctly). The
@@ -2114,12 +2127,13 @@ async function callOpenAICompatibleWithMetadata(
     // Modest temperature — the tagger's quality bar comes from the prompt +
     // banned-phrase gate, not from creative sampling. Matches NVIDIA's
     // documented default for DeepSeek V4 Pro.
-    temperature: 1,
+    temperature: resolvedTemperature,
     top_p: 0.95,
     // Reasoning toggle for NIM-style endpoints. Non-NIM providers ignore
     // unknown fields silently, so this is safe to send unconditionally.
     chat_template_kwargs: { thinking: thinkingEnabled },
   };
+  if (resolvedSeed !== undefined) body.seed = resolvedSeed;
 
   // MiniMax M3: thinking is ON by default and wraps content in <think> tags.
   // Disable thinking for BOTH passes:
@@ -2204,13 +2218,17 @@ async function callClaudeWithMetadata(
   detail: "low" | "high" = "high",
   options?: ProviderCallOptions,
 ): Promise<ProviderCallOutcome> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = options?.apiKeyOverride ?? process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+  if (options?.seedOverride !== undefined && options.seedOverride !== null) {
+    throw new Error("Claude does not support seed pinning");
+  }
   // Resolve the pinned model + per-call budgets. Fall back to the module
   // constants when the C2 path did not thread an override (preserves legacy
   // callers that route through callClaude/callModel).
   const resolvedModel = options?.modelOverride ?? CLAUDE_AUTO_TAG_MODEL;
   const resolvedMaxTokens = options?.maxOutputTokens ?? MAX_OUTPUT_TOKENS;
+  const resolvedBaseUrl = options?.baseUrlOverride ?? ANTHROPIC_API;
 
   // Claude content blocks: image uses raw base64 (no data-URI prefix). Claude
   // has no detail knob, so "low" pre-resizes via sharp to cut token count.
@@ -2238,10 +2256,13 @@ async function callClaudeWithMetadata(
     system: SYSTEM,
     messages: [{ role: "user", content }],
   };
+  if (options?.temperatureOverride !== undefined) {
+    body.temperature = options.temperatureOverride;
+  }
   if (options?.maxOutputTokens !== undefined) {
     body.thinking = { type: "disabled" };
   }
-  const response = await fetchWithRetry(ANTHROPIC_API, {
+  const response = await fetchWithRetry(resolvedBaseUrl, {
     method: "POST",
     headers: {
       "x-api-key": apiKey,
@@ -2320,13 +2341,14 @@ async function callGeminiWithMetadata(
   thinkingOverride?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH",
   options?: ProviderCallOptions,
 ): Promise<ProviderCallOutcome> {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = options?.apiKeyOverride ?? process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not set");
   // Resolve the pinned model + per-call budgets. The model is threaded through
   // every read of GEMINI_AUTO_TAG_MODEL below (thinking-control branch, URL,
   // debug log) so the C2 pinned model is actually honored end-to-end.
   const resolvedModel = options?.modelOverride ?? GEMINI_AUTO_TAG_MODEL;
   const resolvedMaxTokens = options?.maxOutputTokens ?? MAX_OUTPUT_TOKENS;
+  const resolvedBaseUrl = options?.baseUrlOverride ?? GEMINI_API_BASE;
 
   // Gemini parts: inlineData uses raw base64 (no prefix), camelCase. Like
   // Claude, no detail knob — "low" pre-resizes via sharp to cut token count.
@@ -2358,8 +2380,14 @@ async function callGeminiWithMetadata(
   } else if (pass === "extraction") {
     generationConfig.thinkingConfig = { thinkingBudget: 0 };
   }
+  if (options?.temperatureOverride !== undefined) {
+    generationConfig.temperature = options.temperatureOverride;
+  }
+  if (options?.seedOverride !== undefined) {
+    generationConfig.seed = options.seedOverride;
+  }
 
-  const endpoint = `${GEMINI_API_BASE}/${resolvedModel}:generateContent`;
+  const endpoint = `${resolvedBaseUrl}/${resolvedModel}:generateContent`;
   if (DEBUG_TAGGER) {
     const escalation = thinkingOverride ? ` (escalated from ${pass} default)` : "";
     console.error(`[gemini] model=${resolvedModel} pass=${pass}${escalation} thinkingConfig=${JSON.stringify(generationConfig.thinkingConfig)}`);
@@ -2552,12 +2580,10 @@ export async function callTextModel(
  * When undefined, fetchWithRetry's default of 4 attempts (1 + 3 retries) is
  * used.
  *
- * Credentials: `endpoint.apiKey` is honored ONLY for OpenAI-compatible
- * providers (openai/mistral/minimax/grok). Claude and Gemini always read their
- * credentials from the `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` environment
- * variables — a caller-supplied `endpoint.apiKey` is silently ignored on those
- * two providers. The C2 harness stores Claude/Gemini keys as env vars (not
- * inline keys), so this matches the documented harness contract.
+ * Credentials/base URLs: the explicit request endpoint is honored for every
+ * provider in this path. Legacy `callTextModel` / `callModel` callers may still
+ * fall back to provider env vars and defaults; `callTextModelWithMetadata`
+ * always threads the pinned endpoint fields when they are present.
  */
 export async function callTextModelWithMetadata(
   request: TextModelRequest,
@@ -2582,11 +2608,11 @@ export async function callTextModelWithMetadata(
       throw new Error(`Invalid C2 request: endpoint.apiKey is required for provider "${provider}"`);
     }
   } else if (provider === "claude") {
-    if (!process.env.ANTHROPIC_API_KEY) {
+    if (!apiKey && !process.env.ANTHROPIC_API_KEY) {
       throw new Error("Invalid C2 request: ANTHROPIC_API_KEY is not set for provider \"claude\"");
     }
   } else if (provider === "gemini") {
-    if (!process.env.GEMINI_API_KEY) {
+    if (!apiKey && !process.env.GEMINI_API_KEY) {
       throw new Error("Invalid C2 request: GEMINI_API_KEY is not set for provider \"gemini\"");
     }
   }
@@ -2621,6 +2647,10 @@ export async function callTextModelWithMetadata(
     modelOverride: model,
     maxOutputTokens: request.maxOutputTokens,
     maxAttempts: request.maxAttempts,
+    apiKeyOverride: request.endpoint.apiKey,
+    baseUrlOverride: request.endpoint.baseUrl,
+    temperatureOverride: request.temperature,
+    seedOverride: request.seed,
   };
   let outcome: ProviderCallOutcome;
   if (provider === "claude") {

@@ -14,6 +14,7 @@ import {
   DESIGN_JSON_MIME,
   DESIGN_MARKDOWN_FILENAME,
   DESIGN_MARKDOWN_MIME,
+  MAX_INTENT_TEXT_LENGTH,
   MAX_CONSTRAINTS,
   MAX_REFERENCE_IDS,
   briefValidationMessage,
@@ -37,13 +38,13 @@ import "../styles/playground.css";
  *
  * WHAT REACHES THE DOM. Only the DISPLAY-SAFE half of {@link SafeArtifact}, the
  * allowlist projection built by the client from CHECKED response positions: the
- * design direction, the key decisions' structured positions, the acceptance
- * criteria, the producer's warnings, the fields it could not decide, and an
- * AGGREGATE evidence summary (counts plus retrieval metadata). No raw corpus id,
- * source identity, product name, image path, screenshot, critique, provider
- * diagnostic, credential, or filesystem path is projected, so none can be
- * rendered — not because a scrubber removed it, but because the object this
- * component reads does not carry it.
+ * design direction, caller-supplied color/typography intent, the key decisions'
+ * structured positions, the acceptance criteria, the producer's warnings, the
+ * fields it could not decide, and an AGGREGATE evidence summary (counts plus
+ * retrieval metadata). No raw corpus id, source identity, product name, image
+ * path, screenshot, critique, provider diagnostic, credential, or filesystem path
+ * is projected, so none can be rendered — not because a scrubber removed it, but
+ * because the object this component reads does not carry it.
  *
  * `artifact.designMarkdown` / `artifact.designJson` are the EXCEPTION, and the
  * exception is enforced rather than asserted. They are the server's own
@@ -60,12 +61,14 @@ import "../styles/playground.css";
  * publish every one of those fields. A copy control on this page must have NO
  * value-rendering fallback.
  *
- * The producer echoes the caller's own brief into `spec.context.productContext`.
- * The projection drops it: an operator's own brief read back is not a result. The
- * `designDirection` IS rendered — it is the producer's direction statement and the
- * design names it as displayable. It is producer free text, so this component
- * makes no claim about its prose; the only claim made anywhere on this path is
- * about ID and path SHAPE, which the client re-checks itself.
+ * The producer echoes the caller's own brief into `spec.context.productContext`
+ * and records explicit intent beside it. The projection drops the product brief
+ * but carries only the bounded intent fields, so the operator can tell what was
+ * recorded without treating it as a token decision. The `designDirection` IS
+ * rendered — it is the producer's direction statement and the design names it as
+ * displayable. It is producer free text, so this component makes no claim about
+ * its prose; the only claim made anywhere on this path is about ID and path
+ * SHAPE, which the client re-checks itself.
  *
  * DOWNLOADS NEVER REGENERATE. Both renderings arrive in the single response and
  * live in component state. The download handlers read `artifact.designMarkdown` /
@@ -85,7 +88,11 @@ type Lifecycle =
   | { readonly kind: "idle" }
   | { readonly kind: "generating"; readonly phase: LifecyclePhase }
   | { readonly kind: "success"; readonly artifact: SafeArtifact }
-  | { readonly kind: "failure"; readonly failure: CreateUiSpecFailure };
+  | {
+      readonly kind: "failure";
+      readonly failure: CreateUiSpecFailure;
+      readonly explicitReferences: boolean;
+    };
 
 /** Editable form state. Kept flat so "start over" is one assignment. */
 interface FormState {
@@ -97,6 +104,11 @@ interface FormState {
   readonly library: string;
   readonly constraintsText: string;
   readonly referencesText: string;
+  readonly accentPreference: string;
+  readonly colorMood: string;
+  readonly colorContrastFloor: "" | "AA" | "AAA";
+  readonly typographyVoice: string;
+  readonly typographyDensity: "" | "compact" | "regular" | "spacious";
 }
 
 const EMPTY_FORM: FormState = {
@@ -108,6 +120,11 @@ const EMPTY_FORM: FormState = {
   library: "",
   constraintsText: "",
   referencesText: "",
+  accentPreference: "",
+  colorMood: "",
+  colorContrastFloor: "",
+  typographyVoice: "",
+  typographyDensity: "",
 };
 
 /** Split a one-per-line textarea into trimmed, non-empty lines. */
@@ -122,6 +139,17 @@ function lines(text: string): string[] {
 function briefFrom(form: FormState): DesignBrief {
   const constraints = lines(form.constraintsText);
   const referenceIds = lines(form.referencesText);
+  const colorIntent = {
+    ...(form.accentPreference.trim().length > 0
+      ? { accentPreference: form.accentPreference }
+      : {}),
+    ...(form.colorMood.trim().length > 0 ? { mood: form.colorMood } : {}),
+    ...(form.colorContrastFloor !== "" ? { contrastFloor: form.colorContrastFloor } : {}),
+  };
+  const typeIntent = {
+    ...(form.typographyVoice.trim().length > 0 ? { voice: form.typographyVoice } : {}),
+    ...(form.typographyDensity !== "" ? { density: form.typographyDensity } : {}),
+  };
   return {
     productContext: form.brief,
     ...(form.platform !== "" ? { platform: form.platform } : {}),
@@ -137,6 +165,8 @@ function briefFrom(form: FormState): DesignBrief {
       : {}),
     ...(constraints.length > 0 ? { constraints } : {}),
     ...(referenceIds.length > 0 ? { referenceIds } : {}),
+    ...(Object.keys(colorIntent).length > 0 ? { colorIntent } : {}),
+    ...(Object.keys(typeIntent).length > 0 ? { typeIntent } : {}),
   };
 }
 
@@ -158,31 +188,47 @@ function statusLabel(lifecycle: Lifecycle): string {
   if (lifecycle.kind === "success") {
     return successLabel(lifecycle.artifact);
   }
-  return failureLabel(lifecycle.failure);
+  return failureLabel(lifecycle.failure, lifecycle.explicitReferences);
 }
 
+/** Producers that consult no model. Their unavailable fields are a rule of the
+ * producer, not a consequence of a weak brief or an unsuccessful retrieval. */
+const DETERMINISTIC_PRODUCERS = new Set(["c3-fallback-v1"]);
+
 /**
- * Success copy, three-way and deliberately not collapsed.
+ * Success copy keeps three separate claims visible:
  *
- * "Used the deterministic fallback" and "carries warnings" are DIFFERENT claims.
- * The producer emits `motionEvidenceUnavailable` on essentially every run that
- * supplies no motion intents, while `fallbackUsed` stays false whenever keyword
- * retrieval matched — so folding warnings into the fallback wording would
- * mislabel almost every genuine keyword-matched artifact as a fallback. Equally,
- * an artifact carrying warnings is not a "complete" handoff.
+ * - a producer can be deterministic even when retrieval found observations;
+ * - retrieval can fall back after finding nothing;
+ * - an artifact can carry warnings without either of those being true.
  */
 function successLabel(artifact: SafeArtifact): string {
-  if (artifact.evidence.fallbackUsed) {
-    return "Generated a design handoff using the deterministic fallback — automatic retrieval matched nothing. This is not a fully model-generated artifact; the unavailable fields are listed below.";
-  }
-  // Warnings the client could not MAP are still warnings. Counting only the mapped
-  // ones would announce "complete" for an artifact the producer flagged as
-  // degraded, the moment the producer adds a code this client does not know.
+  // Warnings the client could not map are still warnings. Counting only the
+  // mapped ones would announce "complete" for a producer-degraded artifact the
+  // moment it adds a warning code this client does not know.
   const count = artifact.warnings.length + artifact.droppedWarningCount;
-  if (count > 0) {
-    return `Generated a design handoff with ${count} ${count === 1 ? "warning" : "warnings"}. Some fields were unavailable — see below.`;
+  const parts: string[] = [
+    count > 0
+      ? `Generated a design handoff with ${count} ${count === 1 ? "warning" : "warnings"}.`
+      : "Generated a complete design handoff.",
+  ];
+
+  // Do not interpolate producerVersion into this copy: the production id
+  // "c3-fallback-v1" contains "fallback", which would mislabel a retrieval
+  // success as a fallback run in the warning-sensitive UI.
+  if (DETERMINISTIC_PRODUCERS.has(artifact.producerVersion)) {
+    parts.push(
+      "This is a deterministic scaffold with no model attached. Color, typography and motion are declined by design, not missing because of your brief.",
+    );
   }
-  return "Generated a complete design handoff.";
+
+  if (artifact.evidence.fallbackUsed) {
+    parts.push(
+      "Automatic retrieval matched nothing, so this used the deterministic fallback and no corpus evidence grounds it.",
+    );
+  }
+
+  return parts.join(" ");
 }
 
 const PHASE_LABELS: Readonly<Record<LifecyclePhase, string>> = {
@@ -196,7 +242,11 @@ const PHASE_LABELS: Readonly<Record<LifecyclePhase, string>> = {
  * server's bounded `error.message` is deliberately never rendered, so no server
  * string can become UI copy.
  */
-function failureLabel(failure: CreateUiSpecFailure): string {
+function failureLabel(failure: CreateUiSpecFailure, explicitReferences = false): string {
+  if (failure.code === "INVALID_INPUT" && explicitReferences) {
+    return "The explicit references could not be resolved; omit them to use automatic retrieval.";
+  }
+
   switch (failure.code) {
     case "INVALID_INPUT":
       return "The brief could not be accepted. Adjust the brief or the optional controls and generate again.";
@@ -294,7 +344,11 @@ function PlaygroundComposer(): ReactElement {
     setLifecycle(
       result.ok
         ? { kind: "success", artifact: result.artifact }
-        : { kind: "failure", failure: result.failure },
+        : {
+            kind: "failure",
+            failure: result.failure,
+            explicitReferences: (brief.referenceIds?.length ?? 0) > 0,
+          },
     );
   }, [form]);
 
@@ -474,6 +528,102 @@ function PlaygroundComposer(): ReactElement {
             </p>
           </div>
 
+          <fieldset className="composer__fieldset">
+            <legend className="composer__legend">Design intent</legend>
+            <p className="composer__hint" id={id("intent-hint")}>
+              Optional caller-supplied guidance. It is recorded in the handoff, but it does not
+              create color or typography tokens. Text fields allow up to {MAX_INTENT_TEXT_LENGTH}
+              characters.
+            </p>
+            <div className="composer__grid">
+              <div className="composer__field">
+                <label className="composer__label" htmlFor={id("accent-preference")}>
+                  Accent preference
+                </label>
+                <input
+                  id={id("accent-preference")}
+                  className="composer__input"
+                  type="text"
+                  maxLength={MAX_INTENT_TEXT_LENGTH}
+                  value={form.accentPreference}
+                  aria-describedby={id("intent-hint")}
+                  onChange={(event) => setForm({ ...form, accentPreference: event.target.value })}
+                />
+              </div>
+              <div className="composer__field">
+                <label className="composer__label" htmlFor={id("color-mood")}>
+                  Color mood
+                </label>
+                <input
+                  id={id("color-mood")}
+                  className="composer__input"
+                  type="text"
+                  maxLength={MAX_INTENT_TEXT_LENGTH}
+                  value={form.colorMood}
+                  aria-describedby={id("intent-hint")}
+                  onChange={(event) => setForm({ ...form, colorMood: event.target.value })}
+                />
+              </div>
+              <div className="composer__field">
+                <label className="composer__label" htmlFor={id("contrast-floor")}>
+                  Contrast floor
+                </label>
+                <select
+                  id={id("contrast-floor")}
+                  className="composer__select"
+                  value={form.colorContrastFloor}
+                  aria-describedby={id("intent-hint")}
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      colorContrastFloor: event.target.value as FormState["colorContrastFloor"],
+                    })
+                  }
+                >
+                  <option value="">Not specified</option>
+                  <option value="AA">AA</option>
+                  <option value="AAA">AAA</option>
+                </select>
+              </div>
+              <div className="composer__field">
+                <label className="composer__label" htmlFor={id("typography-voice")}>
+                  Typography voice
+                </label>
+                <input
+                  id={id("typography-voice")}
+                  className="composer__input"
+                  type="text"
+                  maxLength={MAX_INTENT_TEXT_LENGTH}
+                  value={form.typographyVoice}
+                  aria-describedby={id("intent-hint")}
+                  onChange={(event) => setForm({ ...form, typographyVoice: event.target.value })}
+                />
+              </div>
+              <div className="composer__field">
+                <label className="composer__label" htmlFor={id("typography-density")}>
+                  Typography density
+                </label>
+                <select
+                  id={id("typography-density")}
+                  className="composer__select"
+                  value={form.typographyDensity}
+                  aria-describedby={id("intent-hint")}
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      typographyDensity: event.target.value as FormState["typographyDensity"],
+                    })
+                  }
+                >
+                  <option value="">Not specified</option>
+                  <option value="compact">Compact</option>
+                  <option value="regular">Regular</option>
+                  <option value="spacious">Spacious</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
           <details className="composer__advanced">
             <summary className="composer__summary">Advanced: explicit reference override</summary>
             <div className="composer__field">
@@ -490,7 +640,7 @@ function PlaygroundComposer(): ReactElement {
               />
               <p className="composer__hint" id={id("references-hint")}>
                 Up to {MAX_REFERENCE_IDS} public references. Supplying any of these turns automatic
-                retrieval off for this run.
+                retrieval off for this run. Find candidates in <Link to="/browse">Browse</Link>.
               </p>
             </div>
           </details>
@@ -678,6 +828,52 @@ function ArtifactView({
         <p className="artifact__direction">{artifact.designDirection}</p>
       </section>
 
+      {(artifact.colorIntent !== null || artifact.typeIntent !== null) && (
+        <section className="artifact__section" aria-labelledby={id("intent-title")}>
+          <h4 className="artifact__section-title" id={id("intent-title")}>
+            Design intent
+          </h4>
+          <p className="artifact__note">
+            Caller-supplied guidance recorded in the spec context. It is not a token decision:
+            color and typography tokens are only available when an authoritative design system
+            supplies them.
+          </p>
+          <dl className="artifact__facts artifact__facts--intent">
+            {artifact.colorIntent !== null && (
+              <div className="artifact__fact">
+                <dt>Color intent</dt>
+                <dd>
+                  {[
+                    artifact.colorIntent.accentPreference
+                      ? "Accent preference: " + artifact.colorIntent.accentPreference
+                      : null,
+                    artifact.colorIntent.mood ? "Mood: " + artifact.colorIntent.mood : null,
+                    artifact.colorIntent.contrastFloor
+                      ? "Contrast floor: " + artifact.colorIntent.contrastFloor
+                      : null,
+                  ]
+                    .filter((value): value is string => value !== null)
+                    .join(" · ")}
+                </dd>
+              </div>
+            )}
+            {artifact.typeIntent !== null && (
+              <div className="artifact__fact">
+                <dt>Typography intent</dt>
+                <dd>
+                  {[
+                    artifact.typeIntent.voice ? "Voice: " + artifact.typeIntent.voice : null,
+                    artifact.typeIntent.density ? "Density: " + artifact.typeIntent.density : null,
+                  ]
+                    .filter((value): value is string => value !== null)
+                    .join(" · ")}
+                </dd>
+              </div>
+            )}
+          </dl>
+        </section>
+      )}
+
       {artifact.decisions.length > 0 && (
         <section className="artifact__section" aria-labelledby={id("decisions-title")}>
           <h4 className="artifact__section-title" id={id("decisions-title")}>
@@ -803,10 +999,19 @@ function ArtifactView({
           Artifact integrity
         </h4>
         <p className="artifact__note">
-          These are the hashes the server returned with this artifact. The downloads above save the
-          exact bytes those hashes cover — nothing is regenerated when you save.
+          The semantic hash covers the spec's content: regenerate with the same inputs and it is
+          identical. The digests below it cover exact bytes and include generation time, so they
+          change on every run even when nothing about the design changed.
         </p>
         <dl className="artifact__facts artifact__facts--hashes">
+          <div className="artifact__fact">
+            <dt>Semantic spec SHA-256</dt>
+            <dd className="artifact__hash">{artifact.semanticSpecSha256}</dd>
+          </div>
+          <div className="artifact__fact">
+            <dt>Producer</dt>
+            <dd>{artifact.producerVersion}</dd>
+          </div>
           <div className="artifact__fact">
             <dt>Artifact</dt>
             <dd className="artifact__hash">{artifact.artifactId}</dd>
@@ -814,10 +1019,6 @@ function ArtifactView({
           <div className="artifact__fact">
             <dt>Generated at</dt>
             <dd>{artifact.generatedAt}</dd>
-          </div>
-          <div className="artifact__fact">
-            <dt>Producer</dt>
-            <dd>{artifact.producerVersion}</dd>
           </div>
           <div className="artifact__fact">
             <dt>{DESIGN_MARKDOWN_FILENAME} SHA-256</dt>

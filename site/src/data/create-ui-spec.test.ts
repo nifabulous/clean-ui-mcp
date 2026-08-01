@@ -31,6 +31,7 @@ import {
   DESIGN_MARKDOWN_FILENAME,
   briefValidationMessage,
   downloadExactBytes,
+  MAX_INTENT_TEXT_LENGTH,
   requestDesignArtifact,
   resetCachedNonce,
   type LifecyclePhase,
@@ -222,6 +223,21 @@ describe("briefValidationMessage", () => {
   it("refuses duplicate explicit references", () => {
     expect(briefValidationMessage({ ...BRIEF, referenceIds: ["a", "a"] })).not.toBeNull();
   });
+
+  it("uses the server's 120-character bound for color and typography intent text", () => {
+    expect(
+      briefValidationMessage({
+        ...BRIEF,
+        colorIntent: { mood: "x".repeat(MAX_INTENT_TEXT_LENGTH + 1) },
+      }),
+    ).toMatch(String(MAX_INTENT_TEXT_LENGTH));
+    expect(
+      briefValidationMessage({
+        ...BRIEF,
+        typeIntent: { voice: "x".repeat(MAX_INTENT_TEXT_LENGTH + 1) },
+      }),
+    ).toMatch(String(MAX_INTENT_TEXT_LENGTH));
+  });
 });
 
 describe("requestDesignArtifact — transport", () => {
@@ -276,6 +292,24 @@ describe("requestDesignArtifact — transport", () => {
       designSystem: { status: "identified", library: "internal-kit" },
       constraints: ["No dark patterns"],
       referenceIds: ["public-ref-1"],
+    });
+  });
+
+  it("sends structured design intent as separate optional request fields", async () => {
+    const { calls, fetchImpl } = stubFetch(okQueue());
+    await requestDesignArtifact(
+      {
+        ...BRIEF,
+        colorIntent: { accentPreference: "light blue", mood: "calm", contrastFloor: "AA" },
+        typeIntent: { voice: "plainspoken", density: "compact" },
+      },
+      { fetchImpl },
+    );
+
+    expect(calls[1].body).toMatchObject({
+      productContext: BRIEF.productContext,
+      colorIntent: { accentPreference: "light blue", mood: "calm", contrastFloor: "AA" },
+      typeIntent: { voice: "plainspoken", density: "compact" },
     });
   });
 
@@ -383,6 +417,36 @@ describe("requestDesignArtifact — safe projection", () => {
       fallbackUsed: false,
       fallbackReason: null,
     });
+  });
+
+  it("projects design intent from spec.context, never from a handoff copy", async () => {
+    const envelope = envelopeFixture();
+    const spec = envelope.spec as Record<string, unknown>;
+    const context = spec.context as Record<string, unknown>;
+    context.colorIntent = {
+      accentPreference: "light blue",
+      mood: "calm",
+      contrastFloor: "AA",
+    };
+    context.typeIntent = { voice: "plainspoken", density: "compact" };
+    envelope.handoff = {
+      target: "neutral-web",
+      motionIntents: [],
+      colorIntent: { accentPreference: "handoff-only value" },
+      typeIntent: { voice: "handoff-only value" },
+    };
+
+    const { fetchImpl } = stubFetch(okQueue(envelope));
+    const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+    if (!result.ok) throw new Error("expected success");
+
+    expect(result.artifact.colorIntent).toEqual({
+      accentPreference: "light blue",
+      mood: "calm",
+      contrastFloor: "AA",
+    });
+    expect(result.artifact.typeIntent).toEqual({ voice: "plainspoken", density: "compact" });
+    expect(JSON.stringify(result.artifact)).not.toContain("handoff-only value");
   });
 
   // The projection carries the two claims the label must keep APART — "the

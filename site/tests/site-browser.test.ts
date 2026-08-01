@@ -663,7 +663,17 @@ describe("public site — C3 composer", () => {
     const status = await statusText(page);
     expect(status).toMatch(/deterministic fallback/i);
     expect(status).not.toMatch(/complete design handoff/i);
-    expect(status).toMatch(/not a fully model-generated artifact/i);
+    // T2 split the old single "not a fully model-generated artifact" sentence
+    // into two independent disclosures, because they answer different questions
+    // and previously only fired together on the fallback path: the producer
+    // attaches no model AT ALL (true of every run, including matched retrieval),
+    // and retrieval separately matched nothing (true only here). The fallback
+    // case is the one run where the status must name BOTH, so assert both —
+    // matching only the first would let a regression drop the retrieval clause
+    // and still pass.
+    expect(status).toMatch(/no model attached/i);
+    expect(status).toMatch(/declined by design/i);
+    expect(status).toMatch(/no corpus evidence grounds it/i);
 
     expect(await page.getByRole("button", { name: /download DESIGN\.md/i }).isEnabled()).toBe(true);
     expect(await page.getByRole("button", { name: /download DESIGN\.json/i }).isEnabled()).toBe(

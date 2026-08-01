@@ -346,6 +346,18 @@ describe("PlaygroundPage — idle", () => {
     expect(link.getAttribute("href")).toBe("/browse");
   });
 
+  it("points explicit-reference users to browse without enumerating reference ids", () => {
+    installFetch(successQueue());
+    renderComposer();
+    fireEvent.click(screen.getByText(/advanced: explicit reference override/i));
+
+    const hint = screen.getByText(/automatic retrieval off/i);
+    expect(hint.textContent ?? "").toMatch(/browse/i);
+    const link = within(hint).getByRole("link", { name: /browse/i });
+    expect(link.getAttribute("href")).toBe("/browse");
+    expect(hint.textContent ?? "").not.toMatch(/corpus-|public-ref-|decision-/i);
+  });
+
   it("sends only the fields the operator filled in", async () => {
     const harness = installFetch(successQueue());
     renderComposer();
@@ -385,6 +397,31 @@ describe("PlaygroundPage — idle", () => {
       // Blank lines are dropped; order preserved.
       constraints: ["No dark patterns", "Must ship in two weeks"],
       referenceIds: ["public-ref-1", "public-ref-2"],
+    });
+  });
+
+  it("sends caller-supplied color and typography intent", async () => {
+    const harness = installFetch(successQueue());
+    renderComposer();
+    typeBrief();
+    fireEvent.change(screen.getByLabelText(/accent preference/i), {
+      target: { value: "light blue" },
+    });
+    fireEvent.change(screen.getByLabelText(/color mood/i), { target: { value: "calm" } });
+    fireEvent.change(screen.getByLabelText(/contrast floor/i), { target: { value: "AA" } });
+    fireEvent.change(screen.getByLabelText(/typography voice/i), {
+      target: { value: "plainspoken" },
+    });
+    fireEvent.change(screen.getByLabelText(/typography density/i), {
+      target: { value: "compact" },
+    });
+    fireEvent.click(generateButton());
+    await screen.findByRole("heading", { level: 3, name: /design handoff/i });
+
+    expect(harness.calls[1].body).toMatchObject({
+      productContext: BRIEF_TEXT,
+      colorIntent: { accentPreference: "light blue", mood: "calm", contrastFloor: "AA" },
+      typeIntent: { voice: "plainspoken", density: "compact" },
     });
   });
 });
@@ -463,6 +500,33 @@ describe("PlaygroundPage — success", () => {
     expect(evidence.textContent ?? "").toMatch(/keyword/);
   });
 
+  it("shows caller intent recorded in spec.context without trusting handoff copies", async () => {
+    const envelope = envelopeFixture();
+    const spec = envelope.spec as Record<string, unknown>;
+    const context = spec.context as Record<string, unknown>;
+    context.colorIntent = {
+      accentPreference: "light blue",
+      mood: "calm",
+      contrastFloor: "AA",
+    };
+    context.typeIntent = { voice: "plainspoken", density: "compact" };
+    envelope.handoff = {
+      target: "neutral-web",
+      motionIntents: [],
+      colorIntent: { accentPreference: "handoff-only value" },
+      typeIntent: { voice: "handoff-only value" },
+    };
+
+    await generateSuccessfully(envelope);
+
+    const intent = screen.getByRole("region", { name: /design intent/i });
+    expect(intent.textContent ?? "").toMatch(/light blue/);
+    expect(intent.textContent ?? "").toMatch(/plainspoken/);
+    expect(intent.textContent ?? "").toMatch(/caller-supplied/i);
+    expect(intent.textContent ?? "").toMatch(/not a token decision/i);
+    expect(intent.textContent ?? "").not.toContain("handoff-only value");
+  });
+
   it("never puts a private marker, source identity, path, or evidence id in the DOM", async () => {
     await generateSuccessfully();
     const dom = document.body.textContent ?? "";
@@ -533,6 +597,15 @@ describe("PlaygroundPage — downloads reuse the returned bytes", () => {
     const integrity = screen.getByRole("region", { name: /artifact integrity/i });
     expect(integrity.textContent ?? "").toContain(hash("d"));
     expect(integrity.textContent ?? "").toContain(hash("e"));
+  });
+
+  it("leads the integrity panel with the run-stable semantic hash", async () => {
+    await generateSuccessfully();
+    const region = screen.getByRole("region", { name: /artifact integrity/i });
+    const terms = within(region).getAllByRole("term").map((term) => term.textContent ?? "");
+
+    expect(terms[0]).toMatch(/semantic spec sha-256/i);
+    expect(within(region).getByText(/include generation time/i)).toBeInTheDocument();
   });
 
   it("offers a copy-markdown action alongside the downloads", async () => {
@@ -621,6 +694,14 @@ describe("PlaygroundPage — copying the handoff never publishes it", () => {
 });
 
 describe("PlaygroundPage — partial / fallback success", () => {
+  it("discloses the deterministic producer even when retrieval succeeded", async () => {
+    await generateSuccessfully(envelopeFixture({ producerVersion: "c3-fallback-v1" }));
+
+    const status = screen.getByRole("status").textContent ?? "";
+    expect(status).toMatch(/no model attached/i);
+    expect(status).toMatch(/declined by design/i);
+  });
+
   it("names the fallback honestly and still offers both downloads", async () => {
     await generateSuccessfully(fallbackEnvelope());
 
@@ -787,6 +868,36 @@ describe("PlaygroundPage — previously-shareable search URLs", () => {
 });
 
 describe("PlaygroundPage — failure and retry", () => {
+  it("gives explicit-reference 400s the automatic-retrieval remedy without rendering server text", async () => {
+    installFetch([
+      { status: 200, json: { nonce: NONCE } },
+      {
+        status: 400,
+        json: {
+          error: {
+            code: "INVALID_INPUT",
+            message: "server-only-diagnostic missing-reference-token",
+            retryable: false,
+          },
+        },
+      },
+    ]);
+    renderComposer();
+    typeBrief();
+    fireEvent.click(screen.getByText(/advanced: explicit reference override/i));
+    fireEvent.change(screen.getByLabelText(/explicit reference/i), {
+      target: { value: "missing-reference-token" },
+    });
+    fireEvent.click(generateButton());
+
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent ?? "").toMatch(
+        /omit them to use automatic retrieval/i,
+      ),
+    );
+    expect(screen.getByRole("status").textContent ?? "").not.toMatch(/missing-reference-token/i);
+  });
+
   it("preserves the brief and offers retry on a retryable failure", async () => {
     installFetch([
       { status: 200, json: { nonce: NONCE } },

@@ -25,6 +25,9 @@ const FIXED_DISCLAIMER = "Proposal only; not accepted into token authority.";
 const POLICY_VERSION = "c3-model-proposal-v1";
 const RESPONSE_SCOPED_EVIDENCE_ID_RE = /\bevidence-[0-9]+\b/;
 const SOURCE_PRIVATE_ID_RE = /\bsource-private-[A-Za-z0-9_-]+\b/;
+const GENERIC_URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/\S+/i;
+const UNIX_PATH_RE = /(^|[\s(])(?:\/|\.{1,2}\/|~\/)[^\s)]+/;
+const WINDOWS_PATH_RE = /(^|[\s(])[A-Za-z]:\\[^\s)]+/;
 
 export interface CreateUiSpecModelInput {
   request: CreateUiSpecRequest;
@@ -87,6 +90,10 @@ export async function createUiSpecModel(
   const parameters = parametersParsed.data;
   const request = requestParsed.data;
   const sanitizedEvidence = evidenceParsed.data;
+
+  if (containsUnsafeCallerText(request)) {
+    return fallback("proposal-rejected");
+  }
 
   const prompt = buildPrompt(request, sanitizedEvidence);
   if (!isPromptSafe(prompt, endpoint)) {
@@ -244,6 +251,23 @@ function isPromptSafe(prompt: string, endpoint: PinnedModelEndpoint): boolean {
   if (prompt.includes(endpoint.apiKey)) return false;
   if (prompt.includes(endpoint.baseUrl)) return false;
   return true;
+}
+
+function containsUnsafeCallerText(value: unknown): boolean {
+  if (typeof value === "string") {
+    return containsPrivateMarker(value) || looksLikeGenericUrlOrPath(value);
+  }
+  if (Array.isArray(value)) return value.some(containsUnsafeCallerText);
+  if (value !== null && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some(containsUnsafeCallerText);
+  }
+  return false;
+}
+
+function looksLikeGenericUrlOrPath(value: string): boolean {
+  return GENERIC_URL_RE.test(value)
+    || UNIX_PATH_RE.test(value)
+    || WINDOWS_PATH_RE.test(value);
 }
 
 function containsPrivateMarkerDeep(value: unknown): boolean {

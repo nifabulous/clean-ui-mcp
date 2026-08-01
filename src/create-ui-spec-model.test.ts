@@ -145,6 +145,34 @@ describe("createUiSpecModel prompt boundary", () => {
     });
     expect(runtime.call).not.toHaveBeenCalled();
   });
+
+  it("rejects caller-controlled generic urls and path-like text before the provider call", async () => {
+    const runtime = buildRuntime();
+    const input = buildInput({
+      request: {
+        ...buildInput().request,
+        productContext: "Review the reference at https://notes.example/internal before drafting the workspace.",
+        implementationFramework: "Load tokens from /Users/demo/design-system/tokens.json",
+        designSystem: {
+          status: "identified",
+          library: "file://shared/design-system.json",
+          registry: "registry path C:\\design\\registry",
+        },
+        constraints: [
+          "Mirror the spacing from https://assets.example/spacing-guide.",
+          "Preserve the existing config at ../private/layout.md.",
+        ],
+      },
+    });
+
+    const result = await createUiSpecModel(input, runtime);
+
+    expect(result).toEqual({
+      kind: "fallback",
+      execution: { state: "proposal-rejected" },
+    });
+    expect(runtime.call).not.toHaveBeenCalled();
+  });
 });
 
 describe("createUiSpecModel response policy", () => {

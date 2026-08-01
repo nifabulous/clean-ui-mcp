@@ -728,7 +728,7 @@ function assembleSpec(
 
   // Acceptance criteria: the recipe's single manual criterion.
   const criteria = RECIPE.acceptanceCriteria;
-  const acceptanceCriteria: UiSpecT["acceptanceCriteria"] = criteria.map((c) => ({
+  const recipeCriteria: UiSpecT["acceptanceCriteria"] = criteria.map((c) => ({
     id: c.id,
     subject: c.subject,
     assertion: c.assertion as UiSpecT["acceptanceCriteria"][number]["assertion"],
@@ -738,6 +738,32 @@ function assembleSpec(
     evidenceIds: [...c.evidenceIds],
     manualSteps: [...(c.manualSteps ?? [])],
   }));
+
+  // Caller-supplied constraints are FACTS THE CALLER STATED, not invented judgment,
+  // so echoing them as checkable criteria is inside the honesty invariant. `manual`
+  // because nothing here can verify them; no evidenceIds because no evidence grounds
+  // a caller assertion; `should` because the caller stated no priority and there is
+  // no "unspecified" member of AcceptancePriority. The constraint text is the
+  // `subject` so the design-handoff renderer's "<subject> <assertion> →
+  // <expectedOutcome>" sentence parses (src/design-handoff.ts:403-406).
+  //
+  // COVERAGE NOTE: `assemblyRulesSha256` hashes the recipe FILE, and
+  // RECIPE.acceptanceCriteria holds one entry while an artifact may now carry up
+  // to 13. Nothing breaks — that hash never covered the produced output — but
+  // `spec.acceptanceCriteria` is no longer fully derivable from the frozen rules.
+  const callerCriteria: UiSpecT["acceptanceCriteria"] = request.constraints.map((text, i) => ({
+    id: `caller-constraint-${i + 1}`,
+    subject: text,
+    assertion: "exists" as const,
+    expectedOutcome: `The delivered UI satisfies this caller-stated constraint: ${text}`,
+    verifier: "manual" as const,
+    priority: "should" as const,
+    evidenceIds: [],
+    manualSteps: [`Confirm by inspection that the UI satisfies: ${text}`],
+  }));
+
+  // Appended, never prepended: acceptanceCriteria[0] stays the recipe criterion.
+  const acceptanceCriteria: UiSpecT["acceptanceCriteria"] = [...recipeCriteria, ...callerCriteria];
 
   // ----- Envelope-only fields: context, provenance, authorityLanes, tokens -----
   const spec: Record<string, unknown> = {
@@ -750,6 +776,14 @@ function assembleSpec(
         : {}),
       ...(request.designSystem !== undefined ? { designSystem: request.designSystem } : {}),
       constraints: request.constraints,
+      // Caller-supplied design intent is RECORDED here and nowhere else.
+      // `spec.context` is the annotated caller-supplied lane, it is what
+      // design-handoff renders from, and it is what buildSemanticSpecInput
+      // hashes — so recording it here is simultaneously the visible proof the
+      // intent was honored and the reason two intents produce two artifactIds.
+      // Tokens stay null: intent is not a token decision.
+      ...(request.colorIntent !== undefined ? { colorIntent: request.colorIntent } : {}),
+      ...(request.typeIntent !== undefined ? { typeIntent: request.typeIntent } : {}),
     },
     designDirection: specFields.designDirection,
     rejectedDefaults: specFields.rejectedDefaults,

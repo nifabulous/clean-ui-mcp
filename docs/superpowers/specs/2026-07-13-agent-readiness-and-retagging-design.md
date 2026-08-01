@@ -403,10 +403,12 @@ Workflow routing and next-tool suggestions belong to the skill layer, not MCP re
 | `designSystem` | `{ status: "none"\|"identified", registry?, library? }` | optional | Design-system identity; "identified" requires registry or library |
 | `constraints` | string[] | optional | max 12 items, each max 500 chars; explicit project constraints |
 | `motionIntents` | structured motion-intent[] | optional | max 8 intents; default `[]`; each requires `id`, `trigger`, `properties`, `durationToken`, `easingToken`, `interruptible`, `reducedMotion` |
+| `colorIntent` | `{ accentPreference?, mood?, contrastFloor? }` | optional | strict object; `accentPreference`/`mood` trim, min 1, max 120 chars; `contrastFloor` enum `AA`/`AAA`. Caller-supplied intent, **recorded** in `spec.context.colorIntent`, never materialized into `colorTokens` |
+| `typeIntent` | `{ voice?, density? }` | optional | strict object; `voice` trim, min 1, max 120 chars; `density` enum `compact`/`regular`/`spacious`. Caller-supplied intent, **recorded** in `spec.context.typeIntent`, never materialized into `typographyTokens` |
 
 **Output sections (each is a typed schema, not `z.unknown()`):**
 
-- `specVersion: "1.0"` and `context` (productContext, platform, framework, designSystem)
+- `specVersion: "1.0"` and `context` (productContext, platform, framework, designSystem, constraints, colorIntent, typeIntent)
 - `designDirection` and `rejectedDefaults`
 - `layoutRegions` (typed) and `responsiveBehavior`
 - `componentInventory` (typed)
@@ -553,7 +555,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 
 | Aspect | Contract |
 |---|---|
-| Input | productContext, referenceIds, default [], platform?, implementationFramework?, designSystem?, constraints, default [], target?, motionIntents, default [], outputFormat, default "markdown" |
+| Input | productContext, referenceIds, default [], platform?, implementationFramework?, designSystem?, constraints, default [], target?, motionIntents, default [], colorIntent?, typeIntent?, outputFormat, default "markdown" |
 | Success data | specVersion, context, designDirection, rejectedDefaults, layoutRegions, responsiveBehavior, componentInventory, colorTokens, colorTokenAuthority, typographyTokens, typographyTokenAuthority, interactions, motionGuidance, accessibilityConstraints, contentVoiceGuidance, techniques, antiPatterns, frameworkNotes, unavailableDecisions, acceptanceCriteria, citedReferences, citedDecisions, authorityLanes, provenance — see §5.4 — UiSpec with layoutRegions, colorTokens, typographyTokens, acceptanceCriteria (verifiers: axe, playwright, static-analysis, manual), citedReferences, citedDecisions, authorityLanes, provenance |
 | Empty | n/a — synthesis produces one spec artifact or errors |
 | Partial | sparseCoverage / insufficientCorpusEvidence / motionEvidenceUnavailable typed warnings; zero automatic matches are reported as structured-fallback/metadata with fallbackReason "no-results"; null tokens require editorial authority + unavailableDecision |

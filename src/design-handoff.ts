@@ -439,6 +439,28 @@ function renderContextSection(spec: DesignHandoffT["spec"]): string[] {
   if (spec.context.constraints.length > 0) {
     lines.push(`- Constraints: ${spec.context.constraints.join("; ")}`);
   }
+  // Caller-supplied design intent, labelled as caller-supplied. It is recorded,
+  // not honored as a token decision — colorTokens/typographyTokens stay null,
+  // so the label must not read as though a decision was made from it.
+  if (spec.context.colorIntent) {
+    const ci = spec.context.colorIntent;
+    const parts: string[] = [];
+    if (ci.accentPreference) parts.push(`accent preference: ${ci.accentPreference}`);
+    if (ci.mood) parts.push(`mood: ${ci.mood}`);
+    if (ci.contrastFloor) parts.push(`contrast floor: ${ci.contrastFloor}`);
+    if (parts.length > 0) {
+      lines.push(`- Colour intent (caller-supplied, not a token decision): ${parts.join("; ")}`);
+    }
+  }
+  if (spec.context.typeIntent) {
+    const ti = spec.context.typeIntent;
+    const parts: string[] = [];
+    if (ti.voice) parts.push(`voice: ${ti.voice}`);
+    if (ti.density) parts.push(`density: ${ti.density}`);
+    if (parts.length > 0) {
+      lines.push(`- Typography intent (caller-supplied, not a token decision): ${parts.join("; ")}`);
+    }
+  }
   if (spec.frameworkNotes) {
     lines.push(`- Framework notes: ${spec.frameworkNotes}`);
   }

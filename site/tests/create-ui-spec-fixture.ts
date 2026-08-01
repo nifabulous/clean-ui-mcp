@@ -102,11 +102,34 @@ export interface ArtifactFixture {
   readonly envelope: Record<string, unknown>;
 }
 
+/**
+ * The optional request fields a fixture may carry beyond the brief. These are
+ * NOT re-declared bounds — they are forwarded verbatim into the real adapter,
+ * so an out-of-bounds value here produces a real 400 and this module throws.
+ * The authoritative bounds live in `CreateUiSpecRequestSchema`.
+ */
+export interface FixtureRequestExtras {
+  readonly constraints?: readonly string[];
+  readonly colorIntent?: {
+    readonly accentPreference?: string;
+    readonly mood?: string;
+    readonly contrastFloor?: "AA" | "AAA";
+  };
+  readonly typeIntent?: {
+    readonly voice?: string;
+    readonly density?: "compact" | "regular" | "spacious";
+  };
+}
+
 async function produce(
   productContext: string,
   ranked: readonly CorpusEntryT[],
+  extras: FixtureRequestExtras = {},
 ): Promise<ArtifactFixture> {
-  const result = await handleCreateUiSpecHttp({ productContext }, makeReader(ranked));
+  const result = await handleCreateUiSpecHttp(
+    { productContext, ...extras },
+    makeReader(ranked),
+  );
   if (result.status !== 200) {
     throw new Error(`fixture generation failed with status ${result.status}`);
   }
@@ -129,4 +152,23 @@ export function keywordMatchedArtifact(productContext: string): Promise<Artifact
  */
 export function fallbackArtifact(productContext: string): Promise<ArtifactFixture> {
   return produce(productContext, []);
+}
+
+/**
+ * A keyword-matched artifact carrying caller constraints and structured design
+ * intent — the shape the site's intent controls produce.
+ *
+ * This exists because the site cannot assert "the intent I sent came back
+ * honored" against a hand-written body: the bytes have to come from the real
+ * producer, whose `spec.context.colorIntent` / `spec.context.typeIntent` and
+ * `caller-constraint-*` acceptance criteria are the ONLY user-visible proof the
+ * intent was recorded. Constraints and intent both feed `semanticSpecSha256`, so
+ * a fixture built this way also carries a genuinely different artifact identity
+ * from the plain-brief fixtures above.
+ */
+export function designIntentArtifact(
+  productContext: string,
+  extras: FixtureRequestExtras,
+): Promise<ArtifactFixture> {
+  return produce(productContext, [seededEntry()], extras);
 }

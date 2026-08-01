@@ -1106,15 +1106,12 @@ describe("parseDesignArtifactEnvelope", () => {
     // Volatile: carries the timestamp, so a mismatch across runs proves nothing.
     expect(late.json).not.toBe(early.json);
 
-    // And the spec hash moves for the same reason — the timestamp is IN the spec.
-    const specHashAt = (generatedAt: string) =>
-      sha256Hex(
-        Buffer.from(
-          canonicalJsonStringify({ ...spec, provenance: { ...spec.provenance, generatedAt } }),
-          "utf-8",
-        ),
-      );
-    expect(specHashAt("2030-12-31T23:59:59.000Z")).not.toBe(specHashAt("2026-08-01T00:00:00.000Z"));
+    // NOTE: `specSha256` is deliberately NOT asserted here. Hashing a locally
+    // reconstructed spec with a timestamp this test injected itself would prove
+    // only that sha256 is a function — if the producer ever stopped putting
+    // `generatedAt` in `spec`, such an assertion would still pass while the UI
+    // copy became false. The spec digest is covered end-to-end from two real
+    // producer envelopes in create-ui-spec.test.ts.
   });
 
   it("rejects a private marker in the serialized envelope", () => {

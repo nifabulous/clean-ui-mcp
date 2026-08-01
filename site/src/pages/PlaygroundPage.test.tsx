@@ -617,7 +617,7 @@ describe("PlaygroundPage — downloads reuse the returned bytes", () => {
     expect(note).toHaveTextContent(/identical semantic content/i);
   });
 
-  it("makes no same-input reproducibility promise, in any phrasing", async () => {
+  it("states the integrity note EXACTLY, so no reproducibility promise can creep back in", async () => {
     // The panel must not tell the operator that re-running a brief reproduces a
     // hash. It does not, and not only because of a future model path: retrieval
     // reads a MUTABLE CORPUS that is not one of the operator's inputs, so the
@@ -625,23 +625,25 @@ describe("PlaygroundPage — downloads reuse the returned bytes", () => {
     // a different semantic hash with nothing the operator controls having
     // changed.
     //
-    // Banning one dead phrase would not hold this: any rewrite could restate the
-    // promise in different words and still pass. So ban the CLAIM, not the
-    // wording.
+    // WHY EXACT TEXT AND NOT A PATTERN. Two weaker guards were tried and both
+    // leak. Banning the one dead phrase `same inputs … identical` lets any
+    // reword through. Banning a LIST of phrasings (`regenerate`, `reproducib`,
+    // `run it again`, …) is just a longer list with the same hole — "identical
+    // briefs always yield the same semantic hash" passes every one of them while
+    // making exactly the forbidden promise. There is no regex for "asserts a
+    // false claim", so this pins the whole sentence: any edit to the most
+    // load-bearing honesty copy in the app has to come here and be re-argued.
     await generateSuccessfully();
     const region = screen.getByRole("region", { name: /artifact integrity/i });
-    const text = within(region).getByText(/semantic hash covers/i).textContent ?? "";
+    const note = within(region).getByText(/semantic hash covers/i);
 
-    for (const promise of [
-      /same inputs?/i,
-      /same brief/i,
-      /regenerate/i,
-      /re-?generate/i,
-      /reproducib/i,
-      /run it again/i,
-    ]) {
-      expect(text, `the integrity note must not promise ${promise}`).not.toMatch(promise);
-    }
+    expect((note.textContent ?? "").replace(/\s+/g, " ").trim()).toBe(
+      "The semantic hash covers the spec's content with generation time normalized: " +
+        "identical semantic content produces the same hash. Of the byte digests below, " +
+        "DESIGN.json and the spec hash include generation time, so they change between " +
+        "runs even when the design does not; the DESIGN.md hash does not carry a " +
+        "timestamp, so it stays stable while the rendered document does.",
+    );
   });
 
   it("names which byte digests carry generation time and which do not", async () => {

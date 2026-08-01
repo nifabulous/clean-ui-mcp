@@ -1475,3 +1475,42 @@ describe("create-ui-spec producer — structured design intent reaches spec.cont
     expect(Object.keys(res.envelope.spec.context)).not.toContain("typeIntent");
   });
 });
+
+describe("create-ui-spec producer — which digests move with generation time", () => {
+  // The playground renders four hashes side by side and its integrity note tells
+  // the operator which of them are comparable across two runs. That claim is
+  // about the PRODUCER's output, so it has to be pinned against the producer —
+  // a renderer-level test cannot see `specSha256`, and a test that injects its
+  // own timestamp into a reconstructed spec would pass even if the producer
+  // stopped embedding `generatedAt` at all.
+  const digestsAt = async (iso: string) => {
+    const res = await createUiSpecForAdapter(
+      validInput({ productContext: "A settings screen for two-factor setup" }),
+      {
+        reader: makeReader([], []),
+        resolveReferenceToken: () => undefined,
+        now: () => new Date(iso),
+      },
+    );
+    return res.envelope;
+  };
+
+  it("moves specSha256 and designJsonSha256 with the clock, but not the semantic hash, artifactId, or designMarkdownSha256", async () => {
+    const early = await digestsAt("2026-08-01T00:00:00.000Z");
+    const late = await digestsAt("2030-12-31T23:59:59.000Z");
+
+    // Stable across runs — safe for the operator to compare.
+    expect(late.semanticSpecSha256).toBe(early.semanticSpecSha256);
+    expect(late.artifactId).toBe(early.artifactId);
+    expect(late.designMarkdownSha256).toBe(early.designMarkdownSha256);
+
+    // Timestamp-bearing — a mismatch across runs proves nothing about the design.
+    expect(late.specSha256).not.toBe(early.specSha256);
+    expect(late.designJsonSha256).not.toBe(early.designJsonSha256);
+
+    // And the reason, so a future reader does not have to infer it: the rendered
+    // markdown carries no timestamp while the JSON does.
+    expect(early.designMarkdown).not.toContain("2026-08-01T00:00:00");
+    expect(early.designJson).toContain("2026-08-01T00:00:00");
+  });
+});

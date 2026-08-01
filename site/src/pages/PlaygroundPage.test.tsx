@@ -630,6 +630,14 @@ describe("PlaygroundPage — copying the handoff never publishes it", () => {
 });
 
 describe("PlaygroundPage — partial / fallback success", () => {
+  it("discloses the deterministic producer even when retrieval succeeded", async () => {
+    await generateSuccessfully(envelopeFixture({ producerVersion: "c3-fallback-v1" }));
+
+    const status = screen.getByRole("status").textContent ?? "";
+    expect(status).toMatch(/no model attached/i);
+    expect(status).toMatch(/declined by design/i);
+  });
+
   it("names the fallback honestly and still offers both downloads", async () => {
     await generateSuccessfully(fallbackEnvelope());
 

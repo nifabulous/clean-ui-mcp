@@ -161,28 +161,44 @@ function statusLabel(lifecycle: Lifecycle): string {
   return failureLabel(lifecycle.failure);
 }
 
+/** Producers that consult no model. Their unavailable fields are a rule of the
+ * producer, not a consequence of a weak brief or an unsuccessful retrieval. */
+const DETERMINISTIC_PRODUCERS = new Set(["c3-fallback-v1"]);
+
 /**
- * Success copy, three-way and deliberately not collapsed.
+ * Success copy keeps three separate claims visible:
  *
- * "Used the deterministic fallback" and "carries warnings" are DIFFERENT claims.
- * The producer emits `motionEvidenceUnavailable` on essentially every run that
- * supplies no motion intents, while `fallbackUsed` stays false whenever keyword
- * retrieval matched — so folding warnings into the fallback wording would
- * mislabel almost every genuine keyword-matched artifact as a fallback. Equally,
- * an artifact carrying warnings is not a "complete" handoff.
+ * - a producer can be deterministic even when retrieval found observations;
+ * - retrieval can fall back after finding nothing;
+ * - an artifact can carry warnings without either of those being true.
  */
 function successLabel(artifact: SafeArtifact): string {
-  if (artifact.evidence.fallbackUsed) {
-    return "Generated a design handoff using the deterministic fallback — automatic retrieval matched nothing. This is not a fully model-generated artifact; the unavailable fields are listed below.";
-  }
-  // Warnings the client could not MAP are still warnings. Counting only the mapped
-  // ones would announce "complete" for an artifact the producer flagged as
-  // degraded, the moment the producer adds a code this client does not know.
+  // Warnings the client could not map are still warnings. Counting only the
+  // mapped ones would announce "complete" for a producer-degraded artifact the
+  // moment it adds a warning code this client does not know.
   const count = artifact.warnings.length + artifact.droppedWarningCount;
-  if (count > 0) {
-    return `Generated a design handoff with ${count} ${count === 1 ? "warning" : "warnings"}. Some fields were unavailable — see below.`;
+  const parts: string[] = [
+    count > 0
+      ? `Generated a design handoff with ${count} ${count === 1 ? "warning" : "warnings"}.`
+      : "Generated a complete design handoff.",
+  ];
+
+  // Do not interpolate producerVersion into this copy: the production id
+  // "c3-fallback-v1" contains "fallback", which would mislabel a retrieval
+  // success as a fallback run in the warning-sensitive UI.
+  if (DETERMINISTIC_PRODUCERS.has(artifact.producerVersion)) {
+    parts.push(
+      "This is a deterministic scaffold with no model attached. Color, typography and motion are declined by design, not missing because of your brief.",
+    );
   }
-  return "Generated a complete design handoff.";
+
+  if (artifact.evidence.fallbackUsed) {
+    parts.push(
+      "Automatic retrieval matched nothing, so this used the deterministic fallback and no corpus evidence grounds it.",
+    );
+  }
+
+  return parts.join(" ");
 }
 
 const PHASE_LABELS: Readonly<Record<LifecyclePhase, string>> = {

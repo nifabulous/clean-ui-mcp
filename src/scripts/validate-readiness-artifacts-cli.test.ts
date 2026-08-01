@@ -185,7 +185,7 @@ describe("validate-readiness-artifacts CLI — pins-inert notice and dist-layout
     // C2 — see the comment there for the full history.
     expect(parsed.ok).toBe(true);
     expect(parsed.checkpointStatus).toEqual({
-      C0: "closed", C1: "closed", C2: "closed", C3: "open", C4: "open", C5: "open",
+      C0: "closed", C1: "closed", C2: "closed", C3: "closed", C4: "open", C5: "open",
     });
     expect(
       parsed.issues.filter((i) => i.code === "ledger-supersession-not-later"),
@@ -321,7 +321,7 @@ describe("validate-readiness-artifacts CLI — pins-inert notice and dist-layout
       // and C2 now closes too — v7's two corrected gold/QA approvals pass the
       // temporal check the retracted v2s failed.
       expect(trackedResult.checkpointStatus).toEqual({
-        C0: "closed", C1: "closed", C2: "closed", C3: "open", C4: "open", C5: "open",
+        C0: "closed", C1: "closed", C2: "closed", C3: "closed", C4: "open", C5: "open",
       });
       // The copy's checkpoint map is UNCHANGED by v7: `index-path-mismatch` is an
       // issue the closure gate cannot attribute to any single checkpoint, so it

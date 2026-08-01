@@ -69,6 +69,7 @@ describe("C2 governance scope boundary", () => {
       "checkpoint-approvals-v5.json",
       "checkpoint-approvals-v6.json",
       "checkpoint-approvals-v7.json",
+      "checkpoint-approvals-v8.json",
     ]);
     const ledger: { approvals: C2Approval[] } = JSON.parse(
       readFileSync(resolve(governanceRoot, "checkpoint-approvals-v5.json"), "utf8"),

@@ -88,6 +88,7 @@ import {
   sha256Hex,
 } from "./readiness/contracts.js";
 import { PatternType } from "./schema.js";
+import { ModelExecutionSchema } from "./create-ui-spec-model-contracts.js";
 
 // ===========================================================================
 // 1. sha256Canonical — canonical-JSON SHA-256 (reuses the two helpers)
@@ -629,12 +630,23 @@ export const DesignArtifactEnvelopeSchema = z
     designMarkdownSha256: Sha256,
     designJsonSha256: Sha256,
     semanticSpecSha256: Sha256,
+    modelExecution: ModelExecutionSchema.optional(),
+    modelExecutionSha256: Sha256.optional(),
     publicEvidenceIds: z.array(EvidenceIdSchema).min(1),
     retrieval: RetrievalStateSchema,
     warnings: z.array(WarningSchema),
   })
   .strict()
   .superRefine((val, ctx) => {
+    // Model execution metadata is optional for backward-compatible deterministic
+    // artifacts, but when present it is always paired with its own digest.
+    if ((val.modelExecution === undefined) !== (val.modelExecutionSha256 === undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "modelExecution and modelExecutionSha256 must be present together",
+        path: [val.modelExecution === undefined ? "modelExecution" : "modelExecutionSha256"],
+      });
+    }
     // publicEvidenceIds must be unique.
     if (new Set(val.publicEvidenceIds).size !== val.publicEvidenceIds.length) {
       ctx.addIssue({
@@ -1034,7 +1046,8 @@ export function parseCreateUiSpecCandidate(
  *  2. reconstruct a DesignHandoffT from the parsed spec + handoff target/
  *     motionIntents + the envelope's generatedAt via parseDesignHandoff;
  *  3. recompute specSha256, semanticSpecSha256 (via buildSemanticSpecInput),
- *     and the two rendering hashes from re-rendered markdown/json;
+ *     the optional modelExecutionSha256, and the two rendering hashes from
+ *     re-rendered markdown/json;
  *  4. demand exact equality with the stored hashes AND exact byte-equality of
  *     the re-rendered renderings with the stored fields;
  *  5. re-check publicEvidenceIds uniqueness and private markers (defense in
@@ -1064,6 +1077,9 @@ export function parseDesignArtifactEnvelope(raw: unknown): DesignArtifactEnvelop
   // Recompute hashes.
   const specSha = sha256Hex(Buffer.from(canonicalJsonStringify(env.spec), "utf-8"));
   const semanticSha = sha256Canonical(buildSemanticSpecInput(env.spec));
+  const modelExecutionSha = env.modelExecution === undefined
+    ? undefined
+    : sha256Canonical(env.modelExecution);
   const markdownSha = sha256Hex(Buffer.from(renderedMarkdown, "utf-8"));
   const jsonSha = sha256Hex(Buffer.from(renderedJson, "utf-8"));
 
@@ -1073,6 +1089,9 @@ export function parseDesignArtifactEnvelope(raw: unknown): DesignArtifactEnvelop
   }
   if (env.semanticSpecSha256 !== semanticSha) {
     throw new Error("design artifact envelope integrity check failed: semanticSpecSha256 mismatch");
+  }
+  if (env.modelExecutionSha256 !== modelExecutionSha) {
+    throw new Error("design artifact envelope integrity check failed: modelExecutionSha256 mismatch");
   }
   if (env.designMarkdownSha256 !== markdownSha) {
     throw new Error("design artifact envelope integrity check failed: designMarkdownSha256 mismatch");

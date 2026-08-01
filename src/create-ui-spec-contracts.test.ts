@@ -948,6 +948,69 @@ function buildValidEnvelope(targetId: keyof typeof CANONICAL_WEB_TARGET_PROFILES
   };
 }
 
+function addProposalAndRefreshIdentity(
+  envelope: Record<string, unknown>,
+  designDirection: string,
+): void {
+  const spec = envelope.spec as Record<string, unknown>;
+  spec.modelProposal = {
+    status: "proposal-only",
+    disclaimer: "Proposal only; not accepted into token authority.",
+    designDirection,
+    colorTokens: {
+      primary: "#2563eb", surface: "#ffffff", ink: "#111827",
+      muted: "#6b7280", accent: "#f59e0b",
+    },
+    typographyTokens: { heading: "Inter", body: "Inter", mono: "JetBrains Mono" },
+    motionNotes: ["Use brief opacity transitions."],
+    contentVoiceGuidance: "Direct and calm.",
+  };
+  const parsedSpec = UiSpec.parse(spec) as import("./tool-contracts.js").UiSpecT;
+  const semanticSpecSha256 = sha256Canonical(buildSemanticSpecInput(parsedSpec));
+  const handoffInput = envelope.handoff as {
+    target: keyof typeof CANONICAL_WEB_TARGET_PROFILES;
+    motionIntents: [];
+  };
+  const handoff = parseDesignHandoff({
+    spec: parsedSpec,
+    target: CANONICAL_WEB_TARGET_PROFILES[handoffInput.target],
+    motionIntents: handoffInput.motionIntents,
+    generatedAt: envelope.generatedAt as string,
+  });
+  const designMarkdown = renderDesignHandoffMarkdown(handoff);
+  const designJson = renderDesignHandoffJson(handoff);
+  envelope.spec = parsedSpec;
+  envelope.specSha256 = sha256Canonical(parsedSpec);
+  envelope.semanticSpecSha256 = semanticSpecSha256;
+  envelope.designMarkdown = designMarkdown;
+  envelope.designJson = designJson;
+  envelope.designMarkdownSha256 = sha256Hex(Buffer.from(designMarkdown, "utf-8"));
+  envelope.designJsonSha256 = sha256Hex(Buffer.from(designJson, "utf-8"));
+  envelope.artifactId = `uispec-${sha256Canonical(buildArtifactIdentityInput({
+    producerVersion: envelope.producerVersion as string,
+    assemblyRulesSha256: envelope.assemblyRulesSha256 as string,
+    semanticSpecSha256,
+    target: handoffInput.target,
+    motionIntents: handoffInput.motionIntents,
+  }))}`;
+}
+
+function addModelExecution(
+  envelope: Record<string, unknown>,
+  model = "gpt-5-mini",
+): void {
+  const modelExecution = {
+    state: "succeeded",
+    provider: "openai",
+    model,
+    promptSha256: "a".repeat(64),
+    parametersSha256: "b".repeat(64),
+    reproducibility: "conditional",
+  };
+  envelope.modelExecution = modelExecution;
+  envelope.modelExecutionSha256 = sha256Canonical(modelExecution);
+}
+
 describe("DesignArtifactEnvelopeSchema", () => {
   it("parses a valid envelope", () => {
     expect(DesignArtifactEnvelopeSchema.safeParse(buildValidEnvelope()).success).toBe(true);
@@ -972,6 +1035,24 @@ describe("DesignArtifactEnvelopeSchema", () => {
     env.designMarkdownSha256 = sha256Hex(Buffer.from(env.designMarkdown as string, "utf-8"));
     expect(DesignArtifactEnvelopeSchema.safeParse(env).success).toBe(false);
   });
+
+  it("accepts model execution metadata only with its matching hash", () => {
+    const env = buildValidEnvelope();
+    addModelExecution(env);
+    expect(DesignArtifactEnvelopeSchema.safeParse(env).success).toBe(true);
+  });
+
+  it("rejects either missing member of the model execution pair", () => {
+    const missingHash = buildValidEnvelope();
+    addModelExecution(missingHash);
+    delete missingHash.modelExecutionSha256;
+    expect(DesignArtifactEnvelopeSchema.safeParse(missingHash).success).toBe(false);
+
+    const missingExecution = buildValidEnvelope();
+    addModelExecution(missingExecution);
+    delete missingExecution.modelExecution;
+    expect(DesignArtifactEnvelopeSchema.safeParse(missingExecution).success).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -989,6 +1070,35 @@ describe("parseDesignArtifactEnvelope", () => {
     expect(parsed.artifactId.startsWith("uispec-")).toBe(true);
     expect(parsed.assemblyRulesSha256).toBe(RECIPE_SHA256);
     expect(parsed.spec.specVersion).toBe("1.0");
+  });
+
+  it("keeps suggested tokens inside the proposal while accepted tokens remain unavailable", () => {
+    const env = buildValidEnvelope();
+    const spec = env.spec as Record<string, unknown>;
+    spec.colorTokens = null;
+    spec.colorTokenAuthority = "editorial";
+    spec.typographyTokens = null;
+    spec.typographyTokenAuthority = "editorial";
+    spec.unavailableDecisions = [
+      { field: "colorTokens", reason: "no accepted color authority" },
+      { field: "typographyTokens", reason: "no accepted typography authority" },
+      { field: "motion", reason: "no DOM evidence" },
+    ];
+    addProposalAndRefreshIdentity(env, "Use compact, task-focused composition.");
+
+    const parsed = parseDesignArtifactEnvelope(env);
+    expect(parsed.spec.modelProposal?.status).toBe("proposal-only");
+    expect(parsed.spec.colorTokens).toBeNull();
+    expect(parsed.spec.colorTokenAuthority).toBe("editorial");
+    expect(parsed.spec.unavailableDecisions).toContainEqual(
+      expect.objectContaining({ field: "colorTokens" }),
+    );
+  });
+
+  it("rejects a private marker carried in proposal text", () => {
+    const env = buildValidEnvelope();
+    addProposalAndRefreshIdentity(env, "Use private-corpus-id as the visual direction.");
+    expect(() => parseDesignArtifactEnvelope(env)).toThrow(/schema validation/);
   });
 
   it("rejects a tampered artifactId", () => {
@@ -1075,6 +1185,39 @@ describe("parseDesignArtifactEnvelope", () => {
     envB.designJsonSha256 = sha256Hex(Buffer.from(js, "utf-8"));
     expect(envB.semanticSpecSha256).toBe(envA.semanticSpecSha256);
     expect(() => parseDesignArtifactEnvelope(envB)).not.toThrow();
+  });
+
+  it("proposal content changes semantic identity and artifact identity", () => {
+    const envA = buildValidEnvelope();
+    const envB = buildValidEnvelope();
+    addProposalAndRefreshIdentity(envA, "Use compact, task-focused composition.");
+    addProposalAndRefreshIdentity(envB, "Use spacious, review-focused composition.");
+
+    expect(() => parseDesignArtifactEnvelope(envA)).not.toThrow();
+    expect(() => parseDesignArtifactEnvelope(envB)).not.toThrow();
+    expect(envB.semanticSpecSha256).not.toBe(envA.semanticSpecSha256);
+    expect(envB.artifactId).not.toBe(envA.artifactId);
+  });
+
+  it("execution metadata changes only its own hash", () => {
+    const envA = buildValidEnvelope();
+    const envB = buildValidEnvelope();
+    addModelExecution(envA, "gpt-5-mini");
+    addModelExecution(envB, "gpt-5.1-mini");
+
+    expect(() => parseDesignArtifactEnvelope(envA)).not.toThrow();
+    expect(() => parseDesignArtifactEnvelope(envB)).not.toThrow();
+    expect(envB.modelExecutionSha256).not.toBe(envA.modelExecutionSha256);
+    expect(envB.semanticSpecSha256).toBe(envA.semanticSpecSha256);
+    expect(envB.artifactId).toBe(envA.artifactId);
+    expect(envB.specSha256).toBe(envA.specSha256);
+  });
+
+  it("rejects a model execution hash that does not bind the stored metadata", () => {
+    const env = buildValidEnvelope();
+    addModelExecution(env);
+    env.modelExecutionSha256 = "f".repeat(64);
+    expect(() => parseDesignArtifactEnvelope(env)).toThrow(/modelExecutionSha256/);
   });
 
   it("moves the DESIGN.json and spec hashes with generation time, but NOT the DESIGN.md hash", () => {

@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
   TOOL_DESCRIPTORS, TOOL_CATALOG, ToolResultSchemas, ToolInputSchemas,
-  parseToolResult, RetrievalState, Evidence, UiSpec, CreateUiSpecInput,
+  parseToolResult, RetrievalState, Evidence, UiSpec, ModelProposalSchema, CreateUiSpecInput,
   ALLOWED_RETRIEVAL_STATES, CATALOG_DIGEST, LEGACY_TO_BETA_MAP,
-  REMOVED_TOOL_NAMES, findUnsafeCreateUiSpecLeaves,
+  REMOVED_TOOL_NAMES, CREATE_UI_SPEC_FREE_TEXT_LEAVES, findUnsafeCreateUiSpecLeaves,
   findCreateUiSpecCitationInconsistencies,
 } from "./tool-contracts.js";
 import {
@@ -291,6 +291,121 @@ describe("UiSpec", () => {
       { field: "motion", reason: "no DOM evidence" },
     ];
     expect(UiSpec.safeParse(b).success).toBe(true);
+  });
+  it("keeps model suggestions proposal-only while accepted tokens remain unavailable", () => {
+    const b = valid();
+    b.colorTokens = null;
+    b.colorTokenAuthority = "editorial";
+    b.typographyTokens = null;
+    b.typographyTokenAuthority = "editorial";
+    b.unavailableDecisions = [
+      { field: "colorTokens", reason: "no accepted color authority" },
+      { field: "typographyTokens", reason: "no accepted typography authority" },
+      { field: "motion", reason: "no DOM evidence" },
+    ];
+    b.modelProposal = {
+      status: "proposal-only",
+      disclaimer: "Proposal only; not accepted into token authority.",
+      designDirection: "Use a focused, high-contrast workspace.",
+      colorTokens: {
+        primary: "#2563eb", surface: "#ffffff", ink: "#111827",
+        muted: "#6b7280", accent: "#f59e0b",
+      },
+      typographyTokens: { heading: "Inter", body: "Inter", mono: "JetBrains Mono" },
+      motionNotes: ["Use short opacity transitions for view changes."],
+      contentVoiceGuidance: "Direct, calm, and concise.",
+    };
+
+    const parsed = UiSpec.parse(b);
+    expect(parsed.modelProposal?.status).toBe("proposal-only");
+    expect(parsed.colorTokens).toBeNull();
+    expect(parsed.colorTokenAuthority).toBe("editorial");
+    expect(parsed.typographyTokens).toBeNull();
+    expect(parsed.typographyTokenAuthority).toBe("editorial");
+    expect(parsed.unavailableDecisions).toContainEqual(
+      expect.objectContaining({ field: "colorTokens" }),
+    );
+  });
+
+  it("rejects empty, oversized, and authority-escalating model proposals", () => {
+    const base = {
+      status: "proposal-only",
+      disclaimer: "Proposal only; not accepted into token authority.",
+      designDirection: "A focused workspace.",
+    };
+    const invalid = [
+      {},
+      { ...base, designDirection: "   " },
+      { ...base, designDirection: "x".repeat(2_001) },
+      { ...base, motionNotes: ["x".repeat(501)] },
+      { ...base, motionNotes: Array.from({ length: 9 }, () => "fade") },
+      { ...base, contentVoiceGuidance: "x".repeat(1_001) },
+      { ...base, colorTokenAuthority: "editorial" },
+      { ...base, acceptedColorTokens: { primary: "#000" } },
+      { ...base, evidenceKind: "corpus-observation" },
+      { ...base, corpusId: "corpus-private-1" },
+      { ...base, privateCorpusId: "private-corpus-entry" },
+      { ...base, unknown: true },
+    ];
+    for (const proposal of invalid) {
+      expect(ModelProposalSchema.safeParse(proposal).success).toBe(false);
+    }
+  });
+
+  it("requires the fixed proposal status and disclaimer", () => {
+    const base = {
+      status: "proposal-only",
+      disclaimer: "Proposal only; not accepted into token authority.",
+      designDirection: "A focused workspace.",
+    };
+    expect(ModelProposalSchema.safeParse(base).success).toBe(true);
+    expect(ModelProposalSchema.safeParse({ ...base, status: "accepted" }).success).toBe(false);
+    expect(ModelProposalSchema.safeParse({ ...base, disclaimer: "Approved tokens." }).success).toBe(false);
+  });
+
+  it("labels every proposal leaf as model-generated proposal content", () => {
+    const annotations = Object.entries(CREATE_UI_SPEC_FREE_TEXT_LEAVES)
+      .filter(([position]) => position.startsWith("data.modelProposal."));
+    expect(annotations.map(([position]) => position).sort()).toEqual([
+      "data.modelProposal.colorTokens.accent",
+      "data.modelProposal.colorTokens.ink",
+      "data.modelProposal.colorTokens.muted",
+      "data.modelProposal.colorTokens.primary",
+      "data.modelProposal.colorTokens.surface",
+      "data.modelProposal.contentVoiceGuidance",
+      "data.modelProposal.designDirection",
+      "data.modelProposal.disclaimer",
+      "data.modelProposal.motionNotes[]",
+      "data.modelProposal.status",
+      "data.modelProposal.typographyTokens.body",
+      "data.modelProposal.typographyTokens.heading",
+      "data.modelProposal.typographyTokens.mono",
+    ]);
+    for (const [, annotation] of annotations) {
+      expect(annotation).toMatch(/model-generated|proposal/i);
+      expect(annotation).not.toMatch(/recipe-owned/i);
+      expect(annotation).not.toMatch(/caller-supplied/i);
+    }
+  });
+
+  it("classifies every string leaf in a complete model proposal", () => {
+    const modelProposal = ModelProposalSchema.parse({
+      status: "proposal-only",
+      disclaimer: "Proposal only; not accepted into token authority.",
+      designDirection: "Use a focused workspace.",
+      colorTokens: {
+        primary: "#2563eb", surface: "#ffffff", ink: "#111827",
+        muted: "#6b7280", accent: "#f59e0b",
+      },
+      typographyTokens: { heading: "Inter", body: "Inter", mono: "JetBrains Mono" },
+      motionNotes: ["Use brief opacity transitions."],
+      contentVoiceGuidance: "Direct and calm.",
+    });
+    expect(findUnsafeCreateUiSpecLeaves({
+      data: { modelProposal },
+      referenceIds: [],
+      evidence: [],
+    })).toEqual([]);
   });
   it("manual verifier requires manualSteps", () => {
     const b = valid();

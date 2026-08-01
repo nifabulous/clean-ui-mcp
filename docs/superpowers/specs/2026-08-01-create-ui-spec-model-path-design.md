@@ -1,7 +1,9 @@
 # `create_ui_spec` Model Path Design
 
-Status: design only. This document does not add a provider call, change the C3
-recipe, or write to the corpus.
+Status: design only — this document does not add a provider call, change the C3
+recipe, or write to the corpus. Its three blocking policy decisions were settled
+on 2026-08-01 and are recorded below; implementation is unblocked on policy and
+awaits scheduling, not further approval.
 
 ## Purpose
 
@@ -11,28 +13,60 @@ operator-authored `c3-fallback-v1` recipe, but it does not pretend that a model
 was involved. A future model path may propose richer direction, tokens, and
 motion guidance, but it must preserve that honesty boundary.
 
-The model path must therefore answer four questions before implementation:
+The model path had to answer four questions before implementation. All four are
+now answered — the three policy questions by the decisions recorded below
+(settled 2026-08-01), and the endpoint question by the pinning design in this
+document:
 
-1. What is model output, and where is it classified?
-2. Which exact endpoint and model produced it?
-3. What does the integrity claim mean when a provider is nondeterministic?
-4. Where can generated history live without becoming corpus evidence?
+1. What is model output, and where is it classified? — outside the evidence
+   schema as a typed proposal for the first slice; see Current Contract Boundary.
+2. Which exact endpoint and model produced it? — an explicit
+   `PinnedModelEndpoint` record; see Endpoint Pinning.
+3. What does the integrity claim mean when a provider is nondeterministic? —
+   decision 2: the content claim and the reproducibility claim are separate.
+4. Where can generated history live without becoming corpus evidence? —
+   decision 1: a separate model-artifact store, unreachable from the corpus
+   reader.
 
-## Decisions Required Before Coding
+## Decisions — SETTLED 2026-08-01
 
-These are the decisions that block implementation. The recommended choices are
-defaults for review, not silently accepted policy.
+All three blocking decisions were taken on 2026-08-01 and are recorded here as
+policy, not as defaults awaiting review. Implementation may proceed against
+them. Reopening any of them is a deliberate act that should amend this section
+and say why.
 
-| Decision | Recommended choice | Reason |
+| Decision | Choice | Reason |
 | --- | --- | --- |
-| Saved output semantics | Store generated output in a separate model-artifact store. Never add it to `corpus/entries.json`, `corpus/decisions.json`, or the corpus reader. | Generated history is not an observation of a source. Reusing the corpus store would make a later retrieval look like evidence. |
-| Determinism claim | Keep `semanticSpecSha256` as a content claim. Add a separate reproducibility claim that is conditional on the pinned provider, endpoint, model, prompt, parameters, and seed. | Temperature 0 does not make every provider byte-identical. A model path must not promise more than the provider can guarantee. |
-| C3 anchor | Treat the existing C3 anchor as historical for this design. Do not re-anchor or edit `C3_RECIPE` as part of the model path. Re-anchor only as a separately approved release action. | Adding a model capability must not silently reopen the signed deterministic baseline. |
+| Saved output semantics | **Separate model-artifact store.** Generated output is never added to `corpus/entries.json`, `corpus/decisions.json`, or anything the corpus reader can reach. | Generated history is not an observation of a source. Reusing the corpus store would make a later retrieval look like evidence. |
+| Determinism claim | **Split the claim.** `semanticSpecSha256` stays a pure CONTENT claim — identical content, identical hash — and is never described as a reproducibility guarantee. Any reproducibility claim is separate and explicitly conditional on the pinned provider, endpoint, model, prompt, parameters, and seed. | Temperature 0 does not make every provider byte-identical. A model path must not promise more than the provider can guarantee. |
+| C3 anchor | **Historical, not reopened.** Do not re-anchor or edit `C3_RECIPE` as part of the model path. Re-anchoring is a separately approved release action with its own review. | Adding a model capability must not silently reopen the signed deterministic baseline. A signature that moves when a feature ships stops meaning "this exact thing was reviewed". |
 
-If the first choice is rejected, the safe alternative is ephemeral model output:
-the response may carry it for the current artifact, but no later retrieval or
-history feature may read it. The unsafe alternative is saving it as a
-`corpus-observation`; that option is excluded.
+### What decision 1 forecloses
+
+Ephemeral output — response-only, never persisted — was the fallback if the
+separate store were rejected. It was not: the store is chosen, so generated
+history may persist, and every persistence path must be unreachable from the
+corpus reader. Saving model output as a `corpus-observation` was excluded before
+this decision and remains excluded.
+
+Decision 1 is the only one of the three that is not cheaply reversible. Once
+generated rows exist in a store something retrieves, observed and generated
+content cannot be told apart after the fact unless they were separated at write
+time — which is exactly what this decision mandates. Enforce the separation in
+the store's type and its reader, not by convention.
+
+### Decision 2 is already partly in force
+
+The playground's artifact-integrity copy shipped in PR #81 claiming that
+regenerating with the same inputs reproduces the hash. PR #82 removed that
+claim: it over-reached even for the deterministic producer, because retrieval
+reads a mutable corpus that is not one of the caller's inputs. The UI therefore
+already states the content claim alone; decision 2 makes that split a contract
+obligation rather than a copy choice, and forbids reintroducing an unconditional
+reproducibility promise when the model path lands.
+
+`site/src/pages/PlaygroundPage.test.tsx` pins that copy as exact text, so a
+future change that tries to re-add the promise fails a test rather than shipping.
 
 ## Current Contract Boundary
 
@@ -203,9 +237,10 @@ claims separately rather than overloading the semantic hash.
 
 ## Storage And Corpus Separation
 
-The recommended store is a separate generated-artifact history keyed by the
-artifact ID. It must have its own schema and reader, and it must not be passed to
-`PrivateCorpusReader`, `PublicCorpusReader`, or any retrieval ranking path.
+Per decision 1 (settled 2026-08-01), the store is a separate generated-artifact
+history keyed by the artifact ID. It must have its own schema and reader, and it
+must not be passed to `PrivateCorpusReader`, `PublicCorpusReader`, or any
+retrieval ranking path.
 
 The store must enforce:
 
@@ -217,9 +252,11 @@ The store must enforce:
 - no read path from `create_ui_spec` until a later contract explicitly defines
   generated-history retrieval.
 
-If the decision is ephemeral output instead, the response must still carry
-bounded provenance sufficient to explain the result, but it must not imply that
-the output will be available as evidence on a later run.
+Ephemeral output was the fallback if the separate store had been rejected. It
+was not, so that branch no longer applies. Persistence is permitted — the
+obligation is that no persisted row is reachable from a corpus read path, and
+that the response never implies stored output will be available as *evidence* on
+a later run.
 
 ## Test Requirements Before Implementation
 

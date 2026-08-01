@@ -100,15 +100,21 @@ describe("callTextModelWithMetadata pinned endpoint handling", () => {
 
     expect(requests[0].headers.authorization).toBe("Bearer request-key");
     expect(requests[0].url.startsWith("https://pinned.example/")).toBe(true);
-    expect(JSON.stringify(requests[0])).not.toContain("ambient-key");
+    expect(JSON.stringify(requests[0])).not.toContain("ambient-openai-key");
+    expect(JSON.stringify(requests[0])).not.toContain("ambient-anthropic-key");
+    expect(JSON.stringify(requests[0])).not.toContain("ambient-gemini-key");
 
     expect(requests[1].headers["x-api-key"]).toBe("request-key");
     expect(requests[1].url.startsWith("https://pinned.example/")).toBe(true);
-    expect(JSON.stringify(requests[1])).not.toContain("ambient-key");
+    expect(JSON.stringify(requests[1])).not.toContain("ambient-openai-key");
+    expect(JSON.stringify(requests[1])).not.toContain("ambient-anthropic-key");
+    expect(JSON.stringify(requests[1])).not.toContain("ambient-gemini-key");
 
     expect(requests[2].headers["x-goog-api-key"]).toBe("request-key");
     expect(requests[2].url.startsWith("https://pinned.example/")).toBe(true);
-    expect(JSON.stringify(requests[2])).not.toContain("ambient-key");
+    expect(JSON.stringify(requests[2])).not.toContain("ambient-openai-key");
+    expect(JSON.stringify(requests[2])).not.toContain("ambient-anthropic-key");
+    expect(JSON.stringify(requests[2])).not.toContain("ambient-gemini-key");
   });
 
   it("keeps the current Claude default endpoint when baseUrl is undefined", async () => {
@@ -136,7 +142,6 @@ describe("callTextModelWithMetadata pinned endpoint handling", () => {
   });
 
   it("fails closed on a blank explicit Claude apiKey without sending a request", async () => {
-    delete process.env.ANTHROPIC_API_KEY;
     globalThis.fetch = vi.fn(async () => {
       throw new Error("fetch should not run");
     }) as unknown as typeof fetch;
@@ -152,6 +157,44 @@ describe("callTextModelWithMetadata pinned endpoint handling", () => {
       maxOutputTokens: 256,
       maxAttempts: 1,
     })).rejects.toThrow(/api|key|ANTHROPIC/i);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on a missing explicit Claude apiKey without sending a request", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("fetch should not run");
+    }) as unknown as typeof fetch;
+
+    await expect(callTextModelWithMetadata({
+      prompt: "proposal-only",
+      endpoint: {
+        provider: "claude",
+        baseUrl: "https://pinned.example/v1/messages",
+        model: "claude-pinned",
+      },
+      maxOutputTokens: 256,
+      maxAttempts: 1,
+    })).rejects.toThrow(/api|key|ANTHROPIC/i);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on a missing explicit Gemini apiKey without sending a request", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("fetch should not run");
+    }) as unknown as typeof fetch;
+
+    await expect(callTextModelWithMetadata({
+      prompt: "proposal-only",
+      endpoint: {
+        provider: "gemini",
+        baseUrl: "https://pinned.example/v1beta/models",
+        model: "gemini-pinned",
+      },
+      maxOutputTokens: 256,
+      maxAttempts: 1,
+    })).rejects.toThrow(/api|key|GEMINI/i);
 
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });

@@ -2580,10 +2580,10 @@ export async function callTextModel(
  * When undefined, fetchWithRetry's default of 4 attempts (1 + 3 retries) is
  * used.
  *
- * Credentials/base URLs: the explicit request endpoint is honored for every
- * provider in this path. Legacy `callTextModel` / `callModel` callers may still
- * fall back to provider env vars and defaults; `callTextModelWithMetadata`
- * always threads the pinned endpoint fields when they are present.
+ * Credentials/base URLs: the explicit request endpoint is authoritative for
+ * every provider in this path. Legacy `callTextModel` / `callModel` callers may
+ * still fall back to provider env vars and defaults; `callTextModelWithMetadata`
+ * never does. Missing/blank explicit credentials fail closed before fetch.
  */
 export async function callTextModelWithMetadata(
   request: TextModelRequest,
@@ -2600,20 +2600,20 @@ export async function callTextModelWithMetadata(
   if (!model || typeof model !== "string") {
     throw new Error("Invalid C2 request: endpoint.model is required (no ambient model resolution)");
   }
-  // OpenAI-compatible providers (and openai native) need an apiKey on the
-  // request; claude/gemini read their keys from env. Missing-key fails closed
-  // BEFORE any fetch is issued.
+  // Every provider in the explicit C2 path needs an apiKey on the request.
+  // Legacy callers may resolve credentials from env, but this entry point is
+  // reproducible from the request alone and must fail closed at the boundary.
   if (provider === "openai" || provider === "mistral" || provider === "minimax" || provider === "grok") {
     if (!apiKey) {
       throw new Error(`Invalid C2 request: endpoint.apiKey is required for provider "${provider}"`);
     }
   } else if (provider === "claude") {
-    if (!apiKey && !process.env.ANTHROPIC_API_KEY) {
-      throw new Error("Invalid C2 request: ANTHROPIC_API_KEY is not set for provider \"claude\"");
+    if (!apiKey) {
+      throw new Error("Invalid C2 request: endpoint.apiKey is required for provider \"claude\"");
     }
   } else if (provider === "gemini") {
-    if (!apiKey && !process.env.GEMINI_API_KEY) {
-      throw new Error("Invalid C2 request: GEMINI_API_KEY is not set for provider \"gemini\"");
+    if (!apiKey) {
+      throw new Error("Invalid C2 request: endpoint.apiKey is required for provider \"gemini\"");
     }
   }
 

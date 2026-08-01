@@ -9,6 +9,7 @@ import { z } from "zod";
 import { ModelProposalSchema } from "./tool-contracts.js";
 import { Sha256, canonicalJsonStringify, sha256Hex } from "./readiness/contracts.js";
 import type { Provider } from "./tagger.js";
+import { containsPrivateMarker } from "./create-ui-spec-private-markers.js";
 
 const PROVIDERS = ["openai", "claude", "gemini", "mistral", "minimax", "grok"] as const satisfies readonly Provider[];
 const ProviderSchema = z.enum(PROVIDERS);
@@ -38,6 +39,15 @@ function isHttpsOrigin(value: string): boolean {
 
 function sha256Canonical(value: unknown): string {
   return sha256Hex(Buffer.from(canonicalJsonStringify(value), "utf-8"));
+}
+
+function containsPrivateMarkerDeep(value: unknown): boolean {
+  if (typeof value === "string") return containsPrivateMarker(value);
+  if (Array.isArray(value)) return value.some(containsPrivateMarkerDeep);
+  if (value !== null && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some(containsPrivateMarkerDeep);
+  }
+  return false;
 }
 
 /** Complete provider tuple used by the explicit model-call path. */
@@ -116,6 +126,13 @@ export const ModelArtifactRecordSchema = z.object({
   storedAt: z.string().datetime(),
   retention: z.literal("until-explicit-delete"),
 }).strict().superRefine((record, ctx) => {
+  if (containsPrivateMarkerDeep(record.proposal)) {
+    ctx.addIssue({
+      code: "custom",
+      message: "proposal must not contain private corpus markers",
+      path: ["proposal"],
+    });
+  }
   if (record.proposalSha256 !== sha256Canonical(record.proposal)) {
     ctx.addIssue({
       code: "custom",

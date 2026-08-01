@@ -953,6 +953,16 @@ function addProposalAndRefreshIdentity(
   designDirection: string,
 ): void {
   const spec = envelope.spec as Record<string, unknown>;
+  spec.colorTokens = null;
+  spec.colorTokenAuthority = "editorial";
+  spec.typographyTokens = null;
+  spec.typographyTokenAuthority = "editorial";
+  const existingUnavailable = spec.unavailableDecisions as Array<{ field: string; reason: string }>;
+  spec.unavailableDecisions = [
+    ...existingUnavailable.filter(({ field }) => field !== "colorTokens" && field !== "typographyTokens"),
+    { field: "colorTokens", reason: "no accepted color authority" },
+    { field: "typographyTokens", reason: "no accepted typography authority" },
+  ];
   spec.modelProposal = {
     status: "proposal-only",
     disclaimer: "Proposal only; not accepted into token authority.",

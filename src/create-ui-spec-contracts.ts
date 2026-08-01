@@ -89,6 +89,8 @@ import {
 } from "./readiness/contracts.js";
 import { PatternType } from "./schema.js";
 import { ModelExecutionSchema } from "./create-ui-spec-model-contracts.js";
+import { containsPrivateMarker } from "./create-ui-spec-private-markers.js";
+export { PRIVATE_MARKERS, containsPrivateMarker } from "./create-ui-spec-private-markers.js";
 
 // ===========================================================================
 // 1. sha256Canonical — canonical-JSON SHA-256 (reuses the two helpers)
@@ -1169,43 +1171,6 @@ function resolveTargetProfile(targetId: z.infer<typeof WebTargetId>): WebTargetP
 
 const HEADING_RE = /^ {0,3}#{1,6}\s/m;
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/m;
-
-/**
- * Distinctive substrings that mark a private corpus identity leak (corpus id
- * slug, private image path, private product/url host, private attribution
- * excerpt). These are the SAME markers the c3-runtime-probe fixture injects and
- * scans for, so the candidate + envelope superRefines and the runtime probe all
- * agree on what counts as a leak.
- *
- * NOTE: this is a SEPARATE concern from {@link SafeErrorMessage}'s path/url
- * refine, which is about operator-safe error text (no paths, urls, or corpus-
- * prefixed identifiers) rather than the private-corpus identity markers
- * enumerated here.
- */
-export const PRIVATE_MARKERS: readonly string[] = [
-  "private-corpus-id",
-  ".c2-private/",
-  "/corpus/private/",
-  "corpus/images-private/",
-  "images-private/",
-];
-
-/** Regex form of {@link PRIVATE_MARKERS} (private corpus paths). */
-const PRIVATE_PATH_RE = /\.c2-private\/|\/corpus\/private\/|corpus\/images-private\//;
-
-/**
- * True if `s` carries any distinctive private-corpus marker. Combines the
- * literal {@link PRIVATE_MARKERS} substring scan with the path-form regex
- * (which catches `/.c2-private/...`, `/corpus/private/...` variants that the
- * literal list also enumerates). Used by the candidate and envelope
- * superRefines so the two checks cannot drift in Phase 2.
- */
-export function containsPrivateMarker(s: string): boolean {
-  for (const marker of PRIVATE_MARKERS) {
-    if (s.includes(marker)) return true;
-  }
-  return PRIVATE_PATH_RE.test(s);
-}
 
 /** Recursively collect ALL string values from an arbitrary object. */
 function collectAllStrings(value: unknown): string[] {

@@ -327,6 +327,55 @@ describe("UiSpec", () => {
     );
   });
 
+  it("rejects a model proposal when root token values or non-editorial authority remain accepted", () => {
+    const modelProposal = {
+      status: "proposal-only",
+      disclaimer: "Proposal only; not accepted into token authority.",
+      designDirection: "Use a focused workspace.",
+      colorTokens: {
+        primary: "#2563eb", surface: "#ffffff", ink: "#111827",
+        muted: "#6b7280", accent: "#f59e0b",
+      },
+      typographyTokens: { heading: "Inter", body: "Inter", mono: "JetBrains Mono" },
+    };
+
+    const acceptedValues = valid();
+    acceptedValues.colorTokenAuthority = "editorial";
+    acceptedValues.typographyTokenAuthority = "editorial";
+    acceptedValues.modelProposal = modelProposal;
+    const valuesResult = UiSpec.safeParse(acceptedValues);
+    expect(valuesResult.success).toBe(false);
+    if (!valuesResult.success) {
+      expect(valuesResult.error.issues.some(({ message }) => message.includes("modelProposal requires root colorTokens"))).toBe(true);
+      expect(valuesResult.error.issues.some(({ message }) => message.includes("modelProposal requires root typographyTokens"))).toBe(true);
+    }
+
+    const acceptedAuthority = valid();
+    acceptedAuthority.colorTokens = null;
+    acceptedAuthority.typographyTokens = null;
+    acceptedAuthority.unavailableDecisions = [
+      { field: "colorTokens", reason: "no accepted color authority" },
+      { field: "typographyTokens", reason: "no accepted typography authority" },
+      { field: "motion", reason: "no DOM evidence" },
+    ];
+    acceptedAuthority.modelProposal = modelProposal;
+    const authorityResult = UiSpec.safeParse(acceptedAuthority);
+    expect(authorityResult.success).toBe(false);
+    if (!authorityResult.success) {
+      expect(authorityResult.error.issues.some(({ message }) => message.includes("modelProposal requires root colorTokenAuthority"))).toBe(true);
+      expect(authorityResult.error.issues.some(({ message }) => message.includes("modelProposal requires root typographyTokenAuthority"))).toBe(true);
+    }
+  });
+
+  it("preserves accepted token behavior when no model proposal is present", () => {
+    const parsed = UiSpec.parse(valid());
+    expect(parsed.modelProposal).toBeUndefined();
+    expect(parsed.colorTokens).not.toBeNull();
+    expect(parsed.colorTokenAuthority).toBe("corpus-evidence");
+    expect(parsed.typographyTokens).not.toBeNull();
+    expect(parsed.typographyTokenAuthority).toBe("corpus-evidence");
+  });
+
   it("rejects empty, oversized, and authority-escalating model proposals", () => {
     const base = {
       status: "proposal-only",
@@ -361,6 +410,39 @@ describe("UiSpec", () => {
     expect(ModelProposalSchema.safeParse(base).success).toBe(true);
     expect(ModelProposalSchema.safeParse({ ...base, status: "accepted" }).success).toBe(false);
     expect(ModelProposalSchema.safeParse({ ...base, disclaimer: "Approved tokens." }).success).toBe(false);
+  });
+
+  it("bounds every suggested color and typography token member", () => {
+    const base = {
+      status: "proposal-only",
+      disclaimer: "Proposal only; not accepted into token authority.",
+      designDirection: "A focused workspace.",
+      colorTokens: {
+        primary: "#2563eb", surface: "#ffffff", ink: "#111827",
+        muted: "#6b7280", accent: "#f59e0b",
+      },
+      typographyTokens: { heading: "Inter", body: "Inter", mono: "JetBrains Mono" },
+    };
+    const tokenPaths = [
+      ["colorTokens", "primary"],
+      ["colorTokens", "surface"],
+      ["colorTokens", "ink"],
+      ["colorTokens", "muted"],
+      ["colorTokens", "accent"],
+      ["typographyTokens", "heading"],
+      ["typographyTokens", "body"],
+      ["typographyTokens", "mono"],
+    ] as const;
+
+    for (const [group, field] of tokenPaths) {
+      const atLimit = structuredClone(base);
+      atLimit[group][field] = "x".repeat(200);
+      expect(ModelProposalSchema.safeParse(atLimit).success).toBe(true);
+
+      const oversized = structuredClone(base);
+      oversized[group][field] = "x".repeat(201);
+      expect(ModelProposalSchema.safeParse(oversized).success).toBe(false);
+    }
   });
 
   it("labels every proposal leaf as model-generated proposal content", () => {

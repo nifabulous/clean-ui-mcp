@@ -196,6 +196,27 @@ describe("ModelArtifactRecordSchema", () => {
     }
   });
 
+  it("rejects private markers and private path forms in every nested proposal text lane", () => {
+    const cases: Array<[string, (proposal: ReturnType<typeof validProposal>) => void]> = [
+      ["designDirection", (proposal) => { proposal.designDirection = "private-corpus-id direction"; }],
+      ["motionNotes", (proposal) => { proposal.motionNotes = ["Read /.c2-private/source.json"]; }],
+      ["colorTokens", (proposal) => { proposal.colorTokens!.primary = "/corpus/private/palette.json"; }],
+      ["typographyTokens", (proposal) => { proposal.typographyTokens!.heading = "corpus/images-private/font"; }],
+      ["contentVoiceGuidance", (proposal) => { proposal.contentVoiceGuidance = "Use images-private/voice.txt"; }],
+    ];
+
+    for (const [lane, mutate] of cases) {
+      const record = validRecord();
+      const proposal = record.proposal as ReturnType<typeof validProposal>;
+      mutate(proposal);
+      record.proposalSha256 = hashCanonical(proposal);
+      expect(
+        ModelArtifactRecordSchema.safeParse(record).success,
+        `expected retained proposal ${lane} to reject private content`,
+      ).toBe(false);
+    }
+  });
+
   it("bounds normalized usage, attempts, latency, timestamps, and retention", () => {
     expect(ModelArtifactRecordSchema.safeParse({ ...validRecord(), usage: { promptTokens: -1, completionTokens: 1 } }).success).toBe(false);
     expect(ModelArtifactRecordSchema.safeParse({ ...validRecord(), attempts: 2 }).success).toBe(false);

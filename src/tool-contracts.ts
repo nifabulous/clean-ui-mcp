@@ -621,16 +621,34 @@ const UnavailableDecision = z.object({
  * {@link SpecContext} below must reference them and that module imports this
  * one, not the reverse.
  */
+/**
+ * Every member is optional, which without this refinement makes `{}` legal — and
+ * an empty intent object is not intent. The producer would record it in
+ * `spec.context`, feed it into `semanticSpecSha256`, and the site would render an
+ * empty "Design intent" panel. Refusing beats normalizing it away: silently
+ * dropping a key the caller sent is the quiet rewrite the honesty invariant
+ * exists to prevent, and `{}` is far likelier a caller-side serialization bug
+ * than a deliberate statement of "no intent". Omit the key instead.
+ */
+function statesSomething(value: Record<string, unknown>): boolean {
+  return Object.values(value).some((member) => member !== undefined);
+}
+
 export const ColorIntentSchema = z.object({
   accentPreference: z.string().trim().min(1).max(120).optional(),
   mood: z.string().trim().min(1).max(120).optional(),
   contrastFloor: z.enum(["AA", "AAA"]).optional(),
-}).strict();
+}).strict().refine(statesSomething, {
+  // No identifier or path in the text — SafeErrorMessage is absolute.
+  message: "colorIntent must state at least one preference; omit it entirely to state none",
+});
 
 export const TypeIntentSchema = z.object({
   voice: z.string().trim().min(1).max(120).optional(),
   density: z.enum(["compact", "regular", "spacious"]).optional(),
-}).strict();
+}).strict().refine(statesSomething, {
+  message: "typeIntent must state at least one preference; omit it entirely to state none",
+});
 
 const SpecContext = z.object({
   productContext: z.string().trim().min(1),

@@ -432,6 +432,23 @@ describe("create_ui_spec HTTP typed errors", () => {
     expect(body.error.message.length).toBeLessThan(300);
   });
 
+  it("maps an empty intent object to 400 INVALID_INPUT at the reachable surface", async () => {
+    // The composer omits these keys when no member is set, so the empty-object
+    // case is unreachable from the UI — but it is trivially reachable here and
+    // from MCP, which is the surface a caller drives programmatically. Assert it
+    // at the boundary the bug was actually reachable through, not only at the
+    // schema.
+    for (const intent of [{ colorIntent: {} }, { typeIntent: {} }]) {
+      const result = await handleCreateUiSpecHttp(
+        { productContext: "A settings screen for two-factor setup", ...intent },
+        makeReader([], []),
+      );
+      expect(result.status, `${Object.keys(intent)[0]} accepted`).toBe(400);
+      const body = JSON.parse(result.body) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("INVALID_INPUT");
+    }
+  });
+
   it("maps a retrieval failure to 503 PROVIDER_ERROR (retryable)", async () => {
     const reader = makeReader([], [], {
       searchRanked: vi.fn(async () => {

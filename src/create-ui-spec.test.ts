@@ -1514,3 +1514,36 @@ describe("create-ui-spec producer — which digests move with generation time", 
     expect(early.designJson).toContain("2026-08-01T00:00:00");
   });
 });
+
+describe("create-ui-spec producer — an intent object with no members is not intent", () => {
+  // `colorIntent: {}` was schema-legal because every member is optional, so the
+  // producer recorded an empty object in `spec.context` and the site rendered an
+  // empty "Design intent" panel. Unreachable from the composer (its request
+  // builder omits the key when no member is set) but reachable from MCP and the
+  // HTTP route, which is exactly the surface a caller drives programmatically.
+  //
+  // Refusing it beats normalizing it away: silently dropping a key the caller
+  // sent is the kind of quiet rewrite the honesty invariant exists to prevent,
+  // and an empty object is far more likely a serialization bug on the caller's
+  // side than a deliberate statement of "no intent".
+  it("rejects an empty colorIntent instead of recording it", async () => {
+    await expect(
+      createUiSpecForAdapter(validInput({ colorIntent: {} }), deps([], [])),
+    ).rejects.toThrow();
+  });
+
+  it("rejects an empty typeIntent instead of recording it", async () => {
+    await expect(
+      createUiSpecForAdapter(validInput({ typeIntent: {} }), deps([], [])),
+    ).rejects.toThrow();
+  });
+
+  it("still accepts an intent carrying a single member", async () => {
+    const res = await createUiSpecForAdapter(
+      validInput({ colorIntent: { mood: "calm" }, typeIntent: { density: "compact" } }),
+      deps([], []),
+    );
+    expect(res.envelope.spec.context.colorIntent).toEqual({ mood: "calm" });
+    expect(res.envelope.spec.context.typeIntent).toEqual({ density: "compact" });
+  });
+});

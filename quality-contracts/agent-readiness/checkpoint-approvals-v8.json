@@ -1,0 +1,548 @@
+{
+  "schemaVersion": "1.0",
+  "artifactType": "checkpoint-approvals",
+  "artifactId": "approvals-v8",
+  "createdAt": "2026-08-01T00:00:00.000Z",
+  "createdByRole": "repository-maintainer",
+  "sourceGitSha": "020093ef04af2a84a2a7c4a9a2ac6e5a2d151c50",
+  "inputHashes": {},
+  "approvals": [
+    {
+      "approvalId": "c0-repo-maintainer",
+      "approvalKind": "checkpoint",
+      "checkpoint": "C0",
+      "decision": "approved",
+      "actorId": "repo-maintainer-1",
+      "role": "Repository Maintainer",
+      "actorKind": "human",
+      "actorRegistryVersion": "1.0",
+      "actorRegistrySha256": "7e849be131f34928e8191bea8ebefe5fb8e690a7e9f64b103e434767acafa45d",
+      "checkpointTargetSha256": "fc74e54da3d6f597c5f04d88aee57ad8dbd4e18e3b985f1e7e58b9dbd7e2b2b3",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-20260714",
+          "sha256": "7e849be131f34928e8191bea8ebefe5fb8e690a7e9f64b103e434767acafa45d"
+        },
+        {
+          "artifactId": "ownership-20260714",
+          "sha256": "4e32063e9ab6e7e8f4621c6f8d92e69e000892c7bac47b16d47417619dc060f1"
+        },
+        {
+          "artifactId": "phase0-20260714",
+          "sha256": "cbaafd09f35ca4aff3842a8a1bc2ab20aafe82130a5af095556684e570cac1dd"
+        },
+        {
+          "artifactId": "taxonomy-20260714",
+          "sha256": "58d612d11acbaa5ab751d34e69e35d3bdf3f758192c9845f14825ee23c407dfb"
+        }
+      ],
+      "planSha256": "aad2a04d8217ead4d2e6d7e84c7fa61add6ef48f1594f84c722b131efb702b99",
+      "specSha256": "b4caeddf9e94792554ea4b695da235c441c8d14809eca163cbf2cbcca942bca0",
+      "contractHashes": {
+        "parent-plan.md": "967c3f180dd025318c4199a9df2dc40b1bb9dd94a78c5907fe105a5fd115f2af",
+        "src/readiness/contracts.ts": "ed22eeed3eea99be979992109db16f3e51cea7b5103d45fdf0d2c2c6244f5f5f"
+      },
+      "decidedAt": "2026-07-14T10:05:00Z",
+      "rationale": "Phase 0 evidence validated against readiness schemas. Strict schemas pass, cross-artifact hashes match, taxonomy recomputes correctly, no private data leaks in tracked artifacts."
+    },
+    {
+      "approvalId": "c0-pm",
+      "approvalKind": "checkpoint",
+      "checkpoint": "C0",
+      "decision": "approved",
+      "actorId": "pm-1",
+      "role": "PM",
+      "actorKind": "human",
+      "actorRegistryVersion": "1.0",
+      "actorRegistrySha256": "7e849be131f34928e8191bea8ebefe5fb8e690a7e9f64b103e434767acafa45d",
+      "checkpointTargetSha256": "fc74e54da3d6f597c5f04d88aee57ad8dbd4e18e3b985f1e7e58b9dbd7e2b2b3",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-20260714",
+          "sha256": "7e849be131f34928e8191bea8ebefe5fb8e690a7e9f64b103e434767acafa45d"
+        },
+        {
+          "artifactId": "ownership-20260714",
+          "sha256": "4e32063e9ab6e7e8f4621c6f8d92e69e000892c7bac47b16d47417619dc060f1"
+        },
+        {
+          "artifactId": "phase0-20260714",
+          "sha256": "cbaafd09f35ca4aff3842a8a1bc2ab20aafe82130a5af095556684e570cac1dd"
+        },
+        {
+          "artifactId": "taxonomy-20260714",
+          "sha256": "58d612d11acbaa5ab751d34e69e35d3bdf3f758192c9845f14825ee23c407dfb"
+        }
+      ],
+      "planSha256": "aad2a04d8217ead4d2e6d7e84c7fa61add6ef48f1594f84c722b131efb702b99",
+      "specSha256": "b4caeddf9e94792554ea4b695da235c441c8d14809eca163cbf2cbcca942bca0",
+      "contractHashes": {
+        "parent-plan.md": "967c3f180dd025318c4199a9df2dc40b1bb9dd94a78c5907fe105a5fd115f2af",
+        "src/readiness/contracts.ts": "ed22eeed3eea99be979992109db16f3e51cea7b5103d45fdf0d2c2c6244f5f5f"
+      },
+      "decidedAt": "2026-07-14T10:06:00Z",
+      "rationale": "Approving C0 checkpoint. Evidence artifacts are schema-valid and hash-linked. Approvals, registry, and index are correct."
+    },
+    {
+      "approvalKind": "checkpoint",
+      "checkpoint": "C1",
+      "decision": "approved",
+      "actorId": "repo-maintainer-1",
+      "actorKind": "human",
+      "actorRegistryVersion": "2.0",
+      "actorRegistrySha256": "8244c15689a30a8dfc4405a028d8b00e799153d6bb0a0c9a97488533b4a4a286",
+      "checkpointTargetSha256": "39c94de4ec22ead40dfa4831db0095f5bfebce337bb81dc57406e2aede3de73b",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-c1-v2",
+          "sha256": "8244c15689a30a8dfc4405a028d8b00e799153d6bb0a0c9a97488533b4a4a286"
+        },
+        {
+          "artifactId": "index-c1-v2",
+          "sha256": "a2d0c874bc8d336ebd6a65bfcbfd3dfdd6a09cfab8494d430380b8ebfbf05898"
+        }
+      ],
+      "planSha256": "155787b5f48b449829e2b472bbcb53fbd52ac998b19fecd9cceb607799c3f6fd",
+      "specSha256": "19333f40a53a9fc03fc1f3c72ce45171ee4bcd2ecaec8d2d84d315854c0b4d39",
+      "contractHashes": {
+        "tool-contracts.ts": "856ec8360c67c1c2a030ce54c48756985f90973d8f1ea57aebae19817dd47f5d",
+        "tool-contract-integrity.ts": "cf3289931f011d9705840483254b10974544aeb17d28d421f6d77e9605bc1483",
+        "tool-contract-docs.ts": "7d42063b52dd19ca37b321a240a79f9f73e9e7efd111f4f5b5887186b5e985f2",
+        "tool-catalog.ts": "1b4d3126ce8fb06ae46c26a7ac2fea02774c215c7d0ca8ac90173e511eef23f2"
+      },
+      "approvalId": "c1-product-repo-maintainer",
+      "role": "Product",
+      "decidedAt": "2026-07-18T16:06:05Z",
+      "rationale": "I approve the C1 product contract represented by this immutable manifest for the sole-maintainer bootstrap phase."
+    },
+    {
+      "approvalKind": "checkpoint",
+      "checkpoint": "C1",
+      "decision": "approved",
+      "actorId": "repo-maintainer-1",
+      "actorKind": "human",
+      "actorRegistryVersion": "2.0",
+      "actorRegistrySha256": "8244c15689a30a8dfc4405a028d8b00e799153d6bb0a0c9a97488533b4a4a286",
+      "checkpointTargetSha256": "39c94de4ec22ead40dfa4831db0095f5bfebce337bb81dc57406e2aede3de73b",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-c1-v2",
+          "sha256": "8244c15689a30a8dfc4405a028d8b00e799153d6bb0a0c9a97488533b4a4a286"
+        },
+        {
+          "artifactId": "index-c1-v2",
+          "sha256": "a2d0c874bc8d336ebd6a65bfcbfd3dfdd6a09cfab8494d430380b8ebfbf05898"
+        }
+      ],
+      "planSha256": "155787b5f48b449829e2b472bbcb53fbd52ac998b19fecd9cceb607799c3f6fd",
+      "specSha256": "19333f40a53a9fc03fc1f3c72ce45171ee4bcd2ecaec8d2d84d315854c0b4d39",
+      "contractHashes": {
+        "tool-contracts.ts": "856ec8360c67c1c2a030ce54c48756985f90973d8f1ea57aebae19817dd47f5d",
+        "tool-contract-integrity.ts": "cf3289931f011d9705840483254b10974544aeb17d28d421f6d77e9605bc1483",
+        "tool-contract-docs.ts": "7d42063b52dd19ca37b321a240a79f9f73e9e7efd111f4f5b5887186b5e985f2",
+        "tool-catalog.ts": "1b4d3126ce8fb06ae46c26a7ac2fea02774c215c7d0ca8ac90173e511eef23f2"
+      },
+      "approvalId": "c1-engineering-repo-maintainer",
+      "role": "Engineering",
+      "decidedAt": "2026-07-18T16:06:06Z",
+      "rationale": "I approve the C1 engineering contract and governance evidence represented by this immutable manifest for the sole-maintainer bootstrap phase."
+    },
+    {
+      "approvalId": "c2-gold-reviewer-gold-v1",
+      "approvalKind": "checkpoint",
+      "checkpoint": "C2",
+      "decision": "approved",
+      "actorId": "reviewer-gold",
+      "role": "Gold Label Owner",
+      "actorKind": "human",
+      "actorRegistryVersion": "3.0",
+      "actorRegistrySha256": "1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6",
+      "checkpointTargetSha256": "5aed64c695cab715b853ba2219df8b72fffee822607179eea51a488217b4ffed",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-c1-v3",
+          "sha256": "1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6"
+        },
+        {
+          "artifactId": "index-c1-v3",
+          "sha256": "4c638a9939cf954397edf3763ecc3ce3346409650f7ee391bc8ed0f9d7b08081"
+        },
+        {
+          "artifactId": "c2-evidence-v1",
+          "sha256": "ac5b06d749b4b2f6dea4d5e06db473d4a765bbbf70720e16a08efebc1198c76e"
+        }
+      ],
+      "planSha256": "09253f91cd90a540eee3cc41200f5c0b4384bd07b897d586f95c83598b4360a1",
+      "specSha256": "d1634c683ea1f14a520371d31c1ef1841fb603280329dc728470d66016c1b1f9",
+      "contractHashes": {
+        "src/c2/candidate-contracts.ts": "3c4585a79b3026e5c819c011d6528115c553faf827c37201c805b85a42d6655b",
+        "src/c2/case-contracts.ts": "c15cdca193567f814d2d9c83e32d556604b596066ef1ea665272c346e0f6e0a9",
+        "src/c2/condition-contracts.ts": "17fc64391fdff8eb176a63d1e31ec3ead77402859069f5de0e43a77b2db916a2",
+        "src/c2/evaluation-contracts.ts": "302c31b2b55b6d00931ac8358bf72e9a2d8e7c179409d702ab6c8466e1645ded",
+        "src/c2/governance-contracts.ts": "f5ccfe331a4ab0b9accdab683bc198d6cc76ba66117ce17a3baf02de98229710",
+        "src/c2/remediation-contracts.ts": "275bb9a0eb84b397d1441c8c68ff755883d7ad7526e1cae297a8bd64feca333d",
+        "src/c2/closure-evaluator.ts": "7eac377a286a283e900699a307c78ecba9ad8efa12d5823730902d3f83a5fc10",
+        "src/c2/label-agreement.ts": "2ddc8533a27fdb6b99189a1e231b979bfaaf8279cea19ba8e46e5c441904e07b"
+      },
+      "decidedAt": "2026-07-26T21:18:07.000Z",
+      "rationale": "I approve the exact C2 Approval Target v1 and the evidence manifest it names as the Gold Label Owner."
+    },
+    {
+      "approvalId": "c2-qa-reviewer-qa-v1",
+      "approvalKind": "checkpoint",
+      "checkpoint": "C2",
+      "decision": "approved",
+      "actorId": "reviewer-qa",
+      "role": "QA",
+      "actorKind": "human",
+      "actorRegistryVersion": "3.0",
+      "actorRegistrySha256": "1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6",
+      "checkpointTargetSha256": "5aed64c695cab715b853ba2219df8b72fffee822607179eea51a488217b4ffed",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-c1-v3",
+          "sha256": "1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6"
+        },
+        {
+          "artifactId": "index-c1-v3",
+          "sha256": "4c638a9939cf954397edf3763ecc3ce3346409650f7ee391bc8ed0f9d7b08081"
+        },
+        {
+          "artifactId": "c2-evidence-v1",
+          "sha256": "ac5b06d749b4b2f6dea4d5e06db473d4a765bbbf70720e16a08efebc1198c76e"
+        }
+      ],
+      "planSha256": "09253f91cd90a540eee3cc41200f5c0b4384bd07b897d586f95c83598b4360a1",
+      "specSha256": "d1634c683ea1f14a520371d31c1ef1841fb603280329dc728470d66016c1b1f9",
+      "contractHashes": {
+        "src/c2/candidate-contracts.ts": "3c4585a79b3026e5c819c011d6528115c553faf827c37201c805b85a42d6655b",
+        "src/c2/case-contracts.ts": "c15cdca193567f814d2d9c83e32d556604b596066ef1ea665272c346e0f6e0a9",
+        "src/c2/condition-contracts.ts": "17fc64391fdff8eb176a63d1e31ec3ead77402859069f5de0e43a77b2db916a2",
+        "src/c2/evaluation-contracts.ts": "302c31b2b55b6d00931ac8358bf72e9a2d8e7c179409d702ab6c8466e1645ded",
+        "src/c2/governance-contracts.ts": "f5ccfe331a4ab0b9accdab683bc198d6cc76ba66117ce17a3baf02de98229710",
+        "src/c2/remediation-contracts.ts": "275bb9a0eb84b397d1441c8c68ff755883d7ad7526e1cae297a8bd64feca333d",
+        "src/c2/closure-evaluator.ts": "7eac377a286a283e900699a307c78ecba9ad8efa12d5823730902d3f83a5fc10",
+        "src/c2/label-agreement.ts": "2ddc8533a27fdb6b99189a1e231b979bfaaf8279cea19ba8e46e5c441904e07b"
+      },
+      "decidedAt": "2026-07-26T21:20:11.000Z",
+      "rationale": "I approve the exact C2 Approval Target v1 and the evidence manifest it names as the QA reviewer."
+    },
+    {
+      "approvalId": "c2-gold-reviewer-gold-v2",
+      "supersedesApprovalId": "c2-gold-reviewer-gold-v1",
+      "approvalKind": "checkpoint",
+      "checkpoint": "C2",
+      "decision": "approved",
+      "actorId": "reviewer-gold",
+      "role": "Gold Label Owner",
+      "actorKind": "human",
+      "actorRegistryVersion": "3.0",
+      "actorRegistrySha256": "1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6",
+      "checkpointTargetSha256": "cf55fee06a3a1f34da7d90672c3f62d3704fbda7026cf0de2de9c2aba3c78ac0",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-c1-v3",
+          "sha256": "1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6"
+        },
+        {
+          "artifactId": "index-c1-v3",
+          "sha256": "c60390e01de336ba4bc4f6ec4a5f18bfa39af1e6b7ff8a969b0d518113c37445"
+        },
+        {
+          "artifactId": "c2-evidence-v1",
+          "sha256": "c4e4b0402c23c1c701369c89450c5c2e89b029d37451939a7a1d257525387cb7"
+        }
+      ],
+      "planSha256": "09253f91cd90a540eee3cc41200f5c0b4384bd07b897d586f95c83598b4360a1",
+      "specSha256": "d1634c683ea1f14a520371d31c1ef1841fb603280329dc728470d66016c1b1f9",
+      "contractHashes": {
+        "src/c2/candidate-contracts.ts": "3c4585a79b3026e5c819c011d6528115c553faf827c37201c805b85a42d6655b",
+        "src/c2/case-contracts.ts": "c15cdca193567f814d2d9c83e32d556604b596066ef1ea665272c346e0f6e0a9",
+        "src/c2/condition-contracts.ts": "17fc64391fdff8eb176a63d1e31ec3ead77402859069f5de0e43a77b2db916a2",
+        "src/c2/evaluation-contracts.ts": "302c31b2b55b6d00931ac8358bf72e9a2d8e7c179409d702ab6c8466e1645ded",
+        "src/c2/governance-contracts.ts": "f5ccfe331a4ab0b9accdab683bc198d6cc76ba66117ce17a3baf02de98229710",
+        "src/c2/remediation-contracts.ts": "275bb9a0eb84b397d1441c8c68ff755883d7ad7526e1cae297a8bd64feca333d",
+        "src/c2/closure-evaluator.ts": "7eac377a286a283e900699a307c78ecba9ad8efa12d5823730902d3f83a5fc10",
+        "src/c2/label-agreement.ts": "2ddc8533a27fdb6b99189a1e231b979bfaaf8279cea19ba8e46e5c441904e07b"
+      },
+      "decidedAt": "2026-07-26T21:18:07.000Z",
+      "rationale": "I approve the exact C2 Approval Target v1 and the evidence manifest it names as the Gold Label Owner."
+    },
+    {
+      "approvalId": "c2-qa-reviewer-qa-v2",
+      "supersedesApprovalId": "c2-qa-reviewer-qa-v1",
+      "approvalKind": "checkpoint",
+      "checkpoint": "C2",
+      "decision": "approved",
+      "actorId": "reviewer-qa",
+      "role": "QA",
+      "actorKind": "human",
+      "actorRegistryVersion": "3.0",
+      "actorRegistrySha256": "1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6",
+      "checkpointTargetSha256": "cf55fee06a3a1f34da7d90672c3f62d3704fbda7026cf0de2de9c2aba3c78ac0",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-c1-v3",
+          "sha256": "1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6"
+        },
+        {
+          "artifactId": "index-c1-v3",
+          "sha256": "c60390e01de336ba4bc4f6ec4a5f18bfa39af1e6b7ff8a969b0d518113c37445"
+        },
+        {
+          "artifactId": "c2-evidence-v1",
+          "sha256": "c4e4b0402c23c1c701369c89450c5c2e89b029d37451939a7a1d257525387cb7"
+        }
+      ],
+      "planSha256": "09253f91cd90a540eee3cc41200f5c0b4384bd07b897d586f95c83598b4360a1",
+      "specSha256": "d1634c683ea1f14a520371d31c1ef1841fb603280329dc728470d66016c1b1f9",
+      "contractHashes": {
+        "src/c2/candidate-contracts.ts": "3c4585a79b3026e5c819c011d6528115c553faf827c37201c805b85a42d6655b",
+        "src/c2/case-contracts.ts": "c15cdca193567f814d2d9c83e32d556604b596066ef1ea665272c346e0f6e0a9",
+        "src/c2/condition-contracts.ts": "17fc64391fdff8eb176a63d1e31ec3ead77402859069f5de0e43a77b2db916a2",
+        "src/c2/evaluation-contracts.ts": "302c31b2b55b6d00931ac8358bf72e9a2d8e7c179409d702ab6c8466e1645ded",
+        "src/c2/governance-contracts.ts": "f5ccfe331a4ab0b9accdab683bc198d6cc76ba66117ce17a3baf02de98229710",
+        "src/c2/remediation-contracts.ts": "275bb9a0eb84b397d1441c8c68ff755883d7ad7526e1cae297a8bd64feca333d",
+        "src/c2/closure-evaluator.ts": "7eac377a286a283e900699a307c78ecba9ad8efa12d5823730902d3f83a5fc10",
+        "src/c2/label-agreement.ts": "2ddc8533a27fdb6b99189a1e231b979bfaaf8279cea19ba8e46e5c441904e07b"
+      },
+      "decidedAt": "2026-07-26T21:20:11.000Z",
+      "rationale": "I approve the exact C2 Approval Target v1 and the evidence manifest it names as the QA reviewer."
+    },
+    {
+      "recordKind": "retraction",
+      "retractionId": "retraction-c2-gold-v2",
+      "retractsApprovalId": "c2-gold-reviewer-gold-v2",
+      "retractedBy": {
+        "actorId": "repo-maintainer-1",
+        "role": "Repository Maintainer",
+        "actorKind": "human",
+        "actorRegistryVersion": "1.0",
+        "actorRegistrySha256": "7e849be131f34928e8191bea8ebefe5fb8e690a7e9f64b103e434767acafa45d"
+      },
+      "retractedAt": "2026-07-31T00:09:24.579Z",
+      "reason": "decidedAt copied from the v1 predecessor predates the bound target cf55fee0 (first present 2026-07-28); withdrawn by the repository owner on 2026-07-28. No reviewer decision on cf55fee0 exists."
+    },
+    {
+      "recordKind": "retraction",
+      "retractionId": "retraction-c2-qa-v2",
+      "retractsApprovalId": "c2-qa-reviewer-qa-v2",
+      "retractedBy": {
+        "actorId": "repo-maintainer-1",
+        "role": "Repository Maintainer",
+        "actorKind": "human",
+        "actorRegistryVersion": "1.0",
+        "actorRegistrySha256": "7e849be131f34928e8191bea8ebefe5fb8e690a7e9f64b103e434767acafa45d"
+      },
+      "retractedAt": "2026-07-31T00:09:24.579Z",
+      "reason": "decidedAt copied from the v1 predecessor predates the bound target cf55fee0 (first present 2026-07-28); withdrawn by the repository owner on 2026-07-28. No reviewer decision on cf55fee0 exists."
+    },
+    {
+      "approvalId": "c2-gold-reviewer-gold-v3",
+      "supersedesApprovalId": "c2-gold-reviewer-gold-v2",
+      "approvalKind": "checkpoint",
+      "checkpoint": "C2",
+      "decision": "approved",
+      "actorId": "reviewer-gold",
+      "role": "Gold Label Owner",
+      "actorKind": "human",
+      "actorRegistryVersion": "3.0",
+      "actorRegistrySha256": "1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6",
+      "checkpointTargetSha256": "cf55fee06a3a1f34da7d90672c3f62d3704fbda7026cf0de2de9c2aba3c78ac0",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-c1-v3",
+          "sha256": "1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6"
+        },
+        {
+          "artifactId": "index-c1-v3",
+          "sha256": "c60390e01de336ba4bc4f6ec4a5f18bfa39af1e6b7ff8a969b0d518113c37445"
+        },
+        {
+          "artifactId": "c2-evidence-v1",
+          "sha256": "c4e4b0402c23c1c701369c89450c5c2e89b029d37451939a7a1d257525387cb7"
+        }
+      ],
+      "planSha256": "09253f91cd90a540eee3cc41200f5c0b4384bd07b897d586f95c83598b4360a1",
+      "specSha256": "d1634c683ea1f14a520371d31c1ef1841fb603280329dc728470d66016c1b1f9",
+      "contractHashes": {
+        "src/c2/candidate-contracts.ts": "3c4585a79b3026e5c819c011d6528115c553faf827c37201c805b85a42d6655b",
+        "src/c2/case-contracts.ts": "c15cdca193567f814d2d9c83e32d556604b596066ef1ea665272c346e0f6e0a9",
+        "src/c2/condition-contracts.ts": "17fc64391fdff8eb176a63d1e31ec3ead77402859069f5de0e43a77b2db916a2",
+        "src/c2/evaluation-contracts.ts": "302c31b2b55b6d00931ac8358bf72e9a2d8e7c179409d702ab6c8466e1645ded",
+        "src/c2/governance-contracts.ts": "f5ccfe331a4ab0b9accdab683bc198d6cc76ba66117ce17a3baf02de98229710",
+        "src/c2/remediation-contracts.ts": "275bb9a0eb84b397d1441c8c68ff755883d7ad7526e1cae297a8bd64feca333d",
+        "src/c2/closure-evaluator.ts": "7eac377a286a283e900699a307c78ecba9ad8efa12d5823730902d3f83a5fc10",
+        "src/c2/label-agreement.ts": "2ddc8533a27fdb6b99189a1e231b979bfaaf8279cea19ba8e46e5c441904e07b"
+      },
+      "decidedAt": "2026-07-31T19:10:32.000Z",
+      "rationale": "I approve the corrected C2 approval target cf55fee06a3a1f34da7d90672c3f62d3704fbda7026cf0de2de9c2aba3c78ac0 and the evidence manifest it names as the Gold Label Owner."
+    },
+    {
+      "approvalId": "c2-qa-reviewer-qa-v3",
+      "supersedesApprovalId": "c2-qa-reviewer-qa-v2",
+      "approvalKind": "checkpoint",
+      "checkpoint": "C2",
+      "decision": "approved",
+      "actorId": "reviewer-qa",
+      "role": "QA",
+      "actorKind": "human",
+      "actorRegistryVersion": "3.0",
+      "actorRegistrySha256": "1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6",
+      "checkpointTargetSha256": "cf55fee06a3a1f34da7d90672c3f62d3704fbda7026cf0de2de9c2aba3c78ac0",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-c1-v3",
+          "sha256": "1757976d564265a93faeee51548d9268694e6487b748d5b5d327aa4ee65719c6"
+        },
+        {
+          "artifactId": "index-c1-v3",
+          "sha256": "c60390e01de336ba4bc4f6ec4a5f18bfa39af1e6b7ff8a969b0d518113c37445"
+        },
+        {
+          "artifactId": "c2-evidence-v1",
+          "sha256": "c4e4b0402c23c1c701369c89450c5c2e89b029d37451939a7a1d257525387cb7"
+        }
+      ],
+      "planSha256": "09253f91cd90a540eee3cc41200f5c0b4384bd07b897d586f95c83598b4360a1",
+      "specSha256": "d1634c683ea1f14a520371d31c1ef1841fb603280329dc728470d66016c1b1f9",
+      "contractHashes": {
+        "src/c2/candidate-contracts.ts": "3c4585a79b3026e5c819c011d6528115c553faf827c37201c805b85a42d6655b",
+        "src/c2/case-contracts.ts": "c15cdca193567f814d2d9c83e32d556604b596066ef1ea665272c346e0f6e0a9",
+        "src/c2/condition-contracts.ts": "17fc64391fdff8eb176a63d1e31ec3ead77402859069f5de0e43a77b2db916a2",
+        "src/c2/evaluation-contracts.ts": "302c31b2b55b6d00931ac8358bf72e9a2d8e7c179409d702ab6c8466e1645ded",
+        "src/c2/governance-contracts.ts": "f5ccfe331a4ab0b9accdab683bc198d6cc76ba66117ce17a3baf02de98229710",
+        "src/c2/remediation-contracts.ts": "275bb9a0eb84b397d1441c8c68ff755883d7ad7526e1cae297a8bd64feca333d",
+        "src/c2/closure-evaluator.ts": "7eac377a286a283e900699a307c78ecba9ad8efa12d5823730902d3f83a5fc10",
+        "src/c2/label-agreement.ts": "2ddc8533a27fdb6b99189a1e231b979bfaaf8279cea19ba8e46e5c441904e07b"
+      },
+      "decidedAt": "2026-07-31T19:15:32.000Z",
+      "rationale": "I approve the corrected C2 approval target cf55fee06a3a1f34da7d90672c3f62d3704fbda7026cf0de2de9c2aba3c78ac0 and the evidence manifest it names as the QA reviewer."
+    },
+    {
+      "approvalId": "c3-product",
+      "approvalKind": "checkpoint",
+      "checkpoint": "C3",
+      "decision": "approved",
+      "actorId": "pm-1",
+      "role": "Product",
+      "actorKind": "human",
+      "actorRegistryVersion": "4.0",
+      "actorRegistrySha256": "371320d01b269a33831c9a367180548ab81d4b578a60ba6139b57d38298891bd",
+      "checkpointTargetSha256": "c32d732c47d2b0fa83473d5c8e89356a2ce072809b986a8818bc7e33055d401a",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-c3-v2",
+          "sha256": "371320d01b269a33831c9a367180548ab81d4b578a60ba6139b57d38298891bd"
+        },
+        {
+          "artifactId": "index-c3-v2",
+          "sha256": "d576ec39f4ac5adaf0e3a10733a1c94ae7e1f7e5fbe16bf3a2033a20034afa56"
+        }
+      ],
+      "planSha256": "157db54693d46ac4d082368a783e9598fecefa65ae7ee092758927a42be8c6e9",
+      "specSha256": "0fa7920168708529e80c209d1928a29b862f32998b8f27c4d0a139fcaa16eb99",
+      "contractHashes": {
+        "src/tool-contracts.ts": "2ece5dff0acd65a471168a942da29e0e0879c6fde689e6c5755a89126de560b9",
+        "src/server-factory.ts": "a4a31292b2ed45ef9f413e109a4eb1c9ab2c0ef85664c64bea2454778cf6a84f",
+        "src/scripts/ui-server.ts": "6d4bd714949242fe2113aae6040a28444d18de6eb02a96f6523d322db1e1f6dc",
+        "site/src/app/App.tsx": "a59233d0a1c10ac162489432480013dbb689d76be041e5bf61433f9a95035b27",
+        "skill/clean-ui-design/SKILL.md": "aba899aa9738234d320f70b52102d865e786c5c72535117544656ca7c6bdb8c4",
+        "src/create-ui-spec.ts": "06c52b85f1fcc0cd73ec473bef9fe74bc366ff064fd85c02b27fdc6db4d8e82c",
+        "src/create-ui-spec-contracts.ts": "674c1f76badf83c1aac08d8391a40c8f19f593a6201d02f676bb3ab2000a7474",
+        "src/create-ui-spec-mcp.ts": "c10185887aa0af7cb50dda51e802e1a34bf88b8a1283cbe0e73b57d5c9277792",
+        "src/create-ui-spec-http.ts": "cfe2e3bd4f65f4cabcedc1a167fae68ae69a5bb604bac9f34da91c06efa2052a",
+        "src/create-ui-spec-dependencies.ts": "416b544adef4e6a8a2178543a4c65d13abf8bcdf17448bc5f089a8aa5a6fc1c6",
+        "src/create-ui-spec-transport-errors.ts": "4acae1c190eb0bc5b3ee8ae00e82863080e97a599094e5aaffa8de994ce1d107",
+        "src/c3/safe-aggregator.ts": "16667218729b35f220c4b1c984ae91aedbac156f9cc74348442cbab6240b2f5d",
+        "src/c3/fallback-recipe-v1.json": "87544160a57c52746db7f6de81ea714f048e6bbd13baec1e1b1967966ec12b89"
+      },
+      "decidedAt": "2026-08-01T00:00:00.000Z"
+    },
+    {
+      "approvalId": "c3-qa",
+      "approvalKind": "checkpoint",
+      "checkpoint": "C3",
+      "decision": "approved",
+      "actorId": "reviewer-qa",
+      "role": "QA",
+      "actorKind": "human",
+      "actorRegistryVersion": "4.0",
+      "actorRegistrySha256": "371320d01b269a33831c9a367180548ab81d4b578a60ba6139b57d38298891bd",
+      "checkpointTargetSha256": "c32d732c47d2b0fa83473d5c8e89356a2ce072809b986a8818bc7e33055d401a",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-c3-v2",
+          "sha256": "371320d01b269a33831c9a367180548ab81d4b578a60ba6139b57d38298891bd"
+        },
+        {
+          "artifactId": "index-c3-v2",
+          "sha256": "d576ec39f4ac5adaf0e3a10733a1c94ae7e1f7e5fbe16bf3a2033a20034afa56"
+        }
+      ],
+      "planSha256": "157db54693d46ac4d082368a783e9598fecefa65ae7ee092758927a42be8c6e9",
+      "specSha256": "0fa7920168708529e80c209d1928a29b862f32998b8f27c4d0a139fcaa16eb99",
+      "contractHashes": {
+        "src/tool-contracts.ts": "2ece5dff0acd65a471168a942da29e0e0879c6fde689e6c5755a89126de560b9",
+        "src/server-factory.ts": "a4a31292b2ed45ef9f413e109a4eb1c9ab2c0ef85664c64bea2454778cf6a84f",
+        "src/scripts/ui-server.ts": "6d4bd714949242fe2113aae6040a28444d18de6eb02a96f6523d322db1e1f6dc",
+        "site/src/app/App.tsx": "a59233d0a1c10ac162489432480013dbb689d76be041e5bf61433f9a95035b27",
+        "skill/clean-ui-design/SKILL.md": "aba899aa9738234d320f70b52102d865e786c5c72535117544656ca7c6bdb8c4",
+        "src/create-ui-spec.ts": "06c52b85f1fcc0cd73ec473bef9fe74bc366ff064fd85c02b27fdc6db4d8e82c",
+        "src/create-ui-spec-contracts.ts": "674c1f76badf83c1aac08d8391a40c8f19f593a6201d02f676bb3ab2000a7474",
+        "src/create-ui-spec-mcp.ts": "c10185887aa0af7cb50dda51e802e1a34bf88b8a1283cbe0e73b57d5c9277792",
+        "src/create-ui-spec-http.ts": "cfe2e3bd4f65f4cabcedc1a167fae68ae69a5bb604bac9f34da91c06efa2052a",
+        "src/create-ui-spec-dependencies.ts": "416b544adef4e6a8a2178543a4c65d13abf8bcdf17448bc5f089a8aa5a6fc1c6",
+        "src/create-ui-spec-transport-errors.ts": "4acae1c190eb0bc5b3ee8ae00e82863080e97a599094e5aaffa8de994ce1d107",
+        "src/c3/safe-aggregator.ts": "16667218729b35f220c4b1c984ae91aedbac156f9cc74348442cbab6240b2f5d",
+        "src/c3/fallback-recipe-v1.json": "87544160a57c52746db7f6de81ea714f048e6bbd13baec1e1b1967966ec12b89"
+      },
+      "decidedAt": "2026-08-01T00:00:00.000Z"
+    },
+    {
+      "approvalId": "c3-engineering",
+      "approvalKind": "checkpoint",
+      "checkpoint": "C3",
+      "decision": "approved",
+      "actorId": "repo-maintainer-1",
+      "role": "Engineering",
+      "actorKind": "human",
+      "actorRegistryVersion": "4.0",
+      "actorRegistrySha256": "371320d01b269a33831c9a367180548ab81d4b578a60ba6139b57d38298891bd",
+      "checkpointTargetSha256": "c32d732c47d2b0fa83473d5c8e89356a2ce072809b986a8818bc7e33055d401a",
+      "approvedArtifacts": [
+        {
+          "artifactId": "actors-c3-v2",
+          "sha256": "371320d01b269a33831c9a367180548ab81d4b578a60ba6139b57d38298891bd"
+        },
+        {
+          "artifactId": "index-c3-v2",
+          "sha256": "d576ec39f4ac5adaf0e3a10733a1c94ae7e1f7e5fbe16bf3a2033a20034afa56"
+        }
+      ],
+      "planSha256": "157db54693d46ac4d082368a783e9598fecefa65ae7ee092758927a42be8c6e9",
+      "specSha256": "0fa7920168708529e80c209d1928a29b862f32998b8f27c4d0a139fcaa16eb99",
+      "contractHashes": {
+        "src/tool-contracts.ts": "2ece5dff0acd65a471168a942da29e0e0879c6fde689e6c5755a89126de560b9",
+        "src/server-factory.ts": "a4a31292b2ed45ef9f413e109a4eb1c9ab2c0ef85664c64bea2454778cf6a84f",
+        "src/scripts/ui-server.ts": "6d4bd714949242fe2113aae6040a28444d18de6eb02a96f6523d322db1e1f6dc",
+        "site/src/app/App.tsx": "a59233d0a1c10ac162489432480013dbb689d76be041e5bf61433f9a95035b27",
+        "skill/clean-ui-design/SKILL.md": "aba899aa9738234d320f70b52102d865e786c5c72535117544656ca7c6bdb8c4",
+        "src/create-ui-spec.ts": "06c52b85f1fcc0cd73ec473bef9fe74bc366ff064fd85c02b27fdc6db4d8e82c",
+        "src/create-ui-spec-contracts.ts": "674c1f76badf83c1aac08d8391a40c8f19f593a6201d02f676bb3ab2000a7474",
+        "src/create-ui-spec-mcp.ts": "c10185887aa0af7cb50dda51e802e1a34bf88b8a1283cbe0e73b57d5c9277792",
+        "src/create-ui-spec-http.ts": "cfe2e3bd4f65f4cabcedc1a167fae68ae69a5bb604bac9f34da91c06efa2052a",
+        "src/create-ui-spec-dependencies.ts": "416b544adef4e6a8a2178543a4c65d13abf8bcdf17448bc5f089a8aa5a6fc1c6",
+        "src/create-ui-spec-transport-errors.ts": "4acae1c190eb0bc5b3ee8ae00e82863080e97a599094e5aaffa8de994ce1d107",
+        "src/c3/safe-aggregator.ts": "16667218729b35f220c4b1c984ae91aedbac156f9cc74348442cbab6240b2f5d",
+        "src/c3/fallback-recipe-v1.json": "87544160a57c52746db7f6de81ea714f048e6bbd13baec1e1b1967966ec12b89"
+      },
+      "decidedAt": "2026-08-01T00:00:00.000Z"
+    }
+  ],
+  "ordinalVersion": 8,
+  "predecessor": {
+    "version": "7",
+    "sha256": "dcdc686cd824bf1bcebad757174672cb982727f44d0044ca76d4d232d24c18d5"
+  }
+}

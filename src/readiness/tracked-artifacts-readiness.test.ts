@@ -144,7 +144,7 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
       C0: "closed",
       C1: "closed",
       C2: "closed",
-      C3: "open",
+      C3: "closed",
       C4: "open",
       C5: "open",
     });
@@ -254,6 +254,7 @@ describe("tracked readiness artifacts (real data, read-only)", () => {
       "checkpoint-approvals-v5.json",
       "checkpoint-approvals-v6.json",
       "checkpoint-approvals-v7.json",
+      "checkpoint-approvals-v8.json",
     ]);
   });
 
@@ -427,7 +428,7 @@ describe("tracked readiness artifacts, private mode (real data, read-only)", () 
         C0: "closed",
         C1: "closed",
         C2: "closed",
-        C3: "open",
+        C3: "closed",
         C4: "open",
         C5: "open",
       });
@@ -534,7 +535,7 @@ describe("tracked readiness artifacts, private mode with the private inputs ABSE
       C0: "closed",
       C1: "closed",
       C2: "open",
-      C3: "open",
+      C3: "closed",
       C4: "open",
       C5: "open",
     });

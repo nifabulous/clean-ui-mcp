@@ -803,10 +803,19 @@ function ArtifactView({
           Artifact integrity
         </h4>
         <p className="artifact__note">
-          These are the hashes the server returned with this artifact. The downloads above save the
-          exact bytes those hashes cover — nothing is regenerated when you save.
+          The semantic hash covers the spec's content: regenerate with the same inputs and it is
+          identical. The digests below it cover exact bytes and include generation time, so they
+          change on every run even when nothing about the design changed.
         </p>
         <dl className="artifact__facts artifact__facts--hashes">
+          <div className="artifact__fact">
+            <dt>Semantic spec SHA-256</dt>
+            <dd className="artifact__hash">{artifact.semanticSpecSha256}</dd>
+          </div>
+          <div className="artifact__fact">
+            <dt>Producer</dt>
+            <dd>{artifact.producerVersion}</dd>
+          </div>
           <div className="artifact__fact">
             <dt>Artifact</dt>
             <dd className="artifact__hash">{artifact.artifactId}</dd>
@@ -814,10 +823,6 @@ function ArtifactView({
           <div className="artifact__fact">
             <dt>Generated at</dt>
             <dd>{artifact.generatedAt}</dd>
-          </div>
-          <div className="artifact__fact">
-            <dt>Producer</dt>
-            <dd>{artifact.producerVersion}</dd>
           </div>
           <div className="artifact__fact">
             <dt>{DESIGN_MARKDOWN_FILENAME} SHA-256</dt>

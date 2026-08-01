@@ -535,6 +535,15 @@ describe("PlaygroundPage — downloads reuse the returned bytes", () => {
     expect(integrity.textContent ?? "").toContain(hash("e"));
   });
 
+  it("leads the integrity panel with the run-stable semantic hash", async () => {
+    await generateSuccessfully();
+    const region = screen.getByRole("region", { name: /artifact integrity/i });
+    const terms = within(region).getAllByRole("term").map((term) => term.textContent ?? "");
+
+    expect(terms[0]).toMatch(/semantic spec sha-256/i);
+    expect(within(region).getByText(/include generation time/i)).toBeInTheDocument();
+  });
+
   it("offers a copy-markdown action alongside the downloads", async () => {
     await generateSuccessfully();
     expect(screen.getByRole("button", { name: /copy markdown/i })).toBeInTheDocument();

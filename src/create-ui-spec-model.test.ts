@@ -173,6 +173,33 @@ describe("createUiSpecModel prompt boundary", () => {
     });
     expect(runtime.call).not.toHaveBeenCalled();
   });
+
+  it("rejects caller-controlled bare-domain urls before the provider call", async () => {
+    const runtime = buildRuntime();
+    const input = buildInput({
+      request: {
+        ...buildInput().request,
+        productContext: "Review the reference at example.com/internal before drafting the workspace.",
+        implementationFramework: "Mirror the widgets from www.example.com/internal/ui.",
+        designSystem: {
+          status: "identified",
+          library: "shared tokens from design.example.com/foundations",
+        },
+        constraints: [
+          "Follow the spacing notes in assets.example.com/internal/spacing.",
+          "Keep the view operational and scan-friendly.",
+        ],
+      },
+    });
+
+    const result = await createUiSpecModel(input, runtime);
+
+    expect(result).toEqual({
+      kind: "fallback",
+      execution: { state: "proposal-rejected" },
+    });
+    expect(runtime.call).not.toHaveBeenCalled();
+  });
 });
 
 describe("createUiSpecModel response policy", () => {

@@ -26,6 +26,8 @@ const POLICY_VERSION = "c3-model-proposal-v1";
 const RESPONSE_SCOPED_EVIDENCE_ID_RE = /\bevidence-[0-9]+\b/;
 const SOURCE_PRIVATE_ID_RE = /\bsource-private-[A-Za-z0-9_-]+\b/;
 const GENERIC_URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/\S+/i;
+const BARE_HOST_URL_RE =
+  /\b(?:www\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?:\/[^\s)]*)/i;
 const UNIX_PATH_RE = /(^|[\s(])(?:\/|\.{1,2}\/|~\/)[^\s)]+/;
 const WINDOWS_PATH_RE = /(^|[\s(])[A-Za-z]:\\[^\s)]+/;
 
@@ -266,6 +268,7 @@ function containsUnsafeCallerText(value: unknown): boolean {
 
 function looksLikeGenericUrlOrPath(value: string): boolean {
   return GENERIC_URL_RE.test(value)
+    || BARE_HOST_URL_RE.test(value)
     || UNIX_PATH_RE.test(value)
     || WINDOWS_PATH_RE.test(value);
 }

@@ -1405,3 +1405,34 @@ describe("create-ui-spec producer — Task 2 adapter-facing evidence result path
     expect(ok.success, ok.success ? "" : JSON.stringify(ok.error.issues, null, 2)).toBe(true);
   });
 });
+
+describe("create-ui-spec producer — caller constraints become manual acceptance criteria", () => {
+  it("turns each caller constraint into a manual acceptance criterion", async () => {
+    const res = await createUiSpecForAdapter(
+      validInput({
+        productContext: "A settings screen for two-factor setup",
+        constraints: ["AA contrast", "primary action always visible"],
+      }),
+      deps([], []),
+    );
+    const criteria = res.envelope.spec.acceptanceCriteria;
+    const ids = criteria.map((c) => c.id);
+    expect(ids).toContain("caller-constraint-1");
+    expect(ids).toContain("caller-constraint-2");
+    expect(ids).toContain("fallback-manual-spec-review"); // recipe criterion survives
+    // Appended, not prepended: client-bounds tests read acceptanceCriteria[0].
+    expect(criteria[0]?.id).toBe("fallback-manual-spec-review");
+    const first = criteria.find((c) => c.id === "caller-constraint-1")!;
+    expect(first.verifier).toBe("manual");
+    expect(first.priority).toBe("should"); // NOT "must" — caller stated no priority
+    expect(first.subject).toBe("AA contrast");
+    expect(first.evidenceIds).toEqual([]);
+    expect(first.manualSteps.length).toBeGreaterThan(0);
+  });
+
+  it("adds no caller criteria when the caller supplied no constraints", async () => {
+    const res = await createUiSpecForAdapter(validInput({ constraints: [] }), deps([], []));
+    const ids = res.envelope.spec.acceptanceCriteria.map((c) => c.id);
+    expect(ids).toEqual(["fallback-manual-spec-review"]);
+  });
+});

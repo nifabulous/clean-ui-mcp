@@ -451,21 +451,42 @@ const C3_SPEC_BINDING: CheckpointSourceBinding = {
 };
 
 /**
- * Contract bindings: the five source files that make up the landed slice — the
- * `create_ui_spec` tool contract, the MCP server factory that registers it, the
- * HTTP transport that serves it, the Playground composer that uses it, and the
- * bundled `clean-ui-design` skill. Keys are repo-relative paths (unique, stable,
- * and self-describing in the ledger's contractHashes). Every binding resolves
- * at C3_SOURCE_GIT_SHA; C3 sets no `integrationGitSha` because the slice landed
- * across multiple commits (unlike C1's single merge) and later hardening
- * legitimately diverges from the reviewed bytes.
+ * Contract bindings: every source file that makes up the landed slice — both
+ * the WIRING surface and the IMPLEMENTATION. A file hash covers only that file's
+ * own bytes, never its imports, so binding only the wiring (tool contract,
+ * server factory, HTTP transport, Playground composer, skill) would leave the
+ * canonical target invariant to changes in the ~3.5k lines of core logic those
+ * files call into — a C3 sign-off would then attest a fingerprint that omits the
+ * code being reviewed. The recipe therefore binds the transitive slice:
+ *
+ *   WIRING          — tool-contracts, server-factory, ui-server, App.tsx, SKILL.md
+ *   IMPLEMENTATION  — create-ui-spec{,-contracts,-mcp,-http,-dependencies,
+ *                     -transport-errors}.ts, c3/safe-aggregator.ts,
+ *                     c3/fallback-recipe-v1.json
+ *
+ * Keys are repo-relative paths (unique, stable, self-describing in the ledger's
+ * contractHashes). Every binding resolves at C3_SOURCE_GIT_SHA; C3 sets no
+ * `integrationGitSha` because the slice landed across multiple commits (unlike
+ * C1's single merge) and later hardening legitimately diverges from the reviewed
+ * bytes — so C3 is historical-only by design (the recipe attests WHAT was
+ * reviewed, not that the live tree still matches it).
  */
 const C3_CONTRACT_BINDINGS: readonly CheckpointSourceBinding[] = [
+  // Wiring surface.
   { key: "src/tool-contracts.ts", repositoryPath: "src/tool-contracts.ts", gitCommit: C3_SOURCE_GIT_SHA },
   { key: "src/server-factory.ts", repositoryPath: "src/server-factory.ts", gitCommit: C3_SOURCE_GIT_SHA },
   { key: "src/scripts/ui-server.ts", repositoryPath: "src/scripts/ui-server.ts", gitCommit: C3_SOURCE_GIT_SHA },
   { key: "site/src/app/App.tsx", repositoryPath: "site/src/app/App.tsx", gitCommit: C3_SOURCE_GIT_SHA },
   { key: "skill/clean-ui-design/SKILL.md", repositoryPath: "skill/clean-ui-design/SKILL.md", gitCommit: C3_SOURCE_GIT_SHA },
+  // create_ui_spec implementation.
+  { key: "src/create-ui-spec.ts", repositoryPath: "src/create-ui-spec.ts", gitCommit: C3_SOURCE_GIT_SHA },
+  { key: "src/create-ui-spec-contracts.ts", repositoryPath: "src/create-ui-spec-contracts.ts", gitCommit: C3_SOURCE_GIT_SHA },
+  { key: "src/create-ui-spec-mcp.ts", repositoryPath: "src/create-ui-spec-mcp.ts", gitCommit: C3_SOURCE_GIT_SHA },
+  { key: "src/create-ui-spec-http.ts", repositoryPath: "src/create-ui-spec-http.ts", gitCommit: C3_SOURCE_GIT_SHA },
+  { key: "src/create-ui-spec-dependencies.ts", repositoryPath: "src/create-ui-spec-dependencies.ts", gitCommit: C3_SOURCE_GIT_SHA },
+  { key: "src/create-ui-spec-transport-errors.ts", repositoryPath: "src/create-ui-spec-transport-errors.ts", gitCommit: C3_SOURCE_GIT_SHA },
+  { key: "src/c3/safe-aggregator.ts", repositoryPath: "src/c3/safe-aggregator.ts", gitCommit: C3_SOURCE_GIT_SHA },
+  { key: "src/c3/fallback-recipe-v1.json", repositoryPath: "src/c3/fallback-recipe-v1.json", gitCommit: C3_SOURCE_GIT_SHA },
 ];
 
 /**

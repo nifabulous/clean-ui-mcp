@@ -32,12 +32,25 @@ describe("checkpoint recipes", () => {
   });
 
   it("binds every C3 slice contract source to the reviewed commit", () => {
+    // Both the wiring surface AND the create_ui_spec implementation. A file
+    // hash covers only its own bytes, not its imports, so binding only the
+    // wiring would leave the canonical target invariant to core-logic changes.
     expect(C3_RECIPE.contractBindings.map((b) => b.repositoryPath)).toEqual([
+      // Wiring surface.
       "src/tool-contracts.ts",
       "src/server-factory.ts",
       "src/scripts/ui-server.ts",
       "site/src/app/App.tsx",
       "skill/clean-ui-design/SKILL.md",
+      // create_ui_spec implementation.
+      "src/create-ui-spec.ts",
+      "src/create-ui-spec-contracts.ts",
+      "src/create-ui-spec-mcp.ts",
+      "src/create-ui-spec-http.ts",
+      "src/create-ui-spec-dependencies.ts",
+      "src/create-ui-spec-transport-errors.ts",
+      "src/c3/safe-aggregator.ts",
+      "src/c3/fallback-recipe-v1.json",
     ]);
     expect(C3_RECIPE.contractBindings.every((b) => b.gitCommit === C3_SOURCE_GIT_SHA)).toBe(true);
     expect(C3_RECIPE.planBinding.gitCommit).toBe(C3_SOURCE_GIT_SHA);

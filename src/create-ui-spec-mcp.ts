@@ -208,6 +208,8 @@ export async function handleCreateUiSpec(
       : {}),
     ...(transport.designSystem !== undefined ? { designSystem: transport.designSystem } : {}),
     ...(transport.target !== undefined ? { target: transport.target } : {}),
+    ...(transport.colorIntent !== undefined ? { colorIntent: transport.colorIntent } : {}),
+    ...(transport.typeIntent !== undefined ? { typeIntent: transport.typeIntent } : {}),
   };
 
   // ----- 2. The sole producer -----

@@ -1405,3 +1405,73 @@ describe("create-ui-spec producer — Task 2 adapter-facing evidence result path
     expect(ok.success, ok.success ? "" : JSON.stringify(ok.error.issues, null, 2)).toBe(true);
   });
 });
+
+describe("create-ui-spec producer — caller constraints become manual acceptance criteria", () => {
+  it("turns each caller constraint into a manual acceptance criterion", async () => {
+    const res = await createUiSpecForAdapter(
+      validInput({
+        productContext: "A settings screen for two-factor setup",
+        constraints: ["AA contrast", "primary action always visible"],
+      }),
+      deps([], []),
+    );
+    const criteria = res.envelope.spec.acceptanceCriteria;
+    const ids = criteria.map((c) => c.id);
+    expect(ids).toContain("caller-constraint-1");
+    expect(ids).toContain("caller-constraint-2");
+    expect(ids).toContain("fallback-manual-spec-review"); // recipe criterion survives
+    // Appended, not prepended: client-bounds tests read acceptanceCriteria[0].
+    expect(criteria[0]?.id).toBe("fallback-manual-spec-review");
+    const first = criteria.find((c) => c.id === "caller-constraint-1")!;
+    expect(first.verifier).toBe("manual");
+    expect(first.priority).toBe("should"); // NOT "must" — caller stated no priority
+    expect(first.subject).toBe("AA contrast");
+    expect(first.evidenceIds).toEqual([]);
+    expect(first.manualSteps.length).toBeGreaterThan(0);
+  });
+
+  it("adds no caller criteria when the caller supplied no constraints", async () => {
+    const res = await createUiSpecForAdapter(validInput({ constraints: [] }), deps([], []));
+    const ids = res.envelope.spec.acceptanceCriteria.map((c) => c.id);
+    expect(ids).toEqual(["fallback-manual-spec-review"]);
+  });
+});
+
+describe("create-ui-spec producer — structured design intent reaches spec.context and identity", () => {
+  it("gives two requests differing only in colorIntent distinct artifactIds", async () => {
+    const base = validInput({ productContext: "A settings screen for two-factor setup" });
+    const a = await createUiSpecForAdapter(
+      { ...base, colorIntent: { accentPreference: "light blue" } },
+      deps([], []),
+    );
+    const b = await createUiSpecForAdapter(
+      { ...base, colorIntent: { accentPreference: "warm red" } },
+      deps([], []),
+    );
+    expect(a.envelope.spec.context.colorIntent).toEqual({ accentPreference: "light blue" });
+    expect(b.envelope.spec.context.colorIntent).toEqual({ accentPreference: "warm red" });
+    expect(a.envelope.semanticSpecSha256).not.toBe(b.envelope.semanticSpecSha256);
+    expect(a.envelope.artifactId).not.toBe(b.envelope.artifactId);
+  });
+
+  it("records typeIntent without materializing tokens", async () => {
+    const res = await createUiSpecForAdapter(
+      validInput({ typeIntent: { voice: "plainspoken", density: "compact" } }),
+      deps([], []),
+    );
+    expect(res.envelope.spec.context.typeIntent).toEqual({
+      voice: "plainspoken",
+      density: "compact",
+    });
+    // Intent is RECORDED, not materialized — the null-token contract holds.
+    expect(res.envelope.spec.typographyTokens).toBeNull();
+    expect(res.envelope.spec.colorTokens).toBeNull();
+    expect(res.envelope.spec.typographyTokenAuthority).toBe("editorial");
+  });
+
+  it("omits both intent keys entirely when the caller supplied neither", async () => {
+    const res = await createUiSpecForAdapter(validInput(), deps([], []));
+    expect(Object.keys(res.envelope.spec.context)).not.toContain("colorIntent");
+    expect(Object.keys(res.envelope.spec.context)).not.toContain("typeIntent");
+  });
+});

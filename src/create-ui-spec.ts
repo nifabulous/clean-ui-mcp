@@ -313,7 +313,9 @@ async function resolveExplicitReferences(
 
   if (resolvedTokens.length === 0) {
     // All explicit references missing — INVALID_INPUT (no silent substitution).
-    throw invalidInput("all supplied reference tokens could not be resolved");
+    throw invalidInput(
+      "all supplied reference tokens could not be resolved; omit them to use automatic retrieval",
+    );
   }
 
   return {

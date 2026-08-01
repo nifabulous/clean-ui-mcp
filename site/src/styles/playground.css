@@ -170,6 +170,23 @@
   color: var(--ink-muted);
 }
 
+.composer__fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.composer__legend {
+  padding: 0;
+  font-size: 0.9375rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+
 .composer__error {
   margin: 0;
   font-size: 0.8125rem;

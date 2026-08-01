@@ -14,6 +14,7 @@ import {
   DESIGN_JSON_MIME,
   DESIGN_MARKDOWN_FILENAME,
   DESIGN_MARKDOWN_MIME,
+  MAX_INTENT_TEXT_LENGTH,
   MAX_CONSTRAINTS,
   MAX_REFERENCE_IDS,
   briefValidationMessage,
@@ -37,13 +38,13 @@ import "../styles/playground.css";
  *
  * WHAT REACHES THE DOM. Only the DISPLAY-SAFE half of {@link SafeArtifact}, the
  * allowlist projection built by the client from CHECKED response positions: the
- * design direction, the key decisions' structured positions, the acceptance
- * criteria, the producer's warnings, the fields it could not decide, and an
- * AGGREGATE evidence summary (counts plus retrieval metadata). No raw corpus id,
- * source identity, product name, image path, screenshot, critique, provider
- * diagnostic, credential, or filesystem path is projected, so none can be
- * rendered — not because a scrubber removed it, but because the object this
- * component reads does not carry it.
+ * design direction, caller-supplied color/typography intent, the key decisions'
+ * structured positions, the acceptance criteria, the producer's warnings, the
+ * fields it could not decide, and an AGGREGATE evidence summary (counts plus
+ * retrieval metadata). No raw corpus id, source identity, product name, image
+ * path, screenshot, critique, provider diagnostic, credential, or filesystem path
+ * is projected, so none can be rendered — not because a scrubber removed it, but
+ * because the object this component reads does not carry it.
  *
  * `artifact.designMarkdown` / `artifact.designJson` are the EXCEPTION, and the
  * exception is enforced rather than asserted. They are the server's own
@@ -60,12 +61,14 @@ import "../styles/playground.css";
  * publish every one of those fields. A copy control on this page must have NO
  * value-rendering fallback.
  *
- * The producer echoes the caller's own brief into `spec.context.productContext`.
- * The projection drops it: an operator's own brief read back is not a result. The
- * `designDirection` IS rendered — it is the producer's direction statement and the
- * design names it as displayable. It is producer free text, so this component
- * makes no claim about its prose; the only claim made anywhere on this path is
- * about ID and path SHAPE, which the client re-checks itself.
+ * The producer echoes the caller's own brief into `spec.context.productContext`
+ * and records explicit intent beside it. The projection drops the product brief
+ * but carries only the bounded intent fields, so the operator can tell what was
+ * recorded without treating it as a token decision. The `designDirection` IS
+ * rendered — it is the producer's direction statement and the design names it as
+ * displayable. It is producer free text, so this component makes no claim about
+ * its prose; the only claim made anywhere on this path is about ID and path
+ * SHAPE, which the client re-checks itself.
  *
  * DOWNLOADS NEVER REGENERATE. Both renderings arrive in the single response and
  * live in component state. The download handlers read `artifact.designMarkdown` /
@@ -101,6 +104,11 @@ interface FormState {
   readonly library: string;
   readonly constraintsText: string;
   readonly referencesText: string;
+  readonly accentPreference: string;
+  readonly colorMood: string;
+  readonly colorContrastFloor: "" | "AA" | "AAA";
+  readonly typographyVoice: string;
+  readonly typographyDensity: "" | "compact" | "regular" | "spacious";
 }
 
 const EMPTY_FORM: FormState = {
@@ -112,6 +120,11 @@ const EMPTY_FORM: FormState = {
   library: "",
   constraintsText: "",
   referencesText: "",
+  accentPreference: "",
+  colorMood: "",
+  colorContrastFloor: "",
+  typographyVoice: "",
+  typographyDensity: "",
 };
 
 /** Split a one-per-line textarea into trimmed, non-empty lines. */
@@ -126,6 +139,17 @@ function lines(text: string): string[] {
 function briefFrom(form: FormState): DesignBrief {
   const constraints = lines(form.constraintsText);
   const referenceIds = lines(form.referencesText);
+  const colorIntent = {
+    ...(form.accentPreference.trim().length > 0
+      ? { accentPreference: form.accentPreference }
+      : {}),
+    ...(form.colorMood.trim().length > 0 ? { mood: form.colorMood } : {}),
+    ...(form.colorContrastFloor !== "" ? { contrastFloor: form.colorContrastFloor } : {}),
+  };
+  const typeIntent = {
+    ...(form.typographyVoice.trim().length > 0 ? { voice: form.typographyVoice } : {}),
+    ...(form.typographyDensity !== "" ? { density: form.typographyDensity } : {}),
+  };
   return {
     productContext: form.brief,
     ...(form.platform !== "" ? { platform: form.platform } : {}),
@@ -141,6 +165,8 @@ function briefFrom(form: FormState): DesignBrief {
       : {}),
     ...(constraints.length > 0 ? { constraints } : {}),
     ...(referenceIds.length > 0 ? { referenceIds } : {}),
+    ...(Object.keys(colorIntent).length > 0 ? { colorIntent } : {}),
+    ...(Object.keys(typeIntent).length > 0 ? { typeIntent } : {}),
   };
 }
 
@@ -502,6 +528,102 @@ function PlaygroundComposer(): ReactElement {
             </p>
           </div>
 
+          <fieldset className="composer__fieldset">
+            <legend className="composer__legend">Design intent</legend>
+            <p className="composer__hint" id={id("intent-hint")}>
+              Optional caller-supplied guidance. It is recorded in the handoff, but it does not
+              create color or typography tokens. Text fields allow up to {MAX_INTENT_TEXT_LENGTH}
+              characters.
+            </p>
+            <div className="composer__grid">
+              <div className="composer__field">
+                <label className="composer__label" htmlFor={id("accent-preference")}>
+                  Accent preference
+                </label>
+                <input
+                  id={id("accent-preference")}
+                  className="composer__input"
+                  type="text"
+                  maxLength={MAX_INTENT_TEXT_LENGTH}
+                  value={form.accentPreference}
+                  aria-describedby={id("intent-hint")}
+                  onChange={(event) => setForm({ ...form, accentPreference: event.target.value })}
+                />
+              </div>
+              <div className="composer__field">
+                <label className="composer__label" htmlFor={id("color-mood")}>
+                  Color mood
+                </label>
+                <input
+                  id={id("color-mood")}
+                  className="composer__input"
+                  type="text"
+                  maxLength={MAX_INTENT_TEXT_LENGTH}
+                  value={form.colorMood}
+                  aria-describedby={id("intent-hint")}
+                  onChange={(event) => setForm({ ...form, colorMood: event.target.value })}
+                />
+              </div>
+              <div className="composer__field">
+                <label className="composer__label" htmlFor={id("contrast-floor")}>
+                  Contrast floor
+                </label>
+                <select
+                  id={id("contrast-floor")}
+                  className="composer__select"
+                  value={form.colorContrastFloor}
+                  aria-describedby={id("intent-hint")}
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      colorContrastFloor: event.target.value as FormState["colorContrastFloor"],
+                    })
+                  }
+                >
+                  <option value="">Not specified</option>
+                  <option value="AA">AA</option>
+                  <option value="AAA">AAA</option>
+                </select>
+              </div>
+              <div className="composer__field">
+                <label className="composer__label" htmlFor={id("typography-voice")}>
+                  Typography voice
+                </label>
+                <input
+                  id={id("typography-voice")}
+                  className="composer__input"
+                  type="text"
+                  maxLength={MAX_INTENT_TEXT_LENGTH}
+                  value={form.typographyVoice}
+                  aria-describedby={id("intent-hint")}
+                  onChange={(event) => setForm({ ...form, typographyVoice: event.target.value })}
+                />
+              </div>
+              <div className="composer__field">
+                <label className="composer__label" htmlFor={id("typography-density")}>
+                  Typography density
+                </label>
+                <select
+                  id={id("typography-density")}
+                  className="composer__select"
+                  value={form.typographyDensity}
+                  aria-describedby={id("intent-hint")}
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      typographyDensity: event.target.value as FormState["typographyDensity"],
+                    })
+                  }
+                >
+                  <option value="">Not specified</option>
+                  <option value="compact">Compact</option>
+                  <option value="regular">Regular</option>
+                  <option value="spacious">Spacious</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
           <details className="composer__advanced">
             <summary className="composer__summary">Advanced: explicit reference override</summary>
             <div className="composer__field">
@@ -705,6 +827,52 @@ function ArtifactView({
         </h4>
         <p className="artifact__direction">{artifact.designDirection}</p>
       </section>
+
+      {(artifact.colorIntent !== null || artifact.typeIntent !== null) && (
+        <section className="artifact__section" aria-labelledby={id("intent-title")}>
+          <h4 className="artifact__section-title" id={id("intent-title")}>
+            Design intent
+          </h4>
+          <p className="artifact__note">
+            Caller-supplied guidance recorded in the spec context. It is not a token decision:
+            color and typography tokens are only available when an authoritative design system
+            supplies them.
+          </p>
+          <dl className="artifact__facts artifact__facts--intent">
+            {artifact.colorIntent !== null && (
+              <div className="artifact__fact">
+                <dt>Color intent</dt>
+                <dd>
+                  {[
+                    artifact.colorIntent.accentPreference
+                      ? "Accent preference: " + artifact.colorIntent.accentPreference
+                      : null,
+                    artifact.colorIntent.mood ? "Mood: " + artifact.colorIntent.mood : null,
+                    artifact.colorIntent.contrastFloor
+                      ? "Contrast floor: " + artifact.colorIntent.contrastFloor
+                      : null,
+                  ]
+                    .filter((value): value is string => value !== null)
+                    .join(" · ")}
+                </dd>
+              </div>
+            )}
+            {artifact.typeIntent !== null && (
+              <div className="artifact__fact">
+                <dt>Typography intent</dt>
+                <dd>
+                  {[
+                    artifact.typeIntent.voice ? "Voice: " + artifact.typeIntent.voice : null,
+                    artifact.typeIntent.density ? "Density: " + artifact.typeIntent.density : null,
+                  ]
+                    .filter((value): value is string => value !== null)
+                    .join(" · ")}
+                </dd>
+              </div>
+            )}
+          </dl>
+        </section>
+      )}
 
       {artifact.decisions.length > 0 && (
         <section className="artifact__section" aria-labelledby={id("decisions-title")}>

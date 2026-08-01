@@ -399,6 +399,31 @@ describe("PlaygroundPage — idle", () => {
       referenceIds: ["public-ref-1", "public-ref-2"],
     });
   });
+
+  it("sends caller-supplied color and typography intent", async () => {
+    const harness = installFetch(successQueue());
+    renderComposer();
+    typeBrief();
+    fireEvent.change(screen.getByLabelText(/accent preference/i), {
+      target: { value: "light blue" },
+    });
+    fireEvent.change(screen.getByLabelText(/color mood/i), { target: { value: "calm" } });
+    fireEvent.change(screen.getByLabelText(/contrast floor/i), { target: { value: "AA" } });
+    fireEvent.change(screen.getByLabelText(/typography voice/i), {
+      target: { value: "plainspoken" },
+    });
+    fireEvent.change(screen.getByLabelText(/typography density/i), {
+      target: { value: "compact" },
+    });
+    fireEvent.click(generateButton());
+    await screen.findByRole("heading", { level: 3, name: /design handoff/i });
+
+    expect(harness.calls[1].body).toMatchObject({
+      productContext: BRIEF_TEXT,
+      colorIntent: { accentPreference: "light blue", mood: "calm", contrastFloor: "AA" },
+      typeIntent: { voice: "plainspoken", density: "compact" },
+    });
+  });
 });
 
 describe("PlaygroundPage — generating", () => {
@@ -473,6 +498,33 @@ describe("PlaygroundPage — success", () => {
     const evidence = screen.getByRole("region", { name: /evidence summary/i });
     expect(evidence.textContent ?? "").toMatch(/2/);
     expect(evidence.textContent ?? "").toMatch(/keyword/);
+  });
+
+  it("shows caller intent recorded in spec.context without trusting handoff copies", async () => {
+    const envelope = envelopeFixture();
+    const spec = envelope.spec as Record<string, unknown>;
+    const context = spec.context as Record<string, unknown>;
+    context.colorIntent = {
+      accentPreference: "light blue",
+      mood: "calm",
+      contrastFloor: "AA",
+    };
+    context.typeIntent = { voice: "plainspoken", density: "compact" };
+    envelope.handoff = {
+      target: "neutral-web",
+      motionIntents: [],
+      colorIntent: { accentPreference: "handoff-only value" },
+      typeIntent: { voice: "handoff-only value" },
+    };
+
+    await generateSuccessfully(envelope);
+
+    const intent = screen.getByRole("region", { name: /design intent/i });
+    expect(intent.textContent ?? "").toMatch(/light blue/);
+    expect(intent.textContent ?? "").toMatch(/plainspoken/);
+    expect(intent.textContent ?? "").toMatch(/caller-supplied/i);
+    expect(intent.textContent ?? "").toMatch(/not a token decision/i);
+    expect(intent.textContent ?? "").not.toContain("handoff-only value");
   });
 
   it("never puts a private marker, source identity, path, or evidence id in the DOM", async () => {

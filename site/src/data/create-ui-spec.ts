@@ -41,13 +41,14 @@
  *     falls back to pointing at the download, never to printing the value as
  *     selectable text. Treating them as displayable would defeat (2) entirely.
  *
- * `spec.context.productContext` and `spec.designDirection` echo the CALLER'S OWN
- * brief. That is the operator's data, not corpus content — but the projection
- * still drops `context` entirely, because showing an operator their own brief
- * back is not a result. `designDirection` IS projected: it is the producer's
- * direction statement and the design names it as displayable. It is producer free
- * text, so this module makes no claim to have screened its prose; the only prose
- * claim made anywhere in this client is about ID/path SHAPE.
+ * `spec.context.productContext` echoes the CALLER'S OWN brief. That is the
+ * operator's data, not corpus content, and it is still dropped. The explicit
+ * `colorIntent` / `typeIntent` fields are the exception: they are projected from
+ * checked `context` positions so the operator can see what was recorded, with no
+ * parallel copy taken from `handoff`. `designDirection` IS projected: it is the
+ * producer's direction statement and the design names it as displayable. It is
+ * producer free text, so this module makes no claim to have screened its prose;
+ * the only prose claim made anywhere in this client is about ID/path SHAPE.
  *
  * NO SERVER FREE TEXT ON THE FAILURE PATH. The route's bounded error body carries
  * a `message`. It is deliberately never surfaced: failures are described by a
@@ -85,6 +86,10 @@ const MAX_CONSTRAINT_LENGTH = 500;
 export const MAX_REFERENCE_IDS = 5;
 const MAX_REFERENCE_ID_LENGTH = 200;
 const MAX_FRAMEWORK_LENGTH = 120;
+/** Structured design-intent text mirrors ColorIntentSchema/TypeIntentSchema. */
+export const MAX_INTENT_TEXT_LENGTH = 120;
+export const COLOR_CONTRAST_FLOORS = ["AA", "AAA"] as const;
+export const TYPE_DENSITIES = ["compact", "regular", "spacious"] as const;
 
 export type BriefPlatform = "web" | "mobile" | "tablet";
 
@@ -92,6 +97,20 @@ export interface BriefDesignSystem {
   readonly status: "none" | "identified";
   readonly registry?: string;
   readonly library?: string;
+}
+
+export type BriefColorContrastFloor = (typeof COLOR_CONTRAST_FLOORS)[number];
+export type BriefTypeDensity = (typeof TYPE_DENSITIES)[number];
+
+export interface BriefColorIntent {
+  readonly accentPreference?: string;
+  readonly mood?: string;
+  readonly contrastFloor?: BriefColorContrastFloor;
+}
+
+export interface BriefTypeIntent {
+  readonly voice?: string;
+  readonly density?: BriefTypeDensity;
 }
 
 /** What the composer collects. Optional fields are omitted from the request. */
@@ -102,6 +121,8 @@ export interface DesignBrief {
   readonly designSystem?: BriefDesignSystem;
   readonly constraints?: readonly string[];
   readonly referenceIds?: readonly string[];
+  readonly colorIntent?: BriefColorIntent;
+  readonly typeIntent?: BriefTypeIntent;
 }
 
 /**
@@ -139,6 +160,32 @@ export function briefValidationMessage(brief: DesignBrief): string | null {
   if (new Set(referenceIds).size !== referenceIds.length) {
     return "Explicit references must be unique.";
   }
+  const colorIntent = brief.colorIntent;
+  if (colorIntent !== undefined) {
+    for (const value of [colorIntent.accentPreference, colorIntent.mood]) {
+      if (value !== undefined && value.trim().length > MAX_INTENT_TEXT_LENGTH) {
+        return `Each color intent text is limited to ${MAX_INTENT_TEXT_LENGTH} characters.`;
+      }
+    }
+    if (
+      colorIntent.contrastFloor !== undefined &&
+      !(COLOR_CONTRAST_FLOORS as readonly string[]).includes(colorIntent.contrastFloor)
+    ) {
+      return "Choose AA or AAA for the contrast floor.";
+    }
+  }
+  const typeIntent = brief.typeIntent;
+  if (typeIntent !== undefined) {
+    if (typeIntent.voice !== undefined && typeIntent.voice.trim().length > MAX_INTENT_TEXT_LENGTH) {
+      return `Typography intent text is limited to ${MAX_INTENT_TEXT_LENGTH} characters.`;
+    }
+    if (
+      typeIntent.density !== undefined &&
+      !(TYPE_DENSITIES as readonly string[]).includes(typeIntent.density)
+    ) {
+      return "Choose compact, regular, or spacious for typography density.";
+    }
+  }
   if (brief.designSystem?.status === "identified") {
     const registry = brief.designSystem.registry?.trim() ?? "";
     const library = brief.designSystem.library?.trim() ?? "";
@@ -170,6 +217,21 @@ function requestBodyFor(brief: DesignBrief): Record<string, unknown> {
   if (constraints.length > 0) body.constraints = [...constraints];
   const referenceIds = brief.referenceIds ?? [];
   if (referenceIds.length > 0) body.referenceIds = [...referenceIds];
+  const colorIntent: Record<string, string> = {};
+  const accentPreference = brief.colorIntent?.accentPreference?.trim() ?? "";
+  const mood = brief.colorIntent?.mood?.trim() ?? "";
+  if (accentPreference.length > 0) colorIntent.accentPreference = accentPreference;
+  if (mood.length > 0) colorIntent.mood = mood;
+  if (brief.colorIntent?.contrastFloor !== undefined) {
+    colorIntent.contrastFloor = brief.colorIntent.contrastFloor;
+  }
+  if (Object.keys(colorIntent).length > 0) body.colorIntent = colorIntent;
+
+  const typeIntent: Record<string, string> = {};
+  const voice = brief.typeIntent?.voice?.trim() ?? "";
+  if (voice.length > 0) typeIntent.voice = voice;
+  if (brief.typeIntent?.density !== undefined) typeIntent.density = brief.typeIntent.density;
+  if (Object.keys(typeIntent).length > 0) body.typeIntent = typeIntent;
   return body;
 }
 
@@ -207,6 +269,19 @@ export interface SafeUnavailableDecision {
   readonly reason: string;
 }
 
+/** Caller-supplied intent projected from the checked `spec.context` only. */
+export interface SafeColorIntent {
+  readonly accentPreference?: string;
+  readonly mood?: string;
+  readonly contrastFloor?: BriefColorContrastFloor;
+}
+
+/** Caller-supplied typography intent projected from the checked `spec.context` only. */
+export interface SafeTypeIntent {
+  readonly voice?: string;
+  readonly density?: BriefTypeDensity;
+}
+
 /**
  * The AGGREGATE evidence summary — counts and closed-enum retrieval metadata
  * only. The response-scoped `evidence-<n>` ids are counted, never listed, and no
@@ -237,6 +312,8 @@ export interface SafeArtifact {
   readonly generatedAt: string;
   readonly producerVersion: string;
   readonly designDirection: string;
+  readonly colorIntent: SafeColorIntent | null;
+  readonly typeIntent: SafeTypeIntent | null;
   readonly decisions: readonly SafeDecision[];
   readonly acceptanceCriteria: readonly SafeAcceptanceCriterion[];
   readonly warnings: readonly SafeWarning[];
@@ -561,8 +638,13 @@ function projectSafeArtifact(payload: unknown): SafeArtifact | null {
   const spec = payload.spec;
   if (!isRecord(spec)) return null;
   if (spec.specVersion !== "1.0") return null;
+  if (!isRecord(spec.context)) return null;
   const designDirection = str(spec.designDirection);
   if (designDirection === null) return null;
+  const colorIntent = projectColorIntent(spec.context.colorIntent);
+  if (spec.context.colorIntent !== undefined && colorIntent === null) return null;
+  const typeIntent = projectTypeIntent(spec.context.typeIntent);
+  if (spec.context.typeIntent !== undefined && typeIntent === null) return null;
 
   const decisions = projectDecisions(spec.citedDecisions);
   if (decisions === null) return null;
@@ -588,6 +670,8 @@ function projectSafeArtifact(payload: unknown): SafeArtifact | null {
     generatedAt,
     producerVersion,
     designDirection,
+    colorIntent,
+    typeIntent,
     decisions,
     acceptanceCriteria,
     warnings: projectedWarnings.warnings,
@@ -609,6 +693,55 @@ function projectSafeArtifact(payload: unknown): SafeArtifact | null {
     semanticSpecSha256,
     designMarkdownSha256,
     designJsonSha256,
+  };
+}
+
+type OptionalIntentText = string | undefined | null;
+
+function optionalIntentText(value: unknown): OptionalIntentText {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_INTENT_TEXT_LENGTH) {
+    return null;
+  }
+  return value;
+}
+
+function projectColorIntent(raw: unknown): SafeColorIntent | null {
+  if (raw === undefined) return null;
+  if (!isRecord(raw)) return null;
+  if (Object.keys(raw).some((key) => !["accentPreference", "mood", "contrastFloor"].includes(key))) {
+    return null;
+  }
+  const accentPreference = optionalIntentText(raw.accentPreference);
+  const mood = optionalIntentText(raw.mood);
+  if (accentPreference === null || mood === null) return null;
+  const contrastFloor = raw.contrastFloor;
+  if (
+    contrastFloor !== undefined &&
+    !(COLOR_CONTRAST_FLOORS as readonly string[]).includes(String(contrastFloor))
+  ) {
+    return null;
+  }
+  return {
+    ...(accentPreference !== undefined ? { accentPreference } : {}),
+    ...(mood !== undefined ? { mood } : {}),
+    ...(contrastFloor !== undefined ? { contrastFloor: contrastFloor as BriefColorContrastFloor } : {}),
+  };
+}
+
+function projectTypeIntent(raw: unknown): SafeTypeIntent | null {
+  if (raw === undefined) return null;
+  if (!isRecord(raw)) return null;
+  if (Object.keys(raw).some((key) => !["voice", "density"].includes(key))) return null;
+  const voice = optionalIntentText(raw.voice);
+  if (voice === null) return null;
+  const density = raw.density;
+  if (density !== undefined && !(TYPE_DENSITIES as readonly string[]).includes(String(density))) {
+    return null;
+  }
+  return {
+    ...(voice !== undefined ? { voice } : {}),
+    ...(density !== undefined ? { density: density as BriefTypeDensity } : {}),
   };
 }
 

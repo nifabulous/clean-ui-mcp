@@ -162,10 +162,15 @@ describe("browser client bounds vs. the envelope schema", () => {
           "its shape check is narrower than the server contract",
       );
     }
-    // The client currently drops `context` by design, so this asserts only that
-    // the criteria survived; projecting the intent itself is the site's task.
+    // The client projects the two caller-owned intent positions from context,
+    // while still dropping the rest of context (including productContext).
     expect(result.artifact.acceptanceCriteria).toHaveLength(13);
     expect(result.artifact.acceptanceCriteria.map((c) => c.id)).toContain("caller-constraint-12");
+    expect(result.artifact.colorIntent?.accentPreference).toHaveLength(120);
+    expect(result.artifact.colorIntent?.mood).toHaveLength(120);
+    expect(result.artifact.colorIntent?.contrastFloor).toBe("AAA");
+    expect(result.artifact.typeIntent?.voice).toHaveLength(120);
+    expect(result.artifact.typeIntent?.density).toBe("spacious");
   });
 
   it("the browser client still refuses a genuinely wrong shape", async () => {

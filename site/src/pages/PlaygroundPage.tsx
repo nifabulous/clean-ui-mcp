@@ -999,9 +999,9 @@ function ArtifactView({
           Artifact integrity
         </h4>
         <p className="artifact__note">
-          The semantic hash covers the spec's content: regenerate with the same inputs and it is
-          identical. The digests below it cover exact bytes and include generation time, so they
-          change on every run even when nothing about the design changed.
+          The semantic hash covers the spec's content with generation time normalized. Identical
+          semantic content produces the same hash. Exact-byte digests include generation time and
+          can differ between runs even when the design does not change.
         </p>
         <dl className="artifact__facts artifact__facts--hashes">
           <div className="artifact__fact">

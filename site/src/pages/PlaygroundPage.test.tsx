@@ -608,6 +608,17 @@ describe("PlaygroundPage — downloads reuse the returned bytes", () => {
     expect(within(region).getByText(/include generation time/i)).toBeInTheDocument();
   });
 
+  it("describes hash stability without promising same-input reproducibility", async () => {
+    await generateSuccessfully();
+    const region = screen.getByRole("region", { name: /artifact integrity/i });
+    const note = within(region).getByText(/semantic hash covers/i);
+
+    expect(note).toHaveTextContent(/generation time normalized/i);
+    expect(note).toHaveTextContent(/identical semantic content/i);
+    expect(note).toHaveTextContent(/can differ between runs/i);
+    expect(note).not.toHaveTextContent(/same inputs.*identical/i);
+  });
+
   it("offers a copy-markdown action alongside the downloads", async () => {
     await generateSuccessfully();
     expect(screen.getByRole("button", { name: /copy markdown/i })).toBeInTheDocument();

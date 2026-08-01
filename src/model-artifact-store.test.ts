@@ -203,6 +203,53 @@ describe("createFileModelArtifactStore", () => {
     }
   });
 
+  it("rolls back a newly published record when post-publication directory sync fails", async () => {
+    const { createFileModelArtifactStore } = await loadStoreModule();
+    const root = mkdtempSync(join(tmpdir(), "model-artifact-store-sync-failure-"));
+    const record = buildRecord();
+    let syncCalls = 0;
+
+    try {
+      const store = createFileModelArtifactStore(root, {
+        syncDirectory: async () => {
+          syncCalls += 1;
+          if (syncCalls === 1) throw new Error("post-publication sync failed");
+        },
+      });
+
+      await expect(store.save(record)).rejects.toThrow("post-publication sync failed");
+      await expect(store.read(record.artifactId as string)).resolves.toBeNull();
+      expect(readdirSync(root)).toEqual([]);
+      expect(syncCalls).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("never deletes a pre-existing first-write-wins record when duplicate cleanup fails", async () => {
+    const { createFileModelArtifactStore } = await loadStoreModule();
+    const root = mkdtempSync(join(tmpdir(), "model-artifact-store-existing-"));
+    const first = buildRecord({ latencyMs: 100 });
+    const duplicate = buildRecord({ latencyMs: 200 });
+
+    try {
+      const initialStore = createFileModelArtifactStore(root);
+      await initialStore.save(first);
+      const failingDuplicateStore = createFileModelArtifactStore(root, {
+        syncDirectory: async () => {
+          throw new Error("duplicate cleanup sync failed");
+        },
+      });
+
+      await expect(failingDuplicateStore.save(duplicate)).rejects.toThrow(
+        "duplicate cleanup sync failed",
+      );
+      await expect(initialStore.read(first.artifactId as string)).resolves.toEqual(first);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects traversal-shaped artifact identifiers on save, read, and delete", async () => {
     const { createFileModelArtifactStore } = await loadStoreModule();
     const root = mkdtempSync(join(tmpdir(), "model-artifact-store-"));

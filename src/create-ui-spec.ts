@@ -217,16 +217,18 @@ async function buildModelAwareEnvelope(
   generatedAt: string,
   model: CreateUiSpecModelDependency,
 ): Promise<DesignArtifactEnvelope> {
+  // Validate the deterministic scaffold and all authority decisions before an
+  // optional provider can run. This is also the exact envelope every model
+  // failure returns after adding only bounded execution metadata.
+  const deterministicEnvelope = buildValidatedEnvelope(request, resolved, generatedAt);
+
   if (model.kind === "not-configured") {
-    return buildValidatedEnvelope(request, resolved, generatedAt);
+    return deterministicEnvelope;
   }
 
   if (model.kind === "invalid-configuration") {
-    return buildValidatedEnvelope(
-      request,
-      resolved,
-      generatedAt,
-      undefined,
+    return attachModelExecution(
+      deterministicEnvelope,
       ModelExecutionSchema.parse({ state: "invalid-configuration" }),
     );
   }
@@ -236,13 +238,7 @@ async function buildModelAwareEnvelope(
     model.runtime,
   );
   if (outcome.kind === "fallback") {
-    return buildValidatedEnvelope(
-      request,
-      resolved,
-      generatedAt,
-      undefined,
-      outcome.execution,
-    );
+    return attachModelExecution(deterministicEnvelope, outcome.execution);
   }
 
   let proposedEnvelope: DesignArtifactEnvelope;
@@ -265,11 +261,8 @@ async function buildModelAwareEnvelope(
       retention: "until-explicit-delete",
     });
   } catch {
-    return buildValidatedEnvelope(
-      request,
-      resolved,
-      generatedAt,
-      undefined,
+    return attachModelExecution(
+      deterministicEnvelope,
       ModelExecutionSchema.parse({ state: "proposal-rejected" }),
     );
   }
@@ -277,16 +270,24 @@ async function buildModelAwareEnvelope(
   try {
     await model.runtime.store.save(record);
   } catch {
-    return buildValidatedEnvelope(
-      request,
-      resolved,
-      generatedAt,
-      undefined,
+    return attachModelExecution(
+      deterministicEnvelope,
       ModelExecutionSchema.parse({ state: "persistence-failed" }),
     );
   }
 
   return proposedEnvelope;
+}
+
+function attachModelExecution(
+  deterministicEnvelope: DesignArtifactEnvelope,
+  execution: ModelExecution,
+): DesignArtifactEnvelope {
+  return parseDesignArtifactEnvelope({
+    ...deterministicEnvelope,
+    modelExecution: execution,
+    modelExecutionSha256: sha256Canonical(execution),
+  });
 }
 
 function buildValidatedEnvelope(

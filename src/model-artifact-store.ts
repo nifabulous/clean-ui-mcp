@@ -14,6 +14,11 @@ export interface ModelArtifactStore {
   delete(artifactId: string): Promise<boolean>;
 }
 
+interface FileModelArtifactStoreOptions {
+  /** Test seam for deterministic post-publication durability failures. */
+  readonly syncDirectory?: (path: string) => Promise<void>;
+}
+
 /**
  * One-file-per-artifact history store with first-write-wins semantics.
  *
@@ -21,7 +26,10 @@ export interface ModelArtifactStore {
  * via an exclusive hard-link gives us the no-clobber property the contract
  * requires while still installing fully-written bytes atomically.
  */
-export function createFileModelArtifactStore(rootDir: string): ModelArtifactStore {
+export function createFileModelArtifactStore(
+  rootDir: string,
+  options: FileModelArtifactStoreOptions = {},
+): ModelArtifactStore {
   const resolvedRoot = resolve(rootDir);
   const inflightSaves = new Map<string, Promise<void>>();
 
@@ -34,7 +42,7 @@ export function createFileModelArtifactStore(rootDir: string): ModelArtifactStor
     return resolve(resolvedRoot, `${safeArtifactId}.json`);
   }
 
-  async function syncDirectory(path: string): Promise<void> {
+  async function syncDirectoryDurably(path: string): Promise<void> {
     const handle = await open(path, "r");
     try {
       await handle.sync();
@@ -42,6 +50,7 @@ export function createFileModelArtifactStore(rootDir: string): ModelArtifactStor
       await handle.close();
     }
   }
+  const syncDirectory = options.syncDirectory ?? syncDirectoryDurably;
 
   return {
     async save(record: ModelArtifactRecord): Promise<void> {
@@ -102,30 +111,54 @@ export function createFileModelArtifactStore(rootDir: string): ModelArtifactStor
 
     const destination = artifactPath(parsed.artifactId);
     const tempPath = `${destination}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
-    const handle = await open(tempPath, "wx", 0o600);
+    let tempExists = false;
     let published = false;
 
     try {
-      const body = `${JSON.stringify(parsed, null, 2)}\n`;
-      await handle.writeFile(body, "utf-8");
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
+      const handle = await open(tempPath, "wx", 0o600);
+      tempExists = true;
+      try {
+        const body = `${JSON.stringify(parsed, null, 2)}\n`;
+        await handle.writeFile(body, "utf-8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
 
-    try {
       await link(tempPath, destination);
       published = true;
+      await unlink(tempPath);
+      tempExists = false;
       await syncDirectory(dirname(destination));
     } catch (error) {
-      if (!isErrno(error, "EEXIST")) throw error;
-    } finally {
-      await unlink(tempPath).catch((error) => {
-        if (!isErrno(error, "ENOENT")) throw error;
-      });
+      const duplicate = !published && isErrno(error, "EEXIST");
+      const cleanupErrors: unknown[] = [];
+
       if (published) {
-        await syncDirectory(dirname(destination));
+        await unlink(destination).catch((cleanupError) => {
+          if (!isErrno(cleanupError, "ENOENT")) cleanupErrors.push(cleanupError);
+        });
       }
+      if (tempExists) {
+        await unlink(tempPath).catch((cleanupError) => {
+          if (!isErrno(cleanupError, "ENOENT")) cleanupErrors.push(cleanupError);
+        });
+      }
+      if (published || tempExists || duplicate) {
+        await syncDirectory(dirname(destination)).catch((cleanupError) => {
+          cleanupErrors.push(cleanupError);
+        });
+      }
+
+      if (duplicate && cleanupErrors.length === 0) return;
+      if (duplicate && cleanupErrors.length === 1) throw cleanupErrors[0];
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...cleanupErrors],
+          "model artifact store failed and cleanup did not complete",
+        );
+      }
+      throw error;
     }
   }
 }

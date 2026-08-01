@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -120,11 +120,10 @@ function makeRuntime(options: {
   };
 }
 
-function memoryStore(options: { failSave?: boolean } = {}): ModelArtifactStore {
+function memoryStore(): ModelArtifactStore {
   const records = new Map<string, ModelArtifactRecord>();
   return {
     save: vi.fn(async (record: ModelArtifactRecord) => {
-      if (options.failSave) throw new Error("private persistence diagnostic");
       if (!records.has(record.artifactId)) records.set(record.artifactId, record);
     }),
     read: vi.fn(async (artifactId: string) => records.get(artifactId) ?? null),
@@ -172,6 +171,7 @@ describe("createUiSpec proposal-only model path", () => {
   });
 
   it("integrates a valid proposal without granting token or evidence authority and persists only the validated artifact", async () => {
+    const baseline = await deterministicBaseline();
     const root = mkdtempSync(join(tmpdir(), "create-ui-spec-model-path-"));
     tempRoots.push(root);
     const store = createFileModelArtifactStore(root);
@@ -204,6 +204,12 @@ describe("createUiSpec proposal-only model path", () => {
     expect(result.envelope.designMarkdown).toContain("## Model proposal — not accepted");
     expect(await store.read(result.envelope.artifactId)).not.toBeNull();
     expect(sha256Hex(await readFile(corpusPath))).toBe(corpusBefore);
+    expect(result.envelope.semanticSpecSha256).not.toBe(baseline.envelope.semanticSpecSha256);
+    expect(result.envelope.artifactId).not.toBe(baseline.envelope.artifactId);
+    expect(result.envelope.designMarkdownSha256).not.toBe(
+      baseline.envelope.designMarkdownSha256,
+    );
+    expect(result.envelope.designJsonSha256).not.toBe(baseline.envelope.designJsonSha256);
 
     const later = await createUiSpecForAdapter(
       REQUEST,
@@ -250,9 +256,21 @@ describe("createUiSpec proposal-only model path", () => {
     expect(result.envelope.modelExecution).toEqual({ state: "proposal-rejected" });
   });
 
-  it("discards a valid proposal and falls back byte-for-byte when persistence fails", async () => {
+  it("rolls back a newly published record and falls back byte-for-byte when post-publication sync fails", async () => {
     const baseline = await deterministicBaseline();
-    const store = memoryStore({ failSave: true });
+    const accepted = await createUiSpecForAdapter(
+      REQUEST,
+      dependencies(FIXED_NOW, { kind: "configured", runtime: makeRuntime() }),
+    );
+    const root = mkdtempSync(join(tmpdir(), "create-ui-spec-model-path-sync-failure-"));
+    tempRoots.push(root);
+    let syncCalls = 0;
+    const store = createFileModelArtifactStore(root, {
+      syncDirectory: vi.fn(async () => {
+        syncCalls += 1;
+        if (syncCalls === 1) throw new Error("post-publication sync failed");
+      }),
+    });
     const runtime = makeRuntime({ store });
 
     const result = await createUiSpecForAdapter(
@@ -263,10 +281,11 @@ describe("createUiSpec proposal-only model path", () => {
     expectDeterministicIdentity(result.envelope, baseline.envelope);
     expect(result.envelope.modelExecution).toEqual({ state: "persistence-failed" });
     expect(result.envelope.spec.modelProposal).toBeUndefined();
-    expect(store.save).toHaveBeenCalledTimes(1);
+    expect(await store.read(accepted.envelope.artifactId)).toBeNull();
+    expect(await readdir(root)).toEqual([]);
   });
 
-  it("propagates the same deterministic error unchanged when the one fallback attempt also fails", async () => {
+  it("validates deterministic assembly before the provider call and preserves its exact error", async () => {
     const failedParse = { success: false } as ReturnType<typeof UiSpec.safeParse>;
     vi.spyOn(UiSpec, "safeParse").mockReturnValue(failedParse);
     const noModelError = await captureError(
@@ -281,7 +300,7 @@ describe("createUiSpec proposal-only model path", () => {
       ),
     );
 
-    expect(call).toHaveBeenCalledTimes(1);
+    expect(call).not.toHaveBeenCalled();
     expect(JSON.stringify(modelError)).toBe(JSON.stringify(noModelError));
   });
 });

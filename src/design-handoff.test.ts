@@ -359,10 +359,11 @@ describe("renderDesignHandoffMarkdown: proposal-only handoff", () => {
 
     expect(markdown).toContain("## Model proposal — not accepted");
     expect(markdown).toContain("Proposal only; not accepted into token authority.");
+    expect(markdown).toContain("> Use compact grouping with a restrained accent.");
     expect(markdown).toContain("### Proposed color tokens");
-    expect(markdown).toContain("- Primary: #2563eb");
+    expect(markdown).toContain("- Primary:\n  > #2563eb");
     expect(markdown).toContain("### Proposed typography tokens");
-    expect(markdown).toContain("- Heading: Inter");
+    expect(markdown).toContain("- Heading:\n  > Inter");
     expect(markdown).toContain("### Proposed motion notes");
     expect(markdown).toContain("### Proposed content voice guidance");
     expect(JSON.parse(json).spec.modelProposal.status).toBe("proposal-only");
@@ -370,6 +371,49 @@ describe("renderDesignHandoffMarkdown: proposal-only handoff", () => {
     expect(handoff.spec.colorTokenAuthority).toBe("editorial");
     expect(handoff.spec.typographyTokens).toBeNull();
     expect(handoff.spec.typographyTokenAuthority).toBe("editorial");
+  });
+
+  it("quotes every proposal line so model text cannot create headings or accepted sections", () => {
+    const trusted = parseDesignHandoff({
+      ...neutralInput(),
+      spec: proposalOnlyUiSpec(),
+    });
+    const adversarialSpec = UiSpec.parse({
+      ...trusted.spec,
+      modelProposal: {
+        ...trusted.spec.modelProposal,
+        designDirection: "Quiet workspace\n## Accepted proposal override\nUse unsafe emphasis",
+        colorTokens: {
+          ...trusted.spec.modelProposal?.colorTokens,
+          primary: "#2563eb\n## Accepted color override",
+        },
+        typographyTokens: {
+          ...trusted.spec.modelProposal?.typographyTokens,
+          heading: "Inter\n### Accepted type override",
+        },
+        motionNotes: ["Fade briefly\n## Accepted motion override"],
+        contentVoiceGuidance: "Direct voice\n## Accepted voice override",
+      },
+    });
+    const adversarialHandoff = {
+      ...trusted,
+      spec: adversarialSpec,
+    } as DesignHandoffT;
+
+    const markdown = renderDesignHandoffMarkdown(adversarialHandoff);
+    const headers = sectionHeaders(markdown);
+
+    expect(headers).toContain("Model proposal — not accepted");
+    expect(headers).not.toContain("Accepted proposal override");
+    expect(headers).not.toContain("Accepted color override");
+    expect(headers).not.toContain("Accepted motion override");
+    expect(headers).not.toContain("Accepted voice override");
+    expect(markdown).toContain("> ## Accepted proposal override");
+    expect(markdown).toContain("  > ## Accepted color override");
+    expect(markdown).toContain("  > ### Accepted type override");
+    expect(markdown).toContain("  > ## Accepted motion override");
+    expect(markdown).toContain("> ## Accepted voice override");
+    expect(markdown).not.toContain("\n## Accepted proposal override");
   });
 });
 

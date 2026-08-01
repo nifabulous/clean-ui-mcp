@@ -327,7 +327,7 @@ function renderModelProposalSection(
     proposal.disclaimer,
     "",
     "### Proposed design direction",
-    proposal.designDirection,
+    ...quoteProposalText(proposal.designDirection),
     "",
     "### Proposed color tokens",
   ];
@@ -335,11 +335,11 @@ function renderModelProposalSection(
   if (proposal.colorTokens === undefined) {
     lines.push("_(not proposed)_");
   } else {
-    lines.push(`- Primary: ${proposal.colorTokens.primary}`);
-    lines.push(`- Surface: ${proposal.colorTokens.surface}`);
-    lines.push(`- Ink: ${proposal.colorTokens.ink}`);
-    lines.push(`- Muted: ${proposal.colorTokens.muted}`);
-    lines.push(`- Accent: ${proposal.colorTokens.accent}`);
+    lines.push(...renderQuotedProposalItem("Primary", proposal.colorTokens.primary));
+    lines.push(...renderQuotedProposalItem("Surface", proposal.colorTokens.surface));
+    lines.push(...renderQuotedProposalItem("Ink", proposal.colorTokens.ink));
+    lines.push(...renderQuotedProposalItem("Muted", proposal.colorTokens.muted));
+    lines.push(...renderQuotedProposalItem("Accent", proposal.colorTokens.accent));
   }
 
   lines.push("");
@@ -347,22 +347,40 @@ function renderModelProposalSection(
   if (proposal.typographyTokens === undefined) {
     lines.push("_(not proposed)_");
   } else {
-    lines.push(`- Heading: ${proposal.typographyTokens.heading}`);
-    lines.push(`- Body: ${proposal.typographyTokens.body}`);
-    lines.push(`- Mono: ${proposal.typographyTokens.mono}`);
+    lines.push(...renderQuotedProposalItem("Heading", proposal.typographyTokens.heading));
+    lines.push(...renderQuotedProposalItem("Body", proposal.typographyTokens.body));
+    lines.push(...renderQuotedProposalItem("Mono", proposal.typographyTokens.mono));
   }
 
   lines.push("");
   lines.push("### Proposed motion notes");
-  lines.push(...(
-    proposal.motionNotes.length > 0
-      ? proposal.motionNotes.map((note) => `- ${note}`)
-      : ["_(not proposed)_"]
-  ));
+  if (proposal.motionNotes.length === 0) {
+    lines.push("_(not proposed)_");
+  } else {
+    proposal.motionNotes.forEach((note, index) => {
+      lines.push(...renderQuotedProposalItem(`Note ${index + 1}`, note));
+    });
+  }
   lines.push("");
   lines.push("### Proposed content voice guidance");
-  lines.push(proposal.contentVoiceGuidance ?? "_(not proposed)_");
+  lines.push(...(
+    proposal.contentVoiceGuidance === undefined
+      ? ["_(not proposed)_"]
+      : quoteProposalText(proposal.contentVoiceGuidance)
+  ));
   return lines;
+}
+
+function renderQuotedProposalItem(label: string, value: string): string[] {
+  return [`- ${label}:`, ...quoteProposalText(value, "  ")];
+}
+
+/** Prefix every physical model-authored line; no delimiter can be closed. */
+function quoteProposalText(value: string, indent: string = ""): string[] {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => `${indent}>${line.length > 0 ? ` ${line}` : ""}`);
 }
 
 /**

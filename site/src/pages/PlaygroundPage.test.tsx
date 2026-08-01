@@ -346,6 +346,18 @@ describe("PlaygroundPage — idle", () => {
     expect(link.getAttribute("href")).toBe("/browse");
   });
 
+  it("points explicit-reference users to browse without enumerating reference ids", () => {
+    installFetch(successQueue());
+    renderComposer();
+    fireEvent.click(screen.getByText(/advanced: explicit reference override/i));
+
+    const hint = screen.getByText(/automatic retrieval off/i);
+    expect(hint.textContent ?? "").toMatch(/browse/i);
+    const link = within(hint).getByRole("link", { name: /browse/i });
+    expect(link.getAttribute("href")).toBe("/browse");
+    expect(hint.textContent ?? "").not.toMatch(/corpus-|public-ref-|decision-/i);
+  });
+
   it("sends only the fields the operator filled in", async () => {
     const harness = installFetch(successQueue());
     renderComposer();
@@ -804,6 +816,36 @@ describe("PlaygroundPage — previously-shareable search URLs", () => {
 });
 
 describe("PlaygroundPage — failure and retry", () => {
+  it("gives explicit-reference 400s the automatic-retrieval remedy without rendering server text", async () => {
+    installFetch([
+      { status: 200, json: { nonce: NONCE } },
+      {
+        status: 400,
+        json: {
+          error: {
+            code: "INVALID_INPUT",
+            message: "server-only-diagnostic missing-reference-token",
+            retryable: false,
+          },
+        },
+      },
+    ]);
+    renderComposer();
+    typeBrief();
+    fireEvent.click(screen.getByText(/advanced: explicit reference override/i));
+    fireEvent.change(screen.getByLabelText(/explicit reference/i), {
+      target: { value: "missing-reference-token" },
+    });
+    fireEvent.click(generateButton());
+
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent ?? "").toMatch(
+        /omit them to use automatic retrieval/i,
+      ),
+    );
+    expect(screen.getByRole("status").textContent ?? "").not.toMatch(/missing-reference-token/i);
+  });
+
   it("preserves the brief and offers retry on a retryable failure", async () => {
     installFetch([
       { status: 200, json: { nonce: NONCE } },

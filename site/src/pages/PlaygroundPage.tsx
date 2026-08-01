@@ -85,7 +85,11 @@ type Lifecycle =
   | { readonly kind: "idle" }
   | { readonly kind: "generating"; readonly phase: LifecyclePhase }
   | { readonly kind: "success"; readonly artifact: SafeArtifact }
-  | { readonly kind: "failure"; readonly failure: CreateUiSpecFailure };
+  | {
+      readonly kind: "failure";
+      readonly failure: CreateUiSpecFailure;
+      readonly explicitReferences: boolean;
+    };
 
 /** Editable form state. Kept flat so "start over" is one assignment. */
 interface FormState {
@@ -158,7 +162,7 @@ function statusLabel(lifecycle: Lifecycle): string {
   if (lifecycle.kind === "success") {
     return successLabel(lifecycle.artifact);
   }
-  return failureLabel(lifecycle.failure);
+  return failureLabel(lifecycle.failure, lifecycle.explicitReferences);
 }
 
 /** Producers that consult no model. Their unavailable fields are a rule of the
@@ -212,7 +216,11 @@ const PHASE_LABELS: Readonly<Record<LifecyclePhase, string>> = {
  * server's bounded `error.message` is deliberately never rendered, so no server
  * string can become UI copy.
  */
-function failureLabel(failure: CreateUiSpecFailure): string {
+function failureLabel(failure: CreateUiSpecFailure, explicitReferences = false): string {
+  if (failure.code === "INVALID_INPUT" && explicitReferences) {
+    return "The explicit references could not be resolved; omit them to use automatic retrieval.";
+  }
+
   switch (failure.code) {
     case "INVALID_INPUT":
       return "The brief could not be accepted. Adjust the brief or the optional controls and generate again.";
@@ -310,7 +318,11 @@ function PlaygroundComposer(): ReactElement {
     setLifecycle(
       result.ok
         ? { kind: "success", artifact: result.artifact }
-        : { kind: "failure", failure: result.failure },
+        : {
+            kind: "failure",
+            failure: result.failure,
+            explicitReferences: (brief.referenceIds?.length ?? 0) > 0,
+          },
     );
   }, [form]);
 
@@ -506,7 +518,7 @@ function PlaygroundComposer(): ReactElement {
               />
               <p className="composer__hint" id={id("references-hint")}>
                 Up to {MAX_REFERENCE_IDS} public references. Supplying any of these turns automatic
-                retrieval off for this run.
+                retrieval off for this run. Find candidates in <Link to="/browse">Browse</Link>.
               </p>
             </div>
           </details>

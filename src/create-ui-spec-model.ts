@@ -29,6 +29,7 @@ const GENERIC_URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/\S+/i;
 const BARE_HOST_URL_RE =
   /\b(?:www\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?:\/[^\s)]*)/i;
 const UNIX_PATH_RE = /(^|[\s(])(?:\/|\.{1,2}\/|~\/)[^\s)]+/;
+const WINDOWS_UNC_PATH_RE = /(^|[\s(])\\\\[^\\/\s)]+\\[^\\/\s)]+(?:\\[^\s)]*)?/;
 const WINDOWS_PATH_RE = /(^|[\s(])[A-Za-z]:\\[^\s)]+/;
 
 export interface CreateUiSpecModelInput {
@@ -270,6 +271,7 @@ function looksLikeGenericUrlOrPath(value: string): boolean {
   return GENERIC_URL_RE.test(value)
     || BARE_HOST_URL_RE.test(value)
     || UNIX_PATH_RE.test(value)
+    || WINDOWS_UNC_PATH_RE.test(value)
     || WINDOWS_PATH_RE.test(value);
 }
 

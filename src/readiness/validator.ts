@@ -184,10 +184,11 @@ interface GovernanceChains {
 
 /**
  * Role requirements for checkpoints without a declared closed-world policy
- * (C2–C5). C0 and C1 derive their required roles from `CHECKPOINT_POLICIES`
- * (consumed at runtime via `CHECKPOINT_POLICIES[cp].requiredRoles`); this table
- * only covers the future checkpoints that still use the legacy presence-only
- * closure check.
+ * (C4–C5). C0–C3 derive their required roles from `CHECKPOINT_POLICIES`
+ * (consumed at runtime via `CHECKPOINT_POLICIES[cp].requiredRoles`); the C2
+ * and C3 rows below are retained as inert fallbacks for clarity even though a
+ * policy entry now takes precedence over them. This table only covers the
+ * future checkpoints that still use the legacy presence-only closure check.
  */
 const FUTURE_CHECKPOINT_ROLES: Record<string, string[]> = {
   C2: ["Gold Label Owner", "QA"],
@@ -1598,7 +1599,8 @@ function validateApprovalsAndCheckpoint(
       verifyApprovedArtifactSet(approval, recipe, artifacts, issues, noteApprovalIssue);
 
       // Closed-world policy: exact-set equality for every category against
-      // the declared C0/C1 policy. Missing AND unexpected members are errors.
+      // the declared checkpoint policy (C0–C3). Missing AND unexpected members
+      // are errors.
       verifyCheckpointPolicy(approval, recipe, artifacts, issues, noteApprovalIssue);
     }
 
@@ -1707,7 +1709,7 @@ function validateApprovalsAndCheckpoint(
 
   // Determine checkpoint closure for C0–C5. Only approvals that are
   // (decision:"approved" + approvalKind:"checkpoint") AND produced no issue
-  // can contribute to closure. For policy-backed checkpoints (C0/C1) the
+  // can contribute to closure. For policy-backed checkpoints (C0–C3) the
   // required roles come from CHECKPOINT_POLICIES and the approved-role set is
   // itself closed-world (extra roles are rejected); future checkpoints use
   // the FUTURE_CHECKPOINT_ROLES table with the legacy presence-only check.
@@ -2090,7 +2092,7 @@ export function computeRetractedApprovalIds(
  * Skipping the temporal comparison never leaves a broken binding unreported for
  * an ACTIVE approval:
  *
- * - **Checkpoint HAS a recipe (C0–C2).** `verifyApprovedArtifactSet` reports it:
+ * - **Checkpoint HAS a recipe (C0–C3).** `verifyApprovedArtifactSet` reports it:
  *   an id outside the recipe set as `approved-artifact-unknown`, a stale hash as
  *   `approved-artifact-hash-mismatch`. An id that IS in the recipe set but has no
  *   parsed artifact hits `if (!entry) continue;` there, and surfaces as
@@ -2099,7 +2101,7 @@ export function computeRetractedApprovalIds(
  *   approval of that checkpoint is disqualified by the recompute-failure code, so
  *   closure is blocked even though the individual row is not inspected. This
  *   function therefore does NOT re-report those rows: doing so would double-report.
- * - **Checkpoint has NO recipe (C3–C5).** Nothing downstream inspects the
+ * - **Checkpoint has NO recipe (C4–C5).** Nothing downstream inspects the
  *   bindings at all: `verifyApprovedArtifactSet`, `verifyCheckpointPolicy` and
  *   target recomputation all sit behind `recipe && …`, and closure for these
  *   checkpoints goes through the presence-only `FUTURE_CHECKPOINT_ROLES` path.
@@ -2169,8 +2171,8 @@ function verifyApprovalArtifactTimestamps(
   issues: ValidationIssue[],
   note: (approvalId: string, code: string) => void,
 ): void {
-  // Recipes are declared for C0–C2 only. Widened to a string index so a
-  // checkpoint id outside the recipe table (C3–C5) is a lookup miss rather than
+  // Recipes are declared for C0–C3 only. Widened to a string index so a
+  // checkpoint id outside the recipe table (C4–C5) is a lookup miss rather than
   // a type error, and so adding a recipe automatically moves that checkpoint to
   // the verifyApprovedArtifactSet path below.
   const recipes: Partial<Record<string, CheckpointRecipe>> = CHECKPOINT_RECIPES;

@@ -37,8 +37,8 @@ interface C2Approval {
 
 describe("C2 governance scope boundary", () => {
   it("declares C2 governance without claiming approval", () => {
-    expect(Object.keys(CHECKPOINT_RECIPES).sort()).toEqual(["C0", "C1", "C2"]);
-    expect(Object.keys(CHECKPOINT_POLICIES).sort()).toEqual(["C0", "C1", "C2"]);
+    expect(Object.keys(CHECKPOINT_RECIPES).sort()).toEqual(["C0", "C1", "C2", "C3"]);
+    expect(Object.keys(CHECKPOINT_POLICIES).sort()).toEqual(["C0", "C1", "C2", "C3"]);
   });
 
   it("tracks the evidence manifest and append-only approval ledgers", () => {

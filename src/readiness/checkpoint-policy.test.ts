@@ -5,6 +5,8 @@ import {
   C1_CONTRACT_SHA,
   C1_MERGE_SHA,
   C1_RECIPE,
+  C3_RECIPE,
+  C3_SOURCE_GIT_SHA,
   CHECKPOINT_POLICIES,
   CHECKPOINT_RECIPES,
 } from "./checkpoint-policy.js";
@@ -17,6 +19,29 @@ describe("checkpoint recipes", () => {
     expect(CHECKPOINT_RECIPES).toHaveProperty("C0", C0_RECIPE);
     expect(CHECKPOINT_RECIPES).toHaveProperty("C1", C1_RECIPE);
     expect(CHECKPOINT_RECIPES).toHaveProperty("C2");
+    expect(CHECKPOINT_RECIPES).toHaveProperty("C3", C3_RECIPE);
+  });
+
+  it("anchors the C3 slice at the reviewed head commit, without merge provenance", () => {
+    expect(C3_SOURCE_GIT_SHA).toBe("5255a656cc35763b73d85c5eabb401e3bde9714d");
+    expect(C3_RECIPE.sourceGitSha).toBe(C3_SOURCE_GIT_SHA);
+    // The slice landed across multiple commits (unlike C1's single merge), so
+    // no integrationGitSha is recorded and no reviewed-vs-merged comparison
+    // applies. Later hardening commits are post-review by design.
+    expect(C3_RECIPE.integrationGitSha).toBeUndefined();
+  });
+
+  it("binds every C3 slice contract source to the reviewed commit", () => {
+    expect(C3_RECIPE.contractBindings.map((b) => b.repositoryPath)).toEqual([
+      "src/tool-contracts.ts",
+      "src/server-factory.ts",
+      "src/scripts/ui-server.ts",
+      "site/src/app/App.tsx",
+      "skill/clean-ui-design/SKILL.md",
+    ]);
+    expect(C3_RECIPE.contractBindings.every((b) => b.gitCommit === C3_SOURCE_GIT_SHA)).toBe(true);
+    expect(C3_RECIPE.planBinding.gitCommit).toBe(C3_SOURCE_GIT_SHA);
+    expect(C3_RECIPE.specBinding.gitCommit).toBe(C3_SOURCE_GIT_SHA);
   });
 
   it("binds every C1 contract source to the reviewed commit", () => {
@@ -76,6 +101,11 @@ describe("checkpoint recipes", () => {
       "approval-actor-registry",
       "artifact-index",
       "c2-evidence-manifest",
+    ]);
+    expect(CHECKPOINT_POLICIES.C3.requiredRoles).toEqual(["Product", "QA", "Engineering"]);
+    expect(CHECKPOINT_POLICIES.C3.requiredArtifactTypes).toEqual([
+      "approval-actor-registry",
+      "artifact-index",
     ]);
   });
 });

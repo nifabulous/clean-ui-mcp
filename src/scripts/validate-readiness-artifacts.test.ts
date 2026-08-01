@@ -26,6 +26,8 @@ import {
   C1_RECIPE,
   C1_CONTRACT_SHA,
   C1_MERGE_SHA,
+  C3_RECIPE,
+  C3_SOURCE_GIT_SHA,
   type GitSourceResolver,
 } from "../readiness/checkpoint-policy.js";
 
@@ -823,20 +825,22 @@ function writeRegistryAndIndexV3(
 }
 
 // ---------------------------------------------------------------------------
-// Test-only C3 fixture builder (recipeless checkpoint)
+// Test-only C3 fixture builder (recipe-backed checkpoint)
 // ---------------------------------------------------------------------------
 
 /**
  * Write a v2 governance snapshot (registry + index + ledger) carrying synthetic
- * C3 approvals. C3 has NO recipe (`CHECKPOINT_RECIPES` covers C0–C2 only), so
- * none of the recomputation, policy, or `approvedArtifacts`-set checks run for
- * these approvals — closure goes through the presence-only role path. That
- * makes this fixture the only way to exercise the binding checks that must
- * still apply to a checkpoint without a recipe.
+ * C3 approvals that satisfy the C3 recipe and closed-world policy. C3 sources
+ * (plan, spec, and the five slice contract files) are registered in the fake
+ * resolver at C3_SOURCE_GIT_SHA so target recomputation resolves deterministic
+ * bytes, and every approval carries the recomputed canonical target plus
+ * matching plan/spec/contract hashes and the recipe artifact set. This is the
+ * C3 analogue of `addValidSyntheticC1Approvals`.
  *
- * `staleApprovalIds` rewrites the named approvals' `ownership-20260714` bound
- * row to a sha256 that is not the on-disk version (the "approved a version that
- * is not on disk" case). `supersedeQa` appends a strictly-later `c3-qa-v2`
+ * `staleApprovalIds` rewrites the named approvals' `actors-c3-v2` bound row to a
+ * sha256 that is not the on-disk version (the "approved a version that is not
+ * on disk" case — reported as `approved-artifact-hash-mismatch`, since C3 is
+ * recipe-backed). `supersedeQa` appends a strictly-later `c3-qa-v2`
  * superseding `c3-qa`, so the stale row lands on a SUPERSEDED (historical)
  * approval instead of an active one.
  *
@@ -844,9 +848,46 @@ function writeRegistryAndIndexV3(
  */
 function addSyntheticC3Approvals(
   fixture: ReturnType<typeof buildValidGraph>,
-  options: { staleApprovalIds?: string[]; supersedeQa?: boolean } = {},
-): { registryPath: string; indexPath: string; ledgerPath: string } {
-  const { staleApprovalIds = [], supersedeQa = false } = options;
+  options: {
+    staleApprovalIds?: string[];
+    supersedeQa?: boolean;
+    /** Skip registering the C3 source bytes in the fake resolver. The approvals
+     * still carry the computed hashes, but target recomputation throws, so every
+     * C3 approval is disqualified with `checkpoint-recompute-failed` — the
+     * fail-closed path. */
+    registerSources?: boolean;
+  } = {},
+): {
+  registryPath: string;
+  indexPath: string;
+  ledgerPath: string;
+  targetSha256: string;
+  planSha256: string;
+  specSha256: string;
+  contractHashes: Record<string, string>;
+} {
+  const { staleApprovalIds = [], supersedeQa = false, registerSources = true } = options;
+
+  // 0. Register synthetic C3 source bytes at the reviewed commit so the recipe
+  //    recomputation resolves deterministic content (mirrors the C1 fixture).
+  const c3Sources: Record<string, string> = {
+    [C3_RECIPE.planBinding.repositoryPath]: "# C3 reviewed first-slice plan (synthetic)\n",
+    [C3_RECIPE.specBinding.repositoryPath]: "# C3 reviewed first-slice design spec (synthetic)\n",
+  };
+  for (const b of C3_RECIPE.contractBindings) {
+    c3Sources[b.repositoryPath] = `// C3 reviewed ${b.key} (synthetic)\nexport const X = 1;\n`;
+  }
+  if (registerSources) {
+    for (const [repoPath, content] of Object.entries(c3Sources)) {
+      fixture.resolver.put(C3_SOURCE_GIT_SHA, repoPath, content);
+    }
+  }
+  const planSha = sha256Hex(Buffer.from(c3Sources[C3_RECIPE.planBinding.repositoryPath]!, "utf-8"));
+  const specSha = sha256Hex(Buffer.from(c3Sources[C3_RECIPE.specBinding.repositoryPath]!, "utf-8"));
+  const contractHashes: Record<string, string> = {};
+  for (const b of C3_RECIPE.contractBindings) {
+    contractHashes[b.key] = sha256Hex(Buffer.from(c3Sources[b.repositoryPath]!, "utf-8"));
+  }
 
   // 1. Registry v2 — adds the three actors C3 closure requires.
   const v1Registry = readJson<
@@ -887,17 +928,37 @@ function addSyntheticC3Approvals(
   const v2IndexFilename = "artifact-index-v2.json";
   const v2IndexPath = join(fixture.artifactRoot, v2IndexFilename);
   writeArtifact(fixture.artifactRoot, v2IndexFilename, v2Index);
+  const v2IndexSha = fileSha(v2IndexPath);
 
-  // 3. Ledger v2 — the v1 C0 approvals unchanged (append-only) plus three C3
-  //    approvals. C3 has no recipe, so the target/plan/spec hashes are opaque
-  //    placeholders: nothing recomputes them. All three share one target sha so
-  //    the divergent-targets check passes.
+  // 3. Compute the REAL canonical C3 target over synthetic-resolved bytes.
+  //    C3 approvals reference the v2 registry, so the target uses version
+  //    "2.0" and the v2 registry sha, exactly as computeCanonicalTargets does.
+  const c3TargetArtifacts = [
+    { artifactId: "actors-c3-v2", artifactType: "approval-actor-registry", sha256: v2RegistrySha },
+    { artifactId: "index-c3-v2", artifactType: "artifact-index", sha256: v2IndexSha },
+  ];
+  const c3Target = buildCheckpointTarget({
+    checkpoint: "C3",
+    baselineGitSha: C3_RECIPE.baselineGitSha,
+    artifacts: c3TargetArtifacts,
+    planSha256: planSha,
+    specSha256: specSha,
+    actorRegistryVersion: "2.0",
+    actorRegistrySha256: v2RegistrySha,
+    contractHashes,
+    inputHashes: {}, // C3_RECIPE.targetIncludesInputHashes === false
+  });
+  const c3TargetSha = computeCheckpointTargetSha256(c3Target);
+
+  // 4. Ledger v2 — the v1 C0 approvals unchanged (append-only) plus three C3
+  //    approvals, each carrying the recomputed canonical target, matching
+  //    plan/spec/contract hashes, and the recipe artifact set.
   const boundRows = (approvalId: string) => [
     {
-      artifactId: "ownership-20260714",
-      sha256: staleApprovalIds.includes(approvalId) ? "f".repeat(64) : fileSha(fixture.ownershipPath),
+      artifactId: "actors-c3-v2",
+      sha256: staleApprovalIds.includes(approvalId) ? "f".repeat(64) : v2RegistrySha,
     },
-    { artifactId: "phase0-20260714", sha256: fileSha(fixture.phase0Path) },
+    { artifactId: "index-c3-v2", sha256: v2IndexSha },
   ];
   const c3Base = {
     approvalKind: "checkpoint",
@@ -906,10 +967,10 @@ function addSyntheticC3Approvals(
     actorKind: "human",
     actorRegistryVersion: "2.0",
     actorRegistrySha256: v2RegistrySha,
-    checkpointTargetSha256: SHA_A,
-    planSha256: fixture.planSha,
-    specSha256: fixture.specSha,
-    contractHashes: {},
+    checkpointTargetSha256: c3TargetSha,
+    planSha256: planSha,
+    specSha256: specSha,
+    contractHashes,
   };
   const c3Approvals: Array<Record<string, unknown>> = [
     { ...c3Base, approvalId: "c3-product", actorId: "product-1", role: "Product", approvedArtifacts: boundRows("c3-product"), decidedAt: "2026-07-16T10:00:00Z" },
@@ -940,7 +1001,15 @@ function addSyntheticC3Approvals(
   const v2LedgerPath = join(fixture.artifactRoot, v2LedgerFilename);
   writeArtifact(fixture.artifactRoot, v2LedgerFilename, v2Ledger);
 
-  return { registryPath: v2RegistryPath, indexPath: v2IndexPath, ledgerPath: v2LedgerPath };
+  return {
+    registryPath: v2RegistryPath,
+    indexPath: v2IndexPath,
+    ledgerPath: v2LedgerPath,
+    targetSha256: c3TargetSha,
+    planSha256: planSha,
+    specSha256: specSha,
+    contractHashes,
+  };
 }
 
 /**
@@ -968,25 +1037,122 @@ function appendExtraRepoMaintainerApproval(
   return approvalId;
 }
 
+// ---------------------------------------------------------------------------
+// Test-only C4 fixture builder (presence-only checkpoint)
+// ---------------------------------------------------------------------------
+
 /**
- * Clone C3's Product approval into an EXTRA approval that shares product-1's
- * actor id (and its registered role, so no `actor-role-mismatch`). The
- * required roles stay satisfied (Product / QA / Engineering are all still
- * present via the three clean approvals), but the approval set now has 4 rows
- * over 3 distinct actors — neither one-approval-per-actor nor a single shared
- * actor — so `approvalsSatisfyActorCardinality` returns false and
- * `checkpoint-actor-separation-violation` fires. Returns the new approval's
- * id for use as a retraction target. Module-scope so both the "codex round-2
- * regression" describe and the channel-agnostic monotonicity guard-test can
- * build the same fixture shape.
+ * Write a v2 governance snapshot (registry + index + ledger) carrying synthetic
+ * C4 approvals. C4 has NO recipe and NO closed-world policy —
+ * `FUTURE_CHECKPOINT_ROLES` gives it {Evaluation Owner, Product, QA} and closure
+ * goes through the legacy presence-only role path. No source bytes are
+ * registered (nothing is recomputed for a recipeless checkpoint), every approval
+ * carries the same placeholder target, and the approved artifact rows bind the
+ * two on-disk v1 artifacts so the recipeless binding check finds resolvable
+ * rows. The only structural check the shape can trip is actor-separation — the
+ * channel the "codex round-2 regression" describe and the monotonicity
+ * presence-only cases probe. All files are written below the fixture's temp
+ * root only.
  */
-function appendExtraDuplicateActorC3Approval(
+function addSyntheticC4Approvals(
+  fixture: ReturnType<typeof buildValidGraph>,
+): { registryPath: string; indexPath: string; ledgerPath: string } {
+  // 1. Registry v2 — C4 actors on top of the v1 registry (repo-maintainer-1
+  //    stays in, so retractions remain authorizable).
+  const v1Registry = readJson<
+    { actors: Array<{ actorId: string; actorKind: string; roles: string[] }> } & Record<string, unknown>
+  >(fixture.registryPath);
+  const v2Registry = {
+    ...v1Registry,
+    artifactId: "actors-c4-v2",
+    registryVersion: "2.0",
+    previousRegistry: { registryVersion: "1.0", sha256: fileSha(fixture.registryPath) },
+    actors: [
+      ...v1Registry.actors,
+      { actorId: "evaluation-owner-1", actorKind: "human", roles: ["Evaluation Owner"] },
+      { actorId: "product-1", actorKind: "human", roles: ["Product"] },
+      { actorId: "qa-1", actorKind: "human", roles: ["QA"] },
+    ],
+  };
+  const v2RegistryFilename = "approval-actor-registry-v2.json";
+  const v2RegistryPath = join(fixture.artifactRoot, v2RegistryFilename);
+  writeArtifact(fixture.artifactRoot, v2RegistryFilename, v2Registry);
+  const v2RegistrySha = fileSha(v2RegistryPath);
+
+  // 2. Index v2 — every non-index/non-ledger artifact, including both registries.
+  const v1Index = readJson<Record<string, unknown>>(fixture.indexPath);
+  const v2Index = {
+    ...v1Index,
+    artifactId: "index-c4-v2",
+    ordinalVersion: 2,
+    predecessor: { version: "1", sha256: fileSha(fixture.indexPath) },
+    artifacts: [
+      { artifactId: "phase0-20260714", artifactType: "phase0-summary", sha256: fileSha(fixture.phase0Path), path: "quality-contracts/agent-readiness/phase0-summary-v1.json" },
+      { artifactId: "ownership-20260714", artifactType: "ownership-map", sha256: fileSha(fixture.ownershipPath), path: "quality-contracts/agent-readiness/ownership-map-v1.json" },
+      { artifactId: "taxonomy-20260714", artifactType: "taxonomy-digest", sha256: fileSha(fixture.taxonomyPath), path: "quality-contracts/agent-readiness/taxonomy-digest-v1.json" },
+      { artifactId: "actors-20260714", artifactType: "approval-actor-registry", sha256: fileSha(fixture.registryPath), path: "quality-contracts/agent-readiness/approval-actor-registry-v1.json" },
+      { artifactId: "actors-c4-v2", artifactType: "approval-actor-registry", sha256: v2RegistrySha, path: `quality-contracts/agent-readiness/${v2RegistryFilename}` },
+    ],
+  };
+  const v2IndexFilename = "artifact-index-v2.json";
+  const v2IndexPath = join(fixture.artifactRoot, v2IndexFilename);
+  writeArtifact(fixture.artifactRoot, v2IndexFilename, v2Index);
+
+  // 3. Ledger v2 — the v1 C0 approvals unchanged (append-only) plus three C4
+  //    approvals, one per required role.
+  const c4Base = {
+    approvalKind: "checkpoint",
+    checkpoint: "C4",
+    decision: "approved",
+    actorKind: "human",
+    actorRegistryVersion: "2.0",
+    actorRegistrySha256: v2RegistrySha,
+    checkpointTargetSha256: SHA_A,
+    approvedArtifacts: [
+      { artifactId: "ownership-20260714", sha256: fileSha(fixture.ownershipPath) },
+      { artifactId: "phase0-20260714", sha256: fileSha(fixture.phase0Path) },
+    ],
+    planSha256: SHA_A,
+    specSha256: SHA_A,
+    contractHashes: {},
+  };
+  const c4Approvals: Array<Record<string, unknown>> = [
+    { ...c4Base, approvalId: "c4-eval-owner", actorId: "evaluation-owner-1", role: "Evaluation Owner", decidedAt: "2026-07-16T10:00:00Z" },
+    { ...c4Base, approvalId: "c4-product", actorId: "product-1", role: "Product", decidedAt: "2026-07-16T10:01:00Z" },
+    { ...c4Base, approvalId: "c4-qa", actorId: "qa-1", role: "QA", decidedAt: "2026-07-16T10:02:00Z" },
+  ];
+
+  const v1Ledger = readJson<{ approvals: unknown[] } & Record<string, unknown>>(fixture.ledgerPath!);
+  const v2Ledger = {
+    ...v1Ledger,
+    artifactId: "approvals-c4-v2",
+    ordinalVersion: 2,
+    predecessor: { version: "1", sha256: fileSha(fixture.ledgerPath!) },
+    approvals: [...v1Ledger.approvals, ...c4Approvals],
+  };
+  const v2LedgerFilename = "checkpoint-approvals-v2.json";
+  const v2LedgerPath = join(fixture.artifactRoot, v2LedgerFilename);
+  writeArtifact(fixture.artifactRoot, v2LedgerFilename, v2Ledger);
+
+  return { registryPath: v2RegistryPath, indexPath: v2IndexPath, ledgerPath: v2LedgerPath };
+}
+
+/**
+ * Clone C4's Product approval into an EXTRA approval that shares product-1's
+ * actor id. C4 is presence-only (no closed-world policy), so the extra row does
+ * not trip a `policy-*` code; the required roles stay satisfied via the three
+ * clean approvals, leaving actor-separation as the only structural check the
+ * shape can trip. Returns the new approval's id for use as a retraction target.
+ * Module-scope so both the "codex round-2 regression" describe and the
+ * channel-agnostic monotonicity guard-test can build the same fixture shape.
+ */
+function appendExtraDuplicateActorC4Approval(
   ledger: { approvals: Array<Record<string, unknown>> },
 ): string {
   const product = ledger.approvals.find(
-    (a) => a["checkpoint"] === "C3" && a["role"] === "Product",
+    (a) => a["checkpoint"] === "C4" && a["role"] === "Product",
   )!;
-  const approvalId = "c3-product-extra";
+  const approvalId = "c4-product-extra";
   ledger.approvals.push({
     ...product,
     approvalId,
@@ -3162,10 +3328,18 @@ describe("codex regression: retraction must not manufacture closure via a struct
 // fail-open CLASS as round 1, a different channel (found by independent
 // cross-model re-review).
 //
-// C3 (required = {Product, QA, Engineering}) is used deliberately: C3 has NO
-// entry in `CHECKPOINT_POLICIES`, so `comparePolicySet` never runs for it —
-// the ONLY structural check the extra approval can trip is actor-separation,
-// isolating the exact channel round 1 missed.
+// C4 (required = {Evaluation Owner, Product, QA}) is used deliberately. The
+// channel this suite probes only exists on a PRESENCE-ONLY checkpoint — one
+// with no closed-world policy, so an extra duplicate-actor row does not trip a
+// `policy-*` code first and actor-separation is the only structural check the
+// shape can trip. C3 WAS that checkpoint until it gained a recipe and a
+// closed-world policy (CHECKPOINT_POLICIES.C3): an extra Product row there now
+// taints every C3 approval via `policy-duplicate-role` before the
+// actor-separation code even runs, so the channel moved to C4, the first of
+// the remaining recipeless checkpoints (C4–C5). The C1 bootstrap-mode tests
+// elsewhere in this file still cover the actor-separation check itself on a
+// policy-backed checkpoint; this suite covers the RETRACTION invariant on a
+// presence-only one.
 // ---------------------------------------------------------------------------
 
 describe("codex round-2 regression: retraction must not manufacture closure via actor-separation", () => {
@@ -3184,30 +3358,30 @@ describe("codex round-2 regression: retraction must not manufacture closure via 
     });
   }
 
-  it("sanity: an EXTRA duplicate-actor C3 approval (no retraction) trips checkpoint-actor-separation-violation and holds C3 open", () => {
+  it("sanity: an EXTRA duplicate-actor C4 approval (no retraction) trips checkpoint-actor-separation-violation and holds C4 open", () => {
     fixture = buildValidGraph({ withApprovals: true });
-    const { ledgerPath } = addSyntheticC3Approvals(fixture);
+    const { ledgerPath } = addSyntheticC4Approvals(fixture);
     mutateJson<{ approvals: Array<Record<string, unknown>> }>(ledgerPath, (ledger) => {
-      appendExtraDuplicateActorC3Approval(ledger);
+      appendExtraDuplicateActorC4Approval(ledger);
       return ledger;
     });
     const result = validate(fixture);
     expect(result.issues.some((i) => i.code === "checkpoint-actor-separation-violation")).toBe(true);
-    expect(result.checkpointStatus.C3).toBe("open");
+    expect(result.checkpointStatus.C4).toBe("open");
     expect(result.ok).toBe(false);
   });
 
-  it("a VALID retraction of the extra duplicate-actor approval must NOT clear checkpoint-actor-separation-violation or close C3", () => {
+  it("a VALID retraction of the extra duplicate-actor approval must NOT clear checkpoint-actor-separation-violation or close C4", () => {
     fixture = buildValidGraph({ withApprovals: true });
-    const { registryPath, ledgerPath } = addSyntheticC3Approvals(fixture);
+    const { registryPath, ledgerPath } = addSyntheticC4Approvals(fixture);
     mutateJson<{ approvals: Array<Record<string, unknown>> }>(ledgerPath, (ledger) => {
-      const approvalId = appendExtraDuplicateActorC3Approval(ledger);
+      const approvalId = appendExtraDuplicateActorC4Approval(ledger);
       // A VALID retraction, authorized by repo-maintainer-1 (a real human
       // Repository Maintainer in the pinned v2 registry). If a retraction can
       // ever close a checkpoint by clearing a STRUCTURAL actor-separation
       // finding, this is the shape that proves it — the retraction targets
       // the very approval that duplicates product-1's actor id, while
-      // Product/QA/Engineering remain satisfied via the three clean
+      // Evaluation Owner/Product/QA remain satisfied via the three clean
       // approvals.
       ledger.approvals.push({
         recordKind: "retraction",
@@ -3235,33 +3409,33 @@ describe("codex round-2 regression: retraction must not manufacture closure via 
     expect(result.issues.some((i) => i.code === "retraction-target-missing")).toBe(false);
 
     // The structural actor-separation violation must still be attributed to
-    // C3 and the checkpoint must still be open — a retraction can only ever
+    // C4 and the checkpoint must still be open — a retraction can only ever
     // REMOVE an approval's contribution to closure, never remove a blocker,
     // regardless of WHICH structural check produced the blocker.
     expect(result.issues.some((i) => i.code === "checkpoint-actor-separation-violation")).toBe(true);
-    expect(result.checkpointStatus.C3).toBe("open");
+    expect(result.checkpointStatus.C4).toBe("open");
     expect(result.ok).toBe(false);
   });
 
   it("a VALID retraction of the SOLE role-provider (while a separation violation is present) must NOT erase the violation or flip ok (channel #4)", () => {
     // Channel #4 (found by cross-model review): the actor-separation EMISSION
     // gate used to read role-presence over the retracted-EXCLUDED set. Here the
-    // duplicate-actor offender (`c3-product-extra`, product-1 again) makes
-    // separation fail, and a VALID retraction targets `c3-qa` — the SOLE QA
+    // duplicate-actor offender (`c4-product-extra`, product-1 again) makes
+    // separation fail, and a VALID retraction targets `c4-qa` — the SOLE QA
     // provider, a DIFFERENT approval. Retracting it drops closure role-presence
     // (QA gone from the effective set), which pre-fix suppressed the emission →
     // the blocking finding vanished and `ok` flipped false→true while the
     // duplicate-actor condition was still live among the non-retracted rows.
     // The emission gate now reads STRUCTURAL role-presence (retracted INCLUDED),
-    // so the violation stays and `ok` stays false. C3 never closes either way.
+    // so the violation stays and `ok` stays false. C4 never closes either way.
     fixture = buildValidGraph({ withApprovals: true });
-    const { registryPath, ledgerPath } = addSyntheticC3Approvals(fixture);
+    const { registryPath, ledgerPath } = addSyntheticC4Approvals(fixture);
     mutateJson<{ approvals: Array<Record<string, unknown>> }>(ledgerPath, (ledger) => {
-      appendExtraDuplicateActorC3Approval(ledger);
+      appendExtraDuplicateActorC4Approval(ledger);
       ledger.approvals.push({
         recordKind: "retraction",
         retractionId: "r-qa",
-        retractsApprovalId: "c3-qa",
+        retractsApprovalId: "c4-qa",
         retractedBy: {
           actorId: "repo-maintainer-1",
           role: "Repository Maintainer",
@@ -3278,7 +3452,7 @@ describe("codex round-2 regression: retraction must not manufacture closure via 
     expect(result.issues.some((i) => i.code === "retraction-unauthorized")).toBe(false);
     // The separation blocker MUST survive the retraction, and ok MUST stay false.
     expect(result.issues.some((i) => i.code === "checkpoint-actor-separation-violation")).toBe(true);
-    expect(result.checkpointStatus.C3).toBe("open");
+    expect(result.checkpointStatus.C4).toBe("open");
     expect(result.ok).toBe(false);
   });
 });
@@ -3313,10 +3487,12 @@ describe("codex round-2 regression: retraction must not manufacture closure via 
 //
 // PROVEN TO HAVE TEETH: with the actor-separation check still routed through
 // the retracted-EXCLUDED set (the pre-fix defect this follow-up closes), the
-// "presence-only actor-separation" case below fails property (a) — C3 is
+// "presence-only actor-separation" case below fails property (a) — C4 is
 // "open" at baseline and "closed" at effective. Verified by running this
 // block before the `cpStructural` / `cpClosureContributors` split landed in
-// validator.ts (see the fix commit for the exact RED output).
+// validator.ts (see the fix commit for the exact RED output). The case was
+// originally built on C3; C3 has since gained a recipe + closed-world policy,
+// so the presence-only fixtures moved to C4 (see the round-2 describe header).
 // ---------------------------------------------------------------------------
 
 const MONOTONICITY_CHECKPOINT_IDS = ["C0", "C1", "C2", "C3", "C4", "C5"] as const;
@@ -3373,10 +3549,10 @@ function assertRetractionIsMonotonicTowardOpen(
   // policy-duplicate-role, actor-separation) manufactured closure by dropping a
   // NON-temporal blocker's count, which this catches directly.
   // NOTE — coverage is per fixture SHAPE, not automatic: policy-backed
-  // checkpoints (C0/C1/C2) are immune to the presence-only actor-separation and
+  // checkpoints (C0–C3) are immune to the presence-only actor-separation and
   // redundant-role-provider shapes because a redundant or extra role trips the
   // non-suppressible closed-world `policy-*` check; the exposure those shapes
-  // probe is presence-only (C3-C5), which is why the fixtures live there.
+  // probe is presence-only (C4–C5), which is why the fixtures live there.
   for (const [code, baselineCount] of baselineCounts) {
     const effectiveCount = effectiveCounts.get(code) ?? 0;
     if (effectiveCount < baselineCount && !RETRACTION_ALLOWED_SUPPRESSED_CODES.has(code)) {
@@ -3509,14 +3685,14 @@ function buildPolicyDuplicateRoleCase(): MonotonicityPair {
 }
 
 /**
- * Case 3: presence-only actor-separation (C3, `checkpoint-actor-separation-violation`).
+ * Case 3: presence-only actor-separation (C4, `checkpoint-actor-separation-violation`).
  * THE CASE THAT FAILS PRE-FIX — this is the channel this follow-up closes.
  */
 function buildPresenceOnlyActorSeparationCase(): MonotonicityPair {
   const baselineFixture = buildValidGraph({ withApprovals: true });
-  const { ledgerPath: baselineLedgerPath } = addSyntheticC3Approvals(baselineFixture);
+  const { ledgerPath: baselineLedgerPath } = addSyntheticC4Approvals(baselineFixture);
   mutateJson<{ approvals: Array<Record<string, unknown>> }>(baselineLedgerPath, (ledger) => {
-    appendExtraDuplicateActorC3Approval(ledger);
+    appendExtraDuplicateActorC4Approval(ledger);
     return ledger;
   });
   const baseline = validateReadinessArtifacts({
@@ -3528,9 +3704,9 @@ function buildPresenceOnlyActorSeparationCase(): MonotonicityPair {
 
   const effectiveFixture = buildValidGraph({ withApprovals: true });
   const { registryPath: effectiveRegistryPath, ledgerPath: effectiveLedgerPath } =
-    addSyntheticC3Approvals(effectiveFixture);
+    addSyntheticC4Approvals(effectiveFixture);
   mutateJson<{ approvals: Array<Record<string, unknown>> }>(effectiveLedgerPath, (ledger) => {
-    const approvalId = appendExtraDuplicateActorC3Approval(ledger);
+    const approvalId = appendExtraDuplicateActorC4Approval(ledger);
     ledger.approvals.push({
       recordKind: "retraction",
       retractionId: "r1",
@@ -3717,8 +3893,8 @@ function buildModelBCase(): MonotonicityPair {
 /**
  * CHANNEL #4: the retracted approval is the SOLE provider of a required role
  * while a SEPARATE approval trips the actor-separation blocker. Baseline: three
- * clean C3 roles + an extra duplicate-actor approval (separation fails → C3 open,
- * violation present). Effective: the same, plus a valid retraction of `c3-qa`
+ * clean C4 roles + an extra duplicate-actor approval (separation fails → C4 open,
+ * violation present). Effective: the same, plus a valid retraction of `c4-qa`
  * (the sole QA provider — NOT the offender). Pre-fix, retracting QA dropped the
  * emission gate's role-presence (it read the retracted-EXCLUDED set), so the
  * `checkpoint-actor-separation-violation` count went 1→0 and `ok` flipped
@@ -3727,9 +3903,9 @@ function buildModelBCase(): MonotonicityPair {
  */
 function buildChannel4SoleRoleProviderCase(): MonotonicityPair {
   const baselineFixture = buildValidGraph({ withApprovals: true });
-  const { ledgerPath: baselineLedgerPath } = addSyntheticC3Approvals(baselineFixture);
+  const { ledgerPath: baselineLedgerPath } = addSyntheticC4Approvals(baselineFixture);
   mutateJson<{ approvals: Array<Record<string, unknown>> }>(baselineLedgerPath, (ledger) => {
-    appendExtraDuplicateActorC3Approval(ledger);
+    appendExtraDuplicateActorC4Approval(ledger);
     return ledger;
   });
   const baseline = validateReadinessArtifacts({
@@ -3741,13 +3917,13 @@ function buildChannel4SoleRoleProviderCase(): MonotonicityPair {
 
   const effectiveFixture = buildValidGraph({ withApprovals: true });
   const { registryPath: effectiveRegistryPath, ledgerPath: effectiveLedgerPath } =
-    addSyntheticC3Approvals(effectiveFixture);
+    addSyntheticC4Approvals(effectiveFixture);
   mutateJson<{ approvals: Array<Record<string, unknown>> }>(effectiveLedgerPath, (ledger) => {
-    appendExtraDuplicateActorC3Approval(ledger);
+    appendExtraDuplicateActorC4Approval(ledger);
     ledger.approvals.push({
       recordKind: "retraction",
       retractionId: "r-qa",
-      retractsApprovalId: "c3-qa",
+      retractsApprovalId: "c4-qa",
       retractedBy: {
         actorId: "repo-maintainer-1",
         role: "Repository Maintainer",
@@ -3781,8 +3957,8 @@ describe("monotonicity guard-test: a valid retraction can only push toward open,
   const cases: Array<{ name: string; build: () => MonotonicityPair }> = [
     { name: "policy unexpected-role (C1)", build: buildPolicyUnexpectedRoleCase },
     { name: "policy duplicate-role (C1)", build: buildPolicyDuplicateRoleCase },
-    { name: "presence-only actor-separation (C3)", build: buildPresenceOnlyActorSeparationCase },
-    { name: "sole role-provider retraction amid separation violation (C3, channel #4)", build: buildChannel4SoleRoleProviderCase },
+    { name: "presence-only actor-separation (C4)", build: buildPresenceOnlyActorSeparationCase },
+    { name: "sole role-provider retraction amid separation violation (C4, channel #4)", build: buildChannel4SoleRoleProviderCase },
     { name: "real v6-vs-v5 (tracked ledger)", build: buildRealV6VsV5Case },
     { name: "Model B (superseder retraction)", build: buildModelBCase },
   ];
@@ -3836,10 +4012,12 @@ describe("monotonicity guard-test: a valid retraction can only push toward open,
  * approval, never the sole provider of a required role, so none of them
  * exercises this direction independently of the real tracked ledger's
  * incidental C2 retraction shape. Hence a dedicated, ledger-independent
- * assertion here.
+ * assertion here. The fixture uses C3 (now recipe- and policy-backed): the
+ * role-satisfaction half of the retraction split is shared by the
+ * policy-backed and presence-only paths alike, so either is a valid host.
  */
 describe("monotonicity guard-test: mirror-image direction (sole role-provider retraction)", () => {
-  it("retracting the SOLE QA approval on a presence-only checkpoint opens it, rather than leaving it closed via the structural set", () => {
+  it("retracting the SOLE QA approval opens the checkpoint, rather than leaving it closed via the structural set", () => {
     const baselineFixture = buildValidGraph({ withApprovals: true });
     addSyntheticC3Approvals(baselineFixture);
     const baseline = validateReadinessArtifacts({
@@ -3902,14 +4080,16 @@ describe("monotonicity guard-test: mirror-image direction (sole role-provider re
 });
 
 // ---------------------------------------------------------------------------
-// Tests — approval bindings for checkpoints WITHOUT a recipe (C3–C5)
+// Tests — checkpoint approval bindings (C3 recipe-backed; C4–C5 recipeless)
 //
-// C0–C2 bindings are verified by verifyApprovedArtifactSet (behind a resolved
-// recipe). C3–C5 have no recipe, so nothing downstream inspects their
-// approvedArtifacts rows: the binding checks below are the only coverage.
+// C0–C3 bindings are verified by verifyApprovedArtifactSet (behind a resolved
+// recipe). C4–C5 have no recipe, so the only place their approvedArtifacts
+// rows are inspected at all is verifyApprovalArtifactTimestamps' recipeless
+// `approved-artifact-version-unresolved` path — covered at the bottom of this
+// describe. The C3 tests here pin the recipe-backed binding checks.
 // ---------------------------------------------------------------------------
 
-describe("recipeless-checkpoint approval bindings", () => {
+describe("checkpoint approval bindings (C3 recipe-backed; C4–C5 recipeless)", () => {
   let fixture: ReturnType<typeof buildValidGraph>;
 
   afterEach(() => {
@@ -3936,6 +4116,32 @@ describe("recipeless-checkpoint approval bindings", () => {
     expect(result.checkpointStatus.C3).toBe("closed");
   });
 
+  it("FAILS CLOSED: recipe sources unavailable → every C3 approval disqualified, C3 stays open", () => {
+    // C3 is recipe-backed, so target recomputation is MANDATORY and fail-closed:
+    // when the resolver cannot produce the recorded-commit bytes, every C3
+    // approval is disqualified with `checkpoint-recompute-failed` and the
+    // checkpoint cannot close — the same invariant the C0 throwing-resolver
+    // tests pin (see the closure-completeness suite). Only C3 is held open:
+    // the issue is attributed to the C3 approvals, and C0/C1/C2 recompute fine
+    // from the sources `buildValidGraph` registers.
+    fixture = buildValidGraph({ withApprovals: true });
+    addSyntheticC3Approvals(fixture, { registerSources: false });
+    const result = validate(fixture);
+    const recomputeFailed = result.issues.filter((i) => i.code === "checkpoint-recompute-failed");
+    expect(recomputeFailed.map((i) => i.artifactId).sort()).toEqual([
+      "c3-engineering",
+      "c3-product",
+      "c3-qa",
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.checkpointStatus.C3).toBe("open");
+    // Precision: only C3 is held open by the recompute failure — the fixture has
+    // no C1 approvals (so C1 reads open for lack of approvals, not impeachment),
+    // and C0's approvals recompute fine from the sources buildValidGraph
+    // registers, so nothing about the C3 failure may spill onto C0.
+    expect(result.checkpointStatus.C0).toBe("closed");
+  });
+
   it("holds a checkpoint open for a blocking issue on its ARTIFACT-REVIEW approval", () => {
     // THE `approvalKind` WIDENING, PINNED. `checkpointHasBlockingIssue` used to
     // require `a.approvalKind === "checkpoint"` before an issue keyed to an
@@ -3960,8 +4166,15 @@ describe("recipeless-checkpoint approval bindings", () => {
     // keyed to the approvalId and does NOT call `noteApprovalIssue`, so the
     // taint-map branch (which still requires checkpoint kind) cannot mask the
     // branch under test.
+    //
+    // C3 is recipe-backed, and this approval is ACTIVE (not superseded), so it
+    // runs the full per-approval recipe gauntlet. It must therefore carry the
+    // recomputed target, plan/spec hashes, contract hashes, and the exact
+    // recipe artifact set — otherwise recipe findings would drown the single
+    // `ledger-invalid-supersession` row the exact-equality assertion pins.
     fixture = buildValidGraph({ withApprovals: true });
-    const { registryPath, ledgerPath } = addSyntheticC3Approvals(fixture);
+    const { registryPath, indexPath, ledgerPath, targetSha256, planSha256, specSha256, contractHashes } =
+      addSyntheticC3Approvals(fixture);
     const registrySha = fileSha(registryPath);
     mutateJson<{ approvals: Array<Record<string, unknown>> }>(ledgerPath, (d) => {
       d.approvals.push({
@@ -3974,13 +4187,13 @@ describe("recipeless-checkpoint approval bindings", () => {
         role: "QA",
         actorRegistryVersion: "2.0",
         actorRegistrySha256: registrySha,
-        checkpointTargetSha256: SHA_A,
-        planSha256: fixture.planSha,
-        specSha256: fixture.specSha,
-        contractHashes: {},
+        checkpointTargetSha256: targetSha256,
+        planSha256,
+        specSha256,
+        contractHashes,
         approvedArtifacts: [
-          { artifactId: "ownership-20260714", sha256: fileSha(fixture.ownershipPath) },
-          { artifactId: "phase0-20260714", sha256: fileSha(fixture.phase0Path) },
+          { artifactId: "actors-c3-v2", sha256: registrySha },
+          { artifactId: "index-c3-v2", sha256: fileSha(indexPath) },
         ],
         decidedAt: "2026-07-16T10:03:00Z",
         // Supersedes an approval that does not exist → `ledger-invalid-supersession`.
@@ -4047,24 +4260,28 @@ describe("recipeless-checkpoint approval bindings", () => {
   });
 
   it("reports and taints an ACTIVE C3 approval binding a version that is not on disk", () => {
-    // The hole the version gate opened: C3 has no recipe, so
-    // approved-artifact-hash-mismatch can never fire for this row, and the
-    // temporal check skipped it. C3 would close on an unverified binding.
+    // C3 now HAS a recipe, so the stale row is caught by verifyApprovedArtifactSet
+    // as approved-artifact-hash-mismatch — previously it fell through the
+    // version gate to approved-artifact-version-unresolved (C3 was recipeless).
     fixture = buildValidGraph({ withApprovals: true });
     addSyntheticC3Approvals(fixture, { staleApprovalIds: ["c3-qa"] });
     const result = validate(fixture);
     const flagged = result.issues.filter(
-      (i) => i.code === "approved-artifact-version-unresolved",
+      (i) => i.code === "approved-artifact-hash-mismatch",
     );
     expect(flagged.length).toBe(1);
     expect(flagged[0]!.artifactId).toBe("c3-qa");
-    expect(flagged[0]!.message).toContain("ownership-20260714");
+    expect(flagged[0]!.message).toContain("actors-c3-v2");
     expect(flagged[0]!.message).toContain("f".repeat(64));
     expect(result.ok).toBe(false);
     expect(result.checkpointStatus.C3).toBe("open");
   });
 
-  it("reports an ACTIVE C3 approval binding an artifactId that does not exist", () => {
+  it("reports an ACTIVE C3 approval binding an artifactId that is not in the recipe set", () => {
+    // Not in the recipe artifact set → verifyApprovedArtifactSet reports it as
+    // approved-artifact-unknown (an unresolvable version on a RECIPELESS
+    // checkpoint would be approved-artifact-version-unresolved instead — that
+    // path is covered on C4 below).
     fixture = buildValidGraph({ withApprovals: true });
     const { ledgerPath } = addSyntheticC3Approvals(fixture);
     mutateJson<{
@@ -4079,7 +4296,7 @@ describe("recipeless-checkpoint approval bindings", () => {
     });
     const result = validate(fixture);
     const flagged = result.issues.filter(
-      (i) => i.code === "approved-artifact-version-unresolved",
+      (i) => i.code === "approved-artifact-unknown",
     );
     expect(flagged.length).toBe(1);
     expect(flagged[0]!.artifactId).toBe("c3-qa");
@@ -4089,7 +4306,10 @@ describe("recipeless-checkpoint approval bindings", () => {
 
   it("still skips an unresolvable binding on a SUPERSEDED approval", () => {
     // Superseded records are immutable history and cannot contribute to
-    // closure, so their bindings stay skipped — the deliberate carve-out.
+    // closure, so their bindings stay skipped — the deliberate carve-out. With
+    // C3 recipe-backed the stale row lands on superseded c3-qa and must not be
+    // reported by verifyApprovedArtifactSet either (the per-approval loop
+    // skips superseded approvals before the recipe checks run).
     fixture = buildValidGraph({ withApprovals: true });
     addSyntheticC3Approvals(fixture, {
       staleApprovalIds: ["c3-qa"],
@@ -4099,7 +4319,37 @@ describe("recipeless-checkpoint approval bindings", () => {
     expect(
       result.issues.some((i) => i.code === "approved-artifact-version-unresolved"),
     ).toBe(false);
+    expect(
+      result.issues.some((i) => i.code === "approved-artifact-hash-mismatch"),
+    ).toBe(false);
     expect(result.checkpointStatus.C3).toBe("closed");
+  });
+
+  it("reports an unresolvable binding on a RECIPELESS C4 approval (approved-artifact-version-unresolved)", () => {
+    // The recipeless path still exists for C4–C5: verifyApprovalArtifactTimestamps
+    // is the ONLY place their approvedArtifacts rows are inspected, and it
+    // reports an active approval binding a version that is not on disk. This is
+    // the code C3's stale rows used to produce before C3 gained a recipe.
+    fixture = buildValidGraph({ withApprovals: true });
+    const { ledgerPath } = addSyntheticC4Approvals(fixture);
+    mutateJson<{
+      approvals: Array<{
+        approvalId: string;
+        approvedArtifacts: Array<{ artifactId: string; sha256: string }>;
+      }>;
+    }>(ledgerPath, (d) => {
+      const qa = d.approvals.find((a) => a.approvalId === "c4-qa")!;
+      qa.approvedArtifacts[0]!.sha256 = "f".repeat(64);
+      return d;
+    });
+    const result = validate(fixture);
+    const flagged = result.issues.filter(
+      (i) => i.code === "approved-artifact-version-unresolved",
+    );
+    expect(flagged.length).toBe(1);
+    expect(flagged[0]!.artifactId).toBe("c4-qa");
+    expect(flagged[0]!.message).toContain("ownership-20260714");
+    expect(result.checkpointStatus.C4).toBe("open");
   });
 
   it("does not double-report a recipe-backed checkpoint's stale binding", () => {

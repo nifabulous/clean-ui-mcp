@@ -52,7 +52,7 @@ export interface GitSourceResolver {
 // ---------------------------------------------------------------------------
 
 /** Identifier for a checkpoint whose recipe and policy are declared in code. */
-export type CheckpointId = "C0" | "C1" | "C2";
+export type CheckpointId = "C0" | "C1" | "C2" | "C3";
 
 /**
  * The complete recipe for recomputing a checkpoint's canonical target.
@@ -415,6 +415,86 @@ export const C2_RECIPE: CheckpointRecipe = {
 };
 
 // ---------------------------------------------------------------------------
+// C3 recipe — create_ui_spec slice evidence and approval provenance
+// ---------------------------------------------------------------------------
+
+/**
+ * The reviewed head of the C3 `create_ui_spec` first slice on main. This is
+ * `5255a65` ("fix(c3): enforce the six citation-consistency rules on the HTTP
+ * transport too", 2026-07-29) — the last commit that changed the slice's
+ * transport/contract content before the slice concluded. Every C3 binding
+ * resolves at this commit, so the validator recomputes the canonical target
+ * from the reviewed bytes.
+ *
+ * Later main commits (e.g. the ui-server sanitization `22eb852`, the
+ * mcp/decision-lab fs-path fix `a790761`) are POST-REVIEW hardening and are
+ * not part of the reviewed content. Per the DESIGN INVARIANT (parent plan,
+ * line ~482), subsequent edits to the live tree do not reopen a checkpoint —
+ * only a change to the *historical* bytes would.
+ */
+export const C3_SOURCE_GIT_SHA = "5255a656cc35763b73d85c5eabb401e3bde9714d";
+
+/** Plan binding: the C3 first-slice implementation plan, reviewed at C3_SOURCE_GIT_SHA. */
+const C3_PLAN_BINDING: CheckpointSourceBinding = {
+  key: "c3-first-slice-plan.md",
+  repositoryPath:
+    "docs/superpowers/plans/2026-07-27-c3-create-ui-spec-first-slice-implementation-plan.md",
+  gitCommit: C3_SOURCE_GIT_SHA,
+};
+
+/** Spec binding: the C3 first-slice design spec, reviewed at C3_SOURCE_GIT_SHA. */
+const C3_SPEC_BINDING: CheckpointSourceBinding = {
+  key: "c3-first-slice-design.md",
+  repositoryPath:
+    "docs/superpowers/specs/2026-07-27-c3-create-ui-spec-first-slice-design.md",
+  gitCommit: C3_SOURCE_GIT_SHA,
+};
+
+/**
+ * Contract bindings: the five source files that make up the landed slice — the
+ * `create_ui_spec` tool contract, the MCP server factory that registers it, the
+ * HTTP transport that serves it, the Playground composer that uses it, and the
+ * bundled `clean-ui-design` skill. Keys are repo-relative paths (unique, stable,
+ * and self-describing in the ledger's contractHashes). Every binding resolves
+ * at C3_SOURCE_GIT_SHA; C3 sets no `integrationGitSha` because the slice landed
+ * across multiple commits (unlike C1's single merge) and later hardening
+ * legitimately diverges from the reviewed bytes.
+ */
+const C3_CONTRACT_BINDINGS: readonly CheckpointSourceBinding[] = [
+  { key: "src/tool-contracts.ts", repositoryPath: "src/tool-contracts.ts", gitCommit: C3_SOURCE_GIT_SHA },
+  { key: "src/server-factory.ts", repositoryPath: "src/server-factory.ts", gitCommit: C3_SOURCE_GIT_SHA },
+  { key: "src/scripts/ui-server.ts", repositoryPath: "src/scripts/ui-server.ts", gitCommit: C3_SOURCE_GIT_SHA },
+  { key: "site/src/app/App.tsx", repositoryPath: "site/src/app/App.tsx", gitCommit: C3_SOURCE_GIT_SHA },
+  { key: "skill/clean-ui-design/SKILL.md", repositoryPath: "skill/clean-ui-design/SKILL.md", gitCommit: C3_SOURCE_GIT_SHA },
+];
+
+/**
+ * Semantic artifact IDs for the future C3 governance artifacts — a v2 actor
+ * registry and v2 artifact index carrying the C3 actors. Mirrors C1's
+ * declared-ahead pattern: the recipe pins the contract now so policy is
+ * closed-world before any C3 approval exists; the JSON files themselves are
+ * created by the C3 approvals PR, not by this recipe.
+ */
+export const C3_ARTIFACTS = [
+  { artifactId: "actors-c3-v2", artifactType: "approval-actor-registry" },
+  { artifactId: "index-c3-v2", artifactType: "artifact-index" },
+] as const;
+
+/** C3 closes only with distinct Product, QA, and Engineering actors. */
+export const C3_RECIPE: CheckpointRecipe = {
+  checkpoint: "C3",
+  baselineGitSha: C0_BASELINE_GIT_SHA,
+  sourceGitSha: C3_SOURCE_GIT_SHA,
+  artifacts: C3_ARTIFACTS,
+  planBinding: C3_PLAN_BINDING,
+  specBinding: C3_SPEC_BINDING,
+  contractBindings: C3_CONTRACT_BINDINGS,
+  inputHashKeys: [],
+  inputHashBindings: [],
+  targetIncludesInputHashes: false,
+};
+
+// ---------------------------------------------------------------------------
 // Closed-world policies — derived from recipes, no duplicated keys
 // ---------------------------------------------------------------------------
 
@@ -435,9 +515,10 @@ const artifactTypes = (recipe: CheckpointRecipe): readonly string[] => [
 
 /**
  * Exact-set policies for every declared checkpoint. C0 reproduces the
- * historically approved closure; C1 declares the roles and artifact/contract
- * sets required for a future authorized C1 approval. Both are derived from
- * their recipes so policy cannot drift from the declared bindings.
+ * historically approved closure; C1–C3 declare the roles and artifact/contract
+ * sets required for a future authorized approval (C1 = tool contracts, C2 =
+ * gold readiness, C3 = the create_ui_spec slice). All are derived from their
+ * recipes so policy cannot drift from the declared bindings.
  */
 export const CHECKPOINT_POLICIES: Record<CheckpointId, CheckpointPolicy> = {
   C0: {
@@ -461,6 +542,13 @@ export const CHECKPOINT_POLICIES: Record<CheckpointId, CheckpointPolicy> = {
     requiredInputHashKeys: C2_RECIPE.inputHashKeys,
     requiredRoles: ["Gold Label Owner", "QA"],
   },
+  C3: {
+    requiredArtifactTypes: artifactTypes(C3_RECIPE),
+    requiredSourceKeys: sourceKeys(C3_RECIPE),
+    requiredContractKeys: contractKeys(C3_RECIPE),
+    requiredInputHashKeys: C3_RECIPE.inputHashKeys,
+    requiredRoles: ["Product", "QA", "Engineering"],
+  },
 };
 
 /** All known recipes keyed by checkpoint id. */
@@ -468,4 +556,5 @@ export const CHECKPOINT_RECIPES: Record<CheckpointId, CheckpointRecipe> = {
   C0: C0_RECIPE,
   C1: C1_RECIPE,
   C2: C2_RECIPE,
+  C3: C3_RECIPE,
 };

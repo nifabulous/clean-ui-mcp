@@ -629,8 +629,9 @@ describe("tracked readiness artifacts, private mode with the private inputs ABSE
 });
 
 /**
- * FACTUAL STATE CHECK for the presence-only checkpoints (C3–C5, no
- * `CHECKPOINT_POLICIES` entry). This USED to be a tripwire guarding an
+ * FACTUAL STATE CHECK for the not-yet-approved checkpoints (C3 is recipe-backed
+ * since the C3 hardening; C4–C5 still have no `CHECKPOINT_POLICIES` entry and
+ * use the presence-only role path). This USED to be a tripwire guarding an
  * unreachable-but-unfixed channel: the actor-separation check used to run over
  * the retracted-EXCLUDED closure set, so on a presence-only checkpoint a valid
  * retraction of an extra duplicate-actor approval could ERASE
@@ -644,7 +645,7 @@ describe("tracked readiness artifacts, private mode with the private inputs ABSE
  * load-bearing for that bug. It is kept as a plain factual record of today's
  * tracked ledger contents, not as a guard.
  */
-describe("presence-only checkpoints (C3-C5): tracked ledger state", () => {
+describe("not-yet-approved checkpoints (C3 recipe-backed; C4-C5 presence-only): tracked ledger state", () => {
   it("has no C3/C4/C5 approval in the tracked ledger today", () => {
     const head = JSON.parse(
       readFileSync(resolve(artifactRoot, "checkpoint-approvals-v6.json"), "utf-8"),

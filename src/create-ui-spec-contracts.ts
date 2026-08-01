@@ -61,9 +61,11 @@
  */
 import { z } from "zod";
 import {
+  ColorIntentSchema,
   DesignSystemIdentitySchema,
   Evidence,
   RetrievalState,
+  TypeIntentSchema,
   UiSpec,
   type EvidenceT,
   type UiSpecT,
@@ -215,6 +217,12 @@ export const CreateUiSpecRequestSchema = z
     constraints: z.array(z.string().trim().min(1).max(500)).max(12).default([]),
     target: WebTargetId.optional(),
     motionIntents: z.array(MotionIntentSchema).max(8).default([]),
+    // Structured design intent. Recorded in `spec.context` (and therefore in
+    // semanticSpecSha256 → artifactId); never materialized into tokens, never
+    // duplicated onto the handoff or ArtifactIdentityInput as a parallel
+    // identity lane — a second copy could drift from what the spec displays.
+    colorIntent: ColorIntentSchema.optional(),
+    typeIntent: TypeIntentSchema.optional(),
   })
   .strict();
 export type CreateUiSpecRequest = z.infer<typeof CreateUiSpecRequestSchema>;

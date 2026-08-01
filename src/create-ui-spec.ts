@@ -776,6 +776,14 @@ function assembleSpec(
         : {}),
       ...(request.designSystem !== undefined ? { designSystem: request.designSystem } : {}),
       constraints: request.constraints,
+      // Caller-supplied design intent is RECORDED here and nowhere else.
+      // `spec.context` is the annotated caller-supplied lane, it is what
+      // design-handoff renders from, and it is what buildSemanticSpecInput
+      // hashes — so recording it here is simultaneously the visible proof the
+      // intent was honored and the reason two intents produce two artifactIds.
+      // Tokens stay null: intent is not a token decision.
+      ...(request.colorIntent !== undefined ? { colorIntent: request.colorIntent } : {}),
+      ...(request.typeIntent !== undefined ? { typeIntent: request.typeIntent } : {}),
     },
     designDirection: specFields.designDirection,
     rejectedDefaults: specFields.rejectedDefaults,

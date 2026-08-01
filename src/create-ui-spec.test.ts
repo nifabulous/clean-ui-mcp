@@ -1436,3 +1436,42 @@ describe("create-ui-spec producer — caller constraints become manual acceptanc
     expect(ids).toEqual(["fallback-manual-spec-review"]);
   });
 });
+
+describe("create-ui-spec producer — structured design intent reaches spec.context and identity", () => {
+  it("gives two requests differing only in colorIntent distinct artifactIds", async () => {
+    const base = validInput({ productContext: "A settings screen for two-factor setup" });
+    const a = await createUiSpecForAdapter(
+      { ...base, colorIntent: { accentPreference: "light blue" } },
+      deps([], []),
+    );
+    const b = await createUiSpecForAdapter(
+      { ...base, colorIntent: { accentPreference: "warm red" } },
+      deps([], []),
+    );
+    expect(a.envelope.spec.context.colorIntent).toEqual({ accentPreference: "light blue" });
+    expect(b.envelope.spec.context.colorIntent).toEqual({ accentPreference: "warm red" });
+    expect(a.envelope.semanticSpecSha256).not.toBe(b.envelope.semanticSpecSha256);
+    expect(a.envelope.artifactId).not.toBe(b.envelope.artifactId);
+  });
+
+  it("records typeIntent without materializing tokens", async () => {
+    const res = await createUiSpecForAdapter(
+      validInput({ typeIntent: { voice: "plainspoken", density: "compact" } }),
+      deps([], []),
+    );
+    expect(res.envelope.spec.context.typeIntent).toEqual({
+      voice: "plainspoken",
+      density: "compact",
+    });
+    // Intent is RECORDED, not materialized — the null-token contract holds.
+    expect(res.envelope.spec.typographyTokens).toBeNull();
+    expect(res.envelope.spec.colorTokens).toBeNull();
+    expect(res.envelope.spec.typographyTokenAuthority).toBe("editorial");
+  });
+
+  it("omits both intent keys entirely when the caller supplied neither", async () => {
+    const res = await createUiSpecForAdapter(validInput(), deps([], []));
+    expect(Object.keys(res.envelope.spec.context)).not.toContain("colorIntent");
+    expect(Object.keys(res.envelope.spec.context)).not.toContain("typeIntent");
+  });
+});

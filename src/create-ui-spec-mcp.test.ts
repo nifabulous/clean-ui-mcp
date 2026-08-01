@@ -562,6 +562,8 @@ describe("create_ui_spec MCP registration — the one dependency factory and the
       interruptible: true,
       reducedMotion: "no-transform",
     }],
+    colorIntent: { accentPreference: "muted teal", mood: "calm", contrastFloor: "AA" },
+    typeIntent: { voice: "plainspoken", density: "compact" },
     outputFormat: "json",
   };
 

@@ -1327,6 +1327,27 @@ describe("C3: CreateUiSpecInput migration", () => {
       ["framework at max length", { ...ok, implementationFramework: "f".repeat(120) }],
       ["framework over max length", { ...ok, implementationFramework: "f".repeat(121) }],
       ["six referenceIds", { ...ok, referenceIds: ["a", "b", "c", "d", "e", "f"] }],
+      // colorIntent / typeIntent — .strict() on the nested objects, .trim() and
+      // the exact max(120) bound on their free-text members, and the two closed
+      // enums. Both schemas read the SAME schema object, so these cases exist to
+      // catch a future hand-mirror replacing that reuse.
+      ["colorIntent with the valid shape", { ...ok, colorIntent: { accentPreference: "muted teal", mood: "calm", contrastFloor: "AA" } }],
+      ["colorIntent with an unknown key", { ...ok, colorIntent: { accentPreference: "teal", hue: 180 } }],
+      ["colorIntent empty object", { ...ok, colorIntent: {} }],
+      ["padded accentPreference", { ...ok, colorIntent: { accentPreference: "  muted teal  " } }],
+      ["whitespace-only accentPreference", { ...ok, colorIntent: { accentPreference: "   " } }],
+      ["accentPreference at max length", { ...ok, colorIntent: { accentPreference: "a".repeat(120) } }],
+      ["accentPreference over max length", { ...ok, colorIntent: { accentPreference: "a".repeat(121) } }],
+      ["mood at max length", { ...ok, colorIntent: { mood: "m".repeat(120) } }],
+      ["mood over max length", { ...ok, colorIntent: { mood: "m".repeat(121) } }],
+      ["contrastFloor off-enum", { ...ok, colorIntent: { contrastFloor: "AAAA" } }],
+      ["typeIntent with the valid shape", { ...ok, typeIntent: { voice: "plainspoken", density: "compact" } }],
+      ["typeIntent with an unknown key", { ...ok, typeIntent: { voice: "plainspoken", weight: "bold" } }],
+      ["padded voice", { ...ok, typeIntent: { voice: "  plainspoken  " } }],
+      ["whitespace-only voice", { ...ok, typeIntent: { voice: "   " } }],
+      ["voice at max length", { ...ok, typeIntent: { voice: "v".repeat(120) } }],
+      ["voice over max length", { ...ok, typeIntent: { voice: "v".repeat(121) } }],
+      ["density off-enum", { ...ok, typeIntent: { density: "airy" } }],
     ];
     for (const [label, input] of cases) {
       const core = CreateUiSpecRequestSchema.safeParse(input);

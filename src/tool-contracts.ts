@@ -607,12 +607,42 @@ const UnavailableDecision = z.object({
   reason: z.string().trim().min(1),
 }).strict();
 
+/**
+ * Structured design intent supplied by the CALLER. Never inferred from prose,
+ * never upgraded to corpus evidence, never synthesized into tokens. Mirrors
+ * MotionIntentSchema's discipline: explicit, bounded, `.strict()`.
+ *
+ * SCOPE: intent is RECORDED, not materialized. A caller saying "light blue"
+ * has not supplied the five required ColorTokens members; synthesizing them
+ * from a mood word would be invention. `colorTokens`/`typographyTokens` stay
+ * `null` under the deterministic recipe regardless of intent.
+ *
+ * These live here rather than in create-ui-spec-contracts.ts because
+ * {@link SpecContext} below must reference them and that module imports this
+ * one, not the reverse.
+ */
+export const ColorIntentSchema = z.object({
+  accentPreference: z.string().trim().min(1).max(120).optional(),
+  mood: z.string().trim().min(1).max(120).optional(),
+  contrastFloor: z.enum(["AA", "AAA"]).optional(),
+}).strict();
+
+export const TypeIntentSchema = z.object({
+  voice: z.string().trim().min(1).max(120).optional(),
+  density: z.enum(["compact", "regular", "spacious"]).optional(),
+}).strict();
+
 const SpecContext = z.object({
   productContext: z.string().trim().min(1),
   platform: z.enum(["web", "mobile", "tablet"]).optional(),
   implementationFramework: z.string().optional(),
   designSystem: DesignSystemIdentitySchema.optional(),
   constraints: z.array(z.string().trim().min(1)).default([]),
+  // Caller-supplied design intent. Present only when the caller supplied it;
+  // this is the ONE place intent surfaces, so it reaches semanticSpecSha256
+  // (which hashes the whole spec) and therefore artifactId.
+  colorIntent: ColorIntentSchema.optional(),
+  typeIntent: TypeIntentSchema.optional(),
 }).strict();
 
 export const UiSpec = z.object({
@@ -789,6 +819,11 @@ export const CreateUiSpecInput = z.object({
   constraints: z.array(z.string().trim().min(1).max(500)).max(12).default([]),
   target: CreateUiSpecTargetId.optional(),
   motionIntents: z.array(CreateUiSpecMotionIntent).max(8).default([]),
+  // Reuses the canonical schema objects rather than hand-mirroring them: both
+  // the core request and this transport input read the same definition, so the
+  // two drift gates below have nothing to catch.
+  colorIntent: ColorIntentSchema.optional(),
+  typeIntent: TypeIntentSchema.optional(),
   /** Adapter-local presentation selection — never part of the core request. */
   outputFormat: z.enum(["markdown", "json"]).default("markdown"),
 }).strict();
@@ -968,6 +1003,8 @@ const CREATE_UI_SPEC_FREE_TEXT_LEAVES: Readonly<Record<LeafPosition, string>> = 
   "data.acceptanceCriteria[].assertion": "closed AcceptanceAssertion enum",
   "data.acceptanceCriteria[].verifier": "closed discriminator literal",
   "data.acceptanceCriteria[].priority": "closed must|should enum",
+  "data.context.colorIntent.contrastFloor": "closed AA|AAA enum, caller-selected",
+  "data.context.typeIntent.density": "closed compact|regular|spacious enum, caller-selected",
   "data.citedDecisions[].authority": "closed authority enum",
   "data.citedDecisions[].readiness": "closed available|proposed|unavailable enum",
   "evidence[].kind": "closed EvidenceKind enum",
@@ -979,6 +1016,9 @@ const CREATE_UI_SPEC_FREE_TEXT_LEAVES: Readonly<Record<LeafPosition, string>> = 
   "data.context.designSystem.registry": "caller-supplied design-system registry name",
   "data.context.designSystem.library": "caller-supplied design-system library name",
   "data.context.constraints[]": "caller-supplied constraint prose",
+  "data.context.colorIntent.accentPreference": "caller-supplied colour intent, echoed back to its own author; never corpus-derived and never materialized into colorTokens",
+  "data.context.colorIntent.mood": "caller-supplied colour intent, echoed back to its own author; never corpus-derived and never materialized into colorTokens",
+  "data.context.typeIntent.voice": "caller-supplied typography intent, echoed back to its own author; never corpus-derived and never materialized into typographyTokens",
   "data.designDirection": "under the deterministic recipe this restates the caller's own brief",
   // --- recipe/operator-owned prose: descriptive, carries no identity (reason b) ---
   "data.rejectedDefaults[]": "recipe-owned prose naming a rejected default",

@@ -241,6 +241,8 @@ export async function handleCreateUiSpecHttp(
       : {}),
     ...(parsed.data.designSystem !== undefined ? { designSystem: parsed.data.designSystem } : {}),
     ...(parsed.data.target !== undefined ? { target: parsed.data.target } : {}),
+    ...(parsed.data.colorIntent !== undefined ? { colorIntent: parsed.data.colorIntent } : {}),
+    ...(parsed.data.typeIntent !== undefined ? { typeIntent: parsed.data.typeIntent } : {}),
   };
 
   // ----- 2. The sole producer, through the ONE dependency constructor -----

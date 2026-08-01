@@ -1077,6 +1077,43 @@ describe("parseDesignArtifactEnvelope", () => {
     expect(() => parseDesignArtifactEnvelope(envB)).not.toThrow();
   });
 
+  it("moves the DESIGN.json and spec hashes with generation time, but NOT the DESIGN.md hash", () => {
+    // The three byte digests are NOT interchangeable, and the difference is
+    // user-facing: the playground renders all three side by side, so its copy
+    // has to say which of them an operator can compare across two runs.
+    // `renderDesignHandoffMarkdown` writes no timestamp; `renderDesignHandoffJson`
+    // does; and `specSha256` covers `spec.provenance.generatedAt`. Without this
+    // test the only statement of that fact is prose in a React component, and a
+    // renderer change could silently make that prose false.
+    const spec = UiSpec.parse(validUiSpec()) as import("./tool-contracts.js").UiSpecT;
+    const target = {
+      id: "neutral-web", platform: "web", siteFramework: "none", runtime: "none",
+      styling: "vanilla-css", componentSource: "native-html", motion: "css",
+      islandStrategy: null,
+    } as const;
+    const renderAt = (generatedAt: string) => {
+      const handoff = parseDesignHandoff({ spec, target, motionIntents: [], generatedAt });
+      return {
+        markdown: sha256Hex(Buffer.from(renderDesignHandoffMarkdown(handoff), "utf-8")),
+        json: sha256Hex(Buffer.from(renderDesignHandoffJson(handoff), "utf-8")),
+      };
+    };
+    const early = renderAt("2026-08-01T00:00:00.000Z");
+    const late = renderAt("2030-12-31T23:59:59.000Z");
+
+    // Stable: comparable across runs, which is what makes it worth showing.
+    expect(late.markdown).toBe(early.markdown);
+    // Volatile: carries the timestamp, so a mismatch across runs proves nothing.
+    expect(late.json).not.toBe(early.json);
+
+    // NOTE: `specSha256` is deliberately NOT asserted here. Hashing a locally
+    // reconstructed spec with a timestamp this test injected itself would prove
+    // only that sha256 is a function — if the producer ever stopped putting
+    // `generatedAt` in `spec`, such an assertion would still pass while the UI
+    // copy became false. The spec digest is covered end-to-end from two real
+    // producer envelopes in create-ui-spec.test.ts.
+  });
+
   it("rejects a private marker in the serialized envelope", () => {
     const env = buildValidEnvelope();
     env.producerVersion = "private-corpus-id-1.2.3";

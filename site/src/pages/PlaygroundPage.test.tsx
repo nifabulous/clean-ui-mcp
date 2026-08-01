@@ -608,6 +608,62 @@ describe("PlaygroundPage — downloads reuse the returned bytes", () => {
     expect(within(region).getByText(/include generation time/i)).toBeInTheDocument();
   });
 
+  it("describes hash stability without promising same-input reproducibility", async () => {
+    await generateSuccessfully();
+    const region = screen.getByRole("region", { name: /artifact integrity/i });
+    const note = within(region).getByText(/semantic hash covers/i);
+
+    expect(note).toHaveTextContent(/generation time normalized/i);
+    expect(note).toHaveTextContent(/identical semantic content/i);
+  });
+
+  it("states the integrity note EXACTLY, so no reproducibility promise can creep back in", async () => {
+    // The panel must not tell the operator that re-running a brief reproduces a
+    // hash. It does not, and not only because of a future model path: retrieval
+    // reads a MUTABLE CORPUS that is not one of the operator's inputs, so the
+    // same brief can legitimately yield different evidence, a different spec and
+    // a different semantic hash with nothing the operator controls having
+    // changed.
+    //
+    // WHY EXACT TEXT AND NOT A PATTERN. Two weaker guards were tried and both
+    // leak. Banning the one dead phrase `same inputs … identical` lets any
+    // reword through. Banning a LIST of phrasings (`regenerate`, `reproducib`,
+    // `run it again`, …) is just a longer list with the same hole — "identical
+    // briefs always yield the same semantic hash" passes every one of them while
+    // making exactly the forbidden promise. There is no regex for "asserts a
+    // false claim", so this pins the whole sentence: any edit to the most
+    // load-bearing honesty copy in the app has to come here and be re-argued.
+    await generateSuccessfully();
+    const region = screen.getByRole("region", { name: /artifact integrity/i });
+    const note = within(region).getByText(/semantic hash covers/i);
+
+    expect((note.textContent ?? "").replace(/\s+/g, " ").trim()).toBe(
+      "The semantic hash covers the spec's content with generation time normalized: " +
+        "identical semantic content produces the same hash. Of the byte digests below, " +
+        "DESIGN.json and the spec hash include generation time, so they change between " +
+        "runs even when the design does not; the DESIGN.md hash does not carry a " +
+        "timestamp, so it stays stable while the rendered document does.",
+    );
+  });
+
+  it("names which byte digests carry generation time and which do not", async () => {
+    // The panel renders THREE byte digests as peers. Two move with the clock and
+    // one does not: `renderDesignHandoffMarkdown` writes no timestamp, so
+    // DESIGN.md's hash is stable across runs while DESIGN.json's and the spec
+    // hash both change. `src/create-ui-spec-contracts.test.ts` pins that
+    // behavior against the real renderers.
+    //
+    // A blanket "the digests below include generation time" is therefore false
+    // for DESIGN.md — and it is false about the one byte digest an operator CAN
+    // usefully compare across two runs, which is the opposite of harmless.
+    await generateSuccessfully();
+    const region = screen.getByRole("region", { name: /artifact integrity/i });
+    const text = within(region).getByText(/semantic hash covers/i).textContent ?? "";
+
+    expect(text).toMatch(/DESIGN\.json[^.]*include generation time/i);
+    expect(text).toMatch(/DESIGN\.md[^.]*does not/i);
+  });
+
   it("offers a copy-markdown action alongside the downloads", async () => {
     await generateSuccessfully();
     expect(screen.getByRole("button", { name: /copy markdown/i })).toBeInTheDocument();

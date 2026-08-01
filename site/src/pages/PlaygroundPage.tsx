@@ -74,9 +74,13 @@ import "../styles/playground.css";
  * live in component state. The download handlers read `artifact.designMarkdown` /
  * `artifact.designJson` from that state and call {@link downloadExactBytes},
  * which touches no network. Re-requesting would produce a different
- * `generatedAt` — and therefore a different artifact identity — than the one the
- * operator just reviewed, so the reviewed bytes are the only bytes that can be
- * saved. The returned hashes are displayed so the saved file can be verified.
+ * `generatedAt`, and therefore different BYTES — `DESIGN.json` embeds the
+ * timestamp and the spec hash covers it — than the one the operator just
+ * reviewed, so the reviewed bytes are the only bytes that can be saved. Note it
+ * is the bytes that differ, NOT the identity: `buildArtifactIdentityInput`
+ * excludes `generatedAt` and consumes the timestamp-normalized semantic hash, so
+ * a timestamp-only rerun keeps the same `artifactId`. The returned hashes are
+ * displayed so the saved file can be verified.
  *
  * NOTHING IS PERSISTED OR LOGGED. No `localStorage`, no `sessionStorage`, no
  * cookie, no analytics call, and no `console.*` — the brief lives in React state
@@ -999,9 +1003,11 @@ function ArtifactView({
           Artifact integrity
         </h4>
         <p className="artifact__note">
-          The semantic hash covers the spec's content: regenerate with the same inputs and it is
-          identical. The digests below it cover exact bytes and include generation time, so they
-          change on every run even when nothing about the design changed.
+          The semantic hash covers the spec's content with generation time normalized: identical
+          semantic content produces the same hash. Of the byte digests below, {DESIGN_JSON_FILENAME}{" "}
+          and the spec hash include generation time, so they change between runs even when the
+          design does not; the {DESIGN_MARKDOWN_FILENAME} hash does not carry a timestamp, so it
+          stays stable while the rendered document does.
         </p>
         <dl className="artifact__facts artifact__facts--hashes">
           <div className="artifact__fact">

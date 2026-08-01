@@ -715,7 +715,11 @@ describe("public site — C3 composer", () => {
     }
 
     // THE critical property: saving did not regenerate. A second POST would carry
-    // a different generatedAt and therefore a different artifact identity.
+    // a different generatedAt and therefore different BYTES — DESIGN.json embeds
+    // the timestamp and specSha256 covers it. The artifactId would be UNCHANGED
+    // (buildArtifactIdentityInput excludes generatedAt and consumes the
+    // timestamp-normalized semantic hash), which is exactly why comparing ids
+    // cannot substitute for saving the reviewed bytes.
     expect(stub.hits.filter((h) => h.path === "/api/create-ui-spec").length).toBe(
       postsAfterGenerate,
     );

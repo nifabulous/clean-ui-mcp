@@ -301,8 +301,9 @@ export interface EvidenceSummary {
  * Everything the composer may render, plus the EXACT rendering bytes the
  * response contained. Downloads read `designMarkdown` / `designJson` straight
  * off this object, so a download can never trigger a second generation (which
- * would carry a different `generatedAt` and a different artifact identity than
- * the one the operator just reviewed).
+ * would carry a different `generatedAt`, and therefore different bytes and a
+ * different `designJson`/`spec` hash, than the one the operator just reviewed —
+ * the `artifactId` itself is timestamp-independent and would NOT change).
  *
  * `designMarkdown` / `designJson` are NOT projected and must never be rendered —
  * see the module header. Every other field on this object is display-safe.
@@ -891,8 +892,11 @@ function defaultDefer(task: () => void): void {
  *
  * The bytes come from the caller — which is always the {@link SafeArtifact}
  * already in component state — so a download NEVER issues a request of any kind.
- * That is the whole point: re-generating would produce a different `generatedAt`
- * and therefore a different artifact identity than the one the operator reviewed.
+ * That is the whole point: a second generation would produce a different
+ * `generatedAt` and therefore different BYTES than the one the operator
+ * reviewed. The identity would be unchanged — `artifactId` is derived from the
+ * timestamp-normalized semantic hash — which is precisely why comparing ids is
+ * not enough and the reviewed bytes must be the saved bytes.
  * There is no `fetch` in this function, and the artifact it reads from is
  * immutable state.
  *

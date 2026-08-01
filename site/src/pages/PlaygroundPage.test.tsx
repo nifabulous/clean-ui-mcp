@@ -615,8 +615,51 @@ describe("PlaygroundPage — downloads reuse the returned bytes", () => {
 
     expect(note).toHaveTextContent(/generation time normalized/i);
     expect(note).toHaveTextContent(/identical semantic content/i);
-    expect(note).toHaveTextContent(/can differ between runs/i);
-    expect(note).not.toHaveTextContent(/same inputs.*identical/i);
+  });
+
+  it("makes no same-input reproducibility promise, in any phrasing", async () => {
+    // The panel must not tell the operator that re-running a brief reproduces a
+    // hash. It does not, and not only because of a future model path: retrieval
+    // reads a MUTABLE CORPUS that is not one of the operator's inputs, so the
+    // same brief can legitimately yield different evidence, a different spec and
+    // a different semantic hash with nothing the operator controls having
+    // changed.
+    //
+    // Banning one dead phrase would not hold this: any rewrite could restate the
+    // promise in different words and still pass. So ban the CLAIM, not the
+    // wording.
+    await generateSuccessfully();
+    const region = screen.getByRole("region", { name: /artifact integrity/i });
+    const text = within(region).getByText(/semantic hash covers/i).textContent ?? "";
+
+    for (const promise of [
+      /same inputs?/i,
+      /same brief/i,
+      /regenerate/i,
+      /re-?generate/i,
+      /reproducib/i,
+      /run it again/i,
+    ]) {
+      expect(text, `the integrity note must not promise ${promise}`).not.toMatch(promise);
+    }
+  });
+
+  it("names which byte digests carry generation time and which do not", async () => {
+    // The panel renders THREE byte digests as peers. Two move with the clock and
+    // one does not: `renderDesignHandoffMarkdown` writes no timestamp, so
+    // DESIGN.md's hash is stable across runs while DESIGN.json's and the spec
+    // hash both change. `src/create-ui-spec-contracts.test.ts` pins that
+    // behavior against the real renderers.
+    //
+    // A blanket "the digests below include generation time" is therefore false
+    // for DESIGN.md — and it is false about the one byte digest an operator CAN
+    // usefully compare across two runs, which is the opposite of harmless.
+    await generateSuccessfully();
+    const region = screen.getByRole("region", { name: /artifact integrity/i });
+    const text = within(region).getByText(/semantic hash covers/i).textContent ?? "";
+
+    expect(text).toMatch(/DESIGN\.json[^.]*include generation time/i);
+    expect(text).toMatch(/DESIGN\.md[^.]*does not/i);
   });
 
   it("offers a copy-markdown action alongside the downloads", async () => {

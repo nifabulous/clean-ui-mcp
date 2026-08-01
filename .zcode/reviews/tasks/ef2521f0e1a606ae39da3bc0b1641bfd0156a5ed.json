@@ -1,0 +1,10 @@
+{
+  "type": "task-review",
+  "branch": "codex/c3-model-path",
+  "baseSha": "ec9a366333d11d51be74d233023c8bf9745317f1",
+  "headSha": "ef2521f0e1a606ae39da3bc0b1641bfd0156a5ed",
+  "reviewedAt": "2026-08-01T20:36:38Z",
+  "reviewer": "agent",
+  "result": "approved",
+  "issues": {}
+}

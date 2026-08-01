@@ -73,7 +73,16 @@ import {
   renderDesignHandoffJson,
 } from "./design-handoff.js";
 import { canonicalJsonStringify, sha256Hex } from "./readiness/contracts.js";
-import { UiSpec, type UiSpecT } from "./tool-contracts.js";
+import { UiSpec, type ModelProposal, type UiSpecT } from "./tool-contracts.js";
+import {
+  createUiSpecModel,
+  type CreateUiSpecModelRuntime,
+} from "./create-ui-spec-model.js";
+import {
+  ModelArtifactRecordSchema,
+  ModelExecutionSchema,
+  type ModelExecution,
+} from "./create-ui-spec-model-contracts.js";
 import {
   buildCorpusObservationSummary,
   buildDesignDirectionSummary,
@@ -98,6 +107,11 @@ import {
  */
 export const RECIPE_EVIDENCE_ID = RECIPE.recipeEvidence.id;
 
+export type CreateUiSpecModelDependency =
+  | { kind: "not-configured" }
+  | { kind: "invalid-configuration" }
+  | { kind: "configured"; runtime: CreateUiSpecModelRuntime };
+
 /**
  * Build the single recipe/system evidence item (editorial-guidance grounding).
  * The summary is recipe-owned text — NOT corpus prose, NOT a user/public
@@ -112,6 +126,7 @@ function buildRecipeSystemEvidence(): SanitizedEvidence {
 
 export interface CreateUiSpecDependencies {
   readonly reader: CorpusReader;
+  readonly model?: CreateUiSpecModelDependency;
   /**
    * Resolve an opaque caller token to an internal corpus entry ID. Raw corpus
    * IDs are not valid public tokens — the producer rejects a token whose
@@ -177,17 +192,14 @@ export async function createUiSpecForAdapter(
 
   // ----- 3/4/5. Assemble + build envelope -----
   const generatedAt = (dependencies.now?.() ?? new Date()).toISOString();
-  let envelope: DesignArtifactEnvelope;
   try {
-    envelope = buildEnvelope(request, resolved, generatedAt);
-    // Re-validate + re-render + re-hash before returning.
-    return {
-      envelope: parseDesignArtifactEnvelope(envelope),
-      // Already parsed through SanitizedEvidenceSchema at construction (see
-      // ResolvedEvidence.sanitized for the two construction sites), so this is a
-      // preservation, not a second validation pass.
-      sanitizedEvidence: resolved.sanitized,
-    };
+    const envelope = await buildModelAwareEnvelope(
+      request,
+      resolved,
+      generatedAt,
+      dependencies.model ?? { kind: "not-configured" },
+    );
+    return { envelope, sanitizedEvidence: resolved.sanitized };
   } catch (err) {
     if (isCreateUiSpecError(err)) throw err;
     // Assembly or integrity-verification failure. The deterministic producer
@@ -197,6 +209,96 @@ export async function createUiSpecForAdapter(
     // failure reaches the caller as a CreateUiSpecError, never an untyped Error.
     throw invalidInput("assembled artifact failed integrity verification");
   }
+}
+
+async function buildModelAwareEnvelope(
+  request: CreateUiSpecRequest,
+  resolved: ResolvedEvidence,
+  generatedAt: string,
+  model: CreateUiSpecModelDependency,
+): Promise<DesignArtifactEnvelope> {
+  if (model.kind === "not-configured") {
+    return buildValidatedEnvelope(request, resolved, generatedAt);
+  }
+
+  if (model.kind === "invalid-configuration") {
+    return buildValidatedEnvelope(
+      request,
+      resolved,
+      generatedAt,
+      undefined,
+      ModelExecutionSchema.parse({ state: "invalid-configuration" }),
+    );
+  }
+
+  const outcome = await createUiSpecModel(
+    { request, sanitizedEvidence: resolved.sanitized },
+    model.runtime,
+  );
+  if (outcome.kind === "fallback") {
+    return buildValidatedEnvelope(
+      request,
+      resolved,
+      generatedAt,
+      undefined,
+      outcome.execution,
+    );
+  }
+
+  let proposedEnvelope: DesignArtifactEnvelope;
+  let record: ReturnType<typeof ModelArtifactRecordSchema.parse>;
+  try {
+    proposedEnvelope = buildValidatedEnvelope(
+      request,
+      resolved,
+      generatedAt,
+      outcome.proposal,
+      outcome.execution,
+    );
+    record = ModelArtifactRecordSchema.parse({
+      recordVersion: "1.0",
+      artifactId: proposedEnvelope.artifactId,
+      specSha256: proposedEnvelope.specSha256,
+      semanticSpecSha256: proposedEnvelope.semanticSpecSha256,
+      ...outcome.recordInput,
+      storedAt: generatedAt,
+      retention: "until-explicit-delete",
+    });
+  } catch {
+    return buildValidatedEnvelope(
+      request,
+      resolved,
+      generatedAt,
+      undefined,
+      ModelExecutionSchema.parse({ state: "proposal-rejected" }),
+    );
+  }
+
+  try {
+    await model.runtime.store.save(record);
+  } catch {
+    return buildValidatedEnvelope(
+      request,
+      resolved,
+      generatedAt,
+      undefined,
+      ModelExecutionSchema.parse({ state: "persistence-failed" }),
+    );
+  }
+
+  return proposedEnvelope;
+}
+
+function buildValidatedEnvelope(
+  request: CreateUiSpecRequest,
+  resolved: ResolvedEvidence,
+  generatedAt: string,
+  proposal?: ModelProposal,
+  execution?: ModelExecution,
+): DesignArtifactEnvelope {
+  return parseDesignArtifactEnvelope(
+    buildEnvelope(request, resolved, generatedAt, proposal, execution),
+  );
 }
 
 // ===========================================================================
@@ -682,6 +784,7 @@ function assembleSpec(
   request: CreateUiSpecRequest,
   resolved: ResolvedEvidence,
   generatedAt: string,
+  proposal?: ModelProposal,
 ): UiSpecT {
   const evidence = resolved.sanitized;
   const evidenceIds = evidence.map((e) => e.id);
@@ -794,6 +897,7 @@ function assembleSpec(
     colorTokenAuthority: "editorial",
     typographyTokens: null,
     typographyTokenAuthority: "editorial",
+    ...(proposal !== undefined ? { modelProposal: proposal } : {}),
     interactions: specFields.interactions,
     motionGuidance: { notes: [], evidenceUnavailable: true },
     accessibilityConstraints: specFields.accessibilityConstraints,
@@ -921,8 +1025,10 @@ function buildEnvelope(
   request: CreateUiSpecRequest,
   resolved: ResolvedEvidence,
   generatedAt: string,
+  proposal?: ModelProposal,
+  execution?: ModelExecution,
 ): DesignArtifactEnvelope {
-  const spec = assembleSpec(request, resolved, generatedAt);
+  const spec = assembleSpec(request, resolved, generatedAt, proposal);
 
   // Target resolution: pass undefined for neutral-web/absent so the handoff
   // parser substitutes the canonical NEUTRAL_WEB_TARGET. For astro targets,
@@ -991,6 +1097,12 @@ function buildEnvelope(
     designMarkdownSha256: markdownSha,
     designJsonSha256: jsonSha,
     semanticSpecSha256: semanticSha,
+    ...(execution !== undefined
+      ? {
+          modelExecution: execution,
+          modelExecutionSha256: sha256Canonical(execution),
+        }
+      : {}),
     publicEvidenceIds,
     retrieval: resolved.retrieval,
     warnings,

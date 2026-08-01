@@ -48,7 +48,11 @@
  * the sole producer. This module only constructs the dependency value.
  */
 import type { CorpusReader } from "./corpus-reader.js";
-import type { CreateUiSpecDependencies } from "./create-ui-spec.js";
+import type {
+  CreateUiSpecDependencies,
+  CreateUiSpecModelDependency,
+} from "./create-ui-spec.js";
+export type { CreateUiSpecModelDependency } from "./create-ui-spec.js";
 
 /**
  * Build the dependency value both create-ui-spec transport adapters pass to the
@@ -63,6 +67,8 @@ import type { CreateUiSpecDependencies } from "./create-ui-spec.js";
  * @param now optional clock, forwarded unchanged to the core for
  *   `generatedAt`. Omitted from the returned object entirely when not supplied,
  *   so the core's own `new Date()` default applies exactly as before.
+ * @param model explicit proposal-path state. Defaults to `not-configured`, so
+ *   existing deterministic callers retain their envelope shape and identity.
  *
  * @returns dependencies whose `resolveReferenceToken` implements the single
  *   explicit-reference policy documented at the top of this module.
@@ -70,6 +76,7 @@ import type { CreateUiSpecDependencies } from "./create-ui-spec.js";
 export function makeCreateUiSpecDependencies(
   reader: CorpusReader,
   now?: () => Date,
+  model?: CreateUiSpecModelDependency,
 ): CreateUiSpecDependencies {
   return {
     reader,
@@ -84,5 +91,6 @@ export function makeCreateUiSpecDependencies(
     resolveReferenceToken: (token: string): string | undefined =>
       reader.getById(token) !== undefined ? token : undefined,
     ...(now !== undefined ? { now } : {}),
+    ...(model !== undefined ? { model } : {}),
   };
 }

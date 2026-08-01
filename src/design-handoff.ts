@@ -309,10 +309,60 @@ export function renderDesignHandoffMarkdown(handoff: DesignHandoffT): string {
     lines.push(`## ${header}`);
     lines.push(...renderSection(i, ctx, tokens));
     lines.push("");
+    if (i === 0 && handoff.spec.modelProposal !== undefined) {
+      lines.push("## Model proposal — not accepted");
+      lines.push(...renderModelProposalSection(handoff.spec.modelProposal));
+      lines.push("");
+    }
   }
 
   // Trim trailing blank line, end with a single newline.
   return `${lines.join("\n").replace(/\n+$/, "\n")}`;
+}
+
+function renderModelProposalSection(
+  proposal: NonNullable<DesignHandoffT["spec"]["modelProposal"]>,
+): string[] {
+  const lines = [
+    proposal.disclaimer,
+    "",
+    "### Proposed design direction",
+    proposal.designDirection,
+    "",
+    "### Proposed color tokens",
+  ];
+
+  if (proposal.colorTokens === undefined) {
+    lines.push("_(not proposed)_");
+  } else {
+    lines.push(`- Primary: ${proposal.colorTokens.primary}`);
+    lines.push(`- Surface: ${proposal.colorTokens.surface}`);
+    lines.push(`- Ink: ${proposal.colorTokens.ink}`);
+    lines.push(`- Muted: ${proposal.colorTokens.muted}`);
+    lines.push(`- Accent: ${proposal.colorTokens.accent}`);
+  }
+
+  lines.push("");
+  lines.push("### Proposed typography tokens");
+  if (proposal.typographyTokens === undefined) {
+    lines.push("_(not proposed)_");
+  } else {
+    lines.push(`- Heading: ${proposal.typographyTokens.heading}`);
+    lines.push(`- Body: ${proposal.typographyTokens.body}`);
+    lines.push(`- Mono: ${proposal.typographyTokens.mono}`);
+  }
+
+  lines.push("");
+  lines.push("### Proposed motion notes");
+  lines.push(...(
+    proposal.motionNotes.length > 0
+      ? proposal.motionNotes.map((note) => `- ${note}`)
+      : ["_(not proposed)_"]
+  ));
+  lines.push("");
+  lines.push("### Proposed content voice guidance");
+  lines.push(proposal.contentVoiceGuidance ?? "_(not proposed)_");
+  return lines;
 }
 
 /**

@@ -102,6 +102,40 @@ function validUiSpec(): Record<string, unknown> {
   };
 }
 
+function proposalOnlyUiSpec(): Record<string, unknown> {
+  return {
+    ...validUiSpec(),
+    colorTokens: null,
+    colorTokenAuthority: "editorial",
+    typographyTokens: null,
+    typographyTokenAuthority: "editorial",
+    modelProposal: {
+      status: "proposal-only",
+      disclaimer: "Proposal only; not accepted into token authority.",
+      designDirection: "Use compact grouping with a restrained accent.",
+      colorTokens: {
+        primary: "#2563eb",
+        surface: "#ffffff",
+        ink: "#111827",
+        muted: "#6b7280",
+        accent: "#f59e0b",
+      },
+      typographyTokens: {
+        heading: "Inter",
+        body: "Inter",
+        mono: "JetBrains Mono",
+      },
+      motionNotes: ["Keep transitions brief and interruptible."],
+      contentVoiceGuidance: "Direct, calm, and operational.",
+    },
+    unavailableDecisions: [
+      { field: "colorTokens", reason: "proposal values are not accepted" },
+      { field: "typographyTokens", reason: "proposal values are not accepted" },
+      { field: "motion", reason: "no DOM evidence" },
+    ],
+  };
+}
+
 function neutralWebTarget(): Record<string, unknown> {
   return {
     id: "neutral-web",
@@ -283,6 +317,7 @@ describe("renderDesignHandoffMarkdown: 19-section outline", () => {
 
   it("emits exactly 19 ## sections", () => {
     expect(headers.length).toBe(19);
+    expect(headers).not.toContain("Model proposal — not accepted");
   });
 
   it("places Implementation guidance at section 14", () => {
@@ -309,6 +344,32 @@ describe("renderDesignHandoffMarkdown: 19-section outline", () => {
     ]) {
       expect(joined).toContain(required);
     }
+  });
+});
+
+describe("renderDesignHandoffMarkdown: proposal-only handoff", () => {
+  it("renders proposed values in an unmistakable section without changing accepted token authority", () => {
+    const handoff = parseDesignHandoff({
+      ...neutralInput(),
+      spec: proposalOnlyUiSpec(),
+    });
+
+    const markdown = renderDesignHandoffMarkdown(handoff);
+    const json = renderDesignHandoffJson(handoff);
+
+    expect(markdown).toContain("## Model proposal — not accepted");
+    expect(markdown).toContain("Proposal only; not accepted into token authority.");
+    expect(markdown).toContain("### Proposed color tokens");
+    expect(markdown).toContain("- Primary: #2563eb");
+    expect(markdown).toContain("### Proposed typography tokens");
+    expect(markdown).toContain("- Heading: Inter");
+    expect(markdown).toContain("### Proposed motion notes");
+    expect(markdown).toContain("### Proposed content voice guidance");
+    expect(JSON.parse(json).spec.modelProposal.status).toBe("proposal-only");
+    expect(handoff.spec.colorTokens).toBeNull();
+    expect(handoff.spec.colorTokenAuthority).toBe("editorial");
+    expect(handoff.spec.typographyTokens).toBeNull();
+    expect(handoff.spec.typographyTokenAuthority).toBe("editorial");
   });
 });
 

@@ -21,6 +21,7 @@
     "capture": "tsc && node dist/scripts/capture.js",
     "capture-batch": "tsc && node dist/scripts/capture.js",
     "test": "vitest run",
+    "ci:local": "bash scripts/ci-local.sh",
     "site:dev": "vite --config site/vite.config.ts",
     "site:build": "vite build --config site/vite.config.ts",
     "site:preview": "vite preview --config site/vite.config.ts",

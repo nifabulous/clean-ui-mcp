@@ -993,7 +993,14 @@ const CREATE_UI_SPEC_SAFE_REFERENCE_LEAVES: ReadonlySet<LeafPosition> = new Set<
  *       (create-ui-spec-contracts.ts); the corpus-derived path additionally
  *       passes SanitizedEvidence, which forbids private identity fields.
  */
-const CREATE_UI_SPEC_FREE_TEXT_LEAVES: Readonly<Record<LeafPosition, string>> = {
+/**
+ * Exported so a guard test can assert the ANNOTATION TEXT itself is truthful.
+ * `classifyCreateUiSpecLeaf` returns immediately for the `free-text` class, so
+ * nothing at runtime ever reads these strings — which means an annotation that
+ * says "recipe-owned" over a position now carrying caller prose is an authority
+ * claim no code path can falsify. See create-ui-spec-intent-guards.test.ts.
+ */
+export const CREATE_UI_SPEC_FREE_TEXT_LEAVES: Readonly<Record<LeafPosition, string>> = {
   // --- closed vocabularies (reason a) ---
   "data.specVersion": "closed z.literal(\"1.0\")",
   "data.context.platform": "closed enum web|mobile|tablet",

@@ -285,6 +285,32 @@ describe("createUiSpec proposal-only model path", () => {
     expect(await readdir(root)).toEqual([]);
   });
 
+  it("rejects with a bounded error when proposal-record rollback cannot complete", async () => {
+    const root = mkdtempSync(join(tmpdir(), "create-ui-spec-model-path-rollback-incomplete-"));
+    tempRoots.push(root);
+    const store = createFileModelArtifactStore(root, {
+      syncDirectory: vi.fn(async () => {
+        throw new Error(`raw sync failure at ${root}`);
+      }),
+    });
+    const runtime = makeRuntime({ store });
+
+    const error = await captureError(
+      createUiSpecForAdapter(
+        REQUEST,
+        dependencies(FIXED_NOW, { kind: "configured", runtime }),
+      ),
+    );
+
+    expect(error).toEqual({
+      code: "INVALID_INPUT",
+      message: "Model artifact persistence rollback did not complete.",
+      retryable: false,
+    });
+    expect(JSON.stringify(error)).not.toContain(root);
+    expect(JSON.stringify(error)).not.toContain("raw sync failure");
+  });
+
   it("validates deterministic assembly before the provider call and preserves its exact error", async () => {
     const failedParse = { success: false } as ReturnType<typeof UiSpec.safeParse>;
     vi.spyOn(UiSpec, "safeParse").mockReturnValue(failedParse);

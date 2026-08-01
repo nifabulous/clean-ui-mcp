@@ -83,6 +83,7 @@ import {
   ModelExecutionSchema,
   type ModelExecution,
 } from "./create-ui-spec-model-contracts.js";
+import { ModelArtifactRollbackIncompleteError } from "./model-artifact-store.js";
 import {
   buildCorpusObservationSummary,
   buildDesignDirectionSummary,
@@ -269,7 +270,10 @@ async function buildModelAwareEnvelope(
 
   try {
     await model.runtime.store.save(record);
-  } catch {
+  } catch (error) {
+    if (error instanceof ModelArtifactRollbackIncompleteError) {
+      throw invalidInput("Model artifact persistence rollback did not complete.");
+    }
     return attachModelExecution(
       deterministicEnvelope,
       ModelExecutionSchema.parse({ state: "persistence-failed" }),

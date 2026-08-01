@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { link, mkdir, open, readFile, unlink } from "node:fs/promises";
+import { link, mkdir, open, readFile, unlink, type FileHandle } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
   ModelArtifactRecordSchema,
@@ -14,9 +14,24 @@ export interface ModelArtifactStore {
   delete(artifactId: string): Promise<boolean>;
 }
 
+export class ModelArtifactRollbackIncompleteError extends Error {
+  readonly code = "MODEL_ARTIFACT_ROLLBACK_INCOMPLETE" as const;
+
+  constructor() {
+    super("Model artifact persistence rollback did not complete.");
+    this.name = "ModelArtifactRollbackIncompleteError";
+  }
+}
+
 interface FileModelArtifactStoreOptions {
   /** Test seam for deterministic post-publication durability failures. */
   readonly syncDirectory?: (path: string) => Promise<void>;
+  /** Test seam for distinguishing temp-file collisions from link conflicts. */
+  readonly openTempFile?: (
+    path: string,
+    flags: "wx",
+    mode: number,
+  ) => Promise<FileHandle>;
 }
 
 /**
@@ -51,6 +66,8 @@ export function createFileModelArtifactStore(
     }
   }
   const syncDirectory = options.syncDirectory ?? syncDirectoryDurably;
+  const openTempFile = options.openTempFile
+    ?? ((path: string, flags: "wx", mode: number) => open(path, flags, mode));
 
   return {
     async save(record: ModelArtifactRecord): Promise<void> {
@@ -115,7 +132,7 @@ export function createFileModelArtifactStore(
     let published = false;
 
     try {
-      const handle = await open(tempPath, "wx", 0o600);
+      const handle = await openTempFile(tempPath, "wx", 0o600);
       tempExists = true;
       try {
         const body = `${JSON.stringify(parsed, null, 2)}\n`;
@@ -125,13 +142,20 @@ export function createFileModelArtifactStore(
         await handle.close();
       }
 
-      await link(tempPath, destination);
+      try {
+        await link(tempPath, destination);
+      } catch (error) {
+        if (!isErrno(error, "EEXIST")) throw error;
+        await unlink(tempPath);
+        tempExists = false;
+        await syncDirectory(dirname(destination));
+        return;
+      }
       published = true;
       await unlink(tempPath);
       tempExists = false;
       await syncDirectory(dirname(destination));
     } catch (error) {
-      const duplicate = !published && isErrno(error, "EEXIST");
       const cleanupErrors: unknown[] = [];
 
       if (published) {
@@ -144,14 +168,15 @@ export function createFileModelArtifactStore(
           if (!isErrno(cleanupError, "ENOENT")) cleanupErrors.push(cleanupError);
         });
       }
-      if (published || tempExists || duplicate) {
+      if (published || tempExists) {
         await syncDirectory(dirname(destination)).catch((cleanupError) => {
           cleanupErrors.push(cleanupError);
         });
       }
 
-      if (duplicate && cleanupErrors.length === 0) return;
-      if (duplicate && cleanupErrors.length === 1) throw cleanupErrors[0];
+      if (published && cleanupErrors.length > 0) {
+        throw new ModelArtifactRollbackIncompleteError();
+      }
       if (cleanupErrors.length > 0) {
         throw new AggregateError(
           [error, ...cleanupErrors],

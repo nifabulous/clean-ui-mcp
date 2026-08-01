@@ -226,6 +226,29 @@ describe("createFileModelArtifactStore", () => {
     }
   });
 
+  it("throws a bounded identifiable error when rollback durability cannot complete", async () => {
+    const { createFileModelArtifactStore } = await loadStoreModule();
+    const root = mkdtempSync(join(tmpdir(), "model-artifact-store-rollback-incomplete-"));
+    const record = buildRecord();
+
+    try {
+      const store = createFileModelArtifactStore(root, {
+        syncDirectory: async () => {
+          throw new Error(`raw sync failure at ${root}`);
+        },
+      });
+
+      await expect(store.save(record)).rejects.toMatchObject({
+        name: "ModelArtifactRollbackIncompleteError",
+        code: "MODEL_ARTIFACT_ROLLBACK_INCOMPLETE",
+        message: "Model artifact persistence rollback did not complete.",
+      });
+      await expect(store.read(record.artifactId as string)).resolves.toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("never deletes a pre-existing first-write-wins record when duplicate cleanup fails", async () => {
     const { createFileModelArtifactStore } = await loadStoreModule();
     const root = mkdtempSync(join(tmpdir(), "model-artifact-store-existing-"));
@@ -245,6 +268,28 @@ describe("createFileModelArtifactStore", () => {
         "duplicate cleanup sync failed",
       );
       await expect(initialStore.read(first.artifactId as string)).resolves.toEqual(first);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects EEXIST from random temp-file creation instead of treating it as a duplicate link", async () => {
+    const { createFileModelArtifactStore } = await loadStoreModule();
+    const root = mkdtempSync(join(tmpdir(), "model-artifact-store-temp-collision-"));
+    const record = buildRecord();
+    const collision = Object.assign(new Error("random temp file already exists"), {
+      code: "EEXIST",
+    });
+
+    try {
+      const store = createFileModelArtifactStore(root, {
+        openTempFile: async () => {
+          throw collision;
+        },
+      });
+
+      await expect(store.save(record)).rejects.toBe(collision);
+      await expect(store.read(record.artifactId as string)).resolves.toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

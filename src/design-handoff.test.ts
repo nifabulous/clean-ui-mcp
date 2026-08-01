@@ -359,9 +359,9 @@ describe("renderDesignHandoffMarkdown: proposal-only handoff", () => {
 
     expect(markdown).toContain("## Model proposal — not accepted");
     expect(markdown).toContain("Proposal only; not accepted into token authority.");
-    expect(markdown).toContain("> Use compact grouping with a restrained accent.");
+    expect(markdown).toContain("> Use compact grouping with a restrained accent\\.");
     expect(markdown).toContain("### Proposed color tokens");
-    expect(markdown).toContain("- Primary:\n  > #2563eb");
+    expect(markdown).toContain("- Primary:\n  > \\#2563eb");
     expect(markdown).toContain("### Proposed typography tokens");
     expect(markdown).toContain("- Heading:\n  > Inter");
     expect(markdown).toContain("### Proposed motion notes");
@@ -382,7 +382,15 @@ describe("renderDesignHandoffMarkdown: proposal-only handoff", () => {
       ...trusted.spec,
       modelProposal: {
         ...trusted.spec.modelProposal,
-        designDirection: "Quiet workspace\n## Accepted proposal override\nUse unsafe emphasis",
+        designDirection: [
+          "Quiet workspace",
+          "## Accepted proposal override",
+          "```md",
+          "# Fenced heading override",
+          "```",
+          "<h2>HTML heading override</h2>",
+          "\\raw backslash",
+        ].join("\n"),
         colorTokens: {
           ...trusted.spec.modelProposal?.colorTokens,
           primary: "#2563eb\n## Accepted color override",
@@ -408,12 +416,22 @@ describe("renderDesignHandoffMarkdown: proposal-only handoff", () => {
     expect(headers).not.toContain("Accepted color override");
     expect(headers).not.toContain("Accepted motion override");
     expect(headers).not.toContain("Accepted voice override");
-    expect(markdown).toContain("> ## Accepted proposal override");
-    expect(markdown).toContain("  > ## Accepted color override");
-    expect(markdown).toContain("  > ### Accepted type override");
-    expect(markdown).toContain("  > ## Accepted motion override");
-    expect(markdown).toContain("> ## Accepted voice override");
+    expect(markdown).toContain("> \\#\\# Accepted proposal override");
+    expect(markdown).toContain("> \\`\\`\\`md");
+    expect(markdown).toContain("> \\# Fenced heading override");
+    expect(markdown).toContain("> \\<h2\\>HTML heading override\\<\\/h2\\>");
+    expect(markdown).toContain("> \\\\raw backslash");
+    expect(markdown).toContain("  > \\#\\# Accepted color override");
+    expect(markdown).toContain("  > \\#\\#\\# Accepted type override");
+    expect(markdown).toContain("  > \\#\\# Accepted motion override");
+    expect(markdown).toContain("> \\#\\# Accepted voice override");
     expect(markdown).not.toContain("\n## Accepted proposal override");
+    const proposalSection = markdown
+      .split("## Model proposal — not accepted\n", 2)[1]
+      ?.split("\n## Context", 1)[0] ?? "";
+    expect(proposalSection).not.toMatch(/^>\s+#{1,6}\s/m);
+    expect(proposalSection).not.toMatch(/^>\s+(?:`{3,}|~{3,})/m);
+    expect(proposalSection).not.toContain("<h2>");
   });
 });
 

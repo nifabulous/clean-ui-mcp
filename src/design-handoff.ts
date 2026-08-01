@@ -375,11 +375,18 @@ function renderQuotedProposalItem(label: string, value: string): string[] {
   return [`- ${label}:`, ...quoteProposalText(value, "  ")];
 }
 
-/** Prefix every physical model-authored line; no delimiter can be closed. */
+const MARKDOWN_PUNCTUATION = new Set(
+  Array.from("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"),
+);
+
+/** Escape then prefix every physical model-authored line. */
 function quoteProposalText(value: string, indent: string = ""): string[] {
   return value
     .replace(/\r\n?/g, "\n")
     .split("\n")
+    .map((line) => Array.from(line, (char) =>
+      MARKDOWN_PUNCTUATION.has(char) ? `\\${char}` : char
+    ).join(""))
     .map((line) => `${indent}>${line.length > 0 ? ` ${line}` : ""}`);
 }
 

@@ -234,6 +234,7 @@ function buildPrompt(
   request: CreateUiSpecRequest,
   sanitizedEvidence: readonly SanitizedEvidence[],
 ): string {
+  const summaries = evidenceSummaries(sanitizedEvidence);
   return canonicalJsonStringify({
     policyVersion: POLICY_VERSION,
     task: "Produce a bounded UI-spec proposal as one JSON object and nothing else. "
@@ -281,8 +282,8 @@ function buildPrompt(
     // Real derived summaries only. recipe-system rows are operator
     // scaffolding, never evidence. Omit the key when nothing real exists —
     // a content-free label is worse than no grounding at all.
-    ...(evidenceSummaries(sanitizedEvidence).length > 0
-      ? { evidenceSummaries: evidenceSummaries(sanitizedEvidence) }
+    ...(summaries.length > 0
+      ? { evidenceSummaries: summaries }
       : {}),
     // TYPES AND BOUNDS, not just field names. The v1 policy listed names only
     // ("required: designDirection"), and a live Claude run answered with

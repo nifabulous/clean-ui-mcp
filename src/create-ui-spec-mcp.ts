@@ -66,7 +66,10 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CorpusReader } from "./corpus-reader.js";
-import { createUiSpecForAdapter } from "./create-ui-spec.js";
+import {
+  createUiSpecForAdapter,
+  type CreateUiSpecModelDependency,
+} from "./create-ui-spec.js";
 import { makeCreateUiSpecDependencies } from "./create-ui-spec-dependencies.js";
 import {
   projectSanitizedEvidenceToMcpEvidence,
@@ -140,7 +143,11 @@ const ERROR_RETRIEVAL = Object.freeze({
  * and `parseToolResult` — which applies ALL of the envelope's refinements,
  * including the fail-closed leaf gate — is the real validation.
  */
-export function registerCreateUiSpec(server: McpServer, reader: CorpusReader): void {
+export function registerCreateUiSpec(
+  server: McpServer,
+  reader: CorpusReader,
+  model?: CreateUiSpecModelDependency,
+): void {
   server.registerTool(
     "create_ui_spec",
     {
@@ -165,7 +172,7 @@ export function registerCreateUiSpec(server: McpServer, reader: CorpusReader): v
       // {@link CreateUiSpecMcpResult} strict (no `[key: string]: unknown` escape
       // hatch that would let a stray field in) without a cast. The key set is
       // asserted at runtime in create-ui-spec-mcp.test.ts.
-      const result = await handleCreateUiSpec(args, reader);
+      const result = await handleCreateUiSpec(args, reader, model);
       return { ...result };
     },
   );
@@ -183,6 +190,8 @@ export function registerCreateUiSpec(server: McpServer, reader: CorpusReader): v
 export async function handleCreateUiSpec(
   rawArgs: unknown,
   reader: CorpusReader,
+  model?: CreateUiSpecModelDependency,
+  now?: () => Date,
 ): Promise<CreateUiSpecMcpResult> {
   // ----- 1. Transport input -----
   const parsedInput = CreateUiSpecInput.safeParse(rawArgs);
@@ -215,7 +224,10 @@ export async function handleCreateUiSpec(
   // ----- 2. The sole producer -----
   let produced: Awaited<ReturnType<typeof createUiSpecForAdapter>>;
   try {
-    produced = await createUiSpecForAdapter(request, makeCreateUiSpecDependencies(reader));
+    const dependencies = model === undefined && now === undefined
+      ? makeCreateUiSpecDependencies(reader)
+      : makeCreateUiSpecDependencies(reader, now, model);
+    produced = await createUiSpecForAdapter(request, dependencies);
   } catch (err) {
     return mapCoreError(err);
   }

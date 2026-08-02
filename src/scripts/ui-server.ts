@@ -33,6 +33,7 @@ import {
 // bounded body read, and writing the adapter's already-validated bytes.
 import { PrivateCorpusReader, type CorpusReader } from "../corpus-reader.js";
 import { handleCreateUiSpecHttp } from "../create-ui-spec-http.js";
+import { resolveCreateUiSpecModelConfig } from "../create-ui-spec-model-config.js";
 // The SHARED core→transport error mapping (also used by the MCP adapter). The
 // pre-adapter refusals below build their bodies from it rather than restating a
 // code, message or retryable flag — a second copy here is exactly the drift the
@@ -47,6 +48,14 @@ const PORT = Number(process.env.CLEAN_UI_PORT ?? 3131);
 const APP_PATH = resolve(PROJECT_ROOT, "index-2.html");
 const STATIC_DIR = resolve(PROJECT_ROOT, "ui"); // extracted CSS/JS lives here
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
+
+// Composition root: like src/server.ts, this file is allowed to read
+// process.env. Only the DEDICATED CREATE_UI_SPEC_MODEL_* tuple is consumed;
+// ambient provider variables can neither fill a missing value nor override an
+// explicit one (see src/create-ui-spec-model-config.ts). Absent or invalid
+// config resolves to a fallback runtime — the bounded runner's own no-call
+// behaviour — so an unconfigured server still serves every other route.
+const CREATE_UI_SPEC_MODEL = resolveCreateUiSpecModelConfig(process.env);
 
 // ─── perceptual hashing (dHash) + duplicate detection ───────────────────────
 // Dedup policy lives in ../dedup.ts so HTTP, CLI commit, and cleanup tools share
@@ -1382,7 +1391,7 @@ async function handleCreateUiSpecRequest(req: IncomingMessage, res: ServerRespon
 
   let result: Awaited<ReturnType<typeof handleCreateUiSpecHttp>>;
   try {
-    result = await handleCreateUiSpecHttp(parsed, readerForCreateUiSpec());
+    result = await handleCreateUiSpecHttp(parsed, readerForCreateUiSpec(), undefined, CREATE_UI_SPEC_MODEL);
   } catch {
     // The adapter THROWS when the envelope about to be served fails ANY of its
     // serve-time gates. There are FIVE, not one, and this handler deliberately

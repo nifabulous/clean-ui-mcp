@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "./server-factory.js";
 import { PrivateCorpusReader, PublicCorpusReader, type CorpusMode, type CorpusReader } from "./corpus-reader.js";
 import { PUBLIC_SNAPSHOT_DIR } from "./paths.js";
+import { resolveCreateUiSpecModelConfig } from "./create-ui-spec-model-config.js";
 
 /**
  * Resolve `CLEAN_UI_MODE` to a CorpusMode. F1 (Gate 1A): this is fail-CLOSED,
@@ -120,7 +121,8 @@ function buildReader(mode: CorpusMode): CorpusReader {
 async function main(): Promise<void> {
   const mode = pickMode();
   const reader = buildReader(mode);
-  const server = createServer(reader);
+  const createUiSpecModel = resolveCreateUiSpecModelConfig(process.env);
+  const server = createServer(reader, { createUiSpecModel });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(`clean-ui-mcp server running on stdio (mode=${mode})`);

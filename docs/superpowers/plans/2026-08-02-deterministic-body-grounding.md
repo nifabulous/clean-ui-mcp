@@ -457,7 +457,10 @@ Still in `resolveAutomaticRetrieval`, make the selection fall back to the id-bas
 ```ts
   // Keyword search first; when it matches nothing, seed the id-based
   // similarity index (findSimilar) from the plain search's top hit.
-  let top = results.slice(0, 3);
+  // SearchResult requires `score` and `searchMode` (src/corpus.ts:116-120);
+  // the similarity fallback yields { entry } rows, so the declared type is the
+  // common { entry } shape and the ranked slice is structurally assignable.
+  let top: { entry: CorpusEntryT }[] = results.slice(0, 3);
   if (top.length === 0) {
     const seeded = await dependencies.reader.search({
       query: request.productContext,
@@ -848,8 +851,17 @@ and extend `unavailableDecisions` (before the UiSpec parse) with the C3-excluded
     { field: "voice", reason: "Voice analysis prose is not served until provenance governance lands." },
     { field: "mood", reason: "Mood is not served until provenance governance lands." },
   ];
+  // The recipe ALREADY declares a colorTokens unavailableDecision
+  // (fallback-recipe-v1.json); the UiSpec gate requires unavailableDecisions
+  // fields to be UNIQUE (tool-contracts.ts:778-781) and forbids a colorTokens
+  // row when tokens are available (:803-804). So: when synthesis runs, drop
+  // the recipe's colorTokens row and re-add exactly ONE row only when the
+  // synthesis leaves tokens null. When synthesis did not run (no corpus match
+  // or model path), the recipe's row survives untouched.
   const unavailableDecisions: UiSpecT["unavailableDecisions"] = [
-    ...RECIPE.unavailableDecisions.map((d) => ({ field: d.field, reason: d.reason })),
+    ...RECIPE.unavailableDecisions
+      .filter((d) => synthesis === null || d.field !== "colorTokens")
+      .map((d) => ({ field: d.field, reason: d.reason })),
     ...(synthesis !== null && synthesis.colorTokens === null
       ? [{ field: "colorTokens", reason: "Fewer than 3 matched entries contribute color roles." }]
       : []),
@@ -875,6 +887,7 @@ Expected: FAILS where tests pin the old deterministic body — token-null, echo-
 1. **Model-path gating (D4):** in `src/create-ui-spec-model-path.test.ts` add a fixture where the reader returns 3 corpus observations with `colorRoles`; assert (a) no-model run: root `designDirection` contains the corpus evidence ids and `colorTokens` is populated; (b) model-success run with the same reader: root `designDirection` is the recipe echo (NOT corpus-synthesized), root `colorTokens`/`typographyTokens` are null, and `modelProposal` is present.
 2. **Citation ledger (D3):** in `src/create-ui-spec.test.ts` (deterministic path with a 3-observation fixture), assert `citedDecisions` contains `designDirection-corpus-synthesis` with `evidenceIds` equal to the corpus observation ids, contains NO `designDirection-editorial-1`, and `parseToolResult` / the envelope parse passes the citation-consistency gate.
 3. **No-fabrication (D5):** already added to `create-ui-spec-deterministic.test.ts` in Step 1 (the "never fabricates default tokens" case); also assert the `colorTokens` unavailableDecision row is present when it fires.
+4. **Gate-pass on BOTH token branches (D8):** in `src/create-ui-spec.test.ts`, for a deterministic path with a 3-observation fixture, assert the full produced envelope passes the shared gate (`parseToolResult` success) with `colorTokens` POPULATED, and for a 2-observation fixture assert it passes with `colorTokens` null and EXACTLY ONE `colorTokens` unavailableDecision row (the duplicate-row bug this pins: the recipe's row + a conditional row would make the gate's uniqueness check at tool-contracts.ts:778-781 fail, and a surviving recipe row with populated tokens would fail :803-804).
 
 - [ ] **Step 6: Run the affected suites**
 
@@ -1032,6 +1045,30 @@ Run one model-lane call (lane configured, `"Make it better."` brief): the prompt
 git add docs/superpowers/specs/coverage-2026-08-02.md
 git commit -m "docs(corpus): refresh coverage snapshot after Plan 2 verification"  # only if the audit output changed
 ```
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 1 | interrupted | no findings returned |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 6 issues, all folded |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+**CODEX:** dispatched via requesting-code-review; the subagent chain ran a nested deep-dive for ~30 minutes and was interrupted before returning findings, so this plan set has no outside-voice pass. Recommend a bounded re-run before implementation if cross-model review is wanted.
+
+**VERDICT:** ENG CLEARED — ready to implement. Six review fixes folded into the plans (see below); scope accepted as-is per user decision; TODOs.md gained three deferred items.
+
+Eng-review findings (all fixed in the plan files, user blanket-approved):
+1. [P1] colorRoles shape mismatched the corpus schema (canvas/muted-nullable) — fixed to mirror `src/schema.ts:420-426` and reuse the `design-prompt.ts` merge mapping.
+2. [P1] Synthesized direction cited corpus ids without updating `citedDecisions`/authority — fixed with a corpus-authority designDirection decision replacing the recipe's.
+3. [P1] Synthesis applied on the model-proposal path — gated behind `proposal === undefined`.
+4. [P1] `Math.min` over empty role arrays fabricated default tokens — fixed with a `withRoles.length >= 3` guard + tests.
+5. [P2] Test gaps — embeddings fallback, error-branch `modelExecutionState: null`, model-path gating, citation ledger; all added.
+6. [P3] Retry worst-case latency undocumented — `.env.example` comment added.
+
+NO UNRESOLVED DECISIONS
 
 ## Implementation Tasks
 

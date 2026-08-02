@@ -593,9 +593,21 @@ Append to the success-path describe in `src/create-ui-spec-mcp.test.ts`:
     const gate = parseToolResult(payload);
     expect(gate.ok).toBe(false);
   });
+
+  it("refuses modelExecutionState on tools without the descriptor flag", async () => {
+    // critique_ui has hasEvidence but no model lane; its envelope's
+    // modelExecutionState slot is z.never().optional(), so the key must be
+    // refused, not ignored. Uses the existing makeValidSuccess("critique_ui")
+    // fixture in tool-contracts.test.ts (clone, inject, expect fail).
+    const other = cloneToolResult(makeValidSuccess("critique_ui")) as Record<string, unknown>;
+    const payload = { ...other, modelExecutionState: "succeeded" };
+    const gate = parseToolResult(payload);
+    expect(gate.ok).toBe(false);
+  });
 ```
 
 `parseToolResult` is already exported from `tool-contracts.js`; add it to the test file's imports if not present.
+`cloneToolResult` and `makeValidSuccess` live in `src/tool-contracts.test.ts` (used at :720, :900-915) — import them from the test-file-local helpers, or replicate the fixture via `parseDesignArtifactEnvelope`-style construction if this test lands in a different file.
 
 Run: `npx vitest run src/create-ui-spec-mcp.test.ts -t "unknown top-level key"`
 Expected: PASS immediately — this pins the fail-closed property that made the original draft of this section unshippable.
@@ -1151,6 +1163,30 @@ The fake provider gains a malformed-once behavior; with
 CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS=2 the dogfood harness asserts a
 succeeded envelope, exactly one store record, and attempts: 2."
 ```
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 1 | interrupted | no findings returned |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 6 issues, all folded |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+**CODEX:** dispatched via requesting-code-review; the subagent chain ran a nested deep-dive for ~30 minutes and was interrupted before returning findings, so this plan set has no outside-voice pass. Recommend a bounded re-run before implementation if cross-model review is wanted.
+
+**VERDICT:** ENG CLEARED — ready to implement. Six review fixes folded into the plans (see below); scope accepted as-is per user decision; TODOs.md gained three deferred items.
+
+Eng-review findings (all fixed in the plan files, user blanket-approved):
+1. [P1] Plan 2 colorRoles shape mismatched the corpus schema (canvas/muted-nullable) — fixed to mirror `src/schema.ts:420-426` and reuse the `design-prompt.ts` merge mapping.
+2. [P1] Synthesized direction cited corpus ids without updating `citedDecisions`/authority — fixed with a corpus-authority designDirection decision replacing the recipe's.
+3. [P1] Synthesis applied on the model-proposal path — gated behind `proposal === undefined`.
+4. [P1] `Math.min` over empty role arrays fabricated default tokens — fixed with a `withRoles.length >= 3` guard + tests.
+5. [P2] Test gaps — embeddings fallback, error-branch `modelExecutionState: null`, model-path gating, citation ledger; all added.
+6. [P3] Retry worst-case latency undocumented — `.env.example` comment added.
+
+NO UNRESOLVED DECISIONS
 
 ## Implementation Tasks
 

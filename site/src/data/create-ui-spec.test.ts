@@ -54,6 +54,11 @@ const MARKDOWN_BYTES = "# DESIGN\n\nDeterministic markdown handoff.\n";
 const JSON_BYTES = '{"specVersion":"1.0","designDirection":"Direction"}';
 
 function envelopeFixture(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  // The model lane is OPTIONAL in the served envelope: `modelExecution` sits
+  // beside the artifact (always paired with its own digest) and
+  // `spec.modelProposal` inside the spec. Neither is present by default, so the
+  // no-model fixtures above stay exactly as served.
+  const { modelExecution, modelProposal, ...rest } = overrides;
   return {
     artifactVersion: "1.0",
     artifactId: `uispec-${HASH_A}`,
@@ -118,6 +123,7 @@ function envelopeFixture(overrides: Record<string, unknown> = {}): Record<string
         sourceReferences: ["https://private.example.com/secret"],
         evidenceIds: ["evidence-1"],
       },
+      ...(modelProposal !== undefined ? { modelProposal } : {}),
     },
     handoff: { target: "neutral-web", motionIntents: [] },
     designMarkdown: MARKDOWN_BYTES,
@@ -136,7 +142,10 @@ function envelopeFixture(overrides: Record<string, unknown> = {}): Record<string
       attemptedModes: [],
     },
     warnings: [{ code: "sparseCoverage", message: "Corpus coverage for this pattern is sparse." }],
-    ...overrides,
+    ...(modelExecution !== undefined
+      ? { modelExecution, modelExecutionSha256: "9".repeat(64) }
+      : {}),
+    ...rest,
   };
 }
 
@@ -475,6 +484,197 @@ describe("requestDesignArtifact — safe projection", () => {
     // No collapsed flag: nothing in the UI reads one, and it would hide the
     // distinction the three-way label exists to make.
     expect("partial" in result.artifact).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The optional model lane. `modelExecution` is absent when no model is attached
+// and `spec.modelProposal` when none was produced; both project through the
+// same closed-shape discipline as every other position, and the fixed
+// disclaimer literal is PROJECTED (never echoed from the served string).
+// ---------------------------------------------------------------------------
+
+describe("requestDesignArtifact — model execution projection", () => {
+  beforeEach(() => {
+    resetCachedNonce();
+  });
+
+  function succeededExecution(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      state: "succeeded",
+      provider: "openai",
+      model: "pinned-ui-model",
+      promptSha256: HASH_A,
+      parametersSha256: HASH_B,
+      reproducibility: "conditional",
+      ...over,
+    };
+  }
+
+  function modelProposalFixture(): Record<string, unknown> {
+    return {
+      status: "proposal-only",
+      disclaimer: "Proposal only; not accepted into token authority.",
+      designDirection: "Lead with the plan comparison on a measured grid.",
+      colorTokens: {
+        primary: "#3344FF",
+        surface: "#FFFFFF",
+        ink: "#101828",
+        muted: "#667085",
+        accent: "#7A5AF8",
+      },
+      typographyTokens: { heading: "Inter", body: "Inter", mono: "JetBrains Mono" },
+      motionNotes: ["Reveal the plan comparison with a 120ms ease-out crossfade."],
+      contentVoiceGuidance: "Plainspoken, non-salesy product copy.",
+    };
+  }
+
+  it("keeps both model fields null when the envelope carries no model lane", async () => {
+    const { fetchImpl } = stubFetch(okQueue());
+    const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+    if (!result.ok) throw new Error("expected success");
+    expect(result.artifact.modelExecution).toBeNull();
+    expect(result.artifact.modelProposal).toBeNull();
+  });
+
+  it("projects { state, provider, model } only, dropping digests, reproducibility, usage and unknown fields", async () => {
+    const envelope = envelopeFixture({
+      modelExecution: succeededExecution({
+        usage: { promptTokens: 37, completionTokens: 19 },
+        diagnostics: { raw: "provider body that must not be projected" },
+      }),
+      modelProposal: modelProposalFixture(),
+    });
+    const { fetchImpl } = stubFetch(okQueue(envelope));
+    const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+    if (!result.ok) throw new Error("expected success");
+
+    expect(result.artifact.modelExecution).toEqual({
+      state: "succeeded",
+      provider: "openai",
+      model: "pinned-ui-model",
+    });
+    const serialized = JSON.stringify(result.artifact);
+    for (const dropped of [
+      "promptSha256",
+      "parametersSha256",
+      "reproducibility",
+      "usage",
+      "diagnostics",
+    ]) {
+      expect(serialized).not.toContain(dropped);
+    }
+  });
+
+  it("projects each failed execution state as { state }, never carrying provider or model", async () => {
+    for (const state of [
+      "invalid-configuration",
+      "call-failed",
+      "proposal-rejected",
+      "persistence-failed",
+    ]) {
+      const envelope = envelopeFixture({
+        modelExecution: { state, provider: "openai", model: "pinned-ui-model" },
+      });
+      resetCachedNonce();
+      const { fetchImpl } = stubFetch(okQueue(envelope));
+      const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+      if (!result.ok) throw new Error(`expected success for ${state}`);
+
+      expect(result.artifact.modelExecution).toEqual({ state });
+      // A hostile provider/model on a failed state is never read, so it cannot
+      // be rendered.
+      const serialized = JSON.stringify(result.artifact);
+      expect(serialized).not.toContain("openai");
+      expect(serialized).not.toContain("pinned-ui-model");
+      expect(result.artifact.modelProposal).toBeNull();
+    }
+  });
+
+  it("projects the proposal through the closed shape, echoing the fixed disclaimer", async () => {
+    const envelope = envelopeFixture({
+      modelExecution: succeededExecution(),
+      modelProposal: modelProposalFixture(),
+    });
+    const { fetchImpl } = stubFetch(okQueue(envelope));
+    const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+    if (!result.ok) throw new Error("expected success");
+
+    expect(result.artifact.modelProposal).toEqual({
+      disclaimer: "Proposal only; not accepted into token authority.",
+      designDirection: "Lead with the plan comparison on a measured grid.",
+      colorTokens: {
+        primary: "#3344FF",
+        surface: "#FFFFFF",
+        ink: "#101828",
+        muted: "#667085",
+        accent: "#7A5AF8",
+      },
+      typographyTokens: { heading: "Inter", body: "Inter", mono: "JetBrains Mono" },
+      motionNotes: ["Reveal the plan comparison with a 120ms ease-out crossfade."],
+      contentVoiceGuidance: "Plainspoken, non-salesy product copy.",
+    });
+  });
+});
+
+describe("requestDesignArtifact — hostile model lane refuses the response", () => {
+  beforeEach(() => {
+    resetCachedNonce();
+  });
+
+  function model(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      state: "succeeded",
+      provider: "openai",
+      model: "pinned-ui-model",
+      promptSha256: HASH_A,
+      parametersSha256: HASH_B,
+      reproducibility: "conditional",
+      ...over,
+    };
+  }
+
+  function proposal(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      status: "proposal-only",
+      disclaimer: "Proposal only; not accepted into token authority.",
+      designDirection: "Lead with the plan comparison.",
+      colorTokens: {
+        primary: "#3344FF",
+        surface: "#FFFFFF",
+        ink: "#101828",
+        muted: "#667085",
+        accent: "#7A5AF8",
+      },
+      typographyTokens: { heading: "Inter", body: "Inter", mono: "JetBrains Mono" },
+      motionNotes: ["A measured 120ms crossfade."],
+      contentVoiceGuidance: "Plainspoken copy.",
+      ...over,
+    };
+  }
+
+  it.each([
+    ["an endpoint-shaped provider name", { modelExecution: model({ provider: "https://private.example.com/secret" }) }],
+    ["a private marker in the provider name", { modelExecution: model({ provider: "private-corpus-id" }) }],
+    ["an endpoint URL in the model name", { modelExecution: model({ model: "https://private.example.com/secret" }) }],
+    ["an over-length model name", { modelExecution: model({ model: "x".repeat(201) }) }],
+    ["an unknown execution state", { modelExecution: { state: "accepted" } }],
+    ["a non-record execution payload", { modelExecution: "succeeded" }],
+    ["a non-string provider", { modelExecution: model({ provider: 42 }) }],
+    ["unknown keys on the proposal", { modelExecution: model(), modelProposal: proposal({ authority: "corpus-evidence" }) }],
+    ["an acceptance-promoting status", { modelExecution: model(), modelProposal: proposal({ status: "accepted" }) }],
+    ["a served disclaimer that differs from the fixed literal", { modelExecution: model(), modelProposal: proposal({ disclaimer: "Approved tokens." }) }],
+    ["an over-length proposal design direction", { modelExecution: model(), modelProposal: proposal({ designDirection: "x".repeat(2_001) }) }],
+    ["non-string token values", { modelExecution: model(), modelProposal: proposal({ colorTokens: { primary: 42, surface: "#FFFFFF", ink: "#101828", muted: "#667085", accent: "#7A5AF8" } }) }],
+    ["a private marker inside a motion note", { modelExecution: model(), modelProposal: proposal({ motionNotes: ["corpus/images-private/secret.png"] }) }],
+    ["a private marker inside the proposal direction", { modelExecution: model(), modelProposal: proposal({ designDirection: "See corpus/images-private/secret.png" }) }],
+  ])("refuses the whole response when the model lane carries %s", async (_label, overrides) => {
+    const { fetchImpl } = stubFetch(okQueue(envelopeFixture(overrides)));
+    const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+    expect(result).toEqual({
+      ok: false,
+      failure: { code: "MALFORMED_RESPONSE", retryable: false },
+    });
   });
 });
 

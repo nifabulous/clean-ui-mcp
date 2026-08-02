@@ -24,7 +24,10 @@ import {
   type CreateUiSpecFailure,
   type DesignBrief,
   type LifecyclePhase,
+  type ModelExecutionState,
   type SafeArtifact,
+  type SafeModelExecution,
+  type SafeModelProposal,
 } from "../data/create-ui-spec";
 import "../styles/playground.css";
 
@@ -220,7 +223,17 @@ function successLabel(artifact: SafeArtifact): string {
   // Do not interpolate producerVersion into this copy: the production id
   // "c3-fallback-v1" contains "fallback", which would mislabel a retrieval
   // success as a fallback run in the warning-sensitive UI.
-  if (DETERMINISTIC_PRODUCERS.has(artifact.producerVersion)) {
+  //
+  // The deterministic claim is suppressed ONLY for a SUCCEEDED model run: the
+  // same producerVersion serves both lanes (the deterministic scaffold is
+  // rebuilt under the model envelope), so "no model attached" would be false
+  // exactly when the proposal section above says a model ran. Failed model
+  // states KEEP the claim — the served scaffold IS the deterministic artifact
+  // there, and the model section next to it says so.
+  if (
+    DETERMINISTIC_PRODUCERS.has(artifact.producerVersion) &&
+    artifact.modelExecution?.state !== "succeeded"
+  ) {
     parts.push(
       "This is a deterministic scaffold with no model attached. Color, typography and motion are declined by design, not missing because of your brief.",
     );
@@ -779,6 +792,140 @@ function CopyHandoffAction({
 }
 
 /**
+ * Client-authored, per-state notices for the failed model lane. Keyed on the
+ * client's projected {@link ModelExecutionState}: no server string ever becomes
+ * one of these. Each one states plainly that the deterministic scaffold above
+ * is what was served — the honest reading of every failed state.
+ */
+const MODEL_EXECUTION_NOTICES: Readonly<
+  Record<
+    Exclude<ModelExecutionState, "succeeded">,
+    { readonly heading: string; readonly note: string }
+  >
+> = {
+  "invalid-configuration": {
+    heading: "Model — not configured",
+    note: "The model configuration was incomplete, so no model ran. The result above is the deterministic scaffold; fix the configuration and generate again to include a proposal.",
+  },
+  "call-failed": {
+    heading: "Model — call failed",
+    note: "The model call failed, so no proposal was produced. The result above is the deterministic scaffold.",
+  },
+  "proposal-rejected": {
+    heading: "Model — proposal rejected",
+    note: "The model returned a proposal that could not be accepted, so nothing from it is shown. The result above is the deterministic scaffold.",
+  },
+  "persistence-failed": {
+    heading: "Model — persistence failed",
+    note: "The proposal could not be persisted, so it is not shown here. The result above is the deterministic scaffold.",
+  },
+};
+
+/**
+ * The model lane of an artifact: an unaccepted proposal on success, a neutral
+ * per-state notice on failure, and NOTHING when no model ran. Fed only the
+ * projected {@link SafeModelExecution} / {@link SafeModelProposal}, so a field
+ * the projection dropped cannot be rendered here. Deterministic evidence,
+ * decisions and unavailable values are rendered by {@link ArtifactView} itself
+ * in every model state.
+ */
+function ModelExecutionSection({
+  execution,
+  proposal,
+}: {
+  readonly execution: SafeModelExecution;
+  readonly proposal: SafeModelProposal | null;
+}): ReactElement {
+  if (execution.state === "succeeded") {
+    return (
+      <section className="artifact__section" aria-labelledby={id("model-title")}>
+        <h4 className="artifact__section-title" id={id("model-title")}>
+          Model proposal — not accepted
+        </h4>
+        {proposal !== null && (
+          <>
+            <p className="artifact__note">
+              Produced by {execution.provider} ({execution.model}).
+            </p>
+            <p className="artifact__note">{proposal.disclaimer}</p>
+            <div className="artifact__proposal">
+              <ProposalGroups proposal={proposal} />
+            </div>
+          </>
+        )}
+      </section>
+    );
+  }
+  const notice = MODEL_EXECUTION_NOTICES[execution.state];
+  return (
+    <section className="artifact__section" aria-labelledby={id("model-title")}>
+      <h4 className="artifact__section-title" id={id("model-title")}>
+        {notice.heading}
+      </h4>
+      <p className="artifact__note">{notice.note}</p>
+    </section>
+  );
+}
+
+/**
+ * The proposal card. Every label is proposal-only — "Proposed color tokens"
+ * and never "Color tokens" — because nothing in this card was accepted into
+ * token authority. Groups render only when the projection carried them.
+ */
+function ProposalGroups({ proposal }: { readonly proposal: SafeModelProposal }): ReactElement {
+  const colorTokens = proposal.colorTokens;
+  const typographyTokens = proposal.typographyTokens;
+  return (
+    <>
+      {colorTokens !== null && (
+        <div className="artifact__proposal-group">
+          <h5 className="artifact__proposal-label">Proposed color tokens</h5>
+          <dl className="artifact__facts">
+            {(["primary", "surface", "ink", "muted", "accent"] as const).map((key) => (
+              <div className="artifact__fact" key={key}>
+                <dt>{key}</dt>
+                <dd>{colorTokens[key]}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+      {typographyTokens !== null && (
+        <div className="artifact__proposal-group">
+          <h5 className="artifact__proposal-label">Proposed typography tokens</h5>
+          <dl className="artifact__facts">
+            {(["heading", "body", "mono"] as const).map((key) => (
+              <div className="artifact__fact" key={key}>
+                <dt>{key}</dt>
+                <dd>{typographyTokens[key]}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+      {proposal.motionNotes.length > 0 && (
+        <div className="artifact__proposal-group">
+          <h5 className="artifact__proposal-label">Proposed motion notes</h5>
+          <ul className="artifact__list">
+            {proposal.motionNotes.map((note, index) => (
+              <li key={index} className="artifact__row">
+                {note}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {proposal.contentVoiceGuidance !== null && (
+        <div className="artifact__proposal-group">
+          <h5 className="artifact__proposal-label">Proposed content voice guidance</h5>
+          <p className="artifact__row-body">{proposal.contentVoiceGuidance}</p>
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
  * The result view. Renders the display-safe half of {@link SafeArtifact} and
  * nothing else — it has no access to the raw response, so it cannot render a field
  * the projection dropped, and it passes `designMarkdown` / `designJson` only to the
@@ -824,6 +971,13 @@ function ArtifactView({
           Start over
         </button>
       </div>
+
+      {artifact.modelExecution !== null && (
+        <ModelExecutionSection
+          execution={artifact.modelExecution}
+          proposal={artifact.modelProposal}
+        />
+      )}
 
       <section className="artifact__section" aria-labelledby={id("direction-title")}>
         <h4 className="artifact__section-title" id={id("direction-title")}>

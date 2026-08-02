@@ -68,6 +68,11 @@ function hash(seed: string): string {
 }
 
 function envelopeFixture(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  // The model lane is OPTIONAL in the served envelope: `modelExecution` sits
+  // beside the artifact (always paired with its own digest) and
+  // `spec.modelProposal` inside the spec. Neither is present by default, so the
+  // no-model fixtures above stay exactly as served.
+  const { modelExecution, modelProposal, ...rest } = overrides;
   const spec = {
     specVersion: "1.0",
     context: {
@@ -148,7 +153,10 @@ function envelopeFixture(overrides: Record<string, unknown> = {}): Record<string
     generatedAt: "2026-07-28T10:00:00.000Z",
     producerVersion: "create-ui-spec/1.0.0",
     assemblyRulesSha256: hash("b"),
-    spec,
+    spec: {
+      ...spec,
+      ...(modelProposal !== undefined ? { modelProposal } : {}),
+    },
     handoff: { target: "neutral-web", motionIntents: [] },
     designMarkdown: MARKDOWN_BYTES,
     designJson: JSON_BYTES,
@@ -166,7 +174,10 @@ function envelopeFixture(overrides: Record<string, unknown> = {}): Record<string
       attemptedModes: [],
     },
     warnings: [],
-    ...overrides,
+    ...(modelExecution !== undefined
+      ? { modelExecution, modelExecutionSha256: hash("9") }
+      : {}),
+    ...rest,
   };
 }
 
@@ -1021,6 +1032,153 @@ describe("PlaygroundPage — failure and retry", () => {
     );
     expect(screen.queryByRole("heading", { level: 3, name: /design handoff/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /download design\.md/i })).toBeNull();
+  });
+});
+
+describe("PlaygroundPage — model proposal and execution states", () => {
+  function succeededModelExecution(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      state: "succeeded",
+      provider: "openai",
+      model: "pinned-ui-model",
+      promptSha256: hash("a"),
+      parametersSha256: hash("b"),
+      reproducibility: "conditional",
+      ...over,
+    };
+  }
+
+  function modelProposalFixture(): Record<string, unknown> {
+    return {
+      status: "proposal-only",
+      disclaimer: "Proposal only; not accepted into token authority.",
+      designDirection: "Lead with the plan comparison on a measured grid.",
+      colorTokens: {
+        primary: "#3344FF",
+        surface: "#FFFFFF",
+        ink: "#101828",
+        muted: "#667085",
+        accent: "#7A5AF8",
+      },
+      typographyTokens: { heading: "Inter", body: "Inter", mono: "JetBrains Mono" },
+      motionNotes: ["Reveal the plan comparison with a 120ms ease-out crossfade."],
+      contentVoiceGuidance: "Plainspoken, non-salesy product copy.",
+    };
+  }
+
+  function succeededEnvelope(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return envelopeFixture({
+      modelExecution: succeededModelExecution(),
+      modelProposal: modelProposalFixture(),
+      ...over,
+    });
+  }
+
+  it("shows no model section at all when no model ran", async () => {
+    await generateSuccessfully();
+
+    expect(screen.queryByRole("heading", { level: 4, name: /model/i })).toBeNull();
+    expect(screen.queryByText("Proposal only; not accepted into token authority.")).toBeNull();
+    expect(screen.queryByText(/proposed color tokens/i)).toBeNull();
+  });
+
+  it("renders the unaccepted proposal with proposal-only labels and the disclaimer exactly once", async () => {
+    await generateSuccessfully(succeededEnvelope());
+
+    const section = screen.getByRole("region", { name: /model proposal — not accepted/i });
+    expect(section).toBeInTheDocument();
+    expect(within(section).getByRole("heading", { level: 4 })).toHaveTextContent(
+      "Model proposal — not accepted",
+    );
+    // The fixed disclaimer appears EXACTLY once per artifact.
+    expect(within(section).getAllByText("Proposal only; not accepted into token authority.")).toHaveLength(1);
+    expect(screen.getAllByText("Proposal only; not accepted into token authority.")).toHaveLength(1);
+
+    // The provider/model identifiers are disclosed; they are not secrets.
+    expect(section.textContent ?? "").toMatch(/openai/);
+    expect(section.textContent ?? "").toMatch(/pinned-ui-model/);
+
+    // Proposal-only labels and their values, inside the visually separated card.
+    expect(within(section).getByRole("heading", { level: 5, name: /proposed color tokens/i })).toBeInTheDocument();
+    expect(within(section).getByText("#3344FF")).toBeInTheDocument();
+    expect(within(section).getByRole("heading", { level: 5, name: /proposed typography tokens/i })).toBeInTheDocument();
+    expect(within(section).getByText("JetBrains Mono")).toBeInTheDocument();
+    expect(within(section).getByRole("heading", { level: 5, name: /proposed motion notes/i })).toBeInTheDocument();
+    expect(within(section).getByText(/crossfade/i)).toBeInTheDocument();
+    expect(within(section).getByRole("heading", { level: 5, name: /proposed content voice guidance/i })).toBeInTheDocument();
+    expect(within(section).getByText(/plainspoken/i)).toBeInTheDocument();
+
+    // The accepted-token labels NEVER appear — this is a proposal, not an
+    // accepted token set.
+    expect(screen.queryByText("Color tokens")).toBeNull();
+    expect(screen.queryByText("Typography tokens")).toBeNull();
+
+    // The model proposal never reaches the DOM's private marker assertions.
+    const dom = document.body.textContent ?? "";
+    expect(dom).not.toContain("promptSha256");
+    expect(dom).not.toContain("reproducibility");
+  });
+
+  it.each([
+    ["invalid-configuration", "Model — not configured", /configuration was incomplete/i],
+    ["call-failed", "Model — call failed", /model call failed/i],
+    ["proposal-rejected", "Model — proposal rejected", /could not be accepted/i],
+    ["persistence-failed", "Model — persistence failed", /could not be persisted/i],
+  ] as const)(
+    "announces the %s state with a neutral client-authored notice and keeps the deterministic sections",
+    async (state, heading, notePattern) => {
+      await generateSuccessfully(envelopeFixture({ modelExecution: { state } }));
+
+      const section = screen.getByRole("region", { name: heading });
+      expect(within(section).getByRole("heading", { level: 4 })).toHaveTextContent(heading);
+      expect(within(section).getByText(notePattern)).toBeInTheDocument();
+      // Nothing from a failed run: no disclaimer, no proposal card, no provider.
+      expect(screen.queryByText("Proposal only; not accepted into token authority.")).toBeNull();
+      expect(screen.queryByText(/proposed color tokens/i)).toBeNull();
+      expect(screen.queryByText(/openai/i)).toBeNull();
+
+      // Deterministic evidence, decisions and unavailable values stay visible.
+      expect(screen.getByRole("region", { name: /evidence summary/i })).toBeInTheDocument();
+      expect(screen.getByRole("list", { name: /key decisions/i })).toBeInTheDocument();
+      expect(screen.getByRole("list", { name: /unavailable/i })).toBeInTheDocument();
+    },
+  );
+
+  it("suppresses the deterministic no-model claim when a model proposal succeeded", async () => {
+    await generateSuccessfully(succeededEnvelope({ producerVersion: "c3-fallback-v1" }));
+
+    const status = screen.getByRole("status").textContent ?? "";
+    expect(status).not.toMatch(/no model attached/i);
+    expect(status).not.toMatch(/declined by design/i);
+  });
+
+  it("keeps the deterministic no-model claim for failed model states", async () => {
+    await generateSuccessfully(
+      envelopeFixture({ producerVersion: "c3-fallback-v1", modelExecution: { state: "call-failed" } }),
+    );
+
+    const status = screen.getByRole("status").textContent ?? "";
+    expect(status).toMatch(/no model attached/i);
+    expect(status).toMatch(/declined by design/i);
+  });
+
+  it("refuses the whole response when the model lane carries a hostile value", async () => {
+    const hostile = envelopeFixture({
+      modelExecution: succeededModelExecution({ model: PRIVATE_URL }),
+      modelProposal: modelProposalFixture(),
+    });
+    installFetch(successQueue(hostile));
+    renderComposer();
+    typeBrief();
+    fireEvent.click(generateButton());
+
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent ?? "").toMatch(/did not match/i),
+    );
+    expect(screen.queryByRole("heading", { level: 3, name: /design handoff/i })).toBeNull();
+    // Nothing derived from the hostile lane is rendered.
+    expect(document.body.textContent ?? "").not.toContain(PRIVATE_URL);
+    expect(document.body.textContent ?? "").not.toContain("Proposal only; not accepted into token authority.");
   });
 });
 

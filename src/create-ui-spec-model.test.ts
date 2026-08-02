@@ -118,12 +118,20 @@ describe("createUiSpecModel prompt boundary", () => {
     expect(request.prompt).toContain("Internal analytics workspace for finance operators.");
     expect(request.prompt).toContain("Prioritize dense scanability over presentation flair.");
     expect(request.prompt).toContain("Favor compact hierarchy, restrained emphasis, and stable column alignment.");
-    // v2: the output contract now carries TYPES AND BOUNDS, not just field
-    // names. The version is hashed into promptSha256, so bumping it is how a
-    // prompt change stays honest about not being the v1 prompt.
-    expect(request.prompt).toContain("\"policyVersion\":\"c3-model-proposal-v2\"");
-    // The bound that a live model violated when it was only given a field name.
+    // v3: the output contract SHRINKS the designDirection cap 4000 -> 1000 (a
+    // ~5000-char single-line value is where a live model lost nesting track and
+    // emitted a stray "}"). The version is hashed into promptSha256, so bumping
+    // it is how a prompt change stays honest about not being the v2 prompt.
+    expect(request.prompt).toContain("\"policyVersion\":\"c3-model-proposal-v4\"");
+    // The bound a live model violated when it was only given a field name.
     expect(request.prompt).toContain("NOT an object, NOT an array");
+    // The prompt figure must stay BELOW the schema cap (1000 vs 2000). Stating
+    // the cap itself is what rejected live, well-formed proposals.
+    expect(request.prompt).toContain("HARD LIMIT 1000 characters");
+    expect(request.prompt).toContain("at most 250 characters");
+    // Shrink is enforced at the gate the prompt feeds: 4000 is no longer a thing.
+    expect(request.prompt).toContain("HARD LIMIT 1000 characters");
+    expect(request.prompt).not.toContain("HARD LIMIT 4000 characters");
     expect(request.prompt).not.toContain("runtime-secret-key");
     expect(request.prompt).not.toContain("https://api.openai.com/v1/responses");
     expect(request.prompt).not.toContain("evidence-1");
@@ -402,6 +410,37 @@ describe("createUiSpecModel response policy", () => {
   it("rejects unknown keys", async () => {
     const runtime = buildRuntime(async () => ({
       content: JSON.stringify(buildProposal({ extra: "nope" })),
+      provider: "openai",
+      model: "gpt-5-mini",
+      usage: { promptTokens: 1, completionTokens: 1, raw: { prompt_tokens: 1, completion_tokens: 1 } },
+      attempts: 1,
+      latencyMs: 10,
+      providerRequestId: null,
+    }));
+
+    const result = await createUiSpecModel(buildInput(), runtime);
+
+    expect(result).toEqual({
+      kind: "fallback",
+      execution: { state: "proposal-rejected" },
+    });
+  });
+
+  it("rejects the derail signature: a long string then a stray root brace", async () => {
+    // Live claude-sonnet-4-5 reproduced this deterministically: after an
+    // enormous single-line designDirection the model emitted `},` again and a
+    // sibling key — structurally invalid JSON, rejected at JSON.parse. This
+    // pins the honest behavior: the lane falls back cleanly, it does NOT try to
+    // recover a substring and it does NOT mask the failure as a success.
+    const strayBrace = `{
+      "status": "proposal-only",
+      "disclaimer": "${"Proposal only; not accepted into token authority."}",
+      "designDirection": "${"x".repeat(5_000)}",
+    },                          "contentVoiceGuidance": "ignored sibling",
+    "status": "proposal-only"
+  }`;
+    const runtime = buildRuntime(async () => ({
+      content: strayBrace,
       provider: "openai",
       model: "gpt-5-mini",
       usage: { promptTokens: 1, completionTokens: 1, raw: { prompt_tokens: 1, completion_tokens: 1 } },

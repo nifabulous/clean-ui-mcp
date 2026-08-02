@@ -592,14 +592,28 @@ const ModelProposalTypographyTokens = z.object({
 export const ModelProposalSchema = z.object({
   status: z.literal("proposal-only"),
   disclaimer: z.literal("Proposal only; not accepted into token authority."),
-  // 4000, not 2000. The original bound was arbitrary — note that UiSpec's OWN
-  // designDirection (below) carries no max at all — and it made the model lane
-  // unusable: live claude-sonnet-4-5 runs produced 4249 chars from an untyped
-  // prompt and 2118 from a prompt stating the 2000 limit three times. A stated
-  // bound is a request to a model, not a guarantee, and a proposal discarded for
-  // 6% overshoot helps nobody. Still bounded, still strict, still rejected past
-  // the cap — the cap is now set where real output lands.
-  designDirection: z.string().trim().min(1).max(4_000),
+  // 1000, not 4000. The 4000 bound grew out of a 6%-overshoot apology in the
+  // other direction — but the REAL live failure was a ~5000-char single-line
+  // designDirection causing the model to lose nesting track and emit a stray
+  // "}", so the bound is now SHRUNK to shrink the malformation surface. 1000
+  // chars is still a full paragraph. Still bounded, still strict, still
+  // rejected past the cap. (UiSpec's OWN designDirection below carries no max
+  // at all — that path is caller-authored, not model-authored.)
+  // CAP 2000, PROMPT SAYS 1000 — DELIBERATELY DIFFERENT NUMBERS.
+  //
+  // Live claude-sonnet-4-5 overshoots whatever length it is told, and the ratio
+  // GROWS as the instruction tightens: told 2000 it wrote 2118 (+6%), told 4000
+  // it wrote 5010 (+25%), told 1000 it wrote 1549 (+55%). The model has a
+  // natural length for this content and clamps toward it.
+  //
+  // So the prompt number and the schema cap do different jobs. The prompt's
+  // 1000 is the LEVER that pulls generated length down — and pulling it down is
+  // what killed the stray-brace derail, which only ever appeared on ~5000-char
+  // single-line values. The schema's 2000 is the BOUND, set above the measured
+  // overshoot so an honest answer is not rejected for being 549 chars over a
+  // number the model was never able to hit. Setting both to 1000 rejected every
+  // live call for a well-formed proposal.
+  designDirection: z.string().trim().min(1).max(2_000),
   colorTokens: ModelProposalColorTokens.optional(),
   typographyTokens: ModelProposalTypographyTokens.optional(),
   motionNotes: z.array(z.string().trim().min(1).max(500)).max(8).default([]),

@@ -385,8 +385,13 @@ describe("UiSpec", () => {
     const invalid = [
       {},
       { ...base, designDirection: "   " },
-      // Cap raised 2000 -> 4000; the bound still exists and is still enforced.
-      { ...base, designDirection: "x".repeat(4_001) },
+      // A ~5000-char single-line designDirection is where live claude-sonnet-4-5
+      // lost nesting track and emitted a stray "}". The PROMPT now asks for
+      // 1000 to hold generated length down — that is what killed the derail —
+      // while the SCHEMA caps at 2000 to absorb the measured overshoot (told
+      // 1000, the model wrote 1549). Same number in both places rejected every
+      // live call for a well-formed proposal; see tool-contracts.ts.
+      { ...base, designDirection: "x".repeat(2_001) },
       { ...base, motionNotes: ["x".repeat(501)] },
       { ...base, motionNotes: Array.from({ length: 9 }, () => "fade") },
       { ...base, contentVoiceGuidance: "x".repeat(1_001) },
@@ -400,6 +405,8 @@ describe("UiSpec", () => {
     for (const proposal of invalid) {
       expect(ModelProposalSchema.safeParse(proposal).success).toBe(false);
     }
+    // The shrink's happy boundary: the old 4000 ceiling is now one over.
+    expect(ModelProposalSchema.safeParse({ ...base, designDirection: "x".repeat(1_000) }).success).toBe(true);
   });
 
   it("requires the fixed proposal status and disclaimer", () => {

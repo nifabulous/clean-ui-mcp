@@ -22,7 +22,7 @@ import { ModelProposalSchema, type ModelProposal } from "./tool-contracts.js";
 
 const MAX_MODEL_TEXT_BYTES = 32 * 1024;
 const FIXED_DISCLAIMER = "Proposal only; not accepted into token authority.";
-const POLICY_VERSION = "c3-model-proposal-v2";
+const POLICY_VERSION = "c3-model-proposal-v4";
 const RESPONSE_SCOPED_EVIDENCE_ID_RE = /\bevidence-[0-9]+\b/;
 const SOURCE_PRIVATE_ID_RE = /\bsource-private-[A-Za-z0-9_-]+\b/;
 const GENERIC_URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/\S+/i;
@@ -209,7 +209,10 @@ function buildPrompt(
       // Bounds are restated at top level because a per-field note was not enough:
       // a live claude-sonnet-4-5 run overshot a stated limit by 6%. Exceeding ANY bound discards everything.
       hardLimits: {
-        designDirection: "4000 characters maximum",
+        // SHRUNK 4000 -> 1000. A ~5000-char single-line value is exactly where
+        // a live model lost nesting track and emitted a stray "}" — so the cap
+        // went DOWN, not up. 1000 chars is still a full paragraph of direction.
+        designDirection: "1000 characters maximum",
         contentVoiceGuidance: "1000 characters maximum",
         motionNotes: "8 entries maximum, 500 characters each",
         onExceeding: "the entire proposal is discarded and the caller receives no proposal at all",
@@ -240,19 +243,29 @@ function buildPrompt(
     // ("required: designDirection"), and a live Claude run answered with
     // designDirection as a nested OBJECT — schema-legal-looking, schema-invalid,
     // rejected. A model cannot honor a bound it was never told.
+    // THE PROMPT NUMBER IS ALWAYS BELOW THE SCHEMA CAP — roughly half.
+    //
+    // Live claude-sonnet-4-5 overshoots any stated length, and the ratio grows
+    // as the instruction tightens: told 2000 it wrote 2118, told 1000 it wrote
+    // 1549 (+55%). Stating the cap itself therefore guarantees rejection of
+    // otherwise-good proposals — that is exactly how a run was lost on
+    // motionNotes after designDirection was fixed. The prompt figure is a LEVER
+    // on generated length (shorter output is also what killed the stray-brace
+    // derail); the schema figure is the BOUND. They are different jobs and must
+    // stay different numbers.
     outputShape: {
       status: 'string, exactly "proposal-only"',
       disclaimer: `string, exactly ${JSON.stringify(FIXED_DISCLAIMER)}`,
       designDirection:
-        "REQUIRED. A single plain string. NOT an object, NOT an array. HARD LIMIT 4000 characters — "
+        "REQUIRED. A single plain string. NOT an object, NOT an array. HARD LIMIT 1000 characters — "
         + "overshooting discards the whole proposal. Be concise; "
         + "prefer the decision over the rationale.",
       colorTokens:
         "optional object with exactly these string keys: primary, surface, ink, muted, accent. Omit the key entirely rather than sending a partial object.",
       typographyTokens:
         "optional object with exactly these string keys: heading, body, mono. Omit the key entirely rather than sending a partial object.",
-      motionNotes: "optional array of at most 8 plain strings, each 1-500 characters",
-      contentVoiceGuidance: "optional plain string, 1-1000 characters",
+      motionNotes: "optional array of at most 6 plain strings, each at most 250 characters",
+      contentVoiceGuidance: "optional plain string, at most 500 characters",
       unknownKeys: "forbidden — any key not listed above causes the whole proposal to be rejected",
     },
   });

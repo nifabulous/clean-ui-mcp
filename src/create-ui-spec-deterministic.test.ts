@@ -65,4 +65,17 @@ describe("createUiSpecDeterministic", () => {
     ] as never;
     expect(createUiSpecDeterministic(evidence, REQUEST).colorTokens).toBeNull();
   });
+
+  it("populates regions but not a form claim when layoutForm is absent", () => {
+    const evidence = [
+      observation("evidence-2", {
+        pattern: "dashboard",
+        layoutRoles: ["primary-nav", "main-canvas"],
+      }),
+    ] as never;
+    const out = createUiSpecDeterministic(evidence, REQUEST);
+    expect(out.layoutRegions.map((r) => r.name)).toEqual(["primary-nav", "main-canvas"]);
+    // No form string may be fabricated when the corpus entry carries none.
+    expect(out.responsiveBehavior).toEqual([]);
+  });
 });

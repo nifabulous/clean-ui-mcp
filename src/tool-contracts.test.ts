@@ -392,9 +392,9 @@ describe("UiSpec", () => {
       // 1000, the model wrote 1549). Same number in both places rejected every
       // live call for a well-formed proposal; see tool-contracts.ts.
       { ...base, designDirection: "x".repeat(2_501) },
-      { ...base, motionNotes: ["x".repeat(501)] },
+      { ...base, motionNotes: ["x".repeat(626)] },
       { ...base, motionNotes: Array.from({ length: 9 }, () => "fade") },
-      { ...base, contentVoiceGuidance: "x".repeat(1_001) },
+      { ...base, contentVoiceGuidance: "x".repeat(1_251) },
       { ...base, colorTokenAuthority: "editorial" },
       { ...base, acceptedColorTokens: { primary: "#000" } },
       { ...base, evidenceKind: "corpus-observation" },
@@ -411,6 +411,10 @@ describe("UiSpec", () => {
     // any future tightening of the cap below observed real output fails here
     // rather than silently rejecting good proposals in production.
     expect(ModelProposalSchema.safeParse({ ...base, designDirection: "x".repeat(1_629) }).success).toBe(true);
+    // Measured worst cases for the other two bounded fields, same reasoning:
+    // 460 came from "Make it better.", 727 from the patient-intake brief.
+    expect(ModelProposalSchema.safeParse({ ...base, motionNotes: ["x".repeat(460)] }).success).toBe(true);
+    expect(ModelProposalSchema.safeParse({ ...base, contentVoiceGuidance: "x".repeat(727) }).success).toBe(true);
   });
 
   it("requires the fixed proposal status and disclaimer", () => {

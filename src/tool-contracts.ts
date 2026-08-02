@@ -625,8 +625,26 @@ export const ModelProposalSchema = z.object({
   designDirection: z.string().trim().min(1).max(2_500),
   colorTokens: ModelProposalColorTokens.optional(),
   typographyTokens: ModelProposalTypographyTokens.optional(),
-  motionNotes: z.array(z.string().trim().min(1).max(500)).max(8).default([]),
-  contentVoiceGuidance: z.string().trim().min(1).max(1_000).optional(),
+  // EVERY CAP IS 2.5x ITS PROMPT FIGURE. One rule, not three tuned numbers.
+  //
+  // Two live campaigns (20 runs) measured how far the model overruns whatever
+  // length the prompt states:
+  //
+  //   designDirection  prompt 1000 -> observed max 1629  (1.63x)
+  //   motionNotes[]    prompt  250 -> observed max  460  (1.84x)
+  //   voice            prompt  500 -> observed max  727  (1.45x)
+  //
+  // Tuning caps one at a time just moves the bottleneck: raising
+  // designDirection from 2000 to 2500 left motionNotes at 92% of ITS cap on the
+  // very next campaign, and the worst case came from "Make it better." — vague
+  // briefs elaborate MORE, so input size cannot bound this. 2.5x sits above the
+  // worst ratio yet measured (1.84x) with room, and applies uniformly so the
+  // next field to creep is already covered.
+  //
+  // Raising bounds is safe; the prompt figures are unchanged, and those are what
+  // drive generated length and what killed the stray-brace derail.
+  motionNotes: z.array(z.string().trim().min(1).max(625)).max(8).default([]),
+  contentVoiceGuidance: z.string().trim().min(1).max(1_250).optional(),
 }).strict();
 export type ModelProposal = z.infer<typeof ModelProposalSchema>;
 

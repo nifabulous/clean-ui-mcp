@@ -107,7 +107,8 @@ describe("ModelGenerationParametersSchema", () => {
   it("rejects parameter drift and unknown controls", () => {
     expect(ModelGenerationParametersSchema.safeParse({ ...fixed, temperature: 0.1 }).success).toBe(false);
     expect(ModelGenerationParametersSchema.safeParse({ ...fixed, maxOutputTokens: 8192 }).success).toBe(false);
-    expect(ModelGenerationParametersSchema.safeParse({ ...fixed, maxAttempts: 2 }).success).toBe(false);
+    // maxAttempts is now 1|2 by contract (parse-failure retry); drift is 3+.
+    expect(ModelGenerationParametersSchema.safeParse({ ...fixed, maxAttempts: 3 }).success).toBe(false);
     expect(ModelGenerationParametersSchema.safeParse({ ...fixed, seed: 42 }).success).toBe(false);
     expect(ModelGenerationParametersSchema.safeParse({ ...fixed, topP: 1 }).success).toBe(false);
   });
@@ -219,9 +220,31 @@ describe("ModelArtifactRecordSchema", () => {
 
   it("bounds normalized usage, attempts, latency, timestamps, and retention", () => {
     expect(ModelArtifactRecordSchema.safeParse({ ...validRecord(), usage: { promptTokens: -1, completionTokens: 1 } }).success).toBe(false);
-    expect(ModelArtifactRecordSchema.safeParse({ ...validRecord(), attempts: 2 }).success).toBe(false);
+    expect(ModelArtifactRecordSchema.safeParse({ ...validRecord(), attempts: 3 }).success).toBe(false);
     expect(ModelArtifactRecordSchema.safeParse({ ...validRecord(), latencyMs: -1 }).success).toBe(false);
     expect(ModelArtifactRecordSchema.safeParse({ ...validRecord(), storedAt: "yesterday" }).success).toBe(false);
     expect(ModelArtifactRecordSchema.safeParse({ ...validRecord(), retention: "temporary" }).success).toBe(false);
+  });
+});
+
+describe("generation parameter contract — maxAttempts 1|2", () => {
+  it("accepts maxAttempts 2", () => {
+    const parsed = ModelGenerationParametersSchema.parse({
+      temperature: 0,
+      maxOutputTokens: 4096,
+      maxAttempts: 2,
+      seed: null,
+    });
+    expect(parsed.maxAttempts).toBe(2);
+  });
+
+  it("still accepts maxAttempts 1", () => {
+    expect(ModelGenerationParametersSchema.parse({
+      temperature: 0, maxOutputTokens: 4096, maxAttempts: 1, seed: null,
+    }).maxAttempts).toBe(1);
+  });
+
+  it("accepts an artifact record with attempts 2", () => {
+    expect(ModelArtifactRecordSchema.safeParse({ ...validRecord(), attempts: 2 }).success).toBe(true);
   });
 });

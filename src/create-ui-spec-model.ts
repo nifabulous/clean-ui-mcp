@@ -57,7 +57,7 @@ export interface ModelRecordInput {
     promptTokens: number;
     completionTokens: number;
   };
-  attempts: 1;
+  attempts: 1 | 2;
   latencyMs: number;
 }
 
@@ -111,88 +111,117 @@ export async function createUiSpecModel(
     Buffer.from(canonicalJsonStringify(parameters), "utf-8"),
   );
 
-  let modelResult: ModelCallResult;
-  try {
-    modelResult = await runtime.call({
-      prompt,
-      endpoint,
-      maxOutputTokens: parameters.maxOutputTokens,
-      maxAttempts: parameters.maxAttempts,
-      temperature: parameters.temperature,
+  // Parse-failure retry, and nothing else. JSON.parse failures of the
+  // UNWRAPPED content are the measured recoverable class (malformed JSON);
+  // schema rejections, byte-limit hits, private-marker hits, and call errors
+  // are single-attempt, exactly as before. Each generation runs at
+  // HTTP-level maxAttempts 1 so the two retry domains do not tangle
+  // (fetchWithRetry transient handling is unchanged).
+  let attempts: 1 | 2 = 1;
+  let totalLatencyMs = 0;
+  let usageAccum: ModelRecordInput["usage"] | null = null;
+
+  for (let generation = 1; generation <= parameters.maxAttempts; generation++) {
+    attempts = generation as 1 | 2;
+
+    let modelResult: ModelCallResult;
+    try {
+      modelResult = await runtime.call({
+        prompt,
+        endpoint,
+        maxOutputTokens: parameters.maxOutputTokens,
+        maxAttempts: 1,
+        temperature: parameters.temperature,
+      });
+    } catch {
+      return fallback("call-failed");
+    }
+
+    if (
+      modelResult.provider !== endpoint.provider
+      || modelResult.model !== endpoint.model
+      || modelResult.attempts !== 1
+      || !Number.isInteger(modelResult.latencyMs)
+      || modelResult.latencyMs < 0
+    ) {
+      return fallback("call-failed");
+    }
+
+    totalLatencyMs += modelResult.latencyMs;
+
+    const generationUsage = normalizeUsage(modelResult.usage);
+    if (!generationUsage) {
+      return fallback("call-failed");
+    }
+    // Summed across generations: the discarded attempt's tokens were billed,
+    // and a lane whose purpose is auditability must not drop them.
+    const prior: ModelRecordInput["usage"] = usageAccum ?? { promptTokens: 0, completionTokens: 0 };
+    usageAccum = {
+      promptTokens: prior.promptTokens + generationUsage.promptTokens,
+      completionTokens: prior.completionTokens + generationUsage.completionTokens,
+    };
+
+    if (byteLength(modelResult.content) > MAX_MODEL_TEXT_BYTES) {
+      return fallback("proposal-rejected");
+    }
+
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(unwrapExactCodeFence(modelResult.content.trim()));
+    } catch {
+      // The ONLY retryable failure class: structurally invalid JSON.
+      if (generation < parameters.maxAttempts) continue;
+      return fallback("proposal-rejected");
+    }
+
+    const proposalParsed = ModelProposalSchema.safeParse(parsedJson);
+    if (!proposalParsed.success) {
+      return fallback("proposal-rejected");
+    }
+
+    const proposal = ModelProposalSchema.parse({
+      ...proposalParsed.data,
+      status: "proposal-only",
+      disclaimer: FIXED_DISCLAIMER,
     });
-  } catch {
-    return fallback("call-failed");
-  }
+    if (containsPrivateMarkerDeep(proposal)) {
+      return fallback("proposal-rejected");
+    }
 
-  if (
-    modelResult.provider !== endpoint.provider
-    || modelResult.model !== endpoint.model
-    || modelResult.attempts !== 1
-    || !Number.isInteger(modelResult.latencyMs)
-    || modelResult.latencyMs < 0
-  ) {
-    return fallback("call-failed");
-  }
+    const proposalSha256 = sha256Hex(
+      Buffer.from(canonicalJsonStringify(proposal), "utf-8"),
+    );
 
-  const usage = normalizeUsage(modelResult.usage);
-  if (!usage) {
-    return fallback("call-failed");
-  }
-
-  if (byteLength(modelResult.content) > MAX_MODEL_TEXT_BYTES) {
-    return fallback("proposal-rejected");
-  }
-
-  let parsedJson: unknown;
-  try {
-    parsedJson = JSON.parse(unwrapExactCodeFence(modelResult.content.trim()));
-  } catch {
-    return fallback("proposal-rejected");
-  }
-
-  const proposalParsed = ModelProposalSchema.safeParse(parsedJson);
-  if (!proposalParsed.success) {
-    return fallback("proposal-rejected");
-  }
-
-  const proposal = ModelProposalSchema.parse({
-    ...proposalParsed.data,
-    status: "proposal-only",
-    disclaimer: FIXED_DISCLAIMER,
-  });
-  if (containsPrivateMarkerDeep(proposal)) {
-    return fallback("proposal-rejected");
-  }
-
-  const proposalSha256 = sha256Hex(
-    Buffer.from(canonicalJsonStringify(proposal), "utf-8"),
-  );
-
-  return {
-    kind: "accepted",
-    proposal,
-    execution: ModelExecutionSchema.parse({
-      state: "succeeded",
-      provider: endpoint.provider,
-      model: endpoint.model,
-      promptSha256,
-      parametersSha256,
-      reproducibility: "conditional",
-    }),
-    recordInput: {
-      proposalSha256,
-      promptSha256,
-      parametersSha256,
+    return {
+      kind: "accepted",
       proposal,
-      provider: endpoint.provider,
-      model: endpoint.model,
-      endpointOrigin: new URL(endpoint.baseUrl).origin,
-      parameters,
-      usage,
-      attempts: 1,
-      latencyMs: modelResult.latencyMs,
-    },
-  };
+      execution: ModelExecutionSchema.parse({
+        state: "succeeded",
+        provider: endpoint.provider,
+        model: endpoint.model,
+        promptSha256,
+        parametersSha256,
+        reproducibility: "conditional",
+      }),
+      recordInput: {
+        proposalSha256,
+        promptSha256,
+        parametersSha256,
+        proposal,
+        provider: endpoint.provider,
+        model: endpoint.model,
+        endpointOrigin: new URL(endpoint.baseUrl).origin,
+        parameters,
+        usage: usageAccum!,
+        attempts,
+        latencyMs: totalLatencyMs,
+      },
+    };
+  }
+
+  // Unreachable: maxAttempts is always >= 1 and every iteration returns or
+  // continues. Kept so the function's return type is total without a cast.
+  return fallback("proposal-rejected");
 }
 
 function buildPrompt(

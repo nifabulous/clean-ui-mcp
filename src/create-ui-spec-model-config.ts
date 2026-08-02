@@ -49,6 +49,15 @@ export function resolveCreateUiSpecModelConfig(
   });
   if (!endpoint.success) return { kind: "invalid-configuration" };
 
+  // Operator opt-in for parse-failure retry. Absent or "1" keeps the
+  // single-attempt default; "2" enables one retry on JSON.parse failure. Any
+  // other value is a misconfiguration and must not silently degrade.
+  const maxAttemptsRaw = env.CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS ?? "1";
+  if (maxAttemptsRaw !== "1" && maxAttemptsRaw !== "2") {
+    return { kind: "invalid-configuration" };
+  }
+  const maxAttempts = maxAttemptsRaw === "2" ? 2 : 1;
+
   return {
     kind: "configured",
     runtime: {
@@ -56,7 +65,7 @@ export function resolveCreateUiSpecModelConfig(
       parameters: ModelGenerationParametersSchema.parse({
         temperature: 0,
         maxOutputTokens: 4_096,
-        maxAttempts: 1,
+        maxAttempts,
         seed: null,
       }),
       call: callTextModelWithMetadata,

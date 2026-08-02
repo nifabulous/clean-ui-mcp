@@ -153,4 +153,28 @@ describe("resolveCreateUiSpecModelConfig", () => {
       model: DEDICATED.CREATE_UI_SPEC_MODEL_NAME,
     });
   });
+
+  it("opts into two generation attempts via CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS=2", () => {
+    const env = {
+      CREATE_UI_SPEC_MODEL_PROVIDER: "openai",
+      CREATE_UI_SPEC_MODEL_BASE_URL: "https://api.openai.com/v1",
+      CREATE_UI_SPEC_MODEL_API_KEY: "sk-test",
+      CREATE_UI_SPEC_MODEL_NAME: "gpt-test",
+      CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS: "2",
+    };
+    const cfg = resolveCreateUiSpecModelConfig(env);
+    expect(cfg.kind).toBe("configured");
+    if (cfg.kind === "configured") expect(cfg.runtime.parameters.maxAttempts).toBe(2);
+  });
+
+  it("rejects an invalid maxAttempts value as invalid-configuration", () => {
+    const env = {
+      CREATE_UI_SPEC_MODEL_PROVIDER: "openai",
+      CREATE_UI_SPEC_MODEL_BASE_URL: "https://api.openai.com/v1",
+      CREATE_UI_SPEC_MODEL_API_KEY: "sk-test",
+      CREATE_UI_SPEC_MODEL_NAME: "gpt-test",
+      CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS: "3",
+    };
+    expect(resolveCreateUiSpecModelConfig(env).kind).toBe("invalid-configuration");
+  });
 });

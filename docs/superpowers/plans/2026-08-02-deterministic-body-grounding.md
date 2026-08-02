@@ -4,7 +4,9 @@
 
 **Goal:** Fill the deterministic `create_ui_spec` body from measured corpus facts and give both the deterministic and model paths real, shared grounding.
 
-**Architecture:** Task 0 locks the coverage audit; Task 1 widens the closed `structuredFacts` allowlist and the recipe-owned summary builder; Task 2 changes automatic retrieval from a diversity-picked 5 to the top 3 ranked matches and adds an embeddings fallback; Task 3 adds a pure `createUiSpecDeterministic` synthesizer (direction sentence, color-token plurality, layout regions) and wires it into `assembleSpec`; Task 4 reintroduces the model prompt's `evidenceSummaries` key (with a non-empty guard) under `POLICY_VERSION` v6.
+**Architecture:** Task 0 locks the coverage audit; Task 1 widens the closed `structuredFacts` allowlist and the recipe-owned summary builder; Task 2 changes automatic retrieval from a diversity-picked 5 to the top 3 ranked matches and adds an embeddings fallback; Task 3 adds a pure `createUiSpecDeterministic` synthesizer (direction sentence, color-token plurality, layout regions) and wires it into `assembleSpec`; the collapsed Task 4C puts the model prompt's `evidenceSummaries` key behind a non-empty guard, applies the conciseness instruction, and bumps `POLICY_VERSION` exactly once (v5 under Route A, v6 under Route B).
+
+**Sequencing:** this plan CANNOT run in parallel with Plan 1 — see the Sequencing section in `2026-08-02-model-lane-reliability.md`. Task 0 below is the one exception: it creates three new files and can run alongside anything.
 
 **Tech Stack:** TypeScript, Zod, Vitest, node:fs (audit script).
 
@@ -15,7 +17,7 @@
 - Corpus freeze invariant: nothing writes to `corpus/entries.json`; every test asserts corpus bytes unchanged.
 - Token population rule: `colorTokens` are populated only when ≥ 3 matched entries contribute `visual.colorRoles`; otherwise `null` + an `unavailableDecisions` reason. `typographyTokens` stays `null` (the corpus records no mono role; see Task 3 deviation note).
 - Model path invariant: whenever `spec.modelProposal` is present, root `colorTokens`/`typographyTokens` stay `null` and authority stays `editorial` (existing UiSpec superRefine — the synthesizer must NOT run against model proposals).
-- `POLICY_VERSION` bumps exactly once in this plan: `c3-model-proposal-v5` → `c3-model-proposal-v6` (Task 4).
+- `POLICY_VERSION` bumps exactly once in this plan, in the collapsed Task 4C: `v4 → v5` under Route A (both plans ship together; Plan 1 Tasks 4-5 skipped) or `v5 → v6` under Route B (Plan 1 already shipped alone). Task 4C is the ONLY task in either plan that touches the prompt. See the Sequencing section in `2026-08-02-model-lane-reliability.md`.
 - Auto-retrieval caps at N=3. Zero matches → zero corpus evidence rows + the EXISTING `sparseCoverage` warning; never fabricated content. NO new warning code is introduced (see the Task 2 note on the dual warning schema).
 - **Warning codes live in TWO schemas.** Any new code must be added to BOTH `WarningSchema` (`src/create-ui-spec-contracts.ts:560`, the closed `z.enum` the producer's `parseDesignArtifactEnvelope` validates against at `:639`) AND the descriptor's `makeWarningSchema` (`src/tool-contracts.ts:1857`). There is no drift gate between them — `tool-contracts.test.ts:40` only asserts `warningSchema` is defined — so a one-sided addition fails at runtime in the producer, before the descriptor gate is ever reached. This plan adds no code and therefore touches neither.
 - Coverage floors enforced by the audit script: `visual.colorRoles` ≥ 600, `layout` ≥ 600.
@@ -965,19 +967,42 @@ rejectedDefaults/voice/mood stay unavailable per the C3 posture, and
 token population requires >= 3 contributing entries."
 ```
 
-## Task 4: Reintroduce `evidenceSummaries` (v6) + rewrite the Plan 1 grounding test
+## Task 4C (COLLAPSED): guarded `evidenceSummaries` + conciseness + ONE policy bump
+
+**This is the only task in either plan that touches the prompt.** It replaces
+Plan 1 Task 4 (remove the key), Plan 1 Task 5 (conciseness + v5), and the
+original Plan 2 Task 4 (re-add the key + v6). See the Sequencing section in
+`2026-08-02-model-lane-reliability.md`.
+
+**Route check before you start:**
+
+- **Route A (both plans ship together — recommended):** Plan 1 Tasks 4 and 5
+  were SKIPPED. The prompt is still at `c3-model-proposal-v4` with the
+  `evidenceSummaries` key present and `buildPrompt(request, sanitizedEvidence)`
+  intact. This task adds the guard, adds the conciseness instruction, and bumps
+  **v4 → v5**. There is no removal step and no v6.
+- **Route B (Plan 1 already shipped alone):** Plan 1 Tasks 4 and 5 ran, so the
+  key is gone, the signature is `buildPrompt(request)`, and the version is
+  `v5`. Restore the parameter, add the guard, skip the conciseness instruction
+  (already applied by Plan 1 Task 5), and bump **v5 → v6**.
+
+Every step below names the route where they differ. `POLICY_VERSION` ends at
+**v5 under Route A** and **v6 under Route B** — one bump either way, because
+the prompt changes once per shipped release.
 
 **Files:**
-- Modify: `src/create-ui-spec-model.ts` (`buildPrompt` — reintroduce key with guard, `POLICY_VERSION` v6)
-- Test: `src/create-ui-spec-model.test.ts` (rewrite the Plan 1 grounding-honesty test)
+- Modify: `src/create-ui-spec-model.ts` (`buildPrompt` guard, conciseness instruction under Route A, `POLICY_VERSION`)
+- Test: `src/create-ui-spec-model.test.ts` (grounding-honesty describe + prompt-boundary assertions)
 
 **Interfaces:**
 - Consumes: `SanitizedEvidence` (now with derived summaries from Task 1).
-- Produces: `evidenceSummaries` present only when non-recipe rows with non-empty summaries exist; `c3-model-proposal-v6`.
+- Produces: `evidenceSummaries` present only when non-recipe rows with non-empty summaries exist; the conciseness instruction in the task line; `c3-model-proposal-v5` (Route A) or `v6` (Route B).
 
-- [ ] **Step 1: Rewrite the grounding test**
+- [ ] **Step 1: Write / rewrite the grounding test**
 
-In `src/create-ui-spec-model.test.ts`, replace the Plan 1 `grounding honesty` describe (the "no evidenceSummaries key" test) with:
+Under Route A this describe does not exist yet — ADD it. Under Route B, replace
+the Plan 1 `grounding honesty` describe (the "no evidenceSummaries key" test)
+with it:
 
 ```ts
 describe("createUiSpecModel grounding honesty", () => {
@@ -1013,23 +1038,16 @@ describe("createUiSpecModel grounding honesty", () => {
 ```
 
 Run: `npx vitest run src/create-ui-spec-model.test.ts -t "grounding honesty"`
-Expected: FAIL — the key is absent unconditionally after Plan 1.
 
-- [ ] **Step 2: Implement the reintroduction**
+Expected FAIL, for a different reason per route:
+- **Route A:** the "omits the key when only recipe rows exist" case fails — the
+  key is currently emitted unconditionally, recipe rows included.
+- **Route B:** the "includes evidenceSummaries" case fails — the key is absent
+  unconditionally after Plan 1 Task 4.
 
-In `src/create-ui-spec-model.ts`, restore the `sanitizedEvidence` parameter on `buildPrompt` and add the guarded key:
+- [ ] **Step 2: Implement the guard**
 
-```ts
-function buildPrompt(request: CreateUiSpecRequest, sanitizedEvidence: readonly SanitizedEvidence[]): string {
-  ...
-    // Plan 2: real derived summaries only. recipe-system rows are operator
-    // scaffolding, never evidence. Omit the key when nothing real exists.
-    ...(evidenceSummaries(sanitizedEvidence).length > 0
-      ? { evidenceSummaries: evidenceSummaries(sanitizedEvidence) }
-      : {}),
-```
-
-with a small helper above `buildPrompt`:
+In `src/create-ui-spec-model.ts`, add the helper above `buildPrompt`:
 
 ```ts
 function evidenceSummaries(rows: readonly SanitizedEvidence[]): string[] {
@@ -1039,15 +1057,55 @@ function evidenceSummaries(rows: readonly SanitizedEvidence[]): string[] {
 }
 ```
 
-Update the call site back to `const prompt = buildPrompt(request, sanitizedEvidence);` and bump:
+**Route B only:** restore the parameter —
+`function buildPrompt(request: CreateUiSpecRequest, sanitizedEvidence: readonly SanitizedEvidence[]): string` —
+and the call site, `const prompt = buildPrompt(request, sanitizedEvidence);`.
+Under Route A both are already in place; do not touch them.
+
+**Both routes:** replace the unconditional key (Route A) or add it back
+(Route B) with the guarded form:
 
 ```ts
+    // Real derived summaries only. recipe-system rows are operator
+    // scaffolding, never evidence. Omit the key when nothing real exists —
+    // a content-free label is worse than no grounding at all.
+    ...(evidenceSummaries(sanitizedEvidence).length > 0
+      ? { evidenceSummaries: evidenceSummaries(sanitizedEvidence) }
+      : {}),
+```
+
+- [ ] **Step 2b: Conciseness instruction (ROUTE A ONLY)**
+
+Under Route B this already landed in Plan 1 Task 5 — skip. Under Route A,
+change the task line:
+
+```ts
+    task: "Produce a bounded UI-spec proposal as one JSON object and nothing else. "
+      + "Be concise. State each decision once, with one sentence of rationale. "
+      + "Drop the DECISION/EFFECT/REJECTS scaffolding where it adds no information.",
+```
+
+- [ ] **Step 3: Bump `POLICY_VERSION` exactly once**
+
+```ts
+// Route A:
+const POLICY_VERSION = "c3-model-proposal-v5";
+// Route B:
 const POLICY_VERSION = "c3-model-proposal-v6";
 ```
 
-- [ ] **Step 3: Update the prompt-boundary assertions**
+Then update the prompt-boundary assertions to match the route:
 
-In the prompt-boundary test, change `c3-model-proposal-v5` → `c3-model-proposal-v6` and `not.toContain("c3-model-proposal-v4")` → `not.toContain("c3-model-proposal-v5")`. The evidence-derived assertion deleted in Plan 1 Task 4 stays deleted (the summary text is now the derived sentence, not the fixture prose).
+- **Route A:** assert `"policyVersion":"c3-model-proposal-v5"`,
+  `not.toContain("c3-model-proposal-v4")`, and
+  `toContain("Be concise. State each decision once")`. Also DELETE the
+  assertion `expect(request.prompt).toContain("Favor compact hierarchy, restrained emphasis, and stable column alignment.")`
+  — that string lives only in the `evidence-1` recipe summary of `buildInput()`,
+  which the new guard now filters out of the prompt. (Under Route B this
+  deletion already happened in Plan 1 Task 4 Step 3.)
+- **Route B:** assert `c3-model-proposal-v6` and
+  `not.toContain("c3-model-proposal-v5")`. The conciseness assertion is
+  already present from Plan 1 Task 5.
 
 Run: `npx vitest run src/create-ui-spec-model.test.ts`
 Expected: PASS.
@@ -1056,12 +1114,16 @@ Expected: PASS.
 
 ```bash
 git add src/create-ui-spec-model.ts src/create-ui-spec-model.test.ts
-git commit -m "feat(model-lane): reintroduce evidenceSummaries with derived content; v6
+git commit -m "feat(model-lane): guarded evidenceSummaries + concise prompt; policy v5
 
 The prompt carries evidenceSummaries only when non-recipe rows with real
-derived summaries exist (recipe stubs stay out), and POLICY_VERSION bumps
-to c3-model-proposal-v6 because the prompt changed again."
+derived summaries exist, so a content-free label can never reach the model
+as grounding, and asks for one sentence of rationale per decision instead
+of the DECISION/EFFECT/REJECTS scaffolding. POLICY_VERSION bumps once."
 ```
+
+(Route B: retitle to `policy v6` and drop the conciseness sentence — Plan 1
+Task 5 already shipped it.)
 
 ## Task 5: Full verification + live campaign
 
@@ -1094,9 +1156,31 @@ Using the MCP stdio harness from the 2026-08-02 session, run the three briefs (l
 
 Record the results in the PR description.
 
-- [ ] **Step 4: Model lane cross-check**
+- [ ] **Step 4: Model-lane campaign — THIS IS A GATE, NOT A NOTE**
 
-Run one model-lane call (lane configured, `"Make it better."` brief): the prompt now carries derived summaries when matches exist, and the proposal must not be steered by label classes. Record the outcome.
+Task 4C changed the prompt, so this is where the length and grounding targets
+are measured. Under Route A this is the ONLY place they are measured at all
+(Plan 1's campaign deliberately records no length numbers — the prompt had not
+changed yet, so any movement there is provider noise and would create a false
+baseline).
+
+Run the 10-brief probe with the lane configured and record:
+
+- **Length:** median `designDirection` ≤ ~1,000 chars against the measured
+  1,272 baseline; max ≤ ~1,400 against 1,789.
+- **Accept rate:** no regression against the 8/10 baseline.
+- **Grounding — the gate.** One `"Make it better."` run. The proposal must NOT
+  describe an editor canvas or a marketing hero.
+
+**If the grounding check fails, Task 1 made things worse and must be
+reconsidered before merge.** The reasoning matters: Task 1's derived sentence
+(`"dashboard reference, 3 regions, compact spacing, slight-round corners, no
+shadows, borders, accent #2563eb, Inter / Inter, layout three-column"`) is MORE
+specific than the label it replaces, not less. The thing expected to fix the
+thin-brief hijack is Task 2's top-3 ranked retrieval — better relevance — not
+Task 1's richer text. If a thin brief still inherits the retrieved pattern
+class after both land, the correct response is a brief-thinness guard (refuse
+or ask), not more summary detail. Record which way it went.
 
 - [ ] **Step 5: Commit any doc/verification artifacts**
 

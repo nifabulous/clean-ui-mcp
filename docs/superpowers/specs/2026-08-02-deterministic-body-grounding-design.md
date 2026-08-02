@@ -197,14 +197,25 @@ create_ui_spec (no model)
   → envelope (recipe authority, no modelProposal)
 ```
 
-**Plan 2 REINTRODUCES `evidenceSummaries`; it does not inherit a filter.**
-Plan 1 removes the key from `buildPrompt` outright, because every value it
-could hold at that point is a stub or a content-free pattern label. Plan 2 adds
-the key back once auto-retrieval produces summaries with real derived content,
-together with the non-empty guard that had no live path in Plan 1 (omit the key
-when retrieval returns zero rows). This is an addition to `buildPrompt`, and it
-requires a second `POLICY_VERSION` bump (`c3-model-proposal-v5` →
-`v6`) — the prompt changes again.
+**The prompt changes exactly once per shipped release, in Plan 2's collapsed
+Task 4C.** Plan 2 puts `evidenceSummaries` behind a non-empty guard over real
+derived summaries (recipe rows excluded; key omitted when nothing real exists)
+and applies the conciseness instruction, under ONE `POLICY_VERSION` bump.
+
+Which bump depends on how the two plans ship:
+
+- **Route A — both together (recommended).** Plan 1 Tasks 4 and 5 are SKIPPED,
+  so the key was never removed and the prompt is still at v4. Task 4C adds the
+  guard plus the conciseness instruction and bumps **v4 → v5**. Removing the
+  key in Plan 1 and restoring it in Plan 2 within one release is pure churn:
+  two bumps and two test rewrites for a net prompt that has the key with
+  better content than today.
+- **Route B — Plan 1 ships to production alone first.** Its Task 4 removal is
+  then the honest interim state, and Task 4C restores the parameter, adds the
+  guard, and bumps **v5 → v6**.
+
+Either way `POLICY_VERSION` moves once per release, and Task 4C is the only
+task in either plan that touches `buildPrompt`.
 
 ## Error handling
 

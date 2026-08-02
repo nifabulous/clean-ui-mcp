@@ -4,9 +4,47 @@
 
 **Goal:** Make the `create_ui_spec` model lane observable, retry-recoverable, honest about grounding, and measurably more concise.
 
-**Architecture:** Four changes in one code path: (1) `maxAttempts` becomes `1 | 2` and `createUiSpecModel` retries only JSON-parse failures; (2) the shared result envelope gains a conditional `modelExecutionState` key (one descriptor flag, one tool) plus an operator channel (boot warnings, `check:model-lane` script, `.env.example`, logs); (3) the model prompt stops carrying the `evidenceSummaries` key entirely; (4) the prompt is tightened and `POLICY_VERSION` bumps to v5.
+**Architecture:** Four changes in one code path: (1) `maxAttempts` becomes `1 | 2` and `createUiSpecModel` retries only JSON-parse failures; (2) the shared result envelope gains a conditional `modelExecutionState` key (one descriptor flag, one tool) plus an operator channel (boot warnings, `check:model-lane` script, `.env.example`, logs); (3) the model prompt stops carrying the `evidenceSummaries` key entirely; (4) the prompt is tightened and `POLICY_VERSION` bumps to v5. **Changes (3) and (4) are ROUTE-DEPENDENT — see Sequencing.**
 
 **Tech Stack:** TypeScript, Zod, Vitest, node:http (dogfood), MCP SDK.
+
+## Sequencing — read before starting either plan
+
+These two plans **cannot run in parallel.** Three conflicts remain after the
+P1-A fold (which removed a fourth by deleting Plan 2's warning-schema edit):
+
+| # | Conflict |
+|---|---|
+| 1 | `buildPrompt` signature — Task 4 here removes the `sanitizedEvidence` param, Plan 2 Task 4 restores it |
+| 2 | `POLICY_VERSION` — Task 5 here sets v5; Plan 2 Task 4 sets v6 AND asserts `not.toContain("v5")`, so it cannot pass until Task 5 has landed |
+| 3 | `scripts/dogfood-createuispec.mjs` — Task 6 here calls `assertTokensUnavailable`; Plan 2 Task 3 Step 5 redefines what that helper asserts |
+
+Plus the `grounding honesty` describe block, written by Task 4 here and
+replaced by Plan 2 Task 4.
+
+`src/create-ui-spec.ts` is touched by both (one `console.error` here, three
+rewritten regions in Plan 2) but in disjoint places — git auto-merges.
+
+**Parallel-safe:** Plan 2 Task 0 (coverage audit) creates three new files and
+touches nothing else. Run it alongside anything.
+
+### Pick a route before Task 4
+
+**Route A — ship both together (RECOMMENDED).** Tasks 4 and 5 here are
+**SKIPPED**. The prompt work happens once, at the end of Plan 2, as the
+collapsed "Task 4C" (guarded `evidenceSummaries` over derived summaries +
+conciseness instruction + a single `v4 → v5` bump). Removing the key and
+re-adding it in the same release is pure churn: two policy bumps, two test
+rewrites, for a net prompt that has the key with better content than today.
+Route A deletes conflicts 1, 2 and 4.
+
+**Route B — ship Plan 1 to production alone first.** Tasks 4 and 5 run as
+written. Removing `evidenceSummaries` is then the honest interim state, and the
+two bumps (v4→v5 here, v5→v6 in Plan 2) are the real cost of shipping
+independently.
+
+**Order under Route A:** Plan 2 Task 0 → Plan 1 Tasks 1–3, 6 → Plan 2
+Tasks 1–3 → collapsed Task 4C → live campaign.
 
 ## Global Constraints
 
@@ -15,8 +53,7 @@
 - Each generation runs at HTTP-level `maxAttempts: 1`; the two retry domains must not tangle.
 - The MCP payload gains exactly ONE new top-level key (`modelExecutionState`); `modelExecution` itself stays unprojected; no raw provider data on the wire.
 - `maxAttempts` default is `1`. The operator opt-in is `CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS=2` (absent or `"1"` keeps `1`; any other value is `invalid-configuration`).
-- The `evidenceSummaries` key is removed from the prompt UNCONDITIONALLY in this plan (Plan 2 reintroduces it with a non-empty guard).
-- `POLICY_VERSION` bumps exactly once: `c3-model-proposal-v4` → `c3-model-proposal-v5`.
+- **ROUTE B ONLY:** the `evidenceSummaries` key is removed from the prompt unconditionally (Task 4), and `POLICY_VERSION` bumps exactly once, `c3-model-proposal-v4` → `c3-model-proposal-v5` (Task 5). Under Route A both tasks are skipped and the prompt is untouched by this plan — the single v4 → v5 bump happens in the collapsed Task 4C at the end of Plan 2. Under NEITHER route does this plan bump the version more than once.
 - **Summed usage applies ONLY to the accepted-after-retry branch** (review finding P1-C). `fallback()` returns `{ kind: "fallback", execution }` with no `recordInput`, and the artifact store is written only on the accepted branch — so when BOTH attempts fail, no record exists and the discarded generations' billed tokens go unrecorded, exactly as a single-attempt rejection's do today. Do NOT "fix" this by writing a record on the fallback path: `ModelArtifactRecordSchema` requires `proposalSha256`/`proposal`/`promptSha256` and every other field describes an ACCEPTED proposal, so a usage-only record is a contract change that is out of scope here. Known, accepted audit gap; retry widens it by at most one discarded generation.
 - All served responses must still pass `assertPassesContractGate`; an unknown top-level key on any tool's envelope is refused (that property must be pinned, not assumed).
 - Every task is TDD: failing test → minimal implementation → passing test → commit.
@@ -975,7 +1012,13 @@ reachability; .env.example documents the four lane keys and the maxAttempts
 opt-in; every non-success lane path logs one concise operator line."
 ```
 
-## Task 4: Grounding honesty — remove `evidenceSummaries` from the prompt
+## Task 4 (ROUTE B ONLY — SKIP under Route A): Grounding honesty — remove `evidenceSummaries` from the prompt
+
+> **Skip this task if both plans ship together.** Plan 2's collapsed Task 4C
+> adds the key back with real derived summaries; removing it here and restoring
+> it there costs two `POLICY_VERSION` bumps and two test rewrites for no net
+> change. Run this ONLY if Plan 1 reaches production before Plan 2 exists, in
+> which case it is the honest interim state. See Sequencing.
 
 **Files:**
 - Modify: `src/create-ui-spec-model.ts` (`buildPrompt` signature + body, call site)
@@ -1042,7 +1085,11 @@ toward the retrieved label class. Plan 2 reintroduces the key with real
 derived summaries and a non-empty guard."
 ```
 
-## Task 5: Prompt conciseness + `POLICY_VERSION` v5
+## Task 5 (ROUTE B ONLY — SKIP under Route A): Prompt conciseness + `POLICY_VERSION` v5
+
+> **Skip this task if both plans ship together.** The conciseness instruction
+> and the single v4 → v5 bump move into Plan 2's collapsed Task 4C, so the
+> prompt changes once instead of three times. See Sequencing.
 
 **Files:**
 - Modify: `src/create-ui-spec-model.ts` (`POLICY_VERSION`, task instruction)
@@ -1157,7 +1204,23 @@ Expected: tsc clean; full suite green (the known `dom-motion-capture` load flake
 
 - [ ] **Step 5: Live campaign (manual, documented, not CI)**
 
-Using the MCP stdio harness from the 2026-08-02 live test, run the 10-brief probe (or at minimum the login, finance, and habit-tracker briefs) against the real provider and record: median `designDirection` length (target ≤ ~1,000 vs the 1,272 baseline), max (target ≤ ~1,400 vs 1,789), accept rate (no regression), and one `"Make it better."` run whose proposal must NOT describe an editor canvas or marketing hero. Record the numbers in the PR description.
+Using the MCP stdio harness from the 2026-08-02 live test, run the 10-brief probe against the real provider. What to record depends on the route:
+
+**Route A (prompt untouched by this plan):** record ONLY the retry and operator
+evidence — accept rate across the probe (baseline 8/10, expect no regression),
+at least one observed retry recovery if a malformed generation occurs, and
+`npm run check:model-lane` reporting `reachable: true` with the resolved dated
+model id. Do NOT measure `designDirection` length here: the prompt has not
+changed, so any movement is provider noise, and recording it as a Plan 1 result
+would create a false baseline for Task 4C. The length and grounding targets
+belong to Plan 2's campaign.
+
+**Route B (Tasks 4 and 5 ran):** record everything above PLUS median
+`designDirection` length (target ≤ ~1,000 against the 1,272 baseline), max
+(target ≤ ~1,400 against 1,789), and one `"Make it better."` run whose proposal
+must NOT describe an editor canvas or marketing hero.
+
+Record the numbers in the PR description either way.
 
 - [ ] **Step 6: Commit**
 

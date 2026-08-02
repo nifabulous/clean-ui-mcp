@@ -237,6 +237,15 @@ safe reason class. No prompt, no response bytes, no key material.
 **`src/create-ui-spec-model.ts` `buildPrompt` — remove the key, do not filter
 it.**
 
+> **Sequencing note.** This section describes the state Plan 1 must reach *if
+> it ships to production before Plan 2 exists* (Route B). If both plans ship in
+> one release (Route A, recommended), this removal is SKIPPED along with §4's
+> conciseness change, and Plan 2's collapsed Task 4C does the prompt work once:
+> guarded key over real derived summaries + conciseness instruction + a single
+> `v4 → v5` bump. Remove-then-restore inside one release is churn. The analysis
+> below is unchanged and still explains why a `kind` filter is the wrong shape
+> — that reasoning is what Task 4C's guard is built on.
+
 An earlier draft of this section filtered `sanitizedEvidence` by `kind`,
 keeping `corpus-observation` and `public-reference` and dropping
 `recipe-system`. That does not fix the failure in Context §3: the harmful

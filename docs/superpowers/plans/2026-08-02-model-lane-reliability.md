@@ -328,6 +328,44 @@ Append to the same describe block:
     expect(callFailed).toEqual({ kind: "fallback", execution: { state: "call-failed" } });
     expect(runtime.call).toHaveBeenCalledTimes(1);
   });
+
+  it("does not retry byte-limit hits or private-marker hits at maxAttempts 2", async () => {
+    // MAX_MODEL_TEXT_BYTES is 32 * 1024 (internal, src/create-ui-spec-model.ts:23);
+    // the byte-limit check runs BEFORE JSON.parse, so it must never continue
+    // the retry loop. Private markers are checked after a successful parse and
+    // are also single-attempt (mirror the marker fixture from the existing
+    // "rejects private markers anywhere" test at :486).
+    const byteRuntime = retryRuntime();
+    byteRuntime.call.mockImplementation(async () => ({
+      content: "x".repeat(32 * 1024 + 1),
+      provider: "openai",
+      model: "gpt-5-mini",
+      usage: { promptTokens: 100, completionTokens: 10, raw: { prompt_tokens: 100, completion_tokens: 10 } },
+      attempts: 1,
+      latencyMs: 400,
+      providerRequestId: "req_x",
+    }));
+    const byteRejected = await createUiSpecModel(buildInput(), byteRuntime);
+    expect(byteRejected).toEqual({ kind: "fallback", execution: { state: "proposal-rejected" } });
+    expect(byteRuntime.call).toHaveBeenCalledTimes(1);
+
+    const markerRuntime = retryRuntime();
+    markerRuntime.call.mockImplementation(async () => ({
+      content: JSON.stringify({
+        ...buildProposal(),
+        designDirection: "Contains " + PRIVATE_MARKER_FIXTURE, // see :486 fixture
+      }),
+      provider: "openai",
+      model: "gpt-5-mini",
+      usage: { promptTokens: 100, completionTokens: 10, raw: { prompt_tokens: 100, completion_tokens: 10 } },
+      attempts: 1,
+      latencyMs: 400,
+      providerRequestId: "req_x",
+    }));
+    const markerRejected = await createUiSpecModel(buildInput(), markerRuntime);
+    expect(markerRejected).toEqual({ kind: "fallback", execution: { state: "proposal-rejected" } });
+    expect(markerRuntime.call).toHaveBeenCalledTimes(1);
+  });
 ```
 
 - [ ] **Step 10: Run the full model test files**
@@ -530,6 +568,19 @@ In `src/create-ui-spec-mcp.test.ts`, add `"modelExecutionState"` to `ENVELOPE_KE
 
 Run: `npx vitest run src/create-ui-spec-mcp.test.ts`
 Expected: PASS — the success-key-set test and the error-key-set test both follow from the constant.
+
+Add the explicit error-branch VALUE assertion next to the error-key-set test (the key-set test proves presence; this proves the value is `null` — no model ran):
+
+```ts
+  it("projects modelExecutionState null on the error branch", async () => {
+    const result = await handleCreateUiSpec(
+      { ...validArgs(), productContext: "bad" }, // fails CreateUiSpecInput validation
+      makeReader([], []),
+    );
+    expect((result.structuredContent as Record<string, unknown>).modelExecutionState).toBeNull();
+    expect((result.structuredContent as Record<string, unknown>).status).toBe("error");
+  });
+```
 
 - [ ] **Step 8: Write the negative gate test (regression pin)**
 
@@ -859,6 +910,8 @@ CREATE_UI_SPEC_MODEL_API_KEY=
 #   claude-sonnet-4-5-20250929
 CREATE_UI_SPEC_MODEL_NAME=
 # Optional: "1" (default) or "2" — one retry on JSON.parse failure.
+# Enabling "2" roughly doubles worst-case call latency (2 x ~30s); retries
+# cost tokens only on the discarded generation.
 #CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS=1
 ```
 
@@ -1098,3 +1151,32 @@ The fake provider gains a malformed-once behavior; with
 CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS=2 the dogfood harness asserts a
 succeeded envelope, exactly one store record, and attempts: 2."
 ```
+
+## Implementation Tasks
+
+- [ ] **T1 (P1, human: ~30min / CC: ~5min)** — apply the two verified plan fixes — Plan 2 Task 3 authority token `"corpusEvidence"` → `"corpus-evidence"`; Plan 2 Task 0 audit fixture `primary` → `canvas`. DONE in this review (already applied to the plan files).
+  - Surfaced by: Architecture review — D3 authority-enum cross-check (tool-contracts.ts:537, :853); D2 corpus-schema cross-check (schema.ts:418-424).
+  - Files: `docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md`, `docs/superpowers/plans/2026-08-02-model-lane-reliability.md`
+  - Verify: `rg -n "corpusEvidence|corpus-evidence" docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md` and `rg -n "canvas" docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md | head -3`
+- [ ] **T2 (P2, human: ~2h / CC: ~15min)** — request code review — dispatch the requesting-code-review subagent on both plan commits before implementation begins (per the requesting-code-review skill; mandatory before implementing major plans).
+  - Surfaced by: requesting-code-review skill — mandatory before implementing major plans.
+  - Files: `docs/superpowers/plans/2026-08-02-model-lane-reliability.md`, `docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md`
+  - Verify: review feedback triaged (Critical fixed, Important fixed, Minor noted).
+
+_No new tasks from Code Quality._ _No new tasks from Performance beyond the documented latency note (retry doubles worst-case to ~60-70s; default stays 1 attempt)._
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 4 | CLEAR | 2 issues, 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+- **CODEX:** (not run — requesting-code-review dispatch is separate; see Implementation Tasks)
+- **CROSS-MODEL:** (not run)
+- **VERDICT:** ENG CLEARED — ready to implement. Joint plan-set review, second pass (2026-08-02, commit 4f4574e). Two verified findings folded: (1) Plan 2 Task 3 `citedDecisions.authority` corrected to `"corpus-evidence"` — the plan used the camelCase lane name, which is not in the CitedDecision enum (tool-contracts.ts:537) and would fail the strict parse while silently bypassing the consistency gate at :853; (2) Plan 2 Task 0 audit fixture `colorRoles` corrected to `canvas` (corpus schema at schema.ts:418-424). This plan also gained the byte-limit / private-marker no-retry pins at maxAttempts=2 (Task 1 Step 9). Every other architecture claim was verified against code: retry loop shape, makeEnvelope conditional-key idiom (:2374), `hasEvidence`/`allowNoneWithPositiveResult` precedent (:1517), `runtime.call` signature, `CorpusReader.searchRanked`/`findSimilar` (corpus-reader.ts:69-71), `pickDiverse` at create-ui-spec.ts:482, warning-code list at tool-contracts.ts:1857, `corpusEvidenceIds`/`buildCitedDecisions` (create-ui-spec.ts:813-847), `buildInput` overrides (model.test.ts:11), ranked `makeReader` helper (create-ui-spec.test.ts:124), `plurality` currently private (design-prompt.ts:45), `HexColor` not exported (schema.ts:418, plan's conditional covers it), and `MAX_MODEL_TEXT_BYTES = 32 * 1024` (model.ts:23).
+
+NO UNRESOLVED DECISIONS

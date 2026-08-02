@@ -58,7 +58,7 @@ function fixtureCorpus(colorRoles, layout) {
       usesShadows: false,
       usesBorders: true,
       colorRoles: colorRoles ? {
-        primary: "#2563eb", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: "#2563eb",
+        canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: "#2563eb",
       } : undefined,
     },
     layout: layout ? { form: "two-column", regions: [{ role: "main-canvas" }] } : undefined,
@@ -822,8 +822,11 @@ consistency violation that would fail the shared gate's authority checks
           id: "designDirection-corpus-synthesis",
           field: "designDirection",
           // The authority token must match the CitedDecision authority enum
-          // (the corpusEvidence lane's token — see tool-contracts.ts).
-          authority: "corpusEvidence",
+          // ("corpus-evidence", NOT the camelCase lane field name — the enum
+          // at tool-contracts.ts:537 is team-design-system /
+          // project-constraint / corpus-evidence / editorial, and the
+          // consistency gate at :853 only fires for "corpus-evidence").
+          authority: "corpus-evidence",
           evidenceIds: corpusEvidenceIds,
           readiness: "available",
         },
@@ -1030,16 +1033,31 @@ git add docs/superpowers/specs/coverage-2026-08-02.md
 git commit -m "docs(corpus): refresh coverage snapshot after Plan 2 verification"  # only if the audit output changed
 ```
 
+## Implementation Tasks
+
+- [ ] **T1 (P1, human: ~30min / CC: ~5min)** — apply the two verified plan fixes — Task 3 authority token `"corpusEvidence"` → `"corpus-evidence"`; Task 0 audit fixture `primary` → `canvas`. DONE in this review (already applied to the plan files).
+  - Surfaced by: Architecture review — D3 authority-enum cross-check (tool-contracts.ts:537, :853); D2 corpus-schema cross-check (schema.ts:418-424).
+  - Files: `docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md`, `docs/superpowers/plans/2026-08-02-model-lane-reliability.md`
+  - Verify: `rg -n "corpusEvidence|corpus-evidence" docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md` and `rg -n "canvas" docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md | head -3`
+- [ ] **T2 (P2, human: ~2h / CC: ~15min)** — request code review — dispatch the requesting-code-review subagent on both plan commits before implementation begins (per the requesting-code-review skill; mandatory before implementing major plans).
+  - Surfaced by: requesting-code-review skill — mandatory before implementing major plans.
+  - Files: `docs/superpowers/plans/2026-08-02-model-lane-reliability.md`, `docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md`
+  - Verify: review feedback triaged (Critical fixed, Important fixed, Minor noted).
+
+_No new tasks from Code Quality._ _No new tasks from Performance beyond the documented latency note (retry doubles worst-case to ~60-70s; default stays 1 attempt)._
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
 | Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 4 issues (D3–D7), all folded |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 4 | CLEAR | 2 issues, 0 critical gaps |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
 
-- **VERDICT:** ENG CLEARED — ready to implement. D2 (ColorRoles shape) confirmed already applied in the working tree; D3–D7 folded in this review (build-index prerequisite, `findSimilar` type cleanup, shared `plurality`, unconditional fixture updates, real-corpus round-trip test).
+- **CODEX:** (not run — requesting-code-review dispatch is separate; see Implementation Tasks)
+- **CROSS-MODEL:** (not run)
+- **VERDICT:** ENG CLEARED — ready to implement. Joint plan-set review, second pass (2026-08-02, commit 4f4574e). Two verified findings folded in this pass: (1) Task 3 `citedDecisions.authority` is now `"corpus-evidence"` — the strict CitedDecision enum at tool-contracts.ts:537 has no `"corpusEvidence"` member and the consistency gate at :853 only fires for the hyphenated token, so the plan's earlier token would both fail the parse and skip the check it was meant to pin; (2) Task 0 audit fixture `colorRoles` now uses `canvas` — the corpus role shape (schema.ts:418-424), not UiSpec's `primary`. The D2 colorRoles convention, D3 citation-ledger tests, D4 model-path gating tests, and D5 no-fabrication test were verified present in this plan. Other claims verified against code: `findSimilarEntries` no-index behavior (corpus.ts:414-419), `pickDiverse` current use (create-ui-spec.ts:482), warning-code list (tool-contracts.ts:1857), `makeReader(corpus, ranked)` helper (create-ui-spec.test.ts:124), `plurality` export step needed (design-prompt.ts:45), `HexColor` export step needed (schema.ts:418), `buildInput` overrides (model.test.ts:11), `corpusEvidenceIds`/`buildCitedDecisions` (create-ui-spec.ts:813-847).
 
 NO UNRESOLVED DECISIONS

@@ -58,6 +58,19 @@ export function resolveCreateUiSpecModelConfig(
   }
   const maxAttempts = maxAttemptsRaw === "2" ? 2 : 1;
 
+  // Advisory boot-time checks for the two measured misconfiguration classes.
+  // Warnings only — proxies legitimately vary, so neither is a hard error.
+  if (providerRaw.trim().toLowerCase() === "claude" && !/\/v1\/messages\/?$/.test(baseUrl)) {
+    console.warn(
+      `[create-ui-spec-model] claude provider: CREATE_UI_SPEC_MODEL_BASE_URL (${baseUrl}) does not end in /v1/messages; the tagger POSTs to the base URL verbatim and will 404.`,
+    );
+  }
+  if (providerRaw.trim().toLowerCase() === "claude" && !/^[A-Za-z0-9._-]+-\d{8}$/.test(modelRaw.trim())) {
+    console.warn(
+      `[create-ui-spec-model] claude provider: model name "${modelRaw.trim()}" does not match the dated-ID shape; aliases resolve server-side and the fail-closed model-substitution check rejects them. Use the exact API model ID (e.g. claude-sonnet-4-5-20250929).`,
+    );
+  }
+
   return {
     kind: "configured",
     runtime: {

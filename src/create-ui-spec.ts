@@ -228,6 +228,7 @@ async function buildModelAwareEnvelope(
   }
 
   if (model.kind === "invalid-configuration") {
+    console.error("[create-ui-spec] model lane not usable: invalid-configuration");
     return attachModelExecution(
       deterministicEnvelope,
       ModelExecutionSchema.parse({ state: "invalid-configuration" }),

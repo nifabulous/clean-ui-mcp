@@ -178,3 +178,40 @@ describe("resolveCreateUiSpecModelConfig", () => {
     expect(resolveCreateUiSpecModelConfig(env).kind).toBe("invalid-configuration");
   });
 });
+
+describe("boot-time config warnings", () => {
+  function envFor(over: Record<string, string>): Record<string, string> {
+    return {
+      CREATE_UI_SPEC_MODEL_PROVIDER: "claude",
+      CREATE_UI_SPEC_MODEL_BASE_URL: "https://api.anthropic.com/v1/messages",
+      CREATE_UI_SPEC_MODEL_API_KEY: "sk-ant-test",
+      CREATE_UI_SPEC_MODEL_NAME: "claude-sonnet-4-5-20250929",
+      ...over,
+    };
+  }
+
+  it("warns when the claude base URL has no /v1/messages path", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resolveCreateUiSpecModelConfig(envFor({ CREATE_UI_SPEC_MODEL_BASE_URL: "https://api.anthropic.com" }));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("/v1/messages"));
+    warn.mockRestore();
+  });
+
+  it("warns when the claude model name is an alias without a dated ID", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resolveCreateUiSpecModelConfig(envFor({ CREATE_UI_SPEC_MODEL_NAME: "claude-sonnet-4-5" }));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("exact API model ID"));
+    warn.mockRestore();
+  });
+
+  it("does not warn for a dated ID or for non-claude providers", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resolveCreateUiSpecModelConfig(envFor({}));
+    resolveCreateUiSpecModelConfig(envFor({
+      CREATE_UI_SPEC_MODEL_PROVIDER: "openai",
+      CREATE_UI_SPEC_MODEL_BASE_URL: "https://api.openai.com/v1",
+    }));
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});

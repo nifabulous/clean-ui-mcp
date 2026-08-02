@@ -400,6 +400,9 @@ function byteLength(value: string): number {
 function fallback(
   state: Extract<ModelExecution["state"], "invalid-configuration" | "call-failed" | "proposal-rejected" | "persistence-failed">,
 ): ModelPathOutcome {
+  // Operator channel: one concise line per non-success. No prompt, no
+  // response bytes, no key material.
+  console.error(`[create-ui-spec-model] lane fallback: ${state}`);
   return {
     kind: "fallback",
     execution: ModelExecutionSchema.parse({ state }) as Exclude<ModelExecution, { state: "succeeded" }>,

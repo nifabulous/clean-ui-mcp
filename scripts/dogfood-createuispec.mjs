@@ -304,9 +304,11 @@ async function startFakeProvider() {
 
   const port = await freePort();
   let behavior = "success";
+  let malformedOnceFired = false;
   const server = createHttpsServer({ key, cert }, (req, res) => {
     req.resume();
-    const body = fakeProviderBody(behavior);
+    const body = fakeProviderBody(behavior, malformedOnceFired);
+    if (behavior === "malformed-once" && !malformedOnceFired) malformedOnceFired = true;
     res.writeHead(behavior === "provider-failure" ? 500 : 200, {
       "content-type": "application/json",
     });
@@ -321,6 +323,7 @@ async function startFakeProvider() {
     baseUrl: `https://localhost:${port}/v1`,
     setBehavior: (next) => {
       behavior = next;
+      malformedOnceFired = false;
     },
     stop: async () => {
       await new Promise((resolveClosed) => server.close(resolveClosed));
@@ -329,12 +332,12 @@ async function startFakeProvider() {
   };
 }
 
-function fakeProviderBody(behavior) {
+function fakeProviderBody(behavior, malformedOnceFired) {
   const usage = { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 };
   if (behavior === "provider-failure") {
     return JSON.stringify({ error: "fake provider failure" });
   }
-  if (behavior === "malformed") {
+  if (behavior === "malformed" || (behavior === "malformed-once" && !malformedOnceFired)) {
     return JSON.stringify({ choices: [{ message: { content: RAW_MODEL_BODY_FIXTURE } }], usage });
   }
   return JSON.stringify({ choices: [{ message: { content: PROPOSAL_FIXTURE_JSON } }], usage });
@@ -573,6 +576,25 @@ async function run() {
     });
     assertStoreEmpty();
     console.log("dogfood-createuispec: PASS malformed-response");
+
+    // Parse-failure retry: with the operator opt-in set, the first generation
+    // returns the malformed body and the second succeeds. The record must
+    // carry attempts: 2 and the served envelope must show proposal-only with
+    // accepted tokens null.
+    resetStore();
+    assertStoreEmpty();
+    fakeProvider.setBehavior("malformed-once");
+    await withModelServer({ ...baseModelEnv, CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS: "2" }, async (modelServer, modelNonce) => {
+      const envelope = requireEnvelope(await postJson(modelServer.baseUrl, modelNonce, INTENT_BRIEF));
+      assert(envelope.modelExecution?.state === "succeeded", "retry did not surface succeeded");
+      assert(envelope.spec.modelProposal?.status === "proposal-only", "retry proposal not proposal-only");
+      assertTokensUnavailable(envelope);
+    });
+    const records = readdirSync(MODEL_ARTIFACT_STORE_ROOT);
+    assert(records.length === 1, "retry wrote exactly one record");
+    const record = JSON.parse(readFileSync(join(MODEL_ARTIFACT_STORE_ROOT, records[0]), "utf8"));
+    assert(record.attempts === 2, "retry record did not carry attempts 2");
+    console.log("dogfood-createuispec: PASS parse-failure-retry");
 
     // Persistence failure: a FILE at the store root blocks the store's mkdir.
     // The provider call succeeds, but the record write fails and the envelope

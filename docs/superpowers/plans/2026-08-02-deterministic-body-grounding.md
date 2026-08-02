@@ -1189,6 +1189,22 @@ git add docs/superpowers/specs/coverage-2026-08-02.md
 git commit -m "docs(corpus): refresh coverage snapshot after Plan 2 verification"  # only if the audit output changed
 ```
 
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | blocked | subagent dispatch broken in this environment |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 7 | CLEAR | 6 findings, all folded |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+**CODEX:** requesting-code-review was invoked; subagent dispatch has been empirically broken in this environment (four prior spawn attempts returned generic greetings, one chain wandered for 30+ min), so the independent review was performed inline with fresh verification instead. Recommend a bounded re-run in a working host before merge if cross-model review is wanted.
+
+**VERDICT:** ENG CLEARED — ready to implement/merge. Post-implementation full-diff review (2026-08-03, branch `codex/model-lane-reliability`, HEAD after D2-D6). Six findings, all folded with the user's approval (D2 pattern-dedupe, D3 DRY hoist, D4-D6 test pins, D7 eval TODO). Full suite green (3190+ passed; the two full-run failures are the documented `mcp-smoke`/`wiring` ordering artifacts, both pass standalone). Dogfood PASS; `check:model-lane` reachable live.
+
+NO UNRESOLVED DECISIONS
+
 ## Implementation Tasks
 
 - [ ] **T1 (P1, human: ~30min / CC: ~5min)** — apply the two verified plan fixes — Task 3 authority token `"corpusEvidence"` → `"corpus-evidence"`; Task 0 audit fixture `primary` → `canvas`. DONE in this review (already applied to the plan files).
@@ -1209,25 +1225,3 @@ git commit -m "docs(corpus): refresh coverage snapshot after Plan 2 verification
   - Verify: `rg -n "let top: \{ entry: CorpusEntryT \}\[\]" docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md`
 
 _No new tasks from Code Quality._ _No new tasks from Performance beyond the documented latency note (retry doubles worst-case to ~60-70s; default stays 1 attempt)._
-
-## GSTACK REVIEW REPORT
-
-| Review | Trigger | Why | Runs | Status | Findings |
-|--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
-| Codex Review | `/codex review` | Independent 2nd opinion | 1 | interrupted | no findings returned |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 6 | CLEAR | 10 issues, 0 critical gaps |
-| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
-| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
-
-- **CODEX:** dispatched via requesting-code-review twice; both subagent chains ran nested deep-dives and were interrupted before returning findings, so this plan set still has no outside-voice pass. Re-run with a hard timebox before implementation if cross-model review is wanted.
-- **CROSS-MODEL:** (not run)
-- **VERDICT:** ENG CLEARED — ready to implement. Joint plan-set review, third pass (2026-08-02). Six prior findings were folded in earlier passes (commits 4f4574e, 3d17ea6, 636ccdd): colorRoles shape, citation-ledger authority, model-path gating, token-fabrication guard, test gaps, latency docs. Four fresh findings folded in this pass, all verified against repo code:
-1. [P1] Duplicate `colorTokens` unavailableDecision — the recipe (fallback-recipe-v1.json) already declares one, so the plan's spread + conditional produced two rows (uniqueness gate, tool-contracts.ts:778-781) or a stale row with populated tokens (:803-804). Fixed: filter the recipe row when synthesis runs and re-add exactly one only when tokens are null.
-2. [P2] Retrieval `top` type — `SearchResult` requires `score`/`searchMode` (corpus.ts:116-120), so the similarity fallback's `{ entry }` rows would not compile. Fixed: annotate as `{ entry: CorpusEntryT }[]`.
-3. [P2] Cross-tool gate test — the descriptor-conditional `modelExecutionState` key needs a pin that OTHER tools reject the key; added a critique_ui fixture test (makeValidSuccess/cloneToolResult pattern).
-4. [P2] D8 gate-pass test — the duplicate-row bug would have been caught by asserting the full envelope passes the gate on BOTH token branches (populated and null); added to Task 3 Step 5.
-
-Verified claims from earlier passes still hold: `findSimilarEntries` no-index behavior (corpus.ts:414-419), `pickDiverse` at create-ui-spec.ts:482, warning-code list (tool-contracts.ts:1857), `makeReader(corpus, ranked)` helper (create-ui-spec.test.ts:124), `plurality` export step needed (design-prompt.ts:45), `HexColor` export step needed (schema.ts:418), `buildInput` overrides (model.test.ts:11), `corpusEvidenceIds`/`buildCitedDecisions` (create-ui-spec.ts:813-847), retry loop shape, makeEnvelope conditional-key idiom (:2374), and `MAX_MODEL_TEXT_BYTES = 32 * 1024` (model.ts:23).
-
-NO UNRESOLVED DECISIONS

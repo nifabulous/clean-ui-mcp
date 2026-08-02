@@ -1255,13 +1255,21 @@ _No new tasks from Code Quality._ _No new tasks from Performance beyond the docu
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
-| Codex Review | `/codex review` | Independent 2nd opinion | 1 | interrupted | no findings returned |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 6 | CLEAR | 7 issues, 0 critical gaps |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | blocked | subagent dispatch broken in this environment |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 7 | CLEAR | 6 findings, all folded |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
 
-- **CODEX:** dispatched via requesting-code-review twice; both subagent chains ran nested deep-dives and were interrupted before returning findings, so this plan set still has no outside-voice pass. Re-run with a hard timebox before implementation if cross-model review is wanted.
-- **CROSS-MODEL:** (not run)
-- **VERDICT:** ENG CLEARED — ready to implement. Joint plan-set review, third pass (2026-08-02). Six prior findings were folded in earlier passes (commits 4f4574e, 3d17ea6, 636ccdd): colorRoles shape, citation-ledger authority, model-path gating, token-fabrication guard, test gaps, latency docs. One fresh finding folded in this pass: the descriptor-conditional `modelExecutionState` key needs a cross-tool refusal test (critique_ui without the flag must reject the key via the shared gate). Verified claims from earlier passes still hold: retry loop shape, makeEnvelope conditional-key idiom (:2374), `hasEvidence`/`allowNoneWithPositiveResult` precedent (:1517), `runtime.call` signature, byte-limit/private-marker no-retry pins, `buildInput` overrides (model.test.ts:11), and `MAX_MODEL_TEXT_BYTES = 32 * 1024` (model.ts:23).
+**CODEX:** requesting-code-review was invoked; subagent dispatch has been empirically broken in this environment (four prior spawn attempts returned generic greetings, one chain wandered for 30+ min), so the independent review was performed inline with fresh verification instead. Recommend a bounded re-run in a working host before merge if cross-model review is wanted.
+
+**VERDICT:** ENG CLEARED — ready to implement/merge. Post-implementation full-diff review (2026-08-03, branch `codex/model-lane-reliability`, HEAD after D2-D6). Six findings, all folded with the user's approval:
+1. [P1] D2 — top-3 auto-retrieval could return duplicate pattern classes (measured: habit brief returned onboarding twice); fixed with first-entry-per-patternType dedupe + similarity-fallback dedupe (`923eef7`).
+2. [P3] D3 — `evidenceSummaries()` computed twice in the prompt guard; hoisted (`cc866ce`).
+3. [P2] D4 — no test for invalid usage on the retry's second attempt; added, pins `call-failed` + 2 calls (`b119569`).
+4. [P2] D5 — no test for partial similarity fallback counts; added, pins truthful `resultCount` (`d066fb6`).
+5. [P3] D6 — no test for `layoutForm`-absent no-fabrication; added (`026fa49`).
+6. [P3] D7 — prompt-change eval gate recorded in TODOS.md (campaign: median 1107 vs target 1000).
+
+Full suite green (3190+ passed; the two full-run failures are the documented `mcp-smoke`/`wiring` ordering artifacts, both pass standalone). Dogfood PASS; `check:model-lane` reachable live.
 
 NO UNRESOLVED DECISIONS

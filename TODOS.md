@@ -333,6 +333,27 @@ on facts; critique/anti-pattern prose flips to trusted only after human sign).
 
 ---
 
+## Prompt-change eval gate for the model lane
+
+**What:** A small eval harness that runs the live brief set (login, finance,
+habit, "Make it better.", checkout, empty-state) against the configured lane
+and fails when median `designDirection` length exceeds the 1000 target, max
+exceeds 1400, or the first-try accept rate drops below the measured baseline.
+
+**Why:** Task 4C changed the model prompt and the only quality measurement is
+the manual live campaign (2026-08-02/03: median 1107 vs target 1000, max 1233
+vs 1400, first-try accept 3/6 with retry recovery verified). Prompt edits are
+the highest-leverage, least-guarded change class; a future prompt change could
+ship with no regression signal.
+
+**Trigger:** the next prompt edit, or when the `check:model-lane` script is
+extended with a length/accept assertion mode.
+
+**Depends on:** the lane staying configured with the real provider; the campaign
+numbers recorded in `.superpowers/sdd/progress.md`.
+
+---
+
 ## Coarse `design_solution` tool (single-call synthesis entry point)
 
 **What:** Ship one MCP tool, `design_solution(productContext, ...)`, that runs

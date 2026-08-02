@@ -352,7 +352,7 @@ server process enables an optional proposal lane:
 
 - `CREATE_UI_SPEC_MODEL_PROVIDER` — `openai`, `claude`, `gemini`, `mistral`,
   `minimax`, or `grok`;
-- `CREATE_UI_SPEC_MODEL_BASE_URL` — an `https:` endpoint URL;
+- `CREATE_UI_SPEC_MODEL_BASE_URL` — an `https:` endpoint URL with no userinfo (a non-`https:` URL or one carrying a userinfo credential is refused as `invalid-configuration`);
 - `CREATE_UI_SPEC_MODEL_API_KEY` — the endpoint credential;
 - `CREATE_UI_SPEC_MODEL_NAME` — the pinned model name.
 

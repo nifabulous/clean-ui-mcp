@@ -281,16 +281,24 @@ function requireEnvelope(response) {
 // request model, and carry the usage the C2 fail-closed path requires.
 async function startFakeProvider() {
   const tmpDir = mkdtempSync(join(tmpdir(), "c3-model-fake-provider-"));
-  execFileSync(
-    "openssl",
-    [
-      "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-      "-subj", "/CN=localhost",
-      "-keyout", join(tmpDir, "key.pem"),
-      "-out", join(tmpDir, "cert.pem"),
-    ],
-    { stdio: "ignore" },
-  );
+  try {
+    execFileSync(
+      "openssl",
+      [
+        "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+        "-subj", "/CN=localhost",
+        "-keyout", join(tmpDir, "key.pem"),
+        "-out", join(tmpDir, "cert.pem"),
+      ],
+      { stdio: "ignore" },
+    );
+  } catch (error) {
+    rmSync(tmpDir, { recursive: true, force: true });
+    throw new Error(
+      "openssl is required to run dogfood (self-signed cert for the fake model provider); install it or invoke the script from a machine with openssl",
+      { cause: error },
+    );
+  }
   const key = readFileSync(join(tmpDir, "key.pem"));
   const cert = readFileSync(join(tmpDir, "cert.pem"));
 

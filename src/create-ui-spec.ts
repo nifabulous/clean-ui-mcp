@@ -63,7 +63,6 @@ import {
   parseDesignArtifactEnvelope,
   sha256Canonical,
 } from "./create-ui-spec-contracts.js";
-import { pickDiverse } from "./recommend.js";
 import {
   parseDesignHandoff,
   NEUTRAL_WEB_TARGET,
@@ -478,9 +477,30 @@ async function resolveAutomaticRetrieval(
     limit: 20,
     searchMode: "keyword-only",
   });
-  // Slice to 20 BEFORE pickDiverse (the reader may ignore the limit).
-  const sliced = results.slice(0, 20);
-  const diverse = pickDiverse(sliced as SearchResult[], 5, 2);
+  // Plan 2: top-3 by rank — no product-diversity pick. A diverse-but-
+  // irrelevant slice was the original sin: it traded relevance for coverage
+  // and left thin briefs steered by label classes. The corpus long tail is
+  // honest about weak matches instead.
+  // Keyword search first; when it matches nothing, seed the id-based
+  // similarity index (findSimilar) from the plain search's top hit.
+  // SearchResult requires `score` and `searchMode` (src/corpus.ts:116-120);
+  // the similarity fallback yields { entry } rows, so the declared type is the
+  // common { entry } shape and the ranked slice is structurally assignable.
+  let top: { entry: CorpusEntryT }[] = results.slice(0, 3);
+  if (top.length === 0) {
+    const seeded = await dependencies.reader.search({
+      query: request.productContext,
+      platform: request.platform,
+      limit: 1,
+    });
+    const seed = seeded[0];
+    if (seed) {
+      const similar = dependencies.reader.findSimilar(seed.id, 3);
+      // SimilarResult is { entry: CorpusEntryT, score: number } —
+      // src/corpus.ts:414-427. The entry is always present.
+      top = similar.map((s) => ({ entry: s.entry }));
+    }
+  }
 
   // The recipe/system evidence is ALWAYS emitted first (evidence-1); retrieved
   // corpus observations follow at evidence-2, evidence-3, ... The recipe
@@ -491,7 +511,7 @@ async function resolveAutomaticRetrieval(
   const sanitized: SanitizedEvidence[] = [buildRecipeSystemEvidence()];
   let nextId = 2;
   let corpusCount = 0;
-  for (const r of diverse) {
+  for (const r of top) {
     const id = `evidence-${nextId++}`;
     sanitized.push(sanitizeCorpusObservation(id, r.entry));
     corpusCount++;

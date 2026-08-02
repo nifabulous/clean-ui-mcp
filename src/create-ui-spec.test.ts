@@ -235,10 +235,11 @@ describe("create-ui-spec producer — automatic retrieval", () => {
     }));
   });
 
-  it("enforces max two per product with backfill to five", async () => {
-    // 6 entries: 3 from product-A (top scores), 1 each from B, C, D. The recipe/
-    // system evidence (evidence-1) is always emitted first, so the envelope
-    // carries 1 recipe id + 5 corpus ids (backfilled to five).
+  it("keeps the top 3 ranked matches regardless of product diversity", async () => {
+    // 6 entries: 3 from product-A (top scores), 1 each from B, C, D. Plan 2
+    // dropped the product-diversity pick; automatic retrieval keeps the top 3
+    // by rank. The recipe/system evidence (evidence-1) is always emitted
+    // first, so the envelope carries 1 recipe id + 3 corpus ids.
     const corpus: FixtureEntry[] = [];
     const ranked: { entry: FixtureEntry; score: number }[] = [];
     const eA1 = entry("a1", "product-A"); corpus.push(eA1); ranked.push({ entry: eA1, score: 5.0 });
@@ -249,27 +250,22 @@ describe("create-ui-spec producer — automatic retrieval", () => {
     const eD = entry("d1", "product-D"); corpus.push(eD); ranked.push({ entry: eD, score: 4.5 });
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
-    // 5 corpus ids + the recipe id.
     const corpusIds = parsed.publicEvidenceIds.filter((id) => id !== RECIPE_EVIDENCE_ID);
-    expect(corpusIds.length).toBe(5);
+    expect(corpusIds.length).toBe(3);
   });
 
-  it("deterministic backfill when the fixture contains too few products", async () => {
-    // Only 2 distinct products, 4 entries — backfill selects all up to 4. The
-    // recipe/system evidence (evidence-1) is always emitted first, so the
-    // envelope carries 1 recipe id + 4 corpus ids.
+  it("keeps all matches when fewer than three are available", async () => {
+    // 2 distinct products, 2 entries — fewer than the top-3 cap, so both are
+    // kept. The recipe/system evidence (evidence-1) is always emitted first,
+    // so the envelope carries 1 recipe id + 2 corpus ids.
     const corpus: FixtureEntry[] = [];
     const ranked: { entry: FixtureEntry; score: number }[] = [];
     const e1 = entry("a1", "product-A"); corpus.push(e1); ranked.push({ entry: e1, score: 5 });
     const e2 = entry("a2", "product-A"); corpus.push(e2); ranked.push({ entry: e2, score: 4 });
-    const e3 = entry("b1", "product-B"); corpus.push(e3); ranked.push({ entry: e3, score: 3 });
-    const e4 = entry("b2", "product-B"); corpus.push(e4); ranked.push({ entry: e4, score: 2 });
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
-    // Fewer than 5 available — backfill returns min(available, 5) = 4 corpus
-    // ids, plus the always-present recipe id.
     const corpusIds = parsed.publicEvidenceIds.filter((id) => id !== RECIPE_EVIDENCE_ID);
-    expect(corpusIds.length).toBe(4);
+    expect(corpusIds.length).toBe(2);
     expect(parsed.retrieval.mode).toBe("keyword");
     expect(parsed.retrieval.modality).toBe("metadata");
   });
@@ -1581,4 +1577,49 @@ it("round-trips a real-shaped corpus entry through the widened projection", asyn
     canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: null, accent: "#2563eb",
   });
   expect(row.summary).toContain("accent #2563eb");
+});
+
+it("automatic retrieval caps at the top 3 ranked matches", async () => {
+  const corpus = Array.from({ length: 5 }, (_, i) => entry(`internal-${i}`, `product-${i}`));
+  const ranked = corpus.map((e) => ({ entry: e, score: 5 - Number((e.id as string).slice(-1)) }));
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard for finance ops", referenceIds: [], constraints: [], motionIntents: [] },
+    deps(corpus, ranked),
+  );
+  const corpusRows = out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation");
+  expect(corpusRows).toHaveLength(3);
+  expect(out.envelope.retrieval.resultCount).toBe(3);
+});
+
+it("falls back to the similarity index when keyword search matches nothing", async () => {
+  const seed = entry("internal-seed", "product-seed");
+  const similar = ["a", "b", "c"].map((k) => entry(`internal-${k}`, `product-${k}`));
+  const reader = {
+    ...makeReader([], []),
+    search: vi.fn(async () => [seed]),
+    findSimilar: vi.fn(() => similar.map((e) => ({ entry: e, score: 1 }))),
+  } as unknown as CorpusReader;
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    { reader, resolveReferenceToken: () => undefined },
+  );
+  const corpusRows = out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation");
+  expect(corpusRows).toHaveLength(3);
+  expect(out.envelope.retrieval.resultCount).toBe(3);
+});
+
+it("reports sparseCoverage when both keyword and similarity return nothing", async () => {
+  const reader = {
+    ...makeReader([], []),
+    search: vi.fn(async () => []),
+    findSimilar: vi.fn(() => []),
+  } as unknown as CorpusReader;
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    { reader, resolveReferenceToken: () => undefined },
+  );
+  expect(out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation")).toHaveLength(0);
+  // The EXISTING zero-match warning (create-ui-spec.ts:1159-1164). No new code.
+  expect(out.envelope.warnings.map((w) => w.code)).toContain("sparseCoverage");
+  expect(out.envelope.retrieval.mode).toBe("structured-fallback");
 });

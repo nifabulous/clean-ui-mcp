@@ -592,11 +592,59 @@ const ModelProposalTypographyTokens = z.object({
 export const ModelProposalSchema = z.object({
   status: z.literal("proposal-only"),
   disclaimer: z.literal("Proposal only; not accepted into token authority."),
-  designDirection: z.string().trim().min(1).max(2_000),
+  // 1000, not 4000. The 4000 bound grew out of a 6%-overshoot apology in the
+  // other direction — but the REAL live failure was a ~5000-char single-line
+  // designDirection causing the model to lose nesting track and emit a stray
+  // "}", so the bound is now SHRUNK to shrink the malformation surface. 1000
+  // chars is still a full paragraph. Still bounded, still strict, still
+  // rejected past the cap. (UiSpec's OWN designDirection below carries no max
+  // at all — that path is caller-authored, not model-authored.)
+  // CAP 2500, PROMPT SAYS 1000 — DELIBERATELY DIFFERENT NUMBERS.
+  //
+  // Live claude-sonnet-4-5 overshoots whatever length it is told, and the ratio
+  // GROWS as the instruction tightens: told 2000 it wrote 2118 (+6%), told 4000
+  // it wrote 5010 (+25%), told 1000 it wrote 1549 (+55%). The model has a
+  // natural length for this content and clamps toward it.
+  //
+  // So the prompt number and the schema cap do different jobs. The prompt's
+  // 1000 is the LEVER that pulls generated length down — and pulling it down is
+  // what killed the stray-brace derail, which only ever appeared on ~5000-char
+  // single-line values. The schema's 2500 is the BOUND, set above the measured
+  // overshoot so an honest answer is not rejected for being 549 chars over a
+  // number the model was never able to hit. Setting both to 1000 rejected every
+  // live call for a well-formed proposal.
+  // 2500, RAISED FROM 2000 ON MEASURED DATA — and deliberately still not the
+  // prompt's figure. An 8-brief live campaign put the worst case at 1629 chars
+  // (81% of a 2000 cap, 371 to spare); the longest answer came from the SHORTEST
+  // brief ("A login screen."), so brief complexity does not bound this and the
+  // margin could not be reasoned about, only measured. Raising the BOUND cannot
+  // reintroduce the stray-brace derail, because generated length is driven by
+  // the prompt figure, which stays at 1000. What it buys is not throwing away a
+  // well-formed 2100-char proposal — a false rejection costs an entire
+  // generation, and the derail only ever appeared around 5000.
+  designDirection: z.string().trim().min(1).max(2_500),
   colorTokens: ModelProposalColorTokens.optional(),
   typographyTokens: ModelProposalTypographyTokens.optional(),
-  motionNotes: z.array(z.string().trim().min(1).max(500)).max(8).default([]),
-  contentVoiceGuidance: z.string().trim().min(1).max(1_000).optional(),
+  // EVERY CAP IS 2.5x ITS PROMPT FIGURE. One rule, not three tuned numbers.
+  //
+  // Two live campaigns (20 runs) measured how far the model overruns whatever
+  // length the prompt states:
+  //
+  //   designDirection  prompt 1000 -> observed max 1629  (1.63x)
+  //   motionNotes[]    prompt  250 -> observed max  460  (1.84x)
+  //   voice            prompt  500 -> observed max  727  (1.45x)
+  //
+  // Tuning caps one at a time just moves the bottleneck: raising
+  // designDirection from 2000 to 2500 left motionNotes at 92% of ITS cap on the
+  // very next campaign, and the worst case came from "Make it better." — vague
+  // briefs elaborate MORE, so input size cannot bound this. 2.5x sits above the
+  // worst ratio yet measured (1.84x) with room, and applies uniformly so the
+  // next field to creep is already covered.
+  //
+  // Raising bounds is safe; the prompt figures are unchanged, and those are what
+  // drive generated length and what killed the stray-brace derail.
+  motionNotes: z.array(z.string().trim().min(1).max(625)).max(8).default([]),
+  contentVoiceGuidance: z.string().trim().min(1).max(1_250).optional(),
 }).strict();
 export type ModelProposal = z.infer<typeof ModelProposalSchema>;
 

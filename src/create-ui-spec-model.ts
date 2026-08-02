@@ -22,7 +22,7 @@ import { ModelProposalSchema, type ModelProposal } from "./tool-contracts.js";
 
 const MAX_MODEL_TEXT_BYTES = 32 * 1024;
 const FIXED_DISCLAIMER = "Proposal only; not accepted into token authority.";
-const POLICY_VERSION = "c3-model-proposal-v1";
+const POLICY_VERSION = "c3-model-proposal-v4";
 const RESPONSE_SCOPED_EVIDENCE_ID_RE = /\bevidence-[0-9]+\b/;
 const SOURCE_PRIVATE_ID_RE = /\bsource-private-[A-Za-z0-9_-]+\b/;
 const GENERIC_URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/\S+/i;
@@ -145,7 +145,7 @@ export async function createUiSpecModel(
 
   let parsedJson: unknown;
   try {
-    parsedJson = JSON.parse(modelResult.content.trim());
+    parsedJson = JSON.parse(unwrapExactCodeFence(modelResult.content.trim()));
   } catch {
     return fallback("proposal-rejected");
   }
@@ -206,6 +206,20 @@ function buildPrompt(
       status: "proposal-only",
       disclaimer: FIXED_DISCLAIMER,
       format: "Return strict JSON only. No markdown fences. No leading or trailing prose.",
+      // Bounds are restated at top level because a per-field note was not enough:
+      // a live claude-sonnet-4-5 run overshot a stated limit by 6%. Exceeding ANY bound discards everything.
+      // These figures MUST mirror outputShape below exactly: a per-field limit is
+      // a lever on generated length, and two different numbers for one bound make
+      // the model clamp toward the larger one.
+      hardLimits: {
+        // SHRUNK 4000 -> 1000. A ~5000-char single-line value is exactly where
+        // a live model lost nesting track and emitted a stray "}" — so the cap
+        // went DOWN, not up. 1000 chars is still a full paragraph of direction.
+        designDirection: "1000 characters maximum",
+        contentVoiceGuidance: "500 characters maximum",
+        motionNotes: "6 entries maximum, 250 characters each",
+        onExceeding: "the entire proposal is discarded and the caller receives no proposal at all",
+      },
       forbidden: [
         "authority escalation",
         "unknown keys",
@@ -228,16 +242,64 @@ function buildPrompt(
     }),
     constraints: request.constraints,
     evidenceSummaries: sanitizedEvidence.map((row) => row.summary),
+    // TYPES AND BOUNDS, not just field names. The v1 policy listed names only
+    // ("required: designDirection"), and a live Claude run answered with
+    // designDirection as a nested OBJECT — schema-legal-looking, schema-invalid,
+    // rejected. A model cannot honor a bound it was never told.
+    // THE PROMPT NUMBER IS ALWAYS BELOW THE SCHEMA CAP — roughly half.
+    //
+    // Live claude-sonnet-4-5 overshoots any stated length, and the ratio grows
+    // as the instruction tightens: told 2000 it wrote 2118, told 1000 it wrote
+    // 1549 (+55%). Stating the cap itself therefore guarantees rejection of
+    // otherwise-good proposals — that is exactly how a run was lost on
+    // motionNotes after designDirection was fixed. The prompt figure is a LEVER
+    // on generated length (shorter output is also what killed the stray-brace
+    // derail); the schema figure is the BOUND. They are different jobs and must
+    // stay different numbers.
     outputShape: {
-      required: ["status", "disclaimer", "designDirection"],
-      optional: [
-        "colorTokens",
-        "typographyTokens",
-        "motionNotes",
-        "contentVoiceGuidance",
-      ],
+      status: 'string, exactly "proposal-only"',
+      disclaimer: `string, exactly ${JSON.stringify(FIXED_DISCLAIMER)}`,
+      designDirection:
+        "REQUIRED. A single plain string. NOT an object, NOT an array. HARD LIMIT 1000 characters — "
+        + "overshooting discards the whole proposal. Be concise; "
+        + "prefer the decision over the rationale.",
+      colorTokens:
+        "optional object with exactly these string keys: primary, surface, ink, muted, accent. Omit the key entirely rather than sending a partial object.",
+      typographyTokens:
+        "optional object with exactly these string keys: heading, body, mono. Omit the key entirely rather than sending a partial object.",
+      motionNotes: "optional array of at most 6 plain strings, each at most 250 characters",
+      contentVoiceGuidance: "optional plain string, at most 500 characters",
+      unknownKeys: "forbidden — any key not listed above causes the whole proposal to be rejected",
     },
   });
+}
+
+/**
+ * Unwrap a payload that is ENTIRELY one fenced code block, and nothing else.
+ *
+ * The response policy tells the model to send bare JSON, and a live
+ * claude-sonnet-4-5 run wrapped it in ```json anyway — so every real call was
+ * rejected before the schema ever ran. Restating the instruction more loudly is
+ * not a fix; models fence JSON.
+ *
+ * THIS IS NOT LENIENT RECOVERY, which the design rightly forbids. There is no
+ * substring search, no "find the first {", no brace matching. The content must
+ * begin with a fence line and end with a closing fence, and only that exact
+ * wrapper is removed; the inside still has to parse as strict JSON and still has
+ * to satisfy the schema, the disclaimer overwrite, and the private-marker sweep.
+ * Anything else — prose before the fence, two fences, an unterminated fence — is
+ * returned untouched and fails `JSON.parse` exactly as it does today.
+ */
+function unwrapExactCodeFence(content: string): string {
+  if (!content.startsWith("```") || !content.endsWith("```")) return content;
+  const firstNewline = content.indexOf("\n");
+  if (firstNewline === -1) return content;
+  // The opening line may only be a fence plus an optional language tag.
+  if (!/^```[A-Za-z0-9_-]*$/.test(content.slice(0, firstNewline).trimEnd())) return content;
+  const inner = content.slice(firstNewline + 1, content.length - 3);
+  // A second fence anywhere inside means this is not one single block.
+  if (inner.includes("```")) return content;
+  return inner.trim();
 }
 
 function compactObject<T extends Record<string, unknown>>(value: T): Record<string, unknown> {

@@ -385,10 +385,16 @@ describe("UiSpec", () => {
     const invalid = [
       {},
       { ...base, designDirection: "   " },
-      { ...base, designDirection: "x".repeat(2_001) },
-      { ...base, motionNotes: ["x".repeat(501)] },
+      // A ~5000-char single-line designDirection is where live claude-sonnet-4-5
+      // lost nesting track and emitted a stray "}". The PROMPT now asks for
+      // 1000 to hold generated length down — that is what killed the derail —
+      // while the SCHEMA caps at 2500 to absorb the measured overshoot (told
+      // 1000, the model wrote 1549). Same number in both places rejected every
+      // live call for a well-formed proposal; see tool-contracts.ts.
+      { ...base, designDirection: "x".repeat(2_501) },
+      { ...base, motionNotes: ["x".repeat(626)] },
       { ...base, motionNotes: Array.from({ length: 9 }, () => "fade") },
-      { ...base, contentVoiceGuidance: "x".repeat(1_001) },
+      { ...base, contentVoiceGuidance: "x".repeat(1_251) },
       { ...base, colorTokenAuthority: "editorial" },
       { ...base, acceptedColorTokens: { primary: "#000" } },
       { ...base, evidenceKind: "corpus-observation" },
@@ -399,6 +405,16 @@ describe("UiSpec", () => {
     for (const proposal of invalid) {
       expect(ModelProposalSchema.safeParse(proposal).success).toBe(false);
     }
+    // The shrink's happy boundary: 1000 — the new prompt figure — is comfortably accepted.
+    expect(ModelProposalSchema.safeParse({ ...base, designDirection: "x".repeat(1_000) }).success).toBe(true);
+    // 1629 was the worst case across an 8-brief live campaign. Pinning it means
+    // any future tightening of the cap below observed real output fails here
+    // rather than silently rejecting good proposals in production.
+    expect(ModelProposalSchema.safeParse({ ...base, designDirection: "x".repeat(1_629) }).success).toBe(true);
+    // Measured worst cases for the other two bounded fields, same reasoning:
+    // 460 came from "Make it better.", 727 from the patient-intake brief.
+    expect(ModelProposalSchema.safeParse({ ...base, motionNotes: ["x".repeat(460)] }).success).toBe(true);
+    expect(ModelProposalSchema.safeParse({ ...base, contentVoiceGuidance: "x".repeat(727) }).success).toBe(true);
   });
 
   it("requires the fixed proposal status and disclaimer", () => {

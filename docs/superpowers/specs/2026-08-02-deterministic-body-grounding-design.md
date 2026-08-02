@@ -45,7 +45,8 @@ pattern gap.
 - Deterministic synthesis: populate `designDirection`, `rejectedDefaults`,
   `colorTokens`, `typographyTokens`, `layoutRegions`, and related spec fields
   from matched entries, with honest unavailability where coverage does not
-  exist.
+  exist. (`rejectedDefaults` is excluded by the served-content posture —
+  see below — and stays `unavailable`.)
 
 **Out:** model-lane fixes (Plan 1), provenance governance, coarse
 `design_solution` tool, learning loop.
@@ -58,9 +59,11 @@ Before any synthesis, an audit snapshot is committed. A small script
 (`scripts/audit-corpus-coverage.mjs`, modeled on `corpus-stats`) emits the
 coverage table above from `corpus/entries.json` and fails if any field used by
 the deterministic synthesizer has coverage below its declared floor:
-`visual.colorRoles` ≥ 600, `layout` ≥ 600, `voice` ≥ 500. The audit is checked
-into the repo (e.g. `docs/superpowers/specs/coverage-2026-08-02.md`) and
-re-run on demand. It defines what "filled" can honestly mean.
+`visual.colorRoles` ≥ 600, `layout` ≥ 600. (`voice` stays in the coverage
+table for awareness but is not a synthesis floor — the served-content posture
+excludes written-analysis fields.) The audit is checked into the repo (e.g.
+`docs/superpowers/specs/coverage-2026-08-02.md`) and re-run on demand. It
+defines what "filled" can honestly mean.
 
 ### Auto-retrieval (shared grounding)
 
@@ -71,13 +74,41 @@ no `referenceIds` resolves to the recipe-only evidence set. Change:
   keyword search first (existing `CorpusReader.searchRanked`), falling back to
   embeddings (`findSimilar`) when available, capped at top N=3 entries.
 - Each matched entry becomes a `corpus-observation` evidence row whose summary
-  is the entry's real `critique`/`whatToSteal` content (sanitized), never a
-  stub.
+  is a DERIVED STRUCTURED description built by one shared summary builder
+  (`src/create-ui-spec-deterministic.ts`): patternType, region count,
+  spacingDensity, cornerStyle, usesShadows/usesBorders flags, dominant/accent
+  colors, and typePairing. Never verbatim `critique`/`whatToSteal` prose, and
+  never a stub.
 - No match at all → zero evidence rows; both the deterministic body and the
   model prompt then omit evidence rather than fabricate it (the Plan 1
   grounding rule becomes the general rule).
 
 This makes the deterministic body and the model lane share one grounding path.
+
+### Served-content posture (C3 resolution — product decision, 2026-08-02)
+
+The registered `create_ui_spec` tool description promises "No corpus content,
+path, url or product identity is ever returned — corpus grounding appears only
+as opaque evidence ids." Serving real `critique`/`whatToSteal` prose as
+`evidence[].summary` would break that promise with auto-tagger output that has
+zero human provenance (measured: 787 auto/auto-reviewed, 0 human). Resolved:
+
+1. **Served summaries are derived structured facts only** — synthesized by the
+   one summary builder above, which is the same builder that feeds the model
+   prompt. Served bytes and prompt content stay consistent; there is no
+   divergence to explain.
+2. **`antiPatterns` prose is not served and not sent to the model.**
+   `rejectedDefaults` therefore stays `unavailable` with a reason in
+   `unavailableDecisions` (see Deterministic synthesis).
+3. **`voice`/`mood` are not served.** Both are written-analysis fields with
+   thinner coverage; they stay `unavailable` until the governance flip below.
+4. **Upgrade path:** when provenance governance lands (human-signed entries),
+   revisit option 1 as a deliberate contract change — update the tool
+   description, then serve signed prose. Until then, prose is never on the
+   wire. This is a gated decision, not an omission.
+
+The tool description is preserved unchanged; derived structured summaries are
+synthesized content, not corpus content.
 
 ### Deterministic synthesis
 
@@ -86,13 +117,18 @@ fixture-testable) that consumes the resolved evidence and the request, and
 produces the non-model spec body. Rules:
 
 - **`designDirection`:** synthesized from the top matched entry's
-  `visual`/`layout`/`voice` fields plus the request context, written in the
-  recipe's own voice (operator content, `recipe-system` authority), citing the
-  evidence ids it draws from. If no entry matched the brief class, the section
-  states that explicitly ("no corpus match for this brief class") instead of
-  generating direction.
+  `visual`/`layout` STRUCTURED fields (colors, density, corner style, shadow/
+  border flags, spacing, type pairing) plus the request context, written in
+  the recipe's own voice (operator content, `recipe-system` authority), citing
+  the evidence ids it draws from. No `critique`/`whatToSteal`/`voice` prose is
+  quoted or paraphrased into it. If no entry matched the brief class, the
+  section states that explicitly ("no corpus match for this brief class")
+  instead of generating direction.
 - **`rejectedDefaults`:** the recurring `antiPatterns` from matched entries,
-  capped at 3, each cited to its evidence id.
+  capped at 3, each cited to its evidence id — NOT in this plan. `antiPatterns`
+  is prose and is excluded by the served-content posture above. `rejectedDefaults`
+  stays `unavailable` with a reason in `unavailableDecisions` until the
+  governance flip permits serving signed prose.
 - **`colorTokens`:** plurality merge of `visual.colorRoles` across matched
   entries (the existing `design-prompt.ts` merge logic is extracted and
   reused). Populated only when ≥ 3 matched entries contribute; otherwise the
@@ -101,11 +137,15 @@ produces the non-model spec body. Rules:
 - **`typographyTokens`:** same plurality rule over `visual.typePairing`.
 - **`layoutRegions` / `responsiveBehavior`:** from the matched entries'
   `layout` field when present.
-- **`voice` / `mood`:** from matched entries; mood is populated only when
-  coverage exists (currently 22 entries), otherwise unavailable.
+- **`voice` / `mood`:** stay `unavailable` with reasons — both are
+  written-analysis fields excluded by the served-content posture (mood also
+  has only 22-entry coverage).
 - **Authority:** everything above is `recipe-system`/`editorial` authority.
-  `proposalOnly` stays `false` — the deterministic body is not model output.
-  Accepted-token positions remain null; no authority promotion.
+  `spec.modelProposal` stays absent on this path — the deterministic body is
+  not model output. (Plan 1 cut its proposed `proposalOnly` flag as redundant
+  with `data.modelProposal`, which is already on the wire; assert against
+  `modelProposal` directly.) Accepted-token positions remain null; no
+  authority promotion.
 
 ### Contracts
 
@@ -113,6 +153,8 @@ produces the non-model spec body. Rules:
 - `EvidenceKindSchema` already has `recipe-system`; auto-retrieved rows are
   `corpus-observation` (existing kind). No new evidence kinds.
 - New warning code `noCorpusMatch` when retrieval returns zero rows.
+- The registered `create_ui_spec` tool description is unchanged (see
+  Served-content posture).
 - The corpus-freeze invariant is preserved: nothing writes to
   `corpus/entries.json`; auto-retrieval only reads.
 
@@ -125,14 +167,20 @@ create_ui_spec (no model)
       referenceIds empty → brief-similarity top-3 (keyword → embeddings)
       zero matches → no evidence rows, warning noCorpusMatch
   → createUiSpecDeterministic(evidence, request)
-      → designDirection / rejectedDefaults / tokens / layout / voice
+      → designDirection / colorTokens / typographyTokens / layoutRegions
       → unavailableDecisions for fields without coverage
-  → envelope (recipe authority, proposalOnly false)
+        (rejectedDefaults, voice, mood — excluded by the served-content posture)
+  → envelope (recipe authority, no modelProposal)
 ```
 
-The model path consumes the same resolved evidence via the Plan 1 grounding
-filter, so a no-reference request with matches now reaches the model with real
-summaries instead of stubs.
+**Plan 2 REINTRODUCES `evidenceSummaries`; it does not inherit a filter.**
+Plan 1 removes the key from `buildPrompt` outright, because every value it
+could hold at that point is a stub or a content-free pattern label. Plan 2 adds
+the key back once auto-retrieval produces summaries with real derived content,
+together with the non-empty guard that had no live path in Plan 1 (omit the key
+when retrieval returns zero rows). This is an addition to `buildPrompt`, and it
+requires a second `POLICY_VERSION` bump (`c3-model-proposal-v5` →
+`v6`) — the prompt changes again.
 
 ## Error handling
 
@@ -148,17 +196,23 @@ summaries instead of stubs.
 - **Audit:** `scripts/audit-corpus-coverage.mjs` passes on the current corpus
   and fails when a field drops below its floor (fixture corpus).
 - **Auto-retrieval:** no references + fixture corpus → top-3 evidence rows with
-  real summaries; zero-match brief → zero rows + `noCorpusMatch`; references
-  non-empty → unchanged path.
+  derived structured summaries; zero-match brief → zero rows +
+  `noCorpusMatch`; references non-empty → unchanged path. Assert that no
+  verbatim `critique`/`whatToSteal`/`voice` prose appears in any served summary
+  or in the model prompt (fixture strings are planted in the corpus to prove
+  exclusion).
 - **Synthesis:** fixture corpus → deterministic `designDirection`,
-  `rejectedDefaults`, token plurality, and explicit unavailability; assertions
-  that authority stays `recipe-system`, `proposalOnly` false, accepted tokens
-  null.
+  token plurality, layout regions, and explicit unavailability (including
+  `rejectedDefaults`, `voice`, and `mood`); assertions that authority stays
+  `recipe-system`, `spec.modelProposal` absent, accepted tokens null.
 - **Freeze:** corpus bytes unchanged before/after every test (existing pattern
   in `create-ui-spec-model-path.test.ts`).
-- **Regression:** full `vitest` suite; the Plan 1 grounding tests now assert
-  that a no-reference request WITH matches carries real summaries to the model
-  prompt.
+- **Regression:** full `vitest` suite. Plan 1's grounding test asserts the
+  `evidenceSummaries` key is absent UNCONDITIONALLY; Plan 2 must REWRITE it,
+  not extend it — the new assertions are "present with real summaries when
+  retrieval matched" and "absent when it did not". Leaving the Plan 1
+  assertion in place would fail the moment Plan 2 lands, which is the intended
+  signal that the two plans are coupled here.
 
 ## Success criteria
 
@@ -166,7 +220,8 @@ For the three session briefs (login, finance analytics, habit tracker) with no
 model configured and no references: `create_ui_spec` returns a populated
 `designDirection` with cited evidence for brief classes the corpus covers,
 populated tokens where ≥ 3 matched entries contribute, and explicit honest
-unavailability elsewhere. No stub strings appear in the served spec, evidence,
+unavailability elsewhere (including `rejectedDefaults`, `voice`, `mood`). No
+stub strings and no verbatim corpus prose appear in the served spec, evidence,
 or (via Plan 1) the model prompt.
 
 ## Non-goals

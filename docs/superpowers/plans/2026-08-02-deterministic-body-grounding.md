@@ -228,9 +228,13 @@ const LayoutRoleEnum = z.enum([
 /**
  * The allowlist of structured-facts keys the recipe may populate. Closed set
  * of enum/count/boolean/hex fields — NO free-form prose. Every row is typed so
- * a stray private excerpt cannot sneak in. `colorRoles` is the entry's five
- * visual color roles; `typePairing` is the DERIVED "display / body" string;
- * `layoutForm`/`layoutRoles` are the wireframe's closed tokens.
+ * a stray private excerpt cannot sneak in. `colorRoles` mirrors the CORPUS
+ * schema exactly — `canvas/surface/ink/muted/accent` with `muted` NULLABLE
+ * (src/schema.ts:420-426) — NOT UiSpec's five-token vocabulary; the
+ * synthesizer maps roles into UiSpec ColorTokens via the existing
+ * design-prompt.ts merge semantics (see Task 3). `typePairing` is the DERIVED
+ * "display / body" string; `layoutForm`/`layoutRoles` are the wireframe's
+ * closed tokens.
  */
 const StructuredFactsSchema = z
   .object({
@@ -245,10 +249,10 @@ const StructuredFactsSchema = z
     usesBorders: z.boolean().optional(),
     accentColor: HexColor.optional(),
     colorRoles: z.object({
-      primary: HexColor,
+      canvas: HexColor,
       surface: HexColor,
       ink: HexColor,
-      muted: HexColor,
+      muted: HexColor.nullable(),
       accent: HexColor,
     }).optional(),
     typePairing: z.string().trim().min(1).max(120).optional(),
@@ -297,10 +301,10 @@ In `src/create-ui-spec.ts`, in `sanitizeCorpusObservation`, after the existing `
   if (typeof visual?.usesBorders === "boolean") structuredFacts.usesBorders = visual.usesBorders;
   if (visual?.accentColor) structuredFacts.accentColor = visual.accentColor;
   if (visual?.colorRoles) structuredFacts.colorRoles = {
-    primary: visual.colorRoles.primary,
+    canvas: visual.colorRoles.canvas,
     surface: visual.colorRoles.surface,
     ink: visual.colorRoles.ink,
-    muted: visual.colorRoles.muted,
+    muted: visual.colorRoles.muted, // nullable per the corpus schema
     accent: visual.colorRoles.accent,
   };
   const pairing = visual?.typePairing;
@@ -315,12 +319,72 @@ In `src/create-ui-spec.ts`, in `sanitizeCorpusObservation`, after the existing `
 
 (`visual` is non-optional on `CorpusEntryT`; the optional chaining is defensive only.)
 
-- [ ] **Step 5: Run the affected suites**
+- [ ] **Step 5: Write the real-corpus round-trip test**
+
+Append to `src/create-ui-spec.test.ts`:
+
+```ts
+it("round-trips a real-shaped corpus entry through the widened projection", async () => {
+  // The exact bug class this pins: a `primary`-shaped fact (the old draft)
+  // made every real entry fail SanitizedEvidenceSchema and look like a
+  // retrieval failure. A real-shaped entry — canvas/surface/ink/muted/accent,
+  // muted nullable (src/schema.ts:420-426) — must survive with colorRoles
+  // intact and a summary that includes the derived accent.
+  const entry = {
+    patternType: "dashboard",
+    layout: { form: "three-column", regions: [{ role: "primary-nav" }, { role: "main-canvas" }] },
+    visual: {
+      colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: null, accent: "#2563eb" },
+      spacingDensity: "compact", cornerStyle: "slight-round",
+      usesShadows: false, usesBorders: true,
+      accentColor: "#2563eb", typePairing: { display: "Inter", body: "Inter" },
+    },
+  } as unknown as CorpusEntryT;
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    makeCreateUiSpecDependencies(makeReaderWithRanked([entry])),
+  );
+  const row = out.sanitizedEvidence.find((e) => e.kind === "corpus-observation");
+  expect(row).toBeDefined();
+  if (!row) return;
+  expect(SanitizedEvidenceSchema.safeParse(row).success).toBe(true);
+  expect(row.structuredFacts.colorRoles).toEqual({
+    canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: null, accent: "#2563eb",
+  });
+  expect(row.summary).toContain("accent #2563eb");
+});
+```
+
+`SanitizedEvidenceSchema` and `CorpusEntryT` are already imported in
+`src/create-ui-spec.test.ts`; `makeReaderWithRanked` is the Task 2 reader helper
+(or the existing ranked helper in the same file).
+
+Run: `npx vitest run src/create-ui-spec.test.ts -t "round-trips"`
+Expected: FAIL — the current projection drops colorRoles/spacingDensity/corners.
+
+- [ ] **Step 6: Update the pinned production-template fixtures (required, not conditional)**
+
+The old `buildCorpusObservationSummary` template (`"<pattern> reference with N
+regions"`) is pinned verbatim in fixtures that will NOT fail on their own — the
+content screen accepts any string, so a stale pin is silent. Both must be
+updated to the new derived sentence:
+
+- `src/create-ui-spec-contracts.test.ts:349` ("still accepts every summary the
+  production templates emit") — replace `"dashboard reference with 3 regions"`
+  with the new derived form (e.g. `"dashboard reference, 3 regions, compact
+  spacing, slight-round corners, no shadows, borders, accent #2563eb, Inter /
+  Inter, layout three-column"`) and update the "three real producer templates"
+  comment.
+- `src/create-ui-spec.test.ts` — any assertion or comment matching the old
+  template must be updated; verify none remain with
+  `rg -n "reference with" src/` (expected: no matches).
+
+- [ ] **Step 7: Run the affected suites**
 
 Run: `npx vitest run src/c3/safe-aggregator.test.ts src/create-ui-spec-contracts.test.ts src/create-ui-spec.test.ts src/create-ui-spec-model-path.test.ts`
-Expected: PASS. If any test pins the exact old summary template (`"<pattern> reference with N regions"`), update that fixture to the new derived sentence (search for `reference with` in `src/**/*.test.ts`).
+Expected: PASS, with no fixture or comment pinning the old template.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add src/schema.ts src/create-ui-spec-contracts.ts src/c3/safe-aggregator.ts src/create-ui-spec.ts src/c3/safe-aggregator.test.ts
@@ -342,6 +406,13 @@ only, keeping the recipe-owned no-prose invariant."
 **Interfaces:**
 - Consumes: `dependencies.reader.searchRanked` (existing), `dependencies.reader.search` (existing, zero-match seed path), `RetrievalState` (existing).
 - Produces: top-3 ranked corpus observations (no diversity pick); `noCorpusMatch` warning code; zero-match path unchanged in retrieval state (`structured-fallback`).
+
+**Prerequisite (required):** the similarity fallback in Step 3 depends on the
+embedding index. `findSimilarEntries` returns `[]` when the index is missing
+(`src/corpus.ts:414-419` — documented "caller tells the user to run
+build-index"), so a fresh checkout silently falls through to `noCorpusMatch`
+even when the corpus has matches. Run `npm run build-index` once before Step 3
+and include it in the task's verification in Step 5.
 
 - [ ] **Step 1: Write the failing retrieval test**
 
@@ -396,18 +467,43 @@ Still in `resolveAutomaticRetrieval`, make the selection fall back to the id-bas
     const seed = seeded[0];
     if (seed) {
       const similar = dependencies.reader.findSimilar(seed.id, 3);
-      top = similar.map((s) => {
-        // SimilarResult carries the matched entry (see src/corpus.ts); if the
-        // concrete shape returns ids instead of entries, resolve via
-        // dependencies.reader.getById(s.id) and skip missing ids.
-        const entry = (s as { entry?: CorpusEntryT }).entry ?? dependencies.reader.getById((s as { id: string }).id);
-        return entry ? { entry } : null;
-      }).filter((r): r is { entry: CorpusEntryT } => r !== null);
+      // SimilarResult is { entry: CorpusEntryT, score: number } —
+      // src/corpus.ts:414-427. The entry is always present.
+      top = similar.map((s) => ({ entry: s.entry }));
     }
   }
 ```
 
 `CorpusEntryT` is already imported in `src/create-ui-spec.ts`. The retrieval-state accounting stays: a successful similarity expansion reports `mode: "keyword"` with `corpusCount` rows (the state machine is unchanged); zero rows still lands in the `structured-fallback` branch.
+
+Add the matching test to `src/create-ui-spec.test.ts`:
+
+```ts
+it("falls back to the similarity index when keyword search matches nothing", async () => {
+  const reader = {
+    ...baseReader(), // existing helper: searchRanked resolves []
+    search: vi.fn(async () => [seedEntry()]),        // one seed
+    findSimilar: vi.fn(() => [similarResult(seedEntry()), similarResult(entryB()), similarResult(entryC())]),
+  } as unknown as CorpusReader;
+  const out = await createUiSpecForAdapter(noRefRequest(), makeCreateUiSpecDependencies(reader));
+  const corpusRows = out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation");
+  expect(corpusRows).toHaveLength(3);
+  expect(out.envelope.retrieval.resultCount).toBe(3);
+});
+
+it("reports noCorpusMatch when both keyword and similarity return nothing", async () => {
+  const reader = {
+    ...baseReader(),
+    search: vi.fn(async () => []),
+    findSimilar: vi.fn(() => []),
+  } as unknown as CorpusReader;
+  const out = await createUiSpecForAdapter(noRefRequest(), makeCreateUiSpecDependencies(reader));
+  expect(out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation")).toHaveLength(0);
+  expect(out.envelope.warnings.map((w) => w.code)).toContain("noCorpusMatch");
+});
+```
+
+`baseReader`, `seedEntry`, `similarResult`, and `noRefRequest` are helpers to add in the same test file following its existing reader-fixture pattern. `CorpusReader` and `vi` are already imported there.
 
 - [ ] **Step 4: Add the `noCorpusMatch` warning code**
 
@@ -477,18 +573,18 @@ describe("createUiSpecDeterministic", () => {
       observation("evidence-2", {
         pattern: "dashboard", spacingDensity: "compact", cornerStyle: "slight-round",
         usesShadows: false, usesBorders: true, accentColor: "#2563eb",
-        colorRoles: { primary: "#2563eb", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: "#2563eb" },
+        colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: "#2563eb" },
         layoutForm: "three-column", layoutRoles: ["primary-nav", "main-canvas", "detail-rail"],
       }),
       observation("evidence-3", {
         pattern: "dashboard", spacingDensity: "compact", cornerStyle: "sharp",
         usesShadows: false, usesBorders: true,
-        colorRoles: { primary: "#1d4ed8", surface: "#ffffff", ink: "#0f172a", muted: "#64748b", accent: "#1d4ed8" },
+        colorRoles: { canvas: "#f8fafc", surface: "#ffffff", ink: "#0f172a", muted: "#64748b", accent: "#1d4ed8" },
       }),
       observation("evidence-4", {
         pattern: "data-table", spacingDensity: "compact", cornerStyle: "slight-round",
         usesShadows: false, usesBorders: true,
-        colorRoles: { primary: "#2563eb", surface: "#f8fafc", ink: "#111827", muted: "#6b7280", accent: "#2563eb" },
+        colorRoles: { canvas: "#f8fafc", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: "#2563eb" },
       }),
     ] as never;
 
@@ -496,6 +592,9 @@ describe("createUiSpecDeterministic", () => {
 
     expect(out.designDirection).toContain("evidence-2");
     expect(out.designDirection).toContain("compact");
+    // UiSpec primary and accent both resolve to the corpus accent plurality
+    // (the corpus records ONE interactive color; the vocabulary split is a
+    // documented mapping, not an invention).
     expect(out.colorTokens).toEqual({
       primary: "#2563eb", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: "#2563eb",
     });
@@ -512,8 +611,17 @@ describe("createUiSpecDeterministic", () => {
 
   it("never populates tokens from fewer than three contributing entries", () => {
     const evidence = [
-      observation("evidence-2", { pattern: "dashboard", colorRoles: { primary: "#2563eb", surface: "#fff", ink: "#111", muted: "#666", accent: "#2563eb" } }),
+      observation("evidence-2", { pattern: "dashboard", colorRoles: { canvas: "#fff", surface: "#fff", ink: "#111", muted: "#666", accent: "#2563eb" } }),
       observation("evidence-3", { pattern: "dashboard" }),
+    ] as never;
+    expect(createUiSpecDeterministic(evidence, REQUEST).colorTokens).toBeNull();
+  });
+
+  it("never fabricates default tokens when no entry has colorRoles", () => {
+    const evidence = [
+      observation("evidence-2", { pattern: "dashboard", spacingDensity: "compact" }),
+      observation("evidence-3", { pattern: "dashboard", spacingDensity: "compact" }),
+      observation("evidence-4", { pattern: "dashboard", spacingDensity: "compact" }),
     ] as never;
     expect(createUiSpecDeterministic(evidence, REQUEST).colorTokens).toBeNull();
   });
@@ -525,11 +633,26 @@ Expected: FAIL — module does not exist.
 
 - [ ] **Step 2: Implement the module**
 
+First, export the existing module-local `plurality` helper from
+`src/design-prompt.ts` (it already implements the majority-vote counting used
+by `generateBrief`) so the new module reuses it instead of duplicating the
+function:
+
+```ts
+export function plurality<T>(values: readonly T[]): T | undefined { /* existing body, unchanged */ }
+```
+
+The role MAPPING stays per-consumer — `generateBrief` emits `canvas` while the
+deterministic synthesizer emits UiSpec `primary = accent` (the corpus records
+one interactive color; the plan's documented mapping) — but the counting logic
+is shared, so there is exactly one `plurality` in the codebase.
+
 Create `src/create-ui-spec-deterministic.ts`:
 
 ```ts
 import type { SanitizedEvidence } from "./create-ui-spec-contracts.js";
 import type { CreateUiSpecRequest } from "./create-ui-spec-contracts.js";
+import { plurality } from "./design-prompt.js";
 
 export interface DeterministicColorTokens {
   primary: string;
@@ -553,18 +676,6 @@ export interface DeterministicSynthesis {
   colorTokens: DeterministicColorTokens | null;
   layoutRegions: readonly DeterministicLayoutRegion[];
   responsiveBehavior: readonly string[];
-}
-
-/** Count occurrences of a value in a list. */
-function plurality<T>(values: readonly T[]): T | undefined {
-  const counts = new Map<T, number>();
-  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
-  let best: T | undefined;
-  let bestCount = 0;
-  for (const [v, c] of counts) {
-    if (c > bestCount) { best = v; bestCount = c; }
-  }
-  return best;
 }
 
 function majority(values: readonly boolean[]): boolean | undefined {
@@ -592,23 +703,20 @@ export function createUiSpecDeterministic(
   const ids = observations.map((o) => o.id);
   const facts = observations.map((o) => o.structuredFacts);
 
-  // Color-token plurality: one vote per contributing entry, per role.
-  const roleVotes = { primary: [], surface: [], ink: [], muted: [], accent: [] } as Record<string, string[]>;
-  for (const f of facts) {
-    if (!f.colorRoles) continue;
-    for (const role of Object.keys(roleVotes)) {
-      const value = f.colorRoles[role as keyof typeof f.colorRoles];
-      if (value) roleVotes[role]!.push(value);
-    }
-  }
-  const contributors = Math.min(...Object.values(roleVotes).map((v) => v.length));
-  const colorTokens = contributors >= 3
+  // Color-token plurality over the CORPUS role shape (canvas/surface/ink/
+  // muted/accent, muted nullable — src/schema.ts:420-426), then mapped into
+  // UiSpec ColorTokens with the same defaults the existing design-prompt.ts
+  // merge uses. NEVER run on fewer than 3 contributing entries, and never when
+  // zero entries have colorRoles (Math.min over empty arrays is Infinity —
+  // that bug would fabricate a default palette).
+  const withRoles = facts.filter((f) => f.colorRoles);
+  const colorTokens = withRoles.length >= 3
     ? {
-        primary: plurality(roleVotes.primary) ?? "#000000",
-        surface: plurality(roleVotes.surface) ?? "#ffffff",
-        ink: plurality(roleVotes.ink) ?? "#111111",
-        muted: plurality(roleVotes.muted) ?? "#888888",
-        accent: plurality(roleVotes.accent) ?? "#000000",
+        primary: plurality(withRoles.map((f) => f.colorRoles!.accent)) ?? "#3b82f6",
+        surface: plurality(withRoles.map((f) => f.colorRoles!.surface)) ?? "#f8f8f8",
+        ink: plurality(withRoles.map((f) => f.colorRoles!.ink)) ?? "#111111",
+        muted: plurality(withRoles.map((f) => f.colorRoles!.muted).filter((v): v is string => v !== null)) ?? "#888888",
+        accent: plurality(withRoles.map((f) => f.colorRoles!.accent)) ?? "#3b82f6",
       }
     : null;
 
@@ -667,29 +775,65 @@ In `src/create-ui-spec.ts`, in `assembleSpec`, after `const specFields = mapCand
 ```ts
   // Deterministic synthesis (Plan 2): corpus-grounded direction, token
   // plurality, and layout regions — ONLY on the no-model path. When a model
-  // proposal is present the UiSpec superRefine requires root tokens to stay
-  // null, so the synthesizer's tokens are applied only when `proposal` is
-  // undefined.
-  const synthesis = createUiSpecDeterministic(evidence, request);
+  // proposal is present, NONE of the synthesis applies: the root direction
+  // keeps the recipe echo, root tokens stay null (UiSpec superRefine), and
+  // the proposal is the only direction content. Gating the whole synthesis
+  // object (not just the token fields) is deliberate — a corpus-synthesized
+  // root direction on the model path would be a behavior change the spec
+  // never approved.
+  const synthesis = proposal === undefined
+    ? createUiSpecDeterministic(evidence, request)
+    : null;
 ```
 
 Then change the spec assembly:
 
 ```ts
-    designDirection: synthesis.designDirection ?? specFields.designDirection,
+    designDirection: synthesis?.designDirection ?? specFields.designDirection,
     rejectedDefaults: specFields.rejectedDefaults,
-    layoutRegions: synthesis.layoutRegions.length > 0
+    layoutRegions: synthesis && synthesis.layoutRegions.length > 0
       ? synthesis.layoutRegions
       : specFields.layoutRegions,
-    responsiveBehavior: synthesis.responsiveBehavior.length > 0
+    responsiveBehavior: synthesis && synthesis.responsiveBehavior.length > 0
       ? synthesis.responsiveBehavior
       : specFields.responsiveBehavior,
     componentInventory: specFields.componentInventory,
-    colorTokens: proposal !== undefined ? null : synthesis.colorTokens,
+    colorTokens: synthesis?.colorTokens ?? null,
     colorTokenAuthority: "editorial",
     typographyTokens: null,
     typographyTokenAuthority: "editorial",
 ```
+
+and replace the `citedDecisions` construction with a synthesis-aware version.
+The synthesized direction text cites the corpus observation ids, so the
+citation ledger must match: the recipe's editorial `designDirection` decision
+is REPLACED (not augmented) by a corpus-authority decision citing those ids,
+when synthesis supplied the direction. Without this, the direction text cites
+`evidence-2..4` while `citedDecisions` claims the recipe id — a citation-
+consistency violation that would fail the shared gate's authority checks
+(`src/tool-contracts.ts:816-848`) and break the honesty invariant:
+
+```ts
+  const recipeDecisions = buildCitedDecisions(editorialLane);
+  const citedDecisions = synthesis?.designDirection
+    ? [
+        ...recipeDecisions.filter((d) => d.field !== "designDirection"),
+        {
+          id: "designDirection-corpus-synthesis",
+          field: "designDirection",
+          // The authority token must match the CitedDecision authority enum
+          // (the corpusEvidence lane's token — see tool-contracts.ts).
+          authority: "corpusEvidence",
+          evidenceIds: corpusEvidenceIds,
+          readiness: "available",
+        },
+      ]
+    : recipeDecisions;
+```
+
+`corpusEvidenceIds` already contains exactly the corpus observation ids in
+response order (it is also the `corpusLane`), so the new decision cites the
+same ids the direction text names and the lane already carries them.
 
 and extend `unavailableDecisions` (before the UiSpec parse) with the C3-excluded fields:
 
@@ -703,7 +847,7 @@ and extend `unavailableDecisions` (before the UiSpec parse) with the C3-excluded
   ];
   const unavailableDecisions: UiSpecT["unavailableDecisions"] = [
     ...RECIPE.unavailableDecisions.map((d) => ({ field: d.field, reason: d.reason })),
-    ...(synthesis.colorTokens === null && proposal === undefined
+    ...(synthesis !== null && synthesis.colorTokens === null
       ? [{ field: "colorTokens", reason: "Fewer than 3 matched entries contribute color roles." }]
       : []),
     ...c3Unavailable,
@@ -722,6 +866,12 @@ Expected: FAILS where tests pin the old deterministic body — token-null, echo-
 - Tests that assert `unavailableDecisions` by exact array must add the new `rejectedDefaults`/`voice`/`mood` rows (and the conditional `colorTokens` row).
 - `expectDeterministicIdentity` baselines in `create-ui-spec-model-path.test.ts` recompute `deterministicBaseline()` with the same synthesis, so identity assertions still hold unchanged.
 - In `scripts/dogfood-createuispec.mjs`, `assertTokensUnavailable` is called on non-model envelopes; change it to assert `envelope.spec.colorTokenAuthority === "editorial"` and that any non-null `colorTokens` values are hex-shaped (`/^#[0-9a-fA-F]{3,8}$/`), and keep the model-proposal cases asserting null tokens (the UiSpec refinement already enforces that).
+
+**New tests required by the review fixes (add to the Step 5 test updates):**
+
+1. **Model-path gating (D4):** in `src/create-ui-spec-model-path.test.ts` add a fixture where the reader returns 3 corpus observations with `colorRoles`; assert (a) no-model run: root `designDirection` contains the corpus evidence ids and `colorTokens` is populated; (b) model-success run with the same reader: root `designDirection` is the recipe echo (NOT corpus-synthesized), root `colorTokens`/`typographyTokens` are null, and `modelProposal` is present.
+2. **Citation ledger (D3):** in `src/create-ui-spec.test.ts` (deterministic path with a 3-observation fixture), assert `citedDecisions` contains `designDirection-corpus-synthesis` with `evidenceIds` equal to the corpus observation ids, contains NO `designDirection-editorial-1`, and `parseToolResult` / the envelope parse passes the citation-consistency gate.
+3. **No-fabrication (D5):** already added to `create-ui-spec-deterministic.test.ts` in Step 1 (the "never fabricates default tokens" case); also assert the `colorTokens` unavailableDecision row is present when it fires.
 
 - [ ] **Step 6: Run the affected suites**
 
@@ -879,3 +1029,17 @@ Run one model-lane call (lane configured, `"Make it better."` brief): the prompt
 git add docs/superpowers/specs/coverage-2026-08-02.md
 git commit -m "docs(corpus): refresh coverage snapshot after Plan 2 verification"  # only if the audit output changed
 ```
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 4 issues (D3–D7), all folded |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+- **VERDICT:** ENG CLEARED — ready to implement. D2 (ColorRoles shape) confirmed already applied in the working tree; D3–D7 folded in this review (build-index prerequisite, `findSimilar` type cleanup, shared `plurality`, unconditional fixture updates, real-corpus round-trip test).
+
+NO UNRESOLVED DECISIONS

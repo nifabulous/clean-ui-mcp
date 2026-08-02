@@ -117,12 +117,13 @@ describe("createUiSpecModel prompt boundary", () => {
     const [request] = runtime.call.mock.calls[0] as [Parameters<CreateUiSpecModelRuntime["call"]>[0]];
     expect(request.prompt).toContain("Internal analytics workspace for finance operators.");
     expect(request.prompt).toContain("Prioritize dense scanability over presentation flair.");
-    expect(request.prompt).toContain("Favor compact hierarchy, restrained emphasis, and stable column alignment.");
-    // v4: the output contract SHRINKS the designDirection cap 4000 -> 1000 (a
+    // v5: the output contract SHRINKS the designDirection cap 4000 -> 1000 (a
     // ~5000-char single-line value is where a live model lost nesting track and
     // emitted a stray "}"). The version is hashed into promptSha256, so bumping
-    // it is how a prompt change stays honest about not being the v1 prompt.
-    expect(request.prompt).toContain("\"policyVersion\":\"c3-model-proposal-v4\"");
+    // it is how a prompt change stays honest about not being the v4 prompt.
+    expect(request.prompt).toContain("\"policyVersion\":\"c3-model-proposal-v5\"");
+    expect(request.prompt).not.toContain("c3-model-proposal-v4");
+    expect(request.prompt).toContain("Be concise. State each decision once");
     // The bound a live model violated when it was only given a field name.
     expect(request.prompt).toContain("NOT an object, NOT an array");
     // The prompt figure must stay BELOW the schema cap (1000 vs 2500). Stating
@@ -761,5 +762,36 @@ describe("createUiSpecModel parse-failure retry", () => {
     const markerRejected = await createUiSpecModel(buildInput(), markerRuntime);
     expect(markerRejected).toEqual({ kind: "fallback", execution: { state: "proposal-rejected" } });
     expect(markerRuntime.call).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createUiSpecModel grounding honesty", () => {
+  it("includes evidenceSummaries only when real (non-recipe) summaries exist", async () => {
+    const runtime = buildRuntime();
+    const result = await createUiSpecModel(buildInput(), runtime);
+    expect(result.kind).toBe("accepted");
+    const [request] = runtime.call.mock.calls[0] as [Parameters<CreateUiSpecModelRuntime["call"]>[0]];
+    // buildInput carries recipe-system + public-reference rows; the recipe
+    // row is excluded, the public-reference summary is real.
+    expect(request.prompt).toContain("evidenceSummaries");
+    expect(request.prompt).toContain("The operator wants quick comparison across dense tables and side panels.");
+    expect(request.prompt).not.toContain("c3-fallback-v1");
+  });
+
+  it("omits the key when only recipe rows exist", async () => {
+    const runtime = buildRuntime();
+    const input = buildInput({
+      sanitizedEvidence: [{
+        id: "evidence-1",
+        kind: "recipe-system",
+        basis: "aggregate",
+        summary: "Deterministic c3-fallback-v1 recipe",
+        structuredFacts: {},
+      }],
+    });
+    const result = await createUiSpecModel(input, runtime);
+    expect(result.kind).toBe("accepted");
+    const [request] = runtime.call.mock.calls[0] as [Parameters<CreateUiSpecModelRuntime["call"]>[0]];
+    expect(request.prompt).not.toContain("evidenceSummaries");
   });
 });

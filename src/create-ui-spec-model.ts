@@ -22,7 +22,7 @@ import { ModelProposalSchema, type ModelProposal } from "./tool-contracts.js";
 
 const MAX_MODEL_TEXT_BYTES = 32 * 1024;
 const FIXED_DISCLAIMER = "Proposal only; not accepted into token authority.";
-const POLICY_VERSION = "c3-model-proposal-v4";
+const POLICY_VERSION = "c3-model-proposal-v5";
 const RESPONSE_SCOPED_EVIDENCE_ID_RE = /\bevidence-[0-9]+\b/;
 const SOURCE_PRIVATE_ID_RE = /\bsource-private-[A-Za-z0-9_-]+\b/;
 const GENERIC_URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/\S+/i;
@@ -224,13 +224,21 @@ export async function createUiSpecModel(
   return fallback("proposal-rejected");
 }
 
+function evidenceSummaries(rows: readonly SanitizedEvidence[]): string[] {
+  return rows
+    .filter((row) => row.kind !== "recipe-system" && row.summary.trim().length > 0)
+    .map((row) => row.summary);
+}
+
 function buildPrompt(
   request: CreateUiSpecRequest,
   sanitizedEvidence: readonly SanitizedEvidence[],
 ): string {
   return canonicalJsonStringify({
     policyVersion: POLICY_VERSION,
-    task: "Produce a bounded UI-spec proposal as one JSON object and nothing else.",
+    task: "Produce a bounded UI-spec proposal as one JSON object and nothing else. "
+      + "Be concise. State each decision once, with one sentence of rationale. "
+      + "Drop the DECISION/EFFECT/REJECTS scaffolding where it adds no information.",
     responsePolicy: {
       status: "proposal-only",
       disclaimer: FIXED_DISCLAIMER,
@@ -270,7 +278,12 @@ function buildPrompt(
       typeIntent: request.typeIntent,
     }),
     constraints: request.constraints,
-    evidenceSummaries: sanitizedEvidence.map((row) => row.summary),
+    // Real derived summaries only. recipe-system rows are operator
+    // scaffolding, never evidence. Omit the key when nothing real exists —
+    // a content-free label is worse than no grounding at all.
+    ...(evidenceSummaries(sanitizedEvidence).length > 0
+      ? { evidenceSummaries: evidenceSummaries(sanitizedEvidence) }
+      : {}),
     // TYPES AND BOUNDS, not just field names. The v1 policy listed names only
     // ("required: designDirection"), and a live Claude run answered with
     // designDirection as a nested OBJECT — schema-legal-looking, schema-invalid,

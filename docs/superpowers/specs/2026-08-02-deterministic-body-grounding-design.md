@@ -152,7 +152,31 @@ produces the non-model spec body. Rules:
 - UiSpec fields already exist; the deterministic synthesizer populates them.
 - `EvidenceKindSchema` already has `recipe-system`; auto-retrieved rows are
   `corpus-observation` (existing kind). No new evidence kinds.
-- New warning code `noCorpusMatch` when retrieval returns zero rows.
+- **The `data.designDirection` leaf annotation must change with it.**
+  `CREATE_UI_SPEC_FREE_TEXT_LEAVES` is the product's own machine-readable claim
+  about who authored each served string, and today it reads "under the
+  deterministic recipe this restates the caller's own brief"
+  (`src/tool-contracts.ts:1155`). Synthesis gives that position a SECOND
+  author, so the annotation must name both sources (brief echo when nothing
+  matched; recipe-voice sentence over closed `structuredFacts` pluralities
+  citing evidence ids when something did), and must still deny corpus prose and
+  model authorship. No existing test catches this — the guards at
+  `src/create-ui-spec-intent-guards.test.ts:290-325` cover the intent and
+  acceptance-criteria positions only — so the change ships green while the
+  claim is false unless a guard is added alongside it. Add one.
+- **No new warning code.** An earlier revision added `noCorpusMatch`; it is
+  cut for two reasons. (1) It is redundant: `buildWarnings` already pushes
+  `sparseCoverage` on the `structured-fallback` branch
+  (`src/create-ui-spec.ts:1159-1164`) with the message "automatic retrieval
+  returned zero matches; the deterministic fallback recipe was used" — exactly
+  the zero-match condition. (2) Adding one is a two-schema change with no
+  drift gate: codes live in BOTH `WarningSchema`
+  (`src/create-ui-spec-contracts.ts:560`, the closed enum the producer's
+  `parseDesignArtifactEnvelope` validates at `:639`) and the descriptor's
+  `makeWarningSchema` (`src/tool-contracts.ts:1857`), and
+  `tool-contracts.test.ts:40` only asserts the descriptor field is defined.
+  A one-sided addition fails at runtime in the producer, before the descriptor
+  gate is reached.
 - The registered `create_ui_spec` tool description is unchanged (see
   Served-content posture).
 - The corpus-freeze invariant is preserved: nothing writes to
@@ -165,7 +189,7 @@ create_ui_spec (no model)
   → resolveEvidence
       referenceIds non-empty → resolved references (unchanged)
       referenceIds empty → brief-similarity top-3 (keyword → embeddings)
-      zero matches → no evidence rows, warning noCorpusMatch
+      zero matches → no evidence rows, existing sparseCoverage warning
   → createUiSpecDeterministic(evidence, request)
       → designDirection / colorTokens / typographyTokens / layoutRegions
       → unavailableDecisions for fields without coverage
@@ -184,9 +208,9 @@ requires a second `POLICY_VERSION` bump (`c3-model-proposal-v5` →
 
 ## Error handling
 
-- Retrieval failure (reader throws) → zero evidence rows + `noCorpusMatch`
-  warning; the deterministic body degrades to explicit unavailability, never
-  fabricated content.
+- Retrieval failure (reader throws) → zero evidence rows + the existing
+  `sparseCoverage` warning; the deterministic body degrades to explicit
+  unavailability, never fabricated content.
 - Coverage below floor for a field → that field is `unavailable` with a reason
   in `unavailableDecisions`; the audit script enforces the global floor.
 - No corpus mutation possible: all reads, no writes.
@@ -197,7 +221,7 @@ requires a second `POLICY_VERSION` bump (`c3-model-proposal-v5` →
   and fails when a field drops below its floor (fixture corpus).
 - **Auto-retrieval:** no references + fixture corpus → top-3 evidence rows with
   derived structured summaries; zero-match brief → zero rows +
-  `noCorpusMatch`; references non-empty → unchanged path. Assert that no
+  `sparseCoverage`; references non-empty → unchanged path. Assert that no
   verbatim `critique`/`whatToSteal`/`voice` prose appears in any served summary
   or in the model prompt (fixture strings are planted in the corpus to prove
   exclusion).

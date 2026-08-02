@@ -385,7 +385,8 @@ describe("UiSpec", () => {
     const invalid = [
       {},
       { ...base, designDirection: "   " },
-      { ...base, designDirection: "x".repeat(2_001) },
+      // Cap raised 2000 -> 4000; the bound still exists and is still enforced.
+      { ...base, designDirection: "x".repeat(4_001) },
       { ...base, motionNotes: ["x".repeat(501)] },
       { ...base, motionNotes: Array.from({ length: 9 }, () => "fade") },
       { ...base, contentVoiceGuidance: "x".repeat(1_001) },

@@ -118,7 +118,12 @@ describe("createUiSpecModel prompt boundary", () => {
     expect(request.prompt).toContain("Internal analytics workspace for finance operators.");
     expect(request.prompt).toContain("Prioritize dense scanability over presentation flair.");
     expect(request.prompt).toContain("Favor compact hierarchy, restrained emphasis, and stable column alignment.");
-    expect(request.prompt).toContain("\"policyVersion\":\"c3-model-proposal-v1\"");
+    // v2: the output contract now carries TYPES AND BOUNDS, not just field
+    // names. The version is hashed into promptSha256, so bumping it is how a
+    // prompt change stays honest about not being the v1 prompt.
+    expect(request.prompt).toContain("\"policyVersion\":\"c3-model-proposal-v2\"");
+    // The bound that a live model violated when it was only given a field name.
+    expect(request.prompt).toContain("NOT an object, NOT an array");
     expect(request.prompt).not.toContain("runtime-secret-key");
     expect(request.prompt).not.toContain("https://api.openai.com/v1/responses");
     expect(request.prompt).not.toContain("evidence-1");
@@ -301,9 +306,64 @@ describe("createUiSpecModel response policy", () => {
     });
   });
 
-  it("rejects fenced JSON without stripping markdown", async () => {
+  // CHANGED DELIBERATELY. This test previously pinned fenced JSON as REJECTED.
+  // A live claude-sonnet-4-5 run returned ```json-wrapped output despite the
+  // response policy saying not to, so every real call failed before the schema
+  // ever ran — the lane had never once succeeded against a real provider.
+  // Unwrapping ONE exact whole-payload fence is not the lenient recovery the
+  // design forbids: the three tests below pin that everything else still fails.
+  it("accepts a payload that is entirely one fenced block", async () => {
     const runtime = buildRuntime(async () => ({
       content: `\`\`\`json\n${JSON.stringify(buildProposal())}\n\`\`\``,
+      provider: "openai",
+      model: "gpt-5-mini",
+      usage: { promptTokens: 1, completionTokens: 1, raw: { prompt_tokens: 1, completion_tokens: 1 } },
+      attempts: 1,
+      latencyMs: 10,
+      providerRequestId: null,
+    }));
+
+    const result = await createUiSpecModel(buildInput(), runtime);
+
+    expect(result.kind).toBe("accepted");
+    if (result.kind !== "accepted") return;
+    expect(result.proposal.status).toBe("proposal-only");
+  });
+
+  it("still rejects prose before a fence, a second fence, or an unterminated fence", async () => {
+    const proposal = JSON.stringify(buildProposal());
+    const cases: Array<[string, string]> = [
+      ["prose then fence", `Here you go:\n\`\`\`json\n${proposal}\n\`\`\``],
+      ["two fenced blocks", `\`\`\`json\n${proposal}\n\`\`\`\n\`\`\`json\n${proposal}\n\`\`\``],
+      ["unterminated fence", `\`\`\`json\n${proposal}`],
+    ];
+    for (const [label, content] of cases) {
+      const runtime = buildRuntime(async () => ({
+        content,
+        provider: "openai",
+        model: "gpt-5-mini",
+        usage: { promptTokens: 1, completionTokens: 1, raw: { prompt_tokens: 1, completion_tokens: 1 } },
+        attempts: 1,
+        latencyMs: 10,
+        providerRequestId: null,
+      }));
+      const result = await createUiSpecModel(buildInput(), runtime);
+      expect(result, `"${label}" must not be recovered`).toEqual({
+        kind: "fallback",
+        execution: { state: "proposal-rejected" },
+      });
+    }
+  });
+
+  it("rejects a designDirection that is an object rather than a string", async () => {
+    // The other half of the live failure: the model answered designDirection as
+    // a nested object. The prompt now states the type and bound; the schema is
+    // the backstop, and this pins it.
+    const runtime = buildRuntime(async () => ({
+      content: JSON.stringify({
+        ...buildProposal(),
+        designDirection: { primaryDecision: "QR code first", rationale: "scanning is faster" },
+      }),
       provider: "openai",
       model: "gpt-5-mini",
       usage: { promptTokens: 1, completionTokens: 1, raw: { prompt_tokens: 1, completion_tokens: 1 } },

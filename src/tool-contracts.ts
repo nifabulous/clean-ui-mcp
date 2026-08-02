@@ -592,7 +592,14 @@ const ModelProposalTypographyTokens = z.object({
 export const ModelProposalSchema = z.object({
   status: z.literal("proposal-only"),
   disclaimer: z.literal("Proposal only; not accepted into token authority."),
-  designDirection: z.string().trim().min(1).max(2_000),
+  // 4000, not 2000. The original bound was arbitrary — note that UiSpec's OWN
+  // designDirection (below) carries no max at all — and it made the model lane
+  // unusable: live claude-sonnet-4-5 runs produced 4249 chars from an untyped
+  // prompt and 2118 from a prompt stating the 2000 limit three times. A stated
+  // bound is a request to a model, not a guarantee, and a proposal discarded for
+  // 6% overshoot helps nobody. Still bounded, still strict, still rejected past
+  // the cap — the cap is now set where real output lands.
+  designDirection: z.string().trim().min(1).max(4_000),
   colorTokens: ModelProposalColorTokens.optional(),
   typographyTokens: ModelProposalTypographyTokens.optional(),
   motionNotes: z.array(z.string().trim().min(1).max(500)).max(8).default([]),

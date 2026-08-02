@@ -242,12 +242,12 @@ describe("create-ui-spec producer — automatic retrieval", () => {
     // first, so the envelope carries 1 recipe id + 3 corpus ids.
     const corpus: FixtureEntry[] = [];
     const ranked: { entry: FixtureEntry; score: number }[] = [];
-    const eA1 = entry("a1", "product-A"); corpus.push(eA1); ranked.push({ entry: eA1, score: 5.0 });
-    const eA2 = entry("a2", "product-A"); corpus.push(eA2); ranked.push({ entry: eA2, score: 4.9 });
-    const eA3 = entry("a3", "product-A"); corpus.push(eA3); ranked.push({ entry: eA3, score: 4.8 });
-    const eB = entry("b1", "product-B"); corpus.push(eB); ranked.push({ entry: eB, score: 4.7 });
-    const eC = entry("c1", "product-C"); corpus.push(eC); ranked.push({ entry: eC, score: 4.6 });
-    const eD = entry("d1", "product-D"); corpus.push(eD); ranked.push({ entry: eD, score: 4.5 });
+    const eA1 = entry("a1", "product-A", "dashboard"); corpus.push(eA1); ranked.push({ entry: eA1, score: 5.0 });
+    const eA2 = entry("a2", "product-A", "data-table"); corpus.push(eA2); ranked.push({ entry: eA2, score: 4.9 });
+    const eA3 = entry("a3", "product-A", "forms"); corpus.push(eA3); ranked.push({ entry: eA3, score: 4.8 });
+    const eB = entry("b1", "product-B", "modal"); corpus.push(eB); ranked.push({ entry: eB, score: 4.7 });
+    const eC = entry("c1", "product-C", "auth"); corpus.push(eC); ranked.push({ entry: eC, score: 4.6 });
+    const eD = entry("d1", "product-D", "onboarding"); corpus.push(eD); ranked.push({ entry: eD, score: 4.5 });
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
     const corpusIds = parsed.publicEvidenceIds.filter((id) => id !== RECIPE_EVIDENCE_ID);
@@ -255,13 +255,13 @@ describe("create-ui-spec producer — automatic retrieval", () => {
   });
 
   it("keeps all matches when fewer than three are available", async () => {
-    // 2 distinct products, 2 entries — fewer than the top-3 cap, so both are
-    // kept. The recipe/system evidence (evidence-1) is always emitted first,
-    // so the envelope carries 1 recipe id + 2 corpus ids.
+    // 2 entries with DISTINCT patterns — fewer than the top-3 cap, so both
+    // are kept. The recipe/system evidence (evidence-1) is always emitted
+    // first, so the envelope carries 1 recipe id + 2 corpus ids.
     const corpus: FixtureEntry[] = [];
     const ranked: { entry: FixtureEntry; score: number }[] = [];
-    const e1 = entry("a1", "product-A"); corpus.push(e1); ranked.push({ entry: e1, score: 5 });
-    const e2 = entry("a2", "product-A"); corpus.push(e2); ranked.push({ entry: e2, score: 4 });
+    const e1 = entry("a1", "product-A", "dashboard"); corpus.push(e1); ranked.push({ entry: e1, score: 5 });
+    const e2 = entry("a2", "product-A", "forms"); corpus.push(e2); ranked.push({ entry: e2, score: 4 });
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
     const corpusIds = parsed.publicEvidenceIds.filter((id) => id !== RECIPE_EVIDENCE_ID);
@@ -430,7 +430,7 @@ describe("create-ui-spec producer — privacy and evidence scoping", () => {
     const corpus: FixtureEntry[] = [];
     const ranked: { entry: FixtureEntry; score: number }[] = [];
     for (let i = 0; i < 3; i++) {
-      const e = entry(`e${i}`, `product-${i}`);
+      const e = entry(`e${i}`, `product-${i}`, ["dashboard", "forms", "modal"][i]!);
       corpus.push(e);
       ranked.push({ entry: e, score: 5 - i });
     }
@@ -772,8 +772,8 @@ describe("create-ui-spec producer — provenance truthfulness (echo direction is
   });
 
   it("the echo-only designDirection cites ONLY the recipe/system evidence id (never a corpus evidence-N id)", async () => {
-    const e1 = entry("e1", "product-A");
-    const e2 = entry("e2", "product-B");
+    const e1 = entry("e1", "product-A", "dashboard");
+    const e2 = entry("e2", "product-B", "forms");
     const env = await createUiSpec(validInput(), deps([e1, e2], [
       { entry: e1, score: 5 },
       { entry: e2, score: 4 },
@@ -1580,7 +1580,8 @@ it("round-trips a real-shaped corpus entry through the widened projection", asyn
 });
 
 it("automatic retrieval caps at the top 3 ranked matches", async () => {
-  const corpus = Array.from({ length: 5 }, (_, i) => entry(`internal-${i}`, `product-${i}`));
+  const patterns = ["dashboard", "onboarding", "modal", "forms", "auth"];
+  const corpus = Array.from({ length: 5 }, (_, i) => entry(`internal-${i}`, `product-${i}`, patterns[i]!));
   const ranked = corpus.map((e) => ({ entry: e, score: 5 - Number((e.id as string).slice(-1)) }));
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard for finance ops", referenceIds: [], constraints: [], motionIntents: [] },
@@ -1591,9 +1592,30 @@ it("automatic retrieval caps at the top 3 ranked matches", async () => {
   expect(out.envelope.retrieval.resultCount).toBe(3);
 });
 
+it("pattern-dedupes the top 3 so a repeated pattern class cannot crowd out diversity", async () => {
+  // Measured case: a habit brief returned onboarding twice in the top 3. The
+  // first entry per patternType wins in rank order, filling up to 3 distinct
+  // patterns.
+  const eOn1 = entry("internal-1", "product-A", "onboarding");
+  const eNav = entry("internal-2", "product-B", "navigation");
+  const eOn2 = entry("internal-3", "product-C", "onboarding");
+  const eForm = entry("internal-4", "product-D", "forms");
+  const ranked = [
+    { entry: eOn1, score: 5 }, { entry: eNav, score: 4 },
+    { entry: eOn2, score: 3 }, { entry: eForm, score: 2 },
+  ];
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps([eOn1, eNav, eOn2, eForm], ranked),
+  );
+  const rows = out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation");
+  expect(rows.map((r) => r.structuredFacts.pattern)).toEqual(["onboarding", "navigation", "forms"]);
+  expect(out.envelope.retrieval.resultCount).toBe(3);
+});
+
 it("falls back to the similarity index when keyword search matches nothing", async () => {
   const seed = entry("internal-seed", "product-seed");
-  const similar = ["a", "b", "c"].map((k) => entry(`internal-${k}`, `product-${k}`));
+  const similar = ["a", "b", "c"].map((k, i) => entry(`internal-${k}`, `product-${k}`, ["dashboard", "forms", "modal"][i]!));
   const reader = {
     ...makeReader([], []),
     search: vi.fn(async () => [seed]),
@@ -1624,8 +1646,8 @@ it("reports sparseCoverage when both keyword and similarity return nothing", asy
   expect(out.envelope.retrieval.mode).toBe("structured-fallback");
 });
 
-function corpusEntryWithRoles(id: string, accent: string): FixtureEntry {
-  return entry(id, `product-${id}`, "dashboard", {
+function corpusEntryWithRoles(id: string, accent: string, pattern = "dashboard"): FixtureEntry {
+  return entry(id, `product-${id}`, pattern, {
     layout: { form: "three-column", regions: [{ role: "main-canvas" }] },
     visual: {
       colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent },
@@ -1649,7 +1671,9 @@ function mcqPayload(out: Awaited<ReturnType<typeof createUiSpecForAdapter>>): Re
 }
 
 it("ledgers the synthesized direction against the corpus evidence ids", async () => {
-  const corpus = ["a", "b", "c"].map((k, i) => corpusEntryWithRoles(`internal-${k}`, i === 2 ? "#1d4ed8" : "#2563eb"));
+  const patterns = ["dashboard", "data-table", "forms"];
+  const ids = ["a", "b", "c"];
+  const corpus = patterns.map((p, i) => corpusEntryWithRoles(`internal-${ids[i]!}`, i === 2 ? "#1d4ed8" : "#2563eb", p));
   const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
@@ -1672,7 +1696,9 @@ it("passes the gate with tokens unavailable and exactly one colorTokens row", as
   // Two observations only — below the >= 3 token threshold. The recipe's
   // colorTokens row is replaced by exactly ONE conditional row; a duplicate
   // would fail the gate's uniqueness check.
-  const corpus = ["a", "b"].map((k) => corpusEntryWithRoles(`internal-${k}`, "#2563eb"));
+  const ids = ["a", "b"];
+  const patterns = ["dashboard", "forms"];
+  const corpus = patterns.map((p, i) => corpusEntryWithRoles(`internal-${ids[i]!}`, "#2563eb", p));
   const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },

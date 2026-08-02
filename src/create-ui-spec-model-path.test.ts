@@ -141,11 +141,15 @@ function dependencies(
 /** A reader whose ranked search returns 3 corpus observations with colorRoles. */
 function rankedCorpusReader(): CorpusReader {
   const reader = makeReader();
-  const entries = ["A", "B", "C"].map((k) => ({
-    id: `internal-${k}`,
-    patternType: "dashboard",
+  const entries = [
+    { id: "internal-A", patternType: "dashboard" },
+    { id: "internal-B", patternType: "data-table" },
+    { id: "internal-C", patternType: "forms" },
+  ].map(({ id, patternType }) => ({
+    id,
+    patternType,
     visual: {
-      colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: k === "C" ? "#1d4ed8" : "#2563eb" },
+      colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: id === "internal-C" ? "#1d4ed8" : "#2563eb" },
       spacingDensity: "compact",
       cornerStyle: "slight-round",
       usesShadows: false,

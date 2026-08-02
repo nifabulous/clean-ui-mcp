@@ -1074,9 +1074,10 @@ describe("create_ui_spec MCP registration — refused tokens are not surfaced", 
  * usable, and it keeps every private marker from `fixtureEntry` so a leak through
  * the served response is still unambiguous.
  */
-function keywordFixtureEntry(id: string, productName: string): CorpusEntryT {
+function keywordFixtureEntry(id: string, productName: string, patternType: string = "dashboard"): CorpusEntryT {
   return {
     ...fixtureEntry(id, productName),
+    patternType,
     domainTags: ["analytics"],
     visual: {
       dominantColors: ["#ffffff", "#101010"],
@@ -1209,8 +1210,8 @@ describe("create_ui_spec over a real MCP transport — the registered tool", () 
   // ── retrieval state 1: real keyword matches ───────────────────────────────
   it("automatic keyword retrieval: keyword/metadata, truthful counts, response-scoped evidence, safe output", async () => {
     const corpus = [
-      keywordFixtureEntry("internal-1", "product-Alpha"),
-      keywordFixtureEntry("internal-2", "product-Bravo"),
+      keywordFixtureEntry("internal-1", "product-Alpha", "dashboard"),
+      keywordFixtureEntry("internal-2", "product-Bravo", "forms"),
     ];
     const reader = makeRealKeywordReader(corpus);
     const t = await connectTransport(reader);

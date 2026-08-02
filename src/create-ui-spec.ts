@@ -482,12 +482,28 @@ async function resolveAutomaticRetrieval(
   // irrelevant slice was the original sin: it traded relevance for coverage
   // and left thin briefs steered by label classes. The corpus long tail is
   // honest about weak matches instead.
+  // Pattern-dedupe (eng review D2): keep the FIRST entry per patternType so a
+  // repeated pattern class cannot crowd out grounding diversity (measured: a
+  // habit brief returned onboarding twice in the top 3). Scan up to 20 ranked
+  // rows and fill distinct patterns up to 3, preserving rank order.
   // Keyword search first; when it matches nothing, seed the id-based
   // similarity index (findSimilar) from the plain search's top hit.
   // SearchResult requires `score` and `searchMode` (src/corpus.ts:116-120);
   // the similarity fallback yields { entry } rows, so the declared type is the
   // common { entry } shape and the ranked slice is structurally assignable.
-  let top: { entry: CorpusEntryT }[] = results.slice(0, 3);
+  const distinctPatterns = (rows: readonly { entry: CorpusEntryT }[]): { entry: CorpusEntryT }[] => {
+    const picked: { entry: CorpusEntryT }[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      if (picked.length >= 3) break;
+      const pattern = row.entry.patternType;
+      if (pattern !== undefined && seen.has(pattern)) continue;
+      seen.add(pattern ?? "");
+      picked.push({ entry: row.entry });
+    }
+    return picked;
+  };
+  let top: { entry: CorpusEntryT }[] = distinctPatterns(results.slice(0, 20));
   if (top.length === 0) {
     const seeded = await dependencies.reader.search({
       query: request.productContext,
@@ -499,7 +515,7 @@ async function resolveAutomaticRetrieval(
       const similar = dependencies.reader.findSimilar(seed.id, 3);
       // SimilarResult is { entry: CorpusEntryT, score: number } —
       // src/corpus.ts:414-427. The entry is always present.
-      top = similar.map((s) => ({ entry: s.entry }));
+      top = distinctPatterns(similar.map((s) => ({ entry: s.entry })));
     }
   }
 

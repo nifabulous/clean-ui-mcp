@@ -842,16 +842,25 @@ function ModelExecutionSection({
         <h4 className="artifact__section-title" id={id("model-title")}>
           Model proposal — not accepted
         </h4>
-        {proposal !== null && (
+        <p className="artifact__note">
+          Produced by {execution.provider} ({execution.model}).
+        </p>
+        {proposal !== null ? (
           <>
-            <p className="artifact__note">
-              Produced by {execution.provider} ({execution.model}).
-            </p>
             <p className="artifact__note">{proposal.disclaimer}</p>
             <div className="artifact__proposal">
               <ProposalGroups proposal={proposal} />
             </div>
           </>
+        ) : (
+          // The server constructs a proposal with every `succeeded` execution,
+          // but that pairing is a construction invariant, not an envelope-schema
+          // rule. A schema-valid run that reported success without a proposal
+          // gets an honest neutral line here — never a half-rendered card.
+          <p className="artifact__note">
+            The model run completed but returned no accepted proposal, so nothing
+            from it is shown. The result above is the deterministic scaffold.
+          </p>
         )}
       </section>
     );

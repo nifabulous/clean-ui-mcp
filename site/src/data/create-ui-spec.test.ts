@@ -656,6 +656,9 @@ describe("requestDesignArtifact — hostile model lane refuses the response", ()
   it.each([
     ["an endpoint-shaped provider name", { modelExecution: model({ provider: "https://private.example.com/secret" }) }],
     ["a private marker in the provider name", { modelExecution: model({ provider: "private-corpus-id" }) }],
+    ["a secret-shaped provider name", { modelExecution: model({ provider: "sk-live-not-a-real-key" }) }],
+    ["the transport API-key fixture as the provider", { modelExecution: model({ provider: "task-6-http-secret-key" }) }],
+    ["a provider outside the closed enum", { modelExecution: model({ provider: "anthropic" }) }],
     ["an endpoint URL in the model name", { modelExecution: model({ model: "https://private.example.com/secret" }) }],
     ["an over-length model name", { modelExecution: model({ model: "x".repeat(201) }) }],
     ["an unknown execution state", { modelExecution: { state: "accepted" } }],
@@ -665,6 +668,9 @@ describe("requestDesignArtifact — hostile model lane refuses the response", ()
     ["an acceptance-promoting status", { modelExecution: model(), modelProposal: proposal({ status: "accepted" }) }],
     ["a served disclaimer that differs from the fixed literal", { modelExecution: model(), modelProposal: proposal({ disclaimer: "Approved tokens." }) }],
     ["an over-length proposal design direction", { modelExecution: model(), modelProposal: proposal({ designDirection: "x".repeat(2_001) }) }],
+    ["an over-length motion note", { modelExecution: model(), modelProposal: proposal({ motionNotes: ["x".repeat(501)] }) }],
+    ["an over-length content voice guidance", { modelExecution: model(), modelProposal: proposal({ contentVoiceGuidance: "x".repeat(1_001) }) }],
+    ["an over-length proposed token value", { modelExecution: model(), modelProposal: proposal({ colorTokens: { primary: "x".repeat(201), surface: "#FFFFFF", ink: "#101828", muted: "#667085", accent: "#7A5AF8" } }) }],
     ["non-string token values", { modelExecution: model(), modelProposal: proposal({ colorTokens: { primary: 42, surface: "#FFFFFF", ink: "#101828", muted: "#667085", accent: "#7A5AF8" } }) }],
     ["a private marker inside a motion note", { modelExecution: model(), modelProposal: proposal({ motionNotes: ["corpus/images-private/secret.png"] }) }],
     ["a private marker inside the proposal direction", { modelExecution: model(), modelProposal: proposal({ designDirection: "See corpus/images-private/secret.png" }) }],
@@ -674,6 +680,25 @@ describe("requestDesignArtifact — hostile model lane refuses the response", ()
     expect(result).toEqual({
       ok: false,
       failure: { code: "MALFORMED_RESPONSE", retryable: false },
+    });
+  });
+
+  it("pins the model-position boundary: the API-key fixture as the MODEL NAME is operator configuration, not a served secret", async () => {
+    // The served envelope has NO API-key position (ModelExecutionSchema carries
+    // provider + model only; the key lives in the operator's environment and is
+    // never served). The provider position is closed-enum-gated (above), which
+    // refuses the key fixture there. The MODEL position cannot shape-detect a
+    // bare alphanumeric key, and it does not try: a key-shaped MODEL NAME would
+    // have to be operator-configured, and it is rendered to the operator's own
+    // browser. This test pins that boundary explicitly rather than leaving it
+    // silently permissive.
+    const { fetchImpl } = stubFetch(okQueue(envelopeFixture({ modelExecution: model({ model: "task-6-http-secret-key" }) })));
+    const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+    if (!result.ok) throw new Error("expected the model-name boundary to accept operator configuration");
+    expect(result.artifact.modelExecution).toEqual({
+      state: "succeeded",
+      provider: "openai",
+      model: "task-6-http-secret-key",
     });
   });
 });

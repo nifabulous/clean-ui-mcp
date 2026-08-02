@@ -1119,6 +1119,22 @@ describe("PlaygroundPage — model proposal and execution states", () => {
     expect(dom).not.toContain("reproducibility");
   });
 
+  it("renders an honest neutral line when the run succeeded but carried no proposal", async () => {
+    // The server constructs a proposal with every `succeeded` execution, but a
+    // schema-valid run that reported success without one must not half-render a
+    // card: the section discloses the provider/model and states plainly that
+    // nothing from the run is shown.
+    await generateSuccessfully(succeededEnvelope({ modelProposal: undefined }));
+
+    const section = screen.getByRole("region", { name: /model proposal — not accepted/i });
+    expect(section.textContent ?? "").toMatch(/openai/);
+    expect(section.textContent ?? "").toMatch(/pinned-ui-model/);
+    expect(section.textContent ?? "").toMatch(/returned no accepted proposal/i);
+    // No half-rendered card, no disclaimer, no proposal labels.
+    expect(screen.queryByText("Proposal only; not accepted into token authority.")).toBeNull();
+    expect(screen.queryByText(/proposed color tokens/i)).toBeNull();
+  });
+
   it.each([
     ["invalid-configuration", "Model — not configured", /configuration was incomplete/i],
     ["call-failed", "Model — call failed", /model call failed/i],

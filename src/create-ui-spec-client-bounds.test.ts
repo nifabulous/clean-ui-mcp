@@ -29,10 +29,11 @@
 import { describe, expect, it } from "vitest";
 
 import { DesignArtifactEnvelopeSchema } from "./create-ui-spec-contracts.js";
+import { PROVIDERS } from "./create-ui-spec-model-contracts.js";
 // A test-only helper. It calls the real loopback adapter over an in-memory reader,
 // so the starting envelope is the exact shape the route serves.
 import { designIntentArtifact, keywordMatchedArtifact } from "../site/tests/create-ui-spec-fixture.js";
-import { requestDesignArtifact, resetCachedNonce } from "../site/src/data/create-ui-spec.js";
+import { requestDesignArtifact, resetCachedNonce, MODEL_PROVIDERS } from "../site/src/data/create-ui-spec.js";
 
 const BRIEF = { productContext: "A calm analytics dashboard for a fintech operations team" };
 const NONCE = "f".repeat(64);
@@ -120,6 +121,17 @@ describe("browser client bounds vs. the envelope schema", () => {
     expect(result.artifact.acceptanceCriteria[0].expectedOutcome).toHaveLength(6_000);
     expect(result.artifact.unavailableDecisions[0].reason).toHaveLength(6_000);
     expect(result.artifact.decisions[0].field.length).toBeGreaterThan(1_000);
+  });
+
+  it("the browser client's provider enum is exactly the server's provider enum", () => {
+    // Same drift class as the bounds above, for the closed provider enum the
+    // client gates on (site/src/data/create-ui-spec.ts MODEL_PROVIDERS). The
+    // dangerous direction: the server ADDS a provider and the client isn't
+    // updated — the client then refuses a schema-legal envelope whole and the
+    // operator loses the generation. The enum is closed on both sides today;
+    // this pin makes the NEXT provider addition a compile-time surface.
+    expect(MODEL_PROVIDERS).toEqual(PROVIDERS);
+    expect(PROVIDERS).toEqual(MODEL_PROVIDERS);
   });
 
   it("the browser client accepts an artifact carrying caller constraints and design intent", async () => {

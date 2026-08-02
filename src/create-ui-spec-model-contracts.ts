@@ -11,7 +11,7 @@ import { Sha256, canonicalJsonStringify, sha256Hex } from "./readiness/contracts
 import type { Provider } from "./tagger.js";
 import { containsPrivateMarker } from "./create-ui-spec-private-markers.js";
 
-const PROVIDERS = ["openai", "claude", "gemini", "mistral", "minimax", "grok"] as const satisfies readonly Provider[];
+export const PROVIDERS = ["openai", "claude", "gemini", "mistral", "minimax", "grok"] as const satisfies readonly Provider[];
 const ProviderSchema = z.enum(PROVIDERS);
 
 function isHttpsUrl(value: string): boolean {

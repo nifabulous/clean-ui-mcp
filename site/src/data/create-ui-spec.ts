@@ -58,10 +58,12 @@
  *  THE OPTIONAL MODEL LANE. The served envelope may carry `modelExecution` beside
  *  the artifact and `spec.modelProposal` inside it. Both project through the same
  *  closed-shape discipline: `modelExecution` reduces to `{ state }` — plus
- *  `provider`/`model` on `succeeded`, bounded, and refused when they carry a
- *  private marker or a URL/path form (a URL-shaped value in a machine identifier
- *  position is never a legal display value). The proposal reduces to its five
- *  bounded content positions plus the FIXED disclaimer literal: a served
+ *  `provider`/`model` on `succeeded`, where `provider` must be one of the six
+ *  server-side provider enum values (a URL-shaped, marker-bearing or secret-shaped
+ *  value is then impossible by construction) and `model` is refused when it
+ *  carries a private marker or a URL/path form (a URL-shaped value in a machine
+ *  identifier position is never a legal display value). The proposal reduces to
+ *  its five bounded content positions plus the FIXED disclaimer literal: a served
  *  disclaimer that differs from the constant REFUSES the response, and the
  *  rendered string is always the constant. Execution digests, `reproducibility`,
  *  `usage`, and every unknown execution field are never read. The proposal's
@@ -419,6 +421,16 @@ const MODEL_EXECUTION_STATES = [
   "succeeded",
 ] as const;
 export type ModelExecutionState = (typeof MODEL_EXECUTION_STATES)[number];
+
+/**
+ * Mirrors the server-side provider enum (`src/create-ui-spec-model-contracts.ts`
+ * `ProviderSchema`). The site is a separate build and cannot import backend src,
+ * so the six literals are duplicated here. Gating on the CLOSED SET — rather
+ * than shape checks — is what makes a secret-shaped or URL-shaped provider
+ * value impossible by construction: the transport suites' API-key fixture
+ * ("task-6-http-secret-key") and any non-enum value refuse the whole response.
+ */
+export const MODEL_PROVIDERS = ["openai", "claude", "gemini", "mistral", "minimax", "grok"] as const;
 
 /**
  * Mirrors `PRIVATE_MARKERS` (`src/create-ui-spec-private-markers.ts`). The site
@@ -878,7 +890,10 @@ function projectTypeIntent(raw: unknown): SafeTypeIntent | null {
 
 /** provider/model: a non-empty string ≤200 that is neither marker- nor
  * URL/path-shaped. These are machine identifiers, not prose — a URL- or
- * path-shaped value here is never a legitimate display value. */
+ * path-shaped value here is never a legitimate display value. The provider
+ * position does NOT use this shape guard: it is gated on the closed
+ * {@link MODEL_PROVIDERS} enum instead, which refuses non-enum (and therefore
+ * secret- or URL-shaped) values by construction. */
 function modelIdentifier(value: unknown): string | null {
   const s = str(value, 200);
   if (s === null) return null;
@@ -908,9 +923,14 @@ function projectModelExecution(raw: unknown): SafeModelExecution | null {
     // strict too, so this mirrors what it would refuse to serve.)
     return { state: raw.state as ModelExecutionState };
   }
-  const provider = modelIdentifier(raw.provider);
+  // The provider position is the closed enum: non-enum values — URL-shaped,
+  // marker-bearing, or secret-shaped — refuse by construction, exactly like the
+  // transport suites' API-key fixture. The model position keeps the shape guard
+  // (see `modelIdentifier`).
+  if (typeof raw.provider !== "string" || !(MODEL_PROVIDERS as readonly string[]).includes(raw.provider)) return null;
+  const provider = raw.provider as (typeof MODEL_PROVIDERS)[number];
   const model = modelIdentifier(raw.model);
-  if (provider === null || model === null) return null;
+  if (model === null) return null;
   return { state: "succeeded", provider, model };
 }
 
@@ -985,7 +1005,9 @@ function projectModelProposal(raw: unknown): SafeModelProposal | null {
     designDirection,
     colorTokens,
     typographyTokens,
-    motionNotes,
+    // The guard above already returned on null; the coalesce narrows the type
+    // to SafeModelProposal.motionNotes (`readonly string[]`) without a cast.
+    motionNotes: motionNotes ?? [],
     contentVoiceGuidance,
   };
 }

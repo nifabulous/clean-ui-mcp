@@ -307,10 +307,20 @@ create_ui_spec call
 - Parse failure on final attempt → `proposal-rejected` fallback (unchanged
   shape), `modelExecutionState: "proposal-rejected"` on the wire.
 - All other rejections → single attempt, same states as today.
-- Both attempts fail → `proposal-rejected`. Record `attempts: 2` and the SUMMED
-  usage across both generations: the discarded attempt's tokens were billed,
-  and a lane whose purpose is auditability must not drop them. Latency is the
-  wall-clock total across attempts.
+- **Both attempts fail → `proposal-rejected`, and NO artifact record is
+  written.** An earlier revision of this section promised `attempts: 2` plus
+  summed usage on this path. That was wrong and is corrected here: `fallback()`
+  returns `{ kind: "fallback", execution }` with no `recordInput`, and the
+  store is written only on the accepted branch — so on double failure the
+  billed tokens go unrecorded, exactly as a single-attempt rejection's do
+  today. Persisting a usage-only record would be a
+  `ModelArtifactRecordSchema` change (every field except `usage`/`attempts`
+  describes an ACCEPTED proposal) and is out of scope. This is a known,
+  accepted audit gap; retry widens it by at most one discarded generation.
+- Accepted after retry → the record carries `attempts: 2`, usage SUMMED across
+  both generations (the discarded attempt was billed), and wall-clock
+  `latencyMs` across attempts. Summed usage applies only here, because this is
+  the only branch that writes a record.
 - `check:model-lane` → never throws; prints structured status with a safe
   message; exit code non-zero on `reachable: false`.
 - Boot warnings → advisory; no startup failure for valid-but-odd proxies.

@@ -17,6 +17,7 @@
 - `maxAttempts` default is `1`. The operator opt-in is `CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS=2` (absent or `"1"` keeps `1`; any other value is `invalid-configuration`).
 - The `evidenceSummaries` key is removed from the prompt UNCONDITIONALLY in this plan (Plan 2 reintroduces it with a non-empty guard).
 - `POLICY_VERSION` bumps exactly once: `c3-model-proposal-v4` → `c3-model-proposal-v5`.
+- **Summed usage applies ONLY to the accepted-after-retry branch** (review finding P1-C). `fallback()` returns `{ kind: "fallback", execution }` with no `recordInput`, and the artifact store is written only on the accepted branch — so when BOTH attempts fail, no record exists and the discarded generations' billed tokens go unrecorded, exactly as a single-attempt rejection's do today. Do NOT "fix" this by writing a record on the fallback path: `ModelArtifactRecordSchema` requires `proposalSha256`/`proposal`/`promptSha256` and every other field describes an ACCEPTED proposal, so a usage-only record is a contract change that is out of scope here. Known, accepted audit gap; retry widens it by at most one discarded generation.
 - All served responses must still pass `assertPassesContractGate`; an unknown top-level key on any tool's envelope is refused (that property must be pinned, not assumed).
 - Every task is TDD: failing test → minimal implementation → passing test → commit.
 
@@ -285,6 +286,11 @@ Append to the same describe block:
       providerRequestId: "req_x",
     }));
     const result = await createUiSpecModel(buildInput(), runtime);
+    // `toEqual` is exact, so this ALSO pins the P1-C audit gap: the fallback
+    // carries no `recordInput`, therefore no artifact record is written and
+    // the two discarded generations' billed tokens are unrecorded. If someone
+    // later adds a usage-only record on this path, this assertion fails first
+    // — which is the intended signal that it is a contract change, not a fix.
     expect(result).toEqual({ kind: "fallback", execution: { state: "proposal-rejected" } });
     expect(runtime.call).toHaveBeenCalledTimes(2);
   });
@@ -1164,30 +1170,6 @@ CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS=2 the dogfood harness asserts a
 succeeded envelope, exactly one store record, and attempts: 2."
 ```
 
-## GSTACK REVIEW REPORT
-
-| Review | Trigger | Why | Runs | Status | Findings |
-|--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
-| Codex Review | `/codex review` | Independent 2nd opinion | 1 | interrupted | no findings returned |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 6 issues, all folded |
-| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
-| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
-
-**CODEX:** dispatched via requesting-code-review; the subagent chain ran a nested deep-dive for ~30 minutes and was interrupted before returning findings, so this plan set has no outside-voice pass. Recommend a bounded re-run before implementation if cross-model review is wanted.
-
-**VERDICT:** ENG CLEARED — ready to implement. Six review fixes folded into the plans (see below); scope accepted as-is per user decision; TODOs.md gained three deferred items.
-
-Eng-review findings (all fixed in the plan files, user blanket-approved):
-1. [P1] Plan 2 colorRoles shape mismatched the corpus schema (canvas/muted-nullable) — fixed to mirror `src/schema.ts:420-426` and reuse the `design-prompt.ts` merge mapping.
-2. [P1] Synthesized direction cited corpus ids without updating `citedDecisions`/authority — fixed with a corpus-authority designDirection decision replacing the recipe's.
-3. [P1] Synthesis applied on the model-proposal path — gated behind `proposal === undefined`.
-4. [P1] `Math.min` over empty role arrays fabricated default tokens — fixed with a `withRoles.length >= 3` guard + tests.
-5. [P2] Test gaps — embeddings fallback, error-branch `modelExecutionState: null`, model-path gating, citation ledger; all added.
-6. [P3] Retry worst-case latency undocumented — `.env.example` comment added.
-
-NO UNRESOLVED DECISIONS
-
 ## Implementation Tasks
 
 - [ ] **T1 (P1, human: ~30min / CC: ~5min)** — apply the two verified plan fixes — Plan 2 Task 3 authority token `"corpusEvidence"` → `"corpus-evidence"`; Plan 2 Task 0 audit fixture `primary` → `canvas`. DONE in this review (already applied to the plan files).
@@ -1198,6 +1180,10 @@ NO UNRESOLVED DECISIONS
   - Surfaced by: requesting-code-review skill — mandatory before implementing major plans.
   - Files: `docs/superpowers/plans/2026-08-02-model-lane-reliability.md`, `docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md`
   - Verify: review feedback triaged (Critical fixed, Important fixed, Minor noted).
+- [ ] **T3 (P2, human: ~20min / CC: ~5min)** — add the cross-tool `modelExecutionState` refusal test — the descriptor-conditional key needs a pin that tools WITHOUT the flag reject the key (critique_ui fixture via makeValidSuccess/cloneToolResult). DONE in this review (already applied to the plan file).
+  - Surfaced by: Test review — the negative gate test only covered create_ui_spec itself.
+  - Files: `docs/superpowers/plans/2026-08-02-model-lane-reliability.md`
+  - Verify: `rg -n "refuses modelExecutionState on tools without" docs/superpowers/plans/2026-08-02-model-lane-reliability.md`
 
 _No new tasks from Code Quality._ _No new tasks from Performance beyond the documented latency note (retry doubles worst-case to ~60-70s; default stays 1 attempt)._
 
@@ -1206,13 +1192,13 @@ _No new tasks from Code Quality._ _No new tasks from Performance beyond the docu
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
-| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 4 | CLEAR | 2 issues, 0 critical gaps |
+| Codex Review | `/codex review` | Independent 2nd opinion | 1 | interrupted | no findings returned |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 6 | CLEAR | 7 issues, 0 critical gaps |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
 
-- **CODEX:** (not run — requesting-code-review dispatch is separate; see Implementation Tasks)
+- **CODEX:** dispatched via requesting-code-review twice; both subagent chains ran nested deep-dives and were interrupted before returning findings, so this plan set still has no outside-voice pass. Re-run with a hard timebox before implementation if cross-model review is wanted.
 - **CROSS-MODEL:** (not run)
-- **VERDICT:** ENG CLEARED — ready to implement. Joint plan-set review, second pass (2026-08-02, commit 4f4574e). Two verified findings folded: (1) Plan 2 Task 3 `citedDecisions.authority` corrected to `"corpus-evidence"` — the plan used the camelCase lane name, which is not in the CitedDecision enum (tool-contracts.ts:537) and would fail the strict parse while silently bypassing the consistency gate at :853; (2) Plan 2 Task 0 audit fixture `colorRoles` corrected to `canvas` (corpus schema at schema.ts:418-424). This plan also gained the byte-limit / private-marker no-retry pins at maxAttempts=2 (Task 1 Step 9). Every other architecture claim was verified against code: retry loop shape, makeEnvelope conditional-key idiom (:2374), `hasEvidence`/`allowNoneWithPositiveResult` precedent (:1517), `runtime.call` signature, `CorpusReader.searchRanked`/`findSimilar` (corpus-reader.ts:69-71), `pickDiverse` at create-ui-spec.ts:482, warning-code list at tool-contracts.ts:1857, `corpusEvidenceIds`/`buildCitedDecisions` (create-ui-spec.ts:813-847), `buildInput` overrides (model.test.ts:11), ranked `makeReader` helper (create-ui-spec.test.ts:124), `plurality` currently private (design-prompt.ts:45), `HexColor` not exported (schema.ts:418, plan's conditional covers it), and `MAX_MODEL_TEXT_BYTES = 32 * 1024` (model.ts:23).
+- **VERDICT:** ENG CLEARED — ready to implement. Joint plan-set review, third pass (2026-08-02). Six prior findings were folded in earlier passes (commits 4f4574e, 3d17ea6, 636ccdd): colorRoles shape, citation-ledger authority, model-path gating, token-fabrication guard, test gaps, latency docs. One fresh finding folded in this pass: the descriptor-conditional `modelExecutionState` key needs a cross-tool refusal test (critique_ui without the flag must reject the key via the shared gate). Verified claims from earlier passes still hold: retry loop shape, makeEnvelope conditional-key idiom (:2374), `hasEvidence`/`allowNoneWithPositiveResult` precedent (:1517), `runtime.call` signature, byte-limit/private-marker no-retry pins, `buildInput` overrides (model.test.ts:11), and `MAX_MODEL_TEXT_BYTES = 32 * 1024` (model.ts:23).
 
 NO UNRESOLVED DECISIONS

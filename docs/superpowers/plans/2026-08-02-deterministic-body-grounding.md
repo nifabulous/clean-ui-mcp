@@ -4,7 +4,7 @@
 
 **Goal:** Fill the deterministic `create_ui_spec` body from measured corpus facts and give both the deterministic and model paths real, shared grounding.
 
-**Architecture:** Task 0 locks the coverage audit; Task 1 widens the closed `structuredFacts` allowlist and the recipe-owned summary builder; Task 2 changes automatic retrieval from a diversity-picked 5 to the top 3 ranked matches and adds the `noCorpusMatch` warning; Task 3 adds a pure `createUiSpecDeterministic` synthesizer (direction sentence, color-token plurality, layout regions) and wires it into `assembleSpec`; Task 4 reintroduces the model prompt's `evidenceSummaries` key (with a non-empty guard) under `POLICY_VERSION` v6.
+**Architecture:** Task 0 locks the coverage audit; Task 1 widens the closed `structuredFacts` allowlist and the recipe-owned summary builder; Task 2 changes automatic retrieval from a diversity-picked 5 to the top 3 ranked matches and adds an embeddings fallback; Task 3 adds a pure `createUiSpecDeterministic` synthesizer (direction sentence, color-token plurality, layout regions) and wires it into `assembleSpec`; Task 4 reintroduces the model prompt's `evidenceSummaries` key (with a non-empty guard) under `POLICY_VERSION` v6.
 
 **Tech Stack:** TypeScript, Zod, Vitest, node:fs (audit script).
 
@@ -16,7 +16,8 @@
 - Token population rule: `colorTokens` are populated only when ≥ 3 matched entries contribute `visual.colorRoles`; otherwise `null` + an `unavailableDecisions` reason. `typographyTokens` stays `null` (the corpus records no mono role; see Task 3 deviation note).
 - Model path invariant: whenever `spec.modelProposal` is present, root `colorTokens`/`typographyTokens` stay `null` and authority stays `editorial` (existing UiSpec superRefine — the synthesizer must NOT run against model proposals).
 - `POLICY_VERSION` bumps exactly once in this plan: `c3-model-proposal-v5` → `c3-model-proposal-v6` (Task 4).
-- Auto-retrieval caps at N=3. Zero matches → zero corpus evidence rows + `noCorpusMatch` warning; never fabricated content.
+- Auto-retrieval caps at N=3. Zero matches → zero corpus evidence rows + the EXISTING `sparseCoverage` warning; never fabricated content. NO new warning code is introduced (see the Task 2 note on the dual warning schema).
+- **Warning codes live in TWO schemas.** Any new code must be added to BOTH `WarningSchema` (`src/create-ui-spec-contracts.ts:560`, the closed `z.enum` the producer's `parseDesignArtifactEnvelope` validates against at `:639`) AND the descriptor's `makeWarningSchema` (`src/tool-contracts.ts:1857`). There is no drift gate between them — `tool-contracts.test.ts:40` only asserts `warningSchema` is defined — so a one-sided addition fails at runtime in the producer, before the descriptor gate is ever reached. This plan adds no code and therefore touches neither.
 - Coverage floors enforced by the audit script: `visual.colorRoles` ≥ 600, `layout` ≥ 600.
 - Every task is TDD: failing test → minimal implementation → passing test → commit.
 
@@ -396,23 +397,44 @@ buildCorpusObservationSummary emits one derived sentence from those tokens
 only, keeping the recipe-owned no-prose invariant."
 ```
 
-## Task 2: Auto-retrieval top-3 + `noCorpusMatch` warning
+## Task 2: Auto-retrieval top-3 + embeddings fallback
 
 **Files:**
 - Modify: `src/create-ui-spec.ts` (`resolveAutomaticRetrieval`)
-- Modify: `src/tool-contracts.ts` (`create_ui_spec` descriptor warning codes)
-- Test: `src/create-ui-spec.test.ts` (retrieval-state tests) + `src/create-ui-spec-mcp.test.ts` (warning fixtures, if any assert the exact code set)
+- Test: `src/create-ui-spec.test.ts` (retrieval-state tests)
 
 **Interfaces:**
 - Consumes: `dependencies.reader.searchRanked` (existing), `dependencies.reader.search` (existing, zero-match seed path), `RetrievalState` (existing).
-- Produces: top-3 ranked corpus observations (no diversity pick); `noCorpusMatch` warning code; zero-match path unchanged in retrieval state (`structured-fallback`).
+- Produces: top-3 ranked corpus observations (no diversity pick); zero-match path unchanged in retrieval state (`structured-fallback`) and in warnings (`sparseCoverage`, already emitted).
+
+**No new warning code (review finding P1-A).** An earlier draft added
+`noCorpusMatch`. Two reasons it is gone:
+
+1. **It was wired to the wrong schema and would have failed at runtime.** The
+   draft added the code only to the descriptor's `makeWarningSchema`
+   (`src/tool-contracts.ts:1857`). But `buildWarnings` pushes into the
+   ENVELOPE, which `parseDesignArtifactEnvelope` validates against
+   `warnings: z.array(WarningSchema)` (`src/create-ui-spec-contracts.ts:639`)
+   — a closed `z.enum` of four codes at `:560`. The producer parse would have
+   thrown before the descriptor gate saw the payload, and no drift gate exists
+   to catch the one-sided edit.
+2. **It is redundant.** `buildWarnings` ALREADY pushes `sparseCoverage` on the
+   `structured-fallback` branch (`src/create-ui-spec.ts:1159-1164`) with the
+   message "automatic retrieval returned zero matches; the deterministic
+   fallback recipe was used." That is precisely the zero-match condition the
+   new code was going to report.
+
+So the zero-match assertion in Step 3 asserts `sparseCoverage`, and Step 4 (the
+warning-code addition) is deleted.
 
 **Prerequisite (required):** the similarity fallback in Step 3 depends on the
 embedding index. `findSimilarEntries` returns `[]` when the index is missing
 (`src/corpus.ts:414-419` — documented "caller tells the user to run
-build-index"), so a fresh checkout silently falls through to `noCorpusMatch`
-even when the corpus has matches. Run `npm run build-index` once before Step 3
-and include it in the task's verification in Step 5.
+build-index"), so a fresh checkout silently falls through to the zero-match
+branch even when the corpus has matches. Run `npm run build-index` once before
+Step 3 and include it in the task's verification in Step 5. Note the unit tests
+stub `findSimilar`, so CI covers the branch logic without an index — only the
+live path needs the index built.
 
 - [ ] **Step 1: Write the failing retrieval test**
 
@@ -494,7 +516,7 @@ it("falls back to the similarity index when keyword search matches nothing", asy
   expect(out.envelope.retrieval.resultCount).toBe(3);
 });
 
-it("reports noCorpusMatch when both keyword and similarity return nothing", async () => {
+it("reports sparseCoverage when both keyword and similarity return nothing", async () => {
   const reader = {
     ...baseReader(),
     search: vi.fn(async () => []),
@@ -502,43 +524,37 @@ it("reports noCorpusMatch when both keyword and similarity return nothing", asyn
   } as unknown as CorpusReader;
   const out = await createUiSpecForAdapter(noRefRequest(), makeCreateUiSpecDependencies(reader));
   expect(out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation")).toHaveLength(0);
-  expect(out.envelope.warnings.map((w) => w.code)).toContain("noCorpusMatch");
+  // The EXISTING zero-match warning (create-ui-spec.ts:1159-1164). No new code.
+  expect(out.envelope.warnings.map((w) => w.code)).toContain("sparseCoverage");
+  expect(out.envelope.retrieval.mode).toBe("structured-fallback");
 });
 ```
 
 `baseReader`, `seedEntry`, `similarResult`, and `noRefRequest` are helpers to add in the same test file following its existing reader-fixture pattern. `CorpusReader` and `vi` are already imported there.
 
-- [ ] **Step 4: Add the `noCorpusMatch` warning code**
+- [ ] **Step 4: Confirm no warning-schema change is needed**
 
-In `src/tool-contracts.ts`, in the `create_ui_spec` descriptor's `warningSchema`, add `"noCorpusMatch"` to the list:
-
-```ts
-    warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "motionEvidenceUnavailable", "authorityConflict", "noCorpusMatch"]),
-```
-
-In `src/create-ui-spec.ts`, in `buildWarnings`, inside the `structured-fallback` branch, after the `sparseCoverage` push:
-
-```ts
-    warnings.push({
-      code: "noCorpusMatch",
-      message: "No corpus entry matched this brief; no grounding evidence is served.",
-    });
-```
+Deliberately empty — see the "No new warning code" note at the top of this
+task. `buildWarnings` and both warning schemas are UNCHANGED by Task 2. Verify
+with `rg -n "noCorpusMatch" src/` (expected: no matches) so a stale draft
+cannot reintroduce the one-sided edit.
 
 - [ ] **Step 5: Run the affected suites**
 
 Run: `npx vitest run src/create-ui-spec.test.ts src/create-ui-spec-mcp.test.ts`
-Expected: PASS. If a fixture asserts the exact warning-code set (search for `sparseCoverage` in `src/**/*.test.ts`), add `noCorpusMatch` to that fixture.
+Expected: PASS. No warning-code fixture needs updating — the emitted code set
+is identical to today's.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/create-ui-spec.ts src/tool-contracts.ts
-git commit -m "feat(create-ui-spec): top-3 ranked auto-retrieval + noCorpusMatch
+git add src/create-ui-spec.ts
+git commit -m "feat(create-ui-spec): top-3 ranked auto-retrieval with similarity fallback
 
 Automatic retrieval keeps the 3 highest-ranked matches instead of a
-diversity-picked 5, and a zero-match request reports the new
-noCorpusMatch warning alongside sparseCoverage."
+diversity-picked 5 and seeds the similarity index when keyword search
+returns nothing. Zero matches keep the existing sparseCoverage warning and
+the structured-fallback retrieval state; no new warning code is added."
 ```
 
 ## Task 3: Deterministic synthesis — new module + `assembleSpec` wiring
@@ -873,6 +889,49 @@ Add the import at the top of `src/create-ui-spec.ts`: `import { createUiSpecDete
 
 Note: `rejectedDefaults` stays the recipe's empty array per C3 (the field is NOT populated); the `unavailableDecisions` row explains why.
 
+- [ ] **Step 4b: Correct the `data.designDirection` leaf annotation (review finding P1-B)**
+
+`CREATE_UI_SPEC_FREE_TEXT_LEAVES` is the product's own machine-readable claim
+about who authored each served string. Today it says
+(`src/tool-contracts.ts:1155`):
+
+```ts
+  "data.designDirection": "under the deterministic recipe this restates the caller's own brief",
+```
+
+Step 4 makes that position corpus-synthesized text citing evidence ids on the
+no-model path, so the annotation becomes FALSE. **No existing test fails** —
+the guards in `src/create-ui-spec-intent-guards.test.ts:290-325` cover the
+intent and acceptance-criteria positions, not this one — which is exactly the
+silent-authority-drift class those guards were written to stop. Replace it:
+
+```ts
+  "data.designDirection": "recipe-owned prose: the caller's own brief restated when no corpus entry matched, or a recipe-voice sentence built from closed structuredFacts pluralities and citing the matched evidence ids; never corpus prose and never model output (a model proposal lives at data.modelProposal.designDirection)",
+```
+
+Then pin it, so the next authorship change cannot drift silently. Append to
+`src/create-ui-spec-intent-guards.test.ts`:
+
+```ts
+  it("annotates designDirection as recipe-owned across BOTH deterministic sources", () => {
+    // Plan 2 gave this position a second author (corpus-fact synthesis)
+    // alongside the brief echo. The annotation must name both, must not
+    // claim corpus prose, and must not claim model authorship.
+    const note = (CREATE_UI_SPEC_FREE_TEXT_LEAVES as Record<string, string | undefined>)[
+      "data.designDirection"
+    ];
+    expect(note, "data.designDirection has no annotation").toBeDefined();
+    expect(note!).toMatch(/recipe-owned/i);
+    expect(note!, "must name the brief-echo source").toMatch(/brief/i);
+    expect(note!, "must name the corpus-fact source").toMatch(/structuredFacts|evidence ids/i);
+    expect(note!, "must not claim corpus prose").not.toMatch(/critique|whatToSteal/i);
+  });
+```
+
+Run: `npx vitest run src/create-ui-spec-intent-guards.test.ts src/tool-contracts.test.ts`
+Expected: PASS (the annotation-shape test at `tool-contracts.test.ts:465`
+iterates every annotation and must stay green).
+
 - [ ] **Step 5: Update deterministic-body assertions**
 
 Run: `npx vitest run src/create-ui-spec.test.ts src/create-ui-spec-model-path.test.ts src/create-ui-spec-mcp.test.ts`
@@ -897,7 +956,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/create-ui-spec-deterministic.ts src/create-ui-spec-deterministic.test.ts src/create-ui-spec.ts scripts/dogfood-createuispec.mjs
+git add src/create-ui-spec-deterministic.ts src/create-ui-spec-deterministic.test.ts src/create-ui-spec.ts src/tool-contracts.ts src/create-ui-spec-intent-guards.test.ts scripts/dogfood-createuispec.mjs
 git commit -m "feat(create-ui-spec): corpus-grounded deterministic body
 
 createUiSpecDeterministic synthesizes direction, color-token plurality,
@@ -1046,30 +1105,6 @@ git add docs/superpowers/specs/coverage-2026-08-02.md
 git commit -m "docs(corpus): refresh coverage snapshot after Plan 2 verification"  # only if the audit output changed
 ```
 
-## GSTACK REVIEW REPORT
-
-| Review | Trigger | Why | Runs | Status | Findings |
-|--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
-| Codex Review | `/codex review` | Independent 2nd opinion | 1 | interrupted | no findings returned |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 6 issues, all folded |
-| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
-| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
-
-**CODEX:** dispatched via requesting-code-review; the subagent chain ran a nested deep-dive for ~30 minutes and was interrupted before returning findings, so this plan set has no outside-voice pass. Recommend a bounded re-run before implementation if cross-model review is wanted.
-
-**VERDICT:** ENG CLEARED — ready to implement. Six review fixes folded into the plans (see below); scope accepted as-is per user decision; TODOs.md gained three deferred items.
-
-Eng-review findings (all fixed in the plan files, user blanket-approved):
-1. [P1] colorRoles shape mismatched the corpus schema (canvas/muted-nullable) — fixed to mirror `src/schema.ts:420-426` and reuse the `design-prompt.ts` merge mapping.
-2. [P1] Synthesized direction cited corpus ids without updating `citedDecisions`/authority — fixed with a corpus-authority designDirection decision replacing the recipe's.
-3. [P1] Synthesis applied on the model-proposal path — gated behind `proposal === undefined`.
-4. [P1] `Math.min` over empty role arrays fabricated default tokens — fixed with a `withRoles.length >= 3` guard + tests.
-5. [P2] Test gaps — embeddings fallback, error-branch `modelExecutionState: null`, model-path gating, citation ledger; all added.
-6. [P3] Retry worst-case latency undocumented — `.env.example` comment added.
-
-NO UNRESOLVED DECISIONS
-
 ## Implementation Tasks
 
 - [ ] **T1 (P1, human: ~30min / CC: ~5min)** — apply the two verified plan fixes — Task 3 authority token `"corpusEvidence"` → `"corpus-evidence"`; Task 0 audit fixture `primary` → `canvas`. DONE in this review (already applied to the plan files).
@@ -1080,6 +1115,14 @@ NO UNRESOLVED DECISIONS
   - Surfaced by: requesting-code-review skill — mandatory before implementing major plans.
   - Files: `docs/superpowers/plans/2026-08-02-model-lane-reliability.md`, `docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md`
   - Verify: review feedback triaged (Critical fixed, Important fixed, Minor noted).
+- [ ] **T3 (P1, human: ~30min / CC: ~5min)** — apply the duplicate-colorTokens fix in Task 3 Step 4 — the recipe ALREADY declares a `colorTokens` unavailableDecision (fallback-recipe-v1.json), so the old spread+conditional produced two rows (or a stale row with populated tokens), failing the uniqueness gate at tool-contracts.ts:778-781 and the available-token gate at :803-804. DONE in this review (already applied to the plan file).
+  - Surfaced by: Architecture review — D8 gate-rule cross-check (tool-contracts.ts:778-804, fallback-recipe-v1.json).
+  - Files: `docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md`
+  - Verify: `rg -n "filter\(\(d\) => synthesis === null" docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md`
+- [ ] **T4 (P2, human: ~15min / CC: ~5min)** — annotate the retrieval `top` variable as `{ entry: CorpusEntryT }[]` — `SearchResult` requires `score` and `searchMode` (corpus.ts:116-120), so the similarity fallback's `{ entry }` rows would not type-check. DONE in this review (already applied to the plan file).
+  - Surfaced by: Code quality review — type-level cross-check (corpus.ts:116-120).
+  - Files: `docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md`
+  - Verify: `rg -n "let top: \{ entry: CorpusEntryT \}\[\]" docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md`
 
 _No new tasks from Code Quality._ _No new tasks from Performance beyond the documented latency note (retry doubles worst-case to ~60-70s; default stays 1 attempt)._
 
@@ -1088,13 +1131,19 @@ _No new tasks from Code Quality._ _No new tasks from Performance beyond the docu
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
-| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 4 | CLEAR | 2 issues, 0 critical gaps |
+| Codex Review | `/codex review` | Independent 2nd opinion | 1 | interrupted | no findings returned |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 6 | CLEAR | 10 issues, 0 critical gaps |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
 
-- **CODEX:** (not run — requesting-code-review dispatch is separate; see Implementation Tasks)
+- **CODEX:** dispatched via requesting-code-review twice; both subagent chains ran nested deep-dives and were interrupted before returning findings, so this plan set still has no outside-voice pass. Re-run with a hard timebox before implementation if cross-model review is wanted.
 - **CROSS-MODEL:** (not run)
-- **VERDICT:** ENG CLEARED — ready to implement. Joint plan-set review, second pass (2026-08-02, commit 4f4574e). Two verified findings folded in this pass: (1) Task 3 `citedDecisions.authority` is now `"corpus-evidence"` — the strict CitedDecision enum at tool-contracts.ts:537 has no `"corpusEvidence"` member and the consistency gate at :853 only fires for the hyphenated token, so the plan's earlier token would both fail the parse and skip the check it was meant to pin; (2) Task 0 audit fixture `colorRoles` now uses `canvas` — the corpus role shape (schema.ts:418-424), not UiSpec's `primary`. The D2 colorRoles convention, D3 citation-ledger tests, D4 model-path gating tests, and D5 no-fabrication test were verified present in this plan. Other claims verified against code: `findSimilarEntries` no-index behavior (corpus.ts:414-419), `pickDiverse` current use (create-ui-spec.ts:482), warning-code list (tool-contracts.ts:1857), `makeReader(corpus, ranked)` helper (create-ui-spec.test.ts:124), `plurality` export step needed (design-prompt.ts:45), `HexColor` export step needed (schema.ts:418), `buildInput` overrides (model.test.ts:11), `corpusEvidenceIds`/`buildCitedDecisions` (create-ui-spec.ts:813-847).
+- **VERDICT:** ENG CLEARED — ready to implement. Joint plan-set review, third pass (2026-08-02). Six prior findings were folded in earlier passes (commits 4f4574e, 3d17ea6, 636ccdd): colorRoles shape, citation-ledger authority, model-path gating, token-fabrication guard, test gaps, latency docs. Four fresh findings folded in this pass, all verified against repo code:
+1. [P1] Duplicate `colorTokens` unavailableDecision — the recipe (fallback-recipe-v1.json) already declares one, so the plan's spread + conditional produced two rows (uniqueness gate, tool-contracts.ts:778-781) or a stale row with populated tokens (:803-804). Fixed: filter the recipe row when synthesis runs and re-add exactly one only when tokens are null.
+2. [P2] Retrieval `top` type — `SearchResult` requires `score`/`searchMode` (corpus.ts:116-120), so the similarity fallback's `{ entry }` rows would not compile. Fixed: annotate as `{ entry: CorpusEntryT }[]`.
+3. [P2] Cross-tool gate test — the descriptor-conditional `modelExecutionState` key needs a pin that OTHER tools reject the key; added a critique_ui fixture test (makeValidSuccess/cloneToolResult pattern).
+4. [P2] D8 gate-pass test — the duplicate-row bug would have been caught by asserting the full envelope passes the gate on BOTH token branches (populated and null); added to Task 3 Step 5.
+
+Verified claims from earlier passes still hold: `findSimilarEntries` no-index behavior (corpus.ts:414-419), `pickDiverse` at create-ui-spec.ts:482, warning-code list (tool-contracts.ts:1857), `makeReader(corpus, ranked)` helper (create-ui-spec.test.ts:124), `plurality` export step needed (design-prompt.ts:45), `HexColor` export step needed (schema.ts:418), `buildInput` overrides (model.test.ts:11), `corpusEvidenceIds`/`buildCitedDecisions` (create-ui-spec.ts:813-847), retry loop shape, makeEnvelope conditional-key idiom (:2374), and `MAX_MODEL_TEXT_BYTES = 32 * 1024` (model.ts:23).
 
 NO UNRESOLVED DECISIONS

@@ -344,6 +344,28 @@ envelope re-parse and hash re-check, and a private-marker sweep over the seriali
 body — so a spec that MCP refuses is not served over HTTP either. It is subject to
 both guards above.
 
+#### Optional model proposal lane (env-only opt-in)
+
+By default the route is fully deterministic: no model is called and the envelope
+carries no model trace. Setting all four of these environment variables on the
+server process enables an optional proposal lane:
+
+- `CREATE_UI_SPEC_MODEL_PROVIDER` — `openai`, `claude`, `gemini`, `mistral`,
+  `minimax`, or `grok`;
+- `CREATE_UI_SPEC_MODEL_BASE_URL` — an `https:` endpoint URL;
+- `CREATE_UI_SPEC_MODEL_API_KEY` — the endpoint credential;
+- `CREATE_UI_SPEC_MODEL_NAME` — the pinned model name.
+
+The lane is strictly proposal-only: a visible proposal is labeled
+`proposal-only` with a fixed disclaimer, accepted-token positions stay
+unavailable, and any model failure returns the same deterministic scaffold
+with a distinct execution state (`invalid-configuration` / `call-failed` /
+`proposal-rejected` / `persistence-failed`). The public request schema is
+unchanged — no provider, URL, model, key, or generation parameter is accepted
+from callers. Successful proposals are recorded in a separate gitignored
+store. See [`docs/security.md`](docs/security.md) for the full operating
+contract.
+
 ---
 
 ## Two-pass auto-fill tagger
@@ -538,7 +560,7 @@ All tools are read-only over the corpus, organized into three tiers:
 | Tool | Purpose |
 |---|---|
 | `recommend_ui_direction(productContext, count?, category?, qualityTier?, platform?, framework?)` | "Design advisor." Embeds your description, finds relevant entries with product diversity, synthesizes a direction. Deterministic — no LLM call. |
-| `create_ui_spec(productContext, referenceIds?, platform?, implementationFramework?, designSystem?, constraints?, target?, motionIntents?, outputFormat?)` | Evidence-grounded UI spec: layout regions, color/typography tokens, component inventory, motion guidance, acceptance criteria with named verifiers, provenance. `referenceIds` (max 5) grounds it in entries you already know; omit it and the tool retrieves. Returns no corpus content, path, url or product identity — grounding appears only as opaque `ref-<sha256>` citations. `outputFormat:"json"` for JSON. |
+| `create_ui_spec(productContext, referenceIds?, platform?, implementationFramework?, designSystem?, constraints?, target?, motionIntents?, outputFormat?)` | Evidence-grounded UI spec: layout regions, color/typography tokens, component inventory, motion guidance, acceptance criteria with named verifiers, provenance. `referenceIds` (max 5) grounds it in entries you already know; omit it and the tool retrieves. Returns no corpus content, path, url or product identity — grounding appears only as opaque `ref-<sha256>` citations. `outputFormat:"json"` for JSON. Deterministic by default; with the server-side env tuple configured it may attach an optional `modelProposal` that is proposal-only and never accepted into token authority (see the proposal lane note above). |
 
 > **Migration:** `generate_design_prompt` was a public tool until the C3 slice and is now
 > deregistered — `createServer()` does not register it and a `tools/call` for it is rejected.

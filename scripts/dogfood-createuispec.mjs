@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 import { request as httpRequest, createServer } from "node:http";
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { createServer as createHttpsServer } from "node:https";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -18,12 +20,34 @@ const PROVIDER_KEYS = [
   "XAI_API_KEY",
   "VOYAGE_API_KEY",
 ];
+const MODEL_ENV_KEYS = [
+  "CREATE_UI_SPEC_MODEL_PROVIDER",
+  "CREATE_UI_SPEC_MODEL_BASE_URL",
+  "CREATE_UI_SPEC_MODEL_API_KEY",
+  "CREATE_UI_SPEC_MODEL_NAME",
+];
+
+// This task's dogfood fixture secrets. The API key and fake-provider URL are
+// loaded into the ui-server child env (and the store path is its artifact
+// root), so the no-secret-in-served-bytes sweep must treat them as private
+// markers. The raw-body fixture is the malformed provider response; if any
+// served byte ever echoes a raw model body, this catches it.
+const DOGFOOD_MODEL_PROVIDER = "openai";
+const DOGFOOD_MODEL_NAME = "dogfood-proposal-model";
+const DOGFOOD_MODEL_API_KEY = "dogfood-c3-proposal-api-key-7f3a9c";
+const RAW_MODEL_BODY_FIXTURE = "not-json-raw-model-body-fixture";
+const MODEL_ARTIFACT_STORE_DIRNAME = ".create-ui-spec-model-artifacts";
+const MODEL_ARTIFACT_STORE_ROOT = resolve(REPO_ROOT, MODEL_ARTIFACT_STORE_DIRNAME);
+const MODEL_PROPOSAL_DISCLAIMER = "Proposal only; not accepted into token authority.";
 
 // These are the classes of private identity this route must never publish. The
 // response-scoped ids (`evidence-<n>`) are intentionally not included here.
 const PRIVATE_RESPONSE_MARKERS = [
   /\bcorpus-[a-z0-9][a-z0-9_-]*/i,
   /(?:^|[/\\])images-private(?:[/\\]|$)/i,
+  new RegExp(escapeRegExp(DOGFOOD_MODEL_API_KEY)),
+  new RegExp(escapeRegExp(MODEL_ARTIFACT_STORE_DIRNAME)),
+  new RegExp(escapeRegExp(RAW_MODEL_BODY_FIXTURE)),
 ];
 const ALLOW_PENDING_INTENT = process.argv.includes("--allow-pending-intent");
 const INTENT_GATE_MESSAGE = "intent fields are not available yet; land Stream 1 S2 before running dogfood";
@@ -42,12 +66,53 @@ const INTENT_BRIEF = {
   },
 };
 
+// The proposal fixture is served by the fake provider as the model's raw body
+// and is projected into the served envelope as spec.modelProposal, so it must
+// carry no corpus ids, paths, or secret words. It satisfies the strict
+// ModelProposalSchema: the status literal, the exact disclaimer, bounded
+// designDirection, five color tokens, three typography tokens, at most eight
+// bounded motion notes, and bounded contentVoiceGuidance.
+const PROPOSAL_FIXTURE = {
+  status: "proposal-only",
+  disclaimer: MODEL_PROPOSAL_DISCLAIMER,
+  designDirection:
+    "A two-step flow that separates account verification from recovery setup. " +
+    "The form stays on a single column so the eye traces one path, and the " +
+    "primary action remains visible without scrolling on the smallest " +
+    "supported screen. Copy uses short sentences and names each field's " +
+    "purpose above the input rather than beside it.",
+  colorTokens: {
+    primary: "#0b6bcb",
+    surface: "#f7fafc",
+    ink: "#0f172a",
+    muted: "#5b6b7b",
+    accent: "#12b3e8",
+  },
+  typographyTokens: {
+    heading: "Inter",
+    body: "Inter",
+    mono: "JetBrains Mono",
+  },
+  motionNotes: [
+    "Settle the panel 120ms after the last keystroke",
+    "Fade the success confirmation instead of sliding it",
+    "Keep transitions under 200ms on the constrained surface",
+  ],
+  contentVoiceGuidance:
+    "Direct, plain language that names actions by their effect; no brand voice or technical jargon.",
+};
+const PROPOSAL_FIXTURE_JSON = JSON.stringify(PROPOSAL_FIXTURE);
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
 function sleep(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function freePort() {
@@ -122,12 +187,14 @@ function rawRequest(port, options) {
   });
 }
 
-async function startServer() {
+async function startServer(extraEnv = {}) {
   assert(existsSync(SERVER_ENTRY), "dist is missing; run npm run build before dogfood");
 
   const port = await freePort();
   const environment = { ...process.env, C2_NO_DOTENV: "1", CLEAN_UI_PORT: String(port) };
   for (const key of PROVIDER_KEYS) delete environment[key];
+  for (const key of MODEL_ENV_KEYS) delete environment[key];
+  Object.assign(environment, extraEnv);
 
   const child = spawn(process.execPath, [SERVER_ENTRY], {
     cwd: REPO_ROOT,
@@ -207,8 +274,105 @@ function requireEnvelope(response) {
   return response.json;
 }
 
+// A fake OpenAI-compatible provider over TLS with a runtime self-signed cert.
+// The ui-server child is spawned with NODE_TLS_REJECT_UNAUTHORIZED=0 so its
+// fetch trusts the cert. The base URL must pass the config gate: https, no
+// userinfo. Responses omit the model identity so the tagger trusts the pinned
+// request model, and carry the usage the C2 fail-closed path requires.
+async function startFakeProvider() {
+  const tmpDir = mkdtempSync(join(tmpdir(), "c3-model-fake-provider-"));
+  execFileSync(
+    "openssl",
+    [
+      "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+      "-subj", "/CN=localhost",
+      "-keyout", join(tmpDir, "key.pem"),
+      "-out", join(tmpDir, "cert.pem"),
+    ],
+    { stdio: "ignore" },
+  );
+  const key = readFileSync(join(tmpDir, "key.pem"));
+  const cert = readFileSync(join(tmpDir, "cert.pem"));
+
+  const port = await freePort();
+  let behavior = "success";
+  const server = createHttpsServer({ key, cert }, (req, res) => {
+    req.resume();
+    const body = fakeProviderBody(behavior);
+    res.writeHead(behavior === "provider-failure" ? 500 : 200, {
+      "content-type": "application/json",
+    });
+    res.end(body);
+  });
+  await new Promise((resolveReady, rejectReady) => {
+    server.once("error", rejectReady);
+    server.listen(port, "127.0.0.1", resolveReady);
+  });
+
+  return {
+    baseUrl: `https://localhost:${port}/v1`,
+    setBehavior: (next) => {
+      behavior = next;
+    },
+    stop: async () => {
+      await new Promise((resolveClosed) => server.close(resolveClosed));
+      rmSync(tmpDir, { recursive: true, force: true });
+    },
+  };
+}
+
+function fakeProviderBody(behavior) {
+  const usage = { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 };
+  if (behavior === "provider-failure") {
+    return JSON.stringify({ error: "fake provider failure" });
+  }
+  if (behavior === "malformed") {
+    return JSON.stringify({ choices: [{ message: { content: RAW_MODEL_BODY_FIXTURE } }], usage });
+  }
+  return JSON.stringify({ choices: [{ message: { content: PROPOSAL_FIXTURE_JSON } }], usage });
+}
+
+function storeRecordNames() {
+  if (!existsSync(MODEL_ARTIFACT_STORE_ROOT)) return [];
+  return readdirSync(MODEL_ARTIFACT_STORE_ROOT)
+    .filter((name) => name.endsWith(".json"))
+    .sort();
+}
+
+function assertStoreEmpty() {
+  assert(storeRecordNames().length === 0, "model artifact store is not empty before a model case");
+}
+
+function resetStore() {
+  rmSync(MODEL_ARTIFACT_STORE_ROOT, { recursive: true, force: true });
+}
+
+// The store walker proves a success record exists ONLY under
+// .create-ui-spec-model-artifacts/ — no other directory may grow a record.
+const STORE_WALK_EXCLUDED_DIRS = new Set([".git", ".zcode", "node_modules", "dist", "site", "corpus"]);
+
+function findArtifactRecordFiles(dir) {
+  const hits = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith(".") && entry.name !== MODEL_ARTIFACT_STORE_DIRNAME) continue;
+    if (entry.isDirectory()) {
+      if (STORE_WALK_EXCLUDED_DIRS.has(entry.name)) continue;
+      hits.push(...findArtifactRecordFiles(join(dir, entry.name)));
+    } else if (/^uispec-[0-9a-f]{64}\.json$/.test(entry.name)) {
+      hits.push(join(dir, entry.name));
+    }
+  }
+  return hits;
+}
+
+function assertTokensUnavailable(envelope) {
+  assert(envelope.spec?.colorTokens === null, "accepted color tokens became available");
+  assert(envelope.spec?.typographyTokens === null, "accepted typography tokens became available");
+}
+
 async function run() {
   const server = await startServer();
+  let fakeProvider = null;
   try {
     const nonce = parseNonce(await request(server.baseUrl, "/api/csrf"));
 
@@ -240,6 +404,14 @@ async function run() {
       );
     }
 
+    // The no-config lane must leave the envelope free of any model trace:
+    // execution metadata is absent, and the spec carries no proposal.
+    assert(first.modelExecution === undefined, "modelExecution present on the no-config lane");
+    assert(first.modelExecutionSha256 === undefined, "modelExecutionSha256 present on the no-config lane");
+    assert(first.spec?.modelProposal === undefined, "modelProposal present on the no-config lane");
+    assertTokensUnavailable(first);
+    const baseSemantic = first.semanticSpecSha256;
+
     // Repeat the same semantic request after the timestamp has advanced. The
     // semantic identity must hold while timestamp-bearing hashes vary.
     await sleep(20);
@@ -254,6 +426,7 @@ async function run() {
     );
     assert(first.semanticSpecSha256 === second.semanticSpecSha256, "semantic hash changed for identical inputs");
     assert(first.specSha256 !== second.specSha256, "spec hash did not change with generation time");
+    console.log("dogfood-createuispec: PASS no-config");
 
     // CSRF and origin guards run before body parsing or the producer.
     const noCsrf = await request(server.baseUrl, "/api/create-ui-spec", {
@@ -298,6 +471,141 @@ async function run() {
     });
     assert(hostileHost.status === 403, "non-loopback Host was not refused");
 
+    // ── Model-lane cases ────────────────────────────────────────────────────
+    // Each case spawns its own ui-server with a case-specific env overlay so
+    // the model configuration is resolved per case. The fake provider serves
+    // scriptable responses; its URL becomes a private response marker.
+    resetStore();
+    fakeProvider = await startFakeProvider();
+    PRIVATE_RESPONSE_MARKERS.push(new RegExp(escapeRegExp(fakeProvider.baseUrl)));
+
+    const baseModelEnv = {
+      CREATE_UI_SPEC_MODEL_PROVIDER: DOGFOOD_MODEL_PROVIDER,
+      CREATE_UI_SPEC_MODEL_BASE_URL: fakeProvider.baseUrl,
+      CREATE_UI_SPEC_MODEL_API_KEY: DOGFOOD_MODEL_API_KEY,
+      CREATE_UI_SPEC_MODEL_NAME: DOGFOOD_MODEL_NAME,
+      NODE_TLS_REJECT_UNAUTHORIZED: "0",
+    };
+    const partialModelEnv = {
+      CREATE_UI_SPEC_MODEL_PROVIDER: DOGFOOD_MODEL_PROVIDER,
+      CREATE_UI_SPEC_MODEL_BASE_URL: fakeProvider.baseUrl,
+      CREATE_UI_SPEC_MODEL_NAME: DOGFOOD_MODEL_NAME,
+      NODE_TLS_REJECT_UNAUTHORIZED: "0",
+    };
+
+    async function withModelServer(extraEnv, runBody) {
+      const modelServer = await startServer(extraEnv);
+      try {
+        const modelNonce = parseNonce(await request(modelServer.baseUrl, "/api/csrf"));
+        return await runBody(modelServer, modelNonce);
+      } finally {
+        await modelServer.stop();
+      }
+    }
+
+    // Partial config (provider + base URL + name, no API key) must surface
+    // invalid-configuration and keep the deterministic scaffold — never a
+    // silent fallback to determinism that pretends no model was intended.
+    resetStore();
+    assertStoreEmpty();
+    await withModelServer(partialModelEnv, async (modelServer, modelNonce) => {
+      const envelope = requireEnvelope(await postJson(modelServer.baseUrl, modelNonce, INTENT_BRIEF));
+      assert(envelope.modelExecution?.state === "invalid-configuration", "partial config did not surface invalid-configuration");
+      assert(envelope.semanticSpecSha256 === baseSemantic, "partial config changed the deterministic scaffold");
+      assertTokensUnavailable(envelope);
+    });
+    assertStoreEmpty();
+    console.log("dogfood-createuispec: PASS partial-config");
+
+    // Provider failure: the pinned fake provider answers 500. The envelope
+    // must show call-failed, serve the identical deterministic scaffold, and
+    // write no record.
+    resetStore();
+    assertStoreEmpty();
+    fakeProvider.setBehavior("provider-failure");
+    await withModelServer(baseModelEnv, async (modelServer, modelNonce) => {
+      const envelope = requireEnvelope(await postJson(modelServer.baseUrl, modelNonce, INTENT_BRIEF));
+      assert(envelope.modelExecution?.state === "call-failed", "provider failure did not surface call-failed");
+      assert(envelope.semanticSpecSha256 === baseSemantic, "provider failure changed the deterministic scaffold");
+      assertTokensUnavailable(envelope);
+    });
+    assertStoreEmpty();
+    console.log("dogfood-createuispec: PASS provider-failure");
+
+    // Malformed response: the fake provider answers 200 with a non-JSON raw
+    // body. The envelope must show proposal-rejected, keep the deterministic
+    // scaffold, and write no record.
+    resetStore();
+    assertStoreEmpty();
+    fakeProvider.setBehavior("malformed");
+    await withModelServer(baseModelEnv, async (modelServer, modelNonce) => {
+      const envelope = requireEnvelope(await postJson(modelServer.baseUrl, modelNonce, INTENT_BRIEF));
+      assert(envelope.modelExecution?.state === "proposal-rejected", "malformed response did not surface proposal-rejected");
+      assert(envelope.semanticSpecSha256 === baseSemantic, "malformed response changed the deterministic scaffold");
+      assertTokensUnavailable(envelope);
+    });
+    assertStoreEmpty();
+    console.log("dogfood-createuispec: PASS malformed-response");
+
+    // Persistence failure: a FILE at the store root blocks the store's mkdir.
+    // The provider call succeeds, but the record write fails and the envelope
+    // must show persistence-failed with the deterministic scaffold restored.
+    resetStore();
+    writeFileSync(MODEL_ARTIFACT_STORE_ROOT, "blocking store mkdir\n");
+    fakeProvider.setBehavior("success");
+    await withModelServer(baseModelEnv, async (modelServer, modelNonce) => {
+      const envelope = requireEnvelope(await postJson(modelServer.baseUrl, modelNonce, INTENT_BRIEF));
+      assert(envelope.modelExecution?.state === "persistence-failed", "blocked store did not surface persistence-failed");
+      assert(envelope.semanticSpecSha256 === baseSemantic, "persistence failure changed the deterministic scaffold");
+      assertTokensUnavailable(envelope);
+    });
+    rmSync(MODEL_ARTIFACT_STORE_ROOT, { force: true });
+    assertStoreEmpty();
+    console.log("dogfood-createuispec: PASS persistence-failure");
+
+    // Successful proposal: full tuple, the fake provider returns a valid
+    // proposal. The proposal changes semantic identity, accepted-token
+    // positions stay null, exactly one record exists under the store root,
+    // and a rerun keeps the same semantic identity without a second record.
+    resetStore();
+    assertStoreEmpty();
+    fakeProvider.setBehavior("success");
+    let successEnvelope;
+    await withModelServer(baseModelEnv, async (modelServer, modelNonce) => {
+      successEnvelope = requireEnvelope(await postJson(modelServer.baseUrl, modelNonce, INTENT_BRIEF));
+      assert(successEnvelope.modelExecution?.state === "succeeded", "valid proposal did not surface succeeded");
+      assert(successEnvelope.modelExecution.provider === DOGFOOD_MODEL_PROVIDER, "succeeded run reported the wrong provider");
+      assert(successEnvelope.modelExecution.model === DOGFOOD_MODEL_NAME, "succeeded run reported the wrong model");
+      assert(successEnvelope.spec?.modelProposal?.status === "proposal-only", "proposal status is not proposal-only");
+      assert(
+        successEnvelope.spec?.modelProposal?.disclaimer === MODEL_PROPOSAL_DISCLAIMER,
+        "proposal disclaimer literal changed",
+      );
+      assert(
+        successEnvelope.semanticSpecSha256 !== baseSemantic,
+        "a visible proposal did not change the semantic identity",
+      );
+      assertTokensUnavailable(successEnvelope);
+
+      const records = findArtifactRecordFiles(REPO_ROOT);
+      assert(records.length === 1, `artifact record exists outside the store: ${records.join(", ")}`);
+      const expectedRecord = join(MODEL_ARTIFACT_STORE_ROOT, `${successEnvelope.artifactId}.json`);
+      assert(records[0] === expectedRecord, "artifact record is not at its store path");
+      const stored = JSON.parse(readFileSync(expectedRecord, "utf-8"));
+      assert(
+        stored.semanticSpecSha256 === successEnvelope.semanticSpecSha256,
+        "stored record semantic hash does not match the served envelope",
+      );
+
+      await sleep(20);
+      const rerun = requireEnvelope(await postJson(modelServer.baseUrl, modelNonce, INTENT_BRIEF));
+      assert(rerun.semanticSpecSha256 === successEnvelope.semanticSpecSha256, "semantic identity changed on rerun");
+      assert(rerun.artifactId === successEnvelope.artifactId, "artifactId changed on rerun");
+      assert(storeRecordNames().length === 1, "rerun wrote a duplicate record (first-write-wins violated)");
+    });
+    assert(storeRecordNames().length === 1, "success run did not leave exactly one record");
+    console.log("dogfood-createuispec: PASS successful-proposal");
+
     console.log(
       intentPending
         ? "dogfood-createuispec: PASS (S2 pending; rerun without --allow-pending-intent after S2)"
@@ -305,6 +613,8 @@ async function run() {
     );
   } finally {
     await server.stop();
+    if (fakeProvider !== null) await fakeProvider.stop();
+    resetStore();
   }
 }
 

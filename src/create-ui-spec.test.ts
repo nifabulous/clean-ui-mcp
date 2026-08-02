@@ -912,6 +912,7 @@ describe("create-ui-spec producer — MCP leaf gate accepts real producer output
       status: "ok",
       summary: "Design spec produced.",
       data: spec,
+      modelExecutionState: env.modelExecution?.state ?? null,
       referenceIds: [...spec.citedReferences],
       // resultCount is the ARTIFACT count (one spec), not the retrieval match
       // count the core records — the adapter concern Task 3 owns.
@@ -1149,6 +1150,7 @@ describe("create-ui-spec producer — Task 2 adapter-facing evidence result path
         status: "ok",
         summary: "Design spec produced.",
         data: envelope.spec,
+        modelExecutionState: envelope.modelExecution?.state ?? null,
         referenceIds: [...envelope.spec.citedReferences],
         // NOT `envelope.retrieval`: its resultCount counts retrieved corpus
         // observations, while the published create_ui_spec contract documents
@@ -1390,6 +1392,7 @@ describe("create-ui-spec producer — Task 2 adapter-facing evidence result path
       status: "ok",
       summary: "Design spec produced.",
       data: envelope.spec,
+      modelExecutionState: envelope.modelExecution?.state ?? null,
       referenceIds: [...envelope.spec.citedReferences],
       retrieval,
       warnings: envelope.warnings.map((w) => ({ code: w.code, message: w.message })),

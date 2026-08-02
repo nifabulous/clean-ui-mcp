@@ -454,6 +454,8 @@ describe("create_ui_spec transports — injected model outcome secrecy and parit
     expect(httpEnvelope).toEqual(httpProduced);
     expect(mcpProduced).toEqual(httpProduced);
     expect((mcp.structuredContent as { data: unknown }).data).toEqual(httpEnvelope.spec);
+    expect((mcp.structuredContent as { modelExecutionState?: string | null }).modelExecutionState)
+      .toBe(fixture.expectedExecution ?? null);
     expect(mcp.content[0]?.text).toBe(httpEnvelope.designMarkdown);
 
     const bytes = `${http.body}\n${JSON.stringify(mcp)}`;

@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   TOOL_DESCRIPTORS, TOOL_CATALOG, ToolResultSchemas, ToolInputSchemas,
   parseToolResult, RetrievalState, Evidence, UiSpec, ModelProposalSchema, CreateUiSpecInput,
+  ModelExecutionStateSchema,
   ALLOWED_RETRIEVAL_STATES, CATALOG_DIGEST, LEGACY_TO_BETA_MAP,
   REMOVED_TOOL_NAMES, CREATE_UI_SPEC_FREE_TEXT_LEAVES, findUnsafeCreateUiSpecLeaves,
   findCreateUiSpecCitationInconsistencies,
@@ -1925,6 +1926,7 @@ describe("C3: status \"error\" requires empty evidence (error-branch reference-s
   function errorEnvelopeWithEvidence(evidence: unknown[]): JsonObject {
     return {
       tool: "create_ui_spec", schemaVersion: "1.0", status: "error", data: null,
+      modelExecutionState: null,
       summary: "Invalid input", referenceIds: [],
       retrieval: { mode: "none", modality: "none", resultCount: 0, fallbackUsed: false, attemptedCount: 0, attemptedModes: [] },
       warnings: [],
@@ -2195,4 +2197,30 @@ describe("Task 1b: structural leaf-value gate (create_ui_spec)", () => {
       expect(ok.success, desc.name).toBe(true);
     }
   });
+});
+
+it("ModelExecutionStateSchema matches the model contracts' states", async () => {
+  const { ModelExecutionSchema } = await import("./create-ui-spec-model-contracts.js");
+  // ModelExecutionSchema is a z.union of a discriminated union (the four
+  // failure states) and a plain object (succeeded). Recurse into .options so
+  // every leaf z.object's `state` literal is collected.
+  const collectStates = (schema: unknown): string[] => {
+    const withOptions = schema as { options?: unknown[] } | undefined;
+    if (withOptions?.options) return withOptions.options.flatMap(collectStates);
+    const shape = (schema as { shape?: Record<string, { value?: string }> } | undefined)?.shape;
+    const state = shape?.state as { value?: string } | undefined;
+    return typeof state?.value === "string" ? [state.value] : [];
+  };
+  const modelStates = new Set(collectStates(ModelExecutionSchema));
+  const sharedStates = new Set(ModelExecutionStateSchema.options);
+  expect(sharedStates).toEqual(modelStates);
+});
+
+it("refuses modelExecutionState on tools without the descriptor flag", () => {
+  // critique_ui has hasEvidence but no model lane; its envelope's
+  // modelExecutionState slot is z.never().optional(), so the key must be
+  // refused, not ignored.
+  const payload = { ...cloneToolResult(makeValidSuccess("critique_ui" as never)), modelExecutionState: "succeeded" };
+  const gate = parseToolResult(payload);
+  expect(gate.ok).toBe(false);
 });

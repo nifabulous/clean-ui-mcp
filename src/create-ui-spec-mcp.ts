@@ -252,15 +252,11 @@ export async function handleCreateUiSpec(
     summary: OK_SUMMARY,
     // The validated UiSpec, NOT the artifact envelope.
     data: envelope.spec,
-    // NOTE — modelExecution is DELIBERATELY not projected here. It is
-    // envelope-level metadata whose only consumer is the playground (Task 7),
-    // which is served over HTTP. Over MCP, the only discriminator is
-    // `data.modelProposal` (present ⇔ succeeded); the non-success states are
-    // intentionally indistinguishable because the served rendering and this
-    // projection are byte-identical across them (secrecy invariant) — no MCP
-    // client decision could differ on the state, so projecting it would add a
-    // key to the shared strict envelope schema without adding signal. Pinned
-    // by a test in create-ui-spec-mcp.test.ts.
+    // Safe execution-state enum (or null when no model ran). The full
+    // envelope — modelExecution included — is already served by the HTTP
+    // adapter, so this projects strictly less than another transport
+    // publishes; the secrecy invariant kept here is "no raw provider data".
+    modelExecutionState: produced.envelope.modelExecution?.state ?? null,
     // `citedReferences` ONLY. Response-scoped evidence ids (`evidence-N`) are a
     // separate domain and never become referenceIds.
     referenceIds: [...envelope.spec.citedReferences],
@@ -359,6 +355,9 @@ function errorResult(transportError: CreateUiSpecTransportError): CreateUiSpecMc
     status: "error",
     summary: ERROR_SUMMARY,
     data: null,
+    // No model ran on a failed request; the key stays present on both
+    // branches so the envelope key set is branch-independent.
+    modelExecutionState: null,
     referenceIds: [],
     retrieval: { ...ERROR_RETRIEVAL, attemptedModes: [] },
     warnings: [],

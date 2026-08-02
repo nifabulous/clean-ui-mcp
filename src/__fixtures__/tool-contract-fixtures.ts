@@ -46,6 +46,10 @@ function successEnvelope(
     status: "ok",
     summary: "Synthetic valid result",
     data,
+    // create_ui_spec is the only tool with the model-lane descriptor flag; its
+    // envelope carries the safe execution-state key on BOTH branches (null when
+    // no model ran). Other tools' envelopes must not carry it at all.
+    ...(tool === "create_ui_spec" ? { modelExecutionState: null } : {}),
     referenceIds,
     retrieval: {
       mode,
@@ -468,6 +472,7 @@ export function makeValidError(tool: ToolName): JsonObject | null {
       summary: message,
       data: null,
       referenceIds: [],
+      ...(tool === "create_ui_spec" ? { modelExecutionState: null } : {}),
       retrieval: { mode: "none", modality: "none", resultCount: 0, fallbackUsed: false, attemptedCount: 0, attemptedModes: [] },
       warnings: [],
       error: { code, message, retryable },

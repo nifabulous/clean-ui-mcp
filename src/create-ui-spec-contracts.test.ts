@@ -350,7 +350,7 @@ describe("SanitizedEvidenceSchema", () => {
     // the frozen recipe row, and the fixed explicit-reference string). The screen
     // must not narrow the production path.
     for (const summary of [
-      "dashboard reference with 3 regions",
+      "dashboard reference, 3 regions, compact spacing, slight-round corners, no shadows, borders, accent #2563eb, Inter + Inter, layout three-column",
       "landing-page reference",
       "Corpus observation reference",
       "Deterministic c3-fallback-v1 recipe",

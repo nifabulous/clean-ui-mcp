@@ -571,6 +571,29 @@ function sanitizeCorpusObservation(id: string, entry: CorpusEntryT): SanitizedEv
   }
   // usesStickyHeader / usesIconography: the corpus schema does not record these
   // truthfully, so we OMIT them (undefined) rather than fabricate.
+  const visual = entry.visual;
+  if (visual?.spacingDensity) structuredFacts.spacingDensity = visual.spacingDensity;
+  if (visual?.cornerStyle) structuredFacts.cornerStyle = visual.cornerStyle;
+  if (typeof visual?.usesShadows === "boolean") structuredFacts.usesShadows = visual.usesShadows;
+  if (typeof visual?.usesBorders === "boolean") structuredFacts.usesBorders = visual.usesBorders;
+  if (visual?.accentColor) structuredFacts.accentColor = visual.accentColor;
+  if (visual?.colorRoles) structuredFacts.colorRoles = {
+    canvas: visual.colorRoles.canvas,
+    surface: visual.colorRoles.surface,
+    ink: visual.colorRoles.ink,
+    muted: visual.colorRoles.muted, // nullable per the corpus schema
+    accent: visual.colorRoles.accent,
+  };
+  const pairing = visual?.typePairing;
+  if (pairing?.display && pairing.body) {
+    // `+` separator, NOT "/" — the summary content screen rejects path-like
+    // strings (PATH_OR_URL_PATTERN), and "Display / Body" trips it.
+    structuredFacts.typePairing = `${pairing.display} + ${pairing.body}`;
+  }
+  const layoutStructure = entry.layout;
+  if (layoutStructure?.form) structuredFacts.layoutForm = layoutStructure.form;
+  const roles = layoutStructure?.regions?.map((r) => r.role).filter(Boolean);
+  if (roles && roles.length > 0) structuredFacts.layoutRoles = roles.slice(0, 8);
 
   const evidence: SanitizedEvidence = {
     id,

@@ -415,7 +415,7 @@ export const TypePairing = z.object({
  * legacy dominantColors (kept for backward compat) — populate when the role
  * mapping is confident; cannot be safely auto-inferred from unordered hex lists.
  */
-const HexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+export const HexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 export const ColorRoles = z.object({
   canvas:  HexColor,                       // app background
   surface: HexColor,                       // cards/panels

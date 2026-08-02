@@ -1223,8 +1223,8 @@ describe("create-ui-spec producer — Task 2 adapter-facing evidence result path
   it("a corpus patternType outside the closed enum cannot reach evidence[].summary", async () => {
     // The adapter result path is what PUBLISHES evidence[].summary — the persisted
     // envelope carries only `publicEvidenceIds`. The recipe-owned summary template
-    // interpolates structuredFacts.pattern verbatim (`"<pattern>" reference with N
-    // regions`), so an entry whose patternType is not a closed PatternType token
+    // interpolates structuredFacts.pattern verbatim (`"<pattern>" reference, N
+    // regions, ...`), so an entry whose patternType is not a closed PatternType token
     // would publish that raw string. Every sanitized row is therefore parsed
     // through SanitizedEvidenceSchema at construction, whose StructuredFacts pins
     // `pattern` to PatternType — so this is refused, not published.
@@ -1552,4 +1552,33 @@ describe("create-ui-spec producer — an intent object with no members is not in
     expect(res.envelope.spec.context.colorIntent).toEqual({ mood: "calm" });
     expect(res.envelope.spec.context.typeIntent).toEqual({ density: "compact" });
   });
+});
+
+it("round-trips a real-shaped corpus entry through the widened projection", async () => {
+  // The exact bug class this pins: a `primary`-shaped fact (the old draft)
+  // made every real entry fail SanitizedEvidenceSchema and look like a
+  // retrieval failure. A real-shaped entry — canvas/surface/ink/muted/accent,
+  // muted nullable (src/schema.ts:420-426) — must survive with colorRoles
+  // intact and a summary that includes the derived accent.
+  const entryData = entry("internal-1", "product-Alpha", "dashboard", {
+    layout: { form: "three-column", regions: [{ role: "primary-nav" }, { role: "main-canvas" }] },
+    visual: {
+      colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: null, accent: "#2563eb" },
+      spacingDensity: "compact", cornerStyle: "slight-round",
+      usesShadows: false, usesBorders: true,
+      accentColor: "#2563eb", typePairing: { display: "Inter", body: "Inter" },
+    },
+  });
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps([entryData], [{ entry: entryData, score: 5 }]),
+  );
+  const row = out.sanitizedEvidence.find((e) => e.kind === "corpus-observation");
+  expect(row).toBeDefined();
+  if (!row) return;
+  expect(SanitizedEvidenceSchema.safeParse(row).success).toBe(true);
+  expect(row.structuredFacts.colorRoles).toEqual({
+    canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: null, accent: "#2563eb",
+  });
+  expect(row.summary).toContain("accent #2563eb");
 });

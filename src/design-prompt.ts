@@ -42,7 +42,7 @@ export interface DesignBrief {
 }
 
 /** Pick the value that appears most often across entries (plurality vote). */
-function plurality<T>(values: T[]): T | undefined {
+export function plurality<T>(values: T[]): T | undefined {
   if (!values.length) return undefined;
   const counts = new Map<T, number>();
   for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);

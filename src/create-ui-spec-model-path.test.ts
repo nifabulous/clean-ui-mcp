@@ -138,6 +138,28 @@ function dependencies(
   return makeCreateUiSpecDependencies(makeReader(), now, model);
 }
 
+/** A reader whose ranked search returns 3 corpus observations with colorRoles. */
+function rankedCorpusReader(): CorpusReader {
+  const reader = makeReader();
+  const entries = ["A", "B", "C"].map((k) => ({
+    id: `internal-${k}`,
+    patternType: "dashboard",
+    visual: {
+      colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: k === "C" ? "#1d4ed8" : "#2563eb" },
+      spacingDensity: "compact",
+      cornerStyle: "slight-round",
+      usesShadows: false,
+      usesBorders: true,
+      accentColor: "#2563eb",
+      typePairing: { display: "Inter", body: "Inter" },
+    },
+  })) as unknown as CorpusEntryT[];
+  (reader.searchRanked as ReturnType<typeof vi.fn>).mockResolvedValue(
+    entries.map((entry, i) => ({ entry, score: 5 - i, searchMode: "keyword" })),
+  );
+  return reader;
+}
+
 async function deterministicBaseline() {
   return createUiSpecForAdapter(REQUEST, dependencies(FIXED_NOW));
 }
@@ -158,6 +180,33 @@ function expectDeterministicIdentity(
 }
 
 describe("createUiSpec proposal-only model path", () => {
+  it("applies corpus synthesis on the no-model path but NOT on the model path", async () => {
+    const noModel = await createUiSpecForAdapter(
+      REQUEST,
+      makeCreateUiSpecDependencies(rankedCorpusReader(), FIXED_NOW),
+    );
+    // (a) no-model: root direction cites the matched corpus ids and tokens are
+    // populated from the accent plurality.
+    expect(noModel.envelope.spec.designDirection).toContain("evidence-2");
+    expect(noModel.envelope.spec.colorTokens).not.toBeNull();
+    expect(noModel.envelope.spec.colorTokens?.primary).toBe("#2563eb");
+
+    // (b) model-success with the SAME reader: root direction keeps the recipe
+    // echo, root tokens stay null, and the proposal is the only direction
+    // content — the whole synthesis object is gated on proposal === undefined.
+    const withModel = await createUiSpecForAdapter(
+      REQUEST,
+      makeCreateUiSpecDependencies(rankedCorpusReader(), FIXED_NOW, {
+        kind: "configured",
+        runtime: makeRuntime(),
+      }),
+    );
+    expect(withModel.envelope.spec.designDirection).toBe(REQUEST.productContext);
+    expect(withModel.envelope.spec.colorTokens).toBeNull();
+    expect(withModel.envelope.spec.typographyTokens).toBeNull();
+    expect(withModel.envelope.spec.modelProposal?.status).toBe("proposal-only");
+  });
+
   it("keeps the deterministic envelope shape when no model runtime is configured", async () => {
     const baseline = await deterministicBaseline();
     const result = await createUiSpecForAdapter(

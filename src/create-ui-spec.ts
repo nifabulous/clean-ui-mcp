@@ -82,6 +82,7 @@ import {
   ModelExecutionSchema,
   type ModelExecution,
 } from "./create-ui-spec-model-contracts.js";
+import { createUiSpecDeterministic } from "./create-ui-spec-deterministic.js";
 import { ModelArtifactRollbackIncompleteError } from "./model-artifact-store.js";
 import {
   buildCorpusObservationSummary,
@@ -880,6 +881,18 @@ function assembleSpec(
   // ----- Map the parsed candidate's decisions into UiSpec fields -----
   const specFields = mapCandidateToSpecFields(parsedCandidate);
 
+  // Deterministic synthesis (Plan 2): corpus-grounded direction, token
+  // plurality, and layout regions — ONLY on the no-model path. When a model
+  // proposal is present, NONE of the synthesis applies: the root direction
+  // keeps the recipe echo, root tokens stay null (UiSpec superRefine), and
+  // the proposal is the only direction content. Gating the whole synthesis
+  // object (not just the token fields) is deliberate — a corpus-synthesized
+  // root direction on the model path would be a behavior change the spec
+  // never approved.
+  const synthesis = proposal === undefined
+    ? createUiSpecDeterministic(evidence, request)
+    : null;
+
   // Cited decisions: the designDirection ALWAYS echoes the requester's brief
   // under the deterministic fallback recipe (editorial authority), citing ONLY
   // the recipe/system evidence id. Corpus observations that were retrieved are
@@ -888,12 +901,51 @@ function assembleSpec(
   // alongside the recipe id.
   const corpusLane = corpusEvidenceIds;
   const editorialLane = [RECIPE_EVIDENCE_ID, ...publicReferenceIds];
-  const citedDecisions = buildCitedDecisions(editorialLane);
+  const recipeDecisions = buildCitedDecisions(editorialLane);
+  // The synthesized direction text cites the corpus observation ids, so the
+  // citation ledger must match: the recipe's editorial designDirection
+  // decision is REPLACED (not augmented) by a corpus-authority decision
+  // citing those ids, when synthesis supplied the direction.
+  const citedDecisions = synthesis?.designDirection
+    ? [
+        ...recipeDecisions.filter((d) => d.field !== "designDirection"),
+        {
+          // NOT "corpus-..." prefixed: the no-secret-in-served-bytes sweep
+          // treats any "corpus-" token as private corpus identity.
+          id: "designDirection-evidence-synthesis",
+          field: "designDirection",
+          // "corpus-evidence" is the CitedDecision authority enum token
+          // (tool-contracts.ts:537), NOT the camelCase lane field name.
+          authority: "corpus-evidence",
+          evidenceIds: corpusEvidenceIds,
+          readiness: "available",
+        },
+      ]
+    : recipeDecisions;
 
-  // Unavailable decisions (model-dependent fields) — recipe-owned reasons.
-  const unavailableDecisions: UiSpecT["unavailableDecisions"] = RECIPE.unavailableDecisions.map(
-    (d) => ({ field: d.field, reason: d.reason }),
-  );
+  // C3 served-content posture: prose-judgment fields stay unavailable with
+  // recipe-owned reasons until the provenance-governance flip permits them.
+  const c3Unavailable: UiSpecT["unavailableDecisions"] = [
+    { field: "rejectedDefaults", reason: "Anti-pattern prose is not served; derived from corpus judgments after governance." },
+    { field: "voice", reason: "Voice analysis prose is not served until provenance governance lands." },
+    { field: "mood", reason: "Mood is not served until provenance governance lands." },
+  ];
+  // The recipe ALREADY declares a colorTokens unavailableDecision
+  // (fallback-recipe-v1.json); the UiSpec gate requires unavailableDecisions
+  // fields to be UNIQUE (tool-contracts.ts:778-781) and forbids a colorTokens
+  // row when tokens are available (:803-804). So: when synthesis runs, drop
+  // the recipe's colorTokens row and re-add exactly ONE row only when the
+  // synthesis leaves tokens null. When synthesis did not run (no corpus match
+  // or model path), the recipe's row survives untouched.
+  const unavailableDecisions: UiSpecT["unavailableDecisions"] = [
+    ...RECIPE.unavailableDecisions
+      .filter((d) => synthesis === null || d.field !== "colorTokens")
+      .map((d) => ({ field: d.field, reason: d.reason })),
+    ...(synthesis !== null && synthesis.colorTokens === null
+      ? [{ field: "colorTokens", reason: "Fewer than 3 matched entries contribute color roles." }]
+      : []),
+    ...c3Unavailable,
+  ];
 
   // Acceptance criteria: the recipe's single manual criterion.
   const criteria = RECIPE.acceptanceCriteria;
@@ -954,12 +1006,16 @@ function assembleSpec(
       ...(request.colorIntent !== undefined ? { colorIntent: request.colorIntent } : {}),
       ...(request.typeIntent !== undefined ? { typeIntent: request.typeIntent } : {}),
     },
-    designDirection: specFields.designDirection,
+    designDirection: synthesis?.designDirection ?? specFields.designDirection,
     rejectedDefaults: specFields.rejectedDefaults,
-    layoutRegions: specFields.layoutRegions,
-    responsiveBehavior: specFields.responsiveBehavior,
+    layoutRegions: synthesis && synthesis.layoutRegions.length > 0
+      ? synthesis.layoutRegions
+      : specFields.layoutRegions,
+    responsiveBehavior: synthesis && synthesis.responsiveBehavior.length > 0
+      ? synthesis.responsiveBehavior
+      : specFields.responsiveBehavior,
     componentInventory: specFields.componentInventory,
-    colorTokens: null,
+    colorTokens: synthesis?.colorTokens ?? null,
     colorTokenAuthority: "editorial",
     typographyTokens: null,
     typographyTokenAuthority: "editorial",

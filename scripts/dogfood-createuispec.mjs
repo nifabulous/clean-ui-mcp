@@ -43,7 +43,10 @@ const MODEL_PROPOSAL_DISCLAIMER = "Proposal only; not accepted into token author
 // These are the classes of private identity this route must never publish. The
 // response-scoped ids (`evidence-<n>`) are intentionally not included here.
 const PRIVATE_RESPONSE_MARKERS = [
-  /\bcorpus-[a-z0-9][a-z0-9_-]*/i,
+  // Raw corpus entry ids are private identity; the CLOSED schema enums
+  // "corpus-evidence" (CitedDecision authority) and "corpus-observation"
+  // (Evidence kind) are schema tokens, not raw ids, and must not trip it.
+  /\bcorpus-(?!evidence|observation\b)[a-z0-9][a-z0-9_-]*/i,
   /(?:^|[/\\])images-private(?:[/\\]|$)/i,
   new RegExp(escapeRegExp(DOGFOOD_MODEL_API_KEY)),
   new RegExp(escapeRegExp(MODEL_ARTIFACT_STORE_DIRNAME)),
@@ -395,7 +398,16 @@ function findArtifactRecordFiles(dir) {
 }
 
 function assertTokensUnavailable(envelope) {
-  assert(envelope.spec?.colorTokens === null, "accepted color tokens became available");
+  // Plan 2 (deterministic synthesis) populates root colorTokens from corpus
+  // plurality on the no-model path, so the invariant is now: editorial
+  // authority, and any populated value is a hex color. The model path still
+  // requires null tokens (UiSpec superRefine enforces it separately).
+  assert(envelope.spec?.colorTokenAuthority === "editorial", "accepted token authority changed");
+  if (envelope.spec?.colorTokens !== null && envelope.spec?.colorTokens !== undefined) {
+    for (const value of Object.values(envelope.spec.colorTokens)) {
+      assert(/^#[0-9a-fA-F]{3,8}$/.test(String(value)), `color token not hex: ${String(value)}`);
+    }
+  }
   assert(envelope.spec?.typographyTokens === null, "accepted typography tokens became available");
 }
 

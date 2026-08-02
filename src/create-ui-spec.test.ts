@@ -1623,3 +1623,65 @@ it("reports sparseCoverage when both keyword and similarity return nothing", asy
   expect(out.envelope.warnings.map((w) => w.code)).toContain("sparseCoverage");
   expect(out.envelope.retrieval.mode).toBe("structured-fallback");
 });
+
+function corpusEntryWithRoles(id: string, accent: string): FixtureEntry {
+  return entry(id, `product-${id}`, "dashboard", {
+    layout: { form: "three-column", regions: [{ role: "main-canvas" }] },
+    visual: {
+      colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent },
+      spacingDensity: "compact", cornerStyle: "slight-round",
+      usesShadows: false, usesBorders: true,
+      accentColor: accent, typePairing: { display: "Inter", body: "Inter" },
+    },
+  });
+}
+
+function mcqPayload(out: Awaited<ReturnType<typeof createUiSpecForAdapter>>): Record<string, unknown> {
+  const spec = out.envelope.spec;
+  return {
+    tool: "create_ui_spec", schemaVersion: "1.0", status: "ok", summary: "Design spec produced.",
+    data: spec, modelExecutionState: null,
+    referenceIds: [...spec.citedReferences],
+    retrieval: { ...out.envelope.retrieval, resultCount: 1 },
+    warnings: out.envelope.warnings.map((w) => ({ code: w.code, message: w.message })),
+    evidence: projectSanitizedEvidenceToMcpEvidence(out.sanitizedEvidence),
+  };
+}
+
+it("ledgers the synthesized direction against the corpus evidence ids", async () => {
+  const corpus = ["a", "b", "c"].map((k, i) => corpusEntryWithRoles(`internal-${k}`, i === 2 ? "#1d4ed8" : "#2563eb"));
+  const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps(corpus, ranked),
+  );
+  const spec = out.envelope.spec;
+  const ledger = spec.citedDecisions.find((d) => d.id === "designDirection-evidence-synthesis");
+  expect(ledger).toBeDefined();
+  expect(ledger!.authority).toBe("corpus-evidence");
+  expect(ledger!.evidenceIds).toEqual(["evidence-2", "evidence-3", "evidence-4"]);
+  expect(spec.citedDecisions.some((d) => d.id === "designDirection-editorial-1")).toBe(false);
+  // The full produced envelope passes the shared gate with tokens POPULATED.
+  const r = ToolResultSchemas.create_ui_spec.safeParse(mcqPayload(out));
+  expect(r.success, r.success ? "" : JSON.stringify(r.error.issues)).toBe(true);
+  expect(spec.colorTokens).not.toBeNull();
+  expect(spec.unavailableDecisions.some((d) => d.field === "colorTokens")).toBe(false);
+});
+
+it("passes the gate with tokens unavailable and exactly one colorTokens row", async () => {
+  // Two observations only — below the >= 3 token threshold. The recipe's
+  // colorTokens row is replaced by exactly ONE conditional row; a duplicate
+  // would fail the gate's uniqueness check.
+  const corpus = ["a", "b"].map((k) => corpusEntryWithRoles(`internal-${k}`, "#2563eb"));
+  const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps(corpus, ranked),
+  );
+  const spec = out.envelope.spec;
+  const rows = spec.unavailableDecisions.filter((d) => d.field === "colorTokens");
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.reason).toContain("Fewer than 3");
+  const r = ToolResultSchemas.create_ui_spec.safeParse(mcqPayload(out));
+  expect(r.success, r.success ? "" : JSON.stringify(r.error.issues)).toBe(true);
+});

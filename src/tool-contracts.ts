@@ -1167,7 +1167,7 @@ export const CREATE_UI_SPEC_FREE_TEXT_LEAVES: Readonly<Record<LeafPosition, stri
   "data.context.colorIntent.accentPreference": "caller-supplied colour intent, echoed back to its own author; never corpus-derived and never materialized into colorTokens",
   "data.context.colorIntent.mood": "caller-supplied colour intent, echoed back to its own author; never corpus-derived and never materialized into colorTokens",
   "data.context.typeIntent.voice": "caller-supplied typography intent, echoed back to its own author; never corpus-derived and never materialized into typographyTokens",
-  "data.designDirection": "under the deterministic recipe this restates the caller's own brief",
+  "data.designDirection": "recipe-owned prose: the caller's own brief restated when no corpus entry matched, or a recipe-voice sentence built from closed structuredFacts pluralities and citing the matched evidence ids; never corpus prose and never model output (a model proposal lives at data.modelProposal.designDirection)",
   // --- recipe/operator-owned prose: descriptive, carries no identity (reason b) ---
   "data.rejectedDefaults[]": "recipe-owned prose naming a rejected default",
   "data.layoutRegions[].name": "recipe-owned region label",

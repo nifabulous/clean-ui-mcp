@@ -283,6 +283,23 @@ async function buildModelAwareEnvelope(
   return proposedEnvelope;
 }
 
+/**
+ * Attach bounded execution metadata to the already-validated deterministic
+ * envelope.
+ *
+ * NO try/catch, DELIBERATELY. The re-parse can only fail if two fields this
+ * function computed itself — from a `ModelExecutionSchema`-validated value, onto
+ * an envelope that already passed `parseDesignArtifactEnvelope` — somehow make
+ * that same envelope invalid. That is an internal inconsistency, not a model
+ * failure, and the honest response is to fail loudly.
+ *
+ * Catching here would be actively worse than throwing: the only thing a catch
+ * could return is the deterministic envelope WITHOUT `modelExecution`, which is
+ * the exact shape of "no model was configured". The operator would be told no
+ * model was attempted when one was, and would go looking in the wrong place. A
+ * lost request is recoverable; a false claim about what ran is the thing this
+ * whole surface exists to prevent.
+ */
 function attachModelExecution(
   deterministicEnvelope: DesignArtifactEnvelope,
   execution: ModelExecution,

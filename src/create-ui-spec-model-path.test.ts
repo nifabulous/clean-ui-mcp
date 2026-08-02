@@ -238,6 +238,28 @@ describe("createUiSpec proposal-only model path", () => {
     expect(result.envelope.modelExecution).toEqual({ state: "call-failed" });
   });
 
+  it("surfaces invalid-configuration end to end without calling a provider", async () => {
+    // The only ModelExecution state with no end-to-end coverage, and the one an
+    // operator is most likely to hit first: set three of the four
+    // CREATE_UI_SPEC_MODEL_* variables and the resolver returns
+    // invalid-configuration rather than falling back to determinism. It must
+    // reach the envelope as its own distinct state — reporting it as
+    // "not-configured" (i.e. omitting modelExecution) would tell the operator
+    // no model was attempted, which is false and would send them looking in the
+    // wrong place. No provider is contacted, so this needs no runtime at all.
+    const baseline = await deterministicBaseline();
+
+    const result = await createUiSpecForAdapter(
+      REQUEST,
+      dependencies(FIXED_NOW, { kind: "invalid-configuration" }),
+    );
+
+    expectDeterministicIdentity(result.envelope, baseline.envelope);
+    expect(result.envelope.modelExecution).toEqual({ state: "invalid-configuration" });
+    // Distinct from the unconfigured case, which carries no execution at all.
+    expect(baseline.envelope.modelExecution).toBeUndefined();
+  });
+
   it("falls back byte-for-byte after proposal rejection", async () => {
     const baseline = await deterministicBaseline();
     const runtime = makeRuntime({

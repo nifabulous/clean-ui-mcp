@@ -3,7 +3,7 @@
 import { request as httpRequest, createServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -352,6 +352,17 @@ function assertStoreEmpty() {
 }
 
 function resetStore() {
+  // The store root is the production location (.create-ui-spec-model-artifacts/
+  // under the repo root). Dogfood must never destroy real operator records, so
+  // refuse rather than delete when the store holds records. A FILE at the path
+  // (the persistence-failure case's blocker) is not a store and is removable.
+  if (existsSync(MODEL_ARTIFACT_STORE_ROOT) && lstatSync(MODEL_ARTIFACT_STORE_ROOT).isDirectory()) {
+    const records = storeRecordNames();
+    assert(
+      records.length === 0,
+      `refusing to reset a non-empty model artifact store: ${records.length} record(s) in ${MODEL_ARTIFACT_STORE_ROOT}; move the store aside and rerun dogfood`,
+    );
+  }
   rmSync(MODEL_ARTIFACT_STORE_ROOT, { recursive: true, force: true });
 }
 

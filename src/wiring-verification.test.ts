@@ -316,14 +316,6 @@ const ALLOWLIST = new Set<string>([
   // precedent as computeLabelAgreement / assertAgreementMatchesSubmissions /
   // computeManifestSha256 above.
   "validateBaselineCompatibility",
-  // model-artifact-store.ts — createFileModelArtifactStore is introduced in C3
-  // Task 3 as the isolated file-backed history store. Its first production
-  // caller lands in Task 6, so keep it allowlisted until that wiring exists.
-  "createFileModelArtifactStore",
-  // create-ui-spec-model.ts — createUiSpecModel is introduced in C3 Task 4 as
-  // the bounded proposal-only runner. Its first production caller lands in
-  // Task 6, so keep it allowlisted until that wiring exists.
-  "createUiSpecModel",
   // create-ui-spec.ts — the envelope-only public core function.
   //
   // THIS ENTRY IS INERT, AND THAT IS WORSE THAN IT SOUNDS. The scan resolves

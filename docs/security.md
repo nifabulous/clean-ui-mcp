@@ -68,9 +68,12 @@ imported by corpus readers or ranking code.
 
 ### Conditional reproducibility
 
-Identical inputs + pinned parameters + the same provider produce the same
-semantic identity. The spec hash varies with generation time, so two runs are
-never byte-identical.
+The deterministic lane is strictly reproducible: identical inputs always
+produce the same semantic identity. The model lane is conditional: temperature
+0 and pinned parameters narrow the distribution, but the semantic identity of
+a proposal run still depends on what the provider actually returns, so it is
+only reproducible given identical model output. In both lanes the spec hash
+varies with generation time, so two runs are never byte-identical.
 
 ### No history read path
 

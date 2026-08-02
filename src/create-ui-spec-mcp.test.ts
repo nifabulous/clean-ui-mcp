@@ -592,6 +592,28 @@ describe.each(STATES)("create_ui_spec MCP registration — success: $label", (st
     expect(Object.keys(result).sort()).toEqual(["content", "structuredContent"]);
   });
 
+  it("deliberately does not project the execution state over MCP", async () => {
+    // Deliberate projection boundary (see the payload comment in
+    // create-ui-spec-mcp.ts): the execution state is envelope-level metadata
+    // surfaced over HTTP for the playground. Over MCP the success
+    // discriminator is data.modelProposal; the failure states are
+    // intentionally indistinguishable because the served bytes are
+    // byte-identical across them. If this ever changes, the shared envelope
+    // key set (ENVELOPE_KEYS) and the served-bytes parity suite in
+    // create-ui-spec-http.test.ts must change together with it.
+    const fixture = modelFixture("succeeded");
+    const corpus = [fixtureEntry("internal-1", "product-Alpha")];
+    const result = await handleCreateUiSpec(
+      validArgs(),
+      makeReader(corpus, corpus),
+      undefined,
+      fixture.dependency,
+    );
+    expect(spyState.produced[0]!.envelope.modelExecution?.state).toBe("succeeded");
+    expect((result.structuredContent.data as { modelProposal?: unknown }).modelProposal).toBeDefined();
+    expect((result.structuredContent as Record<string, unknown>).modelExecution).toBeUndefined();
+  });
+
   it("the summary is a bounded constant carrying no brief, path, url, corpus id or product identity", async () => {
     const result = await call();
     const summary = result.structuredContent.summary as string;
@@ -628,7 +650,7 @@ describe("create_ui_spec MCP registration — injected model outcome secrecy", (
   it.each(states)("serves bounded bytes for %s", async (state) => {
     const fixture = modelFixture(state);
     const corpus = [fixtureEntry("internal-1", "product-Alpha")];
-    const result = await handleCreateUiSpec(validArgs(), makeReader(corpus, corpus), fixture.dependency);
+    const result = await handleCreateUiSpec(validArgs(), makeReader(corpus, corpus), undefined, fixture.dependency);
     const produced = spyState.produced[0]!.envelope;
 
     expect(produced.modelExecution?.state).toBe(fixture.expectedExecution);

@@ -443,8 +443,8 @@ describe("create_ui_spec transports — injected model outcome secrecy and parit
     const mcp = await handleCreateUiSpec(
       validBody(),
       makeReader(mcpCorpus, mcpCorpus),
-      fixture.dependency,
       MODEL_FIXED_NOW,
+      fixture.dependency,
     );
     const mcpProduced = spyState.produced[1]!.envelope;
 

@@ -27,6 +27,13 @@ export function resolveCreateUiSpecModelConfig(
   env: Readonly<Record<string, string | undefined>>,
 ): ResolvedCreateUiSpecModelConfig {
   const raw = CONFIG_KEYS.map((key) => env[key]);
+  // ALL unset ⇔ operator deliberately wants the deterministic runner
+  // (not-configured); a PARTIAL tuple ⇔ operator misconfigured a provisioned
+  // intent and must not silently fall back to determinism (invalid-configuration).
+  // The all-unset case is therefore NOT a validation failure: the composition
+  // root legitimately runs with zero dedicated variables set. (Unset means
+  // `undefined`; present-but-blank values like "" or whitespace fall through
+  // to invalid-configuration, as the whitespace tests assert.)
   if (raw.every((value) => value === undefined)) return { kind: "not-configured" };
   if (raw.some((value) => value === undefined)) return { kind: "invalid-configuration" };
 

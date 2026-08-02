@@ -34,6 +34,7 @@ import {
 import { PrivateCorpusReader, type CorpusReader } from "../corpus-reader.js";
 import { handleCreateUiSpecHttp } from "../create-ui-spec-http.js";
 import { resolveCreateUiSpecModelConfig } from "../create-ui-spec-model-config.js";
+import type { CreateUiSpecModelDependency } from "../create-ui-spec.js";
 // The SHARED core→transport error mapping (also used by the MCP adapter). The
 // pre-adapter refusals below build their bodies from it rather than restating a
 // code, message or retryable flag — a second copy here is exactly the drift the
@@ -52,10 +53,26 @@ const MAX_BODY_BYTES = 20 * 1024 * 1024;
 // Composition root: like src/server.ts, this file is allowed to read
 // process.env. Only the DEDICATED CREATE_UI_SPEC_MODEL_* tuple is consumed;
 // ambient provider variables can neither fill a missing value nor override an
-// explicit one (see src/create-ui-spec-model-config.ts). Absent or invalid
-// config resolves to a fallback runtime — the bounded runner's own no-call
-// behaviour — so an unconfigured server still serves every other route.
-const CREATE_UI_SPEC_MODEL = resolveCreateUiSpecModelConfig(process.env);
+// explicit one (see src/create-ui-spec-model-config.ts). Absent config
+// resolves to `not-configured` (no provider call); a partial/invalid tuple
+// resolves to `invalid-configuration`, which attaches a DISTINCT
+// `modelExecution` state to served envelopes (Task 7 renders it) without
+// ever calling a provider.
+let CREATE_UI_SPEC_MODEL: CreateUiSpecModelDependency =
+  resolveCreateUiSpecModelConfig(process.env);
+
+/**
+ * Test-only seam. `ui-server.test.ts` imports this real module and runs the
+ * real /api/create-ui-spec route, so without a pin the route would read the
+ * operator's real CREATE_UI_SPEC_MODEL_* tuple and fire PAID provider calls
+ * during tests. The suite pins `{ kind: "not-configured" }` in a beforeAll,
+ * mirroring the setCorpusForTesting pattern. Production code never calls it.
+ */
+export function setCreateUiSpecModelForTesting(
+  model: CreateUiSpecModelDependency,
+): void {
+  CREATE_UI_SPEC_MODEL = model;
+}
 
 // ─── perceptual hashing (dHash) + duplicate detection ───────────────────────
 // Dedup policy lives in ../dedup.ts so HTTP, CLI commit, and cleanup tools share

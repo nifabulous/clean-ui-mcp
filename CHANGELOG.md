@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — C3 proposal-only model path (branch `codex/c3-model-path`)
+
+### Added
+- **Optional proposal-only model lane for `create_ui_spec`.** Setting all four
+  dedicated environment variables (`CREATE_UI_SPEC_MODEL_PROVIDER` /
+  `_BASE_URL` / `_API_KEY` / `_NAME`) on the server enables a pinned,
+  single-attempt model call whose output is served strictly as a labeled
+  proposal (`proposal-only` + fixed disclaimer) and never accepted into token
+  authority. The public request schema is unchanged — the lane is env-only.
+  Any model failure (`invalid-configuration` / `call-failed` /
+  `proposal-rejected` / `persistence-failed`) returns the same deterministic
+  scaffold with a distinct execution state; accepted-token positions stay
+  `null`.
+- **Isolated model artifact history.** Successful proposals are recorded in a
+  separate gitignored store (`.create-ui-spec-model-artifacts/`) with
+  first-write-wins retention and explicit deletion; records are not corpus
+  data, are not retrieval input, and are not readable through `create_ui_spec`.
+- **Dogfood coverage for the model path.** `scripts/dogfood-createuispec.mjs`
+  now exercises no-config, partial-config, provider failure, malformed
+  response, persistence failure, and a successful proposal against a fake
+  self-signed HTTPS provider, asserting fallback equivalence, semantic-identity
+  change, timestamp stability, null accepted tokens, store placement, and the
+  no-secret-in-served-bytes rule across every response.
+
 ## Unreleased — C1 executable-contract rework (branch `feat/agent-readiness-phase-0-1c`)
 
 An external adversarial review of the initial C1 closure reproduced seven

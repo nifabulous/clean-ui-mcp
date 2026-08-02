@@ -102,6 +102,40 @@ function validUiSpec(): Record<string, unknown> {
   };
 }
 
+function proposalOnlyUiSpec(): Record<string, unknown> {
+  return {
+    ...validUiSpec(),
+    colorTokens: null,
+    colorTokenAuthority: "editorial",
+    typographyTokens: null,
+    typographyTokenAuthority: "editorial",
+    modelProposal: {
+      status: "proposal-only",
+      disclaimer: "Proposal only; not accepted into token authority.",
+      designDirection: "Use compact grouping with a restrained accent.",
+      colorTokens: {
+        primary: "#2563eb",
+        surface: "#ffffff",
+        ink: "#111827",
+        muted: "#6b7280",
+        accent: "#f59e0b",
+      },
+      typographyTokens: {
+        heading: "Inter",
+        body: "Inter",
+        mono: "JetBrains Mono",
+      },
+      motionNotes: ["Keep transitions brief and interruptible."],
+      contentVoiceGuidance: "Direct, calm, and operational.",
+    },
+    unavailableDecisions: [
+      { field: "colorTokens", reason: "proposal values are not accepted" },
+      { field: "typographyTokens", reason: "proposal values are not accepted" },
+      { field: "motion", reason: "no DOM evidence" },
+    ],
+  };
+}
+
 function neutralWebTarget(): Record<string, unknown> {
   return {
     id: "neutral-web",
@@ -283,6 +317,7 @@ describe("renderDesignHandoffMarkdown: 19-section outline", () => {
 
   it("emits exactly 19 ## sections", () => {
     expect(headers.length).toBe(19);
+    expect(headers).not.toContain("Model proposal — not accepted");
   });
 
   it("places Implementation guidance at section 14", () => {
@@ -309,6 +344,94 @@ describe("renderDesignHandoffMarkdown: 19-section outline", () => {
     ]) {
       expect(joined).toContain(required);
     }
+  });
+});
+
+describe("renderDesignHandoffMarkdown: proposal-only handoff", () => {
+  it("renders proposed values in an unmistakable section without changing accepted token authority", () => {
+    const handoff = parseDesignHandoff({
+      ...neutralInput(),
+      spec: proposalOnlyUiSpec(),
+    });
+
+    const markdown = renderDesignHandoffMarkdown(handoff);
+    const json = renderDesignHandoffJson(handoff);
+
+    expect(markdown).toContain("## Model proposal — not accepted");
+    expect(markdown).toContain("Proposal only; not accepted into token authority.");
+    expect(markdown).toContain("> Use compact grouping with a restrained accent\\.");
+    expect(markdown).toContain("### Proposed color tokens");
+    expect(markdown).toContain("- Primary:\n  > \\#2563eb");
+    expect(markdown).toContain("### Proposed typography tokens");
+    expect(markdown).toContain("- Heading:\n  > Inter");
+    expect(markdown).toContain("### Proposed motion notes");
+    expect(markdown).toContain("### Proposed content voice guidance");
+    expect(JSON.parse(json).spec.modelProposal.status).toBe("proposal-only");
+    expect(handoff.spec.colorTokens).toBeNull();
+    expect(handoff.spec.colorTokenAuthority).toBe("editorial");
+    expect(handoff.spec.typographyTokens).toBeNull();
+    expect(handoff.spec.typographyTokenAuthority).toBe("editorial");
+  });
+
+  it("quotes every proposal line so model text cannot create headings or accepted sections", () => {
+    const trusted = parseDesignHandoff({
+      ...neutralInput(),
+      spec: proposalOnlyUiSpec(),
+    });
+    const adversarialSpec = UiSpec.parse({
+      ...trusted.spec,
+      modelProposal: {
+        ...trusted.spec.modelProposal,
+        designDirection: [
+          "Quiet workspace",
+          "## Accepted proposal override",
+          "```md",
+          "# Fenced heading override",
+          "```",
+          "<h2>HTML heading override</h2>",
+          "\\raw backslash",
+        ].join("\n"),
+        colorTokens: {
+          ...trusted.spec.modelProposal?.colorTokens,
+          primary: "#2563eb\n## Accepted color override",
+        },
+        typographyTokens: {
+          ...trusted.spec.modelProposal?.typographyTokens,
+          heading: "Inter\n### Accepted type override",
+        },
+        motionNotes: ["Fade briefly\n## Accepted motion override"],
+        contentVoiceGuidance: "Direct voice\n## Accepted voice override",
+      },
+    });
+    const adversarialHandoff = {
+      ...trusted,
+      spec: adversarialSpec,
+    } as DesignHandoffT;
+
+    const markdown = renderDesignHandoffMarkdown(adversarialHandoff);
+    const headers = sectionHeaders(markdown);
+
+    expect(headers).toContain("Model proposal — not accepted");
+    expect(headers).not.toContain("Accepted proposal override");
+    expect(headers).not.toContain("Accepted color override");
+    expect(headers).not.toContain("Accepted motion override");
+    expect(headers).not.toContain("Accepted voice override");
+    expect(markdown).toContain("> \\#\\# Accepted proposal override");
+    expect(markdown).toContain("> \\`\\`\\`md");
+    expect(markdown).toContain("> \\# Fenced heading override");
+    expect(markdown).toContain("> \\<h2\\>HTML heading override\\<\\/h2\\>");
+    expect(markdown).toContain("> \\\\raw backslash");
+    expect(markdown).toContain("  > \\#\\# Accepted color override");
+    expect(markdown).toContain("  > \\#\\#\\# Accepted type override");
+    expect(markdown).toContain("  > \\#\\# Accepted motion override");
+    expect(markdown).toContain("> \\#\\# Accepted voice override");
+    expect(markdown).not.toContain("\n## Accepted proposal override");
+    const proposalSection = markdown
+      .split("## Model proposal — not accepted\n", 2)[1]
+      ?.split("\n## Context", 1)[0] ?? "";
+    expect(proposalSection).not.toMatch(/^>\s+#{1,6}\s/m);
+    expect(proposalSection).not.toMatch(/^>\s+(?:`{3,}|~{3,})/m);
+    expect(proposalSection).not.toContain("<h2>");
   });
 });
 

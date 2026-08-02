@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CSRF_HEADER, cleanupBatch, describeInternalError, entryIssues, explainAnalyzeError, explainCaptureError, explainCaptureTargetError, explainTagError, finishWithInternalError, sendRouteError, resolveSiteAsset, findDuplicateAtCommit, hostIsLoopback, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer } from "./ui-server.js";
+import { CSRF_HEADER, cleanupBatch, describeInternalError, entryIssues, explainAnalyzeError, explainCaptureError, explainCaptureTargetError, explainTagError, finishWithInternalError, sendRouteError, resolveSiteAsset, findDuplicateAtCommit, hostIsLoopback, isPrivateAddress, listCaptureBatches, normalizeEntryIdForRename, orphanedPrivateImagePaths, prepareNewEntryPayload, promoteTempImage, publicConfigStatus, sameOrigin, setTriageStatus, stampProvenance, uniqueEntryId, validateEntryPayload, startServer, setCreateUiSpecModelForTesting } from "./ui-server.js";
 import { setCorpusRootForTesting } from "../persistence.js";
 import { request as httpRequest } from "node:http";
 import type { IncomingMessage } from "node:http";
@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { PROJECT_ROOT, privateImageDir, setPrivateImageDirForTesting } from "../paths.js";
 import { setCorpusForTesting } from "../corpus.js";
+import { resolveCreateUiSpecModelConfig } from "../create-ui-spec-model-config.js";
 import { containsPrivateMarker, parseDesignArtifactEnvelope } from "../create-ui-spec-contracts.js";
 import type { CorpusEntryT, DecisionT } from "../schema.js";
 import { setDecisionsPathsForTesting, resetDecisionsPathsForTesting, saveDecision } from "../decisions.js";
@@ -1450,6 +1451,13 @@ describe("POST /api/create-ui-spec (the C3 loopback route)", () => {
     // private-marker-laden fixture so retrieval really returns corpus content
     // and the leak assertions have something to catch.
     setCorpusForTesting([PRIVATE_MARKED_ENTRY]);
+    // Egress pin: this suite imports the real ui-server module, whose
+    // composition root resolves the operator's real CREATE_UI_SPEC_MODEL_*
+    // tuple. Without a pin, an operator running with a configured tuple would
+    // fire PAID provider calls from these tests. The seam mirrors
+    // setCorpusForTesting; the HTTP adapter test suite uses the same model
+    // fixture for its deterministic-call bookkeeping.
+    setCreateUiSpecModelForTesting({ kind: "not-configured" });
     server = await startServer(0);
     const addr = server.address();
     if (!addr || typeof addr !== "object") throw new Error("server did not bind");
@@ -1459,6 +1467,7 @@ describe("POST /api/create-ui-spec (the C3 loopback route)", () => {
 
   afterAll(async () => {
     await new Promise<void>((r) => server.close(() => r()));
+    setCreateUiSpecModelForTesting(resolveCreateUiSpecModelConfig(process.env));
     setCorpusForTesting(null);
     setCorpusRootForTesting(null);
     rmSync(base, { recursive: true, force: true });

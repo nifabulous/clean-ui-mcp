@@ -60,6 +60,9 @@ import {
   createUiSpecIntegrityRefusalError,
   createUiSpecTransportError,
 } from "./create-ui-spec-transport-errors.js";
+import type { CreateUiSpecModelDependency } from "./create-ui-spec.js";
+import type { CreateUiSpecModelRuntime } from "./create-ui-spec-model.js";
+import type { ModelArtifactRecord, ModelExecution } from "./create-ui-spec-model-contracts.js";
 
 // ---------------------------------------------------------------------------
 // Spy over the ONE dependency factory. Same rationale as the MCP suite: "the
@@ -74,8 +77,12 @@ vi.mock("./create-ui-spec-dependencies.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./create-ui-spec-dependencies.js")>();
   return {
     ...actual,
-    makeCreateUiSpecDependencies: vi.fn((reader: never, now?: () => Date) => {
-      const deps = actual.makeCreateUiSpecDependencies(reader, now);
+    makeCreateUiSpecDependencies: vi.fn((
+      reader: never,
+      now?: () => Date,
+      model?: CreateUiSpecModelDependency,
+    ) => {
+      const deps = actual.makeCreateUiSpecDependencies(reader, now, model);
       depsSpyState.returned.push(deps);
       return deps;
     }),
@@ -190,6 +197,86 @@ const BANNED = [
   RAW_TOKEN_REFUSED,
 ];
 
+const MODEL_API_KEY = "task-6-http-secret-key";
+const MODEL_BASE_URL = "https://models.example.test/private/endpoint?account=47";
+const MODEL_STORE_PATH = "/Users/operator/private/model-artifact-store";
+const MODEL_RAW_REJECTED_BODY =
+  "raw-provider-body-zq private-corpus-id /Users/operator/private/provider-response.json";
+const MODEL_RAW_SUCCESS_BODY = `{
+  "status": "proposal-only",
+  "disclaimer": "Proposal only; not accepted into token authority.",
+  "designDirection": "Use a measured grid with clear hierarchy.",
+  "motionNotes": []
+}`;
+const MODEL_FIXED_NOW = (): Date => new Date("2026-08-02T00:00:00.000Z");
+
+type ModelFixtureState =
+  | "not-configured"
+  | "invalid-configuration"
+  | "succeeded"
+  | "call-failed"
+  | "proposal-rejected"
+  | "persistence-failed";
+
+function modelFixture(state: ModelFixtureState): {
+  dependency: CreateUiSpecModelDependency;
+  runtime?: CreateUiSpecModelRuntime;
+  expectedExecution?: ModelExecution["state"];
+  rawProviderBody?: string;
+} {
+  if (state === "not-configured") return { dependency: { kind: "not-configured" } };
+  if (state === "invalid-configuration") {
+    return {
+      dependency: { kind: "invalid-configuration" },
+      expectedExecution: "invalid-configuration",
+    };
+  }
+
+  const rawProviderBody = state === "proposal-rejected"
+    ? MODEL_RAW_REJECTED_BODY
+    : MODEL_RAW_SUCCESS_BODY;
+  const store = {
+    save: vi.fn(async (_record: ModelArtifactRecord) => {
+      if (state === "persistence-failed") {
+        throw new Error(`persistence failed at ${MODEL_STORE_PATH}`);
+      }
+    }),
+    read: vi.fn(async () => null),
+    delete: vi.fn(async () => false),
+  };
+  const call = vi.fn(async () => {
+    if (state === "call-failed") {
+      throw new Error(`provider failed: ${MODEL_RAW_REJECTED_BODY}; key=${MODEL_API_KEY}`);
+    }
+    return {
+      content: rawProviderBody,
+      provider: "openai" as const,
+      model: "pinned-ui-model",
+      usage: { promptTokens: 37, completionTokens: 19, raw: { input_tokens: 37, output_tokens: 19 } },
+      attempts: 1,
+      latencyMs: 8,
+      providerRequestId: "private-provider-request-id",
+    };
+  }) as unknown as CreateUiSpecModelRuntime["call"];
+  const runtime: CreateUiSpecModelRuntime = {
+    endpoint: {
+      provider: "openai",
+      baseUrl: MODEL_BASE_URL,
+      apiKey: MODEL_API_KEY,
+      model: "pinned-ui-model",
+    },
+    parameters: { temperature: 0, maxOutputTokens: 4_096, maxAttempts: 1, seed: null },
+    call,
+    store,
+  };
+  return {
+    dependency: { kind: "configured", runtime },
+    runtime,
+    expectedExecution: state,
+    rawProviderBody,
+  };
+}
+
 beforeEach(() => {
   spyState.produced.length = 0;
   spyState.mutate = undefined;
@@ -223,6 +310,10 @@ describe("create_ui_spec HTTP request contract", () => {
       { screenshot: "data:image/png;base64,AAAA" },
       { apiKey: "sk-live-not-a-real-key" },
       { provider: "openai" },
+      { baseUrl: "https://models.example.test/v1" },
+      { model: "provider-model" },
+      { modelConfig: { provider: "openai" } },
+      { modelRuntime: "browser-controlled" },
       { critiqueProvider: "claude" },
       { authorization: "Bearer x" },
     ]) {
@@ -319,6 +410,66 @@ describe("create_ui_spec HTTP success response", () => {
     const a = await handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus), fixedClock);
     const b = await handleCreateUiSpecHttp(validBody(), makeReader(corpus, corpus), fixedClock);
     expect(a.body).toBe(b.body);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2b. Injected model outcomes: HTTP secrecy and MCP semantic parity
+// ---------------------------------------------------------------------------
+
+describe("create_ui_spec transports — injected model outcome secrecy and parity", () => {
+  const states: readonly ModelFixtureState[] = [
+    "not-configured",
+    "invalid-configuration",
+    "succeeded",
+    "call-failed",
+    "proposal-rejected",
+    "persistence-failed",
+  ];
+
+  it.each(states)("serves bounded HTTP bytes and the same semantic envelope over MCP for %s", async (state) => {
+    const fixture = modelFixture(state);
+    const httpCorpus = [fixtureEntry("internal-1", "product-Alpha")];
+    const http = await handleCreateUiSpecHttp(
+      validBody(),
+      makeReader(httpCorpus, httpCorpus),
+      MODEL_FIXED_NOW,
+      fixture.dependency,
+    );
+    const httpEnvelope = JSON.parse(http.body) as DesignArtifactEnvelope;
+    const httpProduced = spyState.produced[0]!.envelope;
+
+    const mcpCorpus = [fixtureEntry("internal-1", "product-Alpha")];
+    const mcp = await handleCreateUiSpec(
+      validBody(),
+      makeReader(mcpCorpus, mcpCorpus),
+      MODEL_FIXED_NOW,
+      fixture.dependency,
+    );
+    const mcpProduced = spyState.produced[1]!.envelope;
+
+    expect(http.status).toBe(200);
+    expect(httpProduced.modelExecution?.state).toBe(fixture.expectedExecution);
+    expect(httpProduced.spec.modelProposal !== undefined).toBe(state === "succeeded");
+    expect(httpEnvelope).toEqual(httpProduced);
+    expect(mcpProduced).toEqual(httpProduced);
+    expect((mcp.structuredContent as { data: unknown }).data).toEqual(httpEnvelope.spec);
+    expect(mcp.content[0]?.text).toBe(httpEnvelope.designMarkdown);
+
+    const bytes = `${http.body}\n${JSON.stringify(mcp)}`;
+    for (const marker of [
+      MODEL_API_KEY,
+      "/private/endpoint?account=47",
+      MODEL_BASE_URL,
+      MODEL_RAW_REJECTED_BODY,
+      MODEL_STORE_PATH,
+      "private-provider-request-id",
+      ...(fixture.rawProviderBody === MODEL_RAW_SUCCESS_BODY ? [MODEL_RAW_SUCCESS_BODY] : []),
+      ...BANNED,
+    ]) {
+      expect(bytes.includes(marker), `${state} leaked ${JSON.stringify(marker)}`).toBe(false);
+    }
+    expect(containsPrivateMarker(bytes)).toBe(false);
   });
 });
 

@@ -414,6 +414,7 @@ Workflow routing and next-tool suggestions belong to the skill layer, not MCP re
 - `componentInventory` (typed)
 - `colorTokens` (primary/surface/ink/muted/accent) with `colorTokenAuthority`
 - `typographyTokens` (heading/body/mono) with `typographyTokenAuthority`
+- optional `modelProposal` with fixed `proposal-only` status/disclaimer and bounded suggested design direction, colors, typography, motion notes, and content voice; proposed values never populate accepted token fields or token authority
 - `interactions` and `motionGuidance` (with `evidenceUnavailable` flag)
 - `accessibilityConstraints`
 - `contentVoiceGuidance`
@@ -556,7 +557,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 | Aspect | Contract |
 |---|---|
 | Input | productContext, referenceIds, default [], platform?, implementationFramework?, designSystem?, constraints, default [], target?, motionIntents, default [], colorIntent?, typeIntent?, outputFormat, default "markdown" |
-| Success data | specVersion, context, designDirection, rejectedDefaults, layoutRegions, responsiveBehavior, componentInventory, colorTokens, colorTokenAuthority, typographyTokens, typographyTokenAuthority, interactions, motionGuidance, accessibilityConstraints, contentVoiceGuidance, techniques, antiPatterns, frameworkNotes, unavailableDecisions, acceptanceCriteria, citedReferences, citedDecisions, authorityLanes, provenance — see §5.4 — UiSpec with layoutRegions, colorTokens, typographyTokens, acceptanceCriteria (verifiers: axe, playwright, static-analysis, manual), citedReferences, citedDecisions, authorityLanes, provenance |
+| Success data | specVersion, context, designDirection, rejectedDefaults, layoutRegions, responsiveBehavior, componentInventory, colorTokens, colorTokenAuthority, typographyTokens, typographyTokenAuthority, modelProposal, interactions, motionGuidance, accessibilityConstraints, contentVoiceGuidance, techniques, antiPatterns, frameworkNotes, unavailableDecisions, acceptanceCriteria, citedReferences, citedDecisions, authorityLanes, provenance — see §5.4 — UiSpec with layoutRegions, colorTokens, typographyTokens, acceptanceCriteria (verifiers: axe, playwright, static-analysis, manual), citedReferences, citedDecisions, authorityLanes, provenance |
 | Empty | n/a — synthesis produces one spec artifact or errors |
 | Partial | sparseCoverage / insufficientCorpusEvidence / motionEvidenceUnavailable typed warnings; zero automatic matches are reported as structured-fallback/metadata with fallbackReason "no-results"; null tokens require editorial authority + unavailableDecision |
 | Errors | INVALID_INPUT (non-retryable), PROVIDER_ERROR (retryable) |

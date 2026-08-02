@@ -134,7 +134,10 @@
  * `CorpusReader`; nothing here opens a socket or reads a provider credential.
  */
 import type { CorpusReader } from "./corpus-reader.js";
-import { createUiSpecForAdapter } from "./create-ui-spec.js";
+import {
+  createUiSpecForAdapter,
+  type CreateUiSpecModelDependency,
+} from "./create-ui-spec.js";
 import { makeCreateUiSpecDependencies } from "./create-ui-spec-dependencies.js";
 import {
   containsPrivateMarker,
@@ -220,6 +223,7 @@ export async function handleCreateUiSpecHttp(
   rawBody: unknown,
   reader: CorpusReader,
   now?: () => Date,
+  model?: CreateUiSpecModelDependency,
 ): Promise<CreateUiSpecHttpResult> {
   // ----- 1. Transport input -----
   const parsed = CreateUiSpecHttpRequestSchema.safeParse(rawBody);
@@ -248,7 +252,10 @@ export async function handleCreateUiSpecHttp(
   // ----- 2. The sole producer, through the ONE dependency constructor -----
   let produced: Awaited<ReturnType<typeof createUiSpecForAdapter>>;
   try {
-    produced = await createUiSpecForAdapter(request, makeCreateUiSpecDependencies(reader, now));
+    produced = await createUiSpecForAdapter(
+      request,
+      makeCreateUiSpecDependencies(reader, now, model),
+    );
   } catch (err) {
     // Nothing derived from `err` is logged or published — the shared mapping
     // discards untyped text entirely.

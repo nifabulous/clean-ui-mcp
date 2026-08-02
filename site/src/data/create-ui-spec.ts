@@ -50,10 +50,29 @@
  * producer free text, so this module makes no claim to have screened its prose;
  * the only prose claim made anywhere in this client is about ID/path SHAPE.
  *
- * NO SERVER FREE TEXT ON THE FAILURE PATH. The route's bounded error body carries
- * a `message`. It is deliberately never surfaced: failures are described by a
- * CLIENT-authored code ({@link CreateUiSpecFailureCode}) that the UI turns into
- * its own copy. A server string cannot become UI copy through this module.
+ *  NO SERVER FREE TEXT ON THE FAILURE PATH. The route's bounded error body carries
+ *  a `message`. It is deliberately never surfaced: failures are described by a
+ *  CLIENT-authored code ({@link CreateUiSpecFailureCode}) that the UI turns into
+ *  its own copy. A server string cannot become UI copy through this module.
+ *
+ *  THE OPTIONAL MODEL LANE. The served envelope may carry `modelExecution` beside
+ *  the artifact and `spec.modelProposal` inside it. Both project through the same
+ *  closed-shape discipline: `modelExecution` reduces to `{ state }` — plus
+ *  `provider`/`model` on `succeeded`, where `provider` must be one of the six
+ *  server-side provider enum values (a URL-shaped, marker-bearing or secret-shaped
+ *  value is then impossible by construction) and `model` is refused when it
+ *  carries a private marker or a URL/path form (a URL-shaped value in a machine
+ *  identifier position is never a legal display value). The proposal reduces to
+ *  its five bounded content positions plus the FIXED disclaimer literal: a served
+ *  disclaimer that differs from the constant REFUSES the response, and the
+ *  rendered string is always the constant. Execution digests, `reproducibility`,
+ *  `usage`, and every unknown execution field are never read. The proposal's
+ *  prose positions are screened for the same private-corpus markers the server's
+ *  envelope gate refuses on (see {@link PRIVATE_MARKERS_MIRROR}) — a marker
+ *  refuses the response, exactly like the evidence-id shape check, because the
+ *  client re-checks what the server's fail-closed gate screens rather than
+ *  trusting that it ran. The client makes NO other prose claim about proposal
+ *  content, matching the deterministic lane's `designDirection`.
  *
  * NO PERSISTENCE, NO ANALYTICS. The nonce lives in a module-scope variable for
  * the life of the page. Nothing is written to `localStorage`, `sessionStorage`,
@@ -298,6 +317,52 @@ export interface EvidenceSummary {
 }
 
 /**
+ * The safe projection of the served `modelExecution` position. `null` when the
+ * envelope carries no model lane. `provider`/`model` exist ONLY on
+ * `"succeeded"` — the failed states carry nothing but their state, so a hostile
+ * value on a failed run is never read and cannot be rendered. The execution
+ * digests (`promptSha256` / `parametersSha256` / `modelExecutionSha256`),
+ * `reproducibility`, `usage`, and every unknown field are deliberately absent:
+ * they are execution metadata, not display content.
+ */
+export interface SafeModelExecution {
+  readonly state: ModelExecutionState;
+  readonly provider?: string;
+  readonly model?: string;
+}
+
+/** The five token members the model may propose for color, mirrored 1:1. */
+export interface SafeModelColorTokens {
+  readonly primary: string;
+  readonly surface: string;
+  readonly ink: string;
+  readonly muted: string;
+  readonly accent: string;
+}
+
+/** The three token members the model may propose for typography. */
+export interface SafeModelTypographyTokens {
+  readonly heading: string;
+  readonly body: string;
+  readonly mono: string;
+}
+
+/**
+ * The safe projection of the served `spec.modelProposal` position. `null` when
+ * the envelope carries no proposal. `disclaimer` is the FIXED literal from the
+ * module constant — the projection refuses a served string that differs, so the
+ * rendered disclaimer can never be server text.
+ */
+export interface SafeModelProposal {
+  readonly disclaimer: typeof MODEL_PROPOSAL_DISCLAIMER;
+  readonly designDirection: string;
+  readonly colorTokens: SafeModelColorTokens | null;
+  readonly typographyTokens: SafeModelTypographyTokens | null;
+  readonly motionNotes: readonly string[];
+  readonly contentVoiceGuidance: string | null;
+}
+
+/**
  * Everything the composer may render, plus the EXACT rendering bytes the
  * response contained. Downloads read `designMarkdown` / `designJson` straight
  * off this object, so a download can never trigger a second generation (which
@@ -327,6 +392,10 @@ export interface SafeArtifact {
   readonly droppedWarningCount: number;
   readonly unavailableDecisions: readonly SafeUnavailableDecision[];
   readonly evidence: EvidenceSummary;
+  /** `null` when the envelope carried no `modelExecution` (no model attached). */
+  readonly modelExecution: SafeModelExecution | null;
+  /** `null` when the envelope carried no `spec.modelProposal`. */
+  readonly modelProposal: SafeModelProposal | null;
   readonly designMarkdown: string;
   readonly designJson: string;
   readonly specSha256: string;
@@ -334,6 +403,64 @@ export interface SafeArtifact {
   readonly designMarkdownSha256: string;
   readonly designJsonSha256: string;
 }
+
+/**
+ * The fixed proposal disclaimer, verbatim from the backend contract
+ * (`src/tool-contracts.ts` `ModelProposalSchema`). The projection REFUSES a
+ * served string that differs from this literal and projects THIS constant, so
+ * the rendered disclaimer is always client-authored by construction — its type
+ * is the literal itself.
+ */
+export const MODEL_PROPOSAL_DISCLAIMER = "Proposal only; not accepted into token authority.";
+
+const MODEL_EXECUTION_STATES = [
+  "invalid-configuration",
+  "call-failed",
+  "proposal-rejected",
+  "persistence-failed",
+  "succeeded",
+] as const;
+export type ModelExecutionState = (typeof MODEL_EXECUTION_STATES)[number];
+
+/**
+ * Mirrors the server-side provider enum (`src/create-ui-spec-model-contracts.ts`
+ * `ProviderSchema`). The site is a separate build and cannot import backend src,
+ * so the six literals are duplicated here. Gating on the CLOSED SET — rather
+ * than shape checks — is what makes a secret-shaped or URL-shaped provider
+ * value impossible by construction: the transport suites' API-key fixture
+ * ("task-6-http-secret-key") and any non-enum value refuse the whole response.
+ */
+export const MODEL_PROVIDERS = ["openai", "claude", "gemini", "mistral", "minimax", "grok"] as const;
+
+/**
+ * Mirrors `PRIVATE_MARKERS` (`src/create-ui-spec-private-markers.ts`). The site
+ * is a separate build and cannot import backend src, so the literals are
+ * duplicated here and pinned by the site suite's hostile fixtures. The server's
+ * envelope gate refuses the WHOLE response when any string carries one
+ * (`DesignArtifactEnvelopeSchema` superRefine), so refusing here is a strict
+ * mirror — the same "re-check what the fail-closed gate screens" rule as the
+ * response-scoped evidence-id check.
+ */
+const PRIVATE_MARKERS = [
+  "private-corpus-id",
+  ".c2-private/",
+  "/corpus/private/",
+  "corpus/images-private/",
+  "images-private/",
+] as const;
+
+function containsPrivateMarker(value: string): boolean {
+  return PRIVATE_MARKERS.some((marker) => value.includes(marker));
+}
+
+/**
+ * A URL- or path-shaped form (`scheme://`, `//`, a leading `/`, or a Windows
+ * drive prefix). Applied ONLY to the model lane's machine identifiers
+ * (provider/model), never to prose positions: a URL in a provider or model name
+ * is never a legitimate identifier, while proposal prose may legitimately cite
+ * URLs. The deterministic lane's `designDirection` is likewise rendered as-is.
+ */
+const URL_OR_PATH_FORM = /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:\/\/|\/\/|[a-zA-Z]:[\\/]|\/)/;
 
 /** The closed warning-code set, mirroring `WarningSchema`. */
 const WARNING_CODES = [
@@ -642,6 +769,11 @@ function projectSafeArtifact(payload: unknown): SafeArtifact | null {
   if (!isRecord(spec.context)) return null;
   const designDirection = str(spec.designDirection);
   if (designDirection === null) return null;
+
+  const modelExecution = projectModelExecution(payload.modelExecution);
+  if (payload.modelExecution !== undefined && modelExecution === null) return null;
+  const modelProposal = projectModelProposal(spec.modelProposal);
+  if (spec.modelProposal !== undefined && modelProposal === null) return null;
   const colorIntent = projectColorIntent(spec.context.colorIntent);
   if (spec.context.colorIntent !== undefined && colorIntent === null) return null;
   const typeIntent = projectTypeIntent(spec.context.typeIntent);
@@ -679,6 +811,8 @@ function projectSafeArtifact(payload: unknown): SafeArtifact | null {
     droppedWarningCount: projectedWarnings.droppedCount,
     unavailableDecisions,
     evidence,
+    modelExecution,
+    modelProposal,
     // There is deliberately NO collapsed `partial` flag. "The deterministic
     // fallback carried this" and "the producer raised warnings" are different
     // claims, and the lifecycle label has to keep them apart — a single boolean
@@ -743,6 +877,138 @@ function projectTypeIntent(raw: unknown): SafeTypeIntent | null {
   return {
     ...(voice !== undefined ? { voice } : {}),
     ...(density !== undefined ? { density: density as BriefTypeDensity } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The optional model lane. The same closed-shape discipline as every other
+// position: unknown fields on `modelExecution` are never read (dropped), while
+// a hostile VALUE in a projected position, an unknown key on the proposal, or a
+// served disclaimer that differs from the fixed literal refuses the whole
+// response.
+// ---------------------------------------------------------------------------
+
+/** provider/model: a non-empty string ≤200 that is neither marker- nor
+ * URL/path-shaped. These are machine identifiers, not prose — a URL- or
+ * path-shaped value here is never a legitimate display value. The provider
+ * position does NOT use this shape guard: it is gated on the closed
+ * {@link MODEL_PROVIDERS} enum instead, which refuses non-enum (and therefore
+ * secret- or URL-shaped) values by construction. */
+function modelIdentifier(value: unknown): string | null {
+  const s = str(value, 200);
+  if (s === null) return null;
+  if (containsPrivateMarker(s) || URL_OR_PATH_FORM.test(s)) return null;
+  return s;
+}
+
+/** Proposal prose positions: bounded, and marker-free — the same private-marker
+ * gate the server's envelope superRefine applies to every served string. No
+ * other prose claim is made about them (see the module header). */
+function modelProse(value: unknown, max: number): string | null {
+  const s = str(value, max);
+  if (s === null) return null;
+  if (containsPrivateMarker(s)) return null;
+  return s;
+}
+
+function projectModelExecution(raw: unknown): SafeModelExecution | null {
+  if (raw === undefined) return null;
+  if (!isRecord(raw)) return null;
+  if (typeof raw.state !== "string") return null;
+  if (!(MODEL_EXECUTION_STATES as readonly string[]).includes(raw.state)) return null;
+  if (raw.state !== "succeeded") {
+    // Failed states carry their state and NOTHING else: `provider`/`model` are
+    // never read here, so a hostile value on a failed run is dropped by
+    // construction rather than rendered. (The server's per-state schema is
+    // strict too, so this mirrors what it would refuse to serve.)
+    return { state: raw.state as ModelExecutionState };
+  }
+  // The provider position is the closed enum: non-enum values — URL-shaped,
+  // marker-bearing, or secret-shaped — refuse by construction, exactly like the
+  // transport suites' API-key fixture. The model position keeps the shape guard
+  // (see `modelIdentifier`).
+  if (typeof raw.provider !== "string" || !(MODEL_PROVIDERS as readonly string[]).includes(raw.provider)) return null;
+  const provider = raw.provider as (typeof MODEL_PROVIDERS)[number];
+  const model = modelIdentifier(raw.model);
+  if (model === null) return null;
+  return { state: "succeeded", provider, model };
+}
+
+const MODEL_PROPOSAL_KEYS = [
+  "status",
+  "disclaimer",
+  "designDirection",
+  "colorTokens",
+  "typographyTokens",
+  "motionNotes",
+  "contentVoiceGuidance",
+] as const;
+
+const MODEL_COLOR_TOKEN_KEYS = ["primary", "surface", "ink", "muted", "accent"] as const;
+const MODEL_TYPOGRAPHY_TOKEN_KEYS = ["heading", "body", "mono"] as const;
+
+/** Project one strict token set. `null` when absent; refuses on unknown keys,
+ * non-string values, out-of-bound values, or a marker-bearing value. */
+function projectModelTokens<K extends string>(
+  raw: unknown,
+  keys: readonly K[],
+): Record<K, string> | null {
+  if (raw === undefined) return null;
+  if (!isRecord(raw)) return null;
+  if (Object.keys(raw).some((key) => !(keys as readonly string[]).includes(key))) return null;
+  const out = {} as Record<K, string>;
+  for (const key of keys) {
+    const value = modelProse(raw[key], 200);
+    if (value === null) return null;
+    out[key] = value;
+  }
+  return out;
+}
+
+function projectMotionNotes(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length > 8) return null;
+  const out: string[] = [];
+  for (const note of raw) {
+    const value = modelProse(note, 500);
+    if (value === null) return null;
+    out.push(value);
+  }
+  return out;
+}
+
+function projectModelProposal(raw: unknown): SafeModelProposal | null {
+  if (raw === undefined) return null;
+  if (!isRecord(raw)) return null;
+  // `.strict()` server-side: an unknown key — e.g. a future authority field
+  // attempting promotion — refuses the whole response rather than being
+  // dropped, so a promotion attempt can never half-render.
+  if (Object.keys(raw).some((key) => !(MODEL_PROPOSAL_KEYS as readonly string[]).includes(key))) {
+    return null;
+  }
+  if (raw.status !== "proposal-only") return null;
+  // The served disclaimer must be the fixed literal; the PROJECTED value is the
+  // constant, so a served string can never become the rendered disclaimer.
+  if (raw.disclaimer !== MODEL_PROPOSAL_DISCLAIMER) return null;
+  const designDirection = modelProse(raw.designDirection, 2_000);
+  if (designDirection === null) return null;
+  const colorTokens = projectModelTokens(raw.colorTokens, MODEL_COLOR_TOKEN_KEYS);
+  if (raw.colorTokens !== undefined && colorTokens === null) return null;
+  const typographyTokens = projectModelTokens(raw.typographyTokens, MODEL_TYPOGRAPHY_TOKEN_KEYS);
+  if (raw.typographyTokens !== undefined && typographyTokens === null) return null;
+  const motionNotes = raw.motionNotes === undefined ? [] : projectMotionNotes(raw.motionNotes);
+  if (raw.motionNotes !== undefined && motionNotes === null) return null;
+  const contentVoiceGuidance =
+    raw.contentVoiceGuidance === undefined ? null : modelProse(raw.contentVoiceGuidance, 1_000);
+  if (raw.contentVoiceGuidance !== undefined && contentVoiceGuidance === null) return null;
+  return {
+    disclaimer: MODEL_PROPOSAL_DISCLAIMER,
+    designDirection,
+    colorTokens,
+    typographyTokens,
+    // The guard above already returned on null; the coalesce narrows the type
+    // to SafeModelProposal.motionNotes (`readonly string[]`) without a cast.
+    motionNotes: motionNotes ?? [],
+    contentVoiceGuidance,
   };
 }
 

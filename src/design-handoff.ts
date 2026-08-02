@@ -309,10 +309,85 @@ export function renderDesignHandoffMarkdown(handoff: DesignHandoffT): string {
     lines.push(`## ${header}`);
     lines.push(...renderSection(i, ctx, tokens));
     lines.push("");
+    if (i === 0 && handoff.spec.modelProposal !== undefined) {
+      lines.push("## Model proposal — not accepted");
+      lines.push(...renderModelProposalSection(handoff.spec.modelProposal));
+      lines.push("");
+    }
   }
 
   // Trim trailing blank line, end with a single newline.
   return `${lines.join("\n").replace(/\n+$/, "\n")}`;
+}
+
+function renderModelProposalSection(
+  proposal: NonNullable<DesignHandoffT["spec"]["modelProposal"]>,
+): string[] {
+  const lines = [
+    proposal.disclaimer,
+    "",
+    "### Proposed design direction",
+    ...quoteProposalText(proposal.designDirection),
+    "",
+    "### Proposed color tokens",
+  ];
+
+  if (proposal.colorTokens === undefined) {
+    lines.push("_(not proposed)_");
+  } else {
+    lines.push(...renderQuotedProposalItem("Primary", proposal.colorTokens.primary));
+    lines.push(...renderQuotedProposalItem("Surface", proposal.colorTokens.surface));
+    lines.push(...renderQuotedProposalItem("Ink", proposal.colorTokens.ink));
+    lines.push(...renderQuotedProposalItem("Muted", proposal.colorTokens.muted));
+    lines.push(...renderQuotedProposalItem("Accent", proposal.colorTokens.accent));
+  }
+
+  lines.push("");
+  lines.push("### Proposed typography tokens");
+  if (proposal.typographyTokens === undefined) {
+    lines.push("_(not proposed)_");
+  } else {
+    lines.push(...renderQuotedProposalItem("Heading", proposal.typographyTokens.heading));
+    lines.push(...renderQuotedProposalItem("Body", proposal.typographyTokens.body));
+    lines.push(...renderQuotedProposalItem("Mono", proposal.typographyTokens.mono));
+  }
+
+  lines.push("");
+  lines.push("### Proposed motion notes");
+  if (proposal.motionNotes.length === 0) {
+    lines.push("_(not proposed)_");
+  } else {
+    proposal.motionNotes.forEach((note, index) => {
+      lines.push(...renderQuotedProposalItem(`Note ${index + 1}`, note));
+    });
+  }
+  lines.push("");
+  lines.push("### Proposed content voice guidance");
+  lines.push(...(
+    proposal.contentVoiceGuidance === undefined
+      ? ["_(not proposed)_"]
+      : quoteProposalText(proposal.contentVoiceGuidance)
+  ));
+  return lines;
+}
+
+function renderQuotedProposalItem(label: string, value: string): string[] {
+  return [`- ${label}:`, ...quoteProposalText(value, "  ")];
+}
+
+const MARKDOWN_PUNCTUATION = new Set(
+  Array.from("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"),
+);
+
+/** Escape then prefix every physical model-authored line. */
+function quoteProposalText(value: string, indent: string = ""): string[] {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => Array.from(line, (char) =>
+      MARKDOWN_PUNCTUATION.has(char) ? `\\${char}` : char
+    ).join(""))
+    .map((line) => `${indent}>${line.length > 0 ? ` ${line}` : ""}`);
 }
 
 /**

@@ -458,6 +458,9 @@ describe("create-ui-spec producer — determinism and boundaries", () => {
     const envB = await createUiSpec(validInput(), depsB);
     expect(envA.artifactId).toBe(envB.artifactId);
     expect(envA.semanticSpecSha256).toBe(envB.semanticSpecSha256);
+    expect(envA.modelExecution).toBeUndefined();
+    expect(envA.modelExecutionSha256).toBeUndefined();
+    expect(envA.spec.modelProposal).toBeUndefined();
   });
 
   it("stable fallback recipe identity: producerVersion + assemblyRulesSha256", async () => {

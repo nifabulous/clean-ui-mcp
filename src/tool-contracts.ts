@@ -568,6 +568,38 @@ const TypographyTokens = z.object({
   mono: z.string().min(1),
 }).strict();
 
+const ModelProposalTokenValue = z.string().trim().min(1).max(200);
+
+const ModelProposalColorTokens = z.object({
+  primary: ModelProposalTokenValue,
+  surface: ModelProposalTokenValue,
+  ink: ModelProposalTokenValue,
+  muted: ModelProposalTokenValue,
+  accent: ModelProposalTokenValue,
+}).strict();
+
+const ModelProposalTypographyTokens = z.object({
+  heading: ModelProposalTokenValue,
+  body: ModelProposalTokenValue,
+  mono: ModelProposalTokenValue,
+}).strict();
+
+/**
+ * Bounded model-authored suggestions. These values are semantic artifact
+ * content, but they remain visibly separate from the accepted token fields and
+ * carry no evidence or authority controls that could promote them.
+ */
+export const ModelProposalSchema = z.object({
+  status: z.literal("proposal-only"),
+  disclaimer: z.literal("Proposal only; not accepted into token authority."),
+  designDirection: z.string().trim().min(1).max(2_000),
+  colorTokens: ModelProposalColorTokens.optional(),
+  typographyTokens: ModelProposalTypographyTokens.optional(),
+  motionNotes: z.array(z.string().trim().min(1).max(500)).max(8).default([]),
+  contentVoiceGuidance: z.string().trim().min(1).max(1_000).optional(),
+}).strict();
+export type ModelProposal = z.infer<typeof ModelProposalSchema>;
+
 const MotionGuidance = z.object({
   notes: z.array(z.string()),
   evidenceUnavailable: z.boolean(),
@@ -675,6 +707,7 @@ export const UiSpec = z.object({
   colorTokenAuthority: TokenAuthority,
   typographyTokens: TypographyTokens.nullable(),
   typographyTokenAuthority: TokenAuthority,
+  modelProposal: ModelProposalSchema.optional(),
   interactions: z.array(z.string()),
   motionGuidance: MotionGuidance,
   accessibilityConstraints: z.array(z.string()),
@@ -698,6 +731,19 @@ export const UiSpec = z.object({
   const decisionFields = val.unavailableDecisions.map(d => d.field);
   if (new Set(decisionFields).size !== decisionFields.length)
     ctx.addIssue({ code: "custom", message: "unavailableDecisions fields must be unique", path: ["unavailableDecisions"] });
+  // Proposal-only output cannot coexist with accepted root token values or
+  // non-editorial root authority. Existing null-token refinements below still
+  // require the matching unavailableDecision rows.
+  if (val.modelProposal !== undefined) {
+    if (val.colorTokens !== null)
+      ctx.addIssue({ code: "custom", message: "modelProposal requires root colorTokens to remain unavailable", path: ["colorTokens"] });
+    if (val.colorTokenAuthority !== "editorial")
+      ctx.addIssue({ code: "custom", message: "modelProposal requires root colorTokenAuthority 'editorial'", path: ["colorTokenAuthority"] });
+    if (val.typographyTokens !== null)
+      ctx.addIssue({ code: "custom", message: "modelProposal requires root typographyTokens to remain unavailable", path: ["typographyTokens"] });
+    if (val.typographyTokenAuthority !== "editorial")
+      ctx.addIssue({ code: "custom", message: "modelProposal requires root typographyTokenAuthority 'editorial'", path: ["typographyTokenAuthority"] });
+  }
   // Null colorTokens requires colorTokenAuthority "editorial" and an exact unavailableDecision
   if (val.colorTokens === null) {
     if (val.colorTokenAuthority !== "editorial")
@@ -1035,6 +1081,20 @@ export const CREATE_UI_SPEC_FREE_TEXT_LEAVES: Readonly<Record<LeafPosition, stri
   "evidence[].kind": "closed EvidenceKind enum",
   "evidence[].basis": "closed EvidenceBasis enum",
   "data.provenance.generatedAt": "z.string().datetime() — a timestamp, no identity",
+  // --- model-generated proposal content; never accepted into authority ---
+  "data.modelProposal.status": "closed proposal-only literal for model-generated content; never accepted into token authority",
+  "data.modelProposal.disclaimer": "fixed proposal disclaimer for model-generated content; never accepted into token authority",
+  "data.modelProposal.designDirection": "model-generated proposal text; never accepted into token authority",
+  "data.modelProposal.motionNotes[]": "model-generated proposal motion text; never accepted into token authority",
+  "data.modelProposal.contentVoiceGuidance": "model-generated proposal voice text; never accepted into token authority",
+  "data.modelProposal.colorTokens.primary": "model-generated proposal color value; never accepted into token authority",
+  "data.modelProposal.colorTokens.surface": "model-generated proposal color value; never accepted into token authority",
+  "data.modelProposal.colorTokens.ink": "model-generated proposal color value; never accepted into token authority",
+  "data.modelProposal.colorTokens.muted": "model-generated proposal color value; never accepted into token authority",
+  "data.modelProposal.colorTokens.accent": "model-generated proposal color value; never accepted into token authority",
+  "data.modelProposal.typographyTokens.heading": "model-generated proposal font-family value; never accepted into token authority",
+  "data.modelProposal.typographyTokens.body": "model-generated proposal font-family value; never accepted into token authority",
+  "data.modelProposal.typographyTokens.mono": "model-generated proposal font-family value; never accepted into token authority",
   // --- requester-owned prose, echoed back to its own author (reason b) ---
   "data.context.productContext": "the caller's own brief, echoed back to the caller; never corpus-derived",
   "data.context.implementationFramework": "caller-supplied framework name",

@@ -66,7 +66,10 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CorpusReader } from "./corpus-reader.js";
-import { createUiSpecForAdapter } from "./create-ui-spec.js";
+import {
+  createUiSpecForAdapter,
+  type CreateUiSpecModelDependency,
+} from "./create-ui-spec.js";
 import { makeCreateUiSpecDependencies } from "./create-ui-spec-dependencies.js";
 import {
   projectSanitizedEvidenceToMcpEvidence,
@@ -140,7 +143,11 @@ const ERROR_RETRIEVAL = Object.freeze({
  * and `parseToolResult` — which applies ALL of the envelope's refinements,
  * including the fail-closed leaf gate — is the real validation.
  */
-export function registerCreateUiSpec(server: McpServer, reader: CorpusReader): void {
+export function registerCreateUiSpec(
+  server: McpServer,
+  reader: CorpusReader,
+  model?: CreateUiSpecModelDependency,
+): void {
   server.registerTool(
     "create_ui_spec",
     {
@@ -165,7 +172,13 @@ export function registerCreateUiSpec(server: McpServer, reader: CorpusReader): v
       // {@link CreateUiSpecMcpResult} strict (no `[key: string]: unknown` escape
       // hatch that would let a stray field in) without a cast. The key set is
       // asserted at runtime in create-ui-spec-mcp.test.ts.
-      const result = await handleCreateUiSpec(args, reader);
+      // NOTE: `now` is pinned to explicit `undefined` (matching the HTTP
+      // adapter's pinned call). If a deterministic-time test seam is ever
+      // needed, it MUST be threaded through registerCreateUiSpec — dropping
+      // the explicit third argument here would silently shift `model` into
+      // the `now` slot and turn every provisioned call into a deterministic
+      // scaffold.
+      const result = await handleCreateUiSpec(args, reader, undefined, model);
       return { ...result };
     },
   );
@@ -183,6 +196,8 @@ export function registerCreateUiSpec(server: McpServer, reader: CorpusReader): v
 export async function handleCreateUiSpec(
   rawArgs: unknown,
   reader: CorpusReader,
+  now?: () => Date,
+  model?: CreateUiSpecModelDependency,
 ): Promise<CreateUiSpecMcpResult> {
   // ----- 1. Transport input -----
   const parsedInput = CreateUiSpecInput.safeParse(rawArgs);
@@ -214,8 +229,16 @@ export async function handleCreateUiSpec(
 
   // ----- 2. The sole producer -----
   let produced: Awaited<ReturnType<typeof createUiSpecForAdapter>>;
+  // The conditional is load-bearing, not cosmetic: the one-arg form selects the
+  // deterministic (no-provider) runner, the three-arg form selects the model
+  // runner. A call that always passed (reader, now, model) could never take the
+  // deterministic path, silently breaking the `not-configured` / pinned-model
+  // distinction that the parity tests assert.
   try {
-    produced = await createUiSpecForAdapter(request, makeCreateUiSpecDependencies(reader));
+    const dependencies = model === undefined && now === undefined
+      ? makeCreateUiSpecDependencies(reader)
+      : makeCreateUiSpecDependencies(reader, now, model);
+    produced = await createUiSpecForAdapter(request, dependencies);
   } catch (err) {
     return mapCoreError(err);
   }
@@ -229,6 +252,15 @@ export async function handleCreateUiSpec(
     summary: OK_SUMMARY,
     // The validated UiSpec, NOT the artifact envelope.
     data: envelope.spec,
+    // NOTE — modelExecution is DELIBERATELY not projected here. It is
+    // envelope-level metadata whose only consumer is the playground (Task 7),
+    // which is served over HTTP. Over MCP, the only discriminator is
+    // `data.modelProposal` (present ⇔ succeeded); the non-success states are
+    // intentionally indistinguishable because the served rendering and this
+    // projection are byte-identical across them (secrecy invariant) — no MCP
+    // client decision could differ on the state, so projecting it would add a
+    // key to the shared strict envelope schema without adding signal. Pinned
+    // by a test in create-ui-spec-mcp.test.ts.
     // `citedReferences` ONLY. Response-scoped evidence ids (`evidence-N`) are a
     // separate domain and never become referenceIds.
     referenceIds: [...envelope.spec.citedReferences],

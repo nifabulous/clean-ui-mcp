@@ -61,14 +61,22 @@ const repoRoot = resolve(__dirname, "..");
 const stubReader = {} as unknown as CorpusReader;
 
 /** `tools/list` over a real Client ↔ Server transport pair — the actual bytes. */
-async function listServedTools(): Promise<Array<{ name: string; description: string }>> {
+async function listServedTools(): Promise<Array<{
+  name: string;
+  description: string;
+  inputSchema: unknown;
+}>> {
   const server = createServer(stubReader);
   const client = new Client({ name: "served-tool-surface-test", version: "0.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
     const listed = await client.listTools();
-    return listed.tools.map((t) => ({ name: t.name, description: t.description ?? "" }));
+    return listed.tools.map((t) => ({
+      name: t.name,
+      description: t.description ?? "",
+      inputSchema: t.inputSchema,
+    }));
   } finally {
     await client.close();
     await server.close();
@@ -202,6 +210,20 @@ describe("served tool surface — tools/list advertises only registered tools", 
       offenders,
       `these served descriptions route callers to unregistered tools: ${JSON.stringify(offenders)}`,
     ).toEqual([]);
+  });
+
+  it("serves a closed create_ui_spec input schema with no provider or model configuration keys", async () => {
+    const served = await listServedTools();
+    const tool = served.find((candidate) => candidate.name === "create_ui_spec");
+    expect(tool).toBeDefined();
+    const schema = tool!.inputSchema as {
+      additionalProperties?: boolean;
+      properties?: Record<string, unknown>;
+    };
+    expect(schema.additionalProperties).toBe(false);
+    for (const key of ["provider", "baseUrl", "apiKey", "model", "modelConfig", "modelRuntime"]) {
+      expect(Object.keys(schema.properties ?? {}), key).not.toContain(key);
+    }
   });
 });
 

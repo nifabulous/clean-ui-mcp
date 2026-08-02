@@ -193,6 +193,10 @@ corpus/.snapshots/
 # frozen calibration) live elsewhere and pass the scan.
 .c2-private/
 
+# C3 generated-artifact history (Task 3). Proposal-only model records persist
+# until explicitly deleted and are never corpus inputs or retrieval evidence.
+.create-ui-spec-model-artifacts/
+
 # Bulk-import working state. Draft files are the staged-but-uncommitted output
 # of `npm run bulk-import`; their .bak siblings come from the strip-and-approve
 # helper. Per-batch manifests (bulk-*-manifest.json) ARE kept — they record

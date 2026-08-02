@@ -362,15 +362,7 @@ describe("callTextModelWithMetadata (C2 telemetry)", () => {
     expect(gc?.maxOutputTokens).toBe(4096);
   });
 
-  // Issue 5 (endpoint.apiKey ignored for Claude/Gemini) — documented behavior.
-  // Claude/Gemini read credentials from env vars; a caller-supplied apiKey is
-  // not honored. This test pins that contract so a future "fix" that silently
-  // starts honoring it is a deliberate, reviewed change.
-  it("ignores endpoint.apiKey for Claude (uses ANTHROPIC_API_KEY from env)", async () => {
-    // ANTHROPIC_API_KEY is set in beforeEach to "anthropic-test". The request
-    // passes a DIFFERENT apiKey — the documented behavior is that it's ignored
-    // and the env credential is used. We assert the request reaches the
-    // x-api-key header from env, not the caller-supplied one.
+  it("honors endpoint.apiKey for Claude when the request pins explicit credentials", async () => {
     const seenHeaders: Record<string, string> = {};
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = init?.headers as Record<string, string> | undefined;
@@ -392,10 +384,7 @@ describe("callTextModelWithMetadata (C2 telemetry)", () => {
       maxAttempts: 1,
     });
 
-    // The env credential (anthropic-test) is what reaches Anthropic — NOT the
-    // caller-supplied "caller-supplied-key". This is the documented contract.
-    expect(seenHeaders["x-api-key"]).toBe("anthropic-test");
-    expect(seenHeaders["x-api-key"]).not.toBe("caller-supplied-key");
+    expect(seenHeaders["x-api-key"]).toBe("caller-supplied-key");
   });
 
   // Issue 2 (maxAttempts) — proves a transient 5xx is retried up to the cap and

@@ -337,6 +337,41 @@
   color: var(--ink-muted);
 }
 
+/* --- Model proposal card --------------------------------------------------- */
+
+/* The proposal is visually separated from the accepted-token facts: a dashed
+   outline and its own raised background mark it as provisional — this content
+   was never accepted into token authority. */
+.artifact__proposal {
+  min-width: 0;
+  margin: 0;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--surface-raised);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+
+.artifact__proposal-group {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* One step below the section title: the group label names a PROPOSED position,
+   so it cannot look like an accepted-token heading. */
+.artifact__proposal-label {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
 .artifact__direction,
 .artifact__note {
   margin: 0 0 8px;

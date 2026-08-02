@@ -24,7 +24,6 @@
  * Private mode (PrivateCorpusReader) delegates each of these to the same
  * corpus.ts function server.ts called before, so the output is identical.
  */
-import "./env.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { appendFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
@@ -39,6 +38,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { CRITIQUE_UI_INPUT_SCHEMA, CRITIQUE_UI_OUTPUT_SCHEMA } from "./synthesis/contracts.js";
 import { registerCreateUiSpec } from "./create-ui-spec-mcp.js";
 import type { CorpusReader } from "./corpus-reader.js";
+import type { CreateUiSpecModelDependency } from "./create-ui-spec.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const QUERY_LOG_PATH = resolve(__dirname, "..", "corpus", "query-log.jsonl");
@@ -61,7 +61,14 @@ async function logQuery(params: { query?: string; category?: string; styleTag?: 
  * reader. Pure — no stdio, no auto-start, no env reads. The caller (server.ts)
  * is responsible for connecting a transport.
  */
-export function createServer(reader: CorpusReader): McpServer {
+export interface CreateServerOptions {
+  readonly createUiSpecModel?: CreateUiSpecModelDependency;
+}
+
+export function createServer(
+  reader: CorpusReader,
+  options: CreateServerOptions = {},
+): McpServer {
   const server = new McpServer({
     name: "clean-ui-mcp",
     version: "0.1.0",
@@ -80,7 +87,7 @@ export function createServer(reader: CorpusReader): McpServer {
   // implementation stays private in this module (registerGenerateDesignPrompt
   // below) so internal callers and the migration story are unaffected; only the
   // public registration is gone.
-  registerCreateUiSpec(server, reader);
+  registerCreateUiSpec(server, reader, options.createUiSpecModel);
   registerRecommendUiDirection(server, reader);
   registerGetAntiPatterns(server, reader);
   registerGetColorPalette(server, reader);

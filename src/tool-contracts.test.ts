@@ -391,7 +391,7 @@ describe("UiSpec", () => {
       // while the SCHEMA caps at 2000 to absorb the measured overshoot (told
       // 1000, the model wrote 1549). Same number in both places rejected every
       // live call for a well-formed proposal; see tool-contracts.ts.
-      { ...base, designDirection: "x".repeat(2_001) },
+      { ...base, designDirection: "x".repeat(2_501) },
       { ...base, motionNotes: ["x".repeat(501)] },
       { ...base, motionNotes: Array.from({ length: 9 }, () => "fade") },
       { ...base, contentVoiceGuidance: "x".repeat(1_001) },
@@ -407,6 +407,10 @@ describe("UiSpec", () => {
     }
     // The shrink's happy boundary: the old 4000 ceiling is now one over.
     expect(ModelProposalSchema.safeParse({ ...base, designDirection: "x".repeat(1_000) }).success).toBe(true);
+    // 1629 was the worst case across an 8-brief live campaign. Pinning it means
+    // any future tightening of the cap below observed real output fails here
+    // rather than silently rejecting good proposals in production.
+    expect(ModelProposalSchema.safeParse({ ...base, designDirection: "x".repeat(1_629) }).success).toBe(true);
   });
 
   it("requires the fixed proposal status and disclaimer", () => {

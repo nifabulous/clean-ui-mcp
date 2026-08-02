@@ -613,7 +613,16 @@ export const ModelProposalSchema = z.object({
   // overshoot so an honest answer is not rejected for being 549 chars over a
   // number the model was never able to hit. Setting both to 1000 rejected every
   // live call for a well-formed proposal.
-  designDirection: z.string().trim().min(1).max(2_000),
+  // 2500, RAISED FROM 2000 ON MEASURED DATA — and deliberately still not the
+  // prompt's figure. An 8-brief live campaign put the worst case at 1629 chars
+  // (81% of a 2000 cap, 371 to spare); the longest answer came from the SHORTEST
+  // brief ("A login screen."), so brief complexity does not bound this and the
+  // margin could not be reasoned about, only measured. Raising the BOUND cannot
+  // reintroduce the stray-brace derail, because generated length is driven by
+  // the prompt figure, which stays at 1000. What it buys is not throwing away a
+  // well-formed 2100-char proposal — a false rejection costs an entire
+  // generation, and the derail only ever appeared around 5000.
+  designDirection: z.string().trim().min(1).max(2_500),
   colorTokens: ModelProposalColorTokens.optional(),
   typographyTokens: ModelProposalTypographyTokens.optional(),
   motionNotes: z.array(z.string().trim().min(1).max(500)).max(8).default([]),

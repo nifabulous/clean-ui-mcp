@@ -388,7 +388,7 @@ describe("UiSpec", () => {
       // A ~5000-char single-line designDirection is where live claude-sonnet-4-5
       // lost nesting track and emitted a stray "}". The PROMPT now asks for
       // 1000 to hold generated length down — that is what killed the derail —
-      // while the SCHEMA caps at 2000 to absorb the measured overshoot (told
+      // while the SCHEMA caps at 2500 to absorb the measured overshoot (told
       // 1000, the model wrote 1549). Same number in both places rejected every
       // live call for a well-formed proposal; see tool-contracts.ts.
       { ...base, designDirection: "x".repeat(2_501) },
@@ -405,7 +405,7 @@ describe("UiSpec", () => {
     for (const proposal of invalid) {
       expect(ModelProposalSchema.safeParse(proposal).success).toBe(false);
     }
-    // The shrink's happy boundary: the old 4000 ceiling is now one over.
+    // The shrink's happy boundary: 1000 — the new prompt figure — is comfortably accepted.
     expect(ModelProposalSchema.safeParse({ ...base, designDirection: "x".repeat(1_000) }).success).toBe(true);
     // 1629 was the worst case across an 8-brief live campaign. Pinning it means
     // any future tightening of the cap below observed real output fails here

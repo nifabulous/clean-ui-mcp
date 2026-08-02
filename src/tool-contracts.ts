@@ -599,7 +599,7 @@ export const ModelProposalSchema = z.object({
   // chars is still a full paragraph. Still bounded, still strict, still
   // rejected past the cap. (UiSpec's OWN designDirection below carries no max
   // at all — that path is caller-authored, not model-authored.)
-  // CAP 2000, PROMPT SAYS 1000 — DELIBERATELY DIFFERENT NUMBERS.
+  // CAP 2500, PROMPT SAYS 1000 — DELIBERATELY DIFFERENT NUMBERS.
   //
   // Live claude-sonnet-4-5 overshoots whatever length it is told, and the ratio
   // GROWS as the instruction tightens: told 2000 it wrote 2118 (+6%), told 4000
@@ -609,7 +609,7 @@ export const ModelProposalSchema = z.object({
   // So the prompt number and the schema cap do different jobs. The prompt's
   // 1000 is the LEVER that pulls generated length down — and pulling it down is
   // what killed the stray-brace derail, which only ever appeared on ~5000-char
-  // single-line values. The schema's 2000 is the BOUND, set above the measured
+  // single-line values. The schema's 2500 is the BOUND, set above the measured
   // overshoot so an honest answer is not rejected for being 549 chars over a
   // number the model was never able to hit. Setting both to 1000 rejected every
   // live call for a well-formed proposal.

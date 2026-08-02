@@ -208,13 +208,16 @@ function buildPrompt(
       format: "Return strict JSON only. No markdown fences. No leading or trailing prose.",
       // Bounds are restated at top level because a per-field note was not enough:
       // a live claude-sonnet-4-5 run overshot a stated limit by 6%. Exceeding ANY bound discards everything.
+      // These figures MUST mirror outputShape below exactly: a per-field limit is
+      // a lever on generated length, and two different numbers for one bound make
+      // the model clamp toward the larger one.
       hardLimits: {
         // SHRUNK 4000 -> 1000. A ~5000-char single-line value is exactly where
         // a live model lost nesting track and emitted a stray "}" — so the cap
         // went DOWN, not up. 1000 chars is still a full paragraph of direction.
         designDirection: "1000 characters maximum",
-        contentVoiceGuidance: "1000 characters maximum",
-        motionNotes: "8 entries maximum, 500 characters each",
+        contentVoiceGuidance: "500 characters maximum",
+        motionNotes: "6 entries maximum, 250 characters each",
         onExceeding: "the entire proposal is discarded and the caller receives no proposal at all",
       },
       forbidden: [

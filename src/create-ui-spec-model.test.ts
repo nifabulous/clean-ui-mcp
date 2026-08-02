@@ -118,19 +118,26 @@ describe("createUiSpecModel prompt boundary", () => {
     expect(request.prompt).toContain("Internal analytics workspace for finance operators.");
     expect(request.prompt).toContain("Prioritize dense scanability over presentation flair.");
     expect(request.prompt).toContain("Favor compact hierarchy, restrained emphasis, and stable column alignment.");
-    // v3: the output contract SHRINKS the designDirection cap 4000 -> 1000 (a
+    // v4: the output contract SHRINKS the designDirection cap 4000 -> 1000 (a
     // ~5000-char single-line value is where a live model lost nesting track and
     // emitted a stray "}"). The version is hashed into promptSha256, so bumping
-    // it is how a prompt change stays honest about not being the v2 prompt.
+    // it is how a prompt change stays honest about not being the v1 prompt.
     expect(request.prompt).toContain("\"policyVersion\":\"c3-model-proposal-v4\"");
     // The bound a live model violated when it was only given a field name.
     expect(request.prompt).toContain("NOT an object, NOT an array");
-    // The prompt figure must stay BELOW the schema cap (1000 vs 2000). Stating
+    // The prompt figure must stay BELOW the schema cap (1000 vs 2500). Stating
     // the cap itself is what rejected live, well-formed proposals.
     expect(request.prompt).toContain("HARD LIMIT 1000 characters");
     expect(request.prompt).toContain("at most 250 characters");
+    // hardLimits must state the SAME prompt figures as outputShape. It
+    // previously carried the old schema caps (voice 1000, motionNotes 8/500),
+    // which told the model two different numbers for one bound — the model
+    // clamps toward the larger one and eats the schema cap's headroom.
+    expect(request.prompt).toContain("\"contentVoiceGuidance\":\"500 characters maximum\"");
+    expect(request.prompt).toContain("\"motionNotes\":\"6 entries maximum, 250 characters each\"");
+    expect(request.prompt).not.toContain("\"contentVoiceGuidance\":\"1000 characters maximum\"");
+    expect(request.prompt).not.toContain("\"motionNotes\":\"8 entries maximum, 500 characters each\"");
     // Shrink is enforced at the gate the prompt feeds: 4000 is no longer a thing.
-    expect(request.prompt).toContain("HARD LIMIT 1000 characters");
     expect(request.prompt).not.toContain("HARD LIMIT 4000 characters");
     expect(request.prompt).not.toContain("runtime-secret-key");
     expect(request.prompt).not.toContain("https://api.openai.com/v1/responses");

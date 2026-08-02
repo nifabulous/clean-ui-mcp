@@ -1646,6 +1646,24 @@ it("reports sparseCoverage when both keyword and similarity return nothing", asy
   expect(out.envelope.retrieval.mode).toBe("structured-fallback");
 });
 
+it("reports truthful counts when the similarity fallback returns fewer than three matches", async () => {
+  const seed = entry("internal-seed", "product-seed", "dashboard");
+  const similar = ["a", "b"].map((k, i) => entry(`internal-${k}`, `product-${k}`, ["forms", "modal"][i]!));
+  const reader = {
+    ...makeReader([], []),
+    search: vi.fn(async () => [seed]),
+    findSimilar: vi.fn(() => similar.map((e) => ({ entry: e, score: 1 }))),
+  } as unknown as CorpusReader;
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    { reader, resolveReferenceToken: () => undefined },
+  );
+  const corpusRows = out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation");
+  expect(corpusRows).toHaveLength(2);
+  expect(out.envelope.retrieval.resultCount).toBe(2);
+  expect(out.envelope.retrieval.mode).toBe("keyword");
+});
+
 function corpusEntryWithRoles(id: string, accent: string, pattern = "dashboard"): FixtureEntry {
   return entry(id, `product-${id}`, pattern, {
     layout: { form: "three-column", regions: [{ role: "main-canvas" }] },

@@ -351,18 +351,25 @@ function assertStoreEmpty() {
   assert(storeRecordNames().length === 0, "model artifact store is not empty before a model case");
 }
 
-function resetStore() {
-  // The store root is the production location (.create-ui-spec-model-artifacts/
-  // under the repo root). Dogfood must never destroy real operator records, so
-  // refuse rather than delete when the store holds records. A FILE at the path
-  // (the persistence-failure case's blocker) is not a store and is removable.
+function assertStoreHasNoRecords() {
+  // Pre-flight guard: the store root is the production location
+  // (.create-ui-spec-model-artifacts/ under the repo root). Dogfood must never
+  // destroy real operator records, so refuse BEFORE any deletion when the store
+  // holds records. A FILE at the path (the persistence-failure case's blocker)
+  // is not a store and is not then an operator store.
   if (existsSync(MODEL_ARTIFACT_STORE_ROOT) && lstatSync(MODEL_ARTIFACT_STORE_ROOT).isDirectory()) {
     const records = storeRecordNames();
     assert(
       records.length === 0,
-      `refusing to reset a non-empty model artifact store: ${records.length} record(s) in ${MODEL_ARTIFACT_STORE_ROOT}; move the store aside and rerun dogfood`,
+      `refusing to run dogfood against a non-empty model artifact store: ${records.length} record(s) in ${MODEL_ARTIFACT_STORE_ROOT}; move the store aside and rerun`,
     );
   }
+}
+
+function resetStore() {
+  // Safe ONLY because assertStoreHasNoRecords() ran before the model-lane
+  // section: anything the store holds from there on was created by this run and
+  // is removed so a run finishes with the store absent.
   rmSync(MODEL_ARTIFACT_STORE_ROOT, { recursive: true, force: true });
 }
 
@@ -494,6 +501,7 @@ async function run() {
     // Each case spawns its own ui-server with a case-specific env overlay so
     // the model configuration is resolved per case. The fake provider serves
     // scriptable responses; its URL becomes a private response marker.
+    assertStoreHasNoRecords();
     resetStore();
     fakeProvider = await startFakeProvider();
     PRIVATE_RESPONSE_MARKERS.push(new RegExp(escapeRegExp(fakeProvider.baseUrl)));

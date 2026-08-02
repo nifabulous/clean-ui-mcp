@@ -1138,7 +1138,7 @@ describe("PlaygroundPage — model proposal and execution states", () => {
   it.each([
     ["invalid-configuration", "Model — not configured", /configuration was incomplete/i],
     ["call-failed", "Model — call failed", /model call failed/i],
-    ["proposal-rejected", "Model — proposal rejected", /could not be accepted/i],
+    ["proposal-rejected", "Model — proposal rejected", /did not produce an acceptable proposal/i],
     ["persistence-failed", "Model — persistence failed", /could not be persisted/i],
   ] as const)(
     "announces the %s state with a neutral client-authored notice and keeps the deterministic sections",

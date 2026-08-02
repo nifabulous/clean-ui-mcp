@@ -2654,8 +2654,9 @@ export async function callTextModelWithMetadata(
   };
   let outcome: ProviderCallOutcome;
   if (provider === "claude") {
-    // Claude reads its apiKey from ANTHROPIC_API_KEY inside callClaudeWithMetadata;
-    // there is no cfgOverride path, so model is threaded via callOptions.
+    // Claude honors options.apiKeyOverride, falling back to ANTHROPIC_API_KEY
+    // inside callClaudeWithMetadata; there is no cfg override path, so
+    // endpoint pinning is threaded via callOptions.
     outcome = await callClaudeWithMetadata(request.prompt, null, undefined, "high", callOptions);
   } else if (provider === "gemini") {
     outcome = await callGeminiWithMetadata(request.prompt, null, undefined, "high", "critique", undefined, callOptions);

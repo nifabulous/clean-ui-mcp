@@ -68,11 +68,14 @@ imported by corpus readers or ranking code.
 
 ### Conditional reproducibility
 
-The deterministic lane is strictly reproducible: identical inputs always
-produce the same semantic identity. The model lane is conditional: temperature
-0 and pinned parameters narrow the distribution, but the semantic identity of
-a proposal run still depends on what the provider actually returns, so it is
-only reproducible given identical model output. In both lanes the spec hash
+Reproducibility is conditional on the corpus as well as the caller's inputs:
+retrieval reads a mutable corpus that is not one of the caller's inputs, so
+requests with identical caller inputs can differ if the corpus changed between
+runs. The deterministic lane is reproducible given identical caller inputs and
+identical corpus state. The model lane is conditional again: temperature 0 and
+pinned parameters narrow the distribution, but the semantic identity of a
+proposal run also depends on what the provider actually returns, so it is only
+reproducible given identical model output as well. In both lanes the spec hash
 varies with generation time, so two runs are never byte-identical.
 
 ### No history read path

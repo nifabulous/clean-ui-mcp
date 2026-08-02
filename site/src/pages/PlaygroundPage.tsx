@@ -813,7 +813,7 @@ const MODEL_EXECUTION_NOTICES: Readonly<
   },
   "proposal-rejected": {
     heading: "Model — proposal rejected",
-    note: "The model returned a proposal that could not be accepted, so nothing from it is shown. The result above is the deterministic scaffold.",
+    note: "The model path did not produce an acceptable proposal, so nothing from it is shown. The result above is the deterministic scaffold.",
   },
   "persistence-failed": {
     heading: "Model — persistence failed",

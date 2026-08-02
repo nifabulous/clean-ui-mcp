@@ -763,6 +763,41 @@ describe("createUiSpecModel parse-failure retry", () => {
     expect(markerRejected).toEqual({ kind: "fallback", execution: { state: "proposal-rejected" } });
     expect(markerRuntime.call).toHaveBeenCalledTimes(1);
   });
+
+  it("surfaces call-failed when the second attempt reports invalid usage", async () => {
+    // First attempt: valid usage + malformed JSON (retryable). Second attempt:
+    // invalid usage (completionTokens 0) — normalizeUsage returns null, so the
+    // lane fails closed with call-failed after exactly two calls, and no record
+    // is written (the P1-C audit gap applies: fallback carries no recordInput).
+    const runtime = retryRuntime();
+    let calls = 0;
+    runtime.call.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) return {
+        content: "{not valid json",
+        provider: "openai",
+        model: "gpt-5-mini",
+        usage: { promptTokens: 100, completionTokens: 10, raw: { prompt_tokens: 100, completion_tokens: 10 } },
+        attempts: 1,
+        latencyMs: 400,
+        providerRequestId: "req_1",
+      };
+      return {
+        content: JSON.stringify(buildProposal()),
+        provider: "openai",
+        model: "gpt-5-mini",
+        usage: { promptTokens: 100, completionTokens: 0, raw: { prompt_tokens: 100, completion_tokens: 0 } },
+        attempts: 1,
+        latencyMs: 400,
+        providerRequestId: "req_2",
+      };
+    });
+
+    const result = await createUiSpecModel(buildInput(), runtime);
+
+    expect(result).toEqual({ kind: "fallback", execution: { state: "call-failed" } });
+    expect(runtime.call).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("createUiSpecModel grounding honesty", () => {

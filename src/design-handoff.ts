@@ -544,12 +544,22 @@ function renderContextSection(spec: DesignHandoffT["spec"]): string[] {
 
 function renderSourcesSection(ctx: ResolvedDesignHandoff): string[] {
   const lines: string[] = [];
+  // Corpus evidence the spec cites (design spec §5): a DISTINCT line from
+  // `citedReferences`, which hold only caller-supplied ref-<sha256> digests.
+  // The evidence-id domain and the public-reference domain never mix, so the
+  // "Grounded in" line lists the corpus ids while citedReferences stays
+  // untouched.
+  const grounded = ctx.handoff.spec.authorityLanes?.corpusEvidence ?? [];
+  if (grounded.length > 0) {
+    lines.push(`Grounded in corpus evidence: ${grounded.join(", ")}.`);
+    lines.push("");
+  }
   // The handoff never embeds raw corpus records — only stable provenance URLs.
   const cited = ctx.handoff.spec.citedReferences;
   if (cited.length > 0) {
     lines.push("Cited references:");
     for (const ref of cited) lines.push(`- ${ref}`);
-  } else {
+  } else if (grounded.length === 0) {
     lines.push("_(no cited references recorded)_");
   }
   // Documentation sources consulted by the chosen profile.

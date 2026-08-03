@@ -326,17 +326,42 @@ describe("leaf-annotation truthfulness for the caller-owned positions", () => {
     }
   });
 
-  it("annotates designDirection as recipe-owned across BOTH deterministic sources", () => {
+  it("annotates designDirection as carrying the brief echo AND identity-screened corpus prose", () => {
     // Plan 2 gave this position a second author (corpus-fact synthesis)
-    // alongside the brief echo. The annotation must name both, must not
-    // claim corpus prose, and must not claim model authorship.
+    // alongside the brief echo; C3 Phase 1 Task 5 added identity-screened
+    // corpus PROSE (mood, type notes, critique) to the composed direction.
+    // The annotation must name all three sources and must not claim model
+    // authorship.
     const note = (CREATE_UI_SPEC_FREE_TEXT_LEAVES as Record<string, string | undefined>)[
       "data.designDirection"
     ];
     expect(note, "data.designDirection has no annotation").toBeDefined();
-    expect(note!).toMatch(/recipe-owned/i);
     expect(note!, "must name the brief-echo source").toMatch(/brief/i);
     expect(note!, "must name the corpus-fact source").toMatch(/structuredFacts|evidence ids/i);
-    expect(note!, "must not claim corpus prose").not.toMatch(/critique|whatToSteal/i);
+    expect(note!, "must name the identity-screened corpus prose source").toMatch(/critique|mood/i);
+    expect(note!, "must explicitly exclude model authorship").toMatch(/never model output/i);
+  });
+
+  it("annotates the corpus-judgment prose positions as corpus-derived and identity-screened", () => {
+    // Task 4 made these positions carry corpus prose (whatToSteal,
+    // antiPatterns.antiPatterns, voice, accessibilityRisks) through the
+    // identity screen. An annotation left at "recipe-owned" would be an
+    // authority upgrade recorded in the product's own provenance map — the
+    // same stale-annotation class that bit designDirection.
+    const corpusProsePositions = [
+      "data.techniques[].text",
+      "data.antiPatterns[].text",
+      "data.contentVoiceGuidance",
+      "data.accessibilityConstraints[]",
+    ] as const;
+    for (const position of corpusProsePositions) {
+      const note = (CREATE_UI_SPEC_FREE_TEXT_LEAVES as Record<string, string | undefined>)[
+        position
+      ];
+      expect(note, `${position} has no annotation`).toBeDefined();
+      expect(note!, `${position} must name the corpus lane`).toMatch(/corpus/i);
+      expect(note!, `${position} must be screened`).toMatch(/screen/i);
+      expect(note!, `${position} must not claim recipe ownership`).not.toMatch(/^recipe-owned/i);
+    }
   });
 });

@@ -64,8 +64,10 @@ export function buildDeniedNames(entries: readonly CorpusEntryT[]): ReadonlySet<
  * Screen one corpus-prose string (design spec §3). Returns the string
  * UNCHANGED when safe to serve, or null when it must be dropped WHOLE — never
  * redacted in place. Drop conditions, in order:
- *   1. the source entry's own productName or title (always, even dictionary
- *      words — the own-entry check is precise);
+ *   1. the source entry's own id, productName or title (always, even
+ *      dictionary words — the own-entry check is precise; the id is a
+ *      fail-closed addition over design spec §3's list, required by §2c:
+ *      "Never served: ... the corpus entry id", including when prose embeds it);
  *   2. any corpus-derived distinctive product name (dictionary words excluded
  *      from the global list by {@link buildDeniedNames});
  *   3. any private-corpus marker via the existing containsPrivateMarker sweep
@@ -77,6 +79,8 @@ export function screenProse(
   deniedNames: ReadonlySet<string>,
 ): string | null {
   const ownNames: string[] = [];
+  if (typeof entry.id === "string" && entry.id.length > 0)
+    ownNames.push(entry.id);
   if (typeof entry.source?.productName === "string" && entry.source.productName.length > 0)
     ownNames.push(entry.source.productName);
   if (typeof entry.title === "string" && entry.title.length > 0)

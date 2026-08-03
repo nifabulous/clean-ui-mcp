@@ -41,6 +41,13 @@ describe("screenProse — identity screen", () => {
     expect(screenProse("How Mobbin works is the hook", mobbin, names)).toBeNull();
   });
 
+  it("drops a string containing its own entry's corpus id", () => {
+    // §2c: the corpus entry id is never served, including when prose embeds it
+    // (the public-MCP contract fixture embeds the id in whatToSteal).
+    const withId = { ...mobbin, id: "internal-mobbin-7" } as unknown as CorpusEntryT;
+    expect(screenProse("Copy the internal-mobbin-7 grid", withId, names)).toBeNull();
+  });
+
   it("drops a string naming a different corpus product", () => {
     expect(screenProse("unlike Superhuman's triage", other, names)).toBeNull();
   });

@@ -347,6 +347,31 @@ describe("renderDesignHandoffMarkdown: 19-section outline", () => {
   });
 });
 
+describe("renderDesignHandoffMarkdown: Grounded in corpus evidence line", () => {
+  it("lists the corpus evidence ids the spec cites instead of the empty-references placeholder", () => {
+    // Auto-retrieval requests produce corpus citations but NO caller-supplied
+    // citedReferences. The Sources section must show the corpus ids the spec
+    // actually cites ("Grounded in ...") rather than reading "(no cited
+    // references recorded)" — and citedReferences itself stays untouched.
+    const spec = {
+      ...validUiSpec(),
+      authorityLanes: {
+        ...(validUiSpec().authorityLanes as Record<string, unknown>),
+        corpusEvidence: ["evidence-2", "evidence-3"],
+      },
+    };
+    const md = renderDesignHandoffMarkdown(parseDesignHandoff({
+      spec,
+      target: neutralInput().target,
+      motionIntents: neutralInput().motionIntents,
+      generatedAt: neutralInput().generatedAt,
+    }));
+    const sources = md.split("\n## ").find((s) => s.startsWith("Sources")) ?? "";
+    expect(sources).toContain("Grounded in corpus evidence: evidence-2, evidence-3.");
+    expect(sources).not.toContain("(no cited references recorded)");
+  });
+});
+
 describe("renderDesignHandoffMarkdown: proposal-only handoff", () => {
   it("renders proposed values in an unmistakable section without changing accepted token authority", () => {
     const handoff = parseDesignHandoff({

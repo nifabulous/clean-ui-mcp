@@ -353,31 +353,66 @@ Scope call: extraction is NOT in this spec. It belongs with the model lane, and
 this spec is the corpus-serving decision. Recorded here so the section's
 emptiness is understood as *deterministic-path-only*, not permanent.
 
-### 2e. Two review findings that came out better than assumed
+### 2e. Two review findings — one better than assumed, one worse
 
-**The fail-closed leaf gate already covers every position this populates.**
+**Better: the fail-closed leaf gate already covers every position this
+populates.**
 Verified against `CREATE_UI_SPEC_FREE_TEXT_LEAVES` /
 `CREATE_UI_SPEC_EVIDENCE_ID_LEAVES`: `data.techniques[].text`,
 `data.techniques[].sourceIds[]`, `data.antiPatterns[].text`,
 `data.antiPatterns[].sourceIds[]`, `data.contentVoiceGuidance`,
 `data.accessibilityConstraints[]`, `data.componentInventory[].name`/`.pattern`/
 `.sourceId`, `data.responsiveBehavior[]`, `data.interactions[]`,
-`data.layoutRegions[].components[]` — all 13 classified. No new
-classification is required and no served response can be refused for an
-unclassified position.
+`data.layoutRegions[].components[]` — all 13 classified. No response can be
+refused for an *unclassified* position.
 
-**Citation is native, not bolted on.** `TechniqueEntry` and `AntiPatternEntry`
-are `{ text, sourceIds }`, and `sourceIds[]` is classified as a
-public-evidence-id leaf — so techniques and anti-patterns cite their
-`evidence-N` through their own shape and are gated to the evidence-id domain.
-They do NOT need `citedDecisions` rows. Only the values folded into
-`designDirection` (B above) ride the existing `corpus-evidence` citedDecision.
+**And the limit of that reassurance, which the next finding demonstrates:** the
+gate protects against positions nobody classified, not against positions
+classified into the WRONG domain. `sourceIds[]` is classified — and classified
+as the wrong thing. "Every position is covered" and "every position is correct"
+are different claims, and only the first is mechanically checked.
+
+**Worse — CORRECTED: citation is NOT native.** An earlier revision of this section
+claimed `sourceIds[]` was a public-evidence-id leaf, so techniques and
+anti-patterns could cite `evidence-N` through their own shape. That is wrong.
+Both `data.techniques[].sourceIds[]` and `data.antiPatterns[].sourceIds[]` are
+in `CREATE_UI_SPEC_SAFE_REFERENCE_LEAVES`, which enforces
+`SAFE_PUBLIC_REFERENCE_ID` — a `ref-<sha256>` digest. Writing `evidence-2`
+there fails the leaf gate and **refuses the entire response**.
+
+`TechniqueEntry` and `AntiPatternEntry` are still `{ text, sourceIds }`, so the
+shape is right and only the leaf DOMAIN is wrong. The implementation therefore
+moves both positions from the safe-reference set to the evidence-id set. That
+is a deliberate contract change to two classified positions, and it is safe
+only because nothing populates `sourceIds` today: `techniques` and
+`antiPatterns` are sourced from the recipe's decisions map, which is empty on
+every current response. Verify that is still true before making the move.
+
+See Task 2 of `2026-08-03-c3-serve-corpus-prose-phase1.md`.
 
 **But those positions' annotations become false.** Several currently read
 "recipe-owned prose" — e.g. `data.techniques[].text`, `data.antiPatterns[].text`
 — which stops being true the moment they carry corpus judgment. They must be
 rewritten in the same commit, exactly as `data.designDirection` was. This is
 the annotation-truthfulness class that no runtime check catches.
+
+### 2f. How prose reaches the synthesizer (the spec had no answer)
+
+This spec described WHAT to serve without saying how it gets there, and the
+obvious route does not exist. `ResolvedEvidence` carries only `sanitized`
+rows, and their `structuredFacts` is a closed allowlist of enum/count/boolean/
+hex fields that deliberately admits **no prose** — widening it would undo the
+property that makes those rows safe to project verbatim.
+
+So Phase 1 adds an INTERNAL channel: `ResolvedEvidence.matchedEntries`, pairing
+each response-scoped `evidence-N` with the raw `CorpusEntryT` it came from.
+
+**This is the largest leak risk in the whole change.** Those entries carry
+`title`, `source.productName`, and `image` — precisely the identity classes
+§2c says are never served. The field exists so the synthesizer can read prose;
+nothing may project it, and the transport adapters must keep reading
+`sanitized`. Its guard test is written BEFORE the channel exists and must keep
+passing through every subsequent task.
 
 ### 3. The identity screen
 
@@ -411,11 +446,29 @@ Dropping loses one row of grounding; redacting publishes a damaged claim.
 ### 5. Attribution
 
 Every served row cites the response-scoped `evidence-N` of the entry it came
-from, through the existing `citedDecisions` mechanism with `corpus-evidence`
-authority — the same path the synthesized `designDirection` and `colorTokens`
-already use. `## Sources` must then list those ids; today it reads "(no cited
-references recorded)" while the direction cites them, which is the
-self-contradiction the audit found in 12 of 12 files. This spec closes it.
+from. Two channels, because the schema provides two:
+
+- **`techniques` / `antiPatterns`** cite through their own `sourceIds[]`, once
+  that position moves to the evidence-id domain (§2e).
+- **Everything folded into `designDirection`**, plus the composed
+  `contentVoiceGuidance`, rides the existing `citedDecisions` row with
+  `corpus-evidence` authority — the same path the synthesized direction
+  already uses.
+
+**CORRECTED — the Sources contradiction is NOT fixed by populating
+`citedReferences`.** An earlier revision said "`## Sources` must then list
+those ids." It cannot. `citedReferences` is populated only from
+`resolved.resolvedReferenceTokens` — caller-supplied reference tokens, rendered
+as opaque `ref-<sha256>` digests — and the position is itself classified
+`safe-public-reference`, so an `evidence-N` written there fails the gate.
+`evidence-N` and `ref-<sha>` are different id domains and must not be mixed.
+
+The contradiction is real: the direction cites `evidence-2..4` while Sources
+reads "(no cited references recorded)" in 12 of 12 captured files. The fix is a
+DISTINCT rendering — a "Grounded in" line listing the corpus evidence ids the
+spec cites — leaving `citedReferences` and its section untouched, because
+"no caller-supplied references" is a true statement on an auto-retrieval
+request. See Task 6 Step 3 of the Phase 1 plan.
 
 ### 6. The published promise changes
 

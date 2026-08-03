@@ -26,14 +26,46 @@ import type { CorpusReader } from "../../src/corpus-reader.js";
 import type { CorpusEntryT } from "../../src/schema.js";
 import { handleCreateUiSpecHttp } from "../../src/create-ui-spec-http.js";
 
-/** Private values seeded into the corpus entry. None may reach the browser. */
+/**
+ * IDENTITY values seeded into the corpus entry. None may reach the browser, in
+ * any C3 phase — corpus id, product name, source URL and image path are the
+ * "never served" set (design spec §2c).
+ */
 export const PRIVATE_MARKERS: readonly string[] = [
   "internal-corpus-77",
   "product-Alpha-Private",
   "https://private.example.com/secret",
   "images-private/secret.png",
   "images-private",
+];
+
+/**
+ * Corpus PROSE that C3 Phase 1 serves INTO THE PAGE. `critique` folds into the
+ * synthesized `designDirection`, which `site/src/data/create-ui-spec.ts`
+ * projects and the composer renders.
+ *
+ * Asserted PRESENT rather than deleted from the sweep: the identity sweep above
+ * is only a real check if the entry's judgment actually reached the page, and a
+ * silent regression back to withholding corpus prose should fail this suite
+ * instead of passing it vacuously.
+ *
+ * The wording ("must never leave the server") describes the PRE-C3 posture and
+ * is kept verbatim so the diff against the old `PRIVATE_MARKERS` list is
+ * legible.
+ */
+export const PAGE_SERVED_CORPUS_PROSE: readonly string[] = [
   "critique prose that must never leave the server",
+];
+
+/**
+ * Corpus prose that C3 Phase 1 serves ONLY in the handoff bytes. `whatToSteal`
+ * becomes `techniques[].text`, which `renderDesignHandoffMarkdown` writes into
+ * `designMarkdown` but the client projection deliberately does not read — a
+ * DOWNLOAD/CLIPBOARD PAYLOAD ONLY (see the projection docblock in
+ * `site/src/data/create-ui-spec.ts`). It must therefore never reach the DOM,
+ * exactly like the handoff's structural markers.
+ */
+export const HANDOFF_ONLY_CORPUS_PROSE: readonly string[] = [
   "stealable prose that must never leave the server",
 ];
 

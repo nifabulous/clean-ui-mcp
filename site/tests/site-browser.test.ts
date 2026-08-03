@@ -32,6 +32,8 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  HANDOFF_ONLY_CORPUS_PROSE,
+  PAGE_SERVED_CORPUS_PROSE,
   PRIVATE_MARKERS,
   fallbackArtifact,
   keywordMatchedArtifact,
@@ -880,8 +882,37 @@ describe("public site — C3 composer", () => {
       expect(storage.session).not.toContain(marker);
       expect(consoleJoined).not.toContain(marker);
     }
-    // Response-scoped evidence ids are aggregated to a count, never listed.
-    expect(await page.locator("#root").innerText()).not.toMatch(/evidence-\d/);
+    // The identity sweep above is only a real check if the entry's corpus PROSE
+    // did reach the page — otherwise the entry could be withheld wholesale and
+    // this test would pass vacuously. C3 Phase 1 serves critique folded into
+    // designDirection, which IS projected: the page carries the judgment
+    // WITHOUT the identity.
+    for (const prose of PAGE_SERVED_CORPUS_PROSE) {
+      expect(serialized).toContain(prose);
+    }
+    // whatToSteal reaches `techniques[].text`, which lives in designMarkdown
+    // only — a download/clipboard payload the projection never reads. Serving
+    // corpus prose did not make it displayable.
+    for (const prose of HANDOFF_ONLY_CORPUS_PROSE) {
+      expect(serialized).not.toContain(prose);
+    }
+    // Response-scoped evidence ids are aggregated to a count, never ENUMERATED
+    // as rows. The one exception is the direction's own citation: C3 has the
+    // synthesized `designDirection` name the ids it drew from
+    // ("...the matched corpus references (evidence-2)"), and the direction is a
+    // projected, displayable field. That citation is not a leak — a response-
+    // scoped `evidence-N` is a response-local label with no corpus meaning,
+    // which is the whole point of keeping corpus grounding in that domain. So
+    // the sweep runs over everything EXCEPT the direction paragraph.
+    //
+    // This passed before C3 only because the seeded entry carries `visual: {}`,
+    // so no structured-fact clause existed and the direction fell back to the
+    // recipe echo. C3 emits a cited direction from the entry's styleTags and
+    // categories alone, which is what makes the exception explicit here.
+    const rootText = await page.locator("#root").innerText();
+    const directionText = await page.locator(".artifact__direction").innerText();
+    expect(directionText).toMatch(/evidence-\d/);
+    expect(rootText.replace(directionText, "")).not.toMatch(/evidence-\d/);
     await ctx.close();
   }, 60_000);
 
@@ -947,7 +978,9 @@ describe("public site — C3 composer", () => {
     page.on("console", (message) => consoleText.push(message.text()));
 
     // The probe is only meaningful if these strings really are in the bytes.
-    for (const marker of HANDOFF_ONLY_MARKERS) {
+    // C3 Phase 1 adds corpus technique prose to those bytes, so it is probed
+    // the same way: present in designMarkdown, absent from the DOM.
+    for (const marker of [...HANDOFF_ONLY_MARKERS, ...HANDOFF_ONLY_CORPUS_PROSE]) {
       expect(matched.envelope.designMarkdown as string).toContain(marker);
     }
 
@@ -978,7 +1011,7 @@ describe("public site — C3 composer", () => {
     );
 
     const serialized = await page.content();
-    for (const marker of [...HANDOFF_ONLY_MARKERS, ...PRIVATE_MARKERS]) {
+    for (const marker of [...HANDOFF_ONLY_MARKERS, ...HANDOFF_ONLY_CORPUS_PROSE, ...PRIVATE_MARKERS]) {
       expect(serialized).not.toContain(marker);
     }
     expect(consoleText.join("\n")).not.toMatch(/handoff_version|target_profile/);

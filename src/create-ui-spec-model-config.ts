@@ -49,6 +49,28 @@ export function resolveCreateUiSpecModelConfig(
   });
   if (!endpoint.success) return { kind: "invalid-configuration" };
 
+  // Operator opt-in for parse-failure retry. Absent or "1" keeps the
+  // single-attempt default; "2" enables one retry on JSON.parse failure. Any
+  // other value is a misconfiguration and must not silently degrade.
+  const maxAttemptsRaw = env.CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS ?? "1";
+  if (maxAttemptsRaw !== "1" && maxAttemptsRaw !== "2") {
+    return { kind: "invalid-configuration" };
+  }
+  const maxAttempts = maxAttemptsRaw === "2" ? 2 : 1;
+
+  // Advisory boot-time checks for the two measured misconfiguration classes.
+  // Warnings only — proxies legitimately vary, so neither is a hard error.
+  if (providerRaw.trim().toLowerCase() === "claude" && !/\/v1\/messages\/?$/.test(baseUrl)) {
+    console.warn(
+      `[create-ui-spec-model] claude provider: CREATE_UI_SPEC_MODEL_BASE_URL (${baseUrl}) does not end in /v1/messages; the tagger POSTs to the base URL verbatim and will 404.`,
+    );
+  }
+  if (providerRaw.trim().toLowerCase() === "claude" && !/^[A-Za-z0-9._-]+-\d{8}$/.test(modelRaw.trim())) {
+    console.warn(
+      `[create-ui-spec-model] claude provider: model name "${modelRaw.trim()}" does not match the dated-ID shape; aliases resolve server-side and the fail-closed model-substitution check rejects them. Use the exact API model ID (e.g. claude-sonnet-4-5-20250929).`,
+    );
+  }
+
   return {
     kind: "configured",
     runtime: {
@@ -56,7 +78,7 @@ export function resolveCreateUiSpecModelConfig(
       parameters: ModelGenerationParametersSchema.parse({
         temperature: 0,
         maxOutputTokens: 4_096,
-        maxAttempts: 1,
+        maxAttempts,
         seed: null,
       }),
       call: callTextModelWithMetadata,

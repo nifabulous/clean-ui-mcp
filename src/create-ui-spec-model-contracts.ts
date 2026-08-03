@@ -67,7 +67,7 @@ export type PinnedModelEndpoint = z.infer<typeof PinnedModelEndpointSchema>;
 export const ModelGenerationParametersSchema = z.object({
   temperature: z.literal(0),
   maxOutputTokens: z.literal(4_096),
-  maxAttempts: z.literal(1),
+  maxAttempts: z.union([z.literal(1), z.literal(2)]),
   seed: z.null(),
 }).strict();
 export type ModelGenerationParameters = z.infer<typeof ModelGenerationParametersSchema>;
@@ -121,7 +121,7 @@ export const ModelArtifactRecordSchema = z.object({
   }),
   parameters: ModelGenerationParametersSchema,
   usage: ModelUsageSchema,
-  attempts: z.literal(1),
+  attempts: z.union([z.literal(1), z.literal(2)]),
   latencyMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   storedAt: z.string().datetime(),
   retention: z.literal("until-explicit-delete"),

@@ -235,41 +235,37 @@ describe("create-ui-spec producer — automatic retrieval", () => {
     }));
   });
 
-  it("enforces max two per product with backfill to five", async () => {
-    // 6 entries: 3 from product-A (top scores), 1 each from B, C, D. The recipe/
-    // system evidence (evidence-1) is always emitted first, so the envelope
-    // carries 1 recipe id + 5 corpus ids (backfilled to five).
+  it("keeps the top 3 ranked matches regardless of product diversity", async () => {
+    // 6 entries: 3 from product-A (top scores), 1 each from B, C, D. Plan 2
+    // dropped the product-diversity pick; automatic retrieval keeps the top 3
+    // by rank. The recipe/system evidence (evidence-1) is always emitted
+    // first, so the envelope carries 1 recipe id + 3 corpus ids.
     const corpus: FixtureEntry[] = [];
     const ranked: { entry: FixtureEntry; score: number }[] = [];
-    const eA1 = entry("a1", "product-A"); corpus.push(eA1); ranked.push({ entry: eA1, score: 5.0 });
-    const eA2 = entry("a2", "product-A"); corpus.push(eA2); ranked.push({ entry: eA2, score: 4.9 });
-    const eA3 = entry("a3", "product-A"); corpus.push(eA3); ranked.push({ entry: eA3, score: 4.8 });
-    const eB = entry("b1", "product-B"); corpus.push(eB); ranked.push({ entry: eB, score: 4.7 });
-    const eC = entry("c1", "product-C"); corpus.push(eC); ranked.push({ entry: eC, score: 4.6 });
-    const eD = entry("d1", "product-D"); corpus.push(eD); ranked.push({ entry: eD, score: 4.5 });
+    const eA1 = entry("a1", "product-A", "dashboard"); corpus.push(eA1); ranked.push({ entry: eA1, score: 5.0 });
+    const eA2 = entry("a2", "product-A", "data-table"); corpus.push(eA2); ranked.push({ entry: eA2, score: 4.9 });
+    const eA3 = entry("a3", "product-A", "forms"); corpus.push(eA3); ranked.push({ entry: eA3, score: 4.8 });
+    const eB = entry("b1", "product-B", "modal"); corpus.push(eB); ranked.push({ entry: eB, score: 4.7 });
+    const eC = entry("c1", "product-C", "auth"); corpus.push(eC); ranked.push({ entry: eC, score: 4.6 });
+    const eD = entry("d1", "product-D", "onboarding"); corpus.push(eD); ranked.push({ entry: eD, score: 4.5 });
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
-    // 5 corpus ids + the recipe id.
     const corpusIds = parsed.publicEvidenceIds.filter((id) => id !== RECIPE_EVIDENCE_ID);
-    expect(corpusIds.length).toBe(5);
+    expect(corpusIds.length).toBe(3);
   });
 
-  it("deterministic backfill when the fixture contains too few products", async () => {
-    // Only 2 distinct products, 4 entries — backfill selects all up to 4. The
-    // recipe/system evidence (evidence-1) is always emitted first, so the
-    // envelope carries 1 recipe id + 4 corpus ids.
+  it("keeps all matches when fewer than three are available", async () => {
+    // 2 entries with DISTINCT patterns — fewer than the top-3 cap, so both
+    // are kept. The recipe/system evidence (evidence-1) is always emitted
+    // first, so the envelope carries 1 recipe id + 2 corpus ids.
     const corpus: FixtureEntry[] = [];
     const ranked: { entry: FixtureEntry; score: number }[] = [];
-    const e1 = entry("a1", "product-A"); corpus.push(e1); ranked.push({ entry: e1, score: 5 });
-    const e2 = entry("a2", "product-A"); corpus.push(e2); ranked.push({ entry: e2, score: 4 });
-    const e3 = entry("b1", "product-B"); corpus.push(e3); ranked.push({ entry: e3, score: 3 });
-    const e4 = entry("b2", "product-B"); corpus.push(e4); ranked.push({ entry: e4, score: 2 });
+    const e1 = entry("a1", "product-A", "dashboard"); corpus.push(e1); ranked.push({ entry: e1, score: 5 });
+    const e2 = entry("a2", "product-A", "forms"); corpus.push(e2); ranked.push({ entry: e2, score: 4 });
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
-    // Fewer than 5 available — backfill returns min(available, 5) = 4 corpus
-    // ids, plus the always-present recipe id.
     const corpusIds = parsed.publicEvidenceIds.filter((id) => id !== RECIPE_EVIDENCE_ID);
-    expect(corpusIds.length).toBe(4);
+    expect(corpusIds.length).toBe(2);
     expect(parsed.retrieval.mode).toBe("keyword");
     expect(parsed.retrieval.modality).toBe("metadata");
   });
@@ -434,7 +430,7 @@ describe("create-ui-spec producer — privacy and evidence scoping", () => {
     const corpus: FixtureEntry[] = [];
     const ranked: { entry: FixtureEntry; score: number }[] = [];
     for (let i = 0; i < 3; i++) {
-      const e = entry(`e${i}`, `product-${i}`);
+      const e = entry(`e${i}`, `product-${i}`, ["dashboard", "forms", "modal"][i]!);
       corpus.push(e);
       ranked.push({ entry: e, score: 5 - i });
     }
@@ -776,8 +772,8 @@ describe("create-ui-spec producer — provenance truthfulness (echo direction is
   });
 
   it("the echo-only designDirection cites ONLY the recipe/system evidence id (never a corpus evidence-N id)", async () => {
-    const e1 = entry("e1", "product-A");
-    const e2 = entry("e2", "product-B");
+    const e1 = entry("e1", "product-A", "dashboard");
+    const e2 = entry("e2", "product-B", "forms");
     const env = await createUiSpec(validInput(), deps([e1, e2], [
       { entry: e1, score: 5 },
       { entry: e2, score: 4 },
@@ -912,6 +908,7 @@ describe("create-ui-spec producer — MCP leaf gate accepts real producer output
       status: "ok",
       summary: "Design spec produced.",
       data: spec,
+      modelExecutionState: env.modelExecution?.state ?? null,
       referenceIds: [...spec.citedReferences],
       // resultCount is the ARTIFACT count (one spec), not the retrieval match
       // count the core records — the adapter concern Task 3 owns.
@@ -1149,6 +1146,7 @@ describe("create-ui-spec producer — Task 2 adapter-facing evidence result path
         status: "ok",
         summary: "Design spec produced.",
         data: envelope.spec,
+        modelExecutionState: envelope.modelExecution?.state ?? null,
         referenceIds: [...envelope.spec.citedReferences],
         // NOT `envelope.retrieval`: its resultCount counts retrieved corpus
         // observations, while the published create_ui_spec contract documents
@@ -1221,8 +1219,8 @@ describe("create-ui-spec producer — Task 2 adapter-facing evidence result path
   it("a corpus patternType outside the closed enum cannot reach evidence[].summary", async () => {
     // The adapter result path is what PUBLISHES evidence[].summary — the persisted
     // envelope carries only `publicEvidenceIds`. The recipe-owned summary template
-    // interpolates structuredFacts.pattern verbatim (`"<pattern>" reference with N
-    // regions`), so an entry whose patternType is not a closed PatternType token
+    // interpolates structuredFacts.pattern verbatim (`"<pattern>" reference, N
+    // regions, ...`), so an entry whose patternType is not a closed PatternType token
     // would publish that raw string. Every sanitized row is therefore parsed
     // through SanitizedEvidenceSchema at construction, whose StructuredFacts pins
     // `pattern` to PatternType — so this is refused, not published.
@@ -1390,6 +1388,7 @@ describe("create-ui-spec producer — Task 2 adapter-facing evidence result path
       status: "ok",
       summary: "Design spec produced.",
       data: envelope.spec,
+      modelExecutionState: envelope.modelExecution?.state ?? null,
       referenceIds: [...envelope.spec.citedReferences],
       retrieval,
       warnings: envelope.warnings.map((w) => ({ code: w.code, message: w.message })),
@@ -1549,4 +1548,227 @@ describe("create-ui-spec producer — an intent object with no members is not in
     expect(res.envelope.spec.context.colorIntent).toEqual({ mood: "calm" });
     expect(res.envelope.spec.context.typeIntent).toEqual({ density: "compact" });
   });
+});
+
+it("round-trips a real-shaped corpus entry through the widened projection", async () => {
+  // The exact bug class this pins: a `primary`-shaped fact (the old draft)
+  // made every real entry fail SanitizedEvidenceSchema and look like a
+  // retrieval failure. A real-shaped entry — canvas/surface/ink/muted/accent,
+  // muted nullable (src/schema.ts:420-426) — must survive with colorRoles
+  // intact and a summary that includes the derived accent.
+  const entryData = entry("internal-1", "product-Alpha", "dashboard", {
+    layout: { form: "three-column", regions: [{ role: "primary-nav" }, { role: "main-canvas" }] },
+    visual: {
+      colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: null, accent: "#2563eb" },
+      spacingDensity: "compact", cornerStyle: "slight-round",
+      usesShadows: false, usesBorders: true,
+      accentColor: "#2563eb", typePairing: { display: "Inter", body: "Inter" },
+    },
+  });
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps([entryData], [{ entry: entryData, score: 5 }]),
+  );
+  const row = out.sanitizedEvidence.find((e) => e.kind === "corpus-observation");
+  expect(row).toBeDefined();
+  if (!row) return;
+  expect(SanitizedEvidenceSchema.safeParse(row).success).toBe(true);
+  expect(row.structuredFacts.colorRoles).toEqual({
+    canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: null, accent: "#2563eb",
+  });
+  expect(row.summary).toContain("accent #2563eb");
+});
+
+it("automatic retrieval caps at the top 3 ranked matches", async () => {
+  const patterns = ["dashboard", "onboarding", "modal", "forms", "auth"];
+  const corpus = Array.from({ length: 5 }, (_, i) => entry(`internal-${i}`, `product-${i}`, patterns[i]!));
+  const ranked = corpus.map((e) => ({ entry: e, score: 5 - Number((e.id as string).slice(-1)) }));
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard for finance ops", referenceIds: [], constraints: [], motionIntents: [] },
+    deps(corpus, ranked),
+  );
+  const corpusRows = out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation");
+  expect(corpusRows).toHaveLength(3);
+  expect(out.envelope.retrieval.resultCount).toBe(3);
+});
+
+it("pattern-dedupes the top 3 so a repeated pattern class cannot crowd out diversity", async () => {
+  // Measured case: a habit brief returned onboarding twice in the top 3. The
+  // first entry per patternType wins in rank order, filling up to 3 distinct
+  // patterns.
+  const eOn1 = entry("internal-1", "product-A", "onboarding");
+  const eNav = entry("internal-2", "product-B", "navigation");
+  const eOn2 = entry("internal-3", "product-C", "onboarding");
+  const eForm = entry("internal-4", "product-D", "forms");
+  const ranked = [
+    { entry: eOn1, score: 5 }, { entry: eNav, score: 4 },
+    { entry: eOn2, score: 3 }, { entry: eForm, score: 2 },
+  ];
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps([eOn1, eNav, eOn2, eForm], ranked),
+  );
+  const rows = out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation");
+  expect(rows.map((r) => r.structuredFacts.pattern)).toEqual(["onboarding", "navigation", "forms"]);
+  expect(out.envelope.retrieval.resultCount).toBe(3);
+});
+
+it("falls back to the similarity index when keyword search matches nothing", async () => {
+  const seed = entry("internal-seed", "product-seed");
+  const similar = ["a", "b", "c"].map((k, i) => entry(`internal-${k}`, `product-${k}`, ["dashboard", "forms", "modal"][i]!));
+  const reader = {
+    ...makeReader([], []),
+    search: vi.fn(async () => [seed]),
+    findSimilar: vi.fn(() => similar.map((e) => ({ entry: e, score: 1 }))),
+  } as unknown as CorpusReader;
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    { reader, resolveReferenceToken: () => undefined },
+  );
+  const corpusRows = out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation");
+  expect(corpusRows).toHaveLength(3);
+  expect(out.envelope.retrieval.resultCount).toBe(3);
+});
+
+it("reports sparseCoverage when both keyword and similarity return nothing", async () => {
+  const reader = {
+    ...makeReader([], []),
+    search: vi.fn(async () => []),
+    findSimilar: vi.fn(() => []),
+  } as unknown as CorpusReader;
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    { reader, resolveReferenceToken: () => undefined },
+  );
+  expect(out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation")).toHaveLength(0);
+  // The EXISTING zero-match warning (create-ui-spec.ts:1159-1164). No new code.
+  expect(out.envelope.warnings.map((w) => w.code)).toContain("sparseCoverage");
+  expect(out.envelope.retrieval.mode).toBe("structured-fallback");
+});
+
+it("reports truthful counts when the similarity fallback returns fewer than three matches", async () => {
+  const seed = entry("internal-seed", "product-seed", "dashboard");
+  const similar = ["a", "b"].map((k, i) => entry(`internal-${k}`, `product-${k}`, ["forms", "modal"][i]!));
+  const reader = {
+    ...makeReader([], []),
+    search: vi.fn(async () => [seed]),
+    findSimilar: vi.fn(() => similar.map((e) => ({ entry: e, score: 1 }))),
+  } as unknown as CorpusReader;
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    { reader, resolveReferenceToken: () => undefined },
+  );
+  const corpusRows = out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation");
+  expect(corpusRows).toHaveLength(2);
+  expect(out.envelope.retrieval.resultCount).toBe(2);
+  expect(out.envelope.retrieval.mode).toBe("keyword");
+});
+
+function corpusEntryWithRoles(id: string, accent: string, pattern = "dashboard"): FixtureEntry {
+  return entry(id, `product-${id}`, pattern, {
+    layout: { form: "three-column", regions: [{ role: "main-canvas" }] },
+    visual: {
+      colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent },
+      spacingDensity: "compact", cornerStyle: "slight-round",
+      usesShadows: false, usesBorders: true,
+      accentColor: accent, typePairing: { display: "Inter", body: "Inter" },
+    },
+  });
+}
+
+function mcqPayload(out: Awaited<ReturnType<typeof createUiSpecForAdapter>>): Record<string, unknown> {
+  const spec = out.envelope.spec;
+  return {
+    tool: "create_ui_spec", schemaVersion: "1.0", status: "ok", summary: "Design spec produced.",
+    data: spec, modelExecutionState: null,
+    referenceIds: [...spec.citedReferences],
+    retrieval: { ...out.envelope.retrieval, resultCount: 1 },
+    warnings: out.envelope.warnings.map((w) => ({ code: w.code, message: w.message })),
+    evidence: projectSanitizedEvidenceToMcpEvidence(out.sanitizedEvidence),
+  };
+}
+
+it("ledgers the synthesized direction against the corpus evidence ids", async () => {
+  const patterns = ["dashboard", "data-table", "forms"];
+  const ids = ["a", "b", "c"];
+  const corpus = patterns.map((p, i) => corpusEntryWithRoles(`internal-${ids[i]!}`, i === 2 ? "#1d4ed8" : "#2563eb", p));
+  const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps(corpus, ranked),
+  );
+  const spec = out.envelope.spec;
+  const ledger = spec.citedDecisions.find((d) => d.id === "designDirection-evidence-synthesis");
+  expect(ledger).toBeDefined();
+  expect(ledger!.authority).toBe("corpus-evidence");
+  expect(ledger!.evidenceIds).toEqual(["evidence-2", "evidence-3", "evidence-4"]);
+  expect(spec.citedDecisions.some((d) => d.id === "designDirection-editorial-1")).toBe(false);
+  // The full produced envelope passes the shared gate with tokens POPULATED.
+  const r = ToolResultSchemas.create_ui_spec.safeParse(mcqPayload(out));
+  expect(r.success, r.success ? "" : JSON.stringify(r.error.issues)).toBe(true);
+  expect(spec.colorTokens).not.toBeNull();
+  expect(spec.unavailableDecisions.some((d) => d.field === "colorTokens")).toBe(false);
+});
+
+it("ledgers synthesized color tokens against the corpus evidence ids", async () => {
+  // The palette is a plurality vote over visual.colorRoles across the matched
+  // entries — corpus-evidence authorship, not editorial. Declaring it
+  // "editorial" with no citedDecision is the same authority misstatement this
+  // file already pins for designDirection, one field over: the governing
+  // invariant forbids carrying authority the product did not derive, and an
+  // uncited palette loses the trace back to the entries that produced it.
+  const patterns = ["dashboard", "data-table", "forms"];
+  const ids = ["a", "b", "c"];
+  const corpus = patterns.map((p, i) => corpusEntryWithRoles(`internal-${ids[i]!}`, i === 2 ? "#1d4ed8" : "#2563eb", p));
+  const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps(corpus, ranked),
+  );
+  const spec = out.envelope.spec;
+  expect(spec.colorTokens).not.toBeNull();
+  expect(spec.colorTokenAuthority).toBe("corpus-evidence");
+  const ledger = spec.citedDecisions.find((d) => d.id === "colorTokens-evidence-synthesis");
+  expect(ledger).toBeDefined();
+  expect(ledger!.field).toBe("colorTokens");
+  expect(ledger!.authority).toBe("corpus-evidence");
+  expect(ledger!.evidenceIds).toEqual(["evidence-2", "evidence-3", "evidence-4"]);
+  // The authority-prerequisite gate (tool-contracts.ts) requires a
+  // corpus-evidence decision to cite the corpusEvidence lane; prove the whole
+  // envelope still passes with the non-editorial token authority.
+  const r = ToolResultSchemas.create_ui_spec.safeParse(mcqPayload(out));
+  expect(r.success, r.success ? "" : JSON.stringify(r.error.issues)).toBe(true);
+});
+
+it("keeps editorial token authority and no token ledger row when tokens stay null", async () => {
+  const corpus = [corpusEntryWithRoles("internal-a", "#2563eb", "dashboard")];
+  const ranked = corpus.map((e) => ({ entry: e, score: 5 }));
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps(corpus, ranked),
+  );
+  const spec = out.envelope.spec;
+  expect(spec.colorTokens).toBeNull();
+  expect(spec.colorTokenAuthority).toBe("editorial");
+  expect(spec.citedDecisions.some((d) => d.id === "colorTokens-evidence-synthesis")).toBe(false);
+});
+
+it("passes the gate with tokens unavailable and exactly one colorTokens row", async () => {
+  // Two observations only — below the >= 3 token threshold. The recipe's
+  // colorTokens row is replaced by exactly ONE conditional row; a duplicate
+  // would fail the gate's uniqueness check.
+  const ids = ["a", "b"];
+  const patterns = ["dashboard", "forms"];
+  const corpus = patterns.map((p, i) => corpusEntryWithRoles(`internal-${ids[i]!}`, "#2563eb", p));
+  const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps(corpus, ranked),
+  );
+  const spec = out.envelope.spec;
+  const rows = spec.unavailableDecisions.filter((d) => d.field === "colorTokens");
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.reason).toContain("Fewer than 3");
+  const r = ToolResultSchemas.create_ui_spec.safeParse(mcqPayload(out));
+  expect(r.success, r.success ? "" : JSON.stringify(r.error.issues)).toBe(true);
 });

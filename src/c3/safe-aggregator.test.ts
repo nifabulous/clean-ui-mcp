@@ -53,7 +53,7 @@ describe("buildCorpusObservationSummary", () => {
     const summary = buildCorpusObservationSummary(
       evidence({ structuredFacts: { pattern: "dashboard", regionCount: 3 } }),
     );
-    expect(summary).toBe("dashboard reference with 3 regions");
+    expect(summary).toBe("dashboard reference, 3 regions");
   });
 
   it("builds a pattern-only summary when regionCount is absent", () => {
@@ -66,6 +66,32 @@ describe("buildCorpusObservationSummary", () => {
   it("falls back to a generic, pattern-free summary when no pattern is set", () => {
     const summary = buildCorpusObservationSummary(evidence({ structuredFacts: {} }));
     expect(summary).toBe("Corpus observation reference");
+  });
+
+  it("builds a derived sentence from every populated structured fact", () => {
+    const summary = buildCorpusObservationSummary(
+      evidence({
+        structuredFacts: {
+          pattern: "dashboard",
+          regionCount: 3,
+          spacingDensity: "compact",
+          cornerStyle: "slight-round",
+          usesShadows: false,
+          usesBorders: true,
+          accentColor: "#2563eb",
+          typePairing: "Inter + Inter",
+        },
+      }),
+    );
+    expect(summary).toContain("dashboard reference");
+    expect(summary).toContain("3 regions");
+    expect(summary).toContain("compact spacing");
+    expect(summary).toContain("slight-round corners");
+    expect(summary).toContain("no shadows");
+    expect(summary).toContain("borders");
+    expect(summary).toContain("accent #2563eb");
+    expect(summary).toContain("Inter + Inter");
+    expect(summary.length).toBeLessThanOrEqual(500);
   });
 
   it("never reads raw corpus prose (type boundary)", () => {

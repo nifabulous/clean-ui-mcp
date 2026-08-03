@@ -63,7 +63,6 @@ import {
   parseDesignArtifactEnvelope,
   sha256Canonical,
 } from "./create-ui-spec-contracts.js";
-import { pickDiverse } from "./recommend.js";
 import {
   parseDesignHandoff,
   NEUTRAL_WEB_TARGET,
@@ -83,6 +82,7 @@ import {
   ModelExecutionSchema,
   type ModelExecution,
 } from "./create-ui-spec-model-contracts.js";
+import { createUiSpecDeterministic } from "./create-ui-spec-deterministic.js";
 import { ModelArtifactRollbackIncompleteError } from "./model-artifact-store.js";
 import {
   buildCorpusObservationSummary,
@@ -228,6 +228,7 @@ async function buildModelAwareEnvelope(
   }
 
   if (model.kind === "invalid-configuration") {
+    console.error("[create-ui-spec] model lane not usable: invalid-configuration");
     return attachModelExecution(
       deterministicEnvelope,
       ModelExecutionSchema.parse({ state: "invalid-configuration" }),
@@ -477,9 +478,52 @@ async function resolveAutomaticRetrieval(
     limit: 20,
     searchMode: "keyword-only",
   });
-  // Slice to 20 BEFORE pickDiverse (the reader may ignore the limit).
-  const sliced = results.slice(0, 20);
-  const diverse = pickDiverse(sliced as SearchResult[], 5, 2);
+  // Plan 2: top-3 by rank — no product-diversity pick. A diverse-but-
+  // irrelevant slice was the original sin: it traded relevance for coverage
+  // and left thin briefs steered by label classes. The corpus long tail is
+  // honest about weak matches instead.
+  // Pattern-dedupe (eng review D2): keep the FIRST entry per patternType so a
+  // repeated pattern class cannot crowd out grounding diversity (measured: a
+  // habit brief returned onboarding twice in the top 3). Scan up to 20 ranked
+  // rows and fill distinct patterns up to 3, preserving rank order.
+  // Keyword search first; when it matches nothing, seed the id-based
+  // similarity index (findSimilar) from the plain search's top hit.
+  // SearchResult requires `score` and `searchMode` (src/corpus.ts:116-120);
+  // the similarity fallback yields { entry } rows, so the declared type is the
+  // common { entry } shape and the ranked slice is structurally assignable.
+  const distinctPatterns = (rows: readonly { entry: CorpusEntryT }[]): { entry: CorpusEntryT }[] => {
+    const picked: { entry: CorpusEntryT }[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      if (picked.length >= 3) break;
+      const pattern = row.entry.patternType;
+      // Entries with no patternType are deliberately NOT deduped against each
+      // other — there is no class to collide on, and two untyped entries are
+      // two distinct references. Only a present pattern is recorded, so the
+      // set never holds a sentinel that nothing can match.
+      if (pattern !== undefined) {
+        if (seen.has(pattern)) continue;
+        seen.add(pattern);
+      }
+      picked.push({ entry: row.entry });
+    }
+    return picked;
+  };
+  let top: { entry: CorpusEntryT }[] = distinctPatterns(results.slice(0, 20));
+  if (top.length === 0) {
+    const seeded = await dependencies.reader.search({
+      query: request.productContext,
+      platform: request.platform,
+      limit: 1,
+    });
+    const seed = seeded[0];
+    if (seed) {
+      const similar = dependencies.reader.findSimilar(seed.id, 3);
+      // SimilarResult is { entry: CorpusEntryT, score: number } —
+      // src/corpus.ts:414-427. The entry is always present.
+      top = distinctPatterns(similar.map((s) => ({ entry: s.entry })));
+    }
+  }
 
   // The recipe/system evidence is ALWAYS emitted first (evidence-1); retrieved
   // corpus observations follow at evidence-2, evidence-3, ... The recipe
@@ -490,7 +534,7 @@ async function resolveAutomaticRetrieval(
   const sanitized: SanitizedEvidence[] = [buildRecipeSystemEvidence()];
   let nextId = 2;
   let corpusCount = 0;
-  for (const r of diverse) {
+  for (const r of top) {
     const id = `evidence-${nextId++}`;
     sanitized.push(sanitizeCorpusObservation(id, r.entry));
     corpusCount++;
@@ -570,6 +614,29 @@ function sanitizeCorpusObservation(id: string, entry: CorpusEntryT): SanitizedEv
   }
   // usesStickyHeader / usesIconography: the corpus schema does not record these
   // truthfully, so we OMIT them (undefined) rather than fabricate.
+  const visual = entry.visual;
+  if (visual?.spacingDensity) structuredFacts.spacingDensity = visual.spacingDensity;
+  if (visual?.cornerStyle) structuredFacts.cornerStyle = visual.cornerStyle;
+  if (typeof visual?.usesShadows === "boolean") structuredFacts.usesShadows = visual.usesShadows;
+  if (typeof visual?.usesBorders === "boolean") structuredFacts.usesBorders = visual.usesBorders;
+  if (visual?.accentColor) structuredFacts.accentColor = visual.accentColor;
+  if (visual?.colorRoles) structuredFacts.colorRoles = {
+    canvas: visual.colorRoles.canvas,
+    surface: visual.colorRoles.surface,
+    ink: visual.colorRoles.ink,
+    muted: visual.colorRoles.muted, // nullable per the corpus schema
+    accent: visual.colorRoles.accent,
+  };
+  const pairing = visual?.typePairing;
+  if (pairing?.display && pairing.body) {
+    // `+` separator, NOT "/" — the summary content screen rejects path-like
+    // strings (PATH_OR_URL_PATTERN), and "Display / Body" trips it.
+    structuredFacts.typePairing = `${pairing.display} + ${pairing.body}`;
+  }
+  const layoutStructure = entry.layout;
+  if (layoutStructure?.form) structuredFacts.layoutForm = layoutStructure.form;
+  const roles = layoutStructure?.regions?.map((r) => r.role).filter(Boolean);
+  if (roles && roles.length > 0) structuredFacts.layoutRoles = roles.slice(0, 8);
 
   const evidence: SanitizedEvidence = {
     id,
@@ -836,6 +903,18 @@ function assembleSpec(
   // ----- Map the parsed candidate's decisions into UiSpec fields -----
   const specFields = mapCandidateToSpecFields(parsedCandidate);
 
+  // Deterministic synthesis (Plan 2): corpus-grounded direction, token
+  // plurality, and layout regions — ONLY on the no-model path. When a model
+  // proposal is present, NONE of the synthesis applies: the root direction
+  // keeps the recipe echo, root tokens stay null (UiSpec superRefine), and
+  // the proposal is the only direction content. Gating the whole synthesis
+  // object (not just the token fields) is deliberate — a corpus-synthesized
+  // root direction on the model path would be a behavior change the spec
+  // never approved.
+  const synthesis = proposal === undefined
+    ? createUiSpecDeterministic(evidence, request)
+    : null;
+
   // Cited decisions: the designDirection ALWAYS echoes the requester's brief
   // under the deterministic fallback recipe (editorial authority), citing ONLY
   // the recipe/system evidence id. Corpus observations that were retrieved are
@@ -844,12 +923,70 @@ function assembleSpec(
   // alongside the recipe id.
   const corpusLane = corpusEvidenceIds;
   const editorialLane = [RECIPE_EVIDENCE_ID, ...publicReferenceIds];
-  const citedDecisions = buildCitedDecisions(editorialLane);
+  const recipeDecisions = buildCitedDecisions(editorialLane);
+  // The synthesized direction text cites the corpus observation ids, so the
+  // citation ledger must match: the recipe's editorial designDirection
+  // decision is REPLACED (not augmented) by a corpus-authority decision
+  // citing those ids, when synthesis supplied the direction.
+  const directionDecisions: UiSpecT["citedDecisions"] = synthesis?.designDirection
+    ? [
+        ...recipeDecisions.filter((d) => d.field !== "designDirection"),
+        {
+          // NOT "corpus-..." prefixed: the no-secret-in-served-bytes sweep
+          // treats any "corpus-" token as private corpus identity.
+          id: "designDirection-evidence-synthesis",
+          field: "designDirection",
+          // "corpus-evidence" is the CitedDecision authority enum token
+          // (tool-contracts.ts:537), NOT the camelCase lane field name.
+          authority: "corpus-evidence",
+          evidenceIds: corpusEvidenceIds,
+          readiness: "available",
+        },
+      ]
+    : recipeDecisions;
+  // The palette is a plurality vote over the matched entries' visual.colorRoles
+  // — corpus-evidence authorship, exactly like the synthesized direction above.
+  // Leaving colorTokenAuthority "editorial" with no ledger row would declare an
+  // authority the product did not derive (the governing invariant) and would
+  // drop the trace from the served palette back to the entries that produced
+  // it. The gate's authority-prerequisite check then verifies this decision
+  // cites the corpusEvidence lane.
+  const citedDecisions: UiSpecT["citedDecisions"] = synthesis?.colorTokens
+    ? [
+        ...directionDecisions.filter((d) => d.field !== "colorTokens"),
+        {
+          id: "colorTokens-evidence-synthesis",
+          field: "colorTokens",
+          authority: "corpus-evidence",
+          evidenceIds: corpusEvidenceIds,
+          readiness: "available",
+        },
+      ]
+    : directionDecisions;
 
-  // Unavailable decisions (model-dependent fields) — recipe-owned reasons.
-  const unavailableDecisions: UiSpecT["unavailableDecisions"] = RECIPE.unavailableDecisions.map(
-    (d) => ({ field: d.field, reason: d.reason }),
-  );
+  // C3 served-content posture: prose-judgment fields stay unavailable with
+  // recipe-owned reasons until the provenance-governance flip permits them.
+  const c3Unavailable: UiSpecT["unavailableDecisions"] = [
+    { field: "rejectedDefaults", reason: "Anti-pattern prose is not served; derived from corpus judgments after governance." },
+    { field: "voice", reason: "Voice analysis prose is not served until provenance governance lands." },
+    { field: "mood", reason: "Mood is not served until provenance governance lands." },
+  ];
+  // The recipe ALREADY declares a colorTokens unavailableDecision
+  // (fallback-recipe-v1.json); the UiSpec gate requires unavailableDecisions
+  // fields to be UNIQUE (tool-contracts.ts:778-781) and forbids a colorTokens
+  // row when tokens are available (:803-804). So: when synthesis runs, drop
+  // the recipe's colorTokens row and re-add exactly ONE row only when the
+  // synthesis leaves tokens null. When synthesis did not run (no corpus match
+  // or model path), the recipe's row survives untouched.
+  const unavailableDecisions: UiSpecT["unavailableDecisions"] = [
+    ...RECIPE.unavailableDecisions
+      .filter((d) => synthesis === null || d.field !== "colorTokens")
+      .map((d) => ({ field: d.field, reason: d.reason })),
+    ...(synthesis !== null && synthesis.colorTokens === null
+      ? [{ field: "colorTokens", reason: "Fewer than 3 matched entries contribute color roles." }]
+      : []),
+    ...c3Unavailable,
+  ];
 
   // Acceptance criteria: the recipe's single manual criterion.
   const criteria = RECIPE.acceptanceCriteria;
@@ -910,13 +1047,20 @@ function assembleSpec(
       ...(request.colorIntent !== undefined ? { colorIntent: request.colorIntent } : {}),
       ...(request.typeIntent !== undefined ? { typeIntent: request.typeIntent } : {}),
     },
-    designDirection: specFields.designDirection,
+    designDirection: synthesis?.designDirection ?? specFields.designDirection,
     rejectedDefaults: specFields.rejectedDefaults,
-    layoutRegions: specFields.layoutRegions,
-    responsiveBehavior: specFields.responsiveBehavior,
+    layoutRegions: synthesis && synthesis.layoutRegions.length > 0
+      ? synthesis.layoutRegions
+      : specFields.layoutRegions,
+    responsiveBehavior: synthesis && synthesis.responsiveBehavior.length > 0
+      ? synthesis.responsiveBehavior
+      : specFields.responsiveBehavior,
     componentInventory: specFields.componentInventory,
-    colorTokens: null,
-    colorTokenAuthority: "editorial",
+    colorTokens: synthesis?.colorTokens ?? null,
+    // Corpus-derived when synthesis populated them (see the colorTokens
+    // citedDecision above); "editorial" ONLY when they stay null, which the
+    // null-token refinement also requires.
+    colorTokenAuthority: synthesis?.colorTokens ? "corpus-evidence" : "editorial",
     typographyTokens: null,
     typographyTokenAuthority: "editorial",
     ...(proposal !== undefined ? { modelProposal: proposal } : {}),

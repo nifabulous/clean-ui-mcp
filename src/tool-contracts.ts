@@ -91,6 +91,21 @@ export const RetrievalState = z.object({
   }
 });
 
+/**
+ * The safe public model-execution states a model-lane tool may project.
+ * Mirrors the `state` discriminants of ModelExecutionSchema in
+ * create-ui-spec-model-contracts.ts; a sync test in tool-contracts.test.ts
+ * pins the two enums to the same member set. `null` means "no model ran".
+ * No provider data (key, URL, response bytes, request id) is representable.
+ */
+export const ModelExecutionStateSchema = z.enum([
+  "invalid-configuration",
+  "call-failed",
+  "proposal-rejected",
+  "persistence-failed",
+  "succeeded",
+]);
+
 export function isAllowedRetrievalState(s: Record<string, unknown>): boolean {
   return RetrievalState.safeParse(s).success;
 }
@@ -1152,7 +1167,7 @@ export const CREATE_UI_SPEC_FREE_TEXT_LEAVES: Readonly<Record<LeafPosition, stri
   "data.context.colorIntent.accentPreference": "caller-supplied colour intent, echoed back to its own author; never corpus-derived and never materialized into colorTokens",
   "data.context.colorIntent.mood": "caller-supplied colour intent, echoed back to its own author; never corpus-derived and never materialized into colorTokens",
   "data.context.typeIntent.voice": "caller-supplied typography intent, echoed back to its own author; never corpus-derived and never materialized into typographyTokens",
-  "data.designDirection": "under the deterministic recipe this restates the caller's own brief",
+  "data.designDirection": "recipe-owned prose: the caller's own brief restated when no corpus entry matched, or a recipe-voice sentence built from closed structuredFacts pluralities and citing the matched evidence ids; never corpus prose and never model output (a model proposal lives at data.modelProposal.designDirection)",
   // --- recipe/operator-owned prose: descriptive, carries no identity (reason b) ---
   "data.rejectedDefaults[]": "recipe-owned prose naming a rejected default",
   "data.layoutRegions[].name": "recipe-owned region label",
@@ -1515,6 +1530,11 @@ export interface ToolDescriptor {
    * Omitted (or false) preserves the original rule exactly.
    */
   readonly allowNoneWithPositiveResult?: boolean;
+  /**
+   * Tools whose result may carry a model-execution state. Set ONLY for a tool
+   * with a model lane. Omitted (or false) keeps the original key set exactly.
+   */
+  readonly hasModelExecutionState?: boolean;
   readonly evidenceKinds: readonly string[];
   readonly warningSchema: z.ZodType;
   readonly errorSchema: z.ZodType;
@@ -1852,6 +1872,8 @@ export const TOOL_DESCRIPTORS = [
     allowedAttemptedModes: ["keyword"],
     // none/none carries one spec artifact on the explicit-reference path.
     allowNoneWithPositiveResult: true,
+    // The model lane projects its safe execution state; no other tool does.
+    hasModelExecutionState: true,
     // Exactly the kinds the adapter can project from validated SanitizedEvidence.
     evidenceKinds: [...CREATE_UI_SPEC_KINDS],
     warningSchema: makeWarningSchema(["sparseCoverage", "insufficientCorpusEvidence", "motionEvidenceUnavailable", "authorityConflict"]),
@@ -2372,6 +2394,9 @@ function makeEnvelope<const D extends ToolDescriptor>(desc: D) {
     warnings: desc.warningSchema,
     // Non-evidence tools must not include the evidence property at all (not even [])
     evidence: desc.hasEvidence ? EvidenceArray : z.never().optional(),
+    modelExecutionState: desc.hasModelExecutionState
+      ? ModelExecutionStateSchema.nullable()
+      : z.never().optional(),
     error: desc.errorSchema.optional(),
   }).strict().superRefine((val, ctx) => {
     // 0. Structural leaf-value gate. Runs FIRST and OUTSIDE every status branch,

@@ -325,4 +325,18 @@ describe("leaf-annotation truthfulness for the caller-owned positions", () => {
       expect(note!, `${position} must still name the recipe lane`).toMatch(/recipe|caller-constraint/i);
     }
   });
+
+  it("annotates designDirection as recipe-owned across BOTH deterministic sources", () => {
+    // Plan 2 gave this position a second author (corpus-fact synthesis)
+    // alongside the brief echo. The annotation must name both, must not
+    // claim corpus prose, and must not claim model authorship.
+    const note = (CREATE_UI_SPEC_FREE_TEXT_LEAVES as Record<string, string | undefined>)[
+      "data.designDirection"
+    ];
+    expect(note, "data.designDirection has no annotation").toBeDefined();
+    expect(note!).toMatch(/recipe-owned/i);
+    expect(note!, "must name the brief-echo source").toMatch(/brief/i);
+    expect(note!, "must name the corpus-fact source").toMatch(/structuredFacts|evidence ids/i);
+    expect(note!, "must not claim corpus prose").not.toMatch(/critique|whatToSteal/i);
+  });
 });

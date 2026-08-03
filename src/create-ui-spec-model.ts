@@ -22,7 +22,7 @@ import { ModelProposalSchema, type ModelProposal } from "./tool-contracts.js";
 
 const MAX_MODEL_TEXT_BYTES = 32 * 1024;
 const FIXED_DISCLAIMER = "Proposal only; not accepted into token authority.";
-const POLICY_VERSION = "c3-model-proposal-v4";
+const POLICY_VERSION = "c3-model-proposal-v5";
 const RESPONSE_SCOPED_EVIDENCE_ID_RE = /\bevidence-[0-9]+\b/;
 const SOURCE_PRIVATE_ID_RE = /\bsource-private-[A-Za-z0-9_-]+\b/;
 const GENERIC_URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/\S+/i;
@@ -57,7 +57,7 @@ export interface ModelRecordInput {
     promptTokens: number;
     completionTokens: number;
   };
-  attempts: 1;
+  attempts: 1 | 2;
   latencyMs: number;
 }
 
@@ -111,97 +111,135 @@ export async function createUiSpecModel(
     Buffer.from(canonicalJsonStringify(parameters), "utf-8"),
   );
 
-  let modelResult: ModelCallResult;
-  try {
-    modelResult = await runtime.call({
-      prompt,
-      endpoint,
-      maxOutputTokens: parameters.maxOutputTokens,
-      maxAttempts: parameters.maxAttempts,
-      temperature: parameters.temperature,
+  // Parse-failure retry, and nothing else. JSON.parse failures of the
+  // UNWRAPPED content are the measured recoverable class (malformed JSON);
+  // schema rejections, byte-limit hits, private-marker hits, and call errors
+  // are single-attempt, exactly as before. Each generation runs at
+  // HTTP-level maxAttempts 1 so the two retry domains do not tangle
+  // (fetchWithRetry transient handling is unchanged).
+  let attempts: 1 | 2 = 1;
+  let totalLatencyMs = 0;
+  let usageAccum: ModelRecordInput["usage"] | null = null;
+
+  for (let generation = 1; generation <= parameters.maxAttempts; generation++) {
+    attempts = generation as 1 | 2;
+
+    let modelResult: ModelCallResult;
+    try {
+      modelResult = await runtime.call({
+        prompt,
+        endpoint,
+        maxOutputTokens: parameters.maxOutputTokens,
+        maxAttempts: 1,
+        temperature: parameters.temperature,
+      });
+    } catch {
+      return fallback("call-failed");
+    }
+
+    if (
+      modelResult.provider !== endpoint.provider
+      || modelResult.model !== endpoint.model
+      || modelResult.attempts !== 1
+      || !Number.isInteger(modelResult.latencyMs)
+      || modelResult.latencyMs < 0
+    ) {
+      return fallback("call-failed");
+    }
+
+    totalLatencyMs += modelResult.latencyMs;
+
+    const generationUsage = normalizeUsage(modelResult.usage);
+    if (!generationUsage) {
+      return fallback("call-failed");
+    }
+    // Summed across generations: the discarded attempt's tokens were billed,
+    // and a lane whose purpose is auditability must not drop them.
+    const prior: ModelRecordInput["usage"] = usageAccum ?? { promptTokens: 0, completionTokens: 0 };
+    usageAccum = {
+      promptTokens: prior.promptTokens + generationUsage.promptTokens,
+      completionTokens: prior.completionTokens + generationUsage.completionTokens,
+    };
+
+    if (byteLength(modelResult.content) > MAX_MODEL_TEXT_BYTES) {
+      return fallback("proposal-rejected");
+    }
+
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(unwrapExactCodeFence(modelResult.content.trim()));
+    } catch {
+      // The ONLY retryable failure class: structurally invalid JSON.
+      if (generation < parameters.maxAttempts) continue;
+      return fallback("proposal-rejected");
+    }
+
+    const proposalParsed = ModelProposalSchema.safeParse(parsedJson);
+    if (!proposalParsed.success) {
+      return fallback("proposal-rejected");
+    }
+
+    const proposal = ModelProposalSchema.parse({
+      ...proposalParsed.data,
+      status: "proposal-only",
+      disclaimer: FIXED_DISCLAIMER,
     });
-  } catch {
-    return fallback("call-failed");
-  }
+    if (containsPrivateMarkerDeep(proposal)) {
+      return fallback("proposal-rejected");
+    }
 
-  if (
-    modelResult.provider !== endpoint.provider
-    || modelResult.model !== endpoint.model
-    || modelResult.attempts !== 1
-    || !Number.isInteger(modelResult.latencyMs)
-    || modelResult.latencyMs < 0
-  ) {
-    return fallback("call-failed");
-  }
+    const proposalSha256 = sha256Hex(
+      Buffer.from(canonicalJsonStringify(proposal), "utf-8"),
+    );
 
-  const usage = normalizeUsage(modelResult.usage);
-  if (!usage) {
-    return fallback("call-failed");
-  }
-
-  if (byteLength(modelResult.content) > MAX_MODEL_TEXT_BYTES) {
-    return fallback("proposal-rejected");
-  }
-
-  let parsedJson: unknown;
-  try {
-    parsedJson = JSON.parse(unwrapExactCodeFence(modelResult.content.trim()));
-  } catch {
-    return fallback("proposal-rejected");
-  }
-
-  const proposalParsed = ModelProposalSchema.safeParse(parsedJson);
-  if (!proposalParsed.success) {
-    return fallback("proposal-rejected");
-  }
-
-  const proposal = ModelProposalSchema.parse({
-    ...proposalParsed.data,
-    status: "proposal-only",
-    disclaimer: FIXED_DISCLAIMER,
-  });
-  if (containsPrivateMarkerDeep(proposal)) {
-    return fallback("proposal-rejected");
-  }
-
-  const proposalSha256 = sha256Hex(
-    Buffer.from(canonicalJsonStringify(proposal), "utf-8"),
-  );
-
-  return {
-    kind: "accepted",
-    proposal,
-    execution: ModelExecutionSchema.parse({
-      state: "succeeded",
-      provider: endpoint.provider,
-      model: endpoint.model,
-      promptSha256,
-      parametersSha256,
-      reproducibility: "conditional",
-    }),
-    recordInput: {
-      proposalSha256,
-      promptSha256,
-      parametersSha256,
+    return {
+      kind: "accepted",
       proposal,
-      provider: endpoint.provider,
-      model: endpoint.model,
-      endpointOrigin: new URL(endpoint.baseUrl).origin,
-      parameters,
-      usage,
-      attempts: 1,
-      latencyMs: modelResult.latencyMs,
-    },
-  };
+      execution: ModelExecutionSchema.parse({
+        state: "succeeded",
+        provider: endpoint.provider,
+        model: endpoint.model,
+        promptSha256,
+        parametersSha256,
+        reproducibility: "conditional",
+      }),
+      recordInput: {
+        proposalSha256,
+        promptSha256,
+        parametersSha256,
+        proposal,
+        provider: endpoint.provider,
+        model: endpoint.model,
+        endpointOrigin: new URL(endpoint.baseUrl).origin,
+        parameters,
+        usage: usageAccum!,
+        attempts,
+        latencyMs: totalLatencyMs,
+      },
+    };
+  }
+
+  // Unreachable: maxAttempts is always >= 1 and every iteration returns or
+  // continues. Kept so the function's return type is total without a cast.
+  return fallback("proposal-rejected");
+}
+
+function evidenceSummaries(rows: readonly SanitizedEvidence[]): string[] {
+  return rows
+    .filter((row) => row.kind !== "recipe-system" && row.summary.trim().length > 0)
+    .map((row) => row.summary);
 }
 
 function buildPrompt(
   request: CreateUiSpecRequest,
   sanitizedEvidence: readonly SanitizedEvidence[],
 ): string {
+  const summaries = evidenceSummaries(sanitizedEvidence);
   return canonicalJsonStringify({
     policyVersion: POLICY_VERSION,
-    task: "Produce a bounded UI-spec proposal as one JSON object and nothing else.",
+    task: "Produce a bounded UI-spec proposal as one JSON object and nothing else. "
+      + "Be concise. State each decision once, with one sentence of rationale. "
+      + "Drop the DECISION/EFFECT/REJECTS scaffolding where it adds no information.",
     responsePolicy: {
       status: "proposal-only",
       disclaimer: FIXED_DISCLAIMER,
@@ -241,7 +279,12 @@ function buildPrompt(
       typeIntent: request.typeIntent,
     }),
     constraints: request.constraints,
-    evidenceSummaries: sanitizedEvidence.map((row) => row.summary),
+    // Real derived summaries only. recipe-system rows are operator
+    // scaffolding, never evidence. Omit the key when nothing real exists —
+    // a content-free label is worse than no grounding at all.
+    ...(summaries.length > 0
+      ? { evidenceSummaries: summaries }
+      : {}),
     // TYPES AND BOUNDS, not just field names. The v1 policy listed names only
     // ("required: designDirection"), and a live Claude run answered with
     // designDirection as a nested OBJECT — schema-legal-looking, schema-invalid,
@@ -371,6 +414,9 @@ function byteLength(value: string): number {
 function fallback(
   state: Extract<ModelExecution["state"], "invalid-configuration" | "call-failed" | "proposal-rejected" | "persistence-failed">,
 ): ModelPathOutcome {
+  // Operator channel: one concise line per non-success. No prompt, no
+  // response bytes, no key material.
+  console.error(`[create-ui-spec-model] lane fallback: ${state}`);
   return {
     kind: "fallback",
     execution: ModelExecutionSchema.parse({ state }) as Exclude<ModelExecution, { state: "succeeded" }>,

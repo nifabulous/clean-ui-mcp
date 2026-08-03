@@ -450,8 +450,8 @@ describe("create_ui_spec MCP registration — registration surface", () => {
 // ---------------------------------------------------------------------------
 
 const ENVELOPE_KEYS = [
-  "data", "error", "evidence", "referenceIds", "retrieval", "schemaVersion",
-  "status", "summary", "tool", "warnings",
+  "data", "error", "evidence", "modelExecutionState", "referenceIds", "retrieval",
+  "schemaVersion", "status", "summary", "tool", "warnings",
 ].sort();
 
 interface McpResult {
@@ -592,15 +592,7 @@ describe.each(STATES)("create_ui_spec MCP registration — success: $label", (st
     expect(Object.keys(result).sort()).toEqual(["content", "structuredContent"]);
   });
 
-  it("deliberately does not project the execution state over MCP", async () => {
-    // Deliberate projection boundary (see the payload comment in
-    // create-ui-spec-mcp.ts): the execution state is envelope-level metadata
-    // surfaced over HTTP for the playground. Over MCP the success
-    // discriminator is data.modelProposal; the failure states are
-    // intentionally indistinguishable because the served bytes are
-    // byte-identical across them. If this ever changes, the shared envelope
-    // key set (ENVELOPE_KEYS) and the served-bytes parity suite in
-    // create-ui-spec-http.test.ts must change together with it.
+  it("projects modelExecutionState and nothing else over MCP", async () => {
     const fixture = modelFixture("succeeded");
     const corpus = [fixtureEntry("internal-1", "product-Alpha")];
     const result = await handleCreateUiSpec(
@@ -611,7 +603,24 @@ describe.each(STATES)("create_ui_spec MCP registration — success: $label", (st
     );
     expect(spyState.produced[0]!.envelope.modelExecution?.state).toBe("succeeded");
     expect((result.structuredContent.data as { modelProposal?: unknown }).modelProposal).toBeDefined();
+    expect((result.structuredContent as Record<string, unknown>).modelExecutionState).toBe("succeeded");
     expect((result.structuredContent as Record<string, unknown>).modelExecution).toBeUndefined();
+  });
+
+  it("projects modelExecutionState null on the error branch", async () => {
+    const result = await handleCreateUiSpec(
+      { ...validArgs(), productContext: "bad" }, // fails CreateUiSpecInput validation
+      makeReader([], []),
+    );
+    expect((result.structuredContent as Record<string, unknown>).modelExecutionState).toBeNull();
+    expect((result.structuredContent as Record<string, unknown>).status).toBe("error");
+  });
+
+  it("refuses an unknown top-level key through the shared gate", async () => {
+    const result = await call();
+    const payload = { ...(result.structuredContent as Record<string, unknown>), unknownKey: "x" };
+    const gate = parseToolResult(payload);
+    expect(gate.ok).toBe(false);
   });
 
   it("the summary is a bounded constant carrying no brief, path, url, corpus id or product identity", async () => {
@@ -1065,9 +1074,10 @@ describe("create_ui_spec MCP registration — refused tokens are not surfaced", 
  * usable, and it keeps every private marker from `fixtureEntry` so a leak through
  * the served response is still unambiguous.
  */
-function keywordFixtureEntry(id: string, productName: string): CorpusEntryT {
+function keywordFixtureEntry(id: string, productName: string, patternType: string = "dashboard"): CorpusEntryT {
   return {
     ...fixtureEntry(id, productName),
+    patternType,
     domainTags: ["analytics"],
     visual: {
       dominantColors: ["#ffffff", "#101010"],
@@ -1200,8 +1210,8 @@ describe("create_ui_spec over a real MCP transport — the registered tool", () 
   // ── retrieval state 1: real keyword matches ───────────────────────────────
   it("automatic keyword retrieval: keyword/metadata, truthful counts, response-scoped evidence, safe output", async () => {
     const corpus = [
-      keywordFixtureEntry("internal-1", "product-Alpha"),
-      keywordFixtureEntry("internal-2", "product-Bravo"),
+      keywordFixtureEntry("internal-1", "product-Alpha", "dashboard"),
+      keywordFixtureEntry("internal-2", "product-Bravo", "forms"),
     ];
     const reader = makeRealKeywordReader(corpus);
     const t = await connectTransport(reader);

@@ -117,12 +117,13 @@ describe("createUiSpecModel prompt boundary", () => {
     const [request] = runtime.call.mock.calls[0] as [Parameters<CreateUiSpecModelRuntime["call"]>[0]];
     expect(request.prompt).toContain("Internal analytics workspace for finance operators.");
     expect(request.prompt).toContain("Prioritize dense scanability over presentation flair.");
-    expect(request.prompt).toContain("Favor compact hierarchy, restrained emphasis, and stable column alignment.");
-    // v4: the output contract SHRINKS the designDirection cap 4000 -> 1000 (a
+    // v5: the output contract SHRINKS the designDirection cap 4000 -> 1000 (a
     // ~5000-char single-line value is where a live model lost nesting track and
     // emitted a stray "}"). The version is hashed into promptSha256, so bumping
-    // it is how a prompt change stays honest about not being the v1 prompt.
-    expect(request.prompt).toContain("\"policyVersion\":\"c3-model-proposal-v4\"");
+    // it is how a prompt change stays honest about not being the v4 prompt.
+    expect(request.prompt).toContain("\"policyVersion\":\"c3-model-proposal-v5\"");
+    expect(request.prompt).not.toContain("c3-model-proposal-v4");
+    expect(request.prompt).toContain("Be concise. State each decision once");
     // The bound a live model violated when it was only given a field name.
     expect(request.prompt).toContain("NOT an object, NOT an array");
     // The prompt figure must stay BELOW the schema cap (1000 vs 2500). Stating
@@ -611,5 +612,221 @@ describe("createUiSpecModel response policy", () => {
       kind: "fallback",
       execution: { state: "call-failed" },
     });
+  });
+});
+
+describe("createUiSpecModel parse-failure retry", () => {
+  const RETRY_PARAMS = ModelGenerationParametersSchema.parse({
+    temperature: 0,
+    maxOutputTokens: 4096,
+    maxAttempts: 2,
+    seed: null,
+  });
+
+  function retryRuntime(): CreateUiSpecModelRuntime & { call: ReturnType<typeof vi.fn> } {
+    return { ...buildRuntime(), parameters: RETRY_PARAMS };
+  }
+
+  it("retries once on JSON.parse failure and records the second attempt", async () => {
+    const runtime = retryRuntime();
+    let calls = 0;
+    runtime.call.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) return {
+        content: "{not valid json",
+        provider: "openai",
+        model: "gpt-5-mini",
+        usage: { promptTokens: 100, completionTokens: 10, raw: { prompt_tokens: 100, completion_tokens: 10 } },
+        attempts: 1,
+        latencyMs: 400,
+        providerRequestId: "req_1",
+      };
+      return {
+        content: JSON.stringify(buildProposal()),
+        provider: "openai",
+        model: "gpt-5-mini",
+        usage: { promptTokens: 123, completionTokens: 45, raw: { prompt_tokens: 123, completion_tokens: 45 } },
+        attempts: 1,
+        latencyMs: 789,
+        providerRequestId: "req_2",
+      };
+    });
+
+    const result = await createUiSpecModel(buildInput(), runtime);
+
+    expect(result.kind).toBe("accepted");
+    expect(calls).toBe(2);
+    if (result.kind !== "accepted") return;
+    expect(result.recordInput.attempts).toBe(2);
+    expect(result.recordInput.usage).toEqual({ promptTokens: 223, completionTokens: 55 });
+    expect(result.recordInput.latencyMs).toBe(1189);
+    // Identical prompt on both generations; HTTP retry stays pinned to 1.
+    expect(runtime.call.mock.calls[0]![0].prompt).toBe(runtime.call.mock.calls[1]![0].prompt);
+    expect(runtime.call.mock.calls[0]![0].maxAttempts).toBe(1);
+    expect(runtime.call.mock.calls[1]![0].maxAttempts).toBe(1);
+  });
+
+  it("does not retry when the final parse attempt also fails", async () => {
+    const runtime = retryRuntime();
+    runtime.call.mockImplementation(async () => ({
+      content: "{still not json",
+      provider: "openai",
+      model: "gpt-5-mini",
+      usage: { promptTokens: 100, completionTokens: 10, raw: { prompt_tokens: 100, completion_tokens: 10 } },
+      attempts: 1,
+      latencyMs: 400,
+      providerRequestId: "req_x",
+    }));
+    const result = await createUiSpecModel(buildInput(), runtime);
+    // `toEqual` is exact, so this ALSO pins the P1-C audit gap: the fallback
+    // carries no `recordInput`, therefore no artifact record is written and
+    // the two discarded generations' billed tokens are unrecorded. If someone
+    // later adds a usage-only record on this path, this assertion fails first
+    // — which is the intended signal that it is a contract change, not a fix.
+    expect(result).toEqual({ kind: "fallback", execution: { state: "proposal-rejected" } });
+    expect(runtime.call).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry when maxAttempts is 1", async () => {
+    const runtime = buildRuntime();
+    runtime.call.mockImplementation(async () => ({
+      content: "{not json",
+      provider: "openai",
+      model: "gpt-5-mini",
+      usage: { promptTokens: 100, completionTokens: 10, raw: { prompt_tokens: 100, completion_tokens: 10 } },
+      attempts: 1,
+      latencyMs: 400,
+      providerRequestId: "req_x",
+    }));
+    const result = await createUiSpecModel(buildInput(), runtime);
+    expect(result).toEqual({ kind: "fallback", execution: { state: "proposal-rejected" } });
+    expect(runtime.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry schema rejections or call errors", async () => {
+    const runtime = retryRuntime();
+    runtime.call.mockImplementation(async () => ({
+      content: JSON.stringify({ ...buildProposal(), designDirection: 42 }),
+      provider: "openai",
+      model: "gpt-5-mini",
+      usage: { promptTokens: 100, completionTokens: 10, raw: { prompt_tokens: 100, completion_tokens: 10 } },
+      attempts: 1,
+      latencyMs: 400,
+      providerRequestId: "req_x",
+    }));
+    const schemaRejected = await createUiSpecModel(buildInput(), runtime);
+    expect(schemaRejected).toEqual({ kind: "fallback", execution: { state: "proposal-rejected" } });
+    expect(runtime.call).toHaveBeenCalledTimes(1);
+
+    runtime.call.mockReset();
+    runtime.call.mockImplementation(async () => {
+      throw new Error("provider down");
+    });
+    const callFailed = await createUiSpecModel(buildInput(), runtime);
+    expect(callFailed).toEqual({ kind: "fallback", execution: { state: "call-failed" } });
+    expect(runtime.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry byte-limit hits or private-marker hits at maxAttempts 2", async () => {
+    // MAX_MODEL_TEXT_BYTES is 32 * 1024 (internal, src/create-ui-spec-model.ts:23);
+    // the byte-limit check runs BEFORE JSON.parse, so it must never continue
+    // the retry loop. Private markers are checked after a successful parse and
+    // are also single-attempt (mirrors the existing marker fixture above).
+    const byteRuntime = retryRuntime();
+    byteRuntime.call.mockImplementation(async () => ({
+      content: "x".repeat(32 * 1024 + 1),
+      provider: "openai",
+      model: "gpt-5-mini",
+      usage: { promptTokens: 100, completionTokens: 10, raw: { prompt_tokens: 100, completion_tokens: 10 } },
+      attempts: 1,
+      latencyMs: 400,
+      providerRequestId: "req_x",
+    }));
+    const byteRejected = await createUiSpecModel(buildInput(), byteRuntime);
+    expect(byteRejected).toEqual({ kind: "fallback", execution: { state: "proposal-rejected" } });
+    expect(byteRuntime.call).toHaveBeenCalledTimes(1);
+
+    const markerRuntime = retryRuntime();
+    markerRuntime.call.mockImplementation(async () => ({
+      content: JSON.stringify({
+        ...buildProposal(),
+        motionNotes: ["Read /.c2-private/model-output.json before applying the palette."],
+      }),
+      provider: "openai",
+      model: "gpt-5-mini",
+      usage: { promptTokens: 100, completionTokens: 10, raw: { prompt_tokens: 100, completion_tokens: 10 } },
+      attempts: 1,
+      latencyMs: 400,
+      providerRequestId: "req_x",
+    }));
+    const markerRejected = await createUiSpecModel(buildInput(), markerRuntime);
+    expect(markerRejected).toEqual({ kind: "fallback", execution: { state: "proposal-rejected" } });
+    expect(markerRuntime.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces call-failed when the second attempt reports invalid usage", async () => {
+    // First attempt: valid usage + malformed JSON (retryable). Second attempt:
+    // invalid usage (completionTokens 0) — normalizeUsage returns null, so the
+    // lane fails closed with call-failed after exactly two calls, and no record
+    // is written (the P1-C audit gap applies: fallback carries no recordInput).
+    const runtime = retryRuntime();
+    let calls = 0;
+    runtime.call.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) return {
+        content: "{not valid json",
+        provider: "openai",
+        model: "gpt-5-mini",
+        usage: { promptTokens: 100, completionTokens: 10, raw: { prompt_tokens: 100, completion_tokens: 10 } },
+        attempts: 1,
+        latencyMs: 400,
+        providerRequestId: "req_1",
+      };
+      return {
+        content: JSON.stringify(buildProposal()),
+        provider: "openai",
+        model: "gpt-5-mini",
+        usage: { promptTokens: 100, completionTokens: 0, raw: { prompt_tokens: 100, completion_tokens: 0 } },
+        attempts: 1,
+        latencyMs: 400,
+        providerRequestId: "req_2",
+      };
+    });
+
+    const result = await createUiSpecModel(buildInput(), runtime);
+
+    expect(result).toEqual({ kind: "fallback", execution: { state: "call-failed" } });
+    expect(runtime.call).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("createUiSpecModel grounding honesty", () => {
+  it("includes evidenceSummaries only when real (non-recipe) summaries exist", async () => {
+    const runtime = buildRuntime();
+    const result = await createUiSpecModel(buildInput(), runtime);
+    expect(result.kind).toBe("accepted");
+    const [request] = runtime.call.mock.calls[0] as [Parameters<CreateUiSpecModelRuntime["call"]>[0]];
+    // buildInput carries recipe-system + public-reference rows; the recipe
+    // row is excluded, the public-reference summary is real.
+    expect(request.prompt).toContain("evidenceSummaries");
+    expect(request.prompt).toContain("The operator wants quick comparison across dense tables and side panels.");
+    expect(request.prompt).not.toContain("c3-fallback-v1");
+  });
+
+  it("omits the key when only recipe rows exist", async () => {
+    const runtime = buildRuntime();
+    const input = buildInput({
+      sanitizedEvidence: [{
+        id: "evidence-1",
+        kind: "recipe-system",
+        basis: "aggregate",
+        summary: "Deterministic c3-fallback-v1 recipe",
+        structuredFacts: {},
+      }],
+    });
+    const result = await createUiSpecModel(input, runtime);
+    expect(result.kind).toBe("accepted");
+    const [request] = runtime.call.mock.calls[0] as [Parameters<CreateUiSpecModelRuntime["call"]>[0]];
+    expect(request.prompt).not.toContain("evidenceSummaries");
   });
 });

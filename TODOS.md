@@ -268,3 +268,165 @@ symbol must still be found by the defining-file rule), and keep a short comment
 at the removal site recording why no allowlist entry is needed — otherwise the
 next author re-adds it. If the CLI main block in `loader.ts` is ever deleted, the
 symbol drops to one match and genuinely does need an entry again.
+
+---
+
+## Query-based embedding search on CorpusReader
+
+**What:** Add a query-first embedding/vector search method to `CorpusReader`
+(e.g. `searchEmbedded(query, limit)`), so brief-similarity retrieval no longer
+needs the seed-then-`findSimilar(id)` hack the Plan 2 auto-retrieval fallback
+uses.
+
+**Why:** `findSimilar` is id-based only (`src/corpus-reader.ts:71`), so the
+2026-08-02 deterministic-grounding plan's "fall back to embeddings when
+keyword returns zero" path seeds from the same keyword engine that just
+returned nothing — a weak recovery. A real query embedding gives the long-tail
+briefs a second, independent retrieval axis.
+
+**Trigger:** when Plan 2 (deterministic body + grounding) lands and the
+embeddings fallback proves too weak in the live campaign, or when a
+`VOYAGE_API_KEY`-backed embedding index is already present at runtime.
+
+**Depends on:** the embeddings index (`corpus/embeddings.json`) being loadable
+through the reader in both private and public modes.
+
+---
+
+## Corpus schema: mono role for typography
+
+**What:** Add a `mono` role to `TypePairing` (or a sibling field) in
+`src/schema.ts` so `UiSpec.typographyTokens` can be populated by the
+deterministic synthesizer.
+
+**Why:** Plan 2 keeps `typographyTokens` null because the corpus records only
+display/body pairing and UiSpec requires a `mono` member; deriving one would be
+invention. With a mono role captured at tagging time, the plurality logic
+already built in `create-ui-spec-deterministic.ts` lights up immediately.
+
+**Trigger:** a tagging-pipeline change that can populate the mono role from
+real screenshots, or a corpus backfill.
+
+**Depends on:** the two-pass tagger accepting a third type-pairing field and
+re-tagging (or backfilling) entries.
+
+---
+
+## Provenance governance flip (serve signed prose)
+
+**What:** The C3 upgrade path: once `provenance` is load-bearing (human-signed
+entries exist), revisit the "no corpus content is ever returned" tool
+description and allow serving `critique`/`whatToSteal` prose for
+human-signed entries as `evidence[].summary`.
+
+**Why:** The deterministic body and model lane currently exclude all written
+judgments (rejectedDefaults, voice, mood stay unavailable) because the corpus
+has zero human provenance (measured: 787 auto/auto-reviewed). The prose is the
+product's core taste asset; serving it requires a deliberate contract change
+plus governance.
+
+**Trigger:** when the first human-signed entry class exists and the
+`provenance` acceptance bar is enforced.
+
+**Depends on:** the provenance/curation workstream (acceptance bar: auto only
+on facts; critique/anti-pattern prose flips to trusted only after human sign).
+
+---
+
+## Prompt-change eval gate for the model lane
+
+**What:** A small eval harness that runs the live brief set (login, finance,
+habit, "Make it better.", checkout, empty-state) against the configured lane
+and fails when median `designDirection` length exceeds the 1000 target, max
+exceeds 1400, or the first-try accept rate drops below the measured baseline.
+
+**Why:** Task 4C changed the model prompt and the only quality measurement is
+the manual live campaign (2026-08-02/03: median 1107 vs target 1000, max 1233
+vs 1400, first-try accept 3/6 with retry recovery verified). Prompt edits are
+the highest-leverage, least-guarded change class; a future prompt change could
+ship with no regression signal.
+
+**Trigger:** the next prompt edit, or when the `check:model-lane` script is
+extended with a length/accept assertion mode.
+
+**Depends on:** the lane staying configured with the real provider; the campaign
+numbers recorded in `.superpowers/sdd/progress.md`.
+
+---
+
+## Coarse `design_solution` tool (single-call synthesis entry point)
+
+**What:** Ship one MCP tool, `design_solution(productContext, ...)`, that runs
+retrieval → compare → aggregate → spec internally and returns the spec with a
+cited "sources" block. Keep the fine-grained tools (retrieval, compare,
+aggregate, critique) for power users; the coarse tool becomes the default
+entry point and the `clean-ui-design` design/derived layer routes to it unless
+an agent opts into the lower level.
+
+**Why:** The current 16-tool surface forces every agent to orchestrate
+retrieval (8) → aggregation (3) → synthesis (2) → critique correctly, and each
+tool boundary is a place the design dies. One coarse entry removes the
+route-dependence failure mode for the common case.
+
+**Trigger (build when):** Plan 2 (deterministic-body grounding) lands — the
+coarse tool's synthesis reuses its retrieval (top-3 auto-retrieval) and
+deterministic synthesizer directly. Building it before Plan 2 would mean two
+ad-hoc retrieval paths.
+
+**Scope when triggered:** one new tool descriptor in `tool-contracts.ts` +
+server wiring; orchestrates the existing `resolveAutomaticRetrieval` /
+`sanitizeCorpusObservation` / deterministic synthesis pipeline and adds the
+cited sources block. Fine-grained tools unchanged.
+
+**Depends on / blocked by:** Plan 2 (`docs/superpowers/plans/2026-08-02-deterministic-body-grounding.md`).
+
+---
+
+## Learning loop / outcome store (design → result → corpus growth)
+
+**What:** A write path so the corpus "learns taste": when an agent builds from
+a spec, the outcome (design worked for this kind of user / palette did not) is
+recorded and later surfaced to the same synthesis path. Because
+`corpus/entries.json` is byte-frozen by design (freeze tests), the write path
+must be a separate outcome store (mirroring the model-artifact store) or the
+freeze invariant changes — that fork is the first decision in this work.
+
+**Why:** The product's edge is "a taste library," and today it cannot grow in
+taste: nothing learns from what worked. `critique_ui` exists but its output
+does not flow back into entries.
+
+**Trigger (build when):** Plan 2 ships and at least one team is building
+specs end-to-end (so there are real outcomes to record).
+
+**Scope when triggered:** outcome-store schema + record path from
+`critique_ui`/completion flows; a derived-summary feed that folds measured
+outcomes into retrieval ranking or synthesis; corpus freeze invariant either
+preserved (separate store) or amended (documented).
+
+**Depends on / blocked by:** Plan 2 (retrieval + deterministic body are the
+consumers that make recorded outcomes useful).
+
+---
+
+## Model-lane calibration harness (repeatable 10-brief probe)
+
+**What:** Formalize the manual 10-brief live probe (2026-08-02 session and
+Plan 1 Task 5) into a repeatable script: fixed brief set, configurable
+provider, outputs median/max `designDirection` length, accept rate, retry
+recovery rate, and per-brief latency; records results for the PR description
+without manual transcription.
+
+**Why:** Plan 1's success criteria are measured against a live campaign that
+is currently manual and only re-run when someone remembers. A script makes the
+86% → ~98% retry claim and the ≤1,000-char median verifiable on every
+release, not just this one.
+
+**Trigger (build when):** Plan 1 lands — the probe then covers the retry path
+(`CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS=2`) and the v5 prompt in one command.
+
+**Scope when triggered:** `scripts/probe-model-lane.mjs` driving the stdio
+harness over the 10 briefs; JSON output + markdown summary; wired into the
+plan's verification step as an optional `--live` flag (never CI default — it
+spends tokens).
+
+**Depends on / blocked by:** Plan 1 (`docs/superpowers/plans/2026-08-02-model-lane-reliability.md`).

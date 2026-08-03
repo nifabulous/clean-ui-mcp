@@ -161,21 +161,28 @@ export function buildFixedEmptyArrays(recipe: FallbackRecipe): FixedEmptyArrays 
  * The summary is built from a FIXED template keyed by the allowlisted
  * structured-facts tokens — never from critique/voice/product-name/url/prose.
  *
- * Template (recipe-owned):
- *   "${pattern} reference with N regions" when regionCount is known,
- *   "${pattern} reference" otherwise.
- *
- * If the sanitized evidence carries no `pattern`, a generic, pattern-free
- * recipe-owned summary is emitted.
+ * Template (recipe-owned): a comma-joined sentence of every populated fact —
+ * pattern, region count, spacing density, corner style, shadow/border flags,
+ * accent color, type pairing, and layout form. If the sanitized evidence
+ * carries no facts at all, a generic, pattern-free recipe-owned summary is
+ * emitted.
  */
 export function buildCorpusObservationSummary(evidence: SanitizedEvidence): string {
-  const pattern = evidence.structuredFacts?.pattern;
-  const regionCount = evidence.structuredFacts?.regionCount;
-  if (typeof pattern === "string" && pattern.length > 0) {
-    if (typeof regionCount === "number") {
-      return `${pattern} reference with ${regionCount} regions`;
-    }
-    return `${pattern} reference`;
-  }
-  return "Corpus observation reference";
+  // Defensive: the type-boundary test passes raw entry-shaped objects; the
+  // sanitized contract always carries structuredFacts, but the builder must
+  // not throw on a missing one.
+  const f = evidence.structuredFacts ?? {};
+  const parts: string[] = [];
+  if (f.pattern) parts.push(`${f.pattern} reference`);
+  if (typeof f.regionCount === "number") parts.push(`${f.regionCount} regions`);
+  if (f.spacingDensity) parts.push(`${f.spacingDensity} spacing`);
+  if (f.cornerStyle) parts.push(`${f.cornerStyle} corners`);
+  if (f.usesShadows === true) parts.push("shadows");
+  if (f.usesShadows === false) parts.push("no shadows");
+  if (f.usesBorders === true) parts.push("borders");
+  if (f.usesBorders === false) parts.push("no borders");
+  if (f.accentColor) parts.push(`accent ${f.accentColor}`);
+  if (f.typePairing) parts.push(f.typePairing);
+  if (f.layoutForm) parts.push(`layout ${f.layoutForm}`);
+  return parts.length > 0 ? parts.join(", ") : "Corpus observation reference";
 }

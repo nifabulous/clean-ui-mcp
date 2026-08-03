@@ -135,6 +135,7 @@ for (const file of EXTRACT_FILES) {
 const ALLOWLIST = new Set<string>([
   // Consumed by .mjs scripts via dist/ imports (not visible in src/*.ts grep):
   "MIN_WORDS",                 // content-lint.ts — used by eval-scorer.mjs
+  "runModelLaneCheck",         // model-lane-check.ts — used by scripts/check-model-lane.mjs
   "MAX_IMAGE_BYTES",           // critique-ui.ts — used by eval test
   "setDecisionsPathsForTesting", // decisions.ts — test-only export
   "resetDecisionsPathsForTesting", // decisions.ts — test-only export

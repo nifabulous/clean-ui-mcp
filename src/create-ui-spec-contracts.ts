@@ -87,7 +87,7 @@ import {
   canonicalJsonStringify,
   sha256Hex,
 } from "./readiness/contracts.js";
-import { PatternType } from "./schema.js";
+import { PatternType, SpacingDensity, CornerStyle, HexColor } from "./schema.js";
 import { ModelExecutionSchema } from "./create-ui-spec-model-contracts.js";
 import { containsPrivateMarker } from "./create-ui-spec-private-markers.js";
 export { PRIVATE_MARKERS, containsPrivateMarker } from "./create-ui-spec-private-markers.js";
@@ -274,6 +274,23 @@ export const EvidenceBasisSchema = z.enum(["visible", "aggregate", "user-supplie
  * Closed set of bounded fields/counts/booleans — NO free-form prose. Every row
  * is enum- or count-typed so a stray private excerpt cannot sneak in.
  */
+const LayoutFormEnum = z.enum(["single-column", "two-column", "three-column", "modal-overlay"]);
+const LayoutRoleEnum = z.enum([
+  "primary-nav", "icon-nav", "summary-strip", "main-canvas",
+  "detail-rail", "form-panel", "visual-panel", "overlay-card",
+]);
+
+/**
+ * The allowlist of structured-facts keys the recipe may populate. Closed set
+ * of enum/count/boolean/hex fields — NO free-form prose. Every row is typed so
+ * a stray private excerpt cannot sneak in. `colorRoles` mirrors the CORPUS
+ * schema exactly — `canvas/surface/ink/muted/accent` with `muted` NULLABLE
+ * (src/schema.ts:420-426) — NOT UiSpec's five-token vocabulary; the
+ * synthesizer maps roles into UiSpec ColorTokens via the existing
+ * design-prompt.ts merge semantics (see Task 3). `typePairing` is the DERIVED
+ * "display / body" string; `layoutForm`/`layoutRoles` are the wireframe's
+ * closed tokens.
+ */
 const StructuredFactsSchema = z
   .object({
     pattern: PatternType.optional(),
@@ -281,6 +298,21 @@ const StructuredFactsSchema = z
     columnCount: z.number().int().nonnegative().max(20).optional(),
     usesStickyHeader: z.boolean().optional(),
     usesIconography: z.boolean().optional(),
+    spacingDensity: SpacingDensity.optional(),
+    cornerStyle: CornerStyle.optional(),
+    usesShadows: z.boolean().optional(),
+    usesBorders: z.boolean().optional(),
+    accentColor: HexColor.optional(),
+    colorRoles: z.object({
+      canvas: HexColor,
+      surface: HexColor,
+      ink: HexColor,
+      muted: HexColor.nullable(),
+      accent: HexColor,
+    }).optional(),
+    typePairing: z.string().trim().min(1).max(120).optional(),
+    layoutForm: LayoutFormEnum.optional(),
+    layoutRoles: z.array(LayoutRoleEnum).max(8).optional(),
   })
   .strict();
 

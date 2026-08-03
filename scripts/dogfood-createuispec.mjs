@@ -43,7 +43,10 @@ const MODEL_PROPOSAL_DISCLAIMER = "Proposal only; not accepted into token author
 // These are the classes of private identity this route must never publish. The
 // response-scoped ids (`evidence-<n>`) are intentionally not included here.
 const PRIVATE_RESPONSE_MARKERS = [
-  /\bcorpus-[a-z0-9][a-z0-9_-]*/i,
+  // Raw corpus entry ids are private identity; the CLOSED schema enums
+  // "corpus-evidence" (CitedDecision authority) and "corpus-observation"
+  // (Evidence kind) are schema tokens, not raw ids, and must not trip it.
+  /\bcorpus-(?!evidence|observation\b)[a-z0-9][a-z0-9_-]*/i,
   /(?:^|[/\\])images-private(?:[/\\]|$)/i,
   new RegExp(escapeRegExp(DOGFOOD_MODEL_API_KEY)),
   new RegExp(escapeRegExp(MODEL_ARTIFACT_STORE_DIRNAME)),
@@ -304,9 +307,11 @@ async function startFakeProvider() {
 
   const port = await freePort();
   let behavior = "success";
+  let malformedOnceFired = false;
   const server = createHttpsServer({ key, cert }, (req, res) => {
     req.resume();
-    const body = fakeProviderBody(behavior);
+    const body = fakeProviderBody(behavior, malformedOnceFired);
+    if (behavior === "malformed-once" && !malformedOnceFired) malformedOnceFired = true;
     res.writeHead(behavior === "provider-failure" ? 500 : 200, {
       "content-type": "application/json",
     });
@@ -321,6 +326,7 @@ async function startFakeProvider() {
     baseUrl: `https://localhost:${port}/v1`,
     setBehavior: (next) => {
       behavior = next;
+      malformedOnceFired = false;
     },
     stop: async () => {
       await new Promise((resolveClosed) => server.close(resolveClosed));
@@ -329,12 +335,12 @@ async function startFakeProvider() {
   };
 }
 
-function fakeProviderBody(behavior) {
+function fakeProviderBody(behavior, malformedOnceFired) {
   const usage = { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 };
   if (behavior === "provider-failure") {
     return JSON.stringify({ error: "fake provider failure" });
   }
-  if (behavior === "malformed") {
+  if (behavior === "malformed" || (behavior === "malformed-once" && !malformedOnceFired)) {
     return JSON.stringify({ choices: [{ message: { content: RAW_MODEL_BODY_FIXTURE } }], usage });
   }
   return JSON.stringify({ choices: [{ message: { content: PROPOSAL_FIXTURE_JSON } }], usage });
@@ -392,7 +398,31 @@ function findArtifactRecordFiles(dir) {
 }
 
 function assertTokensUnavailable(envelope) {
-  assert(envelope.spec?.colorTokens === null, "accepted color tokens became available");
+  // Plan 2 (deterministic synthesis) populates root colorTokens from corpus
+  // plurality on the no-model path, so the invariant is now: the declared
+  // authority MATCHES where the values came from — "corpus-evidence" with a
+  // matching citedDecision when populated, "editorial" when null — and any
+  // populated value is a hex color. Pinning "editorial" unconditionally (the
+  // earlier form of this assertion) test-enforced an authority the product
+  // did not derive. The model path still requires null tokens (UiSpec
+  // superRefine enforces it separately).
+  const tokens = envelope.spec?.colorTokens;
+  const populated = tokens !== null && tokens !== undefined;
+  assert(
+    envelope.spec?.colorTokenAuthority === (populated ? "corpus-evidence" : "editorial"),
+    `accepted token authority does not match provenance: ${String(envelope.spec?.colorTokenAuthority)} with tokens ${populated ? "populated" : "null"}`,
+  );
+  if (populated) {
+    assert(
+      envelope.spec.citedDecisions?.some(
+        (d) => d.field === "colorTokens" && d.authority === "corpus-evidence",
+      ),
+      "populated colorTokens carry no corpus-evidence citedDecision",
+    );
+    for (const value of Object.values(tokens)) {
+      assert(/^#[0-9a-fA-F]{3,8}$/.test(String(value)), `color token not hex: ${String(value)}`);
+    }
+  }
   assert(envelope.spec?.typographyTokens === null, "accepted typography tokens became available");
 }
 
@@ -573,6 +603,25 @@ async function run() {
     });
     assertStoreEmpty();
     console.log("dogfood-createuispec: PASS malformed-response");
+
+    // Parse-failure retry: with the operator opt-in set, the first generation
+    // returns the malformed body and the second succeeds. The record must
+    // carry attempts: 2 and the served envelope must show proposal-only with
+    // accepted tokens null.
+    resetStore();
+    assertStoreEmpty();
+    fakeProvider.setBehavior("malformed-once");
+    await withModelServer({ ...baseModelEnv, CREATE_UI_SPEC_MODEL_MAX_ATTEMPTS: "2" }, async (modelServer, modelNonce) => {
+      const envelope = requireEnvelope(await postJson(modelServer.baseUrl, modelNonce, INTENT_BRIEF));
+      assert(envelope.modelExecution?.state === "succeeded", "retry did not surface succeeded");
+      assert(envelope.spec.modelProposal?.status === "proposal-only", "retry proposal not proposal-only");
+      assertTokensUnavailable(envelope);
+    });
+    const records = readdirSync(MODEL_ARTIFACT_STORE_ROOT);
+    assert(records.length === 1, "retry wrote exactly one record");
+    const record = JSON.parse(readFileSync(join(MODEL_ARTIFACT_STORE_ROOT, records[0]), "utf8"));
+    assert(record.attempts === 2, "retry record did not carry attempts 2");
+    console.log("dogfood-createuispec: PASS parse-failure-retry");
 
     // Persistence failure: a FILE at the store root blocks the store's mkdir.
     // The provider call succeeds, but the record write fails and the envelope

@@ -69,6 +69,8 @@ interface FixtureEntry extends Partial<CorpusEntryT> {
   critique: string;
   whatToSteal: string[];
   antiPatterns: { antiPatterns: string[]; whereThisFails: string[]; accessibilityRisks: string[] };
+  voice?: { tone: string; examples: string[]; avoid?: string[] };
+  responsiveBehavior?: string;
   categories: string[];
   styleTags: string[];
   components: string[];
@@ -1785,6 +1787,50 @@ it("passes the gate with tokens unavailable and exactly one colorTokens row", as
   const rows = spec.unavailableDecisions.filter((d) => d.field === "colorTokens");
   expect(rows).toHaveLength(1);
   expect(rows[0]!.reason).toContain("Fewer than 3");
+  const r = ToolResultSchemas.create_ui_spec.safeParse(mcqPayload(out));
+  expect(r.success, r.success ? "" : JSON.stringify(r.error.issues)).toBe(true);
+});
+
+it("serves corpus judgment into the six UiSpec fields, evidence-cited and gate-clean", async () => {
+  const corpus = [entry("internal-1", "ProductA", "dashboard", {
+    whatToSteal: ["Group metrics by row", "Right-side callout anchored to chart regions"],
+    antiPatterns: {
+      antiPatterns: ["Avoids heavy chart chrome"],
+      whereThisFails: [],
+      accessibilityRisks: [],
+    },
+    voice: {
+      tone: "Restrained, confident",
+      examples: ["Confidence intervals plotted as soft bands"],
+      avoid: [],
+    },
+    components: ["kpi-card"],
+    responsiveBehavior: "responsive",
+  })];
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps(corpus, [{ entry: corpus[0], score: 5 }]),
+  );
+  const spec = out.envelope.spec;
+  // The recipe/system evidence is evidence-1; the matched corpus entry is
+  // evidence-2, which is what every served row must cite.
+  expect(spec.techniques).toEqual([
+    { text: "Group metrics by row", sourceIds: ["evidence-2"] },
+    { text: "Right-side callout anchored to chart regions", sourceIds: ["evidence-2"] },
+  ]);
+  expect(spec.antiPatterns).toEqual([
+    { text: "Avoids heavy chart chrome", sourceIds: ["evidence-2"] },
+  ]);
+  expect(spec.contentVoiceGuidance).toBe(
+    "Restrained, confident. Examples: Confidence intervals plotted as soft bands.",
+  );
+  expect(spec.componentInventory).toEqual([{ name: "kpi-card", pattern: "kpi-card" }]);
+  expect(spec.responsiveBehavior).toContain("mode: responsive");
+  // The composed voice cites the entry that supplied it.
+  expect(spec.citedDecisions.find((d) => d.field === "contentVoiceGuidance")?.evidenceIds)
+    .toEqual(["evidence-2"]);
+  // The full MCP envelope schema (leaf gate + evidence membership + authority
+  // prerequisites) accepts the produced envelope.
   const r = ToolResultSchemas.create_ui_spec.safeParse(mcqPayload(out));
   expect(r.success, r.success ? "" : JSON.stringify(r.error.issues)).toBe(true);
 });

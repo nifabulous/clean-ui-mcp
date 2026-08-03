@@ -15,8 +15,11 @@
  *  3. Typed sanitization — allowlist projection from CorpusEntry into
  *     response-scoped SanitizedEvidence (evidence-1, evidence-2, ...). Recipe-
  *     owned summaries; never critique/voice/product-name/url/prose.
- *  4. Deterministic assembly — via the safe aggregator (SanitizedEvidence ONLY;
- *     never raw CorpusEntry). The c3-fallback-v1 recipe is the ONLY provider
+ *  4. Deterministic assembly — via the safe aggregator (SanitizedEvidence for
+ *     the structured signals) plus the INTERNAL `ResolvedEvidence.matchedEntries`
+ *     channel for the six prose fields (C3 Phase 1); every prose string is
+ *     identity-screened before emission, and `matchedEntries` never reaches a
+ *     transport projection. The c3-fallback-v1 recipe is the ONLY provider
  *     path this milestone.
  *  5. Envelope construction — build the validated handoff, render both formats,
  *     compute every hash, derive artifactId from the canonical identity object
@@ -926,7 +929,7 @@ function assembleSpec(
   // root direction on the model path would be a behavior change the spec
   // never approved.
   const synthesis = proposal === undefined
-    ? createUiSpecDeterministic(evidence, request)
+    ? createUiSpecDeterministic(evidence, resolved.matchedEntries, request)
     : null;
 
   // Cited decisions: the designDirection ALWAYS echoes the requester's brief
@@ -977,12 +980,31 @@ function assembleSpec(
         },
       ]
     : directionDecisions;
+  // The composed contentVoiceGuidance is corpus-authority content (design spec
+  // §5): it rides a citedDecision row with corpus-evidence authority, citing
+  // exactly the entries whose voice content survived the screen.
+  const citedDecisionsWithVoice = synthesis?.contentVoiceGuidance
+    ? [
+        ...citedDecisions,
+        {
+          id: "contentVoiceGuidance-evidence-synthesis",
+          field: "contentVoiceGuidance",
+          authority: "corpus-evidence" as const,
+          evidenceIds: synthesis.contentVoiceEvidenceIds,
+          readiness: "available" as const,
+        },
+      ]
+    : citedDecisions;
 
-  // C3 served-content posture: prose-judgment fields stay unavailable with
-  // recipe-owned reasons until the provenance-governance flip permits them.
+  // C3 served-content posture: prose-judgment fields WITHOUT surviving corpus
+  // content keep their unavailable reasons (the voice row is dropped exactly
+  // when synthesis serves contentVoiceGuidance below); rejectedDefaults and
+  // mood have no served slot in Phase 1.
   const c3Unavailable: UiSpecT["unavailableDecisions"] = [
     { field: "rejectedDefaults", reason: "Anti-pattern prose is not served; derived from corpus judgments after governance." },
-    { field: "voice", reason: "Voice analysis prose is not served until provenance governance lands." },
+    // Once synthesis serves contentVoiceGuidance, the voice-unavailable row
+    // would be false; it is dropped below exactly when voice content survives.
+    ...(synthesis?.contentVoiceGuidance ? [] : [{ field: "voice", reason: "Voice analysis prose is not served until provenance governance lands." }]),
     { field: "mood", reason: "Mood is not served until provenance governance lands." },
   ];
   // The recipe ALREADY declares a colorTokens unavailableDecision
@@ -1069,7 +1091,9 @@ function assembleSpec(
     responsiveBehavior: synthesis && synthesis.responsiveBehavior.length > 0
       ? synthesis.responsiveBehavior
       : specFields.responsiveBehavior,
-    componentInventory: specFields.componentInventory,
+    componentInventory: synthesis && synthesis.componentInventory.length > 0
+      ? synthesis.componentInventory
+      : specFields.componentInventory,
     colorTokens: synthesis?.colorTokens ?? null,
     // Corpus-derived when synthesis populated them (see the colorTokens
     // citedDecision above); "editorial" ONLY when they stay null, which the
@@ -1080,14 +1104,17 @@ function assembleSpec(
     ...(proposal !== undefined ? { modelProposal: proposal } : {}),
     interactions: specFields.interactions,
     motionGuidance: { notes: [], evidenceUnavailable: true },
-    accessibilityConstraints: specFields.accessibilityConstraints,
+    accessibilityConstraints: synthesis && synthesis.accessibilityConstraints.length > 0
+      ? synthesis.accessibilityConstraints
+      : specFields.accessibilityConstraints,
     ...(specFields.frameworkNotes !== undefined ? { frameworkNotes: specFields.frameworkNotes } : {}),
-    techniques: specFields.techniques,
-    antiPatterns: specFields.antiPatterns,
+    ...(synthesis?.contentVoiceGuidance ? { contentVoiceGuidance: synthesis.contentVoiceGuidance } : {}),
+    techniques: synthesis && synthesis.techniques.length > 0 ? synthesis.techniques : specFields.techniques,
+    antiPatterns: synthesis && synthesis.antiPatterns.length > 0 ? synthesis.antiPatterns : specFields.antiPatterns,
     unavailableDecisions,
     acceptanceCriteria,
     citedReferences,
-    citedDecisions,
+    citedDecisions: citedDecisionsWithVoice,
     authorityLanes: {
       corpusEvidence: corpusLane,
       machineRules: [],

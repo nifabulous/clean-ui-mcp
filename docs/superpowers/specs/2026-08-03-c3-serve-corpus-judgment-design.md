@@ -125,20 +125,44 @@ count, which was incoherent — the invariant now matches the behaviour.
 
 ### 1. What is served
 
-| section | source | rule |
+**Constraint discovered in review: `UiSpec` has no slot for five of the values
+this spec wants to serve.** `UiSpec` (`src/tool-contracts.ts`, `.strict()`) has
+fields for techniques, antiPatterns, contentVoiceGuidance,
+accessibilityConstraints, componentInventory, responsiveBehavior,
+layoutRegions, interactions and rejectedDefaults — but **none** for `critique`,
+`styleTags`/`categories`, `mood`, `colorScheme`, or a typography/colour
+*observation* distinct from the token slots.
+
+Adding five fields to `UiSpec` is a shared-contract change with the same blast
+radius as `modelExecutionState` (strict schema + descriptor `dataSchema` + a
+leaf classification per new string position + renderer sections), times five.
+That is not worth it to carry a handful of tokens. So:
+
+**A. Served into existing UiSpec fields** — no schema change:
+
+| UiSpec field | source | rule |
 |---|---|---|
-| Techniques to borrow | `whatToSteal` | up to 5 rows, each cited |
-| Anti-patterns to avoid | `antiPatterns.antiPatterns` | up to 5 rows, each cited |
-| Reference summary | `critique` | 1 per matched entry, cited |
-| Voice & copy | `voice.tone`, `voice.avoid` | tone (1) + avoid (up to 3), cited |
-| Voice & copy — examples | `voice.examples` | up to 3, **20–140 chars**, cited |
-| Accessibility constraints | `antiPatterns.accessibilityRisks` | all present, cited |
-| Style signals | `styleTags`, `categories` | closed tokens, no screen |
-| Mood / colour scheme | `mood`, `colorScheme` | when present, cited |
-| Component inventory | `components` | when present, cited |
-| Responsive behavior | `responsiveBehavior`, `layout.regions` | when present, cited |
-| Typography observation | `visual.typePairing` | observation only — see §2d |
-| Colour observation | `visual.colorRoles` | observation only — see §2d |
+| `techniques[]` | `whatToSteal` | up to 5, cited via `sourceIds` |
+| `antiPatterns[]` | `antiPatterns.antiPatterns` | up to 5, cited via `sourceIds` |
+| `contentVoiceGuidance` | `voice.tone` + `voice.avoid` + `voice.examples` | ONE composed string — see below |
+| `accessibilityConstraints[]` | `antiPatterns.accessibilityRisks` | all present |
+| `componentInventory[]` | `components` | when present |
+| `responsiveBehavior[]` | `responsiveBehavior` | when present |
+
+**B. Folded into the synthesized `designDirection`** — already a served,
+gated, corpus-authority string, so these need no new field:
+`styleTags`, `categories`, `mood`, `colorScheme`, `visual.typePairing`,
+`visual.colorRoles`, and `critique`. They appear as cited signals in the
+direction sentence rather than as their own sections. This also retires the
+awkward "Reference summary" section an earlier draft invented.
+
+**`contentVoiceGuidance` is a single optional string, not a structure.** The
+composition is fixed and must be pinned by a test:
+
+> `{tone}. Avoid: {avoid joined by "; "}. Examples: {examples joined by " · "}.`
+
+with each segment omitted entirely when its source is absent — never rendered
+as an empty label.
 
 `voice.examples` carries two extra filters beyond the shared identity screen,
 each doing a job the screen does not:
@@ -194,13 +218,17 @@ requiring another code change then — which is the stated plan.
 `voice.avoid`, `voice.examples` (windowed + capped), `accessibilityRisks`.
 
 `critique` is now served — the earlier "duplicates the other fields" exclusion
-was a judgement call, and a whole-entry design summary is worth its own section.
+was a judgement call. It has no `UiSpec` slot, so it is folded into
+`designDirection` (§1 group B) rather than given a section.
 
 ### 2b. Served, no screen needed (closed tokens, no identity)
 
-`styleTags`, `categories`, `mood`, `colorScheme`, `components`,
-`responsiveBehavior`, `layout.regions`, `visual.typePairing`,
-`visual.colorRoles`.
+`components`, `responsiveBehavior`, `layout.regions` go to their own `UiSpec`
+fields. `styleTags`, `categories`, `mood`, `colorScheme`, `visual.typePairing`
+and `visual.colorRoles` have no slot and are folded into `designDirection`
+(§1 group B). None of these carry identity, so the prose screen does not apply
+to them — but the composed direction sentence is itself screened, since it now
+mixes token values with `critique` prose.
 
 ### 2c. Never served
 
@@ -230,6 +258,32 @@ acts, and the distinction survives this decision:
   be invention. The pairing is useful evidence on its own.
 
 Everything else the corpus holds is served.
+
+### 2e. Two review findings that came out better than assumed
+
+**The fail-closed leaf gate already covers every position this populates.**
+Verified against `CREATE_UI_SPEC_FREE_TEXT_LEAVES` /
+`CREATE_UI_SPEC_EVIDENCE_ID_LEAVES`: `data.techniques[].text`,
+`data.techniques[].sourceIds[]`, `data.antiPatterns[].text`,
+`data.antiPatterns[].sourceIds[]`, `data.contentVoiceGuidance`,
+`data.accessibilityConstraints[]`, `data.componentInventory[].name`/`.pattern`/
+`.sourceId`, `data.responsiveBehavior[]`, `data.interactions[]`,
+`data.layoutRegions[].components[]` — all 13 classified. No new
+classification is required and no served response can be refused for an
+unclassified position.
+
+**Citation is native, not bolted on.** `TechniqueEntry` and `AntiPatternEntry`
+are `{ text, sourceIds }`, and `sourceIds[]` is classified as a
+public-evidence-id leaf — so techniques and anti-patterns cite their
+`evidence-N` through their own shape and are gated to the evidence-id domain.
+They do NOT need `citedDecisions` rows. Only the values folded into
+`designDirection` (B above) ride the existing `corpus-evidence` citedDecision.
+
+**But those positions' annotations become false.** Several currently read
+"recipe-owned prose" — e.g. `data.techniques[].text`, `data.antiPatterns[].text`
+— which stops being true the moment they carry corpus judgment. They must be
+rewritten in the same commit, exactly as `data.designDirection` was. This is
+the annotation-truthfulness class that no runtime check catches.
 
 ### 3. The identity screen
 
@@ -328,6 +382,27 @@ latter two. This is the same annotation-truthfulness class as the
    `colorTokens` stays null with its reason and `colorTokenAuthority` stays
    `editorial`. Mutation-test by wiring the observation into the token slot and
    asserting the contrast gate then fails.
+
+## Projected outcome, stated before implementation
+
+Of the 13 sections in the served DESIGN.md, this change fills **6** that are
+empty today: Techniques, Anti-patterns, Voice & copy, Accessibility
+constraints, Component inventory, Responsive behavior — the last two only on
+the ~8% of responses where a matched entry carries them.
+
+Still empty afterwards, and why:
+
+| section | reason |
+|---|---|
+| Color tokens | deliberately unavailable until the contrast gate exists (§2d) |
+| Typography | corpus has no `mono` role; slot cannot be honestly completed |
+| Interactions | no corpus field exists |
+| Rejected defaults | means "defaults the recipe rejected" — not what `antiPatterns` records |
+
+Sources stops contradicting the direction (§5). That is the honest projection:
+**6 filled, 4 still empty, 1 contradiction closed** — not "the body is filled".
+Anyone reporting this as done should quote those numbers, and should verify
+values rather than counting non-null fields (see CLAUDE.md).
 
 ## Non-goals
 

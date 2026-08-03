@@ -399,12 +399,27 @@ function findArtifactRecordFiles(dir) {
 
 function assertTokensUnavailable(envelope) {
   // Plan 2 (deterministic synthesis) populates root colorTokens from corpus
-  // plurality on the no-model path, so the invariant is now: editorial
-  // authority, and any populated value is a hex color. The model path still
-  // requires null tokens (UiSpec superRefine enforces it separately).
-  assert(envelope.spec?.colorTokenAuthority === "editorial", "accepted token authority changed");
-  if (envelope.spec?.colorTokens !== null && envelope.spec?.colorTokens !== undefined) {
-    for (const value of Object.values(envelope.spec.colorTokens)) {
+  // plurality on the no-model path, so the invariant is now: the declared
+  // authority MATCHES where the values came from — "corpus-evidence" with a
+  // matching citedDecision when populated, "editorial" when null — and any
+  // populated value is a hex color. Pinning "editorial" unconditionally (the
+  // earlier form of this assertion) test-enforced an authority the product
+  // did not derive. The model path still requires null tokens (UiSpec
+  // superRefine enforces it separately).
+  const tokens = envelope.spec?.colorTokens;
+  const populated = tokens !== null && tokens !== undefined;
+  assert(
+    envelope.spec?.colorTokenAuthority === (populated ? "corpus-evidence" : "editorial"),
+    `accepted token authority does not match provenance: ${String(envelope.spec?.colorTokenAuthority)} with tokens ${populated ? "populated" : "null"}`,
+  );
+  if (populated) {
+    assert(
+      envelope.spec.citedDecisions?.some(
+        (d) => d.field === "colorTokens" && d.authority === "corpus-evidence",
+      ),
+      "populated colorTokens carry no corpus-evidence citedDecision",
+    );
+    for (const value of Object.values(tokens)) {
       assert(/^#[0-9a-fA-F]{3,8}$/.test(String(value)), `color token not hex: ${String(value)}`);
     }
   }

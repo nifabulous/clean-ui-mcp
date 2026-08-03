@@ -66,6 +66,40 @@ describe("createUiSpecDeterministic", () => {
     expect(createUiSpecDeterministic(evidence, REQUEST).colorTokens).toBeNull();
   });
 
+  it("never fabricates muted when every matched entry has a null muted role", () => {
+    // `muted` is the ONLY nullable role in the corpus shape (schema.ts), so it
+    // is the one field the `withRoles.length >= 3` guard cannot protect: the
+    // null-filter can empty the array while three entries still contribute
+    // colorRoles, and a `?? "#888888"` default would invent a token nothing
+    // derived. Measured base rate: 20 of 688 entries with colorRoles carry a
+    // null muted, and retrieval returns SIMILAR entries, so the three matches
+    // are not independent draws.
+    const roles = (accent: string) => ({
+      canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: null, accent,
+    });
+    const evidence = [
+      observation("evidence-2", { pattern: "dashboard", colorRoles: roles("#2563eb") }),
+      observation("evidence-3", { pattern: "data-table", colorRoles: roles("#2563eb") }),
+      observation("evidence-4", { pattern: "forms", colorRoles: roles("#2563eb") }),
+    ] as never;
+    expect(createUiSpecDeterministic(evidence, REQUEST).colorTokens).toBeNull();
+  });
+
+  it("still populates tokens when at least three entries carry a non-null muted", () => {
+    const withMuted = (accent: string) => ({
+      canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent,
+    });
+    const evidence = [
+      observation("evidence-2", { pattern: "dashboard", colorRoles: withMuted("#2563eb") }),
+      observation("evidence-3", { pattern: "data-table", colorRoles: withMuted("#2563eb") }),
+      observation("evidence-4", { pattern: "forms", colorRoles: { ...withMuted("#2563eb"), muted: null } }),
+      observation("evidence-5", { pattern: "modal", colorRoles: withMuted("#2563eb") }),
+    ] as never;
+    expect(createUiSpecDeterministic(evidence, REQUEST).colorTokens).toEqual({
+      primary: "#2563eb", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: "#2563eb",
+    });
+  });
+
   it("populates regions but not a form claim when layoutForm is absent", () => {
     const evidence = [
       observation("evidence-2", {

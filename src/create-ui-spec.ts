@@ -497,8 +497,14 @@ async function resolveAutomaticRetrieval(
     for (const row of rows) {
       if (picked.length >= 3) break;
       const pattern = row.entry.patternType;
-      if (pattern !== undefined && seen.has(pattern)) continue;
-      seen.add(pattern ?? "");
+      // Entries with no patternType are deliberately NOT deduped against each
+      // other — there is no class to collide on, and two untyped entries are
+      // two distinct references. Only a present pattern is recorded, so the
+      // set never holds a sentinel that nothing can match.
+      if (pattern !== undefined) {
+        if (seen.has(pattern)) continue;
+        seen.add(pattern);
+      }
       picked.push({ entry: row.entry });
     }
     return picked;
@@ -922,7 +928,7 @@ function assembleSpec(
   // citation ledger must match: the recipe's editorial designDirection
   // decision is REPLACED (not augmented) by a corpus-authority decision
   // citing those ids, when synthesis supplied the direction.
-  const citedDecisions = synthesis?.designDirection
+  const directionDecisions: UiSpecT["citedDecisions"] = synthesis?.designDirection
     ? [
         ...recipeDecisions.filter((d) => d.field !== "designDirection"),
         {
@@ -938,6 +944,25 @@ function assembleSpec(
         },
       ]
     : recipeDecisions;
+  // The palette is a plurality vote over the matched entries' visual.colorRoles
+  // — corpus-evidence authorship, exactly like the synthesized direction above.
+  // Leaving colorTokenAuthority "editorial" with no ledger row would declare an
+  // authority the product did not derive (the governing invariant) and would
+  // drop the trace from the served palette back to the entries that produced
+  // it. The gate's authority-prerequisite check then verifies this decision
+  // cites the corpusEvidence lane.
+  const citedDecisions: UiSpecT["citedDecisions"] = synthesis?.colorTokens
+    ? [
+        ...directionDecisions.filter((d) => d.field !== "colorTokens"),
+        {
+          id: "colorTokens-evidence-synthesis",
+          field: "colorTokens",
+          authority: "corpus-evidence",
+          evidenceIds: corpusEvidenceIds,
+          readiness: "available",
+        },
+      ]
+    : directionDecisions;
 
   // C3 served-content posture: prose-judgment fields stay unavailable with
   // recipe-owned reasons until the provenance-governance flip permits them.
@@ -1032,7 +1057,10 @@ function assembleSpec(
       : specFields.responsiveBehavior,
     componentInventory: specFields.componentInventory,
     colorTokens: synthesis?.colorTokens ?? null,
-    colorTokenAuthority: "editorial",
+    // Corpus-derived when synthesis populated them (see the colorTokens
+    // citedDecision above); "editorial" ONLY when they stay null, which the
+    // null-token refinement also requires.
+    colorTokenAuthority: synthesis?.colorTokens ? "corpus-evidence" : "editorial",
     typographyTokens: null,
     typographyTokenAuthority: "editorial",
     ...(proposal !== undefined ? { modelProposal: proposal } : {}),

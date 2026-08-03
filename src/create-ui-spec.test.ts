@@ -1710,6 +1710,49 @@ it("ledgers the synthesized direction against the corpus evidence ids", async ()
   expect(spec.unavailableDecisions.some((d) => d.field === "colorTokens")).toBe(false);
 });
 
+it("ledgers synthesized color tokens against the corpus evidence ids", async () => {
+  // The palette is a plurality vote over visual.colorRoles across the matched
+  // entries — corpus-evidence authorship, not editorial. Declaring it
+  // "editorial" with no citedDecision is the same authority misstatement this
+  // file already pins for designDirection, one field over: the governing
+  // invariant forbids carrying authority the product did not derive, and an
+  // uncited palette loses the trace back to the entries that produced it.
+  const patterns = ["dashboard", "data-table", "forms"];
+  const ids = ["a", "b", "c"];
+  const corpus = patterns.map((p, i) => corpusEntryWithRoles(`internal-${ids[i]!}`, i === 2 ? "#1d4ed8" : "#2563eb", p));
+  const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps(corpus, ranked),
+  );
+  const spec = out.envelope.spec;
+  expect(spec.colorTokens).not.toBeNull();
+  expect(spec.colorTokenAuthority).toBe("corpus-evidence");
+  const ledger = spec.citedDecisions.find((d) => d.id === "colorTokens-evidence-synthesis");
+  expect(ledger).toBeDefined();
+  expect(ledger!.field).toBe("colorTokens");
+  expect(ledger!.authority).toBe("corpus-evidence");
+  expect(ledger!.evidenceIds).toEqual(["evidence-2", "evidence-3", "evidence-4"]);
+  // The authority-prerequisite gate (tool-contracts.ts) requires a
+  // corpus-evidence decision to cite the corpusEvidence lane; prove the whole
+  // envelope still passes with the non-editorial token authority.
+  const r = ToolResultSchemas.create_ui_spec.safeParse(mcqPayload(out));
+  expect(r.success, r.success ? "" : JSON.stringify(r.error.issues)).toBe(true);
+});
+
+it("keeps editorial token authority and no token ledger row when tokens stay null", async () => {
+  const corpus = [corpusEntryWithRoles("internal-a", "#2563eb", "dashboard")];
+  const ranked = corpus.map((e) => ({ entry: e, score: 5 }));
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps(corpus, ranked),
+  );
+  const spec = out.envelope.spec;
+  expect(spec.colorTokens).toBeNull();
+  expect(spec.colorTokenAuthority).toBe("editorial");
+  expect(spec.citedDecisions.some((d) => d.id === "colorTokens-evidence-synthesis")).toBe(false);
+});
+
 it("passes the gate with tokens unavailable and exactly one colorTokens row", async () => {
   // Two observations only — below the >= 3 token threshold. The recipe's
   // colorTokens row is replaced by exactly ONE conditional row; a duplicate

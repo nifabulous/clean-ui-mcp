@@ -57,7 +57,13 @@ export function createUiSpecDeterministic(
   // merge uses. NEVER run on fewer than 3 contributing entries, and never when
   // zero entries have colorRoles (Math.min over empty arrays is Infinity —
   // that bug would fabricate a default palette).
-  const withRoles = facts.filter((f) => f.colorRoles);
+  // `muted` is the ONLY nullable role in the corpus shape, so it is the one
+  // field a plain `f.colorRoles` filter cannot protect: three entries can
+  // contribute colorRoles while every `muted` is null, emptying the filtered
+  // array and letting a `??` default invent a token nothing derived. Requiring
+  // a non-null muted to COUNT toward the >= 3 threshold folds that case back
+  // under the same guard — the block goes null with its reason row instead.
+  const withRoles = facts.filter((f) => f.colorRoles && f.colorRoles.muted !== null);
   const colorTokens = withRoles.length >= 3
     ? {
         primary: plurality(withRoles.map((f) => f.colorRoles!.accent)) ?? "#3b82f6",

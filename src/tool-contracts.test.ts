@@ -838,6 +838,31 @@ describe("adversarial probe matrix", () => {
     assertRejectsAt(p, "data");
   });
 
+  it("accepts evidence ids in techniques/antiPatterns sourceIds", () => {
+    const payload = makeValidSuccess("create_ui_spec") as Record<string, unknown>;
+    const data = payload.data as Record<string, unknown>;
+    // The fixture's envelope carries only evidence-1; sourceIds are
+    // evidence-ID-domain positions (C3 Phase 1 Task 2) and are membership-
+    // checked against the envelope's evidence rows, so the cited evidence-2
+    // must exist there — and in provenance.evidenceIds, which is bound
+    // element-for-element to the envelope evidence rows — for the response to
+    // pass the gate.
+    (payload.evidence as Array<Record<string, unknown>>).push(
+      { id: "evidence-2", kind: "corpus-observation", summary: "Uses a right-side callout.", basis: "visible" },
+    );
+    (data.provenance as Record<string, unknown>).evidenceIds = ["evidence-1", "evidence-2"];
+    data.techniques = [{ text: "Use a right-side callout anchored to chart regions.", sourceIds: ["evidence-2"] }];
+    data.antiPatterns = [{ text: "Avoids heavy chart chrome.", sourceIds: ["evidence-2"] }];
+    const r = parseToolResult(payload);
+    expect(r.ok, r.ok ? "" : JSON.stringify(r.errors)).toBe(true);
+  });
+
+  it("still refuses a raw corpus id in sourceIds", () => {
+    const payload = makeValidSuccess("create_ui_spec") as Record<string, unknown>;
+    (payload.data as Record<string, unknown>).techniques = [{ text: "x", sourceIds: ["corpus-abc123"] }];
+    expect(parseToolResult(payload).ok).toBe(false);
+  });
+
   it("29: duplicate citedReferences rejected", () => {
     const p = cloneToolResult(makeValidSuccess("create_ui_spec")) as Record<string, unknown>;
     const data = p.data as Record<string, unknown>;
@@ -1073,7 +1098,7 @@ describe("R3: spec dup provenance.sourceReferences fails", () => {
 // ---------------------------------------------------------------------------
 // THE SHARED CITATION-CONSISTENCY PREDICATE — one implementation, both transports.
 //
-// The six citation rules below used to live INLINE in the create_ui_spec
+// The citation-consistency rules below used to live INLINE in the create_ui_spec
 // descriptor's `refineEnvelope`, which `makeEnvelope` invokes and only
 // `parseToolResult` reaches — i.e. the MCP path and nothing else. The loopback
 // HTTP route (`POST /api/create-ui-spec`) therefore served a handoff whose
@@ -1084,7 +1109,7 @@ describe("R3: spec dup provenance.sourceReferences fails", () => {
 // create-ui-spec-http.ts.
 //
 // This block is the MCP HALF of the parity proof (the HTTP half is
-// create-ui-spec-http.test.ts's "the six citation checks run on BOTH transports"):
+// create-ui-spec-http.test.ts's "the four citation checks run on BOTH transports"):
 // for each rule it asserts the predicate reports it with the exact message and
 // spec-relative path, AND that `ToolResultSchemas.create_ui_spec` — the object
 // `parseToolResult` dispatches to — refuses the same poison with exactly that
@@ -1113,22 +1138,6 @@ describe("shared create_ui_spec citation-consistency predicate", () => {
       specPath: ["citedReferences"],
       poison: (data) => {
         data.citedReferences = [SAFE_PUBLIC_REFERENCE, SAFE_PUBLIC_REFERENCE];
-      },
-    },
-    {
-      rule: "techniques-sourceIds-cited",
-      message: "techniques[].sourceIds[] not in citedReferences (value withheld)",
-      specPath: ["techniques"],
-      poison: (data) => {
-        data.techniques = [{ text: "Use 8px spacing", sourceIds: [UNCITED] }];
-      },
-    },
-    {
-      rule: "antiPatterns-sourceIds-cited",
-      message: "antiPatterns[].sourceIds[] not in citedReferences (value withheld)",
-      specPath: ["antiPatterns"],
-      poison: (data) => {
-        data.antiPatterns = [{ text: "low-contrast secondary text", sourceIds: [UNCITED] }];
       },
     },
     {
@@ -2071,6 +2080,8 @@ describe("Task 1b: structural leaf-value gate (create_ui_spec)", () => {
       ["data.authorityLanes.editorialGuidance[]", d => { (d.authorityLanes as Record<string, string[]>).editorialGuidance = [PRIVATE_PATH]; }],
       ["data.citedDecisions[].evidenceIds[]", d => { (d.citedDecisions as Array<Record<string, unknown>>)[0]!.evidenceIds = [PRIVATE_PATH]; }],
       ["data.acceptanceCriteria[].evidenceIds[]", d => { (d.acceptanceCriteria as Array<Record<string, unknown>>)[0]!.evidenceIds = [PRIVATE_PATH]; }],
+      ["data.techniques[].sourceIds[]", d => { (d.techniques as Array<Record<string, unknown>>).push({ text: "t", sourceIds: [PRIVATE_PATH] }); }],
+      ["data.antiPatterns[].sourceIds[]", d => { (d.antiPatterns as Array<Record<string, unknown>>).push({ text: "a", sourceIds: [PRIVATE_PATH] }); }],
     ];
     for (const [position, mutate] of positions) {
       const p = makeCreateUiSpecAutomatic();
@@ -2091,8 +2102,6 @@ describe("Task 1b: structural leaf-value gate (create_ui_spec)", () => {
       ["data.provenance.sourceReferences[]", p => { ((p.data as Record<string, unknown>).provenance as Record<string, string[]>).sourceReferences = [PRIVATE_PATH]; }],
       ["evidence[].referenceId", p => { (p.evidence as Array<Record<string, unknown>>)[1]!.referenceId = PRIVATE_PATH; }],
       ["data.citedDecisions[].sourceId", p => { (((p.data as Record<string, unknown>).citedDecisions) as Array<Record<string, unknown>>)[0]!.sourceId = PRIVATE_PATH; }],
-      ["data.techniques[].sourceIds[]", p => { ((p.data as Record<string, unknown>).techniques as Array<Record<string, unknown>>).push({ text: "t", sourceIds: [PRIVATE_PATH] }); }],
-      ["data.antiPatterns[].sourceIds[]", p => { ((p.data as Record<string, unknown>).antiPatterns as Array<Record<string, unknown>>).push({ text: "a", sourceIds: [PRIVATE_PATH] }); }],
       ["data.componentInventory[].sourceId", p => { ((p.data as Record<string, unknown>).componentInventory as Array<Record<string, unknown>>).push({ name: "n", pattern: "p", sourceId: PRIVATE_PATH }); }],
     ];
     for (const [position, mutate] of positions) {

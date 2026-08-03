@@ -228,7 +228,10 @@ export function makeValidSuccess(tool: ToolName): JsonObject {
         interactions: [],
         motionGuidance: { notes: [], evidenceUnavailable: true },
         accessibilityConstraints: ["Contrast meets WCAG AA"],
-        techniques: [{ text: "Use 8px spacing", sourceIds: [SAFE_PUBLIC_REFERENCE] }],
+        // C3 Phase 1 (Task 2): techniques[].sourceIds[] moved to the
+        // evidence-id domain and cite the response-scoped evidence row the
+        // technique came from, not a ref-<sha256> digest.
+        techniques: [{ text: "Use 8px spacing", sourceIds: ["evidence-1"] }],
         antiPatterns: [],
         unavailableDecisions: [{ field: "motion", reason: "No DOM motion evidence available" }],
         acceptanceCriteria: [{

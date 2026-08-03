@@ -528,6 +528,22 @@ describe("createUiSpecDeterministic — direction size guard", () => {
     );
     const direction = out.designDirection ?? "";
     expect(direction).not.toMatch(/\.\./);
+    // A value ending in an ellipsis must not collide with the appended period
+    // either — one stripped period is not enough.
+    const ellipsis = [2].map((n) => matched(`evidence-${n}`, proseEntry({
+      id: `ellipsis-${n}`,
+      title: `EllipsisCo${n} — workspace`,
+      source: { productName: `EllipsisCo${n}` },
+      mood: "unhurried...",
+      critique: "A critique long enough for the schema minimum that trails off...",
+    })));
+    const trailing = createUiSpecDeterministic(
+      [observation("evidence-2", facts)],
+      ellipsis,
+      entriesOf(ellipsis),
+      REQUEST,
+    ).designDirection ?? "";
+    expect(trailing).not.toMatch(/\.\./);
     // The mood list separator must not collide with the clause separator, or
     // the reader cannot tell where the list ends (corpus moods carry commas).
     expect(direction).toContain("mood: calm and measured");

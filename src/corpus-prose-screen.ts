@@ -54,9 +54,15 @@ const URL_PATTERN = /https?:\/\/[^\s]+|www\.[^\s]+/i;
  * "WCAG 1.4.3", "e.g.", "i.e." and "config.json" — ordinary prose in a corpus
  * whose whole value is prose — so the screen trades recall for precision here
  * and the generic-URL pattern above catches anything carrying a scheme.
+ *
+ * The label part accepts dots, and NOTHING is excluded before it, so subdomain
+ * and email forms ("app.acme.com", "hello@acme.com") match too — excluding "."
+ * and "@" before the label let both slip through a TLD the list already covered,
+ * and the exclusions bought no protection, because none of the prose cases above
+ * end in a listed TLD anyway.
  */
 const SCHEMELESS_HOST_PATTERN =
-  /(?:^|[^\w@.])[a-z0-9][a-z0-9-]*\.(?:com|io|app|co|dev|net|org|ai|so|xyz|design|studio)(?:$|[^\w])/i;
+  /[a-z0-9][a-z0-9.-]*\.(?:com|io|app|co|dev|net|org|ai|so|xyz|design|studio|fm|me|ng|tv|ly|page|site|cloud)(?:$|[^\w])/i;
 
 /**
  * Word-boundary, case-insensitive literal match. The name is regex-escaped so

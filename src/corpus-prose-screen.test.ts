@@ -108,8 +108,17 @@ describe("screenProse — identity screen", () => {
 // The plan's draft bands (34/21/52) were measured against a smaller corpus
 // (77 distinct product names). The current corpus has 93 distinct
 // source.productName values (82 distinctive after the six dictionary-word
-// exclusions), so the measured rates are higher; bands below are the current
-// measurements (38/32/61) ± 5.
+// exclusions), so the measured rates are higher.
+//
+// Re-measured at 38/36/65 ± 5 after the schemeless-host pattern was widened to
+// cover subdomain and email forms (PR review round 3). That widening moved
+// antiPatterns 32 -> 36 and critique 61 -> 65: eight rows in the corpus carry a
+// host reference, and the new hits are worth the cost. It newly drops a real
+// person's address quoted from a screenshot ("lucy@yahoo.com" — PII the old
+// pattern let through because it excluded "@" before the label) and keeps
+// catching a real product domain ("MOBBIN.COM/SLACK"). The rows lost are ones
+// quoting RFC placeholder addresses ("you@example.com", "user@domain.com");
+// serving a real address would be the worse error.
 
 describe("full-corpus characterization (local data)", () => {
   const corpus = loadCorpus();
@@ -131,10 +140,10 @@ describe("full-corpus characterization (local data)", () => {
     }
     expect(whatToStealDrops).toBeGreaterThanOrEqual(33);
     expect(whatToStealDrops).toBeLessThanOrEqual(43);
-    expect(antiPatternsDrops).toBeGreaterThanOrEqual(27);
-    expect(antiPatternsDrops).toBeLessThanOrEqual(37);
-    expect(critiqueDrops).toBeGreaterThanOrEqual(56);
-    expect(critiqueDrops).toBeLessThanOrEqual(66);
+    expect(antiPatternsDrops).toBeGreaterThanOrEqual(31);
+    expect(antiPatternsDrops).toBeLessThanOrEqual(41);
+    expect(critiqueDrops).toBeGreaterThanOrEqual(60);
+    expect(critiqueDrops).toBeLessThanOrEqual(70);
   });
 });
 
@@ -152,6 +161,15 @@ describe("screenProse — schemeless URL", () => {
 
   it("drops a bare domain with no path", () => {
     expect(screenProse("Copy the pricing table from stripe.com", other, names)).toBeNull();
+  });
+
+  it("drops a subdomain, an email host, and a product TLD outside the base list", () => {
+    // The leading guard must not exclude "." or "@", or every subdomain and
+    // email form slips through a TLD the list already covers.
+    expect(screenProse("Open app.acme.com to continue", other, names)).toBeNull();
+    expect(screenProse("Write to hello@acme.com for access", other, names)).toBeNull();
+    expect(screenProse("Flow at sub.acme.com/start", other, names)).toBeNull();
+    expect(screenProse("Read the notes on paper.fm", other, names)).toBeNull();
   });
 
   it("keeps ordinary prose containing a period-joined word", () => {

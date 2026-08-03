@@ -79,13 +79,16 @@ const SIGNAL_JOIN = "; ";
 const VALUE_JOIN = " / ";
 
 /**
- * Drop one trailing sentence period so the composed clause list does not read
- * "…without mixing typefaces.. Let those signals lead". This is punctuation
- * normalization at a join, not redaction: no word is removed, and the segment
- * was already identity-screened whole.
+ * Drop the trailing sentence punctuation so the composed clause list does not
+ * read "…without mixing typefaces.. Let those signals lead". The whole trailing
+ * run goes, not one character: corpus prose that trails off ("…trails off...")
+ * would otherwise still collide with the appended period.
+ *
+ * This is punctuation normalization at a join, not redaction: no word is
+ * removed, and the segment was already identity-screened whole.
  */
 function withoutTrailingPeriod(value: string): string {
-  return value.endsWith(".") ? value.slice(0, -1) : value;
+  return value.replace(/[.…]+$/, "");
 }
 
 const MAX_TECHNIQUES = 5;

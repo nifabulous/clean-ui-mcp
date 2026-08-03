@@ -49,6 +49,45 @@ export interface DeterministicSynthesis {
   responsiveBehaviorEvidenceIds: readonly string[];
 }
 
+/**
+ * Direction size guard (PR review round 2). Serving every matched entry's
+ * critique and type notes verbatim produced a 3,783-char mean / 5,642-char max
+ * direction on production-shaped 5-entry windows — 96.8% over 2,000 chars,
+ * against a 358-char baseline. A field that is populated but unreadable is the
+ * presence-not-usability failure CLAUDE.md forbids, so the corpus-signal
+ * section carries a character budget and per-signal count caps.
+ *
+ * The budget covers the SIGNAL SECTION ONLY. The caller's own brief (up to
+ * 8,000 chars) and the fixed template are not corpus growth and are not
+ * bounded here; bounding them would silently rewrite the caller's own words.
+ */
+const MAX_DIRECTION_SIGNAL_CHARS = 1_200;
+/** Corpus mood is a short phrase (p50 24 chars); three is a signal, ten is a list. */
+const MAX_DIRECTION_MOODS = 3;
+/** typePairing.notes p50 is 319 chars — one carries the reasoning, five repeat it. */
+const MAX_DIRECTION_TYPE_NOTES = 1;
+/** critique p50 is 947 chars, so five would be ~4,700 on their own. */
+const MAX_DIRECTION_CRITIQUES = 1;
+/** The separator between signal clauses, counted against the budget. */
+const SIGNAL_JOIN = "; ";
+/**
+ * The separator INSIDE a multi-value prose clause. It must differ from
+ * {@link SIGNAL_JOIN}, or a reader cannot tell where the mood list ends and the
+ * next signal begins — corpus moods contain commas ("warm, calm, data-focused")
+ * so a comma cannot serve either.
+ */
+const VALUE_JOIN = " / ";
+
+/**
+ * Drop one trailing sentence period so the composed clause list does not read
+ * "…without mixing typefaces.. Let those signals lead". This is punctuation
+ * normalization at a join, not redaction: no word is removed, and the segment
+ * was already identity-screened whole.
+ */
+function withoutTrailingPeriod(value: string): string {
+  return value.endsWith(".") ? value.slice(0, -1) : value;
+}
+
 const MAX_TECHNIQUES = 5;
 const MAX_ANTI_PATTERNS = 5;
 const MAX_VOICE_EXAMPLES = 3;
@@ -225,7 +264,7 @@ export function createUiSpecDeterministic(
     matchedEntries
       .map((m) => (typeof m.entry.mood === "string" ? screen(m.entry.mood, m.entry) : null))
       .filter((v): v is string => v !== null),
-  )];
+  )].slice(0, MAX_DIRECTION_MOODS);
   const typeNotes = [...new Set(
     matchedEntries
       .map((m) => {
@@ -233,20 +272,41 @@ export function createUiSpecDeterministic(
         return typeof note === "string" && note.length > 0 ? screen(note, m.entry) : null;
       })
       .filter((v): v is string => v !== null),
-  )];
+  )].slice(0, MAX_DIRECTION_TYPE_NOTES);
   const critiques = matchedEntries
     .map((m) => (typeof m.entry.critique === "string" ? screen(m.entry.critique, m.entry) : null))
-    .filter((v): v is string => v !== null);
+    .filter((v): v is string => v !== null)
+    .slice(0, MAX_DIRECTION_CRITIQUES);
 
+  // Signal clauses in PRIORITY order, appended under a character budget. The
+  // closed-token signals come first: they are short, dense, and cannot carry
+  // identity. Then critique — the corpus's actual design judgment, and the
+  // reason C3 folds group-B signals into the direction at all. typePairing
+  // notes come LAST because the structural typography clause above already
+  // states the pairing, so the notes are the most redundant thing to lose when
+  // the budget binds.
   const signalClauses: string[] = [];
-  if (styleTags.length > 0) signalClauses.push(`style tags: ${styleTags.join(", ")}`);
-  if (categories.length > 0) signalClauses.push(`categories: ${categories.join(", ")}`);
+  let signalChars = 0;
+  /**
+   * Append a clause only if it FITS. An over-budget clause is dropped WHOLE —
+   * never truncated — for the same reason the identity screen drops whole: half
+   * a sentence of design judgment is worse than none, and a mid-word cut is the
+   * "confidently wrong output" the project's output standard forbids.
+   */
+  const pushSignal = (clause: string): void => {
+    const cost = clause.length + (signalClauses.length > 0 ? SIGNAL_JOIN.length : 0);
+    if (signalChars + cost > MAX_DIRECTION_SIGNAL_CHARS) return;
+    signalClauses.push(clause);
+    signalChars += cost;
+  };
+  if (styleTags.length > 0) pushSignal(`style tags: ${styleTags.join(", ")}`);
+  if (categories.length > 0) pushSignal(`categories: ${categories.join(", ")}`);
   if (schemes.length > 0) {
-    signalClauses.push(schemes.length === 1 ? `a ${schemes[0]} color scheme` : `${schemes.join(" and ")} color schemes`);
+    pushSignal(schemes.length === 1 ? `a ${schemes[0]} color scheme` : `${schemes.join(" and ")} color schemes`);
   }
-  if (moods.length > 0) signalClauses.push(`mood: ${moods.join("; ")}`);
-  if (typeNotes.length > 0) signalClauses.push(`type notes: ${typeNotes.join(" ")}`);
-  if (critiques.length > 0) signalClauses.push(`critique: ${critiques.join(" ")}`);
+  if (moods.length > 0) pushSignal(`mood: ${moods.map(withoutTrailingPeriod).join(VALUE_JOIN)}`);
+  if (critiques.length > 0) pushSignal(`critique: ${withoutTrailingPeriod(critiques.join(" "))}`);
+  if (typeNotes.length > 0) pushSignal(`type notes: ${withoutTrailingPeriod(typeNotes.join(" "))}`);
 
   // Template fix (plan Task 5 Step 2): the brief must never be spliced
   // mid-sentence ("Ground this A login screen. in the matched corpus
@@ -256,7 +316,7 @@ export function createUiSpecDeterministic(
     ? `For the brief "${request.productContext}", the matched corpus references (${ids.join(", ")})`
       + (clauses.length > 0 ? ` point to ${clauses.join(", ")}` : "")
       + ". "
-      + (signalClauses.length > 0 ? `The shared signals include ${signalClauses.join("; ")}. ` : "")
+      + (signalClauses.length > 0 ? `The shared signals include ${signalClauses.join(SIGNAL_JOIN)}. ` : "")
       + `Let those signals lead the layout before adding anything not evidenced by the matched examples.`
     : null;
 

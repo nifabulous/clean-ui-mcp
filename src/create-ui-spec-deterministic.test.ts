@@ -424,3 +424,113 @@ describe("createUiSpecDeterministic", () => {
     expect(out.designDirection).not.toContain("Ground this");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Direction size guard (PR review round 2)
+// ---------------------------------------------------------------------------
+//
+// Serving every matched entry's critique and type notes verbatim made the
+// direction a 3,783-char mean / 5,642-char max run-on paragraph on
+// production-shaped 5-entry windows (base was 358). A populated field whose
+// value nobody can read is the presence-not-usability failure CLAUDE.md
+// forbids, so the corpus-signal section carries a CHARACTER BUDGET and drops
+// whole clauses that do not fit — never truncating one.
+
+/** Realistic corpus prose sizes: critique p50 947, typePairing.notes p50 319. */
+function longProseEntry(index: number): Record<string, unknown> {
+  return proseEntry({
+    id: `budget-entry-${index}`,
+    title: `BudgetCo${index} — workspace`,
+    source: { productName: `BudgetCo${index}` },
+    mood: `mood-${index} calm and measured`,
+    visual: {
+      typePairing: {
+        display: "Inter",
+        body: "Inter",
+        notes: `type-note-${index} ` + "a".repeat(310),
+      },
+    },
+    critique: `critique-${index} ` + "b".repeat(930),
+  });
+}
+
+describe("createUiSpecDeterministic — direction size guard", () => {
+  const facts = {
+    pattern: "dashboard", spacingDensity: "compact", cornerStyle: "sharp",
+    usesShadows: false, usesBorders: true, layoutForm: "two-column",
+  };
+  const evidence = [2, 3, 4, 5, 6].map((n) => observation(`evidence-${n}`, facts));
+  const matches = [2, 3, 4, 5, 6].map((n) => matched(`evidence-${n}`, longProseEntry(n)));
+
+  it("bounds the corpus-signal section of the direction", () => {
+    const out = createUiSpecDeterministic(evidence, matches, entriesOf(matches), REQUEST);
+    const direction = out.designDirection ?? "";
+    expect(direction).not.toBe("");
+    // The caller's own brief and the fixed template are not corpus growth, so
+    // the budget covers the signal section only. Five entries' unbudgeted
+    // critique alone is ~4,650 chars.
+    const signals = /The shared signals include (.*?)\. Let those signals lead/s.exec(direction);
+    expect(signals, "direction must still carry a signal section").not.toBeNull();
+    expect((signals as RegExpExecArray)[1].length).toBeLessThanOrEqual(1200);
+  });
+
+  it("drops an over-budget clause WHOLE — never truncates one", () => {
+    const out = createUiSpecDeterministic(evidence, matches, entriesOf(matches), REQUEST);
+    const direction = out.designDirection ?? "";
+    // Every critique/type-note fragment present must be a COMPLETE source
+    // string: a truncated one would leave the marker without its full body.
+    for (const n of [2, 3, 4, 5, 6]) {
+      if (direction.includes(`critique-${n} `))
+        expect(direction).toContain(`critique-${n} ` + "b".repeat(930));
+      if (direction.includes(`type-note-${n} `))
+        expect(direction).toContain(`type-note-${n} ` + "a".repeat(310));
+    }
+    expect(direction).not.toContain("…");
+    expect(direction).not.toContain("...");
+  });
+
+  it("keeps the higher-priority closed-token signals when prose is dropped", () => {
+    const out = createUiSpecDeterministic(evidence, matches, entriesOf(matches), REQUEST);
+    const direction = out.designDirection ?? "";
+    // Priority order: closed tokens (cheap, high signal) before long prose.
+    expect(direction).toContain("style tags:");
+    expect(direction).toContain("categories:");
+    expect(direction).toContain("mood:");
+  });
+
+  it("keeps critique over type notes when the budget binds", () => {
+    // critique IS the corpus's design judgment and the reason group-B signals
+    // fold into the direction; typePairing notes restate the typography clause
+    // the structural sentence already carries, so they lose first.
+    const out = createUiSpecDeterministic(evidence, matches, entriesOf(matches), REQUEST);
+    const direction = out.designDirection ?? "";
+    expect(direction).toContain("critique:");
+    expect(direction).not.toContain("type notes:");
+  });
+
+  it("composes without a doubled sentence period at any clause join", () => {
+    // "…without mixing typefaces.. Let those signals lead" — corpus prose ends
+    // in a period and the template appends one. Real corpus values, not a short
+    // fixture (CLAUDE.md: render templates with real inputs).
+    const withPeriods = [2, 3].map((n) => matched(`evidence-${n}`, proseEntry({
+      id: `period-${n}`,
+      title: `PeriodCo${n} — workspace`,
+      source: { productName: `PeriodCo${n}` },
+      mood: "calm and measured.",
+      critique: `A critique that ends in a period and is long enough for the schema minimum, ${n}.`,
+      visual: { typePairing: { display: "Inter", body: "Inter", notes: "Tight tracking on caps." } },
+    })));
+    const out = createUiSpecDeterministic(
+      [observation("evidence-2", facts), observation("evidence-3", facts)],
+      withPeriods,
+      entriesOf(withPeriods),
+      REQUEST,
+    );
+    const direction = out.designDirection ?? "";
+    expect(direction).not.toMatch(/\.\./);
+    // The mood list separator must not collide with the clause separator, or
+    // the reader cannot tell where the list ends (corpus moods carry commas).
+    expect(direction).toContain("mood: calm and measured");
+    expect(direction).toMatch(/mood: [^;]*; critique:/);
+  });
+});

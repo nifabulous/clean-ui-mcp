@@ -1270,6 +1270,6 @@ _No new tasks from Code Quality._ _No new tasks from Performance beyond the docu
 5. [P3] D6 — no test for `layoutForm`-absent no-fabrication; added (`026fa49`).
 6. [P3] D7 — prompt-change eval gate recorded in TODOS.md (campaign: median 1107 vs target 1000).
 
-Full suite green (3190+ passed; the two full-run failures are the documented `mcp-smoke`/`wiring` ordering artifacts, both pass standalone). Dogfood PASS; `check:model-lane` reachable live.
+Full suite: 3195 passed / 0 failed at the test level. TWO CORRECTIONS to an earlier form of this line, which claimed both full-run file failures "pass standalone": (1) `src/mcp-smoke.test.ts > responds to tools/call for create_ui_spec (no corpus, no credentials)` does NOT pass standalone — it times out at 10s after a clean `npx tsc`, reproducibly. It fails IDENTICALLY on `origin/main`, so it is pre-existing and not caused by this branch, but it is not an ordering artifact and the branch is not "fully green". Filed separately: a no-corpus/no-credentials `tools/call` hanging for 10s is the exact configuration a first-time user hits. (2) `mcp-smoke` also fails at the file level whenever `dist/` is stale relative to `src/` (`assertCompiledServerIsCurrent`); run `npx tsc` before reading that result. Dogfood PASS (all 7 cases); `check:model-lane` reachable live.
 
 NO UNRESOLVED DECISIONS

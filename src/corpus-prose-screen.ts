@@ -45,6 +45,20 @@ function escapeRegExp(value: string): string {
 const URL_PATTERN = /https?:\/\/[^\s]+|www\.[^\s]+/i;
 
 /**
+ * A SCHEMELESS host reference ("acme.com/start", "stripe.com"). Corpus prose
+ * quotes on-screen copy verbatim, and product surfaces write their own domain
+ * without a scheme far more often than with one, so {@link URL_PATTERN} alone
+ * leaves the common case open.
+ *
+ * The TLD list is CLOSED on purpose. A general `\w+\.\w+` would drop
+ * "WCAG 1.4.3", "e.g.", "i.e." and "config.json" — ordinary prose in a corpus
+ * whose whole value is prose — so the screen trades recall for precision here
+ * and the generic-URL pattern above catches anything carrying a scheme.
+ */
+const SCHEMELESS_HOST_PATTERN =
+  /(?:^|[^\w@.])[a-z0-9][a-z0-9-]*\.(?:com|io|app|co|dev|net|org|ai|so|xyz|design|studio)(?:$|[^\w])/i;
+
+/**
  * Word-boundary, case-insensitive literal match. The name is regex-escaped so
  * corpus product names containing metacharacters ("SLMobbin!", "1-on-1") match
  * literally. `\b` is deliberately NOT used: a name ending in a non-word
@@ -106,5 +120,6 @@ export function screenProse(
   }
   if (containsPrivateMarker(text)) return null;
   if (URL_PATTERN.test(text)) return null;
+  if (SCHEMELESS_HOST_PATTERN.test(text)) return null;
   return text;
 }

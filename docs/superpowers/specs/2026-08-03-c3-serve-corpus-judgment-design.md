@@ -105,9 +105,22 @@ narrower and must be stated positively so it can be tested:
 
 > Everything the corpus records about a design may be served, attributed to a
 > response-scoped evidence id and screened for identity. No third-party product
-> name, title, URL, image path, or corpus id is ever published; a string that
-> trips the screen is dropped rather than edited; and a served observation is
-> never promoted into an authoritative token slot it has not earned.
+> name, title, URL, image path, or corpus id is ever published — with ONE stated
+> exception, the six dictionary-word product names of §3, which are screened
+> only for the entry that carries them; a string that trips the screen is
+> dropped rather than edited; and a served observation is never promoted into an
+> authoritative token slot it has not earned.
+
+**The exception is part of the invariant, not a gap in it.** `Origin`, `Hive`,
+`People`, `Projects`, `Mercury` and `Untitled` are ordinary English words as
+well as corpus product names. Matching them corpus-wide drops roughly 8% of
+good rows for the word "projects" alone, so they are excluded from the global
+denied-name list and caught only by the precise own-entry check. A row from a
+DIFFERENT entry that uses one of those words — including as a product reference
+— is therefore served. Stating this in the invariant is what makes the invariant
+testable: the `create_ui_spec` tool description names the exception too, so the
+published contract and this document agree, and the full-corpus leak sweep
+excludes exactly these six rather than silently tolerating hits.
 
 Four properties are load-bearing and each gets a test:
 1. **Attributed** — every served row carries the evidence id it came from.

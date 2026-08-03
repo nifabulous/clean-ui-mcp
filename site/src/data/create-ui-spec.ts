@@ -767,7 +767,15 @@ function projectSafeArtifact(payload: unknown): SafeArtifact | null {
   if (!isRecord(spec)) return null;
   if (spec.specVersion !== "1.0") return null;
   if (!isRecord(spec.context)) return null;
-  const designDirection = str(spec.designDirection);
+  // UNBOUNDED, deliberately. `UiSpec.designDirection` is
+  // `z.string().trim().min(1)` with no `.max()` (src/tool-contracts.ts), and the
+  // deterministic direction embeds the caller's brief verbatim — up to 8,000
+  // chars — plus the corpus-signal section. Reading it through `str()`, whose
+  // default maximum is 8,000, refused a LEGAL artifact whole on a long brief and
+  // told the operator only that the response "did not match the expected
+  // artifact shape". See the {@link unboundedText} docblock: a client maximum
+  // tighter than the schema's is not a safety property.
+  const designDirection = unboundedText(spec.designDirection);
   if (designDirection === null) return null;
 
   const modelExecution = projectModelExecution(payload.modelExecution);

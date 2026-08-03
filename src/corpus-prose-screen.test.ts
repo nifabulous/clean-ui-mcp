@@ -137,3 +137,27 @@ describe("full-corpus characterization (local data)", () => {
     expect(critiqueDrops).toBeLessThanOrEqual(66);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Schemeless URLs (PR review round 2 minor)
+// ---------------------------------------------------------------------------
+
+describe("screenProse — schemeless URL", () => {
+  const other = entryNamed("Other");
+  const names = buildDeniedNames([other]);
+
+  it("drops a bare domain with a path", () => {
+    expect(screenProse("Sign up at acme.com/start to continue", other, names)).toBeNull();
+  });
+
+  it("drops a bare domain with no path", () => {
+    expect(screenProse("Copy the pricing table from stripe.com", other, names)).toBeNull();
+  });
+
+  it("keeps ordinary prose containing a period-joined word", () => {
+    // The TLD list is closed so sentence-internal dots ("e.g.", "1.4.3",
+    // "config.json") are not URLs and must not drop a good row.
+    expect(screenProse("Meets WCAG 1.4.3 for contrast, e.g. on secondary text", other, names)).not.toBeNull();
+    expect(screenProse("Mirror the spacing scale, i.e. an 8px baseline grid", other, names)).not.toBeNull();
+  });
+});

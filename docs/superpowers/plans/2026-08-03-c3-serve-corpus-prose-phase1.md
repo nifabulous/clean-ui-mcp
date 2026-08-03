@@ -20,9 +20,15 @@ anti-patterns can cite `evidence-N`.
 
 - Governing invariant: everything the corpus records may be served, attributed
   to a response-scoped evidence id and screened for identity. No product name,
-  title, URL, image path, or corpus id is ever published; a screened string is
-  **dropped whole, never redacted in place**; and a served observation is never
-  promoted into an authoritative token slot.
+  title, URL, image path, or corpus id is ever published — except the six
+  dictionary-word product names (`Origin`, `Hive`, `People`, `Projects`,
+  `Mercury`, `Untitled`), which are screened only for the entry that carries
+  them, because matching them corpus-wide drops ~8% of good rows for the word
+  "projects" alone (design spec §3 and its "Governing invariant" section, which
+  states the exception; the `create_ui_spec` tool description states it too, so
+  the published contract agrees). A screened string is **dropped whole, never
+  redacted in place**; and a served observation is never promoted into an
+  authoritative token slot.
 - **Phase 1 changes no `UiSpec` field and adds no section.** `colorTokens` and
   `typographyTokens` stay null with their reason rows (Phases 2 and 3).
 - `ResolvedEvidence.matchedEntries` holds RAW corpus entries — `title`,

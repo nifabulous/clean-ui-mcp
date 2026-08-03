@@ -177,6 +177,7 @@ const DESKTOP_IMG = resolve(FIXTURE_DIR, "desktop-dashboard.png");
         url: null,
         imageDetail: "low",
         extractionOnly: true,
+        allowExternalImagePath: true,
         extractionOverride: openAiEndpointOverride(),
       });
     });

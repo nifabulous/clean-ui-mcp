@@ -39,6 +39,8 @@ export interface DeterministicSynthesis {
   contentVoiceEvidenceIds: readonly string[];
   /** Corpus accessibility-risk rows (screened prose), all present. */
   accessibilityConstraints: readonly string[];
+  /** Evidence ids of the entries whose accessibility rows survived the screen. */
+  accessibilityEvidenceIds: readonly string[];
   /** Corpus component tokens (closed vocabulary, no screen needed). */
   componentInventory: readonly { readonly name: string; readonly pattern: string }[];
 }
@@ -85,6 +87,7 @@ export function createUiSpecDeterministic(
       contentVoiceGuidance: null,
       contentVoiceEvidenceIds: [],
       accessibilityConstraints: [],
+      accessibilityEvidenceIds: [],
       componentInventory: [],
     };
   }
@@ -300,12 +303,18 @@ export function createUiSpecDeterministic(
   const contentVoiceGuidance = voiceSegments.length > 0 ? voiceSegments.join(" ") : null;
 
   // accessibilityConstraints ← accessibilityRisks (the risk statement is the
-  // constraint; screened prose, all present, response-wide).
+  // constraint; screened prose, all present, response-wide). The contributing
+  // evidence ids are returned so assembleSpec can attribute the served prose
+  // (governing invariant: every served observation is attributed).
   const accessibilityConstraints: string[] = [];
-  for (const { entry } of matchedEntries) {
+  const accessibilityEvidenceIds: string[] = [];
+  for (const { evidenceId, entry } of matchedEntries) {
     for (const risk of entry.antiPatterns?.accessibilityRisks ?? []) {
       const text = screen(risk.risk, entry);
-      if (text !== null) accessibilityConstraints.push(text);
+      if (text !== null) {
+        accessibilityConstraints.push(text);
+        if (!accessibilityEvidenceIds.includes(evidenceId)) accessibilityEvidenceIds.push(evidenceId);
+      }
     }
   }
 
@@ -330,6 +339,7 @@ export function createUiSpecDeterministic(
     contentVoiceGuidance,
     contentVoiceEvidenceIds: voiceEvidenceIds,
     accessibilityConstraints,
+    accessibilityEvidenceIds,
     componentInventory,
   };
 }

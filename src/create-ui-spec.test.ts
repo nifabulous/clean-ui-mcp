@@ -1805,7 +1805,9 @@ it("serves corpus judgment into the six UiSpec fields, evidence-cited and gate-c
     antiPatterns: {
       antiPatterns: ["Avoids heavy chart chrome"],
       whereThisFails: [],
-      accessibilityRisks: [],
+      accessibilityRisks: [
+        { element: "Secondary text", risk: "Low contrast on secondary text", evidence: "visible", confidence: "visible", wcag: ["1.4.3"] },
+      ],
     },
     voice: {
       tone: "Restrained, confident",
@@ -1832,10 +1834,15 @@ it("serves corpus judgment into the six UiSpec fields, evidence-cited and gate-c
   expect(spec.contentVoiceGuidance).toBe(
     "Restrained, confident. Examples: Confidence intervals plotted as soft bands.",
   );
+  expect(spec.accessibilityConstraints).toEqual(["Low contrast on secondary text"]);
   expect(spec.componentInventory).toEqual([{ name: "kpi-card", pattern: "kpi-card" }]);
   expect(spec.responsiveBehavior).toContain("mode: responsive");
   // The composed voice cites the entry that supplied it.
   expect(spec.citedDecisions.find((d) => d.field === "contentVoiceGuidance")?.evidenceIds)
+    .toEqual(["evidence-2"]);
+  // So do the served accessibility-risk rows (governing invariant: every
+  // served observation is attributed to a response-scoped evidence id).
+  expect(spec.citedDecisions.find((d) => d.field === "accessibilityConstraints")?.evidenceIds)
     .toEqual(["evidence-2"]);
   // The full MCP envelope schema (leaf gate + evidence membership + authority
   // prerequisites) accepts the produced envelope.

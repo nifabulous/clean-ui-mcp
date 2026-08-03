@@ -181,6 +181,7 @@ describe("createUiSpecDeterministic", () => {
     );
     expect(out.contentVoiceEvidenceIds).toEqual(["evidence-2"]);
     expect(out.accessibilityConstraints).toEqual(["Low contrast on secondary text"]);
+    expect(out.accessibilityEvidenceIds).toEqual(["evidence-2"]);
     expect(out.componentInventory).toEqual([
       { name: "kpi-card", pattern: "kpi-card" },
       { name: "sidebar-nav", pattern: "sidebar-nav" },

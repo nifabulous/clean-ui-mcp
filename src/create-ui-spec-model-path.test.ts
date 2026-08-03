@@ -209,6 +209,11 @@ describe("createUiSpec proposal-only model path", () => {
     expect(withModel.envelope.spec.colorTokens).toBeNull();
     expect(withModel.envelope.spec.typographyTokens).toBeNull();
     expect(withModel.envelope.spec.modelProposal?.status).toBe("proposal-only");
+    // The corpusEvidence lane is populated for provenance, but nothing cites
+    // the corpus on the model path (synthesis is gated off), so the handoff
+    // must not print a "Grounded in corpus evidence" claim.
+    expect(withModel.envelope.designMarkdown).not.toContain("Grounded in corpus evidence");
+    expect(withModel.envelope.spec.citedDecisions.some((d) => d.authority === "corpus-evidence")).toBe(false);
   });
 
   it("keeps the deterministic envelope shape when no model runtime is configured", async () => {

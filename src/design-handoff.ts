@@ -548,9 +548,19 @@ function renderSourcesSection(ctx: ResolvedDesignHandoff): string[] {
   // `citedReferences`, which hold only caller-supplied ref-<sha256> digests.
   // The evidence-id domain and the public-reference domain never mix, so the
   // "Grounded in" line lists the corpus ids while citedReferences stays
-  // untouched.
-  const grounded = ctx.handoff.spec.authorityLanes?.corpusEvidence ?? [];
-  if (grounded.length > 0) {
+  // untouched. The line is a GROUNDING CLAIM, so it renders only when the spec
+  // actually cites corpus ids through a served channel: a corpus-evidence
+  // authority decision (direction/voice/accessibility/tokens) or
+  // techniques/antiPatterns sourceIds. On the model path the corpusEvidence
+  // lane is populated for provenance but nothing cites it — printing
+  // "Grounded in" there would be false.
+  const spec = ctx.handoff.spec;
+  const grounded = spec.authorityLanes?.corpusEvidence ?? [];
+  const citesCorpus =
+    (spec.citedDecisions ?? []).some((d) => d.authority === "corpus-evidence") ||
+    (spec.techniques ?? []).some((t) => (t.sourceIds?.length ?? 0) > 0) ||
+    (spec.antiPatterns ?? []).some((a) => (a.sourceIds?.length ?? 0) > 0);
+  if (grounded.length > 0 && citesCorpus) {
     lines.push(`Grounded in corpus evidence: ${grounded.join(", ")}.`);
     lines.push("");
   }
@@ -559,7 +569,7 @@ function renderSourcesSection(ctx: ResolvedDesignHandoff): string[] {
   if (cited.length > 0) {
     lines.push("Cited references:");
     for (const ref of cited) lines.push(`- ${ref}`);
-  } else if (grounded.length === 0) {
+  } else if (!citesCorpus) {
     lines.push("_(no cited references recorded)_");
   }
   // Documentation sources consulted by the chosen profile.

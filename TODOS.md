@@ -430,3 +430,61 @@ plan's verification step as an optional `--live` flag (never CI default — it
 spends tokens).
 
 **Depends on / blocked by:** Plan 1 (`docs/superpowers/plans/2026-08-02-model-lane-reliability.md`).
+
+## C3 Phase 1: cap the synthesized direction length
+
+**What:** Bound the corpus-judgment `designDirection` (root UiSpec field, no
+schema max at `src/tool-contracts.ts:764`). C3 Phase 1 folds every matched
+entry's critique verbatim into the direction; measured against the real corpus,
+three long-critique matches that survive the screen produce a **4,848-char**
+direction (entries `bli-bli-2`, `origin-origin`,
+`wealthsimple-wealthsimple-ios-screens-33-2026-07-05`; a 1.9 KB critique
+each). The 2,500-char cap at `tool-contracts.ts:640` is the model proposal's,
+not the root field's, so the gate lets it through.
+
+**Why:** A multi-KB "direction" is a prose dump, not a direction — it dominates
+the handoff and buries the actual signals. It also sits awkwardly against the
+§6 tool-description promise ("longer brand or legal prose does not" appear),
+which invites a length bound for critique contributions.
+
+**Trigger (build when):** A request with long-critique matches produces a
+direction over ~2,000 chars, or anyone reads a handoff whose direction is
+dominated by verbatim critique.
+
+**Scope when triggered:** Window critique contributions like voice examples
+(e.g. a per-entry character cap with a bounded total) or cap the number of
+critique-bearing entries folded in. Keep the drop-whole screen semantics —
+never truncate in place; a screened string is dropped, and a capped string is
+chosen or omitted whole.
+
+**Depends on / blocked by:** None. This is a follow-up to
+`2026-08-03-c3-serve-corpus-prose-phase1.md` Task 5.
+
+## C3 Phase 1: public-mode denied-name manifest
+
+**What:** At public-snapshot export time, ship the full corpus's distinctive
+product-name list (all distinct `source.productName` values minus the six
+dictionary-word exclusions, as `buildDeniedNames` computes them) as a manifest
+the `PublicCorpusReader` serves, so the identity screen in public mode screens
+against private-corpus product names too.
+
+**Why:** `entriesForAggregation()` in public mode returns only the eligible
+snapshot, so the denied-name set is built from eligible names only. If an
+eligible entry's prose names a *private*-corpus product (one absent from the
+snapshot), the screen would not catch it. Bounded today — the public contract
+test pins private markers and ids, but not private product names in prose.
+The public mode cannot see private data by design, so the list must ride the
+snapshot rather than be derived at read time.
+
+**Trigger (build when):** Public-mode `create_ui_spec` serves prose (it
+already does after Phase 1) and the snapshot exporter next changes, or a
+private product name is observed in eligible prose.
+
+**Scope when triggered:** Extend the public snapshot manifest
+(`src/publication/manifest.ts`) with the denied-name list; `PublicCorpusReader`
+exposes it; `createUiSpecForAdapter` uses it for the denied set in public mode;
+extend `public-mcp-contract.test.ts` with a private-product-name-in-eligible-
+prose case.
+
+**Depends on / blocked by:** None. Follow-up to
+`2026-08-03-c3-serve-corpus-prose-phase1.md` Tasks 3/7.

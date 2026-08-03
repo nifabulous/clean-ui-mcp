@@ -1007,6 +1007,23 @@ function assembleSpec(
         },
       ]
     : citedDecisions;
+  // accessibilityConstraints carries screened corpus prose with no sourceIds
+  // channel (the schema has none), so it rides the same citedDecision path as
+  // contentVoiceGuidance: one corpus-evidence row citing exactly the entries
+  // whose risk statements survived the screen. Without it the served prose
+  // would violate the governing invariant's attribution property.
+  const citedDecisionsWithAccessibility = synthesis && synthesis.accessibilityConstraints.length > 0
+    ? [
+        ...citedDecisionsWithVoice,
+        {
+          id: "accessibilityConstraints-evidence-synthesis",
+          field: "accessibilityConstraints",
+          authority: "corpus-evidence" as const,
+          evidenceIds: synthesis.accessibilityEvidenceIds,
+          readiness: "available" as const,
+        },
+      ]
+    : citedDecisionsWithVoice;
 
   // C3 served-content posture: prose-judgment fields WITHOUT surviving corpus
   // content keep their unavailable reasons (the voice row is dropped exactly
@@ -1126,7 +1143,7 @@ function assembleSpec(
     unavailableDecisions,
     acceptanceCriteria,
     citedReferences,
-    citedDecisions: citedDecisionsWithVoice,
+    citedDecisions: citedDecisionsWithAccessibility,
     authorityLanes: {
       corpusEvidence: corpusLane,
       machineRules: [],

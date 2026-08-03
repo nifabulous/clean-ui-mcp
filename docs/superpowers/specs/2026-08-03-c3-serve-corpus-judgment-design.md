@@ -259,6 +259,100 @@ acts, and the distinction survives this decision:
 
 Everything else the corpus holds is served.
 
+### 2d-i. Colour tokens: the gate is an off switch, so derive instead of copy
+
+An earlier draft said tokens stay unavailable "until the contrast gate exists",
+which implied the gate was a near-term unlock. Measured, it is not:
+
+```
+entries with a complete colorRoles set : 668
+  pass AA  (ink/muted 4.5, accent 3.0) :  36  (5.4%)
+  pass AAA                             :   6  (0.9%)
+  accent identical to ink              :  44  (6.6%)
+```
+
+Even taking one whole coherent palette from a single entry — the fix for the
+independent-role-voting bug — fails **95%** of the time. A copy-then-validate
+gate would leave `colorTokens` unavailable on essentially every response. That
+is honest but it is not a plan.
+
+**Therefore: derive, do not copy.** Take the corpus accent HUE as the grounded
+signal and compute lightness/saturation so each pair meets the caller's
+`contrastFloor`. The grounding claim stays true ("this reference family is
+indigo") while the emitted values are guaranteed to satisfy the floor.
+
+Authority is split and must be stated in the ledger, not blurred:
+- the hue is `corpus-evidence`, citing the entries it came from;
+- the specific emitted values are `editorial`, because no corpus entry holds them.
+
+`colorTokenAuthority` therefore becomes `mixed` on this path — a value the
+schema already defines, whose refinement requires >1 distinct non-editorial
+authority among colour citedDecisions. Confirm that refinement is satisfiable
+with a corpus-evidence + editorial pair before building.
+
+**The validator still ships and still refuses.** Derivation is not a licence to
+skip it: if a derived palette somehow fails the floor or collides two roles,
+emit `unavailable` with a reason. Derivation changes the pass rate; it does not
+remove the check.
+
+This is its own task and may land after the prose work — the prose fills six
+sections with no schema change, and should not wait on colour.
+
+### 2d-ii. Typography: make `mono` optional, and serve the notes
+
+`TypographyTokens` is `{ heading, body, mono }`, all required, `.strict()`
+(`src/tool-contracts.ts:580`). The corpus records two roles and **no mono
+anywhere** — an earlier claim that 33 pairings named a mono face was a false
+positive: the regex matched the words *monospaced* and *monochrome* inside
+prose, not a font assignment.
+
+So the slot can never be completed honestly, and a fabricated third role to
+fill it is exactly the invention this spec exists to prevent.
+
+**Fix: make `mono` optional.** One field on a shared schema, and the slot fills
+on the 35% of responses where a matched entry carries display + body, instead
+of never. Rejected alternative: emitting a platform default
+(`ui-monospace, SF Mono, Menlo`) under editorial authority — it fills the slot
+always and adds a value nobody chose, which is the plausible-filler pattern
+this audit was written to stop.
+
+Coverage, corrected:
+
+| field | populated |
+|---|---|
+| `typePairing.display` | 276 / 787 |
+| `typePairing.body` | 275 / 787 |
+| **`typePairing.notes`** | **786 / 787** |
+
+`typePairing.notes` is a newly surfaced prose field — the corpus's real
+typography reasoning lives there, not in the structured pair. It carries no
+`UiSpec` slot, so it joins group B (folded into `designDirection`) and is
+screened like every other prose field.
+
+### 2d-iii. Rejected defaults: empty deterministically, fillable on the model path
+
+`fallback-recipe-v1.json` states the deterministic position:
+
+> `"strategy": "fixed-empty"` — "The deterministic fallback rejects no defaults
+> by invention; an empty array is the truthful zero-evidence state."
+
+`rejectedDefaults` is first-person about THIS spec ("I considered the
+single-field code mask and rejected it"). `antiPatterns` is third-person about
+someone else's UI ("this reference avoids heavy chart chrome"). Mapping one to
+the other would claim the author weighed something they never considered — the
+same authority misstatement as labelling corpus-derived tokens `editorial`, and
+equally invisible in the rendered artifact.
+
+**But the model path already produces genuine first-person rejections.** Every
+proposal decision carries a REJECTION clause: *"rejecting the single-field mask
+pattern because discrete boxes telegraph the exact expected length."* Today
+those sit inside `designDirection` prose. Extracting them into
+`rejectedDefaults` is a prompt + parse change, not a corpus problem.
+
+Scope call: extraction is NOT in this spec. It belongs with the model lane, and
+this spec is the corpus-serving decision. Recorded here so the section's
+emptiness is understood as *deterministic-path-only*, not permanent.
+
 ### 2e. Two review findings that came out better than assumed
 
 **The fail-closed leaf gate already covers every position this populates.**
@@ -377,7 +471,20 @@ latter two. This is the same annotation-truthfulness class as the
    `components`, and `accessibilityRisks` produces all three sections populated
    and cited — proving the wiring works before the corpus is grown into it.
    A fixture without them renders the unavailable reason, not an empty list.
-10. **Observation never becomes authority:** a fixture whose `colorRoles` would
+10. **Phase 2 — `mono` optional:** a fixture with display+body only produces a
+   populated `typographyTokens` with no `mono` key, `typographyTokenAuthority`
+   NOT `editorial`, and NO `typographyTokens` unavailableDecision (the
+   non-null branch of the refinement at tool-contracts.ts:822). A fixture with
+   neither still yields null + its reason row. Assert no served spec ever
+   contains a `mono` value absent from the corpus.
+11. **Phase 3 — derived colour:** for a matched set whose recorded palette
+   FAILS AA, the derived palette PASSES the caller's floor, no two roles
+   collide, the accent hue stays within a stated tolerance of the corpus hue,
+   `colorTokenAuthority` is `mixed`, and the colour citedDecisions carry both a
+   `corpus-evidence` row (the hue) and an `editorial` row (the values).
+   Mutation-test the validator by feeding a derived palette that violates the
+   floor and asserting the response emits `unavailable` rather than serving it.
+12. **Observation never becomes authority:** a fixture whose `colorRoles` would
    fail contrast produces the colour OBSERVATION in the served body while
    `colorTokens` stays null with its reason and `colorTokenAuthority` stays
    `editorial`. Mutation-test by wiring the observation into the token slot and
@@ -385,32 +492,42 @@ latter two. This is the same annotation-truthfulness class as the
 
 ## Projected outcome, stated before implementation
 
-Of the 13 sections in the served DESIGN.md, this change fills **6** that are
-empty today: Techniques, Anti-patterns, Voice & copy, Accessibility
-constraints, Component inventory, Responsive behavior — the last two only on
-the ~8% of responses where a matched entry carries them.
+Split by phase, because these do not all land together.
 
-Still empty afterwards, and why:
+**Phase 1 — prose serving, no schema change. Fills 6 of 13:**
+Techniques, Anti-patterns, Voice & copy, Accessibility constraints, plus
+Component inventory and Responsive behavior on the ~8% of responses whose
+matched entries carry them. Sources also stops contradicting the direction
+(§5). Result: **6 filled, 4 empty, 1 contradiction closed.**
+
+**Phase 2 — `mono` optional (§2d-ii), one schema field.** Typography fills on
+the ~35% of responses with a display+body pair. Result: **7 of 13.**
+
+**Phase 3 — derived colour tokens (§2d-i), its own task.** Result: **8 of 13.**
+
+Permanently empty after all three, and why:
 
 | section | reason |
 |---|---|
-| Color tokens | deliberately unavailable until the contrast gate exists (§2d) |
-| Typography | corpus has no `mono` role; slot cannot be honestly completed |
-| Interactions | no corpus field exists |
-| Rejected defaults | means "defaults the recipe rejected" — not what `antiPatterns` records |
+| Interactions | no corpus field exists at all |
+| Rejected defaults | deterministic path only; fillable on the model path by extracting REJECTION clauses (§2d-iii), which is out of scope here |
 
-Sources stops contradicting the direction (§5). That is the honest projection:
-**6 filled, 4 still empty, 1 contradiction closed** — not "the body is filled".
-Anyone reporting this as done should quote those numbers, and should verify
-values rather than counting non-null fields (see CLAUDE.md).
+Report these as phase numbers, not as "the body is filled". And verify the
+VALUES — contrast, role distinctness, grammar, self-consistency — rather than
+counting non-null fields. See the standard in CLAUDE.md, which exists because
+this workstream already reported a broken palette as populated.
 
 ## Non-goals
 
-- **Populating `colorTokens` or `typographyTokens` from corpus values.** Both
-  are served as cited observations (§2d); the authoritative slots stay
-  `unavailable` until tokens pass a contrast + role-distinctness gate, which is
-  tracked separately.
-- Changing retrieval (still top-3 ranked, pattern-deduped) or the model lane.
+- **COPYING corpus colour values into `colorTokens`.** Phase 3 DERIVES tokens
+  (corpus hue + computed lightness) and still validates them; it never copies a
+  recorded palette, because only 5.4% of them meet AA. Phase 1 serves colour
+  purely as a cited observation.
+- **Fabricating a `mono` face.** Phase 2 makes the role optional rather than
+  inventing a value to complete the slot.
+- Extracting REJECTION clauses into `rejectedDefaults` (§2d-iii) — real, but it
+  belongs to the model lane, not to the corpus-serving decision.
+- Changing retrieval (still top-3 ranked, pattern-deduped) or the model prompt.
 - Re-signing the readiness ledger. No C3 closure artifact asserts the
   no-corpus-content property, so this is a product-contract change rather than a
   ledger reopening — confirm before implementation.

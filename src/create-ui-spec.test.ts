@@ -1710,6 +1710,14 @@ it("ledgers the synthesized direction against the corpus evidence ids", async ()
   const patterns = ["dashboard", "data-table", "forms"];
   const ids = ["a", "b", "c"];
   const corpus = patterns.map((p, i) => corpusEntryWithRoles(`internal-${ids[i]!}`, i === 2 ? "#1d4ed8" : "#2563eb", p));
+  // The default fixture prose carries the private-corpus marker on purpose;
+  // the whole-direction identity screen would drop the synthesized direction
+  // (correct fail-closed behavior), so give these entries clean prose to pin
+  // the ledger instead.
+  for (const e of corpus) {
+    e.critique = "Clean critique prose about the dashboard layout and its use of a three-column grid.";
+    e.whatToSteal = ["Clean stealable technique about grouping metrics by row."];
+  }
   const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },

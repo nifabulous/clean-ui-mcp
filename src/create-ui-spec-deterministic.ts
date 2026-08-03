@@ -139,8 +139,13 @@ export function createUiSpecDeterministic(
     ...(layoutForm ? [`form: ${layoutForm}`] : []),
   ];
 
-  // Direction: one recipe-voice sentence built ONLY from pluralities of the
-  // closed facts, citing the evidence ids it draws from.
+  // Direction: one recipe-voice sentence built from pluralities of the closed
+  // facts (structured signals) plus the group-B corpus signals folded in as
+  // cited signals (design spec §1B): styleTags, categories, mood, colorScheme,
+  // typePairing.notes and critique. The group-B values live only in the RAW
+  // matched entries — they are deliberately absent from structuredFacts — so
+  // they are read through the internal matchedEntries channel, exactly like
+  // the six prose fields above.
   const density = plurality(facts.map((f) => f.spacingDensity).filter((v): v is NonNullable<typeof v> => Boolean(v)));
   const corners = plurality(facts.map((f) => f.cornerStyle).filter((v): v is NonNullable<typeof v> => Boolean(v)));
   const shadows = majority(facts.filter((f) => typeof f.usesShadows === "boolean").map((f) => f.usesShadows as boolean));
@@ -156,19 +161,72 @@ export function createUiSpecDeterministic(
   if (layoutForm) clauses.push(`a ${layoutForm} layout`);
   if (pairing) clauses.push(`${pairing} typography`);
 
-  const designDirection = clauses.length > 0
-    ? `Ground this ${request.productContext} in the matched corpus references (${ids.join(", ")}): `
-      + `the strongest shared signals are ${clauses.join(", ")}. `
+  // Group-B signals (design spec §1B), distinct in rank order.
+  const styleTags = [...new Set(matchedEntries.flatMap((m) => m.entry.styleTags ?? []))];
+  const categories = [...new Set(matchedEntries.flatMap((m) => m.entry.categories ?? []))];
+  const schemes = [...new Set(
+    matchedEntries.map((m) => m.entry.colorScheme).filter((v): v is NonNullable<typeof v> => typeof v === "string"),
+  )];
+  const moods = [...new Set(
+    matchedEntries.map((m) => m.entry.mood).filter((v): v is NonNullable<typeof v> => typeof v === "string"),
+  )];
+  const typeNotes = [...new Set(
+    matchedEntries
+      .map((m) => m.entry.visual?.typePairing?.notes)
+      .filter((v): v is NonNullable<typeof v> => typeof v === "string" && v.length > 0),
+  )];
+  const critiques = matchedEntries
+    .map((m) => m.entry.critique)
+    .filter((v): v is string => typeof v === "string" && v.length > 0);
+  // Shared identity screen for every corpus-prose string (drop whole, never
+  // redact). Built once so the direction's whole-string screen and the six
+  // prose fields below use the same denied-name set.
+  const deniedNames = buildDeniedNames(matchedEntries.map((m) => m.entry));
+  const screen = (text: string, entry: CorpusEntryT): string | null =>
+    screenProse(text, entry, deniedNames);
+
+  const signalClauses: string[] = [];
+  if (styleTags.length > 0) signalClauses.push(`style tags: ${styleTags.join(", ")}`);
+  if (categories.length > 0) signalClauses.push(`categories: ${categories.join(", ")}`);
+  if (schemes.length > 0) {
+    signalClauses.push(schemes.length === 1 ? `a ${schemes[0]} color scheme` : `${schemes.join(" and ")} color schemes`);
+  }
+  if (moods.length > 0) signalClauses.push(`mood: ${moods.join("; ")}`);
+  if (typeNotes.length > 0) signalClauses.push(`type notes: ${typeNotes.join(" ")}`);
+  if (critiques.length > 0) signalClauses.push(`critique: ${critiques.join(" ")}`);
+
+  // Template fix (plan Task 5 Step 2): the brief must never be spliced
+  // mid-sentence ("Ground this A login screen. in the matched corpus
+  // references"). It now stands as a quoted noun phrase, so ANY brief — single
+  // or multi-sentence — leaves the rest of the sentence grammatically intact.
+  const composedDirection = clauses.length > 0 || signalClauses.length > 0
+    ? `For the brief "${request.productContext}", the matched corpus references (${ids.join(", ")})`
+      + (clauses.length > 0 ? ` point to ${clauses.join(", ")}` : "")
+      + ". "
+      + (signalClauses.length > 0 ? `The shared signals include ${signalClauses.join("; ")}. ` : "")
       + `Let those signals lead the layout before adding anything not evidenced by the matched examples.`
     : null;
+
+  // The composed direction mixes corpus PROSE (mood, type notes, critique), so
+  // it is identity-screened as a WHOLE before emission (plan Task 5 Step 1) —
+  // against every contributing entry's own names (the six dictionary-word
+  // product names are only caught by the precise own-entry check) plus the
+  // corpus-wide names and the private-marker sweep. Any hit drops the whole
+  // direction: a screened string is dropped, never redacted.
+  let designDirection: string | null = composedDirection;
+  if (composedDirection !== null) {
+    for (const { entry } of matchedEntries) {
+      if (screenProse(composedDirection, entry, deniedNames) === null) {
+        designDirection = null;
+        break;
+      }
+    }
+  }
 
   // ----- C3 Phase 1 prose selection (Task 4): six existing UiSpec fields. -----
   // Everything that carries corpus prose goes through the identity screen
   // (drop whole, never redact); closed-token fields (components,
   // responsiveBehavior) do not, per design spec §2b.
-  const deniedNames = buildDeniedNames(matchedEntries.map((m) => m.entry));
-  const screen = (text: string, entry: CorpusEntryT): string | null =>
-    screenProse(text, entry, deniedNames);
 
   // techniques ← whatToSteal, capped at 5 response-wide, rank order.
   const techniques: { text: string; sourceIds: string[] }[] = [];

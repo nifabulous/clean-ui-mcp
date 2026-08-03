@@ -30,6 +30,18 @@ function proseEntry(over: Record<string, unknown> = {}): Record<string, unknown>
       examples: ["Confidence intervals plotted as soft bands"],
       avoid: ["No exclamation enthusiasm on financial data"],
     },
+    styleTags: ["minimal", "data-dense"],
+    categories: ["dashboard", "data-table"],
+    mood: "calm and authoritative",
+    colorScheme: "light",
+    visual: {
+      typePairing: {
+        display: "Inter",
+        body: "Inter",
+        notes: "tight letter-spacing on all-caps labels",
+      },
+    },
+    critique: "A fixture critique long enough to satisfy the corpus schema minimum length requirement.",
     ...over,
   };
 }
@@ -293,5 +305,53 @@ describe("createUiSpecDeterministic", () => {
     ]);
     expect(out.responsiveBehavior).toContain("mode: responsive");
     expect(out.responsiveBehavior).toContain("form: three-column");
+  });
+
+  it("folds group-B signals into the direction as cited signals", () => {
+    const out = createUiSpecDeterministic(
+      [observation("evidence-2", { pattern: "dashboard", spacingDensity: "compact" })] as never,
+      [matched("evidence-2", proseEntry())],
+      REQUEST,
+    );
+    expect(out.designDirection).toContain(
+      `For the brief "${REQUEST.productContext}", the matched corpus references (evidence-2) point to`,
+    );
+    expect(out.designDirection).toContain("style tags: minimal, data-dense");
+    expect(out.designDirection).toContain("categories: dashboard, data-table");
+    expect(out.designDirection).toContain("a light color scheme");
+    expect(out.designDirection).toContain("mood: calm and authoritative");
+    expect(out.designDirection).toContain("type notes: tight letter-spacing on all-caps labels");
+    expect(out.designDirection).toContain("critique: A fixture critique");
+  });
+
+  it("drops the whole direction when a folded signal names a corpus product", () => {
+    const out = createUiSpecDeterministic(
+      [observation("evidence-2", { pattern: "dashboard" })] as never,
+      [
+        matched("evidence-2", proseEntry()),
+        matched("evidence-3", proseEntry({
+          source: { productName: "Superhuman" },
+          title: "Superhuman — mail",
+          critique: "A critique long enough to satisfy the schema minimum that mentions Superhuman triage as the hook.",
+        })),
+      ],
+      REQUEST,
+    );
+    // The composed direction contains the second entry's critique, which names
+    // a corpus product; the whole string is dropped, never redacted.
+    expect(out.designDirection).toBeNull();
+  });
+
+  it("never splices a multi-sentence brief mid-sentence", () => {
+    const out = createUiSpecDeterministic(
+      [observation("evidence-2", { pattern: "dashboard", spacingDensity: "compact" })] as never,
+      [matched("evidence-2", proseEntry())],
+      { ...REQUEST, productContext: "A login screen. Keep it calm." } as never,
+    );
+    expect(out.designDirection).toContain(
+      'For the brief "A login screen. Keep it calm.", the matched corpus references (evidence-2) point to',
+    );
+    expect(out.designDirection).not.toContain("A login screen. in");
+    expect(out.designDirection).not.toContain("Ground this");
   });
 });

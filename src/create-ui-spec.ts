@@ -15,8 +15,11 @@
  *  3. Typed sanitization — allowlist projection from CorpusEntry into
  *     response-scoped SanitizedEvidence (evidence-1, evidence-2, ...). Recipe-
  *     owned summaries; never critique/voice/product-name/url/prose.
- *  4. Deterministic assembly — via the safe aggregator (SanitizedEvidence ONLY;
- *     never raw CorpusEntry). The c3-fallback-v1 recipe is the ONLY provider
+ *  4. Deterministic assembly — via the safe aggregator (SanitizedEvidence for
+ *     the structured signals) plus the INTERNAL `ResolvedEvidence.matchedEntries`
+ *     channel for the six prose fields (C3 Phase 1); every prose string is
+ *     identity-screened before emission, and `matchedEntries` never reaches a
+ *     transport projection. The c3-fallback-v1 recipe is the ONLY provider
  *     path this milestone.
  *  5. Envelope construction — build the validated handoff, render both formats,
  *     compute every hash, derive artifactId from the canonical identity object
@@ -193,10 +196,22 @@ export async function createUiSpecForAdapter(
 
   // ----- 3/4/5. Assemble + build envelope -----
   const generatedAt = (dependencies.now?.() ?? new Date()).toISOString();
+  // The identity screen's denied-name set is CORPUS-WIDE (design spec §3:
+  // "any of the ... distinctive product names in the corpus"), not just the
+  // matched entries — a prose row naming a corpus product outside the top
+  // matches must still be dropped. The reader's entriesForAggregation is the
+  // mode-appropriate full corpus (private mode: all 787; public mode: the
+  // eligible snapshot). Only fetched when matches exist: explicit-reference
+  // and zero-match requests never serve corpus prose, so they never need the
+  // denied set (review finding #13).
+  const corpusEntries = resolved.matchedEntries.length > 0
+    ? dependencies.reader.entriesForAggregation()
+    : [];
   try {
     const envelope = await buildModelAwareEnvelope(
       request,
       resolved,
+      corpusEntries,
       generatedAt,
       dependencies.model ?? { kind: "not-configured" },
     );
@@ -215,13 +230,14 @@ export async function createUiSpecForAdapter(
 async function buildModelAwareEnvelope(
   request: CreateUiSpecRequest,
   resolved: ResolvedEvidence,
+  corpusEntries: readonly CorpusEntryT[],
   generatedAt: string,
   model: CreateUiSpecModelDependency,
 ): Promise<DesignArtifactEnvelope> {
   // Validate the deterministic scaffold and all authority decisions before an
   // optional provider can run. This is also the exact envelope every model
   // failure returns after adding only bounded execution metadata.
-  const deterministicEnvelope = buildValidatedEnvelope(request, resolved, generatedAt);
+  const deterministicEnvelope = buildValidatedEnvelope(request, resolved, corpusEntries, generatedAt);
 
   if (model.kind === "not-configured") {
     return deterministicEnvelope;
@@ -249,6 +265,7 @@ async function buildModelAwareEnvelope(
     proposedEnvelope = buildValidatedEnvelope(
       request,
       resolved,
+      corpusEntries,
       generatedAt,
       outcome.proposal,
       outcome.execution,
@@ -315,12 +332,13 @@ function attachModelExecution(
 function buildValidatedEnvelope(
   request: CreateUiSpecRequest,
   resolved: ResolvedEvidence,
+  corpusEntries: readonly CorpusEntryT[],
   generatedAt: string,
   proposal?: ModelProposal,
   execution?: ModelExecution,
 ): DesignArtifactEnvelope {
   return parseDesignArtifactEnvelope(
-    buildEnvelope(request, resolved, generatedAt, proposal, execution),
+    buildEnvelope(request, resolved, corpusEntries, generatedAt, proposal, execution),
   );
 }
 
@@ -358,6 +376,15 @@ interface ResolvedEvidence {
    * unvalidated.
    */
   readonly sanitized: readonly SanitizedEvidence[];
+  /**
+   * INTERNAL ONLY. Matched corpus entries paired with the response-scoped
+   * evidence id assigned to each, so the synthesizer can read prose the
+   * sanitized rows deliberately exclude (structuredFacts is a closed,
+   * prose-free allowlist). These are RAW entries — title, source.productName,
+   * image. Nothing may project this field; the transport adapters read
+   * `sanitized`, never this. Pinned by the leak test in create-ui-spec.test.ts.
+   */
+  readonly matchedEntries: readonly { readonly evidenceId: string; readonly entry: CorpusEntryT }[];
   /** Public reference tokens that resolved (populate citedReferences). */
   readonly resolvedReferenceTokens: readonly string[];
   /** Tokens whose resolver returned undefined (omitted, bounded). */
@@ -445,6 +472,7 @@ async function resolveExplicitReferences(
 
   return {
     sanitized,
+    matchedEntries: [],
     resolvedReferenceTokens: resolvedTokens,
     omittedReferenceTokens: omittedTokens,
     automaticRetrieved: false,
@@ -532,11 +560,13 @@ async function resolveAutomaticRetrieval(
   // observations are recorded in provenance + the corpusEvidence lane without a
   // designDirection authority claim in this slice.
   const sanitized: SanitizedEvidence[] = [buildRecipeSystemEvidence()];
+  const matchedEntries: { evidenceId: string; entry: CorpusEntryT }[] = [];
   let nextId = 2;
   let corpusCount = 0;
   for (const r of top) {
     const id = `evidence-${nextId++}`;
     sanitized.push(sanitizeCorpusObservation(id, r.entry));
+    matchedEntries.push({ evidenceId: id, entry: r.entry });
     corpusCount++;
   }
 
@@ -549,6 +579,7 @@ async function resolveAutomaticRetrieval(
     // truthful "no-results", NOT "missing-index". The corpus is NOT cited.
     return {
       sanitized,
+      matchedEntries: [],
       resolvedReferenceTokens: [],
       omittedReferenceTokens: [],
       automaticRetrieved: false,
@@ -568,6 +599,7 @@ async function resolveAutomaticRetrieval(
 
   return {
     sanitized,
+    matchedEntries,
     resolvedReferenceTokens: [],
     omittedReferenceTokens: [],
     automaticRetrieved: true,
@@ -872,6 +904,7 @@ function buildFixedEmptyArrayDecisions(recipe: FallbackRecipe): CreateUiSpecCand
 function assembleSpec(
   request: CreateUiSpecRequest,
   resolved: ResolvedEvidence,
+  corpusEntries: readonly CorpusEntryT[],
   generatedAt: string,
   proposal?: ModelProposal,
 ): UiSpecT {
@@ -912,7 +945,7 @@ function assembleSpec(
   // root direction on the model path would be a behavior change the spec
   // never approved.
   const synthesis = proposal === undefined
-    ? createUiSpecDeterministic(evidence, request)
+    ? createUiSpecDeterministic(evidence, resolved.matchedEntries, corpusEntries, request)
     : null;
 
   // Cited decisions: the designDirection ALWAYS echoes the requester's brief
@@ -963,12 +996,72 @@ function assembleSpec(
         },
       ]
     : directionDecisions;
+  // The composed contentVoiceGuidance is corpus-authority content (design spec
+  // §5): it rides a citedDecision row with corpus-evidence authority, citing
+  // exactly the entries whose voice content survived the screen.
+  const citedDecisionsWithVoice = synthesis?.contentVoiceGuidance
+    ? [
+        ...citedDecisions,
+        {
+          id: "contentVoiceGuidance-evidence-synthesis",
+          field: "contentVoiceGuidance",
+          authority: "corpus-evidence" as const,
+          evidenceIds: synthesis.contentVoiceEvidenceIds,
+          readiness: "available" as const,
+        },
+      ]
+    : citedDecisions;
+  // accessibilityConstraints carries screened corpus prose with no sourceIds
+  // channel (the schema has none), so it rides the same citedDecision path as
+  // contentVoiceGuidance: one corpus-evidence row citing exactly the entries
+  // whose risk statements survived the screen. Without it the served prose
+  // would violate the governing invariant's attribution property.
+  const citedDecisionsWithAccessibility = synthesis && synthesis.accessibilityConstraints.length > 0
+    ? [
+        ...citedDecisionsWithVoice,
+        {
+          id: "accessibilityConstraints-evidence-synthesis",
+          field: "accessibilityConstraints",
+          authority: "corpus-evidence" as const,
+          evidenceIds: synthesis.accessibilityEvidenceIds,
+          readiness: "available" as const,
+        },
+      ]
+    : citedDecisionsWithVoice;
+  // componentInventory and responsiveBehavior are closed-token corpus content
+  // with no sourceIds channel, so they ride the same citedDecision path:
+  // one corpus-evidence row per populated field citing the contributing ids.
+  const citedDecisionsWithClosedTokens = synthesis && (
+    synthesis.componentInventory.length > 0 || synthesis.responsiveBehavior.length > 0
+  )
+    ? [
+        ...citedDecisionsWithAccessibility,
+        ...(synthesis.componentInventory.length > 0 ? [{
+          id: "componentInventory-evidence-synthesis",
+          field: "componentInventory",
+          authority: "corpus-evidence" as const,
+          evidenceIds: synthesis.componentInventoryEvidenceIds,
+          readiness: "available" as const,
+        }] : []),
+        ...(synthesis.responsiveBehavior.length > 0 ? [{
+          id: "responsiveBehavior-evidence-synthesis",
+          field: "responsiveBehavior",
+          authority: "corpus-evidence" as const,
+          evidenceIds: synthesis.responsiveBehaviorEvidenceIds,
+          readiness: "available" as const,
+        }] : []),
+      ]
+    : citedDecisionsWithAccessibility;
 
-  // C3 served-content posture: prose-judgment fields stay unavailable with
-  // recipe-owned reasons until the provenance-governance flip permits them.
+  // C3 served-content posture: prose-judgment fields WITHOUT surviving corpus
+  // content keep their unavailable reasons (the voice row is dropped exactly
+  // when synthesis serves contentVoiceGuidance below); rejectedDefaults and
+  // mood have no served slot in Phase 1.
   const c3Unavailable: UiSpecT["unavailableDecisions"] = [
     { field: "rejectedDefaults", reason: "Anti-pattern prose is not served; derived from corpus judgments after governance." },
-    { field: "voice", reason: "Voice analysis prose is not served until provenance governance lands." },
+    // Once synthesis serves contentVoiceGuidance, the voice-unavailable row
+    // would be false; it is dropped below exactly when voice content survives.
+    ...(synthesis?.contentVoiceGuidance ? [] : [{ field: "voice", reason: "Voice analysis prose is not served until provenance governance lands." }]),
     { field: "mood", reason: "Mood is not served until provenance governance lands." },
   ];
   // The recipe ALREADY declares a colorTokens unavailableDecision
@@ -1055,7 +1148,9 @@ function assembleSpec(
     responsiveBehavior: synthesis && synthesis.responsiveBehavior.length > 0
       ? synthesis.responsiveBehavior
       : specFields.responsiveBehavior,
-    componentInventory: specFields.componentInventory,
+    componentInventory: synthesis && synthesis.componentInventory.length > 0
+      ? synthesis.componentInventory
+      : specFields.componentInventory,
     colorTokens: synthesis?.colorTokens ?? null,
     // Corpus-derived when synthesis populated them (see the colorTokens
     // citedDecision above); "editorial" ONLY when they stay null, which the
@@ -1066,14 +1161,17 @@ function assembleSpec(
     ...(proposal !== undefined ? { modelProposal: proposal } : {}),
     interactions: specFields.interactions,
     motionGuidance: { notes: [], evidenceUnavailable: true },
-    accessibilityConstraints: specFields.accessibilityConstraints,
+    accessibilityConstraints: synthesis && synthesis.accessibilityConstraints.length > 0
+      ? synthesis.accessibilityConstraints
+      : specFields.accessibilityConstraints,
     ...(specFields.frameworkNotes !== undefined ? { frameworkNotes: specFields.frameworkNotes } : {}),
-    techniques: specFields.techniques,
-    antiPatterns: specFields.antiPatterns,
+    ...(synthesis?.contentVoiceGuidance ? { contentVoiceGuidance: synthesis.contentVoiceGuidance } : {}),
+    techniques: synthesis && synthesis.techniques.length > 0 ? synthesis.techniques : specFields.techniques,
+    antiPatterns: synthesis && synthesis.antiPatterns.length > 0 ? synthesis.antiPatterns : specFields.antiPatterns,
     unavailableDecisions,
     acceptanceCriteria,
     citedReferences,
-    citedDecisions,
+    citedDecisions: citedDecisionsWithClosedTokens,
     authorityLanes: {
       corpusEvidence: corpusLane,
       machineRules: [],
@@ -1190,11 +1288,12 @@ function buildCitedDecisions(
 function buildEnvelope(
   request: CreateUiSpecRequest,
   resolved: ResolvedEvidence,
+  corpusEntries: readonly CorpusEntryT[],
   generatedAt: string,
   proposal?: ModelProposal,
   execution?: ModelExecution,
 ): DesignArtifactEnvelope {
-  const spec = assembleSpec(request, resolved, generatedAt, proposal);
+  const spec = assembleSpec(request, resolved, corpusEntries, generatedAt, proposal);
 
   // Target resolution: pass undefined for neutral-web/absent so the handoff
   // parser substitutes the canonical NEUTRAL_WEB_TARGET. For astro targets,

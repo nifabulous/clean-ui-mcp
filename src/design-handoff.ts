@@ -544,12 +544,46 @@ function renderContextSection(spec: DesignHandoffT["spec"]): string[] {
 
 function renderSourcesSection(ctx: ResolvedDesignHandoff): string[] {
   const lines: string[] = [];
+  // Corpus evidence the spec cites (design spec §5): a DISTINCT line from
+  // `citedReferences`, which hold only caller-supplied ref-<sha256> digests.
+  // The evidence-id domain and the public-reference domain never mix, so the
+  // "Grounded in" line lists the corpus ids while citedReferences stays
+  // untouched. The line is a GROUNDING CLAIM, so it renders only when the spec
+  // actually cites corpus ids through a served channel, and it lists exactly
+  // THOSE ids — the union of corpus-evidence decisions' evidenceIds and
+  // techniques/antiPatterns sourceIds — not the whole corpusEvidence lane
+  // (review finding #9: the lane also holds entries nothing cites). On the
+  // model path the lane is populated for provenance but nothing cites it, so
+  // no line is printed.
+  const spec = ctx.handoff.spec;
+  const citedCorpusIds: string[] = [];
+  for (const d of spec.citedDecisions ?? []) {
+    if (d.authority === "corpus-evidence") {
+      for (const id of d.evidenceIds ?? []) {
+        if (!citedCorpusIds.includes(id)) citedCorpusIds.push(id);
+      }
+    }
+  }
+  for (const t of spec.techniques ?? []) {
+    for (const id of t.sourceIds ?? []) {
+      if (!citedCorpusIds.includes(id)) citedCorpusIds.push(id);
+    }
+  }
+  for (const a of spec.antiPatterns ?? []) {
+    for (const id of a.sourceIds ?? []) {
+      if (!citedCorpusIds.includes(id)) citedCorpusIds.push(id);
+    }
+  }
+  if (citedCorpusIds.length > 0) {
+    lines.push(`Grounded in corpus evidence: ${citedCorpusIds.join(", ")}.`);
+    lines.push("");
+  }
   // The handoff never embeds raw corpus records — only stable provenance URLs.
   const cited = ctx.handoff.spec.citedReferences;
   if (cited.length > 0) {
     lines.push("Cited references:");
     for (const ref of cited) lines.push(`- ${ref}`);
-  } else {
+  } else if (citedCorpusIds.length === 0) {
     lines.push("_(no cited references recorded)_");
   }
   // Documentation sources consulted by the chosen profile.

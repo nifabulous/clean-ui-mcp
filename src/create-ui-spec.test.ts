@@ -69,6 +69,8 @@ interface FixtureEntry extends Partial<CorpusEntryT> {
   critique: string;
   whatToSteal: string[];
   antiPatterns: { antiPatterns: string[]; whereThisFails: string[]; accessibilityRisks: string[] };
+  voice?: { tone: string; examples: string[]; avoid?: string[] };
+  responsiveBehavior?: string;
   categories: string[];
   styleTags: string[];
   components: string[];
@@ -160,6 +162,10 @@ function validInput(over: Record<string, unknown> = {}): Record<string, unknown>
     motionIntents: [],
     ...over,
   };
+}
+
+function noRefRequest(): Record<string, unknown> {
+  return validInput();
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +445,18 @@ describe("create-ui-spec producer — privacy and evidence scoping", () => {
     // The recipe/system evidence is always evidence-1 (emitted first); the
     // three corpus observations follow at evidence-2, evidence-3, evidence-4.
     expect(parsed.publicEvidenceIds.slice(0, 4)).toEqual(["evidence-1", "evidence-2", "evidence-3", "evidence-4"]);
+  });
+
+  it("never projects matchedEntries or raw corpus identity to a transport", async () => {
+    const corpus = [corpusEntryWithRoles("internal-a", "#2563eb", "dashboard")];
+    // give the entry unmistakable identity to hunt for
+    (corpus[0] as unknown as Record<string, unknown>).title = "ZZTITLEZZ";
+    (corpus[0] as unknown as Record<string, unknown>).source = { productName: "ZZPRODZZ" };
+    const out = await createUiSpecForAdapter(noRefRequest(), deps(corpus, corpus.map(e => ({ entry: e, score: 5 }))));
+    const served = JSON.stringify({ envelope: out.envelope, evidence: out.sanitizedEvidence });
+    expect(served).not.toContain("ZZTITLEZZ");
+    expect(served).not.toContain("ZZPRODZZ");
+    expect(served).not.toContain("matchedEntries");
   });
 });
 
@@ -762,7 +780,10 @@ describe("create-ui-spec producer — provenance truthfulness (echo direction is
   it("designDirection is NEVER corpus-evidence authority when corpus results exist (it echoes the brief)", async () => {
     // Corpus results are present, yet the direction is an echo of the requester's
     // brief — it MUST be editorial authority, never corpus-evidence authority.
-    const e = entry("e1", "product-A");
+    // Empty styleTags/categories force the echo: the direction composes from
+    // closed-token signals, and this fixture carries none (its prose is
+    // screened out by the private marker).
+    const e = entry("e1", "product-A", "dashboard", { styleTags: [], categories: [] } as Partial<FixtureEntry>);
     const env = await createUiSpec(validInput(), deps([e], [{ entry: e, score: 5 }]));
     const parsed = parseDesignArtifactEnvelope(env);
     const dd = parsed.spec.citedDecisions.find((d) => d.field === "designDirection");
@@ -772,8 +793,8 @@ describe("create-ui-spec producer — provenance truthfulness (echo direction is
   });
 
   it("the echo-only designDirection cites ONLY the recipe/system evidence id (never a corpus evidence-N id)", async () => {
-    const e1 = entry("e1", "product-A", "dashboard");
-    const e2 = entry("e2", "product-B", "forms");
+    const e1 = entry("e1", "product-A", "dashboard", { styleTags: [], categories: [] } as Partial<FixtureEntry>);
+    const e2 = entry("e2", "product-B", "forms", { styleTags: [], categories: [] } as Partial<FixtureEntry>);
     const env = await createUiSpec(validInput(), deps([e1, e2], [
       { entry: e1, score: 5 },
       { entry: e2, score: 4 },
@@ -1692,6 +1713,14 @@ it("ledgers the synthesized direction against the corpus evidence ids", async ()
   const patterns = ["dashboard", "data-table", "forms"];
   const ids = ["a", "b", "c"];
   const corpus = patterns.map((p, i) => corpusEntryWithRoles(`internal-${ids[i]!}`, i === 2 ? "#1d4ed8" : "#2563eb", p));
+  // The default fixture prose carries the private-corpus marker on purpose;
+  // the whole-direction identity screen would drop the synthesized direction
+  // (correct fail-closed behavior), so give these entries clean prose to pin
+  // the ledger instead.
+  for (const e of corpus) {
+    e.critique = "Clean critique prose about the dashboard layout and its use of a three-column grid.";
+    e.whatToSteal = ["Clean stealable technique about grouping metrics by row."];
+  }
   const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
@@ -1769,6 +1798,63 @@ it("passes the gate with tokens unavailable and exactly one colorTokens row", as
   const rows = spec.unavailableDecisions.filter((d) => d.field === "colorTokens");
   expect(rows).toHaveLength(1);
   expect(rows[0]!.reason).toContain("Fewer than 3");
+  const r = ToolResultSchemas.create_ui_spec.safeParse(mcqPayload(out));
+  expect(r.success, r.success ? "" : JSON.stringify(r.error.issues)).toBe(true);
+});
+
+it("serves corpus judgment into the six UiSpec fields, evidence-cited and gate-clean", async () => {
+  const corpus = [entry("internal-1", "ProductA", "dashboard", {
+    whatToSteal: ["Group metrics by row", "Right-side callout anchored to chart regions"],
+    antiPatterns: {
+      antiPatterns: ["Avoids heavy chart chrome"],
+      whereThisFails: [],
+      accessibilityRisks: [
+        { element: "Secondary text", risk: "Low contrast on secondary text", evidence: "visible", confidence: "visible", wcag: ["1.4.3"] },
+      ],
+    },
+    voice: {
+      tone: "Restrained, confident",
+      examples: ["Confidence intervals plotted as soft bands"],
+      avoid: [],
+    },
+    components: ["kpi-card"],
+    responsiveBehavior: "responsive",
+  })];
+  const out = await createUiSpecForAdapter(
+    { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
+    deps(corpus, [{ entry: corpus[0], score: 5 }]),
+  );
+  const spec = out.envelope.spec;
+  // The recipe/system evidence is evidence-1; the matched corpus entry is
+  // evidence-2, which is what every served row must cite.
+  expect(spec.techniques).toEqual([
+    { text: "Group metrics by row", sourceIds: ["evidence-2"] },
+    { text: "Right-side callout anchored to chart regions", sourceIds: ["evidence-2"] },
+  ]);
+  expect(spec.antiPatterns).toEqual([
+    { text: "Avoids heavy chart chrome", sourceIds: ["evidence-2"] },
+  ]);
+  expect(spec.contentVoiceGuidance).toBe(
+    "Restrained, confident. Examples: Confidence intervals plotted as soft bands.",
+  );
+  expect(spec.accessibilityConstraints).toEqual(["Low contrast on secondary text"]);
+  expect(spec.componentInventory).toEqual([{ name: "kpi-card", pattern: "kpi-card" }]);
+  expect(spec.responsiveBehavior).toContain("mode: responsive");
+  // The composed voice cites the entry that supplied it.
+  expect(spec.citedDecisions.find((d) => d.field === "contentVoiceGuidance")?.evidenceIds)
+    .toEqual(["evidence-2"]);
+  // So do the served accessibility-risk rows (governing invariant: every
+  // served observation is attributed to a response-scoped evidence id).
+  expect(spec.citedDecisions.find((d) => d.field === "accessibilityConstraints")?.evidenceIds)
+    .toEqual(["evidence-2"]);
+  // The closed-token fields carry corpus content too, so they get the same
+  // corpus-evidence attribution rows.
+  expect(spec.citedDecisions.find((d) => d.field === "componentInventory")?.evidenceIds)
+    .toEqual(["evidence-2"]);
+  expect(spec.citedDecisions.find((d) => d.field === "responsiveBehavior")?.evidenceIds)
+    .toEqual(["evidence-2"]);
+  // The full MCP envelope schema (leaf gate + evidence membership + authority
+  // prerequisites) accepts the produced envelope.
   const r = ToolResultSchemas.create_ui_spec.safeParse(mcqPayload(out));
   expect(r.success, r.success ? "" : JSON.stringify(r.error.issues)).toBe(true);
 });

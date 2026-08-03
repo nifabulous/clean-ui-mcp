@@ -347,6 +347,74 @@ describe("renderDesignHandoffMarkdown: 19-section outline", () => {
   });
 });
 
+describe("renderDesignHandoffMarkdown: Grounded in corpus evidence line", () => {
+  it("lists the corpus evidence ids the spec cites instead of the empty-references placeholder", () => {
+    // Auto-retrieval requests produce corpus citations but NO caller-supplied
+    // citedReferences. The Sources section must show the corpus ids the spec
+    // actually cites ("Grounded in ...") rather than reading "(no cited
+    // references recorded)" — and citedReferences itself stays untouched.
+    const spec = {
+      ...validUiSpec(),
+      authorityLanes: {
+        ...(validUiSpec().authorityLanes as Record<string, unknown>),
+        corpusEvidence: ["evidence-2", "evidence-3"],
+        editorialGuidance: ["evidence-1"],
+      },
+      // The Grounded-in line is a grounding CLAIM: it renders only when the
+      // spec actually cites corpus ids (a corpus-evidence decision or
+      // techniques/antiPatterns sourceIds), never from the lane alone.
+      citedDecisions: [{
+        id: "designDirection-evidence-synthesis",
+        field: "designDirection",
+        authority: "corpus-evidence",
+        evidenceIds: ["evidence-2", "evidence-3"],
+        readiness: "available",
+      }],
+    };
+    const md = renderDesignHandoffMarkdown(parseDesignHandoff({
+      spec,
+      target: neutralInput().target,
+      motionIntents: neutralInput().motionIntents,
+      generatedAt: neutralInput().generatedAt,
+    }));
+    const sources = md.split("\n## ").find((s) => s.startsWith("Sources")) ?? "";
+    expect(sources).toContain("Grounded in corpus evidence: evidence-2, evidence-3.");
+    expect(sources).not.toContain("(no cited references recorded)");
+  });
+
+  it("omits the Grounded-in line when the lane is populated but nothing cites the corpus", () => {
+    // Model-path shape: corpus observations are recorded in the lane for
+    // provenance, but the direction is the editorial echo and no decision or
+    // sourceIds channel cites them. "Grounded in" would be a false claim.
+    const spec = {
+      ...validUiSpec(),
+      authorityLanes: {
+        ...(validUiSpec().authorityLanes as Record<string, unknown>),
+        corpusEvidence: ["evidence-2", "evidence-3"],
+        editorialGuidance: ["evidence-1"],
+      },
+      citedDecisions: [{
+        id: "designDirection-editorial-1",
+        field: "designDirection",
+        authority: "editorial",
+        evidenceIds: ["evidence-1"],
+        readiness: "available",
+      }],
+      techniques: [{ text: "Use quiet grouping.", sourceIds: [] }],
+      antiPatterns: [],
+    };
+    const md = renderDesignHandoffMarkdown(parseDesignHandoff({
+      spec,
+      target: neutralInput().target,
+      motionIntents: neutralInput().motionIntents,
+      generatedAt: neutralInput().generatedAt,
+    }));
+    const sources = md.split("\n## ").find((s) => s.startsWith("Sources")) ?? "";
+    expect(sources).not.toContain("Grounded in corpus evidence");
+    expect(sources).toContain("(no cited references recorded)");
+  });
+});
+
 describe("renderDesignHandoffMarkdown: proposal-only handoff", () => {
   it("renders proposed values in an unmistakable section without changing accepted token authority", () => {
     const handoff = parseDesignHandoff({

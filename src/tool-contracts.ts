@@ -1086,11 +1086,17 @@ const CREATE_UI_SPEC_EVIDENCE_ID_LEAVES: ReadonlySet<LeafPosition> = new Set<Lea
   "data.authorityLanes.editorialGuidance[]",
   "data.citedDecisions[].evidenceIds[]",
   "data.acceptanceCriteria[].evidenceIds[]",
+  // Moved from the safe-reference domain in C3 Phase 1. These cite the
+  // response-scoped evidence-N of the corpus entry a technique came from, not
+  // a ref-<sha256> digest. Verified before the move: no producer populated
+  // sourceIds, so no existing value changes meaning.
+  "data.techniques[].sourceIds[]",
+  "data.antiPatterns[].sourceIds[]",
 ]);
 
 /**
  * Positions holding a SAFE PUBLIC REFERENCE — the core's opaque
- * `ref-${sha256Hex(...)}` digest (src/create-ui-spec.ts). These are the eight
+ * `ref-${sha256Hex(...)}` digest (src/create-ui-spec.ts). These are the six
  * reference-carrying positions enumerated by the round-2 review.
  */
 const CREATE_UI_SPEC_SAFE_REFERENCE_LEAVES: ReadonlySet<LeafPosition> = new Set<LeafPosition>([
@@ -1099,8 +1105,6 @@ const CREATE_UI_SPEC_SAFE_REFERENCE_LEAVES: ReadonlySet<LeafPosition> = new Set<
   "data.provenance.sourceReferences[]",
   "evidence[].referenceId",
   "data.citedDecisions[].sourceId",
-  "data.techniques[].sourceIds[]",
-  "data.antiPatterns[].sourceIds[]",
   "data.componentInventory[].sourceId",
 ]);
 
@@ -1167,7 +1171,7 @@ export const CREATE_UI_SPEC_FREE_TEXT_LEAVES: Readonly<Record<LeafPosition, stri
   "data.context.colorIntent.accentPreference": "caller-supplied colour intent, echoed back to its own author; never corpus-derived and never materialized into colorTokens",
   "data.context.colorIntent.mood": "caller-supplied colour intent, echoed back to its own author; never corpus-derived and never materialized into colorTokens",
   "data.context.typeIntent.voice": "caller-supplied typography intent, echoed back to its own author; never corpus-derived and never materialized into typographyTokens",
-  "data.designDirection": "recipe-owned prose: the caller's own brief restated when no corpus entry matched, or a recipe-voice sentence built from closed structuredFacts pluralities and citing the matched evidence ids; never corpus prose and never model output (a model proposal lives at data.modelProposal.designDirection)",
+  "data.designDirection": "the caller's own brief restated when no corpus entry matched (recipe lane), or a corpus-grounded direction sentence built from structuredFacts pluralities plus identity-screened corpus signals (style tags, categories, mood, color scheme, type notes, critique) and citing the matched evidence ids; never model output (a model proposal lives at data.modelProposal.designDirection)",
   // --- recipe/operator-owned prose: descriptive, carries no identity (reason b) ---
   "data.rejectedDefaults[]": "recipe-owned prose naming a rejected default",
   "data.layoutRegions[].name": "recipe-owned region label",
@@ -1187,10 +1191,10 @@ export const CREATE_UI_SPEC_FREE_TEXT_LEAVES: Readonly<Record<LeafPosition, stri
   "data.typographyTokens.mono": "a font-family name, not an identity",
   "data.interactions[]": "recipe-owned interaction prose",
   "data.motionGuidance.notes[]": "recipe-owned motion prose",
-  "data.accessibilityConstraints[]": "recipe-owned accessibility prose",
-  "data.contentVoiceGuidance": "recipe-owned voice prose",
-  "data.techniques[].text": "recipe-owned technique prose (its citation lives in sourceIds)",
-  "data.antiPatterns[].text": "recipe-owned anti-pattern prose (its citation lives in sourceIds)",
+  "data.accessibilityConstraints[]": "corpus-derived accessibility-risk prose, identity-screened",
+  "data.contentVoiceGuidance": "corpus-derived voice prose (tone/avoid/examples), identity-screened; examples capped at 3 per response, 20-140 chars, data-only strings rejected",
+  "data.techniques[].text": "corpus-derived technique prose, identity-screened and capped at 5 per response; its citation lives in sourceIds (response-scoped evidence ids)",
+  "data.antiPatterns[].text": "corpus-derived anti-pattern prose, identity-screened and capped at 5 per response; its citation lives in sourceIds (response-scoped evidence ids)",
   "data.frameworkNotes": "recipe-owned framework prose",
   "data.unavailableDecisions[].field": "names a UiSpec field, response-local",
   "data.unavailableDecisions[].reason": "recipe-owned reason prose",
@@ -1359,19 +1363,24 @@ export function findUnsafeCreateUiSpecLeaves(roots: {
 // returns `[]` and changes no byte.
 //
 // SCOPE. Exactly the six rules, no more: uniqueness of `citedReferences`,
-// membership of the three sourceId positions in `citedReferences`, uniqueness of
-// `provenance.sourceReferences`, and set-equality of `provenance.sourceReferences`
-// with `citedReferences`. ID SHAPE is the leaf gate's job (above) and evidence-ID
-// membership, evidence-KIND authority and the lane rules stay in `refineEnvelope`,
-// because they read the tool envelope's `evidence[]` rows — which do not exist on
-// the HTTP surface, so they are structurally inapplicable there rather than
-// missing.
+// membership of `componentInventory[].sourceId` in `citedReferences`, membership
+// of `techniques[].sourceIds[]` / `antiPatterns[].sourceIds[]` in the artifact's
+// evidence ids (they moved to the evidence-id domain in C3 Phase 1 Task 2;
+// `spec.provenance.evidenceIds` is present on BOTH surfaces and is bound
+// element-for-element to the envelope's evidence rows, so the membership check
+// is checkable over HTTP — review finding #1), uniqueness of
+// `provenance.sourceReferences`, and set-equality of
+// `provenance.sourceReferences` with `citedReferences`. ID SHAPE is the leaf
+// gate's job (above). The remaining evidence-ID membership checks, evidence-KIND
+// authority and the lane rules stay in `refineEnvelope`, because they read the
+// tool envelope's `evidence[]` rows — which do not exist on the HTTP surface,
+// so they are structurally inapplicable there rather than missing.
 
 /** The six rules, as stable ids. A transport may name these in a refusal. */
 export type CreateUiSpecCitationRule =
   | "citedReferences-unique"
-  | "techniques-sourceIds-cited"
-  | "antiPatterns-sourceIds-cited"
+  | "techniques-sourceIds-evidence"
+  | "antiPatterns-sourceIds-evidence"
   | "componentInventory-sourceId-cited"
   | "provenance-sourceReferences-unique"
   | "provenance-sourceReferences-match-citedReferences";
@@ -1421,7 +1430,7 @@ export function findCreateUiSpecCitationInconsistencies(
         techniques?: unknown;
         antiPatterns?: unknown;
         componentInventory?: unknown;
-        provenance?: { sourceReferences?: unknown };
+        provenance?: { sourceReferences?: unknown; evidenceIds?: unknown };
       }
     | null
     | undefined;
@@ -1436,24 +1445,30 @@ export function findCreateUiSpecCitationInconsistencies(
       message: "citedReferences must be unique",
     });
 
+  // techniques/antiPatterns sourceIds moved to the evidence-id domain (C3
+  // Phase 1 Task 2). Membership is checked here against
+  // spec.provenance.evidenceIds — present on BOTH transports and bound to the
+  // envelope's evidence rows — so a response citing evidence-N that does not
+  // exist is refused over MCP AND HTTP alike (the leaf gate already enforces
+  // the evidence-N shape on both).
+  const evidenceIdSet = new Set(asArray(data?.provenance?.evidenceIds));
   for (const tech of asArray(data?.techniques)) {
     for (const sid of asArray((tech as { sourceIds?: unknown } | null)?.sourceIds)) {
-      if (!citedSet.has(sid))
+      if (!evidenceIdSet.has(sid))
         found.push({
-          rule: "techniques-sourceIds-cited",
+          rule: "techniques-sourceIds-evidence",
           specPath: ["techniques"],
-          message: "techniques[].sourceIds[] not in citedReferences (value withheld)",
+          message: "techniques[].sourceIds[] not in the artifact's evidence ids (value withheld)",
         });
     }
   }
-
   for (const ap of asArray(data?.antiPatterns)) {
     for (const sid of asArray((ap as { sourceIds?: unknown } | null)?.sourceIds)) {
-      if (!citedSet.has(sid))
+      if (!evidenceIdSet.has(sid))
         found.push({
-          rule: "antiPatterns-sourceIds-cited",
+          rule: "antiPatterns-sourceIds-evidence",
           specPath: ["antiPatterns"],
-          message: "antiPatterns[].sourceIds[] not in citedReferences (value withheld)",
+          message: "antiPatterns[].sourceIds[] not in the artifact's evidence ids (value withheld)",
         });
     }
   }
@@ -1909,9 +1924,12 @@ export const TOOL_DESCRIPTORS = [
         citedReferences?: string[];
         authorityLanes?: { corpusEvidence?: string[]; machineRules?: string[]; editorialGuidance?: string[] };
         // `techniques`, `antiPatterns` and `componentInventory` are deliberately
-        // absent: the only rules that read them are the six citation-consistency
-        // rules, which `findCreateUiSpecCitationInconsistencies` owns for both
-        // transports (see the delegation at the end of this block).
+        // absent: the only rules that read them — sourceIds evidence membership
+        // (evidence-id domain since C3 Phase 1 Task 2) and
+        // componentInventory.sourceId citedReferences membership — live in the
+        // shared citation-consistency predicate, which
+        // `findCreateUiSpecCitationInconsistencies` owns for BOTH transports
+        // (see the delegation at the end of this block).
         motionGuidance?: { evidenceUnavailable?: boolean };
       };
       // Motion warning coupling: evidenceUnavailable ↔ motionEvidenceUnavailable
@@ -2090,8 +2108,10 @@ export const TOOL_DESCRIPTORS = [
       if (provenanceEvIds.size !== knownEvidence.size || ![...provenanceEvIds].every(id => knownEvidence.has(id)))
         ctx.addIssue({ code: "custom", message: "provenance.evidenceIds must exactly match envelope evidence IDs", path: ["data", "provenance"] });
       // --- The SIX CITATION-CONSISTENCY rules, delegated to the SHARED predicate. ---
-      // `citedReferences` uniqueness, the three sourceId-membership rules, and both
-      // `provenance.sourceReferences` rules used to be written out inline here. They
+      // `citedReferences` uniqueness, the techniques/antiPatterns sourceIds
+      // evidence-membership rules, the `componentInventory[].sourceId` membership
+      // rule, and both `provenance.sourceReferences` rules used to be
+      // written out inline here. They
       // now come from `findCreateUiSpecCitationInconsistencies`, which the loopback
       // HTTP adapter (create-ui-spec-http.ts) also calls — that is the whole point
       // of the extraction: `refineEnvelope` is reachable only through

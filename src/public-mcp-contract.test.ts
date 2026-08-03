@@ -533,18 +533,19 @@ describe("public MCP contract — no private marker leaks through any tool path"
   // The private/unapproved markers live in entries the exporter refused, so the
   // PublicCorpusReader cannot serve them at all — that is the point of the suite,
   // but it means those two needles alone would leave the case weak. So these
-  // cases ALSO assert that the ELIGIBLE entry's marker, id, product name and
-  // source url never appear. That entry IS in the snapshot and IS retrieved as
-  // evidence by this tool, so the assertion is genuinely falsifiable: it fires the
-  // moment the tool projects corpus prose or identity into either surface, which
-  // is exactly create_ui_spec's contract ("corpus grounding appears only as opaque
-  // evidence ids").
+  // cases ALSO assert that the ELIGIBLE entry's id, product name and source url
+  // never appear. That entry IS in the snapshot and IS retrieved as evidence by
+  // this tool, so the assertion is genuinely falsifiable: it fires the moment the
+  // tool projects identity (id/product/url/path) into either surface. The
+  // entry's JUDGMENT prose is now served as identity-screened cited observations
+  // (C3 Phase 1, design spec §6), so its critique marker is asserted PRESENT
+  // below rather than forbidden.
   const ELIGIBLE_PRODUCT = `${ELIGIBLE_ID}-product`;
   const ELIGIBLE_SOURCE_URL = "https://example.com";
   /** Needles no create_ui_spec response may carry on EITHER served surface. */
   const CREATE_UI_SPEC_FORBIDDEN = [
     PRIVATE_MARKER, UNAPPROVED_MARKER, PRIVATE_ID, UNAPPROVED_ID,
-    ELIGIBLE_MARKER, ELIGIBLE_ID, ELIGIBLE_PRODUCT, ELIGIBLE_SOURCE_URL,
+    ELIGIBLE_ID, ELIGIBLE_PRODUCT, ELIGIBLE_SOURCE_URL,
     "images-public/", "images-private/", ".png",
   ] as const;
 
@@ -566,11 +567,18 @@ describe("public MCP contract — no private marker leaks through any tool path"
     expect(retrieval.mode).toBe("keyword");
     const evidence = env.evidence as Array<Record<string, unknown>>;
     expect(evidence.length).toBeGreaterThan(1);
-    // Corpus grounding appears ONLY as opaque response-scoped evidence ids.
+    // Corpus grounding appears as identity-screened, cited observations
+    // (design spec §6): evidence rows plus the synthesized direction. The
+    // eligible entry's judgment — including its distinctive marker — is
+    // servable; its id, product name, URL and image paths are not.
     for (const row of evidence) expect(String(row.id)).toMatch(/^evidence-\d+$/);
 
     expectNoPrivateData(responseText(resp), "create_ui_spec (automatic retrieval)");
     expectAbsentFromBothSurfaces(resp, CREATE_UI_SPEC_FORBIDDEN, "create_ui_spec (automatic retrieval)");
+    // ANTI-VACUITY for the C3 Phase 1 promise flip: the eligible entry's
+    // judgment is actually served as a cited observation (its critique is
+    // folded into the synthesized direction), not withheld wholesale.
+    expect(responseText(resp)).toContain(ELIGIBLE_MARKER);
   });
 
   it("create_ui_spec: outputFormat json leaks nothing through content or structuredContent", async () => {

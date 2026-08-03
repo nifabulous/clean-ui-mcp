@@ -51,20 +51,20 @@
  * serves:
  *
  *   1. `citedReferences must be unique`
- *   2. `techniques[].sourceIds[]` must be members of `citedReferences`
- *   3. `antiPatterns[].sourceIds[]` must be members of `citedReferences`
- *   4. `componentInventory[].sourceId` must be a member of `citedReferences`
- *   5. `provenance.sourceReferences must be unique`
- *   6. `provenance.sourceReferences` must equal `citedReferences` as sets
+ *   2. `techniques[].sourceIds[]` / `antiPatterns[].sourceIds[]` must be
+ *      members of the artifact's evidence ids (spec.provenance.evidenceIds)
+ *   3. `componentInventory[].sourceId` must be a member of `citedReferences`
+ *   4. `provenance.sourceReferences must be unique`
+ *   5. `provenance.sourceReferences` must equal `citedReferences` as sets
  *
- * A producer regression emitting `techniques[0].sourceIds = ["ref-<sha>"]` where
- * the digest is well-formed but absent from `spec.citedReferences`, or a
+ * A producer regression emitting `componentInventory[0].sourceId = "ref-<sha>"`
+ * where the digest is well-formed but absent from `spec.citedReferences`, or a
  * `provenance.sourceReferences` that disagrees with `citedReferences`, was
  * REFUSED over MCP and SERVED WITH 200 here. No private data was at stake — the
- * leaf gate enforces `ref-<sha256>` shape on all eight reference positions and
+ * leaf gate enforces shape on all reference positions and
  * `containsPrivateMarker` sweeps the whole body — but PROVENANCE INTEGRITY was: a
  * design artifact whose technique claims a source the artifact does not cite,
- * shipped to a browser. Two independent reviewers rated that P1, so the six were
+ * shipped to a browser. Two independent reviewers rated that P1, so the six
  * extracted into the shared predicate and are now enforced HERE TOO, as
  * validation-that-refuses. All six are measured, not assumed, in
  * create-ui-spec-http.test.ts's `I3(r5) closed` block, which proves for each rule

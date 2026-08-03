@@ -1050,7 +1050,7 @@ describe("create_ui_spec — a self-consistent poisoned envelope (m3(r4))", () =
 // asserting 200 on a handoff whose `techniques[].sourceIds`,
 // `antiPatterns[].sourceIds`, `componentInventory[].sourceId` or
 // `provenance.sourceReferences` disagreed with `citedReferences`. Two
-// independent reviewers rated that P1 on a browser-facing route, so the six were
+// independent reviewers rated that P1 on a browser-facing route, so the six
 // extracted into ONE shared pure predicate
 // (`findCreateUiSpecCitationInconsistencies`, tool-contracts.ts) that
 // `refineEnvelope` and this adapter both call. The assertions below are the same
@@ -1088,6 +1088,8 @@ describe("create_ui_spec HTTP — the six citation checks run on BOTH transports
   /** Well-formed public reference digests: correct SHAPE, wrong MEMBERSHIP. */
   const CITED_REF = `ref-${"a".repeat(64)}`;
   const UNCITED_REF = `ref-${"b".repeat(64)}`;
+  /** Well-formed evidence id (evidence-N) absent from the artifact's ids. */
+  const UNCITED_EVIDENCE = "evidence-99";
 
   type SpecT = DesignArtifactEnvelope["spec"];
 
@@ -1115,6 +1117,26 @@ describe("create_ui_spec HTTP — the six citation checks run on BOTH transports
       }),
     },
     {
+      message: "techniques[].sourceIds[] not in the artifact's evidence ids (value withheld)",
+      rule: "techniques-sourceIds-evidence",
+      poison: (spec) => ({
+        ...spec,
+        citedReferences: [CITED_REF],
+        provenance: { ...spec.provenance, sourceReferences: [CITED_REF] },
+        techniques: [{ text: "Use quiet grouping for scanability.", sourceIds: [UNCITED_EVIDENCE] }],
+      }),
+    },
+    {
+      message: "antiPatterns[].sourceIds[] not in the artifact's evidence ids (value withheld)",
+      rule: "antiPatterns-sourceIds-evidence",
+      poison: (spec) => ({
+        ...spec,
+        citedReferences: [CITED_REF],
+        provenance: { ...spec.provenance, sourceReferences: [CITED_REF] },
+        antiPatterns: [{ text: "Avoid heavy card shadows.", sourceIds: [UNCITED_EVIDENCE] }],
+      }),
+    },
+    {
       message: "provenance.sourceReferences must be unique",
       rule: "provenance-sourceReferences-unique",
       poison: (spec) => ({
@@ -1130,26 +1152,6 @@ describe("create_ui_spec HTTP — the six citation checks run on BOTH transports
         ...spec,
         citedReferences: [CITED_REF],
         provenance: { ...spec.provenance, sourceReferences: [] },
-      }),
-    },
-    {
-      message: "techniques[].sourceIds[] not in citedReferences (value withheld)",
-      rule: "techniques-sourceIds-cited",
-      poison: (spec) => ({
-        ...spec,
-        citedReferences: [CITED_REF],
-        provenance: { ...spec.provenance, sourceReferences: [CITED_REF] },
-        techniques: [{ text: "8pt baseline grid across all regions", sourceIds: [UNCITED_REF] }],
-      }),
-    },
-    {
-      message: "antiPatterns[].sourceIds[] not in citedReferences (value withheld)",
-      rule: "antiPatterns-sourceIds-cited",
-      poison: (spec) => ({
-        ...spec,
-        citedReferences: [CITED_REF],
-        provenance: { ...spec.provenance, sourceReferences: [CITED_REF] },
-        antiPatterns: [{ text: "low-contrast secondary text", sourceIds: [UNCITED_REF] }],
       }),
     },
     {

@@ -1084,3 +1084,29 @@ describe("downloadExactBytes", () => {
     expect(await blobs[0].text()).toBe(MARKDOWN_BYTES);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The deterministic direction has no server-side maximum (PR review round 2)
+// ---------------------------------------------------------------------------
+//
+// `UiSpec.designDirection` is `z.string().trim().min(1)` with NO `.max()`
+// (src/tool-contracts.ts), and the direction embeds the caller's brief verbatim
+// — a brief may be 8,000 chars. The projection read it through `str()`, whose
+// default maximum is 8,000, so a long brief made the client refuse a LEGAL
+// artifact whole and the operator saw only "the response did not match the
+// expected artifact shape". A client maximum tighter than the schema's is not a
+// safety property; this module already says so and has `unboundedText` for it.
+
+describe("requestDesignArtifact — direction length", () => {
+  it("projects a direction longer than the client's generic string maximum", async () => {
+    const brief = "b".repeat(8_000);
+    const direction = `For the brief "${brief}", the matched corpus references (evidence-2) point to a two-column layout.`;
+    expect(direction.length).toBeGreaterThan(8_000);
+    const envelope = envelopeFixture();
+    (envelope.spec as Record<string, unknown>).designDirection = direction;
+    const { fetchImpl } = stubFetch(okQueue(envelope));
+    const result = await requestDesignArtifact(BRIEF, { fetchImpl });
+    if (!result.ok) throw new Error(`expected success, got ${result.code}`);
+    expect(result.artifact.designDirection).toBe(direction);
+  });
+});

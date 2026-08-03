@@ -298,6 +298,46 @@ task or push the branch without writing the review artifact.
 
 ---
 
+## Measuring generated output: usability, not presence
+
+**A non-null count is not a quality measurement.** Never report generated
+output as "filled", "populated", or "improved" on the basis of field presence.
+Assert that the VALUES work.
+
+This rule exists because it was violated: a campaign report led with "8/10
+tokens populated, layout regions median 3.5, 10/10 cite evidence ids" and
+called the deterministic body filled. The served palette had
+`--action-accent` identical to `--bg-canvas` (every accented control invisible
+against the page), `--text-muted` at 1.90:1 on white against a caller-supplied
+AA floor, and a direction sentence reading `Ground this A login screen. in the
+matched corpus references`. All three passed the presence check.
+
+Empty output is honest. Confidently wrong output gets pasted into production.
+A presence metric hides exactly the second case, so the number improves as the
+product gets more dangerous.
+
+For every artifact the product generates, the audit must assert:
+
+1. **Contrast** — every text/background pair against the caller's stated floor
+   (`colorIntent.contrastFloor`), not just against a default.
+2. **Semantic-role distinctness** — two roles resolving to the same value is a
+   functional bug (accent == canvas), not a cosmetic one.
+3. **Template rendering** — string templates rendered with REAL inputs, not a
+   short fixture. `Ground this ${productContext} in...` assumes a noun phrase
+   and breaks on every multi-sentence brief.
+4. **Self-consistency** — the document must not contradict itself. A direction
+   citing `evidence-2..4` while `## Sources` reads "(no cited references
+   recorded)" is a defect even though both fields are individually valid.
+5. **Self-claims** — verify any number the output asserts about itself. A model
+   proposal claimed `#3d1ae0 satisfies AA against white (4.9:1)`; the real
+   ratio is 8.67:1.
+6. **Structural content, not labels** — layout regions with zero components and
+   no responsive rules are labels, and should be counted as unfilled.
+
+Prefer a validator that can REFUSE: when a synthesized value set fails these
+checks, emit `unavailable` with a reason rather than serving it. That is the
+existing "enforce, don't just measure" pattern applied to output values.
+
 ## Other conventions
 
 - **Eval before prompt changes:** build the held-out eval set and score the

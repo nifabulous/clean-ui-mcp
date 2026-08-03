@@ -12,6 +12,10 @@ function matched(evidenceId: string, entry: Record<string, unknown>): { evidence
   return { evidenceId, entry: entry as unknown as CorpusEntryT };
 }
 
+function entriesOf(matches: readonly { entry: CorpusEntryT }[]): CorpusEntryT[] {
+  return matches.map((m) => m.entry);
+}
+
 function proseEntry(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: "fixture-entry",
@@ -67,7 +71,7 @@ describe("createUiSpecDeterministic", () => {
       }),
     ] as never;
 
-    const out = createUiSpecDeterministic(evidence, [], REQUEST);
+    const out = createUiSpecDeterministic(evidence, [], [], REQUEST);
 
     expect(out.designDirection).toContain("evidence-2");
     expect(out.designDirection).toContain("compact");
@@ -82,7 +86,7 @@ describe("createUiSpecDeterministic", () => {
   });
 
   it("returns nulls and empty arrays when no corpus observation matched", () => {
-    const out = createUiSpecDeterministic([], [], REQUEST);
+    const out = createUiSpecDeterministic([], [], [], REQUEST);
     expect(out.designDirection).toBeNull();
     expect(out.colorTokens).toBeNull();
     expect(out.layoutRegions).toEqual([]);
@@ -93,7 +97,7 @@ describe("createUiSpecDeterministic", () => {
       observation("evidence-2", { pattern: "dashboard", colorRoles: { canvas: "#fff", surface: "#fff", ink: "#111", muted: "#666", accent: "#2563eb" } }),
       observation("evidence-3", { pattern: "dashboard" }),
     ] as never;
-    expect(createUiSpecDeterministic(evidence, [], REQUEST).colorTokens).toBeNull();
+    expect(createUiSpecDeterministic(evidence, [], [], REQUEST).colorTokens).toBeNull();
   });
 
   it("never fabricates default tokens when no entry has colorRoles", () => {
@@ -102,7 +106,7 @@ describe("createUiSpecDeterministic", () => {
       observation("evidence-3", { pattern: "dashboard", spacingDensity: "compact" }),
       observation("evidence-4", { pattern: "dashboard", spacingDensity: "compact" }),
     ] as never;
-    expect(createUiSpecDeterministic(evidence, [], REQUEST).colorTokens).toBeNull();
+    expect(createUiSpecDeterministic(evidence, [], [], REQUEST).colorTokens).toBeNull();
   });
 
   it("never fabricates muted when every matched entry has a null muted role", () => {
@@ -121,7 +125,7 @@ describe("createUiSpecDeterministic", () => {
       observation("evidence-3", { pattern: "data-table", colorRoles: roles("#2563eb") }),
       observation("evidence-4", { pattern: "forms", colorRoles: roles("#2563eb") }),
     ] as never;
-    expect(createUiSpecDeterministic(evidence, [], REQUEST).colorTokens).toBeNull();
+    expect(createUiSpecDeterministic(evidence, [], [], REQUEST).colorTokens).toBeNull();
   });
 
   it("still populates tokens when at least three entries carry a non-null muted", () => {
@@ -134,7 +138,7 @@ describe("createUiSpecDeterministic", () => {
       observation("evidence-4", { pattern: "forms", colorRoles: { ...withMuted("#2563eb"), muted: null } }),
       observation("evidence-5", { pattern: "modal", colorRoles: withMuted("#2563eb") }),
     ] as never;
-    expect(createUiSpecDeterministic(evidence, [], REQUEST).colorTokens).toEqual({
+    expect(createUiSpecDeterministic(evidence, [], [], REQUEST).colorTokens).toEqual({
       primary: "#2563eb", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: "#2563eb",
     });
   });
@@ -146,7 +150,7 @@ describe("createUiSpecDeterministic", () => {
         layoutRoles: ["primary-nav", "main-canvas"],
       }),
     ] as never;
-    const out = createUiSpecDeterministic(evidence, [], REQUEST);
+    const out = createUiSpecDeterministic(evidence, [], [], REQUEST);
     expect(out.layoutRegions.map((r) => r.name)).toEqual(["primary-nav", "main-canvas"]);
     // No form string may be fabricated when the corpus entry carries none.
     expect(out.responsiveBehavior).toEqual([]);
@@ -156,9 +160,11 @@ describe("createUiSpecDeterministic", () => {
     const evidence = [
       observation("evidence-2", { pattern: "dashboard" }),
     ];
+    const matches = [matched("evidence-2", proseEntry())];
     const out = createUiSpecDeterministic(
       evidence as never,
-      [matched("evidence-2", proseEntry())],
+      matches,
+      entriesOf(matches),
       REQUEST,
     );
 
@@ -187,16 +193,18 @@ describe("createUiSpecDeterministic", () => {
       observation("evidence-2", { pattern: "dashboard" }),
       observation("evidence-3", { pattern: "dashboard" }),
     ];
+    const matches = [
+      matched("evidence-2", proseEntry()),
+      matched("evidence-3", proseEntry({
+        source: { productName: "Superhuman" },
+        title: "Superhuman — mail",
+        whatToSteal: ["Superhuman triage is the hook", "Plain stealable row"],
+      })),
+    ];
     const out = createUiSpecDeterministic(
       evidence as never,
-      [
-        matched("evidence-2", proseEntry()),
-        matched("evidence-3", proseEntry({
-          source: { productName: "Superhuman" },
-          title: "Superhuman — mail",
-          whatToSteal: ["Superhuman triage is the hook", "Plain stealable row"],
-        })),
-      ],
+      matches,
+      entriesOf(matches),
       REQUEST,
     );
     // "Superhuman" is a corpus product name, so the row naming it is dropped
@@ -206,6 +214,23 @@ describe("createUiSpecDeterministic", () => {
       { text: "Right-side callout anchored to chart regions", sourceIds: ["evidence-2"] },
       { text: "Plain stealable row", sourceIds: ["evidence-3"] },
     ]);
+  });
+
+  it("drops prose naming a corpus product that is NOT among the matched entries", () => {
+    // The denied-name set is CORPUS-WIDE (design spec §3), not just the
+    // matched entries: a matched row naming "Mobbin" must be dropped even
+    // though Mobbin is not one of the entries matched for this request.
+    const evidence = [observation("evidence-2", { pattern: "dashboard" })];
+    const matches = [matched("evidence-2", proseEntry({
+      whatToSteal: ["Mobbin triage is the hook", "Clean stealable row"],
+    }))];
+    const corpusEntries: CorpusEntryT[] = [
+      ...entriesOf(matches),
+      { ...proseEntry(), id: "mobbin-entry", source: { productName: "Mobbin" } } as unknown as CorpusEntryT,
+    ];
+    const out = createUiSpecDeterministic(evidence as never, matches, corpusEntries, REQUEST);
+    expect(out.techniques.map((t) => t.text)).not.toContain("Mobbin triage is the hook");
+    expect(out.techniques.map((t) => t.text)).toContain("Clean stealable row");
   });
 
   it("caps techniques and antiPatterns at five and voice examples at three", () => {
@@ -224,13 +249,15 @@ describe("createUiSpecDeterministic", () => {
       },
     });
     const evidence = [observation("evidence-2", { pattern: "dashboard" })];
+    const matches = [
+      matched("evidence-2", many("A")),
+      matched("evidence-3", many("B")),
+      matched("evidence-4", many("C")),
+    ];
     const out = createUiSpecDeterministic(
       evidence as never,
-      [
-        matched("evidence-2", many("A")),
-        matched("evidence-3", many("B")),
-        matched("evidence-4", many("C")),
-      ],
+      matches,
+      entriesOf(matches),
       REQUEST,
     );
     expect(out.techniques).toHaveLength(5);
@@ -251,9 +278,11 @@ describe("createUiSpecDeterministic", () => {
         avoid: [],
       },
     });
+    const matches = [matched("evidence-2", entry)];
     const out = createUiSpecDeterministic(
       [observation("evidence-2", { pattern: "dashboard" })] as never,
-      [matched("evidence-2", entry)],
+      matches,
+      entriesOf(matches),
       REQUEST,
     );
     expect(out.contentVoiceGuidance).toBe("Terse. Examples: A real functional label long enough to survive.");
@@ -261,12 +290,15 @@ describe("createUiSpecDeterministic", () => {
 
   it("composes contentVoiceGuidance per segment presence (each combination pinned)", () => {
     const base = proseEntry();
-    const run = (voice: Record<string, unknown> | undefined): string | null =>
-      createUiSpecDeterministic(
+    const run = (voice: Record<string, unknown> | undefined): string | null => {
+      const matches = [matched("evidence-2", { ...base, voice })];
+      return createUiSpecDeterministic(
         [observation("evidence-2", { pattern: "dashboard" })] as never,
-        [matched("evidence-2", { ...base, voice })],
+        matches,
+        entriesOf(matches),
         REQUEST,
       ).contentVoiceGuidance;
+    };
 
     const toneOnly = { tone: "Terse", examples: [], avoid: [] };
     const avoidOnly = { examples: [], avoid: ["No hype"] };
@@ -290,12 +322,14 @@ describe("createUiSpecDeterministic", () => {
     const evidence = [
       observation("evidence-2", { pattern: "dashboard", layoutForm: "three-column" }),
     ];
+    const matches = [
+      matched("evidence-2", proseEntry()),
+      matched("evidence-3", proseEntry({ id: "other", components: ["kpi-card", "action-list"] })),
+    ];
     const out = createUiSpecDeterministic(
       evidence as never,
-      [
-        matched("evidence-2", proseEntry()),
-        matched("evidence-3", proseEntry({ id: "other", components: ["kpi-card", "action-list"] })),
-      ],
+      matches,
+      entriesOf(matches),
       REQUEST,
     );
     expect(out.componentInventory).toEqual([
@@ -308,9 +342,11 @@ describe("createUiSpecDeterministic", () => {
   });
 
   it("folds group-B signals into the direction as cited signals", () => {
+    const matches = [matched("evidence-2", proseEntry())];
     const out = createUiSpecDeterministic(
       [observation("evidence-2", { pattern: "dashboard", spacingDensity: "compact" })] as never,
-      [matched("evidence-2", proseEntry())],
+      matches,
+      entriesOf(matches),
       REQUEST,
     );
     expect(out.designDirection).toContain(
@@ -325,16 +361,18 @@ describe("createUiSpecDeterministic", () => {
   });
 
   it("drops the whole direction when a folded signal names a corpus product", () => {
+    const matches = [
+      matched("evidence-2", proseEntry()),
+      matched("evidence-3", proseEntry({
+        source: { productName: "Superhuman" },
+        title: "Superhuman — mail",
+        critique: "A critique long enough to satisfy the schema minimum that mentions Superhuman triage as the hook.",
+      })),
+    ];
     const out = createUiSpecDeterministic(
       [observation("evidence-2", { pattern: "dashboard" })] as never,
-      [
-        matched("evidence-2", proseEntry()),
-        matched("evidence-3", proseEntry({
-          source: { productName: "Superhuman" },
-          title: "Superhuman — mail",
-          critique: "A critique long enough to satisfy the schema minimum that mentions Superhuman triage as the hook.",
-        })),
-      ],
+      matches,
+      entriesOf(matches),
       REQUEST,
     );
     // The composed direction contains the second entry's critique, which names
@@ -343,9 +381,11 @@ describe("createUiSpecDeterministic", () => {
   });
 
   it("never splices a multi-sentence brief mid-sentence", () => {
+    const matches = [matched("evidence-2", proseEntry())];
     const out = createUiSpecDeterministic(
       [observation("evidence-2", { pattern: "dashboard", spacingDensity: "compact" })] as never,
-      [matched("evidence-2", proseEntry())],
+      matches,
+      entriesOf(matches),
       { ...REQUEST, productContext: "A login screen. Keep it calm." } as never,
     );
     expect(out.designDirection).toContain(

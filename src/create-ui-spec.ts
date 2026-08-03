@@ -196,10 +196,18 @@ export async function createUiSpecForAdapter(
 
   // ----- 3/4/5. Assemble + build envelope -----
   const generatedAt = (dependencies.now?.() ?? new Date()).toISOString();
+  // The identity screen's denied-name set is CORPUS-WIDE (design spec §3:
+  // "any of the ... distinctive product names in the corpus"), not just the
+  // matched entries — a prose row naming a corpus product outside the top
+  // matches must still be dropped. The reader's entriesForAggregation is the
+  // mode-appropriate full corpus (private mode: all 787; public mode: the
+  // eligible snapshot).
+  const corpusEntries = dependencies.reader.entriesForAggregation();
   try {
     const envelope = await buildModelAwareEnvelope(
       request,
       resolved,
+      corpusEntries,
       generatedAt,
       dependencies.model ?? { kind: "not-configured" },
     );
@@ -218,13 +226,14 @@ export async function createUiSpecForAdapter(
 async function buildModelAwareEnvelope(
   request: CreateUiSpecRequest,
   resolved: ResolvedEvidence,
+  corpusEntries: readonly CorpusEntryT[],
   generatedAt: string,
   model: CreateUiSpecModelDependency,
 ): Promise<DesignArtifactEnvelope> {
   // Validate the deterministic scaffold and all authority decisions before an
   // optional provider can run. This is also the exact envelope every model
   // failure returns after adding only bounded execution metadata.
-  const deterministicEnvelope = buildValidatedEnvelope(request, resolved, generatedAt);
+  const deterministicEnvelope = buildValidatedEnvelope(request, resolved, corpusEntries, generatedAt);
 
   if (model.kind === "not-configured") {
     return deterministicEnvelope;
@@ -252,6 +261,7 @@ async function buildModelAwareEnvelope(
     proposedEnvelope = buildValidatedEnvelope(
       request,
       resolved,
+      corpusEntries,
       generatedAt,
       outcome.proposal,
       outcome.execution,
@@ -318,12 +328,13 @@ function attachModelExecution(
 function buildValidatedEnvelope(
   request: CreateUiSpecRequest,
   resolved: ResolvedEvidence,
+  corpusEntries: readonly CorpusEntryT[],
   generatedAt: string,
   proposal?: ModelProposal,
   execution?: ModelExecution,
 ): DesignArtifactEnvelope {
   return parseDesignArtifactEnvelope(
-    buildEnvelope(request, resolved, generatedAt, proposal, execution),
+    buildEnvelope(request, resolved, corpusEntries, generatedAt, proposal, execution),
   );
 }
 
@@ -889,6 +900,7 @@ function buildFixedEmptyArrayDecisions(recipe: FallbackRecipe): CreateUiSpecCand
 function assembleSpec(
   request: CreateUiSpecRequest,
   resolved: ResolvedEvidence,
+  corpusEntries: readonly CorpusEntryT[],
   generatedAt: string,
   proposal?: ModelProposal,
 ): UiSpecT {
@@ -929,7 +941,7 @@ function assembleSpec(
   // root direction on the model path would be a behavior change the spec
   // never approved.
   const synthesis = proposal === undefined
-    ? createUiSpecDeterministic(evidence, resolved.matchedEntries, request)
+    ? createUiSpecDeterministic(evidence, resolved.matchedEntries, corpusEntries, request)
     : null;
 
   // Cited decisions: the designDirection ALWAYS echoes the requester's brief
@@ -1231,11 +1243,12 @@ function buildCitedDecisions(
 function buildEnvelope(
   request: CreateUiSpecRequest,
   resolved: ResolvedEvidence,
+  corpusEntries: readonly CorpusEntryT[],
   generatedAt: string,
   proposal?: ModelProposal,
   execution?: ModelExecution,
 ): DesignArtifactEnvelope {
-  const spec = assembleSpec(request, resolved, generatedAt, proposal);
+  const spec = assembleSpec(request, resolved, corpusEntries, generatedAt, proposal);
 
   // Target resolution: pass undefined for neutral-web/absent so the handoff
   // parser substitutes the canonical NEUTRAL_WEB_TARGET. For astro targets,

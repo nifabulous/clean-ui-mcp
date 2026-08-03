@@ -5,8 +5,10 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-const S = "/private/tmp/claude-502/-Users-olaniyi-oladokun-Downloads-clean-ui-mcp/e36fa04a-5618-4cfb-9319-9b068f86b78d/scratchpad";
-const R2 = join(S, "out2"), R1 = join(S, "product-out");
+// The capture directory. The original hardcoded paths pointed at a dead
+// session scratchpad; verification now runs over a fresh capture via
+// AUDIT_DIR (plan Task 7 Step 2: "fresh 10-brief capture").
+const DIR = process.env.AUDIT_DIR ?? "/private/tmp/clean-ui-mcp/audit-captures";
 
 const lum = (h) => {
   const m = /^#?([0-9a-f]{6})$/i.exec(h.trim());
@@ -87,8 +89,14 @@ function auditMarkdown(file, md, spec) {
     add(file, "IMPORTANT", "contradiction",
       "direction cites evidence ids but the Sources section reads '(no cited references recorded)'");
   }
-  // self-contradiction: direction names a type pairing while typography is unavailable
-  if (/typography/i.test(dd) && /Typography tokens are unavailable/.test(md)) {
+  // self-contradiction: direction asserts typography AUTHORITY while the
+  // Typography section refuses to record tokens. A cited typePairing
+  // OBSERVATION ("Inter typography", "type notes: ...") is intended (C3
+  // design spec §1B/§2d: typePairing appears as a cited signal, and an
+  // observation is not token authority) — only an authority claim
+  // contradicts the unavailable section.
+  const typographyAuthorityClaim = /typography (tokens|stack)|font stack (is|should)|set (the )?(type|font)|use .* font stack/i;
+  if (typographyAuthorityClaim.test(dd) && /Typography tokens are unavailable/.test(md)) {
     add(file, "IMPORTANT", "contradiction",
       "direction asserts a typography signal while the Typography section refuses to record one");
   }
@@ -135,10 +143,8 @@ function run(dir, files, arm) {
   }
 }
 
-const r2files = readdirSync(R2).filter((f) => f.endsWith(".json"));
-run(R2, r2files.filter((f) => f.startsWith("nomodel-")), "nomodel");
-run(R2, r2files.filter((f) => f.startsWith("model-")), "model");
-run(R1, readdirSync(R1).filter((f) => f.endsWith(".structured.json")), "round1");
+const files = readdirSync(DIR).filter((f) => f.endsWith(".json"));
+run(DIR, files, "capture");
 
 const order = { CRITICAL: 0, IMPORTANT: 1, MINOR: 2, INFO: 3, OK: 4, METRIC: 5 };
 findings.sort((a, b) => order[a.sev] - order[b.sev] || a.code.localeCompare(b.code) || a.file.localeCompare(b.file));

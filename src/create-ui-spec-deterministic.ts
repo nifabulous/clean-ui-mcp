@@ -70,6 +70,7 @@ function majority(values: readonly boolean[]): boolean | undefined {
 export function createUiSpecDeterministic(
   evidence: readonly SanitizedEvidence[],
   matchedEntries: readonly { readonly evidenceId: string; readonly entry: CorpusEntryT }[],
+  corpusEntries: readonly CorpusEntryT[],
   request: CreateUiSpecRequest,
 ): DeterministicSynthesis {
   const observations = evidence.filter((e) => e.kind === "corpus-observation" && e.structuredFacts);
@@ -180,8 +181,10 @@ export function createUiSpecDeterministic(
     .filter((v): v is string => typeof v === "string" && v.length > 0);
   // Shared identity screen for every corpus-prose string (drop whole, never
   // redact). Built once so the direction's whole-string screen and the six
-  // prose fields below use the same denied-name set.
-  const deniedNames = buildDeniedNames(matchedEntries.map((m) => m.entry));
+  // prose fields below use the same denied-name set. The denied set is
+  // CORPUS-WIDE (design spec §3), not just the matched entries — a prose row
+  // naming a corpus product outside the top matches must still be dropped.
+  const deniedNames = buildDeniedNames(corpusEntries);
   const screen = (text: string, entry: CorpusEntryT): string | null =>
     screenProse(text, entry, deniedNames);
 

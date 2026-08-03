@@ -162,6 +162,10 @@ function validInput(over: Record<string, unknown> = {}): Record<string, unknown>
   };
 }
 
+function noRefRequest(): Record<string, unknown> {
+  return validInput();
+}
+
 // ---------------------------------------------------------------------------
 // Test suite
 // ---------------------------------------------------------------------------
@@ -439,6 +443,18 @@ describe("create-ui-spec producer — privacy and evidence scoping", () => {
     // The recipe/system evidence is always evidence-1 (emitted first); the
     // three corpus observations follow at evidence-2, evidence-3, evidence-4.
     expect(parsed.publicEvidenceIds.slice(0, 4)).toEqual(["evidence-1", "evidence-2", "evidence-3", "evidence-4"]);
+  });
+
+  it("never projects matchedEntries or raw corpus identity to a transport", async () => {
+    const corpus = [corpusEntryWithRoles("internal-a", "#2563eb", "dashboard")];
+    // give the entry unmistakable identity to hunt for
+    (corpus[0] as unknown as Record<string, unknown>).title = "ZZTITLEZZ";
+    (corpus[0] as unknown as Record<string, unknown>).source = { productName: "ZZPRODZZ" };
+    const out = await createUiSpecForAdapter(noRefRequest(), deps(corpus, corpus.map(e => ({ entry: e, score: 5 }))));
+    const served = JSON.stringify({ envelope: out.envelope, evidence: out.sanitizedEvidence });
+    expect(served).not.toContain("ZZTITLEZZ");
+    expect(served).not.toContain("ZZPRODZZ");
+    expect(served).not.toContain("matchedEntries");
   });
 });
 

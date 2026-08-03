@@ -358,6 +358,15 @@ interface ResolvedEvidence {
    * unvalidated.
    */
   readonly sanitized: readonly SanitizedEvidence[];
+  /**
+   * INTERNAL ONLY. Matched corpus entries paired with the response-scoped
+   * evidence id assigned to each, so the synthesizer can read prose the
+   * sanitized rows deliberately exclude (structuredFacts is a closed,
+   * prose-free allowlist). These are RAW entries — title, source.productName,
+   * image. Nothing may project this field; the transport adapters read
+   * `sanitized`, never this. Pinned by the leak test in create-ui-spec.test.ts.
+   */
+  readonly matchedEntries: readonly { readonly evidenceId: string; readonly entry: CorpusEntryT }[];
   /** Public reference tokens that resolved (populate citedReferences). */
   readonly resolvedReferenceTokens: readonly string[];
   /** Tokens whose resolver returned undefined (omitted, bounded). */
@@ -445,6 +454,7 @@ async function resolveExplicitReferences(
 
   return {
     sanitized,
+    matchedEntries: [],
     resolvedReferenceTokens: resolvedTokens,
     omittedReferenceTokens: omittedTokens,
     automaticRetrieved: false,
@@ -532,11 +542,13 @@ async function resolveAutomaticRetrieval(
   // observations are recorded in provenance + the corpusEvidence lane without a
   // designDirection authority claim in this slice.
   const sanitized: SanitizedEvidence[] = [buildRecipeSystemEvidence()];
+  const matchedEntries: { evidenceId: string; entry: CorpusEntryT }[] = [];
   let nextId = 2;
   let corpusCount = 0;
   for (const r of top) {
     const id = `evidence-${nextId++}`;
     sanitized.push(sanitizeCorpusObservation(id, r.entry));
+    matchedEntries.push({ evidenceId: id, entry: r.entry });
     corpusCount++;
   }
 
@@ -549,6 +561,7 @@ async function resolveAutomaticRetrieval(
     // truthful "no-results", NOT "missing-index". The corpus is NOT cited.
     return {
       sanitized,
+      matchedEntries: [],
       resolvedReferenceTokens: [],
       omittedReferenceTokens: [],
       automaticRetrieved: false,
@@ -568,6 +581,7 @@ async function resolveAutomaticRetrieval(
 
   return {
     sanitized,
+    matchedEntries,
     resolvedReferenceTokens: [],
     omittedReferenceTokens: [],
     automaticRetrieved: true,

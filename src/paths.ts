@@ -1,4 +1,4 @@
-import { relative, resolve, sep } from "node:path";
+import { relative, resolve, sep, basename, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { existsSync, readdirSync } from "node:fs";
@@ -95,6 +95,23 @@ export function toCorpusRelativePath(path: string): string {
   }
 
   return relativePath;
+}
+
+/**
+ * Synthetic corpus-relative path for an EXTERNAL image (e.g. a critique_ui
+ * screenshot upload written to the OS temp dir). critique_ui never persists
+ * the image, so the tagged output's `path` only needs a valid, corpus-relative
+ * identity for the schema — the real file is read from the temp path and
+ * discarded. Keeps `tagImage`'s corpus-residency guard for every other caller
+ * while letting uploads through.
+ */
+export function syntheticCorpusPathForUpload(imagePath: string): string {
+  const ext = extname(imagePath).replace(/^\./, "").toLowerCase() || "png";
+  const safeName = basename(imagePath)
+    .replace(/\.[^.]*$/, "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .slice(0, 60) || "upload";
+  return `images-private/critique-upload-${safeName}.${ext}`;
 }
 
 export function fromCorpusRelativePath(path: string): string {

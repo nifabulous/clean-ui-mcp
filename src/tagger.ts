@@ -16,7 +16,7 @@ import "./env.js";
 
 import { readFileSync } from "node:fs";
 import { extname, basename } from "node:path";
-import { toCorpusRelativePath } from "./paths.js";
+import { syntheticCorpusPathForUpload, toCorpusRelativePath } from "./paths.js";
 import {
   BANNED_PHRASES,
   PIXEL_MEASUREMENT,
@@ -99,6 +99,14 @@ export interface TaggerInput {
    * produced a weak result. Bulk imports pass "low" to cut token cost.
    */
   imageDetail?: "low" | "high";
+  /**
+   * Allow an image that lives OUTSIDE the corpus (e.g. a critique_ui upload
+   * staged in the OS temp dir). The tagged output's `path` gets a synthetic
+   * `images-private/...` identity; the real file is read from `imagePath`.
+   * ONLY set for transient, never-persisted uploads — corpus-resident
+   * tagging keeps the strict guard.
+   */
+  allowExternalImagePath?: boolean;
   /**
    * Run only Pass 1 (extraction). Critique/steals/antiPatterns come back as
    * [DRAFT — critique deferred] placeholders; the client runs Pass 2 later via
@@ -2728,7 +2736,9 @@ export function assertVisibilityPathCompatible(
 export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   if (!hasVisionKey()) throw new Error("No vision provider key set. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY in .env.");
 
-  const corpusPath = toCorpusRelativePath(input.imagePath);
+  const corpusPath = input.allowExternalImagePath
+    ? syntheticCorpusPathForUpload(input.imagePath)
+    : toCorpusRelativePath(input.imagePath);
   const today = new Date().toISOString().slice(0, 10);
   const imageVisibility = input.imageVisibility ?? "private";
 

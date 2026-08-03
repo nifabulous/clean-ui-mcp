@@ -766,6 +766,10 @@ function registerCritiqueUi(server: McpServer, reader: CorpusReader): void {
             url: null,
             imageDetail: "low",
             extractionOnly: true,
+            // The upload lives in the OS temp dir, not the corpus. It is
+            // transient and never persisted, so the corpus-residency guard is
+            // bypassed with a synthetic images-private/ output path.
+            allowExternalImagePath: true,
           });
         });
 

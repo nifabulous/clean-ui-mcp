@@ -201,8 +201,12 @@ export async function createUiSpecForAdapter(
   // matched entries — a prose row naming a corpus product outside the top
   // matches must still be dropped. The reader's entriesForAggregation is the
   // mode-appropriate full corpus (private mode: all 787; public mode: the
-  // eligible snapshot).
-  const corpusEntries = dependencies.reader.entriesForAggregation();
+  // eligible snapshot). Only fetched when matches exist: explicit-reference
+  // and zero-match requests never serve corpus prose, so they never need the
+  // denied set (review finding #13).
+  const corpusEntries = resolved.matchedEntries.length > 0
+    ? dependencies.reader.entriesForAggregation()
+    : [];
   try {
     const envelope = await buildModelAwareEnvelope(
       request,
@@ -1024,6 +1028,30 @@ function assembleSpec(
         },
       ]
     : citedDecisionsWithVoice;
+  // componentInventory and responsiveBehavior are closed-token corpus content
+  // with no sourceIds channel, so they ride the same citedDecision path:
+  // one corpus-evidence row per populated field citing the contributing ids.
+  const citedDecisionsWithClosedTokens = synthesis && (
+    synthesis.componentInventory.length > 0 || synthesis.responsiveBehavior.length > 0
+  )
+    ? [
+        ...citedDecisionsWithAccessibility,
+        ...(synthesis.componentInventory.length > 0 ? [{
+          id: "componentInventory-evidence-synthesis",
+          field: "componentInventory",
+          authority: "corpus-evidence" as const,
+          evidenceIds: synthesis.componentInventoryEvidenceIds,
+          readiness: "available" as const,
+        }] : []),
+        ...(synthesis.responsiveBehavior.length > 0 ? [{
+          id: "responsiveBehavior-evidence-synthesis",
+          field: "responsiveBehavior",
+          authority: "corpus-evidence" as const,
+          evidenceIds: synthesis.responsiveBehaviorEvidenceIds,
+          readiness: "available" as const,
+        }] : []),
+      ]
+    : citedDecisionsWithAccessibility;
 
   // C3 served-content posture: prose-judgment fields WITHOUT surviving corpus
   // content keep their unavailable reasons (the voice row is dropped exactly
@@ -1143,7 +1171,7 @@ function assembleSpec(
     unavailableDecisions,
     acceptanceCriteria,
     citedReferences,
-    citedDecisions: citedDecisionsWithAccessibility,
+    citedDecisions: citedDecisionsWithClosedTokens,
     authorityLanes: {
       corpusEvidence: corpusLane,
       machineRules: [],

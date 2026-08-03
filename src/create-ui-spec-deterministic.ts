@@ -43,6 +43,10 @@ export interface DeterministicSynthesis {
   accessibilityEvidenceIds: readonly string[];
   /** Corpus component tokens (closed vocabulary, no screen needed). */
   componentInventory: readonly { readonly name: string; readonly pattern: string }[];
+  /** Evidence ids of the entries whose components contributed. */
+  componentInventoryEvidenceIds: readonly string[];
+  /** Evidence ids of the entries whose responsiveBehavior contributed. */
+  responsiveBehaviorEvidenceIds: readonly string[];
 }
 
 const MAX_TECHNIQUES = 5;
@@ -89,6 +93,8 @@ export function createUiSpecDeterministic(
       accessibilityConstraints: [],
       accessibilityEvidenceIds: [],
       componentInventory: [],
+      componentInventoryEvidenceIds: [],
+      responsiveBehaviorEvidenceIds: [],
     };
   }
 
@@ -138,6 +144,17 @@ export function createUiSpecDeterministic(
       .map((m) => m.entry.responsiveBehavior)
       .filter((v): v is NonNullable<typeof v> => typeof v === "string"),
   )];
+  const responsiveBehaviorEvidenceIds: string[] = [];
+  for (const { evidenceId, entry } of matchedEntries) {
+    if (typeof entry.responsiveBehavior === "string") responsiveBehaviorEvidenceIds.push(evidenceId);
+  }
+  // The layout-form clause is derived from every matched observation's
+  // structuredFacts, so when it contributes, every observation id is cited.
+  if (layoutForm) {
+    for (const id of ids) {
+      if (!responsiveBehaviorEvidenceIds.includes(id)) responsiveBehaviorEvidenceIds.push(id);
+    }
+  }
   const responsiveBehavior = [
     ...responsiveModes.map((mode) => `mode: ${mode}`),
     ...(layoutForm ? [`form: ${layoutForm}`] : []),
@@ -156,6 +173,15 @@ export function createUiSpecDeterministic(
   const borders = majority(facts.filter((f) => typeof f.usesBorders === "boolean").map((f) => f.usesBorders as boolean));
   const pairings = facts.map((f) => f.typePairing).filter((v): v is NonNullable<typeof v> => Boolean(v));
   const pairing = plurality(pairings);
+  // Shared identity screen for every corpus-prose string (drop whole, never
+  // redact). Built once so the direction's prose segments (including the
+  // font-family clause, which can carry a product name) and the six prose
+  // fields below use the same denied-name set. The denied set is CORPUS-WIDE
+  // (design spec §3), not just the matched entries — a prose row naming a
+  // corpus product outside the top matches must still be dropped.
+  const deniedNames = buildDeniedNames(corpusEntries);
+  const screen = (text: string, entry: CorpusEntryT): string | null =>
+    screenProse(text, entry, deniedNames);
 
   const clauses: string[] = [];
   if (density) clauses.push(`${density} spacing`);
@@ -163,33 +189,54 @@ export function createUiSpecDeterministic(
   if (shadows !== undefined) clauses.push(shadows ? "soft shadows" : "no shadows");
   if (borders !== undefined) clauses.push(borders ? "hairline borders" : "no borders");
   if (layoutForm) clauses.push(`a ${layoutForm} layout`);
-  if (pairing) clauses.push(`${pairing} typography`);
+  // The font-family clause is the ONE closed-token clause that can carry a
+  // product name (the "Alan" product's font is "Alan Sans" — review finding
+  // #2/#4). Enum-token clauses (density, corners, shadows, borders, layout
+  // form) cannot. The pairing clause is therefore screened like prose: if it
+  // names a product it is DROPPED as a clause, while the direction survives.
+  const pairingClause = pairing ? `${pairing} typography` : null;
+  let pairingDropped = false;
+  if (pairingClause !== null) {
+    for (const { entry } of matchedEntries) {
+      if (screenProse(pairingClause, entry, deniedNames) === null) {
+        pairingDropped = true;
+        break;
+      }
+    }
+  }
+  if (pairing && !pairingDropped) clauses.push(`${pairing} typography`);
 
-  // Group-B signals (design spec §1B), distinct in rank order.
+  // Group-B signals (design spec §1B), distinct in rank order. Closed-token
+  // signals (styleTags, categories, colorScheme, the structuredFacts clauses
+  // and the typePairing font) carry no identity and are NOT screened (design
+  // spec §2b). The PROSE signals (mood, typePairing.notes, critique) are
+  // screened per source entry BEFORE composing: a screened string is dropped
+  // whole, never redacted, and only that segment is omitted. A whole-direction
+  // screen was tried and measured at 26.1% direction loss on production-shaped
+  // 5-entry windows (review finding #2) — e.g. the font clause "Alan Sans
+  // typography" trips the own-name check for the "Alan" product — so the
+  // direction is composed from screened segments instead.
   const styleTags = [...new Set(matchedEntries.flatMap((m) => m.entry.styleTags ?? []))];
   const categories = [...new Set(matchedEntries.flatMap((m) => m.entry.categories ?? []))];
   const schemes = [...new Set(
     matchedEntries.map((m) => m.entry.colorScheme).filter((v): v is NonNullable<typeof v> => typeof v === "string"),
   )];
   const moods = [...new Set(
-    matchedEntries.map((m) => m.entry.mood).filter((v): v is NonNullable<typeof v> => typeof v === "string"),
+    matchedEntries
+      .map((m) => (typeof m.entry.mood === "string" ? screen(m.entry.mood, m.entry) : null))
+      .filter((v): v is string => v !== null),
   )];
   const typeNotes = [...new Set(
     matchedEntries
-      .map((m) => m.entry.visual?.typePairing?.notes)
-      .filter((v): v is NonNullable<typeof v> => typeof v === "string" && v.length > 0),
+      .map((m) => {
+        const note = m.entry.visual?.typePairing?.notes;
+        return typeof note === "string" && note.length > 0 ? screen(note, m.entry) : null;
+      })
+      .filter((v): v is string => v !== null),
   )];
   const critiques = matchedEntries
-    .map((m) => m.entry.critique)
-    .filter((v): v is string => typeof v === "string" && v.length > 0);
-  // Shared identity screen for every corpus-prose string (drop whole, never
-  // redact). Built once so the direction's whole-string screen and the six
-  // prose fields below use the same denied-name set. The denied set is
-  // CORPUS-WIDE (design spec §3), not just the matched entries — a prose row
-  // naming a corpus product outside the top matches must still be dropped.
-  const deniedNames = buildDeniedNames(corpusEntries);
-  const screen = (text: string, entry: CorpusEntryT): string | null =>
-    screenProse(text, entry, deniedNames);
+    .map((m) => (typeof m.entry.critique === "string" ? screen(m.entry.critique, m.entry) : null))
+    .filter((v): v is string => v !== null);
 
   const signalClauses: string[] = [];
   if (styleTags.length > 0) signalClauses.push(`style tags: ${styleTags.join(", ")}`);
@@ -213,21 +260,10 @@ export function createUiSpecDeterministic(
       + `Let those signals lead the layout before adding anything not evidenced by the matched examples.`
     : null;
 
-  // The composed direction mixes corpus PROSE (mood, type notes, critique), so
-  // it is identity-screened as a WHOLE before emission (plan Task 5 Step 1) —
-  // against every contributing entry's own names (the six dictionary-word
-  // product names are only caught by the precise own-entry check) plus the
-  // corpus-wide names and the private-marker sweep. Any hit drops the whole
-  // direction: a screened string is dropped, never redacted.
-  let designDirection: string | null = composedDirection;
-  if (composedDirection !== null) {
-    for (const { entry } of matchedEntries) {
-      if (screenProse(composedDirection, entry, deniedNames) === null) {
-        designDirection = null;
-        break;
-      }
-    }
-  }
+  // Every corpus-prose segment was screened before composing (above); the
+  // remaining parts are closed tokens, the template, and the caller's own
+  // brief. No whole-string re-screen — see the measurement note above.
+  const designDirection: string | null = composedDirection;
 
   // ----- C3 Phase 1 prose selection (Task 4): six existing UiSpec fields. -----
   // Everything that carries corpus prose goes through the identity screen
@@ -321,12 +357,16 @@ export function createUiSpecDeterministic(
   // componentInventory ← components (closed enum tokens; deduped in order).
   const seenComponents = new Set<string>();
   const componentInventory: { name: string; pattern: string }[] = [];
-  for (const { entry } of matchedEntries) {
+  const componentInventoryEvidenceIds: string[] = [];
+  for (const { evidenceId, entry } of matchedEntries) {
+    let contributed = false;
     for (const component of entry.components ?? []) {
       if (seenComponents.has(component)) continue;
       seenComponents.add(component);
       componentInventory.push({ name: component, pattern: component });
+      contributed = true;
     }
+    if (contributed) componentInventoryEvidenceIds.push(evidenceId);
   }
 
   return {
@@ -341,5 +381,7 @@ export function createUiSpecDeterministic(
     accessibilityConstraints,
     accessibilityEvidenceIds,
     componentInventory,
+    componentInventoryEvidenceIds,
+    responsiveBehaviorEvidenceIds,
   };
 }

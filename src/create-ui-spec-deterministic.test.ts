@@ -186,6 +186,8 @@ describe("createUiSpecDeterministic", () => {
       { name: "kpi-card", pattern: "kpi-card" },
       { name: "sidebar-nav", pattern: "sidebar-nav" },
     ]);
+    expect(out.componentInventoryEvidenceIds).toEqual(["evidence-2"]);
+    expect(out.responsiveBehaviorEvidenceIds).toEqual(["evidence-2"]);
     expect(out.responsiveBehavior).toContain("mode: responsive");
   });
 
@@ -338,6 +340,8 @@ describe("createUiSpecDeterministic", () => {
       { name: "sidebar-nav", pattern: "sidebar-nav" },
       { name: "action-list", pattern: "action-list" },
     ]);
+    expect(out.componentInventoryEvidenceIds).toEqual(["evidence-2", "evidence-3"]);
+    expect(out.responsiveBehaviorEvidenceIds).toEqual(["evidence-2", "evidence-3"]);
     expect(out.responsiveBehavior).toContain("mode: responsive");
     expect(out.responsiveBehavior).toContain("form: three-column");
   });
@@ -361,7 +365,7 @@ describe("createUiSpecDeterministic", () => {
     expect(out.designDirection).toContain("critique: A fixture critique");
   });
 
-  it("drops the whole direction when a folded signal names a corpus product", () => {
+  it("drops only the screened segment, not the whole direction, when a folded signal names a corpus product", () => {
     const matches = [
       matched("evidence-2", proseEntry()),
       matched("evidence-3", proseEntry({
@@ -376,9 +380,33 @@ describe("createUiSpecDeterministic", () => {
       entriesOf(matches),
       REQUEST,
     );
-    // The composed direction contains the second entry's critique, which names
-    // a corpus product; the whole string is dropped, never redacted.
-    expect(out.designDirection).toBeNull();
+    // The second entry's critique names a corpus product and is dropped WHOLE;
+    // the direction survives with the first entry's signals. (Whole-direction
+    // screening measured 26.1% direction loss on production-shaped windows —
+    // review finding #2 — so prose segments are screened before composing.)
+    expect(out.designDirection).not.toBeNull();
+    expect(out.designDirection).toContain("critique: A fixture critique");
+    expect(out.designDirection).not.toContain("Superhuman");
+  });
+
+  it("drops a critique naming its own entry's product but keeps sibling signals", () => {
+    const matches = [
+      matched("evidence-2", proseEntry()),
+      matched("evidence-3", proseEntry({
+        source: { productName: "Superhuman" },
+        title: "Superhuman — mail",
+        critique: "Superhuman's own triage critique is long enough to satisfy the schema minimum length.",
+      })),
+    ];
+    const out = createUiSpecDeterministic(
+      [observation("evidence-2", { pattern: "dashboard" })] as never,
+      matches,
+      entriesOf(matches),
+      REQUEST,
+    );
+    expect(out.designDirection).not.toBeNull();
+    expect(out.designDirection).not.toContain("Superhuman");
+    expect(out.designDirection).toContain("mood: calm and authoritative");
   });
 
   it("never splices a multi-sentence brief mid-sentence", () => {

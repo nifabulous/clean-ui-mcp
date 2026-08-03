@@ -163,9 +163,13 @@ export function registerCreateUiSpec(
         "silently substituted. outputFormat:'json' returns the JSON rendering instead " +
         "of markdown; the structured result is identical either way. Design judgment " +
         "drawn from the reference corpus is returned as cited observations, each " +
-        "attributed to a response-scoped evidence id. No product identity, path, url, " +
-        "or corpus id is returned. Short interface copy may appear as cited examples, " +
-        "capped per response; longer brand or legal prose does not.",
+        "attributed to a response-scoped evidence id. Served prose is identity-screened: " +
+        "product names, titles, paths, urls and corpus ids are dropped whole, never " +
+        "published. Six product names that are ordinary dictionary words (e.g. " +
+        "\"people\", \"projects\") are excluded from the corpus-wide screen by design " +
+        "and are caught only for the entry that carries them. Short interface copy may " +
+        "appear as cited examples, capped per response; longer brand or legal prose " +
+        "does not.",
       inputSchema: CreateUiSpecInput,
     },
     async (args) => {

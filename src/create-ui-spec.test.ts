@@ -780,7 +780,10 @@ describe("create-ui-spec producer — provenance truthfulness (echo direction is
   it("designDirection is NEVER corpus-evidence authority when corpus results exist (it echoes the brief)", async () => {
     // Corpus results are present, yet the direction is an echo of the requester's
     // brief — it MUST be editorial authority, never corpus-evidence authority.
-    const e = entry("e1", "product-A");
+    // Empty styleTags/categories force the echo: the direction composes from
+    // closed-token signals, and this fixture carries none (its prose is
+    // screened out by the private marker).
+    const e = entry("e1", "product-A", "dashboard", { styleTags: [], categories: [] } as Partial<FixtureEntry>);
     const env = await createUiSpec(validInput(), deps([e], [{ entry: e, score: 5 }]));
     const parsed = parseDesignArtifactEnvelope(env);
     const dd = parsed.spec.citedDecisions.find((d) => d.field === "designDirection");
@@ -790,8 +793,8 @@ describe("create-ui-spec producer — provenance truthfulness (echo direction is
   });
 
   it("the echo-only designDirection cites ONLY the recipe/system evidence id (never a corpus evidence-N id)", async () => {
-    const e1 = entry("e1", "product-A", "dashboard");
-    const e2 = entry("e2", "product-B", "forms");
+    const e1 = entry("e1", "product-A", "dashboard", { styleTags: [], categories: [] } as Partial<FixtureEntry>);
+    const e2 = entry("e2", "product-B", "forms", { styleTags: [], categories: [] } as Partial<FixtureEntry>);
     const env = await createUiSpec(validInput(), deps([e1, e2], [
       { entry: e1, score: 5 },
       { entry: e2, score: 4 },
@@ -1843,6 +1846,12 @@ it("serves corpus judgment into the six UiSpec fields, evidence-cited and gate-c
   // So do the served accessibility-risk rows (governing invariant: every
   // served observation is attributed to a response-scoped evidence id).
   expect(spec.citedDecisions.find((d) => d.field === "accessibilityConstraints")?.evidenceIds)
+    .toEqual(["evidence-2"]);
+  // The closed-token fields carry corpus content too, so they get the same
+  // corpus-evidence attribution rows.
+  expect(spec.citedDecisions.find((d) => d.field === "componentInventory")?.evidenceIds)
+    .toEqual(["evidence-2"]);
+  expect(spec.citedDecisions.find((d) => d.field === "responsiveBehavior")?.evidenceIds)
     .toEqual(["evidence-2"]);
   // The full MCP envelope schema (leaf gate + evidence membership + authority
   // prerequisites) accepts the produced envelope.

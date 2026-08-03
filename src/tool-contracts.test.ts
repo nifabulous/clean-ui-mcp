@@ -1109,7 +1109,7 @@ describe("R3: spec dup provenance.sourceReferences fails", () => {
 // create-ui-spec-http.ts.
 //
 // This block is the MCP HALF of the parity proof (the HTTP half is
-// create-ui-spec-http.test.ts's "the four citation checks run on BOTH transports"):
+// create-ui-spec-http.test.ts's "the six citation checks run on BOTH transports"):
 // for each rule it asserts the predicate reports it with the exact message and
 // spec-relative path, AND that `ToolResultSchemas.create_ui_spec` — the object
 // `parseToolResult` dispatches to — refuses the same poison with exactly that
@@ -1123,6 +1123,8 @@ describe("R3: spec dup provenance.sourceReferences fails", () => {
 describe("shared create_ui_spec citation-consistency predicate", () => {
   /** Correct SHAPE (so the leaf gate stays silent), wrong MEMBERSHIP. */
   const UNCITED = `ref-${"b".repeat(64)}`;
+  /** Evidence-shaped id absent from the fixture's provenance.evidenceIds. */
+  const UNCITED_EVIDENCE = "evidence-99";
 
   type SpecPoison = {
     readonly rule: string;
@@ -1138,6 +1140,22 @@ describe("shared create_ui_spec citation-consistency predicate", () => {
       specPath: ["citedReferences"],
       poison: (data) => {
         data.citedReferences = [SAFE_PUBLIC_REFERENCE, SAFE_PUBLIC_REFERENCE];
+      },
+    },
+    {
+      rule: "techniques-sourceIds-evidence",
+      message: "techniques[].sourceIds[] not in the artifact's evidence ids (value withheld)",
+      specPath: ["techniques"],
+      poison: (data) => {
+        data.techniques = [{ text: "Use quiet grouping for scanability.", sourceIds: [UNCITED_EVIDENCE] }];
+      },
+    },
+    {
+      rule: "antiPatterns-sourceIds-evidence",
+      message: "antiPatterns[].sourceIds[] not in the artifact's evidence ids (value withheld)",
+      specPath: ["antiPatterns"],
+      poison: (data) => {
+        data.antiPatterns = [{ text: "Avoid heavy card shadows.", sourceIds: [UNCITED_EVIDENCE] }];
       },
     },
     {

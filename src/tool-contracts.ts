@@ -1362,20 +1362,25 @@ export function findUnsafeCreateUiSpecLeaves(roots: {
 // surface serves the persisted envelope byte-identically. On the success path it
 // returns `[]` and changes no byte.
 //
-// SCOPE. Exactly the four rules, no more: uniqueness of `citedReferences`,
-// membership of `componentInventory[].sourceId` in `citedReferences`, uniqueness
-// of `provenance.sourceReferences`, and set-equality of
+// SCOPE. Exactly the six rules, no more: uniqueness of `citedReferences`,
+// membership of `componentInventory[].sourceId` in `citedReferences`, membership
+// of `techniques[].sourceIds[]` / `antiPatterns[].sourceIds[]` in the artifact's
+// evidence ids (they moved to the evidence-id domain in C3 Phase 1 Task 2;
+// `spec.provenance.evidenceIds` is present on BOTH surfaces and is bound
+// element-for-element to the envelope's evidence rows, so the membership check
+// is checkable over HTTP — review finding #1), uniqueness of
+// `provenance.sourceReferences`, and set-equality of
 // `provenance.sourceReferences` with `citedReferences`. ID SHAPE is the leaf
-// gate's job (above). Evidence-ID membership — including
-// `techniques[].sourceIds[]` / `antiPatterns[].sourceIds[]`, which moved to the
-// evidence-id domain in C3 Phase 1 (Task 2) — evidence-KIND authority and the
-// lane rules stay in `refineEnvelope`, because they read the tool envelope's
-// `evidence[]` rows — which do not exist on the HTTP surface, so they are
-// structurally inapplicable there rather than missing.
+// gate's job (above). The remaining evidence-ID membership checks, evidence-KIND
+// authority and the lane rules stay in `refineEnvelope`, because they read the
+// tool envelope's `evidence[]` rows — which do not exist on the HTTP surface,
+// so they are structurally inapplicable there rather than missing.
 
-/** The four rules, as stable ids. A transport may name these in a refusal. */
+/** The six rules, as stable ids. A transport may name these in a refusal. */
 export type CreateUiSpecCitationRule =
   | "citedReferences-unique"
+  | "techniques-sourceIds-evidence"
+  | "antiPatterns-sourceIds-evidence"
   | "componentInventory-sourceId-cited"
   | "provenance-sourceReferences-unique"
   | "provenance-sourceReferences-match-citedReferences";
@@ -1387,7 +1392,7 @@ export type CreateUiSpecCitationRule =
  * it still reached a caller.
  */
 export interface CreateUiSpecCitationInconsistency {
-  /** Which of the four rules failed — stable, value-free, safe to publish. */
+  /** Which of the six rules failed — stable, value-free, safe to publish. */
   readonly rule: CreateUiSpecCitationRule;
   /**
    * The path of the offending field RELATIVE TO THE SPEC (no transport prefix),
@@ -1396,7 +1401,7 @@ export interface CreateUiSpecCitationInconsistency {
    */
   readonly specPath: readonly PropertyKey[];
   /**
-   * The position-naming, value-free message. Byte-identical to what the four
+   * The position-naming, value-free message. Byte-identical to what the six
    * inline checks emitted before the extraction, because the MCP issue messages
    * are a published contract that the drift gates pin.
    */
@@ -1425,7 +1430,7 @@ export function findCreateUiSpecCitationInconsistencies(
         techniques?: unknown;
         antiPatterns?: unknown;
         componentInventory?: unknown;
-        provenance?: { sourceReferences?: unknown };
+        provenance?: { sourceReferences?: unknown; evidenceIds?: unknown };
       }
     | null
     | undefined;
@@ -1439,6 +1444,34 @@ export function findCreateUiSpecCitationInconsistencies(
       specPath: ["citedReferences"],
       message: "citedReferences must be unique",
     });
+
+  // techniques/antiPatterns sourceIds moved to the evidence-id domain (C3
+  // Phase 1 Task 2). Membership is checked here against
+  // spec.provenance.evidenceIds — present on BOTH transports and bound to the
+  // envelope's evidence rows — so a response citing evidence-N that does not
+  // exist is refused over MCP AND HTTP alike (the leaf gate already enforces
+  // the evidence-N shape on both).
+  const evidenceIdSet = new Set(asArray(data?.provenance?.evidenceIds));
+  for (const tech of asArray(data?.techniques)) {
+    for (const sid of asArray((tech as { sourceIds?: unknown } | null)?.sourceIds)) {
+      if (!evidenceIdSet.has(sid))
+        found.push({
+          rule: "techniques-sourceIds-evidence",
+          specPath: ["techniques"],
+          message: "techniques[].sourceIds[] not in the artifact's evidence ids (value withheld)",
+        });
+    }
+  }
+  for (const ap of asArray(data?.antiPatterns)) {
+    for (const sid of asArray((ap as { sourceIds?: unknown } | null)?.sourceIds)) {
+      if (!evidenceIdSet.has(sid))
+        found.push({
+          rule: "antiPatterns-sourceIds-evidence",
+          specPath: ["antiPatterns"],
+          message: "antiPatterns[].sourceIds[] not in the artifact's evidence ids (value withheld)",
+        });
+    }
+  }
 
   for (const comp of asArray(data?.componentInventory)) {
     const sourceId = (comp as { sourceId?: unknown } | null)?.sourceId;
@@ -1890,15 +1923,13 @@ export const TOOL_DESCRIPTORS = [
         provenance?: { evidenceIds?: string[]; sourceReferences?: string[] };
         citedReferences?: string[];
         authorityLanes?: { corpusEvidence?: string[]; machineRules?: string[]; editorialGuidance?: string[] };
-        // `techniques` and `antiPatterns` are read here ONLY for their
-        // sourceIds evidence membership (moved to the evidence-id domain in C3
-        // Phase 1 Task 2); their prose fields are free-text leaves and are not
-        // validated here. `componentInventory` is deliberately absent: the only
-        // rule that reads it is the citation-consistency predicate, which
-        // `findCreateUiSpecCitationInconsistencies` owns for both transports
+        // `techniques`, `antiPatterns` and `componentInventory` are deliberately
+        // absent: the only rules that read them — sourceIds evidence membership
+        // (evidence-id domain since C3 Phase 1 Task 2) and
+        // componentInventory.sourceId citedReferences membership — live in the
+        // shared citation-consistency predicate, which
+        // `findCreateUiSpecCitationInconsistencies` owns for BOTH transports
         // (see the delegation at the end of this block).
-        techniques?: Array<{ sourceIds?: string[] }>;
-        antiPatterns?: Array<{ sourceIds?: string[] }>;
         motionGuidance?: { evidenceUnavailable?: boolean };
       };
       // Motion warning coupling: evidenceUnavailable ↔ motionEvidenceUnavailable
@@ -1916,7 +1947,7 @@ export const TOOL_DESCRIPTORS = [
       const citedSet = new Set(data?.citedReferences ?? []);
       const citedRefs = data?.citedReferences ?? [];
       // NOTE: `citedReferences` UNIQUENESS is no longer checked here. It is one of
-      // the four CITATION-CONSISTENCY rules now owned by the shared predicate
+      // the six CITATION-CONSISTENCY rules now owned by the shared predicate
       // `findCreateUiSpecCitationInconsistencies` (above), which BOTH transports
       // call — see the delegation at the end of this block. The message and path it
       // emits are byte-identical to what this line emitted.
@@ -1974,20 +2005,6 @@ export const TOOL_DESCRIPTORS = [
         ({ path: ["data", "citedDecisions", i, "evidenceIds"] as PropertyKey[], ids: cd.evidenceIds ?? [] }),
       );
       validateEvidenceReferences(knownEvidence, cdRefs, ctx);
-      // Check techniques/antiPatterns sourceIds (membership + dedup). These
-      // positions moved from the safe-reference domain to the evidence-id
-      // domain in C3 Phase 1 (Task 2): they cite the response-scoped
-      // evidence-N of the corpus entry a technique came from, not a
-      // ref-<sha256> digest, so membership is against the envelope's evidence
-      // rows rather than citedReferences. The shape half is the leaf gate's
-      // job (evidence-N); this is the membership half.
-      const techRefs = (data?.techniques ?? []).map((t, i) =>
-        ({ path: ["data", "techniques", i, "sourceIds"] as PropertyKey[], ids: t.sourceIds ?? [] }),
-      );
-      const apRefs = (data?.antiPatterns ?? []).map((a, i) =>
-        ({ path: ["data", "antiPatterns", i, "sourceIds"] as PropertyKey[], ids: a.sourceIds ?? [] }),
-      );
-      validateEvidenceReferences(knownEvidence, [...techRefs, ...apRefs], ctx);
       for (const cd of data?.citedDecisions ?? []) {
         if (cd.sourceId !== undefined && !citedSet.has(cd.sourceId))
           ctx.addIssue({ code: "custom", message: `citedDecisions[].sourceId not in citedReferences (value withheld)`, path: ["data", "citedDecisions"] });
@@ -2090,18 +2107,19 @@ export const TOOL_DESCRIPTORS = [
       const provenanceEvIds = new Set(provEvIds);
       if (provenanceEvIds.size !== knownEvidence.size || ![...provenanceEvIds].every(id => knownEvidence.has(id)))
         ctx.addIssue({ code: "custom", message: "provenance.evidenceIds must exactly match envelope evidence IDs", path: ["data", "provenance"] });
-      // --- The FOUR CITATION-CONSISTENCY rules, delegated to the SHARED predicate. ---
-      // `citedReferences` uniqueness, the `componentInventory[].sourceId`
-      // membership rule, and both `provenance.sourceReferences` rules used to be
+      // --- The SIX CITATION-CONSISTENCY rules, delegated to the SHARED predicate. ---
+      // `citedReferences` uniqueness, the techniques/antiPatterns sourceIds
+      // evidence-membership rules, the `componentInventory[].sourceId` membership
+      // rule, and both `provenance.sourceReferences` rules used to be
       // written out inline here. They
       // now come from `findCreateUiSpecCitationInconsistencies`, which the loopback
       // HTTP adapter (create-ui-spec-http.ts) also calls — that is the whole point
       // of the extraction: `refineEnvelope` is reachable only through
       // `parseToolResult`, so anything written inline here is an MCP-only rule, and
-      // these four read nothing but fields the HTTP surface also publishes.
+      // these six read nothing but fields the HTTP surface also publishes.
       //
       // The messages and the `["data", ...]` paths are byte-identical to the inline
-      // versions; only the emission ORDER changed (the four are now contiguous, so
+      // versions; only the emission ORDER changed (the six are now contiguous, so
       // `citedReferences must be unique` is reported after the evidence rules rather
       // than before them). No test asserts a cross-rule ordering, and every poison
       // whose message list is asserted exactly produces a single issue.

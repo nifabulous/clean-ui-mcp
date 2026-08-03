@@ -488,3 +488,30 @@ prose case.
 
 **Depends on / blocked by:** None. Follow-up to
 `2026-08-03-c3-serve-corpus-prose-phase1.md` Tasks 3/7.
+
+## C3 Phase 1: screen the sanitized evidence-summary channel
+
+**What:** Extend the identity screen to the `evidence[].summary` rows produced
+by `sanitizeCorpusObservation`. The summary is recipe-template prose that
+interpolates `structuredFacts`, including `typePairing` font names — the
+"Alan" product's font is "Alan Sans", so its served summary contains the
+product name (PR review finding #4). The summary channel predates the C3
+screen and typePairing is an intended served signal, but the served bytes
+still carry the name.
+
+**Why:** The C3 prose screen covers the six UiSpec fields and the direction;
+the sanitized summary is a separate served surface that can carry product
+names via font names, and the full-corpus leak sweep excludes it for exactly
+this reason. Closing it makes the "no product name in served prose" claim
+hold on every served surface.
+
+**Trigger (build when):** The evidence summary is next touched, or a served
+summary's font name is observed to carry a product name beyond "Alan Sans".
+
+**Scope when triggered:** Screen the composed summary per entry against the
+corpus-wide denied set (own-entry + global names); drop whole, never redact.
+Extend `src/full-corpus-leak-sweep.test.ts` to include the summary channel and
+remove the scope note that excludes it.
+
+**Depends on / blocked by:** None. Follow-up to
+`2026-08-03-c3-serve-corpus-prose-phase1.md` Tasks 3/7.

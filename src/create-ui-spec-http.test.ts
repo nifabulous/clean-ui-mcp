@@ -1045,18 +1045,18 @@ describe("create_ui_spec — a self-consistent poisoned envelope (m3(r4))", () =
 // `create_ui_spec` descriptor's `refineEnvelope` block (tool-contracts.ts) is
 // invoked only from `makeEnvelope`, reachable only through `parseToolResult` —
 // i.e. only on the MCP path. Its ID-SHAPE subset was recovered here by the leaf
-// gate (the Task-5 fix); its four CITATION-CONSISTENCY rules were NOT, and this
+// gate (the Task-5 fix); its six CITATION-CONSISTENCY rules were NOT, and this
 // block used to PIN that asymmetry — "MCP refuses %s and HTTP serves it",
 // asserting 200 on a handoff whose `techniques[].sourceIds`,
 // `antiPatterns[].sourceIds`, `componentInventory[].sourceId` or
 // `provenance.sourceReferences` disagreed with `citedReferences`. Two
-// independent reviewers rated that P1 on a browser-facing route, so the four
+// independent reviewers rated that P1 on a browser-facing route, so the six
 // extracted into ONE shared pure predicate
 // (`findCreateUiSpecCitationInconsistencies`, tool-contracts.ts) that
 // `refineEnvelope` and this adapter both call. The assertions below are the same
 // poisons with the HTTP verdict INVERTED, exactly as the old docblock instructed.
 //
-// For each of the four rules this proves four things on the SAME poison:
+// For each of the six rules this proves four things on the SAME poison:
 //
 //   1. CONTROL — `parseDesignArtifactEnvelope` accepts the poisoned envelope on
 //      its own, AND the ID-shape leaf gate finds nothing in it. So neither
@@ -1084,16 +1084,18 @@ describe("create_ui_spec — a self-consistent poisoned envelope (m3(r4))", () =
 /** The citation gate's OWN refusal, distinct from every other refusal message. */
 const CITATION_REFUSAL = /failed the citation-consistency gate and was not served/;
 
-describe("create_ui_spec HTTP — the four citation checks run on BOTH transports (I3(r5) closed)", () => {
+describe("create_ui_spec HTTP — the six citation checks run on BOTH transports (I3(r5) closed)", () => {
   /** Well-formed public reference digests: correct SHAPE, wrong MEMBERSHIP. */
   const CITED_REF = `ref-${"a".repeat(64)}`;
   const UNCITED_REF = `ref-${"b".repeat(64)}`;
+  /** Well-formed evidence id (evidence-N) absent from the artifact's ids. */
+  const UNCITED_EVIDENCE = "evidence-99";
 
   type SpecT = DesignArtifactEnvelope["spec"];
 
   /**
    * One poison per shared citation rule. Each poison changes exactly what its
-   * rule reads and leaves the other three satisfied, so `message` below is the
+   * rule reads and leaves the other five satisfied, so `message` below is the
    * COMPLETE issue list on MCP and `rule` is the ONLY rule id in the HTTP
    * refusal — that is what makes "this specific check now runs on both
    * transports" a measurement rather than a claim.
@@ -1112,6 +1114,26 @@ describe("create_ui_spec HTTP — the four citation checks run on BOTH transport
         ...spec,
         citedReferences: [CITED_REF, CITED_REF],
         provenance: { ...spec.provenance, sourceReferences: [CITED_REF] },
+      }),
+    },
+    {
+      message: "techniques[].sourceIds[] not in the artifact's evidence ids (value withheld)",
+      rule: "techniques-sourceIds-evidence",
+      poison: (spec) => ({
+        ...spec,
+        citedReferences: [CITED_REF],
+        provenance: { ...spec.provenance, sourceReferences: [CITED_REF] },
+        techniques: [{ text: "Use quiet grouping for scanability.", sourceIds: [UNCITED_EVIDENCE] }],
+      }),
+    },
+    {
+      message: "antiPatterns[].sourceIds[] not in the artifact's evidence ids (value withheld)",
+      rule: "antiPatterns-sourceIds-evidence",
+      poison: (spec) => ({
+        ...spec,
+        citedReferences: [CITED_REF],
+        provenance: { ...spec.provenance, sourceReferences: [CITED_REF] },
+        antiPatterns: [{ text: "Avoid heavy card shadows.", sourceIds: [UNCITED_EVIDENCE] }],
       }),
     },
     {

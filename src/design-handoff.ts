@@ -549,19 +549,33 @@ function renderSourcesSection(ctx: ResolvedDesignHandoff): string[] {
   // The evidence-id domain and the public-reference domain never mix, so the
   // "Grounded in" line lists the corpus ids while citedReferences stays
   // untouched. The line is a GROUNDING CLAIM, so it renders only when the spec
-  // actually cites corpus ids through a served channel: a corpus-evidence
-  // authority decision (direction/voice/accessibility/tokens) or
-  // techniques/antiPatterns sourceIds. On the model path the corpusEvidence
-  // lane is populated for provenance but nothing cites it — printing
-  // "Grounded in" there would be false.
+  // actually cites corpus ids through a served channel, and it lists exactly
+  // THOSE ids — the union of corpus-evidence decisions' evidenceIds and
+  // techniques/antiPatterns sourceIds — not the whole corpusEvidence lane
+  // (review finding #9: the lane also holds entries nothing cites). On the
+  // model path the lane is populated for provenance but nothing cites it, so
+  // no line is printed.
   const spec = ctx.handoff.spec;
-  const grounded = spec.authorityLanes?.corpusEvidence ?? [];
-  const citesCorpus =
-    (spec.citedDecisions ?? []).some((d) => d.authority === "corpus-evidence") ||
-    (spec.techniques ?? []).some((t) => (t.sourceIds?.length ?? 0) > 0) ||
-    (spec.antiPatterns ?? []).some((a) => (a.sourceIds?.length ?? 0) > 0);
-  if (grounded.length > 0 && citesCorpus) {
-    lines.push(`Grounded in corpus evidence: ${grounded.join(", ")}.`);
+  const citedCorpusIds: string[] = [];
+  for (const d of spec.citedDecisions ?? []) {
+    if (d.authority === "corpus-evidence") {
+      for (const id of d.evidenceIds ?? []) {
+        if (!citedCorpusIds.includes(id)) citedCorpusIds.push(id);
+      }
+    }
+  }
+  for (const t of spec.techniques ?? []) {
+    for (const id of t.sourceIds ?? []) {
+      if (!citedCorpusIds.includes(id)) citedCorpusIds.push(id);
+    }
+  }
+  for (const a of spec.antiPatterns ?? []) {
+    for (const id of a.sourceIds ?? []) {
+      if (!citedCorpusIds.includes(id)) citedCorpusIds.push(id);
+    }
+  }
+  if (citedCorpusIds.length > 0) {
+    lines.push(`Grounded in corpus evidence: ${citedCorpusIds.join(", ")}.`);
     lines.push("");
   }
   // The handoff never embeds raw corpus records — only stable provenance URLs.
@@ -569,7 +583,7 @@ function renderSourcesSection(ctx: ResolvedDesignHandoff): string[] {
   if (cited.length > 0) {
     lines.push("Cited references:");
     for (const ref of cited) lines.push(`- ${ref}`);
-  } else if (!citesCorpus) {
+  } else if (citedCorpusIds.length === 0) {
     lines.push("_(no cited references recorded)_");
   }
   // Documentation sources consulted by the chosen profile.

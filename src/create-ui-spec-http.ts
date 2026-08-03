@@ -38,33 +38,35 @@
  *     and served with 200 here.
  *   * `findCreateUiSpecCitationInconsistencies` (citation consistency) is the
  *     SHARED predicate the `create_ui_spec` descriptor's `refineEnvelope` also
- *     calls — ONE implementation, both transports, which is what makes the four
+ *     calls — ONE implementation, both transports, which is what makes the six
  *     rules below non-divergent by construction rather than by two lists that
  *     have to be kept in step.
  *
- * THE FOUR CITATION RULES, AND WHY THEY ARE HERE NOW. `refineEnvelope` is invoked
+ * THE SIX CITATION RULES, AND WHY THEY ARE HERE NOW. `refineEnvelope` is invoked
  * only from `makeEnvelope`, reachable only through `parseToolResult` — so
  * anything written inline THERE is an MCP-only rule, and this adapter cannot use
  * `parseToolResult` at all (it serves a different shape). Its ID-SHAPE subset was
  * recovered by the leaf gate above; its CITATION-CONSISTENCY subset was NOT, even
- * though every input those four rules read is present in the body this route
+ * though every input those six rules read is present in the body this route
  * serves:
  *
  *   1. `citedReferences must be unique`
- *   2. `componentInventory[].sourceId` must be a member of `citedReferences`
- *   3. `provenance.sourceReferences must be unique`
- *   4. `provenance.sourceReferences` must equal `citedReferences` as sets
+ *   2. `techniques[].sourceIds[]` / `antiPatterns[].sourceIds[]` must be
+ *      members of the artifact's evidence ids (spec.provenance.evidenceIds)
+ *   3. `componentInventory[].sourceId` must be a member of `citedReferences`
+ *   4. `provenance.sourceReferences must be unique`
+ *   5. `provenance.sourceReferences` must equal `citedReferences` as sets
  *
  * A producer regression emitting `componentInventory[0].sourceId = "ref-<sha>"`
  * where the digest is well-formed but absent from `spec.citedReferences`, or a
  * `provenance.sourceReferences` that disagrees with `citedReferences`, was
  * REFUSED over MCP and SERVED WITH 200 here. No private data was at stake — the
- * leaf gate enforces `ref-<sha256>` shape on all six reference positions and
+ * leaf gate enforces shape on all reference positions and
  * `containsPrivateMarker` sweeps the whole body — but PROVENANCE INTEGRITY was: a
  * design artifact whose technique claims a source the artifact does not cite,
- * shipped to a browser. Two independent reviewers rated that P1, so the four
+ * shipped to a browser. Two independent reviewers rated that P1, so the six
  * extracted into the shared predicate and are now enforced HERE TOO, as
- * validation-that-refuses. All four are measured, not assumed, in
+ * validation-that-refuses. All six are measured, not assumed, in
  * create-ui-spec-http.test.ts's `I3(r5) closed` block, which proves for each rule
  * that `parseDesignArtifactEnvelope` accepts the poison, that the leaf gate
  * ignores it, that MCP refuses for that exact rule, and that this route now
@@ -85,7 +87,7 @@
  * THE TWO ADJUDICATED EXCEPTIONS ARE UNCHANGED AND NARROW: the
  * retrieval-projection ruling is about `retrieval.resultCount` (this surface
  * serves the corpus-scoped count, unreshaped), and the ID-shape parity ruling is
- * about the leaf gate. Neither ever covered the four.
+ * about the leaf gate. Neither ever covered the six.
  *
  * EVERY SCREEN HERE VALIDATES AND REFUSES; none rewrites. That matters,
  * because this surface serves the PERSISTED envelope and must not reshape it
@@ -294,7 +296,7 @@ function serializeEnvelope(envelope: DesignArtifactEnvelope): string {
  *  2. the CITATION-CONSISTENCY gate
  *     (`findCreateUiSpecCitationInconsistencies`) over the same re-parsed
  *     `spec` — the same predicate the descriptor's `refineEnvelope` calls, so
- *     the four citation rules hold identically on both transports. It runs after
+ *     the six citation rules hold identically on both transports. It runs after
  *     the ID-shape gate for the same reason that gate runs first: membership is
  *     only meaningful once shape holds.
  *  3. `parseDesignArtifactEnvelope` over the re-parsed bytes — schema (including

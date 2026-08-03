@@ -52,6 +52,18 @@ describe("screenProse — identity screen", () => {
     expect(screenProse("unlike Superhuman's triage", other, names)).toBeNull();
   });
 
+  it("drops a string naming a product whose name ends in a non-word character", () => {
+    // "SLMobbin!" — \b…\b never matches a name ending in a non-word char (no
+    // word/non-word transition after "!"); the explicit non-word boundary does.
+    const slmobbin = { ...other, source: { productName: "SLMobbin!" } } as unknown as CorpusEntryT;
+    const withName = buildDeniedNames([slmobbin]);
+    expect(screenProse("the SLMobbin! design", other, withName)).toBeNull();
+  });
+
+  it("does not match a product name inside a longer word", () => {
+    expect(screenProse("mobbinology is a made-up word", other, names)).not.toBeNull();
+  });
+
   it("keeps a dictionary-word product name used as an ordinary noun", () => {
     // "Projects" is a corpus product name AND an English word; matching it
     // globally would drop ~8% of good rows.
@@ -71,6 +83,11 @@ describe("screenProse — identity screen", () => {
     // string the actual marker set catches.
     expect(screenProse("see images-private/hero.png", other, names)).toBeNull();
   });
+
+  it("drops a string containing a URL", () => {
+    expect(screenProse("reference the guide at https://example.com/guides/onboarding", other, names)).toBeNull();
+    expect(screenProse("visit www.example.com for details", other, names)).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -81,9 +98,12 @@ describe("screenProse — identity screen", () => {
 // corpus (corpus/entries.json, 787 entries) is gitignored — it references
 // private images and critique IP — so this block runs only where the real
 // corpus is present and skips on a fresh clone/CI (where loadCorpus returns
-// the 1-entry seed). The bands make a future change to the denied-name list
-// visible: adding or removing an exclusion moves the counts by far more than
-// the band width.
+// the 1-entry seed). Consequently it is NOT a CI guard: a change to the
+// denied-name list is caught by this block only in environments that carry
+// the corpus (PR review finding #3; the committed full-corpus leak sweep in
+// src/full-corpus-leak-sweep.test.ts has the same data constraint). The bands
+// make such a change visible wherever the corpus exists: adding or removing an
+// exclusion moves the counts by far more than the band width.
 //
 // The plan's draft bands (34/21/52) were measured against a smaller corpus
 // (77 distinct product names). The current corpus has 93 distinct

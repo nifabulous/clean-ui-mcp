@@ -35,13 +35,26 @@ function escapeRegExp(value: string): string {
 }
 
 /**
+ * A generic URL in corpus prose is identity/path material that must never be
+ * served. `containsPrivateMarker` covers only the five private-corpus literals
+ * plus private-path forms, so the screen adds a focused URL match. Deliberately
+ * NOT PATH_OR_URL_PATTERN (create-ui-spec-contracts.ts): that regex is scoped
+ * to operator error messages and matches ordinary words ("private",
+ * "node_modules") and any slash, which would over-drop legitimate prose here.
+ */
+const URL_PATTERN = /https?:\/\/[^\s]+|www\.[^\s]+/i;
+
+/**
  * Word-boundary, case-insensitive literal match. The name is regex-escaped so
  * corpus product names containing metacharacters ("SLMobbin!", "1-on-1") match
- * literally; the `\b` boundaries prevent "Mobbin" from matching inside an
- * unrelated word like "Mobbinology".
+ * literally. `\b` is deliberately NOT used: a name ending in a non-word
+ * character ("SLMobbin!") never matches with `\b…\b` (there is no word/non-word
+ * transition after "!"), so the boundaries are explicit non-word/edge checks.
+ * These also prevent "Mobbin" from matching inside an unrelated word like
+ * "Mobbinology".
  */
 function matchesName(text: string, name: string): boolean {
-  return new RegExp(`\\b${escapeRegExp(name)}\\b`, "i").test(text);
+  return new RegExp(`(?:^|[^\\w])${escapeRegExp(name)}(?:$|[^\\w])`, "i").test(text);
 }
 
 /**
@@ -92,5 +105,6 @@ export function screenProse(
     if (matchesName(text, name)) return null;
   }
   if (containsPrivateMarker(text)) return null;
+  if (URL_PATTERN.test(text)) return null;
   return text;
 }

@@ -38,6 +38,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { CRITIQUE_UI_INPUT_SCHEMA, CRITIQUE_UI_OUTPUT_SCHEMA } from "./synthesis/contracts.js";
 import { registerCreateUiSpec } from "./create-ui-spec-mcp.js";
 import type { CorpusReader } from "./corpus-reader.js";
+import { TrustGatedCorpusReader } from "./corpus-trust-reader.js";
 import type { CreateUiSpecModelDependency } from "./create-ui-spec.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -74,13 +75,33 @@ export function createServer(
     version: "0.1.0",
   });
 
-  registerSearchUiExamples(server, reader);
-  registerGetUiExample(server, reader);
-  registerListCategories(server, reader);
-  registerListStyleTags(server, reader);
-  registerListDomainTags(server, reader);
-  registerGetSimilarUiExamples(server, reader);
-  registerCompareUiExamples(server, reader);
+  // ----- C3 trust gate: every corpus-reading tool -----------------------------
+  // A review found the gate held for `create_ui_spec` alone while its siblings
+  // served the same fabrications: `get_stealable_techniques` returned an entry's
+  // whatToSteal prose verbatim (a left navigation rail described on a 1179x2556
+  // portrait phone screenshot) together with `source.product` and `source.id`,
+  // the exact identity every other served path withholds; `recommend_ui_direction`
+  // and `get_color_palette` invented hexes outright.
+  //
+  // Gating at the READER rather than in each handler means a tool added later is
+  // gated by construction. Day one no entry is verified, so these tools serve
+  // nothing corpus-derived — the honest posture, and the one the spec's invariant
+  // has claimed all along.
+  //
+  // `create_ui_spec` keeps the UNGATED reader on purpose: it gates itself
+  // (create-ui-spec-deterministic.ts) AND needs the corpus-wide entry list to
+  // build the identity screen's denied-name set. Narrowing that set would let an
+  // unverified entry's product name stop being screened out of served prose —
+  // weakening identity screening in the name of trust.
+  const gated = new TrustGatedCorpusReader(reader);
+
+  registerSearchUiExamples(server, gated);
+  registerGetUiExample(server, gated);
+  registerListCategories(server, gated);
+  registerListStyleTags(server, gated);
+  registerListDomainTags(server, gated);
+  registerGetSimilarUiExamples(server, gated);
+  registerCompareUiExamples(server, gated);
   // `generate_design_prompt` is NO LONGER registered publicly — `create_ui_spec`
   // supersedes it (see LEGACY_TO_BETA_MAP in tool-contracts.ts, the documented
   // migration table, which deliberately keeps the legacy name as a row). Its
@@ -88,14 +109,35 @@ export function createServer(
   // below) so internal callers and the migration story are unaffected; only the
   // public registration is gone.
   registerCreateUiSpec(server, reader, options.createUiSpecModel);
-  registerRecommendUiDirection(server, reader);
-  registerGetAntiPatterns(server, reader);
-  registerGetColorPalette(server, reader);
-  registerGetStealableTechniques(server, reader);
-  registerBrowseUiExamples(server, reader);
-  registerCritiqueUi(server, reader);
+  registerRecommendUiDirection(server, gated);
+  registerGetAntiPatterns(server, gated);
+  registerGetColorPalette(server, gated);
+  registerGetStealableTechniques(server, gated);
+  registerBrowseUiExamples(server, gated);
+  registerCritiqueUi(server, gated);
 
   return server;
+}
+
+/**
+ * The message a corpus-reading tool returns when it has nothing to serve.
+ *
+ * "No X found for those filters" blames the caller's query. When the real cause
+ * is that no entry carries a verification record, that is the same false-reason
+ * defect the `create_ui_spec` unavailableDecisions rows had: it sends the caller
+ * off to broaden a search that was never the problem. So the message reports the
+ * trust posture whenever the reader can state one.
+ */
+function emptyCorpusMessage(reader: CorpusReader, noun: string): string {
+  const posture = reader instanceof TrustGatedCorpusReader ? reader.trustPosture() : null;
+  if (posture !== null && posture.verified < posture.total) {
+    return (
+      `No ${noun} available: ${posture.verified} of ${posture.total} corpus entries carry a `
+      + `recorded verification, and corpus content is served only from verified entries. `
+      + `This is not a filter problem — broadening the query will not change it.`
+    );
+  }
+  return `No ${noun} found for those filters.`;
 }
 
 // ─── 1. search_ui_examples ────────────────────────────────────────────────────
@@ -152,9 +194,7 @@ function registerSearchUiExamples(server: McpServer, reader: CorpusReader): void
           content: [
             {
               type: "text",
-              text:
-                "No matching examples found. Try a broader query, or call " +
-                "list_categories / list_style_tags to see available filter values.",
+              text: emptyCorpusMessage(reader, "matching examples"),
             },
           ],
         };
@@ -606,7 +646,7 @@ function registerGetAntiPatterns(server: McpServer, reader: CorpusReader): void 
       const results = aggregateAntiPatterns([...reader.entriesForAggregation()], { patternType: patternType as string | undefined, category: category as string | undefined }, limit ?? 10);
       if (!results.length) {
         const scope = patternType ? ` for patternType '${patternType}'` : "";
-        return { content: [{ type: "text", text: `No anti-patterns found${scope}.` }] };
+        return { content: [{ type: "text", text: emptyCorpusMessage(reader, `anti-patterns${scope}`) }] };
       }
       const lines = [`# Anti-patterns to avoid${patternType ? ` (${patternType})` : ""}\n`];
       results.forEach((r, i) => {
@@ -640,7 +680,7 @@ function registerGetColorPalette(server: McpServer, reader: CorpusReader): void 
     async ({ patternType, styleTag, limit }) => {
       const results = collectPalettes([...reader.entriesForAggregation()], { patternType: patternType as string | undefined, styleTag: styleTag as string | undefined }, limit ?? 10);
       if (!results.length) {
-        return { content: [{ type: "text", text: "No entries with colorRoles match those filters. Try a broader patternType or styleTag." }] };
+        return { content: [{ type: "text", text: emptyCorpusMessage(reader, "palettes") }] };
       }
       const lines = [`# Color palettes (${results.length})\n`];
       let lastBand = "";
@@ -679,12 +719,16 @@ function registerGetStealableTechniques(server: McpServer, reader: CorpusReader)
     async ({ patternType, styleTag, limit }) => {
       const results = collectTechniques([...reader.entriesForAggregation()], { patternType: patternType as string | undefined, styleTag: styleTag as string | undefined }, limit ?? 15);
       if (!results.length) {
-        return { content: [{ type: "text", text: "No techniques found for those filters." }] };
+        return { content: [{ type: "text", text: emptyCorpusMessage(reader, "techniques") }] };
       }
+      // Served WITHOUT the source product name or entry id. Printing
+      // `**${t.source.product}** (${t.source.id})` published the exact identity
+      // every other served path is built to withhold — a leak found in review,
+      // and independent of trust: a verified entry's identity is no more
+      // publishable than an unverified one's.
       const lines = [`# Stealable techniques (${results.length})\n`];
       results.forEach((t, i) => {
-        lines.push(`${i + 1}. ${t.text}`);
-        lines.push(`   _from **${t.source.product}** (\`${t.source.id}\`)_\n`);
+        lines.push(`${i + 1}. ${t.text}\n`);
       });
       return { content: [{ type: "text", text: lines.join("\n") }] };
     },
@@ -711,7 +755,7 @@ function registerBrowseUiExamples(server: McpServer, reader: CorpusReader): void
     async ({ styleTag }) => {
       const results = browseByPattern([...reader.entriesForAggregation()], { styleTag: styleTag as string | undefined });
       if (!results.length) {
-        return { content: [{ type: "text", text: styleTag ? `No entries found with styleTag '${styleTag}'.` : "Corpus is empty." }] };
+        return { content: [{ type: "text", text: emptyCorpusMessage(reader, styleTag ? `entries with styleTag '${styleTag}'` : "entries") }] };
       }
       const lines = [`# Corpus by pattern (${results.length} patterns represented${styleTag ? `, scoped to '${styleTag}'` : ""})\n`];
       lines.push("| Pattern | Count | Top products | Exemplar |");

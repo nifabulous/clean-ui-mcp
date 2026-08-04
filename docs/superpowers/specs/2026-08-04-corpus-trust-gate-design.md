@@ -10,20 +10,44 @@ folded). Every file:line in this document was verified against the repo on
 
 ## Governing invariant
 
-> **No corpus-derived value is served unless a human verified that entry against
-> its screenshot, and that verification is recorded in a field no machine
-> writes.**
+> **A corpus-derived value is servable only when it is grounded in evidence that
+> can be checked — measured from the page, provable from the data, or confirmed
+> against the image by a verifier that actually saw it. An unverifiable assertion
+> is never served.**
 
-Four corollaries, each mechanically testable:
+The invariant is about **evidence class, not verifier identity.** An earlier draft
+required a human signature; that was wrong for this product. A gate only a human
+can open does not scale to 787 entries, blocks corpus growth, and makes a product
+built to give AI agents design judgment depend on the one resource that does not
+scale. Verification has to be something an agent can perform.
 
-1. A machine-writable field is never a trust signal.
-2. An unverified value degrades to `unavailableDecisions` with an honest reason,
+Five corollaries, each mechanically testable:
+
+1. **Blindness, not model authorship, caused the fabrications.** The critique pass
+   was handed no image (`tagger.ts:3026`). Anyone reasoning from facts they cannot
+   see produces Alan's phantom left rail. The fix is grounding, not a human.
+2. A value whose grounding cannot be named is never served.
+3. An unverified value degrades to `unavailableDecisions` with an honest reason,
    never to a plausible substitute.
-3. The identity screen and the trust gate are independent. Trust first, then
+4. The identity screen and the trust gate are independent. Trust first, then
    identity. Neither subsumes the other.
-4. Retrieval still happens and is still reported. "We found matches and did not
+5. Retrieval still happens and is still reported. "We found matches and did not
    trust them" is a truthful state and must be distinguishable from "we found
    nothing".
+
+### Evidence tiers
+
+| tier | evidence | verifier | today |
+|---|---|---|---|
+| **measured** | `domSignals` — computed CSS, real contrast ratios, real `fontFamily` | none needed; it is measurement | discarded on 787/787; recapturable for the 422 with a URL |
+| **provable** | self-consistency: `canvas`==`ink`, accent disagreement, hex absent from every colour field, rail region on a portrait image, styleTag contradicting a visual boolean | none needed; decidable from the data | detectors written, not yet wired |
+| **image-confirmed** | a verifier that saw the screenshot confirms the claim | machine, at corpus scale | does not exist yet |
+| **unverifiable** | assertion with nothing behind it | n/a | this is what ships today |
+
+Three of the four tiers need no human. The strongest tier needs no verifier at
+all: `domSignals.styles.fontFamily` is not an opinion about the font, it is the
+font, and a measured 3.1:1 contrast ratio outranks any number of people agreeing
+the text looks readable.
 
 ## Why
 
@@ -80,7 +104,7 @@ Attaching the image is **not sufficient on its own**. `tagger.ts:1042` instructs
 `:3211`) scrubs prose naming anything absent from Pass 1's components. That is
 Stage 2 work and is out of scope here.
 
-### Root cause 2 — no human sign path exists
+### Root cause 2 — nothing records how a value was checked
 
 - `provenance.taggedBy: "auto-reviewed"` is **machine-stamped**. `ui/app.js:1375`
   and `:1488` flip `auto` → `auto-reviewed` on save; `ui/classic-app.js:635`
@@ -90,9 +114,13 @@ Stage 2 work and is out of scope here.
   `"— (add descriptive subtitle)"`.
 - `reviewStatus` is `approved` on 787/787 — the field carries no information.
 
+The corpus records *who touched* an entry and never *what was checked*. There is
+no field saying "this claim was compared against the image", so nothing can
+distinguish a grounded value from an invented one.
+
 So **zero entries satisfy the invariant today, and no code path can produce
-one.** That is deliberate: this spec ships the gate; the sign path that lets
-entries pass it is Stage 3 of the program track.
+one.** That is deliberate: this spec ships the gate; the verifier that lets
+entries pass it is Stage 2 of the program track, and it is a machine.
 
 ### The governance bar was already written, and was bypassed
 
@@ -106,41 +134,58 @@ confidently wrong.
 
 ## Scope
 
-**This spec covers the gate only.** Stages 2–5 (tagger fix, gold set, sign path,
-re-tag, index rebuild) are a tracked program with their own specs, written after
-the gate shows what serving at zero verified entries actually looks like.
+**This spec covers the gate only.** Stages 2-5 (the verifier plus the tagger
+blindness it shares a root with, `domSignals` persistence, re-tag, index rebuild)
+are a tracked program with their own specs, written after the gate shows what
+serving at zero verified entries actually looks like.
 
 ### Design
 
 New module `src/corpus-trust.ts`:
 
 ```ts
-export function isVerifiedByHuman(entry: CorpusEntryT): boolean
+export function isVerified(entry: CorpusEntryT): boolean
 ```
 
-Named for what it checks. It gates every corpus-derived value, not only prose,
-so a narrower name would lie.
+It gates every corpus-derived value, not only prose, so a narrower name would lie.
 
-Predicate — fail-closed, and it consults exactly two fields:
+The gate reads one new field, `provenance.verification`, which records **how** a
+value was checked rather than **who** touched it:
+
+```ts
+verification?: {
+  method: "measured" | "provable" | "image-confirmed";
+  verifiedAt: string;        // ISO date
+  verifierVersion: string;   // which verifier, so a bad one is revocable
+  imageSha256: string;       // binds the verification to THIS image
+}
+```
+
+`imageSha256` is the integrity property, and it is machine-checkable: if the
+screenshot is re-captured or replaced, the hash no longer matches and the
+verification is **stale, not valid**. That is a stronger guarantee than a human
+signature, which records only that someone looked once at something.
+
+Predicate — fail-closed:
 
 | condition | verdict |
 |---|---|
-| `provenance.reviewedBy` present AND `provenance.taggedBy === "human-verified"` | verified |
-| `provenance` absent (298 entries) | not verified |
-| `taggedBy: "auto"` (477) | not verified |
-| `taggedBy: "auto-reviewed"` (12) | not verified — machine-stamped |
+| `verification` present, `method` in the accepted set, `imageSha256` matches the entry's current image | verified |
+| `verification` absent (787 entries) | not verified |
+| `imageSha256` mismatch | not verified — stale |
+| `taggedBy: "auto"` (477) / `"auto-reviewed"` (12) / absent (298) | **not consulted** — records who, not what |
 | `reviewStatus` | **never consulted**, in any combination |
 
-`"human-verified"` is a value no current code path writes. That is the point: the
-gate cannot be satisfied by accident, and Stage 3 has to introduce the write
-deliberately.
+No current code path writes `verification`, so day one nothing passes. That is the
+point: the gate cannot be satisfied by accident, and Stage 2 introduces the write
+deliberately — from a verifier, not a person.
 
 ### Where the gate applies
 
 Filter **once**, at the top of `createUiSpecDeterministic`:
 
 ```
-matchedEntries ──▶ filter(isVerifiedByHuman) ──▶ trustedEntries
+matchedEntries ──▶ filter(isVerified) ──▶ trustedEntries
                                                       │
         ┌─────────────────────────────────────────────┤
         ▼            ▼            ▼           ▼       ▼
@@ -224,25 +269,39 @@ Rollback is a code revert, which is fully reversible.
 ### Corpus health gate
 
 The eight defect detectors written during this investigation move into
-`doctor.ts` as a standing check, so corpus regressions surface without a
-one-off script.
+`doctor.ts` as a standing check, so corpus regressions surface without a one-off
+script.
+
+**Deliberate scope boundary:** in this stage the detectors **report only**. They
+do not write `verification: { method: "provable" }` and they do not un-gate any
+field, even though the provable tier is decidable today and 54 of 787 entries
+carry no detectable defect.
+
+The reason is Alan. Its critique is entirely fabricated and it trips **zero**
+mechanical detectors — a self-consistent lie passes every provable check. So
+mechanical cleanliness is necessary and not sufficient for prose, and serving the
+provable tier before the image-confirmed verifier exists would re-ship the same
+class of fabrication with a trust label attached. Granting verification from the
+detectors becomes reasonable once the verifier exists to cover what they cannot
+see; until then, everything stays off.
 
 ## Tests
 
 The zero-verified path is the default, so it gets the deepest coverage.
 
-- `isVerifiedByHuman` — one case per row of the predicate table, including
-  `reviewStatus: "approved"` combined with each `taggedBy` value, asserting it
-  changes nothing.
+- `isVerified` — one case per row of the predicate table: `verification` absent,
+  each accepted `method`, an `imageSha256` mismatch (must read as stale, not
+  valid), and `reviewStatus: "approved"` combined with each `taggedBy` value,
+  asserting none of them changes the verdict.
 - Zero verified entries: every gated field empty or null, every one carrying an
   `unavailableDecisions` row, `colorTokenAuthority === "editorial"`, no
   `citedDecision` citing the corpus lane, `designDirection` carrying no
   `evidence-N`.
 - Some verified entries: prose returns for those entries only, proving the gate
-  is a **filter and not an off switch**. Requires a fixture entry stamped
-  `human-verified` — no real corpus entry qualifies.
-- Trust and identity are independent: a `human-verified` entry whose prose names
-  a product is still dropped by `screenProse`.
+  is a **filter and not an off switch**. Requires a fixture entry carrying a
+  valid `verification` record — no real corpus entry qualifies.
+- Trust and identity are independent: a verified entry whose prose names a
+  product is still dropped by `screenProse`.
 - **Regression, CRITICAL:** `full-corpus-leak-sweep.test.ts` and the C3 suites
   assert the current served posture. They are updated in the same change, not
   after.
@@ -251,30 +310,43 @@ The zero-verified path is the default, so it gets the deepest coverage.
 
 ## NOT in scope
 
-- **Tagger fix** (image to Pass 2, the do-not-contradict instruction, scrubber
-  behaviour, palette stripping) — Stage 2.
-- **Gold set** (~50 entries, vision-model labelled with the image attached, human
-  spot-check) — Stage 2. No new privacy exposure: Pass 1 already sends these
-  screenshots to a vision provider.
-- **Human sign path** — Stage 3. `review-draft.ts` is already ~70% of it: an
-  interactive per-entry reviewer that prompts for a real `qualityScore`
-  (`:138`) and prints `entry.image.path` (`:83`) without opening it. It needs
-  three additions: display the screenshot, write the unforgeable stamp, and
-  target existing corpus entries rather than only `entries-draft.json`.
-- **Re-tag** — Stage 4, and blocked: `commit-draft.ts:115` skips ids already in
-  the corpus, so a 787-entry re-tag through that flow commits zero entries. An
-  overwrite path must be built, with a pre-run snapshot held outside the rolling
-  keep-20 in `corpus/.snapshots`. Note `corpus/entries.json` is gitignored
-  (`.gitignore:35`) — there is no git-history rollback.
-- **Index rebuild** — Stage 5. `entryToDocument` leads with `critique` +
-  `whatToSteal` (`embeddings.ts:267`, `:286`) and `:15` names content-staleness,
-  so any re-tag invalidates the vector index.
-- **Quality-default cleanup** — Stage 5, after a downstream-consumer audit of the
-  725 rows asserting `qualityScore: 3` / `exceptional`.
-- **`accessibilityRisks`, `motionGuidance`, real font families** — all need
-  `domSignals` from a live re-crawl. Only 422/787 entries have a `source.url` and
-  0/787 persist `domSignals`. Separate follow-up: stop discarding `domSignals` on
-  capture.
+- **Stage 2 — the verifier, and the tagger blindness it shares a root with.**
+  Attach the image to the critique pass, and resolve what `tagger.ts:1042`
+  ("treat every value below as fact, do not re-derive or contradict it") and
+  `validateCritiqueComponentClaims` (`:1776`) do when the image contradicts the
+  extraction. Then one batch pass over the corpus: screenshot plus the entry's
+  claims in, per-field verdict out, writing `provenance.verification` for what it
+  confirms. 787 calls, unattended, and `imageDetail: "low"` already halves bulk
+  image cost.
+
+  **Calibration has known-correct answers before it costs anything.** The two
+  entries hand-audited in this investigation are the verifier's acceptance test:
+  `alan-alan-ios-screens-32-…` claims a left rail on a screenshot with no rail,
+  and `stackai-stackai-web-screens-13-…` claims a dark canvas on a white one. A
+  verifier that misses either is broken, and you know that before spending a call
+  on the other 785. Add ~30 stratified spot-checks to calibrate the rate, then
+  trust it at scale. That audits one machine once — it does not audit 787 entries.
+
+  The same pass runs at ingest, so a 10,000-entry corpus costs the same per entry
+  as 787. No step in this program scales with human availability.
+
+- **Stage 3 — persist `domSignals` on capture.** Promoted out of a deferred TODO:
+  it is the only tier that needs no verifier at all. Real contrast ratios, real
+  `fontFamily`, real computed styles, currently accepted by the tagger and thrown
+  away (0/787 persisted). Recapturable for the 422 entries with a `source.url`.
+- **Stage 4 — re-tag**, blocked on tooling: `commit-draft.ts:115` skips ids
+  already in the corpus, so a 787-entry re-tag through that flow commits zero
+  entries. An overwrite path must be built, with a pre-run snapshot held outside
+  the rolling keep-20 in `corpus/.snapshots`. Note `corpus/entries.json` is
+  gitignored (`.gitignore:35`) — there is no git-history rollback.
+- **Stage 5 — index rebuild + quality-default cleanup.** `entryToDocument` leads
+  with `critique` + `whatToSteal` (`embeddings.ts:267`, `:286`) and `:15` names
+  content-staleness, so any re-tag invalidates the vector index. The 725 rows
+  asserting `qualityScore: 3` / `exceptional` get scored or nulled after a
+  downstream-consumer audit.
+- **`accessibilityRisks` and `motionGuidance`** — need `domSignals` from a live
+  re-crawl, so they unblock with Stage 3 for the 422 recapturable entries and
+  stay unavailable for the rest.
 
 ## Withdrawn work
 
@@ -304,15 +376,27 @@ be filled honestly from this corpus:
 
 ## Risks
 
-1. **Signing may never scale.** If the verified set stalls at a few dozen entries,
-   served output stays thin indefinitely. The gate makes this visible instead of
-   hidden; it does not solve it. Stage 3 must measure signing throughput
-   (entries per hour) because every served row depends on it.
-2. **A tagger validated on 50 gold entries and applied to 737 unseen ones is
-   still unverified at scale** — the failure this program exists to fix. Signing
-   is what closes it, so Stage 4 before Stage 3 is wasted spend.
-3. **The product question stays open.** If serving corpus judgment requires a
-   human to verify 787 entries, it is worth asking whether the deterministic path
-   should serve only machine-verifiable structured facts. This spec does not
-   settle that; it stops the bleeding so the question can be answered without a
-   clock running.
+1. **The verifier is the single point of trust.** Every served row will depend on
+   it, so a systematically wrong verifier reintroduces the failure at scale with a
+   trust label attached — worse than today, because today nothing claims to be
+   checked. Mitigations, all in Stage 2: the two known fabrications as a hard
+   acceptance test, `verifierVersion` recorded per entry so a bad verifier's
+   output is revocable in bulk, and the detectors kept running independently so
+   provable defects surface even in "verified" rows.
+2. **A machine verifier is weaker than a careful human on any single entry.** It
+   is far stronger across 787, because the human alternative is that ~700 entries
+   are never checked at all. Coverage beats per-item rigor when the per-item rigor
+   does not happen. This is the deliberate trade of the whole program.
+3. **Nothing serves until Stage 2 lands.** This spec gates every corpus-derived
+   field, and the detectors deliberately do not un-gate the provable tier
+   (Alan is self-consistent and fabricated). So `create_ui_spec`'s deterministic
+   body returns brief plus scaffolding for however long Stage 2 takes. Accepted:
+   an empty answer is honest, a confident wrong one is not.
+4. **Verification goes stale on re-capture.** `imageSha256` binds a verification
+   to one image, so re-capturing a screenshot invalidates it by design. That is
+   correct, and it means the verifier must be cheap enough to re-run on changed
+   entries rather than a one-time migration.
+5. **The tagger fix and the verifier share a root cause and must not diverge.**
+   Both exist because the critique pass was blind. If the tagger starts seeing the
+   image but the verifier checks against different rules, the two disagree
+   permanently. Stage 2 should build them as one change.

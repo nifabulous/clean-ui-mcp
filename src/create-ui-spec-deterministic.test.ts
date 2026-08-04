@@ -701,3 +701,108 @@ describe("createUiSpecDeterministic — trust gate", () => {
     expect(out.techniques).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Refusal cause (review round: served reasons must be TRUE, not just present)
+// ---------------------------------------------------------------------------
+
+describe("createUiSpecDeterministic — colorTokensRefusal states the real cause", () => {
+  const roles = (over: Record<string, string | null> = {}) => ({
+    canvas: "#ffffff", surface: "#f8fafc", ink: "#111827", muted: "#6b7280", accent: "#2563eb", ...over,
+  });
+
+  it("reports insufficient-contributors when fewer than three entries carry roles", () => {
+    const matches = [2, 3].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const evidence = [2, 3].map((n) => observation(`evidence-${n}`, { ...GATE_FACTS, colorRoles: roles() }));
+    const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+    expect(out.colorTokens).toBeNull();
+    expect(out.colorTokensRefusal).toBe("insufficient-contributors");
+  });
+
+  it("reports no-plurality when three entries contribute but a role ties", () => {
+    // THE bug this fixes: a 2-2 tie previously reported "fewer than 3 matched
+    // entries contribute color roles", which is measurably false — three did.
+    const matches = [2, 3, 4, 5].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const evidence = [
+      observation("evidence-2", { ...GATE_FACTS, colorRoles: roles({ accent: "#2563eb" }) }),
+      observation("evidence-3", { ...GATE_FACTS, colorRoles: roles({ accent: "#2563eb" }) }),
+      observation("evidence-4", { ...GATE_FACTS, colorRoles: roles({ accent: "#dc2626" }) }),
+      observation("evidence-5", { ...GATE_FACTS, colorRoles: roles({ accent: "#dc2626" }) }),
+    ];
+    const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+    expect(out.colorTokens).toBeNull();
+    expect(out.colorTokensRefusal).toBe("no-plurality");
+  });
+
+  it("reports null refusal when tokens ARE served", () => {
+    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const evidence = [2, 3, 4].map((n) => observation(`evidence-${n}`, { ...GATE_FACTS, colorRoles: roles() }));
+    const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+    expect(out.colorTokens).not.toBeNull();
+    expect(out.colorTokensRefusal).toBeNull();
+  });
+
+  it("reports insufficient-contributors, not no-plurality, when nothing is trusted", () => {
+    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, unverifiedProseEntry({ id: `u-${n}` })));
+    const evidence = [2, 3, 4].map((n) => observation(`evidence-${n}`, { ...GATE_FACTS, colorRoles: roles() }));
+    const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+    expect(out.colorTokensRefusal).toBe("insufficient-contributors");
+  });
+});
+
+describe("createUiSpecDeterministic — every vote refuses a tie, not just colour", () => {
+  // `plurality` (design-prompt.ts) breaks ties by insertion order, so retrieval
+  // order became a consensus claim. Colour was fixed first; these are the four
+  // votes that feed SERVED fields and were left half-fixed.
+  const twoVerified = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+    const matches = [2, 3].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const evidence = [observation("evidence-2", a), observation("evidence-3", b)];
+    return createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+  };
+
+  it("serves no form claim when layoutForm ties", () => {
+    const out = twoVerified(
+      { ...GATE_FACTS, layoutForm: "two-column" },
+      { ...GATE_FACTS, layoutForm: "three-column" },
+    );
+    expect(out.responsiveBehavior.filter((r) => r.startsWith("form:"))).toEqual([]);
+  });
+
+  it("does not claim a spacing density when density ties", () => {
+    const out = twoVerified(
+      { ...GATE_FACTS, spacingDensity: "compact" },
+      { ...GATE_FACTS, spacingDensity: "airy" },
+    );
+    expect(out.designDirection).not.toMatch(/compact spacing|airy spacing/);
+  });
+
+  it("does not claim a corner treatment when cornerStyle ties", () => {
+    const out = twoVerified(
+      { ...GATE_FACTS, cornerStyle: "sharp" },
+      { ...GATE_FACTS, cornerStyle: "pill" },
+    );
+    expect(out.designDirection).not.toMatch(/sharp corner|pill corner/);
+  });
+
+  it("does not claim a type pairing when the pairing ties", () => {
+    const out = twoVerified(
+      { ...GATE_FACTS, typePairing: { display: "Inter", body: "Inter" } },
+      { ...GATE_FACTS, typePairing: { display: "Söhne", body: "Söhne" } },
+    );
+    // Target the CLAUSE, not the bare face name: the brief itself contains
+    // "Internal analytics workspace", so /Inter/ matches the caller's own words.
+    expect(out.designDirection).not.toMatch(/typography/);
+  });
+
+  it("still serves the winner when a vote is not tied", () => {
+    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const evidence = [
+      observation("evidence-2", { ...GATE_FACTS, layoutForm: "two-column", spacingDensity: "compact" }),
+      observation("evidence-3", { ...GATE_FACTS, layoutForm: "two-column", spacingDensity: "compact" }),
+      observation("evidence-4", { ...GATE_FACTS, layoutForm: "three-column", spacingDensity: "airy" }),
+    ];
+    const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+    expect(out.responsiveBehavior).toContain("form: two-column");
+    expect(out.designDirection).toContain("compact");
+  });
+});

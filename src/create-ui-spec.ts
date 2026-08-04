@@ -1090,16 +1090,30 @@ function assembleSpec(
     ...(synthesis?.contentVoiceGuidance ? [] : [{ field: "voice", reason: "Voice analysis prose is not served until provenance governance lands." }]),
     { field: "mood", reason: "Mood is not served until provenance governance lands." },
   ];
-  // Gated-by-trust reasons. A gated array is otherwise indistinguishable from
-  // "the corpus had nothing to say", which is the presence-vs-truth confusion
-  // this whole change exists to remove. Each row is conditional on the SERVED
-  // value being empty — not on `synthesis` being non-null — so the MODEL path
-  // (synthesis === null, specFields fixed-empty) carries the same honest rows,
-  // and a partially-verified response never claims a field is unavailable
-  // while serving it. Each appears at most once (uniqueness is enforced by
+  // Reasons for the five gated array fields. The row's EMISSION is conditioned
+  // on the served value being empty; its WORDING must name the actual cause, or
+  // the row becomes the confidently-wrong output this whole change exists to
+  // remove. Three causes are reachable and they are not interchangeable:
+  //
+  //   1. model path  — `synthesis` is null whenever a proposal exists (`:973`),
+  //      which is a LANE choice, not a trust outcome. Claiming "no verified
+  //      entry" here is false even against a fully verified corpus.
+  //   2. trust gate  — matched entries exist and none carry a verification.
+  //   3. empty corpus content — entries ARE verified but recorded nothing for
+  //      this field (or the identity screen dropped every string).
+  //
+  // Each row appears at most once (uniqueness is enforced by
   // tool-contracts.ts:793-796).
+  const matchedForReason = resolved.matchedEntries.length;
+  const verifiedForReason = resolved.matchedEntries.filter((m) => isVerified(m.entry)).length;
   const gatedReason =
-    "Corpus judgment is served only from entries with a recorded verification; none of the matched entries carry one.";
+    synthesis === null
+      ? "Corpus judgment is not synthesized on the model lane; the proposal carries the model's own direction instead."
+      : matchedForReason > 0 && verifiedForReason === 0
+        ? "Corpus judgment is served only from entries with a recorded verification; none of the matched entries carry one."
+        : verifiedForReason < matchedForReason
+          ? `Only ${verifiedForReason} of ${matchedForReason} matched entries carry a recorded verification, and those recorded nothing servable for this field.`
+          : "The verified corpus entries recorded nothing servable for this field.";
   const gatedEmpty = (
     field: "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior" | "accessibilityConstraints",
   ): boolean =>
@@ -1123,8 +1137,18 @@ function assembleSpec(
     ...RECIPE.unavailableDecisions
       .filter((d) => synthesis === null || d.field !== "colorTokens")
       .map((d) => ({ field: d.field, reason: d.reason })),
+    // The cause comes from the synthesizer, which is the only place that knows
+    // which of the two happened. Guessing "fewer than 3" was wrong in ~99.6% of
+    // real null-palette responses: measured over 3-entry windows of the 668
+    // entries with a non-null muted, only 0.4% agree on all four roles, so
+    // disagreement — not thin retrieval — is the usual cause.
     ...(synthesis !== null && synthesis.colorTokens === null
-      ? [{ field: "colorTokens", reason: "Fewer than 3 matched entries contribute color roles." }]
+      ? [{
+          field: "colorTokens",
+          reason: synthesis.colorTokensRefusal === "no-plurality"
+            ? "Three or more matched entries contributed color roles but did not agree on a single value for every role."
+            : "Fewer than 3 matched entries contribute color roles.",
+        }]
       : []),
     ...c3Unavailable,
     ...c3TrustGated,

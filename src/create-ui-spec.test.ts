@@ -2076,3 +2076,90 @@ describe("create_ui_spec — trust disclosure", () => {
     expect(warning).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Served reasons must be TRUE, not merely present (review round)
+// ---------------------------------------------------------------------------
+
+describe("create_ui_spec — unavailable reasons state the real cause", () => {
+  it("does not claim 'no verified entries' when every matched entry IS verified", async () => {
+    // The bug: the reason row fired whenever the served array was empty, for ANY
+    // cause, while asserting "none of the matched entries carry one". With three
+    // verified entries whose components/accessibilityRisks are empty, that text
+    // is flatly false — the corpus simply recorded nothing for those fields.
+    const corpus = ["a", "b", "c"].map((k, i) =>
+      corpusEntryWithRoles(`cause-${k}`, "#2563eb", ["dashboard", "data-table", "forms"][i]!),
+    );
+    for (const e of corpus) {
+      e.critique = "Clean critique prose about the dashboard layout and its three-column grid.";
+      e.whatToSteal = ["Clean stealable technique about grouping metrics by row."];
+      e.components = [];
+      e.antiPatterns = { antiPatterns: [], whereThisFails: [], accessibilityRisks: [] };
+    }
+    verify(corpus);
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 5 - i }))),
+    );
+    const rows = out.envelope.spec.unavailableDecisions;
+    for (const field of ["componentInventory", "accessibilityConstraints"]) {
+      const row = rows.find((r) => r.field === field);
+      expect(row, `expected a row for ${field}`).toBeDefined();
+      expect(row!.reason, `${field} reason must not claim nothing is verified`)
+        .not.toMatch(/none of the matched entries/i);
+      expect(row!.reason).toMatch(/recorded nothing|did not record/i);
+    }
+  });
+
+  it("does claim 'no verified entries' when that is actually true", async () => {
+    const corpus = [corpusEntryWithRoles("cause-unv", "#2563eb", "dashboard")];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const row = out.envelope.spec.unavailableDecisions.find((r) => r.field === "techniques");
+    expect(row?.reason).toMatch(/verification/i);
+    expect(row?.reason).toMatch(/none of the matched entries/i);
+  });
+
+  it("blames the model lane, not verification, on the model path", async () => {
+    // `synthesis` is null whenever a proposal exists (create-ui-spec.ts:973) —
+    // that is the model path, NOT a trust outcome. Claiming "none of the matched
+    // entries carry a verification" there is false even with a verified corpus.
+    const corpus = [corpusEntryWithRoles("cause-model", "#2563eb", "dashboard")];
+    verify(corpus);
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      {
+        ...deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+        model: { kind: "configured", runtime: gateModelRuntime() },
+      },
+    );
+    expect(out.envelope.modelExecution?.state).toBe("succeeded");
+    const row = out.envelope.spec.unavailableDecisions.find((r) => r.field === "techniques");
+    expect(row).toBeDefined();
+    expect(row!.reason).not.toMatch(/none of the matched entries/i);
+    expect(row!.reason).toMatch(/model/i);
+  });
+
+  it("states the real colorTokens cause when three entries contribute but disagree", async () => {
+    // Measured: only ~0.4% of real 3-entry windows agree on all four roles, so
+    // "fewer than 3 matched entries contribute color roles" was the wrong reason
+    // in almost every null-palette response.
+    const corpus = ["a", "b", "c"].map((k, i) =>
+      corpusEntryWithRoles(`disagree-${k}`, ["#2563eb", "#dc2626", "#16a34a"][i]!, ["dashboard", "data-table", "forms"][i]!),
+    );
+    verify(corpus);
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 5 - i }))),
+    );
+    const spec = out.envelope.spec;
+    expect(spec.colorTokens).toBeNull();
+    const row = spec.unavailableDecisions.find((r) => r.field === "colorTokens");
+    expect(row).toBeDefined();
+    expect(row!.reason, "must not claim thin retrieval when three entries contributed")
+      .not.toMatch(/fewer than 3/i);
+    expect(row!.reason).toMatch(/did not agree|disagree/i);
+  });
+});

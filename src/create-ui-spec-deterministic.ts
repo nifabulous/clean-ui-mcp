@@ -3,7 +3,6 @@ import type { CreateUiSpecRequest } from "./create-ui-spec-contracts.js";
 import type { CorpusEntryT } from "./schema.js";
 import { buildDeniedNames, screenProse } from "./corpus-prose-screen.js";
 import { isVerified, trustedEvidenceIdsOf } from "./corpus-trust.js";
-import { plurality } from "./design-prompt.js";
 
 export interface DeterministicColorTokens {
   primary: string;
@@ -23,8 +22,17 @@ export interface DeterministicLayoutRegion {
 export interface DeterministicSynthesis {
   /** null → keep the recipe's brief echo (no corpus match). */
   designDirection: string | null;
-  /** null → tokens stay unavailable (fewer than 3 contributing entries). */
+  /** null → tokens stay unavailable; {@link colorTokensRefusal} says why. */
   colorTokens: DeterministicColorTokens | null;
+  /**
+   * WHY `colorTokens` is null, so the served `unavailableDecisions` reason can
+   * state the real cause instead of guessing. Two causes are reachable and they
+   * are NOT interchangeable: "fewer than three entries contributed roles" and
+   * "three or more contributed but did not agree". Reporting the first when the
+   * second happened tells a caller retrieval was thin and invites a re-query.
+   * null when tokens are served.
+   */
+  colorTokensRefusal: "insufficient-contributors" | "no-plurality" | null;
   layoutRegions: readonly DeterministicLayoutRegion[];
   responsiveBehavior: readonly string[];
   /** Corpus whatToSteal rows, screened, capped at 5, cited via sourceIds. */
@@ -105,16 +113,25 @@ const DATA_ONLY_VOICE_EXAMPLE = /^[\d\s.,%$£€+-]+$/;
  * every other. `design-prompt.ts:51` keeps the first-inserted value on a tie,
  * which turns retrieval order into a consensus claim.
  */
-function strictPlurality(values: readonly string[]): string | undefined {
+function strictPlurality<T>(values: readonly T[]): T | undefined {
   if (values.length === 0) return undefined;
-  const counts = new Map<string, number>();
-  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
-  let best: string | undefined;
+  const counts = new Map<string, { value: T; count: number }>();
+  // Keyed by a stable serialization so OBJECT votes (typePairing) compare by
+  // value rather than by reference — `plurality` used the raw value as a Map key,
+  // so two structurally identical pairings from different entries counted as two
+  // separate candidates and neither ever reached a majority.
+  for (const v of values) {
+    const key = typeof v === "string" ? v : JSON.stringify(v);
+    const hit = counts.get(key);
+    if (hit) hit.count += 1;
+    else counts.set(key, { value: v, count: 1 });
+  }
+  let best: T | undefined;
   let bestCount = 0;
   let tied = false;
-  for (const [v, c] of counts) {
-    if (c > bestCount) { best = v; bestCount = c; tied = false; }
-    else if (c === bestCount) { tied = true; }
+  for (const { value, count } of counts.values()) {
+    if (count > bestCount) { best = value; bestCount = count; tied = false; }
+    else if (count === bestCount) { tied = true; }
   }
   return tied ? undefined : best;
 }
@@ -163,6 +180,7 @@ export function createUiSpecDeterministic(
     return {
       designDirection: null,
       colorTokens: null,
+      colorTokensRefusal: "insufficient-contributors",
       layoutRegions: [],
       responsiveBehavior: [],
       techniques: [],
@@ -225,6 +243,10 @@ export function createUiSpecDeterministic(
           accent: roleVotes.accent,
         }
       : null;
+  const colorTokensRefusal: DeterministicSynthesis["colorTokensRefusal"] =
+    colorTokens !== null ? null
+      : roleVotes === null ? "insufficient-contributors"
+      : "no-plurality";
 
   // Layout regions from the wireframe roles (closed enum), deduped in order.
   const seen = new Set<string>();
@@ -237,7 +259,7 @@ export function createUiSpecDeterministic(
     }
   }
   const layoutForms = facts.map((f) => f.layoutForm).filter((v): v is NonNullable<typeof v> => Boolean(v));
-  const layoutForm = plurality(layoutForms);
+  const layoutForm = strictPlurality(layoutForms);
   // Responsive-behavior rows: the corpus's closed responsiveBehavior enum plus
   // the layout-form plurality, both in the existing "label: value" style. The
   // enum is a closed token (design spec §2b) — no identity screen needed.
@@ -269,12 +291,12 @@ export function createUiSpecDeterministic(
   // matched entries — they are deliberately absent from structuredFacts — so
   // they are read through the internal matchedEntries channel, exactly like
   // the six prose fields above.
-  const density = plurality(facts.map((f) => f.spacingDensity).filter((v): v is NonNullable<typeof v> => Boolean(v)));
-  const corners = plurality(facts.map((f) => f.cornerStyle).filter((v): v is NonNullable<typeof v> => Boolean(v)));
+  const density = strictPlurality(facts.map((f) => f.spacingDensity).filter((v): v is NonNullable<typeof v> => Boolean(v)));
+  const corners = strictPlurality(facts.map((f) => f.cornerStyle).filter((v): v is NonNullable<typeof v> => Boolean(v)));
   const shadows = majority(facts.filter((f) => typeof f.usesShadows === "boolean").map((f) => f.usesShadows as boolean));
   const borders = majority(facts.filter((f) => typeof f.usesBorders === "boolean").map((f) => f.usesBorders as boolean));
   const pairings = facts.map((f) => f.typePairing).filter((v): v is NonNullable<typeof v> => Boolean(v));
-  const pairing = plurality(pairings);
+  const pairing = strictPlurality(pairings);
   // Shared identity screen for every corpus-prose string (drop whole, never
   // redact). Built once so the direction's prose segments (including the
   // font-family clause, which can carry a product name) and the six prose
@@ -495,6 +517,7 @@ export function createUiSpecDeterministic(
   return {
     designDirection,
     colorTokens,
+    colorTokensRefusal,
     layoutRegions,
     responsiveBehavior,
     techniques,

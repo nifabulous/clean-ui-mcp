@@ -312,24 +312,41 @@ re-tagging (or backfilling) entries.
 
 ---
 
-## Provenance governance flip (serve signed prose)
+## Corpus trust gate: Stage 2 — the verifier that lets entries pass it
 
-**What:** The C3 upgrade path: once `provenance` is load-bearing (human-signed
-entries exist), revisit the "no corpus content is ever returned" tool
-description and allow serving `critique`/`whatToSteal` prose for
-human-signed entries as `evidence[].summary`.
+**What:** Build the verifier that writes `provenance.verification`. Stage 1
+(shipped, `docs/superpowers/plans/2026-08-04-corpus-trust-gate.md`) added the
+fail-closed gate: `isVerified` in `src/corpus-trust.ts` reads that record, and
+`createUiSpecDeterministic` shadows its `matchedEntries` parameter with the
+trusted subset, so no corpus-derived value is served without one. **Zero of 787
+entries carry the record**, so the gate currently serves nothing corpus-derived
+and every gated field ships an honest reason row plus an
+`insufficientCorpusEvidence` warning with the verified-source count.
 
-**Why:** The deterministic body and model lane currently exclude all written
-judgments (rejectedDefaults, voice, mood stay unavailable) because the corpus
-has zero human provenance (measured: 787 auto/auto-reviewed). The prose is the
-product's core taste asset; serving it requires a deliberate contract change
-plus governance.
+Stage 2 makes entries eligible by re-tagging against evidence that can be
+checked, per the three tiers in
+`docs/superpowers/specs/2026-08-04-corpus-trust-gate-design.md`:
+`measured` (read off the page), `provable` (derivable from recorded data), and
+`image-confirmed` (a verifier that ACTUALLY SAW the image agreed, bound to the
+bytes via `imageSha256`).
 
-**Trigger:** when the first human-signed entry class exists and the
-`provenance` acceptance bar is enforced.
+**Why:** This replaces the human-signature framing this TODO used to carry. The
+corpus is ~700 entries and growing, and agents — not a curator — have to be able
+to clear it, so the bar is checkable evidence, not a signature. The audit that
+motivated the gate found 733 of 787 entries defective, with critiques that were
+wholly fabricated; root cause is `src/tagger.ts:3026`, where Pass 2 (critique)
+runs with `null` for the image and is told to "treat every value below as fact",
+so it elaborates confidently on whatever Pass 1 produced. Fixing the blind pass
+is Stage 2's first job — re-tagging with the same blind critique step would just
+mint verified fabrications.
 
-**Depends on:** the provenance/curation workstream (acceptance bar: auto only
-on facts; critique/anti-pattern prose flips to trusted only after human sign).
+**Do NOT:** grant `verification` from `doctor.ts`'s defect scan. Mechanical
+cleanliness is necessary and not sufficient — the worst entry in the audit trips
+zero of the eight detectors.
+
+**Depends on:** Stage 1 (shipped). Stage 2 owns `src/tagger.ts`, which had
+uncommitted third-party edits in the working tree as of 2026-08-04 — reconcile
+those before editing it.
 
 ---
 
@@ -430,35 +447,6 @@ plan's verification step as an optional `--live` flag (never CI default — it
 spends tokens).
 
 **Depends on / blocked by:** Plan 1 (`docs/superpowers/plans/2026-08-02-model-lane-reliability.md`).
-
-## C3 Phase 1: cap the synthesized direction length
-
-**What:** Bound the corpus-judgment `designDirection` (root UiSpec field, no
-schema max at `src/tool-contracts.ts:764`). C3 Phase 1 folds every matched
-entry's critique verbatim into the direction; measured against the real corpus,
-three long-critique matches that survive the screen produce a **4,848-char**
-direction (entries `bli-bli-2`, `origin-origin`,
-`wealthsimple-wealthsimple-ios-screens-33-2026-07-05`; a 1.9 KB critique
-each). The 2,500-char cap at `tool-contracts.ts:640` is the model proposal's,
-not the root field's, so the gate lets it through.
-
-**Why:** A multi-KB "direction" is a prose dump, not a direction — it dominates
-the handoff and buries the actual signals. It also sits awkwardly against the
-§6 tool-description promise ("longer brand or legal prose does not" appear),
-which invites a length bound for critique contributions.
-
-**Trigger (build when):** A request with long-critique matches produces a
-direction over ~2,000 chars, or anyone reads a handoff whose direction is
-dominated by verbatim critique.
-
-**Scope when triggered:** Window critique contributions like voice examples
-(e.g. a per-entry character cap with a bounded total) or cap the number of
-critique-bearing entries folded in. Keep the drop-whole screen semantics —
-never truncate in place; a screened string is dropped, and a capped string is
-chosen or omitted whole.
-
-**Depends on / blocked by:** None. This is a follow-up to
-`2026-08-03-c3-serve-corpus-prose-phase1.md` Task 5.
 
 ## C3 Phase 1: public-mode denied-name manifest
 

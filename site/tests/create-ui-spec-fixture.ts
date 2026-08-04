@@ -88,6 +88,21 @@ function seededEntry(): CorpusEntryT {
       width: 1280,
       height: 800,
     },
+    // Verified for the C3 trust gate. The browser suites' marker sweeps are only
+    // real checks if this entry's corpus PROSE actually reaches the page and the
+    // handoff — their explicit anti-vacuity assertions say so. Without a
+    // verification record the gate serves no corpus prose and both sweeps pass by
+    // serving nothing, which is the false confidence they were written to catch.
+    // Identity containment, what these suites test, is independent of trust.
+    provenance: {
+      taggedBy: "auto",
+      verification: {
+        method: "image-confirmed",
+        verifiedAt: "2026-08-04",
+        verifierVersion: "site-fixture",
+        imageSha256: "a".repeat(64),
+      },
+    },
     critique: "critique prose that must never leave the server",
     whatToSteal: ["stealable prose that must never leave the server"],
     antiPatterns: { antiPatterns: [], whereThisFails: [], accessibilityRisks: [] },

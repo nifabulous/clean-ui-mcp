@@ -41,6 +41,12 @@ import {
 import { canonicalJsonStringify, sha256Hex } from "./readiness/contracts.js";
 import { createUiSpec, createUiSpecForAdapter, buildFallbackCandidate, RECIPE_EVIDENCE_ID, type CreateUiSpecDependencies } from "./create-ui-spec.js";
 import recipe from "./c3/fallback-recipe-v1.json" with { type: "json" };
+import type { CreateUiSpecModelRuntime } from "./create-ui-spec-model.js";
+import {
+  ModelGenerationParametersSchema,
+  PinnedModelEndpointSchema,
+} from "./create-ui-spec-model-contracts.js";
+import type { ModelArtifactRecord } from "./model-artifact-store.js";
 import type { SanitizedEvidence } from "./create-ui-spec-contracts.js";
 import type { DesignArtifactEnvelope } from "./create-ui-spec-contracts.js";
 import { Evidence, ToolResultSchemas, findUnsafeCreateUiSpecLeaves } from "./tool-contracts.js";
@@ -1881,4 +1887,134 @@ it("serves corpus judgment into the six UiSpec fields, evidence-cited and gate-c
   // prerequisites) accepts the produced envelope.
   const r = ToolResultSchemas.create_ui_spec.safeParse(mcqPayload(out));
   expect(r.success, r.success ? "" : JSON.stringify(r.error.issues)).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// C3 trust gate — honest reasons for gated fields (Stage 1, Task 3)
+// ---------------------------------------------------------------------------
+
+const GATED_ARRAY_FIELDS = [
+  "techniques", "antiPatterns", "componentInventory",
+  "responsiveBehavior", "accessibilityConstraints",
+] as const;
+
+/**
+ * A minimal configured model runtime for the trust-gate suites: a stubbed `call`
+ * returning a valid proposal, an in-memory artifact store. It exists so the
+ * gated-reason assertions can run on the MODEL path (synthesis === null), which
+ * is the path a `synthesis`-conditioned reason row would silently skip.
+ */
+function gateModelRuntime(): CreateUiSpecModelRuntime {
+  const proposal = {
+    status: "proposal-only",
+    disclaimer: "Proposal only; not accepted into token authority.",
+    designDirection: "Use compact grouping, restrained emphasis, and stable alignment.",
+  };
+  const records = new Map<string, ModelArtifactRecord>();
+  return {
+    endpoint: PinnedModelEndpointSchema.parse({
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1/responses",
+      apiKey: "gate-test-key",
+      model: "gpt-5-mini",
+    }),
+    parameters: ModelGenerationParametersSchema.parse({
+      temperature: 0, maxOutputTokens: 4096, maxAttempts: 1, seed: null,
+    }),
+    call: vi.fn(async () => ({
+      content: JSON.stringify(proposal),
+      provider: "openai" as const,
+      model: "gpt-5-mini",
+      usage: { promptTokens: 10, completionTokens: 5, raw: {} },
+      attempts: 1,
+      latencyMs: 3,
+      providerRequestId: "gate-test-req",
+    })) as CreateUiSpecModelRuntime["call"],
+    store: {
+      save: vi.fn(async (r: ModelArtifactRecord) => { records.set(r.artifactId, r); }),
+      read: vi.fn(async (id: string) => records.get(id) ?? null),
+      delete: vi.fn(async (id: string) => records.delete(id)),
+    },
+  };
+}
+
+describe("create_ui_spec — gated fields carry honest reasons", () => {
+  it("emits one unavailable row per gated field and keeps them unique", async () => {
+    const corpus = [corpusEntryWithRoles("gate-a", "#2563eb", "dashboard")];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const rows = out.envelope.spec.unavailableDecisions;
+    const fields = rows.map((r) => r.field);
+
+    for (const field of GATED_ARRAY_FIELDS) {
+      expect(fields, `missing reason row for ${field}`).toContain(field);
+      const row = rows.find((r) => r.field === field);
+      expect(row?.reason).toMatch(/verified|verification/i);
+    }
+    // The UiSpec gate requires uniqueness; assert it directly so a duplicate is
+    // caught here rather than as an opaque parse failure.
+    expect(new Set(fields).size).toBe(fields.length);
+  });
+
+  it("emits the same rows on the MODEL path, where synthesis is null", async () => {
+    // The reason rows are conditioned on the SERVED value being empty, not on
+    // `synthesis` being non-null — otherwise the model path (synthesis === null,
+    // fixed-empty specFields) would serve empty arrays with no explanation.
+    const corpus = [corpusEntryWithRoles("gate-m", "#2563eb", "dashboard")];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      {
+        ...deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+        model: { kind: "configured", runtime: gateModelRuntime() },
+      },
+    );
+    expect(out.envelope.modelExecution?.state).toBe("succeeded");
+    const fields = out.envelope.spec.unavailableDecisions.map((r) => r.field);
+    for (const field of GATED_ARRAY_FIELDS) {
+      expect(fields, `missing reason row for ${field} on the model path`).toContain(field);
+    }
+    expect(new Set(fields).size).toBe(fields.length);
+  });
+
+  it("reverts colour authority with no extra code when tokens are gated", async () => {
+    const corpus = [corpusEntryWithRoles("gate-b", "#2563eb", "dashboard")];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const spec = out.envelope.spec;
+    expect(spec.colorTokens).toBeNull();
+    expect(spec.colorTokenAuthority).toBe("editorial");
+    expect(spec.citedDecisions.some((d) => d.field === "colorTokens" && d.authority === "corpus-evidence")).toBe(false);
+    expect(spec.citedDecisions.some((d) => d.authority === "corpus-evidence")).toBe(false);
+    expect(spec.designDirection).not.toMatch(/evidence-\d/);
+  });
+
+  it("omits a field's reason row when that field IS served", async () => {
+    // Partial verification must not claim a field is unavailable while serving
+    // it. Three verified entries populate techniques/antiPatterns, so those two
+    // rows must be absent while the still-empty fields keep theirs.
+    const corpus = ["a", "b", "c"].map((k, i) =>
+      corpusEntryWithRoles(`gate-p-${k}`, "#2563eb", ["dashboard", "data-table", "forms"][i]!),
+    );
+    for (const e of corpus) {
+      e.critique = "Clean critique prose about the dashboard layout and its three-column grid.";
+      e.whatToSteal = ["Clean stealable technique about grouping metrics by row."];
+      e.antiPatterns = { antiPatterns: ["Avoid stacking two shadow depths."], whereThisFails: [], accessibilityRisks: [] };
+    }
+    verify(corpus);
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 5 - i }))),
+    );
+    const spec = out.envelope.spec;
+    const fields = spec.unavailableDecisions.map((r) => r.field);
+    expect(spec.techniques.length).toBeGreaterThan(0);
+    expect(fields).not.toContain("techniques");
+    expect(spec.antiPatterns.length).toBeGreaterThan(0);
+    expect(fields).not.toContain("antiPatterns");
+    expect(new Set(fields).size).toBe(fields.length);
+  });
 });

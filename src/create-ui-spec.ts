@@ -8,10 +8,11 @@
  *
  *  1. Input normalization — parse the request through CreateUiSpecRequestSchema
  *     (exact fields; no `outputFormat`).
- *  2. Evidence resolution — keyword-only retrieval capped at 20 then sliced,
- *     product-diverse selection of at most five; explicit reference-token
- *     resolution through an injected resolver. The core NEVER dispatches to a
- *     network-backed search path.
+ *  2. Evidence resolution — keyword-only retrieval capped at 20 then sliced to
+ *     the top 3 by rank, deduped so one patternType cannot take two slots (there
+ *     is NO product-diversity pick — see the note at the `distinctPatterns`
+ *     helper); explicit reference-token resolution through an injected resolver.
+ *     The core NEVER dispatches to a network-backed search path.
  *  3. Typed sanitization — allowlist projection from CorpusEntry into
  *     response-scoped SanitizedEvidence (evidence-1, evidence-2, ...). Recipe-
  *     owned summaries; never critique/voice/product-name/url/prose.
@@ -1089,6 +1090,28 @@ function assembleSpec(
     ...(synthesis?.contentVoiceGuidance ? [] : [{ field: "voice", reason: "Voice analysis prose is not served until provenance governance lands." }]),
     { field: "mood", reason: "Mood is not served until provenance governance lands." },
   ];
+  // Gated-by-trust reasons. A gated array is otherwise indistinguishable from
+  // "the corpus had nothing to say", which is the presence-vs-truth confusion
+  // this whole change exists to remove. Each row is conditional on the SERVED
+  // value being empty — not on `synthesis` being non-null — so the MODEL path
+  // (synthesis === null, specFields fixed-empty) carries the same honest rows,
+  // and a partially-verified response never claims a field is unavailable
+  // while serving it. Each appears at most once (uniqueness is enforced by
+  // tool-contracts.ts:793-796).
+  const gatedReason =
+    "Corpus judgment is served only from entries with a recorded verification; none of the matched entries carry one.";
+  const gatedEmpty = (
+    field: "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior" | "accessibilityConstraints",
+  ): boolean =>
+    ((synthesis && synthesis[field].length > 0 ? synthesis[field] : specFields[field]) as readonly unknown[])
+      .length === 0;
+  const c3TrustGated: UiSpecT["unavailableDecisions"] = [
+    ...(gatedEmpty("techniques") ? [{ field: "techniques", reason: gatedReason }] : []),
+    ...(gatedEmpty("antiPatterns") ? [{ field: "antiPatterns", reason: gatedReason }] : []),
+    ...(gatedEmpty("componentInventory") ? [{ field: "componentInventory", reason: gatedReason }] : []),
+    ...(gatedEmpty("responsiveBehavior") ? [{ field: "responsiveBehavior", reason: gatedReason }] : []),
+    ...(gatedEmpty("accessibilityConstraints") ? [{ field: "accessibilityConstraints", reason: gatedReason }] : []),
+  ];
   // The recipe ALREADY declares a colorTokens unavailableDecision
   // (fallback-recipe-v1.json); the UiSpec gate requires unavailableDecisions
   // fields to be UNIQUE (tool-contracts.ts:778-781) and forbids a colorTokens
@@ -1104,6 +1127,7 @@ function assembleSpec(
       ? [{ field: "colorTokens", reason: "Fewer than 3 matched entries contribute color roles." }]
       : []),
     ...c3Unavailable,
+    ...c3TrustGated,
   ];
 
   // Acceptance criteria: the recipe's single manual criterion.

@@ -2564,41 +2564,6 @@ export async function callTextModel(
 }
 
 /**
- * Vision-capable model call for non-tagger consumers (e.g. the corpus scout).
- * Mirrors callTextModel but sends an image and routes through the extraction
- * pass's provider/key resolution (the pass that requires a vision provider).
- * One shared provider abstraction — the scout must not reimplement image
- * encoding or provider fallback, or the two paths could drift apart.
- */
-export async function callVisionModel(
-  prompt: string,
-  imagePath: string,
-  providerOverride?: Provider,
-  retryFeedback?: string,
-  endpointOverride?: EndpointOverride,
-  detail: "low" | "high" = "low",
-): Promise<string> {
-  if (endpointOverride) validateEndpointOverride(endpointOverride, "extraction");
-  const cfgOverride = endpointOverride?.provider === "openai" && endpointOverride.model && endpointOverride.apiKey
-    ? {
-        baseUrl: (endpointOverride.baseUrl ?? "").replace(/\/+$/, ""),
-        apiKey: endpointOverride.apiKey,
-        model: endpointOverride.model,
-      }
-    : undefined;
-  return callModel(
-    "extraction",
-    prompt,
-    imagePath,
-    retryFeedback,
-    detail,
-    undefined,
-    endpointOverride?.provider ?? providerOverride,
-    cfgOverride,
-  );
-}
-
-/**
  * C2 telemetry path. Requires an explicit endpoint+model (no ambient routing),
  * surfaces normalized usage / identity / attempts / latency / request id, and
  * fails closed when the provider omits usable token accounting or returns a

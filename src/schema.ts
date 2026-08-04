@@ -607,12 +607,27 @@ export const CorpusEntry = z.object({
      * REQUIRED when `method` is "image-confirmed" and omitted for `measured`,
      * whose evidence is the live DOM rather than the pixels.
      */
+    /**
+     * `method` is a plain string and unknown keys pass through, ON PURPOSE. The
+     * accepted tiers live in `corpus-trust.ts`'s VERIFICATION_METHODS, which is
+     * the sole authority on whether a record grants trust.
+     *
+     * A `z.enum` here would defeat the forward compatibility the gate documents:
+     * `corpus-reader.ts:332` THROWS on a failed parse, so a corpus written by a
+     * newer verifier — one extra tier, or one extra field like `confidence` —
+     * would make an older build refuse the ENTIRE corpus rather than decline the
+     * rows it does not understand. Readability and trust are different questions;
+     * only the second is fail-closed.
+     *
+     * `imageSha256` keeps its shape check: a non-hex hash is a writer bug, not a
+     * newer tier, and there is nothing to be forward-compatible with.
+     */
     verification: z.object({
-      method: z.enum(["measured", "provable", "image-confirmed"]),
+      method: z.string().min(1),
       verifiedAt: z.string().min(1),
       verifierVersion: z.string().min(1),
       imageSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
-    }).strict().optional(),
+    }).passthrough().optional(),
   }).optional(),
 })
 // qualityScore ↔ qualityTier coupling: cautionary entries score 1-2 (sinking in

@@ -17,11 +17,13 @@ function entriesOf(matches: readonly { entry: CorpusEntryT }[]): CorpusEntryT[] 
 }
 
 /**
- * A verification record the C3 trust gate accepts. Fixtures carry it BY DEFAULT
- * because most tests in this file have serving behaviour as their subject
- * (prose composition, identity screening, direction bounds) and the gate would
- * otherwise empty every one of them. Tests whose subject is the gate itself use
- * {@link unverifiedProseEntry} to opt out explicitly.
+ * A verification record the C3 trust gate accepts.
+ *
+ * The fixture default is UNVERIFIED, matching production (0 of 787 real entries
+ * carry a record) and matching the fail-closed default the module enforces.
+ * Tests whose subject is serving behaviour opt IN via {@link verifiedProseEntry}.
+ * The inverse — verified-by-default — meant every future test in a file testing a
+ * fail-closed gate silently opted into trust.
  */
 const VERIFIED = {
   taggedBy: "auto",
@@ -43,12 +45,15 @@ const VERIFIED = {
 function verifiedPairsFor(
   evidence: readonly { id: string }[],
 ): { evidenceId: string; entry: CorpusEntryT }[] {
-  return evidence.map((e) => matched(e.id, proseEntry({ id: `entry-${e.id}` })));
+  // A TRUST-ONLY stub: it supplies the verification record the evidence-id bridge
+  // needs and NO prose. An earlier version returned a full `proseEntry`, whose
+  // `responsiveBehavior: "responsive"` leaked a served row into tests that were
+  // only asking for trust — which is what forced one assertion to be relaxed.
+  return evidence.map((e) => matched(e.id, { id: `entry-${e.id}`, provenance: VERIFIED, whatToSteal: [] }));
 }
 
 function proseEntry(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    provenance: VERIFIED,
     id: "fixture-entry",
     title: "FixtureCo — workspace",
     source: { productName: "FixtureCo" },
@@ -183,18 +188,17 @@ describe("createUiSpecDeterministic", () => {
     ] as never;
     const out = createUiSpecDeterministic(evidence, verifiedPairsFor(evidence), [], REQUEST);
     expect(out.layoutRegions.map((r) => r.name)).toEqual(["primary-nav", "main-canvas"]);
-    // No form string may be fabricated when the corpus entry carries none. The
-    // matched entry's own `responsiveBehavior: "responsive"` still yields a
-    // "mode:" row — that IS corpus-derived, so the assertion targets the absent
-    // signal specifically rather than the whole array.
-    expect(out.responsiveBehavior.filter((r) => r.startsWith("form:"))).toEqual([]);
+    // No form string may be fabricated when the corpus entry carries none. Exact,
+    // not filtered: `verifiedPairsFor` supplies trust only, so nothing else may
+    // appear here either.
+    expect(out.responsiveBehavior).toEqual([]);
   });
 
   it("populates the six corpus fields from matched entries, citing each row's evidence id", () => {
     const evidence = [
       observation("evidence-2", { pattern: "dashboard" }),
     ];
-    const matches = [matched("evidence-2", proseEntry())];
+    const matches = [matched("evidence-2", verifiedProseEntry())];
     const out = createUiSpecDeterministic(
       evidence as never,
       matches,
@@ -231,8 +235,8 @@ describe("createUiSpecDeterministic", () => {
       observation("evidence-3", { pattern: "dashboard" }),
     ];
     const matches = [
-      matched("evidence-2", proseEntry()),
-      matched("evidence-3", proseEntry({
+      matched("evidence-2", verifiedProseEntry()),
+      matched("evidence-3", verifiedProseEntry({
         source: { productName: "Superhuman" },
         title: "Superhuman — mail",
         whatToSteal: ["Superhuman triage is the hook", "Plain stealable row"],
@@ -258,7 +262,7 @@ describe("createUiSpecDeterministic", () => {
     // matched entries: a matched row naming "Mobbin" must be dropped even
     // though Mobbin is not one of the entries matched for this request.
     const evidence = [observation("evidence-2", { pattern: "dashboard" })];
-    const matches = [matched("evidence-2", proseEntry({
+    const matches = [matched("evidence-2", verifiedProseEntry({
       whatToSteal: ["Mobbin triage is the hook", "Clean stealable row"],
     }))];
     const corpusEntries: CorpusEntryT[] = [
@@ -287,9 +291,9 @@ describe("createUiSpecDeterministic", () => {
     });
     const evidence = [observation("evidence-2", { pattern: "dashboard" })];
     const matches = [
-      matched("evidence-2", many("A")),
-      matched("evidence-3", many("B")),
-      matched("evidence-4", many("C")),
+      matched("evidence-2", { ...many("A"), provenance: VERIFIED }),
+      matched("evidence-3", { ...many("B"), provenance: VERIFIED }),
+      matched("evidence-4", { ...many("C"), provenance: VERIFIED }),
     ];
     const out = createUiSpecDeterministic(
       evidence as never,
@@ -315,7 +319,7 @@ describe("createUiSpecDeterministic", () => {
         avoid: [],
       },
     });
-    const matches = [matched("evidence-2", entry)];
+    const matches = [matched("evidence-2", { ...entry, provenance: VERIFIED })];
     const out = createUiSpecDeterministic(
       [observation("evidence-2", { pattern: "dashboard" })] as never,
       matches,
@@ -328,7 +332,7 @@ describe("createUiSpecDeterministic", () => {
   it("composes contentVoiceGuidance per segment presence (each combination pinned)", () => {
     const base = proseEntry();
     const run = (voice: Record<string, unknown> | undefined): string | null => {
-      const matches = [matched("evidence-2", { ...base, voice })];
+      const matches = [matched("evidence-2", { ...base, voice, provenance: VERIFIED })];
       return createUiSpecDeterministic(
         [observation("evidence-2", { pattern: "dashboard" })] as never,
         matches,
@@ -360,8 +364,8 @@ describe("createUiSpecDeterministic", () => {
       observation("evidence-2", { pattern: "dashboard", layoutForm: "three-column" }),
     ];
     const matches = [
-      matched("evidence-2", proseEntry()),
-      matched("evidence-3", proseEntry({ id: "other", components: ["kpi-card", "action-list"] })),
+      matched("evidence-2", verifiedProseEntry()),
+      matched("evidence-3", verifiedProseEntry({ id: "other", components: ["kpi-card", "action-list"] })),
     ];
     const out = createUiSpecDeterministic(
       evidence as never,
@@ -381,7 +385,7 @@ describe("createUiSpecDeterministic", () => {
   });
 
   it("folds group-B signals into the direction as cited signals", () => {
-    const matches = [matched("evidence-2", proseEntry())];
+    const matches = [matched("evidence-2", verifiedProseEntry())];
     const out = createUiSpecDeterministic(
       [observation("evidence-2", { pattern: "dashboard", spacingDensity: "compact" })] as never,
       matches,
@@ -401,8 +405,8 @@ describe("createUiSpecDeterministic", () => {
 
   it("drops only the screened segment, not the whole direction, when a folded signal names a corpus product", () => {
     const matches = [
-      matched("evidence-2", proseEntry()),
-      matched("evidence-3", proseEntry({
+      matched("evidence-2", verifiedProseEntry()),
+      matched("evidence-3", verifiedProseEntry({
         source: { productName: "Superhuman" },
         title: "Superhuman — mail",
         critique: "A critique long enough to satisfy the schema minimum that mentions Superhuman triage as the hook.",
@@ -425,8 +429,8 @@ describe("createUiSpecDeterministic", () => {
 
   it("drops a critique naming its own entry's product but keeps sibling signals", () => {
     const matches = [
-      matched("evidence-2", proseEntry()),
-      matched("evidence-3", proseEntry({
+      matched("evidence-2", verifiedProseEntry()),
+      matched("evidence-3", verifiedProseEntry({
         source: { productName: "Superhuman" },
         title: "Superhuman — mail",
         critique: "Superhuman's own triage critique is long enough to satisfy the schema minimum length.",
@@ -444,7 +448,7 @@ describe("createUiSpecDeterministic", () => {
   });
 
   it("never splices a multi-sentence brief mid-sentence", () => {
-    const matches = [matched("evidence-2", proseEntry())];
+    const matches = [matched("evidence-2", verifiedProseEntry())];
     const out = createUiSpecDeterministic(
       [observation("evidence-2", { pattern: "dashboard", spacingDensity: "compact" })] as never,
       matches,
@@ -494,7 +498,7 @@ describe("createUiSpecDeterministic — direction size guard", () => {
     usesShadows: false, usesBorders: true, layoutForm: "two-column",
   };
   const evidence = [2, 3, 4, 5, 6].map((n) => observation(`evidence-${n}`, facts));
-  const matches = [2, 3, 4, 5, 6].map((n) => matched(`evidence-${n}`, longProseEntry(n)));
+  const matches = [2, 3, 4, 5, 6].map((n) => matched(`evidence-${n}`, { ...longProseEntry(n), provenance: VERIFIED }));
 
   it("bounds the corpus-signal section of the direction", () => {
     const out = createUiSpecDeterministic(evidence, matches, entriesOf(matches), REQUEST);
@@ -546,7 +550,7 @@ describe("createUiSpecDeterministic — direction size guard", () => {
     // "…without mixing typefaces.. Let those signals lead" — corpus prose ends
     // in a period and the template appends one. Real corpus values, not a short
     // fixture (CLAUDE.md: render templates with real inputs).
-    const withPeriods = [2, 3].map((n) => matched(`evidence-${n}`, proseEntry({
+    const withPeriods = [2, 3].map((n) => matched(`evidence-${n}`, verifiedProseEntry({
       id: `period-${n}`,
       title: `PeriodCo${n} — workspace`,
       source: { productName: `PeriodCo${n}` },
@@ -564,7 +568,7 @@ describe("createUiSpecDeterministic — direction size guard", () => {
     expect(direction).not.toMatch(/\.\./);
     // A value ending in an ellipsis must not collide with the appended period
     // either — one stripped period is not enough.
-    const ellipsis = [2].map((n) => matched(`evidence-${n}`, proseEntry({
+    const ellipsis = [2].map((n) => matched(`evidence-${n}`, verifiedProseEntry({
       id: `ellipsis-${n}`,
       title: `EllipsisCo${n} — workspace`,
       source: { productName: `EllipsisCo${n}` },
@@ -589,11 +593,9 @@ describe("createUiSpecDeterministic — direction size guard", () => {
 // Trust gate (Stage 1)
 // ---------------------------------------------------------------------------
 
-/** The same fixture with NO verification record — the gate must refuse it. */
-function unverifiedProseEntry(over: Record<string, unknown> = {}): Record<string, unknown> {
-  const e = proseEntry(over);
-  delete e.provenance;
-  return e;
+/** The fixture WITH a verification record — the gate must serve from it. */
+function verifiedProseEntry(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return proseEntry({ provenance: VERIFIED, ...over });
 }
 
 const GATE_FACTS = {
@@ -604,7 +606,7 @@ const GATE_FACTS = {
 
 describe("createUiSpecDeterministic — trust gate", () => {
   it("serves nothing corpus-derived when no entry is verified", () => {
-    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, unverifiedProseEntry({ id: `u-${n}` })));
+    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, proseEntry({ id: `u-${n}` })));
     const evidence = [2, 3, 4].map((n) => observation(`evidence-${n}`, GATE_FACTS));
     const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
 
@@ -621,8 +623,8 @@ describe("createUiSpecDeterministic — trust gate", () => {
 
   it("is a filter, not an off switch — verified entries still serve", () => {
     const matches = [
-      matched("evidence-2", proseEntry({ id: "v-2" })),
-      matched("evidence-3", unverifiedProseEntry({ id: "u-3" })),
+      matched("evidence-2", verifiedProseEntry({ id: "v-2" })),
+      matched("evidence-3", proseEntry({ id: "u-3" })),
     ];
     const evidence = [
       observation("evidence-2", GATE_FACTS),
@@ -642,9 +644,9 @@ describe("createUiSpecDeterministic — trust gate", () => {
   // from one entry while claiming three backed it.
   it("counts trusted contributors, not matched ones, for the token threshold", () => {
     const matches = [
-      matched("evidence-2", proseEntry({ id: "v-2" })),
-      matched("evidence-3", unverifiedProseEntry({ id: "u-3" })),
-      matched("evidence-4", unverifiedProseEntry({ id: "u-4" })),
+      matched("evidence-2", verifiedProseEntry({ id: "v-2" })),
+      matched("evidence-3", proseEntry({ id: "u-3" })),
+      matched("evidence-4", proseEntry({ id: "u-4" })),
     ];
     const evidence = [2, 3, 4].map((n) => observation(`evidence-${n}`, GATE_FACTS));
     const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
@@ -652,7 +654,7 @@ describe("createUiSpecDeterministic — trust gate", () => {
   });
 
   it("populates tokens once three entries are verified", () => {
-    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, verifiedProseEntry({ id: `v-${n}` })));
     const evidence = [2, 3, 4].map((n) => observation(`evidence-${n}`, GATE_FACTS));
     const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
     expect(out.colorTokens).not.toBeNull();
@@ -667,7 +669,7 @@ describe("createUiSpecDeterministic — trust gate", () => {
       ...GATE_FACTS,
       colorRoles: { canvas: "#ffffff", surface: "#f8fafc", ink: "#111827", muted: "#6b7280", accent },
     });
-    const matches = [2, 3, 4, 5].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const matches = [2, 3, 4, 5].map((n) => matched(`evidence-${n}`, verifiedProseEntry({ id: `v-${n}` })));
     const evidence = [
       observation("evidence-2", withAccent("#2563eb")),
       observation("evidence-3", withAccent("#2563eb")),
@@ -679,7 +681,7 @@ describe("createUiSpecDeterministic — trust gate", () => {
   });
 
   it("gates layoutRegions through the same evidence-id bridge", () => {
-    const matches = [matched("evidence-2", unverifiedProseEntry({ id: "u-2" }))];
+    const matches = [matched("evidence-2", proseEntry({ id: "u-2" }))];
     const evidence = [observation("evidence-2", {
       ...GATE_FACTS, layoutRoles: ["primary-nav", "main-canvas"],
     })];
@@ -690,7 +692,7 @@ describe("createUiSpecDeterministic — trust gate", () => {
   it("keeps trust and identity independent", () => {
     // A verified entry whose prose names its own product is still dropped by the
     // identity screen. Trust does not buy an identity exemption.
-    const named = proseEntry({
+    const named = verifiedProseEntry({
       id: "v-2",
       source: { productName: "Trustworthy" },
       whatToSteal: ["Copy the way Trustworthy anchors its filter rail."],
@@ -699,6 +701,14 @@ describe("createUiSpecDeterministic — trust gate", () => {
     const evidence = [observation("evidence-2", GATE_FACTS)];
     const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
     expect(out.techniques).toEqual([]);
+    // POSITIVE CONTROL. Without this the assertion above is byte-identical to the
+    // gate's own refusal, so the test passed with the gate forced open AND forced
+    // shut — it could not distinguish "the identity screen dropped it" from "the
+    // trust gate dropped it", which is precisely the independence it claims to
+    // prove. The entry IS trusted, so the structured signals must still serve.
+    expect(out.designDirection).not.toBeNull();
+    expect(out.designDirection).toContain("evidence-2");
+    expect(out.colorTokensRefusal).toBe("insufficient-contributors");
   });
 });
 
@@ -712,7 +722,7 @@ describe("createUiSpecDeterministic — colorTokensRefusal states the real cause
   });
 
   it("reports insufficient-contributors when fewer than three entries carry roles", () => {
-    const matches = [2, 3].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const matches = [2, 3].map((n) => matched(`evidence-${n}`, verifiedProseEntry({ id: `v-${n}` })));
     const evidence = [2, 3].map((n) => observation(`evidence-${n}`, { ...GATE_FACTS, colorRoles: roles() }));
     const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
     expect(out.colorTokens).toBeNull();
@@ -722,7 +732,7 @@ describe("createUiSpecDeterministic — colorTokensRefusal states the real cause
   it("reports no-plurality when three entries contribute but a role ties", () => {
     // THE bug this fixes: a 2-2 tie previously reported "fewer than 3 matched
     // entries contribute color roles", which is measurably false — three did.
-    const matches = [2, 3, 4, 5].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const matches = [2, 3, 4, 5].map((n) => matched(`evidence-${n}`, verifiedProseEntry({ id: `v-${n}` })));
     const evidence = [
       observation("evidence-2", { ...GATE_FACTS, colorRoles: roles({ accent: "#2563eb" }) }),
       observation("evidence-3", { ...GATE_FACTS, colorRoles: roles({ accent: "#2563eb" }) }),
@@ -734,8 +744,24 @@ describe("createUiSpecDeterministic — colorTokensRefusal states the real cause
     expect(out.colorTokensRefusal).toBe("no-plurality");
   });
 
+  it("refuses a palette when three entries carry realistically DIFFERENT roles", () => {
+    // Both earlier token tests used identical palettes across every entry, so the
+    // suite only ever proved the degenerate case. Measured on the real corpus,
+    // only ~0.4% of 3-entry windows agree on all four roles — this is the common
+    // case, and it must refuse rather than pick by retrieval order.
+    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, verifiedProseEntry({ id: `v-${n}` })));
+    const evidence = [
+      observation("evidence-2", { ...GATE_FACTS, colorRoles: { canvas: "#ffffff", surface: "#f8fafc", ink: "#111827", muted: "#6b7280", accent: "#2563eb" } }),
+      observation("evidence-3", { ...GATE_FACTS, colorRoles: { canvas: "#fafafa", surface: "#ffffff", ink: "#0f172a", muted: "#64748b", accent: "#1d4ed8" } }),
+      observation("evidence-4", { ...GATE_FACTS, colorRoles: { canvas: "#f5f5f5", surface: "#fcfcfc", ink: "#1a1a1a", muted: "#737373", accent: "#dc2626" } }),
+    ];
+    const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+    expect(out.colorTokens).toBeNull();
+    expect(out.colorTokensRefusal).toBe("no-plurality");
+  });
+
   it("reports null refusal when tokens ARE served", () => {
-    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, verifiedProseEntry({ id: `v-${n}` })));
     const evidence = [2, 3, 4].map((n) => observation(`evidence-${n}`, { ...GATE_FACTS, colorRoles: roles() }));
     const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
     expect(out.colorTokens).not.toBeNull();
@@ -743,7 +769,7 @@ describe("createUiSpecDeterministic — colorTokensRefusal states the real cause
   });
 
   it("reports insufficient-contributors, not no-plurality, when nothing is trusted", () => {
-    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, unverifiedProseEntry({ id: `u-${n}` })));
+    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, proseEntry({ id: `u-${n}` })));
     const evidence = [2, 3, 4].map((n) => observation(`evidence-${n}`, { ...GATE_FACTS, colorRoles: roles() }));
     const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
     expect(out.colorTokensRefusal).toBe("insufficient-contributors");
@@ -755,7 +781,7 @@ describe("createUiSpecDeterministic — every vote refuses a tie, not just colou
   // order became a consensus claim. Colour was fixed first; these are the four
   // votes that feed SERVED fields and were left half-fixed.
   const twoVerified = (a: Record<string, unknown>, b: Record<string, unknown>) => {
-    const matches = [2, 3].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const matches = [2, 3].map((n) => matched(`evidence-${n}`, verifiedProseEntry({ id: `v-${n}` })));
     const evidence = [observation("evidence-2", a), observation("evidence-3", b)];
     return createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
   };
@@ -795,7 +821,7 @@ describe("createUiSpecDeterministic — every vote refuses a tie, not just colou
   });
 
   it("still serves the winner when a vote is not tied", () => {
-    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, verifiedProseEntry({ id: `v-${n}` })));
     const evidence = [
       observation("evidence-2", { ...GATE_FACTS, layoutForm: "two-column", spacingDensity: "compact" }),
       observation("evidence-3", { ...GATE_FACTS, layoutForm: "two-column", spacingDensity: "compact" }),

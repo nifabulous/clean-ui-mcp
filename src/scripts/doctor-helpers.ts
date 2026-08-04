@@ -15,6 +15,9 @@
  * on doctor.ts's display formatting.
  */
 import type { CorpusEntryT } from "../schema.js";
+// The doctor's verification checks MUST agree with the serve gate, so they use
+// its predicate rather than a looser local condition.
+import { isVerified, VERIFICATION_METHODS } from "../corpus-trust.js";
 import type { LoadedCorpus } from "../persistence.js";
 import {
   evaluatePublication,
@@ -240,7 +243,7 @@ export function loaderHealthCheck(loaded: LoadedCorpus): Check {
 
 // ── Corpus defect detectors (C3 trust gate, Stage 1) ──────────────────────────
 //
-// These eight detectors found 733 of 787 real entries defective, which is why
+// These detectors found 768 of 787 real entries defective, which is why
 // the C3 trust gate serves nothing corpus-derived by default. They live here as
 // a STANDING health check so a regression surfaces without a one-off script.
 //
@@ -259,10 +262,12 @@ export type CorpusDefectDetector =
   | "accent-mismatch"
   | "rail-on-portrait"
   | "mono-unrecorded"
+  | "typeface-unrecorded"
   | "neumorphic-no-shadow"
   | "unassessed-quality"
   | "verified-image-missing"
-  | "verified-hash-stale";
+  | "verified-hash-stale"
+  | "verification-malformed";
 
 export interface CorpusDefectFinding {
   /** The corpus entry id the defect was found on. */
@@ -289,10 +294,24 @@ export interface CorpusDefectContext {
 const HEX_IN_PROSE = /#[0-9a-f]{6}\b/gi;
 /** Font families whose name declares a monospace face. */
 const MONO_FACE = /\b(mono|menlo|consolas|courier|monaco|inconsolata)\b/i;
-/** Prose that CLAIMS a monospace treatment. */
-const MONO_CLAIM = /\bmono-?spaced?\b|\bmonospace\b|\btabular (?:figures|numerals)\b/i;
-/** Rail roles that a portrait/mobile viewport physically cannot show. */
-const RAIL_ROLES = new Set(["primary-nav", "detail-rail"]);
+/**
+ * Prose that CLAIMS a monospace treatment.
+ *
+ * "tabular figures/numerals" is deliberately NOT here. Tabular figures are an
+ * OpenType feature of PROPORTIONAL faces (`font-variant-numeric: tabular-nums`)
+ * — Inter ships them — so a tabular claim implies no monospace family at all.
+ * Including it produced a provably false finding for
+ * `quicken-quicken-web-screens-19-2026-07-05` (records Inter/Inter, says columns
+ * are "locked to tabular numerals") and 4 other real entries.
+ */
+const MONO_CLAIM = /\bmono-?spaced?\b|\bmonospace\b/i;
+/**
+ * Rail roles that a portrait/mobile viewport physically cannot show. `icon-nav`
+ * is included: schema.ts:296 defines it as a "narrow icon-only rail", as
+ * impossible on a phone portrait as `primary-nav`. Omitting it left 11 real
+ * entries with an icon rail on a portrait capture reporting NO finding at all.
+ */
+const RAIL_ROLES = new Set(["primary-nav", "icon-nav", "detail-rail"]);
 
 /** sRGB relative luminance per WCAG 2.1 §relativeluminancedef. */
 function relativeLuminance(hex: string): number | null {
@@ -343,24 +362,35 @@ function proseOf(entry: CorpusEntryT): string {
 /**
  * Every defect finding across the corpus, one row per (entry, detector) pair.
  *
- * Findings measured on the real 787-entry corpus (2026-08-04), as the comparison
- * baseline for a future run — 752 of 787 entries carry at least one:
+ * Findings measured on the real 787-entry corpus (2026-08-04, after the
+ * review-round detector corrections) as the comparison baseline for a future
+ * run. 768 of 787 entries carry at least one finding:
  *
- *   unassessed-quality 725 · role-collapse 168 (144 entries) · fabricated-hex 99
- *   (85 entries) · rail-on-portrait 90 · low-contrast 65 · accent-mismatch 27 ·
- *   mono-unrecorded 26 · neumorphic-no-shadow 24
+ *   low-contrast 1477 rows/646 entries · unassessed-quality 737 · role-collapse
+ *   168 rows/144 entries · rail-on-portrait 127 rows/101 entries ·
+ *   fabricated-hex 99 rows/85 entries · accent-mismatch 27 ·
+ *   neumorphic-no-shadow 24 · mono-unrecorded 12 · typeface-unrecorded 9
  *
- * Two of these are HIGHER than the numbers in the plan (role-collapse 81,
- * fabricated-hex 65) because these detectors are broader than the ad-hoc queries
- * that produced those figures, not because they over-report:
- *   - role-collapse checks all 9 role pairs and emits one row per COLLIDING PAIR,
- *     so an entry with two collisions contributes two rows. Every pair is a real
- *     defect: `ink == accent` makes emphasis invisible, `surface == ink` puts
- *     card text in the card's own colour.
- *   - fabricated-hex also reads `whatToSteal` and `typePairing.notes`, not just
- *     `critique`, and counts entries with NO recorded colour fields (where every
- *     hex in prose is unbacked by construction).
- */
+ * These supersede an earlier baseline (role-collapse 81, low-contrast 65,
+ * fabricated-hex 65, rail-on-portrait 90, mono-unrecorded 25,
+ * neumorphic-no-shadow 24, accent-mismatch 27, unassessed-quality 725) taken
+ * with ad-hoc queries before these detectors existed. Where the numbers differ:
+ *
+ *   - low-contrast rose because it now checks all four text-on-background pairs
+ *     (ink/muted on canvas/surface) at two tiers, not ink-on-canvas at one.
+ *   - rail-on-portrait rose because `icon-nav` joined the rail set.
+ *   - mono-unrecorded FELL because a tabular-figures claim is no longer treated
+ *     as a monospace claim, and entries with no recorded face split out into
+ *     typeface-unrecorded.
+ *   - unassessed-quality rose because the exemption is now a real verification
+ *     record rather than the machine-stamped `taggedBy`.
+ *   - fabricated-hex differs because it reads `whatToSteal` and
+ *     `typePairing.notes` in addition to `critique`, and counts rows per colour.
+ *   - role-collapse emits one row per COLLIDING PAIR, which explains 168 rows
+ *     against 144 entries. It does NOT explain 144 entries against the earlier
+ *     81: no pair subset reproduces 81, so that figure could not be reproduced
+ *     and is treated as unexplained rather than accounted for.
+  */
 export function summarizeCorpusDefects(
   entries: readonly CorpusEntryT[],
   ctx: CorpusDefectContext,
@@ -393,13 +423,23 @@ export function summarizeCorpusDefects(
           }
         }
       }
-      // Body text below 3:1 on its own canvas is unreadable at any size, so this
-      // is well under even the large-text AA floor.
-      const ratio = typeof roles.ink === "string" && typeof roles.canvas === "string"
-        ? contrastRatio(roles.ink, roles.canvas)
-        : null;
-      if (ratio !== null && ratio < 3) {
-        push("low-contrast", `ink ${roles.ink} on canvas ${roles.canvas} is ${ratio.toFixed(2)}:1 (below 3:1)`);
+      // EVERY text-on-background pair the roles describe, not just ink-on-canvas.
+      // CLAUDE.md records `--text-muted` shipping at 1.90:1 as a real defect, and
+      // ink-on-canvas alone cannot see it: 432 real entries have muted below 3:1
+      // on canvas and 109 have ink below 3:1 on surface, all previously silent.
+      // 3:1 is the floor for "unreadable at any size"; the AA 4.5:1 tier is
+      // reported separately so a curator can triage the hard failures first.
+      for (const [fg, bg] of [["ink", "canvas"], ["ink", "surface"], ["muted", "canvas"], ["muted", "surface"]] as const) {
+        const a = roles[fg];
+        const b = roles[bg];
+        if (typeof a !== "string" || typeof b !== "string") continue;
+        const ratio = contrastRatio(a, b);
+        if (ratio === null) continue;
+        if (ratio < 3) {
+          push("low-contrast", `${fg} ${a} on ${bg} ${b} is ${ratio.toFixed(2)}:1 (below the 3:1 readability floor)`);
+        } else if (ratio < 4.5) {
+          push("low-contrast", `${fg} ${a} on ${bg} ${b} is ${ratio.toFixed(2)}:1 (below the WCAG AA 4.5:1 floor)`);
+        }
       }
       // The two accent fields are the same design decision recorded twice; when
       // they disagree there is no way to tell which one a consumer should use.
@@ -445,7 +485,12 @@ export function summarizeCorpusDefects(
     const pairing = (visual.typePairing ?? {}) as Record<string, unknown>;
     if (MONO_CLAIM.test(prose)) {
       const faces = [pairing.display, pairing.body].filter((f): f is string => typeof f === "string");
-      if (!faces.some((f) => MONO_FACE.test(f))) {
+      if (faces.length === 0) {
+        // No face recorded at all. The honest finding is "nothing to check
+        // against", NOT "the recorded faces are not mono" — reporting the latter
+        // sends a curator to fix a typeface that was never written down.
+        push("typeface-unrecorded", `prose claims a typographic treatment but no typeface is recorded`);
+      } else if (!faces.some((f) => MONO_FACE.test(f))) {
         push("mono-unrecorded", `prose claims a monospace treatment; no recorded face is a mono family`);
       }
     }
@@ -456,24 +501,53 @@ export function summarizeCorpusDefects(
       push("neumorphic-no-shadow", `styleTag soft-neumorphic with usesShadows: false`);
     }
 
-    // The tagger's untouched defaults. Score 3 + tier "exceptional" + never
-    // reviewed means nothing actually assessed this entry's quality; the score
-    // is a placeholder being read as a judgment.
+    // The tagger's untouched defaults: score 3 + tier "exceptional" is the
+    // placeholder being read as a judgment.
+    //
+    // The exemption is a real VERIFICATION record, never `taggedBy`. An earlier
+    // version exempted `taggedBy === "auto-reviewed"`, which `ui/app.js:1375`
+    // stamps on save with no quality assessment at all — and which
+    // `corpus-trust.ts` documents as carrying no trust information. Simulating
+    // that stamp corpus-wide dropped findings 1224 -> 499 and affected entries
+    // 752 -> 355 without improving one datum, so the metric improved as the data
+    // stayed exactly as bad. That is the presence-not-usability failure CLAUDE.md
+    // forbids, in the detector meant to measure it.
     if (entry.qualityScore === 3 && entry.qualityTier === "exceptional"
-      && entry.provenance?.taggedBy !== "auto-reviewed") {
-      push("unassessed-quality", `qualityScore 3 + tier "exceptional" + not auto-reviewed — never assessed`);
+      && !entry.provenance?.verification) {
+      push("unassessed-quality", `qualityScore 3 + tier "exceptional" with no verification record — never assessed`);
     }
 
     // ── Verification integrity. The serve-path gate is PURE and cannot see
     // either of these; doctor.ts owns them. Both apply only to entries that
     // actually carry a verification record.
+    // Keyed on `isVerified`, the SAME predicate the serve path uses. An earlier
+    // version used a bare `if (verification)`, which accepted records the gate
+    // refuses: it would report "verified entry's image is missing" about an entry
+    // that is not verified (a false statement), and a malformed record produced
+    // no finding at all — so a Stage 2 verifier writing a bad record would get
+    // silence instead of a signal that its entries were being refused.
     const verification = entry.provenance?.verification;
-    if (verification) {
+    if (verification && !isVerified(entry)) {
+      const why = !VERIFICATION_METHODS.has(verification.method)
+        ? `method "${verification.method}" is not one this build accepts (${[...VERIFICATION_METHODS].join(", ")})`
+        : `method "image-confirmed" requires imageSha256, which is absent`;
+      push("verification-malformed", `verification record present but refused by the trust gate: ${why}`);
+    } else if (verification && isVerified(entry)) {
       const path = typeof image.path === "string" ? image.path : null;
-      if (path === null || !ctx.imageExists(path)) {
-        push("verified-image-missing", `verified entry's image is missing: ${path ?? "(no path)"}`);
+      // `imageExists`/`imageSha256` reach the filesystem through
+      // `fromCorpusRelativeImagePath`, which THROWS on any path outside
+      // images-*/ (paths.ts:132). A malformed path must produce a finding, not
+      // abort the whole `npm run doctor` run.
+      const exists = ((): boolean => {
+        if (path === null) return false;
+        try { return ctx.imageExists(path); } catch { return false; }
+      })();
+      if (!exists) {
+        push("verified-image-missing", `verified entry's image is missing or unresolvable: ${path ?? "(no path)"}`);
       } else if (verification.method === "image-confirmed" && verification.imageSha256) {
-        const actual = ctx.imageSha256(path);
+        const actual = ((): string | null => {
+          try { return ctx.imageSha256(path!); } catch { return null; }
+        })();
         if (actual !== null && actual !== verification.imageSha256) {
           push(
             "verified-hash-stale",
@@ -509,9 +583,23 @@ export function corpusDefectCheck(
   const tally = new Map<CorpusDefectDetector, number>();
   for (const f of findings) tally.set(f.detector, (tally.get(f.detector) ?? 0) + 1);
   const affected = new Set(findings.map((f) => f.id)).size;
+  // Units are explicit per tally. The prefix counts ENTRIES while a detector can
+  // emit several rows for one entry (role-collapse emits one per colliding
+  // pair), so a bare `slug:168` next to an entry-count prefix read as 168
+  // entries. publicationCheck — the convention this follows — tallies entries in
+  // every bucket, so a CI script written against it would have mis-read this row.
+  const entriesPer = new Map<CorpusDefectDetector, Set<string>>();
+  for (const f of findings) {
+    const seen = entriesPer.get(f.detector) ?? new Set<string>();
+    seen.add(f.id);
+    entriesPer.set(f.detector, seen);
+  }
   const parts = [...tally.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([detector, count]) => `${detector}:${count}`);
+    .map(([detector, count]) => {
+      const n = entriesPer.get(detector)?.size ?? 0;
+      return `${detector}:${count} rows/${n} entr${n === 1 ? "y" : "ies"}`;
+    });
   return {
     name: "Corpus defect scan",
     status: "WARN",

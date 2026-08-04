@@ -472,11 +472,27 @@ be filled honestly from this corpus:
    is far stronger across 787, because the human alternative is that ~700 entries
    are never checked at all. Coverage beats per-item rigor when the per-item rigor
    does not happen. This is the deliberate trade of the whole program.
-3. **Nothing serves until Stage 2 lands.** This spec gates every corpus-derived
-   field, and the detectors deliberately do not un-gate the provable tier
-   (Alan is self-consistent and fabricated). So `create_ui_spec`'s deterministic
-   body returns brief plus scaffolding for however long Stage 2 takes. Accepted:
-   an empty answer is honest, a confident wrong one is not.
+3. **Nothing corpus-derived serves until Stage 2 lands — across the WHOLE server,
+   not just `create_ui_spec`.** Stage 1 as first written gated `create_ui_spec`
+   alone, and review caught that its eleven sibling tools kept serving the same
+   fabrications: `get_stealable_techniques` returned an entry's `whatToSteal`
+   prose verbatim (a left navigation rail described on a 1179x2556 portrait phone
+   screenshot) along with `source.product` and `source.id`;
+   `recommend_ui_direction` and `get_color_palette` invented hexes outright. The
+   invariant above was therefore true for 1 tool of 12 while reading as absolute.
+
+   Closed by `TrustGatedCorpusReader`, which every corpus-reading tool now reads
+   through. The consequence is deliberate and larger than the original draft
+   implied: with zero verified entries, `search_ui_examples`, `get_ui_example`,
+   `browse_ui_examples` and the aggregation tools also return nothing — the corpus
+   browser is dark until Stage 2 verifies entries. Each says why, with the
+   verified-of-total count, rather than blaming the caller's filters.
+
+   Stage 2's own tooling is unaffected: the tagger, `doctor.ts` and every script
+   read `corpus/entries.json` directly, never through the MCP tools, so the work
+   that clears the corpus does not depend on the surface that is gated.
+
+   Accepted: an empty answer is honest, a confident wrong one is not.
 4. **Verification goes stale on re-capture.** `imageSha256` binds a verification
    to one image, so re-capturing a screenshot invalidates it by design. That is
    correct, and it means the verifier must be cheap enough to re-run on changed

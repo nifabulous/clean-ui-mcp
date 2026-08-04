@@ -316,12 +316,23 @@ re-tagging (or backfilling) entries.
 
 **What:** Build the verifier that writes `provenance.verification`. Stage 1
 (shipped, `docs/superpowers/plans/2026-08-04-corpus-trust-gate.md`) added the
-fail-closed gate: `isVerified` in `src/corpus-trust.ts` reads that record, and
+fail-closed gate: `isVerified` in `src/corpus-trust.ts` reads that record,
 `createUiSpecDeterministic` shadows its `matchedEntries` parameter with the
-trusted subset, so no corpus-derived value is served without one. **Zero of 787
-entries carry the record**, so the gate currently serves nothing corpus-derived
-and every gated field ships an honest reason row plus an
-`insufficientCorpusEvidence` warning with the verified-source count.
+trusted subset, and `TrustGatedCorpusReader` (`src/corpus-trust-reader.ts`) wraps
+the reader every OTHER corpus-reading tool sees. **Zero of 787 entries carry the
+record**, so the whole server serves nothing corpus-derived today.
+
+**The corpus browser is dark until this ships.** `search_ui_examples`,
+`get_ui_example`, `browse_ui_examples`, `get_stealable_techniques`,
+`get_anti_patterns`, `get_color_palette`, `get_similar_ui_examples`,
+`compare_ui_examples`, `recommend_ui_direction` and `critique_ui` all return an
+honest "0 of 787 carry a recorded verification" message; `create_ui_spec` ships
+reason rows plus the `insufficientCorpusEvidence` warning. This was a deliberate
+scope choice (the strictest reading of the invariant), not an accident — the first
+verified entries light the surface back up one at a time.
+
+Stage 2's own tooling is unaffected: the tagger, `doctor.ts` and every script read
+`corpus/entries.json` directly, never through the MCP tools.
 
 Stage 2 makes entries eligible by re-tagging against evidence that can be
 checked, per the three tiers in

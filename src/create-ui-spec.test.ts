@@ -2018,3 +2018,61 @@ describe("create_ui_spec — gated fields carry honest reasons", () => {
     expect(new Set(fields).size).toBe(fields.length);
   });
 });
+
+// ---------------------------------------------------------------------------
+// C3 trust gate — verified-source disclosure (Stage 1, Task 4)
+// ---------------------------------------------------------------------------
+
+describe("create_ui_spec — trust disclosure", () => {
+  it("warns with the verified-source count when matches were found but none trusted", async () => {
+    const corpus = [corpusEntryWithRoles("disc-a", "#2563eb", "dashboard")];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning, "expected an insufficientCorpusEvidence warning").toBeDefined();
+    expect(warning?.message).toMatch(/0 of 1/);
+    // Retrieval is still reported truthfully: matches were found.
+    expect(out.envelope.retrieval.resultCount).toBeGreaterThan(0);
+  });
+
+  it("emits no such warning when there were no matches at all", async () => {
+    const out = await createUiSpecForAdapter(noRefRequest(), deps([], []));
+    const warning = out.envelope.warnings.find(
+      (w) => w.code === "insufficientCorpusEvidence" && /verified/.test(w.message),
+    );
+    expect(warning).toBeUndefined();
+  });
+
+  it("warns with N of M when SOME matched entries are verified", async () => {
+    // The partial case is the branch that distinguishes "trusted some" from
+    // "trusted none": one verified + one unverified entry must report "1 of 2".
+    const verified = corpusEntryWithRoles("disc-v", "#2563eb", "dashboard");
+    verify([verified]);
+    const unverified = corpusEntryWithRoles("disc-u", "#dc2626", "forms");
+    const corpus = [verified, unverified];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning).toBeDefined();
+    expect(warning?.message).toMatch(/1 of 2/);
+  });
+
+  it("emits no trust warning when every matched entry is verified", async () => {
+    const corpus = ["a", "b"].map((k, i) =>
+      corpusEntryWithRoles(`disc-all-${k}`, "#2563eb", i === 0 ? "dashboard" : "forms"),
+    );
+    verify(corpus);
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const warning = out.envelope.warnings.find(
+      (w) => w.code === "insufficientCorpusEvidence" && /verified/.test(w.message),
+    );
+    expect(warning).toBeUndefined();
+  });
+});

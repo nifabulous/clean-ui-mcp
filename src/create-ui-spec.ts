@@ -1454,6 +1454,25 @@ function buildWarnings(resolved: ResolvedEvidence): DesignArtifactEnvelope["warn
       message: "Sparse evidence: automatic retrieval returned zero matches; the deterministic fallback recipe was used.",
     });
   }
+  // Trust disclosure. "We found matches and did not trust them" is a truthful
+  // state and must be distinguishable from "we found nothing", so the message
+  // carries both numbers. Reuses the already-classified
+  // insufficientCorpusEvidence code rather than introducing a numeric field that
+  // the strict envelope/data schemas would then have to declare.
+  //
+  // The guard is `matchedCount > 0`: with zero matches the `sparseCoverage`
+  // warning above already tells the truth, and a second warning would
+  // double-report the same fact.
+  const matchedCount = resolved.matchedEntries.length;
+  const verifiedCount = resolved.matchedEntries.filter((m) => isVerified(m.entry)).length;
+  if (matchedCount > 0 && verifiedCount < matchedCount) {
+    warnings.push({
+      code: "insufficientCorpusEvidence",
+      message:
+        `${verifiedCount} of ${matchedCount} matched corpus entries carry a recorded ` +
+        `verification; corpus judgment is served only from verified entries.`,
+    });
+  }
   // Motion is always model-dependent + unavailable in this milestone.
   warnings.push({
     code: "motionEvidenceUnavailable",

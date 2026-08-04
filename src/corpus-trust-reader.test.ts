@@ -65,6 +65,34 @@ describe("TrustGatedCorpusReader", () => {
     expect(r.entriesForAggregation().map((e) => e.id)).toEqual(["verified-1"]);
   });
 
+  it("gates taxonomy vocabularies to verified entries", () => {
+    const verified = {
+      ...V,
+      categories: ["dashboard"],
+      styleTags: ["minimal"],
+      domainTags: ["analytics"],
+    };
+    const unverified = {
+      ...U,
+      categories: ["pricing"],
+      styleTags: ["dark"],
+      domainTags: ["crypto"],
+    };
+    const all = [verified, unverified];
+    const inner = {
+      ...innerReader(),
+      entriesForAggregation: () => all,
+      listCategories: () => ["dashboard", "pricing"],
+      listStyleTags: () => ["minimal", "dark"],
+      listDomainTags: () => ["analytics", "crypto"],
+    } as unknown as CorpusReader;
+    const r = new TrustGatedCorpusReader(inner);
+    // A label carried only by an unverified entry must not seed filters.
+    expect(r.listCategories()).toEqual(["dashboard"]);
+    expect(r.listStyleTags()).toEqual(["minimal"]);
+    expect(r.listDomainTags()).toEqual(["analytics"]);
+  });
+
   it("distinguishes a refused entry from a missing one", () => {
     // getById answers undefined for both, so a caller that reports "no entry
     // found" would assert non-existence about an entry that exists. This is how a
@@ -99,9 +127,12 @@ describe("TrustGatedCorpusReader", () => {
     expect(r.trustPosture()).toEqual({ verified: 1, total: 2 });
   });
 
-  it("passes non-corpus methods straight through", () => {
+  it("gates taxonomy vocabularies and passes index counters straight through", () => {
     const r = new TrustGatedCorpusReader(innerReader());
-    expect(r.listCategories()).toEqual(["dashboard"]);
+    // The inner reader's own listCategories returns ["dashboard"], but neither
+    // fixture entry carries labels, so the gated recompute yields nothing — the
+    // pass-through value is deliberately ignored. Index counters stay ungated.
+    expect(r.listCategories()).toEqual([]);
     expect(r.indexStatus().total).toBe(2);
   });
 });

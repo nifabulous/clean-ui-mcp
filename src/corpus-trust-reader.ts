@@ -116,19 +116,30 @@ export class TrustGatedCorpusReader implements CorpusReader {
     return { verified: all.filter((e) => isVerified(e)).length, total: all.length };
   }
 
-  // These carry no corpus judgment: taxonomy labels and index counters. They are
-  // derived from entries, so a label that only unverified entries carry still
-  // narrows through `entriesForAggregation` wherever a handler recomputes it.
+  // Taxonomy labels ARE gated, like every content-bearing method: the list tools
+  // are registered with this reader, so a pass-through would let a label that
+  // only unverified entries carry seed filters. Recompute each vocabulary from
+  // the VERIFIED entries only. (Index counters below are ungated — they count
+  // entries, they do not expose them.)
   listCategories(...a: Parameters<CorpusReader["listCategories"]>): ReturnType<CorpusReader["listCategories"]> {
-    return this.inner.listCategories(...a);
+    void a;
+    return [...new Set(
+      this.inner.entriesForAggregation().filter((e) => isVerified(e)).flatMap((e) => e.categories ?? []),
+    )];
   }
 
   listStyleTags(...a: Parameters<CorpusReader["listStyleTags"]>): ReturnType<CorpusReader["listStyleTags"]> {
-    return this.inner.listStyleTags(...a);
+    void a;
+    return [...new Set(
+      this.inner.entriesForAggregation().filter((e) => isVerified(e)).flatMap((e) => e.styleTags ?? []),
+    )];
   }
 
   listDomainTags(...a: Parameters<CorpusReader["listDomainTags"]>): ReturnType<CorpusReader["listDomainTags"]> {
-    return this.inner.listDomainTags(...a);
+    void a;
+    return [...new Set(
+      this.inner.entriesForAggregation().filter((e) => isVerified(e)).flatMap((e) => e.domainTags ?? []),
+    )];
   }
 
   indexStatus(...a: Parameters<CorpusReader["indexStatus"]>): ReturnType<CorpusReader["indexStatus"]> {

@@ -144,19 +144,27 @@ serving at zero verified entries actually looks like.
 New module `src/corpus-trust.ts`:
 
 ```ts
-export function isVerified(
-  entry: CorpusEntryT,
-  resolveImagePath: (path: string) => string | null,
-): boolean
+export function isVerified(entry: CorpusEntryT): boolean
 ```
 
 It gates every corpus-derived value, not only prose, so a narrower name would lie.
 
-The resolver is injected rather than imported because the predicate has to answer
-"does this entry's image still exist" (see the table below) and `CorpusReader`
-already owns that resolution. Injecting it keeps `corpus-trust.ts` pure and
-testable without a corpus on disk — the same test-injection pattern the repo
-already uses for corpus paths.
+**Pure, synchronous, no I/O, no injection.** An earlier draft had it take a
+`resolveImagePath` so it could answer "does this entry's image still exist".
+Verification killed that: `resolveImagePath` validates path *shape* only —
+`assertCorpusImagePath` (`paths.ts:132`) rejects `..`, absolute paths and
+non-`images-*` prefixes, then returns without touching the filesystem. A non-null
+result never meant the file was there.
+
+The right conclusion is not to add an existence check but to drop the question.
+**A missing image does not invalidate a past verification.** The record attests
+that a claim WAS checked against the image when it existed; deleting the file
+later does not make the prose less true, and the caller never sees the screenshot
+anyway. Image existence is a corpus-integrity property, not a trust property, so
+it belongs with the hash-staleness check in `doctor.ts`.
+
+That leaves the predicate reading nothing but the entry it is handed, which is
+also why the gate needs no new plumbing at its call site.
 
 **Also in scope, same change:** correct the stale `create-ui-spec.ts:12` docblock,
 which still describes "product-diverse selection of at most five" while `:509`
@@ -198,21 +206,20 @@ enforced where it is cheap instead:
 - **write-time invalidation** — a capture or import that replaces an entry's image
   clears `verification`. Same pattern as the content-staleness handling
   `embeddings.ts:15` already documents.
-- **`doctor.ts`** re-hashes and reports mismatches as a standing health check.
+- **`doctor.ts`** re-hashes and reports mismatches, and reports verified entries
+  whose image file is missing, as standing health checks.
 
-What the gate *does* check cheaply is that the image still exists, via the
-`resolveImagePath` already on `CorpusReader` — a path resolution, not a byte read.
-
-Predicate — fail-closed:
+Predicate — fail-closed, reading only `provenance.verification`:
 
 | condition | verdict |
 |---|---|
-| `verification` present, `method` in the accepted set, image resolves | verified |
+| `verification` present and `method` in the accepted set | verified |
 | `verification` absent (787 entries) | not verified |
+| `provenance` absent entirely (298 entries) | not verified |
 | `method` unrecognised (forward-compat: a newer verifier's tier) | not verified |
 | `method: "image-confirmed"` with `imageSha256` absent | not verified — malformed record |
-| image path does not resolve | not verified — the evidence is gone |
-| `imageSha256` mismatch against bytes on disk | **not consulted by the gate** — `doctor.ts` owns it (see above) |
+| `imageSha256` mismatch against bytes on disk | **not consulted** — `doctor.ts` owns it |
+| image file missing | **not consulted** — corpus integrity, not trust; `doctor.ts` owns it |
 | `taggedBy: "auto"` (477) / `"auto-reviewed"` (12) / absent (298) | **not consulted** — records who, not what |
 | `reviewStatus` | **never consulted**, in any combination |
 
@@ -225,7 +232,7 @@ deliberately — from a verifier, not a person.
 Filter **once**, at the top of `createUiSpecDeterministic`:
 
 ```
-matchedEntries ──▶ filter(e => isVerified(e, reader.resolveImagePath)) ──▶ trustedEntries
+matchedEntries ──▶ filter(isVerified) ──▶ trustedEntries
                                                       │
         ┌─────────────────────────────────────────────┤
         ▼            ▼            ▼           ▼       ▼
@@ -358,9 +365,9 @@ The zero-verified path is the default, so it gets the deepest coverage.
   `imageSha256` absent, an image path that does not resolve, and
   `reviewStatus: "approved"` combined with each `taggedBy` value, asserting none
   of them changes the verdict.
-- The gate reads no image bytes: with an injected resolver that throws on any
-  byte read, `isVerified` still returns a verdict — staleness belongs to
-  `doctor.ts`, and a serve-time hash would be per-request I/O.
+- The gate performs no I/O: `isVerified` is pure and synchronous, so an entry
+  whose image file is absent still returns a verdict from its record alone.
+  Existence and hash staleness both belong to `doctor.ts`.
 - Zero verified entries: every gated field empty or null, every one carrying an
   `unavailableDecisions` row, `colorTokenAuthority === "editorial"`, no
   `citedDecision` citing the corpus lane, `designDirection` carrying no

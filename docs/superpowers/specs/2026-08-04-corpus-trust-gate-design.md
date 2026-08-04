@@ -144,10 +144,25 @@ serving at zero verified entries actually looks like.
 New module `src/corpus-trust.ts`:
 
 ```ts
-export function isVerified(entry: CorpusEntryT): boolean
+export function isVerified(
+  entry: CorpusEntryT,
+  resolveImagePath: (path: string) => string | null,
+): boolean
 ```
 
 It gates every corpus-derived value, not only prose, so a narrower name would lie.
+
+The resolver is injected rather than imported because the predicate has to answer
+"does this entry's image still exist" (see the table below) and `CorpusReader`
+already owns that resolution. Injecting it keeps `corpus-trust.ts` pure and
+testable without a corpus on disk — the same test-injection pattern the repo
+already uses for corpus paths.
+
+**Also in scope, same change:** correct the stale `create-ui-spec.ts:12` docblock,
+which still describes "product-diverse selection of at most five" while `:509`
+implements top-3 with `patternType` dedupe. It is three lines, it sits in the file
+this change edits, and leaving a known-false claim in place while working around
+it is how the last plan went wrong.
 
 The gate reads one new field, `provenance.verification`, which records **how** a
 value was checked rather than **who** touched it:
@@ -157,22 +172,47 @@ verification?: {
   method: "measured" | "provable" | "image-confirmed";
   verifiedAt: string;        // ISO date
   verifierVersion: string;   // which verifier, so a bad one is revocable
-  imageSha256: string;       // binds the verification to THIS image
+  imageSha256?: string;      // REQUIRED when method is "image-confirmed"
 }
 ```
 
-`imageSha256` is the integrity property, and it is machine-checkable: if the
-screenshot is re-captured or replaced, the hash no longer matches and the
-verification is **stale, not valid**. That is a stronger guarantee than a human
-signature, which records only that someone looked once at something.
+`imageSha256` binds an image-confirmed verification to the exact bytes the
+verifier saw. **It is optional on the type and mandatory by method**, because the
+`measured` tier's evidence comes from the live DOM rather than from pixels —
+requiring an image hash there would bind the record to the wrong artifact.
+`measured` records bind to their capture instead (see Stage 3, which owns the
+`domSignals` shape and its own staleness key).
+
+There is **no persisted image hash in the corpus today.** `schema.ts` has no hash
+field on `image` or the entry. The hash function does exist:
+`dedup.ts:112` computes `createHash("sha256")` over the file bytes and caches
+`{ hash, dhash, path }` per entry id in `corpus/.dhash-cache.json`. That cache is
+rebuildable and gitignored, so it is not provenance — but the verifier can reuse
+the same helper for free, since it has already read the bytes to send them to the
+model. Stage 2 writes the hash; nothing needs a migration.
+
+**The gate does not hash at serve time.** Re-reading up to three PNGs per request
+to compare a digest is real I/O on a path that is otherwise pure CPU. Staleness is
+enforced where it is cheap instead:
+
+- **write-time invalidation** — a capture or import that replaces an entry's image
+  clears `verification`. Same pattern as the content-staleness handling
+  `embeddings.ts:15` already documents.
+- **`doctor.ts`** re-hashes and reports mismatches as a standing health check.
+
+What the gate *does* check cheaply is that the image still exists, via the
+`resolveImagePath` already on `CorpusReader` — a path resolution, not a byte read.
 
 Predicate — fail-closed:
 
 | condition | verdict |
 |---|---|
-| `verification` present, `method` in the accepted set, `imageSha256` matches the entry's current image | verified |
+| `verification` present, `method` in the accepted set, image resolves | verified |
 | `verification` absent (787 entries) | not verified |
-| `imageSha256` mismatch | not verified — stale |
+| `method` unrecognised (forward-compat: a newer verifier's tier) | not verified |
+| `method: "image-confirmed"` with `imageSha256` absent | not verified — malformed record |
+| image path does not resolve | not verified — the evidence is gone |
+| `imageSha256` mismatch against bytes on disk | **not consulted by the gate** — `doctor.ts` owns it (see above) |
 | `taggedBy: "auto"` (477) / `"auto-reviewed"` (12) / absent (298) | **not consulted** — records who, not what |
 | `reviewStatus` | **never consulted**, in any combination |
 
@@ -185,7 +225,7 @@ deliberately — from a verifier, not a person.
 Filter **once**, at the top of `createUiSpecDeterministic`:
 
 ```
-matchedEntries ──▶ filter(isVerified) ──▶ trustedEntries
+matchedEntries ──▶ filter(e => isVerified(e, reader.resolveImagePath)) ──▶ trustedEntries
                                                       │
         ┌─────────────────────────────────────────────┤
         ▼            ▼            ▼           ▼       ▼
@@ -213,6 +253,30 @@ sanitized row does not carry its entry. Bridge it through the evidence id:
 same filter and narrow `observations` to that set before the plurality votes run.
 One filter, two derived views, no second predicate.
 
+#### The vote runs over a subset that grows one entry at a time
+
+Narrowing `observations` changes what plurality *means*, and this matters most in
+the middle of the program rather than at either end. Two consequences the
+implementation has to state, not discover:
+
+1. **Every threshold counts trusted contributors, never matched ones.** The
+   existing `colorTokens` guard requires three contributing entries. After the
+   gate that must mean three *trusted* entries. Counting matches while voting over
+   the trusted subset would derive a token from one verified entry while claiming
+   three backed it — a stronger authority claim than the evidence supports, which
+   is the exact failure this whole spec exists to stop.
+2. **A single newly verified entry can flip a served token.** With three trusted
+   entries, verifying a fourth can move the accent plurality, so the same brief
+   returns a different palette the next day with no code change. That is correct
+   behaviour — the evidence base genuinely changed — but it makes the served
+   palette non-reproducible across verification events, so the plan records it
+   rather than letting someone later read it as a bug. The existing
+   `plurality()` tie rule (`undefined` on a tie) already keeps a 2-2 split from
+   silently picking a winner; the new case is a 2-1 becoming 2-2.
+
+Both are cheap to pin and neither is covered by testing only zero-verified and
+all-verified.
+
 ### What is gated
 
 Everything corpus-derived: `techniques`, `antiPatterns`, `contentVoiceGuidance`,
@@ -238,7 +302,7 @@ Three consequences that must ship with it:
 1. **Five array fields need new `unavailableDecisions` rows.** `techniques`,
    `antiPatterns`, `componentInventory`, `responsiveBehavior` and
    `accessibilityConstraints` currently fall back to the recipe's fixed-empty
-   arrays (`create-ui-spec.ts:1120-1145`) with no reason row. Gated without a
+   arrays (`create-ui-spec.ts:1143-1170`) with no reason row. Gated without a
    row, they are indistinguishable from "the corpus had nothing to say".
 2. **`colorTokens` gating must revert `colorTokenAuthority` to `editorial` and
    drop its corpus-evidence citedDecision** (`create-ui-spec.ts:983-993`,
@@ -290,9 +354,13 @@ see; until then, everything stays off.
 The zero-verified path is the default, so it gets the deepest coverage.
 
 - `isVerified` — one case per row of the predicate table: `verification` absent,
-  each accepted `method`, an `imageSha256` mismatch (must read as stale, not
-  valid), and `reviewStatus: "approved"` combined with each `taggedBy` value,
-  asserting none of them changes the verdict.
+  each accepted `method`, an unrecognised `method`, `image-confirmed` with
+  `imageSha256` absent, an image path that does not resolve, and
+  `reviewStatus: "approved"` combined with each `taggedBy` value, asserting none
+  of them changes the verdict.
+- The gate reads no image bytes: with an injected resolver that throws on any
+  byte read, `isVerified` still returns a verdict — staleness belongs to
+  `doctor.ts`, and a serve-time hash would be per-request I/O.
 - Zero verified entries: every gated field empty or null, every one carrying an
   `unavailableDecisions` row, `colorTokenAuthority === "editorial"`, no
   `citedDecision` citing the corpus lane, `designDirection` carrying no
@@ -302,11 +370,20 @@ The zero-verified path is the default, so it gets the deepest coverage.
   valid `verification` record — no real corpus entry qualifies.
 - Trust and identity are independent: a verified entry whose prose names a
   product is still dropped by `screenProse`.
+- **Vote behaviour on the trusted subset**, which zero-verified and all-verified
+  cases both miss:
+  - three matched entries, one verified → `colorTokens` stays null, because the
+    three-contributor guard counts TRUSTED contributors, not matched ones;
+  - three matched, three verified, then a fourth verified entry whose accent
+    differs → the served accent may change, and a 2-1 plurality becoming 2-2
+    yields `undefined` rather than a silent winner;
+  - `layoutRegions` derived only from trusted evidence ids, asserting an
+    untrusted row cannot contribute a region.
 - **Regression, CRITICAL:** `full-corpus-leak-sweep.test.ts` and the C3 suites
   assert the current served posture. They are updated in the same change, not
   after.
 - `doctor.ts` detector tests, using the synthetic corpus already built for the
-  leak sweep.
+  leak sweep, plus the image-hash staleness check the gate deliberately omits.
 
 ## NOT in scope
 
@@ -360,8 +437,9 @@ be filled honestly from this corpus:
 - **0 of 12 eval briefs** reach three pairing-carrying entries under real
   retrieval, which is top-3 by rank with `patternType` dedupe
   (`create-ui-spec.ts:509`) — not the "product-diverse five" the docblock at
-  `:12` still claims. That docblock is stale and should be fixed; it misled this
-  investigation's first measurement.
+  `:12` still claims. **Fixing that docblock is in scope for this change** (see
+  Design); it misled this investigation's first measurement, and a plan that
+  documents a stale claim while touching the same file earns the next one.
 
 **C3 Phase 3 (derived colour) is blocked** on a trustworthy `colorRoles`.
 

@@ -16,8 +16,39 @@ function entriesOf(matches: readonly { entry: CorpusEntryT }[]): CorpusEntryT[] 
   return matches.map((m) => m.entry);
 }
 
+/**
+ * A verification record the C3 trust gate accepts. Fixtures carry it BY DEFAULT
+ * because most tests in this file have serving behaviour as their subject
+ * (prose composition, identity screening, direction bounds) and the gate would
+ * otherwise empty every one of them. Tests whose subject is the gate itself use
+ * {@link unverifiedProseEntry} to opt out explicitly.
+ */
+const VERIFIED = {
+  taggedBy: "auto",
+  verification: {
+    method: "image-confirmed",
+    verifiedAt: "2026-08-04",
+    verifierVersion: "verifier-v1",
+    imageSha256: "a".repeat(64),
+  },
+};
+
+/**
+ * Verified matched pairs for the given evidence rows. Production pushes the
+ * sanitized row and its matched entry in the SAME loop iteration
+ * (`create-ui-spec.ts:568-569`), so every `corpus-observation` row always has a
+ * 1:1 pair — a bare `[]` alongside populated evidence is not a reachable state,
+ * and the trust gate's evidence-id bridge correctly drops such rows.
+ */
+function verifiedPairsFor(
+  evidence: readonly { id: string }[],
+): { evidenceId: string; entry: CorpusEntryT }[] {
+  return evidence.map((e) => matched(e.id, proseEntry({ id: `entry-${e.id}` })));
+}
+
 function proseEntry(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    provenance: VERIFIED,
     id: "fixture-entry",
     title: "FixtureCo — workspace",
     source: { productName: "FixtureCo" },
@@ -71,7 +102,7 @@ describe("createUiSpecDeterministic", () => {
       }),
     ] as never;
 
-    const out = createUiSpecDeterministic(evidence, [], [], REQUEST);
+    const out = createUiSpecDeterministic(evidence, verifiedPairsFor(evidence), [], REQUEST);
 
     expect(out.designDirection).toContain("evidence-2");
     expect(out.designDirection).toContain("compact");
@@ -97,7 +128,7 @@ describe("createUiSpecDeterministic", () => {
       observation("evidence-2", { pattern: "dashboard", colorRoles: { canvas: "#fff", surface: "#fff", ink: "#111", muted: "#666", accent: "#2563eb" } }),
       observation("evidence-3", { pattern: "dashboard" }),
     ] as never;
-    expect(createUiSpecDeterministic(evidence, [], [], REQUEST).colorTokens).toBeNull();
+    expect(createUiSpecDeterministic(evidence, verifiedPairsFor(evidence), [], REQUEST).colorTokens).toBeNull();
   });
 
   it("never fabricates default tokens when no entry has colorRoles", () => {
@@ -106,7 +137,7 @@ describe("createUiSpecDeterministic", () => {
       observation("evidence-3", { pattern: "dashboard", spacingDensity: "compact" }),
       observation("evidence-4", { pattern: "dashboard", spacingDensity: "compact" }),
     ] as never;
-    expect(createUiSpecDeterministic(evidence, [], [], REQUEST).colorTokens).toBeNull();
+    expect(createUiSpecDeterministic(evidence, verifiedPairsFor(evidence), [], REQUEST).colorTokens).toBeNull();
   });
 
   it("never fabricates muted when every matched entry has a null muted role", () => {
@@ -125,7 +156,7 @@ describe("createUiSpecDeterministic", () => {
       observation("evidence-3", { pattern: "data-table", colorRoles: roles("#2563eb") }),
       observation("evidence-4", { pattern: "forms", colorRoles: roles("#2563eb") }),
     ] as never;
-    expect(createUiSpecDeterministic(evidence, [], [], REQUEST).colorTokens).toBeNull();
+    expect(createUiSpecDeterministic(evidence, verifiedPairsFor(evidence), [], REQUEST).colorTokens).toBeNull();
   });
 
   it("still populates tokens when at least three entries carry a non-null muted", () => {
@@ -138,7 +169,7 @@ describe("createUiSpecDeterministic", () => {
       observation("evidence-4", { pattern: "forms", colorRoles: { ...withMuted("#2563eb"), muted: null } }),
       observation("evidence-5", { pattern: "modal", colorRoles: withMuted("#2563eb") }),
     ] as never;
-    expect(createUiSpecDeterministic(evidence, [], [], REQUEST).colorTokens).toEqual({
+    expect(createUiSpecDeterministic(evidence, verifiedPairsFor(evidence), [], REQUEST).colorTokens).toEqual({
       primary: "#2563eb", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: "#2563eb",
     });
   });
@@ -150,10 +181,13 @@ describe("createUiSpecDeterministic", () => {
         layoutRoles: ["primary-nav", "main-canvas"],
       }),
     ] as never;
-    const out = createUiSpecDeterministic(evidence, [], [], REQUEST);
+    const out = createUiSpecDeterministic(evidence, verifiedPairsFor(evidence), [], REQUEST);
     expect(out.layoutRegions.map((r) => r.name)).toEqual(["primary-nav", "main-canvas"]);
-    // No form string may be fabricated when the corpus entry carries none.
-    expect(out.responsiveBehavior).toEqual([]);
+    // No form string may be fabricated when the corpus entry carries none. The
+    // matched entry's own `responsiveBehavior: "responsive"` still yields a
+    // "mode:" row — that IS corpus-derived, so the assertion targets the absent
+    // signal specifically rather than the whole array.
+    expect(out.responsiveBehavior.filter((r) => r.startsWith("form:"))).toEqual([]);
   });
 
   it("populates the six corpus fields from matched entries, citing each row's evidence id", () => {
@@ -548,5 +582,122 @@ describe("createUiSpecDeterministic — direction size guard", () => {
     // the reader cannot tell where the list ends (corpus moods carry commas).
     expect(direction).toContain("mood: calm and measured");
     expect(direction).toMatch(/mood: [^;]*; critique:/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Trust gate (Stage 1)
+// ---------------------------------------------------------------------------
+
+/** The same fixture with NO verification record — the gate must refuse it. */
+function unverifiedProseEntry(over: Record<string, unknown> = {}): Record<string, unknown> {
+  const e = proseEntry(over);
+  delete e.provenance;
+  return e;
+}
+
+const GATE_FACTS = {
+  pattern: "dashboard", spacingDensity: "compact", cornerStyle: "sharp",
+  usesShadows: false, usesBorders: true, layoutForm: "two-column",
+  colorRoles: { canvas: "#ffffff", surface: "#f8fafc", ink: "#111827", muted: "#6b7280", accent: "#2563eb" },
+};
+
+describe("createUiSpecDeterministic — trust gate", () => {
+  it("serves nothing corpus-derived when no entry is verified", () => {
+    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, unverifiedProseEntry({ id: `u-${n}` })));
+    const evidence = [2, 3, 4].map((n) => observation(`evidence-${n}`, GATE_FACTS));
+    const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+
+    expect(out.designDirection).toBeNull();
+    expect(out.colorTokens).toBeNull();
+    expect(out.layoutRegions).toEqual([]);
+    expect(out.responsiveBehavior).toEqual([]);
+    expect(out.techniques).toEqual([]);
+    expect(out.antiPatterns).toEqual([]);
+    expect(out.contentVoiceGuidance).toBeNull();
+    expect(out.accessibilityConstraints).toEqual([]);
+    expect(out.componentInventory).toEqual([]);
+  });
+
+  it("is a filter, not an off switch — verified entries still serve", () => {
+    const matches = [
+      matched("evidence-2", proseEntry({ id: "v-2" })),
+      matched("evidence-3", unverifiedProseEntry({ id: "u-3" })),
+    ];
+    const evidence = [
+      observation("evidence-2", GATE_FACTS),
+      observation("evidence-3", GATE_FACTS),
+    ];
+    const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+
+    expect(out.techniques.length).toBeGreaterThan(0);
+    // Every citation points at the verified entry only.
+    for (const t of out.techniques) expect(t.sourceIds).toEqual(["evidence-2"]);
+    expect(out.designDirection).toContain("evidence-2");
+    expect(out.designDirection).not.toContain("evidence-3");
+  });
+
+  // The three-contributor colorTokens guard must count TRUSTED contributors.
+  // Counting matches while voting over the trusted subset would derive a token
+  // from one entry while claiming three backed it.
+  it("counts trusted contributors, not matched ones, for the token threshold", () => {
+    const matches = [
+      matched("evidence-2", proseEntry({ id: "v-2" })),
+      matched("evidence-3", unverifiedProseEntry({ id: "u-3" })),
+      matched("evidence-4", unverifiedProseEntry({ id: "u-4" })),
+    ];
+    const evidence = [2, 3, 4].map((n) => observation(`evidence-${n}`, GATE_FACTS));
+    const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+    expect(out.colorTokens).toBeNull();
+  });
+
+  it("populates tokens once three entries are verified", () => {
+    const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const evidence = [2, 3, 4].map((n) => observation(`evidence-${n}`, GATE_FACTS));
+    const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+    expect(out.colorTokens).not.toBeNull();
+    expect(out.colorTokens?.accent).toBe("#2563eb");
+  });
+
+  // Verifying one more entry can move a plurality. That is correct — the
+  // evidence base changed — but a 2-1 becoming 2-2 must yield no winner rather
+  // than silently keeping the old one.
+  it("a newly verified entry can flip a vote to a tie, which yields no token", () => {
+    const withAccent = (accent: string) => ({
+      ...GATE_FACTS,
+      colorRoles: { canvas: "#ffffff", surface: "#f8fafc", ink: "#111827", muted: "#6b7280", accent },
+    });
+    const matches = [2, 3, 4, 5].map((n) => matched(`evidence-${n}`, proseEntry({ id: `v-${n}` })));
+    const evidence = [
+      observation("evidence-2", withAccent("#2563eb")),
+      observation("evidence-3", withAccent("#2563eb")),
+      observation("evidence-4", withAccent("#dc2626")),
+      observation("evidence-5", withAccent("#dc2626")),
+    ];
+    const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+    expect(out.colorTokens).toBeNull();
+  });
+
+  it("gates layoutRegions through the same evidence-id bridge", () => {
+    const matches = [matched("evidence-2", unverifiedProseEntry({ id: "u-2" }))];
+    const evidence = [observation("evidence-2", {
+      ...GATE_FACTS, layoutRoles: ["primary-nav", "main-canvas"],
+    })];
+    const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+    expect(out.layoutRegions).toEqual([]);
+  });
+
+  it("keeps trust and identity independent", () => {
+    // A verified entry whose prose names its own product is still dropped by the
+    // identity screen. Trust does not buy an identity exemption.
+    const named = proseEntry({
+      id: "v-2",
+      source: { productName: "Trustworthy" },
+      whatToSteal: ["Copy the way Trustworthy anchors its filter rail."],
+    });
+    const matches = [matched("evidence-2", named)];
+    const evidence = [observation("evidence-2", GATE_FACTS)];
+    const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+    expect(out.techniques).toEqual([]);
   });
 });

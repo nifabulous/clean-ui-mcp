@@ -1697,6 +1697,27 @@ function corpusEntryWithRoles(id: string, accent: string, pattern = "dashboard")
   });
 }
 
+/**
+ * The C3 trust gate serves corpus judgment only from entries carrying a
+ * `provenance.verification` record. `makeFixture` deliberately leaves it ABSENT
+ * (the day-one corpus state, which the gate must refuse), so tests whose subject
+ * is the SERVING behaviour opt in explicitly with this.
+ */
+function verify<T extends { provenance?: unknown }>(entries: readonly T[]): readonly T[] {
+  for (const e of entries) {
+    (e as { provenance: unknown }).provenance = {
+      taggedBy: "auto",
+      verification: {
+        method: "image-confirmed",
+        verifiedAt: "2026-08-04",
+        verifierVersion: "verifier-v1",
+        imageSha256: "a".repeat(64),
+      },
+    };
+  }
+  return entries;
+}
+
 function mcqPayload(out: Awaited<ReturnType<typeof createUiSpecForAdapter>>): Record<string, unknown> {
   const spec = out.envelope.spec;
   return {
@@ -1721,6 +1742,7 @@ it("ledgers the synthesized direction against the corpus evidence ids", async ()
     e.critique = "Clean critique prose about the dashboard layout and its use of a three-column grid.";
     e.whatToSteal = ["Clean stealable technique about grouping metrics by row."];
   }
+  verify(corpus);
   const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
@@ -1749,6 +1771,7 @@ it("ledgers synthesized color tokens against the corpus evidence ids", async () 
   const patterns = ["dashboard", "data-table", "forms"];
   const ids = ["a", "b", "c"];
   const corpus = patterns.map((p, i) => corpusEntryWithRoles(`internal-${ids[i]!}`, i === 2 ? "#1d4ed8" : "#2563eb", p));
+  verify(corpus);
   const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
@@ -1820,6 +1843,7 @@ it("serves corpus judgment into the six UiSpec fields, evidence-cited and gate-c
     components: ["kpi-card"],
     responsiveBehavior: "responsive",
   })];
+  verify(corpus);
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
     deps(corpus, [{ entry: corpus[0], score: 5 }]),

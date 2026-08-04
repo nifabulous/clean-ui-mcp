@@ -86,6 +86,9 @@ import {
   type ModelExecution,
 } from "./create-ui-spec-model-contracts.js";
 import { createUiSpecDeterministic } from "./create-ui-spec-deterministic.js";
+// `isVerified` is used by the trust-disclosure warning (Task 4);
+// `trustedEvidenceIdsOf` by the model lane's prompt-grounding filter (Task 2).
+import { isVerified, trustedEvidenceIdsOf } from "./corpus-trust.js";
 import { ModelArtifactRollbackIncompleteError } from "./model-artifact-store.js";
 import {
   buildCorpusObservationSummary,
@@ -251,8 +254,30 @@ async function buildModelAwareEnvelope(
     );
   }
 
+  // C3 trust gate: what the MODEL sees must be trusted, even though the served
+  // evidence[] rows stay ungated (response-scoped, no authority claim). An
+  // unverified entry's derived summary must not steer a proposal.
+  //
+  // Narrow ONLY corpus observations, exactly like the deterministic filter does.
+  // `resolved.sanitized[0]` is the recipe/system row from
+  // `buildRecipeSystemEvidence()` (kind "recipe-system", evidence-1): it has no
+  // `matchedEntries` pair, so a flat `trustedEvidenceIds.has(row.id)` filter
+  // would drop it. That row carries no corpus claim at all, so dropping it is
+  // over-gating -- it would remove recipe context the trust gate has no reason
+  // to touch. Zero verified corpus entries therefore leaves the recipe row and
+  // no corpus grounding, which is the intended state.
+  //
+  // `SanitizedEvidenceSchema.array()` carries no `.min(1)`
+  // (create-ui-spec-model.ts:87), so a corpus-free list parses rather than
+  // rejecting the proposal.
+  const trustedEvidenceIds = trustedEvidenceIdsOf(resolved.matchedEntries);
   const outcome = await createUiSpecModel(
-    { request, sanitizedEvidence: resolved.sanitized },
+    {
+      request,
+      sanitizedEvidence: resolved.sanitized.filter(
+        (row) => row.kind !== "corpus-observation" || trustedEvidenceIds.has(row.id),
+      ),
+    },
     model.runtime,
   );
   if (outcome.kind === "fallback") {

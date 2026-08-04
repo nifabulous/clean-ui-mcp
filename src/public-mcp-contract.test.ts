@@ -149,6 +149,22 @@ function baseEntry(id: string, critique: string): CorpusEntryT {
     id,
     title: `${id} title`,
     patternType: "dashboard",
+    // Verified for the C3 trust gate. This suite's subject is LEAK containment,
+    // and its create_ui_spec case carries an explicit anti-vacuity assertion
+    // (the eligible entry's marker must actually reach the response). Without a
+    // verification record the gate would serve no corpus prose and that
+    // assertion would fail for the wrong reason — a leak test that passes by
+    // serving nothing proves nothing. Publication eligibility, which is what
+    // this suite actually filters on, is orthogonal to trust.
+    provenance: {
+      taggedBy: "auto",
+      verification: {
+        method: "image-confirmed",
+        verifiedAt: "2026-08-04",
+        verifierVersion: "contract-fixture",
+        imageSha256: "a".repeat(64),
+      },
+    },
     categories: ["dashboard"],
     styleTags: ["minimal"],
     components: [],

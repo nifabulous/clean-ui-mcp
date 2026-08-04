@@ -121,10 +121,38 @@ function leaksIn(served: string, label: string, identity: readonly Identity[]): 
   return found;
 }
 
+/**
+ * The C3 trust gate serves corpus prose only from entries carrying a
+ * `provenance.verification` record, and no real corpus entry carries one yet.
+ * This sweep's subject is the IDENTITY screen, which the plan's global
+ * constraints keep independent of trust ("the trust gate runs first; screenProse
+ * is unchanged and still drops identity-bearing prose from trusted entries"), so
+ * every entry is stamped verified IN MEMORY before serving.
+ *
+ * Without this the sweep would pass by serving nothing — vacuously green, and
+ * exactly the false confidence the "not passing by serving nothing" case exists
+ * to catch. Nothing is written back to `corpus/entries.json`; the stamp lives on
+ * a shallow copy for the duration of one serve.
+ */
+function asVerified(entries: readonly CorpusEntryT[]): CorpusEntryT[] {
+  return entries.map((e) => ({
+    ...e,
+    provenance: {
+      ...(e.provenance ?? { taggedBy: "auto" as const }),
+      verification: {
+        method: "image-confirmed" as const,
+        verifiedAt: "2026-08-04",
+        verifierVersion: "leak-sweep-fixture",
+        imageSha256: "a".repeat(64),
+      },
+    },
+  }));
+}
+
 async function serveProse(top: readonly CorpusEntryT[], corpus: readonly CorpusEntryT[]): Promise<string> {
   const out = await createUiSpecForAdapter(
     { productContext: BRIEF, referenceIds: [], constraints: [], motionIntents: [] },
-    { reader: readerFor(top, corpus), resolveReferenceToken: () => undefined },
+    { reader: readerFor(asVerified(top), corpus), resolveReferenceToken: () => undefined },
   );
   return prosePositions(out.envelope.spec as ServedSpec);
 }

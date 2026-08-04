@@ -2,6 +2,7 @@ import type { SanitizedEvidence } from "./create-ui-spec-contracts.js";
 import type { CreateUiSpecRequest } from "./create-ui-spec-contracts.js";
 import type { CorpusEntryT } from "./schema.js";
 import { buildDeniedNames, screenProse } from "./corpus-prose-screen.js";
+import { isVerified, trustedEvidenceIdsOf } from "./corpus-trust.js";
 import { plurality } from "./design-prompt.js";
 
 export interface DeterministicColorTokens {
@@ -99,6 +100,25 @@ const MAX_VOICE_EXAMPLE_LENGTH = 140;
 /** Screenshot data ("52,420") is not copy; the identity screen cannot see it. */
 const DATA_ONLY_VOICE_EXAMPLE = /^[\d\s.,%$£€+-]+$/;
 
+/**
+ * `plurality` with no tie-breaking: undefined unless ONE value strictly beats
+ * every other. `design-prompt.ts:51` keeps the first-inserted value on a tie,
+ * which turns retrieval order into a consensus claim.
+ */
+function strictPlurality(values: readonly string[]): string | undefined {
+  if (values.length === 0) return undefined;
+  const counts = new Map<string, number>();
+  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+  let best: string | undefined;
+  let bestCount = 0;
+  let tied = false;
+  for (const [v, c] of counts) {
+    if (c > bestCount) { best = v; bestCount = c; tied = false; }
+    else if (c === bestCount) { tied = true; }
+  }
+  return tied ? undefined : best;
+}
+
 function majority(values: readonly boolean[]): boolean | undefined {
   const yes = values.filter(Boolean).length;
   const no = values.length - yes;
@@ -117,11 +137,28 @@ function majority(values: readonly boolean[]): boolean | undefined {
  */
 export function createUiSpecDeterministic(
   evidence: readonly SanitizedEvidence[],
-  matchedEntries: readonly { readonly evidenceId: string; readonly entry: CorpusEntryT }[],
+  allMatchedEntries: readonly { readonly evidenceId: string; readonly entry: CorpusEntryT }[],
   corpusEntries: readonly CorpusEntryT[],
   request: CreateUiSpecRequest,
 ): DeterministicSynthesis {
-  const observations = evidence.filter((e) => e.kind === "corpus-observation" && e.structuredFacts);
+  // ----- C3 trust gate (Stage 1) -------------------------------------------
+  // ONE filter, and it works by SHADOWING: the ungated parameter is
+  // `allMatchedEntries` and the name the body uses is the trusted view. Every
+  // existing selector and every future one therefore reads gated entries
+  // without needing its own guard — the ungated list is not in scope below.
+  //
+  // `corpusEntries` is deliberately NOT gated. It feeds `buildDeniedNames` for
+  // the identity screen, which must stay corpus-wide; narrowing it would shrink
+  // the denied-name set and weaken screening.
+  const matchedEntries = allMatchedEntries.filter((m) => isVerified(m.entry));
+  // `colorTokens` and `layoutRegions` derive from SanitizedEvidence rows, which
+  // do not carry their entry. Bridge the same filter through the evidence id so
+  // the plurality votes run over trusted observations only — which also means
+  // the existing three-contributor guard counts TRUSTED contributors.
+  const trustedEvidenceIds = trustedEvidenceIdsOf(matchedEntries);
+  const observations = evidence.filter(
+    (e) => e.kind === "corpus-observation" && e.structuredFacts && trustedEvidenceIds.has(e.id),
+  );
   if (observations.length === 0) {
     return {
       designDirection: null,
@@ -155,16 +192,39 @@ export function createUiSpecDeterministic(
   // array and letting a `??` default invent a token nothing derived. Requiring
   // a non-null muted to COUNT toward the >= 3 threshold folds that case back
   // under the same guard — the block goes null with its reason row instead.
+  // A TIE IS NOT A PLURALITY. `plurality` breaks ties by insertion order
+  // (design-prompt.ts:51), so a 2-2 split silently serves whichever value the
+  // retrieval order happened to put first — a consensus claim nothing backs,
+  // the same over-claim class the trust gate exists to stop. It matters more
+  // once the gate lands: verifying one more entry can turn a 2-1 win into a 2-2
+  // tie, and the palette must go null then rather than keep the stale winner.
+  // Scoped to this module on purpose — `design-prompt.ts`'s own merge feeds
+  // generate_design_brief and is not in this change's scope.
   const withRoles = facts.filter((f) => f.colorRoles && f.colorRoles.muted !== null);
-  const colorTokens = withRoles.length >= 3
+  const roleVotes = withRoles.length >= 3
     ? {
-        primary: plurality(withRoles.map((f) => f.colorRoles!.accent)) ?? "#3b82f6",
-        surface: plurality(withRoles.map((f) => f.colorRoles!.surface)) ?? "#f8f8f8",
-        ink: plurality(withRoles.map((f) => f.colorRoles!.ink)) ?? "#111111",
-        muted: plurality(withRoles.map((f) => f.colorRoles!.muted).filter((v): v is string => v !== null)) ?? "#888888",
-        accent: plurality(withRoles.map((f) => f.colorRoles!.accent)) ?? "#3b82f6",
+        accent: strictPlurality(withRoles.map((f) => f.colorRoles!.accent)),
+        surface: strictPlurality(withRoles.map((f) => f.colorRoles!.surface)),
+        ink: strictPlurality(withRoles.map((f) => f.colorRoles!.ink)),
+        muted: strictPlurality(
+          withRoles.map((f) => f.colorRoles!.muted).filter((v): v is string => v !== null),
+        ),
       }
     : null;
+  // The block is all-or-nothing, matching the existing `< 3` behaviour: a
+  // palette with one unresolved role is not a coherent palette, and the `??`
+  // hex defaults this replaces would have INVENTED a token on a tie — exactly
+  // the fabrication the reason row is supposed to report instead.
+  const colorTokens =
+    roleVotes && roleVotes.accent && roleVotes.surface && roleVotes.ink && roleVotes.muted
+      ? {
+          primary: roleVotes.accent,
+          surface: roleVotes.surface,
+          ink: roleVotes.ink,
+          muted: roleVotes.muted,
+          accent: roleVotes.accent,
+        }
+      : null;
 
   // Layout regions from the wireframe roles (closed enum), deduped in order.
   const seen = new Set<string>();

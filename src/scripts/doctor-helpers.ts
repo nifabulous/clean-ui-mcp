@@ -278,7 +278,7 @@ export interface CorpusDefectFinding {
 }
 
 /**
- * Filesystem access the two verification-integrity detectors need, INJECTED so
+ * Filesystem access the verification-integrity detectors need, INJECTED so
  * the detectors stay pure and unit-testable (same pattern as
  * {@link PublicationContext}'s `imageExists`).
  *
@@ -372,7 +372,7 @@ function proseOf(entry: CorpusEntryT): string {
  *   neumorphic-no-shadow 24 · mono-unrecorded 12 · typeface-unrecorded 9
  *
  * These supersede an earlier baseline (role-collapse 81, low-contrast 65,
- * fabricated-hex 65, rail-on-portrait 90, mono-unrecorded 25,
+ * fabricated-hex 65, rail-on-portrait 90, mono-unrecorded 26,
  * neumorphic-no-shadow 24, accent-mismatch 27, unassessed-quality 725) taken
  * with ad-hoc queries before these detectors existed. Where the numbers differ:
  *
@@ -508,17 +508,22 @@ export function summarizeCorpusDefects(
     // version exempted `taggedBy === "auto-reviewed"`, which `ui/app.js:1375`
     // stamps on save with no quality assessment at all — and which
     // `corpus-trust.ts` documents as carrying no trust information. Simulating
-    // that stamp corpus-wide dropped findings 1224 -> 499 and affected entries
-    // 752 -> 355 without improving one datum, so the metric improved as the data
-    // stayed exactly as bad. That is the presence-not-usability failure CLAUDE.md
+    // that stamp corpus-wide silenced all 737 of this detector's findings without
+    // improving one datum, so the metric improved as the data stayed exactly as
+    // bad. (Measured against the detectors as they ship now; an earlier figure of
+    // 1224 -> 499 predates the low-contrast widening and no longer reproduces.) That is the presence-not-usability failure CLAUDE.md
     // forbids, in the detector meant to measure it.
+    // Keyed on `isVerified`, not on the mere PRESENCE of a record: a malformed
+    // record would otherwise exempt the entry here while `verification-malformed`
+    // fires below, so a Stage 2 verifier writing a bad record would silence the
+    // quality signal — the same predicate divergence fixed for the image checks.
     if (entry.qualityScore === 3 && entry.qualityTier === "exceptional"
-      && !entry.provenance?.verification) {
+      && !isVerified(entry)) {
       push("unassessed-quality", `qualityScore 3 + tier "exceptional" with no verification record — never assessed`);
     }
 
     // ── Verification integrity. The serve-path gate is PURE and cannot see
-    // either of these; doctor.ts owns them. Both apply only to entries that
+    // any of these three; doctor.ts owns them. Both apply only to entries that
     // actually carry a verification record.
     // Keyed on `isVerified`, the SAME predicate the serve path uses. An earlier
     // version used a bare `if (verification)`, which accepted records the gate

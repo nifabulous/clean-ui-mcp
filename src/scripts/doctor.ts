@@ -232,7 +232,7 @@ if (entries) {
 }
 
 // ── 10b. Corpus defect scan (C3 trust gate, Stage 1) ─────────────────────────
-// The ten detectors that find 768 of 787 entries defective, as a standing
+// The twelve detectors that find 768 of 787 entries defective, as a standing
 // check so a regression surfaces without a one-off script. REPORT ONLY — it
 // never writes `provenance.verification` and never un-gates anything; a clean
 // bill of health here is NOT grounds for trust (a fabricated critique trips none

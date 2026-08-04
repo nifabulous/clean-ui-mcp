@@ -1109,7 +1109,13 @@ function assembleSpec(
   const gatedReason =
     synthesis === null
       ? "Corpus judgment is not synthesized on the model lane; the proposal carries the model's own direction instead."
-      : matchedForReason > 0 && verifiedForReason === 0
+      : matchedForReason === 0
+        // Zero-match and explicit-reference paths consult no corpus entry at all
+        // (resolveExplicitReferences returns matchedEntries: [] unconditionally),
+        // so a reason about what verified entries did or did not record asserts a
+        // consultation that never happened.
+        ? "No corpus observations were retrieved for this request, so nothing was available to serve for this field."
+        : matchedForReason > 0 && verifiedForReason === 0
         ? "Corpus judgment is served only from entries with a recorded verification; none of the matched entries carry one."
         : verifiedForReason < matchedForReason
           ? `Only ${verifiedForReason} of ${matchedForReason} matched entries carry a recorded verification, and those recorded nothing servable for this field.`
@@ -1137,17 +1143,20 @@ function assembleSpec(
     ...RECIPE.unavailableDecisions
       .filter((d) => synthesis === null || d.field !== "colorTokens")
       .map((d) => ({ field: d.field, reason: d.reason })),
-    // The cause comes from the synthesizer, which is the only place that knows
-    // which of the two happened. Guessing "fewer than 3" was wrong in ~99.6% of
-    // real null-palette responses: measured over 3-entry windows of the 668
-    // entries with a non-null muted, only 0.4% agree on all four roles, so
-    // disagreement — not thin retrieval — is the usual cause.
+    // The cause comes from the synthesizer, the only place that knows which of the
+    // three happened. Guessing "fewer than 3" was wrong in essentially every real
+    // null-palette response: measured over the 666 consecutive 3-entry windows of
+    // the 668 entries with a non-null muted, ZERO agree on all four roles under
+    // strict-plurality semantics. Trust refusal and disagreement — not thin
+    // retrieval — are the real causes.
     ...(synthesis !== null && synthesis.colorTokens === null
       ? [{
           field: "colorTokens",
-          reason: synthesis.colorTokensRefusal === "no-plurality"
-            ? "Three or more matched entries contributed color roles but did not agree on a single value for every role."
-            : "Fewer than 3 matched entries contribute color roles.",
+          reason: synthesis.colorTokensRefusal === "untrusted"
+            ? "Corpus color roles are read only from entries with a recorded verification; none of the matched entries carry one."
+            : synthesis.colorTokensRefusal === "no-plurality"
+              ? "Three or more matched entries contributed color roles but did not agree on a single value for every role."
+              : "Fewer than 3 matched entries contribute color roles.",
         }]
       : []),
     ...c3Unavailable,

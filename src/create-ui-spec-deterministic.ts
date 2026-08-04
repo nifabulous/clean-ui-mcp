@@ -26,13 +26,18 @@ export interface DeterministicSynthesis {
   colorTokens: DeterministicColorTokens | null;
   /**
    * WHY `colorTokens` is null, so the served `unavailableDecisions` reason can
-   * state the real cause instead of guessing. Two causes are reachable and they
-   * are NOT interchangeable: "fewer than three entries contributed roles" and
-   * "three or more contributed but did not agree". Reporting the first when the
-   * second happened tells a caller retrieval was thin and invites a re-query.
+   * state the real cause instead of guessing. THREE causes are reachable and none
+   * is interchangeable with another:
+   *   - `untrusted` — entries were matched and every one was refused by the trust
+   *     gate. This is the DEFAULT production state (0 of 787 entries carry a
+   *     verification record), so it is the most common cause by far.
+   *   - `insufficient-contributors` — fewer than three entries contributed roles.
+   *   - `no-plurality` — three or more contributed and did not agree.
+   * Reporting "fewer than three" for either of the others tells a caller that
+   * retrieval was thin and invites a re-query that cannot help.
    * null when tokens are served.
    */
-  colorTokensRefusal: "insufficient-contributors" | "no-plurality" | null;
+  colorTokensRefusal: "untrusted" | "insufficient-contributors" | "no-plurality" | null;
   layoutRegions: readonly DeterministicLayoutRegion[];
   responsiveBehavior: readonly string[];
   /** Corpus whatToSteal rows, screened, capped at 5, cited via sourceIds. */
@@ -116,10 +121,13 @@ const DATA_ONLY_VOICE_EXAMPLE = /^[\d\s.,%$£€+-]+$/;
 function strictPlurality<T>(values: readonly T[]): T | undefined {
   if (values.length === 0) return undefined;
   const counts = new Map<string, { value: T; count: number }>();
-  // Keyed by a stable serialization so OBJECT votes (typePairing) compare by
-  // value rather than by reference — `plurality` used the raw value as a Map key,
-  // so two structurally identical pairings from different entries counted as two
-  // separate candidates and neither ever reached a majority.
+  // Every vote that reaches this today is a STRING (`typePairing` is the derived
+  // `"${display} + ${body}"` string, `create-ui-spec-contracts.ts:313`), so the
+  // keying below is equivalent to the raw-value Map `plurality` used. It is
+  // written generically so a future non-string vote compares by value rather than
+  // by reference. Caveat if that day comes: `JSON.stringify` is not value
+  // equality — `{a,b}` and `{b,a}` key differently, and `0` collides with `"0"` —
+  // so a structural key would be needed rather than this one.
   for (const v of values) {
     const key = typeof v === "string" ? v : JSON.stringify(v);
     const hit = counts.get(key);
@@ -180,7 +188,9 @@ export function createUiSpecDeterministic(
     return {
       designDirection: null,
       colorTokens: null,
-      colorTokensRefusal: "insufficient-contributors",
+      // Entries WERE matched and the gate refused all of them: that is a trust
+      // outcome, not thin retrieval, and the served reason must say so.
+      colorTokensRefusal: allMatchedEntries.length > 0 ? "untrusted" : "insufficient-contributors",
       layoutRegions: [],
       responsiveBehavior: [],
       techniques: [],

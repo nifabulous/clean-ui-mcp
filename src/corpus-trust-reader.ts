@@ -15,20 +15,32 @@
  * `isVerified` predicate the deterministic gate uses. A tool added later is
  * gated because it reads through this reader, not because someone remembered.
  *
- * ONE METHOD IS DELIBERATELY UNGATED: {@link allEntriesForScreening}. The
- * identity screen derives its denied-name set from the whole corpus, and
+ * ONE CONSUMER DELIBERATELY DOES NOT READ THROUGH THIS CLASS: `create_ui_spec`
+ * keeps the raw reader (`server-factory.ts`). It gates itself, and it needs the
+ * CORPUS-WIDE entry list to build the identity screen's denied-name set —
  * narrowing that set would let an unverified entry's product name stop being
- * screened out of served prose. Trust and identity are independent concerns —
- * the trust gate decides WHETHER a value may be served, the identity screen
- * decides whether a servable string carries a name it must not. Gating the
- * screening corpus would weaken the second in the name of the first.
+ * screened out of served prose. Trust and identity are independent concerns: the
+ * trust gate decides WHETHER a value may be served, the identity screen decides
+ * whether a servable string carries a name it must not. Gating the screening
+ * corpus would weaken the second in the name of the first.
  */
 import type { CorpusReader, ReaderImageIndex } from "./corpus-reader.js";
 import type { CorpusEntryT } from "./schema.js";
 import { isVerified } from "./corpus-trust.js";
 
 export class TrustGatedCorpusReader implements CorpusReader {
-  constructor(private readonly inner: CorpusReader) {}
+  constructor(private readonly inner: CorpusReader) {
+    // Double-wrapping would make `trustPosture()` report verified === total (the
+    // inner gate already filtered), so every honest "0 of 787" message would
+    // silently revert to "No X found for those filters". Refuse it outright rather
+    // than degrade quietly.
+    if (inner instanceof TrustGatedCorpusReader) {
+      throw new Error(
+        "TrustGatedCorpusReader is already gating this reader; double-wrapping "
+        + "would make trustPosture() report everything as verified.",
+      );
+    }
+  }
 
   // ----- Gated: every method whose result becomes served content -------------
 
@@ -80,11 +92,18 @@ export class TrustGatedCorpusReader implements CorpusReader {
   // ----- Ungated ------------------------------------------------------------
 
   /**
-   * The FULL corpus, for identity screening only (`buildDeniedNames`). Never for
-   * serving. See the module docblock for why this one is not gated.
+   * True when an entry EXISTS but the gate refused it — as opposed to not
+   * existing at all.
+   *
+   * Callers need this to avoid asserting a falsehood. `getById` deliberately
+   * answers `undefined` for a refused entry, and four tools turned that into
+   * "No entry found with id X" about an entry that is right there. Withholding
+   * an entry is correct; claiming it does not exist is a different statement and
+   * an untrue one.
    */
-  allEntriesForScreening(): readonly CorpusEntryT[] {
-    return this.inner.entriesForAggregation();
+  refusedForTrust(id: string): boolean {
+    const entry = this.inner.getById(id);
+    return entry !== undefined && !isVerified(entry);
   }
 
   /**

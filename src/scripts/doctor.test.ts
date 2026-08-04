@@ -350,7 +350,7 @@ describe("loaderHealthCheck", () => {
 
 // ── Corpus defect detectors (C3 trust gate, Stage 1 Task 5) ───────────────────
 //
-// These ten detectors find 768 of 787 real entries defective. They REPORT
+// These twelve detectors find 768 of 787 real entries defective. They REPORT
 // ONLY: they never write `provenance.verification` and never un-gate anything.
 // Alan's wholly-fabricated critique trips zero of them, so mechanical
 // cleanliness is necessary and not sufficient — granting trust from these checks
@@ -545,8 +545,8 @@ describe("summarizeCorpusDefects — review-round corrections", () => {
 
   it("reports an icon-nav rail on a portrait capture", () => {
     // schema.ts defines icon-nav as a "narrow icon-only rail" — as impossible on
-    // a phone portrait as primary-nav. 11 real entries carried one with NO
-    // finding at all.
+    // a phone portrait as primary-nav. It added 11 real entries to
+    // rail-on-portrait (90 -> 101 entries); each already had other findings.
     const entries = [defectEntry("icon-rail", {
       image: { visibility: "public-own", path: "images-public/icon-rail.png", width: 390, height: 844 },
       layout: { form: "single-column", regions: [{ role: "icon-nav" }] },

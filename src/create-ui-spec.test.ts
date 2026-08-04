@@ -1818,6 +1818,11 @@ it("passes the gate with tokens unavailable and exactly one colorTokens row", as
   const ids = ["a", "b"];
   const patterns = ["dashboard", "forms"];
   const corpus = patterns.map((p, i) => corpusEntryWithRoles(`internal-${ids[i]!}`, "#2563eb", p));
+  // Verified, so the refusal is genuinely the <3 threshold and not the trust
+  // gate. Leaving them unverified would make the row say "none carry a recorded
+  // verification" — true, but then this test would no longer be about the
+  // threshold it was written for.
+  verify(corpus);
   const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
@@ -2161,5 +2166,36 @@ describe("create_ui_spec — unavailable reasons state the real cause", () => {
     expect(row!.reason, "must not claim thin retrieval when three entries contributed")
       .not.toMatch(/fewer than 3/i);
     expect(row!.reason).toMatch(/did not agree|disagree/i);
+  });
+});
+
+describe("create_ui_spec — reasons on the paths with no corpus at all", () => {
+  it("does not claim verified entries recorded nothing when NO entry was retrieved", async () => {
+    // Zero-match path: matchedEntries is empty, so nothing was consulted. A row
+    // reading "the verified corpus entries recorded nothing servable" asserts a
+    // consultation that never happened.
+    const out = await createUiSpecForAdapter(noRefRequest(), deps([], []));
+    const row = out.envelope.spec.unavailableDecisions.find((r) => r.field === "techniques");
+    expect(row).toBeDefined();
+    expect(row!.reason).not.toMatch(/verified corpus entries recorded nothing/i);
+    expect(row!.reason).toMatch(/no corpus|nothing was retrieved|retrieved no/i);
+  });
+
+  it("states the trust cause for colorTokens when entries contributed but none is verified", async () => {
+    // The default production state. "Fewer than 3 matched entries contribute
+    // color roles" is false here: three contributed and the gate refused them.
+    const corpus = ["a", "b", "c"].map((k, i) =>
+      corpusEntryWithRoles(`untrusted-${k}`, "#2563eb", ["dashboard", "data-table", "forms"][i]!),
+    );
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 5 - i }))),
+    );
+    const spec = out.envelope.spec;
+    expect(spec.colorTokens).toBeNull();
+    const row = spec.unavailableDecisions.find((r) => r.field === "colorTokens");
+    expect(row).toBeDefined();
+    expect(row!.reason).not.toMatch(/fewer than 3/i);
+    expect(row!.reason).toMatch(/verification/i);
   });
 });

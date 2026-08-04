@@ -141,6 +141,35 @@ describe("the identity leak the review found", () => {
 });
 
 describe("gated tools say WHY, not 'no matches'", () => {
+  // Every gated tool, not just the aggregation ones. Four tools reported "No
+  // entry found with id X" about an entry that EXISTS — asserting non-existence
+  // rather than withholding, which is a different and false claim.
+  it.each([
+    { tool: "get_stealable_techniques", args: { limit: 5 } },
+    { tool: "get_ui_example", args: { id: "gate-tool-entry" } },
+    { tool: "get_similar_ui_examples", args: { id: "gate-tool-entry" } },
+    { tool: "compare_ui_examples", args: { ids: ["gate-tool-entry", "gate-tool-entry"] } },
+    { tool: "search_ui_examples", args: { query: "dashboard" } },
+    { tool: "get_anti_patterns", args: { limit: 5 } },
+    { tool: "get_color_palette", args: { limit: 5 } },
+    { tool: "browse_ui_examples", args: {} },
+  ])("$tool names verification as the cause", async ({ tool, args }) => {
+    const served = await callTool(false, tool, args);
+    expect(served, `${tool} did not name verification`).toMatch(/verif/i);
+    expect(served, `${tool} did not report the verified-of-total count`).toMatch(/0 of 1/);
+  });
+
+  it("never claims an entry does not exist when it exists but is unverified", async () => {
+    for (const [tool, args] of [
+      ["get_ui_example", { id: "gate-tool-entry" }],
+      ["get_similar_ui_examples", { id: "gate-tool-entry" }],
+      ["compare_ui_examples", { ids: ["gate-tool-entry", "gate-tool-entry"] }],
+    ] as const) {
+      const served = await callTool(false, tool, args as Record<string, unknown>);
+      expect(served, tool).not.toMatch(/no entr(y|ies) found/i);
+    }
+  });
+
   it("distinguishes 'nothing verified' from 'your filters were too narrow'", async () => {
     // Same false-reason class as create_ui_spec's unavailableDecisions: blaming
     // the caller's filters when the real cause is that nothing is verified sends
@@ -148,5 +177,32 @@ describe("gated tools say WHY, not 'no matches'", () => {
     const served = await callTool(false, "get_stealable_techniques", { limit: 5 });
     expect(served).toMatch(/verif/i);
     expect(served).toMatch(/0 of 1/);
+  });
+});
+
+describe("wiring regression detection", () => {
+  it("every corpus-reading tool is wired to the GATED reader", async () => {
+    // emptyCorpusMessage and unresolvedIdsMessage both branch on
+    // `reader instanceof TrustGatedCorpusReader`, so a tool accidentally wired to
+    // the plain reader would keep serving AND lose its honest message — a silent
+    // revert. This asserts the wiring itself, from the outside: with an unverified
+    // corpus, no gated tool may emit corpus content.
+    for (const { tool, args, needle } of CASES) {
+      const served = await callTool(false, tool, args);
+      expect(served, `${tool} appears to be wired to the UNGATED reader`).not.toContain(needle);
+    }
+  });
+});
+
+describe("the refusal messages read as English", () => {
+  it("agrees in number for one id and for several", async () => {
+    // Template rendering with REAL inputs, per CLAUDE.md: the first version of
+    // this message served 'Entry "x" exist but carry no recorded verification'.
+    const one = await callTool(false, "get_ui_example", { id: "gate-tool-entry" });
+    expect(one).toMatch(/Entry "gate-tool-entry" exists but carries no recorded verification/);
+    const many = await callTool(false, "compare_ui_examples", {
+      ids: ["gate-tool-entry", "gate-tool-entry"],
+    });
+    expect(many).not.toMatch(/exist but carries|exists but carry/);
   });
 });

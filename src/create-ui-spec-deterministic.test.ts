@@ -768,10 +768,20 @@ describe("createUiSpecDeterministic — colorTokensRefusal states the real cause
     expect(out.colorTokensRefusal).toBeNull();
   });
 
-  it("reports insufficient-contributors, not no-plurality, when nothing is trusted", () => {
+  it("reports untrusted — NOT insufficient-contributors — when entries contributed but none is verified", () => {
+    // The earlier fix branched the five ARRAY fields on the real cause and left
+    // colorTokens mapping the trust-gated early return to "fewer than 3 matched
+    // entries contribute color roles". Three DID contribute; they were refused.
+    // That is the default production state (0 of 787 verified), so the row was
+    // false in the single most common response the product produces.
     const matches = [2, 3, 4].map((n) => matched(`evidence-${n}`, proseEntry({ id: `u-${n}` })));
     const evidence = [2, 3, 4].map((n) => observation(`evidence-${n}`, { ...GATE_FACTS, colorRoles: roles() }));
     const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
+    expect(out.colorTokensRefusal).toBe("untrusted");
+  });
+
+  it("reports insufficient-contributors when nothing was retrieved at all", () => {
+    const out = createUiSpecDeterministic([], [], [], REQUEST);
     expect(out.colorTokensRefusal).toBe("insufficient-contributors");
   });
 });
@@ -811,9 +821,12 @@ describe("createUiSpecDeterministic — every vote refuses a tie, not just colou
   });
 
   it("does not claim a type pairing when the pairing ties", () => {
+    // typePairing reaches the synthesizer as the DERIVED string
+    // (create-ui-spec-contracts.ts:313), not an object — an object here would be
+    // an unreachable shape that no Zod parse could produce.
     const out = twoVerified(
-      { ...GATE_FACTS, typePairing: { display: "Inter", body: "Inter" } },
-      { ...GATE_FACTS, typePairing: { display: "Söhne", body: "Söhne" } },
+      { ...GATE_FACTS, typePairing: "Inter + Inter" },
+      { ...GATE_FACTS, typePairing: "Söhne + Söhne" },
     );
     // Target the CLAUSE, not the bare face name: the brief itself contains
     // "Internal analytics workspace", so /Inter/ matches the caller's own words.

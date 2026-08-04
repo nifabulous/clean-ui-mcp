@@ -65,13 +65,14 @@ describe("TrustGatedCorpusReader", () => {
     expect(r.entriesForAggregation().map((e) => e.id)).toEqual(["verified-1"]);
   });
 
-  it("keeps the identity-screening corpus UNGATED", () => {
-    // THE TRAP. buildDeniedNames must stay corpus-wide: narrowing it shrinks the
-    // denied-name set and weakens identity screening, so an unverified entry's
-    // product name would stop being screened out of served prose. Trust and
-    // identity are independent concerns and this method is the identity one.
+  it("distinguishes a refused entry from a missing one", () => {
+    // getById answers undefined for both, so a caller that reports "no entry
+    // found" would assert non-existence about an entry that exists. This is how a
+    // tool tells the two apart without serving the entry.
     const r = new TrustGatedCorpusReader(innerReader());
-    expect(r.allEntriesForScreening().map((e) => e.id)).toEqual(["verified-1", "unverified-1"]);
+    expect(r.refusedForTrust("unverified-1")).toBe(true);
+    expect(r.refusedForTrust("verified-1")).toBe(false);
+    expect(r.refusedForTrust("no-such-entry")).toBe(false);
   });
 
   it("serves nothing when no entry is verified — the day-one corpus", async () => {
@@ -89,8 +90,8 @@ describe("TrustGatedCorpusReader", () => {
     expect(r.getById("unverified-1")).toBeUndefined();
     expect(r.findSimilar("x", 5)).toEqual([]);
     expect(r.entriesForAggregation()).toEqual([]);
-    // Screening still sees it, so its product name is still denied in prose.
-    expect(r.allEntriesForScreening()).toHaveLength(1);
+    // Still distinguishable from a missing entry.
+    expect(r.refusedForTrust("unverified-1")).toBe(true);
   });
 
   it("reports the trust posture so a caller can tell gated from empty", () => {
@@ -128,5 +129,15 @@ describe("TrustGatedCorpusReader — the image-embedding route", () => {
   it("passes a null index through unchanged", async () => {
     const inner = { ...innerReader(), getImageIndex: async () => null } as unknown as CorpusReader;
     expect(await new TrustGatedCorpusReader(inner).getImageIndex()).toBeNull();
+  });
+});
+
+describe("TrustGatedCorpusReader — guards that must not fail open", () => {
+  it("refuses to double-wrap", () => {
+    // A double wrap makes trustPosture() see an already-filtered corpus and
+    // report verified === total, which silently reverts every honest
+    // "0 of N carry a verification" message to "no matches for those filters".
+    const once = new TrustGatedCorpusReader(innerReader());
+    expect(() => new TrustGatedCorpusReader(once)).toThrow(/already gating/i);
   });
 });

@@ -148,6 +148,19 @@ function rankedCorpusReader(): CorpusReader {
   ].map(({ id, patternType }) => ({
     id,
     patternType,
+    // Verified: this fixture's subject is the SERVING behaviour (no-model path
+    // synthesizes, model path does not), so the C3 trust gate must let it
+    // through. The gate's own refusal behaviour is covered by the
+    // trust-gated-prompt-grounding suite below and by corpus-trust.test.ts.
+    provenance: {
+      taggedBy: "auto",
+      verification: {
+        method: "image-confirmed",
+        verifiedAt: "2026-08-04",
+        verifierVersion: "verifier-v1",
+        imageSha256: "a".repeat(64),
+      },
+    },
     visual: {
       colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: id === "internal-C" ? "#1d4ed8" : "#2563eb" },
       spacingDensity: "compact",
@@ -419,3 +432,67 @@ async function captureError(promise: Promise<unknown>): Promise<unknown> {
   }
   throw new Error("expected promise to reject");
 }
+
+// ---------------------------------------------------------------------------
+// C3 trust gate — the model lane's prompt grounding (Stage 1, Task 2)
+// ---------------------------------------------------------------------------
+
+const GATE_ROLES = {
+  canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: "#2563eb",
+};
+
+function gateEntry(id: string, patternType: string, verified: boolean): CorpusEntryT {
+  return {
+    id,
+    patternType,
+    ...(verified
+      ? {
+          provenance: {
+            taggedBy: "auto",
+            verification: {
+              method: "image-confirmed",
+              verifiedAt: "2026-08-04",
+              verifierVersion: "verifier-v1",
+              imageSha256: "a".repeat(64),
+            },
+          },
+        }
+      : {}),
+    visual: {
+      colorRoles: GATE_ROLES,
+      spacingDensity: "compact", cornerStyle: "slight-round",
+      usesShadows: false, usesBorders: true,
+      accentColor: "#2563eb", typePairing: { display: "Inter", body: "Inter" },
+    },
+  } as unknown as CorpusEntryT;
+}
+
+describe("create_ui_spec model lane — trust-gated prompt grounding", () => {
+  it("keeps unverified entries' derived summaries out of the model prompt", async () => {
+    // Two matched entries: one verified (dashboard), one not (forms). The
+    // prompt's evidence summaries must carry only the verified row's derived
+    // summary; the served evidence rows still include both (ungated).
+    const verified = gateEntry("internal-v", "dashboard", true);
+    const unverified = gateEntry("internal-u", "forms", false);
+    const reader = {
+      ...makeReader(),
+      searchRanked: vi.fn(async () => [
+        { entry: verified, score: 5, searchMode: "keyword" },
+        { entry: unverified, score: 4, searchMode: "keyword" },
+      ]),
+    } as unknown as CorpusReader;
+
+    const call = vi.fn(async () => validModelResponse());
+    const runtime = makeRuntime({ call: call as unknown as CreateUiSpecModelRuntime["call"] });
+    const out = await createUiSpecForAdapter(
+      REQUEST,
+      makeCreateUiSpecDependencies(reader, FIXED_NOW, { kind: "configured", runtime }),
+    );
+    expect(out.envelope.modelExecution?.state).toBe("succeeded");
+    const prompt = (call.mock.calls[0][0] as { prompt: string }).prompt;
+    expect(prompt).toContain("dashboard reference");
+    expect(prompt).not.toContain("forms reference");
+    // Served evidence still reports both rows (ungated, no authority claim).
+    expect(out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation")).toHaveLength(2);
+  });
+});

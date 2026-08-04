@@ -596,6 +596,37 @@ export const CorpusEntry = z.object({
      *  only by the tagger/retag path, NOT by human edits. Absent on legacy
      *  entries (pre-dating this field); display falls back to addedAt. */
     taggedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    /**
+     * HOW this entry's values were checked, as opposed to who touched them.
+     * Absent on every entry that predates the trust gate, which is why the gate
+     * is fail-closed: absent means not verified.
+     *
+     * `imageSha256` binds an image-confirmed record to the exact bytes the
+     * verifier saw, so re-capturing the screenshot makes the record stale rather
+     * than valid (checked by `doctor.ts`, never on the serve path). It is
+     * REQUIRED when `method` is "image-confirmed" and omitted for `measured`,
+     * whose evidence is the live DOM rather than the pixels.
+     *
+     * `method` is a plain string and unknown keys pass through (`passthrough`),
+     * ON PURPOSE: the accepted tiers live in `corpus-trust.ts`'s
+     * VERIFICATION_METHODS, the sole authority on whether a record grants trust.
+     *
+     * A `z.enum` here would defeat the forward compatibility the gate documents:
+     * `corpus-reader.ts:332` THROWS on a failed parse, so a corpus written by a
+     * newer verifier — one extra tier, or one extra field like `confidence` —
+     * would make an older build refuse the ENTIRE corpus rather than decline the
+     * rows it does not understand. Readability and trust are different questions;
+     * only the second is fail-closed.
+     *
+     * `imageSha256` keeps its shape check: a non-hex hash is a writer bug, not a
+     * newer tier, and there is nothing to be forward-compatible with.
+     */
+    verification: z.object({
+      method: z.string().min(1),
+      verifiedAt: z.string().min(1),
+      verifierVersion: z.string().min(1),
+      imageSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    }).passthrough().optional(),
   }).optional(),
 })
 // qualityScore ↔ qualityTier coupling: cautionary entries score 1-2 (sinking in

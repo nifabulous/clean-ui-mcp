@@ -11,6 +11,7 @@
  *   npm run doctor -- --json
  */
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -24,6 +25,7 @@ import { ENTRIES_PATH, SNAPSHOT_DIR, listSnapshots, tryReadCorpus } from "../per
 // Check rows these functions return straight into `checks`, so they ship in
 // both the human-readable report and the `--json` output verbatim.
 import {
+  corpusDefectCheck,
   loaderHealthCheck,
   publicationCheck,
   type Check,
@@ -227,6 +229,28 @@ if (entries) {
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   const imageExists = (p: string) => existsSync(fromCorpusRelativeImagePath(p));
   checks.push(publicationCheck(entries, { now: today, imageExists }));
+}
+
+// ── 10b. Corpus defect scan (C3 trust gate, Stage 1) ─────────────────────────
+// The twelve detectors that find 768 of 787 entries defective, as a standing
+// check so a regression surfaces without a one-off script. REPORT ONLY — it
+// never writes `provenance.verification` and never un-gates anything; a clean
+// bill of health here is NOT grounds for trust (a fabricated critique trips none
+// of these detectors).
+//
+// `imageSha256` is called only for entries carrying an image-confirmed
+// verification record, so a corpus with none — the day-one state — reads no
+// image bytes at all.
+if (entries) {
+  const imageExists = (p: string) => existsSync(fromCorpusRelativeImagePath(p));
+  const imageSha256 = (p: string): string | null => {
+    try {
+      return createHash("sha256").update(readFileSync(fromCorpusRelativeImagePath(p))).digest("hex");
+    } catch {
+      return null;
+    }
+  };
+  checks.push(corpusDefectCheck(entries, { imageExists, imageSha256 }));
 }
 
 // ── 11. Review-gate git hooks installed ──────────────────────────────────────

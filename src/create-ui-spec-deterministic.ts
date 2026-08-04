@@ -2,7 +2,7 @@ import type { SanitizedEvidence } from "./create-ui-spec-contracts.js";
 import type { CreateUiSpecRequest } from "./create-ui-spec-contracts.js";
 import type { CorpusEntryT } from "./schema.js";
 import { buildDeniedNames, screenProse } from "./corpus-prose-screen.js";
-import { plurality } from "./design-prompt.js";
+import { isVerified, trustedEvidenceIdsOf } from "./corpus-trust.js";
 
 export interface DeterministicColorTokens {
   primary: string;
@@ -22,8 +22,22 @@ export interface DeterministicLayoutRegion {
 export interface DeterministicSynthesis {
   /** null → keep the recipe's brief echo (no corpus match). */
   designDirection: string | null;
-  /** null → tokens stay unavailable (fewer than 3 contributing entries). */
+  /** null → tokens stay unavailable; {@link colorTokensRefusal} says why. */
   colorTokens: DeterministicColorTokens | null;
+  /**
+   * WHY `colorTokens` is null, so the served `unavailableDecisions` reason can
+   * state the real cause instead of guessing. THREE causes are reachable and none
+   * is interchangeable with another:
+   *   - `untrusted` — entries were matched and every one was refused by the trust
+   *     gate. This is the DEFAULT production state (0 of 787 entries carry a
+   *     verification record), so it is the most common cause by far.
+   *   - `insufficient-contributors` — fewer than three entries contributed roles.
+   *   - `no-plurality` — three or more contributed and did not agree.
+   * Reporting "fewer than three" for either of the others tells a caller that
+   * retrieval was thin and invites a re-query that cannot help.
+   * null when tokens are served.
+   */
+  colorTokensRefusal: "untrusted" | "insufficient-contributors" | "no-plurality" | null;
   layoutRegions: readonly DeterministicLayoutRegion[];
   responsiveBehavior: readonly string[];
   /** Corpus whatToSteal rows, screened, capped at 5, cited via sourceIds. */
@@ -99,6 +113,37 @@ const MAX_VOICE_EXAMPLE_LENGTH = 140;
 /** Screenshot data ("52,420") is not copy; the identity screen cannot see it. */
 const DATA_ONLY_VOICE_EXAMPLE = /^[\d\s.,%$£€+-]+$/;
 
+/**
+ * `plurality` with no tie-breaking: undefined unless ONE value strictly beats
+ * every other. `design-prompt.ts:51` keeps the first-inserted value on a tie,
+ * which turns retrieval order into a consensus claim.
+ */
+function strictPlurality<T>(values: readonly T[]): T | undefined {
+  if (values.length === 0) return undefined;
+  const counts = new Map<string, { value: T; count: number }>();
+  // Every vote that reaches this today is a STRING (`typePairing` is the derived
+  // `"${display} + ${body}"` string, `create-ui-spec-contracts.ts:313`), so the
+  // keying below is equivalent to the raw-value Map `plurality` used. It is
+  // written generically so a future non-string vote compares by value rather than
+  // by reference. Caveat if that day comes: `JSON.stringify` is not value
+  // equality — `{a,b}` and `{b,a}` key differently, and `0` collides with `"0"` —
+  // so a structural key would be needed rather than this one.
+  for (const v of values) {
+    const key = typeof v === "string" ? v : JSON.stringify(v);
+    const hit = counts.get(key);
+    if (hit) hit.count += 1;
+    else counts.set(key, { value: v, count: 1 });
+  }
+  let best: T | undefined;
+  let bestCount = 0;
+  let tied = false;
+  for (const { value, count } of counts.values()) {
+    if (count > bestCount) { best = value; bestCount = count; tied = false; }
+    else if (count === bestCount) { tied = true; }
+  }
+  return tied ? undefined : best;
+}
+
 function majority(values: readonly boolean[]): boolean | undefined {
   const yes = values.filter(Boolean).length;
   const no = values.length - yes;
@@ -117,15 +162,35 @@ function majority(values: readonly boolean[]): boolean | undefined {
  */
 export function createUiSpecDeterministic(
   evidence: readonly SanitizedEvidence[],
-  matchedEntries: readonly { readonly evidenceId: string; readonly entry: CorpusEntryT }[],
+  allMatchedEntries: readonly { readonly evidenceId: string; readonly entry: CorpusEntryT }[],
   corpusEntries: readonly CorpusEntryT[],
   request: CreateUiSpecRequest,
 ): DeterministicSynthesis {
-  const observations = evidence.filter((e) => e.kind === "corpus-observation" && e.structuredFacts);
+  // ----- C3 trust gate (Stage 1) -------------------------------------------
+  // ONE filter, and it works by SHADOWING: the ungated parameter is
+  // `allMatchedEntries` and the name the body uses is the trusted view. Every
+  // existing selector and every future one therefore reads gated entries
+  // without needing its own guard — the ungated list is not in scope below.
+  //
+  // `corpusEntries` is deliberately NOT gated. It feeds `buildDeniedNames` for
+  // the identity screen, which must stay corpus-wide; narrowing it would shrink
+  // the denied-name set and weaken screening.
+  const matchedEntries = allMatchedEntries.filter((m) => isVerified(m.entry));
+  // `colorTokens` and `layoutRegions` derive from SanitizedEvidence rows, which
+  // do not carry their entry. Bridge the same filter through the evidence id so
+  // the plurality votes run over trusted observations only — which also means
+  // the existing three-contributor guard counts TRUSTED contributors.
+  const trustedEvidenceIds = trustedEvidenceIdsOf(matchedEntries);
+  const observations = evidence.filter(
+    (e) => e.kind === "corpus-observation" && e.structuredFacts && trustedEvidenceIds.has(e.id),
+  );
   if (observations.length === 0) {
     return {
       designDirection: null,
       colorTokens: null,
+      // Entries WERE matched and the gate refused all of them: that is a trust
+      // outcome, not thin retrieval, and the served reason must say so.
+      colorTokensRefusal: allMatchedEntries.length > 0 ? "untrusted" : "insufficient-contributors",
       layoutRegions: [],
       responsiveBehavior: [],
       techniques: [],
@@ -155,16 +220,43 @@ export function createUiSpecDeterministic(
   // array and letting a `??` default invent a token nothing derived. Requiring
   // a non-null muted to COUNT toward the >= 3 threshold folds that case back
   // under the same guard — the block goes null with its reason row instead.
+  // A TIE IS NOT A PLURALITY. `plurality` breaks ties by insertion order
+  // (design-prompt.ts:51), so a 2-2 split silently serves whichever value the
+  // retrieval order happened to put first — a consensus claim nothing backs,
+  // the same over-claim class the trust gate exists to stop. It matters more
+  // once the gate lands: verifying one more entry can turn a 2-1 win into a 2-2
+  // tie, and the palette must go null then rather than keep the stale winner.
+  // Scoped to this module on purpose — `design-prompt.ts`'s own merge feeds
+  // generate_design_brief and is not in this change's scope.
   const withRoles = facts.filter((f) => f.colorRoles && f.colorRoles.muted !== null);
-  const colorTokens = withRoles.length >= 3
+  const roleVotes = withRoles.length >= 3
     ? {
-        primary: plurality(withRoles.map((f) => f.colorRoles!.accent)) ?? "#3b82f6",
-        surface: plurality(withRoles.map((f) => f.colorRoles!.surface)) ?? "#f8f8f8",
-        ink: plurality(withRoles.map((f) => f.colorRoles!.ink)) ?? "#111111",
-        muted: plurality(withRoles.map((f) => f.colorRoles!.muted).filter((v): v is string => v !== null)) ?? "#888888",
-        accent: plurality(withRoles.map((f) => f.colorRoles!.accent)) ?? "#3b82f6",
+        accent: strictPlurality(withRoles.map((f) => f.colorRoles!.accent)),
+        surface: strictPlurality(withRoles.map((f) => f.colorRoles!.surface)),
+        ink: strictPlurality(withRoles.map((f) => f.colorRoles!.ink)),
+        muted: strictPlurality(
+          withRoles.map((f) => f.colorRoles!.muted).filter((v): v is string => v !== null),
+        ),
       }
     : null;
+  // The block is all-or-nothing, matching the existing `< 3` behaviour: a
+  // palette with one unresolved role is not a coherent palette, and the `??`
+  // hex defaults this replaces would have INVENTED a token on a tie — exactly
+  // the fabrication the reason row is supposed to report instead.
+  const colorTokens =
+    roleVotes && roleVotes.accent && roleVotes.surface && roleVotes.ink && roleVotes.muted
+      ? {
+          primary: roleVotes.accent,
+          surface: roleVotes.surface,
+          ink: roleVotes.ink,
+          muted: roleVotes.muted,
+          accent: roleVotes.accent,
+        }
+      : null;
+  const colorTokensRefusal: DeterministicSynthesis["colorTokensRefusal"] =
+    colorTokens !== null ? null
+      : roleVotes === null ? "insufficient-contributors"
+      : "no-plurality";
 
   // Layout regions from the wireframe roles (closed enum), deduped in order.
   const seen = new Set<string>();
@@ -177,7 +269,7 @@ export function createUiSpecDeterministic(
     }
   }
   const layoutForms = facts.map((f) => f.layoutForm).filter((v): v is NonNullable<typeof v> => Boolean(v));
-  const layoutForm = plurality(layoutForms);
+  const layoutForm = strictPlurality(layoutForms);
   // Responsive-behavior rows: the corpus's closed responsiveBehavior enum plus
   // the layout-form plurality, both in the existing "label: value" style. The
   // enum is a closed token (design spec §2b) — no identity screen needed.
@@ -209,12 +301,12 @@ export function createUiSpecDeterministic(
   // matched entries — they are deliberately absent from structuredFacts — so
   // they are read through the internal matchedEntries channel, exactly like
   // the six prose fields above.
-  const density = plurality(facts.map((f) => f.spacingDensity).filter((v): v is NonNullable<typeof v> => Boolean(v)));
-  const corners = plurality(facts.map((f) => f.cornerStyle).filter((v): v is NonNullable<typeof v> => Boolean(v)));
+  const density = strictPlurality(facts.map((f) => f.spacingDensity).filter((v): v is NonNullable<typeof v> => Boolean(v)));
+  const corners = strictPlurality(facts.map((f) => f.cornerStyle).filter((v): v is NonNullable<typeof v> => Boolean(v)));
   const shadows = majority(facts.filter((f) => typeof f.usesShadows === "boolean").map((f) => f.usesShadows as boolean));
   const borders = majority(facts.filter((f) => typeof f.usesBorders === "boolean").map((f) => f.usesBorders as boolean));
   const pairings = facts.map((f) => f.typePairing).filter((v): v is NonNullable<typeof v> => Boolean(v));
-  const pairing = plurality(pairings);
+  const pairing = strictPlurality(pairings);
   // Shared identity screen for every corpus-prose string (drop whole, never
   // redact). Built once so the direction's prose segments (including the
   // font-family clause, which can carry a product name) and the six prose
@@ -435,6 +527,7 @@ export function createUiSpecDeterministic(
   return {
     designDirection,
     colorTokens,
+    colorTokensRefusal,
     layoutRegions,
     responsiveBehavior,
     techniques,

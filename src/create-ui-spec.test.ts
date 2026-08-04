@@ -41,6 +41,12 @@ import {
 import { canonicalJsonStringify, sha256Hex } from "./readiness/contracts.js";
 import { createUiSpec, createUiSpecForAdapter, buildFallbackCandidate, RECIPE_EVIDENCE_ID, type CreateUiSpecDependencies } from "./create-ui-spec.js";
 import recipe from "./c3/fallback-recipe-v1.json" with { type: "json" };
+import type { CreateUiSpecModelRuntime } from "./create-ui-spec-model.js";
+import {
+  ModelGenerationParametersSchema,
+  PinnedModelEndpointSchema,
+} from "./create-ui-spec-model-contracts.js";
+import type { ModelArtifactRecord } from "./model-artifact-store.js";
 import type { SanitizedEvidence } from "./create-ui-spec-contracts.js";
 import type { DesignArtifactEnvelope } from "./create-ui-spec-contracts.js";
 import { Evidence, ToolResultSchemas, findUnsafeCreateUiSpecLeaves } from "./tool-contracts.js";
@@ -1697,6 +1703,27 @@ function corpusEntryWithRoles(id: string, accent: string, pattern = "dashboard")
   });
 }
 
+/**
+ * The C3 trust gate serves corpus judgment only from entries carrying a
+ * `provenance.verification` record. `makeFixture` deliberately leaves it ABSENT
+ * (the day-one corpus state, which the gate must refuse), so tests whose subject
+ * is the SERVING behaviour opt in explicitly with this.
+ */
+function verify<T extends { provenance?: unknown }>(entries: readonly T[]): readonly T[] {
+  for (const e of entries) {
+    (e as { provenance: unknown }).provenance = {
+      taggedBy: "auto",
+      verification: {
+        method: "image-confirmed",
+        verifiedAt: "2026-08-04",
+        verifierVersion: "verifier-v1",
+        imageSha256: "a".repeat(64),
+      },
+    };
+  }
+  return entries;
+}
+
 function mcqPayload(out: Awaited<ReturnType<typeof createUiSpecForAdapter>>): Record<string, unknown> {
   const spec = out.envelope.spec;
   return {
@@ -1721,6 +1748,7 @@ it("ledgers the synthesized direction against the corpus evidence ids", async ()
     e.critique = "Clean critique prose about the dashboard layout and its use of a three-column grid.";
     e.whatToSteal = ["Clean stealable technique about grouping metrics by row."];
   }
+  verify(corpus);
   const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
@@ -1749,6 +1777,7 @@ it("ledgers synthesized color tokens against the corpus evidence ids", async () 
   const patterns = ["dashboard", "data-table", "forms"];
   const ids = ["a", "b", "c"];
   const corpus = patterns.map((p, i) => corpusEntryWithRoles(`internal-${ids[i]!}`, i === 2 ? "#1d4ed8" : "#2563eb", p));
+  verify(corpus);
   const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
@@ -1789,6 +1818,11 @@ it("passes the gate with tokens unavailable and exactly one colorTokens row", as
   const ids = ["a", "b"];
   const patterns = ["dashboard", "forms"];
   const corpus = patterns.map((p, i) => corpusEntryWithRoles(`internal-${ids[i]!}`, "#2563eb", p));
+  // Verified, so the refusal is genuinely the <3 threshold and not the trust
+  // gate. Leaving them unverified would make the row say "none carry a recorded
+  // verification" — true, but then this test would no longer be about the
+  // threshold it was written for.
+  verify(corpus);
   const ranked = corpus.map((e, i) => ({ entry: e, score: 5 - i }));
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
@@ -1820,6 +1854,7 @@ it("serves corpus judgment into the six UiSpec fields, evidence-cited and gate-c
     components: ["kpi-card"],
     responsiveBehavior: "responsive",
   })];
+  verify(corpus);
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
     deps(corpus, [{ entry: corpus[0], score: 5 }]),
@@ -1857,4 +1892,310 @@ it("serves corpus judgment into the six UiSpec fields, evidence-cited and gate-c
   // prerequisites) accepts the produced envelope.
   const r = ToolResultSchemas.create_ui_spec.safeParse(mcqPayload(out));
   expect(r.success, r.success ? "" : JSON.stringify(r.error.issues)).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// C3 trust gate — honest reasons for gated fields (Stage 1, Task 3)
+// ---------------------------------------------------------------------------
+
+const GATED_ARRAY_FIELDS = [
+  "techniques", "antiPatterns", "componentInventory",
+  "responsiveBehavior", "accessibilityConstraints",
+] as const;
+
+/**
+ * A minimal configured model runtime for the trust-gate suites: a stubbed `call`
+ * returning a valid proposal, an in-memory artifact store. It exists so the
+ * gated-reason assertions can run on the MODEL path (synthesis === null), which
+ * is the path a `synthesis`-conditioned reason row would silently skip.
+ */
+function gateModelRuntime(): CreateUiSpecModelRuntime {
+  const proposal = {
+    status: "proposal-only",
+    disclaimer: "Proposal only; not accepted into token authority.",
+    designDirection: "Use compact grouping, restrained emphasis, and stable alignment.",
+  };
+  const records = new Map<string, ModelArtifactRecord>();
+  return {
+    endpoint: PinnedModelEndpointSchema.parse({
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1/responses",
+      apiKey: "gate-test-key",
+      model: "gpt-5-mini",
+    }),
+    parameters: ModelGenerationParametersSchema.parse({
+      temperature: 0, maxOutputTokens: 4096, maxAttempts: 1, seed: null,
+    }),
+    call: vi.fn(async () => ({
+      content: JSON.stringify(proposal),
+      provider: "openai" as const,
+      model: "gpt-5-mini",
+      usage: { promptTokens: 10, completionTokens: 5, raw: {} },
+      attempts: 1,
+      latencyMs: 3,
+      providerRequestId: "gate-test-req",
+    })) as CreateUiSpecModelRuntime["call"],
+    store: {
+      save: vi.fn(async (r: ModelArtifactRecord) => { records.set(r.artifactId, r); }),
+      read: vi.fn(async (id: string) => records.get(id) ?? null),
+      delete: vi.fn(async (id: string) => records.delete(id)),
+    },
+  };
+}
+
+describe("create_ui_spec — gated fields carry honest reasons", () => {
+  it("emits one unavailable row per gated field and keeps them unique", async () => {
+    const corpus = [corpusEntryWithRoles("gate-a", "#2563eb", "dashboard")];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const rows = out.envelope.spec.unavailableDecisions;
+    const fields = rows.map((r) => r.field);
+
+    for (const field of GATED_ARRAY_FIELDS) {
+      expect(fields, `missing reason row for ${field}`).toContain(field);
+      const row = rows.find((r) => r.field === field);
+      expect(row?.reason).toMatch(/verified|verification/i);
+    }
+    // The UiSpec gate requires uniqueness; assert it directly so a duplicate is
+    // caught here rather than as an opaque parse failure.
+    expect(new Set(fields).size).toBe(fields.length);
+  });
+
+  it("emits the same rows on the MODEL path, where synthesis is null", async () => {
+    // The reason rows are conditioned on the SERVED value being empty, not on
+    // `synthesis` being non-null — otherwise the model path (synthesis === null,
+    // fixed-empty specFields) would serve empty arrays with no explanation.
+    const corpus = [corpusEntryWithRoles("gate-m", "#2563eb", "dashboard")];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      {
+        ...deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+        model: { kind: "configured", runtime: gateModelRuntime() },
+      },
+    );
+    expect(out.envelope.modelExecution?.state).toBe("succeeded");
+    const fields = out.envelope.spec.unavailableDecisions.map((r) => r.field);
+    for (const field of GATED_ARRAY_FIELDS) {
+      expect(fields, `missing reason row for ${field} on the model path`).toContain(field);
+    }
+    expect(new Set(fields).size).toBe(fields.length);
+  });
+
+  it("reverts colour authority with no extra code when tokens are gated", async () => {
+    const corpus = [corpusEntryWithRoles("gate-b", "#2563eb", "dashboard")];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const spec = out.envelope.spec;
+    expect(spec.colorTokens).toBeNull();
+    expect(spec.colorTokenAuthority).toBe("editorial");
+    expect(spec.citedDecisions.some((d) => d.field === "colorTokens" && d.authority === "corpus-evidence")).toBe(false);
+    expect(spec.citedDecisions.some((d) => d.authority === "corpus-evidence")).toBe(false);
+    expect(spec.designDirection).not.toMatch(/evidence-\d/);
+  });
+
+  it("omits a field's reason row when that field IS served", async () => {
+    // Partial verification must not claim a field is unavailable while serving
+    // it. Three verified entries populate techniques/antiPatterns, so those two
+    // rows must be absent while the still-empty fields keep theirs.
+    const corpus = ["a", "b", "c"].map((k, i) =>
+      corpusEntryWithRoles(`gate-p-${k}`, "#2563eb", ["dashboard", "data-table", "forms"][i]!),
+    );
+    for (const e of corpus) {
+      e.critique = "Clean critique prose about the dashboard layout and its three-column grid.";
+      e.whatToSteal = ["Clean stealable technique about grouping metrics by row."];
+      e.antiPatterns = { antiPatterns: ["Avoid stacking two shadow depths."], whereThisFails: [], accessibilityRisks: [] };
+    }
+    verify(corpus);
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 5 - i }))),
+    );
+    const spec = out.envelope.spec;
+    const fields = spec.unavailableDecisions.map((r) => r.field);
+    expect(spec.techniques.length).toBeGreaterThan(0);
+    expect(fields).not.toContain("techniques");
+    expect(spec.antiPatterns.length).toBeGreaterThan(0);
+    expect(fields).not.toContain("antiPatterns");
+    expect(new Set(fields).size).toBe(fields.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C3 trust gate — verified-source disclosure (Stage 1, Task 4)
+// ---------------------------------------------------------------------------
+
+describe("create_ui_spec — trust disclosure", () => {
+  it("warns with the verified-source count when matches were found but none trusted", async () => {
+    const corpus = [corpusEntryWithRoles("disc-a", "#2563eb", "dashboard")];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning, "expected an insufficientCorpusEvidence warning").toBeDefined();
+    expect(warning?.message).toMatch(/0 of 1/);
+    // Retrieval is still reported truthfully: matches were found.
+    expect(out.envelope.retrieval.resultCount).toBeGreaterThan(0);
+  });
+
+  it("emits no such warning when there were no matches at all", async () => {
+    const out = await createUiSpecForAdapter(noRefRequest(), deps([], []));
+    const warning = out.envelope.warnings.find(
+      (w) => w.code === "insufficientCorpusEvidence" && /verified/.test(w.message),
+    );
+    expect(warning).toBeUndefined();
+  });
+
+  it("warns with N of M when SOME matched entries are verified", async () => {
+    // The partial case is the branch that distinguishes "trusted some" from
+    // "trusted none": one verified + one unverified entry must report "1 of 2".
+    const verified = corpusEntryWithRoles("disc-v", "#2563eb", "dashboard");
+    verify([verified]);
+    const unverified = corpusEntryWithRoles("disc-u", "#dc2626", "forms");
+    const corpus = [verified, unverified];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning).toBeDefined();
+    expect(warning?.message).toMatch(/1 of 2/);
+  });
+
+  it("emits no trust warning when every matched entry is verified", async () => {
+    const corpus = ["a", "b"].map((k, i) =>
+      corpusEntryWithRoles(`disc-all-${k}`, "#2563eb", i === 0 ? "dashboard" : "forms"),
+    );
+    verify(corpus);
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const warning = out.envelope.warnings.find(
+      (w) => w.code === "insufficientCorpusEvidence" && /verified/.test(w.message),
+    );
+    expect(warning).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Served reasons must be TRUE, not merely present (review round)
+// ---------------------------------------------------------------------------
+
+describe("create_ui_spec — unavailable reasons state the real cause", () => {
+  it("does not claim 'no verified entries' when every matched entry IS verified", async () => {
+    // The bug: the reason row fired whenever the served array was empty, for ANY
+    // cause, while asserting "none of the matched entries carry one". With three
+    // verified entries whose components/accessibilityRisks are empty, that text
+    // is flatly false — the corpus simply recorded nothing for those fields.
+    const corpus = ["a", "b", "c"].map((k, i) =>
+      corpusEntryWithRoles(`cause-${k}`, "#2563eb", ["dashboard", "data-table", "forms"][i]!),
+    );
+    for (const e of corpus) {
+      e.critique = "Clean critique prose about the dashboard layout and its three-column grid.";
+      e.whatToSteal = ["Clean stealable technique about grouping metrics by row."];
+      e.components = [];
+      e.antiPatterns = { antiPatterns: [], whereThisFails: [], accessibilityRisks: [] };
+    }
+    verify(corpus);
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 5 - i }))),
+    );
+    const rows = out.envelope.spec.unavailableDecisions;
+    for (const field of ["componentInventory", "accessibilityConstraints"]) {
+      const row = rows.find((r) => r.field === field);
+      expect(row, `expected a row for ${field}`).toBeDefined();
+      expect(row!.reason, `${field} reason must not claim nothing is verified`)
+        .not.toMatch(/none of the matched entries/i);
+      expect(row!.reason).toMatch(/recorded nothing|did not record/i);
+    }
+  });
+
+  it("does claim 'no verified entries' when that is actually true", async () => {
+    const corpus = [corpusEntryWithRoles("cause-unv", "#2563eb", "dashboard")];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const row = out.envelope.spec.unavailableDecisions.find((r) => r.field === "techniques");
+    expect(row?.reason).toMatch(/verification/i);
+    expect(row?.reason).toMatch(/none of the matched entries/i);
+  });
+
+  it("blames the model lane, not verification, on the model path", async () => {
+    // `synthesis` is null whenever a proposal exists (create-ui-spec.ts:973) —
+    // that is the model path, NOT a trust outcome. Claiming "none of the matched
+    // entries carry a verification" there is false even with a verified corpus.
+    const corpus = [corpusEntryWithRoles("cause-model", "#2563eb", "dashboard")];
+    verify(corpus);
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      {
+        ...deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+        model: { kind: "configured", runtime: gateModelRuntime() },
+      },
+    );
+    expect(out.envelope.modelExecution?.state).toBe("succeeded");
+    const row = out.envelope.spec.unavailableDecisions.find((r) => r.field === "techniques");
+    expect(row).toBeDefined();
+    expect(row!.reason).not.toMatch(/none of the matched entries/i);
+    expect(row!.reason).toMatch(/model/i);
+  });
+
+  it("states the real colorTokens cause when three entries contribute but disagree", async () => {
+    // Measured: only ~0.4% of real 3-entry windows agree on all four roles, so
+    // "fewer than 3 matched entries contribute color roles" was the wrong reason
+    // in almost every null-palette response.
+    const corpus = ["a", "b", "c"].map((k, i) =>
+      corpusEntryWithRoles(`disagree-${k}`, ["#2563eb", "#dc2626", "#16a34a"][i]!, ["dashboard", "data-table", "forms"][i]!),
+    );
+    verify(corpus);
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 5 - i }))),
+    );
+    const spec = out.envelope.spec;
+    expect(spec.colorTokens).toBeNull();
+    const row = spec.unavailableDecisions.find((r) => r.field === "colorTokens");
+    expect(row).toBeDefined();
+    expect(row!.reason, "must not claim thin retrieval when three entries contributed")
+      .not.toMatch(/fewer than 3/i);
+    expect(row!.reason).toMatch(/did not agree|disagree/i);
+  });
+});
+
+describe("create_ui_spec — reasons on the paths with no corpus at all", () => {
+  it("does not claim verified entries recorded nothing when NO entry was retrieved", async () => {
+    // Zero-match path: matchedEntries is empty, so nothing was consulted. A row
+    // reading "the verified corpus entries recorded nothing servable" asserts a
+    // consultation that never happened.
+    const out = await createUiSpecForAdapter(noRefRequest(), deps([], []));
+    const row = out.envelope.spec.unavailableDecisions.find((r) => r.field === "techniques");
+    expect(row).toBeDefined();
+    expect(row!.reason).not.toMatch(/verified corpus entries recorded nothing/i);
+    expect(row!.reason).toMatch(/no corpus|nothing was retrieved|retrieved no/i);
+  });
+
+  it("states the trust cause for colorTokens when entries contributed but none is verified", async () => {
+    // The default production state. "Fewer than 3 matched entries contribute
+    // color roles" is false here: three contributed and the gate refused them.
+    const corpus = ["a", "b", "c"].map((k, i) =>
+      corpusEntryWithRoles(`untrusted-${k}`, "#2563eb", ["dashboard", "data-table", "forms"][i]!),
+    );
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 5 - i }))),
+    );
+    const spec = out.envelope.spec;
+    expect(spec.colorTokens).toBeNull();
+    const row = spec.unavailableDecisions.find((r) => r.field === "colorTokens");
+    expect(row).toBeDefined();
+    expect(row!.reason).not.toMatch(/fewer than 3/i);
+    expect(row!.reason).toMatch(/verification/i);
+  });
 });

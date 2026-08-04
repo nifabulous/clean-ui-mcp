@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CorpusEntryT } from "../schema.js";
 import type { LoadedCorpus } from "../persistence.js";
+import { corpusDefectCheck, summarizeCorpusDefects } from "./doctor-helpers.js";
 import {
   loaderHealthCheck,
   publicationCheck,
@@ -344,5 +345,296 @@ describe("loaderHealthCheck", () => {
   it("returns a Check object with the exact keys doctor.ts serializes", () => {
     const check: Check = loaderHealthCheck(loaded({ source: "primary" }));
     expect(Object.keys(check).sort()).toEqual(["detail", "name", "status"]);
+  });
+});
+
+// ── Corpus defect detectors (C3 trust gate, Stage 1 Task 5) ───────────────────
+//
+// These twelve detectors find 768 of 787 real entries defective. They REPORT
+// ONLY: they never write `provenance.verification` and never un-gate anything.
+// Alan's wholly-fabricated critique trips zero of them, so mechanical
+// cleanliness is necessary and not sufficient — granting trust from these checks
+// would re-ship the same fabrication class with a trust label attached.
+
+const CLEAN_ROLES = {
+  canvas: "#ffffff", surface: "#f8fafc", ink: "#111827", muted: "#6b7280", accent: "#2563eb",
+};
+
+function defectEntry(id: string, overrides: Record<string, unknown> = {}): CorpusEntryT {
+  const base = eligibleEntry({ id } as Partial<CorpusEntryT>);
+  return {
+    ...base,
+    layout: { form: "three-column", regions: [] },
+    visual: { ...(base.visual as Record<string, unknown>), accentColor: "#2563eb", colorRoles: CLEAN_ROLES },
+    ...overrides,
+  } as unknown as CorpusEntryT;
+}
+
+const VERIFICATION = {
+  method: "image-confirmed" as const,
+  verifiedAt: "2026-08-04",
+  verifierVersion: "v1",
+  imageSha256: "a".repeat(64),
+};
+
+/** No image is ever read in these tests; the detector's I/O is injected. */
+const NO_IMAGES = { imageExists: () => false, imageSha256: () => null };
+const ALL_IMAGES = { imageExists: () => true, imageSha256: () => "a".repeat(64) };
+
+describe("summarizeCorpusDefects", () => {
+  it("reports role collapse, accent disagreement and fabricated hex", () => {
+    const entries = [
+      // ink === canvas: text the same colour as its background.
+      defectEntry("bad-roles", {
+        visual: { accentColor: "#d25859", colorRoles: { canvas: "#403c44", surface: "#808080", ink: "#403c44", muted: "#909090", accent: "#d25859" } },
+      }),
+      // The two accent fields disagree.
+      defectEntry("bad-accent", { visual: { accentColor: "#403c44", colorRoles: CLEAN_ROLES } }),
+      // The critique cites a hex present in no colour field.
+      defectEntry("bad-hex", {
+        critique: "The deep plum-gray #90b5e8 canvas reduces eye strain across long working sessions without losing contrast.",
+      }),
+    ];
+    const findings = summarizeCorpusDefects(entries, ALL_IMAGES);
+    const byId = (id: string) => findings.filter((f) => f.id === id).map((f) => f.detector);
+    expect(byId("bad-roles")).toContain("role-collapse");
+    expect(byId("bad-accent")).toContain("accent-mismatch");
+    expect(byId("bad-hex")).toContain("fabricated-hex");
+  });
+
+  it("counts a fabricated hex once per colour, not once per mention", () => {
+    // The real corpus has entries citing the same unrecorded hex twice in one
+    // critique. Two rows for one defect inflates the tally and reads as two
+    // problems, so the finding is per (entry, colour).
+    const entries = [defectEntry("repeat-hex", {
+      critique: "The #90b5e8 header sits above the table, and the same #90b5e8 tint returns in the footer band below it.",
+    })];
+    const hits = summarizeCorpusDefects(entries, ALL_IMAGES).filter((f) => f.detector === "fabricated-hex");
+    expect(hits).toHaveLength(1);
+  });
+
+  it("reports ink-on-canvas contrast below 3:1", () => {
+    const entries = [defectEntry("low-contrast", {
+      visual: { accentColor: "#2563eb", colorRoles: { ...CLEAN_ROLES, canvas: "#6b7280", ink: "#808080" } },
+    })];
+    expect(summarizeCorpusDefects(entries, ALL_IMAGES).map((f) => f.detector)).toContain("low-contrast");
+  });
+
+  it("reports a rail region on a portrait or mobile entry", () => {
+    const entries = [defectEntry("mobile-rail", {
+      image: { visibility: "public-own", path: "images-public/mobile-rail.png", width: 390, height: 844 },
+      layout: { form: "single-column", regions: [{ role: "primary-nav" }, { role: "detail-rail" }] },
+    })];
+    expect(summarizeCorpusDefects(entries, ALL_IMAGES).map((f) => f.detector)).toContain("rail-on-portrait");
+  });
+
+  it("reports monospace claimed in prose with no mono face recorded", () => {
+    const entries = [defectEntry("mono-claim", {
+      critique: "Numeric columns use a monospace face so digits align cleanly down the whole ledger column.",
+    })];
+    expect(summarizeCorpusDefects(entries, ALL_IMAGES).map((f) => f.detector)).toContain("mono-unrecorded");
+  });
+
+  it("reports soft-neumorphic with usesShadows false", () => {
+    const entries = [defectEntry("neu", {
+      styleTags: ["soft-neumorphic"],
+      visual: { accentColor: "#2563eb", colorRoles: CLEAN_ROLES, usesShadows: false },
+    })];
+    expect(summarizeCorpusDefects(entries, ALL_IMAGES).map((f) => f.detector)).toContain("neumorphic-no-shadow");
+  });
+
+  it("reports unassessed quality defaults", () => {
+    const entries = [defectEntry("unassessed", {
+      qualityScore: 3, qualityTier: "exceptional",
+      provenance: { taggedBy: "auto" },
+    })];
+    expect(summarizeCorpusDefects(entries, ALL_IMAGES).map((f) => f.detector)).toContain("unassessed-quality");
+  });
+
+  it("reports a verified entry whose image file is missing", () => {
+    // The serve-path gate is pure and cannot see this; doctor.ts owns it.
+    const entries = [defectEntry("verified-no-image", {
+      image: { visibility: "private", path: "images-private/definitely-absent.png", width: 10, height: 10 },
+      provenance: { taggedBy: "auto", verification: VERIFICATION },
+    })];
+    const findings = summarizeCorpusDefects(entries, NO_IMAGES);
+    expect(findings.some((f) => f.id === "verified-no-image" && f.detector === "verified-image-missing")).toBe(true);
+  });
+
+  it("reports a verified entry whose imageSha256 no longer matches the bytes on disk", () => {
+    const entries = [defectEntry("verified-stale-hash", {
+      provenance: { taggedBy: "auto", verification: VERIFICATION },
+    })];
+    const findings = summarizeCorpusDefects(entries, {
+      imageExists: () => true,
+      imageSha256: () => "b".repeat(64),
+    });
+    expect(findings.some((f) => f.detector === "verified-hash-stale")).toBe(true);
+  });
+
+  it("stays silent on a clean entry, and never inspects images of unverified ones", () => {
+    let hashCalls = 0;
+    const clean = defectEntry("clean", {
+      critique: "Restrained borders separate the dense regions and the accent stays reserved for the primary action only.",
+      qualityScore: 4,
+      provenance: { taggedBy: "auto-reviewed" },
+    });
+    const findings = summarizeCorpusDefects([clean], {
+      imageExists: () => true,
+      imageSha256: () => { hashCalls += 1; return "a".repeat(64); },
+    });
+    expect(findings, JSON.stringify(findings)).toEqual([]);
+    // Hashing every image would make the doctor read the whole corpus off disk;
+    // only VERIFIED entries have a hash worth comparing.
+    expect(hashCalls).toBe(0);
+  });
+});
+
+describe("corpusDefectCheck", () => {
+  it("PASSes a clean corpus and WARNs with per-detector tallies otherwise", () => {
+    const clean = defectEntry("clean-2", {
+      critique: "Restrained borders separate the dense regions and the accent stays reserved for the primary action only.",
+      qualityScore: 4,
+      provenance: { taggedBy: "auto-reviewed" },
+    });
+    expect(corpusDefectCheck([clean], ALL_IMAGES).status).toBe("PASS");
+
+    const dirty = defectEntry("dirty", { visual: { accentColor: "#403c44", colorRoles: CLEAN_ROLES } });
+    const check = corpusDefectCheck([clean, dirty], ALL_IMAGES);
+    expect(check.status).toBe("WARN");
+    expect(check.detail).toContain("accent-mismatch:1");
+    // Report-only: the check must never claim it fixed or verified anything.
+    expect(check.detail).not.toMatch(/verified|fixed/i);
+  });
+});
+
+// ── Detector correctness fixes (review round) ─────────────────────────────────
+
+describe("summarizeCorpusDefects — review-round corrections", () => {
+  it("does not call tabular figures a monospace claim", () => {
+    // Tabular figures are an OpenType feature of PROPORTIONAL faces
+    // (font-variant-numeric: tabular-nums). Inter ships them. Reporting "no
+    // recorded face is a mono family" for such an entry is a false statement,
+    // and the real corpus has 5 of them.
+    const entries = [defectEntry("tabular", {
+      critique: "Currency columns are locked to tabular numerals so the decimal points align down the ledger.",
+      visual: { accentColor: "#2563eb", colorRoles: CLEAN_ROLES, typePairing: { display: "Inter", body: "Inter" } },
+    })];
+    expect(summarizeCorpusDefects(entries, ALL_IMAGES).map((f) => f.detector))
+      .not.toContain("mono-unrecorded");
+  });
+
+  it("still reports a genuine monospace claim with no mono face", () => {
+    const entries = [defectEntry("mono-real", {
+      critique: "Numeric columns use a monospace face so digits align cleanly down the whole ledger column.",
+      visual: { accentColor: "#2563eb", colorRoles: CLEAN_ROLES, typePairing: { display: "Inter", body: "Inter" } },
+    })];
+    expect(summarizeCorpusDefects(entries, ALL_IMAGES).map((f) => f.detector))
+      .toContain("mono-unrecorded");
+  });
+
+  it("reports no-typeface-recorded separately from a fabricated mono claim", () => {
+    const entries = [defectEntry("no-faces", {
+      critique: "Numeric columns use a monospace face so digits align cleanly down the whole ledger column.",
+      visual: { accentColor: "#2563eb", colorRoles: CLEAN_ROLES, typePairing: { display: null, body: null } },
+    })];
+    const detectors = summarizeCorpusDefects(entries, ALL_IMAGES).map((f) => f.detector);
+    expect(detectors).toContain("typeface-unrecorded");
+    expect(detectors).not.toContain("mono-unrecorded");
+  });
+
+  it("reports an icon-nav rail on a portrait capture", () => {
+    // schema.ts defines icon-nav as a "narrow icon-only rail" — as impossible on
+    // a phone portrait as primary-nav. It added 11 real entries to
+    // rail-on-portrait (90 -> 101 entries); each already had other findings.
+    const entries = [defectEntry("icon-rail", {
+      image: { visibility: "public-own", path: "images-public/icon-rail.png", width: 390, height: 844 },
+      layout: { form: "single-column", regions: [{ role: "icon-nav" }] },
+    })];
+    expect(summarizeCorpusDefects(entries, ALL_IMAGES).map((f) => f.detector))
+      .toContain("rail-on-portrait");
+  });
+
+  it("reports muted-on-canvas and ink-on-surface contrast, not just ink-on-canvas", () => {
+    // CLAUDE.md records --text-muted at 1.90:1 as a real SHIPPED defect; the
+    // detector could not see it. 432 real entries have muted below 3:1 on canvas.
+    const mutedBad = defectEntry("muted-bad", {
+      visual: { accentColor: "#2563eb", colorRoles: { ...CLEAN_ROLES, canvas: "#ffffff", muted: "#f0f0f0" } },
+    });
+    const inkOnSurface = defectEntry("ink-surface", {
+      visual: { accentColor: "#2563eb", colorRoles: { ...CLEAN_ROLES, surface: "#1a1a1a", ink: "#222222" } },
+    });
+    const found = summarizeCorpusDefects([mutedBad, inkOnSurface], ALL_IMAGES);
+    expect(found.filter((f) => f.id === "muted-bad").map((f) => f.detector)).toContain("low-contrast");
+    expect(found.filter((f) => f.id === "ink-surface").map((f) => f.detector)).toContain("low-contrast");
+  });
+
+  it("does not exempt an entry just because the UI stamped auto-reviewed", () => {
+    // ui/app.js:1375 flips auto -> auto-reviewed on save with NO quality
+    // assessment, and corpus-trust.ts says that field carries no trust
+    // information. Keying the detector on it meant one save-all silenced 725 of
+    // 1224 findings without improving a single datum.
+    const entries = [defectEntry("stamped", {
+      qualityScore: 3, qualityTier: "exceptional",
+      provenance: { taggedBy: "auto-reviewed", reviewedBy: "someone" },
+    })];
+    expect(summarizeCorpusDefects(entries, ALL_IMAGES).map((f) => f.detector))
+      .toContain("unassessed-quality");
+  });
+
+  it("clears unassessed-quality once a real verification exists", () => {
+    const entries = [defectEntry("assessed", {
+      qualityScore: 3, qualityTier: "exceptional",
+      provenance: { taggedBy: "auto", verification: VERIFICATION },
+    })];
+    expect(summarizeCorpusDefects(entries, ALL_IMAGES).map((f) => f.detector))
+      .not.toContain("unassessed-quality");
+  });
+
+  it("reports a verification record this build cannot accept", () => {
+    // isVerified refuses an unrecognised method and an image-confirmed record
+    // with no hash. The detector previously accepted both as "verified", so the
+    // malformed record that silently fails the serve gate produced NO finding.
+    const badMethod = defectEntry("bad-method", {
+      provenance: { taggedBy: "auto", verification: { ...VERIFICATION, method: "vibes-confirmed" } },
+    });
+    const noHash = defectEntry("no-hash", {
+      provenance: { taggedBy: "auto", verification: { method: "image-confirmed", verifiedAt: "2026-08-04", verifierVersion: "v1" } },
+    });
+    const found = summarizeCorpusDefects([badMethod, noHash], ALL_IMAGES);
+    expect(found.filter((f) => f.id === "bad-method").map((f) => f.detector)).toContain("verification-malformed");
+    expect(found.filter((f) => f.id === "no-hash").map((f) => f.detector)).toContain("verification-malformed");
+    // And they must NOT be described as verified entries with a missing image.
+    expect(found.map((f) => f.detector)).not.toContain("verified-image-missing");
+  });
+
+  it("survives a malformed image path instead of taking the doctor down", () => {
+    // fromCorpusRelativeImagePath throws on any path outside images-*; the
+    // injected closure must treat a throw as missing, not abort the run.
+    const entries = [defectEntry("bad-path", {
+      image: { visibility: "private", path: "../escape.png", width: 10, height: 10 },
+      provenance: { taggedBy: "auto", verification: VERIFICATION },
+    })];
+    const throwing = {
+      imageExists: () => { throw new Error("outside the corpus image root"); },
+      imageSha256: () => { throw new Error("outside the corpus image root"); },
+    };
+    expect(() => summarizeCorpusDefects(entries, throwing)).not.toThrow();
+    expect(summarizeCorpusDefects(entries, throwing).map((f) => f.detector))
+      .toContain("verified-image-missing");
+  });
+});
+
+describe("corpusDefectCheck — detail line units", () => {
+  it("distinguishes finding rows from affected entries", () => {
+    // The prefix counted ENTRIES while the tallies counted ROWS, so
+    // "role-collapse:168" read as 168 entries next to an entry-count prefix.
+    // One entry with TWO collisions is the minimum fixture that catches it.
+    const twoCollisions = defectEntry("two-hits", {
+      visual: { accentColor: "#403c44", colorRoles: { canvas: "#403c44", surface: "#888888", ink: "#403c44", muted: "#777777", accent: "#403c44" } },
+    });
+    const check = corpusDefectCheck([twoCollisions], ALL_IMAGES);
+    expect(check.status).toBe("WARN");
+    expect(check.detail).toMatch(/role-collapse:\d+ rows\/1 entr/);
   });
 });

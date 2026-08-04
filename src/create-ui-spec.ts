@@ -8,10 +8,11 @@
  *
  *  1. Input normalization — parse the request through CreateUiSpecRequestSchema
  *     (exact fields; no `outputFormat`).
- *  2. Evidence resolution — keyword-only retrieval capped at 20 then sliced,
- *     product-diverse selection of at most five; explicit reference-token
- *     resolution through an injected resolver. The core NEVER dispatches to a
- *     network-backed search path.
+ *  2. Evidence resolution — keyword-only retrieval capped at 20 then sliced to
+ *     the top 3 by rank, deduped so one patternType cannot take two slots (there
+ *     is NO product-diversity pick — see the note at the `distinctPatterns`
+ *     helper); explicit reference-token resolution through an injected resolver.
+ *     The core NEVER dispatches to a network-backed search path.
  *  3. Typed sanitization — allowlist projection from CorpusEntry into
  *     response-scoped SanitizedEvidence (evidence-1, evidence-2, ...). Recipe-
  *     owned summaries; never critique/voice/product-name/url/prose.
@@ -86,6 +87,9 @@ import {
   type ModelExecution,
 } from "./create-ui-spec-model-contracts.js";
 import { createUiSpecDeterministic } from "./create-ui-spec-deterministic.js";
+// `isVerified` is used by the trust-disclosure warning (Task 4);
+// `trustedEvidenceIdsOf` by the model lane's prompt-grounding filter (Task 2).
+import { isVerified, trustedEvidenceIdsOf } from "./corpus-trust.js";
 import { ModelArtifactRollbackIncompleteError } from "./model-artifact-store.js";
 import {
   buildCorpusObservationSummary,
@@ -251,8 +255,30 @@ async function buildModelAwareEnvelope(
     );
   }
 
+  // C3 trust gate: what the MODEL sees must be trusted, even though the served
+  // evidence[] rows stay ungated (response-scoped, no authority claim). An
+  // unverified entry's derived summary must not steer a proposal.
+  //
+  // Narrow ONLY corpus observations, exactly like the deterministic filter does.
+  // `resolved.sanitized[0]` is the recipe/system row from
+  // `buildRecipeSystemEvidence()` (kind "recipe-system", evidence-1): it has no
+  // `matchedEntries` pair, so a flat `trustedEvidenceIds.has(row.id)` filter
+  // would drop it. That row carries no corpus claim at all, so dropping it is
+  // over-gating -- it would remove recipe context the trust gate has no reason
+  // to touch. Zero verified corpus entries therefore leaves the recipe row and
+  // no corpus grounding, which is the intended state.
+  //
+  // `SanitizedEvidenceSchema.array()` carries no `.min(1)`
+  // (create-ui-spec-model.ts:87), so a corpus-free list parses rather than
+  // rejecting the proposal.
+  const trustedEvidenceIds = trustedEvidenceIdsOf(resolved.matchedEntries);
   const outcome = await createUiSpecModel(
-    { request, sanitizedEvidence: resolved.sanitized },
+    {
+      request,
+      sanitizedEvidence: resolved.sanitized.filter(
+        (row) => row.kind !== "corpus-observation" || trustedEvidenceIds.has(row.id),
+      ),
+    },
     model.runtime,
   );
   if (outcome.kind === "fallback") {
@@ -1064,6 +1090,48 @@ function assembleSpec(
     ...(synthesis?.contentVoiceGuidance ? [] : [{ field: "voice", reason: "Voice analysis prose is not served until provenance governance lands." }]),
     { field: "mood", reason: "Mood is not served until provenance governance lands." },
   ];
+  // Reasons for the five gated array fields. The row's EMISSION is conditioned
+  // on the served value being empty; its WORDING must name the actual cause, or
+  // the row becomes the confidently-wrong output this whole change exists to
+  // remove. Three causes are reachable and they are not interchangeable:
+  //
+  //   1. model path  — `synthesis` is null whenever a proposal exists (`:973`),
+  //      which is a LANE choice, not a trust outcome. Claiming "no verified
+  //      entry" here is false even against a fully verified corpus.
+  //   2. trust gate  — matched entries exist and none carry a verification.
+  //   3. empty corpus content — entries ARE verified but recorded nothing for
+  //      this field (or the identity screen dropped every string).
+  //
+  // Each row appears at most once (uniqueness is enforced by
+  // tool-contracts.ts:793-796).
+  const matchedForReason = resolved.matchedEntries.length;
+  const verifiedForReason = resolved.matchedEntries.filter((m) => isVerified(m.entry)).length;
+  const gatedReason =
+    synthesis === null
+      ? "Corpus judgment is not synthesized on the model lane; the proposal carries the model's own direction instead."
+      : matchedForReason === 0
+        // Zero-match and explicit-reference paths consult no corpus entry at all
+        // (resolveExplicitReferences returns matchedEntries: [] unconditionally),
+        // so a reason about what verified entries did or did not record asserts a
+        // consultation that never happened.
+        ? "No corpus observations were retrieved for this request, so nothing was available to serve for this field."
+        : matchedForReason > 0 && verifiedForReason === 0
+        ? "Corpus judgment is served only from entries with a recorded verification; none of the matched entries carry one."
+        : verifiedForReason < matchedForReason
+          ? `Only ${verifiedForReason} of ${matchedForReason} matched entries carry a recorded verification, and those recorded nothing servable for this field.`
+          : "The verified corpus entries recorded nothing servable for this field.";
+  const gatedEmpty = (
+    field: "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior" | "accessibilityConstraints",
+  ): boolean =>
+    ((synthesis && synthesis[field].length > 0 ? synthesis[field] : specFields[field]) as readonly unknown[])
+      .length === 0;
+  const c3TrustGated: UiSpecT["unavailableDecisions"] = [
+    ...(gatedEmpty("techniques") ? [{ field: "techniques", reason: gatedReason }] : []),
+    ...(gatedEmpty("antiPatterns") ? [{ field: "antiPatterns", reason: gatedReason }] : []),
+    ...(gatedEmpty("componentInventory") ? [{ field: "componentInventory", reason: gatedReason }] : []),
+    ...(gatedEmpty("responsiveBehavior") ? [{ field: "responsiveBehavior", reason: gatedReason }] : []),
+    ...(gatedEmpty("accessibilityConstraints") ? [{ field: "accessibilityConstraints", reason: gatedReason }] : []),
+  ];
   // The recipe ALREADY declares a colorTokens unavailableDecision
   // (fallback-recipe-v1.json); the UiSpec gate requires unavailableDecisions
   // fields to be UNIQUE (tool-contracts.ts:778-781) and forbids a colorTokens
@@ -1075,10 +1143,24 @@ function assembleSpec(
     ...RECIPE.unavailableDecisions
       .filter((d) => synthesis === null || d.field !== "colorTokens")
       .map((d) => ({ field: d.field, reason: d.reason })),
+    // The cause comes from the synthesizer, the only place that knows which of the
+    // three happened. Guessing "fewer than 3" was wrong in essentially every real
+    // null-palette response: measured over the 666 consecutive 3-entry windows of
+    // the 668 entries with a non-null muted, ZERO agree on all four roles under
+    // strict-plurality semantics. Trust refusal and disagreement — not thin
+    // retrieval — are the real causes.
     ...(synthesis !== null && synthesis.colorTokens === null
-      ? [{ field: "colorTokens", reason: "Fewer than 3 matched entries contribute color roles." }]
+      ? [{
+          field: "colorTokens",
+          reason: synthesis.colorTokensRefusal === "untrusted"
+            ? "Corpus color roles are read only from entries with a recorded verification; none of the matched entries carry one."
+            : synthesis.colorTokensRefusal === "no-plurality"
+              ? "Three or more matched entries contributed color roles but did not agree on a single value for every role."
+              : "Fewer than 3 matched entries contribute color roles.",
+        }]
       : []),
     ...c3Unavailable,
+    ...c3TrustGated,
   ];
 
   // Acceptance criteria: the recipe's single manual criterion.
@@ -1403,6 +1485,25 @@ function buildWarnings(resolved: ResolvedEvidence): DesignArtifactEnvelope["warn
     warnings.push({
       code: "sparseCoverage",
       message: "Sparse evidence: automatic retrieval returned zero matches; the deterministic fallback recipe was used.",
+    });
+  }
+  // Trust disclosure. "We found matches and did not trust them" is a truthful
+  // state and must be distinguishable from "we found nothing", so the message
+  // carries both numbers. Reuses the already-classified
+  // insufficientCorpusEvidence code rather than introducing a numeric field that
+  // the strict envelope/data schemas would then have to declare.
+  //
+  // The guard is `matchedCount > 0`: with zero matches the `sparseCoverage`
+  // warning above already tells the truth, and a second warning would
+  // double-report the same fact.
+  const matchedCount = resolved.matchedEntries.length;
+  const verifiedCount = resolved.matchedEntries.filter((m) => isVerified(m.entry)).length;
+  if (matchedCount > 0 && verifiedCount < matchedCount) {
+    warnings.push({
+      code: "insufficientCorpusEvidence",
+      message:
+        `${verifiedCount} of ${matchedCount} matched corpus entries carry a recorded ` +
+        `verification; corpus judgment is served only from verified entries.`,
     });
   }
   // Motion is always model-dependent + unavailable in this milestone.

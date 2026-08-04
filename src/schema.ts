@@ -606,11 +606,10 @@ export const CorpusEntry = z.object({
      * than valid (checked by `doctor.ts`, never on the serve path). It is
      * REQUIRED when `method` is "image-confirmed" and omitted for `measured`,
      * whose evidence is the live DOM rather than the pixels.
-     */
-    /**
-     * `method` is a plain string and unknown keys pass through, ON PURPOSE. The
-     * accepted tiers live in `corpus-trust.ts`'s VERIFICATION_METHODS, which is
-     * the sole authority on whether a record grants trust.
+     *
+     * `method` is a plain string and unknown keys pass through (`passthrough`),
+     * ON PURPOSE: the accepted tiers live in `corpus-trust.ts`'s
+     * VERIFICATION_METHODS, the sole authority on whether a record grants trust.
      *
      * A `z.enum` here would defeat the forward compatibility the gate documents:
      * `corpus-reader.ts:332` THROWS on a failed parse, so a corpus written by a

@@ -160,8 +160,13 @@ seven guards — the `designDirection` group-B composition (mood,
 `typePairing.notes`, critique) is a separate code path from the six selectors and
 is exactly the site a per-loop guard forgets.
 
-`colorTokens` and `layoutRegions` derive from `SanitizedEvidence`, not
-`matchedEntries`, so they need their own gate keyed on the same predicate.
+`colorTokens` and `layoutRegions` derive from `SanitizedEvidence` rows, not from
+`matchedEntries`, so the predicate cannot be applied to them directly — a
+sanitized row does not carry its entry. Bridge it through the evidence id:
+`matchedEntries` pairs `{ evidenceId, entry }`, so derive
+`trustedEvidenceIds = new Set(trustedEntries.map(m => m.evidenceId))` from the
+same filter and narrow `observations` to that set before the plurality votes run.
+One filter, two derived views, no second predicate.
 
 ### What is gated
 
@@ -201,6 +206,13 @@ Three consequences that must ship with it:
 
 The response reports a verified-source count, so a caller can see the grounding
 is thin rather than inferring it from absence.
+
+**Constraint the implementation plan must satisfy:** the leaf gate is fail-closed
+over every served position, so a new field cannot simply be added — it has to be
+classified in `tool-contracts.ts` (a count is a numeric leaf, not free text or a
+reference) or the gate refuses the whole response. Cheapest compliant option is
+reusing an already-classified numeric position rather than introducing one; the
+plan picks between those and records why.
 
 ### No feature flag
 

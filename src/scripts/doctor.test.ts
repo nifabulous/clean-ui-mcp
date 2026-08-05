@@ -643,3 +643,50 @@ describe("corpusDefectCheck — detail line units", () => {
     expect(check.detail).toMatch(/role-collapse:\d+ rows\/1 entr/);
   });
 });
+
+describe("per-key verification integrity", () => {
+  it("names the malformed key when one record among several is bad", () => {
+    const entry = defectEntry("mixed", {
+      provenance: {
+        taggedBy: "auto",
+        verification: {
+          "visual.colorRoles": VERIFICATION,
+          critique: { ...VERIFICATION, method: "vibes-confirmed" },
+        },
+      },
+    });
+    const found = summarizeCorpusDefects([entry], ALL_IMAGES);
+    const malformed = found.filter((f) => f.detector === "verification-malformed");
+    expect(malformed).toHaveLength(1);
+    expect(malformed[0]!.message).toContain("critique");
+    expect(malformed[0]!.message).not.toContain("visual.colorRoles");
+  });
+
+  it("reports an orphan key — a record nothing reads", () => {
+    const entry = defectEntry("orphan", {
+      provenance: {
+        taggedBy: "auto",
+        verification: {
+          "visual.vibes": { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" },
+        },
+      },
+    });
+    const found = summarizeCorpusDefects([entry], ALL_IMAGES);
+    const orphan = found.filter((f) => f.detector === "verification-orphan-key");
+    expect(orphan).toHaveLength(1);
+    expect(orphan[0]!.message).toContain("visual.vibes");
+  });
+
+  it("exempts unassessed-quality when any servable key is verified", () => {
+    const entry = defectEntry("assessed-per-key", {
+      qualityScore: 3,
+      qualityTier: "exceptional",
+      provenance: {
+        taggedBy: "auto",
+        verification: { "visual.colorRoles": VERIFICATION },
+      },
+    });
+    const detectors = summarizeCorpusDefects([entry], ALL_IMAGES).map((f) => f.detector);
+    expect(detectors).not.toContain("unassessed-quality");
+  });
+});

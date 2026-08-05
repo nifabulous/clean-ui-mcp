@@ -45,6 +45,8 @@
     "dedup-cleanup": "tsc && node dist/scripts/dedup-cleanup.js",
     "doctor": "tsc && node dist/scripts/doctor.js",
     "pattern-discovery": "tsc && node dist/scripts/pattern-discovery.js",
+    "scout": "tsc && node dist/scripts/scout-sources.js",
+    "scout:no-vision": "tsc && node dist/scripts/scout-sources.js --no-vision",
     "eval-baseline": "tsc && node scripts/eval-baseline.mjs",
     "eval-matrix": "tsc && node scripts/eval-matrix.mjs",
     "benchmark-image-embeddings": "tsc && node scripts/benchmark-image-embeddings.mjs",

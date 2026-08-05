@@ -689,6 +689,19 @@ batch — failures log an error and produce 0 candidates, the batch continues.
 
 **Robots.txt:** checked before navigation — disallowed URLs are skipped.
 
+## Scouting new sources (web discovery agent)
+
+```bash
+npm run scout              # fill the rarest corpus gaps automatically
+npm run scout:no-vision    # metadata-only, no screenshots/image models
+```
+
+The scout analyzes coverage gaps in `corpus/entries.json`, generates real
+product-URL candidates via the configured text model, verifies them with the
+same SSRF/robots guards capture uses, vision-scores screenshots for
+suitability, and writes a capture-batch-ready `sources-scouted.json` plus a
+curator report. Full usage, options, and model config: `docs/SCOUTING.md`.
+
 ---
 
 ## Bulk import workflow

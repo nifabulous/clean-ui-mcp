@@ -599,6 +599,19 @@ function resolveVisionProvider(): string | undefined {
   return provider || undefined;
 }
 
+/**
+ * The single source of truth for which vision provider a run uses: the
+ * `--vision-provider` flag if given, else the `VERIFY_VISION_PROVIDER` env
+ * fallback. Pulled out as its own pure function (rather than inlined at each
+ * call site) so `main()` can pass ONE resolved value to both the re-produce
+ * dependency and the verify/re-verify vision calls — previously they resolved
+ * independently and could disagree when the flag was unset but the env var
+ * was set, silently routing the two passes to different providers.
+ */
+export function resolveConfiguredVisionProvider(flag: string | undefined): string | undefined {
+  return flag ?? resolveVisionProvider();
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({
     args: process.argv.slice(2),
@@ -632,7 +645,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  const reproduce = makeReproduceDependency(values["vision-provider"] ?? resolveVisionProvider());
+  // Resolve the vision provider ONCE — the flag if given, else the env
+  // fallback — and feed the SAME value to both the re-produce dependency and
+  // the verify/re-verify calls below. Previously `reproduce` used
+  // `values["vision-provider"] ?? resolveVisionProvider()` while `callVision`
+  // passed `values["vision-provider"]` directly, so VERIFY_VISION_PROVIDER set
+  // without `--vision-provider` routed the re-produce pass and the verify
+  // passes to DIFFERENT providers. One resolved value now feeds both.
+  const visionProvider = resolveConfiguredVisionProvider(values["vision-provider"]);
+  const reproduce = makeReproduceDependency(visionProvider);
   const results: RunResult = { entries: pending.length, verdictsByEntry: {} };
   // The verified map keyed by entry id; non-pending entries are preserved
   // untouched, so persistence below never drops an entry.
@@ -655,9 +676,11 @@ async function main(): Promise<void> {
       const { records, verdicts } = await verifyEntry(target, imagePath, {
         now: () => now,
         callVision: async (prompt, image) =>
-          // `--vision-provider` is an operator-supplied provider name; an unset
-          // value resolves through callModel's ambient routing.
-          callVisionModel(prompt, image, values["vision-provider"] as Provider | undefined, undefined, undefined, "low"),
+          // Use the SAME resolved provider as `reproduce` above (the flag, else
+          // VERIFY_VISION_PROVIDER, else callModel's ambient routing) — never
+          // `values["vision-provider"]` directly, or an env-only override would
+          // route this call and the re-produce pass to different providers.
+          callVisionModel(prompt, image, visionProvider as Provider | undefined, undefined, undefined, "low"),
         reproduce,
       });
       if (!dryRun) {

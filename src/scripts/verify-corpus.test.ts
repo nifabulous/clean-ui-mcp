@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,7 @@ import { tierForField, verifyMechanicalFields, type VerificationRecord, type Ver
 import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict } from "./verify-corpus.js";
 import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReproducedProse } from "./verify-corpus.js";
 import { buildRunReport, selectPending, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
+import { resolveConfiguredVisionProvider } from "./verify-corpus.js";
 import { extractQuantizedColors, type TaggerOutput } from "../tagger.js";
 import type { CorpusEntryT } from "../schema.js";
 
@@ -513,6 +514,34 @@ describe("buildEstimate — projected cost without calling the model", () => {
     const est = buildEstimate([withProse, noProse]);
     expect(est).toContain("entries pending: 2");
     expect(est).toMatch(/vision verify calls: 2-3/); // 2 combined + up to 1 prose re-verify
+  });
+});
+
+describe("resolveConfiguredVisionProvider — one resolved value feeds both the re-produce and verify passes", () => {
+  const ORIGINAL_ENV = process.env.VERIFY_VISION_PROVIDER;
+  afterEach(() => {
+    if (ORIGINAL_ENV === undefined) delete process.env.VERIFY_VISION_PROVIDER;
+    else process.env.VERIFY_VISION_PROVIDER = ORIGINAL_ENV;
+  });
+
+  it("prefers the flag over the env var when both are set", () => {
+    process.env.VERIFY_VISION_PROVIDER = "openai";
+    expect(resolveConfiguredVisionProvider("anthropic")).toBe("anthropic");
+  });
+
+  it("falls back to VERIFY_VISION_PROVIDER when the flag is unset — the bug this closes: reproduce and callVision must agree here", () => {
+    process.env.VERIFY_VISION_PROVIDER = "openai";
+    expect(resolveConfiguredVisionProvider(undefined)).toBe("openai");
+  });
+
+  it("returns undefined when neither the flag nor the env var is set", () => {
+    delete process.env.VERIFY_VISION_PROVIDER;
+    expect(resolveConfiguredVisionProvider(undefined)).toBeUndefined();
+  });
+
+  it("treats a blank env var the same as unset", () => {
+    process.env.VERIFY_VISION_PROVIDER = "   ";
+    expect(resolveConfiguredVisionProvider(undefined)).toBeUndefined();
   });
 });
 

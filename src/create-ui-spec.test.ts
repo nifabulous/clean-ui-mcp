@@ -24,6 +24,7 @@
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { CorpusReader } from "./corpus-reader.js";
+import { SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import type { CorpusEntryT } from "./schema.js";
 import {
   parseDesignArtifactEnvelope,
@@ -1710,15 +1711,18 @@ function corpusEntryWithRoles(id: string, accent: string, pattern = "dashboard")
  * is the SERVING behaviour opt in explicitly with this.
  */
 function verify<T extends { provenance?: unknown }>(entries: readonly T[]): readonly T[] {
+  const record = {
+    method: "image-confirmed",
+    verifiedAt: "2026-08-04",
+    verifierVersion: "verifier-v1",
+    imageSha256: "a".repeat(64),
+  };
+  const verification: Record<string, unknown> = {};
+  for (const key of SERVABLE_FIELD_KEYS) verification[key] = record;
   for (const e of entries) {
     (e as { provenance: unknown }).provenance = {
       taggedBy: "auto",
-      verification: {
-        method: "image-confirmed",
-        verifiedAt: "2026-08-04",
-        verifierVersion: "verifier-v1",
-        imageSha256: "a".repeat(64),
-      },
+      verification,
     };
   }
   return entries;

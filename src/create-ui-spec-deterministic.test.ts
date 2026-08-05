@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createUiSpecDeterministic } from "./create-ui-spec-deterministic.js";
+import { SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import type { CorpusEntryT } from "./schema.js";
 
 function observation(id: string, facts: Record<string, unknown>): never {
@@ -16,6 +17,19 @@ function entriesOf(matches: readonly { entry: CorpusEntryT }[]): CorpusEntryT[] 
   return matches.map((m) => m.entry);
 }
 
+/** A verification record the C3 trust gate accepts for EVERY servable key. */
+function allKeysVerified(): Record<string, unknown> {
+  const record = {
+    method: "image-confirmed",
+    verifiedAt: "2026-08-04",
+    verifierVersion: "verifier-v1",
+    imageSha256: "a".repeat(64),
+  };
+  const verification: Record<string, unknown> = {};
+  for (const key of SERVABLE_FIELD_KEYS) verification[key] = record;
+  return verification;
+}
+
 /**
  * A verification record the C3 trust gate accepts.
  *
@@ -27,12 +41,7 @@ function entriesOf(matches: readonly { entry: CorpusEntryT }[]): CorpusEntryT[] 
  */
 const VERIFIED = {
   taggedBy: "auto",
-  verification: {
-    method: "image-confirmed",
-    verifiedAt: "2026-08-04",
-    verifierVersion: "verifier-v1",
-    imageSha256: "a".repeat(64),
-  },
+  verification: allKeysVerified(),
 };
 
 /**

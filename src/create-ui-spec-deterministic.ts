@@ -2,7 +2,7 @@ import type { SanitizedEvidence } from "./create-ui-spec-contracts.js";
 import type { CreateUiSpecRequest } from "./create-ui-spec-contracts.js";
 import type { CorpusEntryT } from "./schema.js";
 import { buildDeniedNames, screenProse } from "./corpus-prose-screen.js";
-import { isVerified, trustedEvidenceIdsOf } from "./corpus-trust.js";
+import { verifiedFields, trustedEvidenceIdsOf } from "./corpus-trust.js";
 
 export interface DeterministicColorTokens {
   primary: string;
@@ -175,7 +175,7 @@ export function createUiSpecDeterministic(
   // `corpusEntries` is deliberately NOT gated. It feeds `buildDeniedNames` for
   // the identity screen, which must stay corpus-wide; narrowing it would shrink
   // the denied-name set and weaken screening.
-  const matchedEntries = allMatchedEntries.filter((m) => isVerified(m.entry));
+  const matchedEntries = allMatchedEntries.filter((m) => verifiedFields(m.entry).size > 0);
   // `colorTokens` and `layoutRegions` derive from SanitizedEvidence rows, which
   // do not carry their entry. Bridge the same filter through the evidence id so
   // the plurality votes run over trusted observations only — which also means

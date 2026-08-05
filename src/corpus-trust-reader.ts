@@ -26,7 +26,7 @@
  */
 import type { CorpusReader, ReaderImageIndex } from "./corpus-reader.js";
 import type { CorpusEntryT } from "./schema.js";
-import { isVerified } from "./corpus-trust.js";
+import { verifiedFields } from "./corpus-trust.js";
 
 export class TrustGatedCorpusReader implements CorpusReader {
   constructor(private readonly inner: CorpusReader) {
@@ -45,13 +45,13 @@ export class TrustGatedCorpusReader implements CorpusReader {
   // ----- Gated: every method whose result becomes served content -------------
 
   async search(...args: Parameters<CorpusReader["search"]>): ReturnType<CorpusReader["search"]> {
-    return (await this.inner.search(...args)).filter((e) => isVerified(e));
+    return (await this.inner.search(...args)).filter((e) => verifiedFields(e).size > 0);
   }
 
   async searchRanked(
     ...args: Parameters<CorpusReader["searchRanked"]>
   ): ReturnType<CorpusReader["searchRanked"]> {
-    return (await this.inner.searchRanked(...args)).filter((r) => isVerified(r.entry));
+    return (await this.inner.searchRanked(...args)).filter((r) => verifiedFields(r.entry).size > 0);
   }
 
   getById(id: string): CorpusEntryT | undefined {
@@ -59,17 +59,17 @@ export class TrustGatedCorpusReader implements CorpusReader {
     // Refusing by id is the same answer as "no such entry" ON PURPOSE: a distinct
     // "exists but unverified" reply would confirm the entry's existence, which is
     // itself corpus information the caller has not earned.
-    return entry !== undefined && isVerified(entry) ? entry : undefined;
+    return entry !== undefined && verifiedFields(entry).size > 0 ? entry : undefined;
   }
 
   findSimilar(...args: Parameters<CorpusReader["findSimilar"]>): ReturnType<CorpusReader["findSimilar"]> {
-    return this.inner.findSimilar(...args).filter((r) => isVerified(r.entry)) as ReturnType<
+    return this.inner.findSimilar(...args).filter((r) => verifiedFields(r.entry).size > 0) as ReturnType<
       CorpusReader["findSimilar"]
     >;
   }
 
   entriesForAggregation(): readonly CorpusEntryT[] {
-    return this.inner.entriesForAggregation().filter((e) => isVerified(e));
+    return this.inner.entriesForAggregation().filter((e) => verifiedFields(e).size > 0);
   }
 
   /**
@@ -84,7 +84,7 @@ export class TrustGatedCorpusReader implements CorpusReader {
     const entries: ReaderImageIndex["entries"] = {};
     for (const [id, vector] of Object.entries(index.entries)) {
       const entry = this.inner.getById(id);
-      if (entry !== undefined && isVerified(entry)) entries[id] = vector;
+      if (entry !== undefined && verifiedFields(entry).size > 0) entries[id] = vector;
     }
     return { dimension: index.dimension, entries };
   }
@@ -103,7 +103,7 @@ export class TrustGatedCorpusReader implements CorpusReader {
    */
   refusedForTrust(id: string): boolean {
     const entry = this.inner.getById(id);
-    return entry !== undefined && !isVerified(entry);
+    return entry !== undefined && verifiedFields(entry).size === 0;
   }
 
   /**
@@ -113,7 +113,7 @@ export class TrustGatedCorpusReader implements CorpusReader {
    */
   trustPosture(): { verified: number; total: number } {
     const all = this.inner.entriesForAggregation();
-    return { verified: all.filter((e) => isVerified(e)).length, total: all.length };
+    return { verified: all.filter((e) => verifiedFields(e).size > 0).length, total: all.length };
   }
 
   // Taxonomy labels ARE gated, like every content-bearing method: the list tools
@@ -124,21 +124,21 @@ export class TrustGatedCorpusReader implements CorpusReader {
   listCategories(...a: Parameters<CorpusReader["listCategories"]>): ReturnType<CorpusReader["listCategories"]> {
     void a;
     return [...new Set(
-      this.inner.entriesForAggregation().filter((e) => isVerified(e)).flatMap((e) => e.categories ?? []),
+      this.inner.entriesForAggregation().filter((e) => verifiedFields(e).size > 0).flatMap((e) => e.categories ?? []),
     )];
   }
 
   listStyleTags(...a: Parameters<CorpusReader["listStyleTags"]>): ReturnType<CorpusReader["listStyleTags"]> {
     void a;
     return [...new Set(
-      this.inner.entriesForAggregation().filter((e) => isVerified(e)).flatMap((e) => e.styleTags ?? []),
+      this.inner.entriesForAggregation().filter((e) => verifiedFields(e).size > 0).flatMap((e) => e.styleTags ?? []),
     )];
   }
 
   listDomainTags(...a: Parameters<CorpusReader["listDomainTags"]>): ReturnType<CorpusReader["listDomainTags"]> {
     void a;
     return [...new Set(
-      this.inner.entriesForAggregation().filter((e) => isVerified(e)).flatMap((e) => e.domainTags ?? []),
+      this.inner.entriesForAggregation().filter((e) => verifiedFields(e).size > 0).flatMap((e) => e.domainTags ?? []),
     )];
   }
 

@@ -87,9 +87,9 @@ import {
   type ModelExecution,
 } from "./create-ui-spec-model-contracts.js";
 import { createUiSpecDeterministic } from "./create-ui-spec-deterministic.js";
-// `isVerified` is used by the trust-disclosure warning (Task 4);
+// `verifiedFields` is used by the trust-disclosure warning (Task 4);
 // `trustedEvidenceIdsOf` by the model lane's prompt-grounding filter (Task 2).
-import { isVerified, trustedEvidenceIdsOf } from "./corpus-trust.js";
+import { verifiedFields, trustedEvidenceIdsOf } from "./corpus-trust.js";
 import { ModelArtifactRollbackIncompleteError } from "./model-artifact-store.js";
 import {
   buildCorpusObservationSummary,
@@ -1105,7 +1105,7 @@ function assembleSpec(
   // Each row appears at most once (uniqueness is enforced by
   // tool-contracts.ts:793-796).
   const matchedForReason = resolved.matchedEntries.length;
-  const verifiedForReason = resolved.matchedEntries.filter((m) => isVerified(m.entry)).length;
+  const verifiedForReason = resolved.matchedEntries.filter((m) => verifiedFields(m.entry).size > 0).length;
   const gatedReason =
     synthesis === null
       ? "Corpus judgment is not synthesized on the model lane; the proposal carries the model's own direction instead."
@@ -1497,7 +1497,7 @@ function buildWarnings(resolved: ResolvedEvidence): DesignArtifactEnvelope["warn
   // warning above already tells the truth, and a second warning would
   // double-report the same fact.
   const matchedCount = resolved.matchedEntries.length;
-  const verifiedCount = resolved.matchedEntries.filter((m) => isVerified(m.entry)).length;
+  const verifiedCount = resolved.matchedEntries.filter((m) => verifiedFields(m.entry).size > 0).length;
   if (matchedCount > 0 && verifiedCount < matchedCount) {
     warnings.push({
       code: "insufficientCorpusEvidence",

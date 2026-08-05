@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CorpusReader } from "./corpus-reader.js";
+import { SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import { makeCreateUiSpecDependencies } from "./create-ui-spec-dependencies.js";
 import {
   createUiSpecForAdapter,
@@ -154,12 +155,7 @@ function rankedCorpusReader(): CorpusReader {
     // trust-gated-prompt-grounding suite below and by corpus-trust.test.ts.
     provenance: {
       taggedBy: "auto",
-      verification: {
-        method: "image-confirmed",
-        verifiedAt: "2026-08-04",
-        verifierVersion: "verifier-v1",
-        imageSha256: "a".repeat(64),
-      },
+      verification: allKeysVerified(),
     },
     visual: {
       colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: id === "internal-C" ? "#1d4ed8" : "#2563eb" },
@@ -441,6 +437,19 @@ const GATE_ROLES = {
   canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: "#2563eb",
 };
 
+/** A verification map valid for EVERY servable key — the serving-behaviour default. */
+function allKeysVerified(): Record<string, unknown> {
+  const record = {
+    method: "image-confirmed",
+    verifiedAt: "2026-08-04",
+    verifierVersion: "verifier-v1",
+    imageSha256: "a".repeat(64),
+  };
+  const verification: Record<string, unknown> = {};
+  for (const key of SERVABLE_FIELD_KEYS) verification[key] = record;
+  return verification;
+}
+
 function gateEntry(id: string, patternType: string, verified: boolean): CorpusEntryT {
   return {
     id,
@@ -449,12 +458,7 @@ function gateEntry(id: string, patternType: string, verified: boolean): CorpusEn
       ? {
           provenance: {
             taggedBy: "auto",
-            verification: {
-              method: "image-confirmed",
-              verifiedAt: "2026-08-04",
-              verifierVersion: "verifier-v1",
-              imageSha256: "a".repeat(64),
-            },
+            verification: allKeysVerified(),
           },
         }
       : {}),

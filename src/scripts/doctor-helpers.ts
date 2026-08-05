@@ -17,7 +17,7 @@
 import type { CorpusEntryT } from "../schema.js";
 // The doctor's verification checks MUST agree with the serve gate, so they use
 // its predicate rather than a looser local condition.
-import { isVerified, VERIFICATION_METHODS } from "../corpus-trust.js";
+import { verifiedFields, VERIFICATION_METHODS } from "../corpus-trust.js";
 import type { LoadedCorpus } from "../persistence.js";
 import {
   evaluatePublication,
@@ -513,31 +513,19 @@ export function summarizeCorpusDefects(
     // bad. (Measured against the detectors as they ship now; an earlier figure of
     // 1224 -> 499 predates the low-contrast widening and no longer reproduces.) That is the presence-not-usability failure CLAUDE.md
     // forbids, in the detector meant to measure it.
-    // Keyed on `isVerified`, not on the mere PRESENCE of a record: a malformed
-    // record would otherwise exempt the entry here while `verification-malformed`
-    // fires below, so a Stage 2 verifier writing a bad record would silence the
-    // quality signal — the same predicate divergence fixed for the image checks.
+    // Keyed on `verifiedFields`, not on the mere PRESENCE of a record: a
+    // malformed record would otherwise exempt the entry here while
+    // `verification-malformed` fires below.
     if (entry.qualityScore === 3 && entry.qualityTier === "exceptional"
-      && !isVerified(entry)) {
+      && verifiedFields(entry).size === 0) {
       push("unassessed-quality", `qualityScore 3 + tier "exceptional" with no verification record — never assessed`);
     }
 
-    // ── Verification integrity. The serve-path gate is PURE and cannot see
-    // any of these three; doctor.ts owns them. Both apply only to entries that
-    // actually carry a verification record.
-    // Keyed on `isVerified`, the SAME predicate the serve path uses. An earlier
-    // version used a bare `if (verification)`, which accepted records the gate
-    // refuses: it would report "verified entry's image is missing" about an entry
-    // that is not verified (a false statement), and a malformed record produced
-    // no finding at all — so a Stage 2 verifier writing a bad record would get
-    // silence instead of a signal that its entries were being refused.
     const verification = entry.provenance?.verification;
-    if (verification && !isVerified(entry)) {
-      const why = !VERIFICATION_METHODS.has(verification.method)
-        ? `method "${verification.method}" is not one this build accepts (${[...VERIFICATION_METHODS].join(", ")})`
-        : `method "image-confirmed" requires imageSha256, which is absent`;
-      push("verification-malformed", `verification record present but refused by the trust gate: ${why}`);
-    } else if (verification && isVerified(entry)) {
+    const validKeys = verifiedFields(entry);
+    if (verification && validKeys.size === 0) {
+      push("verification-malformed", `verification record present but refused by the trust gate`);
+    } else if (verification && validKeys.size > 0) {
       const path = typeof image.path === "string" ? image.path : null;
       // `imageExists`/`imageSha256` reach the filesystem through
       // `fromCorpusRelativeImagePath`, which THROWS on any path outside
@@ -549,15 +537,21 @@ export function summarizeCorpusDefects(
       })();
       if (!exists) {
         push("verified-image-missing", `verified entry's image is missing or unresolvable: ${path ?? "(no path)"}`);
-      } else if (verification.method === "image-confirmed" && verification.imageSha256) {
-        const actual = ((): string | null => {
-          try { return ctx.imageSha256(path!); } catch { return null; }
-        })();
-        if (actual !== null && actual !== verification.imageSha256) {
-          push(
-            "verified-hash-stale",
-            `verification records ${verification.imageSha256.slice(0, 12)}… but ${path} now hashes to ${actual.slice(0, 12)}…`,
-          );
+      } else {
+        const imageConfirmed = Object.values(verification).find(
+          (record): record is typeof record & { imageSha256: string } =>
+            record.method === "image-confirmed" && typeof record.imageSha256 === "string",
+        );
+        if (imageConfirmed) {
+          const actual = ((): string | null => {
+            try { return ctx.imageSha256(path!); } catch { return null; }
+          })();
+          if (actual !== null && actual !== imageConfirmed.imageSha256) {
+            push(
+              "verified-hash-stale",
+              `verification records ${imageConfirmed.imageSha256.slice(0, 12)}… but ${path} now hashes to ${actual.slice(0, 12)}…`,
+            );
+          }
         }
       }
     }

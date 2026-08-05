@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isVerified } from "./corpus-trust.js";
+import { isVerified, SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import { createUiSpecForAdapter } from "./create-ui-spec.js";
 import { loadCorpus } from "./corpus.js";
 import type { CorpusReader } from "./corpus-reader.js";
@@ -136,16 +136,19 @@ function leaksIn(served: string, label: string, identity: readonly Identity[]): 
  * a shallow copy for the duration of one serve.
  */
 function asVerified(entries: readonly CorpusEntryT[]): CorpusEntryT[] {
+  const record = {
+    method: "image-confirmed" as const,
+    verifiedAt: "2026-08-04",
+    verifierVersion: "leak-sweep-fixture",
+    imageSha256: "a".repeat(64),
+  };
+  const verification: Record<string, typeof record> = {};
+  for (const key of SERVABLE_FIELD_KEYS) verification[key] = record;
   const stamped = entries.map((e) => ({
     ...e,
     provenance: {
       ...(e.provenance ?? { taggedBy: "auto" as const }),
-      verification: {
-        method: "image-confirmed" as const,
-        verifiedAt: "2026-08-04",
-        verifierVersion: "leak-sweep-fixture",
-        imageSha256: "a".repeat(64),
-      },
+      verification,
     },
   }));
   // DRIFT CANARY. Nothing on the serve path Zod-parses this literal, so a rename
@@ -154,11 +157,13 @@ function asVerified(entries: readonly CorpusEntryT[]): CorpusEntryT[] {
   // the clean rows" case exists to catch. Assert the stamp satisfies the real
   // predicate so drift fails loudly here instead.
   for (const e of stamped) {
-    if (!isVerified(e)) {
-      throw new Error(
-        "asVerified produced a record the trust gate refuses — the sweep would "
-        + "pass vacuously. Reconcile the fixture with VERIFICATION_METHODS.",
-      );
+    for (const key of SERVABLE_FIELD_KEYS) {
+      if (!isVerified(e, key)) {
+        throw new Error(
+          `asVerified produced a record the trust gate refuses for ${key} — the sweep would `
+          + "pass vacuously. Reconcile the fixture with VERIFICATION_METHODS.",
+        );
+      }
     }
   }
   return stamped;

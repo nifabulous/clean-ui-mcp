@@ -16,11 +16,20 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createServer } from "./server-factory.js";
 import type { CorpusReader } from "./corpus-reader.js";
+import { SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import type { CorpusEntryT } from "./schema.js";
 
 const MARKER = "STEALABLE_MARKER_7Q4";
 
 function entry(verified: boolean): CorpusEntryT {
+  const record = {
+    method: "image-confirmed",
+    verifiedAt: "2026-08-04",
+    verifierVersion: "tool-gate-fixture",
+    imageSha256: "a".repeat(64),
+  };
+  const verification: Record<string, unknown> = {};
+  for (const key of SERVABLE_FIELD_KEYS) verification[key] = record;
   return {
     id: "gate-tool-entry",
     title: "GateCo — dashboard",
@@ -47,12 +56,7 @@ function entry(verified: boolean): CorpusEntryT {
       ? {
           provenance: {
             taggedBy: "auto",
-            verification: {
-              method: "image-confirmed",
-              verifiedAt: "2026-08-04",
-              verifierVersion: "tool-gate-fixture",
-              imageSha256: "a".repeat(64),
-            },
+            verification,
           },
         }
       : {}),

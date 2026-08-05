@@ -37,6 +37,7 @@ import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CorpusEntryT } from "./schema.js";
+import { SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import { PublicCorpusReader } from "./corpus-reader.js";
 import { createServer } from "./server-factory.js";
 import { exportPublicSnapshot } from "./publication/exporter.js";
@@ -145,6 +146,14 @@ const eligiblePublication = {
  * over the fixture.
  */
 function baseEntry(id: string, critique: string): CorpusEntryT {
+  const record = {
+    method: "image-confirmed",
+    verifiedAt: "2026-08-04",
+    verifierVersion: "contract-fixture",
+    imageSha256: "a".repeat(64),
+  };
+  const verification: Record<string, unknown> = {};
+  for (const key of SERVABLE_FIELD_KEYS) verification[key] = record;
   return {
     id,
     title: `${id} title`,
@@ -158,12 +167,7 @@ function baseEntry(id: string, critique: string): CorpusEntryT {
     // this suite actually filters on, is orthogonal to trust.
     provenance: {
       taggedBy: "auto",
-      verification: {
-        method: "image-confirmed",
-        verifiedAt: "2026-08-04",
-        verifierVersion: "contract-fixture",
-        imageSha256: "a".repeat(64),
-      },
+      verification,
     },
     categories: ["dashboard"],
     styleTags: ["minimal"],

@@ -377,6 +377,11 @@ const VERIFICATION = {
   imageSha256: "a".repeat(64),
 };
 
+/** Wrap a record under a servable key — the Stage 2a map shape. */
+function verifiedMap(record: unknown = VERIFICATION): Record<string, unknown> {
+  return { whatToSteal: record };
+}
+
 /** No image is ever read in these tests; the detector's I/O is injected. */
 const NO_IMAGES = { imageExists: () => false, imageSha256: () => null };
 const ALL_IMAGES = { imageExists: () => true, imageSha256: () => "a".repeat(64) };
@@ -455,7 +460,7 @@ describe("summarizeCorpusDefects", () => {
     // The serve-path gate is pure and cannot see this; doctor.ts owns it.
     const entries = [defectEntry("verified-no-image", {
       image: { visibility: "private", path: "images-private/definitely-absent.png", width: 10, height: 10 },
-      provenance: { taggedBy: "auto", verification: VERIFICATION },
+      provenance: { taggedBy: "auto", verification: verifiedMap() },
     })];
     const findings = summarizeCorpusDefects(entries, NO_IMAGES);
     expect(findings.some((f) => f.id === "verified-no-image" && f.detector === "verified-image-missing")).toBe(true);
@@ -463,7 +468,7 @@ describe("summarizeCorpusDefects", () => {
 
   it("reports a verified entry whose imageSha256 no longer matches the bytes on disk", () => {
     const entries = [defectEntry("verified-stale-hash", {
-      provenance: { taggedBy: "auto", verification: VERIFICATION },
+      provenance: { taggedBy: "auto", verification: verifiedMap() },
     })];
     const findings = summarizeCorpusDefects(entries, {
       imageExists: () => true,
@@ -585,7 +590,7 @@ describe("summarizeCorpusDefects — review-round corrections", () => {
   it("clears unassessed-quality once a real verification exists", () => {
     const entries = [defectEntry("assessed", {
       qualityScore: 3, qualityTier: "exceptional",
-      provenance: { taggedBy: "auto", verification: VERIFICATION },
+      provenance: { taggedBy: "auto", verification: verifiedMap() },
     })];
     expect(summarizeCorpusDefects(entries, ALL_IMAGES).map((f) => f.detector))
       .not.toContain("unassessed-quality");
@@ -596,10 +601,10 @@ describe("summarizeCorpusDefects — review-round corrections", () => {
     // with no hash. The detector previously accepted both as "verified", so the
     // malformed record that silently fails the serve gate produced NO finding.
     const badMethod = defectEntry("bad-method", {
-      provenance: { taggedBy: "auto", verification: { ...VERIFICATION, method: "vibes-confirmed" } },
+      provenance: { taggedBy: "auto", verification: verifiedMap({ ...VERIFICATION, method: "vibes-confirmed" }) },
     });
     const noHash = defectEntry("no-hash", {
-      provenance: { taggedBy: "auto", verification: { method: "image-confirmed", verifiedAt: "2026-08-04", verifierVersion: "v1" } },
+      provenance: { taggedBy: "auto", verification: verifiedMap({ method: "image-confirmed", verifiedAt: "2026-08-04", verifierVersion: "v1" }) },
     });
     const found = summarizeCorpusDefects([badMethod, noHash], ALL_IMAGES);
     expect(found.filter((f) => f.id === "bad-method").map((f) => f.detector)).toContain("verification-malformed");
@@ -613,7 +618,7 @@ describe("summarizeCorpusDefects — review-round corrections", () => {
     // injected closure must treat a throw as missing, not abort the run.
     const entries = [defectEntry("bad-path", {
       image: { visibility: "private", path: "../escape.png", width: 10, height: 10 },
-      provenance: { taggedBy: "auto", verification: VERIFICATION },
+      provenance: { taggedBy: "auto", verification: verifiedMap() },
     })];
     const throwing = {
       imageExists: () => { throw new Error("outside the corpus image root"); },

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { TrustGatedCorpusReader } from "./corpus-trust-reader.js";
 import type { CorpusReader } from "./corpus-reader.js";
+import { SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import type { CorpusEntryT } from "./schema.js";
 
 const VERIFICATION = {
@@ -10,12 +11,18 @@ const VERIFICATION = {
   imageSha256: "a".repeat(64),
 };
 
+function verificationMap(): Record<string, unknown> {
+  const map: Record<string, unknown> = {};
+  for (const key of SERVABLE_FIELD_KEYS) map[key] = VERIFICATION;
+  return map;
+}
+
 function entry(id: string, verified: boolean): CorpusEntryT {
   return {
     id,
     source: { productName: `product-${id}` },
     whatToSteal: [`${id} technique`],
-    ...(verified ? { provenance: { taggedBy: "auto", verification: VERIFICATION } } : {}),
+    ...(verified ? { provenance: { taggedBy: "auto", verification: verificationMap() } } : {}),
   } as unknown as CorpusEntryT;
 }
 

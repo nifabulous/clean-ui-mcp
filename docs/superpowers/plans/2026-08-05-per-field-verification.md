@@ -3078,3 +3078,15 @@ Plan complete and saved to `docs/superpowers/plans/2026-08-05-per-field-verifica
 **2. Inline Execution** — Execute tasks in this session using executing-plans, batch execution with checkpoints
 
 Which approach?
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 5 issues (1 P2, 4 P3), all fixed in `0da3fb7` |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
+
+- **VERDICT:** ENG REVIEW CLEARED — the 5 findings landed in `0da3fb7` (per-field voice/mood reasons, redacted-citation promises removed from three tool descriptions, `contributes` fallback no longer claims critique, empty-header fallbacks in similar/compare, and a 500-char bound pin for the disclosure warning). Full suite: 3,404 passing + the new tests; mutation gate 68 > 51.
+- **CODEX:** (none this run)
+
+NO UNRESOLVED DECISIONS

@@ -28,11 +28,8 @@ import type { ImageEmbeddingProvider, ValidatedImage } from "./image-embeddings.
 import { describeError } from "./errors.js";
 
 export interface CritiqueEntry {
-  id: string;
   patternType?: string;
   platform?: string;
-  reviewStatus?: string;
-  title?: string;
   score: number;
 }
 
@@ -99,12 +96,9 @@ export async function retrieveCritiqueEvidence(input: RetrieveCritiqueInput): Pr
         .map((r) => {
           const ce = corpusById.get(r.id)!;
           return {
-            id: r.id,
             score: r.score,
             patternType: ce.patternType,
             platform: ce.platform,
-            reviewStatus: ce.reviewStatus,
-            title: ce.title,
           };
         })
         .slice(0, MAX_ENTRIES);
@@ -131,11 +125,8 @@ export async function retrieveCritiqueEvidence(input: RetrieveCritiqueInput): Pr
   // searchRanked's default reviewStatus:"approved" filter ensures drafts are excluded.
   const results = await reader.searchRanked({ query, limit: MAX_ENTRIES * 2 });
   const entries: CritiqueEntry[] = results.map((r) => ({
-    id: r.entry.id,
     patternType: r.entry.patternType,
     platform: r.entry.platform,
-    reviewStatus: r.entry.reviewStatus,
-    title: r.entry.title,
     score: r.score,
   }));
 

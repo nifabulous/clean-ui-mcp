@@ -728,7 +728,7 @@ function registerGetAntiPatterns(server: McpServer, reader: CorpusReader): void 
       const lines = [`# Anti-patterns to avoid${patternType ? ` (${patternType})` : ""}\n`];
       results.forEach((r, i) => {
         lines.push(`${i + 1}. **${r.text}**`);
-        lines.push(`   _Raised by ${r.count} entr${r.count === 1 ? "y" : "ies"}: ${r.sources.slice(0, 5).map((s) => `\`${s}\``).join(", ")}${r.sources.length > 5 ? `, …+${r.sources.length - 5}` : ""}_\n`);
+        lines.push(`   _Raised by ${r.count} entr${r.count === 1 ? "y" : "ies"}._\n`);
       });
       return { content: [{ type: "text", text: lines.join("\n") }] };
     },
@@ -764,7 +764,7 @@ function registerGetColorPalette(server: McpServer, reader: CorpusReader): void 
       for (const p of results) {
         const band = hueBand(p.accentHue);
         if (band !== lastBand) { lines.push(`\n## ${band} accents\n`); lastBand = band; }
-        lines.push(`**${p.product}** (\`${p.id}\`) — ${p.patternType}`);
+        lines.push(`**${p.patternType}**`);
         lines.push("```css");
         lines.push(`  --canvas:${p.tokens.canvas}; --surface:${p.tokens.surface}; --ink:${p.tokens.ink}; --muted:${p.tokens.muted ?? "inherit"}; --accent:${p.tokens.accent};`);
         lines.push("```\n");
@@ -825,10 +825,9 @@ function registerBrowseUiExamples(server: McpServer, reader: CorpusReader): void
       title: "Browse the corpus by UI pattern",
       description:
         "Summarizes what's in the corpus grouped by patternType — for each pattern, " +
-        "the count, top products represented, and the highest-quality exemplar entry. " +
-        "Use this to discover what's available before searching (search_ui_examples " +
-        "needs a query; this doesn't). Optional styleTag scopes which entries count. " +
-        "Pair with get_ui_example on the exemplar id to inspect a strong representative.",
+        "the count of matching entries. Use this to discover what's available before " +
+        "searching (search_ui_examples needs a query; this doesn't). Optional styleTag " +
+        "scopes which entries count.",
       inputSchema: {
         styleTag: StyleTag.optional().describe("Scope to a style (e.g. 'minimal') to see which patterns have examples in that style"),
       },
@@ -839,10 +838,10 @@ function registerBrowseUiExamples(server: McpServer, reader: CorpusReader): void
         return { content: [{ type: "text", text: emptyCorpusMessage(reader, styleTag ? `entries with styleTag '${styleTag}'` : "entries") }] };
       }
       const lines = [`# Corpus by pattern (${results.length} patterns represented${styleTag ? `, scoped to '${styleTag}'` : ""})\n`];
-      lines.push("| Pattern | Count | Top products | Exemplar |");
-      lines.push("| --- | --- | --- | --- |");
+      lines.push("| Pattern | Count |");
+      lines.push("| --- | --- |");
       for (const r of results) {
-        lines.push(`| ${r.patternType} | ${r.count} | ${r.products.join(", ")} | **${r.exemplar.product}** \`${r.exemplar.id}\` (${r.exemplar.qualityScore}/5) |`);
+        lines.push(`| ${r.patternType} | ${r.count} |`);
       }
       return { content: [{ type: "text", text: lines.join("\n") }] };
     },

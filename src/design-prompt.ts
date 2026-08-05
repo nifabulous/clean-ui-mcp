@@ -149,13 +149,12 @@ export function generateBrief(entries: CorpusEntryT[], input: GenerateBriefInput
   }));
 
   // ── direction: one paragraph tying it together.
-  const products = [...new Set(entries.map((e) => e.source.productName))].slice(0, 3);
   const pattern = plurality(entries.map((e) => e.patternType));
   const contextClause = input.context ? ` for ${input.context}` : "";
   // Distill the voice into a short register phrase rather than dropping a full
   // sentence mid-paragraph (which spliced awkwardly). First clause, trimmed.
   const voiceClause = voice.split(/[.,;—]/)[0].trim().toLowerCase() || "clear, direct";
-  const direction = `Build a ${pattern ?? "UI"}${contextClause} drawing from ${products.join(", ")}. ` +
+  const direction = `Build a ${pattern ?? "UI"}${contextClause}. ` +
     `The throughline is ${plurality(entries.map((e) => e.styleTags).flat()) ?? "restraint"}: ` +
     `${form ? `a ${form} structure` : "a clear structure"} with ${plurality(entries.map((e) => e.visual.spacingDensity)) ?? "moderate"} spacing, ` +
     `an accent reserved for interactive elements, and a ${voiceClause} voice. ` +
@@ -171,7 +170,7 @@ export function renderBriefMarkdown(brief: DesignBrief): string {
   if (brief.context) lines.push(`\n*Context: ${brief.context}*\n`);
   lines.push(`\n${brief.direction}\n`);
   lines.push(`\n## Sources\n`);
-  brief.sources.forEach((s) => lines.push(`- **${s.product}** (\`${s.id}\`) — contributes ${s.contributes}`));
+  brief.sources.forEach((s) => lines.push(`- Contributes: ${s.contributes}`));
 
   lines.push(`\n## Color tokens (paste-ready)`);
   lines.push("```css");
@@ -210,7 +209,7 @@ export function renderBriefTokens(brief: DesignBrief): string {
   return JSON.stringify({
     direction: brief.direction,
     context: brief.context ?? null,
-    sources: brief.sources,
+    sources: brief.sources.map((s) => ({ contributes: s.contributes })),
     tokens: {
       color: brief.colorTokens,
       spacing: brief.layout,

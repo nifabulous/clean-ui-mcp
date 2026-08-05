@@ -70,8 +70,10 @@ describe("generateBrief synthesis", () => {
       context: "a pricing page for a fintech",
     });
     expect(brief.direction).toContain("pricing page for a fintech");
-    expect(brief.direction).toContain("Linear");
-    expect(brief.direction).toContain("Stripe");
+    // Product names are keyless identity and never render — the direction names
+    // the pattern, not the products.
+    expect(brief.direction).not.toContain("Linear");
+    expect(brief.direction).not.toContain("Stripe");
   });
 
   it("records what each entry contributes based on its strongest field", () => {

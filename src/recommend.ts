@@ -66,8 +66,7 @@ function contributionNote(entry: CorpusEntryT): string {
   if (entry.visual.colorRoles) return `color palette + ${entry.patternType}`;
   if (entry.voice?.tone) return `voice/copy + ${entry.patternType}`;
   if (entry.layout?.regions?.length) return `layout structure (${entry.layout.form})`;
-  if (entry.qualityTier === "cautionary") return `cautionary example — ${entry.patternType} done poorly`;
-  return `${entry.patternType} with strong critique`;
+  return `${entry.patternType} example`;
 }
 
 /**
@@ -103,7 +102,7 @@ export function renderRecommendation(rec: Recommendation): string {
   lines.push(`\n*For: ${rec.productContext}*\n`);
   lines.push(`Grounded in ${rec.rationale.length} corpus entries, selected for relevance and product diversity:\n`);
   for (const r of rec.rationale) {
-    lines.push(`${r.rank}. **${r.product}** (\`${r.id}\`) — ${r.note} (relevance ${r.score})`);
+    lines.push(`${r.rank}. ${r.note} (relevance ${r.score})`);
   }
   lines.push("");
   // The brief is the bulk of the output — append its rendered form.

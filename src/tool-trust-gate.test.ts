@@ -327,3 +327,17 @@ describe("keyless redaction — get_ui_example", () => {
     expect(stale.map((c) => c.text ?? "").join("\n")).toMatch(/Image not attached/);
   });
 });
+
+describe("keyless redaction — aggregations and browse", () => {
+  it.each([
+    { tool: "get_anti_patterns", args: { limit: 5 }, content: "shadow depths" },
+    { tool: "get_color_palette", args: { limit: 5 }, content: "#2563eb" },
+    { tool: "browse_ui_examples", args: {}, content: "dashboard" },
+  ])("$tool renders keyed content without identity", async ({ tool, args, content }) => {
+    const served = await callTool(true, tool, args);
+    expect(served, `${tool} must still serve keyed content`).toContain(content);
+    expect(served, `${tool} leaked productName`).not.toContain("GateCo");
+    expect(served, `${tool} leaked entry id`).not.toContain("gate-tool-entry");
+    expect(served, `${tool} leaked title`).not.toContain("GateCo — dashboard");
+  });
+});

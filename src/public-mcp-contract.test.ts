@@ -727,8 +727,10 @@ describe("public MCP contract — no private marker leaks through any tool path"
   it("browse_ui_examples: corpus-by-pattern summary leaks nothing", async () => {
     const resp = await call("browse_ui_examples", {});
     expectNoPrivateData(responseText(resp), "browse_ui_examples");
-    // The eligible entry is the only one in the snapshot, so it's the exemplar.
-    expect(responseText(resp)).toContain(ELIGIBLE_ID);
+    // Keyless redaction removed the exemplar column entirely — the per-pattern
+    // count is what remains, and the entry id must not appear.
+    expect(responseText(resp)).toContain("dashboard");
+    expect(responseText(resp)).not.toContain(ELIGIBLE_ID);
   });
 
   // ── 14. critique_ui ────────────────────────────────────────────────────────

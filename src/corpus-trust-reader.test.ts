@@ -47,28 +47,28 @@ function innerReader(): CorpusReader {
 
 describe("TrustGatedCorpusReader", () => {
   it("drops unverified entries from search", async () => {
-    const r = new TrustGatedCorpusReader(innerReader());
+    const r = new TrustGatedCorpusReader(innerReader(), ["whatToSteal"]);
     expect((await r.search({} as never)).map((e) => e.id)).toEqual(["verified-1"]);
   });
 
   it("drops unverified entries from searchRanked", async () => {
-    const r = new TrustGatedCorpusReader(innerReader());
+    const r = new TrustGatedCorpusReader(innerReader(), ["whatToSteal"]);
     expect((await r.searchRanked({} as never)).map((x) => x.entry.id)).toEqual(["verified-1"]);
   });
 
   it("refuses getById for an unverified entry", () => {
-    const r = new TrustGatedCorpusReader(innerReader());
+    const r = new TrustGatedCorpusReader(innerReader(), ["whatToSteal"]);
     expect(r.getById("verified-1")?.id).toBe("verified-1");
     expect(r.getById("unverified-1")).toBeUndefined();
   });
 
   it("drops unverified entries from findSimilar", () => {
-    const r = new TrustGatedCorpusReader(innerReader());
+    const r = new TrustGatedCorpusReader(innerReader(), ["whatToSteal"]);
     expect(r.findSimilar("verified-1", 5).map((x) => x.entry.id)).toEqual(["verified-1"]);
   });
 
   it("drops unverified entries from entriesForAggregation", () => {
-    const r = new TrustGatedCorpusReader(innerReader());
+    const r = new TrustGatedCorpusReader(innerReader(), ["whatToSteal"]);
     expect(r.entriesForAggregation().map((e) => e.id)).toEqual(["verified-1"]);
   });
 
@@ -93,7 +93,7 @@ describe("TrustGatedCorpusReader", () => {
       listStyleTags: () => ["minimal", "dark"],
       listDomainTags: () => ["analytics", "crypto"],
     } as unknown as CorpusReader;
-    const r = new TrustGatedCorpusReader(inner);
+    const r = new TrustGatedCorpusReader(inner, ["categories"]);
     // A label carried only by an unverified entry must not seed filters.
     expect(r.listCategories()).toEqual(["dashboard"]);
     expect(r.listStyleTags()).toEqual(["minimal"]);
@@ -104,7 +104,7 @@ describe("TrustGatedCorpusReader", () => {
     // getById answers undefined for both, so a caller that reports "no entry
     // found" would assert non-existence about an entry that exists. This is how a
     // tool tells the two apart without serving the entry.
-    const r = new TrustGatedCorpusReader(innerReader());
+    const r = new TrustGatedCorpusReader(innerReader(), ["whatToSteal"]);
     expect(r.refusedForTrust("unverified-1")).toBe(true);
     expect(r.refusedForTrust("verified-1")).toBe(false);
     expect(r.refusedForTrust("no-such-entry")).toBe(false);
@@ -119,7 +119,7 @@ describe("TrustGatedCorpusReader", () => {
       findSimilar: () => [{ entry: U, score: 1 }],
       entriesForAggregation: () => [U],
     } as unknown as CorpusReader;
-    const r = new TrustGatedCorpusReader(inner);
+    const r = new TrustGatedCorpusReader(inner, ["styleTags"]);
     expect(await r.search({} as never)).toEqual([]);
     expect(await r.searchRanked({} as never)).toEqual([]);
     expect(r.getById("unverified-1")).toBeUndefined();
@@ -130,12 +130,12 @@ describe("TrustGatedCorpusReader", () => {
   });
 
   it("reports the trust posture so a caller can tell gated from empty", () => {
-    const r = new TrustGatedCorpusReader(innerReader());
+    const r = new TrustGatedCorpusReader(innerReader(), ["whatToSteal"]);
     expect(r.trustPosture()).toEqual({ verified: 1, total: 2 });
   });
 
   it("gates taxonomy vocabularies and passes index counters straight through", () => {
-    const r = new TrustGatedCorpusReader(innerReader());
+    const r = new TrustGatedCorpusReader(innerReader(), ["whatToSteal"]);
     // The inner reader's own listCategories returns ["dashboard"], but neither
     // fixture entry carries labels, so the gated recompute yields nothing — the
     // pass-through value is deliberately ignored. Index counters stay ungated.
@@ -159,14 +159,14 @@ describe("TrustGatedCorpusReader — the image-embedding route", () => {
         },
       }),
     } as unknown as CorpusReader;
-    const index = await new TrustGatedCorpusReader(inner).getImageIndex();
+    const index = await new TrustGatedCorpusReader(inner, ["whatToSteal"]).getImageIndex();
     expect(Object.keys(index!.entries)).toEqual(["verified-1"]);
     expect(index!.dimension).toBe(3);
   });
 
   it("passes a null index through unchanged", async () => {
     const inner = { ...innerReader(), getImageIndex: async () => null } as unknown as CorpusReader;
-    expect(await new TrustGatedCorpusReader(inner).getImageIndex()).toBeNull();
+    expect(await new TrustGatedCorpusReader(inner, ["whatToSteal"]).getImageIndex()).toBeNull();
   });
 });
 
@@ -175,7 +175,92 @@ describe("TrustGatedCorpusReader — guards that must not fail open", () => {
     // A double wrap makes trustPosture() see an already-filtered corpus and
     // report verified === total, which silently reverts every honest
     // "0 of N carry a verification" message to "no matches for those filters".
-    const once = new TrustGatedCorpusReader(innerReader());
-    expect(() => new TrustGatedCorpusReader(once)).toThrow(/already gating/i);
+    const once = new TrustGatedCorpusReader(innerReader(), ["whatToSteal"]);
+    expect(() => new TrustGatedCorpusReader(once, ["whatToSteal"])).toThrow(/already gating/i);
+  });
+});
+
+describe("TrustGatedCorpusReader — per-field field sets", () => {
+  function fieldEntry(id: string, fields: readonly string[]): CorpusEntryT {
+    const verification: Record<string, unknown> = {};
+    for (const field of fields) {
+      verification[field] = { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" };
+    }
+    return {
+      id,
+      source: { productName: `product-${id}` },
+      whatToSteal: [`${id} technique`],
+      categories: [id],
+      styleTags: [id],
+      domainTags: [id],
+      provenance: fields.length > 0 ? { taggedBy: "auto", verification } : undefined,
+    } as unknown as CorpusEntryT;
+  }
+
+  const colorOnly = fieldEntry("color-1", ["visual.colorRoles"]);
+  const full = fieldEntry("full-1", ["whatToSteal", "voice"]);
+
+  function inner(): CorpusReader {
+    return {
+      search: async () => [colorOnly, full],
+      searchRanked: async () => [colorOnly, full].map((e, i) => ({ entry: e, score: 5 - i, searchMode: "keyword" as const })),
+      getById: (id: string) => [colorOnly, full].find((e) => e.id === id),
+      findSimilar: () => [colorOnly, full].map((e) => ({ entry: e, score: 1 })),
+      listCategories: () => ["color-1", "full-1"],
+      listStyleTags: () => ["color-1", "full-1"],
+      listDomainTags: () => ["color-1", "full-1"],
+      indexStatus: () => ({ indexed: 0, total: 2, hasIndex: false, missing: 0, stale: 0, contentStale: 0 }),
+      entriesForAggregation: () => [colorOnly, full],
+      resolveImagePath: () => null,
+    } as unknown as CorpusReader;
+  }
+
+  it("serves an entry only when EVERY field in the set is verified", async () => {
+    const colorGate = new TrustGatedCorpusReader(inner(), ["visual.colorRoles"]);
+    expect((await colorGate.search({} as never)).map((e) => e.id)).toEqual(["color-1"]);
+    // The same entry is refused by a tool whose set includes an unverified field.
+    const proseGate = new TrustGatedCorpusReader(inner(), ["whatToSteal", "visual.colorRoles"]);
+    expect((await proseGate.search({} as never)).map((e) => e.id)).toEqual([]);
+    expect(proseGate.refusedForTrust("color-1")).toBe(true);
+    expect(proseGate.trustPosture()).toEqual({ verified: 0, total: 2 });
+  });
+
+  it("refuses an empty field set at construction", () => {
+    expect(() => new TrustGatedCorpusReader(inner(), [])).toThrow(/at least one field/i);
+  });
+
+  it("reports the posture against its own field set", () => {
+    const colorGate = new TrustGatedCorpusReader(inner(), ["visual.colorRoles"]);
+    expect(colorGate.trustPosture()).toEqual({ verified: 1, total: 2 });
+    const twoFieldGate = new TrustGatedCorpusReader(inner(), ["whatToSteal", "voice"]);
+    expect(twoFieldGate.trustPosture()).toEqual({ verified: 1, total: 2 });
+  });
+
+  it("gates taxonomy vocabularies on the field each is drawn from", () => {
+    const catOnly = fieldEntry("cat-1", ["categories"]);
+    const styleOnly = fieldEntry("style-1", ["styleTags"]);
+    const innerR = {
+      ...inner(),
+      entriesForAggregation: () => [catOnly, styleOnly],
+    } as unknown as CorpusReader;
+    const r = new TrustGatedCorpusReader(innerR, ["categories"]);
+    expect(r.listCategories()).toEqual(["cat-1"]); // only the entry verified for categories
+    expect(r.listStyleTags()).toEqual([]);
+    expect(r.listDomainTags()).toEqual([]);
+  });
+
+  it("narrows the image index to entries verified for every field in the set", async () => {
+    const innerReader = {
+      ...inner(),
+      getImageIndex: async () => ({
+        dimension: 3,
+        entries: {
+          "color-1": { vector: [1, 0, 0], hash: "h1" },
+          "full-1": { vector: [0, 1, 0], hash: "h2" },
+        },
+      }),
+    } as unknown as CorpusReader;
+    const index = await new TrustGatedCorpusReader(innerReader, ["whatToSteal", "voice"]).getImageIndex();
+    expect(Object.keys(index!.entries)).toEqual(["full-1"]);
   });
 });

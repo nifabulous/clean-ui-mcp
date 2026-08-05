@@ -551,30 +551,39 @@ export function summarizeCorpusDefects(
             + `nothing reads it, so the verifier's check is a silent no-op`,
           );
         }
-        const path = typeof image.path === "string" ? image.path : null;
-        // `imageExists`/`imageSha256` reach the filesystem through
-        // `fromCorpusRelativeImagePath`, which THROWS on any path outside
-        // images-*/ (paths.ts:132). A malformed path must produce a finding,
-        // not abort the whole `npm run doctor` run.
-        const exists = ((): boolean => {
-          if (path === null) return false;
-          try { return ctx.imageExists(path); } catch { return false; }
-        })();
-        if (!exists) {
-          push(
-            "verified-image-missing",
-            `entry verified for "${field}" but its image is missing or unresolvable: ${path ?? "(no path)"}`,
-          );
-        } else if (record.method === "image-confirmed" && record.imageSha256) {
-          const actual = ((): string | null => {
-            try { return ctx.imageSha256(path!); } catch { return null; }
+        // Image integrity checks apply ONLY to image-confirmed records. A
+        // `measured` (or `provable`) record's evidence is the live DOM / the
+        // recorded data, not the pixels — schema.ts and isVerified both say so —
+        // so a missing screenshot does not invalidate it, and Stage 1's "Image
+        // references resolve" check already reports missing images. Firing
+        // verified-image-missing for a measured record would double-report and
+        // falsely imply the verification depends on an artifact it does not use.
+        if (record.method === "image-confirmed") {
+          const path = typeof image.path === "string" ? image.path : null;
+          // `imageExists`/`imageSha256` reach the filesystem through
+          // `fromCorpusRelativeImagePath`, which THROWS on any path outside
+          // images-*/ (paths.ts:132). A malformed path must produce a finding,
+          // not abort the whole `npm run doctor` run.
+          const exists = ((): boolean => {
+            if (path === null) return false;
+            try { return ctx.imageExists(path); } catch { return false; }
           })();
-          if (actual !== null && actual !== record.imageSha256) {
+          if (!exists) {
             push(
-              "verified-hash-stale",
-              `verification for "${field}" records ${record.imageSha256.slice(0, 12)}… `
-              + `but ${path} now hashes to ${actual.slice(0, 12)}…`,
+              "verified-image-missing",
+              `entry image-confirmed for "${field}" but its image is missing or unresolvable: ${path ?? "(no path)"}`,
             );
+          } else if (record.imageSha256) {
+            const actual = ((): string | null => {
+              try { return ctx.imageSha256(path!); } catch { return null; }
+            })();
+            if (actual !== null && actual !== record.imageSha256) {
+              push(
+                "verified-hash-stale",
+                `verification for "${field}" records ${record.imageSha256.slice(0, 12)}… `
+                + `but ${path} now hashes to ${actual.slice(0, 12)}…`,
+              );
+            }
           }
         }
       }

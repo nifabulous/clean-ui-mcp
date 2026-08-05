@@ -3046,7 +3046,7 @@ git commit -m "docs: close the Stage 1 trust-granularity note with per-field ver
 - Doctor per-key + orphan-key + `unassessed-quality` via `verifiedFields` → Task 9.
 - Disclosure per-field at both call sites → Task 10.
 - Testing discipline: both directions, cross-field, mutation ≥51, fixtures unverified by default, real-Zod schema tests, no presence-only assertions → encoded in Tasks 1, 2, 3, 5, 6, 7, 8, 11.
-- Out of scope respected: no evidence bundle, no retag, no records written, day-one posture byte-identical (Task 1 preserves behavior; the full suite is the regression proof in Task 11).
+- Out of scope respected: no evidence bundle, no retag, no records written. Day-one posture is NOT byte-identical and is not claimed to be — Task 3 intentionally drops every corpus-observation row from `evidence[]` (their summaries interpolated unverified facts) and Tasks 10/11 change the disclosure warning + gatedReason text. The invariant that holds is the narrower one: no corpus-derived VALUE is served (zero records before and after). The full suite is the regression proof in Task 11; see the Task 3 scope ruling (~`:1191`) and the corrected spec out-of-scope note.
 - The render/selector sweep rule (one selector or render position with no key = a plan bug) → Task 11 Step 3.
 
 **2. Placeholder scan:** every code step carries complete code. The only intentionally open spots are assertions in existing tests that pin the old message text or template output (Task 2 Step 7, Task 3 Step 1/6, Task 5 Step 1, Task 8 Step 4, Task 10 Step 5) — each names the exact test and the new assertion to write, because the existing literal cannot be known without running the suite.

@@ -628,6 +628,30 @@ describe("summarizeCorpusDefects — review-round corrections", () => {
     expect(summarizeCorpusDefects(entries, throwing).map((f) => f.detector))
       .toContain("verified-image-missing");
   });
+
+  it("does NOT tie a measured record to a missing image", () => {
+    // A `measured` record's evidence is the live DOM, not the pixels (schema +
+    // isVerified both say so), so a missing screenshot does not invalidate it.
+    // Stage 1's "Image references resolve" check already reports missing images;
+    // firing verified-image-missing here would double-report AND falsely imply
+    // the verification depends on an artifact it does not use.
+    const measured = { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" };
+    const entries = [defectEntry("measured-no-image", {
+      image: { visibility: "private", path: "images-private/gone.png", width: 10, height: 10 },
+      provenance: { taggedBy: "auto", verification: verifiedMap(measured) },
+    })];
+    const findings = summarizeCorpusDefects(entries, NO_IMAGES);
+    expect(findings.map((f) => f.detector)).not.toContain("verified-image-missing");
+  });
+
+  it("still ties an image-confirmed record to its missing image", () => {
+    const entries = [defectEntry("confirmed-no-image", {
+      image: { visibility: "private", path: "images-private/gone.png", width: 10, height: 10 },
+      provenance: { taggedBy: "auto", verification: verifiedMap() },
+    })];
+    expect(summarizeCorpusDefects(entries, NO_IMAGES).map((f) => f.detector))
+      .toContain("verified-image-missing");
+  });
 });
 
 describe("corpusDefectCheck — detail line units", () => {

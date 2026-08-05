@@ -133,6 +133,17 @@ export interface TaggerInput {
   extractionOverride?: EndpointOverride;
   critiqueOverride?: EndpointOverride;
   /**
+   * When set, Pass 2 (the critique pass) receives the IMAGE instead of null.
+   * The corpus verifier (Stage 2c) uses this to re-produce prose fields that
+   * failed verification: the fabrication source for the existing corpus is
+   * `tagImage`'s Pass 2 running text-only (`tagger.ts:3026`), and re-producing
+   * against the pixels is the fix for those entries. (The deferred
+   * `generateCritique` path stays text-only — see the scope note above — so
+   * this closes the source for tagImage-produced entries, not every path.)
+   * Unset keeps the historical text-only behaviour byte-identical.
+   */
+  critiqueImagePath?: string;
+  /**
    * Image visibility for the output entry's ImageRef. Defaults to "private"
    * (the safe historical default — local research copy, never published).
    * Set to "public-own" when capturing an image you hold rights to, or
@@ -3018,12 +3029,13 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   }
 
   // ── PASS 2: critique (judgment, fed validated extraction as fact) ──────────
-  // Pass 2 is text-only — the model reasons from the validated extraction, not
-  // by re-looking at pixels. This is the spec's core architecture choice.
+  // Text-only by default — the model reasons from the validated extraction.
+  // `critiqueImagePath` (the verifier's re-produce path) lets it see the pixels
+  // instead, closing the fabrication root cause this pass's null image created.
   let critiqueRawText = await callModel(
     "critique",
     buildCritiquePrompt(effectiveName, critiqueExtraction, input.domSignals),
-    null, // no image — pure reasoning from facts
+    input.critiqueImagePath ?? null, // seeing Pass 2 when the verifier re-produces
     undefined,
     "high",
     undefined,
@@ -3053,7 +3065,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     const retryText = await callModel(
       "critique",
       buildCritiquePrompt(effectiveName, critiqueExtraction, input.domSignals),
-      null,
+      input.critiqueImagePath ?? null,
       feedback,
       "high",
       undefined,

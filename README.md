@@ -704,6 +704,44 @@ curator report. Full usage, options, and model config: `docs/SCOUTING.md`.
 
 ---
 
+## Verifying the corpus (Stage 2c)
+
+```bash
+npm run verify:estimate  # projects the model-call count, calls NOTHING
+npm run verify:dry-run    # runs the full verify (spends model budget), writes nothing
+npm run verify            # writes per-field verification records (snapshot-backed)
+```
+
+Note the difference: `--estimate` is the cheap projection to run FIRST; `--dry-run`
+makes the real model calls and only withholds the writes, so it costs a full run.
+
+The verifier is independent of the tagger and positively affirms every claim
+(default false). `platform` is recomputed from recorded dimensions (a `provable`
+record, no image hash); `dominantColors` is re-extracted from the pixels (an
+`image-confirmed` record bound to the hash). Everything else goes through an
+adversarial vision pass; failed prose fields are re-produced ONCE by the seeing
+Pass 2 and re-verified. Failed/gated fields get an inert `attempted` marker so
+re-runs converge instead of re-spending the vision cost. The doctor is the
+standing check after any run.
+
+**Before the first full run:** verify a stratified sample of 30 entries by eye
+(10 known-bad, 10 typical, 10 unknown) against the actual images. Acceptance:
+at least 95% agreement with human verdicts and ZERO missed assertions. A large
+day-one pass rate on the known-defective corpus is a failure signal, not a
+success — investigate before writing any record.
+
+**What CI exercises vs. what an operator must run with live keys:** `npx tsc`
+and `npm run test` cover every pure-logic path — the tier table, prompt
+building, fail-closed parsing, resume/merge semantics, and the isolation seam
+(`--corpus` never touches the real corpus) — with zero model calls. The
+model-dependent steps (the dry-run calibration slice, the known-bad-entry-must-
+FAIL check, and the 30-entry stratified sample above) require
+`VERIFY_VISION_PROVIDER` (or `--vision-provider`) plus the chosen provider's
+own keys, and real model spend; they are operator steps, run once before the
+first full write, not part of the automated test suite.
+
+---
+
 ## Bulk import workflow
 
 ```bash

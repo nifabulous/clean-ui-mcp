@@ -15,6 +15,7 @@
  * on doctor.ts's display formatting.
  */
 import type { CorpusEntryT } from "../schema.js";
+import { detectPlatform } from "../schema.js";
 // The doctor's verification checks MUST agree with the serve gate, so they use
 // its predicate rather than a looser local condition.
 import { verifiedFields, SERVABLE_FIELD_KEYS, VERIFICATION_METHODS } from "../corpus-trust.js";
@@ -268,7 +269,8 @@ export type CorpusDefectDetector =
   | "verified-image-missing"
   | "verified-hash-stale"
   | "verification-malformed"
-  | "verification-orphan-key";
+  | "verification-orphan-key"
+  | "platform-record-stale";
 
 export interface CorpusDefectFinding {
   /** The corpus entry id the defect was found on. */
@@ -550,6 +552,30 @@ export function summarizeCorpusDefects(
             `verification record for "${field}" is not in the servable field set — `
             + `nothing reads it, so the verifier's check is a silent no-op`,
           );
+        }
+        // `platform` is recorded `provable`, not `image-confirmed` — it's
+        // arithmetic on recorded dimensions, not pixel evidence, so it carries
+        // no image hash and the staleness check below never runs for it. This
+        // re-derives detectPlatform from the recorded dims instead, for ANY
+        // verified platform record regardless of method: the invariant
+        // "recorded platform matches recorded dims" holds independent of tier.
+        // A re-capture that changed dimensions (or a bad backfill) would
+        // otherwise leave a stale platform serving with no flag at all.
+        if (field === "platform") {
+          const w = typeof image.width === "number" ? image.width : null;
+          const h = typeof image.height === "number" ? image.height : null;
+          // Missing dims is a different, pre-handled case (not this detector's
+          // job) — skip silently rather than reporting a false staleness.
+          if (w !== null && h !== null) {
+            const derived = detectPlatform(w, h);
+            if (derived !== entry.platform) {
+              push(
+                "platform-record-stale",
+                `platform is recorded as "${entry.platform}" but its dimensions `
+                + `(${w}x${h}) now derive "${derived}" via detectPlatform`,
+              );
+            }
+          }
         }
         // Image integrity checks apply ONLY to image-confirmed records. A
         // `measured` (or `provable`) record's evidence is the live DOM / the

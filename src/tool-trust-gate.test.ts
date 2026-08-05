@@ -20,6 +20,21 @@ import type { CorpusEntryT } from "./schema.js";
 
 const MARKER = "STEALABLE_MARKER_7Q4";
 
+function verificationFor(fields: readonly string[]): Record<string, unknown> {
+  const record = { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "tool-gate-fixture" };
+  const map: Record<string, unknown> = {};
+  for (const field of fields) map[field] = record;
+  return map;
+}
+
+const ALL_SERVABLE_FIELDS = [
+  "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
+  "voice", "visual.dominantColors", "visual.accentColor", "visual.colorRoles",
+  "visual.typePairing", "visual.spacingDensity", "visual.cornerStyle",
+  "visual.usesShadows", "visual.usesBorders", "layout", "patternType",
+  "platform", "categories", "styleTags", "domainTags",
+] as const;
+
 function entry(verified: boolean): CorpusEntryT {
   return {
     id: "gate-tool-entry",
@@ -47,12 +62,7 @@ function entry(verified: boolean): CorpusEntryT {
       ? {
           provenance: {
             taggedBy: "auto",
-            verification: {
-              method: "image-confirmed",
-              verifiedAt: "2026-08-04",
-              verifierVersion: "tool-gate-fixture",
-              imageSha256: "a".repeat(64),
-            },
+            verification: verificationFor(ALL_SERVABLE_FIELDS),
           },
         }
       : {}),
@@ -95,14 +105,14 @@ async function callTool(verified: boolean, name: string, args: Record<string, un
  */
 const CASES: ReadonlyArray<{ tool: string; args: Record<string, unknown>; needle: string }> = [
   { tool: "get_stealable_techniques", args: { limit: 5 }, needle: MARKER },
-  { tool: "search_ui_examples", args: { query: "dashboard", limit: 3 }, needle: "gate-tool-entry" },
+  { tool: "search_ui_examples", args: { query: "dashboard", limit: 3 }, needle: "restrained dashboard" },
   // The needle is CORPUS CONTENT, never the caller's own input: these two echo
   // the requested id back in their not-found message, so an id needle would
   // report a leak that is just the argument coming home.
   { tool: "get_ui_example", args: { id: "gate-tool-entry" }, needle: "restrained dashboard" },
   { tool: "get_anti_patterns", args: { limit: 5 }, needle: "shadow depths" },
   { tool: "get_color_palette", args: { limit: 5 }, needle: "#2563eb" },
-  { tool: "browse_ui_examples", args: {}, needle: "gate-tool-entry" },
+  { tool: "browse_ui_examples", args: {}, needle: "dashboard" },
   { tool: "get_similar_ui_examples", args: { id: "gate-tool-entry" }, needle: "restrained dashboard" },
 ];
 
@@ -192,6 +202,34 @@ describe("wiring regression detection", () => {
       expect(served, `${tool} appears to be wired to the UNGATED reader`).not.toContain(needle);
     }
   });
+
+  it("gates each tool on exactly the fields it renders", async () => {
+    // `get_color_palette` serves colorRoles + patternType; an entry verified for
+    // critique only must NOT reach it, while `get_stealable_techniques` must
+    // still serve from the same entry (whatToSteal verified).
+    const fixture = {
+      ...entry(true),
+      provenance: {
+        taggedBy: "auto",
+        verification: verificationFor(["critique", "whatToSteal"]),
+      },
+    };
+    const server = createServer(readerWith(fixture));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "field-set-test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const palette = await client.callTool({ name: "get_color_palette", arguments: { limit: 5 } });
+      const paletteText = ((palette.content ?? []) as Array<{ text?: string }>).map((c) => c.text ?? "").join("\n");
+      expect(paletteText).not.toContain("#2563eb");
+      expect(paletteText).toMatch(/verif/i);
+      const steal = await client.callTool({ name: "get_stealable_techniques", arguments: { limit: 5 } });
+      const stealText = ((steal.content ?? []) as Array<{ text?: string }>).map((c) => c.text ?? "").join("\n");
+      expect(stealText).toContain(MARKER);
+    } finally {
+      await client.close();
+    }
+  });
 });
 
 describe("the refusal messages read as English", () => {
@@ -199,10 +237,138 @@ describe("the refusal messages read as English", () => {
     // Template rendering with REAL inputs, per CLAUDE.md: the first version of
     // this message served 'Entry "x" exist but carry no recorded verification'.
     const one = await callTool(false, "get_ui_example", { id: "gate-tool-entry" });
-    expect(one).toMatch(/Entry "gate-tool-entry" exists but carries no recorded verification/);
+    expect(one).toMatch(/Entry "gate-tool-entry" exists but is not verified for every field this tool serves/);
+    expect(one).toMatch(/visual\.colorRoles/);
     const many = await callTool(false, "compare_ui_examples", {
       ids: ["gate-tool-entry", "gate-tool-entry"],
     });
     expect(many).not.toMatch(/exist but carries|exists but carry/);
+  });
+});
+
+describe("keyless redaction — retrieval tools", () => {
+  // A verified-content entry must render its content and NOT its identity:
+  // productName, url, id and title appear nowhere in the served bytes. The
+  // redaction is a rendering property, not a trust field — this holds for the
+  // VERIFIED direction, which is the only direction that returns content.
+  it.each([
+    { tool: "search_ui_examples", args: { query: "dashboard", limit: 3 }, content: "restrained dashboard" },
+    { tool: "get_similar_ui_examples", args: { id: "gate-tool-entry" }, content: "restrained dashboard" },
+    { tool: "compare_ui_examples", args: { ids: ["gate-tool-entry", "gate-tool-entry"] }, content: "restrained dashboard" },
+  ])("$tool renders content without identity", async ({ tool, args, content }) => {
+    const served = await callTool(true, tool, args);
+    expect(served, `${tool} must still serve keyed content`).toContain(content);
+    expect(served, `${tool} leaked productName`).not.toContain("GateCo");
+    expect(served, `${tool} leaked source url`).not.toContain("gateco.example.com");
+    expect(served, `${tool} leaked entry id`).not.toContain("gate-tool-entry");
+    expect(served, `${tool} leaked title`).not.toContain("GateCo — dashboard");
+  });
+});
+
+describe("keyless redaction — empty keyed headers degrade gracefully", () => {
+  it("similar/compare never render an empty header shell", async () => {
+    // An entry with NO patternType/categories/styleTags content (but verified
+    // for the fields those tools serve) must not render "###  — 25% similar"
+    // or "**this example** ()" — a bare shell with no keyed identity.
+    const bare = {
+      ...entry(true),
+      patternType: undefined,
+      categories: [],
+      styleTags: [],
+    };
+    const server = createServer(readerWith(bare));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "empty-header-test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const similar = await client.callTool({ name: "get_similar_ui_examples", arguments: { id: "gate-tool-entry" } });
+      const similarText = ((similar.content ?? []) as Array<{ text?: string }>).map((c) => c.text ?? "").join("\n");
+      expect(similarText).not.toMatch(/###\s+—/);
+      expect(similarText).not.toMatch(/this example\s*\(\)/);
+      expect(similarText).toContain("restrained dashboard");
+      const compare = await client.callTool({ name: "compare_ui_examples", arguments: { ids: ["gate-tool-entry", "gate-tool-entry"] } });
+      const compareText = ((compare.content ?? []) as Array<{ text?: string }>).map((c) => c.text ?? "").join("\n");
+      expect(compareText).not.toMatch(/\| Field \| {2,}\|/);
+      expect(compareText).toContain("restrained dashboard");
+    } finally {
+      await client.close();
+    }
+  });
+});
+
+describe("keyless redaction — get_ui_example", () => {
+  it("renders the verified record without identity and without the source-URL promise", async () => {
+    const served = await callTool(true, "get_ui_example", { id: "gate-tool-entry" });
+    expect(served).toContain("restrained dashboard");
+    expect(served).toContain("What to steal");
+    expect(served).not.toContain("GateCo");
+    expect(served).not.toContain("gateco.example.com");
+    expect(served).not.toContain("gate-tool-entry");
+    expect(served).not.toContain("GateCo — dashboard");
+    expect(served).not.toMatch(/view live at|source URL above/i);
+  });
+
+  it("attaches image bytes only under an image-confirmed record matching the file", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { createHash } = await import("node:crypto");
+    const root = mkdtempSync(join(tmpdir(), "tool-gate-image-"));
+    const imagePath = join(root, "gate.png");
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...new Array(24).fill(0)]);
+    writeFileSync(imagePath, bytes);
+    const matchingSha = createHash("sha256").update(bytes).digest("hex");
+    const staleSha = createHash("sha256").update(Buffer.from("different bytes")).digest("hex");
+
+    const entryWithImage = (sha: string): CorpusEntryT => ({
+      ...entry(true),
+      image: { visibility: "public-own", path: imagePath, width: 1440, height: 900 },
+      provenance: {
+        taggedBy: "auto",
+        verification: {
+          ...verificationFor(ALL_SERVABLE_FIELDS),
+          critique: { method: "image-confirmed", verifiedAt: "2026-08-04", verifierVersion: "tool-gate-fixture", imageSha256: sha },
+        },
+      },
+    });
+
+    async function callWith(sha: string) {
+      const base = readerWith(entry(true));
+      const reader: CorpusReader = {
+        ...base,
+        resolveImagePath: () => imagePath,
+        getById: (id: string) => (id === "gate-tool-entry" ? entryWithImage(sha) : undefined),
+      };
+      const server = createServer(reader);
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "image-gate-test", version: "1.0.0" });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        const res = await client.callTool({ name: "get_ui_example", arguments: { id: "gate-tool-entry" } });
+        return (res.content ?? []) as Array<{ type: string; text?: string }>;
+      } finally {
+        await client.close();
+      }
+    }
+
+    const matching = await callWith(matchingSha);
+    expect(matching.filter((c) => c.type === "image")).toHaveLength(1);
+    const stale = await callWith(staleSha);
+    expect(stale.filter((c) => c.type === "image")).toHaveLength(0);
+    expect(stale.map((c) => c.text ?? "").join("\n")).toMatch(/Image not attached/);
+  });
+});
+
+describe("keyless redaction — aggregations and browse", () => {
+  it.each([
+    { tool: "get_anti_patterns", args: { limit: 5 }, content: "shadow depths" },
+    { tool: "get_color_palette", args: { limit: 5 }, content: "#2563eb" },
+    { tool: "browse_ui_examples", args: {}, content: "dashboard" },
+  ])("$tool renders keyed content without identity", async ({ tool, args, content }) => {
+    const served = await callTool(true, tool, args);
+    expect(served, `${tool} must still serve keyed content`).toContain(content);
+    expect(served, `${tool} leaked productName`).not.toContain("GateCo");
+    expect(served, `${tool} leaked entry id`).not.toContain("gate-tool-entry");
+    expect(served, `${tool} leaked title`).not.toContain("GateCo — dashboard");
   });
 });

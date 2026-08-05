@@ -377,6 +377,11 @@ const VERIFICATION = {
   imageSha256: "a".repeat(64),
 };
 
+/** Wrap a record under a servable key — the Stage 2a map shape. */
+function verifiedMap(record: unknown = VERIFICATION): Record<string, unknown> {
+  return { whatToSteal: record };
+}
+
 /** No image is ever read in these tests; the detector's I/O is injected. */
 const NO_IMAGES = { imageExists: () => false, imageSha256: () => null };
 const ALL_IMAGES = { imageExists: () => true, imageSha256: () => "a".repeat(64) };
@@ -455,7 +460,7 @@ describe("summarizeCorpusDefects", () => {
     // The serve-path gate is pure and cannot see this; doctor.ts owns it.
     const entries = [defectEntry("verified-no-image", {
       image: { visibility: "private", path: "images-private/definitely-absent.png", width: 10, height: 10 },
-      provenance: { taggedBy: "auto", verification: VERIFICATION },
+      provenance: { taggedBy: "auto", verification: verifiedMap() },
     })];
     const findings = summarizeCorpusDefects(entries, NO_IMAGES);
     expect(findings.some((f) => f.id === "verified-no-image" && f.detector === "verified-image-missing")).toBe(true);
@@ -463,7 +468,7 @@ describe("summarizeCorpusDefects", () => {
 
   it("reports a verified entry whose imageSha256 no longer matches the bytes on disk", () => {
     const entries = [defectEntry("verified-stale-hash", {
-      provenance: { taggedBy: "auto", verification: VERIFICATION },
+      provenance: { taggedBy: "auto", verification: verifiedMap() },
     })];
     const findings = summarizeCorpusDefects(entries, {
       imageExists: () => true,
@@ -585,7 +590,7 @@ describe("summarizeCorpusDefects — review-round corrections", () => {
   it("clears unassessed-quality once a real verification exists", () => {
     const entries = [defectEntry("assessed", {
       qualityScore: 3, qualityTier: "exceptional",
-      provenance: { taggedBy: "auto", verification: VERIFICATION },
+      provenance: { taggedBy: "auto", verification: verifiedMap() },
     })];
     expect(summarizeCorpusDefects(entries, ALL_IMAGES).map((f) => f.detector))
       .not.toContain("unassessed-quality");
@@ -596,10 +601,10 @@ describe("summarizeCorpusDefects — review-round corrections", () => {
     // with no hash. The detector previously accepted both as "verified", so the
     // malformed record that silently fails the serve gate produced NO finding.
     const badMethod = defectEntry("bad-method", {
-      provenance: { taggedBy: "auto", verification: { ...VERIFICATION, method: "vibes-confirmed" } },
+      provenance: { taggedBy: "auto", verification: verifiedMap({ ...VERIFICATION, method: "vibes-confirmed" }) },
     });
     const noHash = defectEntry("no-hash", {
-      provenance: { taggedBy: "auto", verification: { method: "image-confirmed", verifiedAt: "2026-08-04", verifierVersion: "v1" } },
+      provenance: { taggedBy: "auto", verification: verifiedMap({ method: "image-confirmed", verifiedAt: "2026-08-04", verifierVersion: "v1" }) },
     });
     const found = summarizeCorpusDefects([badMethod, noHash], ALL_IMAGES);
     expect(found.filter((f) => f.id === "bad-method").map((f) => f.detector)).toContain("verification-malformed");
@@ -613,7 +618,7 @@ describe("summarizeCorpusDefects — review-round corrections", () => {
     // injected closure must treat a throw as missing, not abort the run.
     const entries = [defectEntry("bad-path", {
       image: { visibility: "private", path: "../escape.png", width: 10, height: 10 },
-      provenance: { taggedBy: "auto", verification: VERIFICATION },
+      provenance: { taggedBy: "auto", verification: verifiedMap() },
     })];
     const throwing = {
       imageExists: () => { throw new Error("outside the corpus image root"); },
@@ -621,6 +626,30 @@ describe("summarizeCorpusDefects — review-round corrections", () => {
     };
     expect(() => summarizeCorpusDefects(entries, throwing)).not.toThrow();
     expect(summarizeCorpusDefects(entries, throwing).map((f) => f.detector))
+      .toContain("verified-image-missing");
+  });
+
+  it("does NOT tie a measured record to a missing image", () => {
+    // A `measured` record's evidence is the live DOM, not the pixels (schema +
+    // isVerified both say so), so a missing screenshot does not invalidate it.
+    // Stage 1's "Image references resolve" check already reports missing images;
+    // firing verified-image-missing here would double-report AND falsely imply
+    // the verification depends on an artifact it does not use.
+    const measured = { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" };
+    const entries = [defectEntry("measured-no-image", {
+      image: { visibility: "private", path: "images-private/gone.png", width: 10, height: 10 },
+      provenance: { taggedBy: "auto", verification: verifiedMap(measured) },
+    })];
+    const findings = summarizeCorpusDefects(entries, NO_IMAGES);
+    expect(findings.map((f) => f.detector)).not.toContain("verified-image-missing");
+  });
+
+  it("still ties an image-confirmed record to its missing image", () => {
+    const entries = [defectEntry("confirmed-no-image", {
+      image: { visibility: "private", path: "images-private/gone.png", width: 10, height: 10 },
+      provenance: { taggedBy: "auto", verification: verifiedMap() },
+    })];
+    expect(summarizeCorpusDefects(entries, NO_IMAGES).map((f) => f.detector))
       .toContain("verified-image-missing");
   });
 });
@@ -636,5 +665,52 @@ describe("corpusDefectCheck — detail line units", () => {
     const check = corpusDefectCheck([twoCollisions], ALL_IMAGES);
     expect(check.status).toBe("WARN");
     expect(check.detail).toMatch(/role-collapse:\d+ rows\/1 entr/);
+  });
+});
+
+describe("per-key verification integrity", () => {
+  it("names the malformed key when one record among several is bad", () => {
+    const entry = defectEntry("mixed", {
+      provenance: {
+        taggedBy: "auto",
+        verification: {
+          "visual.colorRoles": VERIFICATION,
+          critique: { ...VERIFICATION, method: "vibes-confirmed" },
+        },
+      },
+    });
+    const found = summarizeCorpusDefects([entry], ALL_IMAGES);
+    const malformed = found.filter((f) => f.detector === "verification-malformed");
+    expect(malformed).toHaveLength(1);
+    expect(malformed[0]!.message).toContain("critique");
+    expect(malformed[0]!.message).not.toContain("visual.colorRoles");
+  });
+
+  it("reports an orphan key — a record nothing reads", () => {
+    const entry = defectEntry("orphan", {
+      provenance: {
+        taggedBy: "auto",
+        verification: {
+          "visual.vibes": { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" },
+        },
+      },
+    });
+    const found = summarizeCorpusDefects([entry], ALL_IMAGES);
+    const orphan = found.filter((f) => f.detector === "verification-orphan-key");
+    expect(orphan).toHaveLength(1);
+    expect(orphan[0]!.message).toContain("visual.vibes");
+  });
+
+  it("exempts unassessed-quality when any servable key is verified", () => {
+    const entry = defectEntry("assessed-per-key", {
+      qualityScore: 3,
+      qualityTier: "exceptional",
+      provenance: {
+        taggedBy: "auto",
+        verification: { "visual.colorRoles": VERIFICATION },
+      },
+    });
+    const detectors = summarizeCorpusDefects([entry], ALL_IMAGES).map((f) => f.detector);
+    expect(detectors).not.toContain("unassessed-quality");
   });
 });

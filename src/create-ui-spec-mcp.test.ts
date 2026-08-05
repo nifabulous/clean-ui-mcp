@@ -28,6 +28,7 @@
  *     the standard error envelope with `isError`.
  */
 import { describe, expect, it, vi, beforeEach, afterEach, afterAll } from "vitest";
+import { SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -1075,8 +1076,17 @@ describe("create_ui_spec MCP registration — refused tokens are not surfaced", 
  * the served response is still unambiguous.
  */
 function keywordFixtureEntry(id: string, productName: string, patternType: string = "dashboard"): CorpusEntryT {
+  const record = {
+    method: "image-confirmed",
+    verifiedAt: "2026-08-04",
+    verifierVersion: "mcp-fixture",
+    imageSha256: "a".repeat(64),
+  };
+  const verification: Record<string, unknown> = {};
+  for (const key of SERVABLE_FIELD_KEYS) verification[key] = record;
   return {
     ...fixtureEntry(id, productName),
+    provenance: { taggedBy: "auto", verification },
     patternType,
     domainTags: ["analytics"],
     visual: {

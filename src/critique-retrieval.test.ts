@@ -124,8 +124,8 @@ describe("retrieveCritiqueEvidence", () => {
   it("filters stale drafts before limiting image candidates", async () => {
     reader = makeReader({
       corpus: [
-        ...Array.from({ length: 12 }, (_, i) => ({ id: `draft-${i}`, patternType: "dashboard", platform: "web", reviewStatus: "draft", title: `Draft ${i}` })),
-        { id: "approved-1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Approved" },
+        ...Array.from({ length: 12 }, (_, i) => ({ id: `draft-${i}`, patternType: `draft-${i}`, platform: "web", reviewStatus: "draft", title: `Draft ${i}` })),
+        { id: "approved-1", patternType: "approved-1", platform: "web", reviewStatus: "approved", title: "Approved" },
       ],
     });
     const result = await retrieveCritiqueEvidence({
@@ -144,7 +144,10 @@ describe("retrieveCritiqueEvidence", () => {
       },
     });
     expect(result.mode).toBe("image");
-    expect(result.entries.map((e) => e.id)).toContain("approved-1");
+    // The served projection carries no id (keyless identity); patternType is the
+    // keyed fingerprint that distinguishes the surviving entry.
+    expect(result.entries.map((e) => e.patternType)).toContain("approved-1");
+    expect(result.entries.map((e) => e.patternType)).not.toContain("draft-0");
   });
 
   // ─── Edge-case tests (proportional to bug classes) ──────────────────────────
@@ -225,7 +228,7 @@ describe("retrieveCritiqueEvidence", () => {
   it("filters orphaned image-index entries (id not in corpus)", async () => {
     reader = makeReader({
       corpus: [
-        { id: "real-1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Real" },
+        { id: "real-1", patternType: "real-1", platform: "web", reviewStatus: "approved", title: "Real" },
       ],
     });
     const result = await retrieveCritiqueEvidence({
@@ -244,15 +247,15 @@ describe("retrieveCritiqueEvidence", () => {
       },
     });
     expect(result.mode).toBe("image");
-    expect(result.entries.map((e) => e.id)).toContain("real-1");
-    expect(result.entries.map((e) => e.id)).not.toContain("orphaned-1");
+    expect(result.entries.map((e) => e.patternType)).toContain("real-1");
+    expect(result.entries.map((e) => e.patternType)).not.toContain("orphaned-1");
   });
 
   it("filters entries demoted from approved to draft after indexing", async () => {
     reader = makeReader({
       corpus: [
-        { id: "demoted", patternType: "dashboard", platform: "web", reviewStatus: "draft", title: "Was Approved" },
-        { id: "still-approved", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Still Good" },
+        { id: "demoted", patternType: "demoted", platform: "web", reviewStatus: "draft", title: "Was Approved" },
+        { id: "still-approved", patternType: "still-approved", platform: "web", reviewStatus: "approved", title: "Still Good" },
       ],
     });
     const result = await retrieveCritiqueEvidence({
@@ -271,8 +274,8 @@ describe("retrieveCritiqueEvidence", () => {
       },
     });
     expect(result.mode).toBe("image");
-    expect(result.entries.map((e) => e.id)).toContain("still-approved");
-    expect(result.entries.map((e) => e.id)).not.toContain("demoted");
+    expect(result.entries.map((e) => e.patternType)).toContain("still-approved");
+    expect(result.entries.map((e) => e.patternType)).not.toContain("demoted");
   });
 
   it("falls back gracefully with empty corpus", async () => {
@@ -297,8 +300,8 @@ describe("retrieveCritiqueEvidence", () => {
   it("applies platform penalty after approved filtering", async () => {
     reader = makeReader({
       corpus: [
-        { id: "web-1", patternType: "dashboard", platform: "web", reviewStatus: "approved", title: "Web A" },
-        { id: "mobile-1", patternType: "dashboard", platform: "mobile", reviewStatus: "approved", title: "Mobile A" },
+        { id: "web-1", patternType: "web-1", platform: "web", reviewStatus: "approved", title: "Web A" },
+        { id: "mobile-1", patternType: "mobile-1", platform: "mobile", reviewStatus: "approved", title: "Mobile A" },
       ],
     });
     // Override the cosine mock to return distinct scores per entry vector so the
@@ -327,10 +330,10 @@ describe("retrieveCritiqueEvidence", () => {
     expect(result.mode).toBe("image");
     // Both survive approved filtering, but web-1 should be ranked above mobile-1
     // because mobile-1's score is halved (0.95 * 0.5 = 0.475 < 0.8)
-    const ids = result.entries.map((e) => e.id);
-    expect(ids).toContain("web-1");
-    expect(ids).toContain("mobile-1");
-    expect(ids.indexOf("web-1")).toBeLessThan(ids.indexOf("mobile-1"));
+    const patterns = result.entries.map((e) => e.patternType);
+    expect(patterns).toContain("web-1");
+    expect(patterns).toContain("mobile-1");
+    expect(patterns.indexOf("web-1")).toBeLessThan(patterns.indexOf("mobile-1"));
   });
 
   it("falls back when query vector dimension doesn't match index dimension", async () => {

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CorpusReader } from "./corpus-reader.js";
+import { SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import { makeCreateUiSpecDependencies } from "./create-ui-spec-dependencies.js";
 import {
   createUiSpecForAdapter,
@@ -154,12 +155,7 @@ function rankedCorpusReader(): CorpusReader {
     // trust-gated-prompt-grounding suite below and by corpus-trust.test.ts.
     provenance: {
       taggedBy: "auto",
-      verification: {
-        method: "image-confirmed",
-        verifiedAt: "2026-08-04",
-        verifierVersion: "verifier-v1",
-        imageSha256: "a".repeat(64),
-      },
+      verification: allKeysVerified(),
     },
     visual: {
       colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: id === "internal-C" ? "#1d4ed8" : "#2563eb" },
@@ -441,6 +437,19 @@ const GATE_ROLES = {
   canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: "#2563eb",
 };
 
+/** A verification map valid for EVERY servable key — the serving-behaviour default. */
+function allKeysVerified(): Record<string, unknown> {
+  const record = {
+    method: "image-confirmed",
+    verifiedAt: "2026-08-04",
+    verifierVersion: "verifier-v1",
+    imageSha256: "a".repeat(64),
+  };
+  const verification: Record<string, unknown> = {};
+  for (const key of SERVABLE_FIELD_KEYS) verification[key] = record;
+  return verification;
+}
+
 function gateEntry(id: string, patternType: string, verified: boolean): CorpusEntryT {
   return {
     id,
@@ -449,12 +458,7 @@ function gateEntry(id: string, patternType: string, verified: boolean): CorpusEn
       ? {
           provenance: {
             taggedBy: "auto",
-            verification: {
-              method: "image-confirmed",
-              verifiedAt: "2026-08-04",
-              verifierVersion: "verifier-v1",
-              imageSha256: "a".repeat(64),
-            },
+            verification: allKeysVerified(),
           },
         }
       : {}),
@@ -471,7 +475,8 @@ describe("create_ui_spec model lane — trust-gated prompt grounding", () => {
   it("keeps unverified entries' derived summaries out of the model prompt", async () => {
     // Two matched entries: one verified (dashboard), one not (forms). The
     // prompt's evidence summaries must carry only the verified row's derived
-    // summary; the served evidence rows still include both (ungated).
+    // summary; the unverified row is dropped at construction by the per-field
+    // strip.
     const verified = gateEntry("internal-v", "dashboard", true);
     const unverified = gateEntry("internal-u", "forms", false);
     const reader = {
@@ -492,7 +497,39 @@ describe("create_ui_spec model lane — trust-gated prompt grounding", () => {
     const prompt = (call.mock.calls[0][0] as { prompt: string }).prompt;
     expect(prompt).toContain("dashboard reference");
     expect(prompt).not.toContain("forms reference");
-    // Served evidence still reports both rows (ungated, no authority claim).
-    expect(out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation")).toHaveLength(2);
+    // The per-field strip is the model-lane gate now: the unverified row was
+    // dropped at construction, so the served evidence reports one row.
+    expect(out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation")).toHaveLength(1);
+  });
+
+  it("feeds the model exactly the verified facts of a partially-verified row", async () => {
+    // Entry verified for patternType ONLY: the row survives with the pattern
+    // fact and none of the colour/layout/typography facts.
+    const verified = {
+      ...gateEntry("internal-v", "dashboard", true),
+      provenance: {
+        taggedBy: "auto",
+        verification: { patternType: { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" } },
+      },
+    } as unknown as CorpusEntryT;
+    const reader = {
+      ...makeReader(),
+      searchRanked: vi.fn(async () => [{ entry: verified, score: 5, searchMode: "keyword" }]),
+    } as unknown as CorpusReader;
+
+    const call = vi.fn(async () => validModelResponse());
+    const runtime = makeRuntime({ call: call as unknown as CreateUiSpecModelRuntime["call"] });
+    const out = await createUiSpecForAdapter(
+      REQUEST,
+      makeCreateUiSpecDependencies(reader, FIXED_NOW, { kind: "configured", runtime }),
+    );
+    expect(out.envelope.modelExecution?.state).toBe("succeeded");
+    const prompt = (call.mock.calls[0][0] as { prompt: string }).prompt;
+    expect(prompt).toContain("dashboard reference");
+    const rows = out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.structuredFacts.pattern).toBe("dashboard");
+    expect(rows[0]!.structuredFacts.colorRoles).toBeUndefined();
+    expect(rows[0]!.structuredFacts.layoutForm).toBeUndefined();
   });
 });

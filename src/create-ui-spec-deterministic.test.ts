@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createUiSpecDeterministic } from "./create-ui-spec-deterministic.js";
+import { createUiSpecDeterministic, type DeterministicSynthesis } from "./create-ui-spec-deterministic.js";
+import { SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import type { CorpusEntryT } from "./schema.js";
 
 function observation(id: string, facts: Record<string, unknown>): never {
@@ -16,6 +17,19 @@ function entriesOf(matches: readonly { entry: CorpusEntryT }[]): CorpusEntryT[] 
   return matches.map((m) => m.entry);
 }
 
+/** A verification record the C3 trust gate accepts for EVERY servable key. */
+function allKeysVerified(): Record<string, unknown> {
+  const record = {
+    method: "image-confirmed",
+    verifiedAt: "2026-08-04",
+    verifierVersion: "verifier-v1",
+    imageSha256: "a".repeat(64),
+  };
+  const verification: Record<string, unknown> = {};
+  for (const key of SERVABLE_FIELD_KEYS) verification[key] = record;
+  return verification;
+}
+
 /**
  * A verification record the C3 trust gate accepts.
  *
@@ -27,12 +41,7 @@ function entriesOf(matches: readonly { entry: CorpusEntryT }[]): CorpusEntryT[] 
  */
 const VERIFIED = {
   taggedBy: "auto",
-  verification: {
-    method: "image-confirmed",
-    verifiedAt: "2026-08-04",
-    verifierVersion: "verifier-v1",
-    imageSha256: "a".repeat(64),
-  },
+  verification: allKeysVerified(),
 };
 
 /**
@@ -289,7 +298,9 @@ describe("createUiSpecDeterministic", () => {
         avoid: [],
       },
     });
-    const evidence = [observation("evidence-2", { pattern: "dashboard" })];
+    // Production pushes one evidence row per matched entry (same loop); a bare
+    // single row beside three matches is not a reachable state.
+    const evidence = [2, 3, 4].map((n) => observation(`evidence-${n}`, { pattern: "dashboard" }));
     const matches = [
       matched("evidence-2", { ...many("A"), provenance: VERIFIED }),
       matched("evidence-3", { ...many("B"), provenance: VERIFIED }),
@@ -362,6 +373,7 @@ describe("createUiSpecDeterministic", () => {
   it("dedupes component rows and folds layout-form into responsiveBehavior", () => {
     const evidence = [
       observation("evidence-2", { pattern: "dashboard", layoutForm: "three-column" }),
+      observation("evidence-3", { pattern: "dashboard" }),
     ];
     const matches = [
       matched("evidence-2", verifiedProseEntry()),
@@ -843,5 +855,135 @@ describe("createUiSpecDeterministic — every vote refuses a tie, not just colou
     const out = createUiSpecDeterministic(evidence as never, matches, entriesOf(matches), REQUEST);
     expect(out.responsiveBehavior).toContain("form: two-column");
     expect(out.designDirection).toContain("compact");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-field gating (Stage 2a)
+// ---------------------------------------------------------------------------
+
+/**
+ * The cross-field case is the reason this spec exists: one verification record
+ * un-gates only the field it names. An entry verified for `visual.colorRoles`
+ * and NOT for `critique` must serve the palette and withhold the critique, in
+ * the same response. This test fails against the Stage 1 entry-level predicate.
+ */
+describe("per-field gating — the cross-field case", () => {
+  it("serves the palette from a colorRoles-verified entry and withholds its critique", () => {
+    // Three entries verified for `visual.colorRoles` ONLY, each carrying
+    // critique + whatToSteal prose that must never reach the direction.
+    const record = { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" };
+    const three = [1, 2, 3].map((n) => matched(`evidence-${n + 1}`, {
+      id: `fixture-${n}`,
+      provenance: { taggedBy: "auto", verification: { "visual.colorRoles": record } },
+      critique: `critique ${n} that must never serve`,
+      whatToSteal: [`technique ${n} that must never serve`],
+    }));
+    const threeEvidence = [1, 2, 3].map((n) => observation(`evidence-${n + 1}`, {
+      pattern: "dashboard",
+      colorRoles: { canvas: "#ffffff", surface: "#ffffff", ink: "#111827", muted: "#6b7280", accent: "#2563eb" },
+    }));
+    const out = createUiSpecDeterministic(threeEvidence as never, three, [], REQUEST);
+    expect(out.colorTokens).not.toBeNull();
+    // Asserted EXACTLY, not as a disjunction. The original
+    // `x === null || !x.includes(...)` passed the moment the direction was null,
+    // so it could not tell "correctly withheld the prose" from "the direction
+    // broke entirely". The true expected value here is null: colour contributes
+    // no direction clause (density/corners/shadows/borders/layoutForm and the
+    // group-B prose do), and none of those fields is verified on this fixture.
+    expect(out.designDirection).toBeNull();
+    expect(out.techniques).toEqual([]);
+  });
+
+  it("composes a direction from a verified direction field while still withholding prose", () => {
+    // The positive control the assertion above cannot provide: verify a field that
+    // DOES feed the direction, and the direction must appear — carrying that
+    // signal and none of the unverified critique or technique prose. Without this,
+    // a change that broke direction composition entirely would still pass.
+    const record = { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" };
+    const three = [1, 2, 3].map((n) => matched(`evidence-${n + 1}`, {
+      id: `fixture-${n}`,
+      provenance: { taggedBy: "auto", verification: { "visual.spacingDensity": record } },
+      critique: `critique ${n} that must never serve`,
+      whatToSteal: [`technique ${n} that must never serve`],
+    }));
+    const threeEvidence = [1, 2, 3].map((n) => observation(`evidence-${n + 1}`, {
+      pattern: "dashboard", spacingDensity: "compact",
+    }));
+    const out = createUiSpecDeterministic(threeEvidence as never, three, [], REQUEST);
+    expect(out.designDirection).not.toBeNull();
+    expect(out.designDirection).toContain("compact");
+    expect(out.designDirection).not.toContain("must never serve");
+    expect(out.techniques).toEqual([]);
+  });
+});
+
+/**
+ * Both directions per field: a verified claim serves, an unverified one
+ * withholds. A one-direction test passes with the feature simply broken.
+ */
+describe("per-field gating — both directions", () => {
+  const FIELDS: Array<{ field: string; serve: (out: DeterministicSynthesis) => boolean }> = [
+    { field: "whatToSteal", serve: (o) => o.techniques.length > 0 },
+    { field: "antiPatterns", serve: (o) => o.antiPatterns.length > 0 },
+    { field: "antiPatterns.accessibilityRisks", serve: (o) => o.accessibilityConstraints.length > 0 },
+    { field: "voice", serve: (o) => o.contentVoiceGuidance !== null },
+    { field: "components", serve: (o) => o.componentInventory.length > 0 },
+    { field: "responsiveBehavior", serve: (o) => o.responsiveBehavior.length > 0 },
+    { field: "layout", serve: (o) => o.layoutRegions.length > 0 },
+  ];
+
+  it.each(FIELDS)("$field serves when verified, withholds when not", ({ field, serve }) => {
+    const record = { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" };
+    const content = (over: Record<string, unknown>): Record<string, unknown> => ({
+      id: "fixture-entry",
+      provenance: { taggedBy: "auto", verification: { [field]: record } },
+      whatToSteal: ["steal me"],
+      antiPatterns: {
+        antiPatterns: ["avoid me"],
+        whereThisFails: [],
+        accessibilityRisks: [{ element: "x", risk: "risk me", evidence: "visible", confidence: "visible", wcag: ["1.4.3"] }],
+      },
+      voice: { tone: "Calm, direct", avoid: [], examples: [] },
+      components: ["kpi-card"],
+      responsiveBehavior: "responsive",
+      layout: { form: "three-column", regions: [{ role: "main-canvas" }] },
+      ...over,
+    });
+    const verified = matched("evidence-2", content({}));
+    const served = createUiSpecDeterministic(
+      [observation("evidence-2", { pattern: "dashboard", layoutRoles: ["main-canvas"], layoutForm: "three-column" })] as never,
+      [verified],
+      [],
+      REQUEST,
+    );
+    expect(serve(served), `${field} should SERVE when verified`).toBe(true);
+
+    const unverified = matched("evidence-2", { ...content({}), provenance: { taggedBy: "auto" } });
+    const withheld = createUiSpecDeterministic(
+      [observation("evidence-2", { pattern: "dashboard", layoutRoles: ["main-canvas"], layoutForm: "three-column" })] as never,
+      [unverified],
+      [],
+      REQUEST,
+    );
+    expect(serve(withheld), `${field} should WITHHOLD when unverified`).toBe(false);
+  });
+
+  it("the colorTokens threshold counts visual.colorRoles-verified entries only", () => {
+    // Three entries verified for OTHER fields must NOT reach the palette
+    // threshold; the same three entries verified for visual.colorRoles must.
+    const other = { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" };
+    const pairs = [1, 2, 3].map((n) => matched(`evidence-${n + 1}`, {
+      id: `e-${n}`,
+      provenance: { taggedBy: "auto", verification: { critique: other } },
+      visual: { colorRoles: { canvas: "#fff", surface: "#fff", ink: "#111", muted: "#666", accent: "#2563eb" } },
+    }));
+    const rows = [1, 2, 3].map((n) => observation(`evidence-${n + 1}`, {
+      pattern: "dashboard",
+      colorRoles: { canvas: "#fff", surface: "#fff", ink: "#111", muted: "#666", accent: "#2563eb" },
+    }));
+    const out = createUiSpecDeterministic(rows as never, pairs, [], REQUEST);
+    expect(out.colorTokens).toBeNull();
+    expect(out.colorTokensRefusal).toBe("untrusted");
   });
 });

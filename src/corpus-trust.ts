@@ -29,31 +29,83 @@ export const VERIFICATION_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * True when the entry carries a verification record this build understands.
- *
- * Fail-closed on every other input: no provenance, no verification, an
- * unrecognised method, or an `image-confirmed` record missing the image hash that
- * binds it to the bytes the verifier saw.
+ * The corpus field keys the gate knows how to serve. This is the contract
+ * between the verifier (Stage 2b/2c) and the gate: every served field must be
+ * reachable through exactly one key, and a key names a claim a verifier can
+ * check. Keys are corpus field paths (`visual.colorRoles`, `critique`, …). A
+ * record written under any other key is a silent no-op; `doctor.ts` reports it
+ * as `verification-orphan-key`.
  */
-export function isVerified(entry: CorpusEntryT): boolean {
-  const verification = entry.provenance?.verification;
-  if (!verification) return false;
-  if (!VERIFICATION_METHODS.has(verification.method)) return false;
+export const SERVABLE_FIELD_KEYS: ReadonlySet<string> = new Set([
+  "visual.colorRoles",
+  "visual.accentColor",
+  "visual.dominantColors",
+  "visual.spacingDensity",
+  "visual.cornerStyle",
+  "visual.usesShadows",
+  "visual.usesBorders",
+  "visual.typePairing",
+  "layout",
+  "critique",
+  "whatToSteal",
+  "antiPatterns",
+  "antiPatterns.accessibilityRisks",
+  "voice",
+  "components",
+  "responsiveBehavior",
+  "patternType",
+  "platform",
+  "styleTags",
+  "categories",
+  "mood",
+  "colorScheme",
+  "domainTags",
+]);
+
+/**
+ * True when the entry carries a verification record for THIS field that this
+ * build understands. The field parameter is REQUIRED: every call site must
+ * state which claim it is asking about, and a site that cannot name its field
+ * has not understood what it gates.
+ *
+ * Fail-closed on every other input: no provenance, no record under the key, an
+ * unrecognised method, or an `image-confirmed` record missing the image hash
+ * that binds it to the bytes the verifier saw.
+ */
+export function isVerified(entry: CorpusEntryT, field: string): boolean {
+  const record = entry.provenance?.verification?.[field];
+  if (!record) return false;
+  // A record under a key nothing serves is a silent no-op: trust attaches only
+  // to the servable field keys (the contract between verifier and gate).
+  if (!SERVABLE_FIELD_KEYS.has(field)) return false;
+  if (!VERIFICATION_METHODS.has(record.method)) return false;
   // `imageSha256` is optional on the type and mandatory by method: the measured
   // tier's evidence is the live DOM, not the pixels, so binding it to an image
   // hash would tie the record to the wrong artifact.
-  if (verification.method === "image-confirmed" && !verification.imageSha256) return false;
+  if (record.method === "image-confirmed" && !record.imageSha256) return false;
   return true;
 }
 
 /**
- * The evidence ids of the matched entries that pass the gate. Shared by BOTH
- * consumers — the model lane's prompt-grounding filter (create-ui-spec.ts) and
- * the deterministic synthesizer (create-ui-spec-deterministic.ts) — so trust is
- * defined in exactly one place and the two paths cannot drift.
+ * The set of fields the entry is verified for. For the sites that need the set
+ * rather than a single answer: the per-tool field-set wiring in `createServer`,
+ * doctor's per-key reporting, and the `unassessed-quality` exemption.
+ */
+export function verifiedFields(entry: CorpusEntryT): ReadonlySet<string> {
+  const verification = entry.provenance?.verification;
+  if (!verification) return new Set();
+  return new Set(Object.keys(verification).filter((field) => isVerified(entry, field)));
+}
+
+/**
+ * The evidence ids of the matched entries verified FOR THE GIVEN FIELD. Shared
+ * by BOTH consumers — the model lane's prompt-grounding filter (superseded by
+ * the per-field strip in Task 3) and the deterministic synthesizer — so trust
+ * is defined in exactly one place and the two paths cannot drift.
  */
 export function trustedEvidenceIdsOf(
   matchedEntries: readonly { readonly evidenceId: string; readonly entry: CorpusEntryT }[],
+  field: string,
 ): Set<string> {
-  return new Set(matchedEntries.filter((m) => isVerified(m.entry)).map((m) => m.evidenceId));
+  return new Set(matchedEntries.filter((m) => isVerified(m.entry, field)).map((m) => m.evidenceId));
 }

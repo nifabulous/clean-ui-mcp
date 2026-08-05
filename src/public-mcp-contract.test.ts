@@ -32,11 +32,13 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CorpusEntryT } from "./schema.js";
+import { SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import { PublicCorpusReader } from "./corpus-reader.js";
 import { createServer } from "./server-factory.js";
 import { exportPublicSnapshot } from "./publication/exporter.js";
@@ -126,6 +128,8 @@ const PNG_BYTES = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
   ...new Array(32).fill(0), // minimal body
 ]);
+/** The real hash of the fixture PNG — binds the image-confirmed record to bytes. */
+const PNG_SHA = createHash("sha256").update(PNG_BYTES).digest("hex");
 
 /** Eligible publication block — every clearance-evidence field present. */
 const eligiblePublication = {
@@ -145,6 +149,14 @@ const eligiblePublication = {
  * over the fixture.
  */
 function baseEntry(id: string, critique: string): CorpusEntryT {
+  const record = {
+    method: "image-confirmed",
+    verifiedAt: "2026-08-04",
+    verifierVersion: "contract-fixture",
+    imageSha256: PNG_SHA,
+  };
+  const verification: Record<string, unknown> = {};
+  for (const key of SERVABLE_FIELD_KEYS) verification[key] = record;
   return {
     id,
     title: `${id} title`,
@@ -158,12 +170,7 @@ function baseEntry(id: string, critique: string): CorpusEntryT {
     // this suite actually filters on, is orthogonal to trust.
     provenance: {
       taggedBy: "auto",
-      verification: {
-        method: "image-confirmed",
-        verifiedAt: "2026-08-04",
-        verifierVersion: "contract-fixture",
-        imageSha256: "a".repeat(64),
-      },
+      verification,
     },
     categories: ["dashboard"],
     styleTags: ["minimal"],
@@ -481,6 +488,10 @@ describe("public MCP contract — no private marker leaks through any tool path"
     const eligibleText = responseText(eligible);
     expect(eligibleText).toContain(ELIGIBLE_MARKER);
     expectNoPrivateData(eligibleText, "get_ui_example (id=ELIGIBLE_ID)");
+    // The eligible entry carries an image-confirmed record whose imageSha256
+    // matches the real fixture PNG, so the image gate attaches the bytes.
+    const imageItems = (eligible.content ?? []).filter((c) => c.type === "image");
+    expect(imageItems.length).toBe(1);
 
     // Direct lookup of a private/unapproved id must not leak the entry's
     // critique/marker. (The handler echoes the caller-supplied id in a
@@ -716,8 +727,10 @@ describe("public MCP contract — no private marker leaks through any tool path"
   it("browse_ui_examples: corpus-by-pattern summary leaks nothing", async () => {
     const resp = await call("browse_ui_examples", {});
     expectNoPrivateData(responseText(resp), "browse_ui_examples");
-    // The eligible entry is the only one in the snapshot, so it's the exemplar.
-    expect(responseText(resp)).toContain(ELIGIBLE_ID);
+    // Keyless redaction removed the exemplar column entirely — the per-pattern
+    // count is what remains, and the entry id must not appear.
+    expect(responseText(resp)).toContain("dashboard");
+    expect(responseText(resp)).not.toContain(ELIGIBLE_ID);
   });
 
   // ── 14. critique_ui ────────────────────────────────────────────────────────

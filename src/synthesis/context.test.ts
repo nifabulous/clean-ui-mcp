@@ -69,7 +69,11 @@ describe("buildSynthesisContext", () => {
       extraction: makeExtraction(),
       retrieval: makeRetrieval([{ id: "abc-123", title: "Dashboard A", patternType: "dashboard" }]),
     });
-    expect(ctx.evidence.some((e) => e.id === "corpus:abc-123")).toBe(true);
+    // The evidence id is a response-scoped ordinal: the entry id embeds the
+    // product name (keyless identity) and must never reach served bytes.
+    expect(ctx.evidence.some((e) => e.id === "corpus:0")).toBe(true);
+    const corpusRow = ctx.evidence.find((e) => e.id === "corpus:0");
+    expect(corpusRow?.label).toBe("dashboard");
   });
 
   it("does not include editorial IDs in the evidence lane", () => {

@@ -70,18 +70,25 @@ describe("generateBrief synthesis", () => {
       context: "a pricing page for a fintech",
     });
     expect(brief.direction).toContain("pricing page for a fintech");
-    expect(brief.direction).toContain("Linear");
-    expect(brief.direction).toContain("Stripe");
+    // Product names are keyless identity and never render — the direction names
+    // the pattern, not the products.
+    expect(brief.direction).not.toContain("Linear");
+    expect(brief.direction).not.toContain("Stripe");
   });
 
   it("records what each entry contributes based on its strongest field", () => {
     const brief = generateBrief([
       entry({ id: "a", visual: { accentColor: null, dominantColors: [], typePairing: { display: null, body: null, notes: "" }, spacingDensity: "moderate", cornerStyle: "slight-round", usesShadows: false, usesBorders: true, colorRoles: { canvas: "#fff", surface: "#f8f8f8", ink: "#111", muted: "#888", accent: "#3b82f6" } } }),
       entry({ id: "b", voice: { tone: "A confident, technical register that respects the reader.", examples: [], avoid: [] } }),
+      entry({ id: "c" }),
     ], { ids: ["a", "b"] });
     const contributes = brief.sources.map((s) => s.contributes);
     expect(contributes).toContain("color palette");
     expect(contributes).toContain("voice & copy");
+    // The fallback must not claim critique: critique is not in
+    // recommend_ui_direction's field set, so no unkeyed claim may render.
+    expect(contributes).toContain("pattern example");
+    expect(contributes).not.toContain("critique & technique");
   });
 });
 

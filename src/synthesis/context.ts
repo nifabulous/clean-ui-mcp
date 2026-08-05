@@ -249,11 +249,13 @@ export function buildSynthesisContext(input: BuildContextInput): SynthesisContex
   evidence.push(...buildScreenEvidence(extraction));
 
   // ── Corpus-level evidence from retrieval ──────────────────────────────────
-  for (const entry of retrieval.entries) {
+  // The response-scoped ordinal is the only id a corpus example may carry: the
+  // entry id embeds the product name (identity) and is keyless by the spec.
+  for (const [index, entry] of retrieval.entries.entries()) {
     evidence.push({
-      id: `corpus:${entry.id}`,
+      id: `corpus:${index}`,
       source: "corpus",
-      label: entry.title ?? entry.id,
+      label: entry.patternType ?? "corpus example",
       detail: entry.patternType ? `Pattern: ${entry.patternType}` : undefined,
     });
   }

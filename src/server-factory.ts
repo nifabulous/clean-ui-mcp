@@ -25,6 +25,7 @@
  * corpus.ts function server.ts called before, so the output is identical.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createHash } from "node:crypto";
 import { appendFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,17 +40,11 @@ import { CRITIQUE_UI_INPUT_SCHEMA, CRITIQUE_UI_OUTPUT_SCHEMA } from "./synthesis
 import { registerCreateUiSpec } from "./create-ui-spec-mcp.js";
 import type { CorpusReader } from "./corpus-reader.js";
 import { TrustGatedCorpusReader } from "./corpus-trust-reader.js";
+import { verifiedFields } from "./corpus-trust.js";
 import type { CreateUiSpecModelDependency } from "./create-ui-spec.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const QUERY_LOG_PATH = resolve(__dirname, "..", "corpus", "query-log.jsonl");
-
-/** Strip placeholder title suffixes so "Product — (add descriptive subtitle)"
- *  shows as just "Product" in MCP tool output. Falls back to productName. */
-function cleanTitle(title: string, fallback: string): string {
-  const cleaned = title.replace(/\s*—\s*\(add descriptive subtitle\)\s*$/i, "").trim();
-  return cleaned || fallback;
-}
 
 /** Append-only query log for retrieval analytics (query-stats.ts). Never throws. */
 async function logQuery(params: { query?: string; category?: string; styleTag?: string; qualityTier?: string; platform?: string }, resultIds: string[]): Promise<void> {
@@ -93,15 +88,43 @@ export function createServer(
   // build the identity screen's denied-name set. Narrowing that set would let an
   // unverified entry's product name stop being screened out of served prose —
   // weakening identity screening in the name of trust.
-  const gated = new TrustGatedCorpusReader(reader);
-
-  registerSearchUiExamples(server, gated);
-  registerGetUiExample(server, gated);
-  registerListCategories(server, gated);
-  registerListStyleTags(server, gated);
-  registerListDomainTags(server, gated);
-  registerGetSimilarUiExamples(server, gated);
-  registerCompareUiExamples(server, gated);
+  // ----- C3 trust gate (Stage 2a): per-tool field sets at wiring time --------
+  // Each registration constructs a reader gated on the exact keys of the fields
+  // that tool renders — never wider (over-gating) and never narrower
+  // (over-serving). The field set is the contract between the verifier (Stage
+  // 2b/2c) and the gate, reviewable in one place. `create_ui_spec` keeps the
+  // UNGATED reader on purpose: it gates itself (create-ui-spec-deterministic.ts)
+  // AND needs the corpus-wide entry list to build the identity screen's
+  // denied-name set.
+  registerSearchUiExamples(
+    server,
+    new TrustGatedCorpusReader(reader, ["critique", "whatToSteal", "antiPatterns", "categories", "styleTags"]),
+  );
+  registerGetUiExample(
+    server,
+    new TrustGatedCorpusReader(reader, [
+      "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
+      "voice", "visual.dominantColors", "visual.accentColor", "visual.colorRoles",
+      "visual.typePairing", "visual.spacingDensity", "visual.cornerStyle",
+      "visual.usesShadows", "visual.usesBorders",
+    ]),
+  );
+  registerListCategories(server, new TrustGatedCorpusReader(reader, ["categories"]));
+  registerListStyleTags(server, new TrustGatedCorpusReader(reader, ["styleTags"]));
+  registerListDomainTags(server, new TrustGatedCorpusReader(reader, ["domainTags"]));
+  registerGetSimilarUiExamples(
+    server,
+    new TrustGatedCorpusReader(reader, ["critique", "whatToSteal", "categories", "styleTags", "patternType"]),
+  );
+  registerCompareUiExamples(
+    server,
+    new TrustGatedCorpusReader(reader, [
+      "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
+      "categories", "styleTags", "patternType", "platform", "layout",
+      "visual.accentColor", "visual.colorRoles", "visual.spacingDensity",
+      "visual.cornerStyle", "visual.usesShadows", "visual.usesBorders",
+    ]),
+  );
   // `generate_design_prompt` is NO LONGER registered publicly — `create_ui_spec`
   // supersedes it (see LEGACY_TO_BETA_MAP in tool-contracts.ts, the documented
   // migration table, which deliberately keeps the legacy name as a row). Its
@@ -109,12 +132,18 @@ export function createServer(
   // below) so internal callers and the migration story are unaffected; only the
   // public registration is gone.
   registerCreateUiSpec(server, reader, options.createUiSpecModel);
-  registerRecommendUiDirection(server, gated);
-  registerGetAntiPatterns(server, gated);
-  registerGetColorPalette(server, gated);
-  registerGetStealableTechniques(server, gated);
-  registerBrowseUiExamples(server, gated);
-  registerCritiqueUi(server, gated);
+  registerRecommendUiDirection(
+    server,
+    new TrustGatedCorpusReader(reader, [
+      "whatToSteal", "antiPatterns", "voice", "visual.colorRoles", "visual.typePairing",
+      "visual.spacingDensity", "visual.cornerStyle", "layout", "patternType", "styleTags",
+    ]),
+  );
+  registerGetAntiPatterns(server, new TrustGatedCorpusReader(reader, ["antiPatterns"]));
+  registerGetColorPalette(server, new TrustGatedCorpusReader(reader, ["visual.colorRoles", "patternType"]));
+  registerGetStealableTechniques(server, new TrustGatedCorpusReader(reader, ["whatToSteal"]));
+  registerBrowseUiExamples(server, new TrustGatedCorpusReader(reader, ["patternType"]));
+  registerCritiqueUi(server, new TrustGatedCorpusReader(reader, ["patternType", "platform"]));
 
   return server;
 }
@@ -129,12 +158,14 @@ export function createServer(
  * trust posture whenever the reader can state one.
  */
 function emptyCorpusMessage(reader: CorpusReader, noun: string): string {
-  const posture = reader instanceof TrustGatedCorpusReader ? reader.trustPosture() : null;
-  if (posture !== null && posture.verified < posture.total) {
+  const gate = reader instanceof TrustGatedCorpusReader ? reader : null;
+  const posture = gate === null ? null : gate.trustPosture();
+  if (gate !== null && posture !== null && posture.verified < posture.total) {
     return (
-      `No ${noun} available: ${posture.verified} of ${posture.total} corpus entries carry a `
-      + `recorded verification, and corpus content is served only from verified entries. `
-      + `This is not a filter problem — broadening the query will not change it.`
+      `No ${noun} available: ${posture.verified} of ${posture.total} corpus entries are verified `
+      + `for every field this tool serves (${gate.fields.join(", ")}), and corpus content is `
+      + `served only from verified entries. This is not a filter problem — broadening the query `
+      + `will not change it.`
     );
   }
   return `No ${noun} found for those filters.`;
@@ -159,9 +190,9 @@ function unresolvedIdsMessage(reader: CorpusReader, ids: readonly string[]): str
     const one = refused.length === 1;
     parts.push(
       `${one ? "Entry" : "Entries"} ${refused.map((i) => `"${i}"`).join(", ")} `
-      + `${one ? "exists" : "exist"} but ${one ? "carries" : "carry"} no recorded verification, `
-      + `and corpus content is served only from verified entries `
-      + `(${posture.verified} of ${posture.total} verified).`,
+      + `${one ? "exists" : "exist"} but ${one ? "is" : "are"} not verified for every field this `
+      + `tool serves (${gate.fields.join(", ")}), and corpus content is served only from verified `
+      + `entries (${posture.verified} of ${posture.total} verified).`,
     );
   }
   if (absent.length > 0) {
@@ -180,12 +211,14 @@ function unresolvedIdsMessage(reader: CorpusReader, ids: readonly string[]): str
  */
 function corpusEvidenceNote(reader: CorpusReader, evidenceCount: number): string {
   if (evidenceCount > 0) return "";
-  const posture = reader instanceof TrustGatedCorpusReader ? reader.trustPosture() : null;
+  const gate = reader instanceof TrustGatedCorpusReader ? reader : null;
+  const posture = gate === null ? null : gate.trustPosture();
   if (posture === null || posture.verified >= posture.total) return "";
   return (
     `\n\n---\n_No corpus evidence backs this critique: ${posture.verified} of ${posture.total} `
-    + `corpus entries carry a recorded verification, and corpus content is served only from `
-    + `verified entries. Every finding above is grounded in the uploaded screenshot alone._`
+    + `corpus entries are verified for every field this tool serves (${gate!.fields.join(", ")}) — `
+    + `corpus content is served only from verified entries. Every finding above is grounded in the `
+    + `uploaded screenshot alone._`
   );
 }
 
@@ -252,18 +285,13 @@ function registerSearchUiExamples(server: McpServer, reader: CorpusReader): void
       const concise = responseFormat === "concise";
       const summary = results
         .map((e) => {
-          const hasImage = e.image.visibility !== "private" && e.image.path;
-          const lines = [
-            `### ${cleanTitle(e.title, e.source.productName)}  (id: ${e.id})`,
-            `Categories: ${e.categories.join(", ")} | Style: ${e.styleTags.join(", ")}`,
-            `Quality: ${e.qualityScore}/5 | Source: ${e.source.productName}${e.source.url ? ` (${e.source.url})` : ""}`,
-          ];
+          const headerParts = [e.categories.join(", "), e.styleTags.join(", ")].filter(Boolean).join(" | ");
+          const lines: string[] = [];
+          if (headerParts) lines.push(`### ${headerParts}`);
           if (concise) {
             lines.push(`Critique: ${e.critique.slice(0, 120)}${e.critique.length > 120 ? "…" : ""}`);
           } else {
             lines.push(
-              `Image available via get_ui_example: ${hasImage ? "yes" : "no (metadata/critique only)"}`,
-              ``,
               `Critique: ${e.critique}`,
               ``,
               `What to steal:`,
@@ -294,8 +322,8 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
       description:
         "Fetch the complete record for a single UI example by id, including " +
         "full visual attributes (colors, type pairing, spacing) and the source " +
-        "image if it's cleared for redistribution. If no image is available, " +
-        "the response includes the source URL so the example can be viewed there.",
+        "image if it is verified against the current file. If no image is " +
+        "attached, the response serves the verified record without image bytes.",
       inputSchema: {
         id: z.string().describe("Entry id, e.g. 'linear-issue-board-grouped'"),
       },
@@ -310,10 +338,6 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
       }
 
       const detail = [
-        `# ${cleanTitle(entry.title, entry.source.productName)}`,
-        `Source: ${entry.source.productName}${entry.source.url ? ` — ${entry.source.url}` : ""}`,
-        entry.qualityTier === "cautionary" ? `Quality tier: **cautionary** (a bad example — critique explains what goes wrong)` : "",
-        ``,
         `## Critique`,
         entry.critique,
         ``,
@@ -323,14 +347,8 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
         entry.antiPatterns.antiPatterns.length
           ? `## Anti-patterns (mistakes this design avoids)\n${entry.antiPatterns.antiPatterns.map((t) => `- ${t}`).join("\n")}\n`
           : "",
-        entry.antiPatterns.whereThisFails.length
-          ? `## Where copying this fails\n${entry.antiPatterns.whereThisFails.map((t) => `- ${t}`).join("\n")}\n`
-          : "",
         entry.antiPatterns.accessibilityRisks.length
           ? `## Accessibility risks\n${entry.antiPatterns.accessibilityRisks.map((r) => `- ${formatAccessibilityRisk(r, { includeEvidence: true })}`).join("\n")}\n`
-          : "",
-        entry.businessRationale
-          ? `## Business rationale\n- Goal: ${entry.businessRationale.businessGoal}\n- Target user: ${entry.businessRationale.targetUser}\n- Rationale: ${entry.businessRationale.rationale}\n- Confirmed: ${entry.businessRationale.confirmed ? "yes" : "no"}\n`
           : "",
         entry.voice
           ? `## Voice\n- Tone: ${entry.voice.tone}\n${entry.voice.examples.map((e) => `- Example: "${e}"`).join("\n")}${entry.voice.avoid.length ? `\n${entry.voice.avoid.map((a) => `- Avoid: ${a}`).join("\n")}` : ""}\n`
@@ -354,32 +372,41 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
         | { type: "image"; data: string; mimeType: string }
       > = [{ type: "text", text: detail }];
 
-      // Only attach actual image bytes if the entry is cleared for it AND
-      // the file is physically present (private-corpus entries on someone
-      // else's machine simply won't have the file — handle that gracefully).
+      // Only attach actual image bytes when the entry carries an
+      // image-confirmed record covering at least one field in the tool's set
+      // whose imageSha256 matches the served file. A `measured` record grounds
+      // DOM facts, not pixels — a measured-only entry renders text without
+      // bytes, even where visibility would allow them.
       if (entry.image.visibility !== "private" && entry.image.path) {
         const fullPath = reader.resolveImagePath(entry.image.path);
         if (fullPath !== null && existsSync(fullPath)) {
-          const data = readFileSync(fullPath).toString("base64");
+          const bytes = readFileSync(fullPath);
+          const data = bytes.toString("base64");
+          const sha = createHash("sha256").update(bytes).digest("hex");
+          const gate = reader instanceof TrustGatedCorpusReader ? reader : null;
+          const imageAttach = gate !== null && [...verifiedFields(entry)].some(
+            (field) => gate.fields.includes(field)
+              && entry.provenance?.verification?.[field]?.method === "image-confirmed"
+              && entry.provenance.verification[field].imageSha256 === sha,
+          );
           const ext = entry.image.path.split(".").pop()?.toLowerCase();
           const mimeType =
             ext === "png"   ? "image/png"
             : ext === "webp" ? "image/webp"
             : "image/jpeg";
-          content.push({ type: "image", data, mimeType });
+          if (imageAttach) {
+            content.push({ type: "image", data, mimeType });
+          } else {
+            content.push({
+              type: "text",
+              text: "\n(Image not attached: no image-confirmed verification matching the current file covers a field this tool serves.)",
+            });
+          }
         } else {
-          content.push({
-            type: "text",
-            text: `\n(Image file not found locally at ${entry.image.path} — see source URL above.)`,
-          });
+          content.push({ type: "text", text: "\n(Image file not found locally.)" });
         }
       } else {
-        content.push({
-          type: "text",
-          text: entry.source.url
-            ? `\n(No redistributable image for this entry — view live at ${entry.source.url})`
-            : `\n(No redistributable image or source URL for this entry.)`,
-        });
+        content.push({ type: "text", text: "\n(No redistributable image for this entry.)" });
       }
 
       return { content };
@@ -486,14 +513,19 @@ function registerGetSimilarUiExamples(server: McpServer, reader: CorpusReader): 
         };
       }
 
+      const sourceHeader = [source.patternType, source.categories.join(", "), source.styleTags.join(", ")]
+        .filter(Boolean)
+        .join(" | ");
       const summary = [
-        `Entries similar to **${cleanTitle(source.title, source.source.productName)}** (${id}), ranked by semantic similarity:`,
+        `Entries similar to **${sourceHeader || "corpus example"}**, ranked by semantic similarity:`,
         ``,
         ...results.map((r) => {
           const pct = Math.round(Math.max(0, r.score) * 100);
+          const header = [r.entry.patternType, r.entry.categories.join(", "), r.entry.styleTags.join(", ")]
+            .filter(Boolean)
+            .join(" | ");
           return [
-            `### ${cleanTitle(r.entry.title, r.entry.source.productName)}  (id: ${r.entry.id}) — ${pct}% similar`,
-            `Pattern: ${r.entry.patternType} | Categories: ${r.entry.categories.join(", ")} | Style: ${r.entry.styleTags.join(", ")}`,
+            `### ${header || "corpus example"} — ${pct}% similar`,
             `Critique: ${r.entry.critique}`,
             `What to steal:`,
             ...r.entry.whatToSteal.map((t) => `  - ${t}`),
@@ -538,11 +570,11 @@ function registerCompareUiExamples(server: McpServer, reader: CorpusReader): voi
       // A11y risks are structured objects with canonical WCAG IDs — format to a string cell.
       const topRisk = (risks: AccessibilityRiskT[]) =>
         cell(risks.length ? formatAccessibilityRisk(risks[0]) : "—");
-      const header = `| Field | ${found.map((e) => cell(cleanTitle(e.title, e.source.productName))).join(" | ")} |`;
+      const header = `| Field | ${found.map((e) => cell(
+        [e.patternType, ...e.categories, ...e.styleTags].filter(Boolean).join(" — ") || "corpus example",
+      )).join(" | ")} |`;
       const divider = `| --- | ${found.map(() => "---").join(" | ")} |`;
       const rows = [
-        `| id | ${found.map((e) => cell(e.id)).join(" | ")} |`,
-        `| patternType | ${found.map((e) => e.patternType).join(" | ")} |`,
         `| categories | ${found.map((e) => cell(e.categories.join(", "))).join(" | ")} |`,
         `| styleTags | ${found.map((e) => cell(e.styleTags.join(", "))).join(" | ")} |`,
         `| platform | ${found.map((e) => (e as Record<string, unknown>).platform ?? "web").join(" | ")} |`,
@@ -550,13 +582,11 @@ function registerCompareUiExamples(server: McpServer, reader: CorpusReader): voi
         `| accent | ${found.map((e) => e.visual.accentColor ?? e.visual.colorRoles?.accent ?? "—").join(" | ")} |`,
         `| density / corners | ${found.map((e) => `${e.visual.spacingDensity} / ${e.visual.cornerStyle}`).join(" | ")} |`,
         `| shadows / borders | ${found.map((e) => `${e.visual.usesShadows ? "yes" : "no"} / ${e.visual.usesBorders ? "yes" : "no"}`).join(" | ")} |`,
-        `| quality | ${found.map((e) => `${e.qualityScore}/5 ${e.qualityTier}`).join(" | ")} |`,
         ...(concise ? [] : [
           `| critique angle | ${found.map((e) => firstSentence(e.critique)).join(" | ")} |`,
           `| top steal | ${found.map((e) => top(e.whatToSteal)).join(" | ")} |`,
           `| anti-patterns | ${found.map((e) => top(e.antiPatterns.antiPatterns)).join(" | ")} |`,
           `| a11y risks | ${found.map((e) => topRisk(e.antiPatterns.accessibilityRisks)).join(" | ")} |`,
-          `| where it fails | ${found.map((e) => top(e.antiPatterns.whereThisFails)).join(" | ")} |`,
         ]),
       ];
 
@@ -683,10 +713,10 @@ function registerGetAntiPatterns(server: McpServer, reader: CorpusReader): void 
       description:
         "Returns the consensus anti-patterns (common UI mistakes to avoid) for a given " +
         "pattern type, aggregated across all matching corpus entries and ranked by how " +
-        "many entries raise each one. Each anti-pattern lists its source entries so you " +
-        "can trace it back. This is the 'what NOT to do' knowledge that screenshot " +
-        "galleries can't offer — use it alongside search_ui_examples when designing a " +
-        "specific pattern. Omit patternType to get anti-patterns across the whole corpus.",
+        "many entries raise each one. This is the 'what NOT to do' knowledge that " +
+        "screenshot galleries can't offer — use it alongside search_ui_examples when " +
+        "designing a specific pattern. Omit patternType to get anti-patterns across the " +
+        "whole corpus.",
       inputSchema: {
         patternType: PatternType.optional().describe("Scope to a UI pattern (e.g. 'modal', 'dashboard'). Omit for corpus-wide."),
         category: Category.optional().describe("Further scope to a category"),
@@ -702,7 +732,7 @@ function registerGetAntiPatterns(server: McpServer, reader: CorpusReader): void 
       const lines = [`# Anti-patterns to avoid${patternType ? ` (${patternType})` : ""}\n`];
       results.forEach((r, i) => {
         lines.push(`${i + 1}. **${r.text}**`);
-        lines.push(`   _Raised by ${r.count} entr${r.count === 1 ? "y" : "ies"}: ${r.sources.slice(0, 5).map((s) => `\`${s}\``).join(", ")}${r.sources.length > 5 ? `, …+${r.sources.length - 5}` : ""}_\n`);
+        lines.push(`   _Raised by ${r.count} entr${r.count === 1 ? "y" : "ies"}._\n`);
       });
       return { content: [{ type: "text", text: lines.join("\n") }] };
     },
@@ -720,8 +750,8 @@ function registerGetColorPalette(server: McpServer, reader: CorpusReader): void 
         "Returns paste-ready color token sets (canvas/surface/ink/muted/accent) from " +
         "corpus entries that have colorRoles, grouped by accent hue band (red, blue, " +
         "green, etc.). Use this when you want real-world palettes for a specific pattern " +
-        "('calm palettes for a dashboard') rather than generating from scratch. Each " +
-        "palette links back to its source entry. Sorted by accent hue for visual grouping.",
+        "('calm palettes for a dashboard') rather than generating from scratch. Sorted by " +
+        "accent hue for visual grouping.",
       inputSchema: {
         patternType: PatternType.optional().describe("Scope to a UI pattern"),
         styleTag: StyleTag.optional().describe("Scope to a style (e.g. 'minimal', 'playful')"),
@@ -738,7 +768,7 @@ function registerGetColorPalette(server: McpServer, reader: CorpusReader): void 
       for (const p of results) {
         const band = hueBand(p.accentHue);
         if (band !== lastBand) { lines.push(`\n## ${band} accents\n`); lastBand = band; }
-        lines.push(`**${p.product}** (\`${p.id}\`) — ${p.patternType}`);
+        lines.push(`**${p.patternType}**`);
         lines.push("```css");
         lines.push(`  --canvas:${p.tokens.canvas}; --surface:${p.tokens.surface}; --ink:${p.tokens.ink}; --muted:${p.tokens.muted ?? "inherit"}; --accent:${p.tokens.accent};`);
         lines.push("```\n");
@@ -758,9 +788,9 @@ function registerGetStealableTechniques(server: McpServer, reader: CorpusReader)
       description:
         "Returns concrete, copyable techniques to borrow from corpus entries, scoped to " +
         "a pattern type and/or style tag. Deduped by theme so you get variety, not " +
-        "repeats. Each technique cites its source entry. Use this when you want a " +
-        "menu of specific ideas for a pattern ('what can I steal for a dense data " +
-        "table?') rather than a synthesized spec (use create_ui_spec for that).",
+        "repeats. Use this when you want a menu of specific ideas for a pattern " +
+        "('what can I steal for a dense data table?') rather than a synthesized spec " +
+        "(use create_ui_spec for that).",
       inputSchema: {
         patternType: PatternType.optional().describe("Scope to a UI pattern"),
         styleTag: StyleTag.optional().describe("Scope to a style"),
@@ -799,10 +829,9 @@ function registerBrowseUiExamples(server: McpServer, reader: CorpusReader): void
       title: "Browse the corpus by UI pattern",
       description:
         "Summarizes what's in the corpus grouped by patternType — for each pattern, " +
-        "the count, top products represented, and the highest-quality exemplar entry. " +
-        "Use this to discover what's available before searching (search_ui_examples " +
-        "needs a query; this doesn't). Optional styleTag scopes which entries count. " +
-        "Pair with get_ui_example on the exemplar id to inspect a strong representative.",
+        "the count of matching entries. Use this to discover what's available before " +
+        "searching (search_ui_examples needs a query; this doesn't). Optional styleTag " +
+        "scopes which entries count.",
       inputSchema: {
         styleTag: StyleTag.optional().describe("Scope to a style (e.g. 'minimal') to see which patterns have examples in that style"),
       },
@@ -813,10 +842,10 @@ function registerBrowseUiExamples(server: McpServer, reader: CorpusReader): void
         return { content: [{ type: "text", text: emptyCorpusMessage(reader, styleTag ? `entries with styleTag '${styleTag}'` : "entries") }] };
       }
       const lines = [`# Corpus by pattern (${results.length} patterns represented${styleTag ? `, scoped to '${styleTag}'` : ""})\n`];
-      lines.push("| Pattern | Count | Top products | Exemplar |");
-      lines.push("| --- | --- | --- | --- |");
+      lines.push("| Pattern | Count |");
+      lines.push("| --- | --- |");
       for (const r of results) {
-        lines.push(`| ${r.patternType} | ${r.count} | ${r.products.join(", ")} | **${r.exemplar.product}** \`${r.exemplar.id}\` (${r.exemplar.qualityScore}/5) |`);
+        lines.push(`| ${r.patternType} | ${r.count} |`);
       }
       return { content: [{ type: "text", text: lines.join("\n") }] };
     },

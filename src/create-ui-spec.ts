@@ -87,9 +87,9 @@ import {
   type ModelExecution,
 } from "./create-ui-spec-model-contracts.js";
 import { createUiSpecDeterministic } from "./create-ui-spec-deterministic.js";
-// `isVerified` is used by the trust-disclosure warning (Task 4);
-// `trustedEvidenceIdsOf` by the model lane's prompt-grounding filter (Task 2).
-import { isVerified, trustedEvidenceIdsOf } from "./corpus-trust.js";
+// `isVerified` is used by the per-field evidence projection (Stage 2a) and the
+// per-field disclosure counts (Task 10).
+import { isVerified, SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import { ModelArtifactRollbackIncompleteError } from "./model-artifact-store.js";
 import {
   buildCorpusObservationSummary,
@@ -255,29 +255,22 @@ async function buildModelAwareEnvelope(
     );
   }
 
-  // C3 trust gate: what the MODEL sees must be trusted, even though the served
-  // evidence[] rows stay ungated (response-scoped, no authority claim). An
-  // unverified entry's derived summary must not steer a proposal.
-  //
-  // Narrow ONLY corpus observations, exactly like the deterministic filter does.
-  // `resolved.sanitized[0]` is the recipe/system row from
-  // `buildRecipeSystemEvidence()` (kind "recipe-system", evidence-1): it has no
-  // `matchedEntries` pair, so a flat `trustedEvidenceIds.has(row.id)` filter
-  // would drop it. That row carries no corpus claim at all, so dropping it is
-  // over-gating -- it would remove recipe context the trust gate has no reason
-  // to touch. Zero verified corpus entries therefore leaves the recipe row and
-  // no corpus grounding, which is the intended state.
+  // C3 trust gate (Stage 2a): the per-field evidence projection strips each
+  // corpus row down to its VERIFIED facts before it reaches any consumer, so
+  // the model sees exactly the grounded facts and never more. Stage 1's
+  // row-level `trustedEvidenceIdsOf` narrowing is superseded by the strip — a
+  // surviving corpus row carries only verified facts, and a row with none was
+  // dropped at construction. The recipe/system row carries no corpus claim and
+  // passes through untouched, so Stage 1's zero-verified state (recipe row
+  // only, no corpus grounding) is preserved.
   //
   // `SanitizedEvidenceSchema.array()` carries no `.min(1)`
   // (create-ui-spec-model.ts:87), so a corpus-free list parses rather than
   // rejecting the proposal.
-  const trustedEvidenceIds = trustedEvidenceIdsOf(resolved.matchedEntries);
   const outcome = await createUiSpecModel(
     {
       request,
-      sanitizedEvidence: resolved.sanitized.filter(
-        (row) => row.kind !== "corpus-observation" || trustedEvidenceIds.has(row.id),
-      ),
+      sanitizedEvidence: resolved.sanitized,
     },
     model.runtime,
   );
@@ -591,7 +584,8 @@ async function resolveAutomaticRetrieval(
   let corpusCount = 0;
   for (const r of top) {
     const id = `evidence-${nextId++}`;
-    sanitized.push(sanitizeCorpusObservation(id, r.entry));
+    const row = sanitizeCorpusObservation(id, r.entry);
+    if (row !== null) sanitized.push(row);
     matchedEntries.push({ evidenceId: id, entry: r.entry });
     corpusCount++;
   }
@@ -658,27 +652,32 @@ async function resolveAutomaticRetrieval(
  *
  * The summary is generated from a FIXED recipe template keyed by those tokens —
  * never from critique/voice/product-name/url/screenshot/prose.
+ *
+ * Stage 2a: a fact is projected only when ITS OWN key is verified for this
+ * entry. A row whose facts are all stripped returns null and is dropped by the
+ * caller — it carries no verified corpus-derived value, and serving it would
+ * publish a summary that asserts nothing grounded.
  */
-function sanitizeCorpusObservation(id: string, entry: CorpusEntryT): SanitizedEvidence {
+function sanitizeCorpusObservation(id: string, entry: CorpusEntryT): SanitizedEvidence | null {
   const structuredFacts: SanitizedEvidence["structuredFacts"] = {};
-  // patternType is a closed enum token — safe to project.
-  if (entry.patternType && typeof entry.patternType === "string") {
+  // patternType is a closed enum token — safe to project when verified.
+  if (isVerified(entry, "patternType") && entry.patternType && typeof entry.patternType === "string") {
     structuredFacts.pattern = entry.patternType;
   }
   // regionCount is a bounded count derived from the optional layout wireframe.
   const regionCount = entry.layout?.regions?.length;
-  if (typeof regionCount === "number" && Number.isFinite(regionCount)) {
+  if (isVerified(entry, "layout") && typeof regionCount === "number" && Number.isFinite(regionCount)) {
     structuredFacts.regionCount = Math.min(Math.max(Math.trunc(regionCount), 0), 50);
   }
   // usesStickyHeader / usesIconography: the corpus schema does not record these
   // truthfully, so we OMIT them (undefined) rather than fabricate.
   const visual = entry.visual;
-  if (visual?.spacingDensity) structuredFacts.spacingDensity = visual.spacingDensity;
-  if (visual?.cornerStyle) structuredFacts.cornerStyle = visual.cornerStyle;
-  if (typeof visual?.usesShadows === "boolean") structuredFacts.usesShadows = visual.usesShadows;
-  if (typeof visual?.usesBorders === "boolean") structuredFacts.usesBorders = visual.usesBorders;
-  if (visual?.accentColor) structuredFacts.accentColor = visual.accentColor;
-  if (visual?.colorRoles) structuredFacts.colorRoles = {
+  if (isVerified(entry, "visual.spacingDensity") && visual?.spacingDensity) structuredFacts.spacingDensity = visual.spacingDensity;
+  if (isVerified(entry, "visual.cornerStyle") && visual?.cornerStyle) structuredFacts.cornerStyle = visual.cornerStyle;
+  if (isVerified(entry, "visual.usesShadows") && typeof visual?.usesShadows === "boolean") structuredFacts.usesShadows = visual.usesShadows;
+  if (isVerified(entry, "visual.usesBorders") && typeof visual?.usesBorders === "boolean") structuredFacts.usesBorders = visual.usesBorders;
+  if (isVerified(entry, "visual.accentColor") && visual?.accentColor) structuredFacts.accentColor = visual.accentColor;
+  if (isVerified(entry, "visual.colorRoles") && visual?.colorRoles) structuredFacts.colorRoles = {
     canvas: visual.colorRoles.canvas,
     surface: visual.colorRoles.surface,
     ink: visual.colorRoles.ink,
@@ -686,15 +685,17 @@ function sanitizeCorpusObservation(id: string, entry: CorpusEntryT): SanitizedEv
     accent: visual.colorRoles.accent,
   };
   const pairing = visual?.typePairing;
-  if (pairing?.display && pairing.body) {
+  if (isVerified(entry, "visual.typePairing") && pairing?.display && pairing.body) {
     // `+` separator, NOT "/" — the summary content screen rejects path-like
     // strings (PATH_OR_URL_PATTERN), and "Display / Body" trips it.
     structuredFacts.typePairing = `${pairing.display} + ${pairing.body}`;
   }
   const layoutStructure = entry.layout;
-  if (layoutStructure?.form) structuredFacts.layoutForm = layoutStructure.form;
+  if (isVerified(entry, "layout") && layoutStructure?.form) structuredFacts.layoutForm = layoutStructure.form;
   const roles = layoutStructure?.regions?.map((r) => r.role).filter(Boolean);
-  if (roles && roles.length > 0) structuredFacts.layoutRoles = roles.slice(0, 8);
+  if (isVerified(entry, "layout") && roles && roles.length > 0) structuredFacts.layoutRoles = roles.slice(0, 8);
+
+  if (Object.keys(structuredFacts).length === 0) return null;
 
   const evidence: SanitizedEvidence = {
     id,
@@ -998,7 +999,9 @@ function assembleSpec(
           // "corpus-evidence" is the CitedDecision authority enum token
           // (tool-contracts.ts:537), NOT the camelCase lane field name.
           authority: "corpus-evidence",
-          evidenceIds: corpusEvidenceIds,
+          // Stage 2a: cite exactly the rows whose clauses composed the
+          // direction — never an entry whose verified claim did not contribute.
+          evidenceIds: [...synthesis.designDirectionEvidenceIds],
           readiness: "available",
         },
       ]
@@ -1017,7 +1020,9 @@ function assembleSpec(
           id: "colorTokens-evidence-synthesis",
           field: "colorTokens",
           authority: "corpus-evidence",
-          evidenceIds: corpusEvidenceIds,
+          // Stage 2a: cite exactly the rows that voted — entries verified for
+          // `visual.colorRoles` specifically, never the whole corpus lane.
+          evidenceIds: [...synthesis.colorRoleEvidenceIds],
           readiness: "available",
         },
       ]
@@ -1083,13 +1088,6 @@ function assembleSpec(
   // content keep their unavailable reasons (the voice row is dropped exactly
   // when synthesis serves contentVoiceGuidance below); rejectedDefaults and
   // mood have no served slot in Phase 1.
-  const c3Unavailable: UiSpecT["unavailableDecisions"] = [
-    { field: "rejectedDefaults", reason: "Anti-pattern prose is not served; derived from corpus judgments after governance." },
-    // Once synthesis serves contentVoiceGuidance, the voice-unavailable row
-    // would be false; it is dropped below exactly when voice content survives.
-    ...(synthesis?.contentVoiceGuidance ? [] : [{ field: "voice", reason: "Voice analysis prose is not served until provenance governance lands." }]),
-    { field: "mood", reason: "Mood is not served until provenance governance lands." },
-  ];
   // Reasons for the five gated array fields. The row's EMISSION is conditioned
   // on the served value being empty; its WORDING must name the actual cause, or
   // the row becomes the confidently-wrong output this whole change exists to
@@ -1105,9 +1103,28 @@ function assembleSpec(
   // Each row appears at most once (uniqueness is enforced by
   // tool-contracts.ts:793-796).
   const matchedForReason = resolved.matchedEntries.length;
-  const verifiedForReason = resolved.matchedEntries.filter((m) => isVerified(m.entry)).length;
-  const gatedReason =
-    synthesis === null
+  const GATED_FIELD_KEYS: Record<
+    "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior"
+      | "accessibilityConstraints" | "voice" | "mood",
+    string
+  > = {
+    techniques: "whatToSteal",
+    antiPatterns: "antiPatterns",
+    componentInventory: "components",
+    responsiveBehavior: "responsiveBehavior",
+    accessibilityConstraints: "antiPatterns.accessibilityRisks",
+    voice: "voice",
+    mood: "mood",
+  };
+  const verifiedForKey = (key: string): number =>
+    resolved.matchedEntries.filter((m) => isVerified(m.entry, key)).length;
+  const gatedReasonFor = (
+    field: "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior"
+      | "accessibilityConstraints" | "voice" | "mood",
+  ): string => {
+    const key = GATED_FIELD_KEYS[field];
+    const verifiedForThisField = verifiedForKey(key);
+    return synthesis === null
       ? "Corpus judgment is not synthesized on the model lane; the proposal carries the model's own direction instead."
       : matchedForReason === 0
         // Zero-match and explicit-reference paths consult no corpus entry at all
@@ -1115,22 +1132,32 @@ function assembleSpec(
         // so a reason about what verified entries did or did not record asserts a
         // consultation that never happened.
         ? "No corpus observations were retrieved for this request, so nothing was available to serve for this field."
-        : matchedForReason > 0 && verifiedForReason === 0
-        ? "Corpus judgment is served only from entries with a recorded verification; none of the matched entries carry one."
-        : verifiedForReason < matchedForReason
-          ? `Only ${verifiedForReason} of ${matchedForReason} matched entries carry a recorded verification, and those recorded nothing servable for this field.`
-          : "The verified corpus entries recorded nothing servable for this field.";
+        : matchedForReason > 0 && verifiedForThisField === 0
+          ? "Corpus judgment is served only from entries with a recorded verification for this field; none of the matched entries carry one."
+          : verifiedForThisField < matchedForReason
+            ? `Only ${verifiedForThisField} of ${matchedForReason} matched entries are verified for ${key}, and those recorded nothing servable for this field.`
+            : "The verified corpus entries recorded nothing servable for this field.";
+  };
+  // Voice and mood are served through other fields (contentVoiceGuidance, the
+  // direction's signal clauses), so their unavailable rows are conditional on
+  // what actually served and use the same per-field trust cause as the gated
+  // array fields. `rejectedDefaults` has no served slot in Phase 1.
+  const c3Unavailable: UiSpecT["unavailableDecisions"] = [
+    { field: "rejectedDefaults", reason: "Anti-pattern prose is not served; derived from corpus judgments after governance." },
+    ...(synthesis?.contentVoiceGuidance ? [] : [{ field: "voice", reason: gatedReasonFor("voice") }]),
+    ...(synthesis?.moodServed ? [] : [{ field: "mood", reason: gatedReasonFor("mood") }]),
+  ];
   const gatedEmpty = (
     field: "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior" | "accessibilityConstraints",
   ): boolean =>
     ((synthesis && synthesis[field].length > 0 ? synthesis[field] : specFields[field]) as readonly unknown[])
       .length === 0;
   const c3TrustGated: UiSpecT["unavailableDecisions"] = [
-    ...(gatedEmpty("techniques") ? [{ field: "techniques", reason: gatedReason }] : []),
-    ...(gatedEmpty("antiPatterns") ? [{ field: "antiPatterns", reason: gatedReason }] : []),
-    ...(gatedEmpty("componentInventory") ? [{ field: "componentInventory", reason: gatedReason }] : []),
-    ...(gatedEmpty("responsiveBehavior") ? [{ field: "responsiveBehavior", reason: gatedReason }] : []),
-    ...(gatedEmpty("accessibilityConstraints") ? [{ field: "accessibilityConstraints", reason: gatedReason }] : []),
+    ...(gatedEmpty("techniques") ? [{ field: "techniques", reason: gatedReasonFor("techniques") }] : []),
+    ...(gatedEmpty("antiPatterns") ? [{ field: "antiPatterns", reason: gatedReasonFor("antiPatterns") }] : []),
+    ...(gatedEmpty("componentInventory") ? [{ field: "componentInventory", reason: gatedReasonFor("componentInventory") }] : []),
+    ...(gatedEmpty("responsiveBehavior") ? [{ field: "responsiveBehavior", reason: gatedReasonFor("responsiveBehavior") }] : []),
+    ...(gatedEmpty("accessibilityConstraints") ? [{ field: "accessibilityConstraints", reason: gatedReasonFor("accessibilityConstraints") }] : []),
   ];
   // The recipe ALREADY declares a colorTokens unavailableDecision
   // (fallback-recipe-v1.json); the UiSpec gate requires unavailableDecisions
@@ -1475,6 +1502,79 @@ function resolveHandoffTarget(
 }
 
 /**
+ * Servable keys this warning deliberately does NOT report, with the reason. The
+ * disclosed set is DERIVED (`SERVABLE_FIELD_KEYS` minus this), so a key added to
+ * the servable set is disclosed automatically. It used to be a hardcoded
+ * eighteen-key list against a twenty-three-key servable set, which left
+ * `patternType`, `platform` and `domainTags` gated but never explained — a caller
+ * withheld on those got no reason at all. `verification-orphan-key` catches keys
+ * nothing READS; nothing caught keys nothing DISCLOSES.
+ */
+export const UNDISCLOSED_FIELD_KEYS: ReadonlySet<string> = new Set([
+  // Retrieval metadata, not served judgment: these steer which entries match,
+  // and `retrieval` already reports what matching did.
+  "patternType",
+  "platform",
+  // Taxonomy vocabularies. Their gating shows up as absent filter values from
+  // list_categories / list_style_tags / list_domain_tags, which is where a
+  // caller looks for them; naming them here spends the message budget twice.
+  "domainTags",
+  // Colour inputs that only reach a served value THROUGH `visual.colorRoles`,
+  // which is disclosed. Reporting all three triples the colour rows for one
+  // outcome.
+  "visual.accentColor",
+  "visual.dominantColors",
+]);
+
+/** The keys the disclosure warning reports, derived so it cannot drift. */
+const DISCLOSED_FIELD_KEYS: readonly string[] = [...SERVABLE_FIELD_KEYS].filter(
+  (key) => !UNDISCLOSED_FIELD_KEYS.has(key),
+);
+
+/**
+ * WarningSchema.message is `z.string().max(500)` (create-ui-spec-contracts.ts),
+ * and this message is built by concatenation, so it MUST bound itself.
+ *
+ * The unbounded version measured 481 chars at `matchedCount` 3, exactly 500 at
+ * 10, and 519 at 100 — so raising the retrieval cap or adding one disclosed field
+ * would have made every create_ui_spec envelope fail its own schema, at the
+ * transport, with no local signal. Two things keep it inside the bound: only
+ * SHORTFALL fields are named (a fully-verified field carries no information here),
+ * and the list truncates with a remainder count when it still would not fit.
+ *
+ * Returns null when there is nothing to disclose — every disclosed field is fully
+ * verified — so the caller pushes no warning at all.
+ */
+export function buildPerFieldDisclosure(
+  verifiedPerField: ReadonlyMap<string, number>,
+  matchedCount: number,
+): string | null {
+  const MAX = 500;
+  const shortfall = [...verifiedPerField.entries()]
+    .filter(([, verified]) => verified < matchedCount)
+    .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]));
+  if (shortfall.length === 0) return null;
+  const head = `${matchedCount} matched corpus entries; verified per field —`;
+  const tail = " Corpus judgment is served only from entries verified for the field that feeds it.";
+  const rows: string[] = [];
+  let used = head.length + tail.length + 1;
+  let dropped = 0;
+  for (const [field, verified] of shortfall) {
+    const row = `${field} ${verified}/${matchedCount}`;
+    // Reserve room for the remainder clause before committing this row, so the
+    // truncation notice itself can never be what overflows.
+    const remainder = dropped > 0 || rows.length < shortfall.length - 1
+      ? `, and ${shortfall.length - rows.length - 1} more`
+      : "";
+    if (used + row.length + 2 + remainder.length > MAX) { dropped += 1; continue; }
+    rows.push(row);
+    used += row.length + 2;
+  }
+  const more = dropped > 0 ? `, and ${dropped} more` : "";
+  return `${head} ${rows.join(", ")}${more}.${tail}`;
+}
+
+/**
  * Build the bounded warnings array. sparseCoverage fires when automatic
  * retrieval produced zero results (structured-fallback). motionEvidenceUnavailable
  * always fires (the recipe marks motion model-dependent + unavailable).
@@ -1487,24 +1587,24 @@ function buildWarnings(resolved: ResolvedEvidence): DesignArtifactEnvelope["warn
       message: "Sparse evidence: automatic retrieval returned zero matches; the deterministic fallback recipe was used.",
     });
   }
-  // Trust disclosure. "We found matches and did not trust them" is a truthful
-  // state and must be distinguishable from "we found nothing", so the message
-  // carries both numbers. Reuses the already-classified
-  // insufficientCorpusEvidence code rather than introducing a numeric field that
-  // the strict envelope/data schemas would then have to declare.
+  // Trust disclosure, per field. One number cannot describe ten claims: an
+  // entry verified for `whatToSteal` only must count toward the whatToSteal
+  // row and no other. The message names what was and was not verified rather
+  // than reporting one count that averages incomparable things. Reuses the
+  // already-classified insufficientCorpusEvidence code rather than introducing
+  // a numeric field the strict envelope/data schemas would have to declare.
   //
   // The guard is `matchedCount > 0`: with zero matches the `sparseCoverage`
   // warning above already tells the truth, and a second warning would
   // double-report the same fact.
   const matchedCount = resolved.matchedEntries.length;
-  const verifiedCount = resolved.matchedEntries.filter((m) => isVerified(m.entry)).length;
-  if (matchedCount > 0 && verifiedCount < matchedCount) {
-    warnings.push({
-      code: "insufficientCorpusEvidence",
-      message:
-        `${verifiedCount} of ${matchedCount} matched corpus entries carry a recorded ` +
-        `verification; corpus judgment is served only from verified entries.`,
-    });
+  const perField = new Map<string, number>();
+  for (const field of DISCLOSED_FIELD_KEYS) {
+    perField.set(field, resolved.matchedEntries.filter((m) => isVerified(m.entry, field)).length);
+  }
+  const disclosure = buildPerFieldDisclosure(perField, matchedCount);
+  if (matchedCount > 0 && disclosure !== null) {
+    warnings.push({ code: "insufficientCorpusEvidence", message: disclosure });
   }
   // Motion is always model-dependent + unavailable in this milestone.
   warnings.push({

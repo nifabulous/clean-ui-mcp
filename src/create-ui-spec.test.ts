@@ -24,6 +24,7 @@
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { CorpusReader } from "./corpus-reader.js";
+import { SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import type { CorpusEntryT } from "./schema.js";
 import {
   parseDesignArtifactEnvelope,
@@ -39,7 +40,7 @@ import {
   type CreateUiSpecAdapterResult,
 } from "./create-ui-spec-contracts.js";
 import { canonicalJsonStringify, sha256Hex } from "./readiness/contracts.js";
-import { createUiSpec, createUiSpecForAdapter, buildFallbackCandidate, RECIPE_EVIDENCE_ID, type CreateUiSpecDependencies } from "./create-ui-spec.js";
+import { createUiSpec, createUiSpecForAdapter, buildFallbackCandidate, buildPerFieldDisclosure, UNDISCLOSED_FIELD_KEYS, RECIPE_EVIDENCE_ID, type CreateUiSpecDependencies } from "./create-ui-spec.js";
 import recipe from "./c3/fallback-recipe-v1.json" with { type: "json" };
 import type { CreateUiSpecModelRuntime } from "./create-ui-spec-model.js";
 import {
@@ -260,6 +261,7 @@ describe("create-ui-spec producer — automatic retrieval", () => {
     const eB = entry("b1", "product-B", "modal"); corpus.push(eB); ranked.push({ entry: eB, score: 4.7 });
     const eC = entry("c1", "product-C", "auth"); corpus.push(eC); ranked.push({ entry: eC, score: 4.6 });
     const eD = entry("d1", "product-D", "onboarding"); corpus.push(eD); ranked.push({ entry: eD, score: 4.5 });
+    verify(corpus);
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
     const corpusIds = parsed.publicEvidenceIds.filter((id) => id !== RECIPE_EVIDENCE_ID);
@@ -274,6 +276,7 @@ describe("create-ui-spec producer — automatic retrieval", () => {
     const ranked: { entry: FixtureEntry; score: number }[] = [];
     const e1 = entry("a1", "product-A", "dashboard"); corpus.push(e1); ranked.push({ entry: e1, score: 5 });
     const e2 = entry("a2", "product-A", "forms"); corpus.push(e2); ranked.push({ entry: e2, score: 4 });
+    verify(corpus);
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
     const corpusIds = parsed.publicEvidenceIds.filter((id) => id !== RECIPE_EVIDENCE_ID);
@@ -446,6 +449,7 @@ describe("create-ui-spec producer — privacy and evidence scoping", () => {
       corpus.push(e);
       ranked.push({ entry: e, score: 5 - i });
     }
+    verify(corpus);
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
     // The recipe/system evidence is always evidence-1 (emitted first); the
@@ -801,6 +805,7 @@ describe("create-ui-spec producer — provenance truthfulness (echo direction is
   it("the echo-only designDirection cites ONLY the recipe/system evidence id (never a corpus evidence-N id)", async () => {
     const e1 = entry("e1", "product-A", "dashboard", { styleTags: [], categories: [] } as Partial<FixtureEntry>);
     const e2 = entry("e2", "product-B", "forms", { styleTags: [], categories: [] } as Partial<FixtureEntry>);
+    verify([e1, e2]);
     const env = await createUiSpec(validInput(), deps([e1, e2], [
       { entry: e1, score: 5 },
       { entry: e2, score: 4 },
@@ -1198,6 +1203,7 @@ describe("create-ui-spec producer — Task 2 adapter-facing evidence result path
       entry("internal-2", "product-Bravo", "landing-page"),
       entry("internal-3", "product-Charlie", "settings"),
     ];
+    verify(corpus);
     const { sanitizedEvidence } = await createUiSpecForAdapter(
       validInput(),
       deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
@@ -1254,6 +1260,9 @@ describe("create-ui-spec producer — Task 2 adapter-facing evidence result path
     const bogus = entry("internal-1", "product-Alpha", "dashboard", {
       patternType: "private-corpus-id-leak-pattern",
     });
+    // Verified so the row survives the per-field strip and reaches the
+    // SanitizedEvidenceSchema parse that refuses the out-of-enum pattern.
+    verify([bogus]);
     await expect(
       createUiSpecForAdapter(validInput(), deps([bogus], [{ entry: bogus, score: 5 }])),
     ).rejects.toMatchObject({ code: "INVALID_INPUT", retryable: false });
@@ -1592,6 +1601,7 @@ it("round-trips a real-shaped corpus entry through the widened projection", asyn
       accentColor: "#2563eb", typePairing: { display: "Inter", body: "Inter" },
     },
   });
+  verify([entryData]);
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
     deps([entryData], [{ entry: entryData, score: 5 }]),
@@ -1610,6 +1620,7 @@ it("automatic retrieval caps at the top 3 ranked matches", async () => {
   const patterns = ["dashboard", "onboarding", "modal", "forms", "auth"];
   const corpus = Array.from({ length: 5 }, (_, i) => entry(`internal-${i}`, `product-${i}`, patterns[i]!));
   const ranked = corpus.map((e) => ({ entry: e, score: 5 - Number((e.id as string).slice(-1)) }));
+  verify(corpus);
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard for finance ops", referenceIds: [], constraints: [], motionIntents: [] },
     deps(corpus, ranked),
@@ -1631,6 +1642,7 @@ it("pattern-dedupes the top 3 so a repeated pattern class cannot crowd out diver
     { entry: eOn1, score: 5 }, { entry: eNav, score: 4 },
     { entry: eOn2, score: 3 }, { entry: eForm, score: 2 },
   ];
+  verify([eOn1, eNav, eOn2, eForm]);
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
     deps([eOn1, eNav, eOn2, eForm], ranked),
@@ -1643,6 +1655,7 @@ it("pattern-dedupes the top 3 so a repeated pattern class cannot crowd out diver
 it("falls back to the similarity index when keyword search matches nothing", async () => {
   const seed = entry("internal-seed", "product-seed");
   const similar = ["a", "b", "c"].map((k, i) => entry(`internal-${k}`, `product-${k}`, ["dashboard", "forms", "modal"][i]!));
+  verify([seed, ...similar]);
   const reader = {
     ...makeReader([], []),
     search: vi.fn(async () => [seed]),
@@ -1676,6 +1689,7 @@ it("reports sparseCoverage when both keyword and similarity return nothing", asy
 it("reports truthful counts when the similarity fallback returns fewer than three matches", async () => {
   const seed = entry("internal-seed", "product-seed", "dashboard");
   const similar = ["a", "b"].map((k, i) => entry(`internal-${k}`, `product-${k}`, ["forms", "modal"][i]!));
+  verify([seed, ...similar]);
   const reader = {
     ...makeReader([], []),
     search: vi.fn(async () => [seed]),
@@ -1710,15 +1724,18 @@ function corpusEntryWithRoles(id: string, accent: string, pattern = "dashboard")
  * is the SERVING behaviour opt in explicitly with this.
  */
 function verify<T extends { provenance?: unknown }>(entries: readonly T[]): readonly T[] {
+  const record = {
+    method: "image-confirmed",
+    verifiedAt: "2026-08-04",
+    verifierVersion: "verifier-v1",
+    imageSha256: "a".repeat(64),
+  };
+  const verification: Record<string, unknown> = {};
+  for (const key of SERVABLE_FIELD_KEYS) verification[key] = record;
   for (const e of entries) {
     (e as { provenance: unknown }).provenance = {
       taggedBy: "auto",
-      verification: {
-        method: "image-confirmed",
-        verifiedAt: "2026-08-04",
-        verifierVersion: "verifier-v1",
-        imageSha256: "a".repeat(64),
-      },
+      verification,
     };
   }
   return entries;
@@ -2037,7 +2054,7 @@ describe("create_ui_spec — trust disclosure", () => {
     );
     const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
     expect(warning, "expected an insufficientCorpusEvidence warning").toBeDefined();
-    expect(warning?.message).toMatch(/0 of 1/);
+    expect(warning?.message).toMatch(/visual\.colorRoles 0\/1/);
     // Retrieval is still reported truthfully: matches were found.
     expect(out.envelope.retrieval.resultCount).toBeGreaterThan(0);
   });
@@ -2052,7 +2069,8 @@ describe("create_ui_spec — trust disclosure", () => {
 
   it("warns with N of M when SOME matched entries are verified", async () => {
     // The partial case is the branch that distinguishes "trusted some" from
-    // "trusted none": one verified + one unverified entry must report "1 of 2".
+    // "trusted none": one verified + one unverified entry must report a
+    // per-field count of 1 for every disclosed field.
     const verified = corpusEntryWithRoles("disc-v", "#2563eb", "dashboard");
     verify([verified]);
     const unverified = corpusEntryWithRoles("disc-u", "#dc2626", "forms");
@@ -2063,7 +2081,8 @@ describe("create_ui_spec — trust disclosure", () => {
     );
     const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
     expect(warning).toBeDefined();
-    expect(warning?.message).toMatch(/1 of 2/);
+    expect(warning?.message).toMatch(/visual\.colorRoles 1\/2/);
+    expect(warning?.message).toMatch(/whatToSteal 1\/2/);
   });
 
   it("emits no trust warning when every matched entry is verified", async () => {
@@ -2079,6 +2098,165 @@ describe("create_ui_spec — trust disclosure", () => {
       (w) => w.code === "insufficientCorpusEvidence" && /verified/.test(w.message),
     );
     expect(warning).toBeUndefined();
+  });
+});
+
+describe("create_ui_spec — per-field evidence projection strip", () => {
+  it("strips unverified facts from a row and drops a row with none", async () => {
+    // Entry A is verified for visual.colorRoles ONLY; its row must carry
+    // colour facts and NOT the layout/typography facts. Entry B is verified
+    // for whatToSteal only (no structured claim); its row must be dropped —
+    // and its technique withheld, because there is no response-scoped row to
+    // cite.
+    const record = (field: string) => ({
+      taggedBy: "auto" as const,
+      verification: { [field]: { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" } },
+    });
+    const colorOnly = {
+      ...corpusEntryWithRoles("strip-a", "#2563eb", "dashboard"),
+      provenance: record("visual.colorRoles"),
+    };
+    const proseOnly = {
+      ...entry("strip-b", "ProductB", "forms", { whatToSteal: ["Prose from an entry with no structured claim."] }),
+      provenance: record("whatToSteal"),
+    };
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps([colorOnly, proseOnly], [
+        { entry: colorOnly, score: 5 },
+        { entry: proseOnly, score: 4 },
+      ]),
+    );
+    const rows = out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe("evidence-2");
+    expect(rows[0]!.structuredFacts.colorRoles).toBeDefined();
+    expect(rows[0]!.structuredFacts.layoutForm).toBeUndefined();
+    expect(rows[0]!.structuredFacts.typePairing).toBeUndefined();
+    expect(rows[0]!.summary.length).toBeGreaterThan(0);
+    expect(rows[0]!.summary).not.toMatch(/typography|layout/i);
+    // The prose-only entry's row was dropped, so its technique is withheld.
+    expect(out.envelope.spec.techniques.map((t) => t.text)).not.toContain(
+      "Prose from an entry with no structured claim.",
+    );
+  });
+});
+
+describe("create_ui_spec — per-field disclosure counts", () => {
+  it("counts a whatToSteal-only entry toward whatToSteal and no other row", async () => {
+    const only = {
+      ...entry("disc-wts", "ProductW", "dashboard", { whatToSteal: ["One verified technique."] }),
+      provenance: {
+        taggedBy: "auto",
+        verification: { whatToSteal: { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" } },
+      },
+    };
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps([only], [{ entry: only, score: 5 }]),
+    );
+    const rows = out.envelope.spec.unavailableDecisions;
+    const techniquesRow = rows.find((d) => d.field === "techniques");
+    const antiPatternsRow = rows.find((d) => d.field === "antiPatterns");
+    // The entry IS verified for whatToSteal, but its response-scoped row was
+    // dropped (no structured claim), so nothing servable survived the citation
+    // gate — the truthful branch is "recorded nothing servable".
+    expect(techniquesRow?.reason).toMatch(/verified corpus entries recorded nothing servable/);
+    // The same entry counts toward NO other row.
+    expect(antiPatternsRow?.reason).toMatch(/none of the matched entries carry one/);
+  });
+
+  it("names per-field counts in the disclosure warning", async () => {
+    // Verified for visual.colorRoles ONLY — the warning must report 1 for that
+    // field and 0 for every prose field, in the same message.
+    const verified = {
+      ...corpusEntryWithRoles("disc-v", "#2563eb", "dashboard"),
+      provenance: {
+        taggedBy: "auto",
+        verification: { "visual.colorRoles": { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" } },
+      },
+    };
+    const unverified = corpusEntryWithRoles("disc-u", "#dc2626", "forms");
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps([verified, unverified], [
+        { entry: verified, score: 5 },
+        { entry: unverified, score: 4 },
+      ]),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning).toBeDefined();
+    expect(warning!.message).toMatch(/visual\.colorRoles 1\/2/);
+    expect(warning!.message).toMatch(/whatToSteal 0\/2/);
+    expect(warning!.message).toMatch(/critique 0\/2/);
+  });
+
+  it("keeps the per-field disclosure warning within the 500-char bound at max matches", async () => {
+    // Regression pin: an earlier draft of the per-field message exceeded the
+    // WarningSchema 500-char bound and every create_ui_spec response was
+    // refused at integrity verification — the HTTP suite caught it only by
+    // accident. Five matched entries (the retrieval cap) must stay under the
+    // bound and the envelope must still parse.
+    const corpus = Array.from({ length: 5 }, (_, i) =>
+      corpusEntryWithRoles(`disc-bound-${i}`, "#2563eb", "dashboard"));
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 5 - i }))),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning).toBeDefined();
+    expect(warning!.message.length).toBeLessThanOrEqual(500);
+    expect(() => parseDesignArtifactEnvelope(out.envelope)).not.toThrow();
+  });
+});
+
+describe("create_ui_spec — voice/mood unavailable decisions tell the per-field truth", () => {
+  it("drops the mood row when the direction serves a mood clause", async () => {
+    const e = {
+      ...corpusEntryWithRoles("mood-v", "#2563eb", "dashboard"),
+      mood: "calm and authoritative",
+      provenance: {
+        taggedBy: "auto",
+        verification: {
+          mood: { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" },
+          "visual.colorRoles": { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" },
+        },
+      },
+    };
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps([e], [{ entry: e, score: 5 }]),
+    );
+    // The mood signal is served in the direction — the unavailable row would
+    // contradict it.
+    expect(out.envelope.spec.designDirection).toContain("mood:");
+    expect(out.envelope.spec.unavailableDecisions.some((d) => d.field === "mood")).toBe(false);
+  });
+
+  it("reports the mood row with the per-field trust cause when nothing is verified", async () => {
+    const e = corpusEntryWithRoles("mood-u", "#dc2626", "forms");
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps([e], [{ entry: e, score: 5 }]),
+    );
+    const moodRow = out.envelope.spec.unavailableDecisions.find((d) => d.field === "mood");
+    expect(moodRow).toBeDefined();
+    // The row is field-scoped by its `field: "mood"` label; the reason names
+    // the per-field trust cause and no longer claims governance never landed.
+    expect(moodRow!.reason).toMatch(/none of the matched entries carry one/);
+    expect(moodRow!.reason).not.toMatch(/governance lands/);
+  });
+
+  it("names the per-field voice cause instead of the stale governance text", async () => {
+    const e = corpusEntryWithRoles("voice-u", "#dc2626", "forms");
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps([e], [{ entry: e, score: 5 }]),
+    );
+    const voiceRow = out.envelope.spec.unavailableDecisions.find((d) => d.field === "voice");
+    expect(voiceRow).toBeDefined();
+    expect(voiceRow!.reason).toMatch(/none of the matched entries carry one/);
+    expect(voiceRow!.reason).not.toMatch(/governance lands/);
   });
 });
 
@@ -2197,5 +2375,106 @@ describe("create_ui_spec — reasons on the paths with no corpus at all", () => 
     expect(row).toBeDefined();
     expect(row!.reason).not.toMatch(/fewer than 3/i);
     expect(row!.reason).toMatch(/verification/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The disclosure warning is bounded (review round, Stage 2a)
+// ---------------------------------------------------------------------------
+
+describe("create_ui_spec — the per-field disclosure warning stays within its schema bound", () => {
+  /** WarningSchema.message is z.string().max(500) (create-ui-spec-contracts.ts). */
+  const WARNING_MESSAGE_MAX = 500;
+
+  it("stays under the bound at every matched count, including ones retrieval cannot reach today", () => {
+    // Tested against the BUILDER, not the adapter: retrieval slices to the top 3,
+    // so an adapter-level test cannot produce a large matchedCount and would pass
+    // vacuously. The bound must hold if that cap is ever raised — which is exactly
+    // the edit that would otherwise break every response.
+    const fields = [...SERVABLE_FIELD_KEYS].filter((k) => !UNDISCLOSED_FIELD_KEYS.has(k));
+    for (const matchedCount of [1, 3, 10, 99, 100, 1000, 100000]) {
+      const none = new Map(fields.map((f) => [f, 0]));
+      const msg = buildPerFieldDisclosure(none, matchedCount);
+      expect(msg, `no disclosure at matchedCount=${matchedCount}`).not.toBeNull();
+      expect(
+        msg!.length,
+        `matchedCount=${matchedCount}: ${msg!.length} chars, over the ${WARNING_MESSAGE_MAX} bound`,
+      ).toBeLessThanOrEqual(WARNING_MESSAGE_MAX);
+    }
+  });
+
+  it("says how many fields it truncated rather than silently dropping them", () => {
+    const fields = [...SERVABLE_FIELD_KEYS].filter((k) => !UNDISCLOSED_FIELD_KEYS.has(k));
+    const msg = buildPerFieldDisclosure(new Map(fields.map((f) => [f, 0])), 100000)!;
+    // A silent truncation would read as "these are all the unverified fields".
+    expect(msg).toMatch(/and \d+ more/);
+    expect(msg.length).toBeLessThanOrEqual(WARNING_MESSAGE_MAX);
+  });
+
+  it("returns null when every disclosed field is fully verified", () => {
+    const fields = [...SERVABLE_FIELD_KEYS].filter((k) => !UNDISCLOSED_FIELD_KEYS.has(k));
+    expect(buildPerFieldDisclosure(new Map(fields.map((f) => [f, 3])), 3)).toBeNull();
+  });
+
+  it("names the least-verified field first, so truncation keeps the worst news", () => {
+    const msg = buildPerFieldDisclosure(
+      new Map([["critique", 2], ["whatToSteal", 0], ["voice", 1]]),
+      3,
+    )!;
+    expect(msg.indexOf("whatToSteal")).toBeLessThan(msg.indexOf("voice"));
+    expect(msg.indexOf("voice")).toBeLessThan(msg.indexOf("critique"));
+  });
+
+  it("stays under the bound through the adapter too", async () => {
+    // The message concatenated one row per disclosed field with no cap: 481 chars
+    // at matchedCount=3, exactly 500 at 10, and 519 at 100 — so raising the
+    // retrieval cap or adding one disclosed field would have made EVERY
+    // create_ui_spec envelope fail WarningSchema, at the transport, with no local
+    // signal. The count is what varies at runtime, so it is what this pins.
+    const corpus = Array.from({ length: 120 }, (_, i) =>
+      corpusEntryWithRoles(`bound-${i}`, "#2563eb", i % 2 === 0 ? "dashboard" : "forms"));
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 500 - i }))),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning, "expected the disclosure warning").toBeDefined();
+    expect(
+      warning!.message.length,
+      `disclosure message is ${warning!.message.length} chars, over the ${WARNING_MESSAGE_MAX} bound`,
+    ).toBeLessThanOrEqual(WARNING_MESSAGE_MAX);
+  });
+
+  it("still names the shortfall rather than reporting one averaged number", async () => {
+    const corpus = ["a", "b", "c"].map((k, i) =>
+      corpusEntryWithRoles(`bound-name-${k}`, "#2563eb", ["dashboard", "data-table", "forms"][i]!));
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 5 - i }))),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning?.message).toMatch(/0 of 3|0\/3/);
+    expect(warning!.message.length).toBeLessThanOrEqual(WARNING_MESSAGE_MAX);
+  });
+
+  it("discloses every servable key that create_ui_spec can gate", async () => {
+    // DISCLOSED_FIELD_KEYS was a hardcoded 18-key duplicate of the 23-key
+    // servable set, so patternType, platform and domainTags were gated but never
+    // explained — a caller withheld on those got no reason at all. The
+    // verification-orphan-key detector catches keys nothing READS; nothing caught
+    // keys nothing DISCLOSES.
+    const corpus = [corpusEntryWithRoles("bound-cov", "#2563eb", "dashboard")];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning).toBeDefined();
+    // Either the key is named, or it is in the documented not-disclosed set —
+    // never silently absent.
+    const undisclosed = [...SERVABLE_FIELD_KEYS].filter(
+      (k) => !warning!.message.includes(k) && !UNDISCLOSED_FIELD_KEYS.has(k),
+    );
+    expect(undisclosed, `servable keys with no disclosure: ${undisclosed.join(", ")}`).toEqual([]);
   });
 });

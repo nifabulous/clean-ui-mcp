@@ -17,7 +17,7 @@
 import type { CorpusEntryT } from "../schema.js";
 // The doctor's verification checks MUST agree with the serve gate, so they use
 // its predicate rather than a looser local condition.
-import { isVerified, VERIFICATION_METHODS } from "../corpus-trust.js";
+import { verifiedFields, SERVABLE_FIELD_KEYS, VERIFICATION_METHODS } from "../corpus-trust.js";
 import type { LoadedCorpus } from "../persistence.js";
 import {
   evaluatePublication,
@@ -267,7 +267,8 @@ export type CorpusDefectDetector =
   | "unassessed-quality"
   | "verified-image-missing"
   | "verified-hash-stale"
-  | "verification-malformed";
+  | "verification-malformed"
+  | "verification-orphan-key";
 
 export interface CorpusDefectFinding {
   /** The corpus entry id the defect was found on. */
@@ -513,51 +514,77 @@ export function summarizeCorpusDefects(
     // bad. (Measured against the detectors as they ship now; an earlier figure of
     // 1224 -> 499 predates the low-contrast widening and no longer reproduces.) That is the presence-not-usability failure CLAUDE.md
     // forbids, in the detector meant to measure it.
-    // Keyed on `isVerified`, not on the mere PRESENCE of a record: a malformed
-    // record would otherwise exempt the entry here while `verification-malformed`
-    // fires below, so a Stage 2 verifier writing a bad record would silence the
-    // quality signal — the same predicate divergence fixed for the image checks.
+    // The tagger's untouched defaults: score 3 + tier "exceptional" is the
+    // placeholder being read as a judgment. The exemption is a real
+    // VERIFICATION record under any servable key — this is the one site where
+    // any-key suffices, because it is a curation nag, not a serve gate.
     if (entry.qualityScore === 3 && entry.qualityTier === "exceptional"
-      && !isVerified(entry)) {
+      && verifiedFields(entry).size === 0) {
       push("unassessed-quality", `qualityScore 3 + tier "exceptional" with no verification record — never assessed`);
     }
 
-    // ── Verification integrity. The serve-path gate is PURE and cannot see
-    // any of these three; doctor.ts owns them. Both apply only to entries that
-    // actually carry a verification record.
-    // Keyed on `isVerified`, the SAME predicate the serve path uses. An earlier
-    // version used a bare `if (verification)`, which accepted records the gate
-    // refuses: it would report "verified entry's image is missing" about an entry
-    // that is not verified (a false statement), and a malformed record produced
-    // no finding at all — so a Stage 2 verifier writing a bad record would get
-    // silence instead of a signal that its entries were being refused.
+    // ── Verification integrity, per key. One malformed record among ten names
+    // the key that is wrong, and a record under a key nothing reads is a
+    // silent no-op the serve path would never notice.
     const verification = entry.provenance?.verification;
-    if (verification && !isVerified(entry)) {
-      const why = !VERIFICATION_METHODS.has(verification.method)
-        ? `method "${verification.method}" is not one this build accepts (${[...VERIFICATION_METHODS].join(", ")})`
-        : `method "image-confirmed" requires imageSha256, which is absent`;
-      push("verification-malformed", `verification record present but refused by the trust gate: ${why}`);
-    } else if (verification && isVerified(entry)) {
-      const path = typeof image.path === "string" ? image.path : null;
-      // `imageExists`/`imageSha256` reach the filesystem through
-      // `fromCorpusRelativeImagePath`, which THROWS on any path outside
-      // images-*/ (paths.ts:132). A malformed path must produce a finding, not
-      // abort the whole `npm run doctor` run.
-      const exists = ((): boolean => {
-        if (path === null) return false;
-        try { return ctx.imageExists(path); } catch { return false; }
-      })();
-      if (!exists) {
-        push("verified-image-missing", `verified entry's image is missing or unresolvable: ${path ?? "(no path)"}`);
-      } else if (verification.method === "image-confirmed" && verification.imageSha256) {
-        const actual = ((): string | null => {
-          try { return ctx.imageSha256(path!); } catch { return null; }
-        })();
-        if (actual !== null && actual !== verification.imageSha256) {
+    if (verification) {
+      for (const [field, record] of Object.entries(verification)) {
+        if (!VERIFICATION_METHODS.has(record.method)) {
           push(
-            "verified-hash-stale",
-            `verification records ${verification.imageSha256.slice(0, 12)}… but ${path} now hashes to ${actual.slice(0, 12)}…`,
+            "verification-malformed",
+            `verification record for "${field}" uses method "${record.method}", `
+            + `which is not one this build accepts (${[...VERIFICATION_METHODS].join(", ")})`,
           );
+          continue;
+        }
+        if (record.method === "image-confirmed" && !record.imageSha256) {
+          push(
+            "verification-malformed",
+            `verification record for "${field}" is image-confirmed but has no imageSha256`,
+          );
+          continue;
+        }
+        if (!SERVABLE_FIELD_KEYS.has(field)) {
+          push(
+            "verification-orphan-key",
+            `verification record for "${field}" is not in the servable field set — `
+            + `nothing reads it, so the verifier's check is a silent no-op`,
+          );
+        }
+        // Image integrity checks apply ONLY to image-confirmed records. A
+        // `measured` (or `provable`) record's evidence is the live DOM / the
+        // recorded data, not the pixels — schema.ts and isVerified both say so —
+        // so a missing screenshot does not invalidate it, and Stage 1's "Image
+        // references resolve" check already reports missing images. Firing
+        // verified-image-missing for a measured record would double-report and
+        // falsely imply the verification depends on an artifact it does not use.
+        if (record.method === "image-confirmed") {
+          const path = typeof image.path === "string" ? image.path : null;
+          // `imageExists`/`imageSha256` reach the filesystem through
+          // `fromCorpusRelativeImagePath`, which THROWS on any path outside
+          // images-*/ (paths.ts:132). A malformed path must produce a finding,
+          // not abort the whole `npm run doctor` run.
+          const exists = ((): boolean => {
+            if (path === null) return false;
+            try { return ctx.imageExists(path); } catch { return false; }
+          })();
+          if (!exists) {
+            push(
+              "verified-image-missing",
+              `entry image-confirmed for "${field}" but its image is missing or unresolvable: ${path ?? "(no path)"}`,
+            );
+          } else if (record.imageSha256) {
+            const actual = ((): string | null => {
+              try { return ctx.imageSha256(path!); } catch { return null; }
+            })();
+            if (actual !== null && actual !== record.imageSha256) {
+              push(
+                "verified-hash-stale",
+                `verification for "${field}" records ${record.imageSha256.slice(0, 12)}… `
+                + `but ${path} now hashes to ${actual.slice(0, 12)}…`,
+              );
+            }
+          }
         }
       }
     }

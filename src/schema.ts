@@ -601,32 +601,46 @@ export const CorpusEntry = z.object({
      * Absent on every entry that predates the trust gate, which is why the gate
      * is fail-closed: absent means not verified.
      *
-     * `imageSha256` binds an image-confirmed record to the exact bytes the
-     * verifier saw, so re-capturing the screenshot makes the record stale rather
-     * than valid (checked by `doctor.ts`, never on the serve path). It is
+     * Stage 2a corrected the Stage 1 shape: this is now a MAP from corpus field
+     * key (`visual.colorRoles`, `critique`, …) to that field's own record. An
+     * entry is not a unit of truth — it is a bag of claims with different
+     * evidence available for each — so verification attaches where the claim
+     * is. There is no wildcard key and no "all" key: a verifier that wants to
+     * attest to ten fields writes ten records.
+     *
+     * The per-record shape is unchanged from Stage 1. `imageSha256` binds an
+     * image-confirmed record to the exact bytes the verifier saw; it is
      * REQUIRED when `method` is "image-confirmed" and omitted for `measured`,
      * whose evidence is the live DOM rather than the pixels.
+     *
+     * The consequence of getting the shape wrong differs by mode, and both are
+     * bad: PUBLIC mode throws (`corpus-reader.ts:332` raises on a failed parse,
+     * so one unreadable record makes the whole corpus unavailable). PRIVATE
+     * mode, the default, is worse and quieter — a schema-invalid corpus decodes
+     * as `corrupt`, which `fromDecodeResult` maps to `null`
+     * (`persistence.ts:138-139`), and the caller silently falls back to a
+     * snapshot or the seed. An older build reading a newer corpus would not
+     * error; it would serve stale data and say nothing.
      *
      * `method` is a plain string and unknown keys pass through (`passthrough`),
      * ON PURPOSE: the accepted tiers live in `corpus-trust.ts`'s
      * VERIFICATION_METHODS, the sole authority on whether a record grants trust.
      *
-     * A `z.enum` here would defeat the forward compatibility the gate documents:
-     * `corpus-reader.ts:332` THROWS on a failed parse, so a corpus written by a
-     * newer verifier — one extra tier, or one extra field like `confidence` —
-     * would make an older build refuse the ENTIRE corpus rather than decline the
-     * rows it does not understand. Readability and trust are different questions;
-     * only the second is fail-closed.
+     * A `z.enum` here would defeat that forward compatibility: a newer verifier's
+     * tier, or one extra field like `confidence`, would make an older build fail
+     * to read the corpus by whichever of the two routes above applies, instead of
+     * declining the rows it does not understand. Readability and trust are
+     * different questions; only trust is fail-closed.
      *
      * `imageSha256` keeps its shape check: a non-hex hash is a writer bug, not a
      * newer tier, and there is nothing to be forward-compatible with.
      */
-    verification: z.object({
+    verification: z.record(z.string(), z.object({
       method: z.string().min(1),
       verifiedAt: z.string().min(1),
       verifierVersion: z.string().min(1),
       imageSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
-    }).passthrough().optional(),
+    }).passthrough()).optional(),
   }).optional(),
 })
 // qualityScore ↔ qualityTier coupling: cautionary entries score 1-2 (sinking in

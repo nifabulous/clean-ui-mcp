@@ -25,6 +25,7 @@
  * corpus.ts function server.ts called before, so the output is identical.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createHash } from "node:crypto";
 import { appendFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,17 +40,11 @@ import { CRITIQUE_UI_INPUT_SCHEMA, CRITIQUE_UI_OUTPUT_SCHEMA } from "./synthesis
 import { registerCreateUiSpec } from "./create-ui-spec-mcp.js";
 import type { CorpusReader } from "./corpus-reader.js";
 import { TrustGatedCorpusReader } from "./corpus-trust-reader.js";
+import { verifiedFields } from "./corpus-trust.js";
 import type { CreateUiSpecModelDependency } from "./create-ui-spec.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const QUERY_LOG_PATH = resolve(__dirname, "..", "corpus", "query-log.jsonl");
-
-/** Strip placeholder title suffixes so "Product — (add descriptive subtitle)"
- *  shows as just "Product" in MCP tool output. Falls back to productName. */
-function cleanTitle(title: string, fallback: string): string {
-  const cleaned = title.replace(/\s*—\s*\(add descriptive subtitle\)\s*$/i, "").trim();
-  return cleaned || fallback;
-}
 
 /** Append-only query log for retrieval analytics (query-stats.ts). Never throws. */
 async function logQuery(params: { query?: string; category?: string; styleTag?: string; qualityTier?: string; platform?: string }, resultIds: string[]): Promise<void> {
@@ -327,8 +322,8 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
       description:
         "Fetch the complete record for a single UI example by id, including " +
         "full visual attributes (colors, type pairing, spacing) and the source " +
-        "image if it's cleared for redistribution. If no image is available, " +
-        "the response includes the source URL so the example can be viewed there.",
+        "image if it is verified against the current file. If no image is " +
+        "attached, the response serves the verified record without image bytes.",
       inputSchema: {
         id: z.string().describe("Entry id, e.g. 'linear-issue-board-grouped'"),
       },
@@ -343,10 +338,6 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
       }
 
       const detail = [
-        `# ${cleanTitle(entry.title, entry.source.productName)}`,
-        `Source: ${entry.source.productName}${entry.source.url ? ` — ${entry.source.url}` : ""}`,
-        entry.qualityTier === "cautionary" ? `Quality tier: **cautionary** (a bad example — critique explains what goes wrong)` : "",
-        ``,
         `## Critique`,
         entry.critique,
         ``,
@@ -356,14 +347,8 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
         entry.antiPatterns.antiPatterns.length
           ? `## Anti-patterns (mistakes this design avoids)\n${entry.antiPatterns.antiPatterns.map((t) => `- ${t}`).join("\n")}\n`
           : "",
-        entry.antiPatterns.whereThisFails.length
-          ? `## Where copying this fails\n${entry.antiPatterns.whereThisFails.map((t) => `- ${t}`).join("\n")}\n`
-          : "",
         entry.antiPatterns.accessibilityRisks.length
           ? `## Accessibility risks\n${entry.antiPatterns.accessibilityRisks.map((r) => `- ${formatAccessibilityRisk(r, { includeEvidence: true })}`).join("\n")}\n`
-          : "",
-        entry.businessRationale
-          ? `## Business rationale\n- Goal: ${entry.businessRationale.businessGoal}\n- Target user: ${entry.businessRationale.targetUser}\n- Rationale: ${entry.businessRationale.rationale}\n- Confirmed: ${entry.businessRationale.confirmed ? "yes" : "no"}\n`
           : "",
         entry.voice
           ? `## Voice\n- Tone: ${entry.voice.tone}\n${entry.voice.examples.map((e) => `- Example: "${e}"`).join("\n")}${entry.voice.avoid.length ? `\n${entry.voice.avoid.map((a) => `- Avoid: ${a}`).join("\n")}` : ""}\n`
@@ -387,32 +372,41 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
         | { type: "image"; data: string; mimeType: string }
       > = [{ type: "text", text: detail }];
 
-      // Only attach actual image bytes if the entry is cleared for it AND
-      // the file is physically present (private-corpus entries on someone
-      // else's machine simply won't have the file — handle that gracefully).
+      // Only attach actual image bytes when the entry carries an
+      // image-confirmed record covering at least one field in the tool's set
+      // whose imageSha256 matches the served file. A `measured` record grounds
+      // DOM facts, not pixels — a measured-only entry renders text without
+      // bytes, even where visibility would allow them.
       if (entry.image.visibility !== "private" && entry.image.path) {
         const fullPath = reader.resolveImagePath(entry.image.path);
         if (fullPath !== null && existsSync(fullPath)) {
-          const data = readFileSync(fullPath).toString("base64");
+          const bytes = readFileSync(fullPath);
+          const data = bytes.toString("base64");
+          const sha = createHash("sha256").update(bytes).digest("hex");
+          const gate = reader instanceof TrustGatedCorpusReader ? reader : null;
+          const imageAttach = gate !== null && [...verifiedFields(entry)].some(
+            (field) => gate.fields.includes(field)
+              && entry.provenance?.verification?.[field]?.method === "image-confirmed"
+              && entry.provenance.verification[field].imageSha256 === sha,
+          );
           const ext = entry.image.path.split(".").pop()?.toLowerCase();
           const mimeType =
             ext === "png"   ? "image/png"
             : ext === "webp" ? "image/webp"
             : "image/jpeg";
-          content.push({ type: "image", data, mimeType });
+          if (imageAttach) {
+            content.push({ type: "image", data, mimeType });
+          } else {
+            content.push({
+              type: "text",
+              text: "\n(Image not attached: no image-confirmed verification matching the current file covers a field this tool serves.)",
+            });
+          }
         } else {
-          content.push({
-            type: "text",
-            text: `\n(Image file not found locally at ${entry.image.path} — see source URL above.)`,
-          });
+          content.push({ type: "text", text: "\n(Image file not found locally.)" });
         }
       } else {
-        content.push({
-          type: "text",
-          text: entry.source.url
-            ? `\n(No redistributable image for this entry — view live at ${entry.source.url})`
-            : `\n(No redistributable image or source URL for this entry.)`,
-        });
+        content.push({ type: "text", text: "\n(No redistributable image for this entry.)" });
       }
 
       return { content };

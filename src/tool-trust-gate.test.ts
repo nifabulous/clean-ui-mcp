@@ -264,3 +264,66 @@ describe("keyless redaction — retrieval tools", () => {
     expect(served, `${tool} leaked title`).not.toContain("GateCo — dashboard");
   });
 });
+
+describe("keyless redaction — get_ui_example", () => {
+  it("renders the verified record without identity and without the source-URL promise", async () => {
+    const served = await callTool(true, "get_ui_example", { id: "gate-tool-entry" });
+    expect(served).toContain("restrained dashboard");
+    expect(served).toContain("What to steal");
+    expect(served).not.toContain("GateCo");
+    expect(served).not.toContain("gateco.example.com");
+    expect(served).not.toContain("gate-tool-entry");
+    expect(served).not.toContain("GateCo — dashboard");
+    expect(served).not.toMatch(/view live at|source URL above/i);
+  });
+
+  it("attaches image bytes only under an image-confirmed record matching the file", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { createHash } = await import("node:crypto");
+    const root = mkdtempSync(join(tmpdir(), "tool-gate-image-"));
+    const imagePath = join(root, "gate.png");
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...new Array(24).fill(0)]);
+    writeFileSync(imagePath, bytes);
+    const matchingSha = createHash("sha256").update(bytes).digest("hex");
+    const staleSha = createHash("sha256").update(Buffer.from("different bytes")).digest("hex");
+
+    const entryWithImage = (sha: string): CorpusEntryT => ({
+      ...entry(true),
+      image: { visibility: "public-own", path: imagePath, width: 1440, height: 900 },
+      provenance: {
+        taggedBy: "auto",
+        verification: {
+          ...verificationFor(ALL_SERVABLE_FIELDS),
+          critique: { method: "image-confirmed", verifiedAt: "2026-08-04", verifierVersion: "tool-gate-fixture", imageSha256: sha },
+        },
+      },
+    });
+
+    async function callWith(sha: string) {
+      const base = readerWith(entry(true));
+      const reader: CorpusReader = {
+        ...base,
+        resolveImagePath: () => imagePath,
+        getById: (id: string) => (id === "gate-tool-entry" ? entryWithImage(sha) : undefined),
+      };
+      const server = createServer(reader);
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "image-gate-test", version: "1.0.0" });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        const res = await client.callTool({ name: "get_ui_example", arguments: { id: "gate-tool-entry" } });
+        return (res.content ?? []) as Array<{ type: string; text?: string }>;
+      } finally {
+        await client.close();
+      }
+    }
+
+    const matching = await callWith(matchingSha);
+    expect(matching.filter((c) => c.type === "image")).toHaveLength(1);
+    const stale = await callWith(staleSha);
+    expect(stale.filter((c) => c.type === "image")).toHaveLength(0);
+    expect(stale.map((c) => c.text ?? "").join("\n")).toMatch(/Image not attached/);
+  });
+});

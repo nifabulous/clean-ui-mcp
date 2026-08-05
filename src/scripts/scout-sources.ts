@@ -125,6 +125,26 @@ export type ScoutCliOptions = {
   corpusPath: string;
 };
 
+/**
+ * True only for a 2xx status. A 3xx without a Location, or the
+ * redirect-loop-exhausted response `fetchWithHopGuard` returns, is NOT
+ * reachable — the page never answered. Treating 300-399 as reachable would let
+ * metadata-only mode accept a malformed redirect as a page.
+ */
+export function isReachableStatus(status: number | null): boolean {
+  return status !== null && status >= 200 && status < 300;
+}
+
+/**
+ * Metadata-only acceptance gate. A page is acceptable without vision scoring
+ * only when it is reachable, robots allows capture, AND its head yielded a
+ * title — a binary 200 (PDF/image) has no `<title>`, so it cannot pass as a
+ * UI page in metadata-only mode.
+ */
+export function metadataAcceptable(verification: Verification): boolean {
+  return verification.reachable && verification.robotsAllowed && verification.title !== null;
+}
+
 // ============================================================
 // Pure helpers (unit-tested)
 // ============================================================
@@ -258,10 +278,6 @@ Rules:
 }
 
 /**
- * Parse the model's candidate JSON, tolerating markdown fences and dropping
- * invalid entries (bad URL, empty name) with a reason. Returns kept + dropped.
- */
-/**
  * Aggregator / gallery hosts the corpus must not source from — a ToS and
  * redistribution boundary (docs/SOURCING.md), not a quality one. Registrable
  * domains only; the match below also covers every subdomain.
@@ -295,6 +311,10 @@ export function isBannedAggregatorHost(rawUrl: string): boolean {
   return false;
 }
 
+/**
+ * Parse the model's candidate JSON, tolerating markdown fences and dropping
+ * invalid entries (bad URL, empty name) with a reason. Returns kept + dropped.
+ */
 export function parseCandidates(raw: string): { kept: Candidate[]; dropped: Array<{ raw: unknown; reason: string }> } {
   const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   let parsed: unknown;
@@ -497,9 +517,11 @@ async function fetchWithHopGuard(url: string, maxHops = 5): Promise<Response> {
  * memory against a model-proposed URL that returns a huge body — `res.text()`
  * would buffer the whole thing before any slice.
  */
-async function readCapped(res: Response, maxBytes: number): Promise<string> {
+export async function readCapped(res: Response, maxBytes: number): Promise<string> {
   const body = res.body;
-  if (!body) return (await res.text()).slice(0, maxBytes);
+  // A null-body response has no content to read — `res.text()` would buffer
+  // whatever follows unbounded, defeating the cap. Nothing to extract from.
+  if (!body) return "";
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -571,8 +593,8 @@ export async function verifyCandidate(candidate: Candidate): Promise<Verificatio
     const res = await fetchWithHopGuard(candidate.url);
     base.status = res.status;
     base.finalUrl = res.url;
-    if (!res.ok && res.status >= 400) {
-      base.error = `HTTP ${res.status}`;
+    if (!isReachableStatus(res.status)) {
+      base.error = `HTTP ${res.status ?? "unknown"}`;
       return base;
     }
     // Only the first 64 KB is ever used (title/meta live in the head), so read
@@ -989,7 +1011,15 @@ async function main(): Promise<void> {
   const uncertain: Array<{ candidate: Candidate; score: SuitabilityScore }> = [];
 
   if (opts.noVision) {
-    for (const { candidate, verification } of verified.slice(0, opts.limit)) {
+    for (const { candidate, verification } of verified) {
+      if (accepted.length >= opts.limit) break;
+      if (!metadataAcceptable(verification)) {
+        droppedBeforeScoring.push({
+          candidate,
+          reason: "metadata-only mode requires an extracted title (non-HTML page?)",
+        });
+        continue;
+      }
       accepted.push({ candidate, verification, score: null });
     }
   } else {

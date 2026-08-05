@@ -8,13 +8,17 @@ import {
   computeGaps,
   decideAcceptance,
   dedupeCandidates,
+  isReachableStatus,
+  metadataAcceptable,
   normalizeHost,
   normalizeUrl,
   parseCandidates,
   parseScore,
+  readCapped,
   type Candidate,
   type CorpusEntry,
   type SuitabilityScore,
+  type Verification,
 } from "./scout-sources.js";
 
 const sampleEntries: CorpusEntry[] = [
@@ -283,5 +287,69 @@ describe("prompt/report builders", () => {
     expect(report).toContain("Example");
     expect(report).toContain("npm run capture-batch");
     expect(report).toContain("metadata-only");
+  });
+});
+
+describe("isReachableStatus — only 2xx is reachable", () => {
+  it("accepts 2xx and refuses every 3xx/4xx/5xx and null", () => {
+    expect(isReachableStatus(200)).toBe(true);
+    expect(isReachableStatus(204)).toBe(true);
+    // A 3xx without a Location, or the redirect-loop-exhausted response, must
+    // NOT be marked reachable — the old check let every 300-399 through.
+    expect(isReachableStatus(301)).toBe(false);
+    expect(isReachableStatus(304)).toBe(false);
+    expect(isReachableStatus(399)).toBe(false);
+    expect(isReachableStatus(400)).toBe(false);
+    expect(isReachableStatus(500)).toBe(false);
+    expect(isReachableStatus(null)).toBe(false);
+  });
+});
+
+describe("readCapped — bounded reads", () => {
+  it("returns an empty string when the response has no body", async () => {
+    const res = new Response(null, { status: 200 });
+    expect(await readCapped(res, 1024)).toBe("");
+  });
+
+  it("caps a large streamed body at the byte budget", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode("x".repeat(10_000)));
+        controller.close();
+      },
+    });
+    const res = new Response(stream, { status: 200 });
+    const out = await readCapped(res, 1024);
+    expect(out.length).toBe(1024);
+  });
+});
+
+describe("metadataAcceptable — the metadata-only content gate", () => {
+  const base = (over: Partial<Verification> = {}): Verification => ({
+    url: "https://example.com",
+    sourceName: "Example",
+    reachable: true,
+    status: 200,
+    finalUrl: "https://example.com",
+    title: "Example",
+    description: null,
+    robotsAllowed: true,
+    screenshotPath: null,
+    error: null,
+    ...over,
+  });
+
+  it("accepts a reachable, robots-allowed page with an extracted title", () => {
+    expect(metadataAcceptable(base())).toBe(true);
+  });
+
+  it("refuses a page with no title — a binary 200 (PDF/image) has no <title>", () => {
+    expect(metadataAcceptable(base({ title: null }))).toBe(false);
+  });
+
+  it("refuses an unreachable or robots-disallowed page", () => {
+    expect(metadataAcceptable(base({ reachable: false }))).toBe(false);
+    expect(metadataAcceptable(base({ robotsAllowed: false }))).toBe(false);
   });
 });

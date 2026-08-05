@@ -290,18 +290,13 @@ function registerSearchUiExamples(server: McpServer, reader: CorpusReader): void
       const concise = responseFormat === "concise";
       const summary = results
         .map((e) => {
-          const hasImage = e.image.visibility !== "private" && e.image.path;
-          const lines = [
-            `### ${cleanTitle(e.title, e.source.productName)}  (id: ${e.id})`,
-            `Categories: ${e.categories.join(", ")} | Style: ${e.styleTags.join(", ")}`,
-            `Quality: ${e.qualityScore}/5 | Source: ${e.source.productName}${e.source.url ? ` (${e.source.url})` : ""}`,
-          ];
+          const headerParts = [e.categories.join(", "), e.styleTags.join(", ")].filter(Boolean).join(" | ");
+          const lines: string[] = [];
+          if (headerParts) lines.push(`### ${headerParts}`);
           if (concise) {
             lines.push(`Critique: ${e.critique.slice(0, 120)}${e.critique.length > 120 ? "…" : ""}`);
           } else {
             lines.push(
-              `Image available via get_ui_example: ${hasImage ? "yes" : "no (metadata/critique only)"}`,
-              ``,
               `Critique: ${e.critique}`,
               ``,
               `What to steal:`,
@@ -525,13 +520,16 @@ function registerGetSimilarUiExamples(server: McpServer, reader: CorpusReader): 
       }
 
       const summary = [
-        `Entries similar to **${cleanTitle(source.title, source.source.productName)}** (${id}), ranked by semantic similarity:`,
+        `Entries similar to **${source.patternType ?? "this example"}** `
+        + `(${[source.categories.join(", "), source.styleTags.join(", ")].filter(Boolean).join(" | ")}), ranked by semantic similarity:`,
         ``,
         ...results.map((r) => {
           const pct = Math.round(Math.max(0, r.score) * 100);
+          const header = [r.entry.patternType, r.entry.categories.join(", "), r.entry.styleTags.join(", ")]
+            .filter(Boolean)
+            .join(" | ");
           return [
-            `### ${cleanTitle(r.entry.title, r.entry.source.productName)}  (id: ${r.entry.id}) — ${pct}% similar`,
-            `Pattern: ${r.entry.patternType} | Categories: ${r.entry.categories.join(", ")} | Style: ${r.entry.styleTags.join(", ")}`,
+            `### ${header} — ${pct}% similar`,
             `Critique: ${r.entry.critique}`,
             `What to steal:`,
             ...r.entry.whatToSteal.map((t) => `  - ${t}`),
@@ -576,11 +574,9 @@ function registerCompareUiExamples(server: McpServer, reader: CorpusReader): voi
       // A11y risks are structured objects with canonical WCAG IDs — format to a string cell.
       const topRisk = (risks: AccessibilityRiskT[]) =>
         cell(risks.length ? formatAccessibilityRisk(risks[0]) : "—");
-      const header = `| Field | ${found.map((e) => cell(cleanTitle(e.title, e.source.productName))).join(" | ")} |`;
+      const header = `| Field | ${found.map((e) => cell([e.patternType, ...e.categories, ...e.styleTags].filter(Boolean).join(" — "))).join(" | ")} |`;
       const divider = `| --- | ${found.map(() => "---").join(" | ")} |`;
       const rows = [
-        `| id | ${found.map((e) => cell(e.id)).join(" | ")} |`,
-        `| patternType | ${found.map((e) => e.patternType).join(" | ")} |`,
         `| categories | ${found.map((e) => cell(e.categories.join(", "))).join(" | ")} |`,
         `| styleTags | ${found.map((e) => cell(e.styleTags.join(", "))).join(" | ")} |`,
         `| platform | ${found.map((e) => (e as Record<string, unknown>).platform ?? "web").join(" | ")} |`,
@@ -588,13 +584,11 @@ function registerCompareUiExamples(server: McpServer, reader: CorpusReader): voi
         `| accent | ${found.map((e) => e.visual.accentColor ?? e.visual.colorRoles?.accent ?? "—").join(" | ")} |`,
         `| density / corners | ${found.map((e) => `${e.visual.spacingDensity} / ${e.visual.cornerStyle}`).join(" | ")} |`,
         `| shadows / borders | ${found.map((e) => `${e.visual.usesShadows ? "yes" : "no"} / ${e.visual.usesBorders ? "yes" : "no"}`).join(" | ")} |`,
-        `| quality | ${found.map((e) => `${e.qualityScore}/5 ${e.qualityTier}`).join(" | ")} |`,
         ...(concise ? [] : [
           `| critique angle | ${found.map((e) => firstSentence(e.critique)).join(" | ")} |`,
           `| top steal | ${found.map((e) => top(e.whatToSteal)).join(" | ")} |`,
           `| anti-patterns | ${found.map((e) => top(e.antiPatterns.antiPatterns)).join(" | ")} |`,
           `| a11y risks | ${found.map((e) => topRisk(e.antiPatterns.accessibilityRisks)).join(" | ")} |`,
-          `| where it fails | ${found.map((e) => top(e.antiPatterns.whereThisFails)).join(" | ")} |`,
         ]),
       ];
 

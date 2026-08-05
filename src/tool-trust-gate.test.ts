@@ -245,3 +245,22 @@ describe("the refusal messages read as English", () => {
     expect(many).not.toMatch(/exist but carries|exists but carry/);
   });
 });
+
+describe("keyless redaction — retrieval tools", () => {
+  // A verified-content entry must render its content and NOT its identity:
+  // productName, url, id and title appear nowhere in the served bytes. The
+  // redaction is a rendering property, not a trust field — this holds for the
+  // VERIFIED direction, which is the only direction that returns content.
+  it.each([
+    { tool: "search_ui_examples", args: { query: "dashboard", limit: 3 }, content: "restrained dashboard" },
+    { tool: "get_similar_ui_examples", args: { id: "gate-tool-entry" }, content: "restrained dashboard" },
+    { tool: "compare_ui_examples", args: { ids: ["gate-tool-entry", "gate-tool-entry"] }, content: "restrained dashboard" },
+  ])("$tool renders content without identity", async ({ tool, args, content }) => {
+    const served = await callTool(true, tool, args);
+    expect(served, `${tool} must still serve keyed content`).toContain(content);
+    expect(served, `${tool} leaked productName`).not.toContain("GateCo");
+    expect(served, `${tool} leaked source url`).not.toContain("gateco.example.com");
+    expect(served, `${tool} leaked entry id`).not.toContain("gate-tool-entry");
+    expect(served, `${tool} leaked title`).not.toContain("GateCo — dashboard");
+  });
+});

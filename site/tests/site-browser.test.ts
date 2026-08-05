@@ -284,8 +284,18 @@ describe("public site — base-path deployment", () => {
     // 1. No request may leave the mounted base path. React Router resolves
     //    `to="/"` under a basename to the basename itself (no trailing slash),
     //    so both `/clean-ui-mcp` and `/clean-ui-mcp/` count as inside the base.
+    // The starting route (`/playground`) already satisfies "within the base",
+    // and React Router updates the URL a frame before the new route's H1 is in
+    // the DOM — so waiting on the pathname alone still races the render, and
+    // the H1 assertion below can read the playground's H1 while the URL is
+    // already the home path. Wait for the home PATH and the home H1 together;
+    // the assertion that follows is then deterministic.
     await page.waitForFunction(
-      () => /^\/clean-ui-mcp(\/|$)/.test(window.location.pathname),
+      () => {
+        const h1 = document.querySelector("#root h1")?.textContent ?? "";
+        return /^\/clean-ui-mcp\/?$/.test(window.location.pathname)
+          && /design judgment for ai agents/i.test(h1);
+      },
       null,
       { timeout: 5000 },
     );

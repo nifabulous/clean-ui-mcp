@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tierForField, verifyMechanicalFields, type VerificationRecord, type VerifierTier } from "./verify-corpus.js";
+import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict } from "./verify-corpus.js";
 import { extractQuantizedColors, type TaggerOutput } from "../tagger.js";
 import type { CorpusEntryT } from "../schema.js";
 
@@ -153,5 +154,88 @@ describe("verifyMechanicalFields — re-derivable values, evidence-appropriate t
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("buildVerifyPrompt — adversarial positive affirmation, per class", () => {
+  it("asks the model to CONFIRM factual claims with a default of false", () => {
+    const e = entry({
+      visual: {
+        ...entry().visual,
+        colorRoles: { canvas: "#ffffff", surface: "#f8fafc", ink: "#111827", muted: "#6b7280", accent: "#2563eb" },
+        usesShadows: false,
+      },
+    });
+    const prompt = buildVerifyPrompt(e, ["visual.colorRoles", "visual.usesShadows"], "verifier-v1");
+    expect(prompt).toContain("confirm");
+    expect(prompt).toContain("default false");
+    expect(prompt).toContain("canvas #ffffff");
+    expect(prompt).toContain("no shadows");
+    expect(prompt).toContain("verifier-v1");
+  });
+
+  it("asks prose fields to enumerate checkable assertions and confirm EACH, empty list is not confirmed", () => {
+    const e = entry({ critique: "The left navigation rail groups the metrics by row." });
+    const prompt = buildVerifyPrompt(e, ["critique"], "verifier-v1");
+    expect(prompt).toContain("enumerate");
+    expect(prompt).toContain("left navigation rail");
+    expect(prompt).toContain('"assertions": []');
+    expect(prompt).toContain('"confirmed": false');
+  });
+
+  it("never asks about responsiveBehavior — it has no verifiable claim", () => {
+    const e = entry({ responsiveBehavior: "responsive" });
+    const prompt = buildVerifyPrompt(e, ["responsiveBehavior"], "verifier-v1");
+    expect(prompt).not.toContain("responsiveBehavior");
+  });
+});
+
+describe("parseVerifyResponse — fail-closed", () => {
+  it("parses per-field confirmations", () => {
+    const parsed = parseVerifyResponse(
+      JSON.stringify({
+        "visual.usesShadows": { confirmed: true },
+        critique: { confirmed: true, assertions: ["a left navigation rail exists"] },
+      }),
+    );
+    expect(parsed["visual.usesShadows"]?.confirmed).toBe(true);
+    expect(parsed.critique?.assertions).toEqual(["a left navigation rail exists"]);
+  });
+
+  it("treats a field ABSENT from the response as not confirmed", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({ "visual.usesShadows": { confirmed: true } }));
+    expect(parsed["visual.colorRoles"]?.confirmed).toBe(false);
+  });
+
+  it("returns all-false for unparseable or non-JSON output", () => {
+    const parsed = parseVerifyResponse("the model rambled");
+    expect(parsed["visual.colorRoles"]?.confirmed).toBe(false);
+  });
+});
+
+describe("decideFieldVerdict", () => {
+  it("passes a confirmed factual claim", () => {
+    const v = decideFieldVerdict("visual.usesShadows", "factual", { confirmed: true });
+    expect(v.verdict).toBe("pass");
+  });
+
+  it("fails an unconfirmed claim", () => {
+    const v = decideFieldVerdict("visual.usesShadows", "factual", { confirmed: false });
+    expect(v.verdict).toBe("fail");
+  });
+
+  it("GATES a prose field whose assertion list is empty — the vacuity fix", () => {
+    const v = decideFieldVerdict("critique", "prose", { confirmed: false, assertions: [] });
+    expect(v.verdict).toBe("gate");
+  });
+
+  it("passes a prose field whose assertions were all confirmed", () => {
+    const v = decideFieldVerdict("critique", "prose", { confirmed: true, assertions: ["a left navigation rail exists"] });
+    expect(v.verdict).toBe("pass");
+  });
+
+  it("gates a gated-tier field (responsiveBehavior) whatever the response says", () => {
+    const v = decideFieldVerdict("responsiveBehavior", "gated", { confirmed: true });
+    expect(v.verdict).toBe("gate");
   });
 });

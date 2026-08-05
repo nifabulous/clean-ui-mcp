@@ -725,6 +725,47 @@ describe("tagImage two-pass request shape", () => {
     expect(pass1Prompt).toContain('domainTags:["integrations"]');
   });
 
+  it("passes the image to Pass 2 when critiqueImagePath is set", async () => {
+    const calls: Array<{ body: { input?: Array<{ content?: Array<Record<string, unknown>> }> } }> = [];
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      calls.push({ body });
+      callCount++;
+      const response = callCount === 1
+        ? JSON.stringify({
+            patternType: "dashboard", categories: ["dashboard"], styleTags: ["minimal"],
+            components: ["sidebar-nav", "kpi-card"], domainTags: ["integrations"],
+            dominantColors: ["#ffffff", "#111111"], accentColor: null,
+            displayFont: null, bodyFont: null, spacingDensity: "moderate", cornerStyle: "slight-round",
+            usesShadows: false, usesBorders: true,
+          })
+        : JSON.stringify({
+            observations: ["a"], typographyNotes: "notes",
+            draftCritique: "A seeing critique that describes the visible layout in detail, grounded in what the model can now observe directly in the screenshot.",
+            draftWhatToSteal: ["Use quiet grouping."],
+            draftAntiPatterns: ["Avoids card shadows."],
+            businessRationale: { businessGoal: "x", targetUser: "y", rationale: "z", confirmed: false },
+            qualityTier: "exceptional",
+          });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const entry = await tagImage({
+      imagePath: testImage,
+      productName: "Test",
+      url: null,
+      critiqueImagePath: testImage,
+    });
+
+    expect(entry.critique).toContain("seeing critique");
+    const pass2Image = calls[1]?.body.input?.[1]?.content?.find((c) => c.type === "input_image");
+    expect(pass2Image, "Pass 2 must receive the image when critiqueImagePath is set").toBeDefined();
+  });
+
   it("surfaces suggestedPatternType as persisted patternDiscovery metadata", async () => {
     let callCount = 0;
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {

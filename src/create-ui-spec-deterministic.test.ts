@@ -885,12 +885,35 @@ describe("per-field gating — the cross-field case", () => {
     }));
     const out = createUiSpecDeterministic(threeEvidence as never, three, [], REQUEST);
     expect(out.colorTokens).not.toBeNull();
-    // The direction may be null (no verified signal beyond colour), but it must
-    // NEVER carry the unverified critique or technique prose.
-    expect(
-      out.designDirection === null
-        || (!out.designDirection.includes("critique") && !out.designDirection.includes("technique")),
-    ).toBe(true);
+    // Asserted EXACTLY, not as a disjunction. The original
+    // `x === null || !x.includes(...)` passed the moment the direction was null,
+    // so it could not tell "correctly withheld the prose" from "the direction
+    // broke entirely". The true expected value here is null: colour contributes
+    // no direction clause (density/corners/shadows/borders/layoutForm and the
+    // group-B prose do), and none of those fields is verified on this fixture.
+    expect(out.designDirection).toBeNull();
+    expect(out.techniques).toEqual([]);
+  });
+
+  it("composes a direction from a verified direction field while still withholding prose", () => {
+    // The positive control the assertion above cannot provide: verify a field that
+    // DOES feed the direction, and the direction must appear — carrying that
+    // signal and none of the unverified critique or technique prose. Without this,
+    // a change that broke direction composition entirely would still pass.
+    const record = { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" };
+    const three = [1, 2, 3].map((n) => matched(`evidence-${n + 1}`, {
+      id: `fixture-${n}`,
+      provenance: { taggedBy: "auto", verification: { "visual.spacingDensity": record } },
+      critique: `critique ${n} that must never serve`,
+      whatToSteal: [`technique ${n} that must never serve`],
+    }));
+    const threeEvidence = [1, 2, 3].map((n) => observation(`evidence-${n + 1}`, {
+      pattern: "dashboard", spacingDensity: "compact",
+    }));
+    const out = createUiSpecDeterministic(threeEvidence as never, three, [], REQUEST);
+    expect(out.designDirection).not.toBeNull();
+    expect(out.designDirection).toContain("compact");
+    expect(out.designDirection).not.toContain("must never serve");
     expect(out.techniques).toEqual([]);
   });
 });

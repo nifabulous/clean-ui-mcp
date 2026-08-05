@@ -40,7 +40,7 @@ import {
   type CreateUiSpecAdapterResult,
 } from "./create-ui-spec-contracts.js";
 import { canonicalJsonStringify, sha256Hex } from "./readiness/contracts.js";
-import { createUiSpec, createUiSpecForAdapter, buildFallbackCandidate, RECIPE_EVIDENCE_ID, type CreateUiSpecDependencies } from "./create-ui-spec.js";
+import { createUiSpec, createUiSpecForAdapter, buildFallbackCandidate, buildPerFieldDisclosure, UNDISCLOSED_FIELD_KEYS, RECIPE_EVIDENCE_ID, type CreateUiSpecDependencies } from "./create-ui-spec.js";
 import recipe from "./c3/fallback-recipe-v1.json" with { type: "json" };
 import type { CreateUiSpecModelRuntime } from "./create-ui-spec-model.js";
 import {
@@ -2375,5 +2375,106 @@ describe("create_ui_spec — reasons on the paths with no corpus at all", () => 
     expect(row).toBeDefined();
     expect(row!.reason).not.toMatch(/fewer than 3/i);
     expect(row!.reason).toMatch(/verification/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The disclosure warning is bounded (review round, Stage 2a)
+// ---------------------------------------------------------------------------
+
+describe("create_ui_spec — the per-field disclosure warning stays within its schema bound", () => {
+  /** WarningSchema.message is z.string().max(500) (create-ui-spec-contracts.ts). */
+  const WARNING_MESSAGE_MAX = 500;
+
+  it("stays under the bound at every matched count, including ones retrieval cannot reach today", () => {
+    // Tested against the BUILDER, not the adapter: retrieval slices to the top 3,
+    // so an adapter-level test cannot produce a large matchedCount and would pass
+    // vacuously. The bound must hold if that cap is ever raised — which is exactly
+    // the edit that would otherwise break every response.
+    const fields = [...SERVABLE_FIELD_KEYS].filter((k) => !UNDISCLOSED_FIELD_KEYS.has(k));
+    for (const matchedCount of [1, 3, 10, 99, 100, 1000, 100000]) {
+      const none = new Map(fields.map((f) => [f, 0]));
+      const msg = buildPerFieldDisclosure(none, matchedCount);
+      expect(msg, `no disclosure at matchedCount=${matchedCount}`).not.toBeNull();
+      expect(
+        msg!.length,
+        `matchedCount=${matchedCount}: ${msg!.length} chars, over the ${WARNING_MESSAGE_MAX} bound`,
+      ).toBeLessThanOrEqual(WARNING_MESSAGE_MAX);
+    }
+  });
+
+  it("says how many fields it truncated rather than silently dropping them", () => {
+    const fields = [...SERVABLE_FIELD_KEYS].filter((k) => !UNDISCLOSED_FIELD_KEYS.has(k));
+    const msg = buildPerFieldDisclosure(new Map(fields.map((f) => [f, 0])), 100000)!;
+    // A silent truncation would read as "these are all the unverified fields".
+    expect(msg).toMatch(/and \d+ more/);
+    expect(msg.length).toBeLessThanOrEqual(WARNING_MESSAGE_MAX);
+  });
+
+  it("returns null when every disclosed field is fully verified", () => {
+    const fields = [...SERVABLE_FIELD_KEYS].filter((k) => !UNDISCLOSED_FIELD_KEYS.has(k));
+    expect(buildPerFieldDisclosure(new Map(fields.map((f) => [f, 3])), 3)).toBeNull();
+  });
+
+  it("names the least-verified field first, so truncation keeps the worst news", () => {
+    const msg = buildPerFieldDisclosure(
+      new Map([["critique", 2], ["whatToSteal", 0], ["voice", 1]]),
+      3,
+    )!;
+    expect(msg.indexOf("whatToSteal")).toBeLessThan(msg.indexOf("voice"));
+    expect(msg.indexOf("voice")).toBeLessThan(msg.indexOf("critique"));
+  });
+
+  it("stays under the bound through the adapter too", async () => {
+    // The message concatenated one row per disclosed field with no cap: 481 chars
+    // at matchedCount=3, exactly 500 at 10, and 519 at 100 — so raising the
+    // retrieval cap or adding one disclosed field would have made EVERY
+    // create_ui_spec envelope fail WarningSchema, at the transport, with no local
+    // signal. The count is what varies at runtime, so it is what this pins.
+    const corpus = Array.from({ length: 120 }, (_, i) =>
+      corpusEntryWithRoles(`bound-${i}`, "#2563eb", i % 2 === 0 ? "dashboard" : "forms"));
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 500 - i }))),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning, "expected the disclosure warning").toBeDefined();
+    expect(
+      warning!.message.length,
+      `disclosure message is ${warning!.message.length} chars, over the ${WARNING_MESSAGE_MAX} bound`,
+    ).toBeLessThanOrEqual(WARNING_MESSAGE_MAX);
+  });
+
+  it("still names the shortfall rather than reporting one averaged number", async () => {
+    const corpus = ["a", "b", "c"].map((k, i) =>
+      corpusEntryWithRoles(`bound-name-${k}`, "#2563eb", ["dashboard", "data-table", "forms"][i]!));
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 5 - i }))),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning?.message).toMatch(/0 of 3|0\/3/);
+    expect(warning!.message.length).toBeLessThanOrEqual(WARNING_MESSAGE_MAX);
+  });
+
+  it("discloses every servable key that create_ui_spec can gate", async () => {
+    // DISCLOSED_FIELD_KEYS was a hardcoded 18-key duplicate of the 23-key
+    // servable set, so patternType, platform and domainTags were gated but never
+    // explained — a caller withheld on those got no reason at all. The
+    // verification-orphan-key detector catches keys nothing READS; nothing caught
+    // keys nothing DISCLOSES.
+    const corpus = [corpusEntryWithRoles("bound-cov", "#2563eb", "dashboard")];
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning).toBeDefined();
+    // Either the key is named, or it is in the documented not-disclosed set —
+    // never silently absent.
+    const undisclosed = [...SERVABLE_FIELD_KEYS].filter(
+      (k) => !warning!.message.includes(k) && !UNDISCLOSED_FIELD_KEYS.has(k),
+    );
+    expect(undisclosed, `servable keys with no disclosure: ${undisclosed.join(", ")}`).toEqual([]);
   });
 });

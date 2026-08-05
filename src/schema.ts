@@ -618,7 +618,7 @@ export const CorpusEntry = z.object({
      * so one unreadable record makes the whole corpus unavailable). PRIVATE
      * mode, the default, is worse and quieter — a schema-invalid corpus decodes
      * as `corrupt`, which `fromDecodeResult` maps to `null`
-     * (`persistence.ts:137-139`), and the caller silently falls back to a
+     * (`persistence.ts:138-139`), and the caller silently falls back to a
      * snapshot or the seed. An older build reading a newer corpus would not
      * error; it would serve stale data and say nothing.
      *
@@ -626,12 +626,11 @@ export const CorpusEntry = z.object({
      * ON PURPOSE: the accepted tiers live in `corpus-trust.ts`'s
      * VERIFICATION_METHODS, the sole authority on whether a record grants trust.
      *
-     * A `z.enum` here would defeat the forward compatibility the gate documents:
-     * `corpus-reader.ts:332` THROWS on a failed parse, so a corpus written by a
-     * newer verifier — one extra tier, or one extra field like `confidence` —
-     * would make an older build refuse the ENTIRE corpus rather than decline the
-     * rows it does not understand. Readability and trust are different questions;
-     * only the second is fail-closed.
+     * A `z.enum` here would defeat that forward compatibility: a newer verifier's
+     * tier, or one extra field like `confidence`, would make an older build fail
+     * to read the corpus by whichever of the two routes above applies, instead of
+     * declining the rows it does not understand. Readability and trust are
+     * different questions; only trust is fail-closed.
      *
      * `imageSha256` keeps its shape check: a non-hex hash is a writer bug, not a
      * newer tier, and there is nothing to be forward-compatible with.

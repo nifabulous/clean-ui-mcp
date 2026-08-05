@@ -89,7 +89,7 @@ import {
 import { createUiSpecDeterministic } from "./create-ui-spec-deterministic.js";
 // `isVerified` is used by the per-field evidence projection (Stage 2a) and the
 // per-field disclosure counts (Task 10).
-import { isVerified } from "./corpus-trust.js";
+import { isVerified, SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import { ModelArtifactRollbackIncompleteError } from "./model-artifact-store.js";
 import {
   buildCorpusObservationSummary,
@@ -1502,6 +1502,79 @@ function resolveHandoffTarget(
 }
 
 /**
+ * Servable keys this warning deliberately does NOT report, with the reason. The
+ * disclosed set is DERIVED (`SERVABLE_FIELD_KEYS` minus this), so a key added to
+ * the servable set is disclosed automatically. It used to be a hardcoded
+ * eighteen-key list against a twenty-three-key servable set, which left
+ * `patternType`, `platform` and `domainTags` gated but never explained — a caller
+ * withheld on those got no reason at all. `verification-orphan-key` catches keys
+ * nothing READS; nothing caught keys nothing DISCLOSES.
+ */
+export const UNDISCLOSED_FIELD_KEYS: ReadonlySet<string> = new Set([
+  // Retrieval metadata, not served judgment: these steer which entries match,
+  // and `retrieval` already reports what matching did.
+  "patternType",
+  "platform",
+  // Taxonomy vocabularies. Their gating shows up as absent filter values from
+  // list_categories / list_style_tags / list_domain_tags, which is where a
+  // caller looks for them; naming them here spends the message budget twice.
+  "domainTags",
+  // Colour inputs that only reach a served value THROUGH `visual.colorRoles`,
+  // which is disclosed. Reporting all three triples the colour rows for one
+  // outcome.
+  "visual.accentColor",
+  "visual.dominantColors",
+]);
+
+/** The keys the disclosure warning reports, derived so it cannot drift. */
+const DISCLOSED_FIELD_KEYS: readonly string[] = [...SERVABLE_FIELD_KEYS].filter(
+  (key) => !UNDISCLOSED_FIELD_KEYS.has(key),
+);
+
+/**
+ * WarningSchema.message is `z.string().max(500)` (create-ui-spec-contracts.ts),
+ * and this message is built by concatenation, so it MUST bound itself.
+ *
+ * The unbounded version measured 481 chars at `matchedCount` 3, exactly 500 at
+ * 10, and 519 at 100 — so raising the retrieval cap or adding one disclosed field
+ * would have made every create_ui_spec envelope fail its own schema, at the
+ * transport, with no local signal. Two things keep it inside the bound: only
+ * SHORTFALL fields are named (a fully-verified field carries no information here),
+ * and the list truncates with a remainder count when it still would not fit.
+ *
+ * Returns null when there is nothing to disclose — every disclosed field is fully
+ * verified — so the caller pushes no warning at all.
+ */
+export function buildPerFieldDisclosure(
+  verifiedPerField: ReadonlyMap<string, number>,
+  matchedCount: number,
+): string | null {
+  const MAX = 500;
+  const shortfall = [...verifiedPerField.entries()]
+    .filter(([, verified]) => verified < matchedCount)
+    .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]));
+  if (shortfall.length === 0) return null;
+  const head = `${matchedCount} matched corpus entries; verified per field —`;
+  const tail = " Corpus judgment is served only from entries verified for the field that feeds it.";
+  const rows: string[] = [];
+  let used = head.length + tail.length + 1;
+  let dropped = 0;
+  for (const [field, verified] of shortfall) {
+    const row = `${field} ${verified}/${matchedCount}`;
+    // Reserve room for the remainder clause before committing this row, so the
+    // truncation notice itself can never be what overflows.
+    const remainder = dropped > 0 || rows.length < shortfall.length - 1
+      ? `, and ${shortfall.length - rows.length - 1} more`
+      : "";
+    if (used + row.length + 2 + remainder.length > MAX) { dropped += 1; continue; }
+    rows.push(row);
+    used += row.length + 2;
+  }
+  const more = dropped > 0 ? `, and ${dropped} more` : "";
+  return `${head} ${rows.join(", ")}${more}.${tail}`;
+}
+
+/**
  * Build the bounded warnings array. sparseCoverage fires when automatic
  * retrieval produced zero results (structured-fallback). motionEvidenceUnavailable
  * always fires (the recipe marks motion model-dependent + unavailable).
@@ -1525,25 +1598,13 @@ function buildWarnings(resolved: ResolvedEvidence): DesignArtifactEnvelope["warn
   // warning above already tells the truth, and a second warning would
   // double-report the same fact.
   const matchedCount = resolved.matchedEntries.length;
-  const DISCLOSED_FIELD_KEYS = [
-    "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks", "voice",
-    "components", "responsiveBehavior", "visual.colorRoles", "layout",
-    "visual.typePairing", "visual.spacingDensity", "visual.cornerStyle",
-    "visual.usesShadows", "visual.usesBorders", "styleTags", "categories",
-    "mood", "colorScheme", "critique",
-  ] as const;
-  const perFieldCounts = DISCLOSED_FIELD_KEYS
-    .map((field) => `${field} ${resolved.matchedEntries.filter((m) => isVerified(m.entry, field)).length}/${matchedCount}`)
-    .join(", ");
-  const anyShortfall = DISCLOSED_FIELD_KEYS.some((field) =>
-    resolved.matchedEntries.filter((m) => isVerified(m.entry, field)).length < matchedCount);
-  if (matchedCount > 0 && anyShortfall) {
-    warnings.push({
-      code: "insufficientCorpusEvidence",
-      message:
-        `${matchedCount} matched corpus entries; verified per field — ${perFieldCounts}. ` +
-        `Corpus judgment is served only from entries verified for the field that feeds it.`,
-    });
+  const perField = new Map<string, number>();
+  for (const field of DISCLOSED_FIELD_KEYS) {
+    perField.set(field, resolved.matchedEntries.filter((m) => isVerified(m.entry, field)).length);
+  }
+  const disclosure = buildPerFieldDisclosure(perField, matchedCount);
+  if (matchedCount > 0 && disclosure !== null) {
+    warnings.push({ code: "insufficientCorpusEvidence", message: disclosure });
   }
   // Motion is always model-dependent + unavailable in this milestone.
   warnings.push({

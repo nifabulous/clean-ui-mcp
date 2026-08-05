@@ -71,7 +71,7 @@ The consequence of getting this wrong differs by mode, and both are bad:
   unreadable record makes the whole corpus unavailable.
 - **Private mode**, the default, is worse and quieter. A schema-invalid corpus
   decodes as `corrupt`, which `fromDecodeResult` maps to `null`
-  (`persistence.ts:137-139`), and the caller **silently falls back to a snapshot or
+  (`persistence.ts:138-139`), and the caller **silently falls back to a snapshot or
   the seed**. An older build reading a newer corpus would not error; it would serve
   stale data and say nothing.
 

@@ -88,19 +88,40 @@ function seededEntry(): CorpusEntryT {
       width: 1280,
       height: 800,
     },
-    // Verified for the C3 trust gate. The browser suites' marker sweeps are only
-    // real checks if this entry's corpus PROSE actually reaches the page and the
-    // handoff — their explicit anti-vacuity assertions say so. Without a
-    // verification record the gate serves no corpus prose and both sweeps pass by
-    // serving nothing, which is the false confidence they were written to catch.
-    // Identity containment, what these suites test, is independent of trust.
+    // Verified for the C3 trust gate — per-field (Stage 2a). The browser
+    // suites' marker sweeps are only real checks if this entry's corpus PROSE
+    // actually reaches the page and the handoff — their explicit anti-vacuity
+    // assertions say so. Without a verification record the gate serves no
+    // corpus prose and both sweeps pass by serving nothing, which is the false
+    // confidence they were written to catch. Identity containment, what these
+    // suites test, is independent of trust.
+    //
+    // Per-field, prose serves only when the entry's response-scoped evidence
+    // row survived the strip, so `patternType` (a structured fact) is verified
+    // alongside the prose fields the suites assert: `critique` (the direction
+    // signal the page carries) and `whatToSteal` (`techniques[].text`, the
+    // handoff-only payload).
     provenance: {
       taggedBy: "auto",
       verification: {
-        method: "image-confirmed",
-        verifiedAt: "2026-08-04",
-        verifierVersion: "site-fixture",
-        imageSha256: "a".repeat(64),
+        critique: {
+          method: "image-confirmed",
+          verifiedAt: "2026-08-04",
+          verifierVersion: "site-fixture",
+          imageSha256: "a".repeat(64),
+        },
+        whatToSteal: {
+          method: "image-confirmed",
+          verifiedAt: "2026-08-04",
+          verifierVersion: "site-fixture",
+          imageSha256: "a".repeat(64),
+        },
+        patternType: {
+          method: "image-confirmed",
+          verifiedAt: "2026-08-04",
+          verifierVersion: "site-fixture",
+          imageSha256: "a".repeat(64),
+        },
       },
     },
     critique: "critique prose that must never leave the server",

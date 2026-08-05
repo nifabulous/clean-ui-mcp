@@ -641,6 +641,18 @@ export const CorpusEntry = z.object({
       verifierVersion: z.string().min(1),
       imageSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
     }).passthrough()).optional(),
+    /**
+     * Resume bookkeeping for the Stage 2c verifier — NOT verification. Maps a
+     * field key to the verifierVersion at which the field was EVALUATED and did
+     * not earn trust (failed or gated). A re-run skips it instead of re-spending
+     * the vision cost; `isVerified` never reads this map, so an attempted field
+     * is never served. Kept out of `verification` so that map stays trust-only
+     * and the doctor's malformed-method detector stays strict.
+     */
+    verifyAttempts: z.record(z.string(), z.object({
+      verifierVersion: z.string().min(1),
+      verifiedAt: z.string().min(1),
+    }).passthrough()).optional(),
   }).optional(),
 })
 // qualityScore ↔ qualityTier coupling: cautionary entries score 1-2 (sinking in

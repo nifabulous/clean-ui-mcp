@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tierForField, verifyMechanicalFields, type VerificationRecord, type VerifierTier } from "./verify-corpus.js";
 import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict } from "./verify-corpus.js";
+import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReproducedProse } from "./verify-corpus.js";
 import { extractQuantizedColors, type TaggerOutput } from "../tagger.js";
 import type { CorpusEntryT } from "../schema.js";
 
@@ -237,5 +238,222 @@ describe("decideFieldVerdict", () => {
   it("gates a gated-tier field (responsiveBehavior) whatever the response says", () => {
     const v = decideFieldVerdict("responsiveBehavior", "gated", { confirmed: true });
     expect(v.verdict).toBe("gate");
+  });
+});
+
+describe("alreadyProcessedAtVersion — the resume key (pass OR attempt)", () => {
+  it("skips a field carrying the current version in EITHER verification or verifyAttempts", () => {
+    const e = entry({
+      provenance: {
+        taggedBy: "auto",
+        verification: { critique: { method: "image-confirmed", verifiedAt: "2026-08-05", verifierVersion: "verifier-v1", imageSha256: "a".repeat(64) } },
+        verifyAttempts: { layout: { verifierVersion: "verifier-v1", verifiedAt: "2026-08-05" } },
+      },
+    });
+    expect(alreadyProcessedAtVersion(e, "critique", "verifier-v1")).toBe(true);  // a pass
+    expect(alreadyProcessedAtVersion(e, "layout", "verifier-v1")).toBe(true);    // a recorded failure
+    expect(alreadyProcessedAtVersion(e, "critique", "verifier-v2")).toBe(false);
+    expect(alreadyProcessedAtVersion(e, "voice", "verifier-v1")).toBe(false);
+  });
+});
+
+describe("applyReproducedProse — strip [DRAFT] markers, preserve antiPatterns siblings", () => {
+  it("stores clean prose and never clobbers accessibilityRisks / whereThisFails", () => {
+    const original = entry({
+      antiPatterns: {
+        antiPatterns: ["old prose"],
+        whereThisFails: ["small screens"],
+        accessibilityRisks: [{ element: "cta", risk: "low contrast", evidence: "text on bg", wcag: ["1.4.3"] }],
+      },
+    });
+    const tagged = {
+      critique: "[DRAFT — REWRITE] A grounded critique.",
+      whatToSteal: ["[DRAFT] Quiet grouping."],
+      antiPatterns: { antiPatterns: ["[DRAFT] Avoids shadows."], whereThisFails: [], accessibilityRisks: [] },
+      voice: { tone: "confident", examples: ["Ship it."], avoid: ["synergy"] },
+    } as unknown as Pick<TaggerOutput, "critique" | "whatToSteal" | "antiPatterns" | "voice">;
+    const out = applyReproducedProse(original, tagged) as unknown as {
+      critique: string; whatToSteal: string[];
+      antiPatterns: { antiPatterns: string[]; whereThisFails: string[]; accessibilityRisks: unknown[] };
+    };
+    expect(out.critique).toBe("A grounded critique.");           // marker stripped
+    expect(out.whatToSteal).toEqual(["Quiet grouping."]);        // marker stripped
+    expect(out.antiPatterns.antiPatterns).toEqual(["Avoids shadows."]);
+    expect(out.antiPatterns.whereThisFails).toEqual(["small screens"]);       // PRESERVED from original
+    expect(out.antiPatterns.accessibilityRisks).toHaveLength(1);              // NOT clobbered
+  });
+});
+
+describe("mergeVerification — merge, never clobber", () => {
+  it("writes new keys and leaves existing ones untouched", () => {
+    const e = entry({
+      provenance: {
+        taggedBy: "auto",
+        verification: { critique: { method: "image-confirmed", verifiedAt: "old", verifierVersion: "verifier-v0", imageSha256: "a".repeat(64) } },
+      },
+    });
+    mergeVerification(e, {
+      platform: { method: "image-confirmed", verifiedAt: "new", verifierVersion: "verifier-v1", imageSha256: "b".repeat(64) },
+    });
+    const v = (e as unknown as { provenance: { verification: Record<string, unknown> } }).provenance.verification;
+    expect(v.platform).toBeDefined();
+    expect((v.critique as { verifierVersion: string }).verifierVersion).toBe("verifier-v0");
+  });
+});
+
+describe("verifyEntry — mechanical + vision + re-produce + re-verify", () => {
+  it("merges mechanical records and vision verdicts; re-produces failed prose and re-verifies", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-entry-"));
+    const imagePath = join(dir, "e1.png");
+    writeFileSync(imagePath, PNG_BYTES);
+    try {
+      const e = entry({
+        platform: "mobile",
+        critique: "The left navigation rail groups the metrics by row.",
+        whatToSteal: ["Group metrics by row."],
+        provenance: { taggedBy: "auto" },
+      });
+      let critiqueCalls = 0;
+      const deps = {
+        now: () => "2026-08-05",
+        // Vision: the FIRST critique prompt fails (the rail is a fabrication);
+        // re-production fixes the prose; the SECOND critique prompt (the fresh
+        // re-verify) confirms the fixed version.
+        callVision: async (prompt: string) => {
+          const wantsCritique = prompt.includes("critique:");
+          if (wantsCritique) {
+            critiqueCalls += 1;
+            return critiqueCalls === 1
+              ? JSON.stringify({ critique: { confirmed: false, assertions: ["a left navigation rail exists"], reason: "no rail visible" } })
+              : JSON.stringify({ critique: { confirmed: true, assertions: ["metrics grouped in a single column card"] } });
+          }
+          return JSON.stringify({ "visual.usesBorders": { confirmed: true } });
+        },
+        reproduce: async () => ({ ...e, critique: "The metrics are grouped in a single column card." }),
+      };
+      const { records, verdicts } = await verifyEntry(e, imagePath, deps);
+      expect(records.platform).toBeDefined();
+      expect(records.critique).toBeDefined();
+      expect(verdicts.find((v) => v.field === "critique")?.verdict).toBe("pass");
+      expect(verdicts.find((v) => v.field === "whatToSteal")?.verdict).toBe("gate");
+      expect(records["responsiveBehavior"]).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a field gated (no record) when re-production fails re-verification", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-entry-"));
+    const imagePath = join(dir, "e1.png");
+    writeFileSync(imagePath, PNG_BYTES);
+    try {
+      const e = entry({ critique: "The left navigation rail groups the metrics by row.", provenance: { taggedBy: "auto" } });
+      const deps = {
+        now: () => "2026-08-05",
+        callVision: async () => JSON.stringify({ critique: { confirmed: false, assertions: ["a left navigation rail exists"] } }),
+        reproduce: async () => ({ ...e, critique: "Still claims the rail." }),
+      };
+      const { records, verdicts } = await verifyEntry(e, imagePath, deps);
+      expect(records.critique).toBeUndefined();
+      expect(verdicts.find((v) => v.field === "critique")?.verdict).toBe("fail");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("re-produces ONCE for N failing prose fields — not once per field (pins the hoist)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-entry-"));
+    const imagePath = join(dir, "e1.png");
+    writeFileSync(imagePath, PNG_BYTES);
+    try {
+      const e = entry({
+        platform: "mobile",
+        critique: "The left navigation rail groups the metrics by row.",
+        voice: { tone: "confident", examples: ["Ship it."], avoid: ["synergy"] },
+        provenance: { taggedBy: "auto" },
+      });
+      let reproduceCalls = 0, visionCalls = 0;
+      const deps = {
+        now: () => "2026-08-05",
+        callVision: async (_prompt: string) => {
+          visionCalls += 1;
+          // Call 1 = the ONE combined verify (critique + voice both fail, non-empty
+          // assertions). Call 2 = the ONE batched re-verify (both pass).
+          return visionCalls === 1
+            ? JSON.stringify({
+                critique: { confirmed: false, assertions: ["a rail exists"] },
+                voice: { confirmed: false, assertions: ["tone is confident"] },
+              })
+            : JSON.stringify({
+                critique: { confirmed: true, assertions: ["single-column card"] },
+                voice: { confirmed: true, assertions: ["tone reads confident"] },
+              });
+        },
+        reproduce: async () => {
+          reproduceCalls += 1;
+          return {
+            ...e,
+            critique: "Metrics in one column.",
+            voice: { tone: "confident", examples: ["x"], avoid: [] },
+          } as CorpusEntryT;
+        },
+      };
+      const { verdicts } = await verifyEntry(e, imagePath, deps);
+      expect(reproduceCalls).toBe(1);  // ONE re-produce for N failing prose fields
+      expect(visionCalls).toBe(2);     // ONE combined verify + ONE batched re-verify, never 1 + N
+      expect(verdicts.find((v) => v.field === "critique")?.verdict).toBe("pass");
+      expect(verdicts.find((v) => v.field === "voice")?.verdict).toBe("pass");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT re-produce a failing FACTUAL field — only prose is re-produced", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-entry-"));
+    const imagePath = join(dir, "e1.png");
+    writeFileSync(imagePath, PNG_BYTES);
+    try {
+      // usesShadows is a factual field with a value; it fails vision and must
+      // stay gated with NO record and NO re-produce (the tagger's Pass 2 does
+      // not write factual fields).
+      const e = entry({ platform: "mobile", provenance: { taggedBy: "auto" } }); // base visual.usesShadows=false → claim "no shadows are used"
+      let reproduceCalls = 0;
+      const deps = {
+        now: () => "2026-08-05",
+        callVision: async () => JSON.stringify({ "visual.usesShadows": { confirmed: false } }),
+        reproduce: async () => { reproduceCalls += 1; return e; },
+      };
+      const { records, verdicts } = await verifyEntry(e, imagePath, deps);
+      expect(reproduceCalls).toBe(0);
+      expect(records["visual.usesShadows"]).toBeUndefined();
+      expect(verdicts.find((v) => v.field === "visual.usesShadows")?.verdict).toBe("fail");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips fields already carrying the current verifierVersion", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-entry-"));
+    const imagePath = join(dir, "e1.png");
+    writeFileSync(imagePath, PNG_BYTES);
+    try {
+      // Every servable field already carries a current-version record, so the
+      // pending set is empty and the vision dependency must never be called.
+      const record = { method: "image-confirmed", verifiedAt: "2026-08-01", verifierVersion: "verifier-v1", imageSha256: "a".repeat(64) };
+      const verification: Record<string, typeof record> = {};
+      for (const field of ["platform", "visual.dominantColors", "visual.colorRoles", "visual.accentColor",
+        "layout", "components", "visual.usesShadows", "visual.usesBorders", "visual.typePairing",
+        "antiPatterns.accessibilityRisks", "critique", "whatToSteal", "antiPatterns", "voice",
+        "mood", "colorScheme", "visual.spacingDensity", "visual.cornerStyle", "styleTags",
+        "categories", "domainTags", "patternType"]) {
+        verification[field] = record;
+      }
+      const e = entry({ provenance: { taggedBy: "auto", verification } });
+      const callVision = async () => { throw new Error("vision must not run for skipped fields"); };
+      const { verdicts } = await verifyEntry(e, imagePath, { now: () => "2026-08-05", callVision, reproduce: async () => e });
+      expect(verdicts.filter((v) => v.field !== "platform" && v.field !== "visual.dominantColors")).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

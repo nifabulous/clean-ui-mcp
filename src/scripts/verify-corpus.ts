@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { detectPlatform } from "../schema.js";
-import { extractQuantizedColors } from "../tagger.js";
+import { detectPlatform, type CorpusEntryT } from "../schema.js";
+import { extractQuantizedColors, tagImage, type TaggerOutput } from "../tagger.js";
 import { fromCorpusRelativeImagePath } from "../paths.js";
 
 /** The verifier's own version — stamped on every record and the resume key. */
@@ -304,4 +304,167 @@ export function decideFieldVerdict(
   return parsed.confirmed
     ? { field, verdict: "pass", reason: "positively confirmed against the image" }
     : { field, verdict: "fail", reason: "not positively confirmed" };
+}
+
+/**
+ * A field is "processed at this version" if it carries EITHER a trust record
+ * (`provenance.verification` — a pass) OR a resume marker
+ * (`provenance.verifyAttempts` — a fail/gate). Both stop re-verification; only
+ * the first is served by `isVerified`.
+ */
+export function alreadyProcessedAtVersion(entry: CorpusEntryT, field: string, version: string): boolean {
+  return entry.provenance?.verification?.[field]?.verifierVersion === version
+    || entry.provenance?.verifyAttempts?.[field]?.verifierVersion === version;
+}
+
+/**
+ * Write trust records into `provenance.verification`, never clobbering OTHER
+ * fields' keys. A pass also REVOKES any stale `verifyAttempts` marker for the
+ * same field, so the two maps stay mutually exclusive per field.
+ */
+export function mergeVerification(entry: CorpusEntryT, records: Record<string, VerificationRecord>): void {
+  const provenance = entry.provenance ?? { taggedBy: "auto" as const };
+  const verification = { ...(provenance.verification ?? {}) };
+  const verifyAttempts = provenance.verifyAttempts ? { ...provenance.verifyAttempts } : undefined;
+  for (const [field, record] of Object.entries(records)) {
+    verification[field] = record;
+    if (verifyAttempts) delete verifyAttempts[field];
+  }
+  provenance.verification = verification;
+  if (verifyAttempts) provenance.verifyAttempts = verifyAttempts;
+  entry.provenance = provenance;
+}
+
+const PROSE_FIELDS: readonly string[] = ["critique", "whatToSteal", "antiPatterns", "voice"];
+
+/**
+ * Map a re-produced tagImage result onto the entry's prose fields, ready to
+ * REPLACE the fabricated values. Two things the raw tagImage output would break
+ * if stored verbatim (both invisible to the stubbed unit tests, so this is its
+ * own pure, tested helper):
+ *   1. tagImage prefixes prose with `[DRAFT — REWRITE]` / `[DRAFT] ` markers
+ *      (`tagger.ts:3116-3123`). Storing them and stamping `image-confirmed`
+ *      would serve "rewrite me" text as verified. Strip them.
+ *   2. `antiPatterns` is an OBJECT `{ antiPatterns, whereThisFails,
+ *      accessibilityRisks }`. `antiPatterns.accessibilityRisks` is its OWN
+ *      servable field, verified independently. Replacing the whole object would
+ *      clobber it (and reset whereThisFails). Swap ONLY the inner prose array.
+ */
+export function applyReproducedProse(
+  entry: CorpusEntryT,
+  // `tagged` is a tagImage result (TaggerOutput), NOT a CorpusEntryT — its
+  // antiPatterns lacks legacyAccessibilityNotes and types accessibilityRisks'
+  // confidence as string, so a CorpusEntryT Pick would not accept it. The body
+  // reads only `tagged.antiPatterns.antiPatterns` (+ voice/critique/whatToSteal),
+  // all of which assign cleanly into CorpusEntryT.
+  tagged: Pick<TaggerOutput, "critique" | "whatToSteal" | "antiPatterns" | "voice">,
+): CorpusEntryT {
+  const stripDraft = (s: string): string => s.replace(/^\[DRAFT[^\]]*\]\s*/, "");
+  return {
+    ...entry,
+    critique: stripDraft(tagged.critique),
+    whatToSteal: tagged.whatToSteal.map(stripDraft),
+    antiPatterns: { ...entry.antiPatterns, antiPatterns: tagged.antiPatterns.antiPatterns.map(stripDraft) },
+    voice: tagged.voice,
+  };
+}
+
+export interface VerifyEntryDeps {
+  now: () => string;
+  callVision: (prompt: string, imagePath: string) => Promise<string>;
+  reproduce: (entry: CorpusEntryT, imagePath: string) => Promise<CorpusEntryT>;
+}
+
+export async function verifyEntry(
+  entry: CorpusEntryT,
+  imagePath: string,
+  deps: VerifyEntryDeps,
+): Promise<{ records: Record<string, VerificationRecord>; verdicts: FieldVerdict[] }> {
+  const now = deps.now();
+  const records: Record<string, VerificationRecord> = {};
+  const verdicts: FieldVerdict[] = [];
+
+  // 1. Mechanical checks — always run, never skipped (they are free).
+  const mechanical = await verifyMechanicalFields(entry, imagePath, now);
+  for (const [field, record] of Object.entries(mechanical.records)) records[field] = record;
+  verdicts.push(...mechanical.verdicts);
+
+  // 2. The fields left to verify — those not already stamped at this version.
+  const pending = Object.keys(TIER_BY_FIELD).filter(
+    (field) => tierForField(field) !== "mechanical" && tierForField(field) !== "gated"
+      && !alreadyProcessedAtVersion(entry, field, VERIFIER_VERSION),
+  );
+  if (pending.length > 0) {
+    const parsed = parseVerifyResponse(await deps.callVision(buildVerifyPrompt(entry, pending, VERIFIER_VERSION), imagePath));
+
+    // First pass: an initial verdict per pending field, from the ONE combined call.
+    const decided = new Map<string, FieldVerdict>();
+    for (const field of pending) {
+      const claim = claimForField(entry as unknown as Record<string, unknown>, field);
+      decided.set(
+        field,
+        claim === null
+          ? { field, verdict: "gate", reason: "no recorded value to verify" }
+          : decideFieldVerdict(field, tierForField(field), parsed[field] ?? { confirmed: false }),
+      );
+    }
+
+    // 3. Re-produce ONCE if any prose field failed. The seeing Pass 2 rewrites
+    // ALL prose fields in a single tagImage call — never re-tag per field — and
+    // the failed ones are re-verified in ONE fresh independent call (step 4).
+    const failedProse = PROSE_FIELDS.filter((f) => decided.get(f)?.verdict === "fail");
+    if (failedProse.length > 0) {
+      const reproduced = await deps.reproduce(entry, imagePath);
+      const reFields = failedProse.filter(
+        (f) => claimForField(reproduced as unknown as Record<string, unknown>, f) !== null,
+      );
+      const reParsed: Record<string, { confirmed: boolean; assertions?: string[]; reason?: string }> = reFields.length > 0
+        ? parseVerifyResponse(await deps.callVision(buildVerifyPrompt(reproduced as unknown as Record<string, unknown>, reFields, VERIFIER_VERSION), imagePath))
+        : {};
+      for (const field of failedProse) {
+        if (!reFields.includes(field)) {
+          decided.set(field, { field, verdict: "gate", reason: "re-production wrote no value for this field" });
+          continue;
+        }
+        const reVerdict = decideFieldVerdict(field, "prose", reParsed[field] ?? { confirmed: false });
+        decided.set(field, reVerdict);
+        if (reVerdict.verdict === "pass") {
+          // The re-produced value replaces the fabricated one only after it
+          // passed, so the stored value and the record agree.
+          (entry as unknown as Record<string, unknown>)[field] = (reproduced as unknown as Record<string, unknown>)[field];
+        }
+      }
+    }
+
+    // Finalize: a passed field earns an image-confirmed record; the caller adds
+    // resume markers for the rest (see Task 5 `resumeMarkers`/`mergeVerifyAttempts`).
+    for (const field of pending) {
+      const verdict = decided.get(field)!;
+      if (verdict.verdict === "pass") {
+        records[field] = { method: "image-confirmed", verifiedAt: now, verifierVersion: VERIFIER_VERSION, imageSha256: imageSha256Of(imagePath) };
+      }
+      verdicts.push(verdict);
+    }
+  }
+  return { records, verdicts };
+}
+
+/**
+ * The real re-produce dependency: tag the image with the SEEING Pass 2 and
+ * return the produced entry. Only the failed fields' values are read by the
+ * caller; Pass 1 re-runs internally as the extraction input Pass 2 requires.
+ */
+export function makeReproduceDependency(provider?: string): VerifyEntryDeps["reproduce"] {
+  return async (entry: CorpusEntryT, imagePath: string): Promise<CorpusEntryT> => {
+    const tagged = await tagImage({
+      imagePath,
+      productName: entry.source?.productName ?? "Untitled",
+      url: entry.source?.url ?? null,
+      critiqueImagePath: imagePath,
+      critiqueProvider: provider as Parameters<typeof tagImage>[0]["critiqueProvider"],
+    });
+    // Strip [DRAFT] markers and preserve antiPatterns' non-prose siblings —
+    // NEVER return raw tagImage prose for storage. See applyReproducedProse.
+    return applyReproducedProse(entry, tagged);
+  };
 }

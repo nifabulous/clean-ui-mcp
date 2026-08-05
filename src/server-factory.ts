@@ -93,15 +93,43 @@ export function createServer(
   // build the identity screen's denied-name set. Narrowing that set would let an
   // unverified entry's product name stop being screened out of served prose —
   // weakening identity screening in the name of trust.
-  const gated = new TrustGatedCorpusReader(reader);
-
-  registerSearchUiExamples(server, gated);
-  registerGetUiExample(server, gated);
-  registerListCategories(server, gated);
-  registerListStyleTags(server, gated);
-  registerListDomainTags(server, gated);
-  registerGetSimilarUiExamples(server, gated);
-  registerCompareUiExamples(server, gated);
+  // ----- C3 trust gate (Stage 2a): per-tool field sets at wiring time --------
+  // Each registration constructs a reader gated on the exact keys of the fields
+  // that tool renders — never wider (over-gating) and never narrower
+  // (over-serving). The field set is the contract between the verifier (Stage
+  // 2b/2c) and the gate, reviewable in one place. `create_ui_spec` keeps the
+  // UNGATED reader on purpose: it gates itself (create-ui-spec-deterministic.ts)
+  // AND needs the corpus-wide entry list to build the identity screen's
+  // denied-name set.
+  registerSearchUiExamples(
+    server,
+    new TrustGatedCorpusReader(reader, ["critique", "whatToSteal", "antiPatterns", "categories", "styleTags"]),
+  );
+  registerGetUiExample(
+    server,
+    new TrustGatedCorpusReader(reader, [
+      "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
+      "voice", "visual.dominantColors", "visual.accentColor", "visual.colorRoles",
+      "visual.typePairing", "visual.spacingDensity", "visual.cornerStyle",
+      "visual.usesShadows", "visual.usesBorders",
+    ]),
+  );
+  registerListCategories(server, new TrustGatedCorpusReader(reader, ["categories"]));
+  registerListStyleTags(server, new TrustGatedCorpusReader(reader, ["styleTags"]));
+  registerListDomainTags(server, new TrustGatedCorpusReader(reader, ["domainTags"]));
+  registerGetSimilarUiExamples(
+    server,
+    new TrustGatedCorpusReader(reader, ["critique", "whatToSteal", "categories", "styleTags", "patternType"]),
+  );
+  registerCompareUiExamples(
+    server,
+    new TrustGatedCorpusReader(reader, [
+      "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
+      "categories", "styleTags", "patternType", "platform", "layout",
+      "visual.accentColor", "visual.colorRoles", "visual.spacingDensity",
+      "visual.cornerStyle", "visual.usesShadows", "visual.usesBorders",
+    ]),
+  );
   // `generate_design_prompt` is NO LONGER registered publicly — `create_ui_spec`
   // supersedes it (see LEGACY_TO_BETA_MAP in tool-contracts.ts, the documented
   // migration table, which deliberately keeps the legacy name as a row). Its
@@ -109,12 +137,18 @@ export function createServer(
   // below) so internal callers and the migration story are unaffected; only the
   // public registration is gone.
   registerCreateUiSpec(server, reader, options.createUiSpecModel);
-  registerRecommendUiDirection(server, gated);
-  registerGetAntiPatterns(server, gated);
-  registerGetColorPalette(server, gated);
-  registerGetStealableTechniques(server, gated);
-  registerBrowseUiExamples(server, gated);
-  registerCritiqueUi(server, gated);
+  registerRecommendUiDirection(
+    server,
+    new TrustGatedCorpusReader(reader, [
+      "whatToSteal", "antiPatterns", "voice", "visual.colorRoles", "visual.typePairing",
+      "visual.spacingDensity", "visual.cornerStyle", "layout", "patternType", "styleTags",
+    ]),
+  );
+  registerGetAntiPatterns(server, new TrustGatedCorpusReader(reader, ["antiPatterns"]));
+  registerGetColorPalette(server, new TrustGatedCorpusReader(reader, ["visual.colorRoles", "patternType"]));
+  registerGetStealableTechniques(server, new TrustGatedCorpusReader(reader, ["whatToSteal"]));
+  registerBrowseUiExamples(server, new TrustGatedCorpusReader(reader, ["patternType"]));
+  registerCritiqueUi(server, new TrustGatedCorpusReader(reader, ["patternType", "platform"]));
 
   return server;
 }
@@ -129,12 +163,14 @@ export function createServer(
  * trust posture whenever the reader can state one.
  */
 function emptyCorpusMessage(reader: CorpusReader, noun: string): string {
-  const posture = reader instanceof TrustGatedCorpusReader ? reader.trustPosture() : null;
-  if (posture !== null && posture.verified < posture.total) {
+  const gate = reader instanceof TrustGatedCorpusReader ? reader : null;
+  const posture = gate === null ? null : gate.trustPosture();
+  if (gate !== null && posture !== null && posture.verified < posture.total) {
     return (
-      `No ${noun} available: ${posture.verified} of ${posture.total} corpus entries carry a `
-      + `recorded verification, and corpus content is served only from verified entries. `
-      + `This is not a filter problem — broadening the query will not change it.`
+      `No ${noun} available: ${posture.verified} of ${posture.total} corpus entries are verified `
+      + `for every field this tool serves (${gate.fields.join(", ")}), and corpus content is `
+      + `served only from verified entries. This is not a filter problem — broadening the query `
+      + `will not change it.`
     );
   }
   return `No ${noun} found for those filters.`;
@@ -159,9 +195,9 @@ function unresolvedIdsMessage(reader: CorpusReader, ids: readonly string[]): str
     const one = refused.length === 1;
     parts.push(
       `${one ? "Entry" : "Entries"} ${refused.map((i) => `"${i}"`).join(", ")} `
-      + `${one ? "exists" : "exist"} but ${one ? "carries" : "carry"} no recorded verification, `
-      + `and corpus content is served only from verified entries `
-      + `(${posture.verified} of ${posture.total} verified).`,
+      + `${one ? "exists" : "exist"} but ${one ? "is" : "are"} not verified for every field this `
+      + `tool serves (${gate.fields.join(", ")}), and corpus content is served only from verified `
+      + `entries (${posture.verified} of ${posture.total} verified).`,
     );
   }
   if (absent.length > 0) {
@@ -180,12 +216,14 @@ function unresolvedIdsMessage(reader: CorpusReader, ids: readonly string[]): str
  */
 function corpusEvidenceNote(reader: CorpusReader, evidenceCount: number): string {
   if (evidenceCount > 0) return "";
-  const posture = reader instanceof TrustGatedCorpusReader ? reader.trustPosture() : null;
+  const gate = reader instanceof TrustGatedCorpusReader ? reader : null;
+  const posture = gate === null ? null : gate.trustPosture();
   if (posture === null || posture.verified >= posture.total) return "";
   return (
     `\n\n---\n_No corpus evidence backs this critique: ${posture.verified} of ${posture.total} `
-    + `corpus entries carry a recorded verification, and corpus content is served only from `
-    + `verified entries. Every finding above is grounded in the uploaded screenshot alone._`
+    + `corpus entries are verified for every field this tool serves (${gate!.fields.join(", ")}) — `
+    + `corpus content is served only from verified entries. Every finding above is grounded in the `
+    + `uploaded screenshot alone._`
   );
 }
 

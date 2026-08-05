@@ -16,20 +16,26 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createServer } from "./server-factory.js";
 import type { CorpusReader } from "./corpus-reader.js";
-import { SERVABLE_FIELD_KEYS } from "./corpus-trust.js";
 import type { CorpusEntryT } from "./schema.js";
 
 const MARKER = "STEALABLE_MARKER_7Q4";
 
+function verificationFor(fields: readonly string[]): Record<string, unknown> {
+  const record = { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "tool-gate-fixture" };
+  const map: Record<string, unknown> = {};
+  for (const field of fields) map[field] = record;
+  return map;
+}
+
+const ALL_SERVABLE_FIELDS = [
+  "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
+  "voice", "visual.dominantColors", "visual.accentColor", "visual.colorRoles",
+  "visual.typePairing", "visual.spacingDensity", "visual.cornerStyle",
+  "visual.usesShadows", "visual.usesBorders", "layout", "patternType",
+  "platform", "categories", "styleTags", "domainTags",
+] as const;
+
 function entry(verified: boolean): CorpusEntryT {
-  const record = {
-    method: "image-confirmed",
-    verifiedAt: "2026-08-04",
-    verifierVersion: "tool-gate-fixture",
-    imageSha256: "a".repeat(64),
-  };
-  const verification: Record<string, unknown> = {};
-  for (const key of SERVABLE_FIELD_KEYS) verification[key] = record;
   return {
     id: "gate-tool-entry",
     title: "GateCo — dashboard",
@@ -56,7 +62,7 @@ function entry(verified: boolean): CorpusEntryT {
       ? {
           provenance: {
             taggedBy: "auto",
-            verification,
+            verification: verificationFor(ALL_SERVABLE_FIELDS),
           },
         }
       : {}),
@@ -99,14 +105,14 @@ async function callTool(verified: boolean, name: string, args: Record<string, un
  */
 const CASES: ReadonlyArray<{ tool: string; args: Record<string, unknown>; needle: string }> = [
   { tool: "get_stealable_techniques", args: { limit: 5 }, needle: MARKER },
-  { tool: "search_ui_examples", args: { query: "dashboard", limit: 3 }, needle: "gate-tool-entry" },
+  { tool: "search_ui_examples", args: { query: "dashboard", limit: 3 }, needle: "restrained dashboard" },
   // The needle is CORPUS CONTENT, never the caller's own input: these two echo
   // the requested id back in their not-found message, so an id needle would
   // report a leak that is just the argument coming home.
   { tool: "get_ui_example", args: { id: "gate-tool-entry" }, needle: "restrained dashboard" },
   { tool: "get_anti_patterns", args: { limit: 5 }, needle: "shadow depths" },
   { tool: "get_color_palette", args: { limit: 5 }, needle: "#2563eb" },
-  { tool: "browse_ui_examples", args: {}, needle: "gate-tool-entry" },
+  { tool: "browse_ui_examples", args: {}, needle: "dashboard" },
   { tool: "get_similar_ui_examples", args: { id: "gate-tool-entry" }, needle: "restrained dashboard" },
 ];
 
@@ -196,6 +202,34 @@ describe("wiring regression detection", () => {
       expect(served, `${tool} appears to be wired to the UNGATED reader`).not.toContain(needle);
     }
   });
+
+  it("gates each tool on exactly the fields it renders", async () => {
+    // `get_color_palette` serves colorRoles + patternType; an entry verified for
+    // critique only must NOT reach it, while `get_stealable_techniques` must
+    // still serve from the same entry (whatToSteal verified).
+    const fixture = {
+      ...entry(true),
+      provenance: {
+        taggedBy: "auto",
+        verification: verificationFor(["critique", "whatToSteal"]),
+      },
+    };
+    const server = createServer(readerWith(fixture));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "field-set-test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const palette = await client.callTool({ name: "get_color_palette", arguments: { limit: 5 } });
+      const paletteText = ((palette.content ?? []) as Array<{ text?: string }>).map((c) => c.text ?? "").join("\n");
+      expect(paletteText).not.toContain("#2563eb");
+      expect(paletteText).toMatch(/verif/i);
+      const steal = await client.callTool({ name: "get_stealable_techniques", arguments: { limit: 5 } });
+      const stealText = ((steal.content ?? []) as Array<{ text?: string }>).map((c) => c.text ?? "").join("\n");
+      expect(stealText).toContain(MARKER);
+    } finally {
+      await client.close();
+    }
+  });
 });
 
 describe("the refusal messages read as English", () => {
@@ -203,7 +237,8 @@ describe("the refusal messages read as English", () => {
     // Template rendering with REAL inputs, per CLAUDE.md: the first version of
     // this message served 'Entry "x" exist but carry no recorded verification'.
     const one = await callTool(false, "get_ui_example", { id: "gate-tool-entry" });
-    expect(one).toMatch(/Entry "gate-tool-entry" exists but carries no recorded verification/);
+    expect(one).toMatch(/Entry "gate-tool-entry" exists but is not verified for every field this tool serves/);
+    expect(one).toMatch(/visual\.colorRoles/);
     const many = await callTool(false, "compare_ui_examples", {
       ids: ["gate-tool-entry", "gate-tool-entry"],
     });

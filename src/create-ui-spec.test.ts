@@ -2190,6 +2190,74 @@ describe("create_ui_spec — per-field disclosure counts", () => {
     expect(warning!.message).toMatch(/whatToSteal 0\/2/);
     expect(warning!.message).toMatch(/critique 0\/2/);
   });
+
+  it("keeps the per-field disclosure warning within the 500-char bound at max matches", async () => {
+    // Regression pin: an earlier draft of the per-field message exceeded the
+    // WarningSchema 500-char bound and every create_ui_spec response was
+    // refused at integrity verification — the HTTP suite caught it only by
+    // accident. Five matched entries (the retrieval cap) must stay under the
+    // bound and the envelope must still parse.
+    const corpus = Array.from({ length: 5 }, (_, i) =>
+      corpusEntryWithRoles(`disc-bound-${i}`, "#2563eb", "dashboard"));
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps(corpus, corpus.map((e, i) => ({ entry: e, score: 5 - i }))),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning).toBeDefined();
+    expect(warning!.message.length).toBeLessThanOrEqual(500);
+    expect(() => parseDesignArtifactEnvelope(out.envelope)).not.toThrow();
+  });
+});
+
+describe("create_ui_spec — voice/mood unavailable decisions tell the per-field truth", () => {
+  it("drops the mood row when the direction serves a mood clause", async () => {
+    const e = {
+      ...corpusEntryWithRoles("mood-v", "#2563eb", "dashboard"),
+      mood: "calm and authoritative",
+      provenance: {
+        taggedBy: "auto",
+        verification: {
+          mood: { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" },
+          "visual.colorRoles": { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" },
+        },
+      },
+    };
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps([e], [{ entry: e, score: 5 }]),
+    );
+    // The mood signal is served in the direction — the unavailable row would
+    // contradict it.
+    expect(out.envelope.spec.designDirection).toContain("mood:");
+    expect(out.envelope.spec.unavailableDecisions.some((d) => d.field === "mood")).toBe(false);
+  });
+
+  it("reports the mood row with the per-field trust cause when nothing is verified", async () => {
+    const e = corpusEntryWithRoles("mood-u", "#dc2626", "forms");
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps([e], [{ entry: e, score: 5 }]),
+    );
+    const moodRow = out.envelope.spec.unavailableDecisions.find((d) => d.field === "mood");
+    expect(moodRow).toBeDefined();
+    // The row is field-scoped by its `field: "mood"` label; the reason names
+    // the per-field trust cause and no longer claims governance never landed.
+    expect(moodRow!.reason).toMatch(/none of the matched entries carry one/);
+    expect(moodRow!.reason).not.toMatch(/governance lands/);
+  });
+
+  it("names the per-field voice cause instead of the stale governance text", async () => {
+    const e = corpusEntryWithRoles("voice-u", "#dc2626", "forms");
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps([e], [{ entry: e, score: 5 }]),
+    );
+    const voiceRow = out.envelope.spec.unavailableDecisions.find((d) => d.field === "voice");
+    expect(voiceRow).toBeDefined();
+    expect(voiceRow!.reason).toMatch(/none of the matched entries carry one/);
+    expect(voiceRow!.reason).not.toMatch(/governance lands/);
+  });
 });
 
 // ---------------------------------------------------------------------------

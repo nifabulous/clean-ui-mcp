@@ -212,6 +212,26 @@ describe("served tool surface — tools/list advertises only registered tools", 
     ).toEqual([]);
   });
 
+  it("no served description promises a citation the redaction removed", async () => {
+    // Stage 2a redacted the source-entry citations from the aggregation and
+    // stealable-technique renders, but the descriptions still advertised them.
+    // A description promising a trace that no longer renders is a served lie.
+    const tools = await listServedTools();
+    const forbidden = [
+      /Each anti-pattern lists its source entries/,
+      /Each palette links back to its source entry/,
+      /Each technique cites its source entry/,
+    ];
+    for (const tool of tools) {
+      for (const re of forbidden) {
+        expect(
+          re.test(tool.description),
+          `${tool.name} description still promises a redacted citation: ${tool.description}`,
+        ).toBe(false);
+      }
+    }
+  });
+
   it("serves a closed create_ui_spec input schema with no provider or model configuration keys", async () => {
     const served = await listServedTools();
     const tool = served.find((candidate) => candidate.name === "create_ui_spec");

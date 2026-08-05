@@ -513,9 +513,11 @@ function registerGetSimilarUiExamples(server: McpServer, reader: CorpusReader): 
         };
       }
 
+      const sourceHeader = [source.patternType, source.categories.join(", "), source.styleTags.join(", ")]
+        .filter(Boolean)
+        .join(" | ");
       const summary = [
-        `Entries similar to **${source.patternType ?? "this example"}** `
-        + `(${[source.categories.join(", "), source.styleTags.join(", ")].filter(Boolean).join(" | ")}), ranked by semantic similarity:`,
+        `Entries similar to **${sourceHeader || "corpus example"}**, ranked by semantic similarity:`,
         ``,
         ...results.map((r) => {
           const pct = Math.round(Math.max(0, r.score) * 100);
@@ -523,7 +525,7 @@ function registerGetSimilarUiExamples(server: McpServer, reader: CorpusReader): 
             .filter(Boolean)
             .join(" | ");
           return [
-            `### ${header} — ${pct}% similar`,
+            `### ${header || "corpus example"} — ${pct}% similar`,
             `Critique: ${r.entry.critique}`,
             `What to steal:`,
             ...r.entry.whatToSteal.map((t) => `  - ${t}`),
@@ -568,7 +570,9 @@ function registerCompareUiExamples(server: McpServer, reader: CorpusReader): voi
       // A11y risks are structured objects with canonical WCAG IDs — format to a string cell.
       const topRisk = (risks: AccessibilityRiskT[]) =>
         cell(risks.length ? formatAccessibilityRisk(risks[0]) : "—");
-      const header = `| Field | ${found.map((e) => cell([e.patternType, ...e.categories, ...e.styleTags].filter(Boolean).join(" — "))).join(" | ")} |`;
+      const header = `| Field | ${found.map((e) => cell(
+        [e.patternType, ...e.categories, ...e.styleTags].filter(Boolean).join(" — ") || "corpus example",
+      )).join(" | ")} |`;
       const divider = `| --- | ${found.map(() => "---").join(" | ")} |`;
       const rows = [
         `| categories | ${found.map((e) => cell(e.categories.join(", "))).join(" | ")} |`,
@@ -709,10 +713,10 @@ function registerGetAntiPatterns(server: McpServer, reader: CorpusReader): void 
       description:
         "Returns the consensus anti-patterns (common UI mistakes to avoid) for a given " +
         "pattern type, aggregated across all matching corpus entries and ranked by how " +
-        "many entries raise each one. Each anti-pattern lists its source entries so you " +
-        "can trace it back. This is the 'what NOT to do' knowledge that screenshot " +
-        "galleries can't offer — use it alongside search_ui_examples when designing a " +
-        "specific pattern. Omit patternType to get anti-patterns across the whole corpus.",
+        "many entries raise each one. This is the 'what NOT to do' knowledge that " +
+        "screenshot galleries can't offer — use it alongside search_ui_examples when " +
+        "designing a specific pattern. Omit patternType to get anti-patterns across the " +
+        "whole corpus.",
       inputSchema: {
         patternType: PatternType.optional().describe("Scope to a UI pattern (e.g. 'modal', 'dashboard'). Omit for corpus-wide."),
         category: Category.optional().describe("Further scope to a category"),
@@ -746,8 +750,8 @@ function registerGetColorPalette(server: McpServer, reader: CorpusReader): void 
         "Returns paste-ready color token sets (canvas/surface/ink/muted/accent) from " +
         "corpus entries that have colorRoles, grouped by accent hue band (red, blue, " +
         "green, etc.). Use this when you want real-world palettes for a specific pattern " +
-        "('calm palettes for a dashboard') rather than generating from scratch. Each " +
-        "palette links back to its source entry. Sorted by accent hue for visual grouping.",
+        "('calm palettes for a dashboard') rather than generating from scratch. Sorted by " +
+        "accent hue for visual grouping.",
       inputSchema: {
         patternType: PatternType.optional().describe("Scope to a UI pattern"),
         styleTag: StyleTag.optional().describe("Scope to a style (e.g. 'minimal', 'playful')"),
@@ -784,9 +788,9 @@ function registerGetStealableTechniques(server: McpServer, reader: CorpusReader)
       description:
         "Returns concrete, copyable techniques to borrow from corpus entries, scoped to " +
         "a pattern type and/or style tag. Deduped by theme so you get variety, not " +
-        "repeats. Each technique cites its source entry. Use this when you want a " +
-        "menu of specific ideas for a pattern ('what can I steal for a dense data " +
-        "table?') rather than a synthesized spec (use create_ui_spec for that).",
+        "repeats. Use this when you want a menu of specific ideas for a pattern " +
+        "('what can I steal for a dense data table?') rather than a synthesized spec " +
+        "(use create_ui_spec for that).",
       inputSchema: {
         patternType: PatternType.optional().describe("Scope to a UI pattern"),
         styleTag: StyleTag.optional().describe("Scope to a style"),

@@ -1088,13 +1088,6 @@ function assembleSpec(
   // content keep their unavailable reasons (the voice row is dropped exactly
   // when synthesis serves contentVoiceGuidance below); rejectedDefaults and
   // mood have no served slot in Phase 1.
-  const c3Unavailable: UiSpecT["unavailableDecisions"] = [
-    { field: "rejectedDefaults", reason: "Anti-pattern prose is not served; derived from corpus judgments after governance." },
-    // Once synthesis serves contentVoiceGuidance, the voice-unavailable row
-    // would be false; it is dropped below exactly when voice content survives.
-    ...(synthesis?.contentVoiceGuidance ? [] : [{ field: "voice", reason: "Voice analysis prose is not served until provenance governance lands." }]),
-    { field: "mood", reason: "Mood is not served until provenance governance lands." },
-  ];
   // Reasons for the five gated array fields. The row's EMISSION is conditioned
   // on the served value being empty; its WORDING must name the actual cause, or
   // the row becomes the confidently-wrong output this whole change exists to
@@ -1111,7 +1104,8 @@ function assembleSpec(
   // tool-contracts.ts:793-796).
   const matchedForReason = resolved.matchedEntries.length;
   const GATED_FIELD_KEYS: Record<
-    "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior" | "accessibilityConstraints",
+    "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior"
+      | "accessibilityConstraints" | "voice" | "mood",
     string
   > = {
     techniques: "whatToSteal",
@@ -1119,11 +1113,14 @@ function assembleSpec(
     componentInventory: "components",
     responsiveBehavior: "responsiveBehavior",
     accessibilityConstraints: "antiPatterns.accessibilityRisks",
+    voice: "voice",
+    mood: "mood",
   };
   const verifiedForKey = (key: string): number =>
     resolved.matchedEntries.filter((m) => isVerified(m.entry, key)).length;
   const gatedReasonFor = (
-    field: "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior" | "accessibilityConstraints",
+    field: "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior"
+      | "accessibilityConstraints" | "voice" | "mood",
   ): string => {
     const key = GATED_FIELD_KEYS[field];
     const verifiedForThisField = verifiedForKey(key);
@@ -1141,6 +1138,15 @@ function assembleSpec(
             ? `Only ${verifiedForThisField} of ${matchedForReason} matched entries are verified for ${key}, and those recorded nothing servable for this field.`
             : "The verified corpus entries recorded nothing servable for this field.";
   };
+  // Voice and mood are served through other fields (contentVoiceGuidance, the
+  // direction's signal clauses), so their unavailable rows are conditional on
+  // what actually served and use the same per-field trust cause as the gated
+  // array fields. `rejectedDefaults` has no served slot in Phase 1.
+  const c3Unavailable: UiSpecT["unavailableDecisions"] = [
+    { field: "rejectedDefaults", reason: "Anti-pattern prose is not served; derived from corpus judgments after governance." },
+    ...(synthesis?.contentVoiceGuidance ? [] : [{ field: "voice", reason: gatedReasonFor("voice") }]),
+    ...(synthesis?.moodServed ? [] : [{ field: "mood", reason: gatedReasonFor("mood") }]),
+  ];
   const gatedEmpty = (
     field: "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior" | "accessibilityConstraints",
   ): boolean =>

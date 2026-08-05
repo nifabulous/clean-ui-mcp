@@ -145,7 +145,7 @@ export function generateBrief(entries: CorpusEntryT[], input: GenerateBriefInput
       : (e.visual.typePairing.notes && e.visual.typePairing.notes.length > 30) ? "typography hierarchy"
       : e.voice?.tone ? "voice & copy"
       : (e.layout?.regions?.length ?? 0) > 0 ? "layout structure"
-      : "critique & technique",
+      : "pattern example",
   }));
 
   // ── direction: one paragraph tying it together.

@@ -65,6 +65,8 @@ export interface DeterministicSynthesis {
   colorRoleEvidenceIds: readonly string[];
   /** Evidence ids of the entries whose clauses produced designDirection. */
   designDirectionEvidenceIds: readonly string[];
+  /** True when the composed direction actually served a mood signal clause. */
+  moodServed: boolean;
 }
 
 /**
@@ -400,12 +402,13 @@ export function createUiSpecDeterministic(
   // states the pairing.
   const signalClauses: string[] = [];
   let signalChars = 0;
-  const pushSignal = (clause: string, ids: readonly string[]): void => {
+  const pushSignal = (clause: string, ids: readonly string[]): boolean => {
     const cost = clause.length + (signalClauses.length > 0 ? SIGNAL_JOIN.length : 0);
-    if (signalChars + cost > MAX_DIRECTION_SIGNAL_CHARS) return;
+    if (signalChars + cost > MAX_DIRECTION_SIGNAL_CHARS) return false;
     signalClauses.push(clause);
     clauseIds.push(...ids);
     signalChars += cost;
+    return true;
   };
   if (styleTags.length > 0) pushSignal(`style tags: ${styleTags.join(", ")}`, styleTagPairs.map((m) => m.evidenceId));
   if (categories.length > 0) pushSignal(`categories: ${categories.join(", ")}`, categoryPairs.map((m) => m.evidenceId));
@@ -415,7 +418,13 @@ export function createUiSpecDeterministic(
       schemePairs.map((m) => m.evidenceId),
     );
   }
-  if (moods.length > 0) pushSignal(`mood: ${moods.map(withoutTrailingPeriod).join(VALUE_JOIN)}`, moodPairs.map((m) => m.evidenceId));
+  let moodServed = false;
+  if (moods.length > 0) {
+    moodServed = pushSignal(
+      `mood: ${moods.map(withoutTrailingPeriod).join(VALUE_JOIN)}`,
+      moodPairs.map((m) => m.evidenceId),
+    );
+  }
   if (critiques.length > 0) pushSignal(`critique: ${withoutTrailingPeriod(critiques.join(" "))}`, critiquePairs.map((m) => m.evidenceId));
   if (typeNotes.length > 0) pushSignal(`type notes: ${withoutTrailingPeriod(typeNotes.join(" "))}`, typePairingPairs.map((m) => m.evidenceId));
 
@@ -548,5 +557,6 @@ export function createUiSpecDeterministic(
     responsiveBehaviorEvidenceIds,
     colorRoleEvidenceIds,
     designDirectionEvidenceIds,
+    moodServed,
   };
 }

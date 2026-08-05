@@ -265,6 +265,37 @@ describe("keyless redaction — retrieval tools", () => {
   });
 });
 
+describe("keyless redaction — empty keyed headers degrade gracefully", () => {
+  it("similar/compare never render an empty header shell", async () => {
+    // An entry with NO patternType/categories/styleTags content (but verified
+    // for the fields those tools serve) must not render "###  — 25% similar"
+    // or "**this example** ()" — a bare shell with no keyed identity.
+    const bare = {
+      ...entry(true),
+      patternType: undefined,
+      categories: [],
+      styleTags: [],
+    };
+    const server = createServer(readerWith(bare));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "empty-header-test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const similar = await client.callTool({ name: "get_similar_ui_examples", arguments: { id: "gate-tool-entry" } });
+      const similarText = ((similar.content ?? []) as Array<{ text?: string }>).map((c) => c.text ?? "").join("\n");
+      expect(similarText).not.toMatch(/###\s+—/);
+      expect(similarText).not.toMatch(/this example\s*\(\)/);
+      expect(similarText).toContain("restrained dashboard");
+      const compare = await client.callTool({ name: "compare_ui_examples", arguments: { ids: ["gate-tool-entry", "gate-tool-entry"] } });
+      const compareText = ((compare.content ?? []) as Array<{ text?: string }>).map((c) => c.text ?? "").join("\n");
+      expect(compareText).not.toMatch(/\| Field \| {2,}\|/);
+      expect(compareText).toContain("restrained dashboard");
+    } finally {
+      await client.close();
+    }
+  });
+});
+
 describe("keyless redaction — get_ui_example", () => {
   it("renders the verified record without identity and without the source-URL promise", async () => {
     const served = await callTool(true, "get_ui_example", { id: "gate-tool-entry" });

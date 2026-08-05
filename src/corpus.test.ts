@@ -330,7 +330,9 @@ describe("searchMode compatibility (C2 Task 6)", () => {
     });
     // The shipped call returns up to 5 entries; the fake returned one.
     expect(result.entries).toHaveLength(1);
-    expect(result.entries[0]!.id).toBe("critique-1");
+    // The served projection carries no entry id (keyless identity); the keyed
+    // fingerprint of the fixture entry is its patternType.
+    expect(result.entries[0]!.patternType).toBe(fixtures[0]!.patternType);
     expect(result.fallbackUsed).toBe(true);
   });
 

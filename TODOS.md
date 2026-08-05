@@ -322,6 +322,15 @@ trusted subset, and `TrustGatedCorpusReader` (`src/corpus-trust-reader.ts`) wrap
 the reader every OTHER corpus-reading tool sees. **Zero of 787 entries carry the
 record**, so the whole server serves nothing corpus-derived today.
 
+Stage 2a (shipped, `docs/superpowers/plans/2026-08-05-per-field-verification.md`)
+corrected Stage 1's entry-level record before any entry carried one:
+`provenance.verification` is now a per-field map, `isVerified(entry, field)`
+requires the field, the deterministic body selects per field
+(`verifiedFor(field)`), the evidence projection strips each row to its verified
+facts, and `TrustGatedCorpusReader` gates on a per-tool field set declared at
+wiring time in `createServer`. The corpus browser stays dark (zero records), and
+the "0 of 787" messages name the field set the tool serves.
+
 **The corpus browser is dark until this ships.** `search_ui_examples`,
 `get_ui_example`, `browse_ui_examples`, `get_stealable_techniques`,
 `get_anti_patterns`, `get_color_palette`, `get_similar_ui_examples`,

@@ -2054,7 +2054,7 @@ describe("create_ui_spec — trust disclosure", () => {
     );
     const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
     expect(warning, "expected an insufficientCorpusEvidence warning").toBeDefined();
-    expect(warning?.message).toMatch(/0 of 1/);
+    expect(warning?.message).toMatch(/visual\.colorRoles 0\/1/);
     // Retrieval is still reported truthfully: matches were found.
     expect(out.envelope.retrieval.resultCount).toBeGreaterThan(0);
   });
@@ -2069,7 +2069,8 @@ describe("create_ui_spec — trust disclosure", () => {
 
   it("warns with N of M when SOME matched entries are verified", async () => {
     // The partial case is the branch that distinguishes "trusted some" from
-    // "trusted none": one verified + one unverified entry must report "1 of 2".
+    // "trusted none": one verified + one unverified entry must report a
+    // per-field count of 1 for every disclosed field.
     const verified = corpusEntryWithRoles("disc-v", "#2563eb", "dashboard");
     verify([verified]);
     const unverified = corpusEntryWithRoles("disc-u", "#dc2626", "forms");
@@ -2080,7 +2081,8 @@ describe("create_ui_spec — trust disclosure", () => {
     );
     const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
     expect(warning).toBeDefined();
-    expect(warning?.message).toMatch(/1 of 2/);
+    expect(warning?.message).toMatch(/visual\.colorRoles 1\/2/);
+    expect(warning?.message).toMatch(/whatToSteal 1\/2/);
   });
 
   it("emits no trust warning when every matched entry is verified", async () => {
@@ -2137,6 +2139,56 @@ describe("create_ui_spec — per-field evidence projection strip", () => {
     expect(out.envelope.spec.techniques.map((t) => t.text)).not.toContain(
       "Prose from an entry with no structured claim.",
     );
+  });
+});
+
+describe("create_ui_spec — per-field disclosure counts", () => {
+  it("counts a whatToSteal-only entry toward whatToSteal and no other row", async () => {
+    const only = {
+      ...entry("disc-wts", "ProductW", "dashboard", { whatToSteal: ["One verified technique."] }),
+      provenance: {
+        taggedBy: "auto",
+        verification: { whatToSteal: { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" } },
+      },
+    };
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps([only], [{ entry: only, score: 5 }]),
+    );
+    const rows = out.envelope.spec.unavailableDecisions;
+    const techniquesRow = rows.find((d) => d.field === "techniques");
+    const antiPatternsRow = rows.find((d) => d.field === "antiPatterns");
+    // The entry IS verified for whatToSteal, but its response-scoped row was
+    // dropped (no structured claim), so nothing servable survived the citation
+    // gate — the truthful branch is "recorded nothing servable".
+    expect(techniquesRow?.reason).toMatch(/verified corpus entries recorded nothing servable/);
+    // The same entry counts toward NO other row.
+    expect(antiPatternsRow?.reason).toMatch(/none of the matched entries carry one/);
+  });
+
+  it("names per-field counts in the disclosure warning", async () => {
+    // Verified for visual.colorRoles ONLY — the warning must report 1 for that
+    // field and 0 for every prose field, in the same message.
+    const verified = {
+      ...corpusEntryWithRoles("disc-v", "#2563eb", "dashboard"),
+      provenance: {
+        taggedBy: "auto",
+        verification: { "visual.colorRoles": { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" } },
+      },
+    };
+    const unverified = corpusEntryWithRoles("disc-u", "#dc2626", "forms");
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps([verified, unverified], [
+        { entry: verified, score: 5 },
+        { entry: unverified, score: 4 },
+      ]),
+    );
+    const warning = out.envelope.warnings.find((w) => w.code === "insufficientCorpusEvidence");
+    expect(warning).toBeDefined();
+    expect(warning!.message).toMatch(/visual\.colorRoles 1\/2/);
+    expect(warning!.message).toMatch(/whatToSteal 0\/2/);
+    expect(warning!.message).toMatch(/critique 0\/2/);
   });
 });
 

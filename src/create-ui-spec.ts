@@ -87,10 +87,9 @@ import {
   type ModelExecution,
 } from "./create-ui-spec-model-contracts.js";
 import { createUiSpecDeterministic } from "./create-ui-spec-deterministic.js";
-// `verifiedFields` is used by the trust-disclosure warning (Task 4) and the
-// model lane's interim prompt-grounding filter; `isVerified` by the per-field
-// evidence projection (Stage 2a).
-import { isVerified, verifiedFields } from "./corpus-trust.js";
+// `isVerified` is used by the per-field evidence projection (Stage 2a) and the
+// per-field disclosure counts (Task 10).
+import { isVerified } from "./corpus-trust.js";
 import { ModelArtifactRollbackIncompleteError } from "./model-artifact-store.js";
 import {
   buildCorpusObservationSummary,
@@ -1111,9 +1110,24 @@ function assembleSpec(
   // Each row appears at most once (uniqueness is enforced by
   // tool-contracts.ts:793-796).
   const matchedForReason = resolved.matchedEntries.length;
-  const verifiedForReason = resolved.matchedEntries.filter((m) => verifiedFields(m.entry).size > 0).length;
-  const gatedReason =
-    synthesis === null
+  const GATED_FIELD_KEYS: Record<
+    "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior" | "accessibilityConstraints",
+    string
+  > = {
+    techniques: "whatToSteal",
+    antiPatterns: "antiPatterns",
+    componentInventory: "components",
+    responsiveBehavior: "responsiveBehavior",
+    accessibilityConstraints: "antiPatterns.accessibilityRisks",
+  };
+  const verifiedForKey = (key: string): number =>
+    resolved.matchedEntries.filter((m) => isVerified(m.entry, key)).length;
+  const gatedReasonFor = (
+    field: "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior" | "accessibilityConstraints",
+  ): string => {
+    const key = GATED_FIELD_KEYS[field];
+    const verifiedForThisField = verifiedForKey(key);
+    return synthesis === null
       ? "Corpus judgment is not synthesized on the model lane; the proposal carries the model's own direction instead."
       : matchedForReason === 0
         // Zero-match and explicit-reference paths consult no corpus entry at all
@@ -1121,22 +1135,23 @@ function assembleSpec(
         // so a reason about what verified entries did or did not record asserts a
         // consultation that never happened.
         ? "No corpus observations were retrieved for this request, so nothing was available to serve for this field."
-        : matchedForReason > 0 && verifiedForReason === 0
-        ? "Corpus judgment is served only from entries with a recorded verification; none of the matched entries carry one."
-        : verifiedForReason < matchedForReason
-          ? `Only ${verifiedForReason} of ${matchedForReason} matched entries carry a recorded verification, and those recorded nothing servable for this field.`
-          : "The verified corpus entries recorded nothing servable for this field.";
+        : matchedForReason > 0 && verifiedForThisField === 0
+          ? "Corpus judgment is served only from entries with a recorded verification for this field; none of the matched entries carry one."
+          : verifiedForThisField < matchedForReason
+            ? `Only ${verifiedForThisField} of ${matchedForReason} matched entries are verified for ${key}, and those recorded nothing servable for this field.`
+            : "The verified corpus entries recorded nothing servable for this field.";
+  };
   const gatedEmpty = (
     field: "techniques" | "antiPatterns" | "componentInventory" | "responsiveBehavior" | "accessibilityConstraints",
   ): boolean =>
     ((synthesis && synthesis[field].length > 0 ? synthesis[field] : specFields[field]) as readonly unknown[])
       .length === 0;
   const c3TrustGated: UiSpecT["unavailableDecisions"] = [
-    ...(gatedEmpty("techniques") ? [{ field: "techniques", reason: gatedReason }] : []),
-    ...(gatedEmpty("antiPatterns") ? [{ field: "antiPatterns", reason: gatedReason }] : []),
-    ...(gatedEmpty("componentInventory") ? [{ field: "componentInventory", reason: gatedReason }] : []),
-    ...(gatedEmpty("responsiveBehavior") ? [{ field: "responsiveBehavior", reason: gatedReason }] : []),
-    ...(gatedEmpty("accessibilityConstraints") ? [{ field: "accessibilityConstraints", reason: gatedReason }] : []),
+    ...(gatedEmpty("techniques") ? [{ field: "techniques", reason: gatedReasonFor("techniques") }] : []),
+    ...(gatedEmpty("antiPatterns") ? [{ field: "antiPatterns", reason: gatedReasonFor("antiPatterns") }] : []),
+    ...(gatedEmpty("componentInventory") ? [{ field: "componentInventory", reason: gatedReasonFor("componentInventory") }] : []),
+    ...(gatedEmpty("responsiveBehavior") ? [{ field: "responsiveBehavior", reason: gatedReasonFor("responsiveBehavior") }] : []),
+    ...(gatedEmpty("accessibilityConstraints") ? [{ field: "accessibilityConstraints", reason: gatedReasonFor("accessibilityConstraints") }] : []),
   ];
   // The recipe ALREADY declares a colorTokens unavailableDecision
   // (fallback-recipe-v1.json); the UiSpec gate requires unavailableDecisions
@@ -1493,23 +1508,35 @@ function buildWarnings(resolved: ResolvedEvidence): DesignArtifactEnvelope["warn
       message: "Sparse evidence: automatic retrieval returned zero matches; the deterministic fallback recipe was used.",
     });
   }
-  // Trust disclosure. "We found matches and did not trust them" is a truthful
-  // state and must be distinguishable from "we found nothing", so the message
-  // carries both numbers. Reuses the already-classified
-  // insufficientCorpusEvidence code rather than introducing a numeric field that
-  // the strict envelope/data schemas would then have to declare.
+  // Trust disclosure, per field. One number cannot describe ten claims: an
+  // entry verified for `whatToSteal` only must count toward the whatToSteal
+  // row and no other. The message names what was and was not verified rather
+  // than reporting one count that averages incomparable things. Reuses the
+  // already-classified insufficientCorpusEvidence code rather than introducing
+  // a numeric field the strict envelope/data schemas would have to declare.
   //
   // The guard is `matchedCount > 0`: with zero matches the `sparseCoverage`
   // warning above already tells the truth, and a second warning would
   // double-report the same fact.
   const matchedCount = resolved.matchedEntries.length;
-  const verifiedCount = resolved.matchedEntries.filter((m) => verifiedFields(m.entry).size > 0).length;
-  if (matchedCount > 0 && verifiedCount < matchedCount) {
+  const DISCLOSED_FIELD_KEYS = [
+    "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks", "voice",
+    "components", "responsiveBehavior", "visual.colorRoles", "layout",
+    "visual.typePairing", "visual.spacingDensity", "visual.cornerStyle",
+    "visual.usesShadows", "visual.usesBorders", "styleTags", "categories",
+    "mood", "colorScheme", "critique",
+  ] as const;
+  const perFieldCounts = DISCLOSED_FIELD_KEYS
+    .map((field) => `${field} ${resolved.matchedEntries.filter((m) => isVerified(m.entry, field)).length}/${matchedCount}`)
+    .join(", ");
+  const anyShortfall = DISCLOSED_FIELD_KEYS.some((field) =>
+    resolved.matchedEntries.filter((m) => isVerified(m.entry, field)).length < matchedCount);
+  if (matchedCount > 0 && anyShortfall) {
     warnings.push({
       code: "insufficientCorpusEvidence",
       message:
-        `${verifiedCount} of ${matchedCount} matched corpus entries carry a recorded ` +
-        `verification; corpus judgment is served only from verified entries.`,
+        `${matchedCount} matched corpus entries; verified per field — ${perFieldCounts}. ` +
+        `Corpus judgment is served only from entries verified for the field that feeds it.`,
     });
   }
   // Motion is always model-dependent + unavailable in this milestone.

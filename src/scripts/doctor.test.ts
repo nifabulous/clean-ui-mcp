@@ -714,3 +714,38 @@ describe("per-key verification integrity", () => {
     expect(detectors).not.toContain("unassessed-quality");
   });
 });
+
+const PROVABLE_PLATFORM = {
+  method: "provable" as const,
+  verifiedAt: "2026-08-04",
+  verifierVersion: "v1",
+};
+
+describe("platform-record-stale", () => {
+  it("flags a verified platform whose recorded value no longer matches its dimensions", () => {
+    // 390x844 is portrait (height > width * 1.2) -> detectPlatform returns
+    // "mobile", but the entry records "web". A re-capture that changed the
+    // dimensions (or a bad backfill) left the platform stale with no other
+    // detector able to see it — platform is `provable`, not `image-confirmed`,
+    // so the image-hash staleness check never runs for it.
+    const entries = [defectEntry("stale-platform", {
+      platform: "web",
+      image: { visibility: "public-own", path: "images-public/stale-platform.png", width: 390, height: 844 },
+      provenance: { taggedBy: "auto", verification: { platform: PROVABLE_PLATFORM } },
+    })];
+    const findings = summarizeCorpusDefects(entries, ALL_IMAGES);
+    expect(findings.map((f) => f.detector)).toContain("platform-record-stale");
+  });
+
+  it("stays silent when the recorded platform still matches its dimensions", () => {
+    // Same 390x844 portrait dims, but this time the entry records "mobile" —
+    // detectPlatform(390, 844) agrees, so there is nothing stale to report.
+    const entries = [defectEntry("consistent-platform", {
+      platform: "mobile",
+      image: { visibility: "public-own", path: "images-public/consistent-platform.png", width: 390, height: 844 },
+      provenance: { taggedBy: "auto", verification: { platform: PROVABLE_PLATFORM } },
+    })];
+    const findings = summarizeCorpusDefects(entries, ALL_IMAGES);
+    expect(findings.map((f) => f.detector)).not.toContain("platform-record-stale");
+  });
+});

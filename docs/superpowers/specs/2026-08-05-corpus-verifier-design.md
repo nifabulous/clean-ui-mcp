@@ -53,8 +53,8 @@ model call:
 ```
 entry + image (imageSha256 bound)
   1. mechanical checks (free, no model)
-       platform        → detectPlatform(w,h) === recorded?   → measured
-       dominantColors  → extract top-N from pixels, match?    → measured
+       platform        → detectPlatform(w,h) === recorded?   → provable (no hash, data-derived)
+       dominantColors  → extract top-N from pixels, match?    → image-confirmed (hash-bound)
   2. verify existing judgment fields (one independent vision pass)
        per field: a precise, checkable claim, adversarially confirmed
          holds → image-confirmed record, prose kept as-is
@@ -79,7 +79,7 @@ by evidence tier:
 
 | class | fields | "verified" means | tier |
 |---|---|---|---|
-| **Re-derivable** | `platform`, `visual.dominantColors` | the recorded value is independently recomputed from the image and matches | `image-confirmed` (no model - see the record-tier note below) |
+| **Re-derivable** | `platform`, `visual.dominantColors` | the recorded value is independently recomputed from the image and matches | split by evidence — see the record-tier note below |
 | **Factual claim** | `visual.colorRoles`, `visual.accentColor`, `layout`, `components`, `visual.usesShadows`, `visual.usesBorders`, `visual.typePairing` | a precise assertion ("canvas=#fff; a left nav rail exists; a mono face is used") the vision pass CONFIRMS true, adversarially | `image-confirmed` |
 | **Factual claim (a11y)** | `antiPatterns.accessibilityRisks` | each recorded risk names an element and a WCAG criterion; the vision pass confirms the risk is genuinely present (e.g. the cited text really is low-contrast) | `image-confirmed` |
 | **Prose over facts** | `critique`, `whatToSteal`, `antiPatterns`, `voice` | extract the prose's factual assertions (named colours, regions, components) and confirm EACH; image-confirm the field only if every checkable assertion holds | `image-confirmed` |
@@ -90,15 +90,28 @@ by evidence tier:
 extract reliably), so it is treated as a **factual claim** confirmed against the
 image rather than re-derived — the honest tier, given extraction unreliability.
 
-**Record-tier note - pixel evidence is `image-confirmed`, never `measured`.**
+**Record-tier note - the two re-derivable fields split by evidence, not both
+`image-confirmed`.** `visual.dominantColors` is recomputed from the image's
+PIXELS (`extractQuantizedColors`), so it carries the same re-capture staleness
+risk as any other image-bound value and is recorded `image-confirmed` with
+`imageSha256` bound to the exact bytes read. `platform`, by contrast, is
+recomputed from the recorded DIMENSIONS (`detectPlatform(width, height)`) — data
+already on the entry, not pixel evidence — so it is recorded `provable`, with NO
+image hash. "measured" is the tagger's DOM-evidence tier and is used by neither.
+
 The record shape binds `imageSha256` only to `image-confirmed` records, and the
-doctor's `verified-hash-stale` / `verified-image-missing` checks run only for
-that method (`corpus-trust.ts:82`, `doctor-helpers.ts:540-576`). `platform` and
-`visual.dominantColors` are derived from the IMAGE - the pixels and the image's
-dimensions - so they carry the same re-capture staleness risk as any other
-image-bound value. Their records therefore use `method: "image-confirmed"` with
-the hash, even though the check is mechanical and model-free. "measured" is the
-tagger's DOM-evidence tier and is not used by this stage.
+doctor's `verified-hash-stale` / `verified-image-missing` staleness checks run
+only for that method (`corpus-trust.ts:85`, and the image-confirmed-gated block
+in `doctor-helpers.ts`).
+Because `platform` is `provable`, those two checks never see it — a re-capture
+that changes an image's dimensions (or a bad backfill) could otherwise leave a
+stale `platform` record serving with no flag. The mitigation is a dedicated
+doctor detector, `platform-record-stale` (`doctor-helpers.ts`), which
+re-derives `detectPlatform` from the entry's recorded dimensions for every
+verified `platform` record — of any method — and flags a mismatch. This is a
+different check than the hash-staleness pair: it re-runs the recomputation
+itself rather than comparing a hash, which is exactly the evidence `provable`
+actually rests on.
 
 **Re-derivation semantics.** `visual.dominantColors` reuses the tagger's
 deterministic extractor - `extractQuantizedColors(imagePath)` (`tagger.ts:272`),
@@ -203,15 +216,18 @@ change, not a rewrite.
   re-runs only those fields.
 - **The doctor is the standing check.** After a run, `doctor.js` reports the
   verified-per-field counts and any `verification-malformed` / `verification-orphan-key`
-  / `verified-hash-stale` finding — the same detectors shipped in 2a.
+  / `verified-hash-stale` / `platform-record-stale` finding — the 2a detectors plus
+  the `platform-record-stale` re-derivation check this stage adds (the standing guard
+  for `provable` platform records, which the hash-based staleness checks never see).
 
 ## Out of scope
 
 - **Re-capture / DOM signals.** 782 of 787 entries are manual uploads with no DOM.
   A `measured`-from-live-DOM tier (computed styles for colorRoles, typePairing,
   borders) would need re-visiting source URLs and recording DOM — a separate,
-  larger effort. This stage measures only what the pixels and recorded numbers
-  give: `platform` and `dominantColors`.
+  larger effort. This stage re-derives only what the pixels and recorded numbers
+  give: `dominantColors` from the pixels (`image-confirmed`) and `platform` from
+  the recorded dimensions (`provable`) — neither is the DOM-evidence `measured` tier.
 - **Cross-model verify** (produce with A, verify with B) — the verifier is built to
   allow it, but shipping two providers is a follow-up.
 - **The per-entry field-set gating decision** flagged by the #95 reviewers

@@ -735,9 +735,10 @@ and `npm run test` cover every pure-logic path — the tier table, prompt
 building, fail-closed parsing, resume/merge semantics, and the isolation seam
 (`--corpus` never touches the real corpus) — with zero model calls. The
 model-dependent steps (the dry-run calibration slice, the known-bad-entry-must-
-FAIL check, and the 30-entry stratified sample above) require live
-`VERIFY_VISION_*` keys and real model spend; they are operator steps, run once
-before the first full write, not part of the automated test suite.
+FAIL check, and the 30-entry stratified sample above) require
+`VERIFY_VISION_PROVIDER` (or `--vision-provider`) plus the chosen provider's
+own keys, and real model spend; they are operator steps, run once before the
+first full write, not part of the automated test suite.
 
 ---
 

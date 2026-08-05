@@ -87,9 +87,10 @@ import {
   type ModelExecution,
 } from "./create-ui-spec-model-contracts.js";
 import { createUiSpecDeterministic } from "./create-ui-spec-deterministic.js";
-// `verifiedFields` is used by the trust-disclosure warning (Task 4);
-// `trustedEvidenceIdsOf` by the model lane's prompt-grounding filter (Task 2).
-import { verifiedFields, trustedEvidenceIdsOf } from "./corpus-trust.js";
+// `verifiedFields` is used by the trust-disclosure warning (Task 4) and the
+// model lane's interim prompt-grounding filter; `isVerified` by the per-field
+// evidence projection (Stage 2a).
+import { isVerified, verifiedFields } from "./corpus-trust.js";
 import { ModelArtifactRollbackIncompleteError } from "./model-artifact-store.js";
 import {
   buildCorpusObservationSummary,
@@ -255,36 +256,22 @@ async function buildModelAwareEnvelope(
     );
   }
 
-  // C3 trust gate: what the MODEL sees must be trusted, even though the served
-  // evidence[] rows stay ungated (response-scoped, no authority claim). An
-  // unverified entry's derived summary must not steer a proposal.
-  //
-  // Narrow ONLY corpus observations, exactly like the deterministic filter does.
-  // `resolved.sanitized[0]` is the recipe/system row from
-  // `buildRecipeSystemEvidence()` (kind "recipe-system", evidence-1): it has no
-  // `matchedEntries` pair, so a flat `trustedEvidenceIds.has(row.id)` filter
-  // would drop it. That row carries no corpus claim at all, so dropping it is
-  // over-gating -- it would remove recipe context the trust gate has no reason
-  // to touch. Zero verified corpus entries therefore leaves the recipe row and
-  // no corpus grounding, which is the intended state.
+  // C3 trust gate (Stage 2a): the per-field evidence projection strips each
+  // corpus row down to its VERIFIED facts before it reaches any consumer, so
+  // the model sees exactly the grounded facts and never more. Stage 1's
+  // row-level `trustedEvidenceIdsOf` narrowing is superseded by the strip — a
+  // surviving corpus row carries only verified facts, and a row with none was
+  // dropped at construction. The recipe/system row carries no corpus claim and
+  // passes through untouched, so Stage 1's zero-verified state (recipe row
+  // only, no corpus grounding) is preserved.
   //
   // `SanitizedEvidenceSchema.array()` carries no `.min(1)`
   // (create-ui-spec-model.ts:87), so a corpus-free list parses rather than
   // rejecting the proposal.
-  // Interim (Stage 2a, Task 2): `trustedEvidenceIdsOf` is per-field now, and
-  // the model lane's any-field narrowing keeps Stage 1 semantics until Task 3's
-  // per-field strip supersedes this filter entirely.
-  const trustedRowIds = new Set(
-    resolved.matchedEntries
-      .filter((m) => verifiedFields(m.entry).size > 0)
-      .map((m) => m.evidenceId),
-  );
   const outcome = await createUiSpecModel(
     {
       request,
-      sanitizedEvidence: resolved.sanitized.filter(
-        (row) => row.kind !== "corpus-observation" || trustedRowIds.has(row.id),
-      ),
+      sanitizedEvidence: resolved.sanitized,
     },
     model.runtime,
   );
@@ -598,7 +585,8 @@ async function resolveAutomaticRetrieval(
   let corpusCount = 0;
   for (const r of top) {
     const id = `evidence-${nextId++}`;
-    sanitized.push(sanitizeCorpusObservation(id, r.entry));
+    const row = sanitizeCorpusObservation(id, r.entry);
+    if (row !== null) sanitized.push(row);
     matchedEntries.push({ evidenceId: id, entry: r.entry });
     corpusCount++;
   }
@@ -665,27 +653,32 @@ async function resolveAutomaticRetrieval(
  *
  * The summary is generated from a FIXED recipe template keyed by those tokens —
  * never from critique/voice/product-name/url/screenshot/prose.
+ *
+ * Stage 2a: a fact is projected only when ITS OWN key is verified for this
+ * entry. A row whose facts are all stripped returns null and is dropped by the
+ * caller — it carries no verified corpus-derived value, and serving it would
+ * publish a summary that asserts nothing grounded.
  */
-function sanitizeCorpusObservation(id: string, entry: CorpusEntryT): SanitizedEvidence {
+function sanitizeCorpusObservation(id: string, entry: CorpusEntryT): SanitizedEvidence | null {
   const structuredFacts: SanitizedEvidence["structuredFacts"] = {};
-  // patternType is a closed enum token — safe to project.
-  if (entry.patternType && typeof entry.patternType === "string") {
+  // patternType is a closed enum token — safe to project when verified.
+  if (isVerified(entry, "patternType") && entry.patternType && typeof entry.patternType === "string") {
     structuredFacts.pattern = entry.patternType;
   }
   // regionCount is a bounded count derived from the optional layout wireframe.
   const regionCount = entry.layout?.regions?.length;
-  if (typeof regionCount === "number" && Number.isFinite(regionCount)) {
+  if (isVerified(entry, "layout") && typeof regionCount === "number" && Number.isFinite(regionCount)) {
     structuredFacts.regionCount = Math.min(Math.max(Math.trunc(regionCount), 0), 50);
   }
   // usesStickyHeader / usesIconography: the corpus schema does not record these
   // truthfully, so we OMIT them (undefined) rather than fabricate.
   const visual = entry.visual;
-  if (visual?.spacingDensity) structuredFacts.spacingDensity = visual.spacingDensity;
-  if (visual?.cornerStyle) structuredFacts.cornerStyle = visual.cornerStyle;
-  if (typeof visual?.usesShadows === "boolean") structuredFacts.usesShadows = visual.usesShadows;
-  if (typeof visual?.usesBorders === "boolean") structuredFacts.usesBorders = visual.usesBorders;
-  if (visual?.accentColor) structuredFacts.accentColor = visual.accentColor;
-  if (visual?.colorRoles) structuredFacts.colorRoles = {
+  if (isVerified(entry, "visual.spacingDensity") && visual?.spacingDensity) structuredFacts.spacingDensity = visual.spacingDensity;
+  if (isVerified(entry, "visual.cornerStyle") && visual?.cornerStyle) structuredFacts.cornerStyle = visual.cornerStyle;
+  if (isVerified(entry, "visual.usesShadows") && typeof visual?.usesShadows === "boolean") structuredFacts.usesShadows = visual.usesShadows;
+  if (isVerified(entry, "visual.usesBorders") && typeof visual?.usesBorders === "boolean") structuredFacts.usesBorders = visual.usesBorders;
+  if (isVerified(entry, "visual.accentColor") && visual?.accentColor) structuredFacts.accentColor = visual.accentColor;
+  if (isVerified(entry, "visual.colorRoles") && visual?.colorRoles) structuredFacts.colorRoles = {
     canvas: visual.colorRoles.canvas,
     surface: visual.colorRoles.surface,
     ink: visual.colorRoles.ink,
@@ -693,15 +686,17 @@ function sanitizeCorpusObservation(id: string, entry: CorpusEntryT): SanitizedEv
     accent: visual.colorRoles.accent,
   };
   const pairing = visual?.typePairing;
-  if (pairing?.display && pairing.body) {
+  if (isVerified(entry, "visual.typePairing") && pairing?.display && pairing.body) {
     // `+` separator, NOT "/" — the summary content screen rejects path-like
     // strings (PATH_OR_URL_PATTERN), and "Display / Body" trips it.
     structuredFacts.typePairing = `${pairing.display} + ${pairing.body}`;
   }
   const layoutStructure = entry.layout;
-  if (layoutStructure?.form) structuredFacts.layoutForm = layoutStructure.form;
+  if (isVerified(entry, "layout") && layoutStructure?.form) structuredFacts.layoutForm = layoutStructure.form;
   const roles = layoutStructure?.regions?.map((r) => r.role).filter(Boolean);
-  if (roles && roles.length > 0) structuredFacts.layoutRoles = roles.slice(0, 8);
+  if (isVerified(entry, "layout") && roles && roles.length > 0) structuredFacts.layoutRoles = roles.slice(0, 8);
+
+  if (Object.keys(structuredFacts).length === 0) return null;
 
   const evidence: SanitizedEvidence = {
     id,

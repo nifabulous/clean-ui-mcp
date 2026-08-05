@@ -298,7 +298,9 @@ describe("createUiSpecDeterministic", () => {
         avoid: [],
       },
     });
-    const evidence = [observation("evidence-2", { pattern: "dashboard" })];
+    // Production pushes one evidence row per matched entry (same loop); a bare
+    // single row beside three matches is not a reachable state.
+    const evidence = [2, 3, 4].map((n) => observation(`evidence-${n}`, { pattern: "dashboard" }));
     const matches = [
       matched("evidence-2", { ...many("A"), provenance: VERIFIED }),
       matched("evidence-3", { ...many("B"), provenance: VERIFIED }),
@@ -371,6 +373,7 @@ describe("createUiSpecDeterministic", () => {
   it("dedupes component rows and folds layout-form into responsiveBehavior", () => {
     const evidence = [
       observation("evidence-2", { pattern: "dashboard", layoutForm: "three-column" }),
+      observation("evidence-3", { pattern: "dashboard" }),
     ];
     const matches = [
       matched("evidence-2", verifiedProseEntry()),

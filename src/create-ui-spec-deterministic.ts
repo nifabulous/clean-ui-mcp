@@ -184,9 +184,14 @@ export function createUiSpecDeterministic(
   // `corpusEntries` is deliberately NOT gated. It feeds `buildDeniedNames` for
   // the identity screen, which must stay corpus-wide; narrowing it would shrink
   // the denied-name set and weaken identity screening.
+  // A prose claim serves only when its response-scoped row survived the strip:
+  // the row is the citation anchor, and `techniques[].sourceIds` must be
+  // members of `spec.provenance.evidenceIds` (`refineEnvelope`). A claim
+  // without a row cannot be attributed, so it is withheld fail-closed.
+  const servedRowIds = new Set(evidence.map((e) => e.id));
   const anyMatchedEntries = allMatchedEntries.length > 0;
   const verifiedFor = (field: string): readonly { readonly evidenceId: string; readonly entry: CorpusEntryT }[] =>
-    allMatchedEntries.filter((m) => isVerified(m.entry, field));
+    allMatchedEntries.filter((m) => isVerified(m.entry, field) && servedRowIds.has(m.evidenceId));
   // `colorTokens`, `layoutRegions` and the direction's structured clauses derive
   // from SanitizedEvidence rows, which do not carry their entry. Bridge the same
   // per-field filter through the evidence id so plurality votes run over trusted

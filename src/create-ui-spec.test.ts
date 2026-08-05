@@ -261,6 +261,7 @@ describe("create-ui-spec producer — automatic retrieval", () => {
     const eB = entry("b1", "product-B", "modal"); corpus.push(eB); ranked.push({ entry: eB, score: 4.7 });
     const eC = entry("c1", "product-C", "auth"); corpus.push(eC); ranked.push({ entry: eC, score: 4.6 });
     const eD = entry("d1", "product-D", "onboarding"); corpus.push(eD); ranked.push({ entry: eD, score: 4.5 });
+    verify(corpus);
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
     const corpusIds = parsed.publicEvidenceIds.filter((id) => id !== RECIPE_EVIDENCE_ID);
@@ -275,6 +276,7 @@ describe("create-ui-spec producer — automatic retrieval", () => {
     const ranked: { entry: FixtureEntry; score: number }[] = [];
     const e1 = entry("a1", "product-A", "dashboard"); corpus.push(e1); ranked.push({ entry: e1, score: 5 });
     const e2 = entry("a2", "product-A", "forms"); corpus.push(e2); ranked.push({ entry: e2, score: 4 });
+    verify(corpus);
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
     const corpusIds = parsed.publicEvidenceIds.filter((id) => id !== RECIPE_EVIDENCE_ID);
@@ -447,6 +449,7 @@ describe("create-ui-spec producer — privacy and evidence scoping", () => {
       corpus.push(e);
       ranked.push({ entry: e, score: 5 - i });
     }
+    verify(corpus);
     const env = await createUiSpec(validInput(), deps(corpus, ranked));
     const parsed = parseDesignArtifactEnvelope(env);
     // The recipe/system evidence is always evidence-1 (emitted first); the
@@ -802,6 +805,7 @@ describe("create-ui-spec producer — provenance truthfulness (echo direction is
   it("the echo-only designDirection cites ONLY the recipe/system evidence id (never a corpus evidence-N id)", async () => {
     const e1 = entry("e1", "product-A", "dashboard", { styleTags: [], categories: [] } as Partial<FixtureEntry>);
     const e2 = entry("e2", "product-B", "forms", { styleTags: [], categories: [] } as Partial<FixtureEntry>);
+    verify([e1, e2]);
     const env = await createUiSpec(validInput(), deps([e1, e2], [
       { entry: e1, score: 5 },
       { entry: e2, score: 4 },
@@ -1199,6 +1203,7 @@ describe("create-ui-spec producer — Task 2 adapter-facing evidence result path
       entry("internal-2", "product-Bravo", "landing-page"),
       entry("internal-3", "product-Charlie", "settings"),
     ];
+    verify(corpus);
     const { sanitizedEvidence } = await createUiSpecForAdapter(
       validInput(),
       deps(corpus, corpus.map((e) => ({ entry: e, score: 5 }))),
@@ -1255,6 +1260,9 @@ describe("create-ui-spec producer — Task 2 adapter-facing evidence result path
     const bogus = entry("internal-1", "product-Alpha", "dashboard", {
       patternType: "private-corpus-id-leak-pattern",
     });
+    // Verified so the row survives the per-field strip and reaches the
+    // SanitizedEvidenceSchema parse that refuses the out-of-enum pattern.
+    verify([bogus]);
     await expect(
       createUiSpecForAdapter(validInput(), deps([bogus], [{ entry: bogus, score: 5 }])),
     ).rejects.toMatchObject({ code: "INVALID_INPUT", retryable: false });
@@ -1593,6 +1601,7 @@ it("round-trips a real-shaped corpus entry through the widened projection", asyn
       accentColor: "#2563eb", typePairing: { display: "Inter", body: "Inter" },
     },
   });
+  verify([entryData]);
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
     deps([entryData], [{ entry: entryData, score: 5 }]),
@@ -1611,6 +1620,7 @@ it("automatic retrieval caps at the top 3 ranked matches", async () => {
   const patterns = ["dashboard", "onboarding", "modal", "forms", "auth"];
   const corpus = Array.from({ length: 5 }, (_, i) => entry(`internal-${i}`, `product-${i}`, patterns[i]!));
   const ranked = corpus.map((e) => ({ entry: e, score: 5 - Number((e.id as string).slice(-1)) }));
+  verify(corpus);
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard for finance ops", referenceIds: [], constraints: [], motionIntents: [] },
     deps(corpus, ranked),
@@ -1632,6 +1642,7 @@ it("pattern-dedupes the top 3 so a repeated pattern class cannot crowd out diver
     { entry: eOn1, score: 5 }, { entry: eNav, score: 4 },
     { entry: eOn2, score: 3 }, { entry: eForm, score: 2 },
   ];
+  verify([eOn1, eNav, eOn2, eForm]);
   const out = await createUiSpecForAdapter(
     { productContext: "A dashboard", referenceIds: [], constraints: [], motionIntents: [] },
     deps([eOn1, eNav, eOn2, eForm], ranked),
@@ -1644,6 +1655,7 @@ it("pattern-dedupes the top 3 so a repeated pattern class cannot crowd out diver
 it("falls back to the similarity index when keyword search matches nothing", async () => {
   const seed = entry("internal-seed", "product-seed");
   const similar = ["a", "b", "c"].map((k, i) => entry(`internal-${k}`, `product-${k}`, ["dashboard", "forms", "modal"][i]!));
+  verify([seed, ...similar]);
   const reader = {
     ...makeReader([], []),
     search: vi.fn(async () => [seed]),
@@ -1677,6 +1689,7 @@ it("reports sparseCoverage when both keyword and similarity return nothing", asy
 it("reports truthful counts when the similarity fallback returns fewer than three matches", async () => {
   const seed = entry("internal-seed", "product-seed", "dashboard");
   const similar = ["a", "b"].map((k, i) => entry(`internal-${k}`, `product-${k}`, ["forms", "modal"][i]!));
+  verify([seed, ...similar]);
   const reader = {
     ...makeReader([], []),
     search: vi.fn(async () => [seed]),
@@ -2083,6 +2096,47 @@ describe("create_ui_spec — trust disclosure", () => {
       (w) => w.code === "insufficientCorpusEvidence" && /verified/.test(w.message),
     );
     expect(warning).toBeUndefined();
+  });
+});
+
+describe("create_ui_spec — per-field evidence projection strip", () => {
+  it("strips unverified facts from a row and drops a row with none", async () => {
+    // Entry A is verified for visual.colorRoles ONLY; its row must carry
+    // colour facts and NOT the layout/typography facts. Entry B is verified
+    // for whatToSteal only (no structured claim); its row must be dropped —
+    // and its technique withheld, because there is no response-scoped row to
+    // cite.
+    const record = (field: string) => ({
+      taggedBy: "auto" as const,
+      verification: { [field]: { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" } },
+    });
+    const colorOnly = {
+      ...corpusEntryWithRoles("strip-a", "#2563eb", "dashboard"),
+      provenance: record("visual.colorRoles"),
+    };
+    const proseOnly = {
+      ...entry("strip-b", "ProductB", "forms", { whatToSteal: ["Prose from an entry with no structured claim."] }),
+      provenance: record("whatToSteal"),
+    };
+    const out = await createUiSpecForAdapter(
+      noRefRequest(),
+      deps([colorOnly, proseOnly], [
+        { entry: colorOnly, score: 5 },
+        { entry: proseOnly, score: 4 },
+      ]),
+    );
+    const rows = out.sanitizedEvidence.filter((e) => e.kind === "corpus-observation");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe("evidence-2");
+    expect(rows[0]!.structuredFacts.colorRoles).toBeDefined();
+    expect(rows[0]!.structuredFacts.layoutForm).toBeUndefined();
+    expect(rows[0]!.structuredFacts.typePairing).toBeUndefined();
+    expect(rows[0]!.summary.length).toBeGreaterThan(0);
+    expect(rows[0]!.summary).not.toMatch(/typography|layout/i);
+    // The prose-only entry's row was dropped, so its technique is withheld.
+    expect(out.envelope.spec.techniques.map((t) => t.text)).not.toContain(
+      "Prose from an entry with no structured claim.",
+    );
   });
 });
 

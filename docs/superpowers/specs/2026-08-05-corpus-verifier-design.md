@@ -74,13 +74,13 @@ entry plus a produce+verify pair per failing field, not 2× everything.
 
 ## What "verified" means, per field
 
-The fabrication risk is FACTUAL assertion, not aesthetic judgment. Three field
-classes, three meanings:
+The fabrication risk is FACTUAL assertion, not aesthetic judgment. Field classes
+by evidence tier:
 
 | class | fields | "verified" means | tier |
 |---|---|---|---|
-| **Re-derivable** | `platform`, `visual.dominantColors` | the recorded value is independently recomputed from image/data and matches | `measured` (no model) |
-| **Factual claim** | `visual.colorRoles`, `layout`, `components`, `visual.usesShadows`, `visual.usesBorders`, `visual.typePairing` | a precise assertion ("canvas=#fff; a left nav rail exists; a mono face is used") the vision pass CONFIRMS true, adversarially | `image-confirmed` |
+| **Re-derivable** | `platform`, `visual.dominantColors` | the recorded value is independently recomputed from the image and matches | `image-confirmed` (no model - see the record-tier note below) |
+| **Factual claim** | `visual.colorRoles`, `visual.accentColor`, `layout`, `components`, `visual.usesShadows`, `visual.usesBorders`, `visual.typePairing` | a precise assertion ("canvas=#fff; a left nav rail exists; a mono face is used") the vision pass CONFIRMS true, adversarially | `image-confirmed` |
 | **Factual claim (a11y)** | `antiPatterns.accessibilityRisks` | each recorded risk names an element and a WCAG criterion; the vision pass confirms the risk is genuinely present (e.g. the cited text really is low-contrast) | `image-confirmed` |
 | **Prose over facts** | `critique`, `whatToSteal`, `antiPatterns`, `voice` | extract the prose's factual assertions (named colours, regions, components) and confirm EACH; image-confirm the field only if every checkable assertion holds | `image-confirmed` |
 | **Soft classification** | `mood`, `colorScheme`, `visual.spacingDensity`, `visual.cornerStyle`, `styleTags`, `categories`, `domainTags`, `patternType` | the vision pass affirms the classification adversarially; softer than a hard fact, so a higher unverifiable rate is expected and accepted | `image-confirmed` |
@@ -90,20 +90,63 @@ classes, three meanings:
 extract reliably), so it is treated as a **factual claim** confirmed against the
 image rather than re-derived — the honest tier, given extraction unreliability.
 
+**Record-tier note - pixel evidence is `image-confirmed`, never `measured`.**
+The record shape binds `imageSha256` only to `image-confirmed` records, and the
+doctor's `verified-hash-stale` / `verified-image-missing` checks run only for
+that method (`corpus-trust.ts:82`, `doctor-helpers.ts:540-576`). `platform` and
+`visual.dominantColors` are derived from the IMAGE - the pixels and the image's
+dimensions - so they carry the same re-capture staleness risk as any other
+image-bound value. Their records therefore use `method: "image-confirmed"` with
+the hash, even though the check is mechanical and model-free. "measured" is the
+tagger's DOM-evidence tier and is not used by this stage.
+
+**Re-derivation semantics.** `visual.dominantColors` reuses the tagger's
+deterministic extractor - `extractQuantizedColors(imagePath)` (`tagger.ts:272`),
+the same function Pass 1 feeds the recorded values from (the "copy from
+quantizedColors verbatim" instruction, `tagger.ts:1070`). Match rule:
+order-insensitive set match; every recorded dominant color must appear in the
+extracted set exactly, both sides already quantized to the same precision. A
+recorded color absent from the extracted set fails the field (stale or
+fabricated) and re-production rewrites `dominantColors` from the extractor
+output. `platform` recomputes via the shared `detectPlatform(width, height)`
+(`schema.ts:184`, the same rule the tagger, backfill and UI use) against the
+image's recorded dimensions; disagreement, or missing dimensions, fails the
+field and re-production writes the recomputed value.
+
+**`layout` confirmation is over the checkable subset.** `layout.regions` are
+wireframe roles (`primary-nav`, `main-canvas`, `detail-rail`), not free-text
+claims. The verify prompt must carry the role vocabulary with a one-line visual
+description per role and confirm: the region COUNT matches, the layout FORM
+(single/multi-column) matches, and each recorded region has a visually distinct
+counterpart matching its role description. A recorded region with no visible
+counterpart fails the field. Role assignments that are not visually
+distinguishable are confirmed only through the count + form check, and the field
+is gated when that is the only signal and the count disagrees.
+
 `responsiveBehavior` is called out deliberately: it describes cross-viewport
 behaviour, and the corpus stores one screenshot per entry, so nothing in the
 evidence can confirm it. It stays unverified and therefore gated — the honest
 outcome, not an oversight. A future re-capture stage that records multiple
 viewports could grant it; this stage cannot.
 
-All 23 keys in `SERVABLE_FIELD_KEYS` are classified above (20 verifiable across the
-first four rows, plus `visual.accentColor` in prose text, plus `responsiveBehavior`
-which is deliberately never granted). A key added to the servable set later must be
-added here too, or it is silently unverifiable.
+All 23 keys in `SERVABLE_FIELD_KEYS` are classified above - 22 verifiable across
+the re-derivable, factual-claim, a11y, prose-over-facts and soft-classification
+rows, plus `responsiveBehavior`, which is deliberately never granted. A key added
+to the servable set later must be added here too, or it is silently unverifiable.
 
 Subjective words ("restrained", "elegant") are never checked: they are not the
 fabrication risk and are not true-or-false. Only a critique's checkable factual
 content gates it.
+
+**The empty-assertion case is fail-closed.** A prose field whose extracted
+checkable-assertion set is EMPTY is NOT granted: "every checkable assertion
+holds" is vacuously true over the empty set, and granting on vacuity would
+re-open the gate for exactly the prose class this stage exists to close. An empty
+set reads as "no checkable content was enumerated", and the field stays gated.
+The dry-run must report the zero-assertion rate per prose field as a first-class
+number, and the human sample must include zero-assertion entries specifically to
+distinguish "genuinely assertion-free" from "extraction missed the assertion" -
+a missed assertion is the dangerous direction and halts the run.
 
 ## Independence and the cross-model limitation
 
@@ -116,6 +159,14 @@ limitation the whole program has carried; it is named here, not hidden. The
 verifier is built provider-parameterized so a cross-model verify (produce with A,
 verify with B) is a config change, not a rewrite. Using two providers when
 available is a recommended future strengthening, out of scope for the first cut.
+
+One verify pass confirms all of an entry's claims in a single call; the claims
+share that context, so a scene-level hallucination can co-vary across them.
+Positive affirmation bounds this per claim, and step 4's re-verify provides a
+second fresh-context look at re-produced fields. If the dry-run sample shows
+scene-level co-variation, per-field fresh-context re-asks are the cost option -
+the verifier is structured so the verify prompt is per field, making that a loop
+change, not a rewrite.
 
 ## Data flow and record writing
 
@@ -139,11 +190,17 @@ available is a recommended future strengthening, out of scope for the first cut.
   grant and why, and writes nothing. The audit's known-bad entries (Alan's rail)
   must show `critique` FAILING; a large pass rate on the first run is a red flag,
   not a success.
-- **Sample before the full run.** Verify a stratified sample by eye against the
-  actual images before spending 787 entries of model budget, and compare the
-  dry-run verdicts to human judgment on that sample.
-- **Idempotent + resumable.** The run records progress so an interrupted 787-entry
-  pass resumes without re-verifying completed entries.
+- **Sample before the full run.** Verify a stratified sample of 30 entries by eye
+  against the actual images (10 known-bad from the audit, 10 typical, 10
+  unknown) before spending 787 entries of model budget. Acceptance: at least 95%
+  agreement with human verdicts on the sample, and ZERO missed-assertion cases in
+  the known-bad strata - a missed assertion in the sample halts the run.
+- **Idempotent + resumable.** Resume key is (entry id, field key): a field whose
+  record already carries the current `verifierVersion` is skipped. An interrupted
+  pass restarts from the first entry without a current-version record, so
+  completed fields are never re-verified. Selective re-verification after a
+  prompt or logic change scans records for `verifierVersion < N` (or absent) and
+  re-runs only those fields.
 - **The doctor is the standing check.** After a run, `doctor.js` reports the
   verified-per-field counts and any `verification-malformed` / `verification-orphan-key`
   / `verified-hash-stale` finding — the same detectors shipped in 2a.

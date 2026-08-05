@@ -98,15 +98,14 @@ export function verifiedFields(entry: CorpusEntryT): ReadonlySet<string> {
 }
 
 /**
- * The evidence ids of the matched entries that pass the gate. Shared by BOTH
- * consumers — the model lane's prompt-grounding filter (create-ui-spec.ts) and
- * the deterministic synthesizer (create-ui-spec-deterministic.ts) — so trust is
- * defined in exactly one place and the two paths cannot drift.
+ * The evidence ids of the matched entries verified FOR THE GIVEN FIELD. Shared
+ * by BOTH consumers — the model lane's prompt-grounding filter (superseded by
+ * the per-field strip in Task 3) and the deterministic synthesizer — so trust
+ * is defined in exactly one place and the two paths cannot drift.
  */
 export function trustedEvidenceIdsOf(
   matchedEntries: readonly { readonly evidenceId: string; readonly entry: CorpusEntryT }[],
+  field: string,
 ): Set<string> {
-  return new Set(
-    matchedEntries.filter((m) => verifiedFields(m.entry).size > 0).map((m) => m.evidenceId),
-  );
+  return new Set(matchedEntries.filter((m) => isVerified(m.entry, field)).map((m) => m.evidenceId));
 }

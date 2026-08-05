@@ -271,12 +271,19 @@ async function buildModelAwareEnvelope(
   // `SanitizedEvidenceSchema.array()` carries no `.min(1)`
   // (create-ui-spec-model.ts:87), so a corpus-free list parses rather than
   // rejecting the proposal.
-  const trustedEvidenceIds = trustedEvidenceIdsOf(resolved.matchedEntries);
+  // Interim (Stage 2a, Task 2): `trustedEvidenceIdsOf` is per-field now, and
+  // the model lane's any-field narrowing keeps Stage 1 semantics until Task 3's
+  // per-field strip supersedes this filter entirely.
+  const trustedRowIds = new Set(
+    resolved.matchedEntries
+      .filter((m) => verifiedFields(m.entry).size > 0)
+      .map((m) => m.evidenceId),
+  );
   const outcome = await createUiSpecModel(
     {
       request,
       sanitizedEvidence: resolved.sanitized.filter(
-        (row) => row.kind !== "corpus-observation" || trustedEvidenceIds.has(row.id),
+        (row) => row.kind !== "corpus-observation" || trustedRowIds.has(row.id),
       ),
     },
     model.runtime,
@@ -998,7 +1005,9 @@ function assembleSpec(
           // "corpus-evidence" is the CitedDecision authority enum token
           // (tool-contracts.ts:537), NOT the camelCase lane field name.
           authority: "corpus-evidence",
-          evidenceIds: corpusEvidenceIds,
+          // Stage 2a: cite exactly the rows whose clauses composed the
+          // direction — never an entry whose verified claim did not contribute.
+          evidenceIds: [...synthesis.designDirectionEvidenceIds],
           readiness: "available",
         },
       ]
@@ -1017,7 +1026,9 @@ function assembleSpec(
           id: "colorTokens-evidence-synthesis",
           field: "colorTokens",
           authority: "corpus-evidence",
-          evidenceIds: corpusEvidenceIds,
+          // Stage 2a: cite exactly the rows that voted — entries verified for
+          // `visual.colorRoles` specifically, never the whole corpus lane.
+          evidenceIds: [...synthesis.colorRoleEvidenceIds],
           readiness: "available",
         },
       ]

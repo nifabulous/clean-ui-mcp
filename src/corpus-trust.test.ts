@@ -84,14 +84,15 @@ describe("verifiedFields", () => {
   });
 });
 
-describe("trustedEvidenceIdsOf — Stage 1 any-field bridge (field param lands in Task 2)", () => {
-  it("returns only entries with at least one valid record", () => {
+describe("trustedEvidenceIdsOf — per-field bridge", () => {
+  it("returns only entries verified for the named field", () => {
     const pairs = [
       { evidenceId: "evidence-2", entry: entry({ critique: VALID }) },
-      { evidenceId: "evidence-3", entry: entry() },
-      { evidenceId: "evidence-4", entry: entry({ "visual.colorRoles": { ...VALID, method: "measured" } }) },
+      { evidenceId: "evidence-3", entry: entry({ "visual.colorRoles": VALID }) },
+      { evidenceId: "evidence-4", entry: entry({ critique: { ...VALID, method: "measured" } }) },
     ];
-    expect(trustedEvidenceIdsOf(pairs)).toEqual(new Set(["evidence-2", "evidence-4"]));
+    expect(trustedEvidenceIdsOf(pairs, "critique")).toEqual(new Set(["evidence-2", "evidence-4"]));
+    expect(trustedEvidenceIdsOf(pairs, "visual.colorRoles")).toEqual(new Set(["evidence-3"]));
   });
 });
 

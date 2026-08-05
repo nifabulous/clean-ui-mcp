@@ -2,7 +2,7 @@ import type { SanitizedEvidence } from "./create-ui-spec-contracts.js";
 import type { CreateUiSpecRequest } from "./create-ui-spec-contracts.js";
 import type { CorpusEntryT } from "./schema.js";
 import { buildDeniedNames, screenProse } from "./corpus-prose-screen.js";
-import { verifiedFields, trustedEvidenceIdsOf } from "./corpus-trust.js";
+import { isVerified, trustedEvidenceIdsOf } from "./corpus-trust.js";
 
 export interface DeterministicColorTokens {
   primary: string;
@@ -61,6 +61,10 @@ export interface DeterministicSynthesis {
   componentInventoryEvidenceIds: readonly string[];
   /** Evidence ids of the entries whose responsiveBehavior contributed. */
   responsiveBehaviorEvidenceIds: readonly string[];
+  /** Evidence ids of the entries whose colorRoles plurality produced colorTokens. */
+  colorRoleEvidenceIds: readonly string[];
+  /** Evidence ids of the entries whose clauses produced designDirection. */
+  designDirectionEvidenceIds: readonly string[];
 }
 
 /**
@@ -166,69 +170,47 @@ export function createUiSpecDeterministic(
   corpusEntries: readonly CorpusEntryT[],
   request: CreateUiSpecRequest,
 ): DeterministicSynthesis {
-  // ----- C3 trust gate (Stage 1) -------------------------------------------
-  // ONE filter, and it works by SHADOWING: the ungated parameter is
-  // `allMatchedEntries` and the name the body uses is the trusted view. Every
-  // existing selector and every future one therefore reads gated entries
-  // without needing its own guard — the ungated list is not in scope below.
+  // ----- C3 trust gate (Stage 2a): per-field selectors behind the same shadow -----
+  // Stage 1 shadowed `allMatchedEntries` behind ONE trusted list. Stage 2a
+  // corrects that shape: verification attaches to the FIELD, not the entry, and
+  // the body has no single trusted list. The ungated parameter is reachable
+  // ONLY through the two accessors below — `verifiedFor(field)` (the matched
+  // entries verified for exactly that field) and `anyMatchedEntries` (the
+  // matched/refused distinction the colorTokensRefusal reason needs). Every
+  // selector below therefore names the claim it reads, and no selector can
+  // silently reach the ungated list. Each selector is the only place that
+  // knows which field it reads.
   //
   // `corpusEntries` is deliberately NOT gated. It feeds `buildDeniedNames` for
   // the identity screen, which must stay corpus-wide; narrowing it would shrink
-  // the denied-name set and weaken screening.
-  const matchedEntries = allMatchedEntries.filter((m) => verifiedFields(m.entry).size > 0);
-  // `colorTokens` and `layoutRegions` derive from SanitizedEvidence rows, which
-  // do not carry their entry. Bridge the same filter through the evidence id so
-  // the plurality votes run over trusted observations only — which also means
-  // the existing three-contributor guard counts TRUSTED contributors.
-  const trustedEvidenceIds = trustedEvidenceIdsOf(matchedEntries);
-  const observations = evidence.filter(
-    (e) => e.kind === "corpus-observation" && e.structuredFacts && trustedEvidenceIds.has(e.id),
-  );
-  if (observations.length === 0) {
-    return {
-      designDirection: null,
-      colorTokens: null,
-      // Entries WERE matched and the gate refused all of them: that is a trust
-      // outcome, not thin retrieval, and the served reason must say so.
-      colorTokensRefusal: allMatchedEntries.length > 0 ? "untrusted" : "insufficient-contributors",
-      layoutRegions: [],
-      responsiveBehavior: [],
-      techniques: [],
-      antiPatterns: [],
-      contentVoiceGuidance: null,
-      contentVoiceEvidenceIds: [],
-      accessibilityConstraints: [],
-      accessibilityEvidenceIds: [],
-      componentInventory: [],
-      componentInventoryEvidenceIds: [],
-      responsiveBehaviorEvidenceIds: [],
-    };
-  }
-
-  const ids = observations.map((o) => o.id);
-  const facts = observations.map((o) => o.structuredFacts);
+  // the denied-name set and weaken identity screening.
+  const anyMatchedEntries = allMatchedEntries.length > 0;
+  const verifiedFor = (field: string): readonly { readonly evidenceId: string; readonly entry: CorpusEntryT }[] =>
+    allMatchedEntries.filter((m) => isVerified(m.entry, field));
+  // `colorTokens`, `layoutRegions` and the direction's structured clauses derive
+  // from SanitizedEvidence rows, which do not carry their entry. Bridge the same
+  // per-field filter through the evidence id so plurality votes run over trusted
+  // observations only. The bridge reads the gated view (`verifiedFor`), never
+  // the ungated parameter directly.
+  const observationsFor = (field: string): readonly SanitizedEvidence[] => {
+    const trustedIds = trustedEvidenceIdsOf(verifiedFor(field), field);
+    return evidence.filter(
+      (e) => e.kind === "corpus-observation" && e.structuredFacts && trustedIds.has(e.id),
+    );
+  };
 
   // Color-token plurality over the CORPUS role shape (canvas/surface/ink/
   // muted/accent, muted nullable — src/schema.ts:420-426), then mapped into
   // UiSpec ColorTokens with the same defaults the existing design-prompt.ts
-  // merge uses. NEVER run on fewer than 3 contributing entries, and never when
-  // zero entries have colorRoles (Math.min over empty arrays is Infinity —
-  // that bug would fabricate a default palette).
-  // `muted` is the ONLY nullable role in the corpus shape, so it is the one
-  // field a plain `f.colorRoles` filter cannot protect: three entries can
-  // contribute colorRoles while every `muted` is null, emptying the filtered
-  // array and letting a `??` default invent a token nothing derived. Requiring
-  // a non-null muted to COUNT toward the >= 3 threshold folds that case back
-  // under the same guard — the block goes null with its reason row instead.
-  // A TIE IS NOT A PLURALITY. `plurality` breaks ties by insertion order
-  // (design-prompt.ts:51), so a 2-2 split silently serves whichever value the
-  // retrieval order happened to put first — a consensus claim nothing backs,
-  // the same over-claim class the trust gate exists to stop. It matters more
-  // once the gate lands: verifying one more entry can turn a 2-1 win into a 2-2
-  // tie, and the palette must go null then rather than keep the stale winner.
-  // Scoped to this module on purpose — `design-prompt.ts`'s own merge feeds
-  // generate_design_brief and is not in this change's scope.
-  const withRoles = facts.filter((f) => f.colorRoles && f.colorRoles.muted !== null);
+  // merge uses. The three-contributor guard counts entries verified FOR
+  // `visual.colorRoles` — counting entries verified for anything would derive a
+  // palette from entries whose colour was never checked (the over-claim this
+  // program exists to stop).
+  const colorRoleObservations = observationsFor("visual.colorRoles");
+  const colorRoleEvidenceIds = colorRoleObservations.map((o) => o.id);
+  const withRoles = colorRoleObservations
+    .map((o) => o.structuredFacts)
+    .filter((f) => f.colorRoles && f.colorRoles.muted !== null);
   const roleVotes = withRoles.length >= 3
     ? {
         accent: strictPlurality(withRoles.map((f) => f.colorRoles!.accent)),
@@ -239,10 +221,6 @@ export function createUiSpecDeterministic(
         ),
       }
     : null;
-  // The block is all-or-nothing, matching the existing `< 3` behaviour: a
-  // palette with one unresolved role is not a coherent palette, and the `??`
-  // hex defaults this replaces would have INVENTED a token on a tie — exactly
-  // the fabrication the reason row is supposed to report instead.
   const colorTokens =
     roleVotes && roleVotes.accent && roleVotes.surface && roleVotes.ink && roleVotes.muted
       ? {
@@ -255,37 +233,44 @@ export function createUiSpecDeterministic(
       : null;
   const colorTokensRefusal: DeterministicSynthesis["colorTokensRefusal"] =
     colorTokens !== null ? null
-      : roleVotes === null ? "insufficient-contributors"
-      : "no-plurality";
+      : roleVotes === null
+        ? (colorRoleObservations.length === 0
+            ? (anyMatchedEntries ? "untrusted" : "insufficient-contributors")
+            : "insufficient-contributors")
+        : "no-plurality";
 
   // Layout regions from the wireframe roles (closed enum), deduped in order.
+  // `layoutRegions` and the responsive-behavior `form` clause both read the
+  // `layout` claim, so both gate on the same key.
+  const layoutObservations = observationsFor("layout");
   const seen = new Set<string>();
   const layoutRegions: DeterministicLayoutRegion[] = [];
-  for (const f of facts) {
+  for (const f of layoutObservations.map((o) => o.structuredFacts)) {
     for (const role of f.layoutRoles ?? []) {
       if (seen.has(role)) continue;
       seen.add(role);
       layoutRegions.push({ name: role, type: role, components: [], responsive: [] });
     }
   }
-  const layoutForms = facts.map((f) => f.layoutForm).filter((v): v is NonNullable<typeof v> => Boolean(v));
+  const layoutForms = layoutObservations
+    .map((o) => o.structuredFacts.layoutForm)
+    .filter((v): v is NonNullable<typeof v> => Boolean(v));
   const layoutForm = strictPlurality(layoutForms);
-  // Responsive-behavior rows: the corpus's closed responsiveBehavior enum plus
-  // the layout-form plurality, both in the existing "label: value" style. The
-  // enum is a closed token (design spec §2b) — no identity screen needed.
+  const responsivePairs = verifiedFor("responsiveBehavior");
   const responsiveModes = [...new Set(
-    matchedEntries
+    responsivePairs
       .map((m) => m.entry.responsiveBehavior)
       .filter((v): v is NonNullable<typeof v> => typeof v === "string"),
   )];
   const responsiveBehaviorEvidenceIds: string[] = [];
-  for (const { evidenceId, entry } of matchedEntries) {
+  for (const { evidenceId, entry } of responsivePairs) {
     if (typeof entry.responsiveBehavior === "string") responsiveBehaviorEvidenceIds.push(evidenceId);
   }
-  // The layout-form clause is derived from every matched observation's
-  // structuredFacts, so when it contributes, every observation id is cited.
+  // The layout-form clause is derived from every layout-verified observation's
+  // structuredFacts, so when it contributes, every layout observation id is
+  // cited.
   if (layoutForm) {
-    for (const id of ids) {
+    for (const id of layoutObservations.map((o) => o.id)) {
       if (!responsiveBehaviorEvidenceIds.includes(id)) responsiveBehaviorEvidenceIds.push(id);
     }
   }
@@ -299,13 +284,32 @@ export function createUiSpecDeterministic(
   // cited signals (design spec §1B): styleTags, categories, mood, colorScheme,
   // typePairing.notes and critique. The group-B values live only in the RAW
   // matched entries — they are deliberately absent from structuredFacts — so
-  // they are read through the internal matchedEntries channel, exactly like
-  // the six prose fields above.
-  const density = strictPlurality(facts.map((f) => f.spacingDensity).filter((v): v is NonNullable<typeof v> => Boolean(v)));
-  const corners = strictPlurality(facts.map((f) => f.cornerStyle).filter((v): v is NonNullable<typeof v> => Boolean(v)));
-  const shadows = majority(facts.filter((f) => typeof f.usesShadows === "boolean").map((f) => f.usesShadows as boolean));
-  const borders = majority(facts.filter((f) => typeof f.usesBorders === "boolean").map((f) => f.usesBorders as boolean));
-  const pairings = facts.map((f) => f.typePairing).filter((v): v is NonNullable<typeof v> => Boolean(v));
+  // they are read through the per-field matched channel, exactly like the six
+  // prose fields below. Each structured clause reads observations verified for
+  // ITS OWN key (spacingDensity, cornerStyle, usesShadows, usesBorders,
+  // typePairing, layout) — one claim, one selector.
+  const densityObs = observationsFor("visual.spacingDensity");
+  const cornersObs = observationsFor("visual.cornerStyle");
+  const shadowsObs = observationsFor("visual.usesShadows");
+  const bordersObs = observationsFor("visual.usesBorders");
+  const pairingObs = observationsFor("visual.typePairing");
+  const density = strictPlurality(
+    densityObs.map((o) => o.structuredFacts.spacingDensity).filter((v): v is NonNullable<typeof v> => Boolean(v)),
+  );
+  const corners = strictPlurality(
+    cornersObs.map((o) => o.structuredFacts.cornerStyle).filter((v): v is NonNullable<typeof v> => Boolean(v)),
+  );
+  const shadows = majority(
+    shadowsObs.filter((o) => typeof o.structuredFacts.usesShadows === "boolean")
+      .map((o) => o.structuredFacts.usesShadows as boolean),
+  );
+  const borders = majority(
+    bordersObs.filter((o) => typeof o.structuredFacts.usesBorders === "boolean")
+      .map((o) => o.structuredFacts.usesBorders as boolean),
+  );
+  const pairings = pairingObs
+    .map((o) => o.structuredFacts.typePairing)
+    .filter((v): v is NonNullable<typeof v> => Boolean(v));
   const pairing = strictPlurality(pairings);
   // Shared identity screen for every corpus-prose string (drop whole, never
   // redact). Built once so the direction's prose segments (including the
@@ -317,107 +321,110 @@ export function createUiSpecDeterministic(
   const screen = (text: string, entry: CorpusEntryT): string | null =>
     screenProse(text, entry, deniedNames);
 
+  // Every clause tracks the evidence ids of the observations/entries that
+  // produced it, so the composed direction cites exactly the references that
+  // grounded it — never an entry whose only verified claim did not contribute.
   const clauses: string[] = [];
-  if (density) clauses.push(`${density} spacing`);
-  if (corners) clauses.push(`${corners} corner treatment`);
-  if (shadows !== undefined) clauses.push(shadows ? "soft shadows" : "no shadows");
-  if (borders !== undefined) clauses.push(borders ? "hairline borders" : "no borders");
-  if (layoutForm) clauses.push(`a ${layoutForm} layout`);
+  const clauseIds: string[] = [];
+  const pushClause = (clause: string, ids: readonly string[]): void => {
+    if (clause.length > 0) {
+      clauses.push(clause);
+      clauseIds.push(...ids);
+    }
+  };
+  if (density) pushClause(`${density} spacing`, densityObs.map((o) => o.id));
+  if (corners) pushClause(`${corners} corner treatment`, cornersObs.map((o) => o.id));
+  if (shadows !== undefined) pushClause(shadows ? "soft shadows" : "no shadows", shadowsObs.map((o) => o.id));
+  if (borders !== undefined) pushClause(borders ? "hairline borders" : "no borders", bordersObs.map((o) => o.id));
+  if (layoutForm) pushClause(`a ${layoutForm} layout`, layoutObservations.map((o) => o.id));
   // The font-family clause is the ONE closed-token clause that can carry a
   // product name (the "Alan" product's font is "Alan Sans" — review finding
-  // #2/#4). Enum-token clauses (density, corners, shadows, borders, layout
-  // form) cannot. The pairing clause is therefore screened like prose: if it
-  // names a product it is DROPPED as a clause, while the direction survives.
+  // #2/#4). The pairing clause is therefore screened like prose: if it names a
+  // product it is DROPPED as a clause, while the direction survives.
   const pairingClause = pairing ? `${pairing} typography` : null;
   let pairingDropped = false;
   if (pairingClause !== null) {
-    for (const { entry } of matchedEntries) {
+    for (const { entry } of verifiedFor("visual.typePairing")) {
       if (screenProse(pairingClause, entry, deniedNames) === null) {
         pairingDropped = true;
         break;
       }
     }
   }
-  if (pairing && !pairingDropped) clauses.push(`${pairing} typography`);
+  if (pairing && !pairingDropped) pushClause(`${pairing} typography`, pairingObs.map((o) => o.id));
 
   // Group-B signals (design spec §1B), distinct in rank order. Closed-token
   // signals (styleTags, categories, colorScheme, the structuredFacts clauses
   // and the typePairing font) carry no identity and are NOT screened (design
   // spec §2b). The PROSE signals (mood, typePairing.notes, critique) are
-  // screened per source entry BEFORE composing: a screened string is dropped
-  // whole, never redacted, and only that segment is omitted. A whole-direction
-  // screen was tried and measured at 26.1% direction loss on production-shaped
-  // 5-entry windows (review finding #2) — e.g. the font clause "Alan Sans
-  // typography" trips the own-name check for the "Alan" product — so the
-  // direction is composed from screened segments instead.
-  const styleTags = [...new Set(matchedEntries.flatMap((m) => m.entry.styleTags ?? []))];
-  const categories = [...new Set(matchedEntries.flatMap((m) => m.entry.categories ?? []))];
+  // screened per source entry BEFORE composing. Each signal reads entries
+  // verified for its own key.
+  const styleTagPairs = verifiedFor("styleTags");
+  const categoryPairs = verifiedFor("categories");
+  const schemePairs = verifiedFor("colorScheme");
+  const moodPairs = verifiedFor("mood");
+  const typePairingPairs = verifiedFor("visual.typePairing");
+  const critiquePairs = verifiedFor("critique");
+  const styleTags = [...new Set(styleTagPairs.flatMap((m) => m.entry.styleTags ?? []))];
+  const categories = [...new Set(categoryPairs.flatMap((m) => m.entry.categories ?? []))];
   const schemes = [...new Set(
-    matchedEntries.map((m) => m.entry.colorScheme).filter((v): v is NonNullable<typeof v> => typeof v === "string"),
+    schemePairs.map((m) => m.entry.colorScheme).filter((v): v is NonNullable<typeof v> => typeof v === "string"),
   )];
   const moods = [...new Set(
-    matchedEntries
+    moodPairs
       .map((m) => (typeof m.entry.mood === "string" ? screen(m.entry.mood, m.entry) : null))
       .filter((v): v is string => v !== null),
   )].slice(0, MAX_DIRECTION_MOODS);
   const typeNotes = [...new Set(
-    matchedEntries
+    typePairingPairs
       .map((m) => {
         const note = m.entry.visual?.typePairing?.notes;
         return typeof note === "string" && note.length > 0 ? screen(note, m.entry) : null;
       })
       .filter((v): v is string => v !== null),
   )].slice(0, MAX_DIRECTION_TYPE_NOTES);
-  const critiques = matchedEntries
+  const critiques = critiquePairs
     .map((m) => (typeof m.entry.critique === "string" ? screen(m.entry.critique, m.entry) : null))
     .filter((v): v is string => v !== null)
     .slice(0, MAX_DIRECTION_CRITIQUES);
 
   // Signal clauses in PRIORITY order, appended under a character budget. The
   // closed-token signals come first: they are short, dense, and cannot carry
-  // identity. Then critique — the corpus's actual design judgment, and the
-  // reason C3 folds group-B signals into the direction at all. typePairing
+  // identity. Then critique — the corpus's actual design judgment. typePairing
   // notes come LAST because the structural typography clause above already
-  // states the pairing, so the notes are the most redundant thing to lose when
-  // the budget binds.
+  // states the pairing.
   const signalClauses: string[] = [];
   let signalChars = 0;
-  /**
-   * Append a clause only if it FITS. An over-budget clause is dropped WHOLE —
-   * never truncated — for the same reason the identity screen drops whole: half
-   * a sentence of design judgment is worse than none, and a mid-word cut is the
-   * "confidently wrong output" the project's output standard forbids.
-   */
-  const pushSignal = (clause: string): void => {
+  const pushSignal = (clause: string, ids: readonly string[]): void => {
     const cost = clause.length + (signalClauses.length > 0 ? SIGNAL_JOIN.length : 0);
     if (signalChars + cost > MAX_DIRECTION_SIGNAL_CHARS) return;
     signalClauses.push(clause);
+    clauseIds.push(...ids);
     signalChars += cost;
   };
-  if (styleTags.length > 0) pushSignal(`style tags: ${styleTags.join(", ")}`);
-  if (categories.length > 0) pushSignal(`categories: ${categories.join(", ")}`);
+  if (styleTags.length > 0) pushSignal(`style tags: ${styleTags.join(", ")}`, styleTagPairs.map((m) => m.evidenceId));
+  if (categories.length > 0) pushSignal(`categories: ${categories.join(", ")}`, categoryPairs.map((m) => m.evidenceId));
   if (schemes.length > 0) {
-    pushSignal(schemes.length === 1 ? `a ${schemes[0]} color scheme` : `${schemes.join(" and ")} color schemes`);
+    pushSignal(
+      schemes.length === 1 ? `a ${schemes[0]} color scheme` : `${schemes.join(" and ")} color schemes`,
+      schemePairs.map((m) => m.evidenceId),
+    );
   }
-  if (moods.length > 0) pushSignal(`mood: ${moods.map(withoutTrailingPeriod).join(VALUE_JOIN)}`);
-  if (critiques.length > 0) pushSignal(`critique: ${withoutTrailingPeriod(critiques.join(" "))}`);
-  if (typeNotes.length > 0) pushSignal(`type notes: ${withoutTrailingPeriod(typeNotes.join(" "))}`);
+  if (moods.length > 0) pushSignal(`mood: ${moods.map(withoutTrailingPeriod).join(VALUE_JOIN)}`, moodPairs.map((m) => m.evidenceId));
+  if (critiques.length > 0) pushSignal(`critique: ${withoutTrailingPeriod(critiques.join(" "))}`, critiquePairs.map((m) => m.evidenceId));
+  if (typeNotes.length > 0) pushSignal(`type notes: ${withoutTrailingPeriod(typeNotes.join(" "))}`, typePairingPairs.map((m) => m.evidenceId));
 
   // Template fix (plan Task 5 Step 2): the brief must never be spliced
-  // mid-sentence ("Ground this A login screen. in the matched corpus
-  // references"). It now stands as a quoted noun phrase, so ANY brief — single
+  // mid-sentence. It now stands as a quoted noun phrase, so ANY brief — single
   // or multi-sentence — leaves the rest of the sentence grammatically intact.
+  const designDirectionEvidenceIds = [...new Set(clauseIds)];
   const composedDirection = clauses.length > 0 || signalClauses.length > 0
-    ? `For the brief "${request.productContext}", the matched corpus references (${ids.join(", ")})`
+    ? `For the brief "${request.productContext}", the matched corpus references (${designDirectionEvidenceIds.join(", ")})`
       + (clauses.length > 0 ? ` point to ${clauses.join(", ")}` : "")
       + ". "
       + (signalClauses.length > 0 ? `The shared signals include ${signalClauses.join(SIGNAL_JOIN)}. ` : "")
       + `Let those signals lead the layout before adding anything not evidenced by the matched examples.`
     : null;
-
-  // Every corpus-prose segment was screened before composing (above); the
-  // remaining parts are closed tokens, the template, and the caller's own
-  // brief. No whole-string re-screen — see the measurement note above.
   const designDirection: string | null = composedDirection;
 
   // ----- C3 Phase 1 prose selection (Task 4): six existing UiSpec fields. -----
@@ -427,7 +434,7 @@ export function createUiSpecDeterministic(
 
   // techniques ← whatToSteal, capped at 5 response-wide, rank order.
   const techniques: { text: string; sourceIds: string[] }[] = [];
-  for (const { evidenceId, entry } of matchedEntries) {
+  for (const { evidenceId, entry } of verifiedFor("whatToSteal")) {
     for (const raw of entry.whatToSteal ?? []) {
       const text = screen(raw, entry);
       if (text === null) continue;
@@ -439,7 +446,7 @@ export function createUiSpecDeterministic(
 
   // antiPatterns ← antiPatterns.antiPatterns, capped at 5 response-wide.
   const antiPatterns: { text: string; sourceIds: string[] }[] = [];
-  for (const { evidenceId, entry } of matchedEntries) {
+  for (const { evidenceId, entry } of verifiedFor("antiPatterns")) {
     for (const raw of entry.antiPatterns?.antiPatterns ?? []) {
       const text = screen(raw, entry);
       if (text === null) continue;
@@ -451,14 +458,11 @@ export function createUiSpecDeterministic(
 
   // contentVoiceGuidance ← voice.tone + voice.avoid + voice.examples. ONE
   // composed string; each segment omitted entirely when its source is absent.
-  // Examples are windowed (20-140 chars), reject data-only strings, capped at
-  // 3 response-wide, then identity-screened. Tone comes from the first
-  // voice-carrying entry in rank order; avoid strings aggregate across entries.
   let tone: string | undefined;
   const avoid: string[] = [];
   const examples: string[] = [];
   const voiceEvidenceIds: string[] = [];
-  for (const { evidenceId, entry } of matchedEntries) {
+  for (const { evidenceId, entry } of verifiedFor("voice")) {
     const voice = entry.voice;
     if (!voice) continue;
     let contributed = false;
@@ -494,12 +498,10 @@ export function createUiSpecDeterministic(
   const contentVoiceGuidance = voiceSegments.length > 0 ? voiceSegments.join(" ") : null;
 
   // accessibilityConstraints ← accessibilityRisks (the risk statement is the
-  // constraint; screened prose, all present, response-wide). The contributing
-  // evidence ids are returned so assembleSpec can attribute the served prose
-  // (governing invariant: every served observation is attributed).
+  // constraint; screened prose, all present, response-wide).
   const accessibilityConstraints: string[] = [];
   const accessibilityEvidenceIds: string[] = [];
-  for (const { evidenceId, entry } of matchedEntries) {
+  for (const { evidenceId, entry } of verifiedFor("antiPatterns.accessibilityRisks")) {
     for (const risk of entry.antiPatterns?.accessibilityRisks ?? []) {
       const text = screen(risk.risk, entry);
       if (text !== null) {
@@ -513,7 +515,7 @@ export function createUiSpecDeterministic(
   const seenComponents = new Set<string>();
   const componentInventory: { name: string; pattern: string }[] = [];
   const componentInventoryEvidenceIds: string[] = [];
-  for (const { evidenceId, entry } of matchedEntries) {
+  for (const { evidenceId, entry } of verifiedFor("components")) {
     let contributed = false;
     for (const component of entry.components ?? []) {
       if (seenComponents.has(component)) continue;
@@ -539,5 +541,7 @@ export function createUiSpecDeterministic(
     componentInventory,
     componentInventoryEvidenceIds,
     responsiveBehaviorEvidenceIds,
+    colorRoleEvidenceIds,
+    designDirectionEvidenceIds,
   };
 }

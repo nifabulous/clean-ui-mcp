@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { detectPlatform, type CorpusEntryT } from "../schema.js";
-import { extractQuantizedColors, tagImage, type TaggerOutput } from "../tagger.js";
+import { extractQuantizedColors, tagImage, callVisionModel, type TaggerOutput, type Provider } from "../tagger.js";
 import { fromCorpusRelativeImagePath } from "../paths.js";
+import { loadCorpus } from "../corpus.js";
+import { persistEntries, writableLoadedCorpus } from "../persistence.js";
 
 /** The verifier's own version — stamped on every record and the resume key. */
 export const VERIFIER_VERSION = "verifier-v1";
@@ -467,4 +472,234 @@ export function makeReproduceDependency(provider?: string): VerifyEntryDeps["rep
     // NEVER return raw tagImage prose for storage. See applyReproducedProse.
     return applyReproducedProse(entry, tagged);
   };
+}
+
+export interface RunResult {
+  entries: number;
+  verdictsByEntry: Record<string, FieldVerdict[]>;
+}
+
+export function selectPending(entries: readonly CorpusEntryT[], version: string): CorpusEntryT[] {
+  return entries.filter((e) => {
+    // No image reference → nothing this stage can verify → never pending (else
+    // it sits in the queue forever). main()'s no-image guard writes no marker.
+    if (!e.image?.path) return false;
+    const verification = e.provenance?.verification ?? {};
+    const attempts = e.provenance?.verifyAttempts ?? {};
+    // Pending when ANY VERIFIABLE servable field is not yet PROCESSED at this
+    // version — neither a trust record (a pass) NOR an attempt marker (a
+    // recorded fail/gate). Gated fields (responsiveBehavior) never count — they
+    // can never carry a record, so they must not keep a finished entry queued.
+    return Object.keys(TIER_BY_FIELD)
+      .filter((field) => tierForField(field) !== "gated")
+      .some((field) => verification[field]?.verifierVersion !== version
+        && attempts[field]?.verifierVersion !== version);
+  });
+}
+
+export function buildRunReport(result: RunResult, opts: { dryRun: boolean; verifierVersion: string; sampleSize: number }): string {
+  const lines: string[] = [];
+  lines.push(`# Corpus verification ${opts.dryRun ? "(DRY-RUN)" : "run"} — ${opts.verifierVersion}`);
+  lines.push("");
+  lines.push(`Entries scanned: ${result.entries}`);
+  const counts = { pass: 0, fail: 0, gate: 0 };
+  let zeroAssertion = 0;
+  for (const verdicts of Object.values(result.verdictsByEntry)) {
+    for (const v of verdicts) {
+      counts[v.verdict] += 1;
+      if (v.verdict === "gate" && /vacuous|no checkable assertions/i.test(v.reason)) zeroAssertion += 1;
+    }
+  }
+  lines.push(`Verdicts — ${counts.pass} pass, ${counts.fail} fail, ${counts.gate} gated`);
+  lines.push(`Zero-assertion prose fields: ${zeroAssertion} (report per prose field before trusting a run)`);
+  lines.push("");
+  for (const [id, verdicts] of Object.entries(result.verdictsByEntry)) {
+    lines.push(`## ${id}`);
+    for (const v of verdicts) lines.push(`- ${v.field}: ${v.verdict} — ${v.reason}`);
+  }
+  lines.push("");
+  if (opts.dryRun) {
+    lines.push("Next: verify a stratified sample of 30 by eye (10 known-bad, 10 typical, 10 unknown)");
+    lines.push("before the full run. Acceptance: >=95% agreement, ZERO missed assertions.");
+  }
+  return lines.join("\n");
+}
+
+/** A resume marker — bookkeeping, NOT a trust record. Lives in `verifyAttempts`. */
+export type VerifyAttempt = { verifierVersion: string; verifiedAt: string };
+
+/**
+ * Markers for the fields a run evaluated but did not pass, so the resume queue
+ * converges instead of re-spending the full vision cost on every run. A pass
+ * earns its own image-confirmed/provable record instead; a gated-tier field
+ * (responsiveBehavior — and any non-servable stray, which `tierForField` maps to
+ * "gated") is never persisted. These go into `provenance.verifyAttempts`, NOT
+ * `provenance.verification`: `isVerified` never reads verifyAttempts, so a failed
+ * field is never served, and the doctor's `verification-malformed` detector
+ * never sees a non-trust method.
+ */
+export function resumeMarkers(
+  verdicts: readonly FieldVerdict[],
+  now: string,
+  version: string,
+): Record<string, VerifyAttempt> {
+  const out: Record<string, VerifyAttempt> = {};
+  for (const v of verdicts) {
+    if (v.verdict === "pass") continue;
+    if (tierForField(v.field) === "gated") continue;
+    out[v.field] = { verifierVersion: version, verifiedAt: now };
+  }
+  return out;
+}
+
+/**
+ * Write attempt markers into `provenance.verifyAttempts`, never clobbering OTHER
+ * fields' keys. A fail/gate also REVOKES any stale `verification` trust record
+ * for the same field — critical because `isVerified` ignores `verifierVersion`
+ * (`corpus-trust.ts:75`), so on a version bump a field that passed at v1 but
+ * fails at v2 would otherwise keep serving its stale v1 record. The record must
+ * be DELETED, not shadowed.
+ */
+export function mergeVerifyAttempts(entry: CorpusEntryT, attempts: Record<string, VerifyAttempt>): void {
+  const provenance = entry.provenance ?? { taggedBy: "auto" as const };
+  const verifyAttempts = { ...(provenance.verifyAttempts ?? {}) };
+  const verification = provenance.verification ? { ...provenance.verification } : undefined;
+  for (const [field, attempt] of Object.entries(attempts)) {
+    verifyAttempts[field] = attempt;
+    if (verification) delete verification[field];
+  }
+  provenance.verifyAttempts = verifyAttempts;
+  if (verification) provenance.verification = verification;
+  entry.provenance = provenance;
+}
+
+/**
+ * Projected model cost for a pending set — NO model is called. One combined
+ * verify per entry, plus at most one batched prose re-verify per entry that has
+ * any prose value, plus the two-pass tagImage re-produce for those entries.
+ */
+export function buildEstimate(pending: readonly CorpusEntryT[]): string {
+  const n = pending.length;
+  const withProse = pending.filter((e) =>
+    PROSE_FIELDS.some((f) => claimForField(e as unknown as Record<string, unknown>, f) !== null),
+  ).length;
+  const maxVision = n + withProse;   // combined verify per entry + one re-verify per prose entry
+  const maxTag = withProse * 2;      // reproduce = 2 tagger passes, once per prose entry
+  return [
+    "Projected cost (no model called):",
+    `  entries pending: ${n}`,
+    `  vision verify calls: ${n}-${maxVision}`,
+    `  re-produce tagger passes (worst case): ${maxTag}`,
+    `  total model calls (worst case): ${maxVision + maxTag}`,
+  ].join("\n");
+}
+
+function resolveVisionProvider(): string | undefined {
+  const provider = (process.env.VERIFY_VISION_PROVIDER ?? "").trim();
+  return provider || undefined;
+}
+
+async function main(): Promise<void> {
+  const { values } = parseArgs({
+    args: process.argv.slice(2),
+    options: {
+      "dry-run": { type: "boolean", default: false },
+      "estimate": { type: "boolean", default: false },
+      "limit": { type: "string" },
+      "sample-size": { type: "string" },
+      "corpus": { type: "string" },
+      "out": { type: "string" },
+      "vision-provider": { type: "string" },
+    },
+  });
+  const dryRun = values["dry-run"] === true;
+  const estimate = values.estimate === true;
+  const limit = Number(values.limit);
+  const sampleSize = Number(values["sample-size"]) || 30;
+  const corpusPath = values.corpus;
+
+  // --corpus is the isolation seam. Read it SYNCHRONOUSLY (the earlier
+  // `JSON.parse(readFile(...))` never awaited the promise) and write results
+  // back to the SAME file so a run against a temp corpus can never touch the
+  // real corpus/entries.json.
+  const rawCorpus = corpusPath ? JSON.parse(readFileSync(corpusPath, "utf8")) : null;
+  const entries: CorpusEntryT[] = rawCorpus ? (rawCorpus.entries as CorpusEntryT[]) : loadCorpus();
+  const pending = selectPending(entries, VERIFIER_VERSION).slice(0, Number.isFinite(limit) && limit > 0 ? limit : undefined);
+
+  // --estimate: project the model cost and exit WITHOUT calling any model.
+  if (estimate) {
+    console.log(buildEstimate(pending));
+    return;
+  }
+
+  const reproduce = makeReproduceDependency(values["vision-provider"] ?? resolveVisionProvider());
+  const results: RunResult = { entries: pending.length, verdictsByEntry: {} };
+  // The verified map keyed by entry id; non-pending entries are preserved
+  // untouched, so persistence below never drops an entry.
+  const verifiedById = new Map<string, CorpusEntryT>();
+  for (const entry of pending) {
+    // Per-entry try/catch: a malformed image path (fromCorpusRelativeImagePath
+    // THROWS, paths.ts:142) or a vision/tag error records a per-entry failure and
+    // the run CONTINUES, instead of propagating to main().catch and aborting
+    // every remaining entry mid-run.
+    try {
+      const imagePath = entry.image?.path ? fromCorpusRelativeImagePath(entry.image.path) : null;
+      if (imagePath === null) {
+        results.verdictsByEntry[entry.id] = [{ field: "image", verdict: "fail", reason: "no image path" }];
+        continue;
+      }
+      const now = new Date().toISOString().slice(0, 10);
+      // verifyEntry MUTATES its entry (value replacement on re-verify pass). Under
+      // --dry-run, clone so the cached loadCorpus() array is never mutated in place.
+      const target = dryRun ? structuredClone(entry) : entry;
+      const { records, verdicts } = await verifyEntry(target, imagePath, {
+        now: () => now,
+        callVision: async (prompt, image) =>
+          // `--vision-provider` is an operator-supplied provider name; an unset
+          // value resolves through callModel's ambient routing.
+          callVisionModel(prompt, image, values["vision-provider"] as Provider | undefined, undefined, undefined, "low"),
+        reproduce,
+      });
+      if (!dryRun) {
+        // Passes earn trust records in `verification`; every other evaluated field
+        // earns a resume marker in `verifyAttempts` (a SIBLING map) so the queue
+        // converges without polluting the trust map or tripping the doctor. A
+        // pass revokes a stale marker and a fail revokes a stale record, so the
+        // two maps stay mutually exclusive per field across version bumps.
+        mergeVerification(entry, records);
+        mergeVerifyAttempts(entry, resumeMarkers(verdicts, now, VERIFIER_VERSION));
+      }
+      results.verdictsByEntry[entry.id] = verdicts;
+      verifiedById.set(entry.id, entry);
+    } catch (err) {
+      results.verdictsByEntry[entry.id] = [{ field: "entry", verdict: "fail", reason: err instanceof Error ? err.message : String(err) }];
+    }
+  }
+  if (!dryRun) {
+    const updated = entries.map((e) => verifiedById.get(e.id) ?? e);
+    if (corpusPath) {
+      writeFileSync(resolve(corpusPath), JSON.stringify({ ...rawCorpus, entries: updated }, null, 2));
+      console.log(`[verify] wrote ${updated.length} entries to ${corpusPath} (${verifiedById.size} verified)`);
+    } else {
+      persistEntries(writableLoadedCorpus(updated), updated);
+      console.log(`[verify] persisted ${entries.length} entries (${verifiedById.size} verified)`);
+    }
+  }
+  const report = buildRunReport(results, { dryRun, verifierVersion: VERIFIER_VERSION, sampleSize });
+  const outDir = values.out ?? process.cwd();
+  writeFileSync(resolve(outDir, "verify-report.md"), report);
+  console.log(report);
+}
+
+const isMain = (() => {
+  const here = process.argv[1] && resolve(process.argv[1]);
+  const me = fileURLToPath(import.meta.url);
+  return here === me;
+})();
+
+if (isMain) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
 }

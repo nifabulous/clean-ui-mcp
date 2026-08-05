@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tierForField, verifyMechanicalFields, type VerificationRecord, type VerifierTier } from "./verify-corpus.js";
 import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict } from "./verify-corpus.js";
 import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReproducedProse } from "./verify-corpus.js";
+import { buildRunReport, selectPending, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
 import { extractQuantizedColors, type TaggerOutput } from "../tagger.js";
 import type { CorpusEntryT } from "../schema.js";
 
@@ -455,5 +456,112 @@ describe("verifyEntry — mechanical + vision + re-produce + re-verify", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resumeMarkers — converge the resume queue on failed/gated fields", () => {
+  it("marks every non-pass, non-gated verdict at the version, never a pass or a gated field", () => {
+    const markers = resumeMarkers(
+      [
+        { field: "platform", verdict: "pass", reason: "" },
+        { field: "critique", verdict: "fail", reason: "" },
+        { field: "whatToSteal", verdict: "gate", reason: "no checkable assertions" },
+        { field: "responsiveBehavior", verdict: "gate", reason: "gated" },
+      ],
+      "2026-08-05",
+      "verifier-v1",
+    );
+    expect(markers.platform).toBeUndefined();           // a pass earns a real record, not a marker
+    expect(markers.responsiveBehavior).toBeUndefined(); // gated is never persisted
+    expect(markers.critique?.verifierVersion).toBe("verifier-v1");
+    expect(markers.critique?.verifiedAt).toBe("2026-08-05");
+    expect(markers.whatToSteal?.verifierVersion).toBe("verifier-v1");
+  });
+
+  it("mergeVerifyAttempts writes into provenance.verifyAttempts, NOT verification, and never clobbers", () => {
+    const e = entry({ provenance: { taggedBy: "auto", verification: { platform: { method: "provable", verifiedAt: "x", verifierVersion: "verifier-v1" } } } });
+    mergeVerifyAttempts(e, { critique: { verifierVersion: "verifier-v1", verifiedAt: "2026-08-05" } });
+    const prov = (e as unknown as { provenance: { verification: Record<string, unknown>; verifyAttempts: Record<string, unknown> } }).provenance;
+    expect(prov.verifyAttempts.critique).toBeDefined();
+    expect(prov.verification.critique).toBeUndefined();  // markers never land in the trust map
+    expect(prov.verification.platform).toBeDefined();    // existing trust record untouched
+  });
+
+  it("a fail/gate marker REVOKES a stale passing record for the same field (version-bump safety)", () => {
+    // isVerified ignores verifierVersion, so a v1 pass that fails at v2 must be
+    // DELETED, not left behind to keep serving.
+    const e = entry({ provenance: { taggedBy: "auto", verification: { critique: { method: "image-confirmed", verifiedAt: "old", verifierVersion: "verifier-v1", imageSha256: "a".repeat(64) } } } });
+    mergeVerifyAttempts(e, { critique: { verifierVersion: "verifier-v2", verifiedAt: "new" } });
+    const prov = (e as unknown as { provenance: { verification: Record<string, unknown>; verifyAttempts: Record<string, unknown> } }).provenance;
+    expect(prov.verification.critique).toBeUndefined();   // stale pass revoked
+    expect(prov.verifyAttempts.critique).toBeDefined();
+  });
+
+  it("a passing record REVOKES a stale attempt marker for the same field", () => {
+    const e = entry({ provenance: { taggedBy: "auto", verifyAttempts: { critique: { verifierVersion: "verifier-v1", verifiedAt: "old" } } } });
+    mergeVerification(e, { critique: { method: "image-confirmed", verifiedAt: "new", verifierVersion: "verifier-v2", imageSha256: "a".repeat(64) } });
+    const prov = (e as unknown as { provenance: { verification: Record<string, unknown>; verifyAttempts: Record<string, unknown> } }).provenance;
+    expect(prov.verifyAttempts.critique).toBeUndefined();  // stale marker revoked
+    expect(prov.verification.critique).toBeDefined();
+  });
+});
+
+describe("buildEstimate — projected cost without calling the model", () => {
+  it("counts pending entries and prose re-verify passes, calls no model", () => {
+    const withProse = entry({ id: "p", critique: "The rail groups the metrics by row.", provenance: { taggedBy: "auto" } });
+    const noProse = entry({ id: "n", provenance: { taggedBy: "auto" } });
+    const est = buildEstimate([withProse, noProse]);
+    expect(est).toContain("entries pending: 2");
+    expect(est).toMatch(/vision verify calls: 2-3/); // 2 combined + up to 1 prose re-verify
+  });
+});
+
+describe("selectPending — the resume selection", () => {
+  const ALL_NON_GATED = ["platform", "visual.dominantColors", "visual.colorRoles", "visual.accentColor",
+    "layout", "components", "visual.usesShadows", "visual.usesBorders", "visual.typePairing",
+    "antiPatterns.accessibilityRisks", "critique", "whatToSteal", "antiPatterns", "voice",
+    "mood", "colorScheme", "visual.spacingDensity", "visual.cornerStyle", "styleTags",
+    "categories", "domainTags", "patternType"];
+
+  it("excludes an entry whose fields are ALL current — whether by pass record OR attempt marker; also excludes no-image entries", () => {
+    const fresh = entry({ id: "fresh", provenance: { taggedBy: "auto" } });
+    const partial = entry({
+      id: "partial",
+      provenance: { taggedBy: "auto", verification: { critique: { method: "image-confirmed", verifiedAt: "2026-08-05", verifierVersion: "verifier-v1", imageSha256: "a".repeat(64) } } },
+    });
+    const record = { method: "image-confirmed", verifiedAt: "2026-08-05", verifierVersion: "verifier-v1", imageSha256: "a".repeat(64) };
+    const attempt = { verifierVersion: "verifier-v1", verifiedAt: "2026-08-05" };
+    // "done" mixes real records (passes) and verifyAttempts (fails) across the
+    // field set — the realistic converged state — and must NOT re-select.
+    const verification: Record<string, typeof record> = {};
+    const verifyAttempts: Record<string, typeof attempt> = {};
+    ALL_NON_GATED.forEach((f, i) => {
+      if (i % 2 === 0) verification[f] = record;
+      else verifyAttempts[f] = attempt;
+    });
+    const done = entry({ id: "done", provenance: { taggedBy: "auto", verification, verifyAttempts } });
+    // A no-image entry can never be verified — it must not sit in the queue forever.
+    const noImage = entry({ id: "noimg", image: { visibility: "private", path: "" } as CorpusEntryT["image"], provenance: { taggedBy: "auto" } });
+
+    const pending = selectPending([fresh, partial, done, noImage], "verifier-v1");
+    expect(pending.map((e) => e.id).sort()).toEqual(["fresh", "partial"]);
+  });
+});
+
+describe("buildRunReport", () => {
+  it("reports accepted/rejected/gated counts and the zero-assertion rate", () => {
+    const report = buildRunReport(
+      {
+        entries: 2,
+        verdictsByEntry: {
+          e1: [{ field: "critique", verdict: "gate", reason: "no checkable assertions enumerated" }],
+          e2: [{ field: "platform", verdict: "pass", reason: "matches" }],
+        },
+      },
+      { dryRun: true, verifierVersion: "verifier-v1", sampleSize: 30 },
+    );
+    expect(report).toContain("DRY-RUN");
+    expect(report).toContain("1 gated");
+    expect(report).toMatch(/zero-assertion/i);
   });
 });

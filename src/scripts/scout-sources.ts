@@ -17,8 +17,9 @@ import "../env.js";
  *   2. Candidate generation — asks the configured text model (callTextModel,
  *      same provider abstraction as the tagger) for real product URLs that
  *      fill the gaps. Gallery/aggregator sites and ToS-forbidden archives
- *      (Mobbin, Dribbble, Behance, Awwwards, ...) are explicitly banned; the
- *      corpus only stores real product UIs.
+ *      (Mobbin, Dribbble, Behance, Awwwards, ...) are banned IN CODE
+ *      (isBannedAggregatorHost, enforced in parseCandidates), not just asked of
+ *      the model; the corpus only stores real product UIs.
  *   3. Verification — per candidate: SSRF guard (assertSafeNavigationTarget,
  *      same rule as capture), robots.txt hard gate (isAllowedByRobots, same
  *      rule as capture), reachability + <title>/<meta> extraction with
@@ -43,7 +44,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { chromium } from "playwright";
 import { callTextModel, callVisionModel, type Provider, type EndpointOverride } from "../tagger.js";
-import { assertSafeNavigationTarget } from "../ssrf.js";
+import { assertSafeNavigationTarget, installSsrfGuard } from "../ssrf.js";
 import { isAllowedByRobots, captureSlug } from "./capture.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -260,6 +261,40 @@ Rules:
  * Parse the model's candidate JSON, tolerating markdown fences and dropping
  * invalid entries (bad URL, empty name) with a reason. Returns kept + dropped.
  */
+/**
+ * Aggregator / gallery hosts the corpus must not source from — a ToS and
+ * redistribution boundary (docs/SOURCING.md), not a quality one. Registrable
+ * domains only; the match below also covers every subdomain.
+ */
+const BANNED_AGGREGATOR_HOSTS: ReadonlySet<string> = new Set([
+  "mobbin.com", "dribbble.com", "behance.net", "awwwards.com", "land-book.com",
+  "pinterest.com", "muzli.com", "collectui.com", "pttrns.com", "uigarage.net",
+]);
+
+/**
+ * True when a URL's host is (or is a subdomain of) a banned aggregator.
+ *
+ * Enforced in code, not just in the prompt: a model that ignores the ban and a
+ * hand-authored candidate file both reach {@link parseCandidates}, so this is the
+ * one gate. Robust to the obvious evasions — the host is lowercased, a trailing
+ * dot is stripped, the port is ignored (URL parsing drops it from `hostname`),
+ * and a subdomain is matched by suffix — so `App.Mobbin.com.:443` is caught.
+ * An unparseable URL returns false: it is not a KNOWN aggregator, and
+ * verifyCandidate still SSRF- and robots-gates it before any fetch.
+ */
+export function isBannedAggregatorHost(rawUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(rawUrl).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return false;
+  }
+  for (const banned of BANNED_AGGREGATOR_HOSTS) {
+    if (host === banned || host.endsWith(`.${banned}`)) return true;
+  }
+  return false;
+}
+
 export function parseCandidates(raw: string): { kept: Candidate[]; dropped: Array<{ raw: unknown; reason: string }> } {
   const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   let parsed: unknown;
@@ -296,6 +331,15 @@ export function parseCandidates(raw: string): { kept: Candidate[]; dropped: Arra
     }
     if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
       dropped.push({ raw: item, reason: `non-http(s) URL: ${url}` });
+      continue;
+    }
+    // The aggregator ban is enforced here, not merely stated in the generation
+    // prompt. The prompt asks the model not to propose Mobbin/Dribbble/etc., but
+    // a model can ignore it and a hand-authored --candidates-file bypasses the
+    // prompt entirely — both funnel through this parser, so this is the choke
+    // point. The corpus stores only real product UIs (ToS + redistribution).
+    if (isBannedAggregatorHost(parsedUrl.toString())) {
+      dropped.push({ raw: item, reason: `banned aggregator host: ${parsedUrl.hostname}` });
       continue;
     }
     if (!sourceName) {
@@ -448,6 +492,41 @@ async function fetchWithHopGuard(url: string, maxHops = 5): Promise<Response> {
   }
 }
 
+/**
+ * Read at most `maxBytes` of a response body, then abort the stream. Bounds
+ * memory against a model-proposed URL that returns a huge body — `res.text()`
+ * would buffer the whole thing before any slice.
+ */
+async function readCapped(res: Response, maxBytes: number): Promise<string> {
+  const body = res.body;
+  if (!body) return (await res.text()).slice(0, maxBytes);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        total += value.length;
+        if (total >= maxBytes) break;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(concatBytes(chunks)).slice(0, maxBytes);
+}
+
+function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+
 function extractMeta(html: string): { title: string | null; description: string | null } {
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)
@@ -496,7 +575,11 @@ export async function verifyCandidate(candidate: Candidate): Promise<Verificatio
       base.error = `HTTP ${res.status}`;
       return base;
     }
-    const text = await res.text();
+    // Only the first 64 KB is ever used (title/meta live in the head), so read
+    // at most that plus a small margin instead of buffering the whole body. A
+    // model-proposed URL returning a multi-GB response would otherwise OOM the
+    // curator process — `await res.text()` buffers it all before the slice.
+    const text = await readCapped(res, 96 * 1024);
     const meta = extractMeta(text.slice(0, 64 * 1024));
     base.title = meta.title;
     base.description = meta.description;
@@ -518,6 +601,16 @@ async function captureScreenshot(url: string, outPath: string): Promise<boolean>
       reducedMotion: "reduce",
     });
     const page = await context.newPage();
+    // SSRF guard on EVERY navigation and subresource, installed BEFORE goto —
+    // exactly as capture.ts does (`:986`, `:1203`). This is a SEPARATE request
+    // from verifyCandidate's fetch: Chromium re-resolves DNS and follows
+    // redirects itself, so a candidate that answered 200 to the scout's fetch
+    // could still 302 headless-Chrome to http://169.254.169.254/ (cloud
+    // metadata) or http://localhost, or embed an internal subresource, and the
+    // response would render into the screenshot on disk. No allowed-local-origin
+    // is passed: candidate URLs are model-supplied, never operator-chosen, so
+    // nothing local is legitimate here.
+    await installSsrfGuard(page);
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
     await page.waitForTimeout(1500);
     await page.screenshot({ path: outPath as `${string}.png` });

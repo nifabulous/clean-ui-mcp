@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isBannedAggregatorHost,
   buildCaptureSources,
   buildGenerationPrompt,
   buildReport,
@@ -61,6 +62,43 @@ describe("computeGaps", () => {
   it("reports zero for requested values absent from the corpus", () => {
     const gaps = computeGaps(sampleEntries, [{ dimension: "styleTag", value: "glassmorphic" }]);
     expect(gaps).toContainEqual({ dimension: "styleTag", value: "glassmorphic", count: 0 });
+  });
+});
+
+describe("isBannedAggregatorHost — the ToS/redistribution denylist is ENFORCED, not just documented", () => {
+  it("bans the named aggregators", () => {
+    for (const u of [
+      "https://mobbin.com/screens", "https://dribbble.com/shots",
+      "https://www.behance.net/gallery", "https://awwwards.com/sites",
+      "https://land-book.com/x",
+    ]) expect(isBannedAggregatorHost(u), u).toBe(true);
+  });
+
+  it("cannot be bypassed by subdomain, case, trailing dot, or port", () => {
+    for (const u of [
+      "https://MOBBIN.com", "https://app.mobbin.com/x", "https://mobbin.com./x",
+      "https://dribbble.com:443/shots",
+    ]) expect(isBannedAggregatorHost(u), u).toBe(true);
+  });
+
+  it("allows real product sites", () => {
+    for (const u of ["https://linear.app", "https://stripe.com/pricing", "https://notmobbin.example.com"]) {
+      expect(isBannedAggregatorHost(u), u).toBe(false);
+    }
+  });
+
+  it("treats an unparseable URL as not-a-known-aggregator (verifyCandidate still SSRF/robots-gates it)", () => {
+    expect(isBannedAggregatorHost("not a url")).toBe(false);
+  });
+});
+
+describe("parseCandidates drops banned aggregators", () => {
+  it("removes an aggregator the model proposed anyway, with a reason", () => {
+    const { kept, dropped } = parseCandidates(
+      '[{"url":"https://mobbin.com/x","sourceName":"Mobbin"},{"url":"https://linear.app","sourceName":"Linear"}]',
+    );
+    expect(kept.map((c) => c.sourceName)).toEqual(["Linear"]);
+    expect(dropped.some((d) => /aggregator|banned/i.test(String(d.reason)))).toBe(true);
   });
 });
 

@@ -205,4 +205,14 @@ describe("collectPalettes — 2d-2 projected entries", () => {
     const filtered = filterEntries([unverifiedLabel], { patternType: "dashboard" });
     expect(filtered.map((e) => e.id)).toEqual(["p2"]);
   });
+
+  it("excludes a raw entry whose patternType label matches but is unverified", () => {
+    // RAW (unprojected) entry: the raw match passes shared filterEntries, so
+    // ONLY the palette-local isVerified gate can exclude it. A projected entry
+    // would have patternType stripped before filtering (test 2), which never
+    // exercises this branch.
+    const unverifiedLabel = paletteEntry("x2", "dashboard", ["visual.colorRoles"]);
+    const results = collectPalettes([unverifiedLabel], { patternType: "dashboard" }, 10);
+    expect(results).toEqual([]);
+  });
 });

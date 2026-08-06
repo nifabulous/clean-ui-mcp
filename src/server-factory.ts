@@ -42,6 +42,7 @@ import type { CorpusReader } from "./corpus-reader.js";
 import { TrustGatedCorpusReader } from "./corpus-trust-reader.js";
 import { verifiedFields } from "./corpus-trust.js";
 import { projectForServing, renderOmittedDisclosure } from "./serving-projection.js";
+import { projectEntryForSynthesis } from "./synthesis-projection.js";
 import type { CreateUiSpecModelDependency } from "./create-ui-spec.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -76,18 +77,6 @@ const GET_UI_EXAMPLE_ENRICHMENT = [
 ] as const;
 const GET_SIMILAR_UI_EXAMPLES_CORE = ["critique"] as const;
 const GET_SIMILAR_UI_EXAMPLES_ENRICHMENT = ["whatToSteal", "categories", "styleTags", "patternType"] as const;
-// Deferred to 2d-2: constructed (fullCurrentSet, []) — byte-for-byte full-AND.
-const COMPARE_UI_EXAMPLES_FULL_SET = [
-  "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
-  "categories", "styleTags", "patternType", "platform", "layout",
-  "visual.accentColor", "visual.colorRoles", "visual.spacingDensity",
-  "visual.cornerStyle", "visual.usesShadows", "visual.usesBorders",
-] as const;
-const RECOMMEND_UI_DIRECTION_FULL_SET = [
-  "whatToSteal", "antiPatterns", "voice", "visual.colorRoles", "visual.typePairing",
-  "visual.spacingDensity", "visual.cornerStyle", "layout", "patternType", "styleTags",
-] as const;
-
 // ----- 2d-2 field sets: core + enrichment split, consumed by Tasks 5-7 --------
 export const COMPARE_UI_EXAMPLES_CORE = ["critique"] as const;
 export const COMPARE_UI_EXAMPLES_ENRICHMENT = [
@@ -160,7 +149,7 @@ export function createServer(
   );
   registerCompareUiExamples(
     server,
-    new TrustGatedCorpusReader(reader, COMPARE_UI_EXAMPLES_FULL_SET),
+    new TrustGatedCorpusReader(reader, COMPARE_UI_EXAMPLES_CORE, COMPARE_UI_EXAMPLES_ENRICHMENT),
   );
   // `generate_design_prompt` is NO LONGER registered publicly — `create_ui_spec`
   // supersedes it (see LEGACY_TO_BETA_MAP in tool-contracts.ts, the documented
@@ -171,10 +160,10 @@ export function createServer(
   registerCreateUiSpec(server, reader, options.createUiSpecModel);
   registerRecommendUiDirection(
     server,
-    new TrustGatedCorpusReader(reader, RECOMMEND_UI_DIRECTION_FULL_SET),
+    new TrustGatedCorpusReader(reader, RECOMMEND_UI_DIRECTION_CORE, RECOMMEND_UI_DIRECTION_ENRICHMENT),
   );
   registerGetAntiPatterns(server, new TrustGatedCorpusReader(reader, ["antiPatterns"]));
-  registerGetColorPalette(server, new TrustGatedCorpusReader(reader, ["visual.colorRoles", "patternType"]));
+  registerGetColorPalette(server, new TrustGatedCorpusReader(reader, GET_COLOR_PALETTE_CORE, GET_COLOR_PALETTE_ENRICHMENT));
   registerGetStealableTechniques(server, new TrustGatedCorpusReader(reader, ["whatToSteal"]));
   registerBrowseUiExamples(server, new TrustGatedCorpusReader(reader, ["patternType"]));
   registerCritiqueUi(server, new TrustGatedCorpusReader(reader, ["patternType", "platform"]));
@@ -633,33 +622,68 @@ function registerCompareUiExamples(server: McpServer, reader: CorpusReader): voi
       const found = entries.filter((e): e is NonNullable<typeof e> => !!e);
       const concise = responseFormat === "concise";
 
+      const projections = found.map((e) => ({
+        id: e.id,
+        entry: projectEntryForSynthesis(e, COMPARE_UI_EXAMPLES_ENRICHMENT),
+        omitted: projectForServing(e, COMPARE_UI_EXAMPLES_ENRICHMENT).omitted,
+      }));
+
       const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
       const firstSentence = (s: string) => cell(s.split(/[.!?]/)[0] || s);
       const top = (arr: string[]) => cell(arr[0] ?? "—");
-      // A11y risks are structured objects with canonical WCAG IDs — format to a string cell.
       const topRisk = (risks: AccessibilityRiskT[]) =>
         cell(risks.length ? formatAccessibilityRisk(risks[0]) : "—");
-      const header = `| Field | ${found.map((e) => cell(
-        [e.patternType, ...e.categories, ...e.styleTags].filter(Boolean).join(" — ") || "corpus example",
+      // A cell renders "—" when its driving field was omitted (unverified); the
+      // platform "web" default applies ONLY to a verified-but-absent platform,
+      // never to an unverified one (that would emit a value never seen verified).
+      const fieldCell = (p: (typeof projections)[number], field: string, render: () => string): string =>
+        p.omitted.includes(field) ? "—" : cell(render());
+      const accentCell = (p: (typeof projections)[number]): string => {
+        if (!p.omitted.includes("visual.accentColor")) {
+          return cell(p.entry.visual?.accentColor ?? p.entry.visual?.colorRoles?.accent ?? "—");
+        }
+        return p.omitted.includes("visual.colorRoles")
+          ? "—"
+          : cell(p.entry.visual?.colorRoles?.accent ?? "—");
+      };
+
+      const header = `| Field | ${projections.map((p) => cell(
+        [
+          p.entry.patternType,
+          ...(p.entry.categories ?? []),
+          ...(p.entry.styleTags ?? []),
+        ].filter(Boolean).join(" — ") || "corpus example",
       )).join(" | ")} |`;
-      const divider = `| --- | ${found.map(() => "---").join(" | ")} |`;
+      const divider = `| --- | ${projections.map(() => "---").join(" | ")} |`;
       const rows = [
-        `| categories | ${found.map((e) => cell(e.categories.join(", "))).join(" | ")} |`,
-        `| styleTags | ${found.map((e) => cell(e.styleTags.join(", "))).join(" | ")} |`,
-        `| platform | ${found.map((e) => (e as Record<string, unknown>).platform ?? "web").join(" | ")} |`,
-        `| layout | ${found.map((e) => e.layout?.form ?? "—").join(" | ")} |`,
-        `| accent | ${found.map((e) => e.visual.accentColor ?? e.visual.colorRoles?.accent ?? "—").join(" | ")} |`,
-        `| density / corners | ${found.map((e) => `${e.visual.spacingDensity} / ${e.visual.cornerStyle}`).join(" | ")} |`,
-        `| shadows / borders | ${found.map((e) => `${e.visual.usesShadows ? "yes" : "no"} / ${e.visual.usesBorders ? "yes" : "no"}`).join(" | ")} |`,
+        `| categories | ${projections.map((p) => fieldCell(p, "categories", () => (p.entry.categories ?? []).join(", "))).join(" | ")} |`,
+        `| styleTags | ${projections.map((p) => fieldCell(p, "styleTags", () => (p.entry.styleTags ?? []).join(", "))).join(" | ")} |`,
+        `| platform | ${projections.map((p) => fieldCell(p, "platform", () => p.entry.platform ?? "web")).join(" | ")} |`,
+        `| layout | ${projections.map((p) => fieldCell(p, "layout", () => p.entry.layout?.form ?? "—")).join(" | ")} |`,
+        `| accent | ${projections.map((p) => accentCell(p)).join(" | ")} |`,
+        `| density / corners | ${projections.map((p) => cell(
+          `${p.omitted.includes("visual.spacingDensity") ? "—" : p.entry.visual?.spacingDensity ?? "—"} / ${p.omitted.includes("visual.cornerStyle") ? "—" : p.entry.visual?.cornerStyle ?? "—"}`,
+        )).join(" | ")} |`,
+        `| shadows / borders | ${projections.map((p) => cell(
+          `${p.omitted.includes("visual.usesShadows") ? "—" : p.entry.visual?.usesShadows ? "yes" : "no"} / ${p.omitted.includes("visual.usesBorders") ? "—" : p.entry.visual?.usesBorders ? "yes" : "no"}`,
+        )).join(" | ")} |`,
         ...(concise ? [] : [
-          `| critique angle | ${found.map((e) => firstSentence(e.critique)).join(" | ")} |`,
-          `| top steal | ${found.map((e) => top(e.whatToSteal)).join(" | ")} |`,
-          `| anti-patterns | ${found.map((e) => top(e.antiPatterns.antiPatterns)).join(" | ")} |`,
-          `| a11y risks | ${found.map((e) => topRisk(e.antiPatterns.accessibilityRisks)).join(" | ")} |`,
+          `| critique angle | ${projections.map((p) => firstSentence(p.entry.critique)).join(" | ")} |`,
+          `| top steal | ${projections.map((p) => fieldCell(p, "whatToSteal", () => top(p.entry.whatToSteal ?? []))).join(" | ")} |`,
+          `| anti-patterns | ${projections.map((p) => fieldCell(p, "antiPatterns", () => top(p.entry.antiPatterns?.antiPatterns ?? []))).join(" | ")} |`,
+          `| a11y risks | ${projections.map((p) => fieldCell(p, "antiPatterns.accessibilityRisks", () => topRisk(p.entry.antiPatterns?.accessibilityRisks ?? []))).join(" | ")} |`,
         ]),
       ];
 
-      return { content: [{ type: "text", text: [header, divider, ...rows].join("\n") }] };
+      const table = [header, divider, ...rows];
+      const columnDisclosures = projections
+        .filter((p) => p.omitted.length > 0)
+        .map((p) => `- **${p.id}**: Unverified fields omitted: ${p.omitted.join(", ")}.`);
+      if (columnDisclosures.length) {
+        table.push("", "_Column disclosures:_", ...columnDisclosures);
+      }
+
+      return { content: [{ type: "text", text: table.join("\n") }] };
     },
   );
 }

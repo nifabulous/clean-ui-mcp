@@ -118,3 +118,22 @@ describe("compare_ui_examples — 2d-2 projected cells", () => {
     expect(text).not.toContain("a11y risks");
   });
 });
+
+describe("get_color_palette — 2d-2 nullable label", () => {
+  it("serves the palette with the label omitted+disclosed when patternType is unverified", async () => {
+    const e = synthEntry("pal-1", ["visual.colorRoles", "critique"]);
+    const text = await callTool("get_color_palette", { limit: 5 }, e);
+    expect(text).toContain("--accent:#2563eb");
+    expect(text).not.toContain("**dashboard**");
+    expect(text).toContain("_Pattern label omitted (unverified)._");
+  });
+
+  it("narrows a patternType filter to verified matches and names the filter key when empty", async () => {
+    const e = synthEntry("pal-1", ["visual.colorRoles"]); // patternType unverified
+    const text = await callTool("get_color_palette", { patternType: "dashboard", limit: 5 }, e);
+    expect(text).not.toContain("#2563eb");
+    // Brief regex /VERIFIED patternType/i was unsatisfiable against the brief's own
+    // message ("...whose patternType label is VERIFIED..."); pin the actual sentence.
+    expect(text).toMatch(/patternType label is VERIFIED/i);
+  });
+});

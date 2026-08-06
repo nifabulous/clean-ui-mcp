@@ -852,8 +852,21 @@ function registerGetColorPalette(server: McpServer, reader: CorpusReader): void 
       },
     },
     async ({ patternType, styleTag, limit }) => {
-      const results = collectPalettes([...reader.entriesForAggregation()], { patternType: patternType as string | undefined, styleTag: styleTag as string | undefined }, limit ?? 10);
+      const entries = [...reader.entriesForAggregation()]
+        .map((e) => projectEntryForSynthesis(e, GET_COLOR_PALETTE_ENRICHMENT));
+      const results = collectPalettes(entries, { patternType: patternType as string | undefined, styleTag: styleTag as string | undefined }, limit ?? 10);
       if (!results.length) {
+        if (patternType) {
+          // The verified-only patternType match is the cause — name it, not the
+          // generic core posture (entries may be verified for colorRoles but not
+          // for the de-facto patternType filter key).
+          return {
+            content: [{
+              type: "text",
+              text: `No palettes available for patternType '${patternType}': palettes are matched only from entries whose patternType label is VERIFIED, and none matched.`,
+            }],
+          };
+        }
         return { content: [{ type: "text", text: emptyCorpusMessage(reader, "palettes") }] };
       }
       const lines = [`# Color palettes (${results.length})\n`];
@@ -861,7 +874,11 @@ function registerGetColorPalette(server: McpServer, reader: CorpusReader): void 
       for (const p of results) {
         const band = hueBand(p.accentHue);
         if (band !== lastBand) { lines.push(`\n## ${band} accents\n`); lastBand = band; }
-        lines.push(`**${p.patternType}**`);
+        if (p.patternType === null) {
+          lines.push(`_Pattern label omitted (unverified)._`);
+        } else {
+          lines.push(`**${p.patternType}**`);
+        }
         lines.push("```css");
         lines.push(`  --canvas:${p.tokens.canvas}; --surface:${p.tokens.surface}; --ink:${p.tokens.ink}; --muted:${p.tokens.muted ?? "inherit"}; --accent:${p.tokens.accent};`);
         lines.push("```\n");

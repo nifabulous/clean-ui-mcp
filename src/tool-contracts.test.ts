@@ -170,6 +170,47 @@ describe.each(TOOL_CATALOG)("valid fixtures: %s", (tool) => {
   });
 });
 
+describe("2d-1 schema round-trip — omitted enrichment validates", () => {
+  it("accepts a search reference with omitted enrichment and a verification disclosure", () => {
+    const p = cloneToolResult(makeValidSuccess("search_ui_references")) as Record<string, unknown>;
+    const data = (p.data as { results: Array<Record<string, unknown>> });
+    delete data.results[0].topTechniques;
+    delete data.results[0].antiPatterns;
+    delete data.results[0].categories;
+    delete data.results[0].styleTags;
+    data.results[0].verification = { omitted: ["topTechniques", "antiPatterns", "categories", "styleTags"] };
+    const r = parseToolResult(p);
+    expect(r.ok, r.ok ? "" : JSON.stringify(r.errors)).toBe(true);
+  });
+
+  it("accepts a similar reference with omitted enrichment and a verification disclosure", () => {
+    const p = cloneToolResult(makeValidSuccess("find_similar_ui_references")) as Record<string, unknown>;
+    const data = (p.data as { results: Array<Record<string, unknown>> });
+    delete data.results[0].patternType;
+    delete data.results[0].categories;
+    delete data.results[0].styleTags;
+    delete data.results[0].techniques;
+    data.results[0].verification = { omitted: ["patternType", "categories", "styleTags", "techniques"] };
+    const r = parseToolResult(p);
+    expect(r.ok, r.ok ? "" : JSON.stringify(r.errors)).toBe(true);
+  });
+
+  it("accepts a full reference with omitted enrichment and a verification disclosure", () => {
+    const p = cloneToolResult(makeValidSuccess("get_ui_reference")) as Record<string, unknown>;
+    const data = p.data as Record<string, unknown>;
+    for (const field of [
+      "accentColor", "dominantColors", "colorRoles", "typePairing", "spacingDensity",
+      "cornerStyle", "usesShadows", "usesBorders", "techniques", "antiPatterns",
+      "accessibility", "voice",
+    ]) {
+      delete data[field];
+    }
+    data.verification = { omitted: ["accentColor", "techniques", "antiPatterns", "accessibility", "voice"] };
+    const r = parseToolResult(p);
+    expect(r.ok, r.ok ? "" : JSON.stringify(r.errors)).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Per-tool adversarial matrix via describe.each
 // ---------------------------------------------------------------------------

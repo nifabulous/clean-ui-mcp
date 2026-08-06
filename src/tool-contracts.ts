@@ -288,32 +288,43 @@ const SourceRef = z.object({
   imageAvailable: z.boolean(),
 }).strict();
 
+/**
+ * 2d-1: per-entry disclosure of omitted-because-unverified enrichment fields.
+ * Present only when something was omitted; the response body itself never
+ * carries an unverified value.
+ */
+const VerificationDisclosure = z.object({
+  omitted: z.array(z.string()),
+}).strict();
+
 const ReferenceSummary = z.object({
   id: z.string().trim().min(1),
   title: z.string().trim().min(1),
   product: z.string().trim().min(1),
-  patternType: z.string().min(1),
-  categories: z.array(z.string()),
-  styleTags: z.array(z.string()),
+  patternType: z.string().min(1).optional(),
+  categories: z.array(z.string()).optional(),
+  styleTags: z.array(z.string()).optional(),
   qualityScore: z.number().int(),
   qualityTier: z.string(),
   source: SourceRef,
   critique: z.string(),
-  topTechniques: z.array(z.string()),
-  antiPatterns: z.array(z.string()),
+  topTechniques: z.array(z.string()).optional(),
+  antiPatterns: z.array(z.string()).optional(),
+  verification: VerificationDisclosure.optional(),
 }).strict();
 
 const SimilarReference = z.object({
   id: z.string().trim().min(1),
   title: z.string().trim().min(1),
   product: z.string().trim().min(1),
-  patternType: z.string().min(1),
-  categories: z.array(z.string()),
-  styleTags: z.array(z.string()),
+  patternType: z.string().min(1).optional(),
+  categories: z.array(z.string()).optional(),
+  styleTags: z.array(z.string()).optional(),
   score: z.number(),
   basis: z.string().min(1),
   critique: z.string(),
-  techniques: z.array(z.string()),
+  techniques: z.array(z.string()).optional(),
+  verification: VerificationDisclosure.optional(),
 }).strict();
 
 const ComparisonRow = z.object({
@@ -394,33 +405,33 @@ const FullReference = z.object({
   qualityTier: z.string(),
   platform: z.string(),
   layout: z.string(),
-  accentColor: z.string().nullable(),
-  dominantColors: z.array(z.string()),
+  accentColor: z.string().nullable().optional(),
+  dominantColors: z.array(z.string()).optional(),
   colorRoles: z.object({
     canvas: z.string().nullable(),
     surface: z.string().nullable(),
     ink: z.string().nullable(),
     muted: z.string().nullable(),
     accent: z.string().nullable(),
-  }).nullable(),
+  }).nullable().optional(),
   typePairing: z.object({
     display: z.string().nullable(),
     body: z.string().nullable(),
     notes: z.string().optional(),
-  }).nullable(),
-  spacingDensity: z.string(),
-  cornerStyle: z.string(),
-  usesShadows: z.boolean(),
-  usesBorders: z.boolean(),
+  }).nullable().optional(),
+  spacingDensity: z.string().optional(),
+  cornerStyle: z.string().optional(),
+  usesShadows: z.boolean().optional(),
+  usesBorders: z.boolean().optional(),
   critique: z.string(),
-  techniques: z.array(z.string()),
-  antiPatterns: z.array(z.string()),
+  techniques: z.array(z.string()).optional(),
+  antiPatterns: z.array(z.string()).optional(),
   whereThisFails: z.array(z.string()),
   accessibility: z.array(z.object({
     element: z.string(),
     risk: z.string(),
     wcag: z.array(z.string()),
-  }).strict()),
+  }).strict()).optional(),
   businessRationale: z.object({
     businessGoal: z.string().nullable(),
     targetUser: z.string().nullable(),
@@ -434,6 +445,7 @@ const FullReference = z.object({
   }).nullable().optional(),
   source: SourceRef,
   imageAvailable: z.boolean(),
+  verification: VerificationDisclosure.optional(),
 }).strict();
 
 // Critique data — strict mirror of StructuredCritique minus schemaVersion

@@ -461,7 +461,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 | Aspect | Contract |
 |---|---|
 | Input | id |
-| Success data | id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, accentColor, dominantColors, colorRoles, typePairing, spacingDensity, cornerStyle, usesShadows, usesBorders, critique, techniques, antiPatterns, whereThisFails, accessibility, businessRationale, voice, source, imageAvailable — full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability |
+| Success data | id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, accentColor, dominantColors, colorRoles, typePairing, spacingDensity, cornerStyle, usesShadows, usesBorders, critique, techniques, antiPatterns, whereThisFails, accessibility, businessRationale, voice, source, imageAvailable, verification — full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability |
 | Empty | n/a — single-id lookup |
 | Partial | n/a — single-id lookup |
 | Errors | NOT_FOUND (non-retryable) |

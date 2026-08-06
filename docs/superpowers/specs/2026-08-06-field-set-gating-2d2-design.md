@@ -38,6 +38,41 @@ techniques, avoid), contribution notes, palette rows, and compare cells.
    - **Aggregation** (brief clauses) discloses coverage: `_Drawn from ${K} of ${N} verified entries._` per section when K < N.
 5. **Mechanism:** ProjectedEntry type + `projectEntryForSynthesis` helper. Compiler-enforced optionality on consumer inputs.
 
+   **ProjectedEntry is a concrete type, not a `Pick` of dotted keys.** Dotted keys are not
+   `keyof CorpusEntryT`, so the optionalized surface is defined at TOP-LEVEL container
+   granularity, with nested leaves expressed as `Partial` containers:
+
+   ```ts
+   export type ProjectedEntry = Omit<
+     CorpusEntryT,
+     "visual" | "antiPatterns" | "voice" | "layout" | "patternType"
+       | "styleTags" | "categories" | "platform" | "whatToSteal"
+   > & {
+     visual?: Partial<VisualAttributes>;   // per-leaf: colorRoles, typePairing, spacingDensity, …
+     antiPatterns?: Partial<AntiPatterns>; // per-leaf: antiPatterns, accessibilityRisks
+     voice?: CorpusEntryT["voice"];
+     layout?: CorpusEntryT["layout"];
+     patternType?: CorpusEntryT["patternType"];
+     styleTags?: CorpusEntryT["styleTags"];
+     categories?: CorpusEntryT["categories"];
+     platform?: CorpusEntryT["platform"];
+     whatToSteal?: CorpusEntryT["whatToSteal"];
+   };
+   ```
+
+   The optionalized top-level set is DERIVED from the union of the three tools' enrichment
+   keys: `{whatToSteal, antiPatterns, voice, layout, patternType, styleTags, categories,
+   platform, visual}` (nested `visual.*` / `antiPatterns.*` paths map to their container).
+   A contract test asserts every enrichment key in the three tools' sets maps into this
+   surface, so the whitelist cannot silently drift (review caught `categories` and `platform`
+   missing from the first draft).
+
+   **`projectEntryForSynthesis` never mutates the source entry.** `loadCorpus()` caches entry
+   objects at module level and `entriesForAggregation` hands those same objects to every
+   handler, so the helper returns a NEW entry object and NEW containers for any nested object
+   it touches (`{ ...entry, visual: { ...entry.visual, … } }`). Stripping a leaf in place
+   would corrupt the shared corpus for all subsequent calls.
+
 ## Architecture
 
 The reader gate is unchanged: `TrustGatedCorpusReader(inner, core, enrichment)`,
@@ -46,8 +81,10 @@ reader and the pure functions.
 
 ### New file: `src/synthesis-projection.ts`
 
-- `type ProjectedEntry` — `Omit<CorpusEntryT, EnrichmentKey> & Partial<Pick<CorpusEntryT, EnrichmentKey>>` where `EnrichmentKey` is the whitelist of 2d-2 enrichment keys (`visual.colorRoles`, `visual.typePairing`, `voice`, `layout`, `patternType`, `styleTags`, `whatToSteal`, `antiPatterns`, `visual.spacingDensity`, `visual.cornerStyle`, `visual.accentColor`, `visual.usesShadows`, `visual.usesBorders`, `visual.dominantColors`, `antiPatterns.accessibilityRisks`). Nested keys mapped to their innermost field.
-- `projectEntryForSynthesis(entry: CorpusEntryT, enrichment: readonly string[]): ProjectedEntry` — returns a shallow-cloned entry with unverified enrichment fields removed (nested where relevant).
+- `type ProjectedEntry` — the concrete top-level-optionalized shape from Locked decision 5
+  (`visual` / `antiPatterns` as `Partial` containers; the other seven keys leaf-optional).
+  The optionalized set is the union of the three tools' enrichment keys — no more, no fewer.
+- `projectEntryForSynthesis(entry: CorpusEntryT, enrichment: readonly string[]): ProjectedEntry` — returns a NEW entry object with unverified enrichment fields removed (nested where relevant). Non-mutating: NEW `visual` / `antiPatterns` containers whenever those are touched; the reader's cached entry and its nested objects are never modified.
 - `renderCoverageDisclosure({ used, total, dropped }): string` — the K-of-N brief-clause variant. Returns `""` when `used === total`.
 - Reuses `renderOmittedDisclosure` from `serving-projection.ts` for direct-echo surfaces.
 
@@ -94,21 +131,38 @@ Union(core, enrichment) for each tool equals today's pre-2d-1 full-AND set → b
 - Handler projects each of 2-3 entries.
 - Header cell string built from `[patternType, ...categories, ...styleTags]`; each fragment guarded on the projection; if all three unverified, falls back to `"corpus example"`.
 - Row cells: unverified field renders `—`; verified renders as today.
+  - **Platform cell:** the current `(e as Record<string, unknown>).platform ?? "web"` default
+    (`server-factory.ts:627`) is REPLACED. An unverified `platform` renders `—`, never `"web"`
+    — `"web"` would be a value the caller never saw verified.
 - Trailing per-column disclosure block appended below the table (only when at least one column has omissions):
 
 ```
 _Column disclosures:_
-- **entry-a**: unverified fields omitted: styleTags, layout.
+- **entry-a**: Unverified fields omitted: styleTags, layout.
 - **entry-b**: (all fields verified).
 ```
 
+- Casing is identical to 2d-1's `renderOmittedDisclosure` output (`Unverified fields omitted: …`).
 - Row-drop is forbidden; a dropped row would hide verified `critique` core.
 
 ### `get_color_palette`
 
 - Reader constructed `(GET_COLOR_PALETTE_CORE, GET_COLOR_PALETTE_ENRICHMENT)`.
 - `collectPalettes(entries: ProjectedEntry[], opts, limit)` — `PaletteResult.patternType` becomes `string | null` (was `string`).
-- **Filter asymmetry:** `filterEntries` matches an entry only when BOTH `entry.patternType === opts.patternType` AND `isVerified(entry, "patternType")`. An unverified `patternType` can't be filtered on because the caller never sees it verified; the request contract requires the corpus to prove the label. This differs from search-tool filters, which project unverified filter keys but don't refuse the request — palette rows publish the filter key as a label, so an unverified match would label a row with a value the caller never sees verified.
+- **Filter asymmetry (PALETTE-LOCAL, not shared `filterEntries`):** `collectPalettes` matches an entry only when BOTH `entry.patternType === opts.patternType` AND `isVerified(entry, "patternType")`. An unverified `patternType` can't be filtered on because the caller never sees it verified; the request contract requires the corpus to prove the label. This differs from search-tool filters, which project unverified filter keys but don't refuse the request — palette rows publish the filter key as a label, so an unverified match would label a row with a value the caller never sees verified. The shared `filterEntries` helper does NOT gain the verified-only rule: `get_anti_patterns` and `get_stealable_techniques` filter by `patternType` but never render it, and `browse_ui_examples` renders it as a row label ([server-factory.ts:848](src/server-factory.ts:848)) but is already gated on `["patternType"]` core in 2d-1 (every rendered value is already verified). Requiring verification inside shared `filterEntries` would silently narrow all three of those tools.
+  - The palette-local filter is a NEW function in `aggregations.ts` (or an inline block inside
+    `collectPalettes`) — shared `filterEntries` at [aggregations.ts:27](src/aggregations.ts:27) is untouched. The new
+    filter duplicates the reviewStatus/category branches from shared `filterEntries` and adds
+    two rules: (a) `patternType` request filter requires `isVerified(entry, "patternType")`;
+    (b) `styleTags` filter reads `e.styleTags?.includes(opts.styleTag)` because
+    `styleTags` is optional on `ProjectedEntry` (recommend/compare project it out). The line
+    [aggregations.ts:34](src/aggregations.ts:34) is the shape the new filter mirrors, not the site edited.
+  - **Filter-aware empty message:** when a `patternType` filter is present and the
+    verified-only match yields zero rows, the empty message must name the filter key as the
+    cause ("no entry with a VERIFIED patternType matching 'X'"), not the generic
+    core-posture message — the generic message would claim the corpus has nothing verified
+    for `visual.colorRoles` when entries ARE verified for the core but not for the de-facto
+    patternType filter key.
 - Row renderer: when `p.patternType === null`, the label line is omitted entirely and the row appends `_Pattern label omitted (unverified)._`; when verified, renders `**${p.patternType}**` as today.
 - Palette tokens (canvas/surface/ink/muted/accent) always serve — they belong to `colorRoles`, which is core.
 
@@ -117,19 +171,33 @@ _Column disclosures:_
 - Reader constructed `(RECOMMEND_UI_DIRECTION_CORE, RECOMMEND_UI_DIRECTION_ENRICHMENT)`.
 - `contributionNote(entry: ProjectedEntry): string` — reads guarded; falls through to `"corpus example"` if every distinctive signal is unverified.
 - `generateBrief(entries: ProjectedEntry[], input): DesignBrief` — every enrichment read guarded. `.filter(x => x !== undefined)` already tolerates missing values naturally; new guards on direct reads (`typePairing.notes`, `layout.form`, `layout.regions`, `patternType`). Existing fallback strings unchanged.
+- **Guard inventory.** Two classes:
+  - **New guards needed** (fields currently required on `CorpusEntryT`, becoming optional on `ProjectedEntry`): `typePairing.notes` ([design-prompt.ts:85](src/design-prompt.ts:85), `:145`), `spacingDensity` / `cornerStyle` (`:103-104`, `:159`), `antiPatterns.antiPatterns` (`:125`, `:132`), `patternType` (`:152`), `styleTags` (`:158`).
+  - **Already guarded** (fields already optional on `CorpusEntryT`, guards must survive the refactor): `voice.tone` (`:108`, reads `e.voice?.tone`), `layout.form` / `regions` (`:93-97`, reads `e.layout?.form` / `e.layout?.regions`).
+  - Both classes get a test hitting the guard branch.
 - `DesignBrief` gains `coverage: Record<Section, { used: number; total: number; droppedFields: string[] }>`. Renderer uses this to append `_Drawn from ${used} of ${total} verified entries._` per section when `used < total`.
 - Direction paragraph still constructed but from fallbacks when key signals absent; the K=0-of-N disclosure names the dropped fields.
+- **Handler seam:** `buildRecommendation` takes `SearchResult[]`, so the handler re-wraps
+  projected entries before calling it:
+  `results.map((r) => ({ ...r, entry: projectEntryForSynthesis(r.entry, RECOMMEND_UI_DIRECTION_ENRICHMENT) }))`.
 
 ### `generate_design_prompt` (private)
 
 - Wired with a gated reader identical to `recommend_ui_direction`'s. Same handler flow.
 - Not re-registered publicly; internal call sites (if any) get the same invariant.
+- **Test boundary:** `generate_design_prompt` is NOT covered by an MCP handler test —
+  `registerGenerateDesignPrompt` ([server-factory.ts:613](src/server-factory.ts:613)) is module-private and never invoked,
+  so the tool cannot be driven through `createServer`. Its hardening shares `generateBrief`,
+  which `design-prompt.test.ts` covers; the private handler is updated for defense-in-depth
+  only, and that update is verified by the typecheck + the shared pure-function tests.
 
 ### Cross-tool invariant sweep
 
 - Extended `TOOL_ARGS` to invoke `recommend_ui_direction`, `get_color_palette`, `compare_ui_examples` with an entry where only core verifies.
 - New sentinel fields in `TOOL_MARKER_FIELDS` per tool.
-- Sweep asserts: a sentinel value planted in unverified enrichment never appears in the serialized brief text / palette row / compare cell.
+- Sweep asserts BOTH halves of the invariant per tool:
+  1. **Sentinel absence** — a sentinel value planted in unverified enrichment never appears in the serialized brief text / palette row / compare cell.
+  2. **Disclosure presence** — when any enrichment field was projected out, the response contains `"Unverified fields omitted"` (direct-echo surfaces: compare, palette) OR `"Drawn from"` (aggregation surface: recommend/generate_design_prompt brief clauses). A silent drop with no disclosure fails the sweep. Mirrors 2d-1's assertion at [invariant-sweep.test.ts:1217](src/invariant-sweep.test.ts:1217).
 - New pin: for a fully-verified fixture, the three tools' output is byte-identical to today (regression net for the refactor).
 
 ## Data flow
@@ -178,6 +246,8 @@ local to the handler.
 - **`pickDiverse` degeneracy:** if `searchRanked` returned zero results, handler already returns `emptyCorpusMessage` before projection runs. Unchanged path.
 - **`plurality([])`:** already returns `undefined`; `entries.map(e => e.visual.spacingDensity).filter(x => x !== undefined)` may be empty → `plurality` returns `undefined` → layout string falls back to today's `"moderate"` default. Same for `cornerStyle`, `patternType`.
 - **Empty enrichment set on an entry:** legal — reader gate already passed. Projection yields entry with only core (`critique`, `whatToSteal`, etc.) filled. Rendering exercises fallbacks; no crash.
+- **Unverified `platform` in a compare cell:** renders `—`, never the `"web"` default.
+- **Filtered palette query with zero verified-`patternType` matches:** filter-aware empty message names the filter key, not the generic core posture.
 - **Filter mismatch on unverified `patternType`:** narrows OUT. Rationale: verified-only match keeps filter contract honest.
 - **Sweep failure semantics:** hard test failure naming tool + sentinel + entry. No production crash path.
 - **`generateBrief` return shape change:** `DesignBrief.coverage` gained; every existing consumer passes the struct through to the renderer.
@@ -187,7 +257,13 @@ local to the handler.
 **New test files:**
 
 - `src/synthesis-projection.test.ts` — pure-function tests for `projectEntryForSynthesis` + `renderCoverageDisclosure`. Mirrors `serving-projection.test.ts`. Covers: full projection, empty projection, nested-key strip, coverage disclosure with K<N / K=0 / K=N.
-- `src/synthesis-serving.test.ts` — MCP handler tests for the three tools + `generate_design_prompt`. Injected reader + in-memory fixtures; no real index. Structure mirrors `field-set-serving.test.ts`.
+- `src/synthesis-projection.test.ts` ALSO includes the whitelist contract test: every key in
+  the three tools' enrichment sets maps into the optionalized `ProjectedEntry` surface (a new
+  enrichment key with no optionalized slot fails loudly).
+- `src/synthesis-serving.test.ts` — MCP handler tests for the three tools (`compare_ui_examples`,
+  `get_color_palette`, `recommend_ui_direction`). Injected reader + in-memory fixtures; no real
+  index (stubbed `searchRanked` + `hasIndex: true` for recommend). `generate_design_prompt` is
+  NOT driven here — it is not publicly registered (see Components).
 
 **Extended files:**
 
@@ -209,6 +285,7 @@ local to the handler.
 3. **Compare table with 3 entries and heavy omission looks sparse.** Accepted: sparse rendering with per-column disclosure honestly represents the corpus's verified state; the alternative (silently dropping columns or filling in fabrications) is what 2d-1/2d-2 exists to prevent.
 4. **`collectPalettes` filter asymmetry surprises callers.** Documented in code comment: `patternType` filter narrows to verified matches only. Rationale: the label ships with the row, and shipping an unverified label would violate the invariant.
 5. **`ProjectedEntry` type maintenance drift.** Whitelist of enrichment keys lives in one place (`synthesis-projection.ts`). Adding an enrichment field means one edit; forgetting to add it means the field stays required in `ProjectedEntry`, which fails the projection helper's contract test (which asserts every key in the whitelist is representable).
+6. **`DesignBrief.coverage` is a breaking type-shape change.** `renderBrief` (`design-prompt.ts`) and `renderRecommendation` (`recommend.ts`) are the only production consumers; both are updated in this pass. Fixture tests use `toContain` on rendered text, not `toEqual` on the struct — safe. Any NEW test that does `toEqual(briefObject)` must include the new `coverage` field or it will fail; plan reviewers should grep for `toEqual` on brief/recommendation return values before merge.
 
 ## Deferred / not in scope
 

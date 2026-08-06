@@ -41,6 +41,7 @@ import { registerCreateUiSpec } from "./create-ui-spec-mcp.js";
 import type { CorpusReader } from "./corpus-reader.js";
 import { TrustGatedCorpusReader } from "./corpus-trust-reader.js";
 import { verifiedFields } from "./corpus-trust.js";
+import { projectForServing, renderOmittedDisclosure } from "./serving-projection.js";
 import type { CreateUiSpecModelDependency } from "./create-ui-spec.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -347,32 +348,50 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
         };
       }
 
+      const projection = projectForServing(entry, GET_UI_EXAMPLE_ENRICHMENT);
+      const served = (field: string) => projection.served.includes(field);
+      const visualLines = (): string[] => {
+        const lines: string[] = [];
+        if (served("visual.dominantColors")) lines.push(`- Dominant colors: ${entry.visual.dominantColors.join(", ")}`);
+        if (served("visual.accentColor")) lines.push(`- Accent: ${entry.visual.accentColor ?? "none identified"}`);
+        if (served("visual.colorRoles") && entry.visual.colorRoles) {
+          const cr = entry.visual.colorRoles;
+          lines.push(`- Color roles (paste-ready token set): canvas ${cr.canvas}, surface ${cr.surface}, ink ${cr.ink}${cr.muted ? `, muted ${cr.muted}` : ""}, accent ${cr.accent}`);
+        }
+        if (served("visual.typePairing") && entry.visual.typePairing) {
+          const tp = entry.visual.typePairing;
+          lines.push(`- Type pairing: ${tp.display ?? "?"} / ${tp.body ?? "?"}${tp.notes ? ` — ${tp.notes}` : ""}`);
+        }
+        if (served("visual.spacingDensity")) lines.push(`- Spacing density: ${entry.visual.spacingDensity}`);
+        if (served("visual.cornerStyle")) lines.push(`- Corners: ${entry.visual.cornerStyle}`);
+        const shadowBorder = [
+          served("visual.usesShadows") ? `Shadows: ${entry.visual.usesShadows ? "yes" : "no"}` : "",
+          served("visual.usesBorders") ? `Borders: ${entry.visual.usesBorders ? "yes" : "no"}` : "",
+        ].filter(Boolean).join(" | ");
+        if (shadowBorder) lines.push(`- ${shadowBorder}`);
+        return lines.length ? [`## Visual attributes`, ...lines] : [];
+      };
+
+      // Output-shape note: sections are folded into single strings and the old
+      // trailing blank line is dropped — field-identical, not byte-identical.
       const detail = [
         `## Critique`,
         entry.critique,
         ``,
-        `## What to steal`,
-        ...entry.whatToSteal.map((t) => `- ${t}`),
-        ``,
-        entry.antiPatterns.antiPatterns.length
+        served("whatToSteal")
+          ? [`## What to steal`, ...entry.whatToSteal.map((t) => `- ${t}`)].join("\n")
+          : "",
+        served("antiPatterns") && entry.antiPatterns.antiPatterns.length
           ? `## Anti-patterns (mistakes this design avoids)\n${entry.antiPatterns.antiPatterns.map((t) => `- ${t}`).join("\n")}\n`
           : "",
-        entry.antiPatterns.accessibilityRisks.length
+        served("antiPatterns.accessibilityRisks") && entry.antiPatterns.accessibilityRisks.length
           ? `## Accessibility risks\n${entry.antiPatterns.accessibilityRisks.map((r) => `- ${formatAccessibilityRisk(r, { includeEvidence: true })}`).join("\n")}\n`
           : "",
-        entry.voice
+        served("voice") && entry.voice
           ? `## Voice\n- Tone: ${entry.voice.tone}\n${entry.voice.examples.map((e) => `- Example: "${e}"`).join("\n")}${entry.voice.avoid.length ? `\n${entry.voice.avoid.map((a) => `- Avoid: ${a}`).join("\n")}` : ""}\n`
           : "",
-        `## Visual attributes`,
-        `- Dominant colors: ${entry.visual.dominantColors.join(", ")}`,
-        `- Accent: ${entry.visual.accentColor ?? "none identified"}`,
-        entry.visual.colorRoles
-          ? `- Color roles (paste-ready token set): canvas ${entry.visual.colorRoles.canvas}, surface ${entry.visual.colorRoles.surface}, ink ${entry.visual.colorRoles.ink}${entry.visual.colorRoles.muted ? `, muted ${entry.visual.colorRoles.muted}` : ""}, accent ${entry.visual.colorRoles.accent}`
-          : "",
-        `- Type pairing: ${entry.visual.typePairing.display ?? "?"} / ${entry.visual.typePairing.body ?? "?"}${entry.visual.typePairing.notes ? ` — ${entry.visual.typePairing.notes}` : ""}`,
-        `- Spacing density: ${entry.visual.spacingDensity}`,
-        `- Corners: ${entry.visual.cornerStyle}`,
-        `- Shadows: ${entry.visual.usesShadows ? "yes" : "no"} | Borders: ${entry.visual.usesBorders ? "yes" : "no"}`,
+        ...visualLines(),
+        renderOmittedDisclosure(projection.omitted),
       ]
         .filter(Boolean)
         .join("\n");

@@ -226,7 +226,7 @@ describe("TrustGatedCorpusReader — per-field field sets", () => {
   });
 
   it("refuses an empty field set at construction", () => {
-    expect(() => new TrustGatedCorpusReader(inner(), [])).toThrow(/at least one field/i);
+    expect(() => new TrustGatedCorpusReader(inner(), [])).toThrow(/at least one core field/i);
   });
 
   it("reports the posture against its own field set", () => {
@@ -262,5 +262,70 @@ describe("TrustGatedCorpusReader — per-field field sets", () => {
     } as unknown as CorpusReader;
     const index = await new TrustGatedCorpusReader(innerReader, ["whatToSteal", "voice"]).getImageIndex();
     expect(Object.keys(index!.entries)).toEqual(["full-1"]);
+  });
+});
+
+describe("TrustGatedCorpusReader — core/enrichment split (2d-1)", () => {
+  function mixedEntry(id: string, verifiedFor: readonly string[]): CorpusEntryT {
+    const verification: Record<string, unknown> = {};
+    for (const field of verifiedFor) {
+      verification[field] = { method: "measured", verifiedAt: "2026-08-04", verifierVersion: "v1" };
+    }
+    return {
+      id,
+      source: { productName: `product-${id}` },
+      whatToSteal: [`${id} technique`],
+      critique: `${id} critique`,
+      provenance: { taggedBy: "auto", verification },
+    } as unknown as CorpusEntryT;
+  }
+
+  function readerOf(entries: CorpusEntryT[]): CorpusReader {
+    return {
+      search: async () => entries,
+      searchRanked: async () => entries.map((e, i) => ({ entry: e, score: 5 - i, searchMode: "keyword" as const })),
+      getById: (id: string) => entries.find((e) => e.id === id),
+      findSimilar: () => entries.map((e) => ({ entry: e, score: 1 })),
+      listCategories: () => ["dashboard"],
+      listStyleTags: () => ["minimal"],
+      listDomainTags: () => ["analytics"],
+      indexStatus: () => ({ indexed: 0, total: entries.length, hasIndex: false, missing: 0, stale: 0, contentStale: 0 }),
+      entriesForAggregation: () => entries,
+      resolveImagePath: () => null,
+    } as unknown as CorpusReader;
+  }
+
+  it("includes an entry whose core verifies even when enrichment does not", async () => {
+    const partial = mixedEntry("partial-1", ["critique"]);
+    const r = new TrustGatedCorpusReader(readerOf([partial]), ["critique"], ["whatToSteal", "voice"]);
+    expect((await r.search({} as never)).map((e) => e.id)).toEqual(["partial-1"]);
+    expect(r.getById("partial-1")?.id).toBe("partial-1");
+  });
+
+  it("excludes an entry whose core does not verify, even when enrichment does", async () => {
+    const dark = mixedEntry("dark-1", ["whatToSteal"]);
+    const r = new TrustGatedCorpusReader(readerOf([dark]), ["critique"], ["whatToSteal"]);
+    expect(await r.search({} as never)).toEqual([]);
+    expect(r.getById("dark-1")).toBeUndefined();
+    expect(r.refusedForTrust("dark-1")).toBe(true);
+  });
+
+  it("exposes core and enrichment as read-only accessors", () => {
+    const r = new TrustGatedCorpusReader(readerOf([]), ["critique"], ["whatToSteal", "voice"]);
+    expect(r.core).toEqual(["critique"]);
+    expect(r.enrichment).toEqual(["whatToSteal", "voice"]);
+  });
+
+  it("refuses an empty CORE set at construction", () => {
+    expect(() => new TrustGatedCorpusReader(readerOf([]), [], ["whatToSteal"])).toThrow(/at least one core field/i);
+  });
+
+  it("behaves byte-for-byte as the old full-AND when constructed (fullSet, [])", async () => {
+    const partial = mixedEntry("partial-1", ["critique", "whatToSteal"]);
+    const full = mixedEntry("full-1", ["critique", "whatToSteal", "voice"]);
+    const r = new TrustGatedCorpusReader(readerOf([partial, full]), ["critique", "whatToSteal", "voice"]);
+    expect((await r.search({} as never)).map((e) => e.id)).toEqual(["full-1"]);
+    expect(r.trustPosture()).toEqual({ verified: 1, total: 2 });
+    expect(r.refusedForTrust("partial-1")).toBe(true);
   });
 });

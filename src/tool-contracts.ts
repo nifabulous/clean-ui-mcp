@@ -288,32 +288,43 @@ const SourceRef = z.object({
   imageAvailable: z.boolean(),
 }).strict();
 
+/**
+ * 2d-1: per-entry disclosure of omitted-because-unverified enrichment fields.
+ * Present only when something was omitted; the response body itself never
+ * carries an unverified value.
+ */
+const VerificationDisclosure = z.object({
+  omitted: z.array(z.string()),
+}).strict();
+
 const ReferenceSummary = z.object({
   id: z.string().trim().min(1),
   title: z.string().trim().min(1),
   product: z.string().trim().min(1),
-  patternType: z.string().min(1),
-  categories: z.array(z.string()),
-  styleTags: z.array(z.string()),
+  patternType: z.string().min(1).optional(),
+  categories: z.array(z.string()).optional(),
+  styleTags: z.array(z.string()).optional(),
   qualityScore: z.number().int(),
   qualityTier: z.string(),
   source: SourceRef,
   critique: z.string(),
-  topTechniques: z.array(z.string()),
-  antiPatterns: z.array(z.string()),
+  topTechniques: z.array(z.string()).optional(),
+  antiPatterns: z.array(z.string()).optional(),
+  verification: VerificationDisclosure.optional(),
 }).strict();
 
 const SimilarReference = z.object({
   id: z.string().trim().min(1),
   title: z.string().trim().min(1),
   product: z.string().trim().min(1),
-  patternType: z.string().min(1),
-  categories: z.array(z.string()),
-  styleTags: z.array(z.string()),
+  patternType: z.string().min(1).optional(),
+  categories: z.array(z.string()).optional(),
+  styleTags: z.array(z.string()).optional(),
   score: z.number(),
   basis: z.string().min(1),
   critique: z.string(),
-  techniques: z.array(z.string()),
+  techniques: z.array(z.string()).optional(),
+  verification: VerificationDisclosure.optional(),
 }).strict();
 
 const ComparisonRow = z.object({
@@ -394,33 +405,33 @@ const FullReference = z.object({
   qualityTier: z.string(),
   platform: z.string(),
   layout: z.string(),
-  accentColor: z.string().nullable(),
-  dominantColors: z.array(z.string()),
+  accentColor: z.string().nullable().optional(),
+  dominantColors: z.array(z.string()).optional(),
   colorRoles: z.object({
     canvas: z.string().nullable(),
     surface: z.string().nullable(),
     ink: z.string().nullable(),
     muted: z.string().nullable(),
     accent: z.string().nullable(),
-  }).nullable(),
+  }).nullable().optional(),
   typePairing: z.object({
     display: z.string().nullable(),
     body: z.string().nullable(),
     notes: z.string().optional(),
-  }).nullable(),
-  spacingDensity: z.string(),
-  cornerStyle: z.string(),
-  usesShadows: z.boolean(),
-  usesBorders: z.boolean(),
+  }).nullable().optional(),
+  spacingDensity: z.string().optional(),
+  cornerStyle: z.string().optional(),
+  usesShadows: z.boolean().optional(),
+  usesBorders: z.boolean().optional(),
   critique: z.string(),
-  techniques: z.array(z.string()),
-  antiPatterns: z.array(z.string()),
+  techniques: z.array(z.string()).optional(),
+  antiPatterns: z.array(z.string()).optional(),
   whereThisFails: z.array(z.string()),
   accessibility: z.array(z.object({
     element: z.string(),
     risk: z.string(),
     wcag: z.array(z.string()),
-  }).strict()),
+  }).strict()).optional(),
   businessRationale: z.object({
     businessGoal: z.string().nullable(),
     targetUser: z.string().nullable(),
@@ -434,6 +445,7 @@ const FullReference = z.object({
   }).nullable().optional(),
   source: SourceRef,
   imageAvailable: z.boolean(),
+  verification: VerificationDisclosure.optional(),
 }).strict();
 
 // Critique data — strict mirror of StructuredCritique minus schemaVersion
@@ -1615,7 +1627,7 @@ export const TOOL_DESCRIPTORS = [
     errorCodes: ["NOT_FOUND", "PROVIDER_ERROR"],
     contractDocs: {
       input: "query?, category?, styleTag?, patternType?, minQuality (1-5)?, qualityTier?, reviewStatus?, platform?, limit (1-20, default 5)?, responseFormat?",
-      successData: "`results: ReferenceSummary[]` — each with id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url required-but-nullable, imageAvailable), critique excerpt, topTechniques, antiPatterns",
+      successData: "`results: ReferenceSummary[]` — each with id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url required-but-nullable, imageAvailable), critique excerpt, topTechniques, antiPatterns, verification (omitted enrichment disclosure, when present)",
       empty: "`results: []`, retrieval none, resultCount 0, summary guidance",
       partial: "sparseCoverage / keywordFallback typed warnings on degraded retrieval",
       resultCount: "`results.length`",
@@ -1646,7 +1658,7 @@ export const TOOL_DESCRIPTORS = [
     errorCodes: ["NOT_FOUND"],
     contractDocs: {
       input: "id (required)",
-      successData: "full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability",
+      successData: "full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability, verification (omitted enrichment disclosure, when present)",
       empty: "n/a — single-id lookup",
       partial: "n/a — single-id lookup",
       resultCount: "1 on success, 0 on error",
@@ -1675,7 +1687,7 @@ export const TOOL_DESCRIPTORS = [
     errorCodes: ["NOT_FOUND", "PROVIDER_ERROR"],
     contractDocs: {
       input: "id (required), limit (1-20, default 5)?",
-      successData: "`results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques",
+      successData: "`results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques, verification (omitted enrichment disclosure, when present)",
       empty: "`results: []` when no index or source not found",
       partial: "keywordFallback / sparseCoverage typed warnings on degraded retrieval",
       resultCount: "`results.length`",

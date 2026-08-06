@@ -41,6 +41,7 @@ import { registerCreateUiSpec } from "./create-ui-spec-mcp.js";
 import type { CorpusReader } from "./corpus-reader.js";
 import { TrustGatedCorpusReader } from "./corpus-trust-reader.js";
 import { verifiedFields } from "./corpus-trust.js";
+import { projectForServing, renderOmittedDisclosure } from "./serving-projection.js";
 import type { CreateUiSpecModelDependency } from "./create-ui-spec.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -60,6 +61,32 @@ async function logQuery(params: { query?: string; category?: string; styleTag?: 
 export interface CreateServerOptions {
   readonly createUiSpecModel?: CreateUiSpecModelDependency;
 }
+
+// ----- 2d-1 field sets: core (hard-gated) + enrichment (render-if-verified) --
+// The SAME constants feed the reader wiring AND the renderers' projection, so
+// a tool's declared set can never drift from what its render path projects.
+const SEARCH_UI_EXAMPLES_CORE = ["critique"] as const;
+const SEARCH_UI_EXAMPLES_ENRICHMENT = ["whatToSteal", "antiPatterns", "categories", "styleTags"] as const;
+const GET_UI_EXAMPLE_CORE = ["critique"] as const;
+const GET_UI_EXAMPLE_ENRICHMENT = [
+  "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks", "voice",
+  "visual.dominantColors", "visual.accentColor", "visual.colorRoles",
+  "visual.typePairing", "visual.spacingDensity", "visual.cornerStyle",
+  "visual.usesShadows", "visual.usesBorders",
+] as const;
+const GET_SIMILAR_UI_EXAMPLES_CORE = ["critique"] as const;
+const GET_SIMILAR_UI_EXAMPLES_ENRICHMENT = ["whatToSteal", "categories", "styleTags", "patternType"] as const;
+// Deferred to 2d-2: constructed (fullCurrentSet, []) — byte-for-byte full-AND.
+const COMPARE_UI_EXAMPLES_FULL_SET = [
+  "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
+  "categories", "styleTags", "patternType", "platform", "layout",
+  "visual.accentColor", "visual.colorRoles", "visual.spacingDensity",
+  "visual.cornerStyle", "visual.usesShadows", "visual.usesBorders",
+] as const;
+const RECOMMEND_UI_DIRECTION_FULL_SET = [
+  "whatToSteal", "antiPatterns", "voice", "visual.colorRoles", "visual.typePairing",
+  "visual.spacingDensity", "visual.cornerStyle", "layout", "patternType", "styleTags",
+] as const;
 
 export function createServer(
   reader: CorpusReader,
@@ -93,37 +120,25 @@ export function createServer(
   // that tool renders — never wider (over-gating) and never narrower
   // (over-serving). The field set is the contract between the verifier (Stage
   // 2b/2c) and the gate, reviewable in one place. `create_ui_spec` keeps the
-  // UNGATED reader on purpose: it gates itself (create-ui-spec-deterministic.ts)
-  // AND needs the corpus-wide entry list to build the identity screen's
-  // denied-name set.
+  // UNGATED reader on purpose (see the C3 note above).
   registerSearchUiExamples(
     server,
-    new TrustGatedCorpusReader(reader, ["critique", "whatToSteal", "antiPatterns", "categories", "styleTags"]),
+    new TrustGatedCorpusReader(reader, SEARCH_UI_EXAMPLES_CORE, SEARCH_UI_EXAMPLES_ENRICHMENT),
   );
   registerGetUiExample(
     server,
-    new TrustGatedCorpusReader(reader, [
-      "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
-      "voice", "visual.dominantColors", "visual.accentColor", "visual.colorRoles",
-      "visual.typePairing", "visual.spacingDensity", "visual.cornerStyle",
-      "visual.usesShadows", "visual.usesBorders",
-    ]),
+    new TrustGatedCorpusReader(reader, GET_UI_EXAMPLE_CORE, GET_UI_EXAMPLE_ENRICHMENT),
   );
   registerListCategories(server, new TrustGatedCorpusReader(reader, ["categories"]));
   registerListStyleTags(server, new TrustGatedCorpusReader(reader, ["styleTags"]));
   registerListDomainTags(server, new TrustGatedCorpusReader(reader, ["domainTags"]));
   registerGetSimilarUiExamples(
     server,
-    new TrustGatedCorpusReader(reader, ["critique", "whatToSteal", "categories", "styleTags", "patternType"]),
+    new TrustGatedCorpusReader(reader, GET_SIMILAR_UI_EXAMPLES_CORE, GET_SIMILAR_UI_EXAMPLES_ENRICHMENT),
   );
   registerCompareUiExamples(
     server,
-    new TrustGatedCorpusReader(reader, [
-      "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
-      "categories", "styleTags", "patternType", "platform", "layout",
-      "visual.accentColor", "visual.colorRoles", "visual.spacingDensity",
-      "visual.cornerStyle", "visual.usesShadows", "visual.usesBorders",
-    ]),
+    new TrustGatedCorpusReader(reader, COMPARE_UI_EXAMPLES_FULL_SET),
   );
   // `generate_design_prompt` is NO LONGER registered publicly — `create_ui_spec`
   // supersedes it (see LEGACY_TO_BETA_MAP in tool-contracts.ts, the documented
@@ -134,10 +149,7 @@ export function createServer(
   registerCreateUiSpec(server, reader, options.createUiSpecModel);
   registerRecommendUiDirection(
     server,
-    new TrustGatedCorpusReader(reader, [
-      "whatToSteal", "antiPatterns", "voice", "visual.colorRoles", "visual.typePairing",
-      "visual.spacingDensity", "visual.cornerStyle", "layout", "patternType", "styleTags",
-    ]),
+    new TrustGatedCorpusReader(reader, RECOMMEND_UI_DIRECTION_FULL_SET),
   );
   registerGetAntiPatterns(server, new TrustGatedCorpusReader(reader, ["antiPatterns"]));
   registerGetColorPalette(server, new TrustGatedCorpusReader(reader, ["visual.colorRoles", "patternType"]));
@@ -163,7 +175,7 @@ function emptyCorpusMessage(reader: CorpusReader, noun: string): string {
   if (gate !== null && posture !== null && posture.verified < posture.total) {
     return (
       `No ${noun} available: ${posture.verified} of ${posture.total} corpus entries are verified `
-      + `for every field this tool serves (${gate.fields.join(", ")}), and corpus content is `
+      + `for every core field this tool serves (${gate.core.join(", ")}), and corpus content is `
       + `served only from verified entries. This is not a filter problem — broadening the query `
       + `will not change it.`
     );
@@ -190,8 +202,8 @@ function unresolvedIdsMessage(reader: CorpusReader, ids: readonly string[]): str
     const one = refused.length === 1;
     parts.push(
       `${one ? "Entry" : "Entries"} ${refused.map((i) => `"${i}"`).join(", ")} `
-      + `${one ? "exists" : "exist"} but ${one ? "is" : "are"} not verified for every field this `
-      + `tool serves (${gate.fields.join(", ")}), and corpus content is served only from verified `
+      + `${one ? "exists" : "exist"} but ${one ? "is" : "are"} not verified for every core field this `
+      + `tool serves (${gate.core.join(", ")}), and corpus content is served only from verified `
       + `entries (${posture.verified} of ${posture.total} verified).`,
     );
   }
@@ -216,7 +228,7 @@ function corpusEvidenceNote(reader: CorpusReader, evidenceCount: number): string
   if (posture === null || posture.verified >= posture.total) return "";
   return (
     `\n\n---\n_No corpus evidence backs this critique: ${posture.verified} of ${posture.total} `
-    + `corpus entries are verified for every field this tool serves (${gate!.fields.join(", ")}) — `
+    + `corpus entries are verified for every core field this tool serves (${gate!.core.join(", ")}) — `
     + `corpus content is served only from verified entries. Every finding above is grounded in the `
     + `uploaded screenshot alone._`
   );
@@ -285,7 +297,12 @@ function registerSearchUiExamples(server: McpServer, reader: CorpusReader): void
       const concise = responseFormat === "concise";
       const summary = results
         .map((e) => {
-          const headerParts = [e.categories.join(", "), e.styleTags.join(", ")].filter(Boolean).join(" | ");
+          const projection = projectForServing(e, SEARCH_UI_EXAMPLES_ENRICHMENT);
+          const served = (field: string) => projection.served.includes(field);
+          const headerParts = [
+            served("categories") ? e.categories.join(", ") : "",
+            served("styleTags") ? e.styleTags.join(", ") : "",
+          ].filter(Boolean).join(" | ");
           const lines: string[] = [];
           if (headerParts) lines.push(`### ${headerParts}`);
           if (concise) {
@@ -294,13 +311,15 @@ function registerSearchUiExamples(server: McpServer, reader: CorpusReader): void
             lines.push(
               `Critique: ${e.critique}`,
               ``,
-              `What to steal:`,
-              ...e.whatToSteal.map((t) => `  - ${t}`),
-              e.antiPatterns.antiPatterns.length
+              served("whatToSteal")
+                ? ["What to steal:", ...e.whatToSteal.map((t) => `  - ${t}`)].join("\n")
+                : "",
+              served("antiPatterns") && e.antiPatterns.antiPatterns.length
                 ? `Anti-patterns (mistakes avoided):\n${e.antiPatterns.antiPatterns.map((t) => `  - ${t}`).join("\n")}`
                 : "",
             );
           }
+          lines.push(renderOmittedDisclosure(projection.omitted));
           return lines.filter(Boolean).join("\n");
         })
         .join("\n\n---\n\n");
@@ -337,32 +356,50 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
         };
       }
 
+      const projection = projectForServing(entry, GET_UI_EXAMPLE_ENRICHMENT);
+      const served = (field: string) => projection.served.includes(field);
+      const visualLines = (): string[] => {
+        const lines: string[] = [];
+        if (served("visual.dominantColors")) lines.push(`- Dominant colors: ${entry.visual.dominantColors.join(", ")}`);
+        if (served("visual.accentColor")) lines.push(`- Accent: ${entry.visual.accentColor ?? "none identified"}`);
+        if (served("visual.colorRoles") && entry.visual.colorRoles) {
+          const cr = entry.visual.colorRoles;
+          lines.push(`- Color roles (paste-ready token set): canvas ${cr.canvas}, surface ${cr.surface}, ink ${cr.ink}${cr.muted ? `, muted ${cr.muted}` : ""}, accent ${cr.accent}`);
+        }
+        if (served("visual.typePairing") && entry.visual.typePairing) {
+          const tp = entry.visual.typePairing;
+          lines.push(`- Type pairing: ${tp.display ?? "?"} / ${tp.body ?? "?"}${tp.notes ? ` — ${tp.notes}` : ""}`);
+        }
+        if (served("visual.spacingDensity")) lines.push(`- Spacing density: ${entry.visual.spacingDensity}`);
+        if (served("visual.cornerStyle")) lines.push(`- Corners: ${entry.visual.cornerStyle}`);
+        const shadowBorder = [
+          served("visual.usesShadows") ? `Shadows: ${entry.visual.usesShadows ? "yes" : "no"}` : "",
+          served("visual.usesBorders") ? `Borders: ${entry.visual.usesBorders ? "yes" : "no"}` : "",
+        ].filter(Boolean).join(" | ");
+        if (shadowBorder) lines.push(`- ${shadowBorder}`);
+        return lines.length ? [`## Visual attributes`, ...lines] : [];
+      };
+
+      // Output-shape note: sections are folded into single strings and the old
+      // trailing blank line is dropped — field-identical, not byte-identical.
       const detail = [
         `## Critique`,
         entry.critique,
         ``,
-        `## What to steal`,
-        ...entry.whatToSteal.map((t) => `- ${t}`),
-        ``,
-        entry.antiPatterns.antiPatterns.length
+        served("whatToSteal")
+          ? [`## What to steal`, ...entry.whatToSteal.map((t) => `- ${t}`)].join("\n")
+          : "",
+        served("antiPatterns") && entry.antiPatterns.antiPatterns.length
           ? `## Anti-patterns (mistakes this design avoids)\n${entry.antiPatterns.antiPatterns.map((t) => `- ${t}`).join("\n")}\n`
           : "",
-        entry.antiPatterns.accessibilityRisks.length
+        served("antiPatterns.accessibilityRisks") && entry.antiPatterns.accessibilityRisks.length
           ? `## Accessibility risks\n${entry.antiPatterns.accessibilityRisks.map((r) => `- ${formatAccessibilityRisk(r, { includeEvidence: true })}`).join("\n")}\n`
           : "",
-        entry.voice
+        served("voice") && entry.voice
           ? `## Voice\n- Tone: ${entry.voice.tone}\n${entry.voice.examples.map((e) => `- Example: "${e}"`).join("\n")}${entry.voice.avoid.length ? `\n${entry.voice.avoid.map((a) => `- Avoid: ${a}`).join("\n")}` : ""}\n`
           : "",
-        `## Visual attributes`,
-        `- Dominant colors: ${entry.visual.dominantColors.join(", ")}`,
-        `- Accent: ${entry.visual.accentColor ?? "none identified"}`,
-        entry.visual.colorRoles
-          ? `- Color roles (paste-ready token set): canvas ${entry.visual.colorRoles.canvas}, surface ${entry.visual.colorRoles.surface}, ink ${entry.visual.colorRoles.ink}${entry.visual.colorRoles.muted ? `, muted ${entry.visual.colorRoles.muted}` : ""}, accent ${entry.visual.colorRoles.accent}`
-          : "",
-        `- Type pairing: ${entry.visual.typePairing.display ?? "?"} / ${entry.visual.typePairing.body ?? "?"}${entry.visual.typePairing.notes ? ` — ${entry.visual.typePairing.notes}` : ""}`,
-        `- Spacing density: ${entry.visual.spacingDensity}`,
-        `- Corners: ${entry.visual.cornerStyle}`,
-        `- Shadows: ${entry.visual.usesShadows ? "yes" : "no"} | Borders: ${entry.visual.usesBorders ? "yes" : "no"}`,
+        ...visualLines(),
+        renderOmittedDisclosure(projection.omitted),
       ]
         .filter(Boolean)
         .join("\n");
@@ -385,7 +422,7 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
           const sha = createHash("sha256").update(bytes).digest("hex");
           const gate = reader instanceof TrustGatedCorpusReader ? reader : null;
           const imageAttach = gate !== null && [...verifiedFields(entry)].some(
-            (field) => gate.fields.includes(field)
+            (field) => (gate.core.includes(field) || gate.enrichment.includes(field))
               && entry.provenance?.verification?.[field]?.method === "image-confirmed"
               && entry.provenance.verification[field].imageSha256 === sha,
           );
@@ -513,22 +550,32 @@ function registerGetSimilarUiExamples(server: McpServer, reader: CorpusReader): 
         };
       }
 
-      const sourceHeader = [source.patternType, source.categories.join(", "), source.styleTags.join(", ")]
-        .filter(Boolean)
-        .join(" | ");
+      const sourceProjection = projectForServing(source, GET_SIMILAR_UI_EXAMPLES_ENRICHMENT);
+      const sourceServed = (field: string) => sourceProjection.served.includes(field);
+      const sourceHeader = [
+        sourceServed("patternType") ? source.patternType : "",
+        sourceServed("categories") ? source.categories.join(", ") : "",
+        sourceServed("styleTags") ? source.styleTags.join(", ") : "",
+      ].filter(Boolean).join(" | ");
       const summary = [
         `Entries similar to **${sourceHeader || "corpus example"}**, ranked by semantic similarity:`,
         ``,
         ...results.map((r) => {
           const pct = Math.round(Math.max(0, r.score) * 100);
-          const header = [r.entry.patternType, r.entry.categories.join(", "), r.entry.styleTags.join(", ")]
-            .filter(Boolean)
-            .join(" | ");
+          const projection = projectForServing(r.entry, GET_SIMILAR_UI_EXAMPLES_ENRICHMENT);
+          const served = (field: string) => projection.served.includes(field);
+          const header = [
+            served("patternType") ? r.entry.patternType : "",
+            served("categories") ? r.entry.categories.join(", ") : "",
+            served("styleTags") ? r.entry.styleTags.join(", ") : "",
+          ].filter(Boolean).join(" | ");
           return [
             `### ${header || "corpus example"} — ${pct}% similar`,
             `Critique: ${r.entry.critique}`,
-            `What to steal:`,
-            ...r.entry.whatToSteal.map((t) => `  - ${t}`),
+            served("whatToSteal")
+              ? ["What to steal:", ...r.entry.whatToSteal.map((t) => `  - ${t}`)].join("\n")
+              : "",
+            renderOmittedDisclosure(projection.omitted),
           ].join("\n");
         }),
       ].join("\n\n---\n\n");

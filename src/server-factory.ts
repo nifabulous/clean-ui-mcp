@@ -549,22 +549,32 @@ function registerGetSimilarUiExamples(server: McpServer, reader: CorpusReader): 
         };
       }
 
-      const sourceHeader = [source.patternType, source.categories.join(", "), source.styleTags.join(", ")]
-        .filter(Boolean)
-        .join(" | ");
+      const sourceProjection = projectForServing(source, GET_SIMILAR_UI_EXAMPLES_ENRICHMENT);
+      const sourceServed = (field: string) => sourceProjection.served.includes(field);
+      const sourceHeader = [
+        sourceServed("patternType") ? source.patternType : "",
+        sourceServed("categories") ? source.categories.join(", ") : "",
+        sourceServed("styleTags") ? source.styleTags.join(", ") : "",
+      ].filter(Boolean).join(" | ");
       const summary = [
         `Entries similar to **${sourceHeader || "corpus example"}**, ranked by semantic similarity:`,
         ``,
         ...results.map((r) => {
           const pct = Math.round(Math.max(0, r.score) * 100);
-          const header = [r.entry.patternType, r.entry.categories.join(", "), r.entry.styleTags.join(", ")]
-            .filter(Boolean)
-            .join(" | ");
+          const projection = projectForServing(r.entry, GET_SIMILAR_UI_EXAMPLES_ENRICHMENT);
+          const served = (field: string) => projection.served.includes(field);
+          const header = [
+            served("patternType") ? r.entry.patternType : "",
+            served("categories") ? r.entry.categories.join(", ") : "",
+            served("styleTags") ? r.entry.styleTags.join(", ") : "",
+          ].filter(Boolean).join(" | ");
           return [
             `### ${header || "corpus example"} — ${pct}% similar`,
             `Critique: ${r.entry.critique}`,
-            `What to steal:`,
-            ...r.entry.whatToSteal.map((t) => `  - ${t}`),
+            served("whatToSteal")
+              ? ["What to steal:", ...r.entry.whatToSteal.map((t) => `  - ${t}`)].join("\n")
+              : "",
+            renderOmittedDisclosure(projection.omitted),
           ].join("\n");
         }),
       ].join("\n\n---\n\n");

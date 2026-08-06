@@ -178,3 +178,25 @@ describe("search_ui_examples — per-result projection (2d-1)", () => {
     }
   });
 });
+
+describe("get_similar_ui_examples — source + result projection (2d-1)", () => {
+  it("projects the source header and each result, disclosing omissions per result", async () => {
+    const e = entry("gate-tool-entry", ["critique", "whatToSteal"]);
+    const server = createServer(readerWith(e));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "field-set-test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const res = await client.callTool({ name: "get_similar_ui_examples", arguments: { id: "gate-tool-entry", limit: 5 } });
+      const text = (res.content ?? []).map((c) => (c as { text?: string }).text ?? "").join("\n");
+      expect(text).toContain("CRITIQUE_MARKER_9f");
+      expect(text).toContain("STEAL_MARKER_9f");
+      // patternType/categories/styleTags unverified → header must be the fallback label.
+      expect(text).toContain("### corpus example — ");
+      expect(text).not.toContain("dashboard"); // the unverified patternType/category value
+      expect(text).toContain("Unverified fields omitted: categories, styleTags, patternType.");
+    } finally {
+      await client.close();
+    }
+  });
+});

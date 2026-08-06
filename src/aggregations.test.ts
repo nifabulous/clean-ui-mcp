@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { CorpusEntryT } from "./schema.js";
-import { aggregateAntiPatterns, collectPalettes, collectTechniques, browseByPattern, hueBand } from "./aggregations.js";
+import { aggregateAntiPatterns, collectPalettes, collectTechniques, browseByPattern, hueBand, filterEntries } from "./aggregations.js";
+import type { ProjectedEntry } from "./synthesis-projection.js";
+import { projectEntryForSynthesis } from "./synthesis-projection.js";
 
 function entry(overrides: Partial<CorpusEntryT> & { id: string }): CorpusEntryT {
   return {
@@ -161,5 +163,46 @@ describe("review-status filtering (drafts hidden by default)", () => {
     // The draft contributes to dashboard count if not filtered; verify it's gone.
     const dash = results.find((r) => r.patternType === "dashboard");
     expect(dash?.count).toBe(1); // only "ok", not "d1"
+  });
+});
+
+const PAL_RECORD = { method: "measured", verifiedAt: "2026-08-06", verifierVersion: "v1" };
+
+function paletteEntry(id: string, patternType: string | undefined, verifiedFor: readonly string[]): CorpusEntryT {
+  const verification: Record<string, unknown> = {};
+  for (const field of verifiedFor) verification[field] = PAL_RECORD;
+  return {
+    id,
+    source: { productName: `Product ${id}`, url: null, capturedAt: "2026-07-01", capturedBy: "self" },
+    patternType,
+    visual: { colorRoles: { canvas: "#ffffff", surface: "#f8f8f8", ink: "#111111", muted: "#888888", accent: "#3b82f6" } },
+    styleTags: ["minimal"],
+    reviewStatus: "approved",
+    provenance: { taggedBy: "auto", verification },
+  } as unknown as CorpusEntryT;
+}
+
+describe("collectPalettes — 2d-2 projected entries", () => {
+  it("emits patternType null when the label is unverified", () => {
+    const e = projectEntryForSynthesis(paletteEntry("p1", "dashboard", ["visual.colorRoles"]), ["patternType"]);
+    const results = collectPalettes([e], {}, 10);
+    expect(results[0].patternType).toBeNull();
+  });
+
+  it("narrows a patternType filter to VERIFIED matches only", () => {
+    const verified = paletteEntry("p1", "dashboard", ["visual.colorRoles", "patternType"]);
+    const unverifiedLabel = projectEntryForSynthesis(paletteEntry("p2", "dashboard", ["visual.colorRoles"]), ["patternType"]);
+    const results = collectPalettes([verified, unverifiedLabel], { patternType: "dashboard" }, 10);
+    expect(results.map((r) => r.id)).toEqual(["p1"]);
+  });
+
+  it("keeps raw-value matching in shared filterEntries for tools that do not render patternType", () => {
+    // RAW (unprojected) entry: the label is present but unverified. The shared
+    // filter must match on the raw value without consulting isVerified — that
+    // gate is palette-local. (A projected entry would have patternType stripped
+    // to undefined, which is the test-2 case.)
+    const unverifiedLabel = paletteEntry("p2", "dashboard", ["visual.colorRoles"]);
+    const filtered = filterEntries([unverifiedLabel], { patternType: "dashboard" });
+    expect(filtered.map((e) => e.id)).toEqual(["p2"]);
   });
 });

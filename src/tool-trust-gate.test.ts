@@ -237,8 +237,10 @@ describe("the refusal messages read as English", () => {
     // Template rendering with REAL inputs, per CLAUDE.md: the first version of
     // this message served 'Entry "x" exist but carry no recorded verification'.
     const one = await callTool(false, "get_ui_example", { id: "gate-tool-entry" });
-    expect(one).toMatch(/Entry "gate-tool-entry" exists but is not verified for every field this tool serves/);
-    expect(one).toMatch(/visual\.colorRoles/);
+    expect(one).toMatch(/Entry "gate-tool-entry" exists but is not verified for every core field this tool serves/);
+    // The message names the CORE set only — enrichment no longer withholds, so
+    // the old /visual\.colorRoles/ assertion (a now-enrichment field) is dropped.
+    expect(one).toMatch(/critique/);
     const many = await callTool(false, "compare_ui_examples", {
       ids: ["gate-tool-entry", "gate-tool-entry"],
     });

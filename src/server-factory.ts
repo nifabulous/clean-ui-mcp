@@ -61,6 +61,32 @@ export interface CreateServerOptions {
   readonly createUiSpecModel?: CreateUiSpecModelDependency;
 }
 
+// ----- 2d-1 field sets: core (hard-gated) + enrichment (render-if-verified) --
+// The SAME constants feed the reader wiring AND the renderers' projection, so
+// a tool's declared set can never drift from what its render path projects.
+const SEARCH_UI_EXAMPLES_CORE = ["critique"] as const;
+const SEARCH_UI_EXAMPLES_ENRICHMENT = ["whatToSteal", "antiPatterns", "categories", "styleTags"] as const;
+const GET_UI_EXAMPLE_CORE = ["critique"] as const;
+const GET_UI_EXAMPLE_ENRICHMENT = [
+  "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks", "voice",
+  "visual.dominantColors", "visual.accentColor", "visual.colorRoles",
+  "visual.typePairing", "visual.spacingDensity", "visual.cornerStyle",
+  "visual.usesShadows", "visual.usesBorders",
+] as const;
+const GET_SIMILAR_UI_EXAMPLES_CORE = ["critique"] as const;
+const GET_SIMILAR_UI_EXAMPLES_ENRICHMENT = ["whatToSteal", "categories", "styleTags", "patternType"] as const;
+// Deferred to 2d-2: constructed (fullCurrentSet, []) — byte-for-byte full-AND.
+const COMPARE_UI_EXAMPLES_FULL_SET = [
+  "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
+  "categories", "styleTags", "patternType", "platform", "layout",
+  "visual.accentColor", "visual.colorRoles", "visual.spacingDensity",
+  "visual.cornerStyle", "visual.usesShadows", "visual.usesBorders",
+] as const;
+const RECOMMEND_UI_DIRECTION_FULL_SET = [
+  "whatToSteal", "antiPatterns", "voice", "visual.colorRoles", "visual.typePairing",
+  "visual.spacingDensity", "visual.cornerStyle", "layout", "patternType", "styleTags",
+] as const;
+
 export function createServer(
   reader: CorpusReader,
   options: CreateServerOptions = {},
@@ -96,48 +122,32 @@ export function createServer(
   // UNGATED reader on purpose: it gates itself (create-ui-spec-deterministic.ts)
   // AND needs the corpus-wide entry list to build the identity screen's
   // denied-name set.
+  // `create_ui_spec` keeps the UNGATED reader on purpose: it gates itself
+  // (create-ui-spec-deterministic.ts) AND needs the corpus-wide entry list to
+  // build the identity screen's denied-name set.
   registerSearchUiExamples(
     server,
-    new TrustGatedCorpusReader(reader, ["critique", "whatToSteal", "antiPatterns", "categories", "styleTags"]),
+    new TrustGatedCorpusReader(reader, SEARCH_UI_EXAMPLES_CORE, SEARCH_UI_EXAMPLES_ENRICHMENT),
   );
   registerGetUiExample(
     server,
-    new TrustGatedCorpusReader(reader, [
-      "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
-      "voice", "visual.dominantColors", "visual.accentColor", "visual.colorRoles",
-      "visual.typePairing", "visual.spacingDensity", "visual.cornerStyle",
-      "visual.usesShadows", "visual.usesBorders",
-    ]),
+    new TrustGatedCorpusReader(reader, GET_UI_EXAMPLE_CORE, GET_UI_EXAMPLE_ENRICHMENT),
   );
   registerListCategories(server, new TrustGatedCorpusReader(reader, ["categories"]));
   registerListStyleTags(server, new TrustGatedCorpusReader(reader, ["styleTags"]));
   registerListDomainTags(server, new TrustGatedCorpusReader(reader, ["domainTags"]));
   registerGetSimilarUiExamples(
     server,
-    new TrustGatedCorpusReader(reader, ["critique", "whatToSteal", "categories", "styleTags", "patternType"]),
+    new TrustGatedCorpusReader(reader, GET_SIMILAR_UI_EXAMPLES_CORE, GET_SIMILAR_UI_EXAMPLES_ENRICHMENT),
   );
   registerCompareUiExamples(
     server,
-    new TrustGatedCorpusReader(reader, [
-      "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
-      "categories", "styleTags", "patternType", "platform", "layout",
-      "visual.accentColor", "visual.colorRoles", "visual.spacingDensity",
-      "visual.cornerStyle", "visual.usesShadows", "visual.usesBorders",
-    ]),
+    new TrustGatedCorpusReader(reader, COMPARE_UI_EXAMPLES_FULL_SET),
   );
-  // `generate_design_prompt` is NO LONGER registered publicly — `create_ui_spec`
-  // supersedes it (see LEGACY_TO_BETA_MAP in tool-contracts.ts, the documented
-  // migration table, which deliberately keeps the legacy name as a row). Its
-  // implementation stays private in this module (registerGenerateDesignPrompt
-  // below) so internal callers and the migration story are unaffected; only the
-  // public registration is gone.
   registerCreateUiSpec(server, reader, options.createUiSpecModel);
   registerRecommendUiDirection(
     server,
-    new TrustGatedCorpusReader(reader, [
-      "whatToSteal", "antiPatterns", "voice", "visual.colorRoles", "visual.typePairing",
-      "visual.spacingDensity", "visual.cornerStyle", "layout", "patternType", "styleTags",
-    ]),
+    new TrustGatedCorpusReader(reader, RECOMMEND_UI_DIRECTION_FULL_SET),
   );
   registerGetAntiPatterns(server, new TrustGatedCorpusReader(reader, ["antiPatterns"]));
   registerGetColorPalette(server, new TrustGatedCorpusReader(reader, ["visual.colorRoles", "patternType"]));
@@ -163,7 +173,7 @@ function emptyCorpusMessage(reader: CorpusReader, noun: string): string {
   if (gate !== null && posture !== null && posture.verified < posture.total) {
     return (
       `No ${noun} available: ${posture.verified} of ${posture.total} corpus entries are verified `
-      + `for every field this tool serves (${gate.fields.join(", ")}), and corpus content is `
+      + `for every core field this tool serves (${gate.core.join(", ")}), and corpus content is `
       + `served only from verified entries. This is not a filter problem — broadening the query `
       + `will not change it.`
     );
@@ -190,8 +200,8 @@ function unresolvedIdsMessage(reader: CorpusReader, ids: readonly string[]): str
     const one = refused.length === 1;
     parts.push(
       `${one ? "Entry" : "Entries"} ${refused.map((i) => `"${i}"`).join(", ")} `
-      + `${one ? "exists" : "exist"} but ${one ? "is" : "are"} not verified for every field this `
-      + `tool serves (${gate.fields.join(", ")}), and corpus content is served only from verified `
+      + `${one ? "exists" : "exist"} but ${one ? "is" : "are"} not verified for every core field this `
+      + `tool serves (${gate.core.join(", ")}), and corpus content is served only from verified `
       + `entries (${posture.verified} of ${posture.total} verified).`,
     );
   }
@@ -216,7 +226,7 @@ function corpusEvidenceNote(reader: CorpusReader, evidenceCount: number): string
   if (posture === null || posture.verified >= posture.total) return "";
   return (
     `\n\n---\n_No corpus evidence backs this critique: ${posture.verified} of ${posture.total} `
-    + `corpus entries are verified for every field this tool serves (${gate!.fields.join(", ")}) — `
+    + `corpus entries are verified for every core field this tool serves (${gate!.core.join(", ")}) — `
     + `corpus content is served only from verified entries. Every finding above is grounded in the `
     + `uploaded screenshot alone._`
   );
@@ -385,7 +395,7 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
           const sha = createHash("sha256").update(bytes).digest("hex");
           const gate = reader instanceof TrustGatedCorpusReader ? reader : null;
           const imageAttach = gate !== null && [...verifiedFields(entry)].some(
-            (field) => gate.fields.includes(field)
+            (field) => (gate.core.includes(field) || gate.enrichment.includes(field))
               && entry.provenance?.verification?.[field]?.method === "image-confirmed"
               && entry.provenance.verification[field].imageSha256 === sha,
           );

@@ -88,6 +88,28 @@ const RECOMMEND_UI_DIRECTION_FULL_SET = [
   "visual.spacingDensity", "visual.cornerStyle", "layout", "patternType", "styleTags",
 ] as const;
 
+// ----- 2d-2 field sets: core + enrichment split, consumed by Tasks 5-7 --------
+export const COMPARE_UI_EXAMPLES_CORE = ["critique"] as const;
+export const COMPARE_UI_EXAMPLES_ENRICHMENT = [
+  "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
+  "categories", "styleTags", "patternType", "platform", "layout",
+  "visual.accentColor", "visual.colorRoles", "visual.spacingDensity",
+  "visual.cornerStyle", "visual.usesShadows", "visual.usesBorders",
+] as const;
+
+export const GET_COLOR_PALETTE_CORE = ["visual.colorRoles"] as const;
+export const GET_COLOR_PALETTE_ENRICHMENT = ["patternType"] as const;
+
+export const RECOMMEND_UI_DIRECTION_CORE = ["whatToSteal"] as const;
+export const RECOMMEND_UI_DIRECTION_ENRICHMENT = [
+  "antiPatterns", "voice", "visual.colorRoles", "visual.typePairing",
+  "visual.spacingDensity", "visual.cornerStyle", "layout", "patternType", "styleTags",
+] as const;
+
+// Same field set as recommend — shared generateBrief.
+export const GENERATE_DESIGN_PROMPT_CORE = RECOMMEND_UI_DIRECTION_CORE;
+export const GENERATE_DESIGN_PROMPT_ENRICHMENT = RECOMMEND_UI_DIRECTION_ENRICHMENT;
+
 export function createServer(
   reader: CorpusReader,
   options: CreateServerOptions = {},

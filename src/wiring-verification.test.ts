@@ -355,6 +355,14 @@ const ALLOWLIST = new Set<string>([
   // src/create-ui-spec-mcp.ts (the create_ui_spec MCP adapter), which
   // src/server-factory.ts's createServer() registers. Leaving them allowlisted
   // would silence this guard for exactly the symbols it was added to protect.
+  // 2d-2 reserved export: the generate_design_prompt handler is compiled but
+  // never registered, so its gate constants are exported for future wiring.
+  // GENERATE_DESIGN_PROMPT_ENRICHMENT IS referenced (the handler projects with
+  // it); GENERATE_DESIGN_PROMPT_CORE has no production caller until the tool is
+  // re-registered behind `new TrustGatedCorpusReader(reader, CORE, ENRICHMENT)`.
+  // Keeping the pair exported lets that future registration use both halves of
+  // the gate without a schema/export change.
+  "GENERATE_DESIGN_PROMPT_CORE",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

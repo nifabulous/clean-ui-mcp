@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CorpusEntryT } from "./schema.js";
 import { generateBrief, renderBrief, renderBriefMarkdown, renderBriefTokens } from "./design-prompt.js";
+import { projectEntryForSynthesis, type ProjectedEntry } from "./synthesis-projection.js";
 
 // generateBrief is a pure deterministic synthesizer — the tests verify it
 // extracts the right consensus signals from entries and degrades gracefully
@@ -127,6 +128,7 @@ describe("legacy brief output regression (Task 7)", () => {
         "avoid",
         "colorTokens",
         "context",
+        "coverage",
         "direction",
         "framework",
         "layout",
@@ -200,5 +202,76 @@ describe("legacy brief output regression (Task 7)", () => {
     expect(renderBrief(briefJson)).toBe(renderBriefTokens(briefJson));
     // The two outputs are distinct shapes.
     expect(renderBrief(briefMd)).not.toBe(renderBrief(briefJson));
+  });
+});
+
+const COVERAGE_RECORD = { method: "measured", verifiedAt: "2026-08-06", verifierVersion: "v1" };
+
+function coveredEntry(id: string, verifiedFor: readonly string[]): ProjectedEntry {
+  const verification: Record<string, unknown> = {};
+  for (const field of verifiedFor) verification[field] = COVERAGE_RECORD;
+  const full = {
+    id,
+    source: { productName: `Product ${id}`, url: null, capturedAt: "2026-07-01", capturedBy: "self" },
+    visual: {
+      colorRoles: { canvas: "#ffffff", surface: "#f8f8f8", ink: "#111111", muted: "#888888", accent: "#3b82f6" },
+      typePairing: { display: "Inter", body: "Inter", notes: "Clear hierarchy with restrained type weights." },
+      spacingDensity: "moderate",
+      cornerStyle: "slight-round",
+    },
+    antiPatterns: { antiPatterns: ["Avoid heavy shadows."] },
+    voice: { tone: "Restrained and confident", examples: ["Hello"], avoid: [] },
+    whatToSteal: ["Group metric tiles on one baseline."],
+    patternType: "dashboard",
+    styleTags: ["minimal"],
+    layout: { form: "sidebar", regions: [{ role: "primary-nav", width: "240px" }] },
+    provenance: { taggedBy: "auto", verification },
+  } as unknown as CorpusEntryT;
+  return projectEntryForSynthesis(full, [
+    "visual.colorRoles", "visual.typePairing", "layout", "voice",
+    "antiPatterns", "patternType", "styleTags",
+  ]);
+}
+
+describe("generateBrief — 2d-2 projected entries", () => {
+  it("reports coverage counts per section over mixed entries", () => {
+    const full = coveredEntry("a", ["visual.colorRoles", "visual.typePairing", "layout", "voice", "antiPatterns", "whatToSteal", "patternType", "styleTags"]);
+    const partial = coveredEntry("b", ["whatToSteal"]);
+    const brief = generateBrief([full, partial], { ids: ["a", "b"] });
+    expect(brief.coverage.colorTokens).toEqual({ used: 1, total: 2, droppedFields: ["visual.colorRoles"] });
+    expect(brief.coverage.voice).toEqual({ used: 1, total: 2, droppedFields: ["voice"] });
+    expect(brief.coverage.techniques).toEqual({ used: 2, total: 2, droppedFields: [] });
+  });
+
+  it("does not throw on a fully-projected entry and falls back honestly", () => {
+    const bare = coveredEntry("c", []);
+    const brief = generateBrief([bare], { ids: ["c"] });
+    expect(brief.coverage.voice.used).toBe(0);
+    expect(brief.voice).toContain("No voice data");
+    expect(brief.layout).toContain("moderate");
+  });
+
+  it("renders per-field Drawn-from disclosures only when coverage is partial", () => {
+    const full = coveredEntry("a", ["visual.colorRoles", "visual.typePairing", "layout", "voice", "antiPatterns", "whatToSteal", "patternType", "styleTags"]);
+    const partial = coveredEntry("b", ["whatToSteal"]);
+    const brief = generateBrief([full, partial], { ids: ["a", "b"] });
+    const md = renderBrief(brief);
+    expect(md).toContain("_Drawn from 1 of 2 verified entries (missing: visual.colorRoles)._");
+    expect(md).toContain("_Drawn from 1 of 2 verified entries (missing: voice)._");
+  });
+
+  it("renders a K=0-of-N disclosure when no entry carries the field's field", () => {
+    const bare = coveredEntry("c", []);
+    const brief = generateBrief([bare], { ids: ["c"] });
+    const md = renderBrief(brief);
+    expect(md).toContain("_Drawn from 0 of 1 verified entries (missing: voice)._");
+  });
+
+  it("renders byte-identically for a fully-verified brief (no disclosure artifacts)", () => {
+    const full = coveredEntry("a", ["visual.colorRoles", "visual.typePairing", "layout", "voice", "antiPatterns", "whatToSteal", "patternType", "styleTags"]);
+    const brief = generateBrief([full], { ids: ["a"] });
+    const md = renderBrief(brief);
+    expect(md).not.toContain("Drawn from");
+    expect(md).toContain("--canvas:  #ffffff");
   });
 });

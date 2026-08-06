@@ -10,7 +10,10 @@
  */
 import type { CorpusEntryT } from "./schema.js";
 import type { SearchResult } from "./corpus.js";
+import type { ProjectedEntry } from "./synthesis-projection.js";
 import { generateBrief, renderBrief, type DesignBrief, type BriefFramework } from "./design-prompt.js";
+
+export type ProjectedSearchResult = Omit<SearchResult, "entry"> & { entry: ProjectedEntry };
 
 export interface RecommendInput {
   productContext: string;
@@ -36,10 +39,10 @@ export interface Recommendation {
  * selection — this prevents the recommendation being dominated by the most
  * common product in the corpus (e.g. 91 "Untitled" or 77 Cash App entries).
  */
-export function pickDiverse(results: SearchResult[], count: number, maxPerProduct = 2): SearchResult[] {
+export function pickDiverse<T extends { entry: ProjectedEntry; score: number }>(results: T[], count: number, maxPerProduct = 2): T[] {
   // Sort defensively (descending by score) so we don't depend on caller ordering.
   const ranked = [...results].sort((a, b) => b.score - a.score);
-  const selected: SearchResult[] = [];
+  const selected: T[] = [];
   const perProduct = new Map<string, number>();
   for (const r of ranked) {
     if (selected.length >= count) break;
@@ -62,11 +65,11 @@ export function pickDiverse(results: SearchResult[], count: number, maxPerProduc
 }
 
 /** One-line note on why an entry was selected, based on its strongest field. */
-function contributionNote(entry: CorpusEntryT): string {
-  if (entry.visual.colorRoles) return `color palette + ${entry.patternType}`;
-  if (entry.voice?.tone) return `voice/copy + ${entry.patternType}`;
-  if (entry.layout?.regions?.length) return `layout structure (${entry.layout.form})`;
-  return `${entry.patternType} example`;
+export function contributionNote(entry: ProjectedEntry): string {
+  if (entry.visual?.colorRoles) return `color palette + ${entry.patternType ?? "UI"}`;
+  if (entry.voice?.tone) return `voice/copy + ${entry.patternType ?? "UI"}`;
+  if (entry.layout?.regions?.length) return `layout structure (${entry.layout.form ?? "standard"})`;
+  return entry.patternType ? `${entry.patternType} example` : "corpus example";
 }
 
 /**
@@ -74,7 +77,7 @@ function contributionNote(entry: CorpusEntryT): string {
  * (embedding the product context) happens in the caller so this stays testable
  * with fixture results.
  */
-export function buildRecommendation(results: SearchResult[], input: RecommendInput): Recommendation {
+export function buildRecommendation(results: ProjectedSearchResult[], input: RecommendInput): Recommendation {
   const count = Math.min(Math.max(input.count ?? 3, 1), 5);
   const selected = pickDiverse(results, count);
 

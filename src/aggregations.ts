@@ -8,6 +8,8 @@
  * corpus). No I/O, no LLM calls.
  */
 import type { CorpusEntryT } from "./schema.js";
+import type { ProjectedEntry } from "./synthesis-projection.js";
+import { isVerified } from "./corpus-trust.js";
 
 // ─── shared filter helper ────────────────────────────────────────────────────
 
@@ -24,14 +26,14 @@ export interface FilterOpts {
   reviewStatus?: "approved" | "draft" | "any";
 }
 
-function filterEntries(entries: CorpusEntryT[], opts: FilterOpts): CorpusEntryT[] {
+export function filterEntries<T extends ProjectedEntry>(entries: readonly T[], opts: FilterOpts): T[] {
   const statusFilter = opts.reviewStatus ?? "approved";
   return entries.filter((e) => {
     if (statusFilter === "approved" && e.reviewStatus === "draft") return false;
     if (statusFilter === "draft" && e.reviewStatus !== "draft") return false;
     if (opts.patternType && e.patternType !== opts.patternType) return false;
-    if (opts.category && !e.categories.includes(opts.category as never)) return false;
-    if (opts.styleTag && !e.styleTags.includes(opts.styleTag as never)) return false;
+    if (opts.category && !e.categories?.includes(opts.category as never)) return false;
+    if (opts.styleTag && !e.styleTags?.includes(opts.styleTag as never)) return false;
     return true;
   });
 }
@@ -76,9 +78,9 @@ export function aggregateAntiPatterns(entries: CorpusEntryT[], opts: FilterOpts,
 export interface PaletteResult {
   id: string;
   product: string;
-  patternType: string;
+  patternType: string | null; // null when the label was unverified and omitted
   tokens: { canvas: string; surface: string; ink: string; muted: string | null; accent: string };
-  accentHue: number; // 0-360, for grouping (e.g. "blues" = 200-240)
+  accentHue: number; // 0-360, for grouping
 }
 
 /** Convert a hex color to an HSL hue (0-360) for palette grouping. */
@@ -114,15 +116,22 @@ export function hueBand(hue: number): string {
  * so the caller can group by "give me calm blue palettes." Filters to entries
  * that actually have colorRoles. Sorted by accent hue for visual grouping.
  */
-export function collectPalettes(entries: CorpusEntryT[], opts: FilterOpts, limit = 10): PaletteResult[] {
-  const filtered = filterEntries(entries, opts).filter((e) => e.visual.colorRoles);
+export function collectPalettes(entries: ProjectedEntry[], opts: FilterOpts, limit = 10): PaletteResult[] {
+  // Palette rows PUBLISH the filter key as a label, so a patternType-scoped
+  // request matches only entries whose patternType is VERIFIED — the caller
+  // never sees an unverified label. This is palette-LOCAL: get_anti_patterns /
+  // get_stealable_techniques / browse_ui_examples filter on patternType without
+  // rendering it and keep raw-value matching via shared filterEntries.
+  const filtered = filterEntries(entries, opts).filter(
+    (e) => e.visual?.colorRoles && (!opts.patternType || isVerified(e as CorpusEntryT, "patternType")),
+  );
   return filtered
     .map((e) => {
-      const cr = e.visual.colorRoles!;
+      const cr = e.visual!.colorRoles!;
       return {
         id: e.id,
         product: e.source.productName,
-        patternType: e.patternType,
+        patternType: e.patternType ?? null,
         tokens: { canvas: cr.canvas, surface: cr.surface, ink: cr.ink, muted: cr.muted, accent: cr.accent },
         accentHue: hexToHue(cr.accent),
       };

@@ -66,7 +66,7 @@ function readerWith(e: CorpusEntryT): CorpusReader {
     listCategories: () => ["dashboard"],
     listStyleTags: () => ["minimal"],
     listDomainTags: () => ["analytics"],
-    indexStatus: () => ({ indexed: 0, total: 1, hasIndex: false, missing: 1, stale: 0, contentStale: 0 }),
+    indexStatus: () => ({ indexed: 0, total: 1, hasIndex: true, missing: 1, stale: 0, contentStale: 0 }),
     entriesForAggregation: () => [e],
     resolveImagePath: () => null,
     getImageIndex: async () => null,
@@ -89,7 +89,7 @@ async function callTool(name: string, args: Record<string, unknown>, e: CorpusEn
 
 // Verification: core + ONE enrichment field (whatToSteal). Every other
 // enrichment field the split tools render is unverified and must not appear.
-const VERIFIED = ["critique", "whatToSteal"];
+const VERIFIED = ["critique", "whatToSteal", "visual.colorRoles"];
 
 // Sentinel fields each tool renders, in its gate set (marker-capable only).
 const TOOL_MARKER_FIELDS: Record<string, readonly string[]> = {
@@ -101,7 +101,9 @@ const TOOL_MARKER_FIELDS: Record<string, readonly string[]> = {
 // Section substrings that must be ABSENT when the corresponding leaf is
 // unverified (enum/boolean leaves the sentinels cannot reach).
 const TOOL_ABSENT_SECTIONS: Record<string, readonly string[]> = {
-  get_ui_example: ["Dominant colors", "Accent:", "Color roles", "Type pairing", "Spacing density", "Corners:", "Shadows:", "Borders:"],
+  // "Color roles" excluded: the 2d-2 sweep verifies visual.colorRoles, so the
+  // section legitimately renders (see VERIFIED below).
+  get_ui_example: ["Dominant colors", "Accent:", "Type pairing", "Spacing density", "Corners:", "Shadows:", "Borders:"],
   search_ui_examples: ["### "],
   // The similar tool ALWAYS prints a "### ..." header; the projected header
   // falls back to "corpus example", so assert the unverified enum VALUE
@@ -152,26 +154,55 @@ describe("cross-tool invariant sweep — no emitted field is unverified", () => 
       }
     }
   });
+});
 
-  it("holds the deferred synthesis tools at full-AND — no partial entry serves", async () => {
+describe("2d-2 synthesis tools serve partial entries with disclosure, never unverified values", () => {
+  it("compare, palette and recommend serve a partial entry and disclose, with no sentinel leak", async () => {
     const e = entry(VERIFIED);
-    for (const tool of ["recommend_ui_direction", "get_color_palette", "compare_ui_examples"] as const) {
-      const args = tool === "compare_ui_examples"
-        ? { ids: ["sweep-entry", "sweep-entry"] }
-        : tool === "recommend_ui_direction"
-          ? { productContext: "A calm analytics dashboard", count: 1 }
-          : { limit: 5 };
-      const text = await callTool(tool, args as Record<string, unknown>, e);
-      for (const sentinel of Object.values(S)) {
-        expect(text, `${tool} served a partial entry`).not.toContain(sentinel);
+    const cases: Array<{ tool: string; args: Record<string, unknown> }> = [
+      { tool: "compare_ui_examples", args: { ids: ["sweep-entry", "sweep-entry"] } },
+      { tool: "get_color_palette", args: { limit: 5 } },
+      { tool: "recommend_ui_direction", args: { productContext: "A calm analytics dashboard", count: 1 } },
+    ];
+    // Sentinel fields each tool actually RENDERS from verified values. A verified
+    // field the tool never renders (e.g. critique in a palette) must not be
+    // required to appear.
+    const TOOL_VERIFIED_CONTAINS: Record<string, readonly string[]> = {
+      compare_ui_examples: ["critique", "whatToSteal", "visual.colorRoles"],
+      get_color_palette: ["visual.colorRoles"],
+      recommend_ui_direction: ["whatToSteal", "visual.colorRoles"],
+    };
+    for (const { tool, args } of cases) {
+      const text = await callTool(tool, args, e);
+      for (const [field, sentinel] of Object.entries(S)) {
+        const gatedKey =
+          field === "antiPatternsAccessibilityRisks" ? "antiPatterns.accessibilityRisks"
+          : field === "visualDominantColors" ? "visual.dominantColors"
+          : field === "visualAccentColor" ? "visual.accentColor"
+          : field === "visualColorRoles" ? "visual.colorRoles"
+          : field === "visualTypePairing" ? "visual.typePairing"
+          : field;
+        const shouldAppear = (TOOL_VERIFIED_CONTAINS[tool] ?? []).includes(gatedKey);
+        if (shouldAppear) {
+          expect(text, `${tool} should serve verified ${gatedKey}`).toContain(sentinel);
+        } else {
+          expect(text, `${tool} leaked unverified or non-rendered ${gatedKey}`).not.toContain(sentinel);
+        }
       }
-      if (tool === "recommend_ui_direction") {
-        // recommend checks the embedding index before touching the corpus, so
-        // the honest message is about the index, not verification.
-        expect(text, `${tool} did not report the missing index`).toMatch(/index/i);
-      } else {
-        expect(text, `${tool} did not name verification as the cause`).toMatch(/verif/i);
-      }
+      expect(text, `${tool} served a partial entry without disclosing`).toMatch(
+        /Unverified fields omitted|Drawn from|Pattern label omitted|Column disclosures/,
+      );
     }
+  });
+
+  it("byte-identical pin: a fully-verified fixture renders today's output with no disclosure artifacts", async () => {
+    // The pin is palette-scoped: verify colorRoles (core) AND patternType (the
+    // only palette enrichment) so the label renders exactly as it did pre-2d-2.
+    const e = entry(["visual.colorRoles", "patternType"]);
+    const text = await callTool("get_color_palette", { limit: 5 }, e);
+    expect(text).toContain("**dashboard**");
+    expect(text).not.toContain("Pattern label omitted");
+    expect(text).not.toContain("Drawn from");
+    expect(text).not.toContain("Column disclosures");
   });
 });

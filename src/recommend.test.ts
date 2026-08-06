@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { CorpusEntryT } from "./schema.js";
 import type { SearchResult } from "./corpus.js";
-import { pickDiverse, buildRecommendation } from "./recommend.js";
+import { projectEntryForSynthesis } from "./synthesis-projection.js";
+import { pickDiverse, buildRecommendation, contributionNote, type ProjectedSearchResult } from "./recommend.js";
 
 // recommend.ts is pure — the embedding/search happens in the MCP caller, so
 // these tests pass fixture SearchResult[] directly and verify the diversity
@@ -77,5 +78,45 @@ describe("buildRecommendation", () => {
     const results = Array.from({ length: 10 }, (_, i) => entry(`e${i}`, `P${i}`, 0.9 - i * 0.01));
     const rec = buildRecommendation(results, { productContext: "test", count: 99 });
     expect(rec.rationale.length).toBe(5);
+  });
+});
+
+const REC = { method: "measured", verifiedAt: "2026-08-06", verifierVersion: "v1" };
+
+function projectedResult(id: string, product: string, score: number, verifiedFor: readonly string[]): ProjectedSearchResult {
+  const verification: Record<string, unknown> = {};
+  for (const field of verifiedFor) verification[field] = REC;
+  const base = entry(id, product, score);
+  return {
+    score: base.score,
+    searchMode: base.searchMode,
+    entry: projectEntryForSynthesis(
+      { ...base.entry, provenance: { taggedBy: "auto", verification } } as CorpusEntryT,
+      ["visual.colorRoles", "voice", "layout", "antiPatterns", "patternType", "styleTags", "visual.typePairing", "visual.spacingDensity", "visual.cornerStyle"],
+    ),
+  };
+}
+
+describe("contributionNote — 2d-2 projected entries", () => {
+  it("falls through to corpus example when every distinctive signal is unverified", () => {
+    const r = projectedResult("a1", "Cash App", 0.9, ["whatToSteal"]);
+    expect(contributionNote(r.entry)).toBe("corpus example");
+  });
+
+  it("does not leak an unverified patternType into a color contribution note", () => {
+    const r = projectedResult("a1", "Cash App", 0.9, ["whatToSteal", "visual.colorRoles"]);
+    expect(contributionNote(r.entry)).toBe("color palette + UI");
+  });
+});
+
+describe("buildRecommendation — 2d-2 projected entries", () => {
+  it("builds a recommendation from projected entries without crashing", () => {
+    const results = [
+      projectedResult("a1", "Cash App", 0.9, ["whatToSteal", "visual.colorRoles"]),
+      projectedResult("b1", "Linear", 0.85, ["whatToSteal"]),
+    ];
+    const rec = buildRecommendation(results, { productContext: "A calm analytics dashboard", count: 2 });
+    expect(rec.rationale.length).toBe(2);
+    expect(rec.brief.coverage.voice.used).toBe(0);
   });
 });

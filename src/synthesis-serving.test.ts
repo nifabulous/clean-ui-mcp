@@ -67,6 +67,29 @@ export function synthReaderWith(e: CorpusEntryT): CorpusReader {
 
 export async function callTool(name: string, args: Record<string, unknown>, e: CorpusEntryT): Promise<string> {
   const server = createServer(synthReaderWith(e));
+  return textTool(name, args, server);
+}
+export function emptyCorpusReader(): CorpusReader {
+  return {
+    search: async () => [],
+    searchRanked: async () => [],
+    getById: () => undefined,
+    findSimilar: () => [],
+    listCategories: () => [],
+    listStyleTags: () => [],
+    listDomainTags: () => [],
+    indexStatus: () => ({ indexed: 0, total: 0, hasIndex: true, missing: 0, stale: 0, contentStale: 0 }),
+    entriesForAggregation: () => [],
+    resolveImagePath: () => null,
+    getImageIndex: async () => null,
+  } as unknown as CorpusReader;
+}
+
+export async function callToolEmpty(name: string, args: Record<string, unknown>): Promise<string> {
+  return textTool(name, args, createServer(emptyCorpusReader()));
+}
+
+async function textTool(name: string, args: Record<string, unknown>, server: ReturnType<typeof createServer>): Promise<string> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "synthesis-test", version: "1.0.0" });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -135,6 +158,12 @@ describe("get_color_palette — 2d-2 nullable label", () => {
     // Brief regex /VERIFIED patternType/i was unsatisfiable against the brief's own
     // message ("...whose patternType label is VERIFIED..."); pin the actual sentence.
     expect(text).toMatch(/patternType label is VERIFIED/i);
+  });
+
+  it("reports the empty corpus, not the filter, when no entries exist", async () => {
+    const text = await callToolEmpty("get_color_palette", { patternType: "dashboard", limit: 5 });
+    expect(text).not.toMatch(/patternType label is VERIFIED/i);
+    expect(text).toContain("No palettes found for those filters.");
   });
 });
 

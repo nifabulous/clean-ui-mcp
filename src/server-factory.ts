@@ -861,10 +861,11 @@ function registerGetColorPalette(server: McpServer, reader: CorpusReader): void 
         .map((e) => projectEntryForSynthesis(e, GET_COLOR_PALETTE_ENRICHMENT));
       const results = collectPalettes(entries, { patternType: patternType as string | undefined, styleTag: styleTag as string | undefined }, limit ?? 10);
       if (!results.length) {
-        if (patternType) {
+        if (patternType && entries.length > 0) {
           // The verified-only patternType match is the cause — name it, not the
           // generic core posture (entries may be verified for colorRoles but not
-          // for the de-facto patternType filter key).
+          // for the de-facto patternType filter key). An empty corpus falls
+          // through to the generic message: the filter is NOT the cause then.
           return {
             content: [{
               type: "text",

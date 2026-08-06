@@ -154,8 +154,7 @@ describe("cross-tool invariant sweep — no emitted field is unverified", () => 
       }
     }
   });
-
-  });
+});
 
 describe("2d-2 synthesis tools serve partial entries with disclosure, never unverified values", () => {
   it("compare, palette and recommend serve a partial entry and disclose, with no sentinel leak", async () => {

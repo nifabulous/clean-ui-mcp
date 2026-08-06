@@ -37,8 +37,8 @@ export function synthEntry(id: string, verifiedFor: readonly string[]): CorpusEn
     critique: "SYNTH_CRITIQUE — a restrained layout that stays readable.",
     whatToSteal: ["SYNTH_STEAL — group metric tiles on one baseline."],
     // One a11y risk present so the FULLY-VERIFIED compare test can assert the
-    // a11y row renders a value (an empty list would render "—" and break
-    // `not.toContain("—")`).
+    // a11y row renders a value (an empty list would render "—" as an omission
+    // marker and trip `not.toContain("| —")`).
     antiPatterns: { antiPatterns: ["SYNTH_ANTI — avoid stacking two shadow depths."], whereThisFails: [], accessibilityRisks: [{ element: "button", risk: "SYNTH_A11Y — low contrast", evidence: "measured", wcag: ["1.4.3"] }] },
     voice: { tone: "SYNTH_VOICE — restrained and confident", examples: ["Example"], avoid: [] },
     qualityTier: "exceptional",

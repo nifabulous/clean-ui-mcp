@@ -781,6 +781,8 @@ function registerRecommendUiDirection(server: McpServer, reader: CorpusReader): 
       const results = await reader.searchRanked({ query: productContext, category: category as string | undefined, qualityTier: qualityTier as string | undefined, platform: platform as "web" | "mobile" | "tablet" | undefined, limit: 20 });
       if (!results.length) {
         const scope = qualityTier === "cautionary" ? " cautionary" : "";
+        // "Try broader terms" is advice the caller cannot act on when the cause is
+        // that nothing is verified, so report the posture instead.
         return { content: [{ type: "text", text: emptyCorpusMessage(reader, `${scope} corpus entries matching "${productContext}"`.trim()) }] };
       }
       const projectedResults = results.map((r) => ({

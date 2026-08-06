@@ -1,6 +1,6 @@
 # Field-set gating: core + enrichment — design
 
-**Status:** design approved, spec under review
+**Status:** implemented
 **Stage:** 2d of the corpus trust gate program (Stages 1, 2a, 2c shipped in #94/#95/#98).
 Split into **2d-1** (this spec — render/echo tools) and **2d-2** (a follow-up spec —
 synthesis/aggregation tools that need consumer hardening; scoped at the end).

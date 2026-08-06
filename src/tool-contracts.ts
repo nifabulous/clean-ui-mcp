@@ -1627,7 +1627,7 @@ export const TOOL_DESCRIPTORS = [
     errorCodes: ["NOT_FOUND", "PROVIDER_ERROR"],
     contractDocs: {
       input: "query?, category?, styleTag?, patternType?, minQuality (1-5)?, qualityTier?, reviewStatus?, platform?, limit (1-20, default 5)?, responseFormat?",
-      successData: "`results: ReferenceSummary[]` — each with id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url required-but-nullable, imageAvailable), critique excerpt, topTechniques, antiPatterns",
+      successData: "`results: ReferenceSummary[]` — each with id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url required-but-nullable, imageAvailable), critique excerpt, topTechniques, antiPatterns, verification (omitted enrichment disclosure, when present)",
       empty: "`results: []`, retrieval none, resultCount 0, summary guidance",
       partial: "sparseCoverage / keywordFallback typed warnings on degraded retrieval",
       resultCount: "`results.length`",
@@ -1658,7 +1658,7 @@ export const TOOL_DESCRIPTORS = [
     errorCodes: ["NOT_FOUND"],
     contractDocs: {
       input: "id (required)",
-      successData: "full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability",
+      successData: "full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability, verification (omitted enrichment disclosure, when present)",
       empty: "n/a — single-id lookup",
       partial: "n/a — single-id lookup",
       resultCount: "1 on success, 0 on error",
@@ -1687,7 +1687,7 @@ export const TOOL_DESCRIPTORS = [
     errorCodes: ["NOT_FOUND", "PROVIDER_ERROR"],
     contractDocs: {
       input: "id (required), limit (1-20, default 5)?",
-      successData: "`results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques",
+      successData: "`results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques, verification (omitted enrichment disclosure, when present)",
       empty: "`results: []` when no index or source not found",
       partial: "keywordFallback / sparseCoverage typed warnings on degraded retrieval",
       resultCount: "`results.length`",

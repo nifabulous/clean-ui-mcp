@@ -120,12 +120,7 @@ export function createServer(
   // that tool renders — never wider (over-gating) and never narrower
   // (over-serving). The field set is the contract between the verifier (Stage
   // 2b/2c) and the gate, reviewable in one place. `create_ui_spec` keeps the
-  // UNGATED reader on purpose: it gates itself (create-ui-spec-deterministic.ts)
-  // AND needs the corpus-wide entry list to build the identity screen's
-  // denied-name set.
-  // `create_ui_spec` keeps the UNGATED reader on purpose: it gates itself
-  // (create-ui-spec-deterministic.ts) AND needs the corpus-wide entry list to
-  // build the identity screen's denied-name set.
+  // UNGATED reader on purpose (see the C3 note above).
   registerSearchUiExamples(
     server,
     new TrustGatedCorpusReader(reader, SEARCH_UI_EXAMPLES_CORE, SEARCH_UI_EXAMPLES_ENRICHMENT),
@@ -145,6 +140,12 @@ export function createServer(
     server,
     new TrustGatedCorpusReader(reader, COMPARE_UI_EXAMPLES_FULL_SET),
   );
+  // `generate_design_prompt` is NO LONGER registered publicly — `create_ui_spec`
+  // supersedes it (see LEGACY_TO_BETA_MAP in tool-contracts.ts, the documented
+  // migration table, which deliberately keeps the legacy name as a row). Its
+  // implementation stays private in this module (registerGenerateDesignPrompt
+  // below) so internal callers and the migration story are unaffected; only the
+  // public registration is gone.
   registerCreateUiSpec(server, reader, options.createUiSpecModel);
   registerRecommendUiDirection(
     server,

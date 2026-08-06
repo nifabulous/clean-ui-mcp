@@ -445,7 +445,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 | Aspect | Contract |
 |---|---|
 | Input | query?, category?, styleTag?, patternType?, minQuality? (1-5), qualityTier?, reviewStatus?, platform?, limit (1-20), default 5, responseFormat? |
-| Success data | results — `results: ReferenceSummary[]` — each with id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url required-but-nullable, imageAvailable), critique excerpt, topTechniques, antiPatterns |
+| Success data | results — `results: ReferenceSummary[]` — each with id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, source (productName, url required-but-nullable, imageAvailable), critique excerpt, topTechniques, antiPatterns, verification (omitted enrichment disclosure, when present) |
 | Empty | `results: []`, retrieval none, resultCount 0, summary guidance |
 | Partial | sparseCoverage / keywordFallback typed warnings on degraded retrieval |
 | Errors | NOT_FOUND (non-retryable), PROVIDER_ERROR (retryable) |
@@ -461,7 +461,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 | Aspect | Contract |
 |---|---|
 | Input | id |
-| Success data | id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, accentColor, dominantColors, colorRoles, typePairing, spacingDensity, cornerStyle, usesShadows, usesBorders, critique, techniques, antiPatterns, whereThisFails, accessibility, businessRationale, voice, source, imageAvailable, verification — full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability |
+| Success data | id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, accentColor, dominantColors, colorRoles, typePairing, spacingDensity, cornerStyle, usesShadows, usesBorders, critique, techniques, antiPatterns, whereThisFails, accessibility, businessRationale, voice, source, imageAvailable, verification — full reference record: id, title, product, patternType, categories, styleTags, qualityScore, qualityTier, platform, layout, visual attributes, accessibility, critique, techniques, antiPatterns, source, image availability, verification (omitted enrichment disclosure, when present) |
 | Empty | n/a — single-id lookup |
 | Partial | n/a — single-id lookup |
 | Errors | NOT_FOUND (non-retryable) |
@@ -477,7 +477,7 @@ These tables are the authoritative source for executable Zod schemas. The block 
 | Aspect | Contract |
 |---|---|
 | Input | id, limit (1-20), default 5 |
-| Success data | results — `results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques |
+| Success data | results — `results: SimilarReference[]` — each with id, title, product, patternType, categories, styleTags, score, basis, critique, techniques, verification (omitted enrichment disclosure, when present) |
 | Empty | `results: []` when no index or source not found |
 | Partial | keywordFallback / sparseCoverage typed warnings on degraded retrieval |
 | Errors | NOT_FOUND (non-retryable), PROVIDER_ERROR (retryable) |

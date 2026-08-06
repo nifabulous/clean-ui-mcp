@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -124,30 +124,38 @@ describe("get_ui_example — image attaches on any served field (2d-1)", () => {
 
   it("attaches when the only image-confirmed field is a served enrichment field", async () => {
     const dir = mkdtempSync(join(tmpdir(), "image-attach-"));
-    const file = join(dir, "gate.png");
-    const bytes = Buffer.from("fake-png-bytes");
-    writeFileSync(file, bytes);
-    const sha = createHash("sha256").update(bytes).digest("hex");
-    const e = publicImageEntry("gate-tool-entry", {
-      critique: RECORD, // image-confirmed with a NON-matching hash — no attach from core
-      "visual.colorRoles": { ...RECORD, imageSha256: sha }, // served enrichment — attaches
-    });
-    const text = await callWithFile(e, file);
-    expect(text).not.toContain("Image not attached");
+    try {
+      const file = join(dir, "gate.png");
+      const bytes = Buffer.from("fake-png-bytes");
+      writeFileSync(file, bytes);
+      const sha = createHash("sha256").update(bytes).digest("hex");
+      const e = publicImageEntry("gate-tool-entry", {
+        critique: RECORD, // image-confirmed with a NON-matching hash — no attach from core
+        "visual.colorRoles": { ...RECORD, imageSha256: sha }, // served enrichment — attaches
+      });
+      const text = await callWithFile(e, file);
+      expect(text).not.toContain("Image not attached");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("does not attach when the image-confirmed field is outside the tool's served set", async () => {
     const dir = mkdtempSync(join(tmpdir(), "image-noattach-"));
-    const file = join(dir, "gate.png");
-    const bytes = Buffer.from("fake-png-bytes");
-    writeFileSync(file, bytes);
-    const sha = createHash("sha256").update(bytes).digest("hex");
-    const e = publicImageEntry("gate-tool-entry", {
-      critique: RECORD, // image-confirmed with a NON-matching hash
-      platform: { ...RECORD, imageSha256: sha }, // NOT in get_ui_example's core ∪ enrichment
-    });
-    const text = await callWithFile(e, file);
-    expect(text).toContain("Image not attached");
+    try {
+      const file = join(dir, "gate.png");
+      const bytes = Buffer.from("fake-png-bytes");
+      writeFileSync(file, bytes);
+      const sha = createHash("sha256").update(bytes).digest("hex");
+      const e = publicImageEntry("gate-tool-entry", {
+        critique: RECORD, // image-confirmed with a NON-matching hash
+        platform: { ...RECORD, imageSha256: sha }, // NOT in get_ui_example's core ∪ enrichment
+      });
+      const text = await callWithFile(e, file);
+      expect(text).toContain("Image not attached");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

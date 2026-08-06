@@ -1,6 +1,6 @@
 # Field-set gating: core + enrichment — design
 
-**Status:** design under review (revised after code-verified spec review)
+**Status:** design approved, spec under review
 **Stage:** 2d of the corpus trust gate program (Stages 1, 2a, 2c shipped in #94/#95/#98).
 Split into **2d-1** (this spec — render/echo tools) and **2d-2** (a follow-up spec —
 synthesis/aggregation tools that need consumer hardening; scoped at the end).
@@ -35,13 +35,14 @@ of work deferred to its own spec.
 Fail-closed is preserved exactly: every served field value is still individually `isVerified`.
 The change is that an unrelated unverified field no longer withholds a verified one.
 
-**By construction, not by discipline.** The invariant must hold because the machinery can't emit
-an unverified value, not because each renderer remembers to check. In 2d-1 this is achieved by
-(a) a single shared projection helper every render path routes through, and (b) a cross-tool
-invariant-sweep test that walks every tool's output and fails if ANY emitted field is
-`!isVerified`. The synthesis tools that can't yet satisfy "by construction" (their consumers read
-enrichment unguarded) are held at full-AND in 2d-1 and fixed in 2d-2 — they never serve a
-partial entry in 2d-1, so they can't leak.
+**By construction at the reader, net-enforced at the renderer.** The invariant must hold because
+the machinery can't emit an unverified value, not because each renderer remembers to check. In
+2d-1 this is achieved by (a) reader-level gating on `core` (hard, structural), (b) a single
+shared projection helper every render path routes through, and (c) a cross-tool invariant-sweep
+test that walks every tool's output and fails if ANY emitted field is `!isVerified` — the
+backstop that makes omission mechanical rather than per-renderer discipline. The synthesis tools
+that can't yet satisfy this (their consumers read enrichment unguarded) are held at full-AND in
+2d-1 and fixed in 2d-2 — they never serve a partial entry in 2d-1, so they can't leak.
 
 ## The model: core + enrichment
 
@@ -122,9 +123,16 @@ attaches a **per-entry** disclosure naming the omitted-because-unverified fields
   able to tell which result dropped which field). The existing `buildPerFieldDisclosure`
   (`create-ui-spec.ts:1548`) is an aggregate-count shape (`whatToSteal 3/5`) that attributes
   nothing to a specific entry, so it is NOT reused here; 2d-1 defines a compact per-entry list.
-  Per-entry lists are ≤12 short field names, so no 500-char bound applies.
+  Per-entry lists hold at most 12 field names (the size of the largest enrichment set), so no
+  500-char bound applies.
 - Response schemas: the enrichment fields these three tools emit become OPTIONAL, and a
-  disclosure field is added. (Only these three tools' schemas change in 2d-1.)
+  disclosure field is added. (Only these three tools' schemas change in 2d-1.) **Which schemas:**
+  the three MCP tools return text content and declare no MCP `outputSchema` (only `critique_ui`
+  does), so the change lands on the CANONICAL descriptor `dataSchema`s in `tool-contracts.ts` —
+  `ReferenceSummary` (`:291`), `SimilarReference` (`:306`), `FullReference` (`:386`) — plus their
+  `makeValidSuccess` fixtures in `__fixtures__/tool-contract-fixtures.ts`. The "schema
+  round-trip" test is therefore a canonical-envelope test via `parseToolResult`, not an
+  MCP-output test.
 
 ## Data flow (2d-1)
 
@@ -211,6 +219,11 @@ enrichment field is skipped, not read:
   must be defined over the RESULT, not just the entry: an entry with verified `colorRoles` but
   unverified `patternType` serves the palette row with the label rendered as unverified/omitted +
   a row disclosure; the request filter matches only entries whose `patternType` is verified.
+  (Note the deliberate asymmetry vs the search tools, which filter freely on unverified
+  `category`/`styleTag` and project only RENDERED values; 2d-2's spec should state why the
+  palette filter key gets gated there and not in search — the difference is that `patternType`
+  doubles as the row label, so an unverified match would label a row with a value the caller
+  never sees verified.)
 - **`compare_ui_examples`** (core `critique` both entries): an omitted cell in a `| field | cell |`
   table renders `—` with a per-row disclosure (drop the CELL, never the row — dropping a row would
   hide a verified core).

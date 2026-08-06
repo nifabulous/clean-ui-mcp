@@ -12,11 +12,12 @@
  *
  * This decorator closes that by construction rather than by discipline: it wraps
  * a CorpusReader and filters every content-bearing method through the per-field
- * `isVerified` predicate, against the FIELD SET the tool actually renders. An
- * entry is returned only when EVERY field in the set is verified — the
- * conservative reading, and the one that cannot over-serve. The field set is
- * declared at wiring time in `createServer`, so a tool added later is gated by
- * construction, not because someone remembered.
+ * `isVerified` predicate, against the CORE fields the tool hard-gates on
+ * (enrichment is projected at the render boundary). An entry is returned only
+ * when EVERY core field in the set is verified — the conservative reading, and
+ * the one that cannot over-serve. The core set is declared at wiring time in
+ * `createServer`, so a tool added later is gated by construction, not because
+ * someone remembered.
  *
  * ONE CONSUMER DELIBERATELY DOES NOT READ THROUGH THIS CLASS: `create_ui_spec`
  * keeps the raw reader (`server-factory.ts`). It gates itself, and it needs the
@@ -32,10 +33,15 @@ import type { CorpusEntryT } from "./schema.js";
 import { isVerified } from "./corpus-trust.js";
 
 export class TrustGatedCorpusReader implements CorpusReader {
+  private readonly _core: readonly string[];
+  private readonly _enrichment: readonly string[];
+
   constructor(
     private readonly inner: CorpusReader,
-    /** The exact keys of the fields this tool renders (wiring-time declaration). */
-    readonly fields: readonly string[],
+    /** The exact keys of the fields this tool hard-gates on (wiring-time declaration). */
+    core: readonly string[],
+    /** The exact keys of the fields this tool renders only when verified; omitted+disclosed otherwise. */
+    enrichment: readonly string[] = [],
   ) {
     // Double-wrapping would make `trustPosture()` report verified === total (the
     // inner gate already filtered), so every honest "0 of 787" message would
@@ -47,18 +53,30 @@ export class TrustGatedCorpusReader implements CorpusReader {
         + "would make trustPosture() report everything as verified.",
       );
     }
-    // An empty set would make `fields.every(...)` vacuously true and un-gate
+    // An empty core would make `core.every(...)` vacuously true and un-gate
     // the whole corpus — the exact failure this class exists to prevent.
-    if (fields.length === 0) {
+    if (core.length === 0) {
       throw new Error(
-        "TrustGatedCorpusReader requires at least one field; an empty field set "
-        + "would let every entry pass (every() over [] is true).",
+        "TrustGatedCorpusReader requires at least one core field; an empty core "
+        + "set would let every entry pass (every() over [] is true).",
       );
     }
+    this._core = core;
+    this._enrichment = enrichment;
+  }
+
+  /** The fields an entry must verify to appear in the tool at all. */
+  get core(): readonly string[] {
+    return this._core;
+  }
+
+  /** The fields rendered only when verified for the entry; omitted+disclosed otherwise. */
+  get enrichment(): readonly string[] {
+    return this._enrichment;
   }
 
   private passes(entry: CorpusEntryT): boolean {
-    return this.fields.every((field) => isVerified(entry, field));
+    return this._core.every((field) => isVerified(entry, field));
   }
 
   // ----- Gated: every method whose result becomes served content -------------

@@ -296,7 +296,12 @@ function registerSearchUiExamples(server: McpServer, reader: CorpusReader): void
       const concise = responseFormat === "concise";
       const summary = results
         .map((e) => {
-          const headerParts = [e.categories.join(", "), e.styleTags.join(", ")].filter(Boolean).join(" | ");
+          const projection = projectForServing(e, SEARCH_UI_EXAMPLES_ENRICHMENT);
+          const served = (field: string) => projection.served.includes(field);
+          const headerParts = [
+            served("categories") ? e.categories.join(", ") : "",
+            served("styleTags") ? e.styleTags.join(", ") : "",
+          ].filter(Boolean).join(" | ");
           const lines: string[] = [];
           if (headerParts) lines.push(`### ${headerParts}`);
           if (concise) {
@@ -305,13 +310,15 @@ function registerSearchUiExamples(server: McpServer, reader: CorpusReader): void
             lines.push(
               `Critique: ${e.critique}`,
               ``,
-              `What to steal:`,
-              ...e.whatToSteal.map((t) => `  - ${t}`),
-              e.antiPatterns.antiPatterns.length
+              served("whatToSteal")
+                ? ["What to steal:", ...e.whatToSteal.map((t) => `  - ${t}`)].join("\n")
+                : "",
+              served("antiPatterns") && e.antiPatterns.antiPatterns.length
                 ? `Anti-patterns (mistakes avoided):\n${e.antiPatterns.antiPatterns.map((t) => `  - ${t}`).join("\n")}`
                 : "",
             );
           }
+          lines.push(renderOmittedDisclosure(projection.omitted));
           return lines.filter(Boolean).join("\n");
         })
         .join("\n\n---\n\n");

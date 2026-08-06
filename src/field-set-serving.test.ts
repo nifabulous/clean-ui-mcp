@@ -150,3 +150,31 @@ describe("get_ui_example — image attaches on any served field (2d-1)", () => {
     expect(text).toContain("Image not attached");
   });
 });
+
+describe("search_ui_examples — per-result projection (2d-1)", () => {
+  it("attributes each result's omitted fields to the right result", async () => {
+    const rich = entry("rich-1", ["critique", "whatToSteal"]);
+    const thin = entry("thin-1", ["critique"]);
+    const server = createServer({
+      ...readerWith(rich),
+      search: async () => [rich, thin],
+    } as CorpusReader);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "field-set-test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const res = await client.callTool({ name: "search_ui_examples", arguments: { query: "dashboard", limit: 3 } });
+      const text = (res.content ?? []).map((c) => (c as { text?: string }).text ?? "").join("\n");
+      // rich-1: whatToSteal verified → steal marker present, only anti/categories/styleTags omitted.
+      const richBlock = text.split("---")[0];
+      expect(richBlock).toContain("STEAL_MARKER_9f");
+      expect(richBlock).toContain("Unverified fields omitted: antiPatterns, categories, styleTags.");
+      // thin-1: only critique verified → steal marker absent, disclosure names it.
+      const thinBlock = text.split("---")[1] ?? text;
+      expect(thinBlock).not.toContain("STEAL_MARKER_9f");
+      expect(thinBlock).toContain("Unverified fields omitted: whatToSteal, antiPatterns, categories, styleTags.");
+    } finally {
+      await client.close();
+    }
+  });
+});

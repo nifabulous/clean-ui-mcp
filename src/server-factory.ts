@@ -730,7 +730,8 @@ function registerGenerateDesignPrompt(server: McpServer, reader: CorpusReader): 
         return { content: [{ type: "text", text: `${unresolvedIdsMessage(reader, missing)} Use search_ui_examples to find valid ids.` }], isError: true };
       }
       const found = entries.filter((e): e is NonNullable<typeof e> => !!e);
-      const brief = generateBrief(found, { ids, framework: framework ?? "brief", context });
+      const projected = found.map((e) => projectEntryForSynthesis(e, GENERATE_DESIGN_PROMPT_ENRICHMENT));
+      const brief = generateBrief(projected, { ids, framework: framework ?? "brief", context });
       return { content: [{ type: "text", text: renderBrief(brief) }] };
     },
   );
@@ -780,11 +781,13 @@ function registerRecommendUiDirection(server: McpServer, reader: CorpusReader): 
       const results = await reader.searchRanked({ query: productContext, category: category as string | undefined, qualityTier: qualityTier as string | undefined, platform: platform as "web" | "mobile" | "tablet" | undefined, limit: 20 });
       if (!results.length) {
         const scope = qualityTier === "cautionary" ? " cautionary" : "";
-        // "Try broader terms" is advice the caller cannot act on when the cause is
-        // that nothing is verified, so report the posture instead.
         return { content: [{ type: "text", text: emptyCorpusMessage(reader, `${scope} corpus entries matching "${productContext}"`.trim()) }] };
       }
-      const rec = buildRecommendation(results, { productContext, count, category: category as string | undefined, framework: framework ?? "brief" });
+      const projectedResults = results.map((r) => ({
+        ...r,
+        entry: projectEntryForSynthesis(r.entry, RECOMMEND_UI_DIRECTION_ENRICHMENT),
+      }));
+      const rec = buildRecommendation(projectedResults, { productContext, count, category: category as string | undefined, framework: framework ?? "brief" });
       // Cautionary recommendation: reframe the headline so the agent knows this is
       // "what to avoid," not "what to emulate." The synthesis body still names the
       // techniques, but the framing inverts them to pitfalls.

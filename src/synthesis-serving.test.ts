@@ -137,3 +137,32 @@ describe("get_color_palette — 2d-2 nullable label", () => {
     expect(text).toMatch(/patternType label is VERIFIED/i);
   });
 });
+
+describe("recommend_ui_direction — 2d-2 projected brief", () => {
+  it("serves a brief with coverage disclosures and no unverified enrichment", async () => {
+    const e = synthEntry("rec-1", ["critique", "whatToSteal", "visual.colorRoles"]);
+    const text = await callTool("recommend_ui_direction", { productContext: "A calm analytics dashboard", count: 1 }, e);
+    expect(text).toContain("SYNTH_STEAL"); // verified core-derived technique
+    expect(text).not.toContain("SYNTH_ANTI"); // unverified — absent
+    expect(text).not.toContain("SYNTH_VOICE"); // unverified — absent
+    expect(text).toContain("Drawn from"); // coverage disclosure present
+  });
+
+  it("does not leak an unverified patternType into the contribution note", async () => {
+    const e = synthEntry("rec-1", ["critique", "whatToSteal", "visual.colorRoles"]);
+    const text = await callTool("recommend_ui_direction", { productContext: "A calm analytics dashboard", count: 1 }, e);
+    expect(text).not.toContain("color palette + dashboard"); // patternType unverified
+  });
+
+  it("renders byte-identically for a fully-verified entry (no coverage disclosures)", async () => {
+    const all = [
+      "critique", "whatToSteal", "visual.colorRoles", "visual.typePairing",
+      "visual.spacingDensity", "visual.cornerStyle", "layout", "voice",
+      "antiPatterns", "patternType", "styleTags",
+    ];
+    const e = synthEntry("rec-1", all);
+    const text = await callTool("recommend_ui_direction", { productContext: "A calm analytics dashboard", count: 1 }, e);
+    expect(text).toContain("SYNTH_STEAL");
+    expect(text).not.toContain("Drawn from");
+  });
+});

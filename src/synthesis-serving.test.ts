@@ -50,16 +50,20 @@ export function synthEntry(id: string, verifiedFor: readonly string[]): CorpusEn
 }
 
 export function synthReaderWith(e: CorpusEntryT): CorpusReader {
+  return synthReaderWithMany([e]);
+}
+
+export function synthReaderWithMany(entries: CorpusEntryT[]): CorpusReader {
   return {
-    search: async () => [e],
-    searchRanked: async () => [{ entry: e, score: 5, searchMode: "vector" as const }],
-    getById: (id: string) => (id === e.id ? e : undefined),
-    findSimilar: () => [{ entry: e, score: 1 }],
-    listCategories: () => ["dashboard"],
-    listStyleTags: () => ["minimal"],
-    listDomainTags: () => ["analytics"],
-    indexStatus: () => ({ indexed: 1, total: 1, hasIndex: true, missing: 0, stale: 0, contentStale: 0 }),
-    entriesForAggregation: () => [e],
+    search: async () => entries,
+    searchRanked: async () => entries.map((entry, i) => ({ entry, score: 5 - i, searchMode: "vector" as const })),
+    getById: (id: string) => entries.find((x) => x.id === id),
+    findSimilar: () => entries.slice(0, 1).map((entry) => ({ entry, score: 1 })),
+    listCategories: () => [...new Set(entries.flatMap((e) => e.categories ?? []))],
+    listStyleTags: () => [...new Set(entries.flatMap((e) => e.styleTags ?? []))],
+    listDomainTags: () => [...new Set(entries.flatMap((e) => e.domainTags ?? []))],
+    indexStatus: () => ({ indexed: entries.length, total: entries.length, hasIndex: true, missing: 0, stale: 0, contentStale: 0 }),
+    entriesForAggregation: () => entries,
     resolveImagePath: () => null,
     getImageIndex: async () => null,
   } as unknown as CorpusReader;
@@ -87,6 +91,10 @@ export function emptyCorpusReader(): CorpusReader {
 
 export async function callToolEmpty(name: string, args: Record<string, unknown>): Promise<string> {
   return textTool(name, args, createServer(emptyCorpusReader()));
+}
+
+export async function callToolMany(name: string, args: Record<string, unknown>, entries: CorpusEntryT[]): Promise<string> {
+  return textTool(name, args, createServer(synthReaderWithMany(entries)));
 }
 
 async function textTool(name: string, args: Record<string, unknown>, server: ReturnType<typeof createServer>): Promise<string> {
@@ -139,6 +147,23 @@ describe("compare_ui_examples — 2d-2 projected cells", () => {
     expect(text).toContain("_Column disclosures:_");
     expect(text).not.toContain("top steal"); // concise drops the detailed rows
     expect(text).not.toContain("a11y risks");
+  });
+
+  it("renders a mixed two-column compare with independent omissions per column", async () => {
+    const all = [
+      "critique", "whatToSteal", "antiPatterns", "antiPatterns.accessibilityRisks",
+      "categories", "styleTags", "patternType", "platform", "layout",
+      "visual.accentColor", "visual.colorRoles", "visual.spacingDensity",
+      "visual.cornerStyle", "visual.usesShadows", "visual.usesBorders",
+    ];
+    const full = synthEntry("entry-full", all);
+    const partial = synthEntry("entry-part", ["critique"]);
+    const text = await callToolMany("compare_ui_examples", { ids: ["entry-full", "entry-part"] }, [full, partial]);
+    expect(text).toContain("dashboard — dashboard — minimal"); // full column header
+    expect(text).toContain("corpus example"); // partial column header fallback
+    expect(text).toContain("| web | — |"); // verified-but-absent vs unverified platform
+    expect(text).not.toContain("**entry-full**: Unverified fields omitted");
+    expect(text).toContain("**entry-part**: Unverified fields omitted:");
   });
 });
 

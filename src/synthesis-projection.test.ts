@@ -66,7 +66,11 @@ describe("projectEntryForSynthesis", () => {
     const p = projectEntryForSynthesis(e, ["whatToSteal", "voice", "antiPatterns", "patternType"]);
     expect(p.whatToSteal).toEqual(["Steal this."]);
     expect(p.voice?.tone).toBe("Restrained");
-    expect(p.antiPatterns).toBeUndefined();
+    // `"antiPatterns"` enrichment key targets the inner .antiPatterns[] leaf,
+    // not the JS container. Sibling leaves (accessibilityRisks, whereThisFails)
+    // are neither enrichment nor unverified here, so the container survives
+    // with only the targeted leaf removed.
+    expect(p.antiPatterns?.antiPatterns).toBeUndefined();
     expect(p.patternType).toBeUndefined();
     expect((p as ProjectedEntry).source.productName).toBe("P");
   });
@@ -96,6 +100,20 @@ describe("projectEntryForSynthesis", () => {
     const p = projectEntryForSynthesis(e, ["antiPatterns", "antiPatterns.accessibilityRisks"]);
     expect(p.antiPatterns?.antiPatterns).toEqual(["Avoid heavy shadows."]);
     expect(p.antiPatterns?.accessibilityRisks).toBeUndefined();
+  });
+
+  it("preserves verified antiPatterns.accessibilityRisks when the parent antiPatterns leaf is unverified", () => {
+    // Regression: the parent enrichment key `"antiPatterns"` and the child
+    // `"antiPatterns.accessibilityRisks"` are INDEPENDENT servable leaves inside
+    // the same JS container. Wiping the container for the parent used to drop
+    // the verified accessibilityRisks silently.
+    const e = entryWith(["antiPatterns.accessibilityRisks"]);
+    const p = projectEntryForSynthesis(e, ["antiPatterns", "antiPatterns.accessibilityRisks"]);
+    // Parent leaf (the anti-patterns list) is unverified — stripped.
+    expect(p.antiPatterns?.antiPatterns).toBeUndefined();
+    // Child leaf is verified — the container survives and carries the value.
+    expect(p.antiPatterns).not.toBeUndefined();
+    expect(p.antiPatterns?.accessibilityRisks).toEqual(e.antiPatterns.accessibilityRisks);
   });
 
   it("returns an entry with only core filled when enrichment is empty", () => {

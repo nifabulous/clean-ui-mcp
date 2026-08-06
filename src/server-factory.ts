@@ -704,6 +704,19 @@ function registerCompareUiExamples(server: McpServer, reader: CorpusReader): voi
 // again — do not re-implement it.
 
 function registerGenerateDesignPrompt(server: McpServer, reader: CorpusReader): void {
+  // Trip-wire for a future re-registration: this handler mirrors recommend's
+  // `(whatToSteal core + enrichment)` split, but only through the ENRICHMENT
+  // projection below. The CORE gate is the reader-side responsibility. Requiring
+  // a `TrustGatedCorpusReader` here means anyone re-adding this to createServer
+  // must pass the gated reader — a raw reader crashes at first call rather than
+  // silently bypassing the whatToSteal core check.
+  if (!(reader instanceof TrustGatedCorpusReader)) {
+    throw new Error(
+      "generate_design_prompt requires a TrustGatedCorpusReader: wire it with "
+      + "new TrustGatedCorpusReader(reader, GENERATE_DESIGN_PROMPT_CORE, "
+      + "GENERATE_DESIGN_PROMPT_ENRICHMENT).",
+    );
+  }
   server.registerTool(
     "generate_design_prompt",
     {

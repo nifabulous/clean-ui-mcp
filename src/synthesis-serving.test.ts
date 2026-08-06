@@ -165,6 +165,26 @@ describe("compare_ui_examples — 2d-2 projected cells", () => {
     expect(text).not.toContain("**entry-full**: Unverified fields omitted");
     expect(text).toContain("**entry-part**: Unverified fields omitted:");
   });
+
+  it("renders verified antiPatterns.accessibilityRisks even when the parent antiPatterns leaf is unverified", async () => {
+    // Regression: the parent enrichment key "antiPatterns" and the child
+    // "antiPatterns.accessibilityRisks" are INDEPENDENT servable leaves inside
+    // the same container. The old projection wiped the whole container on the
+    // parent's omission, causing the verified a11y cell to render "—" and the
+    // column disclosure to lie by omission.
+    const e = synthEntry("mixed-anti", [
+      "critique",
+      "antiPatterns.accessibilityRisks", // verified
+      // "antiPatterns" (the parent list) intentionally NOT verified
+    ]);
+    const text = await callTool("compare_ui_examples", { ids: ["mixed-anti", "mixed-anti"] }, e);
+    // a11y row must carry the verified value.
+    expect(text).toContain("SYNTH_A11Y");
+    // anti-patterns row (unverified) renders as "—".
+    expect(text).toContain("| — |");
+    // Column disclosure names ONLY antiPatterns (parent leaf), not accessibilityRisks.
+    expect(text).toMatch(/Unverified fields omitted:[^\n]*antiPatterns(?!\.accessibilityRisks)/);
+  });
 });
 
 describe("get_color_palette — 2d-2 nullable label", () => {

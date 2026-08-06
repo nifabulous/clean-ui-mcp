@@ -50,6 +50,20 @@ export type ProjectedEntry = Omit<
 const NESTED_ENRICHMENT_KEYS = ["visual", "antiPatterns"] as const;
 
 /**
+ * Enrichment keys that share a name with their JS container. The bare key names
+ * an INNER leaf on the container, not the container itself. Wiping the whole
+ * container would silently drop verified sibling leaves.
+ *
+ *   "antiPatterns" (enrichment/servable key) → entry.antiPatterns.antiPatterns[]
+ *
+ * The nested-key loop below deletes exactly this inner leaf and leaves the
+ * container's other leaves (e.g. `accessibilityRisks`) intact when they verified.
+ */
+const CONTAINER_SELF_LEAF: Readonly<Record<string, string>> = {
+  antiPatterns: "antiPatterns",
+};
+
+/**
  * Returns a NEW entry with unverified enrichment removed (nested where relevant).
  * When nothing is omitted, returns the SAME entry (no clone churn — callers never
  * mutate). When something is omitted, builds a new entry object and NEW `visual` /
@@ -65,20 +79,28 @@ export function projectEntryForSynthesis(
   const projected = { ...entry } as ProjectedEntry;
 
   for (const container of NESTED_ENRICHMENT_KEYS) {
-    const keys = enrichment.filter((k) => k.startsWith(`${container}.`));
-    const containerOmitted = keys.some((k) => omitted.includes(k));
+    const nestedKeys = enrichment.filter((k) => k.startsWith(`${container}.`));
+    const nestedTouched = nestedKeys.some((k) => omitted.includes(k));
+    const selfLeaf = CONTAINER_SELF_LEAF[container];
+    const selfLeafOmitted = selfLeaf !== undefined && omitted.includes(container);
     const sourceContainer = (entry as unknown as Record<string, unknown>)[container];
-    if (containerOmitted && sourceContainer && typeof sourceContainer === "object") {
+    if ((nestedTouched || selfLeafOmitted) && sourceContainer && typeof sourceContainer === "object") {
       const copy = { ...(sourceContainer as Record<string, unknown>) };
-      for (const k of keys) {
+      for (const k of nestedKeys) {
         const leaf = k.slice(container.length + 1);
         if (omitted.includes(k)) delete copy[leaf];
       }
+      if (selfLeafOmitted && selfLeaf !== undefined) delete copy[selfLeaf];
       (projected as unknown as Record<string, unknown>)[container] = copy;
     }
   }
 
   for (const key of PROJECTED_TOP_LEVEL_KEYS) {
+    // Container names (visual, antiPatterns) are handled by the nested loop
+    // above. Wiping them here would drop verified sibling leaves — the bug
+    // that let a verified `antiPatterns.accessibilityRisks` disappear when the
+    // parent `antiPatterns` leaf was unverified.
+    if ((NESTED_ENRICHMENT_KEYS as readonly string[]).includes(key)) continue;
     if (omitted.includes(key)) {
       (projected as unknown as Record<string, unknown>)[key] = undefined;
     }

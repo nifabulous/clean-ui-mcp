@@ -1,6 +1,6 @@
 # Field-set gating 2d-2 — synthesis + aggregation tools
 
-**Status:** designed (pending plan)
+**Status:** implemented
 
 ## Context
 

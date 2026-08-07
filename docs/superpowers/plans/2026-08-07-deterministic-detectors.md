@@ -3331,7 +3331,11 @@ function entryForFixture(fixture: { field: string; recorded: unknown; file: stri
   if (field === "visual.spacingDensity") e.visual = { ...e.visual!, spacingDensity: fixture.recorded as CorpusEntryT["visual"]["spacingDensity"] };
   if (field === "visual.colorRoles") e.visual = { ...e.visual!, colorRoles: fixture.recorded as CorpusEntryT["visual"]["colorRoles"] };
   if (field === "platform") e.platform = fixture.recorded as string;
-  if (fixture.dims) e.image = { path: fixture.file, width: fixture.dims.width, height: fixture.dims.height, format: "png" };
+  // ImageRef = { visibility, path, width, height }: `visibility` is REQUIRED and
+  // there is no `format` field (src/schema.ts ImageRef).
+  if (fixture.dims) {
+    e.image = { visibility: "private", path: fixture.file, width: fixture.dims.width, height: fixture.dims.height };
+  }
   return e;
 }
 
@@ -3630,7 +3634,7 @@ git commit -m "feat(verify): declare detector floors from real-screenshot calibr
 - Produces (consumed by Tasks 15–17):
   - `FieldVerdict["verdict"]` was ALREADY widened to `"pass" | "fail" | "contradicted" | "abstain" | "gate"` in Task 12 Step 0 (it has to be — Task 12 emits the new labels). This task is where `decideFieldVerdict` stops returning `"fail"`; the union itself is untouched here.
   - `parseVerifyResponse` now returns `{ confirmed: boolean; contradicted: boolean; assertions?: string[]; reason?: string }` per field.
-  - `interface DataQualityRecord { measured: unknown; recorded: unknown; source: string; verifierVersion: string; verifiedAt: string; reason?: string }` (formalized into `provenance.dataQuality` + `mergeDataQuality` in Task 15)
+  - `DataQualityRecord` — declared ONCE in Task 15 Step 4 (`measured`, `recorded`, `source`, `reason?`, `verifierVersion`, `verifiedAt`, `imageSha256?`, `dismissed?`). Do not restate the shape elsewhere; an earlier draft declared it four times in three different shapes. (formalized into `provenance.dataQuality` + `mergeDataQuality` in Task 15)
   - `verifyEntry` return type grows to `{ records, verdicts, dataQuality }` — `dataQuality` is ACCUMULATED here (detector contradictions from Task 12 + corroborated model contradictions) and persisted in Task 15.
 
 **The prompt becomes three-way.** The model answers `confirmed` only when the claim is visibly true, `contradicted` only when the image POSITIVELY disagrees, `abstain` for uncertainty. A model `contradicted` is corroborated by a SECOND fresh-context ask for that field alone before it may write `dataQuality` — the detector band's equivalent guard, since model verdicts flip 14–18% between identical runs. The second ask uses the SAME positive-affirmation prompt (never "do you still disagree", which anchors).
@@ -3671,10 +3675,9 @@ describe("three-way model verdicts", () => {
     expect(r.verdict).toBe("gate");
   });
 
-  it("corroborates a model contradicted: second ask confirming writes verification, not dataQuality", async () => {
+  it("a model that disagrees with itself grants NOTHING — no trust record and no finding", async () => {
     const image = new URL("../verify/__fixtures__/images/roles-card.png", import.meta.url).pathname;
     const calls: string[] = [];
-    const { verifyEntry } = await import("./verify-corpus.js");
     const e = makeEntry(); // reuse the runner.test.ts entry() helper shape
     const out = await verifyEntry(e, image, {
       now: () => "2026-08-07",
@@ -3693,8 +3696,14 @@ describe("three-way model verdicts", () => {
     // however many calls the prose lane makes.
     const layoutAsks = calls.filter((p) => p.includes("layout")).length;
     expect(layoutAsks, "initial ask + one corroborating re-ask").toBe(2);
-    expect(out.records.layout).toBeDefined();
-    expect(out.dataQuality.layout).toBeUndefined();
+    // The two asks split. Corroboration exists because these verdicts flip
+    // 14-18% between identical runs, so a split is the instability itself — it
+    // must grant neither trust nor a finding. An earlier draft asserted
+    // `records.layout` was DEFINED here, i.e. served the field on the strength of
+    // one confirming look that another look contradicted.
+    expect(out.records.layout, "a disagreement must not grant trust").toBeUndefined();
+    expect(out.dataQuality.layout, "an uncorroborated accusation is not a finding").toBeUndefined();
+    expect(out.verdicts.find((v) => v.field === "layout")?.verdict).toBe("abstain");
   });
 
   it("writes dataQuality only for a corroborated contradiction", async () => {
@@ -3847,8 +3856,27 @@ if (modelContradicted.length > 0) {
     const reParsed = parseVerifyResponse(reParsedRaw);
     const reVerdict = decideFieldVerdict(field, tierForField(field), reParsed[field] ?? { confirmed: false, contradicted: false });
     if (reVerdict.verdict === "pass") {
-      records[field] = { method: "image-confirmed", verifiedAt: now, verifierVersion: VERIFIER_VERSION, imageSha256: imageSha256Of(imagePath) };
-      decided.set(field, reVerdict);
+      // DISAGREEMENT, NOT CONFIRMATION. The first ask said `contradicted` and the
+      // second says `confirmed`. Corroboration exists precisely BECAUSE model
+      // verdicts flip 14-18% between identical runs, so this split is that
+      // instability manifesting — it is the LEAST trustworthy state available,
+      // not evidence.
+      //
+      // An earlier draft wrote a trust record here, which made the asymmetry
+      // absurd: a contradiction needed 2-of-2 agreement, while a PASS needed
+      // 1-of-2 with the other vote actively contradicting. It also violated the
+      // governing invariant outright — "servable only when grounded in evidence
+      // that can be checked" cannot be satisfied by two looks that disagree.
+      //
+      // Resolve to `abstain`: no trust record (the field stays dark), no
+      // dataQuality (an uncorroborated accusation is not a finding), just a
+      // marker so the queue converges. The next verifier version re-asks.
+      decided.set(field, {
+        field,
+        verdict: "abstain",
+        reason: "model disagreed with itself across two fresh asks (contradicted, then confirmed) — neither verdict is corroborated",
+        source: "vision",
+      });
     } else if (reVerdict.verdict === "contradicted") {
       dataQuality[field] = {
         measured: null,
@@ -3910,7 +3938,10 @@ it("a contradicted mechanical field converges with --detectors off (no orphaned 
   // must still land in a map — otherwise selectPending requeues the entry forever.
   const e = makeEntry();
   e.platform = "mobile";                                   // 1440x900 is web
-  e.image = { path: "x.png", width: 1440, height: 900, format: "png" };
+  // ImageRef is { visibility, path, width, height } — `visibility` is REQUIRED and
+  // there is no `format` field (src/schema.ts ImageRef). An earlier draft omitted
+  // the first and invented the second: two type errors in one literal.
+  e.image = { visibility: "private", path: "images-private/x.png", width: 1440, height: 900 };
   const out = await verifyEntry(e, image, {
     now: () => "2026-08-07", callVision: async () => "{}", reproduce: async (x) => x,
     detectors: false,
@@ -3942,11 +3973,11 @@ git commit -m "feat(verify): three-way model verdicts with corroborated contradi
 
 **Interfaces:**
 - Produces:
-  - `interface DataQualityRecord { measured: unknown; recorded: unknown; source: string; verifierVersion: string; verifiedAt: string; reason?: string }`
+  - `DataQualityRecord` — declared ONCE in Task 15 Step 4 (`measured`, `recorded`, `source`, `reason?`, `verifierVersion`, `verifiedAt`, `imageSha256?`, `dismissed?`). Do not restate the shape elsewhere; an earlier draft declared it four times in three different shapes.
   - `mergeDataQuality(entry, entries: Record<string, DataQualityRecord>): void` — writes the map and REVOKES `verification` + `verifyAttempts` for those fields.
   - `mergeVerification` / `mergeVerifyAttempts` also revoke `dataQuality` for the fields they write (exclusivity in all three directions).
   - `resumeMarkers` skips `pass` AND `contradicted` (a contradiction is a finding, not a retry candidate).
-  - `alreadyProcessedAtVersion` / `selectPending` treat a `dataQuality` record at this version as PROCESSED — a contradiction is terminal at its version (re-checked on the next version bump, the same as fail/abstain markers; triage re-verify therefore runs under a new verifier version, or after the operator clears the record).
+  - `alreadyProcessedAtVersion` / `selectPending` treat a `dataQuality` record as PROCESSED when it is at this version **AND still current for the image** — i.e. its `imageSha256` is absent (a pixel-free detector such as `platform`) or still matches the entry's image. A contradiction measured against pixels that no longer exist proves nothing about the current ones, so a re-capture makes the finding stale and the field is re-offered WITHOUT a version bump. Otherwise a contradiction is terminal at its version, cleared by `--retriage` or the next version bump. (Step 4 has the predicate; the two must not drift.)
 
 - [ ] **Step 1: Write the failing exclusivity test**
 
@@ -4011,22 +4042,27 @@ dataQuality: z.record(z.string(), z.object({
   reason: z.string().optional(),
   verifierVersion: z.string().min(1),
   verifiedAt: z.string().min(1),
-}).passthrough()).optional(),
+  /** The image the contradiction was measured against; absent for pixel-free
+   *  detectors (`platform`). Staleness is derived from this — see below. */
+  imageSha256: z.string().length(64).optional(),
+  /** Set by `--dismiss`. Kept as an audit trail; omitted from the report. */
+  dismissed: z.object({
+    at: z.string().min(1),
+    reason: z.string().min(1),
+  }).optional(),
+}).strict()).optional(),
 ```
+
+`.strict()`, not `.passthrough()`. Passthrough would keep `imageSha256` and
+`dismissed` out of the inferred TS type (so `DataQualityRecord` and the schema
+would disagree) and would let a malformed `dismissed` survive validation — which
+defeats Task 17's "malformed record" check, whose whole job is catching exactly
+that.
 
 - [ ] **Step 4: Implement the merge functions and update the existing ones**
 
 ```ts
 // in verify-corpus.ts
-export interface DataQualityRecord {
-  measured: unknown;
-  recorded: unknown;
-  source: string;
-  reason?: string;
-  verifierVersion: string;
-  verifiedAt: string;
-}
-
 export function mergeDataQuality(entry: CorpusEntryT, entries: Record<string, DataQualityRecord>): void {
   const provenance = entry.provenance ?? { taggedBy: "auto" as const };
   const dataQuality = { ...(provenance.dataQuality ?? {}) };
@@ -4452,7 +4488,7 @@ describe("re-produce sampling pin", () => {
       antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
       critique: "a", whatToSteal: [], voice: null, mood: null,
       platform: "web", qualityScore: 1, qualityTier: "exceptional",
-      image: { path: "images-private/x.png", width: 100, height: 80, format: "png" },
+      image: { visibility: "private", path: "images-private/x.png", width: 100, height: 80 },
     } as CorpusEntryT;
     await reproduce(entry, "images-private/x.png");
     expect(tagImage).toHaveBeenCalledTimes(1);

@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { detectPlatform, type CorpusEntryT } from "../schema.js";
-import { extractQuantizedColors, tagImage, callVisionModel, type TaggerOutput, type Provider } from "../tagger.js";
+import { extractQuantizedColors, tagImage, callVisionModel, resolvedProviderAndModel, type TaggerOutput, type Provider } from "../tagger.js";
 import { fromCorpusRelativeImagePath } from "../paths.js";
 import { loadCorpus } from "../corpus.js";
 import { persistEntries, writableLoadedCorpus } from "../persistence.js";
@@ -459,14 +459,75 @@ export async function verifyEntry(
  * return the produced entry. Only the failed fields' values are read by the
  * caller; Pass 1 re-runs internally as the extraction input Pass 2 requires.
  */
+/**
+ * Reject after `ms` unless `work` settles first. The timer is always cleared, so
+ * a resolved promise never leaves a pending handle holding the process open.
+ *
+ * NOTE: this bounds the WAIT, not the work — the underlying HTTP request is not
+ * aborted (the provider clients own their sockets). That is enough for the
+ * failure this guards: the run stops being blocked and proceeds to the next
+ * entry, recording the timeout as that entry's verdict.
+ */
+export async function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`timed out after ${Math.round(ms / 1000)}s — ${label}`)),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export function makeReproduceDependency(provider?: string): VerifyEntryDeps["reproduce"] {
   return async (entry: CorpusEntryT, imagePath: string): Promise<CorpusEntryT> => {
+    // The verifier's Pass 2 (critique) receives the IMAGE (via critiqueImagePath),
+    // so the critique lane MUST be vision-capable. A common .env setup pins
+    // OPENAI_BASE_URL_CRITIQUE at a text-only OpenAI-compatible endpoint
+    // (e.g. DeepSeek) for cheap prose-only critique elsewhere. That routing
+    // would 400 here on `unknown variant image_url`. When the caller chose
+    // openai as vision provider, force critique to use the extraction-tier
+    // config (real OpenAI, vision-capable) via an explicit override.
+    const openaiVisionCfg = {
+      provider: "openai" as const,
+      baseUrl:
+        process.env.OPENAI_BASE_URL_EXTRACTION
+        ?? process.env.OPENAI_BASE_URL
+        ?? "",
+      apiKey:
+        process.env.OPENAI_API_KEY_EXTRACTION
+        ?? process.env.OPENAI_API_KEY
+        ?? "",
+      model:
+        process.env.OPENAI_AUTO_TAG_MODEL_EXTRACTION
+        ?? process.env.OPENAI_AUTO_TAG_MODEL
+        ?? "gpt-5.4-nano",
+    };
+    const critiqueOverride = provider === "openai" ? openaiVisionCfg : undefined;
+    // BOTH passes must be pinned to the caller's provider, not just critique.
+    // `resolveProvider` honours an explicit override and otherwise falls through
+    // to AUTO_TAG_PROVIDER_<PASS>. Passing only `critiqueProvider` therefore left
+    // Pass 1 (extraction) resolving from AUTO_TAG_PROVIDER_EXTRACTION — so a run
+    // invoked as `--vision-provider claude` re-produced its prose with whatever
+    // that env var named (measured: minimax), while the verdict pass genuinely
+    // used claude. Prose-tier fields (critique/whatToSteal/antiPatterns/voice)
+    // are the ones re-produced, so a provider comparison silently scored the
+    // same extraction model for every provider on exactly those fields.
     const tagged = await tagImage({
       imagePath,
       productName: entry.source?.productName ?? "Untitled",
       url: entry.source?.url ?? null,
       critiqueImagePath: imagePath,
+      extractionProvider: provider as Parameters<typeof tagImage>[0]["extractionProvider"],
       critiqueProvider: provider as Parameters<typeof tagImage>[0]["critiqueProvider"],
+      extractionOverride: provider === "openai" ? openaiVisionCfg : undefined,
+      critiqueOverride,
     });
     // Strip [DRAFT] markers and preserve antiPatterns' non-prose siblings —
     // NEVER return raw tagImage prose for storage. See applyReproducedProse.
@@ -497,10 +558,42 @@ export function selectPending(entries: readonly CorpusEntryT[], version: string)
   });
 }
 
-export function buildRunReport(result: RunResult, opts: { dryRun: boolean; verifierVersion: string; sampleSize: number }): string {
+export function buildRunReport(
+  result: RunResult,
+  opts: {
+    dryRun: boolean;
+    verifierVersion: string;
+    sampleSize: number;
+    /** The provider/model/detail the run ACTUALLY used — see the note below. */
+    resolved?: {
+      provider: string;
+      model: string;
+      /** Pass 2's model, which can differ from Pass 1's via *_AUTO_TAG_MODEL_CRITIQUE. */
+      critiqueModel?: string;
+      imageDetail: string;
+      sampling: string;
+    };
+  },
+): string {
   const lines: string[] = [];
   lines.push(`# Corpus verification ${opts.dryRun ? "(DRY-RUN)" : "run"} — ${opts.verifierVersion}`);
   lines.push("");
+  // Record the RESOLVED model, not the requested one. `loadEnv()` calls dotenv
+  // with `override: true` (src/env.ts), so `.env` beats a shell variable: a run
+  // invoked as `CLAUDE_AUTO_TAG_MODEL=claude-sonnet-5 npm run verify` silently
+  // used whatever `.env` pinned instead. Two runs intended as different models
+  // were measured as the same one, and nothing in the output revealed it —
+  // the discrepancy only surfaced in the provider's billing dashboard. A run
+  // report that cannot name the model it used is not a measurement.
+  if (opts.resolved) {
+    const r = opts.resolved;
+    const pass2 = r.critiqueModel && r.critiqueModel !== r.model ? ` (pass 2: ${r.critiqueModel})` : "";
+    lines.push(
+      `Model: ${r.provider}/${r.model}${pass2}`
+      + ` · image detail: ${r.imageDetail}`
+      + ` · sampling: ${r.sampling}`,
+    );
+  }
   lines.push(`Entries scanned: ${result.entries}`);
   const counts = { pass: 0, fail: 0, gate: 0 };
   let zeroAssertion = 0;
@@ -608,8 +701,23 @@ function resolveVisionProvider(): string | undefined {
  * independently and could disagree when the flag was unset but the env var
  * was set, silently routing the two passes to different providers.
  */
+/** The providers `callModelWithMetadata` can actually route to. */
+const VALID_VISION_PROVIDERS = ["openai", "claude", "gemini", "mistral", "minimax", "grok"] as const;
+
 export function resolveConfiguredVisionProvider(flag: string | undefined): string | undefined {
-  return flag ?? resolveVisionProvider();
+  const resolved = flag ?? resolveVisionProvider();
+  // Reject an unrecognised name instead of passing it through. `resolveProvider`
+  // returns any non-mistral override verbatim and `callModelWithMetadata`'s
+  // `default:` branch routes everything it doesn't recognise to OpenAI — so
+  // `--vision-provider Claude` (capitalised) silently benchmarked OpenAI while
+  // the run report printed "Claude". Fail loudly: this is the one flag whose
+  // entire purpose is pinning the provider.
+  if (resolved !== undefined && !(VALID_VISION_PROVIDERS as readonly string[]).includes(resolved)) {
+    throw new Error(
+      `unknown vision provider "${resolved}" — expected one of: ${VALID_VISION_PROVIDERS.join(", ")}`,
+    );
+  }
+  return resolved;
 }
 
 async function main(): Promise<void> {
@@ -623,6 +731,9 @@ async function main(): Promise<void> {
       "corpus": { type: "string" },
       "out": { type: "string" },
       "vision-provider": { type: "string" },
+      "image-detail": { type: "string" },
+      "entry-timeout": { type: "string" },
+      "sampling": { type: "string" },
     },
   });
   const dryRun = values["dry-run"] === true;
@@ -653,6 +764,41 @@ async function main(): Promise<void> {
   // without `--vision-provider` routed the re-produce pass and the verify
   // passes to DIFFERENT providers. One resolved value now feeds both.
   const visionProvider = resolveConfiguredVisionProvider(values["vision-provider"]);
+  // The VERDICT pass's image fidelity. Historically pinned to "low" (a ~512px
+  // downsample) to cut tokens — but the verdicts it produces are fine visual
+  // judgements ("does this use shadows", "is #04a4fc the accent") on 1440x900
+  // screenshots, where a thumbnail may not carry the evidence. Note the
+  // asymmetry this exposes: the re-produce pass (tagImage) has always run at
+  // "high". Exposed as a flag so the low-vs-high accuracy question is
+  // measurable rather than assumed; "low" stays the default so this change
+  // alters no existing behaviour.
+  const rawDetail = (values["image-detail"] ?? "low").trim();
+  if (rawDetail !== "low" && rawDetail !== "high") {
+    throw new Error(`--image-detail must be "low" or "high" (got "${rawDetail}")`);
+  }
+  const imageDetail: "low" | "high" = rawDetail;
+  // Per-entry wall-clock ceiling, in seconds. Default 300s: an entry legitimately
+  // costs up to ~4 model calls (verify + re-produce's two passes + re-verify), so
+  // the bound has to sit well above a slow-but-healthy entry while still cutting
+  // off a hung one.
+  const rawTimeout = Number(values["entry-timeout"] ?? 300);
+  if (!Number.isFinite(rawTimeout) || rawTimeout <= 0) {
+    throw new Error(`--entry-timeout must be a positive number of seconds (got "${values["entry-timeout"]}")`);
+  }
+  const entryTimeoutMs = rawTimeout * 1000;
+  // Sampling for the verdict pass. A verdict is a pass/fail judgement about a
+  // FIXED image, so there is no reason to sample: any variance is pure verdict
+  // instability. Measured before this existed: 5 of 28 disputed verdicts (18%)
+  // flipped between two runs with identical configuration, because nothing set
+  // temperature and the providers default to 1 (the OpenAI-compatible branch
+  // defaults to 1 explicitly, tagger.ts). Default now pins temperature 0 with a
+  // fixed seed; `--sampling default` restores the old unpinned behaviour so the
+  // noise floor stays measurable.
+  const samplingMode = (values.sampling ?? "pinned").trim();
+  if (samplingMode !== "pinned" && samplingMode !== "default") {
+    throw new Error(`--sampling must be "pinned" or "default" (got "${samplingMode}")`);
+  }
+  const sampling = samplingMode === "pinned" ? { temperature: 0, seed: 20260806 } : undefined;
   const reproduce = makeReproduceDependency(visionProvider);
   const results: RunResult = { entries: pending.length, verdictsByEntry: {} };
   // The verified map keyed by entry id; non-pending entries are preserved
@@ -670,30 +816,58 @@ async function main(): Promise<void> {
         continue;
       }
       const now = new Date().toISOString().slice(0, 10);
-      // verifyEntry MUTATES its entry (value replacement on re-verify pass). Under
-      // --dry-run, clone so the cached loadCorpus() array is never mutated in place.
-      const target = dryRun ? structuredClone(entry) : entry;
-      const { records, verdicts } = await verifyEntry(target, imagePath, {
-        now: () => now,
-        callVision: async (prompt, image) =>
-          // Use the SAME resolved provider as `reproduce` above (the flag, else
-          // VERIFY_VISION_PROVIDER, else callModel's ambient routing) — never
-          // `values["vision-provider"]` directly, or an env-only override would
-          // route this call and the re-produce pass to different providers.
-          callVisionModel(prompt, image, visionProvider as Provider | undefined, undefined, undefined, "low"),
-        reproduce,
-      });
+      // verifyEntry MUTATES its entry (value replacement on the re-verify pass), so
+      // it ALWAYS gets a clone — never the live object from loadCorpus()'s cache.
+      //
+      // Cloning unconditionally is what makes the per-entry timeout below safe.
+      // `withTimeout` bounds the WAIT, not the work: a timed-out verifyEntry keeps
+      // running and can perform its value-replacement write minutes later. When
+      // that write landed on the live entry, the abandoned call could substitute an
+      // entry's prose AFTER the catch had already recorded the entry as failed —
+      // so persistence (which falls back to the live object for any entry absent
+      // from `verifiedById`) would write replaced, unverified prose carrying no
+      // verification record and no resume marker. Exactly the "serve a value
+      // nothing vouched for" failure the trust gate exists to prevent.
+      //
+      // Now the zombie can only ever scribble on a clone that no one reads, and
+      // the live entry is updated below solely on the success path.
+      const target = structuredClone(entry);
+      // Per-entry wall-clock bound. A provider that accepts the request and then
+      // never answers otherwise stalls the whole run indefinitely — observed: a
+      // high-detail claude run sat at 0% CPU for 38 minutes having emitted zero
+      // verdicts, because nothing here bounded a single hung HTTP call. The
+      // rejection lands in the per-entry catch below, so the entry records a
+      // failure and the run moves on rather than hanging forever.
+      const { records, verdicts } = await withTimeout(
+        verifyEntry(target, imagePath, {
+          now: () => now,
+          callVision: async (prompt, image) =>
+            // Use the SAME resolved provider as `reproduce` above (the flag, else
+            // VERIFY_VISION_PROVIDER, else callModel's ambient routing) — never
+            // `values["vision-provider"]` directly, or an env-only override would
+            // route this call and the re-produce pass to different providers.
+            callVisionModel(prompt, image, visionProvider as Provider | undefined, undefined, undefined, imageDetail, sampling),
+          reproduce,
+        }),
+        entryTimeoutMs,
+        `entry "${entry.id}"`,
+      );
       if (!dryRun) {
         // Passes earn trust records in `verification`; every other evaluated field
         // earns a resume marker in `verifyAttempts` (a SIBLING map) so the queue
         // converges without polluting the trust map or tripping the doctor. A
         // pass revokes a stale marker and a fail revokes a stale record, so the
         // two maps stay mutually exclusive per field across version bumps.
-        mergeVerification(entry, records);
-        mergeVerifyAttempts(entry, resumeMarkers(verdicts, now, VERIFIER_VERSION));
+        //
+        // Merged into `target` (the clone verifyEntry actually wrote to) so its
+        // value replacements travel with the records that vouch for them. Reached
+        // only on the success path: a timed-out or throwing entry never registers,
+        // so its partial work cannot reach persistence.
+        mergeVerification(target, records);
+        mergeVerifyAttempts(target, resumeMarkers(verdicts, now, VERIFIER_VERSION));
       }
       results.verdictsByEntry[entry.id] = verdicts;
-      verifiedById.set(entry.id, entry);
+      verifiedById.set(entry.id, target);
     } catch (err) {
       results.verdictsByEntry[entry.id] = [{ field: "entry", verdict: "fail", reason: err instanceof Error ? err.message : String(err) }];
     }
@@ -708,7 +882,22 @@ async function main(): Promise<void> {
       console.log(`[verify] persisted ${entries.length} entries (${verifiedById.size} verified)`);
     }
   }
-  const report = buildRunReport(results, { dryRun, verifierVersion: VERIFIER_VERSION, sampleSize });
+  const report = buildRunReport(results, {
+    dryRun,
+    verifierVersion: VERIFIER_VERSION,
+    sampleSize,
+    resolved: {
+      ...resolvedProviderAndModel("extraction", visionProvider as Provider | undefined),
+      // The re-produce step's Pass 2 can resolve a DIFFERENT model from Pass 1:
+      // grokConfigForPass / minimaxConfigForPass read MINIMAX_AUTO_TAG_MODEL_CRITIQUE
+      // and friends. Report it too — Pass 2 is the pass that writes the prose being
+      // benchmarked, so omitting it reproduces the "cannot name the model it used"
+      // defect one tier over.
+      critiqueModel: resolvedProviderAndModel("critique", visionProvider as Provider | undefined).model,
+      imageDetail,
+      sampling: sampling ? `temperature=${sampling.temperature} seed=${sampling.seed}` : "provider default",
+    },
+  });
   const outDir = values.out ?? process.cwd();
   writeFileSync(resolve(outDir, "verify-report.md"), report);
   console.log(report);

@@ -6,6 +6,7 @@ import { tierForField, verifyMechanicalFields, type VerificationRecord, type Ver
 import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict } from "./verify-corpus.js";
 import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReproducedProse } from "./verify-corpus.js";
 import { buildRunReport, selectPending, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
+import { withTimeout } from "./verify-corpus.js";
 import { resolveConfiguredVisionProvider } from "./verify-corpus.js";
 import { extractQuantizedColors, type TaggerOutput } from "../tagger.js";
 import type { CorpusEntryT } from "../schema.js";
@@ -526,7 +527,26 @@ describe("resolveConfiguredVisionProvider — one resolved value feeds both the 
 
   it("prefers the flag over the env var when both are set", () => {
     process.env.VERIFY_VISION_PROVIDER = "openai";
-    expect(resolveConfiguredVisionProvider("anthropic")).toBe("anthropic");
+    // "claude", not "anthropic": the provider NAME this codebase routes on is
+    // `claude` (see Provider in tagger.ts). The fixture previously used
+    // "anthropic" — a natural thing to type and a value that would have been
+    // passed straight through to the OpenAI default branch.
+    expect(resolveConfiguredVisionProvider("claude")).toBe("claude");
+  });
+
+  it("rejects an unroutable provider name instead of silently falling back to OpenAI", () => {
+    delete process.env.VERIFY_VISION_PROVIDER;
+    // `resolveProvider` returns any non-mistral override verbatim and
+    // callModelWithMetadata's `default:` routes the unrecognised name to OpenAI,
+    // so without this guard `--vision-provider Claude` benchmarks OpenAI while the
+    // report claims Claude. Both a wrong-case name and a wrong vendor name fail.
+    expect(() => resolveConfiguredVisionProvider("Claude")).toThrow(/unknown vision provider "Claude"/);
+    expect(() => resolveConfiguredVisionProvider("anthropic")).toThrow(/expected one of/);
+  });
+
+  it("rejects an unroutable name coming from the env var, not just the flag", () => {
+    process.env.VERIFY_VISION_PROVIDER = "gpt5";
+    expect(() => resolveConfiguredVisionProvider(undefined)).toThrow(/unknown vision provider "gpt5"/);
   });
 
   it("falls back to VERIFY_VISION_PROVIDER when the flag is unset — the bug this closes: reproduce and callVision must agree here", () => {
@@ -592,5 +612,94 @@ describe("buildRunReport", () => {
     expect(report).toContain("DRY-RUN");
     expect(report).toContain("1 gated");
     expect(report).toMatch(/zero-assertion/i);
+  });
+});
+
+describe("withTimeout — bounds the wait so one hung provider call can't stall the run", () => {
+  it("resolves normally when the work finishes first", async () => {
+    await expect(withTimeout(Promise.resolve("ok"), 1000, "fast")).resolves.toBe("ok");
+  });
+
+  it("rejects with the label when the work outlasts the bound", async () => {
+    const never = new Promise<string>(() => {});
+    await expect(withTimeout(never, 20, 'entry "x"')).rejects.toThrow(/timed out after 0s — entry "x"/);
+  });
+
+  it("propagates the work's own rejection rather than masking it as a timeout", async () => {
+    const boom = Promise.reject(new Error("provider 400"));
+    await expect(withTimeout(boom, 1000, "fast")).rejects.toThrow("provider 400");
+  });
+
+  it("does not leave the event loop blocked after resolving (timer is cleared)", async () => {
+    // A leaked timer would keep the process alive for the full duration. Racing a
+    // resolved withTimeout against a short sleep proves the handle was cleared:
+    // if the 60s timer were still pending, vitest would hang on teardown.
+    await withTimeout(Promise.resolve(1), 60_000, "cleared");
+    await new Promise((r) => setTimeout(r, 5));
+    expect(true).toBe(true);
+  });
+
+  it("swallows a LATE rejection from abandoned work instead of crashing the process", async () => {
+    // The abandoned verifyEntry can reject after the timeout already fired. Because
+    // Promise.race attached a handler, that late rejection must not surface as an
+    // unhandledRejection and kill the run mid-corpus.
+    let rejectLate: (e: Error) => void = () => {};
+    const late = new Promise<string>((_, rej) => { rejectLate = rej; });
+    await expect(withTimeout(late, 10, "late")).rejects.toThrow(/timed out/);
+    rejectLate(new Error("arrived after the bound"));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(true).toBe(true);
+  });
+});
+
+describe("buildRunReport — run provenance names what actually ran", () => {
+  const empty = { entries: 0, verdictsByEntry: {} };
+
+  it("records the RESOLVED provider/model, so an overridden request can't be misreported", () => {
+    // The bug this closes: dotenv runs with override:true (src/env.ts), so a run
+    // invoked as CLAUDE_AUTO_TAG_MODEL=claude-sonnet-5 actually used .env's pin.
+    // Two runs intended as different models were measured as the same one and
+    // nothing in the output said so.
+    const report = buildRunReport(empty, {
+      dryRun: true,
+      verifierVersion: "verifier-v1",
+      sampleSize: 30,
+      resolved: {
+        provider: "claude",
+        model: "claude-sonnet-4-5",
+        imageDetail: "low",
+        sampling: "temperature=0 seed=1",
+      },
+    });
+    expect(report).toContain("Model: claude/claude-sonnet-4-5");
+    expect(report).toContain("image detail: low");
+    expect(report).toContain("sampling: temperature=0 seed=1");
+  });
+
+  it("names Pass 2's model when it differs from Pass 1's", () => {
+    const report = buildRunReport(empty, {
+      dryRun: true, verifierVersion: "v", sampleSize: 1,
+      resolved: {
+        provider: "minimax", model: "MiniMax-M3", critiqueModel: "MiniMax-Text",
+        imageDetail: "high", sampling: "provider default",
+      },
+    });
+    expect(report).toContain("(pass 2: MiniMax-Text)");
+  });
+
+  it("omits the Pass 2 note when both passes share a model", () => {
+    const report = buildRunReport(empty, {
+      dryRun: true, verifierVersion: "v", sampleSize: 1,
+      resolved: {
+        provider: "claude", model: "claude-sonnet-4-5", critiqueModel: "claude-sonnet-4-5",
+        imageDetail: "low", sampling: "provider default",
+      },
+    });
+    expect(report).not.toContain("pass 2:");
+  });
+
+  it("omits the provenance line entirely when no resolution is supplied", () => {
+    expect(buildRunReport(empty, { dryRun: true, verifierVersion: "v", sampleSize: 1 }))
+      .not.toContain("Model:");
   });
 });

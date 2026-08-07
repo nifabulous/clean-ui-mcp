@@ -987,6 +987,23 @@ export function activeModelName(pass?: TaggerPass): string {
  * in _raw. This helper resolves through the override's provider when set, so the
  * _raw metadata matches what was actually called.
  */
+/**
+ * The provider AND model a call would actually use, for run-report provenance.
+ *
+ * Exists because the requested model and the used model can differ silently:
+ * `loadEnv()` runs dotenv with `override: true` (src/env.ts), so `.env` beats a
+ * shell variable. A verify run invoked as `CLAUDE_AUTO_TAG_MODEL=claude-sonnet-5`
+ * used `.env`'s pin instead, and no output said so. Anything that reports on a
+ * model run should print this rather than the value it asked for.
+ */
+export function resolvedProviderAndModel(
+  pass: TaggerPass,
+  providerOverride?: Provider,
+): { provider: Provider; model: string } {
+  const provider = resolveProvider(pass, providerOverride);
+  return { provider, model: activeModelNameForOverride(pass, { provider }) };
+}
+
 function activeModelNameForOverride(pass: TaggerPass, override?: EndpointOverride, cfgOverride?: OpenAIConfig): string {
   // Config override (openai triple) → the model is in the cfg.
   if (cfgOverride?.model) return cfgOverride.model;
@@ -2029,7 +2046,14 @@ async function callOpenAIWithMetadata(
     ],
   };
   if (resolvedTemperature !== undefined) body.temperature = resolvedTemperature;
-  if (resolvedSeed !== undefined) body.seed = resolvedSeed;
+  // `seed` is deliberately NOT forwarded here. This branch posts to the Responses
+  // API, which rejects it outright: `400 Unknown parameter: 'seed'`, failing the
+  // whole request (observed: a 30-entry run where every entry failed this way).
+  // Seed is a Chat Completions parameter and is honoured on the
+  // OpenAI-COMPATIBLE branch below. A caller pinning {temperature, seed} for
+  // reproducibility still gets the temperature pin, which is what dominates
+  // sampling variance; losing the seed is strictly better than losing the call.
+  void resolvedSeed;
   const response = await fetchWithRetry(OPENAI_RESPONSES_API, {
     method: "POST",
     headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
@@ -2503,13 +2527,16 @@ async function callModel(
    *  (e.g. DeepSeek via NIM) is used instead of env-driven resolution. Only
    *  applies to the "openai" provider branch. */
   cfgOverride?: OpenAIConfig,
+  /** Sampling controls (temperature/seed). Threaded to the provider branch so a
+   *  caller that needs reproducible output can pin it; omitted = provider default. */
+  options?: ProviderCallOptions,
 ): Promise<string> {
   // The legacy string-returning router delegates to callModelWithMetadata and
   // discards the metadata. Every existing image/tagger caller continues to see
   // `Promise<string>` with identical behavior; only callTextModelWithMetadata
   // surfaces the metadata downstream.
   return (await callModelWithMetadata(
-    pass, prompt, imagePath, retryFeedback, detail, thinkingOverride, providerOverride, cfgOverride,
+    pass, prompt, imagePath, retryFeedback, detail, thinkingOverride, providerOverride, cfgOverride, options,
   )).content;
 }
 
@@ -2530,15 +2557,16 @@ async function callModelWithMetadata(
   thinkingOverride?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH",
   providerOverride?: Provider,
   cfgOverride?: OpenAIConfig,
+  options?: ProviderCallOptions,
 ): Promise<ProviderCallOutcome> {
   const provider = resolveProvider(pass, providerOverride, cfgOverride !== undefined);
   switch (provider) {
-    case "claude":  return callClaudeWithMetadata(prompt, imagePath, retryFeedback, detail);
-    case "gemini":  return callGeminiWithMetadata(prompt, imagePath, retryFeedback, detail, pass, thinkingOverride);
-    case "mistral": return callOpenAICompatibleWithMetadata(prompt, imagePath, retryFeedback, detail, pass, mistralConfigForPass(pass));
-    case "minimax": return callOpenAICompatibleWithMetadata(prompt, imagePath, retryFeedback, detail, pass, minimaxConfigForPass(pass));
-    case "grok":    return callOpenAICompatibleWithMetadata(prompt, imagePath, retryFeedback, detail, pass, grokConfigForPass(pass));
-    default:        return callOpenAIWithMetadata(prompt, imagePath, retryFeedback, detail, pass, cfgOverride);
+    case "claude":  return callClaudeWithMetadata(prompt, imagePath, retryFeedback, detail, options);
+    case "gemini":  return callGeminiWithMetadata(prompt, imagePath, retryFeedback, detail, pass, thinkingOverride, options);
+    case "mistral": return callOpenAICompatibleWithMetadata(prompt, imagePath, retryFeedback, detail, pass, mistralConfigForPass(pass), options);
+    case "minimax": return callOpenAICompatibleWithMetadata(prompt, imagePath, retryFeedback, detail, pass, minimaxConfigForPass(pass), options);
+    case "grok":    return callOpenAICompatibleWithMetadata(prompt, imagePath, retryFeedback, detail, pass, grokConfigForPass(pass), options);
+    default:        return callOpenAIWithMetadata(prompt, imagePath, retryFeedback, detail, pass, cfgOverride, options);
   }
 }
 
@@ -2588,6 +2616,14 @@ export async function callVisionModel(
   retryFeedback?: string,
   endpointOverride?: EndpointOverride,
   detail: "low" | "high" = "low",
+  /**
+   * Sampling controls. Omitted = provider default, which for chat APIs is
+   * temperature 1 (and the OpenAI-compatible branch defaults to 1 explicitly).
+   * The corpus verifier pins temperature 0 + a fixed seed: its output is a
+   * pass/fail verdict about a fixed image, so sampling variance shows up
+   * directly as verdicts that flip between identical runs.
+   */
+  sampling?: { temperature?: number; seed?: number },
 ): Promise<string> {
   if (endpointOverride) validateEndpointOverride(endpointOverride, "extraction");
   const cfgOverride = endpointOverride?.provider === "openai" && endpointOverride.model && endpointOverride.apiKey
@@ -2606,6 +2642,9 @@ export async function callVisionModel(
     undefined,
     endpointOverride?.provider ?? providerOverride,
     cfgOverride,
+    sampling === undefined
+      ? undefined
+      : { temperatureOverride: sampling.temperature, seedOverride: sampling.seed },
   );
 }
 

@@ -6,7 +6,7 @@ import { tierForField, verifyMechanicalFields, type VerificationRecord, type Ver
 import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict } from "./verify-corpus.js";
 import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReproducedProse } from "./verify-corpus.js";
 import { buildRunReport, selectPending, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
-import { withTimeout } from "./verify-corpus.js";
+import { withTimeout, reproduceCritiqueModel } from "./verify-corpus.js";
 import { resolveConfiguredVisionProvider } from "./verify-corpus.js";
 import { extractQuantizedColors, type TaggerOutput } from "../tagger.js";
 import type { CorpusEntryT } from "../schema.js";
@@ -701,5 +701,30 @@ describe("buildRunReport — run provenance names what actually ran", () => {
   it("omits the provenance line entirely when no resolution is supplied", () => {
     expect(buildRunReport(empty, { dryRun: true, verifierVersion: "v", sampleSize: 1 }))
       .not.toContain("Model:");
+  });
+});
+
+describe("reproduceCritiqueModel — the report names the model Pass 2 actually calls", () => {
+  const ORIGINAL = process.env.OPENAI_AUTO_TAG_MODEL;
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.OPENAI_AUTO_TAG_MODEL;
+    else process.env.OPENAI_AUTO_TAG_MODEL = ORIGINAL;
+  });
+
+  it("reports the OVERRIDE model for openai, not the env-resolved critique model", () => {
+    // The bug: makeReproduceDependency overrides Pass 2 to the extraction-tier
+    // OpenAI config, but the report resolved Pass 2 from
+    // OPENAI_AUTO_TAG_MODEL_CRITIQUE — printing `pass 2: deepseek-chat` for a run
+    // that actually called the override.
+    process.env.OPENAI_AUTO_TAG_MODEL = "gpt-5.4-mini";
+    expect(reproduceCritiqueModel("openai", "deepseek-chat")).toBe("gpt-5.4-mini");
+  });
+
+  it("reports the env-resolved model for providers that get no override", () => {
+    // claude/gemini/minimax/grok receive no critiqueOverride, so environment
+    // resolution IS what the call uses and must be reported verbatim.
+    expect(reproduceCritiqueModel("minimax", "MiniMax-Text")).toBe("MiniMax-Text");
+    expect(reproduceCritiqueModel("claude", "claude-sonnet-4-5")).toBe("claude-sonnet-4-5");
+    expect(reproduceCritiqueModel(undefined, "gpt-5.4-nano")).toBe("gpt-5.4-nano");
   });
 });

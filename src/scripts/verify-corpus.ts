@@ -485,6 +485,36 @@ export async function withTimeout<T>(work: Promise<T>, ms: number, label: string
   }
 }
 
+/**
+ * The vision-capable OpenAI triple, used to override BOTH passes when the caller
+ * selects `openai`. Reads the EXTRACTION tier deliberately: the critique tier is
+ * commonly pinned to a text-only OpenAI-compatible endpoint (e.g. DeepSeek) for
+ * cheap prose-only critique elsewhere, and the verifier's Pass 2 receives the
+ * image, so that routing 400s on `unknown variant image_url`.
+ *
+ * Exported so the run report can name the model the re-produce step will ACTUALLY
+ * use. The report resolved Pass 2 from the environment, which reads
+ * OPENAI_AUTO_TAG_MODEL_CRITIQUE — so it printed `pass 2: deepseek-chat` for a run
+ * whose Pass 2 was overridden to this config. Naming a model the run never called
+ * is the same defect as naming none.
+ */
+export function openaiVisionConfig(): { provider: "openai"; baseUrl: string; apiKey: string; model: string } {
+  return {
+    provider: "openai",
+    baseUrl: process.env.OPENAI_BASE_URL_EXTRACTION ?? process.env.OPENAI_BASE_URL ?? "",
+    apiKey: process.env.OPENAI_API_KEY_EXTRACTION ?? process.env.OPENAI_API_KEY ?? "",
+    model: process.env.OPENAI_AUTO_TAG_MODEL_EXTRACTION ?? process.env.OPENAI_AUTO_TAG_MODEL ?? "gpt-5.4-nano",
+  };
+}
+
+/**
+ * The model the re-produce step's Pass 2 will actually call — override-aware, so
+ * it agrees with `makeReproduceDependency` rather than with the raw environment.
+ */
+export function reproduceCritiqueModel(provider: string | undefined, envResolved: string): string {
+  return provider === "openai" ? openaiVisionConfig().model : envResolved;
+}
+
 export function makeReproduceDependency(provider?: string): VerifyEntryDeps["reproduce"] {
   return async (entry: CorpusEntryT, imagePath: string): Promise<CorpusEntryT> => {
     // The verifier's Pass 2 (critique) receives the IMAGE (via critiqueImagePath),
@@ -494,22 +524,7 @@ export function makeReproduceDependency(provider?: string): VerifyEntryDeps["rep
     // would 400 here on `unknown variant image_url`. When the caller chose
     // openai as vision provider, force critique to use the extraction-tier
     // config (real OpenAI, vision-capable) via an explicit override.
-    const openaiVisionCfg = {
-      provider: "openai" as const,
-      baseUrl:
-        process.env.OPENAI_BASE_URL_EXTRACTION
-        ?? process.env.OPENAI_BASE_URL
-        ?? "",
-      apiKey:
-        process.env.OPENAI_API_KEY_EXTRACTION
-        ?? process.env.OPENAI_API_KEY
-        ?? "",
-      model:
-        process.env.OPENAI_AUTO_TAG_MODEL_EXTRACTION
-        ?? process.env.OPENAI_AUTO_TAG_MODEL
-        ?? "gpt-5.4-nano",
-    };
-    const critiqueOverride = provider === "openai" ? openaiVisionCfg : undefined;
+    const openaiVisionCfg = provider === "openai" ? openaiVisionConfig() : undefined;
     // BOTH passes must be pinned to the caller's provider, not just critique.
     // `resolveProvider` honours an explicit override and otherwise falls through
     // to AUTO_TAG_PROVIDER_<PASS>. Passing only `critiqueProvider` therefore left
@@ -526,8 +541,8 @@ export function makeReproduceDependency(provider?: string): VerifyEntryDeps["rep
       critiqueImagePath: imagePath,
       extractionProvider: provider as Parameters<typeof tagImage>[0]["extractionProvider"],
       critiqueProvider: provider as Parameters<typeof tagImage>[0]["critiqueProvider"],
-      extractionOverride: provider === "openai" ? openaiVisionCfg : undefined,
-      critiqueOverride,
+      extractionOverride: openaiVisionCfg,
+      critiqueOverride: openaiVisionCfg,
     });
     // Strip [DRAFT] markers and preserve antiPatterns' non-prose siblings —
     // NEVER return raw tagImage prose for storage. See applyReproducedProse.
@@ -893,7 +908,10 @@ async function main(): Promise<void> {
       // and friends. Report it too — Pass 2 is the pass that writes the prose being
       // benchmarked, so omitting it reproduces the "cannot name the model it used"
       // defect one tier over.
-      critiqueModel: resolvedProviderAndModel("critique", visionProvider as Provider | undefined).model,
+      critiqueModel: reproduceCritiqueModel(
+        visionProvider,
+        resolvedProviderAndModel("critique", visionProvider as Provider | undefined).model,
+      ),
       imageDetail,
       sampling: sampling ? `temperature=${sampling.temperature} seed=${sampling.seed}` : "provider default",
     },

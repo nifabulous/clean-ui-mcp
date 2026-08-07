@@ -320,9 +320,9 @@ function entry(overrides: Partial<CorpusEntryT> = {}): CorpusEntryT {
     whatToSteal: [],
     voice: null,
     mood: null,
-    platform: "desktop",
+    platform: "web",
     qualityScore: 1,
-    qualityTier: "exploratory",
+    qualityTier: "exceptional",
     ...overrides,
   } as CorpusEntryT;
 }
@@ -333,7 +333,7 @@ describe("detector types", () => {
     expect(recordedFor(e, "visual.usesShadows")).toBe(false);
     expect(recordedFor(e, "visual.cornerStyle")).toBe("mixed");
     expect(recordedFor(e, "visual.accentColor")).toBe("#2563eb");
-    expect(recordedFor(e, "platform")).toBe("desktop");
+    expect(recordedFor(e, "platform")).toBe("web");
     expect(recordedFor(e, "visual.dominantColors")).toEqual(["#2563eb"]);
     expect(recordedFor(e, "antiPatterns.accessibilityRisks")).toEqual([]);
     expect(recordedFor(e, "critique")).toBeNull();
@@ -499,7 +499,7 @@ Fixture families (each image is 120×90; background `#f5f5f5` unless noted):
 | `spacing-spacious-true` | visual.spacingDensity | `spacious` | `pass` | 3×3 grid, 30px gaps |
 | `spacing-single` | visual.spacingDensity | `moderate` | `abstain` | one element |
 | `roles-card` | visual.colorRoles | full role set | `abstain` | white card on gray + blue accent bar + dark ink block (never pass) |
-| `platform-hd-desktop` | platform | `desktop` | `pass` | entry-only: dims 1440×900 (held-out) |
+| `platform-hd-web` | platform | `web` | `pass` | entry-only: dims 1440×900 (held-out). `Platform` is `web \| mobile \| tablet` — there is NO `desktop` value, and `detectPlatform(1440,900)` returns `web` for landscape (`src/schema.ts:181,184`) |
 | `platform-hd-mobile` | platform | `mobile` | `contradicted` | entry-only: dims 1440×900 (held-out) |
 | `dominant-colors-hcard` | visual.dominantColors | recorded = actual extraction | `pass` | roles-card image; recorded set at generation time (held-out) |
 
@@ -525,7 +525,7 @@ const EXPECTED_IDS = [
   "corner-sharp-true", "corner-slight-true", "corner-slight-h6-true", "corner-slight-h18-true",
   "corner-pill-true", "corner-mixed", "corner-band",
   "spacing-compact-true", "spacing-moderate-true", "spacing-spacious-true", "spacing-single",
-  "spacing-hmoderate-true", "roles-card", "platform-hd-desktop", "platform-hd-mobile", "dominant-colors-hcard",
+  "spacing-hmoderate-true", "roles-card", "platform-hd-web", "platform-hd-mobile", "dominant-colors-hcard",
 ];
 
 describe("detector fixtures", () => {
@@ -560,7 +560,7 @@ describe("detector fixtures", () => {
     expect(heldOut).toContain("accent-h20-true");
     expect(heldOut).toContain("borders-hstroke-true");
     expect(heldOut).toContain("spacing-hmoderate-true");
-    expect(heldOut).toContain("platform-hd-desktop");
+    expect(heldOut).toContain("platform-hd-web");
     expect(heldOut).toContain("dominant-colors-hcard");
   });
 });
@@ -859,7 +859,7 @@ async function roles(dir: string, entries: FixtureEntry[]): Promise<void> {
 /** Entry-only calibration fixtures for the two pre-existing deterministic detectors. */
 async function platformAndDominant(dir: string, entries: FixtureEntry[]): Promise<void> {
   entries.push(
-    { id: "platform-hd-desktop", file: "", field: "platform", recorded: "desktop", label: "pass", split: "held-out", dims: { width: 1440, height: 900 } },
+    { id: "platform-hd-web", file: "", field: "platform", recorded: "web", label: "pass", split: "held-out", dims: { width: 1440, height: 900 } },
     { id: "platform-hd-mobile", file: "", field: "platform", recorded: "mobile", label: "contradicted", split: "held-out", dims: { width: 1440, height: 900 } },
   );
   // dominantColors: recorded = ACTUAL Vibrant extraction of the roles-card
@@ -998,7 +998,7 @@ function entry(usesBorders: boolean | null): CorpusEntryT {
     },
     antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
     critique: "", whatToSteal: [], voice: null, mood: null,
-    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+    platform: "web", qualityScore: 1, qualityTier: "exceptional",
   } as CorpusEntryT;
 }
 
@@ -1285,7 +1285,7 @@ function entry(usesShadows: boolean): CorpusEntryT {
     },
     antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
     critique: "", whatToSteal: [], voice: null, mood: null,
-    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+    platform: "web", qualityScore: 1, qualityTier: "exceptional",
   } as CorpusEntryT;
 }
 
@@ -1434,7 +1434,7 @@ function entry(accentColor: string | null): CorpusEntryT {
     },
     antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
     critique: "", whatToSteal: [], voice: null, mood: null,
-    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+    platform: "web", qualityScore: 1, qualityTier: "exceptional",
   } as CorpusEntryT;
 }
 
@@ -1517,7 +1517,28 @@ export interface ColorStats {
   largestNonBg: { rgb: [number, number, number]; count: number } | null;
 }
 
-const BUCKET_BITS = 3; // 8 levels per channel -> coarse colour buckets
+// 8-bit channel >> 3 keeps the top 5 bits: 32 levels per channel. The packing
+// shifts MUST therefore be 10/5/0 — one full 5-bit field each. An earlier draft
+// shifted 6/3/0, which overlaps the red field (bits 6-10) with the green field
+// (bits 3-7): rgb(8,0,0) and rgb(0,64,0) both key to 64, so unrelated dark reds
+// and greens merge into one bucket whose AVERAGE matches neither. That silently
+// corrupts `background`, `largestNonBg`, `matchCount`, `largestComponent` and
+// `componentsOf` — every consumer below. It is invisible on the synthetic
+// fixtures (greys plus two well-separated hexes), so no test would catch it.
+//
+// 32 levels is also the granularity the detectors need: at 8 levels per channel
+// (>> 5) #f5f5f5 and #ffffff both bucket to 7 and the colorRoles canvas check
+// could never distinguish a near-white surface from white.
+const BUCKET_BITS = 3;
+const BUCKET_SHIFT_R = 10;
+const BUCKET_SHIFT_G = 5;
+
+/** The single bucket-key definition. Every consumer uses THIS — see the note above. */
+export function bucketKey(r: number, g: number, b: number): number {
+  return ((r >> BUCKET_BITS) << BUCKET_SHIFT_R)
+    | ((g >> BUCKET_BITS) << BUCKET_SHIFT_G)
+    | (b >> BUCKET_BITS);
+}
 
 /**
  * Colour statistics via coarse buckets (fast: one pass, no per-pixel ΔE).
@@ -1531,7 +1552,7 @@ export function colorStats(raw: RawBuffer, target: [number, number, number], tol
     const r = data[i * 4];
     const g = data[i * 4 + 1];
     const b = data[i * 4 + 2];
-    const key = ((r >> BUCKET_BITS) << 6) | ((g >> BUCKET_BITS) << 3) | (b >> BUCKET_BITS);
+    const key = bucketKey(r, g, b);
     const bk = buckets.get(key) ?? { count: 0, r: 0, g: 0, b: 0 };
     bk.count++;
     bk.r += r;
@@ -1689,7 +1710,7 @@ function entry(cornerStyle: string): CorpusEntryT {
     },
     antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
     critique: "", whatToSteal: [], voice: null, mood: null,
-    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+    platform: "web", qualityScore: 1, qualityTier: "exceptional",
   } as CorpusEntryT;
 }
 
@@ -1737,9 +1758,10 @@ export interface ComponentBox {
   area: number;
 }
 
-function bucketKey(r: number, g: number, b: number): number {
-  return ((r >> BUCKET_BITS) << 6) | ((g >> BUCKET_BITS) << 3) | (b >> BUCKET_BITS);
-}
+// `bucketKey` is defined ONCE, in the Task 7 block above (exported). Do NOT
+// redeclare it here: an earlier draft had two copies with different shifts, and
+// the second one silently corrupted every component/background consumer in this
+// task and Task 9. It is already in scope in this file.
 
 /** The most common colour bucket — treated as the image background. */
 export function backgroundBucketKey(raw: RawBuffer): number {
@@ -1955,7 +1977,7 @@ function entry(spacingDensity: string): CorpusEntryT {
     },
     antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
     critique: "", whatToSteal: [], voice: null, mood: null,
-    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+    platform: "web", qualityScore: 1, qualityTier: "exceptional",
   } as CorpusEntryT;
 }
 
@@ -2176,7 +2198,7 @@ function entry(colorRoles: CorpusEntryT["visual"]["colorRoles"]): CorpusEntryT {
     },
     antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
     critique: "", whatToSteal: [], voice: null, mood: null,
-    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+    platform: "web", qualityScore: 1, qualityTier: "exceptional",
   } as CorpusEntryT;
 }
 
@@ -2324,7 +2346,7 @@ function entry(risks: Array<{ element?: string; risk?: string }>): CorpusEntryT 
     },
     antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: risks },
     critique: "", whatToSteal: [], voice: null, mood: null,
-    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+    platform: "web", qualityScore: 1, qualityTier: "exceptional",
   } as CorpusEntryT;
 }
 
@@ -2620,7 +2642,7 @@ function entry(overrides: Partial<CorpusEntryT> = {}): CorpusEntryT {
     },
     antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
     critique: "A", whatToSteal: ["B"], voice: null, mood: null,
-    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+    platform: "web", qualityScore: 1, qualityTier: "exceptional",
     ...overrides,
   } as CorpusEntryT;
 }
@@ -2786,9 +2808,8 @@ try {
   for (const field of outcome.passes) {
     records[field] = field === "platform" ? provableRecord(now) : confirmedRecord(imagePath, now);
   }
-  for (const field of outcome.passes) verdicts.push({ field, verdict: "pass", reason: "detector" });
-  for (const field of outcome.contradicted) verdicts.push({ field, verdict: "contradicted", reason: "detector contradiction" });
-  for (const field of outcome.abstained) verdicts.push({ field, verdict: "abstain", reason: "detector abstained" });
+  // Compute `pending` BEFORE emitting verdicts — the pending set decides which
+  // detector verdicts are allowed to exist.
   pending = Object.keys(TIER_BY_FIELD).filter(
     (field) =>
       !fieldLeavesVisionForEntry(entry, field, detectorsEnabled)
@@ -2796,6 +2817,27 @@ try {
       && !outcome.contradicted.includes(field)
       && !alreadyProcessedAtVersion(entry, field, VERIFIER_VERSION),
   );
+
+  for (const field of outcome.passes) verdicts.push({ field, verdict: "pass", reason: "detector" });
+  for (const field of outcome.contradicted) verdicts.push({ field, verdict: "contradicted", reason: "detector contradiction" });
+  // EXACTLY ONE VERDICT PER FIELD PER RUN. A detector abstain is only the
+  // field's verdict when nothing else will produce one; a field still in
+  // `pending` gets its verdict from the model, so the detector stays SILENT.
+  //
+  // Emitting it unconditionally is a corpus-darkening bug: non-affirmable values
+  // (usesShadows:false, usesBorders:false, cornerStyle:mixed) and both
+  // contradiction-only fields abstain AND stay in `pending`, so `verdicts` would
+  // hold two rows for one field — detector `abstain` plus model `pass`.
+  // `resumeMarkers` skips the pass but still marks the abstain, and
+  // `mergeVerifyAttempts` revokes `verification` for that field, destroying the
+  // pass the model just earned. That darkens precisely what `canAffirm` exists
+  // to protect: 418 `usesShadows:false`, 276 `usesBorders:false`, 139
+  // `cornerStyle:mixed` claims, plus every colorRoles/accessibilityRisks pass.
+  const pendingSet = new Set(pending);
+  for (const field of outcome.abstained) {
+    if (pendingSet.has(field)) continue; // the model will judge it
+    verdicts.push({ field, verdict: "abstain", reason: "detector abstained" });
+  }
 } catch (err) {
   // Spec error table: a corrupt/unreadable image abstains per field. platform
   // still runs against the RECORDED dims (no pixels needed); every other
@@ -2804,11 +2846,28 @@ try {
   const message = err instanceof Error ? err.message : String(err);
   const stub: VerifyCtx = { imagePath, width: entry.image?.width ?? 0, height: entry.image?.height ?? 0 };
   const partial = await runDetectors(entry, stub, { detectors: false });
-  for (const field of partial.passes) records[field] = provableRecord(now);
+  // Use the SAME record-method rule as the happy path. Writing `provableRecord`
+  // for every pass is wrong for image-derived fields: `visual.dominantColors` is
+  // a PIXEL claim, and a `provable` record carries no `imageSha256`, so it would
+  // be permanently exempt from doctor's hash-staleness checks — a pixel
+  // measurement that never dies with its pixels. Only `platform` is genuinely
+  // provable (recomputed from recorded dimensions, no image read).
+  for (const field of partial.passes) {
+    records[field] = field === "platform" ? provableRecord(now) : confirmedRecord(imagePath, now);
+  }
   for (const field of Object.keys(detectorRegistry)) {
     const v = partial.passes.includes(field) ? "pass"
       : partial.contradicted.includes(field) ? "contradicted" : "abstain";
     verdicts.push({ field, verdict: v, reason: v === "abstain" ? `image unreadable: ${message}` : "detector" });
+  }
+  // Every OTHER servable field must also be marked, or the entry never converges:
+  // `pending = []` means the vision call is skipped, so without this loop
+  // `layout`, `components`, `critique`, `mood` … end the run in no map at all and
+  // `selectPending` requeues the entry forever.
+  for (const field of Object.keys(TIER_BY_FIELD)) {
+    if (tierForField(field) === "gated") continue;
+    if (field in detectorRegistry) continue;
+    verdicts.push({ field, verdict: "abstain", reason: `image unreadable: ${message}` });
   }
   pending = [];
 }
@@ -2951,7 +3010,7 @@ export async function calibrate(
     },
     antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
     critique: "", whatToSteal: [], voice: null, mood: null,
-    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+    platform: "web", qualityScore: 1, qualityTier: "exceptional",
   };
   const { join } = await import("node:path");
   const { fileURLToPath } = await import("node:url");
@@ -3737,7 +3796,7 @@ describe("re-produce sampling pin", () => {
       },
       antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
       critique: "a", whatToSteal: [], voice: null, mood: null,
-      platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+      platform: "web", qualityScore: 1, qualityTier: "exceptional",
       image: { path: "images-private/x.png", width: 100, height: 80, format: "png" },
     } as CorpusEntryT;
     await reproduce(entry, "images-private/x.png");

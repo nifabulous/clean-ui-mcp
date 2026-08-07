@@ -294,6 +294,39 @@ reports corpus-integrity findings.
 The verifier never edits a served field. A contradiction is a finding; a human
 decides.
 
+### Triage loop
+
+A contradiction is a finding, and a finding needs a destination. The loop is
+owned operationally, never by the verifier:
+
+1. `--report-suspect` surfaces field, measured-vs-recorded values, `source`,
+   and entry, in the fixed hierarchy above.
+2. A human decides per row: **re-capture** (the screenshot was stale or wrong),
+   **re-tag** (the recorded value was wrong), or **dismiss** (the contradiction
+   is a measurement artefact — the dismissal records the reason).
+3. The action is followed by re-verify. Record-map exclusivity already revoked
+   the old trust record when the contradiction was written, so the field stays
+   dark until the corrected value re-passes.
+
+This is distinct from the "Learning loop / outcome store" TODO (TODOS.md),
+which records agent outcomes rather than corpus corrections. The triage loop is
+what turns `dataQuality` into the corpus's error budget: contradiction counts
+per field and per detector, trended across runs and fed into the doctor
+summary.
+
+### Detector run telemetry
+
+`buildRunReport` (`verify-corpus.ts`) gains per-detector aggregates: for each
+detector, pass / contradicted / abstain counts and rates per run. Two
+consumers:
+
+- the cohort and A/B numbers in Production rollout become publishable as-is,
+  instead of being re-derived by hand;
+- drift gets a signal: a contradiction or abstain rate that shifts between
+  runs (or climbs across re-captures) triggers recalibration of the confidence
+  band and the declared floor, instead of the floor silently decaying into
+  ceremony.
+
 ### Folded-in fixes
 
 **Pin the re-produce pass.** `sampling` currently reaches `callVisionModel` but
@@ -332,7 +365,13 @@ this spec's scope, not a follow-up:
    and contradiction count for the cohort before scaling.
 3. **Light the first surfaces.** Ship the cohort's verified entries through the
    2d-2 field-set gating so the first corpus-derived tools serve real rows with
-   disclosure; the "0 of 787" message becomes a per-cohort count.
+   disclosure; the "0 of 787" message becomes a per-cohort count. The
+   disclosure projection also exposes each verified field's
+   `verification.method` (`provable` / `image-confirmed`) — the serving layer
+   already branches on the method internally (`server-factory.ts`), so
+   surfacing it costs one projected field and lets an agent weigh "recomputed
+   from data" against "confirmed against the image" instead of trusting both
+   equally.
 4. **Scale the full run** to 787 with a per-entry cost budget (model calls per
    entry — reduced by the certifying fields leaving the vision call) and the
    resume-aware `--limit`/`--dry-run` cadence. Re-runs are incremental:
@@ -528,6 +567,9 @@ detector's, and a model `abstain` never serves. Plus a run-report test that a
 **`dataQuality` validation.** The doctor validates the new map like
 `verification`: malformed records, unknown `source`s, and orphan keys are
 flagged, so a bad contradiction entry cannot silently sit beside a served field.
+`buildRunReport` emits per-detector pass/contradicted/abstain rates, and the
+suspect report rows follow the fixed hierarchy (field → measured-vs-recorded →
+`source` → entry).
 
 **Integration.** One `verifyEntry` test with a synthetic image and a mixed entry,
 asserting the `callVision` stub receives a `pending` list with the mechanical

@@ -403,6 +403,36 @@ real-screenshot detector calibration uses the same label-format tooling.
 
 ---
 
+## Capture-time measurement lane (producer-side detectors)
+
+**What:** Reuse the deterministic detectors in the capture pipeline so values
+the verifier currently infers are recorded at capture time with checkable
+evidence, in the `measured` trust tier the schema reserves and no path writes
+today (`VERIFICATION_METHODS` in `corpus-trust.ts` already includes it):
+`visual.usesShadows`, `visual.usesBorders`, `visual.accentColor`, plus
+DOM-derived `layout` / `components` from capture `domSignals`.
+
+**Why:** Today the tagger guesses these fields and the verifier re-measures
+them later ("verify-time inference"). Measuring at capture flips the economics
+to "measure once, verify cheaply forever", and it covers `layout` and
+`components`, which no pixel detector can fully check but a DOM snapshot can.
+
+**Trigger (build when):** the deterministic-detectors plan lands — its detector
+implementations and provenance shapes are the same ones the capture lane
+reuses.
+
+**Scope when triggered:** capture-side module reusing `src/verify/detectors/*`
+plus `domSignals` extraction wired into `src/scripts/capture.ts`; `measured`
+record shape; migration/backfill decision for existing entries. The
+producer/verifier independence boundary is the first decision in this work:
+whether a producer-written `measured` record satisfies the independence
+invariant on its own, or only feeds the verifier's provable checks.
+
+**Depends on / blocked by:** the deterministic-detectors plan; the capture
+pipeline currently collects no `domSignals` (verified 2026-08-07).
+
+---
+
 ## Prompt-change eval gate for the model lane
 
 **What:** A small eval harness that runs the live brief set (login, finance,

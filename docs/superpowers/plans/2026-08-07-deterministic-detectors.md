@@ -1,0 +1,3749 @@
+# Deterministic Detectors + Verdict Taxonomy — Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Replace unstable model verdicts on perception fields with calibrated pixel detectors, widen the verdict taxonomy to `pass | contradicted | abstain | gate` with corroborated model contradictions, and wire the trust records, suspect report, telemetry, and rollout that light the corpus back up.
+
+**Architecture:** `verifyMechanicalFields` becomes a detector registry (`src/verify/detector-registry.ts`) over per-field detectors (`src/verify/detectors/*.ts`) sharing one lazily-decoded raw buffer per entry (`src/verify/ctx.ts`). Certifying detectors remove their fields from the vision path only for affirmable recorded values; contradiction-only detectors (`visual.colorRoles`, `antiPatterns.accessibilityRisks`) run beside vision and can disprove but never grant a pass. Model verdicts become three-way (confirmed / contradicted / abstain), and a model `contradicted` is corroborated by a second fresh ask before it writes anything. Records land in three mutually-exclusive `provenance` maps (`verification`, `verifyAttempts`, `dataQuality`), feeding `--report-suspect`, doctor checks, and per-detector run telemetry.
+
+**Tech Stack:** TypeScript (ESM, NodeNext), vitest, sharp (raw pixel decode + fixture generation), culori (NEW dependency — ΔE2000, wcagContrast), the existing `src/scripts/verify-corpus.ts` CLI.
+
+**Spec:** `docs/superpowers/specs/2026-08-07-deterministic-detectors-design.md` (commits `25046ea`..`5da2a0c`). Read it before starting; where this plan and the spec disagree, the spec wins and this plan is wrong.
+
+## Global Constraints
+
+- **Value-dependent certifying:** a certifying detector may emit `pass` only for recorded values its `canAffirm` accepts. `visual.usesShadows` / `visual.usesBorders`: `true` only. `visual.cornerStyle`: `sharp`, `slight-round`, `pill` only (`mixed` never affirms). `visual.accentColor`: any parseable hex. `visual.spacingDensity`: all enum values. `platform` / `visual.dominantColors`: any recorded value.
+- **Absence invariant:** no detected signal is never `pass`. A solid-colour image → `abstain`, not "no borders present". Recorded-`false` claims can only ever be `contradicted` (signal found) or `abstain` (none found); the model must still be able to affirm them, so they STAY in the vision pending list.
+- **cornerStyle buckets map to the schema vocabulary** (`CornerStyle = sharp | slight-round | pill | mixed`): 0–2px `sharp`, 3–20px `slight-round`, >20px `pill`. There is no `square` or `rounded` value. `mixed` → detector `abstain`, field stays in vision.
+- **Contradiction-only detectors never emit `pass`** (`visual.colorRoles`, `antiPatterns.accessibilityRisks`); the runner downgrades any computed pass to `abstain`.
+- **Runner caps:** a certifying detector on a non-affirmable recorded value is capped at `contradicted`/`abstain`. The band wins: `confidence` inside `[band.low, band.high]` → `abstain`, even when the raw verdict was `pass` or `contradicted`.
+- **Model contradictions are corroborated** by a second fresh-context ask before any write; the second ask uses the same positive-affirmation prompt, never a "do you still disagree" prompt.
+- **Record-map exclusivity:** a field appears in at most one of `provenance.verification` / `verifyAttempts` / `dataQuality`; writing to one revokes the other two for that field.
+- **`--detectors off` is byte-identical to today:** registry fields return to the vision pending list (both affirmable and non-affirmable values), `platform`/`visual.dominantColors` stay deterministic, and no `dataQuality` entries are written.
+- **Registry contract:** every field classified `mechanical` has a registered certifying detector; every certifying detector's field is `mechanical`; every contradiction-only detector's field is NOT `mechanical`; every certifying detector declares `canAffirm`; disabled detectors are exempt from the first two clauses.
+- **Calibration gate:** CI asserts measured accuracy ≥ declared `accuracyFloor` on the HELD-OUT synthetic set only — never the tune set. Disabled detectors are skipped. The real-screenshot numbers (`npm run calibrate-detectors`) are reviewed at merge, not asserted in CI.
+- **Corpus isolation:** tests and fixtures never touch `corpus/entries.json`; verifier writes go through the injected/snapshot-backed paths already in place.
+- **Test command:** `C2_NO_DOTENV=1 npx vitest run <file>` (the env var avoids a local `.env` provider timeout). Full suite: `C2_NO_DOTENV=1 npx vitest run`.
+- **Commits on this branch require a review artifact.** If a commit is blocked by the hook, run `.zcode/scripts/write-review-artifact --type task --result approved --reviewer agent --base-sha <parent-full-sha> --head-sha <HEAD-full-sha> --branch fix/verifier-provider-pinning`, then retry the commit.
+- **TDD:** every code task starts with a failing test. No task touches `corpus/entries.json`. Frequent, small commits.
+
+---
+
+## File Structure
+
+| File | Responsibility |
+| --- | --- |
+| `eval/verdicts/disputes.tsv` | Create — the 28-claim benchmark data rescued from `/tmp/disputes.tsv` (Task 1) |
+| `eval/verdicts/README.md` | Create — benchmark methodology (Task 1) |
+| `package.json` | Modify — add `culori` dependency + `calibrate-detectors` script (Tasks 2, 13) |
+| `src/verify/ctx.ts` | Create — per-entry `VerifyCtx { imagePath, width, height, raw? }` + lazy `ensureRaw` (Task 2) |
+| `src/verify/ctx.test.ts` | Create — ctx tests (Task 2) |
+| `src/verify/detector-types.ts` | Create — `DetectorVerdict`, `DetectorResult`, `DetectorEntry`, `inBand`, `recordedFor` (Task 3) |
+| `src/verify/detector-types.test.ts` | Create — type/helper tests (Task 3) |
+| `src/verify/__fixtures__/generate-detector-fixtures.ts` | Create — synthetic fixture generator (Task 4) |
+| `src/verify/__fixtures__/manifest.json` | Create (generated) — fixture ground truth + tune/held-out split (Task 4) |
+| `src/verify/__fixtures__/*.png` | Create (generated) — committed fixture images (Task 4) |
+| `src/verify/detectors/pixels.ts` | Create — shared CV helpers: luma, edge stats, color buckets, components (Tasks 5, 7, 8, 9) |
+| `src/verify/detectors/uses-borders.ts` | Create — certifying detector (Task 5) |
+| `src/verify/detectors/uses-borders.test.ts` | Create (Task 5) |
+| `src/verify/detectors/uses-shadows.ts` | Create — certifying detector (Task 6) |
+| `src/verify/detectors/uses-shadows.test.ts` | Create, incl. the border/shadow pair test (Task 6) |
+| `src/verify/detectors/accent-color.ts` | Create — certifying detector (Task 7) |
+| `src/verify/detectors/accent-color.test.ts` | Create (Task 7) |
+| `src/verify/detectors/corner-style.ts` | Create — certifying detector (Task 8) |
+| `src/verify/detectors/corner-style.test.ts` | Create (Task 8) |
+| `src/verify/detectors/spacing-density.ts` | Create — certifying detector (Task 9) |
+| `src/verify/detectors/spacing-density.test.ts` | Create (Task 9) |
+| `src/verify/detectors/color-roles.ts` | Create — contradiction-only detector (Task 10) |
+| `src/verify/detectors/color-roles.test.ts` | Create (Task 10) |
+| `src/verify/detectors/accessibility-risks.ts` | Create — contradiction-only detector (Task 11) |
+| `src/verify/detectors/accessibility-risks.test.ts` | Create (Task 11) |
+| `src/verify/detector-registry.ts` | Create — the registry: field key → `DetectorEntry`; `recordedFor` consumers (Task 12) |
+| `src/verify/detector-registry.test.ts` | Create — registry contract test (Task 12) |
+| `src/verify/calibration.ts` | Create — held-out accuracy measurement (Task 13) |
+| `src/verify/calibration.test.ts` | Create — CI calibration gate (Task 13) |
+| `src/verify/calibration-cli.ts` | Create — `npm run calibrate-detectors` CLI for real screenshots (Task 13) |
+| `src/scripts/verify-corpus.ts` | Modify — runner integration, value-aware pending, `--detectors off`, three-way prompt, corroboration, `dataQuality`, `--report-suspect`, telemetry (Tasks 12, 14, 15, 16, 17) |
+| `src/schema.ts` | Modify — add `provenance.dataQuality` passthrough map (Task 15) |
+| `src/scripts/doctor-helpers.ts` | Modify — `dataQuality` validation checks + count (Task 17) |
+| `src/tagger.ts` | Modify — `TaggerInput.sampling` threaded to Pass 1 / Pass 2 (Task 18) |
+| `src/synthesis-projection.ts` + `src/synthesis-projection.test.ts` | Modify — method-level trust disclosure (Task 19) |
+| `README.md` / `TODOS.md` | Modify — rollout runbook + status (Task 20) |
+
+---
+
+### Task 1: Rescue the disputed-verdict benchmark data
+
+**Files:**
+- Create: `eval/verdicts/disputes.tsv` (copy of `/tmp/disputes.tsv`)
+- Create: `eval/verdicts/README.md`
+
+**Interfaces:**
+- Produces: `eval/verdicts/disputes.tsv` — consumed by the frozen labelled ground-truth TODO, NOT by any test in this plan.
+
+The spec's benchmark numbers (5/28 flips, ~62% ceiling, 11/28 unsupported) are prose until the raw labels are committed. The file exists only at `/tmp/disputes.tsv` (224 lines, header `entry	field	sonnet5	haiku45	gpt54mini	minimax`, dated 2026-08-06). Rescuing it is the plan's FIRST task, before any implementation.
+
+- [ ] **Step 1: Copy the file into the repo**
+
+```bash
+mkdir -p eval/verdicts
+cp /tmp/disputes.tsv eval/verdicts/disputes.tsv
+```
+
+- [ ] **Step 2: Verify the copy**
+
+Run: `wc -l eval/verdicts/disputes.tsv && head -1 eval/verdicts/disputes.tsv`
+Expected: `224` and `entry	field	sonnet5	haiku45	gpt54mini	minimax` (tab-separated).
+
+- [ ] **Step 3: Write the methodology README**
+
+```markdown
+# Disputed-verdict benchmark
+
+Raw data behind the numbers in
+`docs/superpowers/specs/2026-08-07-deterministic-detectors-design.md` ("Why this
+exists"): 28 disputed claims from the corpus-verifier benchmark, each labelled
+with four models' verdicts (sonnet5, haiku45, gpt54mini, minimax).
+
+- Source: `/tmp/disputes.tsv`, rescued 2026-08-07 (the file previously existed
+  only outside the repo and would otherwise have been lost).
+- Captured: 2026-08-06 (file mtime).
+- Columns: `entry`, `field`, then one column per model; cell values are
+  `pass` / `fail` verdicts.
+- Methodology gaps to fill when the frozen labelled ground-truth set work
+  (TODOS.md) starts: exact prompts, provider routing, image hashes for the 28
+  entries, and the hand labels for these claims. Until then this file is the
+  raw record, not a labelled set.
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add eval/verdicts/disputes.tsv eval/verdicts/README.md
+git commit -m "eval(verdicts): rescue disputed-claim benchmark data from /tmp"
+```
+
+If the hook blocks: write the review artifact for HEAD (see Global Constraints) and retry.
+
+---
+
+### Task 2: Add `culori` and the shared verify context (`ctx`)
+
+**Files:**
+- Modify: `package.json` (add `culori`)
+- Create: `src/verify/ctx.ts`
+- Test: `src/verify/ctx.test.ts`
+
+**Interfaces:**
+- Consumes: `sharp` (already a dependency).
+- Produces:
+  - `interface RawBuffer { data: Buffer; width: number; height: number; channels: 4 }`
+  - `interface VerifyCtx { imagePath: string; width: number; height: number; raw?: RawBuffer }`
+  - `createVerifyCtx(imagePath: string): Promise<VerifyCtx>` — reads dimensions only, never decodes pixels.
+  - `ensureRaw(ctx: VerifyCtx): Promise<RawBuffer>` — decodes RGBA once; subsequent calls return the cached buffer.
+
+`ctx` is deliberately NOT a bare buffer: `visual.dominantColors` needs the path (Vibrant takes a path, `tagger.ts:283`), `platform` needs only dimensions, and pixel detectors share one decode.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// src/verify/ctx.test.ts
+import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import sharp from "sharp";
+import { createVerifyCtx, ensureRaw } from "./ctx.js";
+
+async function makePng(path: string, width = 4, height = 3): Promise<void> {
+  const px = Buffer.alloc(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    px[i * 4] = 0x25; px[i * 4 + 1] = 0x63; px[i * 4 + 2] = 0xeb; px[i * 4 + 3] = 0xff;
+  }
+  await sharp(px, { raw: { width, height, channels: 4 } }).png().toFile(path);
+}
+
+describe("verify ctx", () => {
+  it("reads dimensions without decoding pixels", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-ctx-"));
+    try {
+      const png = join(dir, "card.png");
+      await makePng(png);
+      const ctx = await createVerifyCtx(png);
+      expect(ctx.width).toBe(4);
+      expect(ctx.height).toBe(3);
+      expect(ctx.raw).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("decodes RGBA once and reuses the buffer", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-ctx-"));
+    try {
+      const png = join(dir, "card.png");
+      await makePng(png);
+      const ctx = await createVerifyCtx(png);
+      const a = await ensureRaw(ctx);
+      const b = await ensureRaw(ctx);
+      expect(a.width).toBe(4);
+      expect(a.height).toBe(3);
+      expect(a.channels).toBe(4);
+      expect(a.data.length).toBe(4 * 3 * 4);
+      expect(b).toBe(a);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/ctx.test.ts`
+Expected: FAIL — cannot resolve `./ctx.js` (module does not exist).
+
+- [ ] **Step 3: Add the dependency and implement the module**
+
+```bash
+npm install culori
+```
+
+```ts
+// src/verify/ctx.ts
+import sharp from "sharp";
+
+/** Decoded raw RGBA pixels shared by the pixel detectors. */
+export interface RawBuffer {
+  data: Buffer;
+  width: number;
+  height: number;
+  channels: 4;
+}
+
+/**
+ * The per-entry verification context. Not a bare buffer: `visual.dominantColors`
+ * needs the path (Vibrant takes a path, tagger.ts:283), `platform` needs only
+ * dimensions, and the pixel detectors share ONE lazily-decoded buffer.
+ */
+export interface VerifyCtx {
+  imagePath: string;
+  width: number;
+  height: number;
+  raw?: RawBuffer;
+}
+
+/** Reads dimensions without decoding pixels. */
+export async function createVerifyCtx(imagePath: string): Promise<VerifyCtx> {
+  const meta = await sharp(imagePath).metadata();
+  if (meta.width === undefined || meta.height === undefined) {
+    throw new Error(`cannot read dimensions from ${imagePath}`);
+  }
+  return { imagePath, width: meta.width, height: meta.height };
+}
+
+/** Decodes RGBA pixels once per entry; later calls reuse the buffer. */
+export async function ensureRaw(ctx: VerifyCtx): Promise<RawBuffer> {
+  if (ctx.raw) return ctx.raw;
+  const { data, info } = await sharp(ctx.imagePath)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  ctx.raw = { data, width: info.width, height: info.height, channels: 4 };
+  return ctx.raw;
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/ctx.test.ts`
+Expected: PASS (2 tests).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add package.json package-lock.json src/verify/ctx.ts src/verify/ctx.test.ts
+git commit -m "feat(verify): culori dependency + shared per-entry verify ctx"
+```
+
+---
+
+### Task 3: Detector types and the recorded-value accessor
+
+**Files:**
+- Create: `src/verify/detector-types.ts`
+- Test: `src/verify/detector-types.test.ts`
+
+**Interfaces:**
+- Consumes: `CorpusEntryT` from `src/schema.js`; `VerifyCtx` from `./ctx.js`.
+- Produces (consumed by every later task):
+  - `type DetectorVerdict = "pass" | "contradicted" | "abstain"`
+  - `type DetectorCategory = "certifying" | "contradiction-only"`
+  - `interface DetectorResult { verdict: DetectorVerdict; measured: unknown; confidence: number; reason: string }`
+  - `interface ConfidenceBand { low: number; high: number }`
+  - `interface DetectorEntry { detect(entry: CorpusEntryT, ctx: VerifyCtx): Promise<DetectorResult>; category: DetectorCategory; accuracyFloor: number; confidenceBand: ConfidenceBand; canAffirm(recorded: unknown): boolean; disabled?: boolean }`
+  - `inBand(band, confidence): boolean` — true when `low <= confidence && confidence <= high`.
+  - `recordedFor(entry, field): unknown` — the raw recorded value per registry field.
+
+**Confidence convention (load-bearing):** `confidence` encodes distance from the decision boundary: `0.5` = exactly ambiguous, `0` / `1` = maximally certain. The band wins: `inBand(band, confidence)` → `abstain` even if the raw verdict was `pass` or `contradicted`. Exact arithmetic detectors (`platform`, `visual.dominantColors`) emit confidence `0` or `1` and use band `{ low: 0.001, high: 0.999 }`, which never fires.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// src/verify/detector-types.test.ts
+import { describe, expect, it } from "vitest";
+import { inBand, recordedFor } from "./detector-types.js";
+import type { CorpusEntryT } from "../schema.js";
+
+function entry(overrides: Partial<CorpusEntryT> = {}): CorpusEntryT {
+  return {
+    id: "t",
+    title: "t",
+    patternType: "dashboard",
+    colorScheme: "light",
+    categories: ["dashboard"],
+    styleTags: ["minimal"],
+    components: [],
+    layout: { form: "single-column", regions: [] },
+    visual: {
+      dominantColors: ["#2563eb"],
+      accentColor: "#2563eb",
+      colorRoles: { canvas: "#ffffff", surface: "#f5f5f5", ink: "#111111", muted: null, accent: "#2563eb" },
+      typePairing: { display: null, body: null },
+      spacingDensity: "moderate",
+      cornerStyle: "mixed",
+      usesShadows: false,
+      usesBorders: false,
+    },
+    antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
+    critique: "",
+    whatToSteal: [],
+    voice: null,
+    mood: null,
+    platform: "desktop",
+    qualityScore: 1,
+    qualityTier: "exploratory",
+    ...overrides,
+  } as CorpusEntryT;
+}
+
+describe("detector types", () => {
+  it("reads the raw recorded value per registry field", () => {
+    const e = entry();
+    expect(recordedFor(e, "visual.usesShadows")).toBe(false);
+    expect(recordedFor(e, "visual.cornerStyle")).toBe("mixed");
+    expect(recordedFor(e, "visual.accentColor")).toBe("#2563eb");
+    expect(recordedFor(e, "platform")).toBe("desktop");
+    expect(recordedFor(e, "visual.dominantColors")).toEqual(["#2563eb"]);
+    expect(recordedFor(e, "antiPatterns.accessibilityRisks")).toEqual([]);
+    expect(recordedFor(e, "critique")).toBeNull();
+  });
+
+  it("returns null for missing values and unknown fields", () => {
+    const e = entry();
+    expect(recordedFor(e, "visual.usesShadows")).toBe(false);
+    expect(recordedFor({ ...e, visual: undefined }, "visual.usesShadows")).toBeNull();
+    expect(recordedFor(e, "nope")).toBeNull();
+  });
+
+  it("treats band edges inclusively", () => {
+    expect(inBand({ low: 0.25, high: 0.75 }, 0.25)).toBe(true);
+    expect(inBand({ low: 0.25, high: 0.75 }, 0.75)).toBe(true);
+    expect(inBand({ low: 0.25, high: 0.75 }, 0.24)).toBe(false);
+    expect(inBand({ low: 0.001, high: 0.999 }, 0)).toBe(false);
+    expect(inBand({ low: 0.001, high: 0.999 }, 1)).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detector-types.test.ts`
+Expected: FAIL — cannot resolve `./detector-types.js`.
+
+- [ ] **Step 3: Implement**
+
+```ts
+// src/verify/detector-types.ts
+import type { CorpusEntryT } from "../schema.js";
+import type { VerifyCtx } from "./ctx.js";
+
+export type DetectorVerdict = "pass" | "contradicted" | "abstain";
+export type DetectorCategory = "certifying" | "contradiction-only";
+
+export interface DetectorResult {
+  verdict: DetectorVerdict;
+  /** The value the detector actually measured (for dataQuality + reports). */
+  measured: unknown;
+  /** 0..1; 0.5 = on the decision boundary. inBand -> abstain (the band wins). */
+  confidence: number;
+  reason: string;
+}
+
+export interface ConfidenceBand {
+  low: number;
+  high: number;
+}
+
+export interface DetectorEntry {
+  detect(entry: CorpusEntryT, ctx: VerifyCtx): Promise<DetectorResult>;
+  category: DetectorCategory;
+  /** Held-out synthetic accuracy gate; below it the detector ships disabled. */
+  accuracyFloor: number;
+  confidenceBand: ConfidenceBand;
+  /** Value-dependent certifying: pass is possible only for values this accepts. */
+  canAffirm(recorded: unknown): boolean;
+  disabled?: boolean;
+}
+
+/** True when confidence is inside the band — the band wins over the raw verdict. */
+export function inBand(band: ConfidenceBand, confidence: number): boolean {
+  return confidence >= band.low && confidence <= band.high;
+}
+
+/** The raw recorded value per registry field — what canAffirm and detectors read. */
+export function recordedFor(entry: CorpusEntryT, field: string): unknown {
+  const v = entry.visual;
+  switch (field) {
+    case "platform":
+      return entry.platform ?? null;
+    case "visual.dominantColors":
+      return v?.dominantColors ?? null;
+    case "visual.usesShadows":
+      return v?.usesShadows ?? null;
+    case "visual.usesBorders":
+      return v?.usesBorders ?? null;
+    case "visual.accentColor":
+      return v?.accentColor ?? null;
+    case "visual.cornerStyle":
+      return v?.cornerStyle ?? null;
+    case "visual.spacingDensity":
+      return v?.spacingDensity ?? null;
+    case "visual.colorRoles":
+      return v?.colorRoles ?? null;
+    case "antiPatterns.accessibilityRisks":
+      return entry.antiPatterns?.accessibilityRisks ?? null;
+    default:
+      return null;
+  }
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detector-types.test.ts`
+Expected: PASS (3 tests).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/verify/detector-types.ts src/verify/detector-types.test.ts
+git commit -m "feat(verify): detector types, confidence band, recorded-value accessor"
+```
+
+---
+
+### Task 4: Synthetic fixture generator and committed fixtures
+
+**Files:**
+- Create: `src/verify/__fixtures__/generate-detector-fixtures.ts`
+- Create: `src/verify/__fixtures__/generate-detector-fixtures.test.ts`
+- Create: `src/verify/__fixtures__/fixtures.ts` (manifest loader used by later tasks' tests)
+- Generated: `src/verify/__fixtures__/images/*.png` + `src/verify/__fixtures__/manifest.json` (committed)
+
+**Interfaces:**
+- Produces:
+  - `interface FixtureEntry { id: string; file: string; field: string; recorded: unknown; label: "pass" | "contradicted" | "abstain"; split: "tune" | "held-out" }`
+  - `interface FixtureManifest { version: 1; fixtures: FixtureEntry[] }`
+  - `generateFixtures(outDir: string): Promise<FixtureManifest>` — draws every image with `sharp` and writes `manifest.json`.
+  - `fixtureManifest(): FixtureManifest` and `fixtureImagePath(id: string): string` — reads the COMMITTED fixtures (used by detector tests).
+
+Ground truth is exact by construction: the generator knows what it drew. Tune and held-out sets use disjoint parameter ranges (shadow opacity 0.30 tune / 0.15 + 0.50 held-out; corner radii 4px + 12px tune / 6px + 18px held-out; accent `#2563eb` tune / `#059669` held-out). CI gates on `held-out` only (Task 13).
+
+Fixture families (each image is 120×90; background `#f5f5f5` unless noted):
+
+| id | field | recorded | label | drawing |
+| --- | --- | --- | --- | --- |
+| `borders-stroke-true` | visual.usesBorders | `true` | `pass` | white 60×40 card + 1px `#222` stroke |
+| `borders-stroke-false` | visual.usesBorders | `false` | `contradicted` | same drawing |
+| `borders-flat-true` | visual.usesBorders | `true` | `contradicted` | white card, no stroke |
+| `borders-flat-false` | visual.usesBorders | `false` | `abstain` | white card, no stroke |
+| `borders-solid` | visual.usesBorders | `true` | `abstain` | solid background |
+| `shadows-card-true` | visual.usesShadows | `true` | `pass` | white card + 8px soft shadow (opacity 0.30) |
+| `shadows-card-false` | visual.usesShadows | `false` | `contradicted` | same drawing |
+| `shadows-flat-true` | visual.usesShadows | `true` | `contradicted` | white card, no shadow |
+| `shadows-solid` | visual.usesShadows | `true` | `abstain` | solid background |
+| `shadows-card-h15-true` | visual.usesShadows | `true` | `pass` | shadow opacity 0.15 (held-out) |
+| `shadows-card-h50-true` | visual.usesShadows | `true` | `pass` | shadow opacity 0.50 (held-out) |
+| `pair-shadowed-borderless` | both | `true` | borders `contradicted`, shadows `pass` | shadow, no stroke (two manifest entries) |
+| `pair-bordered-flat` | both | `true` | borders `pass`, shadows `contradicted` | stroke, no shadow (two manifest entries) |
+| `accent-primary-true` | visual.accentColor | `#2563eb` | `pass` | `#2563eb` 30×20 button on white, no other color |
+| `accent-primary-absent` | visual.accentColor | `#dc2626` | `contradicted` | `#2563eb` button |
+| `accent-primary-speck` | visual.accentColor | `#2563eb` | `abstain` | 2×2 px speck of `#2563eb` |
+| `accent-primary-secondary` | visual.accentColor | `#2563eb` | `abstain` | 30×20 `#2563eb` button + 45×40 `#111` sidebar (sidebar larger) |
+| `accent-bg-equal` | visual.accentColor | `#f5f5f5` | `contradicted` | solid background |
+| `accent-h20-true` | visual.accentColor | `#059669` | `pass` | `#059669` button (held-out) |
+| `corner-sharp-true` | visual.cornerStyle | `sharp` | `pass` | radius 0px |
+| `corner-slight-true` | visual.cornerStyle | `slight-round` | `pass` | radius 4px (tune) |
+| `corner-slight-h6-true` | visual.cornerStyle | `slight-round` | `pass` | radius 6px (held-out) |
+| `corner-slight-h18-true` | visual.cornerStyle | `slight-round` | `pass` | radius 18px (held-out) |
+| `corner-pill-true` | visual.cornerStyle | `pill` | `pass` | radius 28px |
+| `corner-mixed` | visual.cornerStyle | `mixed` | `abstain` | radius 12px (mixed is never affirmable) |
+| `corner-band` | visual.cornerStyle | `slight-round` | `abstain` | radius 2.5px (band boundary) |
+| `spacing-compact-true` | visual.spacingDensity | `compact` | `pass` | 3×3 grid of 10px elements, 4px gaps |
+| `spacing-moderate-true` | visual.spacingDensity | `moderate` | `pass` | 3×3 grid, 15px gaps |
+| `spacing-spacious-true` | visual.spacingDensity | `spacious` | `pass` | 3×3 grid, 30px gaps |
+| `spacing-single` | visual.spacingDensity | `moderate` | `abstain` | one element |
+| `roles-card` | visual.colorRoles | full role set | `abstain` | white card on gray + blue accent bar + dark ink block (never pass) |
+
+`visual.colorRoles` and `antiPatterns.accessibilityRisks` need no fixture images: colorRoles reuses the accent fixtures' pixels via entries (Task 10), and accessibilityRisks is pure arithmetic on recorded hexes (Task 11).
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// src/verify/__fixtures__/generate-detector-fixtures.test.ts
+import { describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { generateFixtures } from "./generate-detector-fixtures.js";
+
+const EXPECTED_IDS = [
+  "borders-stroke-true", "borders-stroke-false", "borders-flat-true", "borders-flat-false", "borders-solid",
+  "shadows-card-true", "shadows-card-false", "shadows-flat-true", "shadows-solid",
+  "shadows-card-h15-true", "shadows-card-h50-true",
+  "accent-primary-true", "accent-primary-absent", "accent-primary-speck", "accent-primary-secondary",
+  "accent-bg-equal", "accent-h20-true",
+  "corner-sharp-true", "corner-slight-true", "corner-slight-h6-true", "corner-slight-h18-true",
+  "corner-pill-true", "corner-mixed", "corner-band",
+  "spacing-compact-true", "spacing-moderate-true", "spacing-spacious-true", "spacing-single",
+  "roles-card",
+];
+
+describe("detector fixtures", () => {
+  it("generates every expected fixture with images on disk", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "detector-fixtures-"));
+    try {
+      const manifest = await generateFixtures(dir);
+      expect(manifest.version).toBe(1);
+      expect(manifest.fixtures.length).toBeGreaterThanOrEqual(EXPECTED_IDS.length);
+      for (const id of EXPECTED_IDS) {
+        const entries = manifest.fixtures.filter((f) => f.id === id);
+        expect(entries.length).toBeGreaterThan(0, `missing fixture ${id}`);
+        for (const e of entries) {
+          expect(existsSync(join(dir, "images", e.file))).toBe(true, `missing image for ${id}`);
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("splits tune and held-out into disjoint parameter ranges", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("./manifest.json", import.meta.url), "utf8"),
+    ) as { fixtures: Array<{ id: string; split: string }> };
+    const heldOut = manifest.fixtures.filter((f) => f.split === "held-out").map((f) => f.id);
+    expect(heldOut).toContain("shadows-card-h15-true");
+    expect(heldOut).toContain("shadows-card-h50-true");
+    expect(heldOut).toContain("corner-slight-h6-true");
+    expect(heldOut).toContain("corner-slight-h18-true");
+    expect(heldOut).toContain("accent-h20-true");
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/__fixtures__/generate-detector-fixtures.test.ts`
+Expected: FAIL — cannot resolve `./generate-detector-fixtures.js` and `./manifest.json` (neither exists yet).
+
+- [ ] **Step 3: Implement the generator**
+
+```ts
+// src/verify/__fixtures__/generate-detector-fixtures.ts
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import sharp from "sharp";
+
+export interface FixtureEntry {
+  id: string;
+  file: string;
+  field: string;
+  recorded: unknown;
+  label: "pass" | "contradicted" | "abstain";
+  split: "tune" | "held-out";
+}
+
+export interface FixtureManifest {
+  version: 1;
+  fixtures: FixtureEntry[];
+}
+
+const W = 120;
+const H = 90;
+const BG: [number, number, number] = [245, 245, 245];
+
+type Px = Uint8ClampedArray;
+
+function blank(): Px {
+  const px = new Uint8ClampedArray(W * H * 4);
+  for (let i = 0; i < W * H; i++) {
+    px[i * 4] = BG[0]; px[i * 4 + 1] = BG[1]; px[i * 4 + 2] = BG[2]; px[i * 4 + 3] = 255;
+  }
+  return px;
+}
+
+function setPx(px: Px, x: number, y: number, rgb: [number, number, number], alpha = 1): void {
+  if (x < 0 || y < 0 || x >= W || y >= H) return;
+  const i = (y * W + x) * 4;
+  px[i] = Math.round(px[i] * (1 - alpha) + rgb[0] * alpha);
+  px[i + 1] = Math.round(px[i + 1] * (1 - alpha) + rgb[1] * alpha);
+  px[i + 2] = Math.round(px[i + 2] * (1 - alpha) + rgb[2] * alpha);
+  px[i + 3] = 255;
+}
+
+function fillRect(px: Px, x: number, y: number, w: number, h: number, rgb: [number, number, number]): void {
+  for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) setPx(px, i, j, rgb);
+}
+
+/** Rounded rectangle; radius 0 = plain rect. */
+function fillRoundRect(px: Px, x: number, y: number, w: number, h: number, radius: number, rgb: [number, number, number]): void {
+  const r = Math.min(radius, Math.floor(Math.min(w, h) / 2));
+  for (let j = y; j < y + h; j++) {
+    for (let i = x; i < x + w; i++) {
+      // Distance to the nearest corner center; inside if within the corner circle.
+      const cx = Math.max(x + r, Math.min(i, x + w - r - 1));
+      const cy = Math.max(y + r, Math.min(j, y + h - r - 1));
+      const dx = i - cx;
+      const dy = j - cy;
+      if (dx * dx + dy * dy <= r * r || r === 0) setPx(px, i, j, rgb);
+    }
+  }
+}
+
+/** 1px stroke ring around a rect. */
+function strokeRect(px: Px, x: number, y: number, w: number, h: number, rgb: [number, number, number]): void {
+  for (let i = x; i < x + w; i++) {
+    setPx(px, i, y, rgb); setPx(px, i, y + h - 1, rgb);
+  }
+  for (let j = y; j < y + h; j++) {
+    setPx(px, x, j, rgb); setPx(px, x + w - 1, j, rgb);
+  }
+}
+
+/** Soft shadow: darkens the background outside the card for `blur` px, fading out. */
+function softShadow(px: Px, cardX: number, cardY: number, cardW: number, cardH: number, blur: number, opacity: number): void {
+  for (let j = 0; j < H; j++) {
+    for (let i = 0; i < W; i++) {
+      if (i >= cardX && i < cardX + cardW && j >= cardY && j < cardY + cardH) continue;
+      const dx = Math.max(cardX - i, 0, i - (cardX + cardW - 1));
+      const dy = Math.max(cardY - j, 0, j - (cardY + cardH - 1));
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < blur) setPx(px, i, j, [16, 16, 16], opacity * (1 - d / blur));
+    }
+  }
+}
+
+async function writePng(dir: string, file: string, px: Px): Promise<void> {
+  await sharp(Buffer.from(px), { raw: { width: W, height: H, channels: 4 } }).png().toFile(join(dir, "images", file));
+}
+
+function cardBox(): { x: number; y: number; w: number; h: number } {
+  return { x: 30, y: 25, w: 60, h: 40 };
+}
+
+const fixtures: Array<(dir: string, entries: FixtureEntry[]) => Promise<void>> = [];
+
+async function borders(dir: string, entries: FixtureEntry[]): Promise<void> {
+  const box = cardBox();
+  const stroke: FixtureEntry[] = [
+    { id: "borders-stroke-true", file: "borders-stroke-true.png", field: "visual.usesBorders", recorded: true, label: "pass", split: "tune" },
+    { id: "borders-stroke-false", file: "borders-stroke-true.png", field: "visual.usesBorders", recorded: false, label: "contradicted", split: "tune" },
+  ];
+  for (const e of stroke) {
+    const px = blank();
+    fillRect(px, box.x, box.y, box.w, box.h, [255, 255, 255]);
+    strokeRect(px, box.x, box.y, box.w, box.h, [34, 34, 34]);
+    await writePng(dir, e.file, px);
+    entries.push(e);
+  }
+  const flat: FixtureEntry[] = [
+    { id: "borders-flat-true", file: "borders-flat-true.png", field: "visual.usesBorders", recorded: true, label: "contradicted", split: "tune" },
+    { id: "borders-flat-false", file: "borders-flat-true.png", field: "visual.usesBorders", recorded: false, label: "abstain", split: "tune" },
+  ];
+  for (const e of flat) {
+    const px = blank();
+    fillRect(px, box.x, box.y, box.w, box.h, [255, 255, 255]);
+    await writePng(dir, e.file, px);
+    entries.push(e);
+  }
+  const solid = blank();
+  await writePng(dir, "borders-solid.png", solid);
+  entries.push({ id: "borders-solid", file: "borders-solid.png", field: "visual.usesBorders", recorded: true, label: "abstain", split: "tune" });
+}
+
+async function shadows(dir: string, entries: FixtureEntry[]): Promise<void> {
+  const box = cardBox();
+  const make = async (id: string, file: string, opacity: number, split: "tune" | "held-out"): Promise<void> => {
+    const px = blank();
+    softShadow(px, box.x, box.y, box.w, box.h, 8, opacity);
+    fillRect(px, box.x, box.y, box.w, box.h, [255, 255, 255]);
+    await writePng(dir, file, px);
+  };
+  await make("shadows-card-true", "shadows-card-true.png", 0.30, "tune");
+  entries.push(
+    { id: "shadows-card-true", file: "shadows-card-true.png", field: "visual.usesShadows", recorded: true, label: "pass", split: "tune" },
+    { id: "shadows-card-false", file: "shadows-card-true.png", field: "visual.usesShadows", recorded: false, label: "contradicted", split: "tune" },
+  );
+  await make("shadows-card-h15-true", "shadows-card-h15-true.png", 0.15, "held-out");
+  await make("shadows-card-h50-true", "shadows-card-h50-true.png", 0.50, "held-out");
+  entries.push(
+    { id: "shadows-card-h15-true", file: "shadows-card-h15-true.png", field: "visual.usesShadows", recorded: true, label: "pass", split: "held-out" },
+    { id: "shadows-card-h50-true", file: "shadows-card-h50-true.png", field: "visual.usesShadows", recorded: true, label: "pass", split: "held-out" },
+  );
+  const flat = blank();
+  fillRect(flat, box.x, box.y, box.w, box.h, [255, 255, 255]);
+  await writePng(dir, "shadows-flat-true.png", flat);
+  entries.push({ id: "shadows-flat-true", file: "shadows-flat-true.png", field: "visual.usesShadows", recorded: true, label: "contradicted", split: "tune" });
+  const solid = blank();
+  await writePng(dir, "shadows-solid.png", solid);
+  entries.push({ id: "shadows-solid", file: "shadows-solid.png", field: "visual.usesShadows", recorded: true, label: "abstain", split: "tune" });
+}
+
+async function pairs(dir: string, entries: FixtureEntry[]): Promise<void> {
+  const box = cardBox();
+  const shadowed = blank();
+  softShadow(shadowed, box.x, box.y, box.w, box.h, 8, 0.30);
+  fillRect(shadowed, box.x, box.y, box.w, box.h, [255, 255, 255]);
+  await writePng(dir, "pair-shadowed-borderless.png", shadowed);
+  entries.push(
+    { id: "pair-shadowed-borderless", file: "pair-shadowed-borderless.png", field: "visual.usesBorders", recorded: true, label: "contradicted", split: "tune" },
+    { id: "pair-shadowed-borderless", file: "pair-shadowed-borderless.png", field: "visual.usesShadows", recorded: true, label: "pass", split: "tune" },
+  );
+  const stroked = blank();
+  fillRect(stroked, box.x, box.y, box.w, box.h, [255, 255, 255]);
+  strokeRect(stroked, box.x, box.y, box.w, box.h, [34, 34, 34]);
+  await writePng(dir, "pair-bordered-flat.png", stroked);
+  entries.push(
+    { id: "pair-bordered-flat", file: "pair-bordered-flat.png", field: "visual.usesBorders", recorded: true, label: "pass", split: "tune" },
+    { id: "pair-bordered-flat", file: "pair-bordered-flat.png", field: "visual.usesShadows", recorded: true, label: "contradicted", split: "tune" },
+  );
+}
+
+async function accents(dir: string, entries: FixtureEntry[]): Promise<void> {
+  const button = (rgb: [number, number, number]): void => fillRect(blank(), 45, 35, 30, 20, rgb);
+  const px1 = button([37, 99, 235]);
+  await writePng(dir, "accent-primary-true.png", px1);
+  entries.push({ id: "accent-primary-true", file: "accent-primary-true.png", field: "visual.accentColor", recorded: "#2563eb", label: "pass", split: "tune" });
+  entries.push({ id: "accent-primary-absent", file: "accent-primary-true.png", field: "visual.accentColor", recorded: "#dc2626", label: "contradicted", split: "tune" });
+  const speck = blank();
+  fillRect(speck, 59, 44, 2, 2, [37, 99, 235]);
+  await writePng(dir, "accent-primary-speck.png", speck);
+  entries.push({ id: "accent-primary-speck", file: "accent-primary-speck.png", field: "visual.accentColor", recorded: "#2563eb", label: "abstain", split: "tune" });
+  const secondary = blank();
+  fillRect(secondary, 5, 5, 45, 80, [17, 17, 17]);
+  fillRect(secondary, 55, 35, 30, 20, [37, 99, 235]);
+  await writePng(dir, "accent-primary-secondary.png", secondary);
+  entries.push({ id: "accent-primary-secondary", file: "accent-primary-secondary.png", field: "visual.accentColor", recorded: "#2563eb", label: "abstain", split: "tune" });
+  const bgEq = blank();
+  await writePng(dir, "accent-bg-equal.png", bgEq);
+  entries.push({ id: "accent-bg-equal", file: "accent-bg-equal.png", field: "visual.accentColor", recorded: "#f5f5f5", label: "contradicted", split: "tune" });
+  const pxH = button([5, 150, 105]);
+  await writePng(dir, "accent-h20-true.png", pxH);
+  entries.push({ id: "accent-h20-true", file: "accent-h20-true.png", field: "visual.accentColor", recorded: "#059669", label: "pass", split: "held-out" });
+}
+
+async function corners(dir: string, entries: FixtureEntry[]): Promise<void> {
+  const box = cardBox();
+  const make = async (id: string, radius: number, split: "tune" | "held-out"): Promise<void> => {
+    const px = blank();
+    fillRoundRect(px, box.x, box.y, box.w, box.h, radius, [255, 255, 255]);
+    await writePng(dir, `${id}.png`, px);
+  };
+  await make("corner-sharp-true", 0, "tune");
+  await make("corner-slight-true", 4, "tune");
+  await make("corner-slight-h6-true", 6, "held-out");
+  await make("corner-slight-h18-true", 18, "held-out");
+  await make("corner-pill-true", 28, "tune");
+  await make("corner-mixed", 12, "tune");
+  await make("corner-band", 2.5, "tune");
+  entries.push(
+    { id: "corner-sharp-true", file: "corner-sharp-true.png", field: "visual.cornerStyle", recorded: "sharp", label: "pass", split: "tune" },
+    { id: "corner-slight-true", file: "corner-slight-true.png", field: "visual.cornerStyle", recorded: "slight-round", label: "pass", split: "tune" },
+    { id: "corner-slight-h6-true", file: "corner-slight-h6-true.png", field: "visual.cornerStyle", recorded: "slight-round", label: "pass", split: "held-out" },
+    { id: "corner-slight-h18-true", file: "corner-slight-h18-true.png", field: "visual.cornerStyle", recorded: "slight-round", label: "pass", split: "held-out" },
+    { id: "corner-pill-true", file: "corner-pill-true.png", field: "visual.cornerStyle", recorded: "pill", label: "pass", split: "tune" },
+    { id: "corner-mixed", file: "corner-mixed.png", field: "visual.cornerStyle", recorded: "mixed", label: "abstain", split: "tune" },
+    { id: "corner-band", file: "corner-band.png", field: "visual.cornerStyle", recorded: "slight-round", label: "abstain", split: "tune" },
+  );
+}
+
+async function spacings(dir: string, entries: FixtureEntry[]): Promise<void> {
+  const grid = (gap: number): Px => {
+    const px = blank();
+    for (let j = 0; j < 3; j++) {
+      for (let i = 0; i < 3; i++) {
+        fillRect(px, 15 + i * (10 + gap), 15 + j * (10 + gap), 10, 10, [255, 255, 255]);
+      }
+    }
+    return px;
+  };
+  const write = async (id: string, gap: number): Promise<void> => {
+    const px = grid(gap);
+    await writePng(dir, `${id}.png`, px);
+  };
+  await write("spacing-compact-true", 4);
+  await write("spacing-moderate-true", 15);
+  await write("spacing-spacious-true", 30);
+  const single = blank();
+  fillRect(single, 50, 35, 20, 20, [255, 255, 255]);
+  await writePng(dir, "spacing-single.png", single);
+  entries.push(
+    { id: "spacing-compact-true", file: "spacing-compact-true.png", field: "visual.spacingDensity", recorded: "compact", label: "pass", split: "tune" },
+    { id: "spacing-moderate-true", file: "spacing-moderate-true.png", field: "visual.spacingDensity", recorded: "moderate", label: "pass", split: "tune" },
+    { id: "spacing-spacious-true", file: "spacing-spacious-true.png", field: "visual.spacingDensity", recorded: "spacious", label: "pass", split: "tune" },
+    { id: "spacing-single", file: "spacing-single.png", field: "visual.spacingDensity", recorded: "moderate", label: "abstain", split: "tune" },
+  );
+}
+
+async function roles(dir: string, entries: FixtureEntry[]): Promise<void> {
+  const px = blank();
+  fillRect(px, 25, 20, 70, 50, [255, 255, 255]);        // surface
+  fillRect(px, 30, 30, 20, 10, [37, 99, 235]);            // accent
+  fillRect(px, 55, 30, 20, 20, [17, 17, 17]);             // ink
+  await writePng(dir, "roles-card.png", px);
+  entries.push(
+    { id: "roles-card", file: "roles-card.png", field: "visual.colorRoles", recorded: null, label: "abstain", split: "tune" },
+  );
+}
+
+export async function generateFixtures(outDir: string): Promise<FixtureManifest> {
+  const imagesDir = join(outDir, "images");
+  mkdirSync(imagesDir, { recursive: true });
+  const fixtures: FixtureEntry[] = [];
+  await borders(imagesDir, fixtures);
+  await shadows(imagesDir, fixtures);
+  await pairs(imagesDir, fixtures);
+  await accents(imagesDir, fixtures);
+  await corners(imagesDir, fixtures);
+  await spacings(imagesDir, fixtures);
+  await roles(imagesDir, fixtures);
+  const manifest: FixtureManifest = { version: 1, fixtures };
+  writeFileSync(join(outDir, "manifest.json"), JSON.stringify(manifest, null, 2));
+  return manifest;
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  // CLI mode: regenerate the committed fixtures in place.
+  const here = new URL(".", import.meta.url);
+  generateFixtures(here.pathname).then((m) => {
+    console.log(`wrote ${m.fixtures.length} fixture entries to ${here.pathname}`);
+  });
+}
+```
+
+Note the generator writes `images/` inside `outDir`; when run in CLI mode, `outDir` is the `__fixtures__` directory itself.
+
+- [ ] **Step 4: Create the committed fixture loader and run the generator for real**
+
+```ts
+// src/verify/__fixtures__/fixtures.ts
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { FixtureEntry, FixtureManifest } from "./generate-detector-fixtures.js";
+
+const DIR = fileURLToPath(new URL(".", import.meta.url));
+
+export function fixtureManifest(): FixtureManifest {
+  return JSON.parse(readFileSync(join(DIR, "manifest.json"), "utf8")) as FixtureManifest;
+}
+
+export function fixtureEntries(field: string): FixtureEntry[] {
+  return fixtureManifest().fixtures.filter((f) => f.field === field);
+}
+
+export function fixtureImagePath(id: string): string {
+  const entry = fixtureManifest().fixtures.find((f) => f.id === id);
+  if (!entry) throw new Error(`no fixture with id ${id}`);
+  return join(DIR, "images", entry.file);
+}
+```
+
+```bash
+node --experimental-strip-types src/verify/__fixtures__/generate-detector-fixtures.ts
+```
+
+Then verify:
+
+```bash
+ls src/verify/__fixtures__/images | wc -l
+```
+Expected: 27 image files. Then confirm the manifest parses and counts:
+
+```bash
+node -e "const m=require('./src/verify/__fixtures__/manifest.json'); console.log(m.fixtures.length)"
+```
+Expected: a count >= 35 (some images carry two field entries).
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/__fixtures__/generate-detector-fixtures.test.ts`
+Expected: PASS (2 tests).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/verify/__fixtures__/
+git commit -m "test(verify): synthetic detector fixtures with tune/held-out split"
+```
+
+---
+
+### Task 5: `usesBorders` certifying detector + shared edge helpers
+
+**Files:**
+- Create: `src/verify/detectors/pixels.ts` (edge helpers; extended by Tasks 7–9)
+- Create: `src/verify/detectors/uses-borders.ts`
+- Test: `src/verify/detectors/uses-borders.test.ts`
+
+**Interfaces:**
+- Consumes: `ensureRaw` (`ctx.ts`), `recordedFor`/`inBand`/`DetectorResult` (`detector-types.ts`), fixture loader (`__fixtures__/fixtures.ts`).
+- Produces:
+  - `luma(raw: RawBuffer): Float32Array`
+  - `interface EdgeStats { edgeCoverage: number; thinRatio: number; rampRatio: number }`
+  - `edgeStats(raw: RawBuffer): EdgeStats` — `thinRatio` = stroke-like thin (≤3px) edges / edge pixels; `rampRatio` = monotonic 4–20px ramps / edge pixels; degenerate images (no edges) return `edgeCoverage` near 0.
+  - `DEGENERATE_COVERAGE = 0.001`
+  - `boundaryConfidence(value: number, threshold: number): number` — 0.5 exactly on the threshold, 0/1 at the extremes.
+  - `detect(entry, ctx): Promise<DetectorResult>` from `uses-borders.ts` — `canAffirm: (r) => r === true`.
+
+**Edge model:** a border stroke is a THIN (≤3px) edge whose ±1px luma neighbours are similar to each other (a line drawn ON a surface). A card boundary is a step where the two sides differ — not stroke-like. A shadow is a wide (4–20px) monotonic ramp. Degenerate images (no edges at all) → `abstain` (the absence invariant).
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// src/verify/detectors/uses-borders.test.ts
+import { describe, expect, it } from "vitest";
+import { createVerifyCtx } from "../ctx.js";
+import { fixtureImagePath } from "../__fixtures__/fixtures.js";
+import { detect } from "./uses-borders.js";
+import type { CorpusEntryT } from "../../schema.js";
+
+function entry(usesBorders: boolean | null): CorpusEntryT {
+  return {
+    id: "t", title: "t", patternType: "dashboard", colorScheme: "light",
+    categories: ["dashboard"], styleTags: ["minimal"], components: [],
+    layout: { form: "single-column", regions: [] },
+    visual: {
+      dominantColors: [], accentColor: null,
+      typePairing: { display: null, body: null },
+      spacingDensity: "moderate", cornerStyle: "sharp",
+      usesShadows: false, usesBorders,
+    },
+    antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
+    critique: "", whatToSteal: [], voice: null, mood: null,
+    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+  } as CorpusEntryT;
+}
+
+describe("usesBorders detector", () => {
+  it("passes a 1px-stroked card recorded true", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("borders-stroke-true"));
+    const r = await detect(entry(true), ctx);
+    expect(r.verdict).toBe("pass");
+  });
+
+  it("contradicts a borderless flat card recorded true", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("borders-flat-true"));
+    const r = await detect(entry(true), ctx);
+    expect(r.verdict).toBe("contradicted");
+  });
+
+  it("abstains on a solid-colour image (absence invariant)", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("borders-solid"));
+    const r = await detect(entry(true), ctx);
+    expect(r.verdict).toBe("abstain");
+  });
+
+  it("contradicts a stroked card recorded false (signal found)", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("borders-stroke-true"));
+    const r = await detect(entry(false), ctx);
+    expect(r.verdict).toBe("contradicted");
+  });
+
+  it("abstains on a borderless flat card recorded false (absence not evidence)", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("borders-flat-true"));
+    const r = await detect(entry(false), ctx);
+    expect(r.verdict).toBe("abstain");
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/uses-borders.test.ts`
+Expected: FAIL — cannot resolve `./uses-borders.js` / `./pixels.js` / the fixtures manifest is committed but the modules do not exist yet.
+
+- [ ] **Step 3: Implement the edge helpers**
+
+```ts
+// src/verify/detectors/pixels.ts
+import type { RawBuffer } from "../ctx.js";
+
+/** Luma (0-255) per pixel. */
+export function luma(raw: RawBuffer): Float32Array {
+  const { data, width, height } = raw;
+  const out = new Float32Array(width * height);
+  for (let i = 0; i < width * height; i++) {
+    out[i] = data[i * 4] * 0.299 + data[i * 4 + 1] * 0.587 + data[i * 4 + 2] * 0.114;
+  }
+  return out;
+}
+
+export interface EdgeStats {
+  edgeCoverage: number;
+  thinRatio: number;
+  rampRatio: number;
+}
+
+export const DEGENERATE_COVERAGE = 0.001;
+const EDGE_MAGNITUDE = 8;
+const STROKE_SIMILARITY = 24;
+
+/**
+ * Edge classification. thinRatio = stroke-like thin edges / all edge pixels;
+ * rampRatio = monotonic 4-20px ramps / all edge pixels. A degenerate image
+ * (no edges) yields edgeCoverage 0 and both ratios 0 — callers abstain.
+ */
+export function edgeStats(raw: RawBuffer): EdgeStats {
+  const { width, height } = raw;
+  const L = luma(raw);
+  const n = width * height;
+  const mag = new Float32Array(n);
+  let edgePixels = 0;
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = y * width + x;
+      const gx = L[i + 1] - L[i - 1];
+      const gy = L[i + width] - L[i - width];
+      const m = Math.sqrt(gx * gx + gy * gy);
+      mag[i] = m;
+      if (m > EDGE_MAGNITUDE) edgePixels++;
+    }
+  }
+  if (edgePixels === 0) return { edgeCoverage: 0, thinRatio: 0, rampRatio: 0 };
+
+  let thin = 0;
+  let ramp = 0;
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = y * width + x;
+      if (mag[i] <= EDGE_MAGNITUDE) continue;
+      const gx = L[i + 1] - L[i - 1];
+      const gy = L[i + width] - L[i - width];
+      const horiz = Math.abs(gx) >= Math.abs(gy);
+      const step = horiz ? 1 : width;
+      const dir = (horiz ? gx : gy) >= 0 ? 1 : -1;
+      const peak = mag[i];
+      let widthPx = 1;
+      for (let k = 1; k <= 24; k++) {
+        const j = i + dir * step * k;
+        if (j < 0 || j >= n) break;
+        if (mag[j] < peak / 2) break;
+        widthPx = k + 1;
+      }
+      const before = i - dir * step;
+      const after = i + dir * step;
+      const inBounds = before >= 0 && after >= 0 && before < n && after < n;
+      const strokeLike = inBounds && Math.abs(L[before] - L[after]) < STROKE_SIMILARITY;
+      if (widthPx <= 3) {
+        if (strokeLike) thin++;
+      } else if (widthPx <= 20) {
+        // A shadow is a MONOTONIC ramp (luma changes in one direction as it
+        // fades); a photo edge usually is not. Check ±2 steps for sign
+        // consistency — a shadow is never a stroke, so no strokeLike test here.
+        const d1 = L[i] - L[i - dir * step];
+        const d2 = L[i + dir * step] - L[i];
+        const d3 = i - 2 * dir * step >= 0 && i - 2 * dir * step < n
+          ? L[i - dir * step] - L[i - 2 * dir * step]
+          : d1;
+        const d4 = i + 2 * dir * step >= 0 && i + 2 * dir * step < n
+          ? L[i + 2 * dir * step] - L[i + dir * step]
+          : d2;
+        if (d1 * d2 >= 0 && d2 * d3 >= 0 && d2 * d4 >= 0) ramp++;
+      }
+    }
+  }
+  return {
+    edgeCoverage: edgePixels / n,
+    thinRatio: thin / edgePixels,
+    rampRatio: ramp / edgePixels,
+  };
+}
+
+/**
+ * Maps a measurement vs a decision threshold to 0..1 where 0.5 = exactly on the
+ * threshold (maximally ambiguous) and 0 / 1 = decisively on one side.
+ */
+export function boundaryConfidence(value: number, threshold: number): number {
+  const span = 2 * Math.max(threshold, 1 - threshold);
+  return Math.min(1, Math.max(0, 0.5 + (value - threshold) / span));
+}
+```
+
+- [ ] **Step 4: Implement the detector**
+
+```ts
+// src/verify/detectors/uses-borders.ts
+import type { CorpusEntryT } from "../../schema.js";
+import type { VerifyCtx } from "../ctx.js";
+import { ensureRaw } from "../ctx.js";
+import {
+  inBand,
+  recordedFor,
+  type ConfidenceBand,
+  type DetectorResult,
+} from "../detector-types.js";
+import { boundaryConfidence, DEGENERATE_COVERAGE, edgeStats } from "./pixels.js";
+
+const BORDER_THRESHOLD = 0.45;
+const BAND: ConfidenceBand = { low: 0.25, high: 0.75 };
+
+/** Certifying for `true` only: an absence claim cannot be affirmed by measurement. */
+export function canAffirm(recorded: unknown): boolean {
+  return recorded === true;
+}
+
+export async function detect(entry: CorpusEntryT, ctx: VerifyCtx): Promise<DetectorResult> {
+  const recorded = recordedFor(entry, "visual.usesBorders");
+  const raw = await ensureRaw(ctx);
+  const s = edgeStats(raw);
+  if (s.edgeCoverage < DEGENERATE_COVERAGE) {
+    return { verdict: "abstain", measured: s, confidence: 0.5, reason: "no edge content to measure (degenerate image)" };
+  }
+  const confidence = boundaryConfidence(s.thinRatio, BORDER_THRESHOLD);
+  if (inBand(BAND, confidence)) {
+    return { verdict: "abstain", measured: s, confidence, reason: `thinRatio ${s.thinRatio.toFixed(3)} is inside the decision band` };
+  }
+  const hasBorders = s.thinRatio >= BORDER_THRESHOLD;
+  if (recorded === true) {
+    return hasBorders
+      ? { verdict: "pass", measured: s, confidence, reason: `stroke-like thin edges dominate (thinRatio ${s.thinRatio.toFixed(3)})` }
+      : { verdict: "contradicted", measured: s, confidence, reason: "no stroke-like thin edges found though borders are recorded" };
+  }
+  return hasBorders
+    ? { verdict: "contradicted", measured: s, confidence, reason: "stroke-like thin edges found though no borders are recorded" }
+    : { verdict: "abstain", measured: s, confidence: 0.5, reason: "no borders found; absence is not evidence of absence" };
+}
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/uses-borders.test.ts`
+Expected: PASS (5 tests). If the stroked fixture fails, tune `EDGE_MAGNITUDE` / `STROKE_SIMILARITY` in `pixels.ts` against the TUNE fixtures only, and re-run. Do NOT tune against held-out fixtures.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/verify/detectors/pixels.ts src/verify/detectors/uses-borders.ts src/verify/detectors/uses-borders.test.ts
+git commit -m "feat(verify): usesBorders detector + shared edge helpers"
+```
+
+---
+
+### Task 6: `usesShadows` certifying detector + the border/shadow pair test
+
+**Files:**
+- Create: `src/verify/detectors/uses-shadows.ts`
+- Test: `src/verify/detectors/uses-shadows.test.ts`
+
+**Interfaces:**
+- Consumes: `edgeStats` (`pixels.ts`), `ensureRaw`, detector types, fixtures.
+- Produces: `canAffirm(recorded): boolean` (`true` only) and `detect(entry, ctx): Promise<DetectorResult>`.
+
+**Shadow model:** a shadow is a wide (4–20px) monotonic luma ramp (`rampRatio` from `edgeStats`). A border is a thin stroke; a flat card boundary is a step that is neither. The pair test pins the two high-risk confusions.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// src/verify/detectors/uses-shadows.test.ts
+import { describe, expect, it } from "vitest";
+import { createVerifyCtx } from "../ctx.js";
+import { fixtureImagePath } from "../__fixtures__/fixtures.js";
+import { detect as borders } from "./uses-borders.js";
+import { detect } from "./uses-shadows.js";
+import type { CorpusEntryT } from "../../schema.js";
+
+function entry(usesShadows: boolean): CorpusEntryT {
+  return {
+    id: "t", title: "t", patternType: "dashboard", colorScheme: "light",
+    categories: ["dashboard"], styleTags: ["minimal"], components: [],
+    layout: { form: "single-column", regions: [] },
+    visual: {
+      dominantColors: [], accentColor: null,
+      typePairing: { display: null, body: null },
+      spacingDensity: "moderate", cornerStyle: "sharp",
+      usesShadows, usesBorders: false,
+    },
+    antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
+    critique: "", whatToSteal: [], voice: null, mood: null,
+    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+  } as CorpusEntryT;
+}
+
+describe("usesShadows detector", () => {
+  it("passes a shadowed card recorded true", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("shadows-card-true"));
+    expect((await detect(entry(true), ctx)).verdict).toBe("pass");
+  });
+
+  it("contradicts a flat card recorded true", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("shadows-flat-true"));
+    expect((await detect(entry(true), ctx)).verdict).toBe("contradicted");
+  });
+
+  it("abstains on a solid image recorded true (absence invariant)", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("shadows-solid"));
+    expect((await detect(entry(true), ctx)).verdict).toBe("abstain");
+  });
+
+  it("contradicts a shadowed card recorded false", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("shadows-card-true"));
+    expect((await detect(entry(false), ctx)).verdict).toBe("contradicted");
+  });
+
+  it("never confuses shadow with border (the pair)", async () => {
+    const shadowed = await createVerifyCtx(fixtureImagePath("pair-shadowed-borderless"));
+    expect((await borders(entry(true), shadowed)).verdict).toBe("contradicted");
+    expect((await detect(entry(true), shadowed)).verdict).toBe("pass");
+
+    const stroked = await createVerifyCtx(fixtureImagePath("pair-bordered-flat"));
+    expect((await borders(entry(true), stroked)).verdict).toBe("pass");
+    expect((await detect(entry(true), stroked)).verdict).toBe("contradicted");
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/uses-shadows.test.ts`
+Expected: FAIL — cannot resolve `./uses-shadows.js`.
+
+- [ ] **Step 3: Implement**
+
+```ts
+// src/verify/detectors/uses-shadows.ts
+import type { CorpusEntryT } from "../../schema.js";
+import type { VerifyCtx } from "../ctx.js";
+import { ensureRaw } from "../ctx.js";
+import {
+  inBand,
+  recordedFor,
+  type ConfidenceBand,
+  type DetectorResult,
+} from "../detector-types.js";
+import { boundaryConfidence, DEGENERATE_COVERAGE, edgeStats } from "./pixels.js";
+
+const SHADOW_THRESHOLD = 0.35;
+const BAND: ConfidenceBand = { low: 0.25, high: 0.75 };
+
+/** Certifying for `true` only — an absence claim cannot be affirmed by measurement. */
+export function canAffirm(recorded: unknown): boolean {
+  return recorded === true;
+}
+
+export async function detect(entry: CorpusEntryT, ctx: VerifyCtx): Promise<DetectorResult> {
+  const recorded = recordedFor(entry, "visual.usesShadows");
+  const raw = await ensureRaw(ctx);
+  const s = edgeStats(raw);
+  if (s.edgeCoverage < DEGENERATE_COVERAGE) {
+    return { verdict: "abstain", measured: s, confidence: 0.5, reason: "no edge content to measure (degenerate image)" };
+  }
+  const confidence = boundaryConfidence(s.rampRatio, SHADOW_THRESHOLD);
+  if (inBand(BAND, confidence)) {
+    return { verdict: "abstain", measured: s, confidence, reason: `rampRatio ${s.rampRatio.toFixed(3)} is inside the decision band` };
+  }
+  const hasShadows = s.rampRatio >= SHADOW_THRESHOLD;
+  if (recorded === true) {
+    return hasShadows
+      ? { verdict: "pass", measured: s, confidence, reason: `monotonic ramps dominate (rampRatio ${s.rampRatio.toFixed(3)})` }
+      : { verdict: "contradicted", measured: s, confidence, reason: "no shadow ramps found though shadows are recorded" };
+  }
+  return hasShadows
+    ? { verdict: "contradicted", measured: s, confidence, reason: "shadow ramps found though no shadows are recorded" }
+    : { verdict: "abstain", measured: s, confidence: 0.5, reason: "no shadows found; absence is not evidence of absence" };
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/uses-shadows.test.ts`
+Expected: PASS (5 tests, incl. the pair test). If the shadowed fixture fails, tune `EDGE_MAGNITUDE` / the monotonic-window constants in `pixels.ts` against TUNE fixtures only.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/verify/detectors/uses-shadows.ts src/verify/detectors/uses-shadows.test.ts
+git commit -m "feat(verify): usesShadows detector + border/shadow pair test"
+```
+
+---
+
+### Task 7: `accentColor` certifying detector + color helpers
+
+**Files:**
+- Modify: `src/verify/detectors/pixels.ts` (add `parseHex`, `deltaE2000`, `colorStats`)
+- Create: `src/verify/detectors/accent-color.ts`
+- Test: `src/verify/detectors/accent-color.test.ts`
+
+**Interfaces:**
+- Consumes: `culori` (`differenceCiede2000`), `ensureRaw`, detector types, fixtures.
+- Produces:
+  - `parseHex(hex: string): [number, number, number]` — throws on anything but `#rrggbb`.
+  - `deltaE2000(a: [number, number, number], b: [number, number, number]): number`
+  - `interface ColorStats { total: number; matchCount: number; background: [number, number, number]; backgroundCount: number; largestNonBg: { rgb: [number, number, number]; count: number } | null }`
+  - `colorStats(raw: RawBuffer, target: [number, number, number], tolerance: number): ColorStats`
+  - `canAffirm(recorded): boolean` — any string; `detect(entry, ctx): Promise<DetectorResult>`.
+
+**Certifying contract (maximality):** pass requires the recorded hex to be the LARGEST non-background colour cluster above an area floor. Presence alone is not "the accent" — the exact mistake the spec forbids for `colorRoles`.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// src/verify/detectors/accent-color.test.ts
+import { describe, expect, it } from "vitest";
+import { createVerifyCtx } from "../ctx.js";
+import { fixtureImagePath } from "../__fixtures__/fixtures.js";
+import { detect } from "./accent-color.js";
+import type { CorpusEntryT } from "../../schema.js";
+
+function entry(accentColor: string | null): CorpusEntryT {
+  return {
+    id: "t", title: "t", patternType: "dashboard", colorScheme: "light",
+    categories: ["dashboard"], styleTags: ["minimal"], components: [],
+    layout: { form: "single-column", regions: [] },
+    visual: {
+      dominantColors: [], accentColor,
+      typePairing: { display: null, body: null },
+      spacingDensity: "moderate", cornerStyle: "sharp",
+      usesShadows: false, usesBorders: false,
+    },
+    antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
+    critique: "", whatToSteal: [], voice: null, mood: null,
+    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+  } as CorpusEntryT;
+}
+
+describe("accentColor detector", () => {
+  it("passes when the recorded hex is the largest non-background colour", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("accent-primary-true"));
+    const r = await detect(entry("#2563eb"), ctx);
+    expect(r.verdict).toBe("pass");
+  });
+
+  it("contradicts a hex absent from the image", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("accent-primary-true"));
+    const r = await detect(entry("#dc2626"), ctx);
+    expect(r.verdict).toBe("contradicted");
+  });
+
+  it("abstains on a 2px speck (below the area floor)", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("accent-primary-speck"));
+    const r = await detect(entry("#2563eb"), ctx);
+    expect(r.verdict).toBe("abstain");
+  });
+
+  it("abstains when present but not the largest colour (role unconfirmed)", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("accent-primary-secondary"));
+    const r = await detect(entry("#2563eb"), ctx);
+    expect(r.verdict).toBe("abstain");
+  });
+
+  it("contradicts a recorded hex equal to the background", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("accent-bg-equal"));
+    const r = await detect(entry("#f5f5f5"), ctx);
+    expect(r.verdict).toBe("contradicted");
+  });
+
+  it("abstains on a malformed hex (unparseable, not disproven)", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("accent-primary-true"));
+    const r = await detect(entry("blue"), ctx);
+    expect(r.verdict).toBe("abstain");
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/accent-color.test.ts`
+Expected: FAIL — cannot resolve `./accent-color.js`.
+
+- [ ] **Step 3: Extend `pixels.ts` with the color helpers**
+
+```ts
+// append to src/verify/detectors/pixels.ts
+import { differenceCiede2000 } from "culori";
+
+const CIEDE = differenceCiede2000();
+
+/** Parses `#rrggbb`; throws on anything else. */
+export function parseHex(hex: string): [number, number, number] {
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex)) throw new Error(`malformed hex ${hex}`);
+  return [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
+}
+
+function rgbToHex(rgb: [number, number, number]): string {
+  return `#${rgb.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** CIEDE2000 distance between two RGB colours (culori). */
+export function deltaE2000(a: [number, number, number], b: [number, number, number]): number {
+  return CIEDE(rgbToHex(a), rgbToHex(b));
+}
+
+export interface ColorStats {
+  total: number;
+  matchCount: number;
+  background: [number, number, number];
+  backgroundCount: number;
+  largestNonBg: { rgb: [number, number, number]; count: number } | null;
+}
+
+const BUCKET_BITS = 3; // 8 levels per channel -> coarse colour buckets
+
+/**
+ * Colour statistics via coarse buckets (fast: one pass, no per-pixel ΔE).
+ * `matchCount` = pixels within `tolerance` ΔE of `target`; `background` = the
+ * largest bucket; `largestNonBg` = the largest bucket clearly distinct from it.
+ */
+export function colorStats(raw: RawBuffer, target: [number, number, number], tolerance: number): ColorStats {
+  const { data, width, height } = raw;
+  const buckets = new Map<number, { count: number; r: number; g: number; b: number }>();
+  for (let i = 0; i < width * height; i++) {
+    const r = data[i * 4];
+    const g = data[i * 4 + 1];
+    const b = data[i * 4 + 2];
+    const key = ((r >> BUCKET_BITS) << 6) | ((g >> BUCKET_BITS) << 3) | (b >> BUCKET_BITS);
+    const bk = buckets.get(key) ?? { count: 0, r: 0, g: 0, b: 0 };
+    bk.count++;
+    bk.r += r;
+    bk.g += g;
+    bk.b += b;
+    buckets.set(key, bk);
+  }
+  let bgKey = -1;
+  let bgCount = 0;
+  for (const [key, bk] of buckets) {
+    if (bk.count > bgCount) { bgCount = bk.count; bgKey = key; }
+  }
+  const bg = buckets.get(bgKey)!;
+  const background: [number, number, number] = [
+    Math.round(bg.r / bg.count),
+    Math.round(bg.g / bg.count),
+    Math.round(bg.b / bg.count),
+  ];
+  let matchCount = 0;
+  let largestNonBg: ColorStats["largestNonBg"] = null;
+  for (const [key, bk] of buckets) {
+    const rgb: [number, number, number] = [
+      Math.round(bk.r / bk.count),
+      Math.round(bk.g / bk.count),
+      Math.round(bk.b / bk.count),
+    ];
+    if (deltaE2000(rgb, target) <= tolerance) matchCount += bk.count;
+    if (key === bgKey) continue;
+    if (deltaE2000(rgb, background) > tolerance * 2 && (!largestNonBg || bk.count > largestNonBg.count)) {
+      largestNonBg = { rgb, count: bk.count };
+    }
+  }
+  return { total: width * height, matchCount, background, backgroundCount: bgCount, largestNonBg };
+}
+```
+
+- [ ] **Step 4: Implement the detector**
+
+```ts
+// src/verify/detectors/accent-color.ts
+import type { CorpusEntryT } from "../../schema.js";
+import type { VerifyCtx } from "../ctx.js";
+import { ensureRaw } from "../ctx.js";
+import {
+  inBand,
+  recordedFor,
+  type ConfidenceBand,
+  type DetectorResult,
+} from "../detector-types.js";
+import { boundaryConfidence, colorStats, deltaE2000, parseHex } from "./pixels.js";
+
+const ACCENT_TOLERANCE = 6;
+const BACKGROUND_EQUAL = 4;
+const AREA_FLOOR = 0.005;
+const BAND: ConfidenceBand = { low: 0.25, high: 0.75 };
+
+/** Any recorded hex is affirmable (malformed values abstain inside detect). */
+export function canAffirm(recorded: unknown): boolean {
+  return typeof recorded === "string";
+}
+
+export async function detect(entry: CorpusEntryT, ctx: VerifyCtx): Promise<DetectorResult> {
+  const recorded = recordedFor(entry, "visual.accentColor");
+  if (typeof recorded !== "string") {
+    return { verdict: "abstain", measured: null, confidence: 0.5, reason: "no recorded accent hex" };
+  }
+  let target: [number, number, number];
+  try {
+    target = parseHex(recorded);
+  } catch (err) {
+    return { verdict: "abstain", measured: recorded, confidence: 0.5, reason: `malformed recorded hex: ${String(err)}` };
+  }
+  const raw = await ensureRaw(ctx);
+  const s = colorStats(raw, target, ACCENT_TOLERANCE);
+  if (s.matchCount === 0) {
+    return { verdict: "contradicted", measured: s, confidence: 0, reason: `recorded ${recorded} is absent from the image` };
+  }
+  if (deltaE2000(target, s.background) <= BACKGROUND_EQUAL) {
+    return { verdict: "contradicted", measured: s, confidence: 0, reason: `recorded ${recorded} equals the background colour` };
+  }
+  if (s.matchCount < AREA_FLOOR * s.total) {
+    return { verdict: "abstain", measured: s, confidence: 0.5, reason: "recorded hex present but below the area floor" };
+  }
+  const other = s.largestNonBg?.count ?? 0;
+  const share = s.matchCount / (s.matchCount + other);
+  const confidence = boundaryConfidence(share, 0.5);
+  if (inBand(BAND, confidence)) {
+    return { verdict: "abstain", measured: s, confidence, reason: "recorded hex and another colour are near-tied — accent role unconfirmed" };
+  }
+  if (s.largestNonBg && other > s.matchCount) {
+    return { verdict: "abstain", measured: s, confidence, reason: "recorded hex present but another colour is larger — role unconfirmed" };
+  }
+  return { verdict: "pass", measured: s, confidence, reason: `recorded ${recorded} is the largest non-background colour (${s.matchCount} px)` };
+}
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/accent-color.test.ts`
+Expected: PASS (6 tests). If the "secondary" fixture passes instead of abstaining, the sidebar bucket is not registering as larger — check the `deltaE2000(rgb, background) > tolerance * 2` distinctness filter (the sidebar must clear it; if not, widen the distinctness factor for the fixture's contrast).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/verify/detectors/pixels.ts src/verify/detectors/accent-color.ts src/verify/detectors/accent-color.test.ts
+git commit -m "feat(verify): accentColor detector with maximality contract"
+```
+
+---
+
+### Task 8: `cornerStyle` certifying detector + component helpers
+
+**Files:**
+- Modify: `src/verify/detectors/pixels.ts` (add `largestComponent`, `cornerMeasure`)
+- Create: `src/verify/detectors/corner-style.ts`
+- Test: `src/verify/detectors/corner-style.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `interface ComponentBox { x: number; y: number; width: number; height: number; area: number }`
+  - `largestComponent(raw: RawBuffer): ComponentBox | null` — BFS flood fill over non-background pixels.
+  - `interface CornerMeasure { radius: number; consistency: number }`
+  - `cornerMeasure(raw: RawBuffer, box: ComponentBox): CornerMeasure` — radius = diagonal corner deviation × 3.414 (deviation / (1 − 1/√2)); consistency = 1 − corner spread / max(mean, 1).
+  - `canAffirm(recorded)` — `sharp` | `slight-round` | `pill` only; `detect(entry, ctx)`.
+
+**Bucket vocabulary is the schema enum** (`sharp | slight-round | pill | mixed`): radius ≤ 2 `sharp`, 2 < radius ≤ 20 `slight-round`, > 20 `pill`. `mixed` is never affirmable — a single-radius measurement can neither affirm nor contradict it, so the field stays in vision (the runner's job).
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// src/verify/detectors/corner-style.test.ts
+import { describe, expect, it } from "vitest";
+import { createVerifyCtx } from "../ctx.js";
+import { fixtureImagePath } from "../__fixtures__/fixtures.js";
+import { detect } from "./corner-style.js";
+import type { CorpusEntryT } from "../../schema.js";
+
+function entry(cornerStyle: string): CorpusEntryT {
+  return {
+    id: "t", title: "t", patternType: "dashboard", colorScheme: "light",
+    categories: ["dashboard"], styleTags: ["minimal"], components: [],
+    layout: { form: "single-column", regions: [] },
+    visual: {
+      dominantColors: [], accentColor: null,
+      typePairing: { display: null, body: null },
+      spacingDensity: "moderate", cornerStyle: cornerStyle as CorpusEntryT["visual"]["cornerStyle"],
+      usesShadows: false, usesBorders: false,
+    },
+    antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
+    critique: "", whatToSteal: [], voice: null, mood: null,
+    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+  } as CorpusEntryT;
+}
+
+describe("cornerStyle detector", () => {
+  it("maps radii onto the schema vocabulary (no square/rounded values)", async () => {
+    const sharp = await createVerifyCtx(fixtureImagePath("corner-sharp-true"));
+    const slight = await createVerifyCtx(fixtureImagePath("corner-slight-true"));
+    const pill = await createVerifyCtx(fixtureImagePath("corner-pill-true"));
+    expect((await detect(entry("sharp"), sharp)).verdict).toBe("pass");
+    expect((await detect(entry("slight-round"), slight)).verdict).toBe("pass");
+    expect((await detect(entry("pill"), pill)).verdict).toBe("pass");
+  });
+
+  it("abstains on a band-boundary radius (2.5px)", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("corner-band"));
+    expect((await detect(entry("slight-round"), ctx)).verdict).toBe("abstain");
+  });
+
+  it("abstains on recorded mixed — never affirmable", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("corner-mixed"));
+    expect((await detect(entry("mixed"), ctx)).verdict).toBe("abstain");
+  });
+
+  it("contradicts a mismatched bucket", async () => {
+    const sharp = await createVerifyCtx(fixtureImagePath("corner-sharp-true"));
+    expect((await detect(entry("pill"), sharp)).verdict).toBe("contradicted");
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/corner-style.test.ts`
+Expected: FAIL — cannot resolve `./corner-style.js`.
+
+- [ ] **Step 3: Extend `pixels.ts` with component helpers**
+
+```ts
+// append to src/verify/detectors/pixels.ts
+export interface ComponentBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  area: number;
+}
+
+function bucketKey(r: number, g: number, b: number): number {
+  return ((r >> BUCKET_BITS) << 6) | ((g >> BUCKET_BITS) << 3) | (b >> BUCKET_BITS);
+}
+
+/** The most common colour bucket — treated as the image background. */
+export function backgroundBucketKey(raw: RawBuffer): number {
+  const { data, width, height } = raw;
+  const counts = new Map<number, number>();
+  for (let i = 0; i < width * height; i++) {
+    const key = bucketKey(data[i * 4], data[i * 4 + 1], data[i * 4 + 2]);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  let bestKey = -1;
+  let bestCount = 0;
+  for (const [key, count] of counts) {
+    if (count > bestCount) { bestCount = count; bestKey = key; }
+  }
+  return bestKey;
+}
+
+/** The largest connected region of non-background pixels (4-connectivity BFS). */
+export function largestComponent(raw: RawBuffer): ComponentBox | null {
+  const { data, width, height } = raw;
+  const n = width * height;
+  const bgKey = backgroundBucketKey(raw);
+  const visited = new Uint8Array(n);
+  let best: ComponentBox | null = null;
+  for (let start = 0; start < n; start++) {
+    if (visited[start]) continue;
+    const startKey = bucketKey(data[start * 4], data[start * 4 + 1], data[start * 4 + 2]);
+    if (startKey === bgKey) { visited[start] = 1; continue; }
+    let area = 0;
+    let minX = width, minY = height, maxX = -1, maxY = -1;
+    const queue = [start];
+    visited[start] = 1;
+    while (queue.length > 0) {
+      const i = queue.pop()!;
+      area++;
+      const x = i % width;
+      const y = (i / width) | 0;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      for (const j of [i - 1, i + 1, i - width, i + width]) {
+        if (j < 0 || j >= n || visited[j]) continue;
+        if (bucketKey(data[j * 4], data[j * 4 + 1], data[j * 4 + 2]) === bgKey) {
+          visited[j] = 1;
+          continue;
+        }
+        visited[j] = 1;
+        queue.push(j);
+      }
+    }
+    if (!best || area > best.area) {
+      best = { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1, area };
+    }
+  }
+  return best;
+}
+
+export interface CornerMeasure {
+  radius: number;
+  consistency: number;
+}
+
+/**
+ * Corner radius estimate: walk each bounding-box corner diagonally inward,
+ * counting background pixels until the first foreground pixel (0 for a sharp
+ * corner). deviation → radius via deviation / (1 − 1/√2) ≈ deviation × 3.414.
+ */
+export function cornerMeasure(raw: RawBuffer, box: ComponentBox): CornerMeasure {
+  const { data, width, height } = raw;
+  const bgKey = backgroundBucketKey(raw);
+  const isBg = (x: number, y: number): boolean => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return true;
+    const i = (y * width + x) * 4;
+    return bucketKey(data[i], data[i + 1], data[i + 2]) === bgKey;
+  };
+  const corners: Array<[number, number]> = [
+    [box.x, box.y],
+    [box.x + box.width - 1, box.y],
+    [box.x, box.y + box.height - 1],
+    [box.x + box.width - 1, box.y + box.height - 1],
+  ];
+  const deviations: number[] = [];
+  for (const [cx, cy] of corners) {
+    let k = 0;
+    while (k < 32 && isBg(cx + k, cy + k)) k++;
+    deviations.push(k);
+  }
+  const avg = deviations.reduce((a, b) => a + b, 0) / deviations.length;
+  const radius = avg * 3.414;
+  const spread = Math.max(...deviations) - Math.min(...deviations);
+  const consistency = Math.max(0, 1 - spread / Math.max(avg, 1));
+  return { radius, consistency };
+}
+```
+
+- [ ] **Step 4: Implement the detector**
+
+```ts
+// src/verify/detectors/corner-style.ts
+import type { CorpusEntryT } from "../../schema.js";
+import type { VerifyCtx } from "../ctx.js";
+import { ensureRaw } from "../ctx.js";
+import {
+  inBand,
+  recordedFor,
+  type ConfidenceBand,
+  type DetectorResult,
+} from "../detector-types.js";
+import { cornerMeasure, largestComponent } from "./pixels.js";
+
+const BAND: ConfidenceBand = { low: 0.25, high: 0.75 };
+const BOUNDARY_MARGIN = 3; // px; inside this distance of a bucket boundary -> band
+
+const AFFIRMABLE = new Set(["sharp", "slight-round", "pill"]);
+
+export function canAffirm(recorded: unknown): boolean {
+  return typeof recorded === "string" && AFFIRMABLE.has(recorded);
+}
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+
+export async function detect(entry: CorpusEntryT, ctx: VerifyCtx): Promise<DetectorResult> {
+  const recorded = recordedFor(entry, "visual.cornerStyle");
+  if (!canAffirm(recorded)) {
+    return {
+      verdict: "abstain", measured: recorded, confidence: 0.5,
+      reason: "mixed (or unaffirmable) corner style cannot be certified by a single-radius measurement",
+    };
+  }
+  const raw = await ensureRaw(ctx);
+  const box = largestComponent(raw);
+  if (!box || box.area < 64) {
+    return { verdict: "abstain", measured: null, confidence: 0.5, reason: "no measurable component" };
+  }
+  const m = cornerMeasure(raw, box);
+  if (m.consistency < 0.7) {
+    return { verdict: "abstain", measured: m, confidence: 0.5, reason: "corners disagree (consistency below 0.7)" };
+  }
+  const distanceToBoundary = Math.min(Math.abs(m.radius - 2), Math.abs(m.radius - 20));
+  const confidence = clamp01(0.5 - 0.5 * (distanceToBoundary / BOUNDARY_MARGIN));
+  if (inBand(BAND, confidence)) {
+    return { verdict: "abstain", measured: m, confidence, reason: `radius ${m.radius.toFixed(1)}px is inside the bucket boundary band` };
+  }
+  const measured = m.radius <= 2 ? "sharp" : m.radius <= 20 ? "slight-round" : "pill";
+  return measured === recorded
+    ? { verdict: "pass", measured: m, confidence, reason: `measured ${measured} (radius ${m.radius.toFixed(1)}px) matches recorded ${recorded}` }
+    : { verdict: "contradicted", measured: m, confidence, reason: `measured ${measured} (radius ${m.radius.toFixed(1)}px), recorded ${recorded}` };
+}
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/corner-style.test.ts`
+Expected: PASS (4 tests). If the slight-round fixture lands in the band, the radius estimate is too close to a boundary — tune `BOUNDARY_MARGIN` or the deviation→radius factor (3.414) against TUNE fixtures only.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/verify/detectors/pixels.ts src/verify/detectors/corner-style.ts src/verify/detectors/corner-style.test.ts
+git commit -m "feat(verify): cornerStyle detector on the schema vocabulary"
+```
+
+---
+
+### Task 9: `spacingDensity` certifying detector + gap helpers
+
+**Files:**
+- Modify: `src/verify/detectors/pixels.ts` (add `componentsOf`, `elementGaps`)
+- Create: `src/verify/detectors/spacing-density.ts`
+- Test: `src/verify/detectors/spacing-density.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `componentsOf(raw: RawBuffer): ComponentBox[]` — all non-background connected regions (reuses the BFS from `largestComponent`, collecting every component).
+  - `interface ElementGaps { count: number; medianGap: number; medianSize: number; gapRatio: number }`
+  - `elementGaps(raw: RawBuffer): ElementGaps` — nearest-neighbour Chebyshev distance between component bounding boxes; `gapRatio = medianGap / medianSize`.
+  - `canAffirm(recorded)` — all enum values; `detect(entry, ctx)`.
+
+**Buckets (calibration constants, tunable):** `gapRatio ≤ 1` `compact`, `≤ 2.5` `moderate`, `> 2.5` `spacious`. Fewer than 2 elements → `abstain` (a gap of zero / undefined is not evidence).
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// src/verify/detectors/spacing-density.test.ts
+import { describe, expect, it } from "vitest";
+import { createVerifyCtx } from "../ctx.js";
+import { fixtureImagePath } from "../__fixtures__/fixtures.js";
+import { detect } from "./spacing-density.js";
+import type { CorpusEntryT } from "../../schema.js";
+
+function entry(spacingDensity: string): CorpusEntryT {
+  return {
+    id: "t", title: "t", patternType: "dashboard", colorScheme: "light",
+    categories: ["dashboard"], styleTags: ["minimal"], components: [],
+    layout: { form: "single-column", regions: [] },
+    visual: {
+      dominantColors: [], accentColor: null,
+      typePairing: { display: null, body: null },
+      spacingDensity: spacingDensity as CorpusEntryT["visual"]["spacingDensity"],
+      cornerStyle: "sharp", usesShadows: false, usesBorders: false,
+    },
+    antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
+    critique: "", whatToSteal: [], voice: null, mood: null,
+    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+  } as CorpusEntryT;
+}
+
+describe("spacingDensity detector", () => {
+  it("passes compact / moderate / spacious grids", async () => {
+    const compact = await createVerifyCtx(fixtureImagePath("spacing-compact-true"));
+    const moderate = await createVerifyCtx(fixtureImagePath("spacing-moderate-true"));
+    const spacious = await createVerifyCtx(fixtureImagePath("spacing-spacious-true"));
+    expect((await detect(entry("compact"), compact)).verdict).toBe("pass");
+    expect((await detect(entry("moderate"), moderate)).verdict).toBe("pass");
+    expect((await detect(entry("spacious"), spacious)).verdict).toBe("pass");
+  });
+
+  it("contradicts a mismatched density", async () => {
+    const compact = await createVerifyCtx(fixtureImagePath("spacing-compact-true"));
+    expect((await detect(entry("spacious"), compact)).verdict).toBe("contradicted");
+  });
+
+  it("abstains on a single-element image rather than reporting a zero gap", async () => {
+    const single = await createVerifyCtx(fixtureImagePath("spacing-single"));
+    expect((await detect(entry("moderate"), single)).verdict).toBe("abstain");
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/spacing-density.test.ts`
+Expected: FAIL — cannot resolve `./spacing-density.js`.
+
+- [ ] **Step 3: Extend `pixels.ts` with the gap helpers**
+
+```ts
+// append to src/verify/detectors/pixels.ts
+/** Every non-background connected region (4-connectivity). */
+export function componentsOf(raw: RawBuffer): ComponentBox[] {
+  const { data, width, height } = raw;
+  const n = width * height;
+  const bgKey = backgroundBucketKey(raw);
+  const visited = new Uint8Array(n);
+  const out: ComponentBox[] = [];
+  for (let start = 0; start < n; start++) {
+    if (visited[start]) continue;
+    if (bucketKey(data[start * 4], data[start * 4 + 1], data[start * 4 + 2]) === bgKey) {
+      visited[start] = 1;
+      continue;
+    }
+    let area = 0;
+    let minX = width, minY = height, maxX = -1, maxY = -1;
+    const queue = [start];
+    visited[start] = 1;
+    while (queue.length > 0) {
+      const i = queue.pop()!;
+      area++;
+      const x = i % width;
+      const y = (i / width) | 0;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      for (const j of [i - 1, i + 1, i - width, i + width]) {
+        if (j < 0 || j >= n || visited[j]) continue;
+        if (bucketKey(data[j * 4], data[j * 4 + 1], data[j * 4 + 2]) === bgKey) {
+          visited[j] = 1;
+          continue;
+        }
+        visited[j] = 1;
+        queue.push(j);
+      }
+    }
+    out.push({ x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1, area });
+  }
+  return out;
+}
+
+export interface ElementGaps {
+  count: number;
+  medianGap: number;
+  medianSize: number;
+  gapRatio: number;
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * Median nearest-neighbour gap between component bounding boxes (Chebyshev),
+ * normalised by the median element size.
+ */
+export function elementGaps(raw: RawBuffer): ElementGaps {
+  const components = componentsOf(raw);
+  if (components.length < 2) {
+    return { count: components.length, medianGap: 0, medianSize: 0, gapRatio: 0 };
+  }
+  const nearest: number[] = [];
+  for (const a of components) {
+    let best = Infinity;
+    for (const b of components) {
+      if (a === b) continue;
+      const dx = Math.max(0, Math.abs(a.x - b.x) - a.width);
+      const dy = Math.max(0, Math.abs(a.y - b.y) - a.height);
+      best = Math.min(best, Math.max(dx, dy));
+    }
+    nearest.push(best);
+  }
+  const medianGap = median(nearest);
+  const medianSize = median(components.map((c) => Math.sqrt(c.area)));
+  return { count: components.length, medianGap, medianSize, gapRatio: medianGap / Math.max(medianSize, 1) };
+}
+```
+
+- [ ] **Step 4: Implement the detector**
+
+```ts
+// src/verify/detectors/spacing-density.ts
+import type { CorpusEntryT } from "../../schema.js";
+import type { VerifyCtx } from "../ctx.js";
+import { ensureRaw } from "../ctx.js";
+import {
+  inBand,
+  recordedFor,
+  type ConfidenceBand,
+  type DetectorResult,
+} from "../detector-types.js";
+import { elementGaps } from "./pixels.js";
+
+const COMPACT_MAX = 1;
+const MODERATE_MAX = 2.5;
+const BAND: ConfidenceBand = { low: 0.25, high: 0.75 };
+const BOUNDARY_MARGIN = 0.4; // gapRatio units; inside this distance of a bucket boundary -> band
+
+const AFFIRMABLE = new Set(["compact", "moderate", "spacious"]);
+
+export function canAffirm(recorded: unknown): boolean {
+  return typeof recorded === "string" && AFFIRMABLE.has(recorded);
+}
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+
+export async function detect(entry: CorpusEntryT, ctx: VerifyCtx): Promise<DetectorResult> {
+  const recorded = recordedFor(entry, "visual.spacingDensity");
+  if (!canAffirm(recorded)) {
+    return { verdict: "abstain", measured: recorded, confidence: 0.5, reason: "unaffirmable spacingDensity value" };
+  }
+  const raw = await ensureRaw(ctx);
+  const g = elementGaps(raw);
+  if (g.count < 2) {
+    return { verdict: "abstain", measured: g, confidence: 0.5, reason: "fewer than two elements — a zero gap is not evidence" };
+  }
+  const boundaries = [COMPACT_MAX, MODERATE_MAX];
+  const d = Math.min(...boundaries.map((b) => Math.abs(g.gapRatio - b)));
+  const confidence = clamp01(0.5 - 0.5 * (d / BOUNDARY_MARGIN));
+  if (inBand(BAND, confidence)) {
+    return { verdict: "abstain", measured: g, confidence, reason: `gapRatio ${g.gapRatio.toFixed(2)} is inside the bucket boundary band` };
+  }
+  const measured = g.gapRatio <= COMPACT_MAX ? "compact" : g.gapRatio <= MODERATE_MAX ? "moderate" : "spacious";
+  return measured === recorded
+    ? { verdict: "pass", measured: g, confidence, reason: `measured ${measured} (gapRatio ${g.gapRatio.toFixed(2)}) matches recorded ${recorded}` }
+    : { verdict: "contradicted", measured: g, confidence, reason: `measured ${measured} (gapRatio ${g.gapRatio.toFixed(2)}), recorded ${recorded}` };
+}
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/spacing-density.test.ts`
+Expected: PASS (3 tests). If a grid lands in the band, adjust the fixture gaps (Task 4) or `BOUNDARY_MARGIN` against TUNE fixtures only.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/verify/detectors/pixels.ts src/verify/detectors/spacing-density.ts src/verify/detectors/spacing-density.test.ts
+git commit -m "feat(verify): spacingDensity detector"
+```
+
+---
+
+### Task 10: `visual.colorRoles` contradiction-only detector
+
+**Files:**
+- Create: `src/verify/detectors/color-roles.ts`
+- Test: `src/verify/detectors/color-roles.test.ts`
+
+**Interfaces:**
+- Consumes: `colorStats`, `parseHex`, `deltaE2000` (`pixels.ts`), detector types, the `roles-card` fixture.
+- Produces: `canAffirm(recorded)` — always `false` (never pass); `detect(entry, ctx): Promise<DetectorResult>`.
+
+**Contract:** one key holding five sub-values. Presence of a hex does not verify its ROLE, so the detector can only disprove: a recorded hex wholly absent, or a `canvas` that is measurably not the largest-area colour → `contradicted`. A fully matching set → `abstain`, NEVER `pass` (the runner enforces the downgrade too).
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// src/verify/detectors/color-roles.test.ts
+import { describe, expect, it } from "vitest";
+import { createVerifyCtx } from "../ctx.js";
+import { fixtureImagePath } from "../__fixtures__/fixtures.js";
+import { detect } from "./color-roles.js";
+import type { CorpusEntryT } from "../../schema.js";
+
+const FULL_ROLES = {
+  canvas: "#f5f5f5", surface: "#ffffff", ink: "#111111", muted: null, accent: "#2563eb",
+};
+
+function entry(colorRoles: CorpusEntryT["visual"]["colorRoles"]): CorpusEntryT {
+  return {
+    id: "t", title: "t", patternType: "dashboard", colorScheme: "light",
+    categories: ["dashboard"], styleTags: ["minimal"], components: [],
+    layout: { form: "single-column", regions: [] },
+    visual: {
+      dominantColors: [], accentColor: null, colorRoles,
+      typePairing: { display: null, body: null },
+      spacingDensity: "moderate", cornerStyle: "sharp",
+      usesShadows: false, usesBorders: false,
+    },
+    antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
+    critique: "", whatToSteal: [], voice: null, mood: null,
+    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+  } as CorpusEntryT;
+}
+
+describe("colorRoles detector (contradiction-only)", () => {
+  it("never passes a fully matching role set — abstains instead", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("roles-card"));
+    const r = await detect(entry(FULL_ROLES), ctx);
+    expect(r.verdict).toBe("abstain");
+  });
+
+  it("contradicts a recorded hex wholly absent from the image", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("roles-card"));
+    const r = await detect(entry({ ...FULL_ROLES, ink: "#123456" }), ctx);
+    expect(r.verdict).toBe("contradicted");
+  });
+
+  it("contradicts a canvas that is not the largest-area colour", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("roles-card"));
+    const r = await detect(entry({ ...FULL_ROLES, canvas: "#ffffff" }), ctx);
+    expect(r.verdict).toBe("contradicted");
+  });
+
+  it("abstains on a malformed hex (unparseable, not disproven)", async () => {
+    const ctx = await createVerifyCtx(fixtureImagePath("roles-card"));
+    const r = await detect(entry({ ...FULL_ROLES, accent: "blue" }), ctx);
+    expect(r.verdict).toBe("abstain");
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/color-roles.test.ts`
+Expected: FAIL — cannot resolve `./color-roles.js`.
+
+- [ ] **Step 3: Implement**
+
+```ts
+// src/verify/detectors/color-roles.ts
+import type { CorpusEntryT } from "../../schema.js";
+import type { VerifyCtx } from "../ctx.js";
+import { ensureRaw } from "../ctx.js";
+import type { DetectorResult } from "../detector-types.js";
+import { colorStats, deltaE2000, parseHex } from "./pixels.js";
+
+const ROLE_TOLERANCE = 8;
+const CANVAS_EQUAL = 8;
+
+/** Contradiction-only: this detector can disprove but never grant a pass. */
+export function canAffirm(): boolean {
+  return false;
+}
+
+const ROLES = ["canvas", "surface", "ink", "muted", "accent"] as const;
+
+export async function detect(entry: CorpusEntryT, ctx: VerifyCtx): Promise<DetectorResult> {
+  const roles = entry.visual?.colorRoles;
+  if (!roles) {
+    return { verdict: "abstain", measured: null, confidence: 0.5, reason: "no recorded colorRoles" };
+  }
+  const raw = await ensureRaw(ctx);
+  const checked: string[] = [];
+  const skipped: string[] = [];
+  for (const role of ROLES) {
+    const hex = roles[role];
+    if (hex === null || hex === undefined) continue;
+    let target: [number, number, number];
+    try {
+      target = parseHex(hex);
+    } catch {
+      skipped.push(role);
+      continue;
+    }
+    const s = colorStats(raw, target, ROLE_TOLERANCE);
+    if (s.matchCount === 0) {
+      return {
+        verdict: "contradicted", measured: { role, hex }, confidence: 0,
+        reason: `recorded ${role} ${hex} is absent from the image`,
+      };
+    }
+    checked.push(role);
+    if (role === "canvas") {
+      if (deltaE2000(target, s.background) > CANVAS_EQUAL) {
+        return {
+          verdict: "contradicted", measured: { role, hex, background: s.background }, confidence: 0,
+          reason: `recorded canvas ${hex} is not the largest-area colour (background is ${s.background.join(",")})`,
+        };
+      }
+    }
+  }
+  if (skipped.length > 0) {
+    return { verdict: "abstain", measured: { checked, skipped }, confidence: 0.5, reason: `unparseable role hexes: ${skipped.join(", ")}` };
+  }
+  return {
+    verdict: "abstain", measured: { checked }, confidence: 0.5,
+    reason: "all recorded role hexes are present, but presence does not confirm role assignment",
+  };
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/color-roles.test.ts`
+Expected: PASS (4 tests). The malformed-hex case returns `abstain` even though all other roles are present — that is the "unparseable is unverifiable, not disproven" contract.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/verify/detectors/color-roles.ts src/verify/detectors/color-roles.test.ts
+git commit -m "feat(verify): colorRoles contradiction-only detector"
+```
+
+---
+
+### Task 11: `antiPatterns.accessibilityRisks` contradiction-only detector
+
+**Files:**
+- Create: `src/verify/detectors/accessibility-risks.ts`
+- Test: `src/verify/detectors/accessibility-risks.test.ts`
+
+**Interfaces:**
+- Consumes: `culori` (`wcagContrast`), detector types. No pixels, no `ctx` — pure arithmetic over the recorded risk strings and hexes.
+- Produces: `canAffirm(recorded)` — always `false`; `detect(entry, _ctx): Promise<DetectorResult>`.
+
+**Contract:** a listed contrast risk that is arithmetically FALSE is bad data worth surfacing. Only risks that name a WCAG contrast criterion (1.4.3 / 1.4.11) AND carry two parseable hexes are checkable; a risk that "comfortably clears" its threshold (`ratio >= threshold + 0.5`) is `contradicted`. Everything else — hit-target risks, no hexes, a genuine low ratio — is `abstain` (not disproven). `muted` role hexes are nullable; the detector only ever reads the risk string itself.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// src/verify/detectors/accessibility-risks.test.ts
+import { describe, expect, it } from "vitest";
+import { detect } from "./accessibility-risks.js";
+import type { CorpusEntryT } from "../../schema.js";
+
+function entry(risks: Array<{ element?: string; risk?: string }>): CorpusEntryT {
+  return {
+    id: "t", title: "t", patternType: "dashboard", colorScheme: "light",
+    categories: ["dashboard"], styleTags: ["minimal"], components: [],
+    layout: { form: "single-column", regions: [] },
+    visual: {
+      dominantColors: [], accentColor: null,
+      typePairing: { display: null, body: null },
+      spacingDensity: "moderate", cornerStyle: "sharp",
+      usesShadows: false, usesBorders: false,
+    },
+    antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: risks },
+    critique: "", whatToSteal: [], voice: null, mood: null,
+    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+  } as CorpusEntryT;
+}
+
+describe("accessibilityRisks detector (contradiction-only)", () => {
+  it("contradicts a 12:1 pair carrying a 1.4.3 claim (arithmetically false)", async () => {
+    const r = await detect(
+      entry([{ element: "body", risk: "text #111111 on #ffffff fails WCAG 1.4.3" }]),
+      null as never,
+    );
+    expect(r.verdict).toBe("contradicted");
+    expect((r.measured as { ratio: number }).ratio).toBeGreaterThan(5);
+  });
+
+  it("abstains on a genuine 2.1:1 pair (not disproven)", async () => {
+    const r = await detect(
+      entry([{ element: "body", risk: "text #9ca3af on #ffffff fails WCAG 1.4.3" }]),
+      null as never,
+    );
+    expect(r.verdict).toBe("abstain");
+  });
+
+  it("contradicts a false 1.4.11 non-text claim", async () => {
+    const r = await detect(
+      entry([{ element: "button", risk: "button #0000ff on #ffffff fails WCAG 1.4.11" }]),
+      null as never,
+    );
+    expect(r.verdict).toBe("contradicted");
+  });
+
+  it("abstains on a hit-target risk with no contrast criterion", async () => {
+    const r = await detect(
+      entry([{ element: "button", risk: "hit target smaller than 24px" }]),
+      null as never,
+    );
+    expect(r.verdict).toBe("abstain");
+  });
+
+  it("abstains when no risks are recorded", async () => {
+    const r = await detect(entry([]), null as never);
+    expect(r.verdict).toBe("abstain");
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/accessibility-risks.test.ts`
+Expected: FAIL — cannot resolve `./accessibility-risks.js`.
+
+- [ ] **Step 3: Implement**
+
+```ts
+// src/verify/detectors/accessibility-risks.ts
+import { wcagContrast } from "culori";
+import type { CorpusEntryT } from "../../schema.js";
+import type { VerifyCtx } from "../ctx.js";
+import type { DetectorResult } from "../detector-types.js";
+
+/** Contradiction-only: contrast arithmetic can disprove a listed risk, never confirm the field. */
+export function canAffirm(): boolean {
+  return false;
+}
+
+const CRITERION = /1\.4\.3|1\.4\.11/;
+const HEX = /#[0-9a-fA-F]{6}/g;
+const CLEAR_MARGIN = 0.5; // comfortably clears the threshold
+
+export async function detect(entry: CorpusEntryT, _ctx: VerifyCtx): Promise<DetectorResult> {
+  const risks = entry.antiPatterns?.accessibilityRisks ?? [];
+  if (risks.length === 0) {
+    return { verdict: "abstain", measured: null, confidence: 0.5, reason: "no recorded accessibility risks" };
+  }
+  for (const r of risks) {
+    const text = r.risk ?? "";
+    const criterion = text.match(CRITERION)?.[0];
+    const hexes = [...text.matchAll(HEX)].map((m) => m[0].toLowerCase());
+    if (!criterion || hexes.length < 2) continue;
+    const ratio = wcagContrast(hexes[0], hexes[1]);
+    const threshold = criterion === "1.4.3" ? 4.5 : 3.0;
+    if (ratio >= threshold + CLEAR_MARGIN) {
+      return {
+        verdict: "contradicted", measured: { risk: text, criterion, ratio }, confidence: 0,
+        reason: `listed ${criterion} risk is arithmetically false: ${hexes[0]} vs ${hexes[1]} is ${ratio.toFixed(2)}:1 (clears ${threshold}:1)`,
+      };
+    }
+  }
+  return {
+    verdict: "abstain", measured: null, confidence: 0.5,
+    reason: "no checkable contrast risk was disproven (either no criterion+hex pair, or the ratio is genuinely low)",
+  };
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/accessibility-risks.test.ts`
+Expected: PASS (5 tests).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/verify/detectors/accessibility-risks.ts src/verify/detectors/accessibility-risks.test.ts
+git commit -m "feat(verify): accessibilityRisks contradiction-only detector"
+```
+
+---
+
+### Task 12: The registry, the runner, and verifyEntry integration
+
+**Files:**
+- Create: `src/verify/detectors/platform.ts` (moves `verifyMechanicalFields`' platform logic)
+- Create: `src/verify/detectors/dominant-colors.ts` (moves the dominantColors logic)
+- Create: `src/verify/detector-registry.ts`
+- Create: `src/verify/runner.ts`
+- Create: `src/verify/detector-registry.test.ts` (registry contract test)
+- Create: `src/verify/runner.test.ts` (verifyEntry integration: pending shrinks, non-affirmable stays, contradicted excluded, `--detectors off` byte-identical)
+- Modify: `src/scripts/verify-corpus.ts` (TIER_BY_FIELD reclassification, value-aware pending filter, `runDetectors` wiring, `--detectors` CLI flag; delete `verifyMechanicalFields`)
+- Modify: `src/scripts/verify-corpus.test.ts` (delete the old `verifyMechanicalFields` tests; they move to the runner tests)
+
+**Interfaces:**
+- Consumes: all detector modules (Tasks 5–11), `recordedFor` / `inBand` / `DetectorEntry` (detector-types), `createVerifyCtx` / `ensureRaw` (ctx).
+- Produces:
+  - `detectorRegistry: Record<string, DetectorEntry>` — the single place deterministic status is declared.
+  - `capVerdict(det: DetectorEntry, result: DetectorResult, recorded: unknown): DetectorVerdict` — band wins; contradiction-only `pass` → `abstain`; certifying `pass` on a non-affirmable value → `abstain`.
+  - `interface RunDetectorsOutcome { passes: string[]; contradicted: string[]; abstained: string[] }`
+  - `runDetectors(entry, ctx, opts?: { detectors?: boolean }): Promise<RunDetectorsOutcome>` — `detectors: false` runs ONLY `platform` + `visual.dominantColors` (they stay deterministic today); every detector is wrapped so a throw → `abstain` for that field.
+  - `fieldLeavesVisionForEntry(entry, field, detectorsEnabled): boolean` — the value-aware pending filter.
+  - `verifyEntry(entry, imagePath, deps)` now takes `deps.detectors?: boolean` (default `true`).
+
+- [ ] **Step 1: Write the failing registry contract test**
+
+```ts
+// src/verify/detector-registry.test.ts
+import { describe, expect, it } from "vitest";
+import { tierForField } from "../scripts/verify-corpus.js";
+import { detectorRegistry } from "./detector-registry.js";
+
+describe("detector registry contract", () => {
+  const mechanicalFields = Object.entries(tierForField)
+    .filter(([, tier]) => tier === "mechanical")
+    .map(([field]) => field);
+
+  it("every mechanical field has a registered certifying detector", () => {
+    for (const field of mechanicalFields) {
+      const det = detectorRegistry[field];
+      expect(det, `no detector for mechanical field ${field}`).toBeDefined();
+      if (det && !det.disabled) {
+        expect(det.category, `${field} is mechanical but its detector is not certifying`).toBe("certifying");
+      }
+    }
+  });
+
+  it("every certifying detector's field is mechanical (disabled exempt)", () => {
+    for (const [field, det] of Object.entries(detectorRegistry)) {
+      if (det.disabled) continue;
+      if (det.category === "certifying") {
+        expect(tierForField(field), `${field} has a certifying detector but is not mechanical`).toBe("mechanical");
+      } else {
+        expect(tierForField(field), `${field} is contradiction-only but classified mechanical`).not.toBe("mechanical");
+      }
+      expect(typeof det.canAffirm, `${field} declares canAffirm`).toBe("function");
+    }
+  });
+
+  it("value-dependence boundary: false shadow/border claims are never affirmable", () => {
+    expect(detectorRegistry["visual.usesShadows"].canAffirm(false)).toBe(false);
+    expect(detectorRegistry["visual.usesShadows"].canAffirm(true)).toBe(true);
+    expect(detectorRegistry["visual.usesBorders"].canAffirm(false)).toBe(false);
+    expect(detectorRegistry["visual.cornerStyle"].canAffirm("mixed")).toBe(false);
+    expect(detectorRegistry["visual.cornerStyle"].canAffirm("slight-round")).toBe(true);
+    expect(detectorRegistry["visual.colorRoles"].canAffirm({})).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detector-registry.test.ts`
+Expected: FAIL — cannot resolve `./detector-registry.js` (and `tierForField` is not a map — the test's first line reads it as an object; see Step 4 for the corrected import).
+
+- [ ] **Step 3: Create the two moved detectors**
+
+```ts
+// src/verify/detectors/platform.ts
+import type { CorpusEntryT } from "../../schema.js";
+import { detectPlatform } from "../../schema.js";
+import type { VerifyCtx } from "../ctx.js";
+import type { DetectorResult } from "../detector-types.js";
+
+export function canAffirm(): boolean {
+  return true;
+}
+
+/** Recomputed from RECORDED data — provable, no pixels, no image hash. */
+export async function detect(entry: CorpusEntryT, _ctx: VerifyCtx): Promise<DetectorResult> {
+  const width = entry.image?.width ?? null;
+  const height = entry.image?.height ?? null;
+  const recorded = entry.platform ?? null;
+  if (width === null || height === null || recorded === null) {
+    return { verdict: "abstain", measured: null, confidence: 0.5, reason: "image dimensions or recorded platform missing" };
+  }
+  const recomputed = detectPlatform(width, height);
+  return recomputed === recorded
+    ? { verdict: "pass", measured: recomputed, confidence: 1, reason: `detectPlatform(${width}, ${height}) matches` }
+    : { verdict: "contradicted", measured: recomputed, confidence: 0, reason: `detectPlatform gives ${recomputed}, recorded ${recorded}` };
+}
+```
+
+```ts
+// src/verify/detectors/dominant-colors.ts
+import type { CorpusEntryT } from "../../schema.js";
+import type { VerifyCtx } from "../ctx.js";
+import { extractQuantizedColors } from "../../tagger.js";
+import type { DetectorResult } from "../detector-types.js";
+
+export function canAffirm(): boolean {
+  return true;
+}
+
+/** Recomputed from the PIXELS via Vibrant — image-confirmed, bound to the bytes. */
+export async function detect(entry: CorpusEntryT, ctx: VerifyCtx): Promise<DetectorResult> {
+  const recordedColors = entry.visual?.dominantColors ?? null;
+  if (recordedColors === null || recordedColors.length === 0) {
+    return { verdict: "abstain", measured: null, confidence: 0.5, reason: "no recorded dominantColors" };
+  }
+  const extracted = await extractQuantizedColors(ctx.imagePath);
+  const extractedSet = new Set(extracted);
+  const missing = recordedColors.filter((c) => !extractedSet.has(c.toLowerCase()));
+  return missing.length === 0
+    ? { verdict: "pass", measured: extracted, confidence: 1, reason: "recorded colors all present in the extracted set" }
+    : { verdict: "contradicted", measured: missing, confidence: 0, reason: `recorded colors absent from extraction: ${missing.join(", ")}` };
+}
+```
+
+- [ ] **Step 4: Create the registry**
+
+```ts
+// src/verify/detector-registry.ts
+import type { DetectorEntry } from "./detector-types.js";
+import { detect as detectAccessibility } from "./detectors/accessibility-risks.js";
+import { canAffirm as affirmAccessibility } from "./detectors/accessibility-risks.js";
+import { detect as detectAccent, canAffirm as affirmAccent } from "./detectors/accent-color.js";
+import { detect as detectBorders, canAffirm as affirmBorders } from "./detectors/uses-borders.js";
+import { detect as detectColorRoles, canAffirm as affirmColorRoles } from "./detectors/color-roles.js";
+import { detect as detectCorner, canAffirm as affirmCorner } from "./detectors/corner-style.js";
+import { detect as detectDominant } from "./detectors/dominant-colors.js";
+import { detect as detectPlatform } from "./detectors/platform.js";
+import { detect as detectShadows, canAffirm as affirmShadows } from "./detectors/uses-shadows.js";
+import { detect as detectSpacing, canAffirm as affirmSpacing } from "./detectors/spacing-density.js";
+
+/** Exact arithmetic detectors never fire the band (confidence is 0 or 1). */
+const EXACT_BAND = { low: 0.001, high: 0.999 };
+const PIXEL_BAND = { low: 0.25, high: 0.75 };
+
+/**
+ * The single place a field's deterministic status is declared. The contract
+ * test in detector-registry.test.ts pins TIER_BY_FIELD to this table.
+ */
+export const detectorRegistry: Record<string, DetectorEntry> = {
+  platform: { detect: detectPlatform, category: "certifying", accuracyFloor: 1, confidenceBand: EXACT_BAND, canAffirm: () => true },
+  "visual.dominantColors": { detect: detectDominant, category: "certifying", accuracyFloor: 1, confidenceBand: EXACT_BAND, canAffirm: () => true },
+  "visual.usesBorders": { detect: detectBorders, category: "certifying", accuracyFloor: 0.8, confidenceBand: PIXEL_BAND, canAffirm: affirmBorders },
+  "visual.usesShadows": { detect: detectShadows, category: "certifying", accuracyFloor: 0.7, confidenceBand: PIXEL_BAND, canAffirm: affirmShadows },
+  "visual.accentColor": { detect: detectAccent, category: "certifying", accuracyFloor: 0.9, confidenceBand: PIXEL_BAND, canAffirm: affirmAccent },
+  "visual.cornerStyle": { detect: detectCorner, category: "certifying", accuracyFloor: 0.8, confidenceBand: PIXEL_BAND, canAffirm: affirmCorner },
+  "visual.spacingDensity": { detect: detectSpacing, category: "certifying", accuracyFloor: 0.8, confidenceBand: PIXEL_BAND, canAffirm: affirmSpacing },
+  "visual.colorRoles": { detect: detectColorRoles, category: "contradiction-only", accuracyFloor: 0.9, confidenceBand: PIXEL_BAND, canAffirm: affirmColorRoles },
+  "antiPatterns.accessibilityRisks": { detect: detectAccessibility, category: "contradiction-only", accuracyFloor: 0.9, confidenceBand: PIXEL_BAND, canAffirm: affirmAccessibility },
+};
+```
+
+Then fix the contract test's import: `tierForField` is a function, not a map. Replace the first line of the test with a small helper:
+
+```ts
+// in detector-registry.test.ts — replace `Object.entries(tierForField)` with:
+const TIERS: Array<[string, ReturnType<typeof tierForField>]> = [
+  "platform", "visual.dominantColors", "visual.colorRoles", "visual.accentColor",
+  "layout", "components", "visual.usesShadows", "visual.usesBorders",
+  "visual.typePairing", "antiPatterns.accessibilityRisks", "critique", "whatToSteal",
+  "antiPatterns", "voice", "mood", "colorScheme", "visual.spacingDensity",
+  "visual.cornerStyle", "styleTags", "categories", "domainTags", "patternType",
+  "responsiveBehavior",
+].map((field) => [field, tierForField(field)] as [string, ReturnType<typeof tierForField>]);
+const mechanicalFields = TIERS.filter(([, tier]) => tier === "mechanical").map(([field]) => field);
+```
+
+- [ ] **Step 5: Write the failing runner integration test**
+
+```ts
+// src/verify/runner.test.ts
+import { describe, expect, it } from "vitest";
+import { fixtureImagePath } from "./__fixtures__/fixtures.js";
+import { verifyEntry } from "../scripts/verify-corpus.js";
+import type { CorpusEntryT } from "../schema.js";
+
+function entry(overrides: Partial<CorpusEntryT> = {}): CorpusEntryT {
+  return {
+    id: "t", title: "t", patternType: "dashboard", colorScheme: "light",
+    categories: ["dashboard"], styleTags: ["minimal"], components: ["sidebar-nav"],
+    layout: { form: "single-column", regions: [{ role: "sidebar" }] },
+    visual: {
+      dominantColors: ["#f5f5f5", "#2563eb"], accentColor: "#2563eb",
+      colorRoles: { canvas: "#f5f5f5", surface: "#ffffff", ink: "#111111", muted: null, accent: "#2563eb" },
+      typePairing: { display: "Geist", body: "Geist" },
+      spacingDensity: "moderate", cornerStyle: "slight-round",
+      usesShadows: true, usesBorders: true,
+    },
+    antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
+    critique: "A", whatToSteal: ["B"], voice: null, mood: null,
+    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+    ...overrides,
+  } as CorpusEntryT;
+}
+
+function deps(prompts: string[]) {
+  return {
+    now: () => "2026-08-07",
+    callVision: async (prompt: string) => { prompts.push(prompt); return "{}"; },
+    reproduce: async (e: CorpusEntryT) => e,
+  };
+}
+
+describe("verifyEntry with the detector registry", () => {
+  it("keeps affirmable mechanical fields out of the vision pending list", async () => {
+    const prompts: string[] = [];
+    const image = fixtureImagePath("roles-card");
+    await verifyEntry(entry(), image, deps(prompts));
+    const prompt = prompts[0] ?? "";
+    expect(prompt).not.toContain("visual.usesShadows");
+    expect(prompt).not.toContain("visual.usesBorders");
+    expect(prompt).not.toContain("visual.cornerStyle");
+  });
+
+  it("keeps a non-affirmable recorded false claim in the pending list", async () => {
+    const prompts: string[] = [];
+    const image = fixtureImagePath("borders-flat-true");
+    const e = entry({ visual: { ...entry().visual!, usesShadows: false, usesBorders: false } });
+    await verifyEntry(e, image, deps(prompts));
+    expect(prompts[0] ?? "").toContain("visual.usesShadows");
+    expect(prompts[0] ?? "").toContain("visual.usesBorders");
+  });
+
+  it("excludes a contradicted field from the vision call", async () => {
+    const prompts: string[] = [];
+    const image = fixtureImagePath("borders-stroke-true");
+    const e = entry({ visual: { ...entry().visual!, usesBorders: false } });
+    await verifyEntry(e, image, deps(prompts));
+    expect(prompts[0] ?? "").not.toContain("visual.usesBorders");
+  });
+
+  it("--detectors off restores the legacy pending list (byte-identical to today)", async () => {
+    const prompts: string[] = [];
+    const image = fixtureImagePath("roles-card");
+    await verifyEntry(entry(), image, { ...deps(prompts), detectors: false });
+    const prompt = prompts[0] ?? "";
+    expect(prompt).toContain("visual.usesShadows");
+    expect(prompt).toContain("visual.usesBorders");
+    expect(prompt).toContain("visual.cornerStyle");
+  });
+});
+```
+
+- [ ] **Step 6: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/runner.test.ts`
+Expected: FAIL — `verifyEntry` does not consult the registry yet; mechanical fields are not reclassified; the `detectors` dep does not exist.
+
+- [ ] **Step 7: Implement the runner**
+
+```ts
+// src/verify/runner.ts
+import type { CorpusEntryT } from "../schema.js";
+import type { VerifyCtx } from "./ctx.js";
+import {
+  inBand,
+  recordedFor,
+  type DetectorEntry,
+  type DetectorResult,
+  type DetectorVerdict,
+} from "./detector-types.js";
+import { detectorRegistry } from "./detector-registry.js";
+
+export interface RunDetectorsOutcome {
+  passes: string[];
+  contradicted: string[];
+  abstained: string[];
+}
+
+/**
+ * The runner-enforced caps. The band wins; a contradiction-only `pass` is a
+ * downgrade; a certifying `pass` on a non-affirmable value is a downgrade.
+ */
+export function capVerdict(det: DetectorEntry, result: DetectorResult, recorded: unknown): DetectorVerdict {
+  if (inBand(det.confidenceBand, result.confidence)) return "abstain";
+  if (result.verdict !== "pass") return result.verdict;
+  if (det.category === "contradiction-only") return "abstain";
+  if (!det.canAffirm(recorded)) return "abstain";
+  return "pass";
+}
+
+/**
+ * Runs every registered detector. `detectors: false` runs ONLY the two
+ * pre-existing deterministic fields (platform, dominantColors) — everything
+ * else returns to the vision pending list, byte-identical to today.
+ */
+export async function runDetectors(
+  entry: CorpusEntryT,
+  ctx: VerifyCtx,
+  opts: { detectors?: boolean } = {},
+): Promise<RunDetectorsOutcome> {
+  const detectors = opts.detectors ?? true;
+  const outcome: RunDetectorsOutcome = { passes: [], contradicted: [], abstained: [] };
+  for (const [field, det] of Object.entries(detectorRegistry)) {
+    if (det.disabled) continue;
+    if (!detectors && field !== "platform" && field !== "visual.dominantColors") continue;
+    const recorded = recordedFor(entry, field);
+    let result: DetectorResult;
+    try {
+      result = await det.detect(entry, ctx);
+    } catch (err) {
+      outcome.abstained.push(field);
+      continue;
+    }
+    const verdict = capVerdict(det, result, recorded);
+    if (verdict === "pass") outcome.passes.push(field);
+    else if (verdict === "contradicted") outcome.contradicted.push(field);
+    else outcome.abstained.push(field);
+  }
+  return outcome;
+}
+```
+
+- [ ] **Step 8: Wire it into `verify-corpus.ts`**
+
+Reclassify the five fields in `TIER_BY_FIELD` (lines 38–61): change `visual.usesShadows`, `visual.usesBorders`, `visual.accentColor` from `"factual"` to `"mechanical"`, and `visual.spacingDensity`, `visual.cornerStyle` from `"soft"` to `"mechanical"`. Add the value-aware filter and replace `verifyMechanicalFields` in `verifyEntry`:
+
+```ts
+// in verify-corpus.ts — new helper next to tierForField:
+import { detectorRegistry } from "../verify/detector-registry.js";
+import { createVerifyCtx } from "../verify/ctx.js";
+import { runDetectors } from "../verify/runner.js";
+import { recordedFor } from "../verify/detector-types.js";
+
+/**
+ * Value-aware pending filter. A mechanical field leaves the vision path only
+ * when its recorded value is AFFIRMABLE by its certifying detector; a
+ * recorded-false shadow/border claim or cornerStyle:mixed stays in vision.
+ * With `detectors: false`, only platform + dominantColors stay mechanical.
+ */
+export function fieldLeavesVisionForEntry(
+  entry: CorpusEntryT,
+  field: string,
+  detectorsEnabled: boolean,
+): boolean {
+  if (tierForField(field) !== "mechanical") return false;
+  const det = detectorRegistry[field];
+  if (!det || det.disabled) return false;
+  if (!detectorsEnabled && field !== "platform" && field !== "visual.dominantColors") return false;
+  return det.canAffirm(recordedFor(entry, field));
+}
+```
+
+Then in `verifyEntry`, replace the mechanical block and the pending filter:
+
+```ts
+// replaces "// 1. Mechanical checks" and the pending construction in verifyEntry:
+const detectorsEnabled = deps.detectors ?? true;
+const ctx = await createVerifyCtx(imagePath);
+const outcome = await runDetectors(entry, ctx, { detectors: detectorsEnabled });
+for (const field of outcome.passes) {
+  records[field] = field === "platform" ? provableRecord(now) : confirmedRecord(imagePath, now);
+}
+for (const field of outcome.passes) verdicts.push({ field, verdict: "pass", reason: "detector" });
+for (const field of outcome.contradicted) verdicts.push({ field, verdict: "contradicted", reason: "detector contradiction" });
+for (const field of outcome.abstained) verdicts.push({ field, verdict: "abstain", reason: "detector abstained" });
+const pending = Object.keys(TIER_BY_FIELD).filter(
+  (field) =>
+    !fieldLeavesVisionForEntry(entry, field, detectorsEnabled)
+    && tierForField(field) !== "gated"
+    && !outcome.contradicted.includes(field)
+    && !alreadyProcessedAtVersion(entry, field, VERIFIER_VERSION),
+);
+```
+
+Add `detectors?: boolean` to `VerifyEntryDeps`, delete `verifyMechanicalFields` (its logic now lives in `detectors/platform.ts` + `detectors/dominant-colors.ts`), and delete the old `verifyMechanicalFields` tests from `verify-corpus.test.ts`. In `main()`, add the CLI flag:
+
+```ts
+// in main()'s parseArgs options:
+"detectors": { type: "string" },
+// ...
+const detectorsEnabled = values.detectors !== "off";
+// pass to every verifyEntry deps object:
+const deps = { now: () => new Date().toISOString().slice(0, 10), callVision, reproduce, detectors: detectorsEnabled };
+```
+
+- [ ] **Step 9: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/runner.test.ts src/verify/detector-registry.test.ts`
+Expected: PASS. Then the existing suite:
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/scripts/verify-corpus.test.ts`
+Expected: PASS after the old mechanical tests are removed.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add src/verify/ src/scripts/verify-corpus.ts src/scripts/verify-corpus.test.ts
+git commit -m "feat(verify): detector registry, value-aware runner, verifyEntry integration"
+```
+
+---
+
+### Task 13: Calibration — held-out gate + real-screenshot CLI
+
+**Files:**
+- Create: `src/verify/calibration.ts`
+- Create: `src/verify/calibration.test.ts`
+- Create: `src/verify/calibration-cli.ts`
+- Modify: `package.json` (`calibrate-detectors` script)
+
+**Interfaces:**
+- Consumes: `detectorRegistry`, `capVerdict`, `recordedFor`, fixture manifest, `createVerifyCtx`.
+- Produces:
+  - `interface CalibrationRow { field: string; id: string; label: string; verdict: string; correct: boolean }`
+  - `interface CalibrationResult { accuracy: number; decisiveRate: number; rows: CalibrationRow[]; byField: Record<string, { accuracy: number; decisiveRate: number }> }`
+  - `calibrate(manifest: FixtureManifest, split: "tune" | "held-out"): Promise<CalibrationResult>`
+  - `assertGate(result: CalibrationResult, registry: typeof detectorRegistry): string[]` — returns the fields failing `accuracy >= floor` OR `decisiveRate >= 0.4`.
+
+**Gate honesty:** exact-match accuracy alone can be gamed by abstaining everything, so the gate also requires `decisiveRate >= 0.4` (the detector must actually decide on at least 40% of held-out fixtures). The tune set is never CI-gated.
+
+- [ ] **Step 1: Write the failing gate test**
+
+```ts
+// src/verify/calibration.test.ts
+import { describe, expect, it } from "vitest";
+import { fixtureManifest } from "./__fixtures__/fixtures.js";
+import { calibrate, assertGate } from "./calibration.js";
+import { detectorRegistry } from "./detector-registry.js";
+
+describe("calibration gate", () => {
+  it("measures held-out accuracy and asserts every enabled certifying detector clears its floor", async () => {
+    const manifest = fixtureManifest();
+    const result = await calibrate(manifest, "held-out");
+    const failing = assertGate(result, detectorRegistry);
+    expect(failing).toEqual([]);
+  });
+
+  it("never gates on the tune set", async () => {
+    const manifest = fixtureManifest();
+    const tune = await calibrate(manifest, "tune");
+    expect(tune.accuracy).toBeGreaterThanOrEqual(0);
+    expect(tune.rows.length).toBeGreaterThan(0);
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/calibration.test.ts`
+Expected: FAIL — cannot resolve `./calibration.js`.
+
+- [ ] **Step 3: Implement**
+
+```ts
+// src/verify/calibration.ts
+import type { CorpusEntryT } from "../schema.js";
+import { createVerifyCtx } from "./ctx.js";
+import { recordedFor } from "./detector-types.js";
+import { capVerdict } from "./runner.js";
+import { detectorRegistry } from "./detector-registry.js";
+import type { FixtureManifest } from "./__fixtures__/generate-detector-fixtures.js";
+
+export interface CalibrationRow {
+  field: string;
+  id: string;
+  label: string;
+  verdict: string;
+  correct: boolean;
+}
+
+export interface CalibrationResult {
+  accuracy: number;
+  decisiveRate: number;
+  rows: CalibrationRow[];
+  byField: Record<string, { accuracy: number; decisiveRate: number }>;
+}
+
+/** Builds a minimal entry carrying the fixture's recorded value. */
+function entryForFixture(fixture: { field: string; recorded: unknown }, base: CorpusEntryT): CorpusEntryT {
+  const field = fixture.field;
+  const e: CorpusEntryT = { ...base };
+  if (field === "visual.usesShadows") e.visual = { ...e.visual!, usesShadows: fixture.recorded as boolean };
+  if (field === "visual.usesBorders") e.visual = { ...e.visual!, usesBorders: fixture.recorded as boolean };
+  if (field === "visual.accentColor") e.visual = { ...e.visual!, accentColor: fixture.recorded as string | null };
+  if (field === "visual.cornerStyle") e.visual = { ...e.visual!, cornerStyle: fixture.recorded as CorpusEntryT["visual"]["cornerStyle"] };
+  if (field === "visual.spacingDensity") e.visual = { ...e.visual!, spacingDensity: fixture.recorded as CorpusEntryT["visual"]["spacingDensity"] };
+  if (field === "visual.colorRoles") e.visual = { ...e.visual!, colorRoles: fixture.recorded as CorpusEntryT["visual"]["colorRoles"] };
+  return e;
+}
+
+export async function calibrate(manifest: FixtureManifest, split: "tune" | "held-out"): Promise<CalibrationResult> {
+  const rows: CalibrationRow[] = [];
+  const base: CorpusEntryT = {
+    id: "fixture", title: "fixture", patternType: "dashboard", colorScheme: "light",
+    categories: ["dashboard"], styleTags: [], components: [],
+    layout: { form: "single-column", regions: [] },
+    visual: {
+      dominantColors: [], accentColor: null,
+      typePairing: { display: null, body: null },
+      spacingDensity: "moderate", cornerStyle: "sharp",
+      usesShadows: false, usesBorders: false,
+    },
+    antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
+    critique: "", whatToSteal: [], voice: null, mood: null,
+    platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+  };
+  const { join } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const DIR = fileURLToPath(new URL("./__fixtures__/", import.meta.url));
+  for (const fixture of manifest.fixtures) {
+    if (fixture.split !== split) continue;
+    const det = detectorRegistry[fixture.field];
+    if (!det || det.disabled) continue;
+    const entry = entryForFixture(fixture, base);
+    const ctx = await createVerifyCtx(join(DIR, "images", fixture.file));
+    const result = await det.detect(entry, ctx);
+    const verdict = capVerdict(det, result, recordedFor(entry, fixture.field));
+    rows.push({ field: fixture.field, id: fixture.id, label: fixture.label, verdict, correct: verdict === fixture.label });
+  }
+  const correct = rows.filter((r) => r.correct).length;
+  const decisive = rows.filter((r) => r.verdict !== "abstain").length;
+  const byField: CalibrationResult["byField"] = {};
+  for (const row of rows) {
+    const f = byField[row.field] ?? { accuracy: 0, decisiveRate: 0, total: 0, correct: 0, decisive: 0 };
+    f.total++; if (row.correct) f.correct++; if (row.verdict !== "abstain") f.decisive++;
+    f.accuracy = f.correct / f.total;
+    f.decisiveRate = f.decisive / f.total;
+    byField[row.field] = f;
+  }
+  return {
+    accuracy: correct / Math.max(rows.length, 1),
+    decisiveRate: decisive / Math.max(rows.length, 1),
+    rows,
+    byField,
+  };
+}
+
+export function assertGate(
+  result: CalibrationResult,
+  registry: typeof detectorRegistry,
+): string[] {
+  const failing: string[] = [];
+  for (const [field, det] of Object.entries(registry)) {
+    if (det.disabled || det.category !== "certifying") continue;
+    const f = result.byField[field];
+    if (!f) continue; // no held-out fixtures for this field — not gated
+    if (f.accuracy < det.accuracyFloor || f.decisiveRate < 0.4) {
+      failing.push(`${field}: accuracy ${f.accuracy.toFixed(2)} / floor ${det.accuracyFloor}, decisive ${f.decisiveRate.toFixed(2)} / 0.4`);
+    }
+  }
+  return failing;
+}
+```
+
+- [ ] **Step 4: Create the real-screenshot CLI and npm script**
+
+```ts
+// src/verify/calibration-cli.ts
+import { readFileSync } from "node:fs";
+import { calibrate } from "./calibration.js";
+import { fixtureManifest } from "./__fixtures__/fixtures.js";
+
+// Real-set labels: gitignored eval/detectors/labels.jsonl, one JSON object per
+// line: { "id", "imagePath", "field", "recorded", "label" }.
+const labelsPath = process.argv[2] ?? "eval/detectors/labels.jsonl";
+const lines = readFileSync(labelsPath, "utf8").trim().split("\n").filter(Boolean);
+const manifest = {
+  version: 1 as const,
+  fixtures: lines.map((line) => {
+    const l = JSON.parse(line) as { id: string; file: string; field: string; recorded: unknown; label: "pass" | "contradicted" | "abstain" };
+    return { ...l, split: "held-out" as const };
+  }),
+};
+
+const result = await calibrate(manifest, "held-out");
+console.log(`Accuracy: ${(result.accuracy * 100).toFixed(1)}%  Decisive: ${(result.decisiveRate * 100).toFixed(1)}%`);
+for (const [field, f] of Object.entries(result.byField)) {
+  console.log(`${field}: accuracy ${(f.accuracy * 100).toFixed(1)}%, decisive ${(f.decisiveRate * 100).toFixed(1)}%`);
+}
+```
+
+In `package.json` scripts:
+
+```json
+"calibrate-detectors": "tsc && node dist/verify/calibration-cli.js"
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/calibration.test.ts`
+Expected: PASS. If a detector fails its held-out floor, do NOT loosen the floor to make the test green. Either improve the detector's threshold against TUNE fixtures, or mark it `disabled: true` in the registry (which reverts its field to the vision tier — see Task 12's `fieldLeavesVisionForEntry`) and record the decision in the plan's rollout notes. A floor that is lowered to match a failing detector certifies nothing.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/verify/calibration.ts src/verify/calibration.test.ts src/verify/calibration-cli.ts package.json
+git commit -m "feat(verify): held-out calibration gate + calibrate-detectors CLI"
+```
+
+---
+
+### Task 14: Three-way model verdicts + corroborated contradictions
+
+**Files:**
+- Modify: `src/scripts/verify-corpus.ts` (`buildVerifyPrompt`, `parseVerifyResponse`, `decideFieldVerdict`, `FieldVerdict`, `verifyEntry` — the model path)
+- Test: `src/scripts/verify-corpus.test.ts` (extend)
+
+**Interfaces:**
+- Produces (consumed by Tasks 15–17):
+  - `type FieldVerdict["verdict"] = "pass" | "fail" | "contradicted" | "abstain" | "gate"` (`fail` remains only for the image-level pseudo-verdict in `main()`; `decideFieldVerdict` never returns it).
+  - `parseVerifyResponse` now returns `{ confirmed: boolean; contradicted: boolean; assertions?: string[]; reason?: string }` per field.
+  - `interface DataQualityEntry { measured: unknown; recorded: unknown; source: string; verifierVersion: string; verifiedAt: string }`
+  - `verifyEntry` return type grows to `{ records, verdicts, dataQuality }` — `dataQuality` is ACCUMULATED here (detector contradictions from Task 12 + corroborated model contradictions) and persisted in Task 15.
+
+**The prompt becomes three-way.** The model answers `confirmed` only when the claim is visibly true, `contradicted` only when the image POSITIVELY disagrees, `abstain` for uncertainty. A model `contradicted` is corroborated by a SECOND fresh-context ask for that field alone before it may write `dataQuality` — the detector band's equivalent guard, since model verdicts flip 14–18% between identical runs. The second ask uses the SAME positive-affirmation prompt (never "do you still disagree", which anchors).
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+// additions to src/scripts/verify-corpus.test.ts
+import { buildVerifyPrompt, decideFieldVerdict, parseVerifyResponse, verifyEntry } from "./verify-corpus.js";
+
+describe("three-way model verdicts", () => {
+  it("parses the verdict field and fails closed on absence", () => {
+    const parsed = parseVerifyResponse(
+      '{"visual.accentColor":{"verdict":"confirmed"},"layout":{"verdict":"contradicted"},"mood":{"verdict":"abstain"}}',
+    );
+    expect(parsed["visual.accentColor"].confirmed).toBe(true);
+    expect(parsed["visual.accentColor"].contradicted).toBe(false);
+    expect(parsed.layout.contradicted).toBe(true);
+    expect(parsed.mood.confirmed).toBe(false);
+    expect(parsed.mood.contradicted).toBe(false);
+    expect(parsed.critique.confirmed).toBe(false); // absent -> fail closed
+  });
+
+  it("keeps the legacy confirmed-boolean shape working", () => {
+    const parsed = parseVerifyResponse('{"layout":{"confirmed":true}}');
+    expect(parsed.layout.confirmed).toBe(true);
+  });
+
+  it("decides pass / contradicted / abstain / gate", () => {
+    expect(decideFieldVerdict("layout", "factual", { confirmed: true, contradicted: false }).verdict).toBe("pass");
+    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: true }).verdict).toBe("contradicted");
+    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: false }).verdict).toBe("abstain");
+    expect(decideFieldVerdict("responsiveBehavior", "gated", { confirmed: true, contradicted: false }).verdict).toBe("gate");
+  });
+
+  it("keeps the vacuity guard for prose fields", () => {
+    const r = decideFieldVerdict("critique", "prose", { confirmed: false, contradicted: false, assertions: [] });
+    expect(r.verdict).toBe("gate");
+  });
+
+  it("corroborates a model contradicted: second ask confirming writes verification, not dataQuality", async () => {
+    const image = new URL("../verify/__fixtures__/images/roles-card.png", import.meta.url).pathname;
+    const calls: string[] = [];
+    const { verifyEntry } = await import("./verify-corpus.js");
+    const e = makeEntry(); // reuse the runner.test.ts entry() helper shape
+    const out = await verifyEntry(e, image, {
+      now: () => "2026-08-07",
+      callVision: async (prompt) => {
+        calls.push(prompt);
+        return calls.length === 1
+          ? '{"layout":{"verdict":"contradicted"}}'
+          : '{"layout":{"verdict":"confirmed"}}';
+      },
+      reproduce: async (x) => x,
+    });
+    expect(calls.length).toBe(2);
+    expect(out.records.layout).toBeDefined();
+    expect(out.dataQuality.layout).toBeUndefined();
+  });
+
+  it("writes dataQuality only for a corroborated contradiction", async () => {
+    const image = new URL("../verify/__fixtures__/images/roles-card.png", import.meta.url).pathname;
+    const calls: string[] = [];
+    const e = makeEntry();
+    const out = await verifyEntry(e, image, {
+      now: () => "2026-08-07",
+      callVision: async () => {
+        calls.push("x");
+        return '{"layout":{"verdict":"contradicted"}}';
+      },
+      reproduce: async (x) => x,
+    });
+    expect(out.dataQuality.layout).toBeDefined();
+    expect(out.dataQuality.layout.source).toBe("vision");
+    expect(out.records.layout).toBeUndefined();
+  });
+});
+```
+
+(The `makeEntry()` helper is the `entry()` builder already used in `runner.test.ts` — copy it into `verify-corpus.test.ts` for these tests; both files may share a small local copy.)
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/scripts/verify-corpus.test.ts`
+Expected: FAIL — no `verdict` parsing, `contradicted` not in the verdict union, `verifyEntry` has no `dataQuality` return.
+
+- [ ] **Step 3: Update the prompt, parser, and decider**
+
+```ts
+// in buildVerifyPrompt — replace the return-JSON contract:
+//   "<field>": { "verdict": "confirmed" | "contradicted" | "abstain",
+//                "assertions": ["..."], "reason": "..." }
+// and per-field instructions become:
+//   "...: confirm this claim is VISIBLY TRUE in the screenshot. Return
+//   \"confirmed\" only when you can positively see it; \"contradicted\" only
+//   when the image POSITIVELY disagrees with the claim; otherwise \"abstain\"."
+
+// parseVerifyResponse — widen the per-field shape and read `verdict`:
+export type ParsedField = { confirmed: boolean; contradicted: boolean; assertions?: string[]; reason?: string };
+
+// inside the field loop:
+const verdict = typeof (value as Record<string, unknown>).verdict === "string"
+  ? (value as Record<string, unknown>).verdict as string
+  : (value as Record<string, unknown>).confirmed === true ? "confirmed" : undefined;
+out[field] = {
+  confirmed: verdict === "confirmed",
+  contradicted: verdict === "contradicted",
+  ...(assertions !== undefined ? { assertions } : {}),
+  ...(typeof v.reason === "string" ? { reason: v.reason } : {}),
+};
+
+// failClosed default becomes { confirmed: false, contradicted: false }.
+
+// decideFieldVerdict — replace the tail:
+export function decideFieldVerdict(
+  field: string,
+  tier: VerifierTier,
+  parsed: { confirmed: boolean; contradicted: boolean; assertions?: string[] },
+): FieldVerdict {
+  if (tier === "gated") {
+    return { field, verdict: "gate", reason: "no single screenshot can confirm this claim" };
+  }
+  if (tier === "prose") {
+    const assertions = parsed.assertions ?? [];
+    if (assertions.length === 0) {
+      return { field, verdict: "gate", reason: "no checkable assertions enumerated — vacuous confirmation refused" };
+    }
+    if (parsed.contradicted) {
+      return { field, verdict: "contradicted", reason: "the image positively disagrees with a recorded assertion" };
+    }
+    return parsed.confirmed
+      ? { field, verdict: "pass", reason: `${assertions.length} assertion(s) confirmed` }
+      : { field, verdict: "abstain", reason: "not positively confirmed" };
+  }
+  if (parsed.contradicted) {
+    return { field, verdict: "contradicted", reason: "the image positively disagrees with the recorded claim" };
+  }
+  return parsed.confirmed
+    ? { field, verdict: "pass", reason: "positively confirmed against the image" }
+    : { field, verdict: "abstain", reason: "not positively confirmed" };
+}
+```
+
+- [ ] **Step 4: Add corroboration and the `dataQuality` accumulation to `verifyEntry`**
+
+```ts
+// FieldVerdict verdict union widens; verifyEntry return type becomes:
+// { records, verdicts, dataQuality: Record<string, DataQualityEntry> }
+
+// After the first-pass decide loop, BEFORE the prose re-produce block:
+const modelContradicted = pending.filter((field) => decided.get(field)?.verdict === "contradicted");
+if (modelContradicted.length > 0) {
+  // Corroborate each contradicted field with a SECOND fresh-context ask. The
+  // second ask uses the same positive-affirmation prompt; never anchor it.
+  for (const field of modelContradicted) {
+    const claim = claimForField(entry as unknown as Record<string, unknown>, field);
+    if (claim === null) continue;
+    const reParsed = parseVerifyResponse(
+      await deps.callVision(buildVerifyPrompt(entry as unknown as Record<string, unknown>, [field], VERIFIER_VERSION), imagePath),
+    );
+    const reVerdict = decideFieldVerdict(field, tierForField(field), reParsed[field] ?? { confirmed: false, contradicted: false });
+    if (reVerdict.verdict === "pass") {
+      records[field] = { method: "image-confirmed", verifiedAt: now, verifierVersion: VERIFIER_VERSION, imageSha256: imageSha256Of(imagePath) };
+      decided.set(field, reVerdict);
+    } else if (reVerdict.verdict === "contradicted") {
+      dataQuality[field] = {
+        measured: null,
+        recorded: claim,
+        source: "vision",
+        verifierVersion: VERIFIER_VERSION,
+        verifiedAt: now,
+      };
+      decided.set(field, reVerdict);
+    } else {
+      decided.set(field, reVerdict); // abstain -> marker in Task 15
+    }
+  }
+}
+
+// The prose re-produce trigger widens: failedProse filters verdict !== "pass"
+// (was === "fail").
+
+// The finalize loop stays, but skip fields now carrying records/dataQuality.
+
+// Detector contradictions (Task 12's outcome.contradicted) also accumulate:
+//   dataQuality[field] = { measured: null, recorded: claimForField(entry, field),
+//     source: field /* the detector name = registry key */,
+//     verifierVersion: VERIFIER_VERSION, verifiedAt: now };
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/scripts/verify-corpus.test.ts`
+Expected: PASS, including the two corroboration tests and all pre-existing verdict tests (updated for the new `abstain` semantics where they asserted `fail`).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/scripts/verify-corpus.ts src/scripts/verify-corpus.test.ts
+git commit -m "feat(verify): three-way model verdicts with corroborated contradictions"
+```
+
+---
+
+### Task 15: `provenance.dataQuality` map + record-map exclusivity
+
+**Files:**
+- Modify: `src/schema.ts` (add `dataQuality` to `provenance`)
+- Modify: `src/scripts/verify-corpus.ts` (`resumeMarkers`, `mergeVerification`, `mergeVerifyAttempts`, new `mergeDataQuality`, `main()` persistence)
+- Test: `src/scripts/verify-corpus.test.ts` (extend)
+
+**Interfaces:**
+- Produces:
+  - `interface DataQualityRecord { measured: unknown; recorded: unknown; source: string; verifierVersion: string; verifiedAt: string }`
+  - `mergeDataQuality(entry, entries: Record<string, DataQualityRecord>): void` — writes the map and REVOKES `verification` + `verifyAttempts` for those fields.
+  - `mergeVerification` / `mergeVerifyAttempts` also revoke `dataQuality` for the fields they write (exclusivity in all three directions).
+  - `resumeMarkers` skips `pass` AND `contradicted` (a contradiction is a finding, not a retry candidate).
+
+- [ ] **Step 1: Write the failing exclusivity test**
+
+```ts
+// additions to src/scripts/verify-corpus.test.ts
+import { mergeDataQuality, mergeVerification, mergeVerifyAttempts, resumeMarkers } from "./verify-corpus.js";
+
+describe("record-map exclusivity", () => {
+  it("a contradiction revokes trust and attempts for its field only", () => {
+    const e = makeEntry();
+    mergeVerification(e, { layout: { method: "image-confirmed", verifiedAt: "x", verifierVersion: "v1" } });
+    mergeVerifyAttempts(e, { mood: { verifierVersion: "v1", verifiedAt: "x" } });
+    mergeDataQuality(e, { layout: { measured: 1, recorded: "a", source: "layout", verifierVersion: "v1", verifiedAt: "x" } });
+    expect(e.provenance?.verification?.layout).toBeUndefined();
+    expect(e.provenance?.verifyAttempts?.mood).toBeDefined(); // untouched sibling
+    expect(e.provenance?.dataQuality?.layout?.source).toBe("layout");
+  });
+
+  it("a pass revokes dataQuality for its field", () => {
+    const e = makeEntry();
+    mergeDataQuality(e, { layout: { measured: 1, recorded: "a", source: "vision", verifierVersion: "v1", verifiedAt: "x" } });
+    mergeVerification(e, { layout: { method: "image-confirmed", verifiedAt: "x", verifierVersion: "v1" } });
+    expect(e.provenance?.dataQuality?.layout).toBeUndefined();
+  });
+
+  it("resume markers skip pass and contradicted", () => {
+    const markers = resumeMarkers(
+      [
+        { field: "layout", verdict: "pass", reason: "" },
+        { field: "mood", verdict: "contradicted", reason: "" },
+        { field: "critique", verdict: "abstain", reason: "" },
+      ],
+      "2026-08-07",
+      "verifier-v1",
+    );
+    expect(markers.layout).toBeUndefined();
+    expect(markers.mood).toBeUndefined();
+    expect(markers.critique).toBeDefined();
+  });
+});
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/scripts/verify-corpus.test.ts`
+Expected: FAIL — `mergeDataQuality` does not exist, and `resumeMarkers` still marks `contradicted`.
+
+- [ ] **Step 3: Add the schema field**
+
+```ts
+// in src/schema.ts, inside the provenance object after verifyAttempts:
+/**
+ * Data-quality findings — NOT verification and NOT bookkeeping. Written by
+ * contradicted verdicts (detector or corroborated model); revoked when the
+ * field re-passes. Feeds --report-suspect and doctor. A field appears in at
+ * most one of verification / verifyAttempts / dataQuality.
+ */
+dataQuality: z.record(z.string(), z.object({
+  measured: z.unknown(),
+  recorded: z.unknown(),
+  source: z.string().min(1),
+  verifierVersion: z.string().min(1),
+  verifiedAt: z.string().min(1),
+}).passthrough()).optional(),
+```
+
+- [ ] **Step 4: Implement the merge functions and update the existing ones**
+
+```ts
+// in verify-corpus.ts
+export interface DataQualityRecord {
+  measured: unknown;
+  recorded: unknown;
+  source: string;
+  verifierVersion: string;
+  verifiedAt: string;
+}
+
+export function mergeDataQuality(entry: CorpusEntryT, entries: Record<string, DataQualityRecord>): void {
+  const provenance = entry.provenance ?? { taggedBy: "auto" as const };
+  const dataQuality = { ...(provenance.dataQuality ?? {}) };
+  const verification = provenance.verification ? { ...provenance.verification } : undefined;
+  const verifyAttempts = provenance.verifyAttempts ? { ...provenance.verifyAttempts } : undefined;
+  for (const [field, record] of Object.entries(entries)) {
+    dataQuality[field] = record;
+    if (verification) delete verification[field];
+    if (verifyAttempts) delete verifyAttempts[field];
+  }
+  provenance.dataQuality = dataQuality;
+  if (verification) provenance.verification = verification;
+  if (verifyAttempts) provenance.verifyAttempts = verifyAttempts;
+  entry.provenance = provenance;
+}
+
+// mergeVerification: add `if (provenance.dataQuality) delete provenance.dataQuality[field];`
+//   inside its loop (plus carry dataQuality through the clone).
+// mergeVerifyAttempts: same — a marker revokes dataQuality for its field.
+// resumeMarkers: `if (v.verdict === "pass" || v.verdict === "contradicted") continue;`
+```
+
+Then in `main()`'s persistence block (where `mergeVerification` / `mergeVerifyAttempts` are already called), add:
+
+```ts
+mergeDataQuality(target, verifyResult.dataQuality);
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/scripts/verify-corpus.test.ts`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/schema.ts src/scripts/verify-corpus.ts src/scripts/verify-corpus.test.ts
+git commit -m "feat(verify): provenance.dataQuality map with three-way exclusivity"
+```
+
+---
+
+### Task 16: `--report-suspect` with the fixed hierarchy
+
+**Files:**
+- Modify: `src/scripts/verify-corpus.ts` (new `renderSuspectReport`, `--report-suspect` CLI flag)
+- Test: `src/scripts/verify-corpus.test.ts` (extend)
+
+**Interfaces:**
+- Produces: `renderSuspectReport(entries: readonly CorpusEntryT[]): string` — a markdown table whose rows are ordered by **source class first** (detector contradictions above corroborated `"vision"` contradictions), then per entry by contradiction count descending, then by field. Columns: `field`, `measured`, `recorded`, `source`, `entry`, `title`.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// addition to src/scripts/verify-corpus.test.ts
+import { renderSuspectReport } from "./verify-corpus.js";
+
+describe("suspect report", () => {
+  it("ranks detector contradictions above vision contradictions", () => {
+    const vision = makeEntryWithDataQuality("vision", "mood");
+    const detector = makeEntryWithDataQuality("visual.usesBorders", "layout");
+    const report = renderSuspectReport([vision, detector]);
+    const visionIdx = report.indexOf("mood");
+    const detectorIdx = report.indexOf("visual.usesBorders");
+    expect(detectorIdx).toBeGreaterThan(-1);
+    expect(visionIdx).toBeGreaterThan(detectorIdx);
+  });
+
+  it("emits the fixed columns", () => {
+    const report = renderSuspectReport([makeEntryWithDataQuality("vision", "layout")]);
+    expect(report).toContain("| field |");
+    expect(report).toContain("| measured |");
+    expect(report).toContain("| recorded |");
+    expect(report).toContain("| source |");
+    expect(report).toContain("| entry |");
+  });
+});
+
+function makeEntryWithDataQuality(source: string, field: string): CorpusEntryT {
+  const e = makeEntry();
+  mergeDataQuality(e, { [field]: { measured: null, recorded: "x", source, verifierVersion: "verifier-v1", verifiedAt: "2026-08-07" } });
+  return e;
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/scripts/verify-corpus.test.ts`
+Expected: FAIL — `renderSuspectReport` does not exist.
+
+- [ ] **Step 3: Implement**
+
+```ts
+// in verify-corpus.ts
+export function renderSuspectReport(entries: readonly CorpusEntryT[]): string {
+  const rows: Array<{ field: string; measured: string; recorded: string; source: string; entry: string; title: string; count: number }> = [];
+  for (const e of entries) {
+    const dq = e.provenance?.dataQuality ?? {};
+    const count = Object.keys(dq).length;
+    for (const [field, record] of Object.entries(dq)) {
+      rows.push({
+        field,
+        measured: typeof record.measured === "string" ? record.measured : JSON.stringify(record.measured ?? ""),
+        recorded: typeof record.recorded === "string" ? record.recorded : JSON.stringify(record.recorded ?? ""),
+        source: record.source,
+        entry: e.id,
+        title: e.title,
+        count,
+      });
+    }
+  }
+  // Source class first: detector (registry key) rows above "vision"; then
+  // contradiction count desc; then field.
+  const sourceRank = (source: string): number => (source === "vision" ? 1 : 0);
+  rows.sort((a, b) =>
+    sourceRank(a.source) - sourceRank(b.source)
+    || b.count - a.count
+    || a.field.localeCompare(b.field));
+  const lines = [
+    "| field | measured | recorded | source | entry | title |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...rows.map((r) => `| ${r.field} | ${r.measured} | ${r.recorded} | ${r.source} | ${r.entry} | ${r.title} |`),
+  ];
+  return rows.length === 0 ? "No contradictions recorded." : lines.join("\n");
+}
+```
+
+- [ ] **Step 4: Wire the CLI flag**
+
+```ts
+// in main()'s parseArgs options:
+"report-suspect": { type: "boolean", default: false },
+// after the run + persistence loop, before the run report print:
+if (values["report-suspect"] === true) {
+  console.log("\n## Suspect entries\n");
+  console.log(renderSuspectReport(entries));
+}
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/scripts/verify-corpus.test.ts`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/scripts/verify-corpus.ts src/scripts/verify-corpus.test.ts
+git commit -m "feat(verify): --report-suspect with source-ranked hierarchy"
+```
+
+---
+
+### Task 17: Doctor validation for `dataQuality`
+
+**Files:**
+- Modify: `src/scripts/doctor-helpers.ts` (FindingType union + checks)
+- Test: `src/scripts/doctor-helpers.test.ts` (create if absent)
+
+**Interfaces:**
+- Produces: three new doctor finding ids — `dataquality-malformed`, `dataquality-orphan-key`, `dataquality-count`.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// src/scripts/doctor-helpers.test.ts
+import { describe, expect, it } from "vitest";
+import { scanEntry } from "./doctor-helpers.js"; // adapt to the file's actual exported entry scanner
+import type { CorpusEntryT } from "../schema.js";
+
+function entry(dataQuality: CorpusEntryT["provenance"]["dataQuality"]): CorpusEntryT {
+  const e = { /* the file's standard entry fixture shape */ } as CorpusEntryT;
+  e.provenance = { taggedBy: "auto", dataQuality };
+  return e;
+}
+
+describe("doctor dataQuality checks", () => {
+  it("flags orphan keys and malformed records", () => {
+    const findings = scanEntry(entry({
+      "not-a-servable-key": { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" },
+      layout: { measured: null, recorded: null, source: "", verifierVersion: "v1", verifiedAt: "x" },
+    }));
+    const ids = findings.map((f) => f.id);
+    expect(ids).toContain("dataquality-orphan-key");
+    expect(ids).toContain("dataquality-malformed");
+  });
+
+  it("surfaces the total contradiction count", () => {
+    const findings = scanEntry(entry({
+      layout: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" },
+    }));
+    expect(findings.some((f) => f.id === "dataquality-count")).toBe(true);
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/scripts/doctor-helpers.test.ts`
+Expected: FAIL — `dataquality-*` ids don't exist (adapt the test to the file's actual scanner export — match how `verification-malformed` tests are wired).
+
+- [ ] **Step 3: Implement**
+
+```ts
+// in doctor-helpers.ts — FindingType union (near line 269) gains:
+  | "dataquality-malformed"
+  | "dataquality-orphan-key"
+  | "dataquality-count"
+
+// After the verification-integrity block, still inside the per-entry scan:
+const dataQuality = entry.provenance?.dataQuality;
+if (dataQuality) {
+  for (const [field, record] of Object.entries(dataQuality)) {
+    if (!SERVABLE_FIELD_KEYS.has(field)) {
+      push(
+        "dataquality-orphan-key",
+        `dataQuality record for "${field}" is not in the servable field set — nobody reads it`,
+      );
+    }
+    if (typeof record.source !== "string" || record.source.length === 0
+      || typeof record.verifierVersion !== "string" || typeof record.verifiedAt !== "string") {
+      push(
+        "dataquality-malformed",
+        `dataQuality record for "${field}" is missing source/verifierVersion/verifiedAt`,
+      );
+    }
+  }
+  const total = Object.keys(dataQuality).length;
+  if (total > 0) {
+    push("dataquality-count", `${total} contradiction(s) recorded — run the suspect report before trusting these entries`);
+  }
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/scripts/doctor-helpers.test.ts`
+Expected: PASS (plus the pre-existing doctor suite).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/scripts/doctor-helpers.ts src/scripts/doctor-helpers.test.ts
+git commit -m "feat(doctor): validate provenance.dataQuality"
+```
+
+---
+
+### Task 18: Pin sampling in the re-produce pass (`tagImage`)
+
+**Files:**
+- Modify: `src/tagger.ts` (`TaggerInput.sampling`, threaded to Pass 1 + Pass 2 call sites)
+- Modify: `src/scripts/verify-corpus.ts` (`makeReproduceDependency` passes the pin)
+- Test: `src/scripts/verify-corpus.sampling.test.ts` (new)
+
+**Interfaces:**
+- Produces: `TaggerInput.sampling?: { temperature?: number; seed?: number }` — unset keeps today's behavior byte-identical.
+
+This closes the measured instability source: `sampling` reaches `callVisionModel` today but not `tagImage`'s internal Pass 1 / Pass 2, so re-produced prose varies run to run.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// src/scripts/verify-corpus.sampling.test.ts
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../tagger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../tagger.js")>();
+  return {
+    ...actual,
+    tagImage: vi.fn(async () => ({
+      critique: "critique",
+      whatToSteal: ["steal"],
+      antiPatterns: { antiPatterns: ["pattern"], whereThisFails: null, accessibilityRisks: [] },
+      voice: { tone: "tone", examples: [], avoid: [] },
+    })),
+  };
+});
+
+import { makeReproduceDependency } from "./verify-corpus.js";
+import { tagImage } from "../tagger.js";
+import type { CorpusEntryT } from "../schema.js";
+
+describe("re-produce sampling pin", () => {
+  it("threads the pinned sampling into tagImage", async () => {
+    const reproduce = makeReproduceDependency();
+    const entry = {
+      id: "t", title: "t", patternType: "dashboard", colorScheme: "light",
+      categories: ["dashboard"], styleTags: [], components: [],
+      layout: { form: "single-column", regions: [] },
+      visual: {
+        dominantColors: [], accentColor: null,
+        typePairing: { display: null, body: null },
+        spacingDensity: "moderate", cornerStyle: "sharp",
+        usesShadows: false, usesBorders: false,
+      },
+      antiPatterns: { antiPatterns: [], whereThisFails: null, accessibilityRisks: [] },
+      critique: "a", whatToSteal: [], voice: null, mood: null,
+      platform: "desktop", qualityScore: 1, qualityTier: "exploratory",
+      image: { path: "images-private/x.png", width: 100, height: 80, format: "png" },
+    } as CorpusEntryT;
+    await reproduce(entry, "images-private/x.png");
+    expect(tagImage).toHaveBeenCalledTimes(1);
+    expect((tagImage as ReturnType<typeof vi.fn>).mock.calls[0][0].sampling).toEqual({ temperature: 0, seed: 20260806 });
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/scripts/verify-corpus.sampling.test.ts`
+Expected: FAIL — the reproduced call passes no `sampling`.
+
+- [ ] **Step 3: Implement**
+
+```ts
+// in tagger.ts — TaggerInput gains:
+  /**
+   * Sampling controls for BOTH internal passes. Omitted = provider default
+   * (today's behavior). The verifier pins temperature 0 + a fixed seed so
+   * re-produced prose does not vary between identical runs.
+   */
+  sampling?: { temperature?: number; seed?: number };
+
+// Pass 1 call sites (three: initial at ~2873, low-detail retry at ~2898,
+// high-detail retry at ~2931) gain the sampling arg:
+    input.sampling, // last argument of each callModel(...)
+// Pass 2 call sites (initial at ~3074, retry at ~3107) likewise:
+    input.sampling,
+
+// in verify-corpus.ts — makeReproduceDependency's tagImage call gains:
+      sampling: { temperature: 0, seed: 20260806 },
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/scripts/verify-corpus.sampling.test.ts src/tagger.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/tagger.ts src/scripts/verify-corpus.ts src/scripts/verify-corpus.sampling.test.ts
+git commit -m "fix(verify): pin sampling in the re-produce pass"
+```
+
+---
+
+### Task 19: Method-level trust disclosure (E2)
+
+**Files:**
+- Modify: `src/corpus-trust.ts` (new `verifiedMethodFor`)
+- Modify: `src/server-factory.ts` (browse column disclosure appends the method)
+- Test: `src/corpus-trust.test.ts` (extend)
+
+**Interfaces:**
+- Produces: `verifiedMethodFor(entry: CorpusEntryT, field: string): string | null` — `"measured" | "provable" | "image-confirmed"` when `isVerified`, else `null`.
+
+Agents should weigh "recomputed from data" (`provable`) differently from "a model looked at it" (`image-confirmed`). The serving layer already branches on `record.method` internally (`server-factory.ts:437`); this task surfaces it in the disclosure.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// addition to src/corpus-trust.test.ts
+import { verifiedMethodFor } from "./corpus-trust.js";
+
+describe("verifiedMethodFor", () => {
+  it("returns the record method only when verified", () => {
+    const e = { ...baseEntry, provenance: { taggedBy: "auto", verification: {
+      platform: { method: "provable", verifiedAt: "x", verifierVersion: "v1" },
+      layout: { method: "image-confirmed", verifiedAt: "x", verifierVersion: "v1", imageSha256: "a".repeat(64) },
+      critique: { method: "nope", verifiedAt: "x", verifierVersion: "v1" },
+    } } } as CorpusEntryT;
+    expect(verifiedMethodFor(e, "platform")).toBe("provable");
+    expect(verifiedMethodFor(e, "layout")).toBe("image-confirmed");
+    expect(verifiedMethodFor(e, "critique")).toBeNull(); // unknown method
+    expect(verifiedMethodFor(e, "mood")).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/corpus-trust.test.ts`
+Expected: FAIL — `verifiedMethodFor` does not exist.
+
+- [ ] **Step 3: Implement the helper**
+
+```ts
+// in corpus-trust.ts
+/**
+ * The evidence method behind a verified field — for disclosure, so an agent
+ * can weigh "recomputed from data" (provable) vs "confirmed against the
+ * image" (image-confirmed). Null when the field is not verified.
+ */
+export function verifiedMethodFor(entry: CorpusEntryT, field: string): string | null {
+  const record = entry.provenance?.verification?.[field];
+  if (!record || !isVerified(entry, field)) return null;
+  return record.method;
+}
+```
+
+- [ ] **Step 4: Surface it in the browse column disclosure**
+
+Locate the `_Column disclosures:_` construction in `src/server-factory.ts` (around line 683). The disclosures name omitted columns. Extend them so a column that HAS verified rows also names the method on first mention — e.g., append ` (verified via ${method})` using `verifiedMethodFor(found[0].entry, field)` per column, skipping nulls. If the exact construction differs from this sketch, keep the disclosure text and add the method to it; the test contract is the helper, and the disclosure change is verified by running the site tests:
+
+Run: `C2_NO_DOTENV=1 npx vitest run site/tests/` (or the repo's server-factory test file) — Expected: PASS with no disclosure regressions.
+
+- [ ] **Step 5: Run the corpus-trust tests to verify they pass**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/corpus-trust.test.ts`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/corpus-trust.ts src/corpus-trust.test.ts src/server-factory.ts
+git commit -m "feat(trust): disclose per-field verification method"
+```
+
+---
+
+### Task 20: Production rollout runbook + final verification
+
+**Files:**
+- Modify: `README.md` ("Corpus trust & recovery" — detectors, cohort, suspect report)
+- Modify: `TODOS.md` (frozen-set trigger update)
+- Modify: `docs/superpowers/specs/2026-08-07-deterministic-detectors-design.md` (Status → implemented)
+
+- [ ] **Step 1: Document the rollout sequence in README.md**
+
+Under "Corpus trust & recovery", add a "Deterministic detectors" subsection:
+
+```markdown
+## Deterministic detectors & the suspect report
+
+Perception fields (`usesShadows`, `usesBorders`, `accentColor`, `cornerStyle`,
+`spacingDensity`) are verified by calibrated pixel detectors instead of the
+vision model; `colorRoles` and `accessibilityRisks` get contradiction-only
+checks. Model contradictions are corroborated by a second fresh ask.
+
+- Verify with detectors: `npm run verify -- --detectors on`
+- Compare with the legacy path: `npm run verify -- --detectors off`
+- Real-screenshot calibration: `npm run calibrate-detectors` (numbers reviewed
+  at merge; a detector that cannot clear its floor ships disabled and its
+  field stays with vision)
+- Human triage: `npm run verify -- --report-suspect` — detector findings rank
+  above model findings; actions are re-capture / re-tag / dismiss, then
+  re-verify
+
+Rollout order: calibrate → verify a ~50-entry representative cohort → light
+the first 2d-2 surfaces with method disclosure → scale to the full corpus.
+```
+
+- [ ] **Step 2: Update TODOS.md**
+
+In the "Frozen labelled ground-truth set" TODO, change the trigger line to note the plan has landed, and add `eval/detectors/labels.jsonl` (real-screenshot labels) as the calibration-input artifact.
+
+- [ ] **Step 3: Run the full verification suite**
+
+Run: `npx tsc --noEmit`
+Expected: no type errors.
+
+Run: `C2_NO_DOTENV=1 npx vitest run`
+Expected: PASS (full suite, including the new `src/verify/**` tests).
+
+Run: `npm run verify:dry-run` (after `npx tsc`)
+Expected: prints the projected-cost report without calling any model.
+
+- [ ] **Step 4: Update the spec status and commit**
+
+```markdown
+**Status:** implemented (2026-08-07)
+```
+
+```bash
+git add README.md TODOS.md docs/superpowers/specs/2026-08-07-deterministic-detectors-design.md
+git commit -m "docs(verify): deterministic-detectors rollout runbook"
+```
+
+---
+
+## Self-review
+
+**Spec coverage** (each spec requirement → task):
+
+| Spec section | Task(s) |
+| --- | --- |
+| Benchmark provenance / rescue `/tmp/disputes.tsv` | 1 |
+| `culori` dependency, shared `ctx` (`{ imagePath, raw?, width, height }`) | 2 |
+| Detector types, confidence band, `canAffirm`, `recordedFor` | 3 |
+| Synthetic fixtures, tune/held-out disjoint split | 4 |
+| `usesBorders` certifying | 5 |
+| `usesShadows` certifying + the border/shadow pair | 6 |
+| `accentColor` maximality contract | 7 |
+| `cornerStyle` schema-vocabulary buckets, `mixed` unaffirmable, band boundary | 8 |
+| `spacingDensity` | 9 |
+| `colorRoles` contradiction-only | 10 |
+| `accessibilityRisks` contradiction-only | 11 |
+| Registry + contract test, value-aware pending filter, runner caps, `--detectors off`, `verifyEntry` integration, tier reclassification | 12 |
+| Calibration: held-out gate, disabled skip, decisive-rate floor, real-set CLI | 13 |
+| Three-way model verdicts, corroborated contradictions, vacuity guard | 14 |
+| `provenance.dataQuality`, three-way exclusivity, resume markers | 15 |
+| `--report-suspect` hierarchy (source class → count → field) | 16 |
+| Doctor `dataQuality` validation + count | 17 |
+| Re-produce sampling pin | 18 |
+| Method-level trust disclosure (E2) | 19 |
+| Production rollout sequence + runbook (E3 triage documented, E4 telemetry in run report via detector verdicts from Task 12) | 20 (+12/16) |
+
+**Deliberate deviations from the spec (flagged, not silent):**
+1. The calibration gate adds a `decisiveRate >= 0.4` requirement alongside exact-match accuracy, because exact-match accuracy alone can be gamed by abstaining everything (Task 13).
+2. The plan's `FieldVerdict` union retains `"fail"` for the image-level pseudo-verdict in `main()`; field-level verdicts use only pass/contradicted/abstain/gate (Task 14).
+3. The real-screenshot labels format is pinned as `eval/detectors/labels.jsonl` (gitignored) in Task 13; the spec left the format open.
+
+**Placeholder scan:** every code step contains complete code. The only locate-style steps are the server-factory disclosure edit (Task 19) and the doctor test's scanner-export adaptation (Task 17) — both name the anchor symbol and the exact behavior to assert.
+
+**Type consistency:** `detect(entry, ctx)` everywhere (never `detect(imagePath, recorded)`); `canAffirm(recorded)` everywhere; `ctx = { imagePath, raw?, width, height }`; `DataQualityRecord { measured, recorded, source, verifierVersion, verifiedAt }`; `FieldVerdict` widened once in Task 14 and consumed consistently in 15–17. `resumeMarkers` skip set updated in Task 15, `buildRunReport` counts updated in Task 17's commit note (telemetry surfaces via the detector verdicts pushed in Task 12).
+
+## Execution Handoff
+
+Plan complete and saved to `docs/superpowers/plans/2026-08-07-deterministic-detectors.md`. Two execution options:
+
+**1. Subagent-Driven (recommended)** — dispatch a fresh subagent per task, review between tasks, fast iteration.
+
+**2. Inline Execution** — execute tasks in this session using executing-plans, batch execution with checkpoints.
+
+Which approach?

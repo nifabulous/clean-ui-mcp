@@ -1,0 +1,101 @@
+# Verifier calibration — real-screenshot per-field numbers (2026-08-07)
+
+This file is the committed evidence behind every `accuracyFloor` and `disabled`
+flag in `src/verify/detector-registry.ts`. The numbers come from the CLI
+(`npm run calibrate-detectors`) measured on **82 human-labelled real corpus
+screenshots** — the frozen labelled ground-truth set at
+`eval/verdicts/labels.jsonl`.
+
+- Date: 2026-08-07 (run `real-calibration-2026-08-07`)
+- Labeller: user (judgements made against the images only; detector code and
+  output were not consulted while labelling)
+- Label-file line count: 82 labels over 80 distinct screenshots (7 fields;
+  ≥10 labels per field)
+- Per-field contradicted counts: usesShadows 6, usesBorders 2, accentColor 5,
+  cornerStyle 1, spacingDensity 0, dominantColors 0, platform 1
+
+## Measured numbers (native resolution, the production path)
+
+| field | n | accuracy | decisive | labels: conf/contra/abstain |
+|---|---|---|---|---|
+| platform | 12 | **0.917** | 1.000 | 11 / 1 / 0 |
+| visual.dominantColors | 12 | **1.000** | 1.000 | 12 / 0 / 0 |
+| visual.usesShadows | 10 | 0.000 | 0.100 | 4 / 6 / 0 |
+| visual.usesBorders | 12 | 0.000 | 0.000 | 10 / 2 / 0 |
+| visual.accentColor | 12 | 0.167 | 0.083 | 6 / 5 / 1 |
+| visual.cornerStyle | 12 | 0.333 | 0.250 | 9 / 1 / 2 |
+| visual.spacingDensity | 12 | 0.167 | 0.667 | 12 / 0 / 0 |
+
+## Floors declared
+
+Per the plan's Step 3 rule:
+
+- real accuracy ≥ 0.9 **and** decisive ≥ 0.5 → floor `0.85`, enabled
+- real accuracy ≥ 0.8 → floor `0.75`, enabled
+- anything lower, or decisive < 0.4 → `disabled: true`
+
+| field | decision | floor |
+|---|---|---|
+| platform | enabled | 0.85 |
+| visual.dominantColors | enabled | 0.85 |
+| visual.usesShadows | disabled | — |
+| visual.usesBorders | disabled | — |
+| visual.accentColor | disabled | — |
+| visual.cornerStyle | disabled | — |
+| visual.spacingDensity | disabled | — |
+
+Disabled fields revert to the vision path (`fieldLeavesVisionForEntry`) — the
+corpus keeps the model's verdict for those fields and loses nothing it has
+today. The five pixel detectors stay registered (their synthetic held-out gate
+still runs) but write no trust records on real entries until they are made
+robust to real screenshots.
+
+## Why the five pixel detectors measure so low
+
+The pixel detectors were developed and tuned on 120x90 flat-color synthetic
+canvases with absolute-pixel thresholds (component seams, gap bands, corner
+radii, background-bucket dominance). Real corpus screenshots are full-
+resolution (typically 1200-1920px wide) with photographs, gradients, text,
+antialiasing, and multi-colour backgrounds:
+
+- the detectors abstain 33-100% of the time on real images (the threshold
+  conditions tuned on flat synthetic canvases rarely hold), and
+- where they do decide, they are 0-33% accurate against the human labels.
+
+Downscaling real screenshots to the synthetic scale (120-160px wide, measured
+separately) does **not** rescue them: accuracy stays 0-33% for all five fields,
+and one detector (usesBorders) got *worse* (it contradicted a borders-present
+screenshot). The plan never specified a resolution-normalization step, so the
+native-resolution numbers above are the honest measurement of the shipped
+code, and production runs the same code path.
+
+Making these detectors robust to real screenshots (scale-relative thresholds,
+retuning against the label set) is follow-up work, not a floor decision.
+
+## Measurement notes (honesty disclosures)
+
+1. **Platform harness bug found and fixed during this task.** The CLI built
+   calibration fixtures from labels without pixel dimensions, so the dims-based
+   platform detector abstained on every real label (0% accuracy *and* 0%
+   decisive). The CLI now reads dimensions from the labelled image files
+   (`calibration-cli.ts`), and the numbers above reflect the fixed harness.
+   Without the fix, the 0% would have looked like a detector failure and
+   platform would have been wrongly disabled.
+2. **dominantColors is 100% by construction and has 0 contradicted labels.**
+   The recorded values are the extractor's own output on the same pixels
+   (exact-string match in the detector), so a human labelling against the image
+   can only ever confirm them; a contradiction would require the extractor to
+   change. The all-confirmed label set is a real blind spot for this field and
+   is recorded here rather than hidden.
+3. **The plan's "≥2 contradicted per field" guard is not met for four fields**
+   (cornerStyle 1, spacingDensity 0, dominantColors 0, platform 1). For the
+   five disabled fields this is moot (they are no longer gated). For platform
+   and dominantColors it means the enabled fields' numbers rest on thin
+   negative evidence; they should gain contradicted labels before the next
+   calibration round.
+4. `labelledBy: "user"` — the labeller is the repo owner, not a hired or
+   algorithmic annotator.
+5. `npm run calibrate-detectors` now measures only the two enabled detectors —
+   `calibration.ts` skips `disabled` detectors when computing stats, so the
+   five disabled fields' numbers above cannot be re-derived from the CLI;
+   this file is their only record until the detectors are made robust.

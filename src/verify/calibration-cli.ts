@@ -56,13 +56,27 @@ if (stale.length > 0) {
   process.exit(1);
 }
 
+// Real labels carry only a path; the platform detector (and the entry stub's
+// `image` ref) needs actual pixel dimensions, which cannot be recovered from
+// the label record alone. Read them from the file so dims-based detectors are
+// measured against the real geometry — an earlier draft dropped them, and the
+// platform field abstained on every real label (entry.image was undefined).
+const { createVerifyCtx } = await import("./ctx.js");
+const withDims = await Promise.all(
+  [...latest.values()].map(async (l) => {
+    const ctx = await createVerifyCtx(l.imagePath);
+    return { ...l, dims: { width: ctx.width, height: ctx.height } };
+  }),
+);
+
 const manifest = {
   version: 1 as const,
-  fixtures: [...latest.values()].map((l) => ({
+  fixtures: withDims.map((l) => ({
     id: `${l.entryId}|${l.field}`,
     file: l.imagePath,
     field: l.field,
     recorded: l.recorded,
+    dims: l.dims,
     // `confirmed` (claim status) -> `pass` (detector verdict).
     label: l.label === "confirmed" ? ("pass" as const) : l.label,
     split: "held-out" as const,

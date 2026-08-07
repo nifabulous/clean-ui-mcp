@@ -215,8 +215,29 @@ Expected: FAIL — cannot resolve `./ctx.js` (module does not exist).
 - [ ] **Step 3: Add the dependency and implement the module**
 
 ```bash
-npm install culori
+npm install culori@4.0.2
 ```
+
+**API verified against culori 4.0.2 (installed and run, not assumed).** No reviewer
+could confirm these offline, so they were checked directly:
+
+| Export | Shape | Verified value |
+| --- | --- | --- |
+| `differenceCiede2000` | **factory** — call it, then call the result: `differenceCiede2000()(a, b)` | `('#ffffff','#f5f5f5')` = **2.012** |
+| `wcagContrast` | direct `(a, b) => number` | `('#111111','#ffffff')` = **18.88** |
+| | | `('#9ca3af','#ffffff')` = **2.54** |
+| | | `('#0000ff','#ffffff')` = **8.59** |
+
+`parse`, `formatHex`, `converter`, `rgb` are also present. Both functions accept
+hex strings directly, so no conversion step is needed.
+
+Those four numbers are load-bearing elsewhere in this plan:
+- `2.012` is why Task 10's near-identical-canvas case is `abstain`, not
+  `contradicted` (it is far below `CANVAS_EQUAL = 8`).
+- `18.88` vs the 1.4.3 threshold of 4.5, and `8.59` vs the 1.4.11 threshold of
+  3.0, are the two Task 11 contradictions.
+- `2.54` is below 4.5, which is why Task 11's muted/canvas case must `abstain` —
+  the recorded risk is plausible there.
 
 ```ts
 // src/verify/ctx.ts
@@ -3767,6 +3788,27 @@ export function decideFieldVerdict(
 // FieldVerdict verdict union widens; verifyEntry return type becomes:
 // { records, verdicts, dataQuality: Record<string, DataQualityRecord> }
 
+// The first-pass decide loop KEEPS the absent-value gate branch. verifyEntry has
+// it today (verify-corpus.ts:410-414) and it is the ONLY producer of the `gate`
+// verdict for a field that simply has no recorded value — `decideFieldVerdict`
+// itself only gates the `gated` tier and vacuous prose. An earlier draft of this
+// plan replaced the loop without it, which silently deleted a whole verdict class
+// from the taxonomy this spec is meant to widen, and would have turned every
+// absent value into `abstain` — indistinguishable from "the model could not tell".
+const decided = new Map<string, FieldVerdict>();
+for (const field of pending) {
+  const claim = claimForField(entry as unknown as Record<string, unknown>, field);
+  decided.set(
+    field,
+    claim === null
+      ? { field, verdict: "gate", reason: "no recorded value to verify", source: "vision" }
+      : {
+          ...decideFieldVerdict(field, tierForField(field), parsed[field] ?? { confirmed: false, contradicted: false }),
+          source: "vision" as const,
+        },
+  );
+}
+
 // After the first-pass decide loop, BEFORE the prose re-produce block:
 // Corroboration covers NON-PROSE fields only. A prose field that the model
 // contradicts goes through the EXISTING re-produce + re-verify path (rewrite
@@ -4006,6 +4048,58 @@ export function mergeDataQuality(entry: CorpusEntryT, entries: Record<string, Da
 // mergeVerifyAttempts: same — a marker revokes dataQuality for its field.
 // resumeMarkers: `if (v.verdict === "pass" || v.verdict === "contradicted") continue;`
 ```
+
+**`dataQuality` records pin the image, and there is a way to clear them.** Without
+both, the triage loop the spec describes ("re-capture / re-tag / dismiss, then
+re-verify") is inert: a contradiction counts as PROCESSED at its verifier version,
+so re-verify skips the field and the finding sits there until someone bumps
+`VERIFIER_VERSION` for unrelated reasons. Two additions:
+
+```ts
+export interface DataQualityRecord {
+  measured: unknown;
+  recorded: unknown;
+  source: string;
+  reason?: string;
+  verifierVersion: string;
+  verifiedAt: string;
+  /**
+   * The image the contradiction was measured against. A re-capture changes these
+   * bytes, which makes the finding stale BY CONSTRUCTION — `selectPending` then
+   * re-offers the field without needing a version bump, because a contradiction
+   * measured against pixels that no longer exist proves nothing about the
+   * current ones. Absent for detectors that read no pixels (`platform`).
+   */
+  imageSha256?: string;
+  /** Set by `--dismiss`; a dismissed finding stays recorded but stops being reported. */
+  dismissed?: { at: string; reason: string };
+}
+```
+
+`alreadyProcessedAtVersion` treats a `dataQuality` record as processed ONLY while
+its `imageSha256` still matches the entry's current image:
+
+```ts
+// a contradiction measured against different bytes is stale, not processed
+const dq = entry.provenance?.dataQuality?.[field];
+const dqCurrent = dq?.verifierVersion === version
+  && (dq.imageSha256 === undefined || dq.imageSha256 === imageSha256Of(imagePathFor(entry)));
+```
+
+And two operator actions in `main()`:
+
+- `--retriage <entryId>[:<field>]` — deletes the named `dataQuality` records so the
+  next run re-verifies those fields. This is what "re-tag, then re-verify" needs;
+  the alternative is telling an operator to bump a global version constant to
+  clear one row.
+- `--dismiss <entryId>:<field> --reason "<why>"` — stamps `dismissed` instead of
+  deleting. The record survives as an audit trail, `--report-suspect` omits it by
+  default (`--report-suspect --include-dismissed` shows it), and the doctor count
+  excludes it. This implements the spec's third triage action, which had no
+  mechanism at all.
+
+Both write through the same snapshot-backed persistence path as every other
+provenance edit — no raw file writes.
 
 Then in `main()`'s persistence block (where `mergeVerification` / `mergeVerifyAttempts` are already called), add:
 
@@ -4542,18 +4636,66 @@ checks. Model contradictions are corroborated by a second fresh ask.
   fixture to make the gate green; the lock makes either change visible in
   review.
 - Human triage: `npm run verify -- --report-suspect` — detector findings rank
-  above model findings; actions are re-capture / re-tag / dismiss, then
-  re-verify
+  above model findings. Actions:
+  - re-capture the screenshot, then re-verify (the new bytes make the finding
+    stale automatically — its `imageSha256` no longer matches)
+  - re-tag the recorded value, then `npm run verify -- --retriage <entryId>:<field>`
+    to clear the finding so the field is re-offered
+  - `npm run verify -- --dismiss <entryId>:<field> --reason "<why>"` when the
+    contradiction is a measurement artefact — the record is kept as an audit
+    trail but stops being reported
 
 Rollout order: calibrate → verify a ~50-entry representative cohort → light
 the first 2d-2 surfaces with method disclosure → scale to the full corpus.
 ```
 
-- [ ] **Step 2: Update TODOS.md**
+- [ ] **Step 2: Run the representative cohort and PUBLISH its numbers**
+
+The spec puts the rollout sequence in scope, and an earlier draft left steps 2–4
+as runbook prose with no executable step — so nothing actually required the cohort
+to be measured before scaling to 787 entries.
+
+Select ~50 entries spanning the distributions that matter, and deliberately
+including the populations the detectors cannot affirm:
+
+```bash
+# The cohort must contain all three cornerStyle values (525 slight-round /
+# 123 pill / 139 mixed), both usesShadows values (369 true / 418 false), and a
+# spread of colorScheme, so the run exercises the value-dependence rule rather
+# than only the happy path.
+npm run verify -- --limit 50 --detectors on
+npm run verify -- --report-suspect > /tmp/cohort-suspect.md
+```
+
+Record in `docs/verifier-calibration.md`, under a "Cohort run" heading:
+
+- per-detector pass / contradicted / abstain **rates** (straight from the run
+  report's telemetry lines)
+- the contradiction count, and how many survived triage as genuine corpus errors
+- how many fields lit up (`verification` records written) vs stayed dark
+- the measured per-entry model-call count, against the pre-detector baseline
+
+**Gate before scaling:** if the cohort's detector contradiction rate is far above
+the real-screenshot calibration rate from Task 13B, stop — that gap means the
+calibration set was not representative, and scaling would write findings faster
+than anyone can triage them. Re-label and re-run Task 13B instead of proceeding.
+
+- [ ] **Step 3: Scale the full run**
+
+```bash
+npm run verify -- --detectors on          # resume-aware; processed fields skip
+```
+
+Re-runs are incremental: processed-at-version markers skip finished fields, so an
+interrupted run resumes without re-paying for completed work. Watch the
+per-detector rates across batches — a rate that drifts between batches means
+recalibration, not a bigger batch.
+
+- [ ] **Step 4: Update TODOS.md**
 
 In the "Frozen labelled ground-truth set" TODO, change the trigger line to note the plan has landed, and add `eval/verdicts/labels.jsonl` (real-screenshot labels, the spec's own labelling contract) as the calibration-input artifact.
 
-- [ ] **Step 3: Run the full verification suite**
+- [ ] **Step 5: Run the full verification suite**
 
 Run: `npx tsc --noEmit`
 Expected: no type errors.
@@ -4564,7 +4706,7 @@ Expected: PASS (full suite, including the new `src/verify/**` tests).
 Run: `npm run verify:dry-run` (after `npx tsc`)
 Expected: prints the projected-cost report without calling any model.
 
-- [ ] **Step 4: Update the spec status and commit**
+- [ ] **Step 6: Update the spec status and commit**
 
 ```markdown
 **Status:** implemented (2026-08-07)

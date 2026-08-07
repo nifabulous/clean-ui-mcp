@@ -245,3 +245,118 @@ export function colorStats(raw: RawBuffer, target: [number, number, number], tol
   }
   return { total: width * height, matchCount, background, backgroundCount: bgCount, largestNonBg };
 }
+
+export interface ComponentBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  area: number;
+}
+
+// `bucketKey` is defined ONCE, in the Task 7 block above (exported). Do NOT
+// redeclare it here: an earlier draft had two copies with different shifts, and
+// the second one silently corrupted every component/background consumer in this
+// task and Task 9. It is already in scope in this file.
+
+/** The most common colour bucket — treated as the image background. */
+export function backgroundBucketKey(raw: RawBuffer): number {
+  const { data, width, height } = raw;
+  const counts = new Map<number, number>();
+  for (let i = 0; i < width * height; i++) {
+    const key = bucketKey(data[i * 4], data[i * 4 + 1], data[i * 4 + 2]);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  let bestKey = -1;
+  let bestCount = 0;
+  for (const [key, count] of counts) {
+    if (count > bestCount) { bestCount = count; bestKey = key; }
+  }
+  return bestKey;
+}
+
+/** The largest connected region of non-background pixels (4-connectivity BFS). */
+export function largestComponent(raw: RawBuffer): ComponentBox | null {
+  const { data, width, height } = raw;
+  const n = width * height;
+  const bgKey = backgroundBucketKey(raw);
+  const visited = new Uint8Array(n);
+  let best: ComponentBox | null = null;
+  for (let start = 0; start < n; start++) {
+    if (visited[start]) continue;
+    const startKey = bucketKey(data[start * 4], data[start * 4 + 1], data[start * 4 + 2]);
+    if (startKey === bgKey) { visited[start] = 1; continue; }
+    let area = 0;
+    let minX = width, minY = height, maxX = -1, maxY = -1;
+    const queue = [start];
+    visited[start] = 1;
+    while (queue.length > 0) {
+      const i = queue.pop()!;
+      area++;
+      const x = i % width;
+      const y = (i / width) | 0;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      for (const j of [i - 1, i + 1, i - width, i + width]) {
+        if (j < 0 || j >= n || visited[j]) continue;
+        if (bucketKey(data[j * 4], data[j * 4 + 1], data[j * 4 + 2]) === bgKey) {
+          visited[j] = 1;
+          continue;
+        }
+        visited[j] = 1;
+        queue.push(j);
+      }
+    }
+    if (!best || area > best.area) {
+      best = { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1, area };
+    }
+  }
+  return best;
+}
+
+export interface CornerMeasure {
+  radius: number;
+  consistency: number;
+}
+
+/**
+ * Corner radius estimate via EDGE INSET. From each bounding-box corner, walk
+ * inward along each of the two box edges, counting background pixels until the
+ * first foreground pixel. For a rounded corner radius r the inset is r (±1px);
+ * for a sharp corner it is 0. Mean over all 8 edge samples = radius.
+ *
+ * The previous diagonal walk was a bug: it walked `(cx+k, cy+k)` UNIFORMLY, so
+ * for the top-right and bottom-left corners it headed OUTWARD, hit the image
+ * edge at k=32, and every rounded fixture abstained on "corners disagree".
+ */
+export function cornerMeasure(raw: RawBuffer, box: ComponentBox): CornerMeasure {
+  const { data, width, height } = raw;
+  const bgKey = backgroundBucketKey(raw);
+  const isBg = (x: number, y: number): boolean => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return true;
+    const i = (y * width + x) * 4;
+    return bucketKey(data[i], data[i + 1], data[i + 2]) === bgKey;
+  };
+  const right = box.x + box.width - 1;
+  const bottom = box.y + box.height - 1;
+  const corners: Array<{ x: number; y: number; dx: number; dy: number }> = [
+    { x: box.x, y: box.y, dx: 1, dy: 1 },     // top-left: inward is +x, +y
+    { x: right, y: box.y, dx: -1, dy: 1 },    // top-right: inward is -x, +y
+    { x: box.x, y: bottom, dx: 1, dy: -1 },   // bottom-left: inward is +x, -y
+    { x: right, y: bottom, dx: -1, dy: -1 },  // bottom-right: inward is -x, -y
+  ];
+  const insets: number[] = [];
+  for (const c of corners) {
+    let kx = 0;
+    while (kx < 32 && isBg(c.x + c.dx * kx, c.y)) kx++;
+    insets.push(kx);
+    let ky = 0;
+    while (ky < 32 && isBg(c.x, c.y + c.dy * ky)) ky++;
+    insets.push(ky);
+  }
+  const avg = insets.reduce((a, b) => a + b, 0) / insets.length;
+  const radius = avg; // edge inset IS the radius (±1px) — no diagonal factor
+  const spread = Math.max(...insets) - Math.min(...insets);
+  const consistency = Math.max(0, 1 - spread / Math.max(avg, 1));
+  return { radius, consistency };
+}

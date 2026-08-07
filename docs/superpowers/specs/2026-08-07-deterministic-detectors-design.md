@@ -181,10 +181,20 @@ model `contradicted` would accuse the corpus of being wrong at roughly that
 rate, indistinguishable from a detector's arithmetic. A model `contradicted`
 therefore triggers a second fresh-context ask for that field alone, using the
 same positive-affirmation prompt (not a "do you still disagree" prompt, which
-would anchor the second answer). Only a corroborated `contradicted` writes
-`dataQuality`; a second ask that confirms writes `verification` (the first ask
-flipped), and one that abstains writes a processed marker. With flips
-independent, corroboration drops the false-accusation rate from ~18% to ~3%.
+would anchor the second answer). Only a corroborated `contradicted` writes `dataQuality`.
+
+**A split grants nothing.** If the second ask *confirms*, the two looks disagree —
+and a split carries no information: assuming the measured flip rate,
+P(split | claim true) = 0.15 x 0.85 is the same as P(split | claim false), so
+resolving it either way is resolving on the prior, not on evidence. It is also the
+state corroboration exists to catch. So a split writes no `verification` and no
+`dataQuality` — only a processed marker, and the next verifier version re-asks.
+Granting trust there would make the rule absurdly asymmetric: 2-of-2 agreement
+demanded to *accuse* the corpus, 1-of-2 accepted to *serve* it, with the dissenting
+look actively contradicting. A second ask that abstains is likewise a marker.
+
+With flips independent, corroboration drops the false-accusation rate from ~18%
+to ~3%.
 
 ## Components
 
@@ -589,8 +599,8 @@ writes only a processed marker; `pass` writes only `verification`; each write
 revokes the other two for that field. A model `contradicted` verdict — from the
 three-way prompt — is corroborated by a second fresh ask before anything is
 written: corroborated → `dataQuality` with `source: "vision"`; second ask
-confirms → `verification` (the first ask flipped); second ask abstains →
-processed marker. A model `abstain` never serves. Plus a run-report test that a
+confirms → the two looks disagree, so a processed marker and NOTHING else (no
+trust record, no finding); second ask abstains → processed marker. A model `abstain` never serves. Plus a run-report test that a
 `contradicted` entry appears in the suspect table with detector rows ranked
 above model rows.
 

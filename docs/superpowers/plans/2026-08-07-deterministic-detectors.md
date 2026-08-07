@@ -3885,6 +3885,11 @@ if (modelContradicted.length > 0) {
         reason: reParsed[field]?.reason ?? "corroborated contradiction",
         verifierVersion: VERIFIER_VERSION,
         verifiedAt: now,
+        // The model judged these exact pixels; pin them, as image-confirmed
+        // verification records do. Without this the `imageSha256` field is
+        // declared but never populated, and every staleness rule built on it is
+        // dead code.
+        imageSha256: imageSha256Of(imagePath),
       };
       decided.set(field, reVerdict);
     } else {
@@ -3901,41 +3906,67 @@ if (modelContradicted.length > 0) {
 
 // The finalize loop stays, but skip fields now carrying records/dataQuality.
 
-// Detector contradictions (Task 12's outcome.contradicted) also accumulate.
+// Detector contradictions (Task 12's outcome.contradicted) also accumulate —
+// but ONLY when detectors are enabled, and every executed contradiction must
+// still land in exactly one map.
 //
-// NO `if (detectorsEnabled)` GUARD HERE. An earlier draft wrapped this loop in
-// one, reasoning that `--detectors off` must not write dataQuality. But with the
-// flag off `runDetectors` still runs `platform` and `visual.dominantColors` —
-// they are `mechanical` TODAY, so the flag does not disable them. A contradiction
-// from either was therefore blocked from dataQuality here, skipped by
-// `resumeMarkers` (which ignores `contradicted`), and written to NO map at all —
-// so `selectPending` requeued that entry on every subsequent run, forever. Before
-// this plan, `verifyMechanicalFields` returned `"fail"` and `resumeMarkers` marked
-// it, so that was a regression, not a pre-existing gap.
+// The subtlety that produced two wrong drafts: `--detectors off` does NOT stop
+// `runDetectors` from running `platform` and `visual.dominantColors`. Those two
+// are `mechanical` TODAY, so the flag cannot disable them.
 //
-// The guard is also redundant: with the flag off, `outcome.contradicted` can only
-// contain `platform` / `visual.dominantColors`, because no other detector ran.
-// Anything in the outcome came from a detector that actually executed, and every
-// executed contradiction must land in exactly one map.
-for (const field of outcome.contradicted) {
-  const verdict = verdicts.find((v) => v.field === field);
-  dataQuality[field] = {
-    measured: null,
-    recorded: claimForField(entry as unknown as Record<string, unknown>, field),
-    source: field, // the detector name = registry key
-    reason: verdict?.reason ?? "detector contradiction",
-    verifierVersion: VERIFIER_VERSION,
-    verifiedAt: now,
-  };
+//   - Draft 1 wrapped this loop in `if (detectorsEnabled)`. A contradiction from
+//     either always-on detector was then blocked from `dataQuality` here, skipped
+//     by `resumeMarkers` (which ignores `contradicted`), and written to NO map —
+//     so `selectPending` requeued that entry forever. A real regression:
+//     `verifyMechanicalFields` used to return `"fail"`, which `resumeMarkers`
+//     marked.
+//   - Draft 2 removed the guard entirely. That fixed convergence but broke the
+//     `--detectors off` contract: the Global Constraint and the spec both say no
+//     detector-side `dataQuality` is written under the flag, and the A/B
+//     comparison in Task 20 depends on flag-off being a genuine legacy baseline
+//     rather than a hybrid that emits findings.
+//
+// Correct resolution: under the flag, the two always-on detectors emit the LEGACY
+// `fail` verdict, which `resumeMarkers` marks. Convergence holds, no `dataQuality`
+// is written, and flag-off is a true baseline. Under the flag ON, they emit
+// `contradicted` and write a finding like every other detector.
+if (detectorsEnabled) {
+  for (const field of outcome.contradicted) {
+    const verdict = verdicts.find((v) => v.field === field);
+    dataQuality[field] = {
+      measured: null,
+      recorded: claimForField(entry as unknown as Record<string, unknown>, field),
+      source: field, // the detector name = registry key
+      reason: verdict?.reason ?? "detector contradiction",
+      verifierVersion: VERIFIER_VERSION,
+      verifiedAt: now,
+      // Pixel-based findings pin the bytes they were measured against, exactly as
+      // image-confirmed verification records do. `platform` is recomputed from
+      // recorded dimensions and reads no pixels, so it carries no hash — the same
+      // discriminator already used to choose provableRecord vs confirmedRecord.
+      ...(field === "platform" ? {} : { imageSha256: imageSha256Of(imagePath) }),
+    };
+  }
+} else {
+  // Legacy path: rewrite the two always-on detectors' `contradicted` verdicts as
+  // `fail` so `resumeMarkers` marks them and the entry converges with no
+  // `dataQuality`. Byte-identical to pre-plan behaviour for these fields.
+  for (const field of outcome.contradicted) {
+    const i = verdicts.findIndex((v) => v.field === field);
+    if (i >= 0) verdicts[i] = { ...verdicts[i], verdict: "fail" };
+  }
 }
 ```
 
 Add a convergence test for exactly this path:
 
 ```ts
-it("a contradicted mechanical field converges with --detectors off (no orphaned field)", async () => {
+it("a contradicted mechanical field converges with --detectors off, as a legacy fail", async () => {
   // platform/dominantColors run regardless of the flag, so their contradictions
-  // must still land in a map — otherwise selectPending requeues the entry forever.
+  // must land in SOME map or selectPending requeues the entry forever. Under the
+  // flag they take the LEGACY route — `fail` + resume marker — because the flag's
+  // contract is no detector-side dataQuality, and Task 20's A/B comparison needs
+  // flag-off to be a genuine baseline rather than a hybrid that emits findings.
   const e = makeEntry();
   e.platform = "mobile";                                   // 1440x900 is web
   // ImageRef is { visibility, path, width, height } — `visibility` is REQUIRED and
@@ -3946,7 +3977,22 @@ it("a contradicted mechanical field converges with --detectors off (no orphaned 
     now: () => "2026-08-07", callVision: async () => "{}", reproduce: async (x) => x,
     detectors: false,
   });
-  expect(out.dataQuality.platform, "contradiction must be recorded even with detectors off").toBeDefined();
+  expect(out.dataQuality.platform, "the flag's contract is no detector-side dataQuality").toBeUndefined();
+  expect(out.verdicts.find((v) => v.field === "platform")?.verdict).toBe("fail");
+  // The marker is what actually stops the requeue loop.
+  expect(resumeMarkers(out.verdicts, "2026-08-07", VERIFIER_VERSION).platform).toBeDefined();
+});
+
+it("the same contradiction becomes a dataQuality finding with detectors ON", async () => {
+  const e = makeEntry();
+  e.platform = "mobile";
+  e.image = { visibility: "private", path: "images-private/x.png", width: 1440, height: 900 };
+  const out = await verifyEntry(e, image, {
+    now: () => "2026-08-07", callVision: async () => "{}", reproduce: async (x) => x,
+  });
+  expect(out.dataQuality.platform).toBeDefined();
+  // platform reads no pixels, so its finding carries no image hash.
+  expect(out.dataQuality.platform.imageSha256).toBeUndefined();
 });
 ```
 
@@ -3977,7 +4023,7 @@ git commit -m "feat(verify): three-way model verdicts with corroborated contradi
   - `mergeDataQuality(entry, entries: Record<string, DataQualityRecord>): void` — writes the map and REVOKES `verification` + `verifyAttempts` for those fields.
   - `mergeVerification` / `mergeVerifyAttempts` also revoke `dataQuality` for the fields they write (exclusivity in all three directions).
   - `resumeMarkers` skips `pass` AND `contradicted` (a contradiction is a finding, not a retry candidate).
-  - `alreadyProcessedAtVersion` / `selectPending` treat a `dataQuality` record as PROCESSED when it is at this version **AND still current for the image** — i.e. its `imageSha256` is absent (a pixel-free detector such as `platform`) or still matches the entry's image. A contradiction measured against pixels that no longer exist proves nothing about the current ones, so a re-capture makes the finding stale and the field is re-offered WITHOUT a version bump. Otherwise a contradiction is terminal at its version, cleared by `--retriage` or the next version bump. (Step 4 has the predicate; the two must not drift.)
+  - `alreadyProcessedAtVersion` / `selectPending` treat a `dataQuality` record at this version as PROCESSED — a contradiction is terminal at its version, cleared by `--retriage`, a `--dismiss`, or a version bump. The predicate is **version-only**, deliberately: `selectPending` scans all 787 entries and never hashes images today — not even for `verification`, whose image-confirmed records have exactly the same re-capture problem. Staleness detection lives in `doctor.ts` (`doctor-helpers.ts:602` already compares a verification record's `imageSha256` to the current file), so a stale contradiction is surfaced there for a human, NOT auto-requeued by hashing 787 files in the queue scan. An earlier draft of this plan claimed the field would be re-offered automatically without a version bump; that would have required exactly that per-entry hashing and contradicted how verification staleness already works.
 
 - [ ] **Step 1: Write the failing exclusivity test**
 
@@ -4112,30 +4158,23 @@ export interface DataQualityRecord {
 }
 ```
 
-`alreadyProcessedAtVersion` treats a `dataQuality` record as processed ONLY while
-its `imageSha256` still matches the entry's current image:
+`imageSha256` is recorded for auditability and for doctor's staleness check — NOT
+for the queue predicate. `alreadyProcessedAtVersion` stays version-only:
 
 ```ts
-// a contradiction measured against different bytes is stale, not processed
-const dq = entry.provenance?.dataQuality?.[field];
-const dqCurrent = dq?.verifierVersion === version
-  && (dq.imageSha256 === undefined || dq.imageSha256 === imageSha256Of(imagePathFor(entry)));
+// version-only, matching how `verification` records are treated. selectPending
+// scans every entry and must not hash 787 images; doctor owns staleness.
+|| entry.provenance?.dataQuality?.[field]?.verifierVersion === version;
 ```
 
-And two operator actions in `main()`:
+Task 17 adds the doctor check that mirrors the existing image-confirmed one: a
+`dataQuality` record whose `imageSha256` no longer matches the entry's image is
+reported as a stale contradiction, so a re-capture surfaces for a human who then
+runs `--retriage`.
 
-- `--retriage <entryId>[:<field>]` — deletes the named `dataQuality` records so the
-  next run re-verifies those fields. This is what "re-tag, then re-verify" needs;
-  the alternative is telling an operator to bump a global version constant to
-  clear one row.
-- `--dismiss <entryId>:<field> --reason "<why>"` — stamps `dismissed` instead of
-  deleting. The record survives as an audit trail, `--report-suspect` omits it by
-  default (`--report-suspect --include-dismissed` shows it), and the doctor count
-  excludes it. This implements the spec's third triage action, which had no
-  mechanism at all.
-
-Both write through the same snapshot-backed persistence path as every other
-provenance edit — no raw file writes.
+The two operator actions are implemented in **Step 5B** below — not left as prose.
+A triage loop described but not built is the same placeholder defect this plan
+bans elsewhere.
 
 Then in `main()`'s persistence block (where `mergeVerification` / `mergeVerifyAttempts` are already called), add:
 
@@ -4197,6 +4236,110 @@ for (const [field, d] of Object.entries(detectorRates)) {
 ```
 
 Add tests for both: `alreadyProcessedAtVersion` returns true for a field with a `dataQuality` record at the version, and `buildRunReport` prints the new verdict counts and a per-detector line for a run containing `contradicted`/`abstain` verdicts.
+
+- [ ] **Step 5B: Implement the triage actions (`--retriage`, `--dismiss`)**
+
+The spec's triage loop names three actions — re-capture, re-tag, dismiss — and
+before this step only re-capture had a mechanism (doctor surfaces the stale hash).
+Without these two, a contradiction is terminal at its version and the only way to
+clear one row is bumping a global constant for the whole corpus.
+
+Write the failing tests first:
+
+```ts
+describe("triage actions", () => {
+  it("retriage deletes the named finding so the field is re-offered", () => {
+    const e = makeEntry();
+    mergeDataQuality(e, {
+      layout: { measured: 1, recorded: "a", source: "vision", verifierVersion: "verifier-v1", verifiedAt: "x" },
+      mood:   { measured: 2, recorded: "b", source: "vision", verifierVersion: "verifier-v1", verifiedAt: "x" },
+    });
+    retriageDataQuality(e, ["layout"]);
+    expect(e.provenance?.dataQuality?.layout).toBeUndefined();
+    expect(e.provenance?.dataQuality?.mood, "untargeted findings survive").toBeDefined();
+    expect(alreadyProcessedAtVersion(e, "layout", "verifier-v1"), "re-offered").toBe(false);
+  });
+
+  it("retriage with no field clears every finding on the entry", () => {
+    const e = makeEntry();
+    mergeDataQuality(e, {
+      layout: { measured: 1, recorded: "a", source: "vision", verifierVersion: "verifier-v1", verifiedAt: "x" },
+      mood:   { measured: 2, recorded: "b", source: "vision", verifierVersion: "verifier-v1", verifiedAt: "x" },
+    });
+    retriageDataQuality(e, undefined);
+    expect(Object.keys(e.provenance?.dataQuality ?? {})).toEqual([]);
+  });
+
+  it("dismiss KEEPS the record but stamps it, and the field stays processed", () => {
+    const e = makeEntry();
+    mergeDataQuality(e, {
+      layout: { measured: 1, recorded: "a", source: "vision", verifierVersion: "verifier-v1", verifiedAt: "x" },
+    });
+    dismissDataQuality(e, "layout", "measurement artefact — antialiasing", "2026-08-07");
+    // Dismissing is NOT deleting: the audit trail is the point.
+    expect(e.provenance?.dataQuality?.layout).toBeDefined();
+    expect(e.provenance?.dataQuality?.layout?.dismissed?.reason).toContain("antialiasing");
+    expect(alreadyProcessedAtVersion(e, "layout", "verifier-v1"), "dismissed stays processed").toBe(true);
+  });
+
+  it("dismiss refuses a field with no finding, rather than inventing one", () => {
+    const e = makeEntry();
+    expect(() => dismissDataQuality(e, "layout", "why", "2026-08-07")).toThrow(/no dataQuality finding/i);
+  });
+
+  it("the suspect report hides dismissed rows unless asked", () => {
+    const e = makeEntry();
+    mergeDataQuality(e, {
+      layout: { measured: 1, recorded: "a", source: "vision", verifierVersion: "verifier-v1", verifiedAt: "x" },
+    });
+    dismissDataQuality(e, "layout", "artefact", "2026-08-07");
+    expect(renderSuspectReport([e], { includeDismissed: false })).not.toContain("layout");
+    expect(renderSuspectReport([e], { includeDismissed: true })).toContain("layout");
+  });
+});
+```
+
+Then implement:
+
+```ts
+/** Clears findings so the next run re-verifies those fields. Re-tag, then this. */
+export function retriageDataQuality(entry: CorpusEntryT, fields: readonly string[] | undefined): void {
+  const dq = entry.provenance?.dataQuality;
+  if (!dq) return;
+  for (const field of fields ?? Object.keys(dq)) delete dq[field];
+}
+
+/**
+ * Marks a finding as a measurement artefact. Deliberately NOT a delete: the
+ * record is the audit trail for a human decision, and a dismissed field stays
+ * PROCESSED so it is not re-offered every run.
+ */
+export function dismissDataQuality(entry: CorpusEntryT, field: string, reason: string, now: string): void {
+  const record = entry.provenance?.dataQuality?.[field];
+  if (!record) throw new Error(`no dataQuality finding for "${field}" on ${entry.id} — nothing to dismiss`);
+  record.dismissed = { at: now, reason };
+}
+```
+
+Wire both in `main()`, alongside the existing flags:
+
+```ts
+"retriage": { type: "string" },   // "<entryId>" or "<entryId>:<field>"
+"dismiss":  { type: "string" },   // "<entryId>:<field>"
+"reason":   { type: "string" },   // required with --dismiss
+"include-dismissed": { type: "boolean", default: false },
+```
+
+Both are ENTRY-EDITING actions that run and exit before any verification: resolve
+the entry, apply the mutation, persist through the same snapshot-backed path as
+every other provenance write (`persistEntries(writableLoadedCorpus(...))`) — never
+a raw file write — and print what changed. `--dismiss` without `--reason` is a
+hard error; a dismissal with no recorded reason is exactly the unauditable state
+the record exists to prevent.
+
+Task 16's `renderSuspectReport` takes `{ includeDismissed }` and filters dismissed
+rows by default; Task 17's `dataquality-count` excludes them from its total, so a
+dismissed artefact stops nagging the doctor while remaining on the record.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 

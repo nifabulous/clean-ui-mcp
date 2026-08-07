@@ -768,7 +768,17 @@ async function pairs(dir: string, entries: FixtureEntry[]): Promise<void> {
 }
 
 async function accents(dir: string, entries: FixtureEntry[]): Promise<void> {
-  const button = (rgb: [number, number, number]): void => fillRect(blank(), 45, 35, 30, 20, rgb);
+  // Returns the buffer. An earlier draft typed this `: void` and passed
+  // `fillRect(blank(), ...)` — `fillRect` mutates in place and returns void, so
+  // the throwaway `blank()` was discarded, `px1` was `undefined`, and
+  // `writePng` crashed on `Buffer.from(undefined)`. It was also a `tsc` error
+  // (`void` assigned to `Px`) in a NON-test file, so `npm run build` broke and
+  // no accent fixture was ever written.
+  const button = (rgb: [number, number, number]): Px => {
+    const px = blank();
+    fillRect(px, 45, 35, 30, 20, rgb);
+    return px;
+  };
   const px1 = button([37, 99, 235]);
   await writePng(dir, "accent-primary-true.png", px1);
   entries.push({ id: "accent-primary-true", file: "accent-primary-true.png", field: "visual.accentColor", recorded: "#2563eb", label: "pass", split: "tune" });
@@ -2326,9 +2336,23 @@ describe("colorRoles detector (contradiction-only)", () => {
   });
 
   it("contradicts a canvas that is not the largest-area colour", async () => {
+    // `#111111` on a light card: the claimed canvas is nowhere near the dominant
+    // colour, so the claim is positively disproven.
+    const ctx = await createVerifyCtx(fixtureImagePath("roles-card"));
+    const r = await detect(entry({ ...FULL_ROLES, canvas: "#111111" }), ctx);
+    expect(r.verdict).toBe("contradicted");
+  });
+
+  it("ABSTAINS on a canvas that is perceptually near the real background", async () => {
+    // roles-card's background is #f5f5f5; a recorded canvas of #ffffff is
+    // ΔE2000 ≈ 2.0 from it — far below CANVAS_EQUAL (8). Calling that a
+    // contradiction would put a false accusation in the human triage queue over
+    // a difference nobody can see. An earlier draft asserted `contradicted`
+    // here, which the threshold made unreachable; `abstain` is both what the
+    // code does and what it SHOULD do.
     const ctx = await createVerifyCtx(fixtureImagePath("roles-card"));
     const r = await detect(entry({ ...FULL_ROLES, canvas: "#ffffff" }), ctx);
-    expect(r.verdict).toBe("contradicted");
+    expect(r.verdict).toBe("abstain");
   });
 
   it("abstains on a malformed hex (unparseable, not disproven)", async () => {
@@ -2430,10 +2454,27 @@ git commit -m "feat(verify): colorRoles contradiction-only detector"
 - Test: `src/verify/detectors/accessibility-risks.test.ts`
 
 **Interfaces:**
-- Consumes: `culori` (`wcagContrast`), detector types. No pixels, no `ctx` — pure arithmetic over the recorded risk strings and hexes.
+- Consumes: `culori` (`wcagContrast`), detector types. No pixels, no `ctx` — pure arithmetic.
 - Produces: `canAffirm(recorded)` — always `false`; `detect(entry, _ctx): Promise<DetectorResult>`.
 
-**Contract:** a listed contrast risk that is arithmetically FALSE is bad data worth surfacing. Only risks that name a WCAG contrast criterion (1.4.3 / 1.4.11) AND carry two parseable hexes are checkable; a risk that "comfortably clears" its threshold (`ratio >= threshold + 0.5`) is `contradicted`. Everything else — hit-target risks, no hexes, a genuine low ratio — is `abstain` (not disproven). `muted` role hexes are nullable; the detector only ever reads the risk string itself.
+**Contract:** a listed contrast risk that is arithmetically FALSE is bad data worth surfacing. A risk that "comfortably clears" its threshold (`ratio >= threshold + 0.5`) is `contradicted`. Everything else — hit-target risks, an unresolvable colour pair, a genuine low ratio — is `abstain` (not disproven).
+
+**Read the criteria from `wcag[]`, and the colours from `colorRoles` — measured against the real corpus.** An earlier draft parsed both the WCAG criterion and two hexes out of the `risk` prose. Measured over all 11 recorded risks in `corpus/entries.json`:
+
+| | count |
+| --- | --- |
+| risks total | 11 |
+| contrast criterion present in `wcag[]` | **2** |
+| contrast criterion present in the `risk` prose | **0** |
+| two-or-more hexes in the `risk` prose | **0** |
+| two-or-more hexes in `evidence` | **0** |
+
+So the prose-parsing version could never fire on real data — it would abstain on 11 of 11 forever while passing its own synthetic-string tests. Two corrections follow:
+
+1. **Criteria come from `r.wcag`**, which `AccessibilityRisk` declares required (`z.array(...).min(1).max(3)`, `schema.ts:232`) and which a dedicated `migrate-wcag-ids` script exists to keep canonical. Never from the prose.
+2. **The colour pair comes from `visual.colorRoles`**, because the risks carry no hexes at all. Resolve the risk to a role pair by its `element` text (`text`/`body`/`label` → `ink` on `canvas`; `muted`/`secondary`/`placeholder` → `muted` on `canvas`; `button`/`link`/`cta` → `accent` on `canvas`). An unresolvable `element`, or a `colorRoles` missing either side (`muted` is nullable, `schema.ts:419-425`), is `abstain`.
+
+**Honest scope:** this yields at most 2 checkable risks across the entire corpus today. It is worth keeping because it is exact arithmetic and cheap, but it should not be expected to surface much until the corpus records more a11y risks — and it must not be counted as evidence the detector layer is working.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2443,7 +2484,12 @@ import { describe, expect, it } from "vitest";
 import { detect } from "./accessibility-risks.js";
 import type { CorpusEntryT } from "../../schema.js";
 
-function entry(risks: Array<{ element?: string; risk?: string }>): CorpusEntryT {
+// Mirrors the REAL AccessibilityRisk shape (schema.ts:227-233): `wcag` is a
+// required canonical-ID array, and `evidence`/`confidence` are required too.
+// The detector reads `wcag` and `element`, never the prose.
+type TestRisk = { element: string; risk: string; evidence: string; confidence: "visible" | "inferred" | "dom-grounded"; wcag: string[] };
+const RISK_ROLES = { canvas: "#ffffff", surface: "#ffffff", ink: "#111111", muted: "#9ca3af", accent: "#0000ff" };
+function entry(risks: TestRisk[], roles: Record<string, string | null> = RISK_ROLES): CorpusEntryT {
   return {
     id: "t", title: "t", patternType: "dashboard", colorScheme: "light",
     categories: ["dashboard"], styleTags: ["minimal"], components: [],
@@ -2461,36 +2507,56 @@ function entry(risks: Array<{ element?: string; risk?: string }>): CorpusEntryT 
 }
 
 describe("accessibilityRisks detector (contradiction-only)", () => {
-  it("contradicts a 12:1 pair carrying a 1.4.3 claim (arithmetically false)", async () => {
-    const r = await detect(
-      entry([{ element: "body", risk: "text #111111 on #ffffff fails WCAG 1.4.3" }]),
-      null as never,
-    );
+  const risk = (element: string, wcag: string[]): TestRisk =>
+    ({ element, risk: `${element} contrast is insufficient for readers`, evidence: "visual inspection", confidence: "visible", wcag });
+
+  it("contradicts a 1.4.3 claim on ink/canvas that actually measures ~19:1", async () => {
+    // ink #111111 on canvas #ffffff. The criterion comes from wcag[], the colours
+    // from colorRoles — neither is parsed out of the prose, which carries neither.
+    const r = await detect(entry([risk("body text", ["1.4.3"])]), null as never);
     expect(r.verdict).toBe("contradicted");
     expect((r.measured as { ratio: number }).ratio).toBeGreaterThan(5);
   });
 
-  it("abstains on a genuine 2.1:1 pair (not disproven)", async () => {
+  it("abstains on a genuine low-contrast muted/canvas pair (not disproven)", async () => {
+    // muted #9ca3af on #ffffff is ~2.5:1 — the recorded risk is plausible, so the
+    // detector must NOT contradict it.
+    const r = await detect(entry([risk("muted label", ["1.4.3"])]), null as never);
+    expect(r.verdict).toBe("abstain");
+  });
+
+  it("contradicts a false 1.4.11 non-text claim on accent/canvas", async () => {
+    const r = await detect(entry([risk("button", ["1.4.11"])]), null as never);
+    expect(r.verdict).toBe("contradicted");
+  });
+
+  it("abstains on a hit-target risk — no contrast criterion in wcag[]", async () => {
+    const r = await detect(entry([risk("button", ["2.5.8"])]), null as never);
+    expect(r.verdict).toBe("abstain");
+  });
+
+  it("abstains when the element does not resolve to a role pair", async () => {
+    const r = await detect(entry([risk("decorative divider", ["1.4.3"])]), null as never);
+    expect(r.verdict).toBe("abstain");
+  });
+
+  it("abstains when colorRoles cannot supply the pair (muted is nullable)", async () => {
     const r = await detect(
-      entry([{ element: "body", risk: "text #9ca3af on #ffffff fails WCAG 1.4.3" }]),
+      entry([risk("muted label", ["1.4.3"])], { ...RISK_ROLES, muted: null }),
       null as never,
     );
     expect(r.verdict).toBe("abstain");
   });
 
-  it("contradicts a false 1.4.11 non-text claim", async () => {
-    const r = await detect(
-      entry([{ element: "button", risk: "button #0000ff on #ffffff fails WCAG 1.4.11" }]),
-      null as never,
-    );
-    expect(r.verdict).toBe("contradicted");
-  });
-
-  it("abstains on a hit-target risk with no contrast criterion", async () => {
-    const r = await detect(
-      entry([{ element: "button", risk: "hit target smaller than 24px" }]),
-      null as never,
-    );
+  it("NEVER contradicts by reading the prose — a criterion only in the text is ignored", async () => {
+    // Guards the regression this task fixes: 0 of 11 real risks name a criterion
+    // in the prose, so a prose-reading detector abstains on the whole corpus while
+    // passing synthetic-string tests.
+    const proseOnly: TestRisk = {
+      element: "body text", risk: "text #111111 on #ffffff fails WCAG 1.4.3",
+      evidence: "visual inspection", confidence: "visible", wcag: ["2.5.8"],
+    };
+    const r = await detect(entry([proseOnly]), null as never);
     expect(r.verdict).toBe("abstain");
   });
 
@@ -2520,32 +2586,57 @@ export function canAffirm(): boolean {
   return false;
 }
 
-const CRITERION = /1\.4\.3|1\.4\.11/;
-const HEX = /#[0-9a-fA-F]{6}/g;
-const CLEAR_MARGIN = 0.5; // comfortably clears the threshold
+// Contrast criteria, read from the REQUIRED canonical `wcag[]` array — never from
+// the risk prose. Measured over the real corpus: 2 of 11 risks name a contrast
+// criterion in `wcag[]`; ZERO name one in the prose, and zero carry two hexes
+// anywhere. A prose-parsing detector abstains on 11 of 11 forever.
+const CONTRAST_CRITERIA: Record<string, number> = { "1.4.3": 4.5, "1.4.11": 3.0 };
+const CLEAR_MARGIN = 0.5; // must comfortably clear the threshold to contradict
+
+/**
+ * Which colorRoles pair a risk's `element` refers to. The risks carry no hexes,
+ * so the pair must come from the recorded roles; an element we cannot map is
+ * abstained rather than guessed.
+ */
+function rolePairFor(element: string): { fg: "ink" | "muted" | "accent"; bg: "canvas" } | null {
+  const e = element.toLowerCase();
+  if (/\b(muted|secondary|placeholder|caption|hint)\b/.test(e)) return { fg: "muted", bg: "canvas" };
+  if (/\b(button|link|cta|action)\b/.test(e)) return { fg: "accent", bg: "canvas" };
+  if (/\b(text|body|label|heading|title|paragraph)\b/.test(e)) return { fg: "ink", bg: "canvas" };
+  return null;
+}
 
 export async function detect(entry: CorpusEntryT, _ctx: VerifyCtx): Promise<DetectorResult> {
   const risks = entry.antiPatterns?.accessibilityRisks ?? [];
   if (risks.length === 0) {
     return { verdict: "abstain", measured: null, confidence: 0.5, reason: "no recorded accessibility risks" };
   }
+  const roles = entry.visual?.colorRoles ?? null;
   for (const r of risks) {
-    const text = r.risk ?? "";
-    const criterion = text.match(CRITERION)?.[0];
-    const hexes = [...text.matchAll(HEX)].map((m) => m[0].toLowerCase());
-    if (!criterion || hexes.length < 2) continue;
-    const ratio = wcagContrast(hexes[0], hexes[1]);
-    const threshold = criterion === "1.4.3" ? 4.5 : 3.0;
+    // `wcag` is required and canonical (schema.ts:232); a risk may list up to 3.
+    const criterion = (r.wcag ?? []).find((w) => w in CONTRAST_CRITERIA);
+    if (criterion === undefined) continue;
+    const pair = rolePairFor(r.element ?? "");
+    if (pair === null || roles === null) continue;
+    const fg = (roles as Record<string, string | null | undefined>)[pair.fg];
+    const bg = (roles as Record<string, string | null | undefined>)[pair.bg];
+    // `muted` is nullable (schema.ts:419-425) — an absent side is unverifiable.
+    if (!fg || !bg) continue;
+    const ratio = wcagContrast(fg, bg);
+    if (typeof ratio !== "number" || Number.isNaN(ratio)) continue;
+    const threshold = CONTRAST_CRITERIA[criterion];
     if (ratio >= threshold + CLEAR_MARGIN) {
       return {
-        verdict: "contradicted", measured: { risk: text, criterion, ratio }, confidence: 0,
-        reason: `listed ${criterion} risk is arithmetically false: ${hexes[0]} vs ${hexes[1]} is ${ratio.toFixed(2)}:1 (clears ${threshold}:1)`,
+        verdict: "contradicted",
+        measured: { element: r.element, criterion, fg, bg, ratio },
+        confidence: 0,
+        reason: `listed ${criterion} risk on "${r.element}" is arithmetically false: ${pair.fg} ${fg} on ${pair.bg} ${bg} is ${ratio.toFixed(2)}:1, clearing ${threshold}:1`,
       };
     }
   }
   return {
     verdict: "abstain", measured: null, confidence: 0.5,
-    reason: "no checkable contrast risk was disproven (either no criterion+hex pair, or the ratio is genuinely low)",
+    reason: "no listed contrast risk was disproven (no contrast criterion in wcag[], no resolvable role pair, or the ratio is genuinely low)",
   };
 }
 ```
@@ -2553,7 +2644,7 @@ export async function detect(entry: CorpusEntryT, _ctx: VerifyCtx): Promise<Dete
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detectors/accessibility-risks.test.ts`
-Expected: PASS (5 tests).
+Expected: PASS (8 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -2585,6 +2676,46 @@ git commit -m "feat(verify): accessibilityRisks contradiction-only detector"
   - `runDetectors(entry, ctx, opts?: { detectors?: boolean }): Promise<RunDetectorsOutcome>` — `detectors: false` runs ONLY `platform` + `visual.dominantColors` (they stay deterministic today); every detector is wrapped so a throw → `abstain` for that field.
   - `fieldLeavesVisionForEntry(entry, field, detectorsEnabled): boolean` — the value-aware pending filter.
   - `verifyEntry(entry, imagePath, deps)` now takes `deps.detectors?: boolean` (default `true`).
+
+- [ ] **Step 0: Widen `FieldVerdict` FIRST — this task does not compile without it**
+
+`FieldVerdict.verdict` is `"pass" | "fail" | "gate"` today (`verify-corpus.ts:25-29`),
+and `buildRunReport`'s tally is a fixed `{ pass, fail, gate }` object indexed by
+`counts[v.verdict]`. This task emits `"contradicted"` and `"abstain"`, so the
+widening cannot wait for Task 14 (where an earlier draft put it) — Tasks 12 and 13
+would not typecheck, and the run report would produce `NaN` counts for the new
+labels.
+
+```ts
+// verify-corpus.ts
+export type FieldVerdict = {
+  field: string;
+  verdict: "pass" | "fail" | "contradicted" | "abstain" | "gate";
+  reason: string;
+  /**
+   * WHICH lane produced this verdict. Required for honest telemetry: a field can
+   * be in the detector registry AND still be decided by the model (every
+   * non-affirmable recorded value, and both contradiction-only fields), so
+   * keying per-detector rates on registry membership alone credits the detector
+   * for the model's work. Omitted = "vision" for backwards compatibility with
+   * the image-level pseudo-verdict in main().
+   */
+  source?: "detector" | "vision";
+};
+```
+
+`"fail"` stays in the union only for the image-level pseudo-verdict `main()` writes
+when an entry has no usable image; `decideFieldVerdict` stops returning it in
+Task 14. In `buildRunReport`, make the tally total over the union rather than a
+fixed literal so a new label can never silently count as `NaN`:
+
+```ts
+const counts: Record<FieldVerdict["verdict"], number> =
+  { pass: 0, fail: 0, contradicted: 0, abstain: 0, gate: 0 };
+```
+
+Verify before continuing: `npx tsc --noEmit` — Expected: no errors (the widening
+alone is additive and breaks no existing caller).
 
 - [ ] **Step 1: Write the failing registry contract test**
 
@@ -2928,8 +3059,8 @@ try {
       && !alreadyProcessedAtVersion(entry, field, VERIFIER_VERSION),
   );
 
-  for (const field of outcome.passes) verdicts.push({ field, verdict: "pass", reason: "detector" });
-  for (const field of outcome.contradicted) verdicts.push({ field, verdict: "contradicted", reason: "detector contradiction" });
+  for (const field of outcome.passes) verdicts.push({ field, verdict: "pass", reason: "detector", source: "detector" });
+  for (const field of outcome.contradicted) verdicts.push({ field, verdict: "contradicted", reason: "detector contradiction", source: "detector" });
   // EXACTLY ONE VERDICT PER FIELD PER RUN. A detector abstain is only the
   // field's verdict when nothing else will produce one; a field still in
   // `pending` gets its verdict from the model, so the detector stays SILENT.
@@ -2946,7 +3077,7 @@ try {
   const pendingSet = new Set(pending);
   for (const field of outcome.abstained) {
     if (pendingSet.has(field)) continue; // the model will judge it
-    verdicts.push({ field, verdict: "abstain", reason: "detector abstained" });
+    verdicts.push({ field, verdict: "abstain", reason: "detector abstained", source: "detector" });
   }
 } catch (err) {
   // Spec error table: a corrupt/unreadable image abstains per field. platform
@@ -2968,7 +3099,7 @@ try {
   for (const field of Object.keys(detectorRegistry)) {
     const v = partial.passes.includes(field) ? "pass"
       : partial.contradicted.includes(field) ? "contradicted" : "abstain";
-    verdicts.push({ field, verdict: v, reason: v === "abstain" ? `image unreadable: ${message}` : "detector" });
+    verdicts.push({ field, verdict: v, reason: v === "abstain" ? `image unreadable: ${message}` : "detector", source: "detector" });
   }
   // Every OTHER servable field must also be marked, or the entry never converges:
   // `pending = []` means the vision call is skipped, so without this loop
@@ -3166,7 +3297,9 @@ export interface CalibrationResult {
 }
 
 /** Builds a minimal entry carrying the fixture's recorded value. */
-function entryForFixture(fixture: { field: string; recorded: unknown; dims?: { width: number; height: number } }, base: CorpusEntryT): CorpusEntryT {
+// `file` is in the param type because the body reads `fixture.file` for the
+// image path — an earlier draft omitted it and would not compile.
+function entryForFixture(fixture: { field: string; recorded: unknown; file: string; dims?: { width: number; height: number } }, base: CorpusEntryT): CorpusEntryT {
   const field = fixture.field;
   const e: CorpusEntryT = { ...base };
   if (field === "visual.usesShadows") e.visual = { ...e.visual!, usesShadows: fixture.recorded as boolean };
@@ -3474,7 +3607,7 @@ git commit -m "feat(verify): declare detector floors from real-screenshot calibr
 
 **Interfaces:**
 - Produces (consumed by Tasks 15–17):
-  - `type FieldVerdict["verdict"] = "pass" | "fail" | "contradicted" | "abstain" | "gate"` (`fail` remains only for the image-level pseudo-verdict in `main()`; `decideFieldVerdict` never returns it).
+  - `FieldVerdict["verdict"]` was ALREADY widened to `"pass" | "fail" | "contradicted" | "abstain" | "gate"` in Task 12 Step 0 (it has to be — Task 12 emits the new labels). This task is where `decideFieldVerdict` stops returning `"fail"`; the union itself is untouched here.
   - `parseVerifyResponse` now returns `{ confirmed: boolean; contradicted: boolean; assertions?: string[]; reason?: string }` per field.
   - `interface DataQualityRecord { measured: unknown; recorded: unknown; source: string; verifierVersion: string; verifiedAt: string; reason?: string }` (formalized into `provenance.dataQuality` + `mergeDataQuality` in Task 15)
   - `verifyEntry` return type grows to `{ records, verdicts, dataQuality }` — `dataQuality` is ACCUMULATED here (detector contradictions from Task 12 + corroborated model contradictions) and persisted in Task 15.
@@ -3532,7 +3665,13 @@ describe("three-way model verdicts", () => {
       },
       reproduce: async (x) => x,
     });
-    expect(calls.length).toBe(2);
+    // Assert the CORROBORATION, not the total call count. `makeEntry()` carries a
+    // non-null `critique`, so the prose re-produce/re-verify lane fires too and the
+    // real total is 3 — an earlier draft asserted 2 and could never pass. Counting
+    // the layout asks is what this test is actually about, and it stays correct
+    // however many calls the prose lane makes.
+    const layoutAsks = calls.filter((p) => p.includes("layout")).length;
+    expect(layoutAsks, "initial ask + one corroborating re-ask").toBe(2);
     expect(out.records.layout).toBeDefined();
     expect(out.dataQuality.layout).toBeUndefined();
   });
@@ -3543,12 +3682,14 @@ describe("three-way model verdicts", () => {
     const e = makeEntry();
     const out = await verifyEntry(e, image, {
       now: () => "2026-08-07",
-      callVision: async () => {
-        calls.push("x");
+      callVision: async (prompt) => {
+        calls.push(prompt);
         return '{"layout":{"verdict":"contradicted"}}';
       },
       reproduce: async (x) => x,
     });
+    // Both asks said contradicted, so the contradiction is corroborated.
+    expect(calls.filter((p) => p.includes("layout")).length).toBe(2);
     expect(out.dataQuality.layout).toBeDefined();
     expect(out.dataQuality.layout.source).toBe("vision");
     expect(out.records.layout).toBeUndefined();
@@ -3640,9 +3781,28 @@ if (modelContradicted.length > 0) {
   for (const field of modelContradicted) {
     const claim = claimForField(entry as unknown as Record<string, unknown>, field);
     if (claim === null) continue;
-    const reParsed = parseVerifyResponse(
-      await deps.callVision(buildVerifyPrompt(entry as unknown as Record<string, unknown>, [field], VERIFIER_VERSION), imagePath),
-    );
+    // The corroborating ask is wrapped: an unwrapped throw here (timeout, 429,
+    // provider 500) propagates out of verifyEntry to main()'s per-entry catch,
+    // which discards EVERYTHING already computed for the entry — including
+    // detector passes that cost nothing to keep. A failed corroboration must
+    // downgrade this one field to `abstain`, not destroy the entry's other work.
+    let reParsedRaw: string;
+    try {
+      reParsedRaw = await deps.callVision(
+        buildVerifyPrompt(entry as unknown as Record<string, unknown>, [field], VERIFIER_VERSION),
+        imagePath,
+      );
+    } catch (err) {
+      // Uncorroborated: no dataQuality (an unconfirmed accusation is not a
+      // finding) and no trust record. A marker keeps the queue converging.
+      verdicts.push({
+        field,
+        verdict: "abstain",
+        reason: `model contradiction could not be corroborated: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      continue;
+    }
+    const reParsed = parseVerifyResponse(reParsedRaw);
     const reVerdict = decideFieldVerdict(field, tierForField(field), reParsed[field] ?? { confirmed: false, contradicted: false });
     if (reVerdict.verdict === "pass") {
       records[field] = { method: "image-confirmed", verifiedAt: now, verifierVersion: VERIFIER_VERSION, imageSha256: imageSha256Of(imagePath) };
@@ -3671,22 +3831,50 @@ if (modelContradicted.length > 0) {
 
 // The finalize loop stays, but skip fields now carrying records/dataQuality.
 
-// Detector contradictions (Task 12's outcome.contradicted) also accumulate,
-// but ONLY when detectors are enabled — `--detectors off` must not write
-// dataQuality (its Global Constraint):
-if (detectorsEnabled) {
-  for (const field of outcome.contradicted) {
-    const verdict = verdicts.find((v) => v.field === field);
-    dataQuality[field] = {
-      measured: null,
-      recorded: claimForField(entry as unknown as Record<string, unknown>, field),
-      source: field, // the detector name = registry key
-      reason: verdict?.reason ?? "detector contradiction",
-      verifierVersion: VERIFIER_VERSION,
-      verifiedAt: now,
-    };
-  }
+// Detector contradictions (Task 12's outcome.contradicted) also accumulate.
+//
+// NO `if (detectorsEnabled)` GUARD HERE. An earlier draft wrapped this loop in
+// one, reasoning that `--detectors off` must not write dataQuality. But with the
+// flag off `runDetectors` still runs `platform` and `visual.dominantColors` —
+// they are `mechanical` TODAY, so the flag does not disable them. A contradiction
+// from either was therefore blocked from dataQuality here, skipped by
+// `resumeMarkers` (which ignores `contradicted`), and written to NO map at all —
+// so `selectPending` requeued that entry on every subsequent run, forever. Before
+// this plan, `verifyMechanicalFields` returned `"fail"` and `resumeMarkers` marked
+// it, so that was a regression, not a pre-existing gap.
+//
+// The guard is also redundant: with the flag off, `outcome.contradicted` can only
+// contain `platform` / `visual.dominantColors`, because no other detector ran.
+// Anything in the outcome came from a detector that actually executed, and every
+// executed contradiction must land in exactly one map.
+for (const field of outcome.contradicted) {
+  const verdict = verdicts.find((v) => v.field === field);
+  dataQuality[field] = {
+    measured: null,
+    recorded: claimForField(entry as unknown as Record<string, unknown>, field),
+    source: field, // the detector name = registry key
+    reason: verdict?.reason ?? "detector contradiction",
+    verifierVersion: VERIFIER_VERSION,
+    verifiedAt: now,
+  };
 }
+```
+
+Add a convergence test for exactly this path:
+
+```ts
+it("a contradicted mechanical field converges with --detectors off (no orphaned field)", async () => {
+  // platform/dominantColors run regardless of the flag, so their contradictions
+  // must still land in a map — otherwise selectPending requeues the entry forever.
+  const e = makeEntry();
+  e.platform = "mobile";                                   // 1440x900 is web
+  e.image = { path: "x.png", width: 1440, height: 900, format: "png" };
+  const out = await verifyEntry(e, image, {
+    now: () => "2026-08-07", callVision: async () => "{}", reproduce: async (x) => x,
+    detectors: false,
+  });
+  expect(out.dataQuality.platform, "contradiction must be recorded even with detectors off").toBeDefined();
+});
 ```
 
 - [ ] **Step 5: Run the tests to verify they pass**
@@ -3852,6 +4040,13 @@ import { detectorRegistry } from "../verify/detector-registry.js";
 const detectorRates: Record<string, { pass: number; contradicted: number; abstain: number }> = {};
 for (const verdicts of Object.values(result.verdictsByEntry)) {
   for (const v of verdicts) {
+    // Filter on SOURCE, not registry membership. `visual.usesShadows` is in the
+    // registry but is decided by the MODEL whenever the recorded value is `false`
+    // (418 entries), and both contradiction-only fields are always model-decided
+    // for their passes. Keying on the registry alone reported those as detector
+    // results, so the drift signal this telemetry exists to provide was measuring
+    // the wrong lane.
+    if (v.source !== "detector") continue;
     if (!detectorRegistry[v.field]) continue;
     const d = detectorRates[v.field] ?? { pass: 0, contradicted: 0, abstain: 0 };
     if (v.verdict === "pass" || v.verdict === "contradicted" || v.verdict === "abstain") d[v.verdict]++;
@@ -3859,7 +4054,15 @@ for (const verdicts of Object.values(result.verdictsByEntry)) {
   }
 }
 for (const [field, d] of Object.entries(detectorRates)) {
-  lines.push(`Detector ${field}: ${d.pass} pass, ${d.contradicted} contradicted, ${d.abstain} abstain`);
+  // RATES, not just counts (the spec asks for rates): a raw count cannot be
+  // compared across runs of different sizes, which is what drift detection needs.
+  const n = d.pass + d.contradicted + d.abstain;
+  const pct = (x: number) => n === 0 ? "0%" : `${((x / n) * 100).toFixed(0)}%`;
+  lines.push(
+    `Detector ${field}: n=${n} · pass ${d.pass} (${pct(d.pass)})`
+    + ` · contradicted ${d.contradicted} (${pct(d.contradicted)})`
+    + ` · abstain ${d.abstain} (${pct(d.abstain)})`,
+  );
 }
 ```
 
@@ -3995,7 +4198,7 @@ git commit -m "feat(verify): --report-suspect with source-ranked hierarchy"
 ### Task 17: Doctor validation for `dataQuality`
 
 **Files:**
-- Modify: `src/scripts/doctor-helpers.ts` (FindingType union + checks)
+- Modify: `src/scripts/doctor-helpers.ts` (`CorpusDefectDetector` union + checks)
 - Test: `src/scripts/doctor.test.ts` (the existing doctor suite — there is NO `doctor-helpers.test.ts`; the per-entry scanner is `corpusDefectCheck(entries, ctx)`, driven from `doctor.test.ts`)
 
 **Interfaces:**
@@ -4010,7 +4213,10 @@ import { describe, expect, it } from "vitest";
 import { corpusDefectCheck } from "./doctor-helpers.js";
 import type { CorpusEntryT } from "../schema.js";
 
-function entry(dataQuality: CorpusEntryT["provenance"]["dataQuality"]): CorpusEntryT {
+// `provenance` is `.optional()` (schema.ts:577,656), so indexing the possibly-
+// undefined type is a TS error — NonNullable first.
+type ProvenanceT = NonNullable<CorpusEntryT["provenance"]>;
+function entry(dataQuality: ProvenanceT["dataQuality"]): CorpusEntryT {
   const e = { /* the file's standard clean-entry fixture shape */ } as CorpusEntryT;
   e.provenance = { taggedBy: "auto", dataQuality };
   return e;
@@ -4044,7 +4250,9 @@ Expected: FAIL — `dataquality-*` ids don't exist.
 - [ ] **Step 3: Implement**
 
 ```ts
-// in doctor-helpers.ts — FindingType union (near line 269) gains:
+// in doctor-helpers.ts — the `CorpusDefectDetector` union (doctor-helpers.ts:259-274)
+// gains the new detector names. There is no `FindingType` in this file; an earlier
+// draft invented that name, and the union it meant is the one below.
   | "dataquality-malformed"
   | "dataquality-orphan-key"
   | "dataquality-count"
@@ -4171,20 +4379,43 @@ Expected: FAIL — the reproduced call passes no `sampling`.
   /**
    * Sampling controls for BOTH internal passes. Omitted = provider default
    * (today's behavior). The verifier pins temperature 0 (NO seed — a seed
-   * override makes callClaudeWithMetadata throw, tagger.ts:2266) so
+   * override makes callClaudeWithMetadata throw, tagger.ts:2267) so
    * re-produced prose does not vary between identical runs.
    */
   sampling?: { temperature?: number; seed?: number };
+```
 
-// Pass 1 call sites (three: initial at ~2873, low-detail retry at ~2898,
-// high-detail retry at ~2931) gain the sampling arg:
-    input.sampling, // last argument of each callModel(...)
-// Pass 2 call sites (initial at ~3074, retry at ~3107) likewise:
-    input.sampling,
+**`callModel`'s options parameter is `ProviderCallOptions`, NOT `{temperature, seed}`.**
+Its fields are `temperatureOverride` / `seedOverride` (`tagger.ts:449-457`), and
+`callVisionModel` already does this conversion explicitly (`tagger.ts:2645-2647`).
+Passing `input.sampling` straight through would not compile, and if cast it would
+be silently dropped — the pin would appear to work while changing nothing. Convert
+once and reuse:
 
+```ts
+// tagger.ts, inside tagImage() before the passes run:
+const samplingOptions: ProviderCallOptions | undefined =
+  input.sampling === undefined
+    ? undefined
+    : { temperatureOverride: input.sampling.temperature, seedOverride: input.sampling.seed };
+```
+
+Then thread `samplingOptions` (not `input.sampling`) as the 9th argument of each
+`callModel(...)`:
+
+- **Pass 1** — three sites: initial `tagger.ts:2873`, low-detail retry `:2898`, high-detail retry `:2931`
+- **Pass 2** — two sites: initial `tagger.ts:3074`, retry `:3104`
+
+`callModel`'s signature is `(pass, prompt, imagePath, retryFeedback, detail,
+thinkingOverride, providerOverride, cfgOverride, options)`, so the argument must
+land in 9th position — the intervening `undefined`s are already present at each
+site. `generateCritique`'s own call sites (`:3245`, `:3266`) are deliberately NOT
+touched: that function is a separate public entry point with no `TaggerInput`.
+
+```ts
 // in verify-corpus.ts — makeReproduceDependency's tagImage call gains:
       // TEMPERATURE-ONLY. A seed override makes callClaudeWithMetadata THROW
-      // (tagger.ts:2266) and OpenAI's Responses branch silently drops it —
+      // (tagger.ts:2267) and OpenAI's Responses branch silently drops it —
       // pinning a seed here would break --vision-provider claude re-produce.
       sampling: { temperature: 0 },
 ```
@@ -4259,9 +4490,13 @@ export function verifiedMethodFor(entry: CorpusEntryT, field: string): string | 
 
 - [ ] **Step 4: Surface it in the browse column disclosure**
 
-Locate the `_Column disclosures:_` construction in `src/server-factory.ts` (around line 683). The disclosures name omitted columns. Extend them so a column that HAS verified rows also names the method on first mention — e.g., append ` (verified via ${method})` using `verifiedMethodFor(found[0].entry, field)` per column, skipping nulls. If the exact construction differs from this sketch, keep the disclosure text and add the method to it; the test contract is the helper, and the disclosure change is verified by running the site tests:
+Locate the `_Column disclosures:_` construction in `src/server-factory.ts` (around line 683). The disclosures name omitted columns. Extend them so a column that HAS verified rows also names the method on first mention — e.g., append ` (verified via ${method})` using `verifiedMethodFor(p.entry, field)` per column, skipping nulls. NOTE: `found` is `CorpusEntryT[]` (`server-factory.ts:622`) and has no `.entry` — only the `projections` elements built at `:625-629` do. Either `p.entry` inside the projections map or `found[i]` directly works (`ProjectedEntry` retains `provenance`); `found[0].entry` does not compile. If the exact construction differs from this sketch, keep the disclosure text and add the method to it; the test contract is the helper, and the disclosure change is verified by running the site tests:
 
-Run: `C2_NO_DOTENV=1 npx vitest run site/tests/` (or the repo's server-factory test file) — Expected: PASS with no disclosure regressions.
+Run: `C2_NO_DOTENV=1 npx vitest run src/synthesis-serving.test.ts src/invariant-sweep.test.ts`
+Expected: PASS with no disclosure regressions. These are the two suites that actually assert
+on `_Column disclosures:_`. There is NO `src/server-factory.test.ts`, and the root
+`vitest.config.ts` excludes `site/tests/**` — an earlier draft named that path, so the step
+ran zero tests and its "PASS" was unfalsifiable.
 
 - [ ] **Step 5: Run the corpus-trust tests to verify they pass**
 
@@ -4382,7 +4617,7 @@ git commit -m "docs(verify): deterministic-detectors rollout runbook"
 
 **Placeholder scan:** every code step contains complete code. The only locate-style step left is the server-factory disclosure edit (Task 19) — it names the anchor symbol and the exact behavior to assert.
 
-**Type consistency:** `detect(entry, ctx)` everywhere (never `detect(imagePath, recorded)`); `canAffirm(recorded)` everywhere; `ctx = { imagePath, raw?, width, height }`; `DataQualityRecord { measured, recorded, source, verifierVersion, verifiedAt, reason? }`; `FieldVerdict` widened once in Task 14 and consumed consistently in 15–17. `resumeMarkers` skip set updated in Task 15; `buildRunReport` counts + per-detector telemetry land in Task 15.
+**Type consistency:** `detect(entry, ctx)` everywhere (never `detect(imagePath, recorded)`); `canAffirm(recorded)` everywhere; `ctx = { imagePath, raw?, width, height }`; `DataQualityRecord { measured, recorded, source, verifierVersion, verifiedAt, reason? }`; `FieldVerdict` widened once in Task 12 **Step 0** (it must precede the first task that emits the new labels) and consumed consistently in 13–17; it also carries `source: "detector" | "vision"` so telemetry can attribute a verdict to the lane that produced it. `resumeMarkers` skip set updated in Task 15; `buildRunReport` counts + per-detector telemetry land in Task 15.
 
 ## Execution Handoff
 

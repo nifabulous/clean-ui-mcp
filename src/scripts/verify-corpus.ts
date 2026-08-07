@@ -4,11 +4,15 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { detectPlatform, type CorpusEntryT } from "../schema.js";
-import { extractQuantizedColors, tagImage, callVisionModel, resolvedProviderAndModel, type TaggerOutput, type Provider } from "../tagger.js";
+import { type CorpusEntryT } from "../schema.js";
+import { tagImage, callVisionModel, resolvedProviderAndModel, type TaggerOutput, type Provider } from "../tagger.js";
 import { fromCorpusRelativeImagePath } from "../paths.js";
 import { loadCorpus } from "../corpus.js";
 import { persistEntries, writableLoadedCorpus } from "../persistence.js";
+import { detectorRegistry } from "../verify/detector-registry.js";
+import { createVerifyCtx, type VerifyCtx } from "../verify/ctx.js";
+import { runDetectors, type RunDetectorsOutcome } from "../verify/runner.js";
+import { recordedFor } from "../verify/detector-types.js";
 
 /** The verifier's own version — stamped on every record and the resume key. */
 export const VERIFIER_VERSION = "verifier-v1";
@@ -24,8 +28,17 @@ export type VerificationRecord = {
 
 export type FieldVerdict = {
   field: string;
-  verdict: "pass" | "fail" | "gate";
+  verdict: "pass" | "fail" | "contradicted" | "abstain" | "gate";
   reason: string;
+  /**
+   * WHICH lane produced this verdict. Required for honest telemetry: a field can
+   * be in the detector registry AND still be decided by the model (every
+   * non-affirmable recorded value, and both contradiction-only fields), so
+   * keying per-detector rates on registry membership alone credits the detector
+   * for the model's work. Omitted = "vision" for backwards compatibility with
+   * the image-level pseudo-verdict in main().
+   */
+  source?: "detector" | "vision";
 };
 
 /**
@@ -35,15 +48,15 @@ export type FieldVerdict = {
  * already catches keys nothing reads; this catches servable keys nothing
  * verifies.
  */
-const TIER_BY_FIELD: Readonly<Record<string, VerifierTier>> = {
+export const TIER_BY_FIELD: Readonly<Record<string, VerifierTier>> = {
   platform: "mechanical",
   "visual.dominantColors": "mechanical",
   "visual.colorRoles": "factual",
-  "visual.accentColor": "factual",
+  "visual.accentColor": "mechanical",
   layout: "factual",
   components: "factual",
-  "visual.usesShadows": "factual",
-  "visual.usesBorders": "factual",
+  "visual.usesShadows": "mechanical",
+  "visual.usesBorders": "mechanical",
   "visual.typePairing": "factual",
   "antiPatterns.accessibilityRisks": "a11y",
   critique: "prose",
@@ -52,8 +65,8 @@ const TIER_BY_FIELD: Readonly<Record<string, VerifierTier>> = {
   voice: "prose",
   mood: "soft",
   colorScheme: "soft",
-  "visual.spacingDensity": "soft",
-  "visual.cornerStyle": "soft",
+  "visual.spacingDensity": "mechanical",
+  "visual.cornerStyle": "mechanical",
   styleTags: "soft",
   categories: "soft",
   domainTags: "soft",
@@ -63,6 +76,24 @@ const TIER_BY_FIELD: Readonly<Record<string, VerifierTier>> = {
 
 export function tierForField(field: string): VerifierTier {
   return TIER_BY_FIELD[field] ?? "gated";
+}
+
+/**
+ * Value-aware pending filter. A mechanical field leaves the vision path only
+ * when its recorded value is AFFIRMABLE by its certifying detector; a
+ * recorded-false shadow/border claim or cornerStyle:mixed stays in vision.
+ * With `detectors: false`, only platform + dominantColors stay mechanical.
+ */
+export function fieldLeavesVisionForEntry(
+  entry: CorpusEntryT,
+  field: string,
+  detectorsEnabled: boolean,
+): boolean {
+  if (tierForField(field) !== "mechanical") return false;
+  const det = detectorRegistry[field];
+  if (!det || det.disabled) return false;
+  if (!detectorsEnabled && field !== "platform" && field !== "visual.dominantColors") return false;
+  return det.canAffirm(recordedFor(entry, field));
 }
 
 export function imageSha256Of(imagePath: string): string {
@@ -86,57 +117,6 @@ function confirmedRecord(imagePath: string, now: string): VerificationRecord {
  */
 function provableRecord(now: string): VerificationRecord {
   return { method: "provable", verifiedAt: now, verifierVersion: VERIFIER_VERSION };
-}
-
-/**
- * Re-derivable fields — no model — at DIFFERENT tiers because their evidence
- * differs. `platform` is recomputed from recorded dimensions → `provable`, no
- * hash. `visual.dominantColors` is read from pixels → `image-confirmed` bound to
- * the hash the doctor's staleness checks read (`doctor-helpers.ts:561-588`).
- */
-export async function verifyMechanicalFields(
-  entry: { platform?: string | null; image?: { width?: number | null; height?: number | null } | null; visual?: { dominantColors?: string[] | null } | null },
-  imagePath: string,
-  now = new Date().toISOString().slice(0, 10),
-): Promise<{ records: Record<string, VerificationRecord>; verdicts: FieldVerdict[] }> {
-  const records: Record<string, VerificationRecord> = {};
-  const verdicts: FieldVerdict[] = [];
-
-  const width = entry.image?.width ?? null;
-  const height = entry.image?.height ?? null;
-  const recordedPlatform = entry.platform ?? null;
-  if (width === null || height === null || recordedPlatform === null) {
-    verdicts.push({
-      field: "platform",
-      verdict: "fail",
-      reason: width === null || height === null ? "image dimensions missing" : "no recorded platform",
-    });
-  } else {
-    const recomputed = detectPlatform(width, height);
-    if (recomputed === recordedPlatform) {
-      records.platform = provableRecord(now);
-      verdicts.push({ field: "platform", verdict: "pass", reason: `detectPlatform(${width}, ${height}) matches` });
-    } else {
-      verdicts.push({ field: "platform", verdict: "fail", reason: `detectPlatform gives ${recomputed}, recorded ${recordedPlatform}` });
-    }
-  }
-
-  const recordedColors = entry.visual?.dominantColors ?? null;
-  if (recordedColors === null || recordedColors.length === 0) {
-    verdicts.push({ field: "visual.dominantColors", verdict: "fail", reason: "no recorded dominantColors" });
-  } else {
-    const extracted = await extractQuantizedColors(imagePath);
-    const extractedSet = new Set(extracted);
-    const missing = recordedColors.filter((c) => !extractedSet.has(c.toLowerCase()));
-    if (missing.length === 0) {
-      records["visual.dominantColors"] = confirmedRecord(imagePath, now);
-      verdicts.push({ field: "visual.dominantColors", verdict: "pass", reason: "recorded colors all present in the extracted set" });
-    } else {
-      verdicts.push({ field: "visual.dominantColors", verdict: "fail", reason: `recorded colors absent from extraction: ${missing.join(", ")}` });
-    }
-  }
-
-  return { records, verdicts };
 }
 
 /** A precise, checkable claim per servable field, built from the RECORDED value. */
@@ -378,6 +358,7 @@ export interface VerifyEntryDeps {
   now: () => string;
   callVision: (prompt: string, imagePath: string) => Promise<string>;
   reproduce: (entry: CorpusEntryT, imagePath: string) => Promise<CorpusEntryT>;
+  detectors?: boolean;
 }
 
 export async function verifyEntry(
@@ -389,16 +370,80 @@ export async function verifyEntry(
   const records: Record<string, VerificationRecord> = {};
   const verdicts: FieldVerdict[] = [];
 
-  // 1. Mechanical checks — always run, never skipped (they are free).
-  const mechanical = await verifyMechanicalFields(entry, imagePath, now);
-  for (const [field, record] of Object.entries(mechanical.records)) records[field] = record;
-  verdicts.push(...mechanical.verdicts);
+  const detectorsEnabled = deps.detectors ?? true;
+  let outcome: RunDetectorsOutcome;
+  let pending: string[];
+  try {
+    const ctx = await createVerifyCtx(imagePath);
+    outcome = await runDetectors(entry, ctx, { detectors: detectorsEnabled });
+    for (const field of outcome.passes) {
+      records[field] = field === "platform" ? provableRecord(now) : confirmedRecord(imagePath, now);
+    }
+    // Compute `pending` BEFORE emitting verdicts — the pending set decides which
+    // detector verdicts are allowed to exist.
+    pending = Object.keys(TIER_BY_FIELD).filter(
+      (field) =>
+        !fieldLeavesVisionForEntry(entry, field, detectorsEnabled)
+        && tierForField(field) !== "gated"
+        && !outcome.contradicted.includes(field)
+        && !alreadyProcessedAtVersion(entry, field, VERIFIER_VERSION),
+    );
+
+    for (const field of outcome.passes) verdicts.push({ field, verdict: "pass", reason: "detector", source: "detector" });
+    for (const field of outcome.contradicted) verdicts.push({ field, verdict: "contradicted", reason: "detector contradiction", source: "detector" });
+    // EXACTLY ONE VERDICT PER FIELD PER RUN. A detector abstain is only the
+    // field's verdict when nothing else will produce one; a field still in
+    // `pending` gets its verdict from the model, so the detector stays SILENT.
+    //
+    // Emitting it unconditionally is a corpus-darkening bug: non-affirmable values
+    // (usesShadows:false, usesBorders:false, cornerStyle:mixed) and both
+    // contradiction-only fields abstain AND stay in `pending`, so `verdicts` would
+    // hold two rows for one field — detector `abstain` plus model `pass`.
+    // `resumeMarkers` skips the pass but still marks the abstain, and
+    // `mergeVerifyAttempts` revokes `verification` for that field, destroying the
+    // pass the model just earned. That darkens precisely what `canAffirm` exists
+    // to protect: 418 `usesShadows:false`, 276 `usesBorders:false`, 139
+    // `cornerStyle:mixed` claims, plus every colorRoles/accessibilityRisks pass.
+    const pendingSet = new Set(pending);
+    for (const field of outcome.abstained) {
+      if (pendingSet.has(field)) continue; // the model will judge it
+      verdicts.push({ field, verdict: "abstain", reason: "detector abstained", source: "detector" });
+    }
+  } catch (err) {
+    // Spec error table: a corrupt/unreadable image abstains per field. platform
+    // still runs against the RECORDED dims (no pixels needed); every other
+    // detector abstains with the file error named; nothing reaches the vision
+    // call (it would fail on the same bytes).
+    const message = err instanceof Error ? err.message : String(err);
+    const stub: VerifyCtx = { imagePath, width: entry.image?.width ?? 0, height: entry.image?.height ?? 0 };
+    const partial = await runDetectors(entry, stub, { detectors: false });
+    // Use the SAME record-method rule as the happy path. Writing `provableRecord`
+    // for every pass is wrong for image-derived fields: `visual.dominantColors` is
+    // a PIXEL claim, and a `provable` record carries no `imageSha256`, so it would
+    // be permanently exempt from doctor's hash-staleness checks — a pixel
+    // measurement that never dies with its pixels. Only `platform` is genuinely
+    // provable (recomputed from recorded dimensions, no image read).
+    for (const field of partial.passes) {
+      records[field] = field === "platform" ? provableRecord(now) : confirmedRecord(imagePath, now);
+    }
+    for (const field of Object.keys(detectorRegistry)) {
+      const v = partial.passes.includes(field) ? "pass"
+        : partial.contradicted.includes(field) ? "contradicted" : "abstain";
+      verdicts.push({ field, verdict: v, reason: v === "abstain" ? `image unreadable: ${message}` : "detector", source: "detector" });
+    }
+    // Every OTHER servable field must also be marked, or the entry never converges:
+    // `pending = []` means the vision call is skipped, so without this loop
+    // `layout`, `components`, `critique`, `mood` … end the run in no map at all and
+    // `selectPending` requeues the entry forever.
+    for (const field of Object.keys(TIER_BY_FIELD)) {
+      if (tierForField(field) === "gated") continue;
+      if (field in detectorRegistry) continue;
+      verdicts.push({ field, verdict: "abstain", reason: `image unreadable: ${message}` });
+    }
+    pending = [];
+  }
 
   // 2. The fields left to verify — those not already stamped at this version.
-  const pending = Object.keys(TIER_BY_FIELD).filter(
-    (field) => tierForField(field) !== "mechanical" && tierForField(field) !== "gated"
-      && !alreadyProcessedAtVersion(entry, field, VERIFIER_VERSION),
-  );
   if (pending.length > 0) {
     const parsed = parseVerifyResponse(await deps.callVision(buildVerifyPrompt(entry, pending, VERIFIER_VERSION), imagePath));
 
@@ -610,7 +655,8 @@ export function buildRunReport(
     );
   }
   lines.push(`Entries scanned: ${result.entries}`);
-  const counts = { pass: 0, fail: 0, gate: 0 };
+  const counts: Record<FieldVerdict["verdict"], number> =
+    { pass: 0, fail: 0, contradicted: 0, abstain: 0, gate: 0 };
   let zeroAssertion = 0;
   for (const verdicts of Object.values(result.verdictsByEntry)) {
     for (const v of verdicts) {
@@ -749,6 +795,7 @@ async function main(): Promise<void> {
       "image-detail": { type: "string" },
       "entry-timeout": { type: "string" },
       "sampling": { type: "string" },
+      "detectors": { type: "string" },
     },
   });
   const dryRun = values["dry-run"] === true;
@@ -756,6 +803,7 @@ async function main(): Promise<void> {
   const limit = Number(values.limit);
   const sampleSize = Number(values["sample-size"]) || 30;
   const corpusPath = values.corpus;
+  const detectorsEnabled = values.detectors !== "off";
 
   // --corpus is the isolation seam. Read it SYNCHRONOUSLY (the earlier
   // `JSON.parse(readFile(...))` never awaited the promise) and write results
@@ -863,6 +911,7 @@ async function main(): Promise<void> {
             // route this call and the re-produce pass to different providers.
             callVisionModel(prompt, image, visionProvider as Provider | undefined, undefined, undefined, imageDetail, sampling),
           reproduce,
+          detectors: detectorsEnabled,
         }),
         entryTimeoutMs,
         `entry "${entry.id}"`,

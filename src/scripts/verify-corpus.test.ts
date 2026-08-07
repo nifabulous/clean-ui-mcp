@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tierForField, verifyMechanicalFields, type VerificationRecord, type VerifierTier } from "./verify-corpus.js";
+import { tierForField, type VerifierTier } from "./verify-corpus.js";
 import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict } from "./verify-corpus.js";
 import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReproducedProse } from "./verify-corpus.js";
 import { buildRunReport, selectPending, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
 import { withTimeout, reproduceCritiqueModel } from "./verify-corpus.js";
 import { resolveConfiguredVisionProvider } from "./verify-corpus.js";
-import { extractQuantizedColors, type TaggerOutput } from "../tagger.js";
+import type { TaggerOutput } from "../tagger.js";
 import type { CorpusEntryT } from "../schema.js";
 
 // A real 32x32 PNG with four solid color quadrants (white / near-black / blue /
@@ -37,11 +37,11 @@ describe("tierForField — the spec's classification table", () => {
       platform: "mechanical",
       "visual.dominantColors": "mechanical",
       "visual.colorRoles": "factual",
-      "visual.accentColor": "factual",
+      "visual.accentColor": "mechanical",
       layout: "factual",
       components: "factual",
-      "visual.usesShadows": "factual",
-      "visual.usesBorders": "factual",
+      "visual.usesShadows": "mechanical",
+      "visual.usesBorders": "mechanical",
       "visual.typePairing": "factual",
       "antiPatterns.accessibilityRisks": "a11y",
       critique: "prose",
@@ -50,8 +50,8 @@ describe("tierForField — the spec's classification table", () => {
       voice: "prose",
       mood: "soft",
       colorScheme: "soft",
-      "visual.spacingDensity": "soft",
-      "visual.cornerStyle": "soft",
+      "visual.spacingDensity": "mechanical",
+      "visual.cornerStyle": "mechanical",
       styleTags: "soft",
       categories: "soft",
       domainTags: "soft",
@@ -60,103 +60,6 @@ describe("tierForField — the spec's classification table", () => {
     };
     for (const [field, tier] of Object.entries(expected)) {
       expect(tierForField(field), field).toBe(tier);
-    }
-  });
-});
-
-describe("verifyMechanicalFields — re-derivable values, evidence-appropriate tiers", () => {
-  it("writes a provable platform record (no hash) and an image-confirmed dominantColors record (with hash) when both match", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "verify-mech-"));
-    const imagePath = join(dir, "e1.png");
-    writeFileSync(imagePath, PNG_BYTES);
-    try {
-      // Derive the recorded colors FROM the extractor so the SET match holds
-      // regardless of how Vibrant quantizes this build's pixels. The palette
-      // must be non-empty or the pass direction is untestable (guards the PNG).
-      const extracted = await extractQuantizedColors(imagePath);
-      expect(extracted.length, "fixture PNG must yield a non-empty Vibrant palette").toBeGreaterThan(0);
-      const e = entry({
-        platform: "mobile", // detectPlatform(390, 844) === "mobile"
-        visual: { dominantColors: [extracted[0]], accentColor: null, typePairing: { display: null, body: null, notes: "" }, spacingDensity: "moderate", cornerStyle: "slight-round", usesShadows: false, usesBorders: true },
-      });
-      const { records, verdicts } = await verifyMechanicalFields(e, imagePath);
-
-      // platform: recomputed from recorded dimensions (DATA) — provable, no hash.
-      const platform = records.platform;
-      expect(platform, "platform").toBeDefined();
-      expect(platform!.method).toBe("provable");
-      expect(platform!.imageSha256).toBeUndefined();
-      expect(platform!.verifierVersion).toMatch(/^verifier-v\d+$/);
-
-      // dominantColors: read from PIXELS — image-confirmed, bound to the hash.
-      const colors = records["visual.dominantColors"];
-      expect(colors, "visual.dominantColors").toBeDefined();
-      expect(colors!.method).toBe("image-confirmed");
-      expect(colors!.imageSha256).toMatch(/^[0-9a-f]{64}$/);
-
-      expect(verdicts.map((v) => v.field).sort()).toEqual(["platform", "visual.dominantColors"]);
-      expect(verdicts.every((v) => v.verdict === "pass")).toBe(true);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("fails platform when the recorded value disagrees with the image dimensions", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "verify-mech-"));
-    const imagePath = join(dir, "e1.png");
-    writeFileSync(imagePath, PNG_BYTES);
-    try {
-      const e = entry({ platform: "web" }); // 390x844 is mobile
-      const { records, verdicts } = await verifyMechanicalFields(e, imagePath);
-      expect(records.platform).toBeUndefined();
-      expect(verdicts.find((v) => v.field === "platform")?.verdict).toBe("fail");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("fails platform when image dimensions are missing", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "verify-mech-"));
-    const imagePath = join(dir, "e1.png");
-    writeFileSync(imagePath, PNG_BYTES);
-    try {
-      // width/height deliberately omitted to exercise the missing-dimensions
-      // path; cast because ImageRef requires the keys (schema.ts:355).
-      const e = entry({ platform: "mobile", image: { visibility: "private", path: "images-private/e1.png" } as CorpusEntryT["image"] });
-      const { records, verdicts } = await verifyMechanicalFields(e, imagePath);
-      expect(records.platform).toBeUndefined();
-      expect(verdicts.find((v) => v.field === "platform")?.verdict).toBe("fail");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("fails dominantColors when a recorded color is absent from the extracted set", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "verify-mech-"));
-    const imagePath = join(dir, "e1.png");
-    writeFileSync(imagePath, PNG_BYTES);
-    try {
-      const e = entry({
-        visual: { dominantColors: ["#123456", "#111111"], accentColor: null, typePairing: { display: null, body: null, notes: "" }, spacingDensity: "moderate", cornerStyle: "slight-round", usesShadows: false, usesBorders: true },
-      });
-      const { records, verdicts } = await verifyMechanicalFields(e, imagePath);
-      expect(records["visual.dominantColors"]).toBeUndefined();
-      expect(verdicts.find((v) => v.field === "visual.dominantColors")?.verdict).toBe("fail");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("never writes a record for responsiveBehavior — it stays gated", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "verify-mech-"));
-    const imagePath = join(dir, "e1.png");
-    writeFileSync(imagePath, PNG_BYTES);
-    try {
-      const e = entry({ responsiveBehavior: "responsive" });
-      const { records } = await verifyMechanicalFields(e, imagePath);
-      expect(records.responsiveBehavior).toBeUndefined();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
@@ -441,7 +344,8 @@ describe("verifyEntry — mechanical + vision + re-produce + re-verify", () => {
     writeFileSync(imagePath, PNG_BYTES);
     try {
       // Every servable field already carries a current-version record, so the
-      // pending set is empty and the vision dependency must never be called.
+      // pending set is empty and the vision dependency must never be called
+      // (callVision above throws if it is).
       const record = { method: "image-confirmed", verifiedAt: "2026-08-01", verifierVersion: "verifier-v1", imageSha256: "a".repeat(64) };
       const verification: Record<string, typeof record> = {};
       for (const field of ["platform", "visual.dominantColors", "visual.colorRoles", "visual.accentColor",
@@ -454,7 +358,10 @@ describe("verifyEntry — mechanical + vision + re-produce + re-verify", () => {
       const e = entry({ provenance: { taggedBy: "auto", verification } });
       const callVision = async () => { throw new Error("vision must not run for skipped fields"); };
       const { verdicts } = await verifyEntry(e, imagePath, { now: () => "2026-08-05", callVision, reproduce: async () => e });
-      expect(verdicts.filter((v) => v.field !== "platform" && v.field !== "visual.dominantColors")).toEqual([]);
+      // The vision lane must stay silent for a fully-processed entry. Detector
+      // verdicts may still be emitted (the registry runs unconditionally), but
+      // nothing may carry a MODEL verdict — `source` is omitted for vision.
+      expect(verdicts.filter((v) => v.source !== "detector")).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

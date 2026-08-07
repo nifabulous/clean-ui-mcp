@@ -1,0 +1,503 @@
+{
+  "version": 1,
+  "fixtures": [
+    {
+      "id": "borders-stroke-true",
+      "file": "borders-stroke-true.png",
+      "field": "visual.usesBorders",
+      "recorded": true,
+      "label": "pass",
+      "split": "tune"
+    },
+    {
+      "id": "borders-stroke-false",
+      "file": "borders-stroke-true.png",
+      "field": "visual.usesBorders",
+      "recorded": false,
+      "label": "contradicted",
+      "split": "tune"
+    },
+    {
+      "id": "borders-flat-true",
+      "file": "borders-flat-true.png",
+      "field": "visual.usesBorders",
+      "recorded": true,
+      "label": "contradicted",
+      "split": "tune"
+    },
+    {
+      "id": "borders-flat-false",
+      "file": "borders-flat-true.png",
+      "field": "visual.usesBorders",
+      "recorded": false,
+      "label": "abstain",
+      "split": "tune"
+    },
+    {
+      "id": "borders-hstroke-true",
+      "file": "borders-hstroke-true.png",
+      "field": "visual.usesBorders",
+      "recorded": true,
+      "label": "pass",
+      "split": "held-out"
+    },
+    {
+      "id": "borders-solid",
+      "file": "borders-solid.png",
+      "field": "visual.usesBorders",
+      "recorded": true,
+      "label": "abstain",
+      "split": "tune"
+    },
+    {
+      "id": "shadows-card-true",
+      "file": "shadows-card-true.png",
+      "field": "visual.usesShadows",
+      "recorded": true,
+      "label": "pass",
+      "split": "tune"
+    },
+    {
+      "id": "shadows-card-false",
+      "file": "shadows-card-true.png",
+      "field": "visual.usesShadows",
+      "recorded": false,
+      "label": "contradicted",
+      "split": "tune"
+    },
+    {
+      "id": "shadows-card-h25-true",
+      "file": "shadows-card-h25-true.png",
+      "field": "visual.usesShadows",
+      "recorded": true,
+      "label": "pass",
+      "split": "held-out"
+    },
+    {
+      "id": "shadows-card-h50-true",
+      "file": "shadows-card-h50-true.png",
+      "field": "visual.usesShadows",
+      "recorded": true,
+      "label": "pass",
+      "split": "held-out"
+    },
+    {
+      "id": "shadows-flat-true",
+      "file": "shadows-flat-true.png",
+      "field": "visual.usesShadows",
+      "recorded": true,
+      "label": "contradicted",
+      "split": "tune"
+    },
+    {
+      "id": "shadows-solid",
+      "file": "shadows-solid.png",
+      "field": "visual.usesShadows",
+      "recorded": true,
+      "label": "abstain",
+      "split": "tune"
+    },
+    {
+      "id": "pair-shadowed-borderless",
+      "file": "pair-shadowed-borderless.png",
+      "field": "visual.usesBorders",
+      "recorded": true,
+      "label": "contradicted",
+      "split": "tune"
+    },
+    {
+      "id": "pair-shadowed-borderless",
+      "file": "pair-shadowed-borderless.png",
+      "field": "visual.usesShadows",
+      "recorded": true,
+      "label": "pass",
+      "split": "tune"
+    },
+    {
+      "id": "pair-bordered-flat",
+      "file": "pair-bordered-flat.png",
+      "field": "visual.usesBorders",
+      "recorded": true,
+      "label": "pass",
+      "split": "tune"
+    },
+    {
+      "id": "pair-bordered-flat",
+      "file": "pair-bordered-flat.png",
+      "field": "visual.usesShadows",
+      "recorded": true,
+      "label": "contradicted",
+      "split": "tune"
+    },
+    {
+      "id": "accent-primary-true",
+      "file": "accent-primary-true.png",
+      "field": "visual.accentColor",
+      "recorded": "#2563eb",
+      "label": "pass",
+      "split": "tune"
+    },
+    {
+      "id": "accent-primary-absent",
+      "file": "accent-primary-true.png",
+      "field": "visual.accentColor",
+      "recorded": "#dc2626",
+      "label": "contradicted",
+      "split": "tune"
+    },
+    {
+      "id": "accent-primary-speck",
+      "file": "accent-primary-speck.png",
+      "field": "visual.accentColor",
+      "recorded": "#2563eb",
+      "label": "abstain",
+      "split": "tune"
+    },
+    {
+      "id": "accent-primary-secondary",
+      "file": "accent-primary-secondary.png",
+      "field": "visual.accentColor",
+      "recorded": "#2563eb",
+      "label": "abstain",
+      "split": "tune"
+    },
+    {
+      "id": "accent-bg-equal",
+      "file": "accent-bg-equal.png",
+      "field": "visual.accentColor",
+      "recorded": "#f5f5f5",
+      "label": "contradicted",
+      "split": "tune"
+    },
+    {
+      "id": "accent-h20-true",
+      "file": "accent-h20-true.png",
+      "field": "visual.accentColor",
+      "recorded": "#059669",
+      "label": "pass",
+      "split": "held-out"
+    },
+    {
+      "id": "corner-sharp-true",
+      "file": "corner-sharp-true.png",
+      "field": "visual.cornerStyle",
+      "recorded": "sharp",
+      "label": "pass",
+      "split": "tune"
+    },
+    {
+      "id": "corner-slight-true",
+      "file": "corner-slight-true.png",
+      "field": "visual.cornerStyle",
+      "recorded": "slight-round",
+      "label": "pass",
+      "split": "tune"
+    },
+    {
+      "id": "corner-slight-h6-true",
+      "file": "corner-slight-h6-true.png",
+      "field": "visual.cornerStyle",
+      "recorded": "slight-round",
+      "label": "pass",
+      "split": "held-out"
+    },
+    {
+      "id": "corner-slight-h18-true",
+      "file": "corner-slight-h18-true.png",
+      "field": "visual.cornerStyle",
+      "recorded": "slight-round",
+      "label": "pass",
+      "split": "held-out"
+    },
+    {
+      "id": "corner-pill-true",
+      "file": "corner-pill-true.png",
+      "field": "visual.cornerStyle",
+      "recorded": "pill",
+      "label": "pass",
+      "split": "tune"
+    },
+    {
+      "id": "corner-mixed",
+      "file": "corner-mixed.png",
+      "field": "visual.cornerStyle",
+      "recorded": "mixed",
+      "label": "abstain",
+      "split": "tune"
+    },
+    {
+      "id": "corner-band",
+      "file": "corner-band.png",
+      "field": "visual.cornerStyle",
+      "recorded": "slight-round",
+      "label": "abstain",
+      "split": "tune"
+    },
+    {
+      "id": "spacing-compact-true",
+      "file": "spacing-compact-true.png",
+      "field": "visual.spacingDensity",
+      "recorded": "compact",
+      "label": "pass",
+      "split": "tune"
+    },
+    {
+      "id": "spacing-moderate-true",
+      "file": "spacing-moderate-true.png",
+      "field": "visual.spacingDensity",
+      "recorded": "moderate",
+      "label": "pass",
+      "split": "tune"
+    },
+    {
+      "id": "spacing-hmoderate-true",
+      "file": "spacing-hmoderate-true.png",
+      "field": "visual.spacingDensity",
+      "recorded": "moderate",
+      "label": "pass",
+      "split": "held-out"
+    },
+    {
+      "id": "spacing-spacious-true",
+      "file": "spacing-spacious-true.png",
+      "field": "visual.spacingDensity",
+      "recorded": "spacious",
+      "label": "pass",
+      "split": "tune"
+    },
+    {
+      "id": "spacing-single",
+      "file": "spacing-single.png",
+      "field": "visual.spacingDensity",
+      "recorded": "moderate",
+      "label": "abstain",
+      "split": "tune"
+    },
+    {
+      "id": "roles-card",
+      "file": "roles-card.png",
+      "field": "visual.colorRoles",
+      "recorded": null,
+      "label": "abstain",
+      "split": "tune"
+    },
+    {
+      "id": "borders-hflat-true",
+      "file": "borders-hflat.png",
+      "field": "visual.usesBorders",
+      "recorded": true,
+      "label": "contradicted",
+      "split": "held-out"
+    },
+    {
+      "id": "borders-hflat-false",
+      "file": "borders-hflat.png",
+      "field": "visual.usesBorders",
+      "recorded": false,
+      "label": "abstain",
+      "split": "held-out"
+    },
+    {
+      "id": "shadows-hflat-true",
+      "file": "shadows-hflat.png",
+      "field": "visual.usesShadows",
+      "recorded": true,
+      "label": "contradicted",
+      "split": "held-out"
+    },
+    {
+      "id": "shadows-hflat-false",
+      "file": "shadows-hflat.png",
+      "field": "visual.usesShadows",
+      "recorded": false,
+      "label": "abstain",
+      "split": "held-out"
+    },
+    {
+      "id": "accent-hgreen-pass",
+      "file": "accent-hgreen.png",
+      "field": "visual.accentColor",
+      "recorded": "#059669",
+      "label": "pass",
+      "split": "held-out"
+    },
+    {
+      "id": "accent-hgreen-contra",
+      "file": "accent-hgreen.png",
+      "field": "visual.accentColor",
+      "recorded": "#ff00ff",
+      "label": "contradicted",
+      "split": "held-out"
+    },
+    {
+      "id": "accent-hgreen-bg",
+      "file": "accent-hgreen.png",
+      "field": "visual.accentColor",
+      "recorded": "#f5f5f5",
+      "label": "contradicted",
+      "split": "held-out"
+    },
+    {
+      "id": "corner-hsharp-pass",
+      "file": "corner-hsharp.png",
+      "field": "visual.cornerStyle",
+      "recorded": "sharp",
+      "label": "pass",
+      "split": "held-out"
+    },
+    {
+      "id": "corner-hsharp-contra",
+      "file": "corner-hsharp.png",
+      "field": "visual.cornerStyle",
+      "recorded": "pill",
+      "label": "contradicted",
+      "split": "held-out"
+    },
+    {
+      "id": "spacing-htight-compact",
+      "file": "spacing-htight.png",
+      "field": "visual.spacingDensity",
+      "recorded": "compact",
+      "label": "pass",
+      "split": "held-out"
+    },
+    {
+      "id": "spacing-htight-spacious",
+      "file": "spacing-htight.png",
+      "field": "visual.spacingDensity",
+      "recorded": "spacious",
+      "label": "contradicted",
+      "split": "held-out"
+    },
+    {
+      "id": "spacing-htight-moderate",
+      "file": "spacing-htight.png",
+      "field": "visual.spacingDensity",
+      "recorded": "moderate",
+      "label": "abstain",
+      "split": "held-out"
+    },
+    {
+      "id": "platform-hd-web",
+      "file": "",
+      "field": "platform",
+      "recorded": "web",
+      "label": "pass",
+      "split": "held-out",
+      "dims": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "id": "platform-hd-mobile",
+      "file": "",
+      "field": "platform",
+      "recorded": "mobile",
+      "label": "contradicted",
+      "split": "held-out",
+      "dims": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "id": "platform-hportrait-mobile",
+      "file": "",
+      "field": "platform",
+      "recorded": "mobile",
+      "label": "pass",
+      "split": "held-out",
+      "dims": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "id": "platform-hsquare-tablet",
+      "file": "",
+      "field": "platform",
+      "recorded": "tablet",
+      "label": "pass",
+      "split": "held-out",
+      "dims": {
+        "width": 1024,
+        "height": 1000
+      }
+    },
+    {
+      "id": "platform-hportrait-web",
+      "file": "",
+      "field": "platform",
+      "recorded": "web",
+      "label": "contradicted",
+      "split": "held-out",
+      "dims": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "id": "platform-tune-web",
+      "file": "",
+      "field": "platform",
+      "recorded": "web",
+      "label": "pass",
+      "split": "tune",
+      "dims": {
+        "width": 1280,
+        "height": 800
+      }
+    },
+    {
+      "id": "dominant-hbw-pass",
+      "file": "dominant-hbw.png",
+      "field": "visual.dominantColors",
+      "recorded": [
+        "#ffffff"
+      ],
+      "label": "pass",
+      "split": "held-out"
+    },
+    {
+      "id": "dominant-hbw-contra",
+      "file": "dominant-hbw.png",
+      "field": "visual.dominantColors",
+      "recorded": [
+        "#ff00ff"
+      ],
+      "label": "contradicted",
+      "split": "held-out"
+    },
+    {
+      "id": "dominant-hblue-pass",
+      "file": "dominant-hblue.png",
+      "field": "visual.dominantColors",
+      "recorded": [
+        "#ffffff"
+      ],
+      "label": "pass",
+      "split": "held-out"
+    },
+    {
+      "id": "dominant-hblue-contra",
+      "file": "dominant-hblue.png",
+      "field": "visual.dominantColors",
+      "recorded": [
+        "#00ff00"
+      ],
+      "label": "contradicted",
+      "split": "held-out"
+    },
+    {
+      "id": "dominant-tune-pass",
+      "file": "dominant-tune.png",
+      "field": "visual.dominantColors",
+      "recorded": [
+        "#f5f5f5"
+      ],
+      "label": "pass",
+      "split": "tune"
+    }
+  ]
+}

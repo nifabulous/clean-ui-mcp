@@ -297,7 +297,10 @@ export function largestComponent(raw: RawBuffer): ComponentBox | null {
       const y = (i / width) | 0;
       minX = Math.min(minX, x); maxX = Math.max(maxX, x);
       minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-      for (const j of [i - 1, i + 1, i - width, i + width]) {
+      // Row-continuity guard: i-1/i+1 must stay within the same row — an
+      // unguarded step at x=0 wraps into the previous row's last column and
+      // can merge unrelated components that merely touch opposite row ends.
+      for (const j of [x > 0 ? i - 1 : -1, x < width - 1 ? i + 1 : -1, i - width, i + width]) {
         if (j < 0 || j >= n || visited[j]) continue;
         if (bucketKey(data[j * 4], data[j * 4 + 1], data[j * 4 + 2]) === bgKey) {
           visited[j] = 1;
@@ -385,7 +388,10 @@ export function componentsOf(raw: RawBuffer): ComponentBox[] {
       const y = (i / width) | 0;
       minX = Math.min(minX, x); maxX = Math.max(maxX, x);
       minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-      for (const j of [i - 1, i + 1, i - width, i + width]) {
+      // Row-continuity guard: i-1/i+1 must stay within the same row — an
+      // unguarded step at x=0 wraps into the previous row's last column and
+      // can merge unrelated components that merely touch opposite row ends.
+      for (const j of [x > 0 ? i - 1 : -1, x < width - 1 ? i + 1 : -1, i - width, i + width]) {
         if (j < 0 || j >= n || visited[j]) continue;
         if (bucketKey(data[j * 4], data[j * 4 + 1], data[j * 4 + 2]) === bgKey) {
           visited[j] = 1;

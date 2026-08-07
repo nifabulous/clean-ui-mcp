@@ -21,7 +21,13 @@
 - **Record-map exclusivity:** a field appears in at most one of `provenance.verification` / `verifyAttempts` / `dataQuality`; writing to one revokes the other two for that field.
 - **`--detectors off` restores the legacy PENDING LIST (not byte-identical verdict labels):** registry fields return to the vision pending list (both affirmable and non-affirmable values), `platform`/`visual.dominantColors` stay deterministic, no detector-side `dataQuality` entries are written, and detector verdicts do not run. Verdict-label strings still differ from pre-taxonomy today (`fail` → `abstain`/`contradicted`), so "byte-identical" applies to the pending set, not the run report.
 - **Registry contract:** every field classified `mechanical` has a registered certifying detector; every certifying detector's field is `mechanical`; every contradiction-only detector's field is NOT `mechanical`; every certifying detector declares `canAffirm`; disabled detectors are exempt from the first two clauses.
-- **Calibration gate:** CI asserts measured accuracy ≥ declared `accuracyFloor` on the HELD-OUT synthetic set only — never the tune set. Disabled detectors are skipped. The real-screenshot numbers (`npm run calibrate-detectors`) are reviewed at merge, not asserted in CI.
+- **Calibration gate:** CI asserts measured accuracy ≥ declared `accuracyFloor` on the HELD-OUT synthetic set only — never the tune set. Disabled detectors are skipped.
+- **The held-out set is LOCKED, and floors are declared from REAL screenshots.** These two rules exist because the first draft of this plan violated both, and its own notes recorded the violation ("re-validated: 0/32 fixture mismatches, *including held-out*"; held-out opacities changed from 0.15 to 0.28/0.50 to make detectors pass). A held-out set that is consulted and adjusted during tuning certifies nothing, and a floor invented as a literal certifies nothing either.
+  - `src/verify/__fixtures__/held-out-lock.json` pins the SHA-256 of the held-out manifest subset together with the floors declared against it and the real-calibration run those floors came from. A test asserts the live hash matches. Changing a held-out fixture therefore cannot be quiet: the gate fails until the lock is updated, and the lock diff shows a reviewer that the held-out set moved.
+  - **Never loosen a floor or edit a held-out fixture to make the gate green.** Tune against TUNE fixtures; if the detector still cannot clear its floor, mark it `disabled: true` (Task 12) so its field reverts to the vision path. A disabled detector is an honest outcome; a lowered floor is not.
+  - Held-out adequacy is asserted, not assumed: per enabled certifying detector, ≥4 held-out fixtures with at least one `pass` AND at least one `contradicted`. An all-positive set cannot detect a detector that only ever says yes.
+  - Tune and held-out never share an image file.
+  - No fixture's ground truth may be produced by the detector under test.
 - **Corpus isolation:** tests and fixtures never touch `corpus/entries.json`; verifier writes go through the injected/snapshot-backed paths already in place.
 - **Test command:** `C2_NO_DOTENV=1 npx vitest run <file>` (the env var avoids a local `.env` provider timeout). Full suite: `C2_NO_DOTENV=1 npx vitest run`.
 - **Commits on this branch require a review artifact.** If a commit is blocked by the hook, run `.zcode/scripts/write-review-artifact --type task --result approved --reviewer agent --base-sha <parent-full-sha> --head-sha <HEAD-full-sha> --branch fix/verifier-provider-pinning`, then retry the commit.
@@ -63,6 +69,9 @@
 | `src/verify/calibration.ts` | Create — held-out accuracy measurement (Task 13) |
 | `src/verify/calibration.test.ts` | Create — CI calibration gate (Task 13) |
 | `src/verify/calibration-cli.ts` | Create — `npm run calibrate-detectors` CLI for real screenshots (Task 13) |
+| `src/verify/__fixtures__/held-out-lock.json` | Create — pins the held-out manifest hash + the floors declared against it (Task 13B) |
+| `eval/verdicts/labels.jsonl` | Create — real-screenshot labels in the spec's labelling contract (Task 13B) |
+| `docs/verifier-calibration.md` | Create — committed record of the real per-field numbers behind every floor (Task 13B) |
 | `src/scripts/verify-corpus.ts` | Modify — runner integration, value-aware pending, `--detectors off`, three-way prompt, corroboration, `dataQuality`, `--report-suspect`, telemetry (Tasks 12, 14, 15, 16, 17) |
 | `src/schema.ts` | Modify — add `provenance.dataQuality` passthrough map (Task 15) |
 | `src/scripts/doctor-helpers.ts` | Modify — `dataQuality` validation checks + count (Task 17) |
@@ -704,7 +713,6 @@ async function borders(dir: string, entries: FixtureEntry[]): Promise<void> {
   await writePng(dir, "borders-hstroke-true.png", heldStroke);
   entries.push(
     { id: "borders-hstroke-true", file: "borders-hstroke-true.png", field: "visual.usesBorders", recorded: true, label: "pass", split: "held-out" },
-    { id: "borders-hflat-false", file: "borders-flat-true.png", field: "visual.usesBorders", recorded: false, label: "abstain", split: "held-out" },
   );
   const solid = blank();
   await writePng(dir, "borders-solid.png", solid);
@@ -856,19 +864,120 @@ async function roles(dir: string, entries: FixtureEntry[]): Promise<void> {
   );
 }
 
+/**
+ * Held-out fixtures that bring every certifying detector up to the adequacy bar
+ * the gate asserts: >=4 held-out fixtures per field, with at least one `pass` AND
+ * at least one `contradicted`.
+ *
+ * WHY THIS EXISTS. The first draft gave accent and spacing ONE held-out fixture
+ * each and gave shadows/corner two — every one of them labelled `pass`. A
+ * detector hardcoded to `return pass` scores 100% on a set like that. The
+ * negatives below are the only fixtures that can actually fail a broken detector.
+ *
+ * Every image here has its own filename: an image shared with the tune split is
+ * not held out, and the gate asserts disjointness.
+ *
+ * Ground truth is chosen to be UNAMBIGUOUS — the recorded value is not merely
+ * near the boundary, it is plainly wrong for the pixels drawn — because a
+ * held-out label that is itself arguable cannot certify anything.
+ */
+async function heldOutNegatives(dir: string, entries: FixtureEntry[]): Promise<void> {
+  const box = cardBox();
+  const white: [number, number, number] = [255, 255, 255];
+
+  // usesBorders: a flat card claimed to HAVE borders. No stroke exists, so the
+  // claim is positively disproven, not merely unconfirmed.
+  const flat = blank();
+  fillRect(flat, box.x, box.y, box.w, box.h, white);
+  await writePng(dir, "borders-hflat.png", flat);
+  entries.push(
+    { id: "borders-hflat-true", file: "borders-hflat.png", field: "visual.usesBorders", recorded: true, label: "contradicted", split: "held-out" },
+    { id: "borders-hflat-false", file: "borders-hflat.png", field: "visual.usesBorders", recorded: false, label: "abstain", split: "held-out" },
+  );
+
+  // usesShadows: the same flat card claimed to HAVE shadows.
+  await writePng(dir, "shadows-hflat.png", flat);
+  entries.push(
+    { id: "shadows-hflat-true", file: "shadows-hflat.png", field: "visual.usesShadows", recorded: true, label: "contradicted", split: "held-out" },
+    { id: "shadows-hflat-false", file: "shadows-hflat.png", field: "visual.usesShadows", recorded: false, label: "abstain", split: "held-out" },
+  );
+
+  // accentColor: a magenta-free image claiming a magenta accent, plus a second
+  // positive at a third hue so the field has 4 held-out rows.
+  const green = blank();
+  fillRect(green, box.x, box.y, box.w, box.h, white);
+  fillRect(green, box.x + 6, box.y + 6, 24, 14, [5, 150, 105]);
+  await writePng(dir, "accent-hgreen.png", green);
+  entries.push(
+    { id: "accent-hgreen-pass", file: "accent-hgreen.png", field: "visual.accentColor", recorded: "#059669", label: "pass", split: "held-out" },
+    { id: "accent-hgreen-contra", file: "accent-hgreen.png", field: "visual.accentColor", recorded: "#ff00ff", label: "contradicted", split: "held-out" },
+    { id: "accent-hgreen-bg", file: "accent-hgreen.png", field: "visual.accentColor", recorded: "#f5f5f5", label: "contradicted", split: "held-out" },
+  );
+
+  // cornerStyle: a hard-edged rectangle claimed to be `pill`. Measured inset ~0
+  // against a >20px claim — unambiguous.
+  const sharpCard = blank();
+  fillRect(sharpCard, box.x, box.y, box.w, box.h, white);
+  await writePng(dir, "corner-hsharp.png", sharpCard);
+  entries.push(
+    { id: "corner-hsharp-pass", file: "corner-hsharp.png", field: "visual.cornerStyle", recorded: "sharp", label: "pass", split: "held-out" },
+    { id: "corner-hsharp-contra", file: "corner-hsharp.png", field: "visual.cornerStyle", recorded: "pill", label: "contradicted", split: "held-out" },
+  );
+
+  // spacingDensity: a tightly-packed grid claimed `spacious`. Gaps of 4px cannot
+  // be spacious under any threshold the detector could reasonably pick.
+  const tight = blank();
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 4; c++) {
+      fillRect(tight, 8 + c * 28, 8 + r * 26, 24, 22, white);
+    }
+  }
+  await writePng(dir, "spacing-htight.png", tight);
+  entries.push(
+    { id: "spacing-htight-compact", file: "spacing-htight.png", field: "visual.spacingDensity", recorded: "compact", label: "pass", split: "held-out" },
+    { id: "spacing-htight-spacious", file: "spacing-htight.png", field: "visual.spacingDensity", recorded: "spacious", label: "contradicted", split: "held-out" },
+    { id: "spacing-htight-moderate", file: "spacing-htight.png", field: "visual.spacingDensity", recorded: "moderate", label: "abstain", split: "held-out" },
+  );
+}
+
 /** Entry-only calibration fixtures for the two pre-existing deterministic detectors. */
 async function platformAndDominant(dir: string, entries: FixtureEntry[]): Promise<void> {
+  // `platform` needs no pixels: detectPlatform() is pure arithmetic on the
+  // recorded dimensions, so four dim/recorded combinations cover it exactly.
+  // Platform is `web | mobile | tablet` — there is no `desktop` value.
   entries.push(
     { id: "platform-hd-web", file: "", field: "platform", recorded: "web", label: "pass", split: "held-out", dims: { width: 1440, height: 900 } },
     { id: "platform-hd-mobile", file: "", field: "platform", recorded: "mobile", label: "contradicted", split: "held-out", dims: { width: 1440, height: 900 } },
+    { id: "platform-hportrait-mobile", file: "", field: "platform", recorded: "mobile", label: "pass", split: "held-out", dims: { width: 390, height: 844 } },
+    { id: "platform-hsquare-tablet", file: "", field: "platform", recorded: "tablet", label: "pass", split: "held-out", dims: { width: 1024, height: 1000 } },
+    { id: "platform-hportrait-web", file: "", field: "platform", recorded: "web", label: "contradicted", split: "held-out", dims: { width: 390, height: 844 } },
+    { id: "platform-tune-web", file: "", field: "platform", recorded: "web", label: "pass", split: "tune", dims: { width: 1280, height: 800 } },
   );
-  // dominantColors: recorded = ACTUAL Vibrant extraction of the roles-card
-  // image, taken at generation time — the fixture is self-consistent by
-  // construction, pinning the existing algorithm's contract.
-  const { extractQuantizedColors } = await import("../../tagger.js");
-  const extracted = await extractQuantizedColors(join(dir, "roles-card.png"));
+
+  // `visual.dominantColors` ground truth is HAND-SPECIFIED, never taken from the
+  // detector. An earlier draft recorded `await extractQuantizedColors(...)` — the
+  // output of the algorithm under test — which makes the fixture self-certifying:
+  // it passes by construction no matter how wrong the extractor becomes, and it
+  // cannot fail. That is the circularity this whole section exists to prevent.
+  //
+  // These fixtures are drawn as large flat blocks of exactly the colours named,
+  // so Vibrant's quantisation lands on them within the detector's own tolerance.
+  // The `contradicted` cases name a colour that is nowhere in the image.
+  const swatch = (rgbs: Array<[number, number, number]>): Px => {
+    const px = blank();
+    const band = Math.floor(H / rgbs.length);
+    rgbs.forEach((rgb, i) => fillRect(px, 0, i * band, W, band, rgb));
+    return px;
+  };
+  await writePng(dir, "dominant-hbw.png", swatch([[255, 255, 255], [17, 17, 17]]));
+  await writePng(dir, "dominant-hblue.png", swatch([[255, 255, 255], [37, 99, 235]]));
+  await writePng(dir, "dominant-tune.png", swatch([[245, 245, 245], [17, 17, 17]]));
   entries.push(
-    { id: "dominant-colors-hcard", file: "roles-card.png", field: "visual.dominantColors", recorded: extracted, label: "pass", split: "held-out" },
+    { id: "dominant-hbw-pass", file: "dominant-hbw.png", field: "visual.dominantColors", recorded: ["#ffffff"], label: "pass", split: "held-out" },
+    { id: "dominant-hbw-contra", file: "dominant-hbw.png", field: "visual.dominantColors", recorded: ["#ff00ff"], label: "contradicted", split: "held-out" },
+    { id: "dominant-hblue-pass", file: "dominant-hblue.png", field: "visual.dominantColors", recorded: ["#ffffff"], label: "pass", split: "held-out" },
+    { id: "dominant-hblue-contra", file: "dominant-hblue.png", field: "visual.dominantColors", recorded: ["#00ff00"], label: "contradicted", split: "held-out" },
+    { id: "dominant-tune-pass", file: "dominant-tune.png", field: "visual.dominantColors", recorded: ["#f5f5f5"], label: "pass", split: "tune" },
   );
 }
 
@@ -883,6 +992,7 @@ export async function generateFixtures(outDir: string): Promise<FixtureManifest>
   await corners(imagesDir, fixtures);
   await spacings(imagesDir, fixtures);
   await roles(imagesDir, fixtures);
+  await heldOutNegatives(imagesDir, fixtures);
   await platformAndDominant(imagesDir, fixtures);
   const manifest: FixtureManifest = { version: 1, fixtures };
   writeFileSync(join(outDir, "manifest.json"), JSON.stringify(manifest, null, 2));
@@ -2943,6 +3053,85 @@ describe("calibration gate", () => {
     expect(tune.rows.length).toBeGreaterThan(0);
   });
 });
+
+describe("held-out integrity — the anti-circularity guards", () => {
+  // These four tests are the ONLY thing standing between this gate and the
+  // circularity the first draft of this plan shipped: held-out fixtures that
+  // were run during tuning and then edited until the detectors passed.
+
+  it("held-out manifest matches the lock, so the set cannot move quietly", () => {
+    const locked = heldOutLock();
+    expect(
+      heldOutHash(fixtureManifest()),
+      "HELD-OUT SET CHANGED. Do not update the lock to make this pass. Either revert "
+      + "the fixture change, or (if the set genuinely needed to grow) re-run "
+      + "`npm run calibrate-detectors` on real screenshots, re-declare every floor "
+      + "from those numbers, and update held-out-lock.json in the SAME commit so a "
+      + "reviewer sees both moved together.",
+    ).toBe(locked.manifestHash);
+  });
+
+  it("the locked floors match the registry's declared floors", () => {
+    const locked = heldOutLock();
+    for (const [field, entry] of Object.entries(detectorRegistry)) {
+      if (entry.category !== "certifying" || entry.disabled) continue;
+      expect(entry.accuracyFloor, `floor for ${field} drifted from the lock`)
+        .toBe(locked.floors[field]);
+    }
+  });
+
+  it("every enabled certifying detector has an adequate held-out set", () => {
+    const heldOut = fixtureManifest().fixtures.filter((f) => f.split === "held-out");
+    for (const [field, entry] of Object.entries(detectorRegistry)) {
+      if (entry.category !== "certifying" || entry.disabled) continue;
+      const forField = heldOut.filter((f) => f.field === field);
+      const labels = forField.map((f) => f.label);
+      // An all-`pass` held-out set cannot distinguish a working detector from one
+      // that returns `pass` unconditionally.
+      expect(forField.length, `${field}: needs >=4 held-out fixtures, has ${forField.length}`)
+        .toBeGreaterThanOrEqual(4);
+      expect(labels, `${field}: held-out has no positive case`).toContain("pass");
+      expect(labels, `${field}: held-out has no negative case — an all-positive set certifies nothing`)
+        .toContain("contradicted");
+    }
+  });
+
+  it("tune and held-out never share an image file", () => {
+    const m = fixtureManifest().fixtures;
+    const tuneFiles = new Set(m.filter((f) => f.split === "tune" && f.file).map((f) => f.file));
+    const shared = m
+      .filter((f) => f.split === "held-out" && f.file && tuneFiles.has(f.file))
+      .map((f) => f.id);
+    expect(shared, "a fixture image reused across splits is not held out").toEqual([]);
+  });
+});
+```
+
+`heldOutHash` / `heldOutLock` live in `calibration.ts`:
+
+```ts
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
+export interface HeldOutLock {
+  manifestHash: string;
+  floors: Record<string, number>;
+  /** The real-screenshot calibration run these floors were declared from. */
+  declaredFrom: { runId: string; recordedAt: string; report: string };
+}
+
+/** Stable hash of the held-out subset: id, field, recorded, label, file, dims. */
+export function heldOutHash(manifest: FixtureManifest): string {
+  const canonical = manifest.fixtures
+    .filter((f) => f.split === "held-out")
+    .map((f) => ({ id: f.id, field: f.field, recorded: f.recorded, label: f.label, file: f.file, dims: f.dims ?? null }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
+export function heldOutLock(): HeldOutLock {
+  return JSON.parse(readFileSync(new URL("./__fixtures__/held-out-lock.json", import.meta.url), "utf8"));
+}
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -3072,16 +3261,70 @@ export function assertGate(
 import { readFileSync } from "node:fs";
 import { calibrate } from "./calibration.js";
 
-// Real-set labels: gitignored eval/detectors/labels.jsonl, one JSON object per
-// line: { "id", "imagePath", "field", "recorded", "label" }.
-const labelsPath = process.argv[2] ?? "eval/detectors/labels.jsonl";
+// Real-set labels use the SPEC'S ONE labelling contract (spec: "Frozen labelled
+// ground-truth set"), not a second bespoke format. The spec defines that format
+// precisely so detector calibration and the frozen verdict set cannot invent two:
+//
+//   { "entryId", "imageSha256", "field", "claim", "label", "notes",
+//     "labelledAt", "labelledBy", "recorded", "imagePath", "supersedes"? }
+//
+//   - `label` is `confirmed | contradicted | abstain` — `confirmed`, NOT `pass`,
+//     because the label describes the CLAIM's status, not a detector's verdict.
+//     It maps to the detector verdict `pass` below.
+//   - `imageSha256` pins the bytes, so a re-capture invalidates the label instead
+//     of silently re-grounding it against different pixels.
+//   - Labels are append-only: a correction adds a record with `supersedes`, and
+//     the newest record per (entryId, field) wins. A label that moves mid-
+//     comparison makes the comparison meaningless.
+//
+// The file is `eval/verdicts/labels.jsonl` — the same directory as the frozen
+// verdict set (Task 1), gitignored for the image paths it references but with the
+// labels themselves committed.
+interface LabelRecord {
+  entryId: string;
+  imagePath: string;
+  imageSha256: string;
+  field: string;
+  recorded: unknown;
+  label: "confirmed" | "contradicted" | "abstain";
+  labelledAt: string;
+  labelledBy: string;
+  supersedes?: string;
+}
+
+const labelsPath = process.argv[2] ?? "eval/verdicts/labels.jsonl";
 const lines = readFileSync(labelsPath, "utf8").trim().split("\n").filter(Boolean);
+const all = lines.map((line) => JSON.parse(line) as LabelRecord);
+
+// Append-only resolution: last record per (entryId, field) wins.
+const latest = new Map<string, LabelRecord>();
+for (const l of all) latest.set(`${l.entryId}|${l.field}`, l);
+
+// Refuse to calibrate against a label whose image has changed underneath it —
+// otherwise the "real" numbers are measured on pixels nobody labelled.
+const stale: string[] = [];
+for (const l of latest.values()) {
+  const actual = createHash("sha256").update(readFileSync(l.imagePath)).digest("hex");
+  if (actual !== l.imageSha256) stale.push(`${l.entryId}|${l.field}`);
+}
+if (stale.length > 0) {
+  console.error(`REFUSING: ${stale.length} label(s) reference images that have changed since labelling:`);
+  for (const s of stale) console.error(`  ${s}`);
+  console.error("Re-label those claims (append a record with `supersedes`) before calibrating.");
+  process.exit(1);
+}
+
 const manifest = {
   version: 1 as const,
-  fixtures: lines.map((line) => {
-    const l = JSON.parse(line) as { id: string; imagePath: string; field: string; recorded: unknown; label: "pass" | "contradicted" | "abstain" };
-    return { id: l.id, file: l.imagePath, field: l.field, recorded: l.recorded, label: l.label, split: "held-out" as const };
-  }),
+  fixtures: [...latest.values()].map((l) => ({
+    id: `${l.entryId}|${l.field}`,
+    file: l.imagePath,
+    field: l.field,
+    recorded: l.recorded,
+    // `confirmed` (claim status) -> `pass` (detector verdict).
+    label: l.label === "confirmed" ? ("pass" as const) : l.label,
+    split: "held-out" as const,
+  })),
 };
 
 // Real labels carry their own absolute/relative paths — resolve them AS-IS,
@@ -3104,11 +3347,121 @@ In `package.json` scripts:
 Run: `C2_NO_DOTENV=1 npx vitest run src/verify/calibration.test.ts`
 Expected: PASS. If a detector fails its held-out floor, do NOT loosen the floor to make the test green. Either improve the detector's threshold against TUNE fixtures, or mark it `disabled: true` in the registry (which reverts its field to the vision tier — see Task 12's `fieldLeavesVisionForEntry`) and record the decision in the plan's rollout notes. A floor that is lowered to match a failing detector certifies nothing.
 
+The held-out integrity tests will FAIL on first run — `held-out-lock.json` does not
+exist yet. It is written in Task 13B, from real numbers. Until then the floors in
+the registry are placeholders and no detector may write a trust record.
+
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/verify/calibration.ts src/verify/calibration.test.ts src/verify/calibration-cli.ts package.json
 git commit -m "feat(verify): held-out calibration gate + calibrate-detectors CLI"
+```
+
+---
+
+### Task 13B: Declare floors from REAL screenshots and lock the held-out set
+
+**This task is the difference between "deterministic" and "trusted".** Until it
+completes, the `accuracyFloor` values in the registry are placeholders invented
+while writing the plan, measured on ~40 synthetic images that the detectors were
+developed against. The spec's added invariant — *a detector may write a trust
+record only for a field it has been measured on, against data it was not tuned
+against* — is not satisfied by synthetic fixtures alone. 787 real entries are
+about to be judged; the floors must come from real pixels.
+
+**Files:**
+- Create: `eval/verdicts/labels.jsonl` (gitignored images, committed labels — Task 1's carve-out already allows this path)
+- Create: `src/verify/__fixtures__/held-out-lock.json`
+- Create: `docs/verifier-calibration.md` (the committed record of the real numbers)
+- Modify: `src/verify/detector-registry.ts` (floors + `disabled` set from the measurement)
+
+**Interfaces:**
+- Consumes: `npm run calibrate-detectors`, `heldOutHash` (Task 13).
+- Produces: real per-field accuracy/decisive numbers, final floors, `disabled` flags, and the lock that pins them together.
+
+- [ ] **Step 1: Label real screenshots**
+
+For each of the seven certifying/contradiction-only fields, label **at least 10**
+real corpus screenshots in `eval/verdicts/labels.jsonl`, using the spec's contract
+(`entryId`, `imagePath`, `imageSha256`, `field`, `recorded`, `label`,
+`labelledAt`, `labelledBy`). Stratify deliberately — include the populations the
+synthetic set cannot represent:
+
+- entries whose screenshots contain **photographic content or gradients** (the
+  known false-positive risk for `usesShadows`)
+- the recorded-`false` populations (418 `usesShadows`, 276 `usesBorders`) and
+  `cornerStyle: mixed` (139) — these route to vision, but a detector that
+  *contradicts* them wrongly still writes a `dataQuality` finding
+- at least 2 `contradicted` labels per field, or the real measurement has the same
+  all-positive blind spot the synthetic set had
+
+`label` is `confirmed | contradicted | abstain` — the claim's status, not a
+verdict. Labelling is the human's judgement against the image; the detector's
+output must not be consulted while labelling, or this measurement is circular too.
+
+- [ ] **Step 2: Measure**
+
+```bash
+npm run calibrate-detectors
+```
+
+The CLI refuses to run if any label's `imageSha256` no longer matches its file.
+Record the full per-field table (accuracy, decisive rate, n) in
+`docs/verifier-calibration.md`, together with the date, the labeller, and the
+label-file line count. This file is the evidence for every floor below.
+
+- [ ] **Step 3: Set floors and disable what cannot clear them**
+
+For each certifying detector, set `accuracyFloor` in the registry to the value
+justified by the REAL number — not the synthetic one:
+
+- real accuracy ≥ 0.9 and decisive ≥ 0.5 → floor `0.85`, enabled
+- real accuracy ≥ 0.8 → floor `0.75`, enabled
+- anything lower, or decisive < 0.4 → **`disabled: true`**
+
+A disabled detector's field reverts to the vision path
+(`fieldLeavesVisionForEntry`), which is the honest outcome: the corpus keeps the
+model's verdict for that field and loses nothing it has today. Do NOT set a floor
+below the real measurement to keep a detector enabled — that is the failure this
+task exists to prevent.
+
+Expect `visual.spacingDensity` and possibly `visual.usesShadows` to disable here.
+That is a success for the gate, not a failure of the plan.
+
+- [ ] **Step 4: Write the lock**
+
+```json
+{
+  "manifestHash": "<output of heldOutHash(fixtureManifest())>",
+  "floors": { "visual.usesBorders": 0.85, "…": 0.0 },
+  "declaredFrom": {
+    "runId": "real-calibration-<date>",
+    "recordedAt": "<ISO date>",
+    "report": "docs/verifier-calibration.md"
+  }
+}
+```
+
+`floors` must list every enabled certifying detector and match the registry
+exactly — the integrity test asserts both directions.
+
+- [ ] **Step 5: Verify the gate now passes honestly**
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/calibration.test.ts`
+Expected: PASS — held-out integrity, floor/lock agreement, adequacy (≥4 fixtures
+with ≥1 pass and ≥1 contradicted per enabled detector), and split disjointness.
+
+Run: `C2_NO_DOTENV=1 npx vitest run src/verify/detector-registry.test.ts`
+Expected: PASS — a detector disabled in Step 3 must have its field back on the
+vision path, which the contract test asserts.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add eval/verdicts/labels.jsonl src/verify/__fixtures__/held-out-lock.json \
+  docs/verifier-calibration.md src/verify/detector-registry.ts
+git commit -m "feat(verify): declare detector floors from real-screenshot calibration; lock the held-out set"
 ```
 
 ---
@@ -3945,9 +4298,14 @@ checks. Model contradictions are corroborated by a second fresh ask.
 
 - Verify with detectors: `npm run verify -- --detectors on`
 - Compare with the legacy path: `npm run verify -- --detectors off`
-- Real-screenshot calibration: `npm run calibrate-detectors` (numbers reviewed
-  at merge; a detector that cannot clear its floor ships disabled and its
-  field stays with vision)
+- Real-screenshot calibration: `npm run calibrate-detectors`. Every declared
+  `accuracyFloor` comes from a real-screenshot run recorded in
+  `docs/verifier-calibration.md` and pinned in
+  `src/verify/__fixtures__/held-out-lock.json`. A detector that cannot clear
+  its floor ships `disabled` and its field stays with vision — that is a
+  supported outcome, not a failure. Never lower a floor or edit a held-out
+  fixture to make the gate green; the lock makes either change visible in
+  review.
 - Human triage: `npm run verify -- --report-suspect` — detector findings rank
   above model findings; actions are re-capture / re-tag / dismiss, then
   re-verify
@@ -3958,7 +4316,7 @@ the first 2d-2 surfaces with method disclosure → scale to the full corpus.
 
 - [ ] **Step 2: Update TODOS.md**
 
-In the "Frozen labelled ground-truth set" TODO, change the trigger line to note the plan has landed, and add `eval/detectors/labels.jsonl` (real-screenshot labels) as the calibration-input artifact.
+In the "Frozen labelled ground-truth set" TODO, change the trigger line to note the plan has landed, and add `eval/verdicts/labels.jsonl` (real-screenshot labels, the spec's own labelling contract) as the calibration-input artifact.
 
 - [ ] **Step 3: Run the full verification suite**
 
@@ -4014,7 +4372,7 @@ git commit -m "docs(verify): deterministic-detectors rollout runbook"
 **Deliberate deviations from the spec (flagged, not silent):**
 1. The calibration gate adds a `decisiveRate >= 0.4` requirement alongside exact-match accuracy, because exact-match accuracy alone can be gamed by abstaining everything (Task 13).
 2. The plan's `FieldVerdict` union retains `"fail"` for the image-level pseudo-verdict in `main()`; field-level verdicts use only pass/contradicted/abstain/gate (Task 14).
-3. The real-screenshot labels format is pinned as `eval/detectors/labels.jsonl` (gitignored) in Task 13; the spec left the format open.
+3. The real-screenshot labels REUSE the spec's "Frozen labelled ground-truth set" contract at `eval/verdicts/labels.jsonl` (Task 13B) — `confirmed | contradicted | abstain`, `imageSha256`-pinned, append-only with `supersedes`. An earlier draft invented a second format at `eval/detectors/labels.jsonl`, which is exactly what the spec defines that contract to prevent.
 4. The re-produce pin is TEMPERATURE-ONLY (no seed): a seed override makes `callClaudeWithMetadata` throw (tagger.ts:2266) and OpenAI's Responses branch silently drops it (Task 18). This extends, not introduces, the existing verdict-path convention.
 5. `dataQuality` at a verifier version counts as PROCESSED in `alreadyProcessedAtVersion`/`selectPending`, so a contradiction is terminal at its version and re-checked on the next version bump — consistent with fail/abstain markers and with the spec's terminal-contradiction semantics (Task 15).
 6. `--detectors off` is scoped as "legacy pending list + no detector-side `dataQuality`" rather than byte-identical verdict labels; the three-way prompt changes labels regardless of the flag (Tasks 12/14).

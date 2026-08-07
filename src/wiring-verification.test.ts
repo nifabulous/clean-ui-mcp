@@ -370,6 +370,14 @@ const ALLOWLIST = new Set<string>([
   // the same precedent as renderSourceDesign / computeLabelAgreement above.
   "createVerifyCtx",
   "ensureRaw",
+  // verify/detector-types.ts — the shared detector type surface consumed by
+  // the pixel detectors (Tasks 5-11) and the verify-corpus runner (Task 12)
+  // of the deterministic-detectors plan. Consumed only by
+  // detector-types.test.ts today; listed here rather than wired to a
+  // placeholder caller to avoid fake coupling, per the same precedent as
+  // createVerifyCtx / ensureRaw above.
+  "inBand",
+  "recordedFor",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

@@ -241,6 +241,41 @@ held-out gate skips disabled detectors; for enabled ones it asserts measured
 accuracy ≥ the declared floor, so a threshold regression cannot silently resume
 writing trust records.
 
+### Frozen labelled ground-truth set
+
+The motivation for this spec (the 28-claim benchmark: 5/28 flips, ~62% ceiling,
+11/28 unsupported) and the fields that remain model-verified (`layout`,
+`components`, `visual.typePairing`, prose, soft) both need one thing the repo
+does not have: a frozen, hand-labelled verdict set that does not move while
+detectors and models are compared against it. The labelling run and comparison
+harness are a separate spec (tracked in TODOS.md); the fixture format and
+labelling contract are defined here, because detector calibration and the
+frozen set share the same labelling infrastructure and must not invent two
+formats.
+
+**Fixture format.** One JSONL record per labelled claim:
+
+```json
+{ "entryId": "…", "imageSha256": "…", "field": "visual.typePairing",
+  "claim": "a Söhne + Inter type pairing", "label": "confirmed",
+  "notes": "…", "labelledAt": "2026-08-07", "labelledBy": "…" }
+```
+
+- `label` ∈ `confirmed | contradicted | abstain` — the same taxonomy as the
+  verifier, so a detector or model verdict compares to a label directly.
+- The record pins the image bytes by hash, so a re-capture invalidates the
+  label instead of silently re-grounding it.
+- The set is **frozen**: labels are never edited in place; a correction appends
+  a new record with a `supersedes` field. A label that moves mid-comparison
+  makes the comparison meaningless.
+- The fixture lives under `eval/verdicts/`, committed like any other eval
+  artifact.
+
+**Initial scope.** The 28 disputed claims behind this spec's benchmark, plus a
+stratified sample of the remaining model-verified fields (~10 per field,
+matching the detector calibration sets) so both lanes measure against the same
+ground truth.
+
 ### Data-quality reporting
 
 `contradicted` — from a detector or the vision model — writes
@@ -248,8 +283,13 @@ writing trust records.
 where `source` is the detector name or `"vision"` (with the model's cited
 reason), as a third sibling map alongside `verification` and `verifyAttempts`.
 A `--report-suspect` flag emits a markdown table of entries carrying
-contradictions, ranked by count. `doctor.ts` gains a check surfacing the total,
-since it already reports corpus-integrity findings.
+contradictions, ranked by count. The report's hierarchy is fixed so a curator
+can act from it alone: per row, **field first**, then measured-vs-recorded
+values, then `source` (detector name or `"vision"`), then entry id and title,
+ordered by contradiction count across the entry's fields, then by field. The
+triage actions — re-capture, re-tag, or dismiss — are taken by the human, never
+by the verifier. `doctor.ts` gains a check surfacing the total, since it already
+reports corpus-integrity findings.
 
 The verifier never edits a served field. A contradiction is a finding; a human
 decides.
@@ -273,6 +313,34 @@ With the flag off, behaviour is byte-identical to today, which means precisely:
 - `platform` and `visual.dominantColors` stay deterministic — they are `mechanical`
   today, so returning them to vision would be a change, not a restoration
 - contradiction-only detectors do not run, so no `dataQuality` entries are written
+
+## Production rollout
+
+The corpus is dark today — zero of 787 entries carry a verification record, and
+every corpus-derived MCP tool serves the honest "0 of 787" message. The
+detectors and taxonomy in this spec are machinery; the product outcome is the
+surface lighting back up with evidence chains. The rollout sequence is part of
+this spec's scope, not a follow-up:
+
+1. **Calibrate on real screenshots.** Run `npm run calibrate-detectors` over the
+   gitignored real set; set declared floors and disabled states from the
+   numbers (reviewed at merge, per Calibration).
+2. **Verify a representative cohort first.** ~50 entries spanning the
+   pattern-type, colour-scheme, and corner-style distributions, including the
+   recorded-`false` and `mixed` populations the value-dependence rule keeps in
+   vision. Inspect `--report-suspect`; publish the measured detector accuracy
+   and contradiction count for the cohort before scaling.
+3. **Light the first surfaces.** Ship the cohort's verified entries through the
+   2d-2 field-set gating so the first corpus-derived tools serve real rows with
+   disclosure; the "0 of 787" message becomes a per-cohort count.
+4. **Scale the full run** to 787 with a per-entry cost budget (model calls per
+   entry — reduced by the certifying fields leaving the vision call) and the
+   resume-aware `--limit`/`--dry-run` cadence. Re-runs are incremental:
+   processed-at-version markers skip finished fields.
+
+If a detector fails real-set calibration in step 1, it ships disabled with its
+field reverted (per Calibration); the cohort run then measures the remaining
+detectors honestly instead of hiding the miss.
 
 ## Data flow
 
@@ -484,7 +552,7 @@ never `corpus/entries.json`.
 ## Out of scope
 
 - **Moondream / local narrow-question verifier.** A separate spec. This work removes most of the fields it would have served, so its scope should be re-decided afterwards.
-- **OpenRouter + promptfoo harness, and the frozen labelled ground-truth set.** A separate spec, and a prerequisite for comparing models on the fields that remain subjective (`critique`, `whatToSteal`, `styleTags`, `mood`).
+- **OpenRouter + promptfoo harness, and the frozen labelled ground-truth set.** The harness and the labelling run are a separate spec (tracked in TODOS.md); the fixture format and labelling contract are defined in this spec (Frozen labelled ground-truth set) so both lanes share one ground truth.
 - **Splitting `visual.colorRoles` into per-role verification keys.** Would let `canvas` and `accent` genuinely pass, but touches `SERVABLE_FIELD_KEYS`, the serving gate, and the 2d-1/2d-2 field sets. Its own spec if wanted.
 - **Auto-correcting contradicted corpus values.** Deliberately excluded: it would make the verifier a producer and violate producer/verifier independence.
 - **Choosing a vision provider.** Left open; this spec reduces how much rides on that choice.

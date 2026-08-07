@@ -370,6 +370,39 @@ those before editing it.
 
 ---
 
+## Frozen labelled ground-truth set (verdict labels)
+
+**What:** Build and freeze a hand-labelled verdict set: one JSONL record per
+labelled claim (`entryId`, `imageSha256`, `field`, `claim`, `label`, `notes`,
+`labelledAt`, `labelledBy`; `label` ∈ `confirmed | contradicted | abstain`).
+The set is frozen — corrections append a `supersedes` record, never edit in
+place. Fixture format and labelling contract are defined in
+`docs/superpowers/specs/2026-08-07-deterministic-detectors-design.md`
+("Frozen labelled ground-truth set"); this TODO owns the labelling run and the
+comparison harness.
+
+**Why:** The deterministic-detectors spec's benchmark (5/28 flips, ~62% model
+ceiling, 11/28 unsupported) and the fields that remain model-verified
+(`layout`, `components`, `visual.typePairing`, prose, soft) are both
+unmeasurable without labels. Detector calibration and the frozen set share the
+same labelling infrastructure, so the format is defined now rather than
+invented twice.
+
+**Trigger (build when):** the deterministic-detectors plan lands — the 28
+disputed claims plus a ~10-per-field stratified sample are the initial scope,
+so detector and model lanes compare against the same ground truth.
+
+**Scope when triggered:** labelling run + `eval/verdicts/` fixture commit +
+promptfoo/OpenRouter comparison harness for the remaining subjective fields.
+The harness is the "separate spec" referenced in the deterministic-detectors
+spec's Out of scope.
+
+**Depends on / blocked by:** the deterministic-detectors plan
+(`docs/superpowers/plans/2026-08-07-deterministic-detectors.md` when written);
+real-screenshot detector calibration uses the same label-format tooling.
+
+---
+
 ## Prompt-change eval gate for the model lane
 
 **What:** A small eval harness that runs the live brief set (login, finance,

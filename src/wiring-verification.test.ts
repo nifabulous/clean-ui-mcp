@@ -317,6 +317,18 @@ const ALLOWLIST = new Set<string>([
   // precedent as computeLabelAgreement / assertAgreementMatchesSubmissions /
   // computeManifestSha256 above.
   "validateBaselineCompatibility",
+  // verify/calibration.ts — the calibration-gate trio. `calibrate` is consumed
+  // by calibration-cli.ts (the `npm run calibrate-detectors` script); the other
+  // three are the anti-circularity guards' helpers: `heldOutHash` fingerprints
+  // the held-out subset and `heldOutLock` reads the committed lock, both of
+  // which Task 13B consumes when it creates held-out-lock.json from the CLI's
+  // real-screenshot run, and `assertGate` is the CLI's gate check. Their only
+  // src/ callers today are calibration.test.ts. Listed here rather than wired
+  // to a placeholder caller to avoid fake coupling, per the same precedent as
+  // assertAgreementMatchesSubmissions / computeLabelAgreement above.
+  "assertGate",
+  "heldOutHash",
+  "heldOutLock",
   // create-ui-spec.ts — the envelope-only public core function.
   //
   // THIS ENTRY IS INERT, AND THAT IS WORSE THAN IT SOUNDS. The scan resolves

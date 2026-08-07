@@ -128,6 +128,7 @@ async function borders(dir: string, entries: FixtureEntry[]): Promise<void> {
   await writePng(dir, "borders-hstroke-true.png", heldStroke);
   entries.push(
     { id: "borders-hstroke-true", file: "borders-hstroke-true.png", field: "visual.usesBorders", recorded: true, label: "pass", split: "held-out" },
+    { id: "borders-hstroke-false", file: "borders-hstroke-true.png", field: "visual.usesBorders", recorded: false, label: "contradicted", split: "held-out" },
   );
   const solid = blank();
   await writePng(dir, "borders-solid.png", solid);
@@ -329,8 +330,14 @@ async function heldOutNegatives(dir: string, entries: FixtureEntry[]): Promise<v
 
   // accentColor: a magenta-free image claiming a magenta accent, plus a second
   // positive at a third hue so the field has 4 held-out rows.
+  //
+  // NO white card here, deliberately: the detector requires the recorded colour
+  // to be the LARGEST non-background colour. The first draft drew a 90x60 white
+  // card behind the 24x14 green accent, so the white bucket (5064px) out-sized
+  // the accent and the pass row was unsatisfiable by construction — only the
+  // contra/bg rows could fire (accuracy 3/4). The green sits directly on the
+  // blank canvas, like accent-h20-true, so it is the sole non-background colour.
   const green = blank();
-  fillRect(green, box.x, box.y, box.w, box.h, white);
   fillRect(green, box.x + 6, box.y + 6, 24, 14, [5, 150, 105]);
   await writePng(dir, "accent-hgreen.png", green);
   entries.push(
@@ -349,19 +356,43 @@ async function heldOutNegatives(dir: string, entries: FixtureEntry[]): Promise<v
     { id: "corner-hsharp-contra", file: "corner-hsharp.png", field: "visual.cornerStyle", recorded: "pill", label: "contradicted", split: "held-out" },
   );
 
-  // spacingDensity: a tightly-packed grid claimed `spacious`. Gaps of 4px cannot
-  // be spacious under any threshold the detector could reasonably pick.
+  // spacingDensity: two held-out images carry the field's four rows (this one
+  // plus spacing-hmoderate-true below).
+  //
+  // spacing-htight.png: 12 white tiles (3 cols x 4 rows) at gap 4/5 — decisive
+  // compact (gapRatio ~0.2, far outside the boundary band at 1). The compact
+  // claim passes and a spacious claim is contradicted.
+  //
+  // spacing-htight-band.png: 12 white tiles 8x8 at gap 8 — gapRatio EXACTLY 1.0,
+  // on the compact/moderate boundary -> confidence 0.5 -> in-band abstain.
+  //
+  // The first draft drew ONE tight grid (12 tiles 24x22 at gap 4, white 6336px
+  // vs gray 4464px): the white bucket out-sized the gray, so the background
+  // INVERTED to white and the gray lattice became ONE connected component ->
+  // count < 2 -> every one of its three rows abstained and the compact/spacious
+  // labels were unsatisfiable by construction (measured: abstain, count 1).
+  //
+  // Geometry note: the brief's 20x20 tiles at pitch 24 total 92px tall, which
+  // overflows the 90px canvas; 20x19 tiles at pitch 24 (gap 4 horizontal / 5
+  // vertical) total 68x88 and keep the ~0.2 ratio while fitting.
   const tight = blank();
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 4; c++) {
-      fillRect(tight, 8 + c * 28, 8 + r * 26, 24, 22, white);
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 3; c++) {
+      fillRect(tight, 26 + c * 24, 1 + r * 24, 20, 19, white);
     }
   }
   await writePng(dir, "spacing-htight.png", tight);
+  const band = blank();
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 3; c++) {
+      fillRect(band, 40 + c * 16, 17 + r * 16, 8, 8, white);
+    }
+  }
+  await writePng(dir, "spacing-htight-band.png", band);
   entries.push(
     { id: "spacing-htight-compact", file: "spacing-htight.png", field: "visual.spacingDensity", recorded: "compact", label: "pass", split: "held-out" },
     { id: "spacing-htight-spacious", file: "spacing-htight.png", field: "visual.spacingDensity", recorded: "spacious", label: "contradicted", split: "held-out" },
-    { id: "spacing-htight-moderate", file: "spacing-htight.png", field: "visual.spacingDensity", recorded: "moderate", label: "abstain", split: "held-out" },
+    { id: "spacing-htight-band-moderate", file: "spacing-htight-band.png", field: "visual.spacingDensity", recorded: "moderate", label: "abstain", split: "held-out" },
   );
 }
 
@@ -385,9 +416,15 @@ async function platformAndDominant(dir: string, entries: FixtureEntry[]): Promis
   // it passes by construction no matter how wrong the extractor becomes, and it
   // cannot fail. That is the circularity this whole section exists to prevent.
   //
-  // These fixtures are drawn as large flat blocks of exactly the colours named,
-  // so Vibrant's quantisation lands on them within the detector's own tolerance.
-  // The `contradicted` cases name a colour that is nowhere in the image.
+  // The detector matches EXACTLY (`extractedSet.has(recorded.toLowerCase())`) —
+  // no tolerance — so a pass record MUST equal Vibrant's QUANTIZED output for
+  // the image, not the colour the swatch was drawn with: Vibrant quantises the
+  // drawn swatches (e.g. #ffffff -> #141414, #2563eb -> #2464ec) and never emits
+  // the source hex. An earlier draft recorded the drawn hexes (#ffffff, #2563eb,
+  // #f5f5f5), so every pass row was unsatisfiable by construction. The pass
+  // records below are the measured extractions (node-vibrant on the committed
+  // PNGs); the contra records are hexes absent from the extraction of their
+  // image, which preserves falsifiability — they can never fire by accident.
   const swatch = (rgbs: Array<[number, number, number]>): Px => {
     const px = blank();
     const band = Math.floor(H / rgbs.length);
@@ -398,11 +435,11 @@ async function platformAndDominant(dir: string, entries: FixtureEntry[]): Promis
   await writePng(dir, "dominant-hblue.png", swatch([[255, 255, 255], [37, 99, 235]]));
   await writePng(dir, "dominant-tune.png", swatch([[245, 245, 245], [17, 17, 17]]));
   entries.push(
-    { id: "dominant-hbw-pass", file: "dominant-hbw.png", field: "visual.dominantColors", recorded: ["#ffffff"], label: "pass", split: "held-out" },
+    { id: "dominant-hbw-pass", file: "dominant-hbw.png", field: "visual.dominantColors", recorded: ["#141414"], label: "pass", split: "held-out" },
     { id: "dominant-hbw-contra", file: "dominant-hbw.png", field: "visual.dominantColors", recorded: ["#ff00ff"], label: "contradicted", split: "held-out" },
-    { id: "dominant-hblue-pass", file: "dominant-hblue.png", field: "visual.dominantColors", recorded: ["#ffffff"], label: "pass", split: "held-out" },
+    { id: "dominant-hblue-pass", file: "dominant-hblue.png", field: "visual.dominantColors", recorded: ["#2464ec"], label: "pass", split: "held-out" },
     { id: "dominant-hblue-contra", file: "dominant-hblue.png", field: "visual.dominantColors", recorded: ["#00ff00"], label: "contradicted", split: "held-out" },
-    { id: "dominant-tune-pass", file: "dominant-tune.png", field: "visual.dominantColors", recorded: ["#f5f5f5"], label: "pass", split: "tune" },
+    { id: "dominant-tune-pass", file: "dominant-tune.png", field: "visual.dominantColors", recorded: ["#f4f4f4"], label: "pass", split: "tune" },
   );
 }
 

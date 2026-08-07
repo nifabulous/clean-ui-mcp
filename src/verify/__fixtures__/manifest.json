@@ -42,6 +42,14 @@
       "split": "held-out"
     },
     {
+      "id": "borders-hstroke-false",
+      "file": "borders-hstroke-true.png",
+      "field": "visual.usesBorders",
+      "recorded": false,
+      "label": "contradicted",
+      "split": "held-out"
+    },
+    {
       "id": "borders-solid",
       "file": "borders-solid.png",
       "field": "visual.usesBorders",
@@ -370,8 +378,8 @@
       "split": "held-out"
     },
     {
-      "id": "spacing-htight-moderate",
-      "file": "spacing-htight.png",
+      "id": "spacing-htight-band-moderate",
+      "file": "spacing-htight-band.png",
       "field": "visual.spacingDensity",
       "recorded": "moderate",
       "label": "abstain",
@@ -454,7 +462,7 @@
       "file": "dominant-hbw.png",
       "field": "visual.dominantColors",
       "recorded": [
-        "#ffffff"
+        "#141414"
       ],
       "label": "pass",
       "split": "held-out"
@@ -474,7 +482,7 @@
       "file": "dominant-hblue.png",
       "field": "visual.dominantColors",
       "recorded": [
-        "#ffffff"
+        "#2464ec"
       ],
       "label": "pass",
       "split": "held-out"
@@ -494,7 +502,7 @@
       "file": "dominant-tune.png",
       "field": "visual.dominantColors",
       "recorded": [
-        "#f5f5f5"
+        "#f4f4f4"
       ],
       "label": "pass",
       "split": "tune"

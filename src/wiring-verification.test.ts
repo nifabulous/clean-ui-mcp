@@ -363,6 +363,13 @@ const ALLOWLIST = new Set<string>([
   // Keeping the pair exported lets that future registration use both halves of
   // the gate without a schema/export change.
   "GENERATE_DESIGN_PROMPT_CORE",
+  // verify/ctx.ts — the shared verify-context foundation consumed by the pixel
+  // detectors (Tasks 5-9) and the verify-corpus runner (Task 12) of the
+  // deterministic-detectors plan. Consumed only by ctx.test.ts today; listed
+  // here rather than wired to a placeholder caller to avoid fake coupling, per
+  // the same precedent as renderSourceDesign / computeLabelAgreement above.
+  "createVerifyCtx",
+  "ensureRaw",
 ]);
 
 // ─── the test ─────────────────────────────────────────────────────────────────

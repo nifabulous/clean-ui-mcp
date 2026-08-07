@@ -36,10 +36,14 @@ sample.
 > **Benchmark provenance.** The figures above — 5/28 flips (18%), 4/28 at
 > pinned `temperature: 0` (14%), ~62% best accuracy, the 3.6-point
 > same-model-twice gap, 11/28 unsupported — come from the disputed-verdict
-> benchmark run. That run's methodology (sample composition, prompts,
-> providers, dates, raw verdicts) must be committed under `eval/verdicts/`
-> alongside the implementation plan; until then these numbers are prose, not
-> evidence — the same standard this spec holds the corpus to.
+> benchmark run. The raw labels currently exist only as `/tmp/disputes.tsv`
+> (224 lines: 28 disputed claims, four models, dated 2026-08-06) and this
+> session's notes — nothing is committed. **The plan's first task is to commit
+> that file under `eval/verdicts/` with the run's methodology (sample
+> composition, prompts, providers, dates) before any implementation**, or the
+> numbers cannot be reproduced and the benchmark is lost. Until then these
+> figures are prose, not evidence — the same standard this spec holds the
+> corpus to.
 
 ## Governing invariant
 
@@ -90,11 +94,15 @@ receives fewer fields.
 Three new modules:
 
 - **`src/verify/detectors/<field>.ts`** — one per field. Each exports
-  `detect(entry, ctx) => Promise<DetectorResult>` where `ctx` is the entry's
-  shared decoded raw buffer — one `sharp.raw()` decode per entry, not one per
-  detector — and
+  `detect(entry, ctx) => Promise<DetectorResult>` where
+  `ctx = { imagePath, raw?, width, height }`: `imagePath` for the Vibrant-based
+  path (`extractQuantizedColors` takes a path, not a buffer), `raw` the shared
+  decoded buffer produced lazily on first request and reused by pixel
+  detectors, and `width`/`height` so `platform` needs neither pixels nor a
+  decode. A bare buffer would be a signature mismatch for `dominantColors` and
+  `platform` on day one, and
   `DetectorResult = { verdict: "pass" | "contradicted" | "abstain"; measured: unknown; confidence: number; reason: string }`.
-  Reads pixels via the shared `ctx`; colour maths via `culori`. No network, no model.
+  Reads pixels via `ctx.raw`; colour maths via `culori`. No network, no model.
 - **`src/verify/detector-registry.ts`** — field key → `{ detect, category, accuracyFloor, confidenceBand, canAffirm(recorded), disabled? }`. The single place a field's deterministic status is declared, including which recorded values the detector can affirm and whether it is disabled. A contract test asserts `TIER_BY_FIELD` and the registry cannot disagree, with explicit exceptions for disabled detectors and non-affirmable values.
 - **`src/verify/calibration.ts`** — runs a detector over a labelled fixture set and returns measured accuracy. Used by CI (held-out synthetic) and by a calibration script (real screenshots).
 
@@ -165,6 +173,19 @@ explicitly), and uncertainty is `abstain`. A model `contradicted` writes
 `dataQuality` and revokes any stale trust record; `abstain` writes a processed
 marker and never serves.
 
+**Model contradictions are corroborated; detector contradictions are not.** A
+detector contradiction is guarded by the confidence band — a near-threshold
+measurement downgrades to `abstain` — and a model verdict has no equivalent
+guard: model verdicts flip 14–18% between identical runs, so an unguarded
+model `contradicted` would accuse the corpus of being wrong at roughly that
+rate, indistinguishable from a detector's arithmetic. A model `contradicted`
+therefore triggers a second fresh-context ask for that field alone, using the
+same positive-affirmation prompt (not a "do you still disagree" prompt, which
+would anchor the second answer). Only a corroborated `contradicted` writes
+`dataQuality`; a second ask that confirms writes `verification` (the first ask
+flipped), and one that abstains writes a processed marker. With flips
+independent, corroboration drops the false-accusation rate from ~18% to ~3%.
+
 ## Components
 
 All detectors read raw pixels via `sharp`; colour maths via `culori`.
@@ -183,11 +204,13 @@ All detectors read raw pixels via `sharp`; colour maths via `culori`.
 
 Colour maths uses `culori` (ΔE2000 for the colour detectors, `wcagContrast`
 for the a11y detector) — a **new dependency to be added to `package.json`**;
-it is not currently in the project. Detectors share one decoded raw buffer per
-entry (`ctx` in the signature above) instead of each calling `sharp.raw()` on
-the full screenshot: `cornerStyle` and `spacingDensity` both need
-connected-component segmentation of the same pixels, and five full decodes per
-entry would dominate the local cost.
+it is not currently in the project. `ctx` carries `{ imagePath, raw?, width,
+height }`: pixel detectors share one lazily-decoded raw buffer (`ctx.raw`)
+instead of each calling `sharp.raw()` on the full screenshot (`cornerStyle`
+and `spacingDensity` both need connected-component segmentation of the same
+pixels), `visual.dominantColors` keeps the path for Vibrant
+(`extractQuantizedColors(imagePath)`), and `platform` reads only the recorded
+dimensions. Five full decodes per entry would dominate the local cost.
 
 `platform` and `visual.dominantColors` move into the registry and gain
 calibration entries. They are currently trusted without ever having been measured
@@ -283,9 +306,10 @@ ground truth.
 where `source` is the detector name or `"vision"` (with the model's cited
 reason), as a third sibling map alongside `verification` and `verifyAttempts`.
 A `--report-suspect` flag emits a markdown table of entries carrying
-contradictions, ranked by count. The report's hierarchy is fixed so a curator
-can act from it alone: per row, **field first**, then measured-vs-recorded
-values, then `source` (detector name or `"vision"`), then entry id and title,
+contradictions. The report's hierarchy is fixed so a curator can act from it
+alone: **source class first** — detector (arithmetic) contradictions outrank
+corroborated model contradictions — then per row field, measured-vs-recorded
+values, `source` (detector name or `"vision"`), then entry id and title,
 ordered by contradiction count across the entry's fields, then by field. The
 triage actions — re-capture, re-tag, or dismiss — are taken by the human, never
 by the verifier. `doctor.ts` gains a check surfacing the total, since it already
@@ -413,7 +437,8 @@ buildVerifyPrompt(entry, pending)
 decideFieldVerdict per field
    │        NOTE: a contradiction-only field (or non-affirmable value) that
    │        ABSTAINED arrives here and can still pass via the model, as today.
-   │        A model `contradicted` writes dataQuality exactly like a detector's.
+   │        A model `contradicted` is corroborated by a second fresh ask
+   │        before writing dataQuality (the detector band is its guard).
    │
    ▼  (4) prose re-produce + re-verify — unchanged, now sampling-pinned
    │
@@ -456,9 +481,11 @@ tokens stay. The saving is value-conditional: `usesShadows: false` (418
 entries), `usesBorders: false` (276), and `cornerStyle: mixed` (139) keep their
 fields in the vision call. `colorRoles` and `accessibilityRisks` stay because
 they are contradiction-only. Detectors are local pixel work: milliseconds, no
-API calls. The number of model calls per entry is unchanged; each is smaller,
-and the fields most responsible for verdict instability no longer contribute
-to it for the values they can affirm.
+API calls. The number of model calls per entry is unchanged except for the
+corroboration ask a model `contradicted` triggers — a rare verdict, so the
+expected call count is essentially unchanged. Each call is smaller, and the
+fields most responsible for verdict instability no longer contribute to it for
+the values they can affirm.
 
 **Staleness.** Adding image-confirmed records multiplies `doctor.ts`'s
 hash-staleness surface: a re-captured screenshot now invalidates five or more
@@ -560,9 +587,12 @@ go permanently dark.
 **Verdict-taxonomy tests.** `contradicted` writes only `dataQuality`; `abstain`
 writes only a processed marker; `pass` writes only `verification`; each write
 revokes the other two for that field. A model `contradicted` verdict — from the
-three-way prompt — writes `dataQuality` with `source: "vision"` exactly like a
-detector's, and a model `abstain` never serves. Plus a run-report test that a
-`contradicted` entry appears in the suspect table.
+three-way prompt — is corroborated by a second fresh ask before anything is
+written: corroborated → `dataQuality` with `source: "vision"`; second ask
+confirms → `verification` (the first ask flipped); second ask abstains →
+processed marker. A model `abstain` never serves. Plus a run-report test that a
+`contradicted` entry appears in the suspect table with detector rows ranked
+above model rows.
 
 **`dataQuality` validation.** The doctor validates the new map like
 `verification`: malformed records, unknown `source`s, and orphan keys are

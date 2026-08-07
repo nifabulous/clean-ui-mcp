@@ -390,7 +390,10 @@ invented twice.
 
 **Trigger (build when):** the deterministic-detectors plan lands — the 28
 disputed claims plus a ~10-per-field stratified sample are the initial scope,
-so detector and model lanes compare against the same ground truth.
+so detector and model lanes compare against the same ground truth. The raw
+28-claim labels must first be rescued from `/tmp/disputes.tsv` into
+`eval/verdicts/` (the spec's Benchmark provenance makes this the plan's first
+task).
 
 **Scope when triggered:** labelling run + `eval/verdicts/` fixture commit +
 promptfoo/OpenRouter comparison harness for the remaining subjective fields.

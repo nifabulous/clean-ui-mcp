@@ -360,3 +360,81 @@ export function cornerMeasure(raw: RawBuffer, box: ComponentBox): CornerMeasure 
   const consistency = Math.max(0, 1 - spread / Math.max(avg, 1));
   return { radius, consistency };
 }
+
+/** Every non-background connected region (4-connectivity). */
+export function componentsOf(raw: RawBuffer): ComponentBox[] {
+  const { data, width, height } = raw;
+  const n = width * height;
+  const bgKey = backgroundBucketKey(raw);
+  const visited = new Uint8Array(n);
+  const out: ComponentBox[] = [];
+  for (let start = 0; start < n; start++) {
+    if (visited[start]) continue;
+    if (bucketKey(data[start * 4], data[start * 4 + 1], data[start * 4 + 2]) === bgKey) {
+      visited[start] = 1;
+      continue;
+    }
+    let area = 0;
+    let minX = width, minY = height, maxX = -1, maxY = -1;
+    const queue = [start];
+    visited[start] = 1;
+    while (queue.length > 0) {
+      const i = queue.pop()!;
+      area++;
+      const x = i % width;
+      const y = (i / width) | 0;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      for (const j of [i - 1, i + 1, i - width, i + width]) {
+        if (j < 0 || j >= n || visited[j]) continue;
+        if (bucketKey(data[j * 4], data[j * 4 + 1], data[j * 4 + 2]) === bgKey) {
+          visited[j] = 1;
+          continue;
+        }
+        visited[j] = 1;
+        queue.push(j);
+      }
+    }
+    out.push({ x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1, area });
+  }
+  return out;
+}
+
+export interface ElementGaps {
+  count: number;
+  medianGap: number;
+  medianSize: number;
+  gapRatio: number;
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * Median nearest-neighbour gap between component bounding boxes (Chebyshev),
+ * normalised by the median element size.
+ */
+export function elementGaps(raw: RawBuffer): ElementGaps {
+  const components = componentsOf(raw);
+  if (components.length < 2) {
+    return { count: components.length, medianGap: 0, medianSize: 0, gapRatio: 0 };
+  }
+  const nearest: number[] = [];
+  for (const a of components) {
+    let best = Infinity;
+    for (const b of components) {
+      if (a === b) continue;
+      const dx = Math.max(0, Math.abs(a.x - b.x) - a.width);
+      const dy = Math.max(0, Math.abs(a.y - b.y) - a.height);
+      best = Math.min(best, Math.max(dx, dy));
+    }
+    nearest.push(best);
+  }
+  const medianGap = median(nearest);
+  const medianSize = median(components.map((c) => Math.sqrt(c.area)));
+  return { count: components.length, medianGap, medianSize, gapRatio: medianGap / Math.max(medianSize, 1) };
+}

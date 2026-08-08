@@ -7,7 +7,10 @@ that the element-box probe has closed element detection: reclassify the
 single-image-ceiling fields to the `gated` tier, and fix the prompt contract's
 verdict-missing defect. Plus the documentation closures both runs committed to.
 
-**Architecture:** Two independent workstreams on the verifier lane. Workstream A
+**Architecture:** Three workstreams on the verifier lane, run SEQUENTIALLY —
+A and B both edit `src/scripts/verify-corpus.ts`, and A shortens the very prompt
+B2 measures, so running them in parallel would confound the result (see
+"Ordering"). Workstream A
 moves three fields in `TIER_BY_FIELD` (`src/scripts/verify-corpus.ts:78-113`)
 to `gated`, which the existing machinery already handles correctly (gated fields
 never keep entries queued, never persist markers, and the three target detectors
@@ -150,6 +153,38 @@ alternative route for `usesShadows`.
   In `TIER_BY_FIELD` (`src/scripts/verify-corpus.ts:78-113`), move
   `visual.accentColor`, `visual.colorRoles`, and `visual.usesShadows` to
   `"gated"` and reorder the table so the three sit with `responsiveBehavior`.
+
+- [ ] **Step 4: Soften the gate reason string so it stops contradicting the
+  records that keep serving**
+
+  `decideFieldVerdict` emits one shared reason for every gated field
+  (`src/scripts/verify-corpus.ts:324`):
+
+  ```ts
+  return { field, verdict: "gate", reason: "no single screenshot can confirm this claim" };
+  ```
+
+  That is an absolute claim about confirmability, and it is **true for
+  `responsiveBehavior`** — no one screenshot shows responsive behaviour. It is
+  NOT true for the three fields arriving here: 28 entries carry
+  `image-confirmed` verification records for them (A3 Step 2), each asserting
+  that a single screenshot *did* confirm the claim. Ship the string unchanged
+  and the lane serves 28 records its own gate reason calls impossible.
+
+  Replace it with a statement about the LANE'S POLICY rather than about
+  confirmability, which is true of all four gated fields and contradicts nothing:
+
+  ```ts
+  return { field, verdict: "gate", reason: "this field is not verified from a single screenshot" };
+  ```
+
+  Add a test asserting the new string, and grep for the old literal before
+  changing it — `verify-corpus.test.ts` may pin it in a report fixture, the same
+  way `"not positively confirmed"` was pinned at `:739`.
+
+  This is deliberately a wording change, not a behaviour change: the verdict
+  stays `gate` and no field moves. It exists so the served reason is not a claim
+  the corpus falsifies 28 times.
   No other production change. The disabled detectors, `selectPending`, pending
   filter, and `resumeMarkers` already handle gated fields correctly.
 
@@ -202,7 +237,17 @@ test file), no production change.
   (39/12/25), the probe's closure as the reason `usesShadows` is not waiting on
   element detection, and the serving consequence (records keep serving, new
   verification stops, synthesis omits the unverified).
-- [ ] **Step 2: Commit** (`docs(verify): record the gated reclassification`).
+- [ ] **Step 2: State how many records keep serving, measured not asserted.**
+  Counted against the live corpus on 2026-08-08: **28 verification records
+  across 787 entries** — `accentColor` 9, `colorRoles` 0, `usesShadows` 19.
+  (Also present and unaffected: 11 `colorRoles` dataQuality findings and 111
+  `verifyAttempts` markers across the three.)
+
+  The number is what makes "keep them serving" the right call rather than an
+  assumption: 28 of 787 is 3.6%, so revoking would destroy legitimately earned
+  records to fix a contradiction almost nobody encounters. Had it been 300, the
+  call would go the other way. A reader deserves the number, not the conclusion.
+- [ ] **Step 3: Commit** (`docs(verify): record the gated reclassification`).
 
 ## Workstream B — prompt contract fix
 
@@ -241,12 +286,22 @@ test file), no production change.
   as the original (`--detectors on --diagnose --only-ids` with the 50 ids;
   cost ≈160 model calls, minimax both passes).
 - [ ] **Step 2: Verify the corpus hash is unchanged** (the invariant).
-- [ ] **Step 3: Compare `verdict-missing` first causes against the baseline of
-  50** and append a "Prompt contract fix — re-measurement" section to the
-  diagnosis doc: before/after counts, the new `Abstain causes` block verbatim,
-  and the note that accentColor/colorRoles/usesShadows are now gated so the
-  denominator is the remaining fields.
-- [ ] **Step 4: Commit** (`docs(verify): prompt contract re-measurement`).
+- [ ] **Step 3: Apply the pre-registered decision rule.** Fixed BEFORE the run,
+  because verdicts flip 14-18% between identical runs and 50 prose
+  `verdict-missing` out of ~200 prose asks is 25% — a result of 30 would be
+  genuinely ambiguous and would otherwise get argued about instead of decided.
+
+  | `verdict-missing` after the fix | verdict |
+  |---|---|
+  | **≤ 10** | fixed — keep the clause |
+  | **11-24** | inconclusive — do NOT claim success; second run or a different hypothesis |
+  | **≥ 25** | not fixed — the cause is not prompt phrasing; revert the clause or keep it only if separately justified |
+
+- [ ] **Step 4: Append a "Prompt contract fix — re-measurement" section** to the
+  diagnosis doc: before/after counts, which band fired, and the new `Abstain
+  causes` block verbatim. The denominator is UNCHANGED from the baseline —
+  Workstream A has not landed yet, which is the point of this ordering.
+- [ ] **Step 5: Commit** (`docs(verify): prompt contract re-measurement`).
 
 ## Workstream C — documentation closure
 
@@ -273,14 +328,41 @@ test file), no production change.
   the prerequisite is not satisfiable with the proposers tried.
 - [ ] **Step 2: Commit** (`docs(verify): record the element-box probe outcome`).
 
-## Ordering and parallelization
+## Ordering — sequential on one branch, B1 before A
 
-- Workstream D first (integration prerequisite).
-- Workstreams A and B1 are independent (different files and lanes): run in
-  parallel worktrees if desired.
-- Task B2 (re-measurement) must run AFTER A1 (gated fields change the
-  denominator) and B1 (the prompt change is what is measured) land.
-- Workstream C can run at any point after the source branches merge.
+**Corrected 2026-08-08.** An earlier draft called A and B1 independent and
+offered parallel worktrees. They are not independent, for a reason that would
+have silently corrupted B2's result.
+
+**The confound.** `buildVerifyPrompt` skips gated fields
+(`src/scripts/verify-corpus.ts:231`, `if (tier === "gated") continue;`), so
+Workstream A REMOVES three field lines from the combined ask — roughly 15% of a
+typical ~20-line prompt. Workstream B's entire hypothesis is that the model drops
+verdict keys *because the combined ask is long*. Land A first and B2 cannot
+separate "the new clause worked" from "the prompt got shorter": two changes to
+one input, one measurement.
+
+**The stale-baseline problem.** The 50 `verdict-missing` figure was measured on
+the CURRENT lane configuration. Land A first and that baseline describes a lane
+that no longer exists, so the before/after comparison has no valid "before".
+
+**They also share a file** — `TIER_BY_FIELD` at `:78-113` and
+`buildVerifyPrompt` at `:224-248` are both in `src/scripts/verify-corpus.ts`.
+Parallel worktrees on one module buy nothing once the work must be sequenced.
+
+Required order:
+
+1. **Workstream D** — integrate the two feature branches (prerequisite).
+2. **Task B1** — the prompt clause.
+3. **Task B2** — re-measure. Baseline is still valid; the only changed input is
+   the clause, so the delta is attributable to it.
+4. **Workstream A** — gated reclassification.
+5. **Workstream C** — any point after D.
+
+A-first is also viable but costs a second run (~320 calls total): land A,
+re-baseline, land B1, re-measure. B1-first gets a clean attribution for one run.
+A's own justification is the single-image ceiling, not prompt length, so its
+effect does not need separate measurement.
 
 ## Self-review
 
@@ -301,3 +383,28 @@ test file), no production change.
 ## Review amendments (2026-08-08)
 
 None yet — this plan is the first revision of the follow-up.
+
+### Amendments from the cross-branch review (2026-08-08, second round)
+
+Three changes, one of which would have corrupted a measurement:
+
+1. **Ordering: A and B1 are NOT independent; B1 now runs first.**
+   `buildVerifyPrompt` skips gated fields (`:231`), so Workstream A removes three
+   lines from the combined ask — ~15% of a ~20-line prompt. Workstream B's
+   hypothesis is that the model drops verdict keys *because the ask is long*, so
+   A-then-B2 could not separate the clause's effect from the shortening. The
+   50-verdict-missing baseline was also measured on the current lane, so
+   A-first would leave the comparison with no valid "before". They share a file
+   besides. Sequential, B1 → B2 → A, one branch.
+2. **B2 gets a pre-registered decision rule** (≤10 fixed / 11-24 inconclusive /
+   ≥25 not fixed). Verdicts flip 14-18% between identical runs and the baseline
+   is 25% of prose asks, so a mid-range result would be argued rather than
+   decided.
+3. **A1 softens the gate reason string.** The shared gated reason, "no single
+   screenshot can confirm this claim", is true of `responsiveBehavior` but false
+   of the three arriving fields — 28 entries carry `image-confirmed` records for
+   them. Replaced with a policy statement ("this field is not verified from a
+   single screenshot") that is true of all four. A3 now states the 28 measured
+   against the live corpus, because that number is what makes "keep them
+   serving" a decision rather than an assumption.
+

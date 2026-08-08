@@ -163,3 +163,88 @@ for the corroboration path ≈ 154 calls); the run log does not count calls
 directly. The pre-detector estimate tool projects a worst case of 4/entry,
 so detector lanes do not change the per-entry call count (calls are
 per-entry, not per-field) — they change which lane writes the verdict.
+
+---
+
+## Failure diagnosis (2026-08-08)
+
+The "why they measure so low" section above attributed all five failures to
+synthetic-vs-real scale. Running each disabled detector over the 82 real labels
+and capturing the intermediate measurement — not just the verdict — shows that
+is right for only two of them. There are **three distinct failure modes**, and
+only one is a tuning problem.
+
+Method: each detector run against its own labels, recording `measured`,
+`confidence` and the `reason` that produced the verdict. Read-only; no corpus
+writes. (Harness was throwaway — the numbers below are the artifact.)
+
+### Class A — real signal, mis-calibrated threshold and band
+
+`visual.usesBorders`, `visual.usesShadows`. **12/12 and 9/10 abstained for one
+reason: the metric landed inside the confidence band.** Never a wrong answer —
+no answer.
+
+| field | metric | class present | class absent | shipped threshold | best on this sample |
+|---|---|---|---|---|---|
+| usesBorders | `thinRatio` | 0.307–0.611 | 0.193–0.326 | 0.45 | **0.20 → 11/12** |
+| usesShadows | `rampRatio` | 0.148–0.642 | 0.110–0.201 | 0.35 | **0.21 → 9/10** |
+
+The thresholds were set from synthetic extremes (a stroked synthetic card scores
+`thinRatio` 0.986; a real bordered screenshot scores 0.31–0.61, because a real UI's
+edge population is dominated by text, not by card strokes). With the threshold
+that high, `boundaryConfidence` maps every real image to 0.27–0.65, and the bands
+(`[0.25, 0.75]` and `[0.30, 0.70]`) swallow that entire range.
+
+So these two are genuinely retunable. **But do not retune on this sample:** there
+are only 2 and 6 negatives, the classes overlap slightly at the boundary, and a
+threshold fitted to 2 negatives is overfitting, not calibration. They need more
+`contradicted` labels first.
+
+### Class B — the rule itself is wrong for real UI
+
+`visual.accentColor`. Not a threshold problem. Two assumptions that hold on
+synthetic canvases and fail on screenshots:
+
+1. **Area floor.** The synthetic accent button is 30x20 of 120x90 = **5.6%** of
+   pixels. Real accents measured here are **0.05%–0.84%** (`matchCount/total`:
+   332/2304000 … 19423/2304000). Four labels failed as "present but below the
+   area floor".
+2. **Maximality.** The detector requires the accent to be the largest
+   non-background colour cluster. On a real screenshot it almost never is — body
+   text, chrome, and imagery all cover more pixels. Four more failed as "present
+   but another colour is larger — role unconfirmed".
+
+The maximality rule was added during spec review (to stop mere presence being
+read as "this is the accent"). The reasoning was sound — presence is not role —
+but the rule it produced does not describe real interfaces. Replacing it needs a
+different role signal (e.g. saturation against a desaturated field, or
+concentration in interactive-sized clusters), not a lower bar.
+
+### Class C — segmentation finds noise, so the metric is meaningless
+
+`visual.spacingDensity`, `visual.cornerStyle`. These are the ones that answer
+confidently and wrongly, which is worse than abstaining.
+
+- **spacingDensity**: on real screenshots the connected-component pass finds
+  ~400–1400 components with **median size 1.0–1.9 px and median gap 1–4 px**. It
+  is segmenting antialiasing and texture, not UI elements, so `gapRatio`
+  (≈0.707 = 1px gap / 1.41px "element") measures pixel noise. That is why it is
+  decisive 67% of the time and 17% accurate — the number is real arithmetic over
+  meaningless inputs.
+- **cornerStyle**: `consistency` is **0.000** on most real entries — the four
+  corners of whatever region it measured disagree completely. The detector has no
+  notion of *which* element's corners to measure; a synthetic canvas had exactly
+  one card, a real screenshot has dozens of rounded things.
+
+Neither is fixable by tuning. Both need actual element detection before any
+corner or gap measurement means anything.
+
+### What this changes
+
+- "Scale-relative thresholds" would help **Class A only**. Class B needs a new
+  rule; Class C needs element detection.
+- Class A's fix is cheap but blocked on **more contradicted labels**, not on code.
+- Class C detectors are the most dangerous of the five: they are the only ones
+  that were confidently wrong rather than silent, and `spacingDensity` was the
+  one field whose detector the plan predicted would "self-limit" via abstention.
+  It did not — it decided, and it was wrong.

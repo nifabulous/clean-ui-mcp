@@ -202,6 +202,15 @@ ABSENT class** — the metric is anti-correlated at the top end. `usesShadows`
 scores exactly its majority-class baseline: the measurement adds nothing over
 always answering "absent".
 
+Precisely: the two fields are not equally dead. `usesShadows` is at baseline.
+`usesBorders` beats baseline by 9 points (67% vs 58%) — which at n=12 is one or
+two samples and well inside noise, so it does not justify retuning, but it is
+not the same statement as "no signal". Read the heading as "no signal that this
+sample can distinguish from none", and note that the composition also differs:
+usesShadows' PRESENT/ABSENT counts coincide with its confirmed/contradicted
+counts (4/6) while its class RANGES changed under regrouping, so its membership
+changed even though its counts did not.
+
 Why the metrics do not transfer: both are whole-image edge-population ratios. On
 a 120x90 synthetic canvas containing one card, `thinRatio` really is "what
 fraction of edges are the card's stroke". On a 1200-1920px screenshot the edge
@@ -262,10 +271,13 @@ corner or gap measurement means anything.
 - "Scale-relative thresholds" help **nothing**. Class A's metrics do not separate
   the classes at any threshold; Class B needs a new rule; Class C needs element
   detection.
-- **All five detectors need element-localised measurement**, not tuning. Class A
-  and Class C converge on the same prerequisite: find the UI elements first, then
-  measure their borders / shadows / corners / gaps. Whole-image ratios are
-  measuring text and texture.
+- **Class A and Class C need element-localised measurement**, not tuning — four
+  of the five detectors. They converge on the same prerequisite: find the UI
+  elements first, then measure their borders / shadows / corners / gaps.
+  Whole-image ratios are measuring text and texture. **Class B is the exception:**
+  `accentColor` needs a new ROLE rule, and the candidate named in its own section
+  (saturation against a desaturated field) is a whole-image statistic that does
+  not require element detection. Do not fold it into the same prerequisite.
 - No further labelling is warranted until a detector exists whose metric shows
   separation on the labels already collected.
 - Class C detectors are the most dangerous of the five: they are the only ones

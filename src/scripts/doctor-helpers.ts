@@ -274,7 +274,8 @@ export type CorpusDefectDetector =
   | "dataquality-malformed"
   | "dataquality-orphan-key"
   | "dataquality-hash-stale"
-  | "dataquality-count";
+  | "dataquality-count"
+  | "record-map-overlap";
 
 export interface CorpusDefectFinding {
   /** The corpus entry id the defect was found on. */
@@ -698,6 +699,30 @@ export function summarizeCorpusDefects(
       const total = Object.values(dataQuality).filter((r) => !r.dismissed).length;
       if (total > 0) {
         push("dataquality-count", `${total} contradiction(s) recorded — run the suspect report before trusting these entries`);
+      }
+    }
+
+    // ── record-map exclusivity, across the three maps. The write paths
+    // (mergeVerification / mergeVerifyAttempts / mergeDataQuality) revoke
+    // their siblings when they write, so an overlap here means a record
+    // arrived by some other path — a field in two maps is ambiguous: a pass
+    // that revoked nothing, or a finding that never revoked the trust it
+    // contradicts. One finding per overlapping field, naming the maps.
+    const verificationKeys = Object.keys(entry.provenance?.verification ?? {});
+    const attemptKeys = Object.keys(entry.provenance?.verifyAttempts ?? {});
+    const dataQualityKeys = Object.keys(entry.provenance?.dataQuality ?? {});
+    const mapKeys = new Set([...verificationKeys, ...attemptKeys, ...dataQualityKeys]);
+    for (const field of mapKeys) {
+      const maps = [
+        ...(verificationKeys.includes(field) ? ["verification"] : []),
+        ...(attemptKeys.includes(field) ? ["verifyAttempts"] : []),
+        ...(dataQualityKeys.includes(field) ? ["dataQuality"] : []),
+      ];
+      if (maps.length > 1) {
+        push(
+          "record-map-overlap",
+          `"${field}" appears in ${maps.join(" and ")} — the three record maps must be mutually exclusive per field (a pass revokes its contradiction and vice versa)`,
+        );
       }
     }
   }

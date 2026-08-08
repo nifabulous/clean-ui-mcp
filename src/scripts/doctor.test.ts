@@ -761,6 +761,122 @@ describe("summarizeCorpusDefects — review-round corrections", () => {
   });
 });
 
+describe("corpusDefectCheck — record-map exclusivity", () => {
+  it("flags a field that spans verification and dataQuality", () => {
+    const entries = [defectEntry("overlap-1", {
+      provenance: {
+        taggedBy: "auto",
+        verification: { layout: VERIFICATION },
+        dataQuality: { layout: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" } },
+      },
+    })];
+    const findings = summarizeCorpusDefects(entries, ALL_IMAGES);
+    expect(findings.some((f) => f.detector === "record-map-overlap" && f.message.includes("layout"))).toBe(true);
+  });
+
+  it("flags a field that spans verification and verifyAttempts", () => {
+    const entries = [defectEntry("overlap-2", {
+      provenance: {
+        taggedBy: "auto",
+        verification: { layout: VERIFICATION },
+        verifyAttempts: { layout: VERIFICATION },
+      },
+    })];
+    const findings = summarizeCorpusDefects(entries, ALL_IMAGES);
+    expect(findings.some((f) => f.detector === "record-map-overlap")).toBe(true);
+  });
+
+  it("flags a field that spans verifyAttempts and dataQuality", () => {
+    // The untested pair. A marker beside a finding means the contradiction never
+    // revoked the attempt that preceded it — the field is both "tried and gave
+    // up" and "positively disproven", which are different states.
+    const entries = [defectEntry("overlap-3", {
+      provenance: {
+        taggedBy: "auto",
+        verifyAttempts: { layout: VERIFICATION },
+        dataQuality: { layout: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" } },
+      },
+    })];
+    const findings = summarizeCorpusDefects(entries, ALL_IMAGES);
+    const overlap = findings.find((f) => f.detector === "record-map-overlap");
+    expect(overlap).toBeDefined();
+    expect(overlap!.message).toContain("verifyAttempts");
+    expect(overlap!.message).toContain("dataQuality");
+    expect(overlap!.message, "must not name a map the field is absent from").not.toContain("verification and");
+  });
+
+  it("names all three maps, once, when a field is in every map", () => {
+    const entries = [defectEntry("overlap-all", {
+      provenance: {
+        taggedBy: "auto",
+        verification: { layout: VERIFICATION },
+        verifyAttempts: { layout: VERIFICATION },
+        dataQuality: { layout: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" } },
+      },
+    })];
+    const overlaps = summarizeCorpusDefects(entries, ALL_IMAGES)
+      .filter((f) => f.detector === "record-map-overlap");
+    // ONE finding per overlapping field, not one per map pair.
+    expect(overlaps).toHaveLength(1);
+    for (const m of ["verification", "verifyAttempts", "dataQuality"]) {
+      expect(overlaps[0].message).toContain(m);
+    }
+  });
+
+  it("reports each overlapping field separately", () => {
+    const entries = [defectEntry("overlap-multi", {
+      provenance: {
+        taggedBy: "auto",
+        verification: { layout: VERIFICATION, mood: VERIFICATION },
+        dataQuality: {
+          layout: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" },
+          mood: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" },
+        },
+      },
+    })];
+    const overlaps = summarizeCorpusDefects(entries, ALL_IMAGES)
+      .filter((f) => f.detector === "record-map-overlap");
+    expect(overlaps).toHaveLength(2);
+    expect(overlaps.map((f) => f.message).join(" ")).toContain("layout");
+    expect(overlaps.map((f) => f.message).join(" ")).toContain("mood");
+  });
+
+  it("a DISMISSED finding still counts as occupying dataQuality", () => {
+    // Dismissal stops the finding nagging the count, but the record is still
+    // there — so it can still collide with a trust record, and that collision is
+    // exactly as ambiguous as an undismissed one.
+    const entries = [defectEntry("overlap-dismissed", {
+      provenance: {
+        taggedBy: "auto",
+        verification: { layout: VERIFICATION },
+        dataQuality: {
+          layout: {
+            measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x",
+            dismissed: { at: "2026-08-08", reason: "artefact" },
+          },
+        },
+      },
+    })];
+    const findings = summarizeCorpusDefects(entries, ALL_IMAGES);
+    expect(findings.some((f) => f.detector === "record-map-overlap")).toBe(true);
+    // ...and it is still excluded from the count, which is a separate concern.
+    expect(findings.some((f) => f.detector === "dataquality-count")).toBe(false);
+  });
+
+  it("stays silent when the three maps are mutually exclusive", () => {
+    const entries = [defectEntry("exclusive-1", {
+      provenance: {
+        taggedBy: "auto",
+        verification: { layout: VERIFICATION },
+        verifyAttempts: { voice: VERIFICATION },
+        dataQuality: { mood: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" } },
+      },
+    })];
+    const findings = summarizeCorpusDefects(entries, ALL_IMAGES);
+    expect(findings.some((f) => f.detector === "record-map-overlap")).toBe(false);
+  });
+});
+
 describe("corpusDefectCheck — detail line units", () => {
   it("distinguishes finding rows from affected entries", () => {
     // The prefix counted ENTRIES while the tallies counted ROWS, so

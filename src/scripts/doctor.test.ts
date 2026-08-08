@@ -511,6 +511,52 @@ describe("corpusDefectCheck", () => {
     // Report-only: the check must never claim it fixed or verified anything.
     expect(check.detail).not.toMatch(/verified|fixed/i);
   });
+
+  it("flags orphan keys and malformed/unknown sources in dataQuality", () => {
+    const check = corpusDefectCheck([defectEntry("dq-1", {
+      provenance: {
+        taggedBy: "auto",
+        dataQuality: {
+          "not-a-servable-key": { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" },
+          layout: { measured: null, recorded: null, source: "not-a-detector", verifierVersion: "v1", verifiedAt: "x" },
+        },
+      },
+    })], ALL_IMAGES);
+    const text = JSON.stringify(check);
+    expect(text).toContain("dataquality-orphan-key");
+    expect(text).toContain("dataquality-malformed");
+  });
+
+  it("surfaces the total contradiction count", () => {
+    const check = corpusDefectCheck([defectEntry("dq-2", {
+      provenance: {
+        taggedBy: "auto",
+        dataQuality: {
+          layout: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" },
+        },
+      },
+    })], ALL_IMAGES);
+    expect(JSON.stringify(check)).toContain("dataquality-count");
+  });
+
+  it("flags a pixel-pinned contradiction whose image bytes changed (Task 15's stale contract)", () => {
+    // ALL_IMAGES hashes to "a".repeat(64); the finding is pinned to different
+    // bytes — a re-capture — so the contradiction proves nothing about the
+    // current pixels and must surface for a human to --retriage it.
+    const check = corpusDefectCheck([defectEntry("dq-3", {
+      provenance: {
+        taggedBy: "auto",
+        dataQuality: {
+          layout: {
+            measured: "grid", recorded: "flex",
+            source: "vision", verifierVersion: "v1", verifiedAt: "x",
+            imageSha256: "b".repeat(64),
+          },
+        },
+      },
+    })], ALL_IMAGES);
+    expect(JSON.stringify(check)).toContain("dataquality-hash-stale");
+  });
 });
 
 // ── Detector correctness fixes (review round) ─────────────────────────────────

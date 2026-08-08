@@ -40,14 +40,14 @@ One cause is already measurable from the committed report without a re-run: an
 unparseable response makes every field on that entry abstain at once. Three of 48
 entries show that signature (`origin-origin-4`, `hume-hume-26`, `anima-anima`),
 accounting for 34 of the 256 abstains on model-lane fields — 13%. The other 87%
-are per-field
-abstains on entries where the model answered other fields normally, so the
-dominant cause is per-field and the report cannot name it.
+are per-field abstains on entries where the model answered other fields normally,
+so the dominant cause is per-field and the report cannot name it.
 
 ### Why this is the next thing to build
 
 Three rationales for further deterministic-detector work were measured against
-the corpus and none survived:
+the corpus. None of them justifies building element detection *ahead of* this
+diagnosis:
 
 - **Independent contradiction.** The two enabled detectors are not independent
   witnesses. `platform` (`src/verify/detectors/platform.ts:12-23`) recomputes
@@ -62,9 +62,10 @@ the corpus and none survived:
 - **Coverage.** Deterministic measurement of the five perception fields could
   reach at most 122 of 306 abstains: accentColor 37 + usesShadows 30 +
   spacingDensity 20 + cornerStyle 19 + usesBorders 16. Element-localised
-  detection specifically covers 85 of those — `accentColor` is Class B in
-  `docs/verifier-calibration.md` and needs a new role rule, not element
-  detection. The other 184 abstains are taxonomy, layout, prose, and `platform`.
+  detection covers 85 of those for certain, and the remaining 37 (`accentColor`,
+  Class B) only if a screen parser can identify the primary interactive element —
+  open, see "Parallel track". The other 184 abstains are taxonomy, layout, prose,
+  and `platform`.
 - **Cost.** Model calls are per entry (verify + re-produce passes ≈ 3.2–3.4),
   not per field, and prose fields always need the model. A detector changes
   which lane writes a verdict, not the call count.
@@ -75,14 +76,26 @@ origins (`https://alan.com`, `https://mercury.com`), while the screenshots are
 internal application screens behind auth. The URL is provenance, not a
 reproducible render target.
 
-That leaves the model lane, and its largest bucket is a sentence that means
-seven different things. Naming them is a prerequisite for deciding whether the
-lane deserves investment at all.
+So the model lane is where the addressable volume is, and its largest bucket is a
+sentence that means seven different things. Naming them is a prerequisite for
+deciding whether the lane deserves investment — and it also sizes the element
+detection question rather than replacing it. If the abstains are mostly defects,
+the model lane improves for near-zero cost and element detection's marginal value
+falls. If they are genuine "cannot determine from one screenshot", element
+detection becomes *more* attractive, because that is exactly the case where a
+pixel measurement beats asking the model again. The box-quality probe (see
+"Parallel track") runs alongside and is gated by neither outcome.
 
 ## Governing invariant
 
-> A diagnosis run produces measurement and nothing else: identical verdicts,
-> byte-identical `corpus/entries.json`, no schema change.
+> A diagnosis run produces measurement and nothing else: no verdict LOGIC
+> changes, `corpus/entries.json` is byte-identical, no schema change.
+
+"No verdict logic changes" is the precise claim — not that a diagnosis run
+reproduces the committed report's verdicts. It cannot: the model flips 14–18%
+between identical runs. What must hold is that for a given parsed response, every
+branch returns the same verdict it returns today; only the reason string and the
+new `cause`/`site` fields differ.
 
 Every acceptance criterion below is checked against this. The invariant is
 load-bearing because the run deliberately re-processes fields the resume
@@ -123,6 +136,24 @@ count is carried as a detail — a prose field that listed assertions but confir
 none is a different situation from one that listed many; it is not a separate
 cause because the assertion-empty case already gates
 (`:328-330`).
+
+#### Call site
+
+An entry makes up to three vision calls — the combined initial ask (`:554`), the
+per-field corroboration ask (`:585-588`), and the post-re-produce re-verify
+(`:655`). A bare `response-unparseable` on a field does not say which one failed,
+and they have different fixes. Every cause therefore carries a `site` of
+`initial` | `corroborate` | `reverify`.
+
+#### Prose fields get two causes
+
+`decideFieldVerdict` runs twice for a prose field that first abstained: once on
+the recorded value, then again on the re-produced value (`:662`). The second
+call's cause is the one that survives into the verdict, so recording only it
+would hide every first-ask cause behind a re-produce that failed for a different
+reason. Prose abstains carry `cause` (final) and `firstCause` (the initial ask).
+The breakdown table reports both columns; only `cause` is counted in the total,
+so the total still equals the abstain count.
 
 ### 2. Code changes
 
@@ -165,31 +196,64 @@ A single flag, `--diagnose`, bypasses both skips **and** implies dry-run. One
 flag rather than two orthogonal ones so no half-set state exists and the
 invariant is directly testable.
 
+**`--limit` cannot select the cohort.** `main` slices `selectPending(...)` by
+`--limit` (`:1177`). With the skip bypassed, `selectPending` returns every entry
+carrying an image path in corpus order, so `--limit 50` takes the first 50 in
+that order — which is **not** the cohort. Measured: 0 of 50 positional matches
+between the committed report's entries and the first 50 with-image entries, and
+2 entries differ in set membership. The original run's cohort was the first 50
+*unprocessed* entries at that moment; that set is not reconstructible from an
+order-plus-count.
+
+`--diagnose` therefore takes an explicit id list, `--only-ids`, seeded from the
+committed report:
+
 ```bash
-npm run verify -- --limit 50 --detectors on --diagnose
+npm run verify -- --detectors on --diagnose \
+  --only-ids "$(grep '^## ' verify-report.md | cut -c4- | paste -sd, -)"
 ```
 
-Re-runs the same 48-entry cohort — comparable to the committed report and
-inclusive of the three total-silence entries. Cost ≈160 model calls; the
-re-produce path still fires (a call, not a write).
+Order-independent, exactly reproducible, and the comparison to the committed
+report is like-for-like. An id in the list that is not in the corpus fails
+loudly rather than being silently skipped — the same rule `--retriage` already
+applies to entry ids (`:1188-1189`). Cost ≈160 model calls; the re-produce path
+still fires (a call, not a write).
 
 **Stated limit:** model verdicts flip 14–18% between identical runs
-(`src/scripts/verify-corpus.ts:574`). The causes are measured on a fresh run, not
-on the exact verdicts in the committed `verify-report.md`. The output is a rate,
-not a per-verdict autopsy.
+(`src/scripts/verify-corpus.ts:574`). The causes are measured on a fresh run over
+the same entries, not on the exact verdicts in the committed
+`verify-report.md` — a field that abstained there may pass here and vice versa.
+The output is a cause breakdown of *this run's* abstains, whose count will not
+equal 244. It is a rate, not a per-verdict autopsy of the committed report.
 
 ### 4. Pre-registered decision rule
 
-Fixed before the numbers land, so the result cannot be re-litigated after:
+Fixed before the numbers land, so the result cannot be re-litigated after.
 
-- **`model-abstained` < 50% of abstains** → the lane is mostly defects. Fix the
-  parser and prompt contract, re-measure. Model-lane investment is cheap and
-  justified.
-- **≥ 50%, reasons cluster on "cannot determine from one screenshot"** → those
-  fields are genuinely unverifiable from a single image. The honest response is
+The earlier draft of this rule branched on whether `model-abstained` was above or
+below 50% of abstains. That was wrong: it made two independent questions share
+one threshold, and it made a cheap fix wait on a share it does not depend on.
+Fixing a parser defect is worth doing at any rate. The rule is therefore two
+independent rules.
+
+**Rule 1 — defects (absolute, share-independent).** Any of the six defect causes
+with **n ≥ 10** in this run is fixed, whatever fraction of abstains it
+represents. Ten is the point at which a cause is not a one-entry fluke on a
+48-entry cohort; the fixes (parser branch, prompt contract) are hours, so the bar
+is deliberately low. Causes below 10 are recorded and left.
+
+**Rule 2 — lane headroom (reason-text, count-independent).** Read the collected
+`model-abstained` reason strings and classify each:
+
+- clusters on **"cannot determine from one screenshot"** → those fields are
+  genuinely unverifiable from a single image. The honest response is
   reclassifying them to the `gated` tier, not asking harder.
-- **≥ 50%, reasons cluster on hedging ("appears to be", "likely")** → prompt and
-  consensus work has real headroom, and the model-lane harness is worth building.
+- clusters on **hedging** ("appears to be", "likely") → prompt and consensus work
+  has real headroom, and the model-lane harness is worth building.
+- **reasons are empty or restate the claim** → the prompt does not elicit usable
+  reasons. That is itself a finding, and a cheap prompt fix to test next.
+
+The two rules can both fire. Neither is conditional on the other.
 
 Reason clustering is a manual read of the collected strings, recorded verbatim in
 the output document. No automated clustering.
@@ -198,10 +262,14 @@ the output document. No automated clustering.
 
 New file `docs/verifier-abstain-diagnosis.md`:
 
-- cause breakdown table with counts and percentages
+- cause breakdown table with counts and percentages, split by call site
+  (`initial` / `corroborate` / `reverify`)
 - per-field cause split
+- for prose fields, the `firstCause` column beside `cause`
 - the collected `model-abstained` reason strings, verbatim
-- which branch of the decision rule fired, and the resulting decision
+- which rules fired (Rule 1 per cause, Rule 2 per cluster) and the resulting
+  decisions
+- the exact `--only-ids` list used, so the run is re-executable
 
 Not appended to `docs/verifier-calibration.md`. That file's claims are about
 detector calibration against a frozen label set; appending model-lane numbers
@@ -211,6 +279,10 @@ would blur what its floors rest on.
 
 TDD, failing test first, per project convention:
 
+- one characterization test over the full `(tier × parsed-state)` matrix
+  asserting `decideFieldVerdict` returns the same `verdict` for every
+  combination it returns today — the direct check on the governing invariant,
+  written before any other change so it fails if the taxonomy work moves a branch
 - seven unit tests on `parseVerifyResponse`, one per cause, each asserting the
   right discriminator from a crafted raw response
 - two unit tests on the `verifyEntry` corroboration abstains, asserting
@@ -220,8 +292,60 @@ TDD, failing test first, per project convention:
 - one test asserting `--diagnose` re-queues an entry whose fields are all stamped
   at the current version — the skip bypass, without which the run measures
   nothing
+- one test asserting `--only-ids` selects exactly the listed entries **in a
+  corpus whose first-N-by-order set differs from the id list** — the fixture has
+  to be built so an order-based selection would fail it, or the test passes
+  against the bug it exists to catch
+- one test asserting an id absent from the corpus fails loudly
+- one test per call site asserting the `site` tag (`initial`, `corroborate`,
+  `reverify`)
+- one test asserting a prose field carries both `cause` and `firstCause` when the
+  two asks fail for different reasons
 - one test asserting the report's breakdown block sums to the reported abstain
-  count
+  count, counting `cause` only (never `firstCause` — double-counting prose is the
+  obvious way this table goes wrong)
+
+## Parallel track — element-detection box quality
+
+Runs alongside this spec, gated by neither. It answers one question this spec
+cannot: **would a screen parser produce boxes good enough for the four detectors
+that need element localisation?**
+
+Not in this spec because it has a different risk profile — an external model
+dependency and unverified claims about model behaviour — and folding it in would
+put both behind one review cycle.
+
+Scope: run a screen parser over ~20 pinned corpus screenshots, save the boxes as
+overlay images, and judge by eye whether the boxes are the things
+`cornerStyle` / `spacingDensity` / `usesBorders` / `usesShadows` would need to
+measure. No integration, no lane, no verdicts.
+
+Three things it must settle before any element-detection spec is written:
+
+1. **Model family.** Moondream and Florence-2 are trained on natural-image
+   corpora; UI screenshots are out of distribution for generic object detection,
+   and the expected failure is boxes labelled `screen` / `text` / `monitor`
+   rather than `card` / `button` / `input`. The relevant family is a screen
+   parser finetuned on interactable UI elements. This is a belief, not a
+   measurement — the probe is what turns it into one.
+2. **Whether `accentColor` is in reach.** `docs/verifier-calibration.md` files it
+   as Class B, needing a role rule rather than element detection, and the
+   candidate rule named there is a whole-image statistic. But the accent is
+   typically the primary button's fill, so a parser that finds interactable
+   elements may address it directly. If it does, the reachable abstain set is
+   122, not 85.
+3. **What "deterministic" would then mean.** Pinned weights plus greedy decode is
+   *reproducible*, not *recomputable*. A neural box proposer is still an
+   independent witness — a different model from the vision lane — but the lane's
+   premise changes, and that has to be stated explicitly rather than absorbed
+   quietly.
+
+**The probe script is committed, not throwaway.** The Class A analysis was
+corrected once and cannot be checked a third time because its harness was
+discarded (`docs/verifier-calibration.md`, "Harness was throwaway — the numbers
+below are the artifact"). The entry ids are pinned in the script and the overlay
+images are committed, so the next person can disagree with the judgement by
+looking at the same pictures.
 
 ## Out of scope
 

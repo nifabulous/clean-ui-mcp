@@ -277,7 +277,11 @@ corner or gap measurement means anything.
   Whole-image ratios are measuring text and texture. **Class B is the exception:**
   `accentColor` needs a new ROLE rule, and the candidate named in its own section
   (saturation against a desaturated field) is a whole-image statistic that does
-  not require element detection. Do not fold it into the same prerequisite.
+  not require element detection. Do not fold it into the same prerequisite —
+  though note element detection is not *excluded* for it either: the accent is
+  typically the primary button's fill, so a detector that finds interactable
+  elements could resolve the role question more directly than a saturation rule.
+  Which of the two is right for Class B is open.
 - No further labelling is warranted until a detector exists whose metric shows
   separation on the labels already collected.
 - Class C detectors are the most dangerous of the five: they are the only ones

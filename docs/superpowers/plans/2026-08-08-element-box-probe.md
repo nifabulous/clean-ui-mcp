@@ -24,6 +24,12 @@ Copied verbatim from `docs/superpowers/specs/2026-08-08-element-box-probe-design
 - TDD: failing test first, then implementation, then commit. Every task.
 - Review artifact after every task, before the next commit (`CLAUDE.md`). The git hook blocks otherwise.
 
+### The TypeScript suite is deliberately not run on this branch
+
+This branch adds Python and one `.gitignore` block. It compiles no TypeScript and imports nothing from `src/`, so `npm test` measures nothing about it. Its gate is `pytest` over `eval/element-box-probe/tests/`.
+
+Recorded so the omission is a decision rather than a gap: `npm test` is **not green at this branch point** either — 3 failed files of 164 on `fb055fa` (`src/mcp-smoke.test.ts` stale-build, `src/tagger.test.ts:1042` Gemini thinking-config drift, `src/readiness/tracked-artifacts-readiness.test.ts:435`/`:468` corpus-hash-mismatch). If a reviewer runs the TS suite here anyway, those three are the pre-existing baseline, not this branch's doing.
+
 ---
 
 ## File Structure

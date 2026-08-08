@@ -26,6 +26,7 @@ const PNG_BYTES = Buffer.from(
 function entry(over: Partial<CorpusEntryT> = {}): CorpusEntryT {
   return {
     id: "e1",
+    title: "Test entry",
     image: { visibility: "private", path: "images-private/e1.png", width: 390, height: 844 },
     visual: { dominantColors: ["#ffffff", "#111111"], accentColor: null, typePairing: { display: null, body: null, notes: "" }, spacingDensity: "moderate", cornerStyle: "slight-round", usesShadows: false, usesBorders: true },
     ...over,
@@ -673,6 +674,33 @@ describe("suspect report", () => {
     const detectorIdx = report.indexOf("visual.usesBorders");
     expect(detectorIdx).toBeGreaterThan(-1);
     expect(visionIdx).toBeGreaterThan(detectorIdx);
+  });
+
+  it("orders same-source entries by contradiction count descending", () => {
+    const two = entry({ id: "two" });
+    mergeDataQuality(two, {
+      zzz: { measured: null, recorded: "a", source: "vision", verifierVersion: "verifier-v1", verifiedAt: "2026-08-07" },
+      aaa: { measured: null, recorded: "b", source: "vision", verifierVersion: "verifier-v1", verifiedAt: "2026-08-07" },
+    });
+    const one = makeEntryWithDataQuality("vision", "mmm");
+    const report = renderSuspectReport([one, two]);
+    // Both of "two"'s rows (count 2) precede "one"'s row (count 1).
+    expect(report.indexOf("aaa")).toBeGreaterThan(-1);
+    expect(report.indexOf("aaa")).toBeLessThan(report.indexOf("mmm"));
+    expect(report.indexOf("zzz")).toBeLessThan(report.indexOf("mmm"));
+  });
+
+  it("tiebreaks same-source same-count rows by field", () => {
+    const a = makeEntryWithDataQuality("vision", "zzz");
+    const b = makeEntryWithDataQuality("vision", "aaa");
+    const report = renderSuspectReport([a, b]);
+    expect(report.indexOf("aaa")).toBeGreaterThan(-1);
+    expect(report.indexOf("aaa")).toBeLessThan(report.indexOf("zzz"));
+  });
+
+  it("renders the empty case honestly", () => {
+    expect(renderSuspectReport([])).toBe("No contradictions recorded.");
+    expect(renderSuspectReport([entry()])).toBe("No contradictions recorded.");
   });
 
   it("emits the fixed columns", () => {

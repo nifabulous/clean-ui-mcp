@@ -98,6 +98,19 @@ export function verifiedFields(entry: CorpusEntryT): ReadonlySet<string> {
 }
 
 /**
+ * The evidence method behind a verified field — for disclosure, so an agent
+ * can weigh "recomputed from data" (provable) vs "confirmed against the
+ * image" (image-confirmed). Null when the field is not verified. Reuses
+ * `isVerified` so a record this build does not understand never leaks its
+ * method string into a disclosure.
+ */
+export function verifiedMethodFor(entry: CorpusEntryT, field: string): string | null {
+  const record = entry.provenance?.verification?.[field];
+  if (!record || !isVerified(entry, field)) return null;
+  return record.method;
+}
+
+/**
  * The evidence ids of the matched entries verified FOR THE GIVEN FIELD. Shared
  * by BOTH consumers — the model lane's prompt-grounding filter (superseded by
  * the per-field strip in Task 3) and the deterministic synthesizer — so trust

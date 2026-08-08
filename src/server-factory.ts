@@ -40,7 +40,7 @@ import { CRITIQUE_UI_INPUT_SCHEMA, CRITIQUE_UI_OUTPUT_SCHEMA } from "./synthesis
 import { registerCreateUiSpec } from "./create-ui-spec-mcp.js";
 import type { CorpusReader } from "./corpus-reader.js";
 import { TrustGatedCorpusReader } from "./corpus-trust-reader.js";
-import { verifiedFields } from "./corpus-trust.js";
+import { verifiedFields, verifiedMethodFor } from "./corpus-trust.js";
 import { projectForServing, renderOmittedDisclosure } from "./serving-projection.js";
 import { projectEntryForSynthesis } from "./synthesis-projection.js";
 import type { CreateUiSpecModelDependency } from "./create-ui-spec.js";
@@ -676,9 +676,26 @@ function registerCompareUiExamples(server: McpServer, reader: CorpusReader): voi
       ];
 
       const table = [header, divider, ...rows];
+      // Method disclosure per column: alongside the omitted fields, name the
+      // evidence tier behind each field the column DOES serve, so an agent can
+      // weigh "recomputed from data" (provable) vs "a model looked at it"
+      // (image-confirmed). `found[i]` (not `p.entry`, which is the projected
+      // shape with optional fields) carries the untrimmed provenance.
       const columnDisclosures = projections
-        .filter((p) => p.omitted.length > 0)
-        .map((p) => `- **${p.id}**: Unverified fields omitted: ${p.omitted.join(", ")}.`);
+        .map((p, i) => {
+          const verified = Object.keys(found[i].provenance?.verification ?? {})
+            .map((field) => ({ field, method: verifiedMethodFor(found[i], field) }))
+            .filter((v): v is { field: string; method: string } => v.method !== null);
+          return { p, verified };
+        })
+        .filter(({ p }) => p.omitted.length > 0)
+        .map(({ p, verified }) => {
+          const parts = [`Unverified fields omitted: ${p.omitted.join(", ")}.`];
+          if (verified.length > 0) {
+            parts.push(`Verified: ${verified.map((v) => `${v.field} (${v.method})`).join(", ")}.`);
+          }
+          return `- **${p.id}**: ${parts.join(" ")}`;
+        });
       if (columnDisclosures.length) {
         table.push("", "_Column disclosures:_", ...columnDisclosures);
       }

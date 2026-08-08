@@ -658,6 +658,35 @@ describe("triage actions", () => {
   });
 });
 
+describe("suspect report", () => {
+  function makeEntryWithDataQuality(source: string, field: string): CorpusEntryT {
+    const e = entry();
+    mergeDataQuality(e, { [field]: { measured: null, recorded: "x", source, verifierVersion: "verifier-v1", verifiedAt: "2026-08-07" } });
+    return e;
+  }
+
+  it("ranks detector contradictions above vision contradictions", () => {
+    const vision = makeEntryWithDataQuality("vision", "mood");
+    const detector = makeEntryWithDataQuality("detector", "visual.usesBorders");
+    const report = renderSuspectReport([vision, detector]);
+    const visionIdx = report.indexOf("mood");
+    const detectorIdx = report.indexOf("visual.usesBorders");
+    expect(detectorIdx).toBeGreaterThan(-1);
+    expect(visionIdx).toBeGreaterThan(detectorIdx);
+  });
+
+  it("emits the fixed columns", () => {
+    const report = renderSuspectReport([makeEntryWithDataQuality("vision", "layout")]);
+    expect(report).toContain("| field |");
+    expect(report).toContain("| measured |");
+    expect(report).toContain("| recorded |");
+    expect(report).toContain("| source |");
+    expect(report).toContain("| reason |");
+    expect(report).toContain("| entry |");
+    expect(report).toContain("| title |");
+  });
+});
+
 describe("dataQuality is processed at its version — queue + report", () => {
   it("alreadyProcessedAtVersion treats a contradiction as processed", () => {
     const e = entry();

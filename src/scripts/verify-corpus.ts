@@ -1010,30 +1010,49 @@ export function dismissDataQuality(entry: CorpusEntryT, field: string, reason: s
 }
 
 /**
- * Renders the queue of entries with live data-quality findings. Sorted by
- * finding count descending (highest signal first). Dismissed findings are
- * hidden unless `includeDismissed` is set — a curator triaging the queue does
- * not want yesterday's acknowledged artefacts cluttering it.
+ * Renders the queue of entries with live data-quality findings as a markdown
+ * table. Rows are ordered by SOURCE CLASS first — detector contradictions
+ * (registry-keyed, pixel-measured) above corroborated "vision" contradictions
+ * — then per entry by contradiction count descending, then by field. Dismissed
+ * findings are hidden unless `includeDismissed` is set — a curator triaging
+ * the queue does not want yesterday's acknowledged artefacts cluttering it,
+ * but the flag restores them for the audit trail.
  */
 export function renderSuspectReport(
   entries: readonly CorpusEntryT[],
   opts: { includeDismissed?: boolean } = {},
 ): string {
-  const rows: { id: string; image: string | null; fields: string[] }[] = [];
+  const rows: Array<{ field: string; measured: string; recorded: string; source: string; reason: string; entry: string; title: string; count: number }> = [];
   for (const e of entries) {
-    const dq = e.provenance?.dataQuality;
-    if (!dq) continue;
-    const fields = Object.keys(dq).filter((f) => opts.includeDismissed || !dq[f].dismissed);
-    if (fields.length > 0) rows.push({ id: e.id, image: e.image?.path ?? null, fields });
+    const dq = e.provenance?.dataQuality ?? {};
+    const count = Object.keys(dq).length;
+    for (const [field, record] of Object.entries(dq)) {
+      if (!opts.includeDismissed && record.dismissed) continue;
+      rows.push({
+        field,
+        measured: typeof record.measured === "string" ? record.measured : JSON.stringify(record.measured ?? ""),
+        recorded: typeof record.recorded === "string" ? record.recorded : JSON.stringify(record.recorded ?? ""),
+        source: record.source,
+        reason: typeof record.reason === "string" ? record.reason : "",
+        entry: e.id,
+        title: e.title,
+        count,
+      });
+    }
   }
-  rows.sort((a, b) => b.fields.length - a.fields.length);
-  if (rows.length === 0) return "No live data-quality findings.";
-  const width = Math.max(...rows.map((r) => r.fields.length));
-  const lines: string[] = ["Findings:"];
-  for (const r of rows) {
-    const marks = Array.from({ length: width }, (_, i) => (r.fields[i] ? "x" : "·")).join("");
-    lines.push(`  ${r.id} ${marks}  ${r.fields.join(", ")}  [${r.image}]`);
-  }
+  // Source class first: detector (registry key) rows above "vision"; then
+  // contradiction count desc; then field.
+  const sourceRank = (source: string): number => (source === "vision" ? 1 : 0);
+  rows.sort((a, b) =>
+    sourceRank(a.source) - sourceRank(b.source)
+    || b.count - a.count
+    || a.field.localeCompare(b.field));
+  if (rows.length === 0) return "No contradictions recorded.";
+  const lines = [
+    "| field | measured | recorded | source | reason | entry | title |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    ...rows.map((r) => `| ${r.field} | ${r.measured} | ${r.recorded} | ${r.source} | ${r.reason} | ${r.entry} | ${r.title} |`),
+  ];
   return lines.join("\n");
 }
 
@@ -1110,6 +1129,7 @@ async function main(): Promise<void> {
       "dismiss": { type: "string" },
       "reason": { type: "string" },
       "include-dismissed": { type: "boolean", default: false },
+      "report-suspect": { type: "boolean", default: false },
     },
   });
   const dryRun = values["dry-run"] === true;
@@ -1318,8 +1338,11 @@ async function main(): Promise<void> {
       results.verdictsByEntry[entry.id] = [{ field: "entry", verdict: "fail", reason: err instanceof Error ? err.message : String(err) }];
     }
   }
+  // Hoisted out of the !dryRun block so --report-suspect can read the POST-run
+  // state: the persistence branch's clones carry this run's fresh findings, and
+  // printing the pre-run `entries` would show the PREVIOUS run's contradictions.
+  const updated = entries.map((e) => verifiedById.get(e.id) ?? e);
   if (!dryRun) {
-    const updated = entries.map((e) => verifiedById.get(e.id) ?? e);
     if (corpusPath) {
       writeFileSync(resolve(corpusPath), JSON.stringify({ ...rawCorpus, entries: updated }, null, 2));
       console.log(`[verify] wrote ${updated.length} entries to ${corpusPath} (${verifiedById.size} verified)`);
@@ -1327,6 +1350,10 @@ async function main(): Promise<void> {
       persistEntries(writableLoadedCorpus(updated), updated);
       console.log(`[verify] persisted ${entries.length} entries (${verifiedById.size} verified)`);
     }
+  }
+  if (values["report-suspect"] === true) {
+    console.log("\n## Suspect entries\n");
+    console.log(renderSuspectReport(updated, { includeDismissed: values["include-dismissed"] === true }));
   }
   const report = buildRunReport(results, {
     dryRun,

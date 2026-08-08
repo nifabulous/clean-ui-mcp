@@ -66,6 +66,16 @@ export type FieldVerdict = {
    * the image-level pseudo-verdict in main().
    */
   source?: "detector" | "vision";
+  /** WHY an abstain happened. Set on abstains only. */
+  cause?: AbstainCause;
+  /** WHICH vision call produced this verdict. Set alongside `cause`. */
+  site?: VerifyCallSite;
+  /**
+   * For a prose field that abstained TWICE, the cause of the FIRST ask. The
+   * re-produce pass overwrites `cause`, and recording only the survivor would
+   * hide every first-ask cause behind a re-produce that failed differently.
+   */
+  firstCause?: AbstainCause;
 };
 
 /**
@@ -248,6 +258,26 @@ ${lines.join("\n")}`;
 }
 
 /**
+ * WHY an abstain happened, one value per physical branch. Six of these are
+ * defects with cheap fixes; only `model-abstained` is evidence about the model
+ * lane's ceiling, and only for it does the model's own `reason` text exist.
+ * The two `corroboration-*` values are set in `verifyEntry`, not at parse time.
+ */
+export type AbstainCause =
+  | "response-unparseable"
+  | "response-not-object"
+  | "field-absent"
+  | "field-not-object"
+  | "verdict-missing"
+  | "verdict-unrecognised"
+  | "model-abstained"
+  | "corroboration-split"
+  | "corroboration-error";
+
+/** WHICH of an entry's up-to-three vision calls produced a verdict. */
+export type VerifyCallSite = "initial" | "corroborate" | "reverify";
+
+/**
  * A parsed per-field model answer. `contradicted` is the THIRD state: the image
  * POSITIVELY disagrees with the claim. Failing closed (a missing field, an
  * unparseable response) means neither confirmed nor contradicted.
@@ -257,6 +287,10 @@ export type ParsedField = {
   contradicted: boolean;
   assertions?: string[];
   reason?: string;
+  /** Set only when the field is neither confirmed nor contradicted. */
+  cause?: AbstainCause;
+  /** The literal verdict string, kept only for `verdict-unrecognised`. */
+  rawVerdict?: string;
 };
 
 /**
@@ -269,11 +303,12 @@ export type ParsedField = {
  */
 function failClosed(
   out: Record<string, ParsedField>,
+  absentCause: AbstainCause,
 ): Record<string, ParsedField> {
   return new Proxy(out, {
     get(target, prop, receiver) {
       if (typeof prop === "string" && !(prop in target)) {
-        return { confirmed: false, contradicted: false };
+        return { confirmed: false, contradicted: false, cause: absentCause };
       }
       return Reflect.get(target, prop, receiver);
     },
@@ -287,12 +322,12 @@ export function parseVerifyResponse(raw: string): Record<string, ParsedField> {
   try {
     parsed = JSON.parse(stripped);
   } catch {
-    return failClosed(out);
+    return failClosed(out, "response-unparseable");
   }
-  if (typeof parsed !== "object" || parsed === null) return failClosed(out);
+  if (typeof parsed !== "object" || parsed === null) return failClosed(out, "response-not-object");
   for (const [field, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (typeof value !== "object" || value === null) {
-      out[field] = { confirmed: false, contradicted: false };
+      out[field] = { confirmed: false, contradicted: false, cause: "field-not-object" };
       continue;
     }
     const v = value as Record<string, unknown>;
@@ -302,23 +337,46 @@ export function parseVerifyResponse(raw: string): Record<string, ParsedField> {
     // The three-way verdict, with the legacy confirmed-boolean shape as a
     // fallback: a `verdict` string wins; otherwise an explicit `confirmed: true`
     // still counts as confirmed.
-    const verdict = typeof v.verdict === "string"
-      ? (v.verdict as string)
-      : v.confirmed === true ? "confirmed" : undefined;
+    const rawVerdict = typeof v.verdict === "string" ? (v.verdict as string) : undefined;
+    const verdict = rawVerdict ?? (v.confirmed === true ? "confirmed" : undefined);
+    const confirmed = verdict === "confirmed";
+    const contradicted = verdict === "contradicted";
+    // A field that is neither gets a cause naming WHICH silence this was.
+    const cause: AbstainCause | undefined = confirmed || contradicted
+      ? undefined
+      : verdict === undefined
+        ? "verdict-missing"
+        : verdict === "abstain"
+          ? "model-abstained"
+          : "verdict-unrecognised";
     out[field] = {
-      confirmed: verdict === "confirmed",
-      contradicted: verdict === "contradicted",
+      confirmed,
+      contradicted,
       ...(assertions !== undefined ? { assertions } : {}),
       ...(typeof v.reason === "string" ? { reason: v.reason } : {}),
+      ...(cause !== undefined ? { cause } : {}),
+      ...(cause === "verdict-unrecognised" && rawVerdict !== undefined ? { rawVerdict } : {}),
     };
   }
-  return failClosed(out);
+  return failClosed(out, "field-absent");
+}
+
+/** The one place an abstain verdict is built, so cause/site can never diverge. */
+function abstainVerdict(field: string, parsed: ParsedField, site: VerifyCallSite): FieldVerdict {
+  const cause = parsed.cause ?? "verdict-missing";
+  const detail = cause === "verdict-unrecognised" && parsed.rawVerdict !== undefined
+    ? ` — verdict "${parsed.rawVerdict}"`
+    : parsed.reason !== undefined && parsed.reason !== ""
+      ? ` — ${parsed.reason}`
+      : "";
+  return { field, verdict: "abstain", reason: `not positively confirmed${detail}`, cause, site };
 }
 
 export function decideFieldVerdict(
   field: string,
   tier: VerifierTier,
   parsed: ParsedField,
+  site: VerifyCallSite,
 ): FieldVerdict {
   if (tier === "gated") {
     return { field, verdict: "gate", reason: "no single screenshot can confirm this claim" };
@@ -333,14 +391,14 @@ export function decideFieldVerdict(
     }
     return parsed.confirmed
       ? { field, verdict: "pass", reason: `${assertions.length} assertion(s) confirmed` }
-      : { field, verdict: "abstain", reason: "not positively confirmed" };
+      : abstainVerdict(field, parsed, site);
   }
   if (parsed.contradicted) {
     return { field, verdict: "contradicted", reason: "the image positively disagrees with the recorded claim" };
   }
   return parsed.confirmed
     ? { field, verdict: "pass", reason: "positively confirmed against the image" }
-    : { field, verdict: "abstain", reason: "not positively confirmed" };
+    : abstainVerdict(field, parsed, site);
 }
 
 /**
@@ -417,6 +475,12 @@ export interface VerifyEntryDeps {
   callVision: (prompt: string, imagePath: string) => Promise<string>;
   reproduce: (entry: CorpusEntryT, imagePath: string) => Promise<CorpusEntryT>;
   detectors?: boolean;
+  /**
+   * Bypass the per-field resume skip so an already-processed cohort can be
+   * re-measured. Only ever set by `--diagnose`, which also forces dry-run, so
+   * the bypass can never reach a corpus write.
+   */
+  diagnose?: boolean;
 }
 
 export async function verifyEntry(
@@ -432,6 +496,7 @@ export async function verifyEntry(
   const dataQuality: Record<string, DataQualityRecord> = {};
 
   const detectorsEnabled = deps.detectors ?? true;
+  const diagnose = deps.diagnose ?? false;
   let outcome: RunDetectorsOutcome = { passes: [], contradicted: [], abstained: [], results: {} };
   let detectorContradictions: string[] = [];
   let pending: string[];
@@ -449,7 +514,7 @@ export async function verifyEntry(
         !fieldLeavesVisionForEntry(entry, field, detectorsEnabled)
         && tierForField(field) !== "gated"
         && !outcome.contradicted.includes(field)
-        && !alreadyProcessedAtVersion(entry, field, VERIFIER_VERSION),
+        && (diagnose || !alreadyProcessedAtVersion(entry, field, VERIFIER_VERSION)),
     );
 
     for (const field of outcome.passes) verdicts.push({ field, verdict: "pass", reason: "detector", source: "detector" });
@@ -561,7 +626,7 @@ export async function verifyEntry(
         field,
         claim === null
           ? { field, verdict: "gate", reason: "no recorded value to verify", source: "vision" }
-          : { ...decideFieldVerdict(field, tierForField(field), parsed[field] ?? { confirmed: false, contradicted: false }), source: "vision" },
+          : { ...decideFieldVerdict(field, tierForField(field), parsed[field] ?? { confirmed: false, contradicted: false, cause: "field-absent" }, "initial"), source: "vision" },
       );
     }
 
@@ -596,11 +661,13 @@ export async function verifyEntry(
           verdict: "abstain",
           reason: `model contradiction could not be corroborated: ${err instanceof Error ? err.message : String(err)}`,
           source: "vision",
+          cause: "corroboration-error",
+          site: "corroborate",
         });
         continue;
       }
       const reParsed = parseVerifyResponse(reParsedRaw);
-      const reVerdict = decideFieldVerdict(field, tierForField(field), reParsed[field] ?? { confirmed: false, contradicted: false });
+      const reVerdict = decideFieldVerdict(field, tierForField(field), reParsed[field] ?? { confirmed: false, contradicted: false, cause: "field-absent" }, "corroborate");
       if (reVerdict.verdict === "pass") {
         // DISAGREEMENT, NOT CONFIRMATION. The first ask said `contradicted` and
         // the second says `confirmed` — that split IS the instability
@@ -612,6 +679,8 @@ export async function verifyEntry(
           verdict: "abstain",
           reason: "model disagreed with itself across two fresh asks (contradicted, then confirmed) — neither verdict is corroborated",
           source: "vision",
+          cause: "corroboration-split",
+          site: "corroborate",
         });
       } else if (reVerdict.verdict === "contradicted") {
         // Corroborated: both fresh asks positively disagree. A finding, not a
@@ -655,12 +724,22 @@ export async function verifyEntry(
         ? parseVerifyResponse(await deps.callVision(buildVerifyPrompt(reproduced as unknown as Record<string, unknown>, reFields, VERIFIER_VERSION), imagePath))
         : {};
       for (const field of failedProse) {
+        const firstCause = decided.get(field)?.cause;
         if (!reFields.includes(field)) {
-          decided.set(field, { field, verdict: "gate", reason: "re-production wrote no value for this field" });
+          // firstCause is kept on the gate verdict deliberately: the re-produce
+          // wrote nothing, but the first ask's cause is still information about
+          // the lane, and Task 6 reports it on the separate first-causes line,
+          // outside the abstain total.
+          decided.set(field, {
+            field,
+            verdict: "gate",
+            reason: "re-production wrote no value for this field",
+            ...(firstCause !== undefined ? { firstCause } : {}),
+          });
           continue;
         }
-        const reVerdict = decideFieldVerdict(field, "prose", reParsed[field] ?? { confirmed: false, contradicted: false });
-        decided.set(field, reVerdict);
+        const reVerdict = decideFieldVerdict(field, "prose", reParsed[field] ?? { confirmed: false, contradicted: false, cause: "field-absent" }, "reverify");
+        decided.set(field, { ...reVerdict, ...(firstCause !== undefined ? { firstCause } : {}) });
         if (reVerdict.verdict === "pass") {
           // The re-produced value replaces the fabricated one only after it
           // passed, so the stored value and the record agree.
@@ -821,6 +900,27 @@ export function selectPending(entries: readonly CorpusEntryT[], version: string)
   });
 }
 
+/**
+ * Select entries by EXPLICIT id, in the order given. `--limit` cannot select a
+ * cohort: `main` slices `selectPending` by corpus order, and with the resume
+ * skip bypassed that returns every image-bearing entry — measured 0 of 50
+ * positional matches against the committed report. An unknown id throws rather
+ * than being silently dropped, the same rule `--retriage` applies.
+ */
+export function selectByIds(entries: readonly CorpusEntryT[], ids: readonly string[]): CorpusEntryT[] {
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const missing = ids.filter((id) => !byId.has(id));
+  if (missing.length > 0) {
+    throw new Error(`--only-ids: unknown entry id(s): ${missing.join(", ")}`);
+  }
+  const selected = ids.map((id) => byId.get(id) as CorpusEntryT);
+  const noImage = selected.filter((e) => !e.image?.path).map((e) => e.id);
+  if (noImage.length > 0) {
+    throw new Error(`--only-ids: entries with no image path: ${noImage.join(", ")}`);
+  }
+  return selected;
+}
+
 export function buildRunReport(
   result: RunResult,
   opts: {
@@ -865,10 +965,24 @@ export function buildRunReport(
   // detector lane.
   const detectorStats = new Map<string, { pass: number; contradicted: number; abstain: number }>();
   let zeroAssertion = 0;
+  const causeStats = new Map<string, { total: number; bySite: Map<string, number> }>();
+  const firstCauseStats = new Map<string, number>();
   for (const verdicts of Object.values(result.verdictsByEntry)) {
     for (const v of verdicts) {
       counts[v.verdict] += 1;
       if (v.verdict === "gate" && /vacuous|no checkable assertions/i.test(v.reason)) zeroAssertion += 1;
+      if (v.verdict === "abstain" && v.cause !== undefined) {
+        const s = causeStats.get(v.cause) ?? { total: 0, bySite: new Map<string, number>() };
+        s.total += 1;
+        const site = v.site ?? "initial";
+        s.bySite.set(site, (s.bySite.get(site) ?? 0) + 1);
+        causeStats.set(v.cause, s);
+      }
+      // firstCause is reported SEPARATELY and never added to the total —
+      // counting a prose abstain twice is the obvious way this table goes wrong.
+      if (v.firstCause !== undefined) {
+        firstCauseStats.set(v.firstCause, (firstCauseStats.get(v.firstCause) ?? 0) + 1);
+      }
       if (v.source === "detector") {
         const stats = detectorStats.get(v.field) ?? { pass: 0, contradicted: 0, abstain: 0 };
         // Whitelist: a flag-off run rewrites detector contradictions to legacy
@@ -894,6 +1008,29 @@ export function buildRunReport(
       + ` · contradicted ${s.contradicted} (${pct(s.contradicted)})`
       + ` · abstain ${s.abstain} (${pct(s.abstain)})`,
     );
+  }
+  const causeTotal = [...causeStats.values()].reduce((a, s) => a + s.total, 0);
+  if (causeTotal > 0) {
+    lines.push("");
+    lines.push(`Abstain causes — ${causeTotal} total`);
+    for (const [cause, s] of [...causeStats.entries()].sort((a, b) => b[1].total - a[1].total)) {
+      const sites = [...s.bySite.entries()].sort().map(([site, n]) => `${site} ${n}`).join(", ");
+      lines.push(`  ${cause.padEnd(22)} ${String(s.total).padStart(4)}  (${sites})`);
+    }
+    const siteTotals = new Map<string, number>();
+    for (const s of causeStats.values()) {
+      for (const [site, n] of s.bySite) {
+        siteTotals.set(site, (siteTotals.get(site) ?? 0) + n);
+      }
+    }
+    if (siteTotals.size > 0) {
+      const sites = [...siteTotals.entries()].sort().map(([site, n]) => `${site} ${n}`).join(", ");
+      lines.push(`  by call site: ${sites}`);
+    }
+    if (firstCauseStats.size > 0) {
+      const firsts = [...firstCauseStats.entries()].sort().map(([c, n]) => `${c} ${n}`).join(", ");
+      lines.push(`Prose first causes (not counted in the total above): ${firsts}`);
+    }
   }
   lines.push("");
   for (const [id, verdicts] of Object.entries(result.verdictsByEntry)) {
@@ -1159,9 +1296,24 @@ async function main(): Promise<void> {
       "reason": { type: "string" },
       "include-dismissed": { type: "boolean", default: false },
       "report-suspect": { type: "boolean", default: false },
+      "diagnose": { type: "boolean", default: false },
+      "only-ids": { type: "string" },
     },
   });
-  const dryRun = values["dry-run"] === true;
+  const diagnose = values.diagnose === true;
+  const onlyIdsRaw = values["only-ids"];
+  // The flag matrix is exhaustive on purpose: there is no invocation that
+  // re-measures the full corpus by accident, and no invocation where
+  // --only-ids is silently ignored.
+  if (diagnose && (onlyIdsRaw === undefined || onlyIdsRaw.trim() === "")) {
+    throw new Error("--diagnose requires --only-ids: a diagnosis run must name the entries it re-measures");
+  }
+  if (!diagnose && onlyIdsRaw !== undefined) {
+    throw new Error("--only-ids requires --diagnose: it has no effect on a normal run");
+  }
+  // --diagnose IMPLIES --dry-run. One flag, so no half-set state exists where
+  // the resume bypass is active and the corpus write is not gated.
+  const dryRun = values["dry-run"] === true || diagnose;
   const estimate = values.estimate === true;
   const limit = Number(values.limit);
   const sampleSize = Number(values["sample-size"]) || 30;
@@ -1174,7 +1326,10 @@ async function main(): Promise<void> {
   // real corpus/entries.json.
   const rawCorpus = corpusPath ? JSON.parse(readFileSync(corpusPath, "utf8")) : null;
   const entries: CorpusEntryT[] = rawCorpus ? (rawCorpus.entries as CorpusEntryT[]) : loadCorpus();
-  const pending = selectPending(entries, VERIFIER_VERSION).slice(0, Number.isFinite(limit) && limit > 0 ? limit : undefined);
+  const onlyIds = onlyIdsRaw ? onlyIdsRaw.split(",").map((s) => s.trim()).filter(Boolean) : null;
+  const pending = onlyIds
+    ? selectByIds(entries, onlyIds)
+    : selectPending(entries, VERIFIER_VERSION).slice(0, Number.isFinite(limit) && limit > 0 ? limit : undefined);
 
   // --retriage / --dismiss: ENTRY-EDITING actions that run and exit before any
   // verification — they change what the NEXT run will do, so the current run
@@ -1336,6 +1491,7 @@ async function main(): Promise<void> {
             callVisionModel(prompt, image, visionProvider as Provider | undefined, undefined, undefined, imageDetail, sampling),
           reproduce,
           detectors: detectorsEnabled,
+          diagnose,
         }),
         entryTimeoutMs,
         `entry "${entry.id}"`,

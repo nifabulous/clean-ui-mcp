@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tierForField, type VerifierTier } from "./verify-corpus.js";
-import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict } from "./verify-corpus.js";
+import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict, type FieldVerdict, type ParsedField } from "./verify-corpus.js";
 import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReproducedProse, VERIFIER_VERSION } from "./verify-corpus.js";
-import { buildRunReport, selectPending, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
+import { buildRunReport, selectPending, selectByIds, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
 import { mergeDataQuality, retriageDataQuality, dismissDataQuality, renderSuspectReport } from "./verify-corpus.js";
 import { withTimeout, reproduceCritiqueModel } from "./verify-corpus.js";
 import { resolveConfiguredVisionProvider, resolveSampling } from "./verify-corpus.js";
@@ -124,27 +124,27 @@ describe("parseVerifyResponse — fail-closed", () => {
 
 describe("decideFieldVerdict", () => {
   it("passes a confirmed factual claim", () => {
-    const v = decideFieldVerdict("visual.usesShadows", "factual", { confirmed: true });
+    const v = decideFieldVerdict("visual.usesShadows", "factual", { confirmed: true }, "initial");
     expect(v.verdict).toBe("pass");
   });
 
   it("abstains an unconfirmed claim that the image does not contradict", () => {
-    const v = decideFieldVerdict("visual.usesShadows", "factual", { confirmed: false });
+    const v = decideFieldVerdict("visual.usesShadows", "factual", { confirmed: false }, "initial");
     expect(v.verdict).toBe("abstain");
   });
 
   it("GATES a prose field whose assertion list is empty — the vacuity fix", () => {
-    const v = decideFieldVerdict("critique", "prose", { confirmed: false, assertions: [] });
+    const v = decideFieldVerdict("critique", "prose", { confirmed: false, assertions: [] }, "initial");
     expect(v.verdict).toBe("gate");
   });
 
   it("passes a prose field whose assertions were all confirmed", () => {
-    const v = decideFieldVerdict("critique", "prose", { confirmed: true, assertions: ["a left navigation rail exists"] });
+    const v = decideFieldVerdict("critique", "prose", { confirmed: true, assertions: ["a left navigation rail exists"] }, "initial");
     expect(v.verdict).toBe("pass");
   });
 
   it("gates a gated-tier field (responsiveBehavior) whatever the response says", () => {
-    const v = decideFieldVerdict("responsiveBehavior", "gated", { confirmed: true });
+    const v = decideFieldVerdict("responsiveBehavior", "gated", { confirmed: true }, "initial");
     expect(v.verdict).toBe("gate");
   });
 });
@@ -399,14 +399,14 @@ describe("three-way model verdicts", () => {
   });
 
   it("decides pass / contradicted / abstain / gate", () => {
-    expect(decideFieldVerdict("layout", "factual", { confirmed: true, contradicted: false }).verdict).toBe("pass");
-    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: true }).verdict).toBe("contradicted");
-    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: false }).verdict).toBe("abstain");
-    expect(decideFieldVerdict("responsiveBehavior", "gated", { confirmed: true, contradicted: false }).verdict).toBe("gate");
+    expect(decideFieldVerdict("layout", "factual", { confirmed: true, contradicted: false }, "initial").verdict).toBe("pass");
+    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: true }, "initial").verdict).toBe("contradicted");
+    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: false }, "initial").verdict).toBe("abstain");
+    expect(decideFieldVerdict("responsiveBehavior", "gated", { confirmed: true, contradicted: false }, "initial").verdict).toBe("gate");
   });
 
   it("keeps the vacuity guard for prose fields", () => {
-    const r = decideFieldVerdict("critique", "prose", { confirmed: false, contradicted: false, assertions: [] });
+    const r = decideFieldVerdict("critique", "prose", { confirmed: false, contradicted: false, assertions: [] }, "initial");
     expect(r.verdict).toBe("gate");
   });
 
@@ -1057,5 +1057,458 @@ describe("reproduceCritiqueModel — the report names the model Pass 2 actually 
     expect(reproduceCritiqueModel("minimax", "MiniMax-Text")).toBe("MiniMax-Text");
     expect(reproduceCritiqueModel("claude", "claude-sonnet-4-5")).toBe("claude-sonnet-4-5");
     expect(reproduceCritiqueModel(undefined, "gpt-5.4-nano")).toBe("gpt-5.4-nano");
+  });
+});
+
+describe("decideFieldVerdict — verdict logic characterization (governing invariant)", () => {
+  // Every (tier x parsed-state) combination the function can see, with the
+  // verdict it returns TODAY. Later tasks add `cause`, `site` and richer reason
+  // strings; if any of them moves a VERDICT, this table fails.
+  const PARSED_STATES: Array<{ name: string; parsed: ParsedField }> = [
+    { name: "confirmed", parsed: { confirmed: true, contradicted: false } },
+    { name: "contradicted", parsed: { confirmed: false, contradicted: true } },
+    { name: "neither", parsed: { confirmed: false, contradicted: false } },
+    { name: "confirmed with assertions", parsed: { confirmed: true, contradicted: false, assertions: ["a", "b"] } },
+    { name: "contradicted with assertions", parsed: { confirmed: false, contradicted: true, assertions: ["a"] } },
+    { name: "neither with assertions", parsed: { confirmed: false, contradicted: false, assertions: ["a"] } },
+    { name: "confirmed with empty assertions", parsed: { confirmed: true, contradicted: false, assertions: [] } },
+    { name: "contradicted with empty assertions", parsed: { confirmed: false, contradicted: true, assertions: [] } },
+    { name: "neither with empty assertions", parsed: { confirmed: false, contradicted: false, assertions: [] } },
+  ];
+
+  const EXPECTED: Record<VerifierTier, Record<string, FieldVerdict["verdict"]>> = {
+    gated: {
+      "confirmed": "gate",
+      "contradicted": "gate",
+      "neither": "gate",
+      "confirmed with assertions": "gate",
+      "contradicted with assertions": "gate",
+      "neither with assertions": "gate",
+      "confirmed with empty assertions": "gate",
+      "contradicted with empty assertions": "gate",
+      "neither with empty assertions": "gate",
+    },
+    prose: {
+      // Prose gates FIRST on an empty assertion list — before the contradicted
+      // check — so an empty list gates even when contradicted is true.
+      "confirmed": "gate",
+      "contradicted": "gate",
+      "neither": "gate",
+      "confirmed with assertions": "pass",
+      "contradicted with assertions": "contradicted",
+      "neither with assertions": "abstain",
+      "confirmed with empty assertions": "gate",
+      "contradicted with empty assertions": "gate",
+      "neither with empty assertions": "gate",
+    },
+    mechanical: {
+      "confirmed": "pass",
+      "contradicted": "contradicted",
+      "neither": "abstain",
+      "confirmed with assertions": "pass",
+      "contradicted with assertions": "contradicted",
+      "neither with assertions": "abstain",
+      "confirmed with empty assertions": "pass",
+      "contradicted with empty assertions": "contradicted",
+      "neither with empty assertions": "abstain",
+    },
+    factual: {
+      "confirmed": "pass",
+      "contradicted": "contradicted",
+      "neither": "abstain",
+      "confirmed with assertions": "pass",
+      "contradicted with assertions": "contradicted",
+      "neither with assertions": "abstain",
+      "confirmed with empty assertions": "pass",
+      "contradicted with empty assertions": "contradicted",
+      "neither with empty assertions": "abstain",
+    },
+    soft: {
+      "confirmed": "pass",
+      "contradicted": "contradicted",
+      "neither": "abstain",
+      "confirmed with assertions": "pass",
+      "contradicted with assertions": "contradicted",
+      "neither with assertions": "abstain",
+      "confirmed with empty assertions": "pass",
+      "contradicted with empty assertions": "contradicted",
+      "neither with empty assertions": "abstain",
+    },
+    a11y: {
+      "confirmed": "pass",
+      "contradicted": "contradicted",
+      "neither": "abstain",
+      "confirmed with assertions": "pass",
+      "contradicted with assertions": "contradicted",
+      "neither with assertions": "abstain",
+      "confirmed with empty assertions": "pass",
+      "contradicted with empty assertions": "contradicted",
+      "neither with empty assertions": "abstain",
+    },
+  };
+
+  for (const [tier, byState] of Object.entries(EXPECTED) as Array<[VerifierTier, Record<string, FieldVerdict["verdict"]>]>) {
+    for (const { name, parsed } of PARSED_STATES) {
+      it(`${tier} / ${name} -> ${byState[name]}`, () => {
+        expect(decideFieldVerdict("someField", tier, parsed, "initial").verdict).toBe(byState[name]);
+      });
+    }
+  }
+});
+
+describe("parseVerifyResponse — abstain cause taxonomy", () => {
+  it("tags every field response-unparseable when the JSON does not parse", () => {
+    const parsed = parseVerifyResponse("this is not json {{{");
+    expect(parsed.layout).toEqual({ confirmed: false, contradicted: false, cause: "response-unparseable" });
+    expect(parsed.mood.cause).toBe("response-unparseable");
+  });
+
+  it("tags every field response-not-object when the payload is a bare scalar", () => {
+    const parsed = parseVerifyResponse("42");
+    expect(parsed.layout.cause).toBe("response-not-object");
+  });
+
+  it("tags an absent key field-absent when other keys parsed fine", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({ layout: { verdict: "confirmed" } }));
+    expect(parsed.layout.confirmed).toBe(true);
+    expect(parsed.layout.cause).toBeUndefined();
+    expect(parsed.mood.cause).toBe("field-absent");
+  });
+
+  it("tags a present-but-scalar field value field-not-object", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({ layout: "yes" }));
+    expect(parsed.layout.cause).toBe("field-not-object");
+  });
+
+  it("tags a field with no verdict key verdict-missing", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({ layout: { reason: "hard to say" } }));
+    expect(parsed.layout.cause).toBe("verdict-missing");
+    expect(parsed.layout.reason).toBe("hard to say");
+  });
+
+  it("tags an unrecognised verdict string verdict-unrecognised and keeps the literal", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({ layout: { verdict: "partially confirmed" } }));
+    expect(parsed.layout.cause).toBe("verdict-unrecognised");
+    expect(parsed.layout.rawVerdict).toBe("partially confirmed");
+    expect(parsed.layout.confirmed).toBe(false);
+    expect(parsed.layout.contradicted).toBe(false);
+  });
+
+  it("tags an explicit abstain model-abstained and keeps the model's reason", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({
+      layout: { verdict: "abstain", reason: "cannot determine from one screenshot" },
+    }));
+    expect(parsed.layout.cause).toBe("model-abstained");
+    expect(parsed.layout.reason).toBe("cannot determine from one screenshot");
+  });
+
+  it("leaves confirmed and contradicted fields with no cause", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({
+      a: { verdict: "confirmed" },
+      b: { verdict: "contradicted" },
+    }));
+    expect(parsed.a.cause).toBeUndefined();
+    expect(parsed.b.cause).toBeUndefined();
+  });
+
+  it("still honours the legacy confirmed-boolean shape with no verdict key", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({ layout: { confirmed: true } }));
+    expect(parsed.layout.confirmed).toBe(true);
+    expect(parsed.layout.cause).toBeUndefined();
+  });
+
+  it("surfaces an empty object as field-absent on every field", () => {
+    const parsed = parseVerifyResponse("{}");
+    expect(parsed.layout.cause).toBe("field-absent");
+    expect(parsed.anythingElse.cause).toBe("field-absent");
+  });
+});
+
+describe("decideFieldVerdict — cause and site on abstains", () => {
+  it("carries the parsed cause and the declared site", () => {
+    const v = decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: false, cause: "field-absent" }, "initial");
+    expect(v.verdict).toBe("abstain");
+    expect(v.cause).toBe("field-absent");
+    expect(v.site).toBe("initial");
+  });
+
+  it("appends the model's reason to the abstain reason string", () => {
+    const v = decideFieldVerdict("layout", "factual", {
+      confirmed: false, contradicted: false, cause: "model-abstained", reason: "cannot determine from one screenshot",
+    }, "initial");
+    expect(v.reason).toBe("not positively confirmed — cannot determine from one screenshot");
+  });
+
+  it("names the offending literal for an unrecognised verdict", () => {
+    const v = decideFieldVerdict("layout", "factual", {
+      confirmed: false, contradicted: false, cause: "verdict-unrecognised", rawVerdict: "maybe",
+    }, "reverify");
+    expect(v.reason).toBe('not positively confirmed — verdict "maybe"');
+    expect(v.site).toBe("reverify");
+  });
+
+  it("keeps the bare reason string when the model gave no reason", () => {
+    const v = decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: false, cause: "field-absent" }, "initial");
+    expect(v.reason).toBe("not positively confirmed");
+  });
+
+  it("carries cause and site on a prose abstain too", () => {
+    const v = decideFieldVerdict("critique", "prose", {
+      confirmed: false, contradicted: false, assertions: ["a"], cause: "model-abstained", reason: "unclear",
+    }, "corroborate");
+    expect(v.verdict).toBe("abstain");
+    expect(v.cause).toBe("model-abstained");
+    expect(v.site).toBe("corroborate");
+    expect(v.reason).toBe("not positively confirmed — unclear");
+  });
+
+  it("sets no cause on a pass, a contradiction, or a gate", () => {
+    expect(decideFieldVerdict("layout", "factual", { confirmed: true, contradicted: false }, "initial").cause).toBeUndefined();
+    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: true }, "initial").cause).toBeUndefined();
+    expect(decideFieldVerdict("layout", "gated", { confirmed: false, contradicted: false }, "initial").cause).toBeUndefined();
+    expect(decideFieldVerdict("critique", "prose", { confirmed: false, contradicted: false, assertions: [] }, "initial").cause).toBeUndefined();
+  });
+});
+
+// Runner-set-cause fixtures, built from the existing `entry()` helper so the
+// fields and provenance shape match the rest of the suite.
+function entryWithAccent(): CorpusEntryT {
+  return entry({
+    visual: {
+      dominantColors: ["#ffffff", "#111111"],
+      accentColor: "#4f46e5",
+      typePairing: { display: null, body: null, notes: "" },
+      spacingDensity: "moderate",
+      cornerStyle: "slight-round",
+      usesShadows: false,
+      usesBorders: true,
+    },
+    provenance: { taggedBy: "auto" },
+  });
+}
+
+function entryWithCritique(): CorpusEntryT {
+  return entry({
+    critique: "The left navigation rail groups the metrics by row.",
+    provenance: { taggedBy: "auto" },
+  });
+}
+
+function fixtureImagePath(): string {
+  const dir = mkdtempSync(join(tmpdir(), "verify-cause-"));
+  const imagePath = join(dir, "e1.png");
+  writeFileSync(imagePath, PNG_BYTES);
+  return imagePath;
+}
+
+describe("verifyEntry — runner-set abstain causes", () => {
+  it("tags a corroboration split corroboration-split", async () => {
+    // First ask contradicts, second ask confirms -> the split IS the finding.
+    const responses = [
+      JSON.stringify({ "visual.accentColor": { verdict: "contradicted" } }),
+      JSON.stringify({ "visual.accentColor": { verdict: "confirmed" } }),
+    ];
+    let call = 0;
+    const out = await verifyEntry(entryWithAccent(), fixtureImagePath(), {
+      now: () => "2026-08-08T00:00:00.000Z",
+      callVision: async () => responses[call++] ?? "{}",
+      reproduce: async (e) => e,
+      detectors: false,
+    });
+    const v = out.verdicts.find((x) => x.field === "visual.accentColor");
+    expect(v?.verdict).toBe("abstain");
+    expect(v?.cause).toBe("corroboration-split");
+  });
+
+  it("tags a corroboration call that threw corroboration-error", async () => {
+    let call = 0;
+    const out = await verifyEntry(entryWithAccent(), fixtureImagePath(), {
+      now: () => "2026-08-08T00:00:00.000Z",
+      callVision: async () => {
+        if (call++ === 0) return JSON.stringify({ "visual.accentColor": { verdict: "contradicted" } });
+        throw new Error("upstream 503");
+      },
+      reproduce: async (e) => e,
+      detectors: false,
+    });
+    const v = out.verdicts.find((x) => x.field === "visual.accentColor");
+    expect(v?.verdict).toBe("abstain");
+    expect(v?.cause).toBe("corroboration-error");
+  });
+
+  it("records firstCause and cause separately when a prose field abstains twice for different reasons", async () => {
+    let call = 0;
+    const out = await verifyEntry(entryWithCritique(), fixtureImagePath(), {
+      now: () => "2026-08-08T00:00:00.000Z",
+      callVision: async () => {
+        // Initial ask: an explicit refusal -> model-abstained.
+        if (call++ === 0) {
+          return JSON.stringify({ critique: { verdict: "abstain", assertions: ["a"], reason: "cannot tell" } });
+        }
+        // Re-verify: the verdict key is dropped but assertions remain ->
+        // verdict-missing. (A prose field with NO assertions gates on the
+        // vacuity guard, so the two causes must differ in a way the prose
+        // branch can actually abstain on.)
+        return JSON.stringify({ critique: { assertions: ["a"] } });
+      },
+      reproduce: async (e) => e,
+      detectors: false,
+    });
+    const v = out.verdicts.find((x) => x.field === "critique");
+    expect(v?.firstCause).toBe("model-abstained");
+    expect(v?.cause).toBe("verdict-missing");
+    expect(v?.site).toBe("reverify");
+  });
+});
+
+// Task 5 fixtures: `entry()` plus the layout claim the vision prompt needs.
+function entryFixture(over: Partial<CorpusEntryT> = {}): CorpusEntryT {
+  // `layout` is a claim OBJECT for claimForField, not a string.
+  return entry({ layout: { form: "left navigation rail with grouped metrics" }, ...over });
+}
+
+function stampedEntryFixture(imagePath: string): CorpusEntryT {
+  return entry({
+    image: { visibility: "private", path: imagePath, width: 390, height: 844 },
+    layout: { form: "left navigation rail with grouped metrics" },
+    provenance: {
+      taggedBy: "auto",
+      verifyAttempts: { layout: { verifierVersion: VERIFIER_VERSION, verifiedAt: "2026-08-07" } },
+    },
+  });
+}
+
+describe("--only-ids selection", () => {
+  it("selects exactly the listed ids, in a corpus whose first-N-by-order set differs", () => {
+    // The fixture is built so an order-based selection CANNOT pass: the ids we
+    // ask for are the LAST two, and the first two are also image-bearing and
+    // unprocessed, so `selectPending(...).slice(0, 2)` would return them instead.
+    const entries = [
+      entryFixture({ id: "first" }), entryFixture({ id: "second" }),
+      entryFixture({ id: "third" }), entryFixture({ id: "fourth" }),
+    ];
+    expect(selectByIds(entries, ["third", "fourth"]).map((e) => e.id)).toEqual(["third", "fourth"]);
+    expect(selectPending(entries, VERIFIER_VERSION).slice(0, 2).map((e) => e.id)).toEqual(["first", "second"]);
+  });
+
+  it("throws naming every unknown id rather than skipping it", () => {
+    const entries = [entryFixture({ id: "first" })];
+    expect(() => selectByIds(entries, ["first", "nope", "alsoNope"]))
+      .toThrow(/unknown entry id\(s\): nope, alsoNope/);
+  });
+
+  it("throws when a listed entry has no image path", () => {
+    const entries = [entryFixture({ id: "first", image: undefined })];
+    expect(() => selectByIds(entries, ["first"])).toThrow(/no image path: first/);
+  });
+
+  it("preserves the order of the id list, not corpus order", () => {
+    const entries = [entryFixture({ id: "a" }), entryFixture({ id: "b" })];
+    expect(selectByIds(entries, ["b", "a"]).map((e) => e.id)).toEqual(["b", "a"]);
+  });
+});
+
+describe("verifyEntry — diagnose bypasses the per-field resume skip", () => {
+  it("re-queues a field already stamped at the current version", async () => {
+    const entry = entryFixture({ id: "e1" });
+    entry.provenance = {
+      taggedBy: "auto",
+      verifyAttempts: { layout: { verifierVersion: VERIFIER_VERSION, verifiedAt: "2026-08-07" } },
+    };
+    const asked: string[] = [];
+    await verifyEntry(entry, fixtureImagePath(), {
+      now: () => "2026-08-08T00:00:00.000Z",
+      callVision: async (prompt) => { asked.push(prompt); return "{}"; },
+      reproduce: async (e) => e,
+      detectors: false,
+      diagnose: true,
+    });
+    expect(asked.join("\n")).toContain("layout");
+  });
+
+  it("still skips that field without the flag", async () => {
+    const entry = entryFixture({ id: "e1" });
+    entry.provenance = {
+      taggedBy: "auto",
+      verifyAttempts: { layout: { verifierVersion: VERIFIER_VERSION, verifiedAt: "2026-08-07" } },
+    };
+    const asked: string[] = [];
+    await verifyEntry(entry, fixtureImagePath(), {
+      now: () => "2026-08-08T00:00:00.000Z",
+      callVision: async (prompt) => { asked.push(prompt); return "{}"; },
+      reproduce: async (e) => e,
+      detectors: false,
+    });
+    expect(asked.join("\n")).not.toContain("- layout:");
+  });
+});
+
+describe("--diagnose leaves the corpus byte-identical", () => {
+  it("writes nothing even though it re-processes stamped fields", async () => {
+    // Corpus isolation: a temp --corpus file, NEVER corpus/entries.json.
+    const dir = mkdtempSync(join(tmpdir(), "verify-diagnose-"));
+    const imgDir = mkdtempSync(join(tmpdir(), "verify-diagnose-img-"));
+    const imgPath = join(imgDir, "e1.png");
+    writeFileSync(imgPath, PNG_BYTES);
+    const tmp = join(dir, "corpus.json");
+    writeFileSync(tmp, JSON.stringify({ entries: [stampedEntryFixture(imgPath)] }, null, 2));
+    const before = readFileSync(tmp);
+    // `main` reads process.argv and is not exported, so drive the CLI through a
+    // child process on the SOURCE (tsx), never a stale dist/ build. One real
+    // vision call may fire for the re-queued layout field; the byte-identical
+    // assertion holds whatever the call returns because --diagnose implies
+    // dry-run.
+    const { execFileSync } = await import("node:child_process");
+    execFileSync(
+      process.execPath,
+      ["--import", "tsx", "src/scripts/verify-corpus.ts", "--diagnose", "--only-ids", "e1", "--corpus", tmp, "--detectors", "off"],
+      { stdio: "pipe" },
+    );
+    expect(readFileSync(tmp).equals(before)).toBe(true);
+  });
+});
+
+describe("buildRunReport — abstain cause breakdown", () => {
+  const report = () => buildRunReport({
+    entries: 1,
+    verdictsByEntry: {
+      e1: [
+        { field: "layout", verdict: "abstain", reason: "x", source: "vision", cause: "field-absent", site: "initial" },
+        { field: "mood", verdict: "abstain", reason: "x", source: "vision", cause: "model-abstained", site: "initial" },
+        { field: "critique", verdict: "abstain", reason: "x", source: "vision", cause: "model-abstained", site: "reverify", firstCause: "field-absent" },
+        { field: "visual.dominantColors", verdict: "pass", reason: "detector", source: "detector" },
+      ],
+    },
+  } as never, { dryRun: true, verifierVersion: "verifier-v1", sampleSize: 30 });
+
+  it("counts each cause once, by cause and not by firstCause", () => {
+    const text = report();
+    expect(text).toContain("Abstain causes — 3 total");
+    expect(text).toMatch(/model-abstained\s+2/);
+    expect(text).toMatch(/field-absent\s+1/);
+  });
+
+  it("sums to the reported abstain count", () => {
+    const text = report();
+    const total = Number(/Abstain causes — (\d+) total/.exec(text)![1]);
+    const counted = [...text.matchAll(/^ {2}\S+\s+(\d+)\b/gm)].reduce((a, m) => a + Number(m[1]), 0);
+    expect(counted).toBe(total);
+  });
+
+  it("breaks the causes down by call site", () => {
+    expect(report()).toMatch(/initial 2/);
+    expect(report()).toMatch(/reverify 1/);
+  });
+
+  it("reports prose first causes in their own line, outside the total", () => {
+    expect(report()).toContain("Prose first causes (not counted in the total above): field-absent 1");
+  });
+
+  it("prints nothing when there are no abstains", () => {
+    const text = buildRunReport({
+      entries: 1,
+      verdictsByEntry: { e1: [{ field: "layout", verdict: "pass", reason: "x", source: "vision" }] },
+    } as never, { dryRun: true, verifierVersion: "verifier-v1", sampleSize: 30 });
+    expect(text).not.toContain("Abstain causes");
   });
 });

@@ -653,6 +653,36 @@ export const CorpusEntry = z.object({
       verifierVersion: z.string().min(1),
       verifiedAt: z.string().min(1),
     }).passthrough()).optional(),
+    /**
+     * Data-quality findings — NOT trust records. A field that was EVALUATED and
+     * the evidence (a detector, or a corroborated model judgement) DISAGREED
+     * with the recorded claim: the claim is wrong, unproven, or stale, and must
+     * be fixed before it can be verified. `isVerified` never reads this map, so
+     * a finding can never serve a value.
+     *
+     * `.strict()` is deliberate — every key is forward-compatible by design:
+     * a newer verifier adds a key and an older build declines the row it does
+     * not understand, instead of silently serving a value the verifier never
+     * judged. This is the same reasoning as the shape check on `imageSha256` in
+     * `verification`: unknown keys here are schema drift, not a new tier.
+     *
+     * `dismissed` is a HUMAN stamp (the `--dismiss` CLI path): the finding is
+     * kept for the audit trail but hidden from the suspect queue and never
+     * re-offered — unless `retriageDataQuality` deletes it.
+     */
+    dataQuality: z.record(z.string(), z.object({
+      measured: z.unknown(),
+      recorded: z.unknown(),
+      source: z.string().min(1),
+      reason: z.string().min(1).optional(),
+      verifierVersion: z.string().min(1),
+      verifiedAt: z.string().min(1),
+      imageSha256: z.string().length(64).optional(),
+      dismissed: z.object({
+        at: z.string().min(1),
+        reason: z.string().min(1),
+      }).optional(),
+    }).strict()).optional(),
   }).optional(),
 })
 // qualityScore ↔ qualityTier coupling: cautionary entries score 1-2 (sinking in

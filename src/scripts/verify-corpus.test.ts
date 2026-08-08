@@ -6,6 +6,7 @@ import { tierForField, type VerifierTier } from "./verify-corpus.js";
 import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict } from "./verify-corpus.js";
 import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReproducedProse, VERIFIER_VERSION } from "./verify-corpus.js";
 import { buildRunReport, selectPending, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
+import { mergeDataQuality, retriageDataQuality, dismissDataQuality, renderSuspectReport } from "./verify-corpus.js";
 import { withTimeout, reproduceCritiqueModel } from "./verify-corpus.js";
 import { resolveConfiguredVisionProvider } from "./verify-corpus.js";
 import type { TaggerOutput } from "../tagger.js";
@@ -567,6 +568,117 @@ describe("three-way model verdicts", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("record-map exclusivity", () => {
+  it("a contradiction revokes trust and attempts for its field only", () => {
+    const e = entry();
+    mergeVerification(e, { layout: { method: "image-confirmed", verifiedAt: "x", verifierVersion: "v1" } });
+    mergeVerifyAttempts(e, { mood: { verifierVersion: "v1", verifiedAt: "x" } });
+    mergeDataQuality(e, { layout: { measured: null, recorded: "a", source: "layout", verifierVersion: "v1", verifiedAt: "x" } });
+    expect(e.provenance?.verification?.layout).toBeUndefined();
+    expect(e.provenance?.verifyAttempts?.mood).toBeDefined(); // untouched sibling
+    expect(e.provenance?.dataQuality?.layout?.source).toBe("layout");
+  });
+
+  it("a pass revokes dataQuality for its field", () => {
+    const e = entry();
+    mergeDataQuality(e, { layout: { measured: null, recorded: "a", source: "vision", verifierVersion: "v1", verifiedAt: "x" } });
+    mergeVerification(e, { layout: { method: "image-confirmed", verifiedAt: "x", verifierVersion: "v1" } });
+    expect(e.provenance?.dataQuality?.layout).toBeUndefined();
+  });
+
+  it("resume markers skip pass and contradicted", () => {
+    const markers = resumeMarkers(
+      [
+        { field: "layout", verdict: "pass", reason: "" },
+        { field: "mood", verdict: "contradicted", reason: "" },
+        { field: "critique", verdict: "abstain", reason: "" },
+      ],
+      "2026-08-07",
+      "verifier-v1",
+    );
+    expect(markers.layout).toBeUndefined();
+    expect(markers.mood).toBeUndefined();
+    expect(markers.critique).toBeDefined();
+  });
+});
+
+describe("triage actions", () => {
+  function entryWithFindings(): CorpusEntryT {
+    const e = entry();
+    mergeDataQuality(e, {
+      layout: { measured: null, recorded: "a", source: "vision", verifierVersion: "verifier-v1", verifiedAt: "x" },
+      mood: { measured: null, recorded: "b", source: "vision", verifierVersion: "verifier-v1", verifiedAt: "x" },
+    });
+    return e;
+  }
+
+  it("retriage deletes the named finding so the field is re-offered", () => {
+    const e = entryWithFindings();
+    retriageDataQuality(e, ["layout"]);
+    expect(e.provenance?.dataQuality?.layout).toBeUndefined();
+    expect(e.provenance?.dataQuality?.mood, "untargeted findings survive").toBeDefined();
+    expect(alreadyProcessedAtVersion(e, "layout", "verifier-v1"), "re-offered").toBe(false);
+  });
+
+  it("retriage with no field clears every finding on the entry", () => {
+    const e = entryWithFindings();
+    retriageDataQuality(e, undefined);
+    expect(Object.keys(e.provenance?.dataQuality ?? {})).toEqual([]);
+  });
+
+  it("dismiss KEEPS the record but stamps it, and the field stays processed", () => {
+    const e = entryWithFindings();
+    dismissDataQuality(e, "layout", "measurement artefact — antialiasing", "2026-08-07");
+    // Dismissing is NOT deleting: the audit trail is the point.
+    expect(e.provenance?.dataQuality?.layout).toBeDefined();
+    expect(e.provenance?.dataQuality?.layout?.dismissed?.reason).toContain("antialiasing");
+    expect(alreadyProcessedAtVersion(e, "layout", "verifier-v1"), "dismissed stays processed").toBe(true);
+  });
+
+  it("dismiss refuses a field with no finding, rather than inventing one", () => {
+    const e = entry();
+    expect(() => dismissDataQuality(e, "layout", "why", "2026-08-07")).toThrow(/no dataQuality finding/i);
+  });
+
+  it("the suspect report hides dismissed rows unless asked", () => {
+    const e = entryWithFindings();
+    dismissDataQuality(e, "layout", "artefact", "2026-08-07");
+    expect(renderSuspectReport([e], { includeDismissed: false })).not.toContain("layout");
+    expect(renderSuspectReport([e], { includeDismissed: true })).toContain("layout");
+  });
+});
+
+describe("dataQuality is processed at its version — queue + report", () => {
+  it("alreadyProcessedAtVersion treats a contradiction as processed", () => {
+    const e = entry();
+    mergeDataQuality(e, { layout: { measured: null, recorded: "a", source: "vision", verifierVersion: "verifier-v1", verifiedAt: "x" } });
+    expect(alreadyProcessedAtVersion(e, "layout", "verifier-v1")).toBe(true);
+    expect(alreadyProcessedAtVersion(e, "layout", "verifier-v2")).toBe(false);
+  });
+
+  it("buildRunReport counts the new verdicts and prints per-detector rates by SOURCE", () => {
+    const report = buildRunReport(
+      {
+        entries: 1,
+        verdictsByEntry: {
+          e1: [
+            { field: "visual.usesBorders", verdict: "contradicted", reason: "detector contradiction", source: "detector" },
+            { field: "visual.dominantColors", verdict: "pass", reason: "detector", source: "detector" },
+            { field: "mood", verdict: "abstain", reason: "not positively confirmed", source: "vision" },
+            { field: "critique", verdict: "contradicted", reason: "corroborated", source: "vision" },
+          ],
+        },
+      },
+      { dryRun: true, verifierVersion: "verifier-v1", sampleSize: 30 },
+    );
+    // A vision-source contradicted must NOT be credited to the detector lane.
+    expect(report).toContain("Detector visual.usesBorders: n=1 · pass 0 (0%) · contradicted 1 (100%) · abstain 0 (0%)");
+    expect(report).toContain("Detector visual.dominantColors: n=1 · pass 1 (100%) · contradicted 0 (0%) · abstain 0 (0%)");
+    expect(report).not.toContain("Detector mood");
+    expect(report).toContain("Verdicts — 1 pass, 2 contradicted, 1 abstain, 0 gated, 0 fail (image-level only)");
   });
 });
 

@@ -38,13 +38,19 @@ export type VerificationRecord = {
  * from recorded dimensions and reads no pixels, so it carries no hash.
  */
 export type DataQualityRecord = {
-  measured: null | string;
-  recorded: string | null;
+  measured: unknown;
+  recorded: unknown;
   source: string;
   reason?: string;
   verifierVersion: string;
   verifiedAt: string;
   imageSha256?: string;
+  /**
+   * A human dismissed this finding. The record is KEPT (the audit trail is the
+   * point) but `isVerified` never reads this map, so a dismissed record can
+   * never serve. Present only when a human ran --dismiss.
+   */
+  dismissed?: { at: string; reason: string };
 };
 
 export type FieldVerdict = {
@@ -345,24 +351,30 @@ export function decideFieldVerdict(
  */
 export function alreadyProcessedAtVersion(entry: CorpusEntryT, field: string, version: string): boolean {
   return entry.provenance?.verification?.[field]?.verifierVersion === version
-    || entry.provenance?.verifyAttempts?.[field]?.verifierVersion === version;
+    || entry.provenance?.verifyAttempts?.[field]?.verifierVersion === version
+    || entry.provenance?.dataQuality?.[field]?.verifierVersion === version;
 }
 
 /**
  * Write trust records into `provenance.verification`, never clobbering OTHER
- * fields' keys. A pass also REVOKES any stale `verifyAttempts` marker for the
- * same field, so the two maps stay mutually exclusive per field.
+ * fields' keys. A pass also REVOKES any stale `verifyAttempts` AND
+ * `dataQuality` records for the same field, so the three maps stay mutually
+ * exclusive per field — a re-pass means the contradiction is gone, and its
+ * finding (and any dismissal stamp on it) must not outlive the corrected claim.
  */
 export function mergeVerification(entry: CorpusEntryT, records: Record<string, VerificationRecord>): void {
   const provenance = entry.provenance ?? { taggedBy: "auto" as const };
   const verification = { ...(provenance.verification ?? {}) };
   const verifyAttempts = provenance.verifyAttempts ? { ...provenance.verifyAttempts } : undefined;
+  const dataQuality = provenance.dataQuality ? { ...provenance.dataQuality } : undefined;
   for (const [field, record] of Object.entries(records)) {
     verification[field] = record;
     if (verifyAttempts) delete verifyAttempts[field];
+    if (dataQuality) delete dataQuality[field];
   }
   provenance.verification = verification;
   if (verifyAttempts) provenance.verifyAttempts = verifyAttempts;
+  if (dataQuality) provenance.dataQuality = dataQuality;
   entry.provenance = provenance;
 }
 
@@ -783,14 +795,18 @@ export function selectPending(entries: readonly CorpusEntryT[], version: string)
     if (!e.image?.path) return false;
     const verification = e.provenance?.verification ?? {};
     const attempts = e.provenance?.verifyAttempts ?? {};
+    const dataQuality = e.provenance?.dataQuality ?? {};
     // Pending when ANY VERIFIABLE servable field is not yet PROCESSED at this
     // version — neither a trust record (a pass) NOR an attempt marker (a
-    // recorded fail/gate). Gated fields (responsiveBehavior) never count — they
-    // can never carry a record, so they must not keep a finished entry queued.
+    // recorded fail/gate) NOR a data-quality finding (a recorded
+    // contradiction/dismissal). Gated fields (responsiveBehavior) never count —
+    // they can never carry a record, so they must not keep a finished entry
+    // queued.
     return Object.keys(TIER_BY_FIELD)
       .filter((field) => tierForField(field) !== "gated")
       .some((field) => verification[field]?.verifierVersion !== version
-        && attempts[field]?.verifierVersion !== version);
+        && attempts[field]?.verifierVersion !== version
+        && dataQuality[field]?.verifierVersion !== version);
   });
 }
 
@@ -833,15 +849,33 @@ export function buildRunReport(
   lines.push(`Entries scanned: ${result.entries}`);
   const counts: Record<FieldVerdict["verdict"], number> =
     { pass: 0, fail: 0, contradicted: 0, abstain: 0, gate: 0 };
+  // Per-detector rates, keyed on the verdict's declared SOURCE (see FieldVerdict)
+  // so a vision-source contradicted on a registry key is never credited to the
+  // detector lane.
+  const detectorStats = new Map<string, { pass: number; contradicted: number; abstain: number }>();
   let zeroAssertion = 0;
   for (const verdicts of Object.values(result.verdictsByEntry)) {
     for (const v of verdicts) {
       counts[v.verdict] += 1;
       if (v.verdict === "gate" && /vacuous|no checkable assertions/i.test(v.reason)) zeroAssertion += 1;
+      if (v.source === "detector") {
+        const stats = detectorStats.get(v.field) ?? { pass: 0, contradicted: 0, abstain: 0 };
+        stats[v.verdict as "pass" | "contradicted" | "abstain"] += 1;
+        detectorStats.set(v.field, stats);
+      }
     }
   }
-  lines.push(`Verdicts — ${counts.pass} pass, ${counts.fail} fail, ${counts.gate} gated`);
+  lines.push(`Verdicts — ${counts.pass} pass, ${counts.contradicted} contradicted, ${counts.abstain} abstain, ${counts.gate} gated, ${counts.fail} fail (image-level only)`);
   lines.push(`Zero-assertion prose fields: ${zeroAssertion} (report per prose field before trusting a run)`);
+  lines.push("");
+  for (const [field, s] of detectorStats) {
+    const total = s.pass + s.contradicted + s.abstain;
+    lines.push(
+      `Detector ${field}: n=${total} · pass ${s.pass} (${Math.round((100 * s.pass) / total)}%)`
+      + ` · contradicted ${s.contradicted} (${Math.round((100 * s.contradicted) / total)}%)`
+      + ` · abstain ${s.abstain} (${Math.round((100 * s.abstain) / total)}%)`,
+    );
+  }
   lines.push("");
   for (const [id, verdicts] of Object.entries(result.verdictsByEntry)) {
     lines.push(`## ${id}`);
@@ -863,7 +897,11 @@ export type VerifyAttempt = { verifierVersion: string; verifiedAt: string };
  * converges instead of re-spending the full vision cost on every run. A pass
  * earns its own image-confirmed/provable record instead; a gated-tier field
  * (responsiveBehavior — and any non-servable stray, which `tierForField` maps to
- * "gated") is never persisted. These go into `provenance.verifyAttempts`, NOT
+ * "gated") is never persisted. A CONTRADICTED field gets no marker either — its
+ * processing is carried by the `dataQuality` record `mergeDataQuality` writes,
+ * which `selectPending`/`alreadyProcessedAtVersion` already treat as processed
+ * (a marker would be dead weight; a flag-off "fail" rewrite still marks, so
+ * those fields stay requeued). These go into `provenance.verifyAttempts`, NOT
  * `provenance.verification`: `isVerified` never reads verifyAttempts, so a failed
  * field is never served, and the doctor's `verification-malformed` detector
  * never sees a non-trust method.
@@ -875,7 +913,7 @@ export function resumeMarkers(
 ): Record<string, VerifyAttempt> {
   const out: Record<string, VerifyAttempt> = {};
   for (const v of verdicts) {
-    if (v.verdict === "pass") continue;
+    if (v.verdict === "pass" || v.verdict === "contradicted") continue;
     if (tierForField(v.field) === "gated") continue;
     out[v.field] = { verifierVersion: version, verifiedAt: now };
   }
@@ -894,13 +932,101 @@ export function mergeVerifyAttempts(entry: CorpusEntryT, attempts: Record<string
   const provenance = entry.provenance ?? { taggedBy: "auto" as const };
   const verifyAttempts = { ...(provenance.verifyAttempts ?? {}) };
   const verification = provenance.verification ? { ...provenance.verification } : undefined;
+  const dataQuality = provenance.dataQuality ? { ...provenance.dataQuality } : undefined;
   for (const [field, attempt] of Object.entries(attempts)) {
     verifyAttempts[field] = attempt;
     if (verification) delete verification[field];
+    if (dataQuality) delete dataQuality[field];
   }
   provenance.verifyAttempts = verifyAttempts;
   if (verification) provenance.verification = verification;
+  if (dataQuality) provenance.dataQuality = dataQuality;
   entry.provenance = provenance;
+}
+
+/**
+ * Write data-quality findings into `provenance.dataQuality`, never clobbering
+ * OTHER fields' keys. A contradiction also REVOKES any stale `verification`
+ * trust record AND `verifyAttempts` marker for the same field, so the three
+ * maps stay mutually exclusive per field — a contradiction is the OPPOSITE of
+ * a pass and must not coexist with one, and it is a PROCESSED outcome, so it
+ * must not coexist with a retry marker either.
+ */
+export function mergeDataQuality(entry: CorpusEntryT, records: Record<string, DataQualityRecord>): void {
+  const provenance = entry.provenance ?? { taggedBy: "auto" as const };
+  const dataQuality = { ...(provenance.dataQuality ?? {}) };
+  const verification = provenance.verification ? { ...provenance.verification } : undefined;
+  const verifyAttempts = provenance.verifyAttempts ? { ...provenance.verifyAttempts } : undefined;
+  for (const [field, record] of Object.entries(records)) {
+    dataQuality[field] = record;
+    if (verification) delete verification[field];
+    if (verifyAttempts) delete verifyAttempts[field];
+  }
+  provenance.dataQuality = dataQuality;
+  if (verification) provenance.verification = verification;
+  if (verifyAttempts) provenance.verifyAttempts = verifyAttempts;
+  entry.provenance = provenance;
+}
+
+/**
+ * Human override: re-offer a field for verification by deleting its finding
+ * (and its dismissal stamp, if any). `fields` limits the re-offer to named
+ * fields; undefined clears EVERY finding on the entry. The entry is not
+ * persisted here — main() persists through the snapshot-backed path.
+ */
+export function retriageDataQuality(entry: CorpusEntryT, fields: readonly string[] | undefined): void {
+  const dataQuality = entry.provenance?.dataQuality;
+  if (!dataQuality) return;
+  const next = { ...dataQuality };
+  if (fields) {
+    for (const field of fields) delete next[field];
+  } else {
+    for (const field of Object.keys(next)) delete next[field];
+  }
+  entry.provenance = { ...(entry.provenance ?? { taggedBy: "auto" as const }), dataQuality: next };
+}
+
+/**
+ * Human override: dismiss a finding WITHOUT deleting it. The record is kept
+ * (the audit trail is the point) and stamped with who-ish/why — a dismissal is
+ * not an erasure. The field stays processed, so it is not re-offered on the
+ * next run unless retriaged.
+ */
+export function dismissDataQuality(entry: CorpusEntryT, field: string, reason: string, now: string): void {
+  const record = entry.provenance?.dataQuality?.[field];
+  if (!record) throw new Error(`no dataQuality finding for "${field}" on ${entry.id} — nothing to dismiss`);
+  entry.provenance = {
+    ...(entry.provenance ?? { taggedBy: "auto" as const }),
+    dataQuality: { ...entry.provenance?.dataQuality, [field]: { ...record, dismissed: { at: now, reason } } },
+  };
+}
+
+/**
+ * Renders the queue of entries with live data-quality findings. Sorted by
+ * finding count descending (highest signal first). Dismissed findings are
+ * hidden unless `includeDismissed` is set — a curator triaging the queue does
+ * not want yesterday's acknowledged artefacts cluttering it.
+ */
+export function renderSuspectReport(
+  entries: readonly CorpusEntryT[],
+  opts: { includeDismissed?: boolean } = {},
+): string {
+  const rows: { id: string; image: string | null; fields: string[] }[] = [];
+  for (const e of entries) {
+    const dq = e.provenance?.dataQuality;
+    if (!dq) continue;
+    const fields = Object.keys(dq).filter((f) => opts.includeDismissed || !dq[f].dismissed);
+    if (fields.length > 0) rows.push({ id: e.id, image: e.image?.path ?? null, fields });
+  }
+  rows.sort((a, b) => b.fields.length - a.fields.length);
+  if (rows.length === 0) return "No live data-quality findings.";
+  const width = Math.max(...rows.map((r) => r.fields.length));
+  const lines: string[] = ["Findings:"];
+  for (const r of rows) {
+    const marks = Array.from({ length: width }, (_, i) => (r.fields[i] ? "x" : "·")).join("");
+    lines.push(`  ${r.id} ${marks}  ${r.fields.join(", ")}  [${r.image}]`);
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -972,6 +1098,10 @@ async function main(): Promise<void> {
       "entry-timeout": { type: "string" },
       "sampling": { type: "string" },
       "detectors": { type: "string" },
+      "retriage": { type: "string" },
+      "dismiss": { type: "string" },
+      "reason": { type: "string" },
+      "include-dismissed": { type: "boolean", default: false },
     },
   });
   const dryRun = values["dry-run"] === true;
@@ -988,6 +1118,41 @@ async function main(): Promise<void> {
   const rawCorpus = corpusPath ? JSON.parse(readFileSync(corpusPath, "utf8")) : null;
   const entries: CorpusEntryT[] = rawCorpus ? (rawCorpus.entries as CorpusEntryT[]) : loadCorpus();
   const pending = selectPending(entries, VERIFIER_VERSION).slice(0, Number.isFinite(limit) && limit > 0 ? limit : undefined);
+
+  // --retriage / --dismiss: ENTRY-EDITING actions that run and exit before any
+  // verification — they change what the NEXT run will do, so the current run
+  // must not also verify. Both persist through the same snapshot-backed path
+  // as every other provenance write (or the --corpus file, mirroring the verify
+  // persistence below) — never a raw write to corpus/entries.json.
+  const retriageSpec = values.retriage;
+  const dismissSpec = values.dismiss;
+  if (retriageSpec || dismissSpec) {
+    const now = new Date().toISOString().slice(0, 10);
+    const updated = entries.map((e) => {
+      if (retriageSpec) {
+        const [id, field] = retriageSpec.split(":");
+        if (e.id !== id) return e;
+        retriageDataQuality(e, field ? [field] : undefined);
+      }
+      if (dismissSpec) {
+        const [id, field] = dismissSpec.split(":");
+        if (e.id !== id) return e;
+        const reason = (values.reason ?? "").trim();
+        if (!reason) throw new Error(`--dismiss requires --reason (got nothing)`);
+        if (!field) throw new Error(`--dismiss must name a field: <entryId>:<field>`);
+        dismissDataQuality(e, field, reason, now);
+      }
+      return e;
+    });
+    if (corpusPath) {
+      writeFileSync(resolve(corpusPath), JSON.stringify({ ...rawCorpus, entries: updated }, null, 2));
+      console.log(`[verify] wrote ${updated.length} entries to ${corpusPath}`);
+    } else {
+      persistEntries(writableLoadedCorpus(updated), updated);
+      console.log(`[verify] persisted triage (${retriageSpec ? `retriage ${retriageSpec}` : ""}${retriageSpec && dismissSpec ? " + " : ""}${dismissSpec ? `dismiss ${dismissSpec}` : ""})`);
+    }
+    return;
+  }
 
   // --estimate: project the model cost and exit WITHOUT calling any model.
   if (estimate) {
@@ -1077,7 +1242,7 @@ async function main(): Promise<void> {
       // verdicts, because nothing here bounded a single hung HTTP call. The
       // rejection lands in the per-entry catch below, so the entry records a
       // failure and the run moves on rather than hanging forever.
-      const { records, verdicts } = await withTimeout(
+      const { records, verdicts, dataQuality } = await withTimeout(
         verifyEntry(target, imagePath, {
           now: () => now,
           callVision: async (prompt, image) =>
@@ -1099,12 +1264,19 @@ async function main(): Promise<void> {
         // pass revokes a stale marker and a fail revokes a stale record, so the
         // two maps stay mutually exclusive per field across version bumps.
         //
+        // Corroborated contradictions earn `dataQuality` findings (a THIRD map)
+        // instead of resume markers — they are processed outcomes with a
+        // fix-me-please payload, not retry queues. The three maps are mutually
+        // exclusive per field: each merge revokes the other two's records for
+        // the fields it writes, so the last-evaluated state wins.
+        //
         // Merged into `target` (the clone verifyEntry actually wrote to) so its
         // value replacements travel with the records that vouch for them. Reached
         // only on the success path: a timed-out or throwing entry never registers,
         // so its partial work cannot reach persistence.
         mergeVerification(target, records);
         mergeVerifyAttempts(target, resumeMarkers(verdicts, now, VERIFIER_VERSION));
+        mergeDataQuality(target, dataQuality);
       }
       results.verdictsByEntry[entry.id] = verdicts;
       verifiedById.set(entry.id, target);

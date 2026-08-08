@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from tests.fixtures import blank, with_stroked_rect
 from proposers import PROPOSERS, propose_classical
 
@@ -32,7 +34,6 @@ def test_registry_exposes_the_classical_proposer() -> None:
     assert PROPOSERS["classical"] is propose_classical
 
 
-import pytest
 
 
 @pytest.mark.slow
@@ -138,3 +139,30 @@ def test_deki_returns_contract_boxes() -> None:
     for x0, y0, x1, y1 in boxes:
         assert all(isinstance(v, int) for v in (x0, y0, x1, y1))
         assert 0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h
+
+
+def test_overlapping_text_boxes_are_not_double_counted() -> None:
+    # Two OCR detections of the SAME word overlap. Summing intersection areas
+    # counts the shared pixels twice, so coverage can exceed the box's real
+    # covered fraction and drop a container that is mostly not text. The bias is
+    # silent — no error, just a wrongly discarded box, and 3a already
+    # under-detects.
+    from proposers import _drop_text_overlaps
+    box = (0, 0, 100, 100)          # 10_000 px
+    # Each covers 40% of the box; together they cover 50% (they share 30%).
+    a = (0, 0, 100, 40)
+    b = (0, 10, 100, 50)
+    kept = _drop_text_overlaps([box], [a, b], threshold=0.6)
+    assert kept == [box], "union coverage is 50% < 60%, so the box must survive"
+
+
+def test_text_coverage_uses_union_not_sum() -> None:
+    from proposers import _text_covered_area
+    # Same two rects: union is 100x50 = 5000, naive sum would be 4000+4000=8000.
+    assert _text_covered_area((0, 0, 100, 100), [(0, 0, 100, 40), (0, 10, 100, 50)]) == 5000
+
+
+def test_a_box_genuinely_full_of_text_is_still_dropped() -> None:
+    from proposers import _drop_text_overlaps
+    word = (10, 10, 110, 30)
+    assert _drop_text_overlaps([word], [(8, 8, 112, 32)], threshold=0.9) == []

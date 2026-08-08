@@ -91,3 +91,63 @@ def test_scores_row_keeps_rung_first_and_run_id_last() -> None:
     assert row[0] == "classical"  # Task 7's `cut -f1 | uniq -c` grouping depends on this
     assert row[-1] == "run-1"
     assert len(row) == 12
+
+
+def test_run_rung_continues_past_a_failing_entry(tmp_path) -> None:
+    # A single image/proposer failure must not abort the run: the failed entry
+    # is reported and excluded, the rest are measured, and no partial row for
+    # the failed entry reaches the outputs.
+    from pathlib import Path
+
+    import numpy as np
+    from PIL import Image
+
+    from run_probe import run_rung
+
+    img_a = tmp_path / "a.png"
+    img_b = tmp_path / "b.png"
+    Image.fromarray(np.full((100, 100), 240, dtype=np.uint8)).save(img_a)
+    Image.fromarray(np.full((100, 100), 240, dtype=np.uint8)).save(img_b)
+    resolved = {"a": (img_a, "aa"), "b": (img_b, "bb")}
+
+    def flaky(_gray: np.ndarray) -> list:
+        raise RuntimeError("ocr boom")
+
+    def good(_gray: np.ndarray) -> list:
+        return [(10, 10, 60, 60)]
+
+    metrics = tmp_path / "m.jsonl"
+    scores = tmp_path / "s.tsv"
+    with metrics.open("w") as mo, scores.open("w") as so:
+        s = run_rung(flaky, ["a\taa\tvisual.usesBorders"], resolved, "r1", "flaky", mo, so)
+        assert [e for e, _ in s.failed] == ["a"]
+        assert s.scores == []
+
+        s2 = run_rung(
+            good,
+            ["a\taa\tvisual.usesBorders", "b\tbb\tvisual.usesShadows"],
+            resolved, "r1", "good", mo, so,
+        )
+        assert [x[0] for x in s2.scores] == ["a", "b"]
+        assert s2.failed == []
+
+    assert metrics.read_text().count("\n") == 2  # one box per good entry, none for the failure
+    assert scores.read_text().count("\n") == 2
+
+
+def test_run_ids_from_two_runs_in_the_same_second_differ() -> None:
+    # runId is the dedup key for append-mode outputs. At second resolution two
+    # runs in the same second share an id and the committed data cannot be
+    # separated by run.
+    from run_probe import new_run_id
+    assert new_run_id() != new_run_id()
+
+
+def test_metrics_row_pins_the_full_schema_not_a_subset() -> None:
+    # The committed metrics accumulated 14/15/16-key rows across runs and no test
+    # caught it, because the shape test asserted a SUBSET of keys.
+    import json as _json
+    from rubric import BoxMetrics
+    from run_probe import METRICS_ROW_KEYS, format_metrics_row
+    row = _json.loads(format_metrics_row("r", "e", "sha", "f", "m", BoxMetrics(box=(0, 0, 1, 1))))
+    assert set(row) == set(METRICS_ROW_KEYS)

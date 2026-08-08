@@ -46,6 +46,33 @@ failed 46/46, with 79.5% of edges having no qualifying gradient within 3px.
 Florence-2 finds **page regions** (median box = 51% of the screen). Moondream
 finds **one box per image**.
 
+## Post-review verification (2026-08-08)
+
+Three claims in this document were re-tested after review, rather than argued:
+
+**numpy pin.** `requirements.txt` pinned `numpy==2.1.3`, but the venv that
+produced every committed number has `1.26.4` — `ultralytics` (rungs 3b/3c)
+requires `numpy<2.0.0` on darwin, so installing it downgraded numpy mid-session.
+Rungs 1/2/3a were therefore measured under 2.1.3 and 3b/3c under 1.26.4. Rung 1
+re-run under 1.26.4 reproduces its verdict **exactly** (23.9% global; per-field
+0.167/0.200/0.250/0.333; failing checks 3/32/0/19). Pin corrected to 1.26.4 — a
+wrong pin is worse than a missing one, because a fresh install silently gets a
+different major version.
+
+**Text-overlap double-count.** `_drop_text_overlaps` summed per-rectangle
+intersection areas without unioning, so overlapping OCR detections could inflate
+coverage and wrongly discard a container — a silent downward bias on a proposer
+that already under-detects. Fixed to exact union via coordinate compression.
+Rung 3a re-run: **byte-identical box set** (408 boxes, zero difference either
+direction) and an unchanged verdict. The defect was real; on this corpus no two
+detections overlapped enough to fire it. Recorded because "we fixed a bias" would
+otherwise imply the numbers moved, and they did not.
+
+**Per-image failures.** The runner now continues past a failing entry and reports
+it, instead of aborting with partially-appended outputs and no verdict. Two real
+crashes during rung 2 (Moondream's CDN failure and the MPS `torch.cat` mismatch)
+did exactly that.
+
 ## Probe set
 
 46 images, the full set in `eval/verdicts/labels.jsonl` carrying a label for one

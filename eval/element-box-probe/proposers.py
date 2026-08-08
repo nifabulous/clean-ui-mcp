@@ -166,25 +166,54 @@ MIN_SOLIDITY = 0.70         # a card fills its bbox; a ragged blob does not
 TEXT_OVERLAP_DROP = 0.90    # UIED's threshold
 
 
+def _text_covered_area(box: Box, text_boxes: list[Box]) -> int:
+    """Area of `box` covered by the UNION of text_boxes.
+
+    Summing per-rect intersections double-counts wherever two OCR detections
+    overlap — which they routinely do on the same word — so coverage can exceed
+    the truly-covered fraction and drop a container that is mostly not text.
+    The bias is silent: no error, just a wrongly discarded box, on a proposer
+    that already under-detects.
+
+    Exact via coordinate compression: the clipped rectangles induce a grid, and
+    a cell is counted once no matter how many rectangles cover it. Text boxes
+    per container are few, so the grid stays small.
+    """
+    bx0, by0, bx1, by1 = box
+    clipped = []
+    for tx0, ty0, tx1, ty1 in text_boxes:
+        cx0, cy0 = max(bx0, tx0), max(by0, ty0)
+        cx1, cy1 = min(bx1, tx1), min(by1, ty1)
+        if cx1 > cx0 and cy1 > cy0:
+            clipped.append((cx0, cy0, cx1, cy1))
+    if not clipped:
+        return 0
+    xs = sorted({c for r in clipped for c in (r[0], r[2])})
+    ys = sorted({c for r in clipped for c in (r[1], r[3])})
+    total = 0
+    for i in range(len(xs) - 1):
+        for j in range(len(ys) - 1):
+            cx0, cx1, cy0, cy1 = xs[i], xs[i + 1], ys[j], ys[j + 1]
+            if any(r[0] <= cx0 and r[2] >= cx1 and r[1] <= cy0 and r[3] >= cy1 for r in clipped):
+                total += (cx1 - cx0) * (cy1 - cy0)
+    return total
+
+
 def _drop_text_overlaps(
     boxes: list[Box], text_boxes: list[Box], threshold: float = TEXT_OVERLAP_DROP,
 ) -> list[Box]:
     """Discard a box whose OWN area is >= threshold covered by text.
 
-    Intersection is normalised by the BOX's area, not the text's: a card
-    containing a label keeps its box (the label covers little of the card),
-    while a box drawn around the label itself is dropped.
+    Coverage is normalised by the BOX's area, not the text's: a card containing
+    a label keeps its box (the label covers little of the card), while a box
+    drawn around the label itself is dropped.
     """
     kept: list[Box] = []
-    for bx0, by0, bx1, by1 in boxes:
+    for box in boxes:
+        bx0, by0, bx1, by1 = box
         area = float(max(1, (bx1 - bx0) * (by1 - by0)))
-        covered = 0.0
-        for tx0, ty0, tx1, ty1 in text_boxes:
-            ix = max(0, min(bx1, tx1) - max(bx0, tx0))
-            iy = max(0, min(by1, ty1) - max(by0, ty0))
-            covered += ix * iy
-        if covered / area < threshold:
-            kept.append((bx0, by0, bx1, by1))
+        if _text_covered_area(box, text_boxes) / area < threshold:
+            kept.append(box)
     return kept
 
 
@@ -196,13 +225,12 @@ def _ocr_reader():
 
 def detect_text_boxes(gray: np.ndarray) -> list[Box]:
     """Text bounding boxes via local OCR. UIED uses Google OCR over the network;
-    the detector lane must stay offline and independent, so this is local."""
-    try:
-        results = _ocr_reader().detect(np.stack([gray] * 3, axis=-1))
-    except Exception:
-        # An OCR failure must not silently disable text suppression — that would
-        # make rung 3a score as rung 1 while claiming to be different.
-        raise
+    the detector lane must stay offline and independent, so this is local.
+
+    An OCR failure propagates to the runner's per-image catch (run_probe.py) — it
+    must NOT silently disable text suppression, which would make rung 3a score as
+    rung 1 while claiming to be different."""
+    results = _ocr_reader().detect(np.stack([gray] * 3, axis=-1))
     boxes: list[Box] = []
     horizontal = results[0][0] if results and results[0] else []
     for item in horizontal:

@@ -13,12 +13,13 @@ import json
 from dataclasses import asdict, dataclass, field as dc_field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TextIO
 
 import numpy as np
 from PIL import Image, ImageDraw
 
 from build_entries import ELEMENT_FIELDS
-from proposers import PROPOSERS
+from proposers import PROPOSERS, Proposer
 from rubric import BoxMetrics, ImageScore, score_image
 
 HERE = Path(__file__).resolve().parent
@@ -75,6 +76,23 @@ def rung_verdict(scores: list[tuple[str, str, ImageScore]]) -> RungVerdict:
     return RungVerdict(passed, global_fraction, by_field, failing_checks, missing_fields)
 
 
+def new_run_id() -> str:
+    """Microsecond resolution: at second resolution two runs in the same second
+    share an id, and runId is the key that separates appended runs."""
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+#: The pinned metrics.jsonl schema. A test asserts a row's keys equal this set
+#: exactly — the committed data accumulated 14/15/16-key rows across runs and a
+#: subset assertion did not catch it.
+METRICS_ROW_KEYS: tuple[str, ...] = (
+    "runId", "entryId", "imageSha256", "field", "method",
+    "box", "edge_offsets", "edge_offsets_strongest", "edge_magnitudes",
+    "edges_aligned", "outside_clearances", "max_clearance", "area_ratio",
+    "boundary_edges", "all_edges_boundary", "interior_edge_density",
+)
+
+
 def format_metrics_row(run_id: str, entry_id: str, sha: str, field_name: str,
                        method: str, m: BoxMetrics) -> str:
     """One metrics.jsonl row. The schema is pinned here so re-judgment parses
@@ -107,6 +125,62 @@ def render_overlay(gray: np.ndarray, boxes: list, out_path: Path) -> None:
     rgb.save(out_path)
 
 
+@dataclass
+class RunSummary:
+    scores: list[tuple[str, str, ImageScore]] = dc_field(default_factory=list)
+    missing: list[str] = dc_field(default_factory=list)
+    failed: list[tuple[str, str]] = dc_field(default_factory=list)
+
+
+def run_rung(
+    proposer: Proposer,
+    entry_lines: list[str],
+    resolved: dict[str, tuple[Path, str]],
+    run_id: str,
+    method: str,
+    metrics_out: TextIO,
+    scores_out: TextIO,
+    overlays: bool = False,
+) -> RunSummary:
+    """Score every entry, continuing past a per-image failure.
+
+    A single OCR hiccup, corrupt image or model crash must not abort the run and
+    leave a half-appended metrics file with no verdict — the verifier's per-entry
+    pattern. Failures are collected, printed with their ids, and the measured
+    rows stay honest: they never include the failed entry.
+    """
+    summary = RunSummary()
+    for line in entry_lines:
+        entry_id, sha, field_name = line.split("\t")
+        if entry_id not in resolved:
+            summary.missing.append(entry_id)
+            continue
+        path, _ = resolved[entry_id]
+        if not path.exists():
+            summary.missing.append(entry_id)
+            continue
+        try:
+            gray = load_grey(path)
+            boxes = proposer(gray)
+            score, box_metrics = score_image(gray, boxes)
+        except Exception as err:
+            summary.failed.append((entry_id, str(err)))
+            continue
+        summary.scores.append((entry_id, field_name, score))
+        if overlays:
+            overlay_path = HERE / "out" / f"{entry_id}-{method}.png"
+            overlay_path.parent.mkdir(exist_ok=True)
+            render_overlay(gray, boxes, overlay_path)
+        for m in box_metrics:
+            metrics_out.write(
+                format_metrics_row(run_id, entry_id, sha, field_name, method, m) + "\n",
+            )
+        scores_out.write(
+            format_scores_row(run_id, method, entry_id, field_name, score) + "\n",
+        )
+    return summary
+
+
 def resolve_image_paths(labels_path: Path) -> dict[str, tuple[Path, str]]:
     """entryId -> (imagePath, imageSha256). Paths are resolved, never committed."""
     out: dict[str, tuple[Path, str]] = {}
@@ -135,13 +209,12 @@ def main() -> int:
     args = parser.parse_args()
 
     proposer = PROPOSERS[args.rung]
-    run_id = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    run_id = new_run_id()
     resolved = resolve_image_paths(REPO_ROOT / "eval" / "verdicts" / "labels.jsonl")
 
     scores: list[tuple[str, str, ImageScore]] = []
     metrics_path = HERE / "metrics.jsonl"
     scores_path = HERE / "scores.tsv"
-    missing: list[str] = []
 
     entry_lines = [l for l in (HERE / "entries.txt").read_text().splitlines() if l.strip()]
     total_available = len(entry_lines)
@@ -149,38 +222,23 @@ def main() -> int:
         entry_lines = entry_lines[:args.limit]
 
     with metrics_path.open("a") as metrics_out, scores_path.open("a") as scores_out:
-        for line in entry_lines:
-            entry_id, sha, field_name = line.split("\t")
-            if entry_id not in resolved:
-                missing.append(entry_id)
-                continue
-            path, _ = resolved[entry_id]
-            if not path.exists():
-                missing.append(entry_id)
-                continue
-            gray = load_grey(path)
-            boxes = proposer(gray)
-            score, box_metrics = score_image(gray, boxes)
-            scores.append((entry_id, field_name, score))
-            if args.overlays:
-                overlay_path = HERE / "out" / f"{entry_id}-{args.rung}.png"
-                overlay_path.parent.mkdir(exist_ok=True)
-                render_overlay(gray, boxes, overlay_path)
-            for m in box_metrics:
-                metrics_out.write(
-                    format_metrics_row(run_id, entry_id, sha, field_name, args.rung, m) + "\n",
-                )
-            scores_out.write(
-                format_scores_row(run_id, args.rung, entry_id, field_name, score) + "\n",
-            )
+        summary = run_rung(
+            proposer, entry_lines, resolved, run_id, args.rung,
+            metrics_out, scores_out, overlays=args.overlays,
+        )
 
-    verdict = rung_verdict(scores)
+    verdict = rung_verdict(summary.scores)
     # A silently shrunk probe set would read as a cleaner result than it is.
     if len(entry_lines) < total_available:
         print(f"BOUNDED RUN: {len(entry_lines)} of {total_available} entries "
               f"(--limit {args.limit}). Not a full-probe-set result.")
-    if missing:
-        print(f"MISSING {len(missing)} images (excluded from the denominator): {', '.join(missing)}")
+    if summary.missing:
+        print(f"MISSING {len(summary.missing)} images (excluded from the denominator): {', '.join(summary.missing)}")
+    for entry_id, err in summary.failed:
+        print(f"FAILED {entry_id}: {err}")
+    if summary.failed:
+        print(f"{len(summary.failed)} entries failed (excluded from the denominator): "
+              f"{', '.join(e for e, _ in summary.failed)}")
     print(json.dumps(asdict(verdict), indent=2))
     return 0 if verdict.passed else 1
 

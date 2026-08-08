@@ -178,27 +178,45 @@ Method: each detector run against its own labels, recording `measured`,
 `confidence` and the `reason` that produced the verdict. Read-only; no corpus
 writes. (Harness was throwaway — the numbers below are the artifact.)
 
-### Class A — real signal, mis-calibrated threshold and band
+### Class A — CORRECTED: the metric has no discriminative power
 
-`visual.usesBorders`, `visual.usesShadows`. **12/12 and 9/10 abstained for one
-reason: the metric landed inside the confidence band.** Never a wrong answer —
-no answer.
+> **This section replaces an earlier, wrong analysis (same day).** The first pass
+> grouped samples by LABEL and reported that `usesBorders`/`usesShadows` had real
+> signal needing only a retune (11/12 and 9/10 achievable). That was an artifact:
+> the physical class is `recorded` COMBINED with label — a `confirmed` on
+> `recorded: false` means the feature is **absent**, and four such rows had been
+> counted as "present". Regrouped correctly, the conclusion inverts.
 
-| field | metric | class present | class absent | shipped threshold | best on this sample |
+`visual.usesBorders`, `visual.usesShadows`. **12/12 and 9/10 abstained** because
+the metric landed inside the confidence band — that part stands. But the band is
+not what is wrong: regrouped by physical class, the metrics barely separate the
+classes at all.
+
+| field | metric | PRESENT | ABSENT | best threshold | majority baseline |
 |---|---|---|---|---|---|
-| usesBorders | `thinRatio` | 0.307–0.611 | 0.193–0.326 | 0.45 | **0.20 → 11/12** |
-| usesShadows | `rampRatio` | 0.148–0.642 | 0.110–0.201 | 0.35 | **0.21 → 9/10** |
+| usesBorders | `thinRatio` | 0.307–0.525 (n=7) | 0.193–**0.611** (n=5) | 8/12 = **67%** | 7/12 = 58% |
+| usesShadows | `rampRatio` | 0.110–0.402 (n=4) | 0.145–**0.642** (n=6) | 6/10 = **60%** | 6/10 = 60% |
 
-The thresholds were set from synthetic extremes (a stroked synthetic card scores
-`thinRatio` 0.986; a real bordered screenshot scores 0.31–0.61, because a real UI's
-edge population is dominated by text, not by card strokes). With the threshold
-that high, `boundaryConfidence` maps every real image to 0.27–0.65, and the bands
-(`[0.25, 0.75]` and `[0.30, 0.70]`) swallow that entire range.
+In both fields the **highest metric value in the whole sample belongs to the
+ABSENT class** — the metric is anti-correlated at the top end. `usesShadows`
+scores exactly its majority-class baseline: the measurement adds nothing over
+always answering "absent".
 
-So these two are genuinely retunable. **But do not retune on this sample:** there
-are only 2 and 6 negatives, the classes overlap slightly at the boundary, and a
-threshold fitted to 2 negatives is overfitting, not calibration. They need more
-`contradicted` labels first.
+Why the metrics do not transfer: both are whole-image edge-population ratios. On
+a 120x90 synthetic canvas containing one card, `thinRatio` really is "what
+fraction of edges are the card's stroke". On a 1200-1920px screenshot the edge
+population is dominated by **text**, and text strokes are thin edges — so
+`thinRatio` measures typographic density, which is uncorrelated with whether
+cards have borders. `rampRatio` has the same problem with antialiasing and
+imagery.
+
+**Consequence for the follow-up plan: more labels will not rescue these two.**
+The proposed next step ("~10 more contradicted labels each, then retune") was
+based on the wrong analysis and would have been wasted labelling effort. A
+threshold cannot separate distributions that overlap this thoroughly; these need
+a different measurement (border/shadow evidence localised to detected element
+boundaries, not counted across the whole image), which puts them in the same
+bucket as Class C.
 
 ### Class B — the rule itself is wrong for real UI
 
@@ -241,9 +259,15 @@ corner or gap measurement means anything.
 
 ### What this changes
 
-- "Scale-relative thresholds" would help **Class A only**. Class B needs a new
-  rule; Class C needs element detection.
-- Class A's fix is cheap but blocked on **more contradicted labels**, not on code.
+- "Scale-relative thresholds" help **nothing**. Class A's metrics do not separate
+  the classes at any threshold; Class B needs a new rule; Class C needs element
+  detection.
+- **All five detectors need element-localised measurement**, not tuning. Class A
+  and Class C converge on the same prerequisite: find the UI elements first, then
+  measure their borders / shadows / corners / gaps. Whole-image ratios are
+  measuring text and texture.
+- No further labelling is warranted until a detector exists whose metric shows
+  separation on the labels already collected.
 - Class C detectors are the most dangerous of the five: they are the only ones
   that were confidently wrong rather than silent, and `spacingDensity` was the
   one field whose detector the plan predicted would "self-limit" via abstention.

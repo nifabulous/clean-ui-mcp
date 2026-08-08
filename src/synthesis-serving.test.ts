@@ -121,6 +121,9 @@ describe("compare_ui_examples — 2d-2 projected cells", () => {
     expect(text).toContain("—");
     expect(text).toContain("_Column disclosures:_");
     expect(text).toContain("**entry-a**: Unverified fields omitted:");
+    // Method-level trust disclosure: the fields the column DOES serve name
+    // their evidence tier, so an agent can weigh provable vs image-confirmed.
+    expect(text).toContain("Verified: critique (image-confirmed), whatToSteal (image-confirmed).");
   });
 
   it("renders byte-identically for a fully-verified entry (no disclosure block)", async () => {

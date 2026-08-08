@@ -677,10 +677,10 @@ function registerCompareUiExamples(server: McpServer, reader: CorpusReader): voi
 
       const table = [header, divider, ...rows];
       // Method disclosure per column: alongside the omitted fields, name the
-      // evidence tier behind each field the column DOES serve, so an agent can
-      // weigh "recomputed from data" (provable) vs "a model looked at it"
-      // (image-confirmed). `found[i]` (not `p.entry`, which is the projected
-      // shape with optional fields) carries the untrimmed provenance.
+      // evidence tier behind each verification record the entry carries, so an
+      // agent can weigh "recomputed from data" (provable) vs "a model looked
+      // at it" (image-confirmed). `found[i]` (not `p.entry`, which is the
+      // projected shape with optional fields) carries the untrimmed provenance.
       const columnDisclosures = projections
         .map((p, i) => {
           const verified = Object.keys(found[i].provenance?.verification ?? {})

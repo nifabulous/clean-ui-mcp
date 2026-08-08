@@ -860,7 +860,12 @@ export function buildRunReport(
       if (v.verdict === "gate" && /vacuous|no checkable assertions/i.test(v.reason)) zeroAssertion += 1;
       if (v.source === "detector") {
         const stats = detectorStats.get(v.field) ?? { pass: 0, contradicted: 0, abstain: 0 };
-        stats[v.verdict as "pass" | "contradicted" | "abstain"] += 1;
+        // Whitelist: a flag-off run rewrites detector contradictions to legacy
+        // "fail" PRESERVING source ("detector"), so an unguarded
+        // `stats[v.verdict] += 1` would land on `stats["fail"]` -> NaN.
+        if (v.verdict === "pass" || v.verdict === "contradicted" || v.verdict === "abstain") {
+          stats[v.verdict] += 1;
+        }
         detectorStats.set(v.field, stats);
       }
     }
@@ -870,10 +875,13 @@ export function buildRunReport(
   lines.push("");
   for (const [field, s] of detectorStats) {
     const total = s.pass + s.contradicted + s.abstain;
+    // Zero-guard: n=0 (all flag-off verdicts rewritten to fail) must print 0%,
+    // not NaN% — the drift telemetry must not measure nothing while showing NaN.
+    const pct = (x: number): string => (total === 0 ? "0%" : `${Math.round((100 * x) / total)}%`);
     lines.push(
-      `Detector ${field}: n=${total} · pass ${s.pass} (${Math.round((100 * s.pass) / total)}%)`
-      + ` · contradicted ${s.contradicted} (${Math.round((100 * s.contradicted) / total)}%)`
-      + ` · abstain ${s.abstain} (${Math.round((100 * s.abstain) / total)}%)`,
+      `Detector ${field}: n=${total} · pass ${s.pass} (${pct(s.pass)})`
+      + ` · contradicted ${s.contradicted} (${pct(s.contradicted)})`
+      + ` · abstain ${s.abstain} (${pct(s.abstain)})`,
     );
   }
   lines.push("");
@@ -1128,28 +1136,54 @@ async function main(): Promise<void> {
   const dismissSpec = values.dismiss;
   if (retriageSpec || dismissSpec) {
     const now = new Date().toISOString().slice(0, 10);
+    // Validate BEFORE any mutation: a typo'd entry id must fail loudly instead
+    // of rewriting the corpus unchanged and printing "persisted triage", and
+    // --dismiss's hard --reason requirement must not be bypassable by pointing
+    // at a non-existent id (the old per-entry match skipped the check).
+    const retriageParts = retriageSpec ? retriageSpec.split(":") : null;
+    const dismissParts = dismissSpec ? dismissSpec.split(":") : null;
+    if (retriageParts && retriageParts.length > 1 && retriageParts[1].length === 0) {
+      throw new Error(`--retriage must be "<entryId>" or "<entryId>:<field>" (got "${retriageSpec}")`);
+    }
+    if (dismissParts) {
+      if (!dismissParts[1]) throw new Error(`--dismiss must name a field: <entryId>:<field> (got "${dismissSpec}")`);
+      if (!(values.reason ?? "").trim()) throw new Error(`--dismiss requires --reason (got nothing)`);
+    }
+    const reason = (values.reason ?? "").trim();
+    const retriageId = retriageParts?.[0];
+    const dismissId = dismissParts?.[0];
+    // Validated non-null above (field required for --dismiss); captured before
+    // the closure so TS's narrowing survives it.
+    const dismissField = dismissParts ? dismissParts[1] : null;
+    if (retriageId && !entries.some((e) => e.id === retriageId)) {
+      throw new Error(`no entry found for "${retriageId}" — nothing to retriage`);
+    }
+    if (dismissId && !entries.some((e) => e.id === dismissId)) {
+      throw new Error(`no entry found for "${dismissId}" — nothing to dismiss`);
+    }
+    const hasId = (spec: string | null, id: string): boolean =>
+      spec !== null && spec.split(":")[0] === id;
+    let mutated = 0;
     const updated = entries.map((e) => {
-      if (retriageSpec) {
-        const [id, field] = retriageSpec.split(":");
-        if (e.id !== id) return e;
-        retriageDataQuality(e, field ? [field] : undefined);
+      const didRetriage = retriageSpec && hasId(retriageSpec, e.id);
+      const didDismiss = dismissSpec && hasId(dismissSpec, e.id);
+      if (!didRetriage && !didDismiss) return e;
+      if (didRetriage) {
+        retriageDataQuality(e, retriageParts && retriageParts.length > 1 ? [retriageParts[1]] : undefined);
+        mutated += 1;
       }
-      if (dismissSpec) {
-        const [id, field] = dismissSpec.split(":");
-        if (e.id !== id) return e;
-        const reason = (values.reason ?? "").trim();
-        if (!reason) throw new Error(`--dismiss requires --reason (got nothing)`);
-        if (!field) throw new Error(`--dismiss must name a field: <entryId>:<field>`);
-        dismissDataQuality(e, field, reason, now);
+      if (didDismiss) {
+        dismissDataQuality(e, dismissField ?? "", reason, now);
+        mutated += 1;
       }
       return e;
     });
     if (corpusPath) {
       writeFileSync(resolve(corpusPath), JSON.stringify({ ...rawCorpus, entries: updated }, null, 2));
-      console.log(`[verify] wrote ${updated.length} entries to ${corpusPath}`);
+      console.log(`[verify] wrote ${updated.length} entries to ${corpusPath} (${mutated} mutated)`);
     } else {
       persistEntries(writableLoadedCorpus(updated), updated);
-      console.log(`[verify] persisted triage (${retriageSpec ? `retriage ${retriageSpec}` : ""}${retriageSpec && dismissSpec ? " + " : ""}${dismissSpec ? `dismiss ${dismissSpec}` : ""})`);
+      console.log(`[verify] persisted triage, ${mutated} entry/entries mutated (${retriageSpec ? `retriage ${retriageSpec}` : ""}${retriageSpec && dismissSpec ? " + " : ""}${dismissSpec ? `dismiss ${dismissSpec}` : ""})`);
     }
     return;
   }

@@ -589,6 +589,13 @@ describe("record-map exclusivity", () => {
     expect(e.provenance?.dataQuality?.layout).toBeUndefined();
   });
 
+  it("an attempt marker revokes dataQuality for its field", () => {
+    const e = entry();
+    mergeDataQuality(e, { layout: { measured: null, recorded: "a", source: "vision", verifierVersion: "v1", verifiedAt: "x" } });
+    mergeVerifyAttempts(e, { layout: { verifierVersion: "v1", verifiedAt: "x" } });
+    expect(e.provenance?.dataQuality?.layout).toBeUndefined();
+  });
+
   it("resume markers skip pass and contradicted", () => {
     const markers = resumeMarkers(
       [
@@ -679,6 +686,25 @@ describe("dataQuality is processed at its version — queue + report", () => {
     expect(report).toContain("Detector visual.dominantColors: n=1 · pass 1 (100%) · contradicted 0 (0%) · abstain 0 (0%)");
     expect(report).not.toContain("Detector mood");
     expect(report).toContain("Verdicts — 1 pass, 2 contradicted, 1 abstain, 0 gated, 0 fail (image-level only)");
+  });
+
+  it("buildRunReport never prints NaN% — a flag-off fail rewrite on a detector source is not a rate", () => {
+    // Under --detectors off, detector contradictions are rewritten to legacy
+    // "fail" PRESERVING source ("detector") — the telemetry must not measure
+    // the rewritten lane at all, and n=0 must render 0%, not NaN%.
+    const report = buildRunReport(
+      {
+        entries: 1,
+        verdictsByEntry: {
+          e1: [
+            { field: "platform", verdict: "fail", reason: "legacy flag-off rewrite", source: "detector" },
+          ],
+        },
+      },
+      { dryRun: true, verifierVersion: "verifier-v1", sampleSize: 30 },
+    );
+    expect(report).not.toContain("NaN");
+    expect(report).toContain("Detector platform: n=0 · pass 0 (0%) · contradicted 0 (0%) · abstain 0 (0%)");
   });
 });
 

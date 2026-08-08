@@ -674,7 +674,12 @@ export const CorpusEntry = z.object({
       measured: z.unknown(),
       recorded: z.unknown(),
       source: z.string().min(1),
-      reason: z.string().min(1).optional(),
+      // Optional, NOT .min(1): the model's reason string passes through
+      // verbatim and "" is a real model output (verify-corpus parseVerifyResponse
+      // keeps it). Rejecting it inside Corpus.parse would abort a whole run's
+      // persistence after the verification loop — the reason column is
+      // display-only, not a trust input.
+      reason: z.string().optional(),
       verifierVersion: z.string().min(1),
       verifiedAt: z.string().min(1),
       imageSha256: z.string().length(64).optional(),

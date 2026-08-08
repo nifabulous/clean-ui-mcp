@@ -652,6 +652,54 @@ describe("corpus schema", () => {
       clearance: "unreviewed",
     });
   });
+
+  it("dataQuality records round-trip, reject unknown keys, and stay optional", () => {
+    // .strict() per record: an unknown key is schema drift, not a newer tier —
+    // a finding whose shape nobody recognizes must fail the parse.
+    const withFinding = Corpus.parse({
+      version: 2,
+      entries: [{
+        ...validEntry,
+        provenance: {
+          taggedBy: "auto",
+          dataQuality: {
+            layout: {
+              measured: null,
+              recorded: "grid",
+              source: "vision",
+              verifierVersion: "verifier-v1",
+              verifiedAt: "2026-08-07",
+              dismissed: { at: "2026-08-08", reason: "measurement artefact" },
+            },
+          },
+        },
+      }],
+    });
+    const reparsed = Corpus.parse(JSON.parse(JSON.stringify(withFinding)));
+    expect(reparsed.entries[0].provenance?.dataQuality?.layout).toEqual({
+      measured: null,
+      recorded: "grid",
+      source: "vision",
+      verifierVersion: "verifier-v1",
+      verifiedAt: "2026-08-07",
+      dismissed: { at: "2026-08-08", reason: "measurement artefact" },
+    });
+
+    const unknownKey = Corpus.safeParse({
+      version: 2,
+      entries: [{
+        ...validEntry,
+        provenance: {
+          taggedBy: "auto",
+          dataQuality: { layout: { measured: null, recorded: "x", source: "vision", verifierVersion: "v1", verifiedAt: "x", confidence: 0.9 } },
+        },
+      }],
+    });
+    expect(unknownKey.success).toBe(false);
+
+    // Absent map parses fine (existing corpora have no dataQuality).
+    expect(Corpus.parse({ version: 2, entries: [validEntry] }).entries[0].provenance?.dataQuality).toBeUndefined();
+  });
 });
 
 describe("detectPlatform", () => {

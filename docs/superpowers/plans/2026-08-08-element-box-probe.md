@@ -39,6 +39,7 @@ Recorded so the omission is a decision rather than a gap: `npm test` is **not gr
 | `eval/element-box-probe/README.md` | how to run it, what the outputs mean |
 | `eval/element-box-probe/requirements.txt` | rung-1 dependencies, pinned |
 | `eval/element-box-probe/requirements-rung2.txt` | rung-2 model stack, pinned, separate so rung 1 never pulls torch |
+| `eval/element-box-probe/pytest.ini` | registers the `slow` marker so rung-2 model tests stay out of the default suite |
 | `eval/element-box-probe/entries.txt` | the 46 `entryId<TAB>imageSha256` rows, pinned |
 | `eval/element-box-probe/build_entries.py` | regenerates `entries.txt` from `labels.jsonl` |
 | `eval/element-box-probe/proposers.py` | box proposers — one signature, three implementations |
@@ -64,7 +65,7 @@ Nothing measures yet. This task exists because the gitignore negations are the s
 **Interfaces:**
 - Produces: a runnable venv and a tracked directory. No code consumed by later tasks.
 
-- [ ] **Step 1: Create the directory and the two requirements files**
+- [ ] **Step 1: Create the directory, the requirements files, and pytest.ini**
 
 ```bash
 mkdir -p eval/element-box-probe/tests
@@ -90,6 +91,14 @@ torch==2.5.1
 transformers==4.46.3
 einops==0.8.0
 timm==1.0.11
+```
+
+`eval/element-box-probe/pytest.ini`:
+
+```
+[pytest]
+markers =
+    slow: rung-2 model tests that load weights; excluded from the default suite
 ```
 
 - [ ] **Step 2: Create the venv and install rung-1 dependencies**
@@ -119,6 +128,7 @@ eval/element-box-probe/*
 !eval/element-box-probe/README.md
 !eval/element-box-probe/requirements.txt
 !eval/element-box-probe/requirements-rung2.txt
+!eval/element-box-probe/pytest.ini
 !eval/element-box-probe/entries.txt
 !eval/element-box-probe/build_entries.py
 !eval/element-box-probe/proposers.py
@@ -139,7 +149,7 @@ eval/element-box-probe/tests/*
 touch eval/element-box-probe/{entries.txt,build_entries.py,proposers.py,rubric.py,run_probe.py,metrics.jsonl,scores.tsv}
 touch eval/element-box-probe/tests/test_rubric.py
 mkdir -p eval/element-box-probe/out && touch eval/element-box-probe/out/dummy.png
-for f in README.md requirements.txt requirements-rung2.txt entries.txt build_entries.py proposers.py rubric.py run_probe.py metrics.jsonl scores.tsv tests/test_rubric.py; do
+for f in README.md requirements.txt requirements-rung2.txt pytest.ini entries.txt build_entries.py proposers.py rubric.py run_probe.py metrics.jsonl scores.tsv tests/test_rubric.py; do
   git check-ignore -q "eval/element-box-probe/$f" && echo "IGNORED (BAD): $f" || echo "tracked ok: $f"
 done
 git check-ignore -q eval/element-box-probe/out/dummy.png && echo "out/ ignored ok" || echo "out/ TRACKED (BAD)"
@@ -184,7 +194,7 @@ Rung 2 additionally needs `-r requirements-rung2.txt` (~1-2GB of model weights).
 
 | path | tracked | contents |
 |---|---|---|
-| `metrics.jsonl` | yes | one row per (method, image, box) — coordinates and every raw metric |
+| `metrics.jsonl` | yes | one row per (method, image, box) — coordinates, every raw metric, and the runId that produced it |
 | `scores.tsv` | yes | per (method, image) the four check results |
 | `out/` | **no** | overlay PNGs, local inspection only |
 
@@ -202,7 +212,7 @@ badly-placed threshold can be re-judged without re-running anything.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add .gitignore eval/element-box-probe/README.md eval/element-box-probe/requirements.txt eval/element-box-probe/requirements-rung2.txt
+git add .gitignore eval/element-box-probe/README.md eval/element-box-probe/requirements.txt eval/element-box-probe/requirements-rung2.txt eval/element-box-probe/pytest.ini
 git status --porcelain eval/element-box-probe/
 git commit -m "chore(probe): scaffold the element-box probe with tracked-artifact negations
 
@@ -450,7 +460,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from fixtures import blank, with_rect, with_stroked_rect
+from tests.fixtures import blank, with_rect, with_stroked_rect
 from rubric import (
     ALIGN_TOLERANCE_PX, MAX_BOXES, MIN_BOXES,
     measure_boxes, score_image,
@@ -831,7 +841,7 @@ shadow region is outside the viewport."
 ```python
 from __future__ import annotations
 
-from fixtures import blank, with_stroked_rect
+from tests.fixtures import blank, with_stroked_rect
 from proposers import PROPOSERS, propose_classical
 
 
@@ -969,7 +979,9 @@ nothing."
 - Produces:
   - `resolve_image_paths(labels_path: Path) -> dict[str, tuple[Path, str]]` — `entryId -> (path, sha256)`
   - `rung_verdict(scores: list[tuple[str, str, ImageScore]]) -> RungVerdict` — `(entryId, field, score)` rows in, verdict out
-  - `@dataclass RungVerdict` — `passed: bool`, `global_fraction: float`, `by_field: dict[str, float]`, `failing_checks: dict[str, int]`
+  - `@dataclass RungVerdict` — `passed: bool`, `global_fraction: float`, `by_field: dict[str, float]`, `failing_checks: dict[str, int]`, `missing_fields: list[str]`
+  - `format_metrics_row(run_id, entry_id, sha, field, method, m) -> str` and `format_scores_row(run_id, method, entry_id, field, s) -> str` — the pinned output schemas, pure so tests can target them
+  - `render_overlay(gray, boxes, out_path)` — draws boxes onto out/ PNGs when `--overlays` is passed
 
 - [ ] **Step 1: Write the failing tests for the ladder arithmetic**
 
@@ -978,10 +990,12 @@ nothing."
 ```python
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from rubric import ImageScore
-from run_probe import rung_verdict
+from run_probe import format_metrics_row, format_scores_row, rung_verdict
 
 FIELDS = ("visual.usesBorders", "visual.usesShadows", "visual.cornerStyle", "visual.spacingDensity")
 
@@ -997,6 +1011,8 @@ def _score(ok: bool) -> ImageScore:
 def _rows(per_field_ok: dict[str, int], per_field_total: int = 10):
     rows = []
     for f in FIELDS:
+        if f not in per_field_ok:
+            continue  # a field with no rows exercises the missing-field path
         ok = per_field_ok[f]
         for i in range(per_field_total):
             rows.append((f"{f}-{i}", f, _score(i < ok)))
@@ -1036,6 +1052,35 @@ def test_an_empty_row_set_fails_rather_than_dividing_by_zero() -> None:
     v = rung_verdict([])
     assert v.passed is False
     assert v.global_fraction == 0.0
+    assert v.missing_fields == list(FIELDS)
+
+
+def test_a_field_with_no_rows_is_reported_missing_not_failed() -> None:
+    ok = {f: 8 for f in FIELDS if f != "visual.cornerStyle"}
+    v = rung_verdict(_rows(ok))
+    assert v.missing_fields == ["visual.cornerStyle"]
+    assert v.passed is False
+    assert "visual.cornerStyle" not in v.by_field
+
+
+def test_metrics_row_shape_has_run_id_and_all_box_fields() -> None:
+    from rubric import BoxMetrics
+    row = json.loads(format_metrics_row(
+        "run-1", "e1", "aa", "visual.usesBorders", "classical",
+        BoxMetrics(box=(0, 0, 10, 10)),
+    ))
+    assert row["runId"] == "run-1"
+    assert row["entryId"] == "e1"
+    assert set(row) >= {"box", "edge_offsets", "edge_magnitudes",
+                        "outside_clearances", "area_ratio", "boundary_edges"}
+
+
+def test_scores_row_keeps_rung_first_and_run_id_last() -> None:
+    s = _score(True)
+    row = format_scores_row("run-1", "classical", "e1", "visual.usesBorders", s).split("\t")
+    assert row[0] == "classical"  # Task 7's `cut -f1 | uniq -c` grouping depends on this
+    assert row[-1] == "run-1"
+    assert len(row) == 12
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -1053,20 +1098,24 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'run_probe'`.
 
 Reads corpus images. Writes ONLY to this directory (metrics.jsonl, scores.tsv)
 and to out/ (overlays, untracked). Never touches the corpus.
+
+Every row carries a runId so re-running a rung appends a distinguishable row set
+instead of silently duplicating the previous run's numbers.
 """
 from __future__ import annotations
 
 import argparse
 import json
 from dataclasses import asdict, dataclass, field as dc_field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from build_entries import ELEMENT_FIELDS
 from proposers import PROPOSERS
-from rubric import ImageScore, score_image
+from rubric import BoxMetrics, ImageScore, score_image
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
@@ -1081,17 +1130,20 @@ class RungVerdict:
     global_fraction: float
     by_field: dict[str, float] = dc_field(default_factory=dict)
     failing_checks: dict[str, int] = dc_field(default_factory=dict)
+    missing_fields: list[str] = dc_field(default_factory=list)
 
 
 def rung_verdict(scores: list[tuple[str, str, ImageScore]]) -> RungVerdict:
-    """A rung passes only above BOTH bars.
+    """A rung passes only above BOTH bars, with every field present.
 
     The per-field floor exists because the follow-up detector measurement is
     per-field: a rung that clears the global bar while missing one field's
-    images is reported as failing that field, not as passing on average.
+    images is reported as failing that field, not as passing on average. A field
+    with ZERO rows is missing, not failed at 0.0: the two have different causes
+    (no labelled images vs a proposer that missed every one).
     """
     if not scores:
-        return RungVerdict(passed=False, global_fraction=0.0)
+        return RungVerdict(passed=False, global_fraction=0.0, missing_fields=list(ELEMENT_FIELDS))
 
     def all_ok(s: ImageScore) -> bool:
         return all(getattr(s, name) for name in CHECK_NAMES)
@@ -1099,19 +1151,57 @@ def rung_verdict(scores: list[tuple[str, str, ImageScore]]) -> RungVerdict:
     global_fraction = sum(1 for _, _, s in scores if all_ok(s)) / len(scores)
 
     by_field: dict[str, float] = {}
+    missing_fields: list[str] = []
     for f in ELEMENT_FIELDS:
         rows = [s for _, field_name, s in scores if field_name == f]
-        by_field[f] = (sum(1 for s in rows if all_ok(s)) / len(rows)) if rows else 0.0
+        if not rows:
+            missing_fields.append(f)
+            continue
+        by_field[f] = (sum(1 for s in rows if all_ok(s)) / len(rows))
 
     failing_checks = {
         name: sum(1 for _, _, s in scores if not getattr(s, name)) for name in CHECK_NAMES
     }
 
     passed = (
+        not missing_fields
+        and
         global_fraction >= GLOBAL_PASS_FRACTION
         and all(v >= PER_FIELD_PASS_FRACTION for v in by_field.values())
     )
-    return RungVerdict(passed, global_fraction, by_field, failing_checks)
+    return RungVerdict(passed, global_fraction, by_field, failing_checks, missing_fields)
+
+
+def format_metrics_row(run_id: str, entry_id: str, sha: str, field_name: str,
+                       method: str, m: BoxMetrics) -> str:
+    """One metrics.jsonl row. The schema is pinned here so re-judgment parses
+    committed rows without guessing — see the spec's review decisions."""
+    return json.dumps({
+        "runId": run_id, "entryId": entry_id, "imageSha256": sha, "field": field_name,
+        "method": method, **asdict(m),
+    })
+
+
+def format_scores_row(run_id: str, method: str, entry_id: str, field_name: str,
+                      s: ImageScore) -> str:
+    """One scores.tsv row. Column 1 is deliberately the rung: Task 7's
+    `cut -f1 | sort | uniq -c` groups by rung. runId is the LAST column."""
+    return "\t".join([
+        method, entry_id, field_name,
+        *(str(getattr(s, n)) for n in CHECK_NAMES),
+        f"{s.box_count}", f"{s.aligned_fraction:.4f}",
+        f"{s.clear_fraction:.4f}", f"{s.median_area_ratio:.6f}",
+        run_id,
+    ])
+
+
+def render_overlay(gray: np.ndarray, boxes: list, out_path: Path) -> None:
+    """Draw proposed boxes on a copy of the image. Untracked, local inspection."""
+    rgb = Image.fromarray(gray).convert("RGB")
+    draw = ImageDraw.Draw(rgb)
+    for x0, y0, x1, y1 in boxes:
+        draw.rectangle((x0, y0, x1 - 1, y1 - 1), outline=(255, 40, 40), width=2)
+    rgb.save(out_path)
 
 
 def resolve_image_paths(labels_path: Path) -> dict[str, tuple[Path, str]]:
@@ -1136,6 +1226,7 @@ def main() -> int:
     args = parser.parse_args()
 
     proposer = PROPOSERS[args.rung]
+    run_id = datetime.now(timezone.utc).isoformat(timespec="seconds")
     resolved = resolve_image_paths(REPO_ROOT / "eval" / "verdicts" / "labels.jsonl")
 
     scores: list[tuple[str, str, ImageScore]] = []
@@ -1143,7 +1234,7 @@ def main() -> int:
     scores_path = HERE / "scores.tsv"
     missing: list[str] = []
 
-    with metrics_path.open("a") as metrics_out:
+    with metrics_path.open("a") as metrics_out, scores_path.open("a") as scores_out:
         for line in (HERE / "entries.txt").read_text().splitlines():
             if not line.strip():
                 continue
@@ -1159,20 +1250,17 @@ def main() -> int:
             boxes = proposer(gray)
             score, box_metrics = score_image(gray, boxes)
             scores.append((entry_id, field_name, score))
+            if args.overlays:
+                overlay_path = HERE / "out" / f"{entry_id}-{args.rung}.png"
+                overlay_path.parent.mkdir(exist_ok=True)
+                render_overlay(gray, boxes, overlay_path)
             for m in box_metrics:
-                metrics_out.write(json.dumps({
-                    "entryId": entry_id, "imageSha256": sha, "field": field_name,
-                    "method": args.rung, **asdict(m),
-                }) + "\n")
-
-    with scores_path.open("a") as scores_out:
-        for entry_id, field_name, s in scores:
-            scores_out.write("\t".join([
-                args.rung, entry_id, field_name,
-                *(str(getattr(s, n)) for n in CHECK_NAMES),
-                f"{s.box_count}", f"{s.aligned_fraction:.4f}",
-                f"{s.clear_fraction:.4f}", f"{s.median_area_ratio:.6f}",
-            ]) + "\n")
+                metrics_out.write(
+                    format_metrics_row(run_id, entry_id, sha, field_name, args.rung, m) + "\n",
+                )
+            scores_out.write(
+                format_scores_row(run_id, args.rung, entry_id, field_name, score) + "\n",
+            )
 
     verdict = rung_verdict(scores)
     # A silently shrunk probe set would read as a cleaner result than it is.
@@ -1189,15 +1277,22 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run the tests**
 
 ```bash
-.venv/bin/python -m pytest tests/ -v
+.venv/bin/python -m pytest tests/ -m "not slow" -v
 ```
 
-Expected: PASS, 28 tests across all four test files.
+Expected: PASS, 31 tests across all four test files (4 entries + 15 rubric + 4
+proposers + 8 runner). The `-m "not slow"` keeps the rung-2 model tests out of
+the default gate; they run explicitly in Task 6.
 
 - [ ] **Step 5: Run rung 1 over the real probe set**
 
 ```bash
 cd eval/element-box-probe
+# The hash gate needs the live corpus present; git worktrees do not carry
+# untracked files. Copy it in first (gitignored via .git/info/exclude, stays
+# local, never committed).
+mkdir -p ../../corpus
+cp /Users/olaniyi.oladokun/Downloads/clean-ui-mcp/corpus/entries.json ../../corpus/entries.json
 shasum -a 256 ../../corpus/entries.json > /tmp/corpus-before.txt
 .venv/bin/python run_probe.py --rung classical --overlays
 shasum -a 256 ../../corpus/entries.json | diff - /tmp/corpus-before.txt && echo "CORPUS UNCHANGED"
@@ -1276,15 +1371,17 @@ import pytest
 from proposers import PROPOSERS
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("key", ["florence2", "moondream"])
 def test_model_proposers_are_registered_with_the_same_signature(key: str) -> None:
     assert key in PROPOSERS
     assert callable(PROPOSERS[key])
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("key", ["florence2", "moondream"])
 def test_model_proposers_return_integer_boxes_within_image_bounds(key: str) -> None:
-    from fixtures import blank, with_stroked_rect
+    from tests.fixtures import blank, with_stroked_rect
     gray = with_stroked_rect(blank(w=400, h=300), 100, 80, 300, 220)
     boxes = PROPOSERS[key](gray)
     h, w = gray.shape
@@ -1293,7 +1390,8 @@ def test_model_proposers_return_integer_boxes_within_image_bounds(key: str) -> N
         assert 0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h
 ```
 
-These are marked slow — they load a model. Run them explicitly, not in the default suite:
+These are marked slow (registered in `pytest.ini`) and excluded from the default
+suite via `-m "not slow"` in Tasks 5 and 7. Run them explicitly:
 
 ```bash
 .venv/bin/python -m pytest tests/test_proposers.py -k "model_proposers" -v
@@ -1460,7 +1558,7 @@ the 46 labels' rather than 'this will work'."
 - [ ] **Step 4: Branch review and push**
 
 ```bash
-cd eval/element-box-probe && .venv/bin/python -m pytest tests/ -v && cd ../..
+cd eval/element-box-probe && .venv/bin/python -m pytest tests/ -m "not slow" -v && cd ../..
 .zcode/scripts/write-review-artifact --type branch --result approved --reviewer agent \
   --base-sha fb055fa --head-sha $(git rev-parse HEAD) \
   --branch feat/element-box-probe
@@ -1480,3 +1578,22 @@ The branch gate rejects an artifact whose `headSha` is not `git rev-parse HEAD`,
 **Type consistency.** `Box = tuple[int, int, int, int]` is declared in `rubric.py` (Task 3) and re-declared identically in `proposers.py` (Task 4) so the two modules stay independent — they are structurally identical aliases, not two different shapes. `ImageScore` is produced by `score_image` (Task 3) and consumed by `rung_verdict` (Task 5) with the same four `checkN_*` attribute names used in `CHECK_NAMES`. `PROPOSERS` is created in Task 4 and extended in place in Task 6. `ELEMENT_FIELDS` is declared in Task 2 and consumed in Task 5.
 
 **One risk this plan adds beyond the spec.** Task 6's model call signatures are written against the pinned `transformers` version but have not been executed. Step 3 requires that any deviation be fixed *and recorded*, because a proposer silently returning `[]` after an API rename is indistinguishable from a model that found nothing — and only the latter is a result.
+
+## Review amendments (2026-08-08)
+
+Folded from the eng review of this plan:
+
+- `pytest.ini` added (registers `slow`) with its gitignore negation; the rung-2
+  model tests are `@pytest.mark.slow`, and the default suites in Tasks 5 and 7
+  run with `-m "not slow"`.
+- `from fixtures import` corrected to `from tests.fixtures import` (pytest
+  prepend import mode with `tests/__init__.py` does not put `tests/` on
+  sys.path).
+- `metrics.jsonl`/`scores.tsv` rows carry a `runId` (last TSV column, so
+  `cut -f1` still groups by rung); the row schemas are pinned by the pure
+  `format_metrics_row`/`format_scores_row` functions, with output-shape tests.
+- `--overlays` is implemented (`render_overlay` draws boxes to `out/`).
+- `rung_verdict` distinguishes a missing field (zero rows) from a failing one,
+  reporting `missing_fields` and failing the rung when any field is absent.
+- Task 5 step 5 copies `corpus/entries.json` from the main checkout before the
+  hash gate (untracked files do not exist in worktrees).

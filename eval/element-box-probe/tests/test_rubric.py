@@ -126,3 +126,25 @@ def test_metrics_are_recorded_even_when_a_check_fails() -> None:
     assert len(m.edge_offsets) == 4
     assert len(m.edge_magnitudes) == 4
     assert m.area_ratio > 0
+
+
+def test_a_stronger_neighbouring_edge_does_not_mask_the_boxs_own_edge() -> None:
+    # The defect real screenshots exposed. The box's left edge sits on a real
+    # 240->40 step, but a DARKER neighbour 5px outside produces a stronger
+    # 240->0 step inside the same +/-6px window. Taking the offset of the
+    # strongest gradient reports -5.5 and calls an aligned edge misaligned.
+    gray = with_rect(blank(), 100, 80, 200, 160)
+    gray[80:160, 93:95] = 0  # stronger competing edge, 5px outside
+    [m] = measure_boxes(gray, [(100, 80, 200, 160)])
+    assert m.edge_offsets[0] is not None
+    assert abs(m.edge_offsets[0]) <= ALIGN_TOLERANCE_PX
+    assert m.edges_aligned == 4
+
+
+def test_the_pre_registered_strongest_gradient_offset_is_still_recorded() -> None:
+    # The amended measurement must not destroy the number the spec originally
+    # declared — both go to metrics.jsonl so the original verdict stays derivable.
+    gray = with_rect(blank(), 100, 80, 200, 160)
+    gray[80:160, 93:95] = 0
+    [m] = measure_boxes(gray, [(100, 80, 200, 160)])
+    assert m.edge_offsets_strongest[0] == pytest.approx(-5.5)

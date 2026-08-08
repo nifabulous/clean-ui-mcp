@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { CorpusEntryT } from "../schema.js";
 import type { LoadedCorpus } from "../persistence.js";
-import { corpusDefectCheck, summarizeCorpusDefects } from "./doctor-helpers.js";
+import { corpusDefectCheck, summarizeCorpusDefects, DATA_QUALITY_SOURCES } from "./doctor-helpers.js";
+import { detectorRegistry } from "../verify/detector-registry.js";
 import {
   loaderHealthCheck,
   publicationCheck,
@@ -556,6 +557,66 @@ describe("corpusDefectCheck", () => {
       },
     })], ALL_IMAGES);
     expect(JSON.stringify(check)).toContain("dataquality-hash-stale");
+  });
+
+  it("reports a pixel-pinned finding whose image is missing, without aborting", () => {
+    const check = corpusDefectCheck([defectEntry("dq-4", {
+      provenance: {
+        taggedBy: "auto",
+        dataQuality: {
+          layout: {
+            measured: "grid", recorded: "flex",
+            source: "vision", verifierVersion: "v1", verifiedAt: "x",
+            imageSha256: "a".repeat(64),
+          },
+        },
+      },
+    })], NO_IMAGES);
+    expect(JSON.stringify(check)).toContain("dataquality-hash-stale");
+  });
+
+  it("counts only LIVE findings — a dismissed artefact stops nagging", () => {
+    const check = corpusDefectCheck([defectEntry("dq-5", {
+      provenance: {
+        taggedBy: "auto",
+        dataQuality: {
+          layout: {
+            measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x",
+            dismissed: { at: "2026-08-08", reason: "measurement artefact" },
+          },
+        },
+      },
+    })], ALL_IMAGES);
+    // No live contradiction: the count finding must NOT fire for a record the
+    // human already acknowledged (Task 15 Step 5B's contract).
+    expect(JSON.stringify(check)).not.toContain("dataquality-count");
+  });
+
+  it("accepts a real detector source without a malformed finding", () => {
+    const check = corpusDefectCheck([defectEntry("dq-6", {
+      provenance: {
+        taggedBy: "auto",
+        dataQuality: {
+          layout: {
+            measured: "grid", recorded: "flex",
+            source: "platform", verifierVersion: "v1", verifiedAt: "x",
+          },
+        },
+      },
+    })], ALL_IMAGES);
+    expect(JSON.stringify(check)).not.toContain("dataquality-malformed");
+  });
+
+  it("DATA_QUALITY_SOURCES stays in sync with the detector registry", () => {
+    const registryKeys = Object.keys(detectorRegistry);
+    const expected = new Set([...registryKeys, "vision"]);
+    for (const key of DATA_QUALITY_SOURCES) {
+      expect(expected.has(key), `doctor source "${key}" has no registry key and is not "vision"`).toBe(true);
+    }
+    for (const key of expected) {
+      expect(DATA_QUALITY_SOURCES.has(key), `registry key "${key}" missing from doctor sources`).toBe(true);
+    }
+    expect(DATA_QUALITY_SOURCES.size).toBe(expected.size);
   });
 });
 

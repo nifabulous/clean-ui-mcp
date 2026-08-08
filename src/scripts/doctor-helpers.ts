@@ -290,8 +290,9 @@ export interface CorpusDefectFinding {
  * {@link PublicationContext}'s `imageExists`).
  *
  * `imageSha256` returns null when the file cannot be read. It is called ONLY for
- * entries carrying an `image-confirmed` verification record — hashing every
- * image would make the doctor read the entire corpus off disk on every run.
+ * entries carrying an `image-confirmed` verification record or a pixel-pinned
+ * `dataQuality` finding — hashing every image would make the doctor read the
+ * entire corpus off disk on every run.
  */
 export interface CorpusDefectContext {
   imageExists: (corpusRelPath: string) => boolean;
@@ -302,9 +303,10 @@ export interface CorpusDefectContext {
  * The lanes a dataQuality record's `source` may name: the detector registry
  * keys (detector name = registry key) plus "vision" for the model lane. Kept
  * local on purpose — importing detector-registry would pull the tagger chain
- * into the doctor hot path. Keep in sync with detector-registry.ts.
+ * into the doctor hot path. Keep in sync with detector-registry.ts (a test
+ * cross-checks this set against the registry keys).
  */
-const DATA_QUALITY_SOURCES = new Set([
+export const DATA_QUALITY_SOURCES = new Set([
   "platform",
   "visual.dominantColors",
   "visual.usesBorders",
@@ -689,7 +691,11 @@ export function summarizeCorpusDefects(
           }
         }
       }
-      const total = Object.keys(dataQuality).length;
+      // The count EXCLUDES dismissed records: a dismissal is a human decision
+      // that the finding is a measurement artefact — it stops nagging the
+      // doctor while remaining on the record (Task 15 Step 5B's stated
+      // contract, which the Task 17 step code contradicted; the prose wins).
+      const total = Object.values(dataQuality).filter((r) => !r.dismissed).length;
       if (total > 0) {
         push("dataquality-count", `${total} contradiction(s) recorded — run the suspect report before trusting these entries`);
       }

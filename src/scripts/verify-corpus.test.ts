@@ -124,27 +124,27 @@ describe("parseVerifyResponse — fail-closed", () => {
 
 describe("decideFieldVerdict", () => {
   it("passes a confirmed factual claim", () => {
-    const v = decideFieldVerdict("visual.usesShadows", "factual", { confirmed: true });
+    const v = decideFieldVerdict("visual.usesShadows", "factual", { confirmed: true }, "initial");
     expect(v.verdict).toBe("pass");
   });
 
   it("abstains an unconfirmed claim that the image does not contradict", () => {
-    const v = decideFieldVerdict("visual.usesShadows", "factual", { confirmed: false });
+    const v = decideFieldVerdict("visual.usesShadows", "factual", { confirmed: false }, "initial");
     expect(v.verdict).toBe("abstain");
   });
 
   it("GATES a prose field whose assertion list is empty — the vacuity fix", () => {
-    const v = decideFieldVerdict("critique", "prose", { confirmed: false, assertions: [] });
+    const v = decideFieldVerdict("critique", "prose", { confirmed: false, assertions: [] }, "initial");
     expect(v.verdict).toBe("gate");
   });
 
   it("passes a prose field whose assertions were all confirmed", () => {
-    const v = decideFieldVerdict("critique", "prose", { confirmed: true, assertions: ["a left navigation rail exists"] });
+    const v = decideFieldVerdict("critique", "prose", { confirmed: true, assertions: ["a left navigation rail exists"] }, "initial");
     expect(v.verdict).toBe("pass");
   });
 
   it("gates a gated-tier field (responsiveBehavior) whatever the response says", () => {
-    const v = decideFieldVerdict("responsiveBehavior", "gated", { confirmed: true });
+    const v = decideFieldVerdict("responsiveBehavior", "gated", { confirmed: true }, "initial");
     expect(v.verdict).toBe("gate");
   });
 });
@@ -399,14 +399,14 @@ describe("three-way model verdicts", () => {
   });
 
   it("decides pass / contradicted / abstain / gate", () => {
-    expect(decideFieldVerdict("layout", "factual", { confirmed: true, contradicted: false }).verdict).toBe("pass");
-    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: true }).verdict).toBe("contradicted");
-    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: false }).verdict).toBe("abstain");
-    expect(decideFieldVerdict("responsiveBehavior", "gated", { confirmed: true, contradicted: false }).verdict).toBe("gate");
+    expect(decideFieldVerdict("layout", "factual", { confirmed: true, contradicted: false }, "initial").verdict).toBe("pass");
+    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: true }, "initial").verdict).toBe("contradicted");
+    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: false }, "initial").verdict).toBe("abstain");
+    expect(decideFieldVerdict("responsiveBehavior", "gated", { confirmed: true, contradicted: false }, "initial").verdict).toBe("gate");
   });
 
   it("keeps the vacuity guard for prose fields", () => {
-    const r = decideFieldVerdict("critique", "prose", { confirmed: false, contradicted: false, assertions: [] });
+    const r = decideFieldVerdict("critique", "prose", { confirmed: false, contradicted: false, assertions: [] }, "initial");
     expect(r.verdict).toBe("gate");
   });
 
@@ -1150,7 +1150,7 @@ describe("decideFieldVerdict — verdict logic characterization (governing invar
   for (const [tier, byState] of Object.entries(EXPECTED) as Array<[VerifierTier, Record<string, FieldVerdict["verdict"]>]>) {
     for (const { name, parsed } of PARSED_STATES) {
       it(`${tier} / ${name} -> ${byState[name]}`, () => {
-        expect(decideFieldVerdict("someField", tier, parsed).verdict).toBe(byState[name]);
+        expect(decideFieldVerdict("someField", tier, parsed, "initial").verdict).toBe(byState[name]);
       });
     }
   }
@@ -1221,5 +1221,51 @@ describe("parseVerifyResponse — abstain cause taxonomy", () => {
     const parsed = parseVerifyResponse("{}");
     expect(parsed.layout.cause).toBe("field-absent");
     expect(parsed.anythingElse.cause).toBe("field-absent");
+  });
+});
+
+describe("decideFieldVerdict — cause and site on abstains", () => {
+  it("carries the parsed cause and the declared site", () => {
+    const v = decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: false, cause: "field-absent" }, "initial");
+    expect(v.verdict).toBe("abstain");
+    expect(v.cause).toBe("field-absent");
+    expect(v.site).toBe("initial");
+  });
+
+  it("appends the model's reason to the abstain reason string", () => {
+    const v = decideFieldVerdict("layout", "factual", {
+      confirmed: false, contradicted: false, cause: "model-abstained", reason: "cannot determine from one screenshot",
+    }, "initial");
+    expect(v.reason).toBe("not positively confirmed — cannot determine from one screenshot");
+  });
+
+  it("names the offending literal for an unrecognised verdict", () => {
+    const v = decideFieldVerdict("layout", "factual", {
+      confirmed: false, contradicted: false, cause: "verdict-unrecognised", rawVerdict: "maybe",
+    }, "reverify");
+    expect(v.reason).toBe('not positively confirmed — verdict "maybe"');
+    expect(v.site).toBe("reverify");
+  });
+
+  it("keeps the bare reason string when the model gave no reason", () => {
+    const v = decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: false, cause: "field-absent" }, "initial");
+    expect(v.reason).toBe("not positively confirmed");
+  });
+
+  it("carries cause and site on a prose abstain too", () => {
+    const v = decideFieldVerdict("critique", "prose", {
+      confirmed: false, contradicted: false, assertions: ["a"], cause: "model-abstained", reason: "unclear",
+    }, "corroborate");
+    expect(v.verdict).toBe("abstain");
+    expect(v.cause).toBe("model-abstained");
+    expect(v.site).toBe("corroborate");
+    expect(v.reason).toBe("not positively confirmed — unclear");
+  });
+
+  it("sets no cause on a pass, a contradiction, or a gate", () => {
+    expect(decideFieldVerdict("layout", "factual", { confirmed: true, contradicted: false }, "initial").cause).toBeUndefined();
+    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: true }, "initial").cause).toBeUndefined();
+    expect(decideFieldVerdict("layout", "gated", { confirmed: false, contradicted: false }, "initial").cause).toBeUndefined();
+    expect(decideFieldVerdict("critique", "prose", { confirmed: false, contradicted: false, assertions: [] }, "initial").cause).toBeUndefined();
   });
 });

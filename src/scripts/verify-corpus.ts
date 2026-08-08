@@ -66,6 +66,16 @@ export type FieldVerdict = {
    * the image-level pseudo-verdict in main().
    */
   source?: "detector" | "vision";
+  /** WHY an abstain happened. Set on abstains only. */
+  cause?: AbstainCause;
+  /** WHICH vision call produced this verdict. Set alongside `cause`. */
+  site?: VerifyCallSite;
+  /**
+   * For a prose field that abstained TWICE, the cause of the FIRST ask. The
+   * re-produce pass overwrites `cause`, and recording only the survivor would
+   * hide every first-ask cause behind a re-produce that failed differently.
+   */
+  firstCause?: AbstainCause;
 };
 
 /**
@@ -351,10 +361,22 @@ export function parseVerifyResponse(raw: string): Record<string, ParsedField> {
   return failClosed(out, "field-absent");
 }
 
+/** The one place an abstain verdict is built, so cause/site can never diverge. */
+function abstainVerdict(field: string, parsed: ParsedField, site: VerifyCallSite): FieldVerdict {
+  const cause = parsed.cause ?? "verdict-missing";
+  const detail = cause === "verdict-unrecognised" && parsed.rawVerdict !== undefined
+    ? ` — verdict "${parsed.rawVerdict}"`
+    : parsed.reason !== undefined && parsed.reason !== ""
+      ? ` — ${parsed.reason}`
+      : "";
+  return { field, verdict: "abstain", reason: `not positively confirmed${detail}`, cause, site };
+}
+
 export function decideFieldVerdict(
   field: string,
   tier: VerifierTier,
   parsed: ParsedField,
+  site: VerifyCallSite,
 ): FieldVerdict {
   if (tier === "gated") {
     return { field, verdict: "gate", reason: "no single screenshot can confirm this claim" };
@@ -369,14 +391,14 @@ export function decideFieldVerdict(
     }
     return parsed.confirmed
       ? { field, verdict: "pass", reason: `${assertions.length} assertion(s) confirmed` }
-      : { field, verdict: "abstain", reason: "not positively confirmed" };
+      : abstainVerdict(field, parsed, site);
   }
   if (parsed.contradicted) {
     return { field, verdict: "contradicted", reason: "the image positively disagrees with the recorded claim" };
   }
   return parsed.confirmed
     ? { field, verdict: "pass", reason: "positively confirmed against the image" }
-    : { field, verdict: "abstain", reason: "not positively confirmed" };
+    : abstainVerdict(field, parsed, site);
 }
 
 /**
@@ -597,7 +619,7 @@ export async function verifyEntry(
         field,
         claim === null
           ? { field, verdict: "gate", reason: "no recorded value to verify", source: "vision" }
-          : { ...decideFieldVerdict(field, tierForField(field), parsed[field] ?? { confirmed: false, contradicted: false }), source: "vision" },
+          : { ...decideFieldVerdict(field, tierForField(field), parsed[field] ?? { confirmed: false, contradicted: false, cause: "field-absent" }, "initial"), source: "vision" },
       );
     }
 
@@ -636,7 +658,7 @@ export async function verifyEntry(
         continue;
       }
       const reParsed = parseVerifyResponse(reParsedRaw);
-      const reVerdict = decideFieldVerdict(field, tierForField(field), reParsed[field] ?? { confirmed: false, contradicted: false });
+      const reVerdict = decideFieldVerdict(field, tierForField(field), reParsed[field] ?? { confirmed: false, contradicted: false, cause: "field-absent" }, "corroborate");
       if (reVerdict.verdict === "pass") {
         // DISAGREEMENT, NOT CONFIRMATION. The first ask said `contradicted` and
         // the second says `confirmed` — that split IS the instability
@@ -695,7 +717,7 @@ export async function verifyEntry(
           decided.set(field, { field, verdict: "gate", reason: "re-production wrote no value for this field" });
           continue;
         }
-        const reVerdict = decideFieldVerdict(field, "prose", reParsed[field] ?? { confirmed: false, contradicted: false });
+        const reVerdict = decideFieldVerdict(field, "prose", reParsed[field] ?? { confirmed: false, contradicted: false, cause: "field-absent" }, "reverify");
         decided.set(field, reVerdict);
         if (reVerdict.verdict === "pass") {
           // The re-produced value replaces the fabricated one only after it

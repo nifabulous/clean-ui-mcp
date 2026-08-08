@@ -388,12 +388,14 @@ unmeasurable without labels. Detector calibration and the frozen set share the
 same labelling infrastructure, so the format is defined now rather than
 invented twice.
 
-**Trigger (build when):** the deterministic-detectors plan lands — the 28
+**Trigger (build when):** the deterministic-detectors plan has landed — the 28
 disputed claims plus a ~10-per-field stratified sample are the initial scope,
 so detector and model lanes compare against the same ground truth. The raw
-28-claim labels must first be rescued from `/tmp/disputes.tsv` into
-`eval/verdicts/` (the spec's Benchmark provenance makes this the plan's first
-task).
+28-claim labels were rescued from `/tmp/disputes.tsv` into
+`eval/verdicts/labels.jsonl` (the spec's labelling contract), and the
+real-screenshot calibration run from the plan's Task 13B appends to that same
+file; that append-only, `supersedes`-based set is the calibration input
+artifact the detectors' declared `accuracyFloor`s depend on.
 
 **Scope when triggered:** labelling run + `eval/verdicts/` fixture commit +
 promptfoo/OpenRouter comparison harness for the remaining subjective fields.

@@ -1,6 +1,6 @@
 # Deterministic detectors + verdict taxonomy — design
 
-**Status:** designed (pending plan)
+**Status:** implemented (2026-08-07)
 
 ## Why this exists
 

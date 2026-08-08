@@ -99,3 +99,59 @@ retuning against the label set) is follow-up work, not a floor decision.
    `calibration.ts` skips `disabled` detectors when computing stats, so the
    five disabled fields' numbers above cannot be re-derived from the CLI;
    this file is their only record until the detectors are made robust.
+
+## Cohort run (2026-08-08)
+
+The first representative run from the plan's Task 20 rollout sequence:
+`npm run verify -- --limit 50 --detectors on` against the live corpus.
+Model minimax/MiniMax-M3 (DeepSeek peak-hour routing kicked in, UTC 02:00) ·
+image detail low · sampling pinned `temperature=0 seed=20260806` ·
+verifier-v1. 50 entries scanned (48 fresh + 2 already processed at this
+version by the warm-up smoke run).
+
+- Verdicts: **420 pass, 18 contradicted, 306 abstain, 312 gated, 2 fail**
+  (image-level only — entries with no image path).
+- Zero-assertion prose fields: 12.
+
+Per-detector rates (straight from the run report's telemetry lines):
+
+| detector | n | pass | contradicted | abstain |
+|---|---|---|---|---|
+| visual.dominantColors | 48 | 47 (98%) | 1 (2%) | 0 (0%) |
+| visual.colorRoles | 10 | 0 (0%) | 10 (100%) | 0 (0%) |
+| platform | 48 | 0 (0%) | 0 (0%) | 48 (100%) |
+
+**Gate check (Task 20 Step 2: stop if a calibrated field's contradiction rate
+is far above its Task 13B baseline):** dominantColors 2% vs calibration 0/12 —
+one finding, within noise. platform 0% contradicted — 48/48 abstained because
+340/787 corpus entries carry no recorded `platform` value (the detector can
+only affirm against a recorded value, platform.ts:16). Neither calibrated
+field trips the gate; the run is scaled-eligible on that basis.
+
+**Qualitative alarm (no Task 13B baseline exists for it):** the enabled
+contradiction-only `visual.colorRoles` lane contradicted **10/10** recorded
+palettes, every one with `measured: ""` — the detector finds no pixels
+matching the recorded roles at all. Likely a detector/extractor serialization
+mismatch (recorded is a formatted string, measured expects quantized hexes),
+not 10 genuine corpus errors. This lane is the largest single source of the
+19 findings (10 of 19) and should be investigated before the full-corpus
+scale run writes hundreds of findings; the suspect report makes the 19
+findings all rank above model findings for triage.
+
+**Findings and triage:** 19 `dataQuality` findings total — 11 detector
+(10 colorRoles + 1 dominantColors: origin-origin-3, measured `""` vs
+recorded `""` — itself a candidate detector edge case) and 8 vision
+(critique ×2, layout ×3, styleTags, usesBorders, +1). None have been
+triaged yet (dismiss/retriage are human actions; the cohort stage is
+measurement).
+
+**Fields lit up:** all 50 cohort entries carry `verification` records
+(48 fresh + 2 prior); every entry with a contradiction also carries
+`dataQuality`. 2/50 entries failed at the image level (no image path).
+
+**Per-entry model calls:** ≈3.2–3.4/entry, derived from verdict counts
+(48 × 3 calls [verify + re-produce Pass 1 + Pass 2] + ~10 re-verify asks
+for the corroboration path ≈ 154 calls); the run log does not count calls
+directly. The pre-detector estimate tool projects a worst case of 4/entry,
+so detector lanes do not change the per-entry call count (calls are
+per-entry, not per-field) — they change which lane writes the verdict.

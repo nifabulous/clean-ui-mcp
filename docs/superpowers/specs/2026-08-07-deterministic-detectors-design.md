@@ -108,6 +108,16 @@ Three new modules:
 
 ### Two detector categories
 
+> **Implementation note (2026-08-08).** A disabled detector's field keeps its
+> `mechanical` classification in `TIER_BY_FIELD`; it does NOT get rewritten to
+> its old tier. `fieldLeavesVisionForEntry` returns false whenever
+> `det.disabled` is set, so the field stays in the vision `pending` set anyway —
+> the same outcome through one gate instead of a mutable tier table. Every other
+> `tierForField` consumer branches only on `gated` and `prose`, so the residual
+> `mechanical` label is inert. Described here because the earlier "reverts to its
+> pre-detector tier" wording would lead a reader to "fix" working code.
+
+
 The distinction is load-bearing, not cosmetic. A verification key covers exactly
 one value, so a key whose claim cannot be *fully* checked must never pass — a
 pass makes `isVerified` true and the serving path then emits the whole value,
@@ -267,7 +277,8 @@ reviewed at merge, not asserted in CI, because CI has no access to the images.
 The registry declares an `accuracyFloor` per detector and a `disabled` state.
 At merge time the floor is set from the real-screenshot calibration; a detector
 that cannot clear it on the real set **ships disabled**, its field **reverts to
-its pre-detector tier** (`factual`/`soft`, as in `TIER_BY_FIELD` today) and
+the vision path** (`fieldLeavesVisionForEntry` returns false for a disabled
+detector, so the field stays in `pending` regardless of its tier) and
 stays in the vision path — the field is never left `mechanical` with a
 detector that can only abstain, which would darken it permanently. CI's
 held-out gate skips disabled detectors; for enabled ones it asserts measured
@@ -426,7 +437,7 @@ runDetectors(entry, sharedCtx)
    │       -> { verdict, measured, confidence, reason }
    │     confidence inside band         -> abstain (overrides the verdict)
    │     accuracy floor unmet           -> detector disabled, field reverts to
-   │                                       its pre-detector tier (stays in vision)
+   │                                       vision (fieldLeavesVisionForEntry=false)
    │     !canAffirm(recorded)           -> verdict capped at contradicted/abstain
    │                                       (enforced in the runner)
    │     contradiction-only computed a pass -> downgraded to abstain
@@ -519,7 +530,7 @@ field is either deterministic or it is not.
 | No recorded value for the field | `gate` — nothing to verify |
 | Recorded hex malformed (`"blue"`, `#12`) | `abstain`, not `contradicted`. An unparseable claim is unverifiable, not disproven |
 | Measurement inside the confidence band | `abstain`, even when the raw verdict was `pass` or `contradicted`. The band wins |
-| Detector below its accuracy floor | Disabled at registry level, field tier reverts to its pre-detector tier (stays in vision), always `abstain`, CI held-out gate skips it |
+| Detector below its accuracy floor | Disabled at registry level; `fieldLeavesVisionForEntry` returns false so the field stays in the vision `pending` set, always `abstain`, CI held-out gate skips it |
 | Certifying detector on a non-affirmable recorded value | Verdict capped at `contradicted`/`abstain` (runner-enforced); on `abstain` the field proceeds to vision and can pass via the model |
 | Contradiction-only detector computes a pass | Downgraded to `abstain`. Enforced in the runner, not left to each detector |
 
@@ -542,7 +553,7 @@ affirmed by the vision model, never by a detector.
 luminance ramps that mimic shadows. This is the main false-positive risk for
 `usesShadows` and the reason its confidence is Medium. The real-screenshot
 calibration set is the mitigation; if the detector cannot clear its floor there,
-it ships disabled and its field reverts to its pre-detector tier, staying with
+it ships disabled and its field stays with
 vision.
 
 ## Testing
@@ -572,7 +583,7 @@ the band overrides a contradiction, keeping `dataQuality` actionable.
 **Calibration gate.** `calibration.test.ts` runs every certifying detector over
 its **held-out** synthetic set and asserts measured accuracy ≥ its declared
 floor — explicitly not the tune set, and **skipping detectors marked disabled**
-(whose fields have reverted to their pre-detector tier). This is the mechanism
+(whose fields stay on the vision path). This is the mechanism
 that stops a threshold regression from silently resuming trust-record writes.
 
 **Registry contract test.** The drift guard, and it is category-aware — a single
@@ -587,7 +598,8 @@ detectors deliberately keep their original tier:
   filter is asserted at the boundary values (`usesShadows: false` stays in
   `pending`; `usesShadows: true` leaves it)
 - disabled detectors are exempt from the first two clauses — their field reverts
-  to its pre-detector tier, so a disabled certifying detector's field is NOT
+  on the vision path via `fieldLeavesVisionForEntry`, so a disabled certifying
+  detector's field is NOT
   required to be `mechanical`
 
 A field reclassified without a detector would otherwise route to a vision prompt
@@ -625,7 +637,7 @@ never `corpus/entries.json`.
 
 ## Risks
 
-1. **`usesShadows` cannot clear its floor on real screenshots.** Photographic content mimics shadow gradients. Mitigated by the real calibration set catching it before merge; the detector then ships disabled and its field reverts to its pre-detector tier, staying with vision. Cost is a fixture set and no benefit — not a regression.
+1. **`usesShadows` cannot clear its floor on real screenshots.** Photographic content mimics shadow gradients. Mitigated by the real calibration set catching it before merge; the detector then ships disabled and its field stays with vision. Cost is a fixture set and no benefit — not a regression. **This risk materialised** (2026-08-07): `usesShadows` measured 0.000 accuracy / 0.100 decisive on 10 real labels and shipped disabled — along with the other four pixel detectors. See `docs/verifier-calibration.md`.
 2. **Thresholds tuned on synthetic images do not transfer.** The held-out split catches overfitting to the generator; the real set catches overfitting to synthetic-ness. Both are needed, which is why both exist.
 3. **The suspect report is ignored.** A `dataQuality` map nobody reads is dead weight. Mitigated by surfacing the count in `doctor.ts`, which is already part of the routine integrity check.
 4. **More image-confirmed records mean more staleness churn** on re-capture. Accepted: it is the correct semantics. Flagged so the increase is expected rather than alarming.

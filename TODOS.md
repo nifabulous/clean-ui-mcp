@@ -593,3 +593,88 @@ remove the scope note that excludes it.
 
 **Depends on / blocked by:** None. Follow-up to
 `2026-08-03-c3-serve-corpus-prose-phase1.md` Tasks 3/7.
+
+---
+
+## Corpus backfill: the 298 gated fields
+
+**What:** Re-run the tagger to populate the five fields that are recorded on
+almost no entries, so the verifier has something to verify.
+
+**Why:** The 2026-08-08 diagnosis measured 298 `gate — no recorded value to
+verify` verdicts, 28% of all verdicts in the 50-entry cohort. They concentrate in
+five fields whose corpus coverage is ~3%:
+
+| field | recorded / 787 |
+|---|---|
+| domainTags | 14 |
+| mood | 22 |
+| colorScheme | 22 |
+| components | 23 |
+| typePairing | 0 usable (`display`/`body` null on all 787) |
+
+This is the single largest number on the verification board — larger than the 244
+model-lane abstains and far larger than the 85 abstains element detection could
+ever have reached. Verifying a field the corpus does not have is free and
+worthless.
+
+**Why deferred:** It is tagger work, not verifier work. Nothing in the abstain
+diagnosis or the element-box probe touches it, and folding it into either would
+have made both results uninterpretable — the same reason the diagnosis spec put
+it out of scope. It deserves its own cycle with its own before/after measurement.
+
+**Trigger:** Next verification cycle after the follow-up plan's workstreams land.
+Nothing blocks it; it is sequenced, not gated.
+
+---
+
+## Consensus ask for the model lane (Rule 2 branch 2, second half)
+
+**What:** A second independent ask for fields the model declines to confirm,
+resolving agreement/disagreement rather than accepting a single abstain.
+
+**Why:** The diagnosis's Rule 2 identified two levers for model-lane headroom:
+the prompt contract (being fixed in follow-up Workstream B1) and consensus. Only
+the first is in scope there.
+
+**Why deferred:** Its cost/benefit is not yet priceable. Workstream B2 re-measures
+the cohort after the prompt fix; the size of that delta determines whether
+consensus is worth ~2× the per-field call cost. Deciding before the number exists
+would be guessing, and the diagnosis exists precisely to stop that.
+
+**Trigger:** B2 reports. If the prompt fix closes most of the 50 `verdict-missing`
+first causes, consensus is likely not worth it. If it closes few, the residue is
+genuine model uncertainty and consensus becomes the live option.
+
+---
+
+## Labelled container boxes on the corpus (recall check + any web-trained detector)
+
+**What:** Human-labelled bounding boxes for UI containers (cards, panels,
+surfaces) on corpus screenshots — starting with the 46 already carrying
+element-field labels.
+
+**Why:** It is the one artifact that unblocks two separate things at once.
+
+1. **The probe's missing recall check.** `docs/element-box-probe.md` records that
+   all four rubric checks are precision-flavoured: they ask whether the boxes a
+   proposer returned are geometrically clean, never whether the containers were
+   found. A proposer returning nothing but word-boxes can score well — rung 1
+   scored 23.9% with 96% of its boxes being text. The rubric can rule out; it
+   cannot rule in, *even when the numbers look good*. Fixing that needs ground
+   truth, not a fifth precision check.
+2. **Fine-tuning a detector for web.** Rung 3c (deki-yolo) has the right class
+   (`View` containers) but is trained on 486 MOBILE screenshots, and 67.5% of its
+   `View` boxes on web screenshots are text. Adapting it needs web-labelled
+   container boxes — the same artifact.
+
+**Why deferred:** It is a real labelling investment and should be a deliberate
+bet, not a side effect of closing a probe. The element-detection line is closed
+under its pre-registered rule, and the cheaper unexplored option (the deki-recall
++ 3a-precision box-refinement hybrid, `docs/element-box-probe.md`) needs **no
+labels at all**. Spending the labelling budget before trying the free thing is
+the wrong order.
+
+**Trigger:** Either the box-refinement hybrid is tried and shows the geometry can
+work (making labels worth buying), or element detection is reopened for a reason
+independent of this probe. Not before.

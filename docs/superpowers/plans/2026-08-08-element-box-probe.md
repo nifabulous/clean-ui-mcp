@@ -1286,20 +1286,30 @@ the default gate; they run explicitly in Task 6.
 
 - [ ] **Step 5: Run rung 1 over the real probe set**
 
+The invariant to check is the tree the probe actually reads. `run_probe.py` never
+opens `corpus/entries.json`; it resolves images from `labels.jsonl`, whose
+`imagePath` values are absolute into the **main checkout**
+(`/Users/…/clean-ui-mcp/corpus/images-private/…`). Copying `entries.json` into
+the worktree and hashing that copy would verify a file the probe never touches —
+a check that cannot fail, which reads as verification while proving nothing.
+
 ```bash
+MAIN=/Users/olaniyi.oladokun/Downloads/clean-ui-mcp
 cd eval/element-box-probe
-# The hash gate needs the live corpus present; git worktrees do not carry
-# untracked files. Copy it in first (gitignored via .git/info/exclude, stays
-# local, never committed).
-mkdir -p ../../corpus
-cp /Users/olaniyi.oladokun/Downloads/clean-ui-mcp/corpus/entries.json ../../corpus/entries.json
-shasum -a 256 ../../corpus/entries.json > /tmp/corpus-before.txt
+# Snapshot the tree the probe genuinely reads, in the checkout it reads it from.
+shasum -a 256 "$MAIN/corpus/entries.json" > /tmp/probe-corpus-before.txt
+find "$MAIN/corpus/images-private" -type f -newermt '1 minute ago' | wc -l > /tmp/probe-images-before.txt
 .venv/bin/python run_probe.py --rung classical --overlays
-shasum -a 256 ../../corpus/entries.json | diff - /tmp/corpus-before.txt && echo "CORPUS UNCHANGED"
-wc -l metrics.jsonl scores.tsv
+# 1. The main checkout's corpus file is untouched.
+shasum -a 256 "$MAIN/corpus/entries.json" | diff - /tmp/probe-corpus-before.txt && echo "CORPUS FILE UNCHANGED"
+# 2. No private image was written (read-only opens leave mtime alone).
+test "$(find "$MAIN/corpus/images-private" -type f -newermt '2 minutes ago' | wc -l)" -eq 0 && echo "IMAGES UNWRITTEN"
+# 3. The probe wrote ONLY inside its own directory.
+cd ../.. && git status --porcelain | grep -v '^?? eval/element-box-probe/' | grep -v '^ M eval/element-box-probe/' || echo "NO WRITES OUTSIDE THE PROBE DIR"
+cd eval/element-box-probe && wc -l metrics.jsonl scores.tsv
 ```
 
-Expected: a JSON verdict, `CORPUS UNCHANGED`, and non-empty outputs. Exit code 1 means the rung failed the rubric — that is a **result**, not an error, and the ladder continues to Task 6.
+Expected: a JSON verdict, `CORPUS FILE UNCHANGED`, `IMAGES UNWRITTEN`, `NO WRITES OUTSIDE THE PROBE DIR`, and non-empty outputs. Exit code 1 from `run_probe.py` means the rung failed the rubric — that is a **result**, not an error, and the ladder continues to Task 6.
 
 If any image is reported `MISSING`, record the count and the ids. Do not quietly proceed on a shrunk denominator.
 
@@ -1484,7 +1494,7 @@ If either model's API differs from the above at the pinned `transformers` versio
 ```bash
 .venv/bin/python run_probe.py --rung florence2 --overlays
 .venv/bin/python run_probe.py --rung moondream --overlays
-shasum -a 256 ../../corpus/entries.json | diff - /tmp/corpus-before.txt && echo "CORPUS UNCHANGED"
+shasum -a 256 "$MAIN/corpus/entries.json" | diff - /tmp/probe-corpus-before.txt && echo "CORPUS FILE UNCHANGED"
 ```
 
 Expected: two verdicts appended to `metrics.jsonl`/`scores.tsv`, corpus unchanged.
@@ -1595,5 +1605,5 @@ Folded from the eng review of this plan:
 - `--overlays` is implemented (`render_overlay` draws boxes to `out/`).
 - `rung_verdict` distinguishes a missing field (zero rows) from a failing one,
   reporting `missing_fields` and failing the rung when any field is absent.
-- Task 5 step 5 copies `corpus/entries.json` from the main checkout before the
-  hash gate (untracked files do not exist in worktrees).
+- Task 5 step 5 checks the tree the probe actually reads (the MAIN checkout's
+  corpus), not a copy of a file it never opens. Superseded 2026-08-08.

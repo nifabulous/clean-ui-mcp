@@ -193,6 +193,26 @@ eval/c2/remediation-scorecards/*
 # three pilot packages. Tracked because downstream gates validate against it
 # via `npm run validate:c2-pilot`.
 !eval/c2/pilot/manifest.json
+# Element-box probe (docs/superpowers/specs/2026-08-08-element-box-probe-design.md).
+# Sources, pinned inputs and NUMERIC outputs are tracked; `out/` is not — it holds
+# overlay renders of private corpus screenshots, and corpus/images-private/* has
+# never entered git.
+!eval/element-box-probe/
+eval/element-box-probe/*
+!eval/element-box-probe/README.md
+!eval/element-box-probe/requirements.txt
+!eval/element-box-probe/requirements-rung2.txt
+!eval/element-box-probe/pytest.ini
+!eval/element-box-probe/entries.txt
+!eval/element-box-probe/build_entries.py
+!eval/element-box-probe/proposers.py
+!eval/element-box-probe/rubric.py
+!eval/element-box-probe/run_probe.py
+!eval/element-box-probe/metrics.jsonl
+!eval/element-box-probe/scores.tsv
+!eval/element-box-probe/tests/
+eval/element-box-probe/tests/*
+!eval/element-box-probe/tests/*.py
 # Durability — rolling snapshots of entries.json, written on every UI save.
 # Gitignored because they're large, derivable, and purely a local safety net.
 corpus/.snapshots/

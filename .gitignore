@@ -202,6 +202,7 @@ eval/element-box-probe/*
 !eval/element-box-probe/README.md
 !eval/element-box-probe/requirements.txt
 !eval/element-box-probe/requirements-rung2.txt
+!eval/element-box-probe/requirements-rung3.txt
 !eval/element-box-probe/pytest.ini
 !eval/element-box-probe/entries.txt
 !eval/element-box-probe/build_entries.py

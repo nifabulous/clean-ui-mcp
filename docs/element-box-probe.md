@@ -4,6 +4,17 @@
 **Spec:** `docs/superpowers/specs/2026-08-08-element-box-probe-design.md`
 **Evidence:** `eval/element-box-probe/metrics.jsonl`, `eval/element-box-probe/scores.tsv`
 
+**Canonical runs (2026-08-08, data hygiene fold):** the committed files were
+pruned to the runs the numbers above come from. `classical` retains TWO runs by
+design: `2026-08-08T12:28:39+00:00` (the pre-amendment 14-key schema, the 2.2%
+baseline in the check-2 comparison table) and `2026-08-08T13:04:21+00:00` (the
+final amended run, 23.9%). `florence2`, `moondream`, `uied`, `omniparser` and
+`deki` each have exactly one runId — the only rows for that method. The
+intermediate classical run (`12:59:22`, an amended schema without
+`interior_edge_density`) was pruned as superseded. Rung-3 dependencies are
+pinned in `eval/element-box-probe/requirements-rung3.txt` so the rung whose
+result the decision rests on is reproducible from committed files.
+
 ## Verdict
 
 **No rung passed the 70% bar.** Six proposers measured: **UIED techniques 52.2%**,

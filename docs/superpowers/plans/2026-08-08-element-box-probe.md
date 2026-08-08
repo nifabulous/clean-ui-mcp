@@ -1607,3 +1607,13 @@ Folded from the eng review of this plan:
   reporting `missing_fields` and failing the rung when any field is absent.
 - Task 5 step 5 checks the tree the probe actually reads (the MAIN checkout's
   corpus), not a copy of a file it never opens. Superseded 2026-08-08.
+
+Second round (2026-08-08, post-execution review fold):
+
+- `requirements-rung3.txt` pins easyocr/ultralytics/huggingface_hub — rungs
+  3a-3c were imported but unpinned, making the rung that carries the decision
+  unreproducible from committed files.
+- The committed `metrics.jsonl`/`scores.tsv` are pruned to canonical runs
+  (classical keeps the pre-amendment A-baseline and the final amended run; the
+  superseded intermediate run is dropped) and `docs/element-box-probe.md`
+  records the canonical runIds.

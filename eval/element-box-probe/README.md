@@ -14,6 +14,9 @@ usable. Design: `docs/superpowers/specs/2026-08-08-element-box-probe-design.md`.
     .venv/bin/python run_probe.py --rung classical
 
 Rung 2 additionally needs `-r requirements-rung2.txt` (~1-2GB of model weights).
+Rungs 3a-3c additionally need `-r requirements-rung3.txt` (easyocr, ultralytics,
+huggingface_hub — the rungs whose result the decision rests on must be
+reproducible from committed files).
 
 ## Outputs
 

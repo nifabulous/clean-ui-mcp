@@ -475,6 +475,12 @@ export interface VerifyEntryDeps {
   callVision: (prompt: string, imagePath: string) => Promise<string>;
   reproduce: (entry: CorpusEntryT, imagePath: string) => Promise<CorpusEntryT>;
   detectors?: boolean;
+  /**
+   * Bypass the per-field resume skip so an already-processed cohort can be
+   * re-measured. Only ever set by `--diagnose`, which also forces dry-run, so
+   * the bypass can never reach a corpus write.
+   */
+  diagnose?: boolean;
 }
 
 export async function verifyEntry(
@@ -490,6 +496,7 @@ export async function verifyEntry(
   const dataQuality: Record<string, DataQualityRecord> = {};
 
   const detectorsEnabled = deps.detectors ?? true;
+  const diagnose = deps.diagnose ?? false;
   let outcome: RunDetectorsOutcome = { passes: [], contradicted: [], abstained: [], results: {} };
   let detectorContradictions: string[] = [];
   let pending: string[];
@@ -507,7 +514,7 @@ export async function verifyEntry(
         !fieldLeavesVisionForEntry(entry, field, detectorsEnabled)
         && tierForField(field) !== "gated"
         && !outcome.contradicted.includes(field)
-        && !alreadyProcessedAtVersion(entry, field, VERIFIER_VERSION),
+        && (diagnose || !alreadyProcessedAtVersion(entry, field, VERIFIER_VERSION)),
     );
 
     for (const field of outcome.passes) verdicts.push({ field, verdict: "pass", reason: "detector", source: "detector" });
@@ -893,6 +900,27 @@ export function selectPending(entries: readonly CorpusEntryT[], version: string)
   });
 }
 
+/**
+ * Select entries by EXPLICIT id, in the order given. `--limit` cannot select a
+ * cohort: `main` slices `selectPending` by corpus order, and with the resume
+ * skip bypassed that returns every image-bearing entry — measured 0 of 50
+ * positional matches against the committed report. An unknown id throws rather
+ * than being silently dropped, the same rule `--retriage` applies.
+ */
+export function selectByIds(entries: readonly CorpusEntryT[], ids: readonly string[]): CorpusEntryT[] {
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const missing = ids.filter((id) => !byId.has(id));
+  if (missing.length > 0) {
+    throw new Error(`--only-ids: unknown entry id(s): ${missing.join(", ")}`);
+  }
+  const selected = ids.map((id) => byId.get(id) as CorpusEntryT);
+  const noImage = selected.filter((e) => !e.image?.path).map((e) => e.id);
+  if (noImage.length > 0) {
+    throw new Error(`--only-ids: entries with no image path: ${noImage.join(", ")}`);
+  }
+  return selected;
+}
+
 export function buildRunReport(
   result: RunResult,
   opts: {
@@ -1231,9 +1259,24 @@ async function main(): Promise<void> {
       "reason": { type: "string" },
       "include-dismissed": { type: "boolean", default: false },
       "report-suspect": { type: "boolean", default: false },
+      "diagnose": { type: "boolean", default: false },
+      "only-ids": { type: "string" },
     },
   });
-  const dryRun = values["dry-run"] === true;
+  const diagnose = values.diagnose === true;
+  const onlyIdsRaw = values["only-ids"];
+  // The flag matrix is exhaustive on purpose: there is no invocation that
+  // re-measures the full corpus by accident, and no invocation where
+  // --only-ids is silently ignored.
+  if (diagnose && (onlyIdsRaw === undefined || onlyIdsRaw.trim() === "")) {
+    throw new Error("--diagnose requires --only-ids: a diagnosis run must name the entries it re-measures");
+  }
+  if (!diagnose && onlyIdsRaw !== undefined) {
+    throw new Error("--only-ids requires --diagnose: it has no effect on a normal run");
+  }
+  // --diagnose IMPLIES --dry-run. One flag, so no half-set state exists where
+  // the resume bypass is active and the corpus write is not gated.
+  const dryRun = values["dry-run"] === true || diagnose;
   const estimate = values.estimate === true;
   const limit = Number(values.limit);
   const sampleSize = Number(values["sample-size"]) || 30;
@@ -1246,7 +1289,10 @@ async function main(): Promise<void> {
   // real corpus/entries.json.
   const rawCorpus = corpusPath ? JSON.parse(readFileSync(corpusPath, "utf8")) : null;
   const entries: CorpusEntryT[] = rawCorpus ? (rawCorpus.entries as CorpusEntryT[]) : loadCorpus();
-  const pending = selectPending(entries, VERIFIER_VERSION).slice(0, Number.isFinite(limit) && limit > 0 ? limit : undefined);
+  const onlyIds = onlyIdsRaw ? onlyIdsRaw.split(",").map((s) => s.trim()).filter(Boolean) : null;
+  const pending = onlyIds
+    ? selectByIds(entries, onlyIds)
+    : selectPending(entries, VERIFIER_VERSION).slice(0, Number.isFinite(limit) && limit > 0 ? limit : undefined);
 
   // --retriage / --dismiss: ENTRY-EDITING actions that run and exit before any
   // verification — they change what the NEXT run will do, so the current run
@@ -1408,6 +1454,7 @@ async function main(): Promise<void> {
             callVisionModel(prompt, image, visionProvider as Provider | undefined, undefined, undefined, imageDetail, sampling),
           reproduce,
           detectors: detectorsEnabled,
+          diagnose,
         }),
         entryTimeoutMs,
         `entry "${entry.id}"`,

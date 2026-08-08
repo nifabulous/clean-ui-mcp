@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tierForField, type VerifierTier } from "./verify-corpus.js";
 import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict, type FieldVerdict, type ParsedField } from "./verify-corpus.js";
 import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReproducedProse, VERIFIER_VERSION } from "./verify-corpus.js";
-import { buildRunReport, selectPending, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
+import { buildRunReport, selectPending, selectByIds, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
 import { mergeDataQuality, retriageDataQuality, dismissDataQuality, renderSuspectReport } from "./verify-corpus.js";
 import { withTimeout, reproduceCritiqueModel } from "./verify-corpus.js";
 import { resolveConfiguredVisionProvider, resolveSampling } from "./verify-corpus.js";
@@ -1358,5 +1358,112 @@ describe("verifyEntry — runner-set abstain causes", () => {
     expect(v?.firstCause).toBe("model-abstained");
     expect(v?.cause).toBe("verdict-missing");
     expect(v?.site).toBe("reverify");
+  });
+});
+
+// Task 5 fixtures: `entry()` plus the layout claim the vision prompt needs.
+function entryFixture(over: Partial<CorpusEntryT> = {}): CorpusEntryT {
+  // `layout` is a claim OBJECT for claimForField, not a string.
+  return entry({ layout: { form: "left navigation rail with grouped metrics" }, ...over });
+}
+
+function stampedEntryFixture(imagePath: string): CorpusEntryT {
+  return entry({
+    image: { visibility: "private", path: imagePath, width: 390, height: 844 },
+    layout: { form: "left navigation rail with grouped metrics" },
+    provenance: {
+      taggedBy: "auto",
+      verifyAttempts: { layout: { verifierVersion: VERIFIER_VERSION, verifiedAt: "2026-08-07" } },
+    },
+  });
+}
+
+describe("--only-ids selection", () => {
+  it("selects exactly the listed ids, in a corpus whose first-N-by-order set differs", () => {
+    // The fixture is built so an order-based selection CANNOT pass: the ids we
+    // ask for are the LAST two, and the first two are also image-bearing and
+    // unprocessed, so `selectPending(...).slice(0, 2)` would return them instead.
+    const entries = [
+      entryFixture({ id: "first" }), entryFixture({ id: "second" }),
+      entryFixture({ id: "third" }), entryFixture({ id: "fourth" }),
+    ];
+    expect(selectByIds(entries, ["third", "fourth"]).map((e) => e.id)).toEqual(["third", "fourth"]);
+    expect(selectPending(entries, VERIFIER_VERSION).slice(0, 2).map((e) => e.id)).toEqual(["first", "second"]);
+  });
+
+  it("throws naming every unknown id rather than skipping it", () => {
+    const entries = [entryFixture({ id: "first" })];
+    expect(() => selectByIds(entries, ["first", "nope", "alsoNope"]))
+      .toThrow(/unknown entry id\(s\): nope, alsoNope/);
+  });
+
+  it("throws when a listed entry has no image path", () => {
+    const entries = [entryFixture({ id: "first", image: undefined })];
+    expect(() => selectByIds(entries, ["first"])).toThrow(/no image path: first/);
+  });
+
+  it("preserves the order of the id list, not corpus order", () => {
+    const entries = [entryFixture({ id: "a" }), entryFixture({ id: "b" })];
+    expect(selectByIds(entries, ["b", "a"]).map((e) => e.id)).toEqual(["b", "a"]);
+  });
+});
+
+describe("verifyEntry — diagnose bypasses the per-field resume skip", () => {
+  it("re-queues a field already stamped at the current version", async () => {
+    const entry = entryFixture({ id: "e1" });
+    entry.provenance = {
+      taggedBy: "auto",
+      verifyAttempts: { layout: { verifierVersion: VERIFIER_VERSION, verifiedAt: "2026-08-07" } },
+    };
+    const asked: string[] = [];
+    await verifyEntry(entry, fixtureImagePath(), {
+      now: () => "2026-08-08T00:00:00.000Z",
+      callVision: async (prompt) => { asked.push(prompt); return "{}"; },
+      reproduce: async (e) => e,
+      detectors: false,
+      diagnose: true,
+    });
+    expect(asked.join("\n")).toContain("layout");
+  });
+
+  it("still skips that field without the flag", async () => {
+    const entry = entryFixture({ id: "e1" });
+    entry.provenance = {
+      taggedBy: "auto",
+      verifyAttempts: { layout: { verifierVersion: VERIFIER_VERSION, verifiedAt: "2026-08-07" } },
+    };
+    const asked: string[] = [];
+    await verifyEntry(entry, fixtureImagePath(), {
+      now: () => "2026-08-08T00:00:00.000Z",
+      callVision: async (prompt) => { asked.push(prompt); return "{}"; },
+      reproduce: async (e) => e,
+      detectors: false,
+    });
+    expect(asked.join("\n")).not.toContain("- layout:");
+  });
+});
+
+describe("--diagnose leaves the corpus byte-identical", () => {
+  it("writes nothing even though it re-processes stamped fields", async () => {
+    // Corpus isolation: a temp --corpus file, NEVER corpus/entries.json.
+    const dir = mkdtempSync(join(tmpdir(), "verify-diagnose-"));
+    const imgDir = mkdtempSync(join(tmpdir(), "verify-diagnose-img-"));
+    const imgPath = join(imgDir, "e1.png");
+    writeFileSync(imgPath, PNG_BYTES);
+    const tmp = join(dir, "corpus.json");
+    writeFileSync(tmp, JSON.stringify({ entries: [stampedEntryFixture(imgPath)] }, null, 2));
+    const before = readFileSync(tmp);
+    // `main` reads process.argv and is not exported, so drive the CLI through a
+    // child process on the SOURCE (tsx), never a stale dist/ build. One real
+    // vision call may fire for the re-queued layout field; the byte-identical
+    // assertion holds whatever the call returns because --diagnose implies
+    // dry-run.
+    const { execFileSync } = await import("node:child_process");
+    execFileSync(
+      process.execPath,
+      ["--import", "tsx", "src/scripts/verify-corpus.ts", "--diagnose", "--only-ids", "e1", "--corpus", tmp, "--detectors", "off"],
+      { stdio: "pipe" },
+    );
+    expect(readFileSync(tmp).equals(before)).toBe(true);
   });
 });

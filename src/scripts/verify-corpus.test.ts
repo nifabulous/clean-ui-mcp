@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tierForField, type VerifierTier } from "./verify-corpus.js";
-import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict } from "./verify-corpus.js";
+import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict, type FieldVerdict, type ParsedField } from "./verify-corpus.js";
 import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReproducedProse, VERIFIER_VERSION } from "./verify-corpus.js";
 import { buildRunReport, selectPending, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
 import { mergeDataQuality, retriageDataQuality, dismissDataQuality, renderSuspectReport } from "./verify-corpus.js";
@@ -1058,4 +1058,100 @@ describe("reproduceCritiqueModel — the report names the model Pass 2 actually 
     expect(reproduceCritiqueModel("claude", "claude-sonnet-4-5")).toBe("claude-sonnet-4-5");
     expect(reproduceCritiqueModel(undefined, "gpt-5.4-nano")).toBe("gpt-5.4-nano");
   });
+});
+
+describe("decideFieldVerdict — verdict logic characterization (governing invariant)", () => {
+  // Every (tier x parsed-state) combination the function can see, with the
+  // verdict it returns TODAY. Later tasks add `cause`, `site` and richer reason
+  // strings; if any of them moves a VERDICT, this table fails.
+  const PARSED_STATES: Array<{ name: string; parsed: ParsedField }> = [
+    { name: "confirmed", parsed: { confirmed: true, contradicted: false } },
+    { name: "contradicted", parsed: { confirmed: false, contradicted: true } },
+    { name: "neither", parsed: { confirmed: false, contradicted: false } },
+    { name: "confirmed with assertions", parsed: { confirmed: true, contradicted: false, assertions: ["a", "b"] } },
+    { name: "contradicted with assertions", parsed: { confirmed: false, contradicted: true, assertions: ["a"] } },
+    { name: "neither with assertions", parsed: { confirmed: false, contradicted: false, assertions: ["a"] } },
+    { name: "confirmed with empty assertions", parsed: { confirmed: true, contradicted: false, assertions: [] } },
+    { name: "contradicted with empty assertions", parsed: { confirmed: false, contradicted: true, assertions: [] } },
+    { name: "neither with empty assertions", parsed: { confirmed: false, contradicted: false, assertions: [] } },
+  ];
+
+  const EXPECTED: Record<VerifierTier, Record<string, FieldVerdict["verdict"]>> = {
+    gated: {
+      "confirmed": "gate",
+      "contradicted": "gate",
+      "neither": "gate",
+      "confirmed with assertions": "gate",
+      "contradicted with assertions": "gate",
+      "neither with assertions": "gate",
+      "confirmed with empty assertions": "gate",
+      "contradicted with empty assertions": "gate",
+      "neither with empty assertions": "gate",
+    },
+    prose: {
+      // Prose gates FIRST on an empty assertion list — before the contradicted
+      // check — so an empty list gates even when contradicted is true.
+      "confirmed": "gate",
+      "contradicted": "gate",
+      "neither": "gate",
+      "confirmed with assertions": "pass",
+      "contradicted with assertions": "contradicted",
+      "neither with assertions": "abstain",
+      "confirmed with empty assertions": "gate",
+      "contradicted with empty assertions": "gate",
+      "neither with empty assertions": "gate",
+    },
+    mechanical: {
+      "confirmed": "pass",
+      "contradicted": "contradicted",
+      "neither": "abstain",
+      "confirmed with assertions": "pass",
+      "contradicted with assertions": "contradicted",
+      "neither with assertions": "abstain",
+      "confirmed with empty assertions": "pass",
+      "contradicted with empty assertions": "contradicted",
+      "neither with empty assertions": "abstain",
+    },
+    factual: {
+      "confirmed": "pass",
+      "contradicted": "contradicted",
+      "neither": "abstain",
+      "confirmed with assertions": "pass",
+      "contradicted with assertions": "contradicted",
+      "neither with assertions": "abstain",
+      "confirmed with empty assertions": "pass",
+      "contradicted with empty assertions": "contradicted",
+      "neither with empty assertions": "abstain",
+    },
+    soft: {
+      "confirmed": "pass",
+      "contradicted": "contradicted",
+      "neither": "abstain",
+      "confirmed with assertions": "pass",
+      "contradicted with assertions": "contradicted",
+      "neither with assertions": "abstain",
+      "confirmed with empty assertions": "pass",
+      "contradicted with empty assertions": "contradicted",
+      "neither with empty assertions": "abstain",
+    },
+    a11y: {
+      "confirmed": "pass",
+      "contradicted": "contradicted",
+      "neither": "abstain",
+      "confirmed with assertions": "pass",
+      "contradicted with assertions": "contradicted",
+      "neither with assertions": "abstain",
+      "confirmed with empty assertions": "pass",
+      "contradicted with empty assertions": "contradicted",
+      "neither with empty assertions": "abstain",
+    },
+  };
+
+  for (const [tier, byState] of Object.entries(EXPECTED) as Array<[VerifierTier, Record<string, FieldVerdict["verdict"]>]>) {
+    for (const { name, parsed } of PARSED_STATES) {
+      it(`${tier} / ${name} -> ${byState[name]}`, () => {
+        expect(decideFieldVerdict("someField", tier, parsed).verdict).toBe(byState[name]);
+      });
+    }
+  }
 });

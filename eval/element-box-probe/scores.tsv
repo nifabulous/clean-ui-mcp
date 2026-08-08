@@ -136,3 +136,11 @@ classical	wealthsimple-wealthsimple-ios-screens-36-2026-07-05	visual.usesBorders
 classical	wealthsimple-wealthsimple-ios-screens-47-2026-07-05	visual.usesShadows	True	False	True	False	13	0.4615	1.0000	0.000680	2026-08-08T13:04:21+00:00
 classical	wealthsimple-wealthsimple-ios-screens-66-2026-07-05	visual.usesShadows	True	False	True	False	67	0.3433	1.0000	0.000855	2026-08-08T13:04:21+00:00
 classical	wise-wise-10	visual.usesBorders	True	False	True	False	18	0.2222	1.0000	0.000652	2026-08-08T13:04:21+00:00
+florence2	1-on-1-1-on-1	visual.usesBorders	False	False	False	True	1	0.0000	0.0000	0.995422	2026-08-08T13:07:16+00:00
+florence2	1-on-1-1-on-1-2	visual.usesBorders	False	False	False	True	1	0.0000	0.0000	0.995422	2026-08-08T13:07:16+00:00
+florence2	aboard-aboard	visual.cornerStyle	False	False	True	True	3	0.3333	0.6667	0.493526	2026-08-08T13:07:16+00:00
+florence2	aboard-aboard-3	visual.usesBorders	False	False	True	True	3	0.0000	1.0000	0.259296	2026-08-08T13:07:16+00:00
+florence2	aboard-aboard-4	visual.cornerStyle	False	False	False	True	1	0.0000	0.0000	0.995422	2026-08-08T13:07:16+00:00
+florence2	aboard-aboard-5	visual.spacingDensity	False	False	True	True	2	0.0000	0.5000	0.507742	2026-08-08T13:07:16+00:00
+florence2	aboard-by-teamtailor-aboard-by-teamtailor	visual.usesShadows	False	False	True	True	2	0.5000	0.5000	0.671872	2026-08-08T13:07:16+00:00
+florence2	afterpay-afterpay-2	visual.spacingDensity	False	False	True	True	2	0.0000	0.5000	0.498948	2026-08-08T13:07:16+00:00

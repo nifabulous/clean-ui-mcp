@@ -126,6 +126,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rung", required=True, help="proposer key, e.g. classical")
     parser.add_argument("--overlays", action="store_true", help="render out/ PNGs (untracked)")
+    parser.add_argument(
+        "--limit", type=int, default=0,
+        help="measure only the first N entries. The bound is PRINTED with the "
+             "verdict — a silently shrunk probe set reads as a cleaner result "
+             "than it is.",
+    )
     args = parser.parse_args()
 
     proposer = PROPOSERS[args.rung]
@@ -137,10 +143,13 @@ def main() -> int:
     scores_path = HERE / "scores.tsv"
     missing: list[str] = []
 
+    entry_lines = [l for l in (HERE / "entries.txt").read_text().splitlines() if l.strip()]
+    total_available = len(entry_lines)
+    if args.limit and args.limit > 0:
+        entry_lines = entry_lines[:args.limit]
+
     with metrics_path.open("a") as metrics_out, scores_path.open("a") as scores_out:
-        for line in (HERE / "entries.txt").read_text().splitlines():
-            if not line.strip():
-                continue
+        for line in entry_lines:
             entry_id, sha, field_name = line.split("\t")
             if entry_id not in resolved:
                 missing.append(entry_id)
@@ -167,6 +176,9 @@ def main() -> int:
 
     verdict = rung_verdict(scores)
     # A silently shrunk probe set would read as a cleaner result than it is.
+    if len(entry_lines) < total_available:
+        print(f"BOUNDED RUN: {len(entry_lines)} of {total_available} entries "
+              f"(--limit {args.limit}). Not a full-probe-set result.")
     if missing:
         print(f"MISSING {len(missing)} images (excluded from the denominator): {', '.join(missing)}")
     print(json.dumps(asdict(verdict), indent=2))

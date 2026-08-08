@@ -1,0 +1,12 @@
+{
+  "manifestHash": "35367333eedc564bf74a0de56d4f9ad3a6d63cdfbb22bd30a8e8eeab10ced492",
+  "floors": {
+    "platform": 0.85,
+    "visual.dominantColors": 0.85
+  },
+  "declaredFrom": {
+    "runId": "real-calibration-2026-08-07",
+    "recordedAt": "2026-08-08T00:35:00.000Z",
+    "report": "docs/verifier-calibration.md"
+  }
+}

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { CorpusEntryT } from "../schema.js";
 import type { LoadedCorpus } from "../persistence.js";
-import { corpusDefectCheck, summarizeCorpusDefects } from "./doctor-helpers.js";
+import { corpusDefectCheck, summarizeCorpusDefects, DATA_QUALITY_SOURCES } from "./doctor-helpers.js";
+import { detectorRegistry } from "../verify/detector-registry.js";
 import {
   loaderHealthCheck,
   publicationCheck,
@@ -511,6 +512,112 @@ describe("corpusDefectCheck", () => {
     // Report-only: the check must never claim it fixed or verified anything.
     expect(check.detail).not.toMatch(/verified|fixed/i);
   });
+
+  it("flags orphan keys and malformed/unknown sources in dataQuality", () => {
+    const check = corpusDefectCheck([defectEntry("dq-1", {
+      provenance: {
+        taggedBy: "auto",
+        dataQuality: {
+          "not-a-servable-key": { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" },
+          layout: { measured: null, recorded: null, source: "not-a-detector", verifierVersion: "v1", verifiedAt: "x" },
+        },
+      },
+    })], ALL_IMAGES);
+    const text = JSON.stringify(check);
+    expect(text).toContain("dataquality-orphan-key");
+    expect(text).toContain("dataquality-malformed");
+  });
+
+  it("surfaces the total contradiction count", () => {
+    const check = corpusDefectCheck([defectEntry("dq-2", {
+      provenance: {
+        taggedBy: "auto",
+        dataQuality: {
+          layout: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" },
+        },
+      },
+    })], ALL_IMAGES);
+    expect(JSON.stringify(check)).toContain("dataquality-count");
+  });
+
+  it("flags a pixel-pinned contradiction whose image bytes changed (Task 15's stale contract)", () => {
+    // ALL_IMAGES hashes to "a".repeat(64); the finding is pinned to different
+    // bytes — a re-capture — so the contradiction proves nothing about the
+    // current pixels and must surface for a human to --retriage it.
+    const check = corpusDefectCheck([defectEntry("dq-3", {
+      provenance: {
+        taggedBy: "auto",
+        dataQuality: {
+          layout: {
+            measured: "grid", recorded: "flex",
+            source: "vision", verifierVersion: "v1", verifiedAt: "x",
+            imageSha256: "b".repeat(64),
+          },
+        },
+      },
+    })], ALL_IMAGES);
+    expect(JSON.stringify(check)).toContain("dataquality-hash-stale");
+  });
+
+  it("reports a pixel-pinned finding whose image is missing, without aborting", () => {
+    const check = corpusDefectCheck([defectEntry("dq-4", {
+      provenance: {
+        taggedBy: "auto",
+        dataQuality: {
+          layout: {
+            measured: "grid", recorded: "flex",
+            source: "vision", verifierVersion: "v1", verifiedAt: "x",
+            imageSha256: "a".repeat(64),
+          },
+        },
+      },
+    })], NO_IMAGES);
+    expect(JSON.stringify(check)).toContain("dataquality-hash-stale");
+  });
+
+  it("counts only LIVE findings — a dismissed artefact stops nagging", () => {
+    const check = corpusDefectCheck([defectEntry("dq-5", {
+      provenance: {
+        taggedBy: "auto",
+        dataQuality: {
+          layout: {
+            measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x",
+            dismissed: { at: "2026-08-08", reason: "measurement artefact" },
+          },
+        },
+      },
+    })], ALL_IMAGES);
+    // No live contradiction: the count finding must NOT fire for a record the
+    // human already acknowledged (Task 15 Step 5B's contract).
+    expect(JSON.stringify(check)).not.toContain("dataquality-count");
+  });
+
+  it("accepts a real detector source without a malformed finding", () => {
+    const check = corpusDefectCheck([defectEntry("dq-6", {
+      provenance: {
+        taggedBy: "auto",
+        dataQuality: {
+          layout: {
+            measured: "grid", recorded: "flex",
+            source: "platform", verifierVersion: "v1", verifiedAt: "x",
+          },
+        },
+      },
+    })], ALL_IMAGES);
+    expect(JSON.stringify(check)).not.toContain("dataquality-malformed");
+  });
+
+  it("DATA_QUALITY_SOURCES stays in sync with the detector registry", () => {
+    const registryKeys = Object.keys(detectorRegistry);
+    const expected = new Set([...registryKeys, "vision"]);
+    for (const key of DATA_QUALITY_SOURCES) {
+      expect(expected.has(key), `doctor source "${key}" has no registry key and is not "vision"`).toBe(true);
+    }
+    for (const key of expected) {
+      expect(DATA_QUALITY_SOURCES.has(key), `registry key "${key}" missing from doctor sources`).toBe(true);
+    }
+    expect(DATA_QUALITY_SOURCES.size).toBe(expected.size);
+  });
 });
 
 // ── Detector correctness fixes (review round) ─────────────────────────────────
@@ -651,6 +758,122 @@ describe("summarizeCorpusDefects — review-round corrections", () => {
     })];
     expect(summarizeCorpusDefects(entries, NO_IMAGES).map((f) => f.detector))
       .toContain("verified-image-missing");
+  });
+});
+
+describe("corpusDefectCheck — record-map exclusivity", () => {
+  it("flags a field that spans verification and dataQuality", () => {
+    const entries = [defectEntry("overlap-1", {
+      provenance: {
+        taggedBy: "auto",
+        verification: { layout: VERIFICATION },
+        dataQuality: { layout: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" } },
+      },
+    })];
+    const findings = summarizeCorpusDefects(entries, ALL_IMAGES);
+    expect(findings.some((f) => f.detector === "record-map-overlap" && f.message.includes("layout"))).toBe(true);
+  });
+
+  it("flags a field that spans verification and verifyAttempts", () => {
+    const entries = [defectEntry("overlap-2", {
+      provenance: {
+        taggedBy: "auto",
+        verification: { layout: VERIFICATION },
+        verifyAttempts: { layout: VERIFICATION },
+      },
+    })];
+    const findings = summarizeCorpusDefects(entries, ALL_IMAGES);
+    expect(findings.some((f) => f.detector === "record-map-overlap")).toBe(true);
+  });
+
+  it("flags a field that spans verifyAttempts and dataQuality", () => {
+    // The untested pair. A marker beside a finding means the contradiction never
+    // revoked the attempt that preceded it — the field is both "tried and gave
+    // up" and "positively disproven", which are different states.
+    const entries = [defectEntry("overlap-3", {
+      provenance: {
+        taggedBy: "auto",
+        verifyAttempts: { layout: VERIFICATION },
+        dataQuality: { layout: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" } },
+      },
+    })];
+    const findings = summarizeCorpusDefects(entries, ALL_IMAGES);
+    const overlap = findings.find((f) => f.detector === "record-map-overlap");
+    expect(overlap).toBeDefined();
+    expect(overlap!.message).toContain("verifyAttempts");
+    expect(overlap!.message).toContain("dataQuality");
+    expect(overlap!.message, "must not name a map the field is absent from").not.toContain("verification and");
+  });
+
+  it("names all three maps, once, when a field is in every map", () => {
+    const entries = [defectEntry("overlap-all", {
+      provenance: {
+        taggedBy: "auto",
+        verification: { layout: VERIFICATION },
+        verifyAttempts: { layout: VERIFICATION },
+        dataQuality: { layout: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" } },
+      },
+    })];
+    const overlaps = summarizeCorpusDefects(entries, ALL_IMAGES)
+      .filter((f) => f.detector === "record-map-overlap");
+    // ONE finding per overlapping field, not one per map pair.
+    expect(overlaps).toHaveLength(1);
+    for (const m of ["verification", "verifyAttempts", "dataQuality"]) {
+      expect(overlaps[0].message).toContain(m);
+    }
+  });
+
+  it("reports each overlapping field separately", () => {
+    const entries = [defectEntry("overlap-multi", {
+      provenance: {
+        taggedBy: "auto",
+        verification: { layout: VERIFICATION, mood: VERIFICATION },
+        dataQuality: {
+          layout: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" },
+          mood: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" },
+        },
+      },
+    })];
+    const overlaps = summarizeCorpusDefects(entries, ALL_IMAGES)
+      .filter((f) => f.detector === "record-map-overlap");
+    expect(overlaps).toHaveLength(2);
+    expect(overlaps.map((f) => f.message).join(" ")).toContain("layout");
+    expect(overlaps.map((f) => f.message).join(" ")).toContain("mood");
+  });
+
+  it("a DISMISSED finding still counts as occupying dataQuality", () => {
+    // Dismissal stops the finding nagging the count, but the record is still
+    // there — so it can still collide with a trust record, and that collision is
+    // exactly as ambiguous as an undismissed one.
+    const entries = [defectEntry("overlap-dismissed", {
+      provenance: {
+        taggedBy: "auto",
+        verification: { layout: VERIFICATION },
+        dataQuality: {
+          layout: {
+            measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x",
+            dismissed: { at: "2026-08-08", reason: "artefact" },
+          },
+        },
+      },
+    })];
+    const findings = summarizeCorpusDefects(entries, ALL_IMAGES);
+    expect(findings.some((f) => f.detector === "record-map-overlap")).toBe(true);
+    // ...and it is still excluded from the count, which is a separate concern.
+    expect(findings.some((f) => f.detector === "dataquality-count")).toBe(false);
+  });
+
+  it("stays silent when the three maps are mutually exclusive", () => {
+    const entries = [defectEntry("exclusive-1", {
+      provenance: {
+        taggedBy: "auto",
+        verification: { layout: VERIFICATION },
+        verifyAttempts: { voice: VERIFICATION },
+        dataQuality: { mood: { measured: null, recorded: null, source: "vision", verifierVersion: "v1", verifiedAt: "x" } },
+      },
+    })];
+    const findings = summarizeCorpusDefects(entries, ALL_IMAGES);
+    expect(findings.some((f) => f.detector === "record-map-overlap")).toBe(false);
   });
 });
 

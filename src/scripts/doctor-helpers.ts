@@ -270,7 +270,12 @@ export type CorpusDefectDetector =
   | "verified-hash-stale"
   | "verification-malformed"
   | "verification-orphan-key"
-  | "platform-record-stale";
+  | "platform-record-stale"
+  | "dataquality-malformed"
+  | "dataquality-orphan-key"
+  | "dataquality-hash-stale"
+  | "dataquality-count"
+  | "record-map-overlap";
 
 export interface CorpusDefectFinding {
   /** The corpus entry id the defect was found on. */
@@ -286,13 +291,34 @@ export interface CorpusDefectFinding {
  * {@link PublicationContext}'s `imageExists`).
  *
  * `imageSha256` returns null when the file cannot be read. It is called ONLY for
- * entries carrying an `image-confirmed` verification record — hashing every
- * image would make the doctor read the entire corpus off disk on every run.
+ * entries carrying an `image-confirmed` verification record or a pixel-pinned
+ * `dataQuality` finding — hashing every image would make the doctor read the
+ * entire corpus off disk on every run.
  */
 export interface CorpusDefectContext {
   imageExists: (corpusRelPath: string) => boolean;
   imageSha256: (corpusRelPath: string) => string | null;
 }
+
+/**
+ * The lanes a dataQuality record's `source` may name: the detector registry
+ * keys (detector name = registry key) plus "vision" for the model lane. Kept
+ * local on purpose — importing detector-registry would pull the tagger chain
+ * into the doctor hot path. Keep in sync with detector-registry.ts (a test
+ * cross-checks this set against the registry keys).
+ */
+export const DATA_QUALITY_SOURCES = new Set([
+  "platform",
+  "visual.dominantColors",
+  "visual.usesBorders",
+  "visual.usesShadows",
+  "visual.accentColor",
+  "visual.cornerStyle",
+  "visual.spacingDensity",
+  "visual.colorRoles",
+  "antiPatterns.accessibilityRisks",
+  "vision",
+]);
 
 const HEX_IN_PROSE = /#[0-9a-f]{6}\b/gi;
 /** Font families whose name declares a monospace face. */
@@ -612,6 +638,91 @@ export function summarizeCorpusDefects(
             }
           }
         }
+      }
+    }
+    // ── dataQuality integrity, per key. A contradiction is a PROCESSED
+    // outcome, so a malformed or orphaned finding is a silent lie (nobody reads
+    // a record under a key nothing serves; nobody trusts a record with an
+    // unknown lane), and a finding pinned to pixels that no longer exist proves
+    // nothing about the current ones — the Task 15 contract ("doctor owns
+    // staleness") says a re-capture must surface for a human to --retriage.
+    const dataQuality = entry.provenance?.dataQuality;
+    if (dataQuality) {
+      for (const [field, record] of Object.entries(dataQuality)) {
+        if (!SERVABLE_FIELD_KEYS.has(field)) {
+          push(
+            "dataquality-orphan-key",
+            `dataQuality record for "${field}" is not in the servable field set — nobody reads it, so the contradiction is a silent no-op`,
+          );
+        }
+        if (typeof record.source !== "string" || record.source.length === 0
+          || !DATA_QUALITY_SOURCES.has(record.source)
+          || typeof record.verifierVersion !== "string" || typeof record.verifiedAt !== "string") {
+          push(
+            "dataquality-malformed",
+            `dataQuality record for "${field}" has an unusable source or version — got source "${String(record.source)}"`,
+          );
+        }
+        // Mirrors verified-hash-stale: a pixel-measured finding whose recorded
+        // bytes no longer match the entry's image is stale BY CONSTRUCTION
+        // (schema.ts's dataQuality.imageSha256 doc says staleness derives from
+        // this). Pixel-free records (source "platform") carry no hash and skip.
+        if (record.imageSha256) {
+          const path = typeof image.path === "string" ? image.path : null;
+          const exists = ((): boolean => {
+            if (path === null) return false;
+            try { return ctx.imageExists(path); } catch { return false; }
+          })();
+          if (!exists) {
+            push(
+              "dataquality-hash-stale",
+              `dataQuality for "${field}" is pinned to imageSha256 ${record.imageSha256.slice(0, 12)}… but its image is missing or unresolvable`,
+            );
+          } else {
+            const actual = ((): string | null => {
+              try { return ctx.imageSha256(path!); } catch { return null; }
+            })();
+            if (actual !== null && actual !== record.imageSha256) {
+              push(
+                "dataquality-hash-stale",
+                `dataQuality for "${field}" records ${record.imageSha256.slice(0, 12)}… `
+                + `but ${path} now hashes to ${actual.slice(0, 12)}… — re-capture changed the pixels; retriage this finding`,
+              );
+            }
+          }
+        }
+      }
+      // The count EXCLUDES dismissed records: a dismissal is a human decision
+      // that the finding is a measurement artefact — it stops nagging the
+      // doctor while remaining on the record (Task 15 Step 5B's stated
+      // contract, which the Task 17 step code contradicted; the prose wins).
+      const total = Object.values(dataQuality).filter((r) => !r.dismissed).length;
+      if (total > 0) {
+        push("dataquality-count", `${total} contradiction(s) recorded — run the suspect report before trusting these entries`);
+      }
+    }
+
+    // ── record-map exclusivity, across the three maps. The write paths
+    // (mergeVerification / mergeVerifyAttempts / mergeDataQuality) revoke
+    // their siblings when they write, so an overlap here means a record
+    // arrived by some other path — a field in two maps is ambiguous: a pass
+    // that revoked nothing, or a finding that never revoked the trust it
+    // contradicts. One finding per overlapping field, naming the maps.
+    const verificationKeys = Object.keys(entry.provenance?.verification ?? {});
+    const attemptKeys = Object.keys(entry.provenance?.verifyAttempts ?? {});
+    const dataQualityKeys = Object.keys(entry.provenance?.dataQuality ?? {});
+    const mapKeys = new Set([...verificationKeys, ...attemptKeys, ...dataQualityKeys]);
+    for (const field of mapKeys) {
+      const maps = [
+        ...(verificationKeys.includes(field) ? ["verification"] : []),
+        ...(attemptKeys.includes(field) ? ["verifyAttempts"] : []),
+        ...(dataQualityKeys.includes(field) ? ["dataQuality"] : []),
+      ];
+      if (maps.length > 1) {
+        push(
+          "record-map-overlap",
+          `"${field}" appears in ${maps.join(" and ")} — the three record maps must be mutually exclusive per field (a pass revokes its contradiction and vice versa)`,
+        );
       }
     }
   }

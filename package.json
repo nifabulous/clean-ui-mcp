@@ -22,6 +22,7 @@
     "capture": "tsc && node dist/scripts/capture.js",
     "capture-batch": "tsc && node dist/scripts/capture.js",
     "test": "vitest run",
+    "calibrate-detectors": "tsc && node dist/verify/calibration-cli.js",
     "ci:local": "bash scripts/ci-local.sh",
     "site:dev": "vite --config site/vite.config.ts",
     "site:build": "vite build --config site/vite.config.ts",
@@ -82,6 +83,7 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "culori": "^4.0.2",
     "dotenv": "^17.4.2",
     "fflate": "^0.8.3",
     "image-size": "^2.0.2",

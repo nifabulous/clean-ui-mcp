@@ -784,6 +784,36 @@ npm run clean-orphans -- --dry-run   # find unreferenced images
 npm run build-index                  # repair semantic-search index drift
 ```
 
+### Deterministic detectors & the suspect report
+
+Perception fields (`usesShadows`, `usesBorders`, `accentColor`, `cornerStyle`,
+`spacingDensity`) are verified by calibrated pixel detectors instead of the
+vision model; `colorRoles` and `accessibilityRisks` get contradiction-only
+checks. Model contradictions are corroborated by a second fresh ask.
+
+- Verify with detectors: `npm run verify -- --detectors on`
+- Compare with the legacy path: `npm run verify -- --detectors off`
+- Real-screenshot calibration: `npm run calibrate-detectors`. Every declared
+  `accuracyFloor` comes from a real-screenshot run recorded in
+  `docs/verifier-calibration.md` and pinned in
+  `src/verify/__fixtures__/held-out-lock.json`. A detector that cannot clear
+  its floor ships `disabled` and its field stays with vision — that is a
+  supported outcome, not a failure. Never lower a floor or edit a held-out
+  fixture to make the gate green; the lock makes either change visible in
+  review.
+- Human triage: `npm run verify -- --report-suspect` — detector findings rank
+  above model findings. Actions:
+  - re-capture the screenshot, then re-verify (the new bytes make the finding
+    stale automatically — its `imageSha256` no longer matches)
+  - re-tag the recorded value, then `npm run verify -- --retriage <entryId>:<field>`
+    to clear the finding so the field is re-offered
+  - `npm run verify -- --dismiss <entryId>:<field> --reason "<why>"` when the
+    contradiction is a measurement artefact — the record is kept as an audit
+    trail but stops being reported
+
+Rollout order: calibrate → verify a ~50-entry representative cohort → light
+the first 2d-2 surfaces with method disclosure → scale to the full corpus.
+
 ---
 
 ## Analytics

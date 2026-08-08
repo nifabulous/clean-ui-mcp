@@ -370,6 +370,76 @@ those before editing it.
 
 ---
 
+## Frozen labelled ground-truth set (verdict labels)
+
+**What:** Build and freeze a hand-labelled verdict set: one JSONL record per
+labelled claim (`entryId`, `imageSha256`, `field`, `claim`, `label`, `notes`,
+`labelledAt`, `labelledBy`; `label` ∈ `confirmed | contradicted | abstain`).
+The set is frozen — corrections append a `supersedes` record, never edit in
+place. Fixture format and labelling contract are defined in
+`docs/superpowers/specs/2026-08-07-deterministic-detectors-design.md`
+("Frozen labelled ground-truth set"); this TODO owns the labelling run and the
+comparison harness.
+
+**Why:** The deterministic-detectors spec's benchmark (5/28 flips, ~62% model
+ceiling, 11/28 unsupported) and the fields that remain model-verified
+(`layout`, `components`, `visual.typePairing`, prose, soft) are both
+unmeasurable without labels. Detector calibration and the frozen set share the
+same labelling infrastructure, so the format is defined now rather than
+invented twice.
+
+**Trigger (build when):** the deterministic-detectors plan has landed — the 28
+disputed claims plus a ~10-per-field stratified sample are the initial scope,
+so detector and model lanes compare against the same ground truth. NOTE: the
+raw 28-claim rows (`eval/verdicts/disputes.tsv`) were LOST before commit — the
+plan's Task 1 rescue never landed and `/tmp/disputes.tsv` is gone (see
+`eval/verdicts/README.md`). The 28-claim comparison must be re-run and
+committed under that name as part of this TODO's scope; the 82
+real-screenshot labels at `eval/verdicts/labels.jsonl` (the spec's labelling
+contract) survive and are the calibration input artifact the detectors'
+declared `accuracyFloor`s depend on.
+
+**Scope when triggered:** labelling run + `eval/verdicts/` fixture commit +
+promptfoo/OpenRouter comparison harness for the remaining subjective fields.
+The harness is the "separate spec" referenced in the deterministic-detectors
+spec's Out of scope.
+
+**Depends on / blocked by:** the deterministic-detectors plan
+(`docs/superpowers/plans/2026-08-07-deterministic-detectors.md` when written);
+real-screenshot detector calibration uses the same label-format tooling.
+
+---
+
+## Capture-time measurement lane (producer-side detectors)
+
+**What:** Reuse the deterministic detectors in the capture pipeline so values
+the verifier currently infers are recorded at capture time with checkable
+evidence, in the `measured` trust tier the schema reserves and no path writes
+today (`VERIFICATION_METHODS` in `corpus-trust.ts` already includes it):
+`visual.usesShadows`, `visual.usesBorders`, `visual.accentColor`, plus
+DOM-derived `layout` / `components` from capture `domSignals`.
+
+**Why:** Today the tagger guesses these fields and the verifier re-measures
+them later ("verify-time inference"). Measuring at capture flips the economics
+to "measure once, verify cheaply forever", and it covers `layout` and
+`components`, which no pixel detector can fully check but a DOM snapshot can.
+
+**Trigger (build when):** the deterministic-detectors plan lands — its detector
+implementations and provenance shapes are the same ones the capture lane
+reuses.
+
+**Scope when triggered:** capture-side module reusing `src/verify/detectors/*`
+plus `domSignals` extraction wired into `src/scripts/capture.ts`; `measured`
+record shape; migration/backfill decision for existing entries. The
+producer/verifier independence boundary is the first decision in this work:
+whether a producer-written `measured` record satisfies the independence
+invariant on its own, or only feeds the verifier's provable checks.
+
+**Depends on / blocked by:** the deterministic-detectors plan; the capture
+pipeline currently collects no `domSignals` (verified 2026-08-07).
+
+---
+
 ## Prompt-change eval gate for the model lane
 
 **What:** A small eval harness that runs the live brief set (login, finance,

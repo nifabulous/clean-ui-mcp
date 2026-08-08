@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isVerified, verifiedFields, trustedEvidenceIdsOf } from "./corpus-trust.js";
+import { isVerified, verifiedFields, verifiedMethodFor, trustedEvidenceIdsOf } from "./corpus-trust.js";
 import { CorpusEntry, type CorpusEntryT } from "./schema.js";
 
 /** A minimal entry. Only `provenance` matters to the predicate. */
@@ -93,6 +93,20 @@ describe("trustedEvidenceIdsOf — per-field bridge", () => {
     ];
     expect(trustedEvidenceIdsOf(pairs, "critique")).toEqual(new Set(["evidence-2", "evidence-4"]));
     expect(trustedEvidenceIdsOf(pairs, "visual.colorRoles")).toEqual(new Set(["evidence-3"]));
+  });
+});
+
+describe("verifiedMethodFor — disclosure of the evidence tier", () => {
+  it("returns the record method only when verified", () => {
+    const e = entry({
+      platform: { method: "provable", verifiedAt: "x", verifierVersion: "v1" },
+      layout: { method: "image-confirmed", verifiedAt: "x", verifierVersion: "v1", imageSha256: "a".repeat(64) },
+      critique: { method: "nope", verifiedAt: "x", verifierVersion: "v1" },
+    });
+    expect(verifiedMethodFor(e, "platform")).toBe("provable");
+    expect(verifiedMethodFor(e, "layout")).toBe("image-confirmed");
+    expect(verifiedMethodFor(e, "critique")).toBeNull(); // unknown method
+    expect(verifiedMethodFor(e, "mood")).toBeNull(); // no record
   });
 });
 

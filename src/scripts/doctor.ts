@@ -239,8 +239,8 @@ if (entries) {
 // of these detectors).
 //
 // `imageSha256` is called only for entries carrying an image-confirmed
-// verification record, so a corpus with none — the day-one state — reads no
-// image bytes at all.
+// verification record or a pixel-pinned dataQuality finding, so a corpus with
+// neither — the day-one state — reads no image bytes at all.
 if (entries) {
   const imageExists = (p: string) => existsSync(fromCorpusRelativeImagePath(p));
   const imageSha256 = (p: string): string | null => {

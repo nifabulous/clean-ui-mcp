@@ -78,13 +78,35 @@ Four checks per image. All arithmetic — no eyeballing decides pass/fail.
 | 3 | outside margin | `usesShadows` | ≥50% of boxes have ≥8px clear outside ≥1 edge |
 | 4 | element-not-glyph | all four | median box area ≥ 0.1% of image area |
 
-**Check 2 detail.** For each box edge, sample a line perpendicular to it spanning
-±6px, take the maximum absolute luminance gradient along that line, and record
-the offset of the maximum from the box boundary. An edge is aligned when
-`|offset| ≤ 3px` and the gradient magnitude exceeds the image's median edge
-magnitude. Rationale: `cornerStyle` needs the corner arc inside the crop and
-`usesBorders` needs a boundary ring sample to cross the stroke — a box loose by
-10px samples background on both.
+**Check 2 detail.** For each box edge, sample three lines perpendicular to it
+spanning ±6px — at the edge midpoint and 10–15% from each corner — take the
+maximum absolute luminance gradient along each line, and record the offset of
+the maximum from the box boundary. An edge is aligned when `|offset| ≤ 3px` on
+the midpoint and the corner-adjacent samples and the gradient magnitude exceeds
+the image's median edge magnitude. The corner-adjacent samples are deliberate: a
+box whose edges align but whose corners are shaved inward passes midpoint-only
+sampling while `cornerStyle` measures background at the corners, so the corners
+are part of the alignment check. Rationale: `cornerStyle` needs the corner arc
+inside the crop and `usesBorders` needs a boundary ring sample to cross the
+stroke — a box loose by 10px samples background on both.
+
+> **AMENDED DURING EXECUTION (2026-08-08).** Check 2 as declared above — "the
+> offset of the MAXIMUM gradient" within ±6px — measured 20.4% of edges aligned
+> on real screenshots, with a degenerate offset distribution (median = p75 = p90
+> = max = 5.50px, piled against the sampling window edge). Within 6px of a box
+> edge a dense UI usually contains OTHER elements' edges, and `argmax` picks
+> whichever is strongest rather than the box's own, so an aligned edge reads as
+> misaligned.
+>
+> The implemented rubric asks the question this section's own sentence states:
+> is there a gradient beating the noise floor AT the boundary? That measures
+> 49.8% of edges. Both are on disk — `edge_offsets` carries the amended
+> measurement and `edge_offsets_strongest` the pre-declared one — so the original
+> verdict stays derivable from `metrics.jsonl` without a re-run.
+>
+> The text above is deliberately NOT rewritten: it is what was pre-registered,
+> and erasing it would erase the thing that made amending it defensible. Full
+> reasoning and both verdict tables in `docs/element-box-probe.md`.
 
 **Check 3 detail.** 8px is the low end of a typical web shadow blur at 1x. A
 shadow lives *outside* the boundary, so a box packed against a neighbour has its
@@ -93,6 +115,16 @@ shadow region occupied by that neighbour.
 **Check 4 detail.** On a 1920×1200 image, 0.1% is ~2300px, about 48×48. A glyph
 box is roughly 10×14 = 140px = 0.006%. The check separates containers from
 characters.
+
+**Boundary boxes.** Boxes touching an image edge (navbars, sidebars, full-bleed
+heroes) make the ±6px sample and the outside-margin sample run off-image. The
+rules, pre-declared: for check 2, the perpendicular line is clamped to the image
+and the off-image portion is excluded from the gradient window (recorded as a
+`boundary` flag in metrics.jsonl); for check 3, an image-boundary edge is
+ineligible as the "≥1 edge" — the shadow region is outside the viewport and the
+follow-up detector cannot measure it either — and a box whose edges are all at
+the image boundary is excluded from check 3's denominator with a `boundary`
+flag. The flags are raw metrics, so the choice stays re-judgeable.
 
 ### These thresholds are pre-declared guesses
 
@@ -114,7 +146,10 @@ the artifact").
 Run cheapest rung first. Stop at the first rung that passes.
 
 1. **Classical CV.** Contour / MSER extraction at container scale with text
-   suppression. No dependency beyond what the repo can already run.
+   suppression. Dependencies are plain Python plus one small pinned CV library
+   (`opencv-python` or `scikit-image`) in `requirements.txt` — no model download
+   and no external service, but the repo has no CV tooling today, so this is a
+   new pinned dependency, not existing runtime.
 2. **Small local VLM.** Florence-2 (`<REGION_PROPOSAL>`, `<OD>`) and Moondream 2
    detect, via a pinned `uv` venv on python3.12 (both `python3.11` and
    `python3.12` are present on this machine; the default `python3` is 3.14, which
@@ -122,7 +157,11 @@ Run cheapest rung first. Stop at the first rung that passes.
 3. **Screen parser.** A detector finetuned on interactable UI elements
    (OmniParser-style), subject to obtainability and licence.
 
-**Pass condition for a rung:** ≥70% of the 46 images pass all four checks.
+**Pass condition for a rung:** ≥70% of the 46 images pass all four checks, AND
+each of the four fields' own images (10–12 per field) pass at ≥60%. The
+follow-up detector measurement is per-field, so a rung that clears the global
+bar but misses one field's images is reported as failing that field rather than
+passing on a global average.
 
 **On failure, record which check failed.** That is the useful output of a failed
 rung — it states what the next rung has to supply. A rung failing only check 1
@@ -145,9 +184,15 @@ Committed:
 
 - `eval/element-box-probe/probe.py` — the runner, all rungs
 - `eval/element-box-probe/requirements.txt` — pinned, `uv`-resolvable
-- `eval/element-box-probe/entries.txt` — the 46 image paths, pinned
+- `eval/element-box-probe/entries.txt` — the 46 entry ids + sha256, pinned
+  (image paths are resolved at runtime from `eval/verdicts/labels.jsonl`, which
+  already maps entryId → imagePath; absolute machine paths are never committed)
 - `eval/element-box-probe/metrics.jsonl` — one row per (method, image, box):
-  coordinates and every raw metric behind the four checks
+  `entryId`, `imageSha256`, `method`, `rung`, box `[x0,y0,x1,y1]`, and every raw
+  metric behind the four checks (`boxCount`, per-edge
+  `maxGradientOffset`/`maxGradientMagnitude`, `outsideClearances`,
+  `boxAreaRatio`, `boundary` flags). The schema is pinned here so the
+  re-judgment path parses committed rows without guessing at field names.
 - `eval/element-box-probe/scores.tsv` — the 46 × 4 × N pass/fail table
 - `docs/element-box-probe.md` — one page: which rung passed, which checks failed
   where, and the resulting decision
@@ -170,6 +215,17 @@ that a missing negation once made `git add eval/verdicts/...` silently no-op and
 nearly lost the only copy of a benchmark — so the negations are part of the work,
 not an afterthought, and the plan must verify each file is actually tracked after
 adding it.
+
+## Testing
+
+All four checks get synthetic-image unit tests, TDD with the probe: one known
+element per fixture (a bordered card, a shadowed card, a glyph, a
+boundary-touching box), each asserting both the pass/fail and the raw metric
+values, plus one golden fixture run over a tiny committed canvas. The ladder's
+pass/fail arithmetic is tested the same way. The probe's arithmetic is what
+decides the rungs, and the calibration harness already demonstrated what a
+throwaway measurement path costs this repo (`docs/verifier-calibration.md`:
+"Harness was throwaway — the numbers below are the artifact").
 
 ## Out of scope
 
@@ -197,3 +253,12 @@ adding it.
    button's fill and the field may come into reach. That would raise the
    addressable abstain set from 85 to 122. The probe records whether any rung
    distinguishes interactive elements, but does not test the role rule.
+
+## Review decisions (2026-08-08)
+
+Folded from the eng review of this spec: corner-adjacent sampling in check 2;
+boundary-box rules for checks 2 and 3; the per-field pass floor (≥60% per field
+alongside the global 70%); `entries.txt` pinned by entryId/sha256; the
+metrics.jsonl row schema; the rung-1 dependency wording; and the synthetic-image
+test plan. Thresholds remain pre-declared guesses; the raw metrics stay the
+source of truth for re-judgment.

@@ -39,9 +39,11 @@ The model already returns a per-field `reason` string (the prompt requests it,
 One cause is already measurable from the committed report without a re-run: an
 unparseable response makes every field on that entry abstain at once. Three of 48
 entries show that signature (`origin-origin-4`, `hume-hume-26`, `anima-anima`),
-accounting for 34 of the 256 abstains on model-lane fields — 13%. The other 87%
-are per-field abstains on entries where the model answered other fields normally,
-so the dominant cause is per-field and the report cannot name it.
+accounting for 34 of the 258 abstains on model-lane fields — 13.2% (258 = 244
+"not positively confirmed" + 14 "model disagreed with itself"; 306 abstain total
+minus 48 detector abstains). The other 86.8% are per-field abstains on entries
+where the model answered other fields normally, so the dominant cause is
+per-field and the report cannot name it.
 
 ### Why this is the next thing to build
 
@@ -137,6 +139,19 @@ none is a different situation from one that listed many; it is not a separate
 cause because the assertion-empty case already gates
 (`:328-330`).
 
+Two notes on the parse mapping, folded from the 2026-08-08 eng review.
+`verdict-unrecognised` is NOT one of today's parse branches:
+`parseVerifyResponse` maps any unrecognised verdict string to
+`{ confirmed: false, contradicted: false }` at `:305-310` and discards the
+literal, so it is currently indistinguishable from `verdict-missing`. The
+taxonomy therefore adds a new parse-time branch that retains the offending
+string; the seven causes are one per branch after that branch lands, not one per
+branch in the file as it exists today. Separately, an empty object `{}` parses
+successfully and surfaces as per-field `field-absent` on every field; the output
+also reports the entry-level "all servable fields absent" signature so
+contract-level silence (the model returned no fields) is distinguishable from
+per-field drops.
+
 #### Call site
 
 An entry makes up to three vision calls — the combined initial ask (`:554`), the
@@ -195,6 +210,15 @@ two places:
 A single flag, `--diagnose`, bypasses both skips **and** implies dry-run. One
 flag rather than two orthogonal ones so no half-set state exists and the
 invariant is directly testable.
+
+The flag matrix is pinned: `--diagnose` REQUIRES `--only-ids` and fails loudly
+when it is absent; `--only-ids` without `--diagnose` is an error, not a no-op.
+There is no invocation that re-measures the full corpus by accident. The bypass
+threads into `verifyEntry` through the existing deps seam (`diagnose: true`), so
+the internal per-field `pending` filter (`:447-452`) and the unreadable-image
+`pending = []` reset (`:512`) are governed by the same flag. The cohort's images
+are all readable, so the unreadable path is asserted as a no-op rather than
+exercised.
 
 **`--limit` cannot select the cohort.** `main` slices `selectPending(...)` by
 `--limit` (`:1177`). With the skip bypassed, `selectPending` returns every entry
@@ -280,9 +304,10 @@ would blur what its floors rest on.
 TDD, failing test first, per project convention:
 
 - one characterization test over the full `(tier × parsed-state)` matrix
-  asserting `decideFieldVerdict` returns the same `verdict` for every
-  combination it returns today — the direct check on the governing invariant,
-  written before any other change so it fails if the taxonomy work moves a branch
+  asserting `decideFieldVerdict` returns the same `verdict` AND populates
+  `cause` exactly on abstain states — verdict-equality alone is preserved by the
+  additive change, so the cause-population assertion is the half that actually
+  fails if the taxonomy work moves a branch
 - seven unit tests on `parseVerifyResponse`, one per cause, each asserting the
   right discriminator from a crafted raw response
 - two unit tests on the `verifyEntry` corroboration abstains, asserting
@@ -297,6 +322,8 @@ TDD, failing test first, per project convention:
   to be built so an order-based selection would fail it, or the test passes
   against the bug it exists to catch
 - one test asserting an id absent from the corpus fails loudly
+- one test asserting `--diagnose` without `--only-ids` fails loudly
+- one test asserting `--only-ids` without `--diagnose` errors
 - one test per call site asserting the `site` tag (`initial`, `corroborate`,
   `reverify`)
 - one test asserting a prose field carries both `cause` and `firstCause` when the
@@ -352,3 +379,14 @@ addressable abstain set from 85 to 122. Until the probe reports, this spec treat
    part.** It is safe only because the same flag forces dry-run. The
    byte-identical test is the control; it must fail if the two behaviours are
    ever decoupled.
+
+## Review decisions (2026-08-08)
+
+Folded from the eng review of this spec: model-lane abstain total corrected to
+258 (34/258 = 13.2%); `verdict-unrecognised` specified as a new parse-time
+branch that retains the literal offending string; the
+`--diagnose`/`--only-ids` flag matrix pinned (`--diagnose` requires `--only-ids`
+and errors without it, and `--only-ids` alone errors); the empty-object
+all-fields-absent signature added to the output; the characterization test
+reframed to assert cause propagation; and the bypass threading through the deps
+seam specified.

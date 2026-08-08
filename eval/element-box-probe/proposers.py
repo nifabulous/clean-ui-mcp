@@ -276,3 +276,66 @@ def propose_omniparser(gray: np.ndarray) -> list[Box]:
 
 
 PROPOSERS["omniparser"] = propose_omniparser
+
+
+# --- Rung 3c: deki-yolo -------------------------------------------------------
+#
+# github.com/RasulOs/deki — the only detector found with an explicit CONTAINER
+# class. OmniParser's icon_detect carries one class ("icon"), which is why 3b
+# targeted the wrong objects; deki's four classes are View (general-purpose
+# containers), ImageView, Text and Line.
+#
+# Only `View` is proposed. ImageView/Text/Line are the objects the rubric's
+# text-suppression step exists to REMOVE, and three of the four fields this probe
+# serves (usesBorders, usesShadows, cornerStyle) are about containers.
+#
+# Pre-declared risks, recorded before the run so the result cannot be
+# re-litigated afterwards:
+#   1. DOMAIN SHIFT. The model card is titled "Mobile UI Element Detection
+#      Model"; examples are 1080x2178 phone screenshots and the class names are
+#      Android SDK vocabulary. This corpus is 1920x1200 WEB screenshots. A
+#      failure on box count or alignment is attributable to domain shift and
+#      would NOT rule out a web-trained equivalent.
+#   2. SMALL TRAINING SET. 486 images trained, 60 tested — the README itself
+#      warns its examples "give people a false impression of the accuracy".
+#   3. BOUNDARY PRECISION. YOLO optimises IoU 0.5-0.95; the rubric needs +/-3px
+#      per edge. Right class does not guarantee right boundary — that distinction
+#      is exactly what 3b failed on (46/46 alignment failures at a correct count).
+#
+# LICENCE: GPL-3.0, repo and weights. Fine here — the probe runs locally and
+# distributes nothing, and copyleft obligations attach to distribution. Shipping
+# this in the product would be a separate, deliberate licence decision.
+
+_DEKI_REPO = "orasul/deki-yolo"
+_DEKI_WEIGHTS = "best.pt"
+DEKI_CONF = 0.05          # matched to OMNIPARSER_CONF so the rungs are comparable
+DEKI_CONTAINER_CLASS = "View"
+
+
+@functools.lru_cache(maxsize=1)
+def _deki():
+    from huggingface_hub import hf_hub_download
+    from ultralytics import YOLO
+    return YOLO(hf_hub_download(_DEKI_REPO, _DEKI_WEIGHTS))
+
+
+def propose_deki(gray: np.ndarray) -> list[Box]:
+    """deki-yolo, filtered to the View (container) class."""
+    model = _deki()
+    names = {v: k for k, v in model.names.items()}
+    if DEKI_CONTAINER_CLASS not in names:
+        # Fail loudly: silently proposing every class would make this rung look
+        # like a container detector while measuring text and icons.
+        raise RuntimeError(
+            f"deki weights have no {DEKI_CONTAINER_CLASS!r} class; got {model.names}",
+        )
+    wanted = names[DEKI_CONTAINER_CLASS]
+    results = model.predict(
+        np.stack([gray] * 3, axis=-1), conf=DEKI_CONF, iou=0.7,
+        classes=[wanted], verbose=False,
+    )
+    raw = [[float(v) for v in b.xyxy[0].tolist()] for r in results for b in r.boxes]
+    return _to_boxes(raw, gray.shape)
+
+
+PROPOSERS["deki"] = propose_deki

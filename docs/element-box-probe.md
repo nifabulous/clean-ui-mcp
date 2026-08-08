@@ -6,8 +6,9 @@
 
 ## Verdict
 
-**No rung passed the 70% bar.** Five proposers measured: classical CV 23.9%,
-**UIED techniques 52.2%**, OmniParser 0.0%, Florence-2 0.0%, Moondream 0.0%.
+**No rung passed the 70% bar.** Six proposers measured: **UIED techniques 52.2%**,
+classical CV 23.9%, deki-yolo 19.6%, OmniParser 0.0%, Florence-2 0.0%,
+Moondream 0.0%.
 
 But the ladder did not merely fail — it converged on one approach and one
 remaining obstacle.
@@ -295,10 +296,80 @@ This is the mAP-vs-boundary-precision risk, flagged in advance and confirmed: a
 detector can score well at IoU 0.5–0.95 and still be useless for measuring a 1px
 border. Detection accuracy and boundary precision are different properties.
 
-## Rung 3c — other screen parsers
+## Rung 3c — deki-yolo (46/46)
+
+[RasulOs/deki](https://github.com/RasulOs/deki), weights `orasul/deki-yolo`. The
+only detector found with an explicit **container** class: `View`, `ImageView`,
+`Text`, `Line`. Only `View` is proposed — a test asserts the class exists in the
+weights, because that is the entire premise of the rung.
+
+**Global 19.6%** — above OmniParser (0.0%), below classical (23.9%), far below
+3a (52.2%). `check2_alignment` failed 36/46; `check1_count` 4; `check3`/`check4` 0.
+
+The container class is real and it helps: edges with no qualifying gradient
+within 3px fell from OmniParser's 79.5% to **47.8%**, and box-level alignment rose
+12.3% → 43.1%. But **67.5% of its `View` boxes are text-like** on web screenshots.
+
+That is the pre-declared domain-shift risk landing where it was declared. The
+model card is titled "Mobile UI Element Detection Model", trained on 486 phone
+screenshots with Android SDK class names. On mobile a `View` often wraps a text
+block tightly; generalised to 1920×1200 web, it boxes paragraphs.
+
+### The finding that matters: 3a and 3c are complementary
+
+The `aboard-aboard-3` overlay shows it directly. deki finds the left panel, the
+right panel, **the shadow-separated badge card that 3a is structurally blind to**,
+both buttons and the avatar chip — the right objects. And its boxes are visibly
+offset ~15px, with the badge card double-boxed. **Right objects, wrong
+boundaries** — the exact inverse of 3a.
+
+Measured over all 46 images (IoU ≥ 0.5 to count as the same object):
+
+| | count |
+|---|---|
+| found by both | 340 |
+| deki-only | 569 |
+| uied-only | 144 |
+
+But the deki-only boxes are **78% text-like**. The honest number is that deki
+contributes **124 genuinely new containers** on top of uied's 304 — **+41%
+container recall**, not the +63% the raw box count implies.
+
+### The hybrid that follows
+
+Neither rung is one tuning pass from passing, but their failures are opposite and
+neither is fundamental:
+
+| | recall (finds containers) | precision (±3px boundaries) |
+|---|---|---|
+| uied (3a) | under-detects — median 7/image | **77.0% aligned** |
+| deki (3c) | +41% more containers, incl. shadow-separated | 43.1% aligned |
+
+The obvious next construction is **deki for recall, 3a's gradient machinery for
+precision**: take deki's candidate boxes and snap each edge to the nearest
+qualifying gradient within a search window, using the `_sample_offsets` code the
+rubric already contains. That is a box-refinement pass, not a retraining, and it
+requires no web-labelled data.
+
+**Not run.** It is a new proposer, and the pre-registered rule closing this line
+had already fired twice by the time the evidence for it existed. It is recorded
+here as the best-evidenced next step for whoever reopens the question, not as a
+result.
+
+### On making deki work for web
+
+Two routes, in increasing cost:
+
+1. **Box refinement** (above) — no data needed, uses code that exists.
+2. **Fine-tune on web screenshots** — needs labelled container boxes on this
+   corpus, which is *also* exactly what the rubric's missing recall check needs.
+   One labelling effort would serve both, and it is the single artifact whose
+   absence limits this probe most.
+
+## Other screen parsers
 
 Not run. This ladder covers classical CV, two general small VLMs, a
-literature-standard hybrid, and one UI-finetuned detector. **It is not
+literature-standard hybrid, and two UI-finetuned detectors. **It is not
 exhaustive** and is reported as such.
 
 ## Interactable elements and `accentColor`

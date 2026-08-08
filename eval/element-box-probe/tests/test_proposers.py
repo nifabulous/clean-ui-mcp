@@ -118,3 +118,23 @@ def test_omniparser_is_registered_and_returns_contract_boxes() -> None:
     for x0, y0, x1, y1 in boxes:
         assert all(isinstance(v, int) for v in (x0, y0, x1, y1))
         assert 0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h
+
+
+@pytest.mark.slow
+def test_deki_weights_actually_carry_a_container_class() -> None:
+    # The entire premise of rung 3c. OmniParser's weights carry one class,
+    # "icon"; if deki's do not carry "View", this rung measures something else.
+    from proposers import _deki, DEKI_CONTAINER_CLASS
+    assert DEKI_CONTAINER_CLASS in set(_deki().names.values())
+
+
+@pytest.mark.slow
+def test_deki_returns_contract_boxes() -> None:
+    from tests.fixtures import with_soft_card
+    from proposers import PROPOSERS
+    gray = with_soft_card(blank(w=600, h=400, value=246), 100, 80, 400, 300)
+    boxes = PROPOSERS["deki"](gray)
+    h, w = gray.shape
+    for x0, y0, x1, y1 in boxes:
+        assert all(isinstance(v, int) for v in (x0, y0, x1, y1))
+        assert 0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h

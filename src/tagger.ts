@@ -144,6 +144,13 @@ export interface TaggerInput {
    */
   critiqueImagePath?: string;
   /**
+   * Sampling controls for BOTH internal passes. Omitted = provider default
+   * (today's behavior). The verifier pins temperature 0 (NO seed — a seed
+   * override makes callClaudeWithMetadata throw, tagger.ts:2267) so
+   * re-produced prose does not vary between identical runs.
+   */
+  sampling?: { temperature?: number; seed?: number };
+  /**
    * Image visibility for the output entry's ImageRef. Defaults to "private"
    * (the safe historical default — local research copy, never published).
    * Set to "public-own" when capturing an image you hold rights to, or
@@ -2842,6 +2849,14 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   // to env when unset (current behavior). Bypasses peak-hour routing.
   if (input.extractionOverride) validateEndpointOverride(input.extractionOverride, "extraction");
   if (input.critiqueOverride) validateEndpointOverride(input.critiqueOverride, "critique");
+  // Sampling for BOTH passes, converted ONCE from the TaggerInput shape to
+  // callModel's ProviderCallOptions field names — a straight pass-through of
+  // `input.sampling` would not compile, and a cast would be silently dropped
+  // (the pin would appear to work while changing nothing).
+  const samplingOptions: ProviderCallOptions | undefined =
+    input.sampling === undefined
+      ? undefined
+      : { temperatureOverride: input.sampling.temperature, seedOverride: input.sampling.seed };
   const extractionCfgOverride = input.extractionOverride?.provider === "openai" && input.extractionOverride.model && input.extractionOverride.apiKey
     ? { baseUrl: (input.extractionOverride.baseUrl ?? "").replace(/\/+$/, ""), apiKey: input.extractionOverride.apiKey, model: input.extractionOverride.model }
     : undefined;
@@ -2879,6 +2894,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     undefined,
     input.extractionOverride?.provider ?? input.extractionProvider,
     extractionCfgOverride,
+    samplingOptions,
   );
   let extractionParsed = parseExtraction(extractionRawText);
 
@@ -2904,6 +2920,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         undefined,
         input.extractionOverride?.provider ?? input.extractionProvider,
         extractionCfgOverride,
+        samplingOptions,
       );
       extractionParsed = parseExtraction(extractionRawText);
     }
@@ -2937,6 +2954,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         "HIGH",
         input.extractionOverride?.provider ?? input.extractionProvider,
         extractionCfgOverride,
+        samplingOptions,
       );
       extractionParsed = parseExtraction(extractionRawText);
     }
@@ -3080,6 +3098,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     undefined,
     input.critiqueOverride?.provider ?? input.critiqueProvider,
     critiqueCfgOverride,
+    samplingOptions,
   );
 
   let critiqueParsed: Record<string, unknown>;
@@ -3110,6 +3129,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       undefined,
       input.critiqueOverride?.provider ?? input.critiqueProvider,
       critiqueCfgOverride,
+      samplingOptions,
     );
     try {
       critiqueParsed = JSON.parse(stripFences(retryText));

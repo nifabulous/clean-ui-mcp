@@ -776,6 +776,10 @@ export function makeReproduceDependency(provider?: string): VerifyEntryDeps["rep
       critiqueProvider: provider as Parameters<typeof tagImage>[0]["critiqueProvider"],
       extractionOverride: openaiVisionCfg,
       critiqueOverride: openaiVisionCfg,
+      // TEMPERATURE-ONLY. A seed override makes callClaudeWithMetadata THROW
+      // (tagger.ts:2267) and OpenAI's Responses branch silently drops it —
+      // pinning a seed here would break --vision-provider claude re-produce.
+      sampling: { temperature: 0 },
     });
     // Strip [DRAFT] markers and preserve antiPatterns' non-prose siblings —
     // NEVER return raw tagImage prose for storage. See applyReproducedProse.

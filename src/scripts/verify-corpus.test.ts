@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tierForField, type VerifierTier } from "./verify-corpus.js";
 import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict } from "./verify-corpus.js";
-import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReproducedProse } from "./verify-corpus.js";
+import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReproducedProse, VERIFIER_VERSION } from "./verify-corpus.js";
 import { buildRunReport, selectPending, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
 import { withTimeout, reproduceCritiqueModel } from "./verify-corpus.js";
 import { resolveConfiguredVisionProvider } from "./verify-corpus.js";
@@ -75,7 +75,7 @@ describe("buildVerifyPrompt — adversarial positive affirmation, per class", ()
     });
     const prompt = buildVerifyPrompt(e, ["visual.colorRoles", "visual.usesShadows"], "verifier-v1");
     expect(prompt).toContain("confirm");
-    expect(prompt).toContain("default false");
+    expect(prompt).toContain('otherwise "abstain"');   // the three-way contract
     expect(prompt).toContain("canvas #ffffff");
     expect(prompt).toContain("no shadows");
     expect(prompt).toContain("verifier-v1");
@@ -126,9 +126,9 @@ describe("decideFieldVerdict", () => {
     expect(v.verdict).toBe("pass");
   });
 
-  it("fails an unconfirmed claim", () => {
+  it("abstains an unconfirmed claim that the image does not contradict", () => {
     const v = decideFieldVerdict("visual.usesShadows", "factual", { confirmed: false });
-    expect(v.verdict).toBe("fail");
+    expect(v.verdict).toBe("abstain");
   });
 
   it("GATES a prose field whose assertion list is empty — the vacuity fix", () => {
@@ -261,7 +261,7 @@ describe("verifyEntry — mechanical + vision + re-produce + re-verify", () => {
       };
       const { records, verdicts } = await verifyEntry(e, imagePath, deps);
       expect(records.critique).toBeUndefined();
-      expect(verdicts.find((v) => v.field === "critique")?.verdict).toBe("fail");
+      expect(verdicts.find((v) => v.field === "critique")?.verdict).toBe("abstain");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -332,7 +332,7 @@ describe("verifyEntry — mechanical + vision + re-produce + re-verify", () => {
       const { records, verdicts } = await verifyEntry(e, imagePath, deps);
       expect(reproduceCalls).toBe(0);
       expect(records["visual.usesShadows"]).toBeUndefined();
-      expect(verdicts.find((v) => v.field === "visual.usesShadows")?.verdict).toBe("fail");
+      expect(verdicts.find((v) => v.field === "visual.usesShadows")?.verdict).toBe("abstain");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -362,6 +362,208 @@ describe("verifyEntry — mechanical + vision + re-produce + re-verify", () => {
       // verdicts may still be emitted (the registry runs unconditionally), but
       // nothing may carry a MODEL verdict — `source` is omitted for vision.
       expect(verdicts.filter((v) => v.source !== "detector")).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("three-way model verdicts", () => {
+  function entryWithImage(over: Partial<CorpusEntryT> = {}): CorpusEntryT {
+    return entry({
+      provenance: { taggedBy: "auto" },
+      // layout must carry a claim (claimForField returns null for a bare entry,
+      // which gates the field before the model verdict can exist).
+      layout: { form: "single-column", regions: [{ role: "sidebar" }] },
+      ...over,
+    });
+  }
+
+  it("parses the verdict field and fails closed on absence", () => {
+    const parsed = parseVerifyResponse(
+      '{"visual.accentColor":{"verdict":"confirmed"},"layout":{"verdict":"contradicted"},"mood":{"verdict":"abstain"}}',
+    );
+    expect(parsed["visual.accentColor"].confirmed).toBe(true);
+    expect(parsed["visual.accentColor"].contradicted).toBe(false);
+    expect(parsed.layout.contradicted).toBe(true);
+    expect(parsed.mood.confirmed).toBe(false);
+    expect(parsed.mood.contradicted).toBe(false);
+    expect(parsed.critique.confirmed).toBe(false); // absent -> fail closed
+  });
+
+  it("keeps the legacy confirmed-boolean shape working", () => {
+    const parsed = parseVerifyResponse('{"layout":{"confirmed":true}}');
+    expect(parsed.layout.confirmed).toBe(true);
+  });
+
+  it("decides pass / contradicted / abstain / gate", () => {
+    expect(decideFieldVerdict("layout", "factual", { confirmed: true, contradicted: false }).verdict).toBe("pass");
+    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: true }).verdict).toBe("contradicted");
+    expect(decideFieldVerdict("layout", "factual", { confirmed: false, contradicted: false }).verdict).toBe("abstain");
+    expect(decideFieldVerdict("responsiveBehavior", "gated", { confirmed: true, contradicted: false }).verdict).toBe("gate");
+  });
+
+  it("keeps the vacuity guard for prose fields", () => {
+    const r = decideFieldVerdict("critique", "prose", { confirmed: false, contradicted: false, assertions: [] });
+    expect(r.verdict).toBe("gate");
+  });
+
+  it("a model that disagrees with itself grants NOTHING — no trust record and no finding", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-threeway-"));
+    const imagePath = join(dir, "e1.png");
+    writeFileSync(imagePath, PNG_BYTES);
+    try {
+      const calls: string[] = [];
+      // critique carries a value, so the prose re-produce/re-verify lane can fire
+      // too — the assertion counts ONLY the layout asks, so it stays correct
+      // however many calls the prose lane makes.
+      const e = entryWithImage({ critique: "The metrics are grouped in a single column card." });
+      const out = await verifyEntry(e, imagePath, {
+        now: () => "2026-08-07",
+        callVision: async (prompt) => {
+          calls.push(prompt);
+          return calls.length === 1
+            ? '{"layout":{"verdict":"contradicted"}}'
+            : '{"layout":{"verdict":"confirmed"}}';
+        },
+        reproduce: async (x) => x,
+      });
+      // The two asks split. Corroboration exists because these verdicts flip
+      // 14-18% between identical runs, so a split is the instability itself — it
+      // must grant neither trust nor a finding.
+      const layoutAsks = calls.filter((p) => p.includes("layout")).length;
+      expect(layoutAsks, "initial ask + one corroborating re-ask").toBe(2);
+      expect(out.records.layout, "a disagreement must not grant trust").toBeUndefined();
+      expect(out.dataQuality.layout, "an uncorroborated accusation is not a finding").toBeUndefined();
+      expect(out.verdicts.find((v) => v.field === "layout")?.verdict).toBe("abstain");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes dataQuality only for a corroborated contradiction", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-threeway-"));
+    const imagePath = join(dir, "e1.png");
+    writeFileSync(imagePath, PNG_BYTES);
+    try {
+      const calls: string[] = [];
+      const e = entryWithImage({ critique: "The metrics are grouped in a single column card." });
+      const out = await verifyEntry(e, imagePath, {
+        now: () => "2026-08-07",
+        callVision: async (prompt) => {
+          calls.push(prompt);
+          return '{"layout":{"verdict":"contradicted"}}';
+        },
+        reproduce: async (x) => x,
+      });
+      // Both asks said contradicted, so the contradiction is corroborated.
+      expect(calls.filter((p) => p.includes("layout")).length).toBe(2);
+      expect(out.dataQuality.layout).toBeDefined();
+      expect(out.dataQuality.layout.source).toBe("vision");
+      expect(out.dataQuality.layout.imageSha256).toBeDefined(); // the model judged these exact pixels
+      expect(out.records.layout).toBeUndefined();
+      expect(out.verdicts.filter((v) => v.field === "layout")).toHaveLength(1); // exactly one verdict per field
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a contradicted mechanical field converges with --detectors off, as a legacy fail", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-threeway-"));
+    const imagePath = join(dir, "e1.png");
+    writeFileSync(imagePath, PNG_BYTES);
+    try {
+      // platform runs regardless of the flag, so its contradiction must land in
+      // SOME map or selectPending requeues the entry forever. Under the flag it
+      // takes the LEGACY route — `fail` + resume marker — because the flag's
+      // contract is no detector-side dataQuality, and Task 20's A/B comparison
+      // needs flag-off to be a genuine baseline rather than a hybrid.
+      const e = entryWithImage({ platform: "mobile" });
+      e.image = { visibility: "private", path: "images-private/x.png", width: 1440, height: 900 }; // web vs recorded mobile
+      const out = await verifyEntry(e, imagePath, {
+        now: () => "2026-08-07",
+        callVision: async () => "{}",
+        reproduce: async (x) => x,
+        detectors: false,
+      });
+      expect(out.dataQuality.platform, "the flag's contract is no detector-side dataQuality").toBeUndefined();
+      expect(out.verdicts.find((v) => v.field === "platform")?.verdict).toBe("fail");
+      // The marker is what actually stops the requeue loop.
+      expect(resumeMarkers(out.verdicts, "2026-08-07", VERIFIER_VERSION).platform).toBeDefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the same contradiction becomes a dataQuality finding with detectors ON", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-threeway-"));
+    const imagePath = join(dir, "e1.png");
+    writeFileSync(imagePath, PNG_BYTES);
+    try {
+      const e = entryWithImage({ platform: "mobile" });
+      e.image = { visibility: "private", path: "images-private/x.png", width: 1440, height: 900 };
+      const out = await verifyEntry(e, imagePath, {
+        now: () => "2026-08-07",
+        callVision: async () => "{}",
+        reproduce: async (x) => x,
+      });
+      expect(out.dataQuality.platform).toBeDefined();
+      // platform reads no pixels, so its finding carries no image hash.
+      expect(out.dataQuality.platform.imageSha256).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("an unanswerable corroboration ask downgrades ONLY that field to abstain", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-threeway-"));
+    const imagePath = join(dir, "e1.png");
+    writeFileSync(imagePath, PNG_BYTES);
+    try {
+      const calls: string[] = [];
+      const e = entryWithImage({ layout: { form: "single-column", regions: [{ role: "sidebar" }] } });
+      const out = await verifyEntry(e, imagePath, {
+        now: () => "2026-08-07",
+        callVision: async (prompt) => {
+          calls.push(prompt);
+          if (calls.length === 1) return '{"layout":{"verdict":"contradicted"}}';
+          throw new Error("provider 500 on the corroborating ask");
+        },
+        reproduce: async (x) => x,
+      });
+      expect(calls.filter((p) => p.includes("layout")).length).toBe(2);
+      expect(out.records.layout).toBeUndefined();
+      expect(out.dataQuality.layout, "an unconfirmed accusation is not a finding").toBeUndefined();
+      expect(out.verdicts.find((v) => v.field === "layout")?.verdict).toBe("abstain");
+      expect(out.verdicts.filter((v) => v.field === "layout")).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a prose value that still contradicts on the fresh ask is a finding", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-threeway-"));
+    const imagePath = join(dir, "e1.png");
+    writeFileSync(imagePath, PNG_BYTES);
+    try {
+      const calls: string[] = [];
+      const e = entryWithImage({ critique: "The left navigation rail groups the metrics by row." });
+      const out = await verifyEntry(e, imagePath, {
+        now: () => "2026-08-07",
+        callVision: async (prompt) => {
+          calls.push(prompt);
+          return JSON.stringify({ critique: { verdict: "contradicted", assertions: ["a left navigation rail exists"] } });
+        },
+        reproduce: async (x) => x,
+      });
+      // Pass 1 says contradicted -> prose lane -> the fresh ask on the
+      // re-produced value STILL contradicts -> a finding, not a marker.
+      expect(out.dataQuality.critique).toBeDefined();
+      expect(out.dataQuality.critique.source).toBe("vision");
+      expect(out.dataQuality.critique.imageSha256).toBeDefined();
+      expect(out.records.critique).toBeUndefined();
+      expect(out.verdicts.find((v) => v.field === "critique")?.verdict).toBe("contradicted");
+      expect(out.verdicts.filter((v) => v.field === "critique")).toHaveLength(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

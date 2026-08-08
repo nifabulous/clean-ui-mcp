@@ -26,6 +26,27 @@ export type VerificationRecord = {
   imageSha256?: string;
 };
 
+/**
+ * A data-quality finding: the record claims X but the evidence (a detector or
+ * a corroborated model judgement) disagrees. This is NOT a trust record — it
+ * lives OUTSIDE `provenance.verification` (Task 15 formalizes it into
+ * `provenance.dataQuality`) and never serves a value. `measured` is what the
+ * evidence found (null when the evidence only contradicts without measuring);
+ * `source` names the lane: the detector name (= registry key) or "vision".
+ * `imageSha256` pins the bytes a pixel-based finding was measured against,
+ * exactly as image-confirmed verification records do; `platform` is recomputed
+ * from recorded dimensions and reads no pixels, so it carries no hash.
+ */
+export type DataQualityRecord = {
+  measured: null | string;
+  recorded: string | null;
+  source: string;
+  reason?: string;
+  verifierVersion: string;
+  verifiedAt: string;
+  imageSha256?: string;
+};
+
 export type FieldVerdict = {
   field: string;
   verdict: "pass" | "fail" | "contradicted" | "abstain" | "gate";
@@ -208,40 +229,53 @@ export function buildVerifyPrompt(
     if (tier === "prose") {
       lines.push(`- ${field}: enumerate the CHECKABLE FACTUAL assertions in this text (named colours, regions, components, layout features): "${claim}". Then confirm EACH against the screenshot. If the text contains no checkable factual assertions, return "assertions": [] and "confirmed": false.`);
     } else {
-      lines.push(`- ${field}: confirm this claim is VISIBLY TRUE in the screenshot — default false if you cannot positively see it: "${claim}".`);
+      lines.push(`- ${field}: confirm this claim is VISIBLY TRUE in the screenshot. Return "confirmed" only when you can positively see it; "contradicted" only when the image POSITIVELY disagrees with the claim; otherwise "abstain": "${claim}".`);
     }
   }
   if (lines.length === 0) return "";
-  return `You are an independent verifier (${verifierVersion}), NOT the producer. For each field below, POSITIVELY CONFIRM the claim against the screenshot (default false). A missing element returns false. Never guess.
+  return `You are an independent verifier (${verifierVersion}), NOT the producer. For each field below, judge the claim against the screenshot: "confirmed" only when you can positively SEE it; "contradicted" only when the image POSITIVELY disagrees; otherwise "abstain". Never guess.
 Return ONLY valid JSON, no fences:
 {
-  "<field>": { "confirmed": true|false, "assertions": ["..."], "reason": "..." }
+  "<field>": { "verdict": "confirmed" | "contradicted" | "abstain", "assertions": ["..."], "reason": "..." }
 }
 ${lines.join("\n")}`;
 }
 
 /**
+ * A parsed per-field model answer. `contradicted` is the THIRD state: the image
+ * POSITIVELY disagrees with the claim. Failing closed (a missing field, an
+ * unparseable response) means neither confirmed nor contradicted.
+ */
+export type ParsedField = {
+  confirmed: boolean;
+  contradicted: boolean;
+  assertions?: string[];
+  reason?: string;
+};
+
+/**
  * Wraps a parsed-response map so any key NOT explicitly present — an absent
  * field, an unparseable response, a non-object payload — reads back as
- * `{ confirmed: false }` rather than `undefined`. This is the fail-closed
- * contract: a missing key must fail the same way an explicit `false` would,
- * not silently short-circuit an optional-chained caller into `undefined`.
+ * `{ confirmed: false, contradicted: false }` rather than `undefined`. This is
+ * the fail-closed contract: a missing key must fail the same way an explicit
+ * silence would, not silently short-circuit an optional-chained caller into
+ * `undefined`.
  */
 function failClosed(
-  out: Record<string, { confirmed: boolean; assertions?: string[]; reason?: string }>,
-): Record<string, { confirmed: boolean; assertions?: string[]; reason?: string }> {
+  out: Record<string, ParsedField>,
+): Record<string, ParsedField> {
   return new Proxy(out, {
     get(target, prop, receiver) {
       if (typeof prop === "string" && !(prop in target)) {
-        return { confirmed: false };
+        return { confirmed: false, contradicted: false };
       }
       return Reflect.get(target, prop, receiver);
     },
   });
 }
 
-export function parseVerifyResponse(raw: string): Record<string, { confirmed: boolean; assertions?: string[]; reason?: string }> {
-  const out: Record<string, { confirmed: boolean; assertions?: string[]; reason?: string }> = {};
+export function parseVerifyResponse(raw: string): Record<string, ParsedField> {
+  const out: Record<string, ParsedField> = {};
   const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   let parsed: unknown;
   try {
@@ -252,15 +286,22 @@ export function parseVerifyResponse(raw: string): Record<string, { confirmed: bo
   if (typeof parsed !== "object" || parsed === null) return failClosed(out);
   for (const [field, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (typeof value !== "object" || value === null) {
-      out[field] = { confirmed: false };
+      out[field] = { confirmed: false, contradicted: false };
       continue;
     }
     const v = value as Record<string, unknown>;
     const assertions = Array.isArray(v.assertions)
       ? v.assertions.filter((a): a is string => typeof a === "string")
       : undefined;
+    // The three-way verdict, with the legacy confirmed-boolean shape as a
+    // fallback: a `verdict` string wins; otherwise an explicit `confirmed: true`
+    // still counts as confirmed.
+    const verdict = typeof v.verdict === "string"
+      ? (v.verdict as string)
+      : v.confirmed === true ? "confirmed" : undefined;
     out[field] = {
-      confirmed: v.confirmed === true,
+      confirmed: verdict === "confirmed",
+      contradicted: verdict === "contradicted",
       ...(assertions !== undefined ? { assertions } : {}),
       ...(typeof v.reason === "string" ? { reason: v.reason } : {}),
     };
@@ -271,7 +312,7 @@ export function parseVerifyResponse(raw: string): Record<string, { confirmed: bo
 export function decideFieldVerdict(
   field: string,
   tier: VerifierTier,
-  parsed: { confirmed: boolean; assertions?: string[] },
+  parsed: ParsedField,
 ): FieldVerdict {
   if (tier === "gated") {
     return { field, verdict: "gate", reason: "no single screenshot can confirm this claim" };
@@ -281,14 +322,19 @@ export function decideFieldVerdict(
     if (assertions.length === 0) {
       return { field, verdict: "gate", reason: "no checkable assertions enumerated — vacuous confirmation refused" };
     }
-    if (!parsed.confirmed) {
-      return { field, verdict: "fail", reason: "at least one assertion was not confirmed" };
+    if (parsed.contradicted) {
+      return { field, verdict: "contradicted", reason: "the image positively disagrees with a recorded assertion" };
     }
-    return { field, verdict: "pass", reason: `${assertions.length} assertion(s) confirmed` };
+    return parsed.confirmed
+      ? { field, verdict: "pass", reason: `${assertions.length} assertion(s) confirmed` }
+      : { field, verdict: "abstain", reason: "not positively confirmed" };
+  }
+  if (parsed.contradicted) {
+    return { field, verdict: "contradicted", reason: "the image positively disagrees with the recorded claim" };
   }
   return parsed.confirmed
     ? { field, verdict: "pass", reason: "positively confirmed against the image" }
-    : { field, verdict: "fail", reason: "not positively confirmed" };
+    : { field, verdict: "abstain", reason: "not positively confirmed" };
 }
 
 /**
@@ -365,17 +411,22 @@ export async function verifyEntry(
   entry: CorpusEntryT,
   imagePath: string,
   deps: VerifyEntryDeps,
-): Promise<{ records: Record<string, VerificationRecord>; verdicts: FieldVerdict[] }> {
+): Promise<{ records: Record<string, VerificationRecord>; verdicts: FieldVerdict[]; dataQuality: Record<string, DataQualityRecord> }> {
   const now = deps.now();
   const records: Record<string, VerificationRecord> = {};
   const verdicts: FieldVerdict[] = [];
+  // Accumulated here (detector contradictions + corroborated model
+  // contradictions) and persisted into `provenance.dataQuality` in Task 15.
+  const dataQuality: Record<string, DataQualityRecord> = {};
 
   const detectorsEnabled = deps.detectors ?? true;
   let outcome: RunDetectorsOutcome;
+  let detectorContradictions: string[] = [];
   let pending: string[];
   try {
     const ctx = await createVerifyCtx(imagePath);
     outcome = await runDetectors(entry, ctx, { detectors: detectorsEnabled });
+    detectorContradictions = outcome.contradicted;
     for (const field of outcome.passes) {
       records[field] = field === "platform" ? provableRecord(now) : confirmedRecord(imagePath, now);
     }
@@ -417,6 +468,7 @@ export async function verifyEntry(
     const message = err instanceof Error ? err.message : String(err);
     const stub: VerifyCtx = { imagePath, width: entry.image?.width ?? 0, height: entry.image?.height ?? 0 };
     const partial = await runDetectors(entry, stub, { detectors: false });
+    detectorContradictions = partial.contradicted;
     // Use the SAME record-method rule as the happy path. Writing `provableRecord`
     // for every pass is wrong for image-derived fields: `visual.dominantColors` is
     // a PIXEL claim, and a `provable` record carries no `imageSha256`, so it would
@@ -443,6 +495,41 @@ export async function verifyEntry(
     pending = [];
   }
 
+  // Detector-side contradictions must land in EXACTLY ONE map, whichever way
+  // they are resolved:
+  //   - detectors ON: every contradiction becomes a `dataQuality` finding —
+  //     with `--detectors off` the two always-on detectors (platform,
+  //     visual.dominantColors) still RUN (they are `mechanical` today, so the
+  //     flag cannot disable them); their contradictions must not be dropped
+  //     from every map, or `selectPending` requeues that entry forever.
+  //   - detectors OFF: the flag's contract is NO detector-side dataQuality
+  //     (Task 20's A/B comparison needs flag-off to be a genuine legacy
+  //     baseline), so the same contradictions emit the LEGACY `fail` verdict,
+  //     which `resumeMarkers` marks. Convergence holds with zero findings.
+  if (detectorsEnabled) {
+    for (const field of detectorContradictions) {
+      const verdict = verdicts.find((v) => v.field === field);
+      dataQuality[field] = {
+        measured: null,
+        recorded: claimForField(entry as unknown as Record<string, unknown>, field),
+        source: field, // the detector name = registry key
+        reason: verdict?.reason ?? "detector contradiction",
+        verifierVersion: VERIFIER_VERSION,
+        verifiedAt: now,
+        // Pixel-based findings pin the bytes they were measured against. Only
+        // `platform` is recomputed from recorded dimensions (no pixels), so it
+        // carries no hash — the same discriminator used to choose
+        // provableRecord vs confirmedRecord.
+        ...(field === "platform" ? {} : { imageSha256: imageSha256Of(imagePath) }),
+      };
+    }
+  } else {
+    for (const field of detectorContradictions) {
+      const i = verdicts.findIndex((v) => v.field === field);
+      if (i >= 0) verdicts[i] = { ...verdicts[i], verdict: "fail" };
+    }
+  }
+
   // 2. The fields left to verify — those not already stamped at this version.
   if (pending.length > 0) {
     const parsed = parseVerifyResponse(await deps.callVision(buildVerifyPrompt(entry, pending, VERIFIER_VERSION), imagePath));
@@ -454,21 +541,98 @@ export async function verifyEntry(
       decided.set(
         field,
         claim === null
-          ? { field, verdict: "gate", reason: "no recorded value to verify" }
-          : decideFieldVerdict(field, tierForField(field), parsed[field] ?? { confirmed: false }),
+          ? { field, verdict: "gate", reason: "no recorded value to verify", source: "vision" }
+          : { ...decideFieldVerdict(field, tierForField(field), parsed[field] ?? { confirmed: false, contradicted: false }), source: "vision" },
       );
+    }
+
+    // Corroboration covers NON-PROSE fields only. A prose field the model
+    // contradicts goes through the EXISTING re-produce + re-verify path
+    // (rewrite against the pixels, then one fresh ask) — corroborating it here
+    // too would double-ask and race the re-produce write. A model `contradicted`
+    // is corroborated by a SECOND fresh-context ask for that field alone; the
+    // second ask uses the SAME positive-affirmation prompt, never an anchored
+    // "do you still disagree". Model verdicts flip 14-18% between identical
+    // runs, so a split is that instability manifesting and grants NEITHER a
+    // trust record NOR a finding.
+    const modelContradicted = pending.filter(
+      (field) => !PROSE_FIELDS.includes(field) && decided.get(field)?.verdict === "contradicted",
+    );
+    for (const field of modelContradicted) {
+      const claim = claimForField(entry as unknown as Record<string, unknown>, field);
+      if (claim === null) continue;
+      let reParsedRaw: string;
+      try {
+        reParsedRaw = await deps.callVision(
+          buildVerifyPrompt(entry as unknown as Record<string, unknown>, [field], VERIFIER_VERSION),
+          imagePath,
+        );
+      } catch (err) {
+        // Uncorroborated: no dataQuality (an unconfirmed accusation is not a
+        // finding) and no trust record. The abstain marker keeps the queue
+        // converging. A throw here must NOT destroy the entry's other work
+        // (detector passes already computed), so it is caught, not propagated.
+        decided.set(field, {
+          field,
+          verdict: "abstain",
+          reason: `model contradiction could not be corroborated: ${err instanceof Error ? err.message : String(err)}`,
+          source: "vision",
+        });
+        continue;
+      }
+      const reParsed = parseVerifyResponse(reParsedRaw);
+      const reVerdict = decideFieldVerdict(field, tierForField(field), reParsed[field] ?? { confirmed: false, contradicted: false });
+      if (reVerdict.verdict === "pass") {
+        // DISAGREEMENT, NOT CONFIRMATION. The first ask said `contradicted` and
+        // the second says `confirmed` — that split IS the instability
+        // corroboration exists to catch, the LEAST trustworthy state available.
+        // Resolve to `abstain`: no trust record, no finding, just a marker so
+        // the queue converges. The next verifier version re-asks.
+        decided.set(field, {
+          field,
+          verdict: "abstain",
+          reason: "model disagreed with itself across two fresh asks (contradicted, then confirmed) — neither verdict is corroborated",
+          source: "vision",
+        });
+      } else if (reVerdict.verdict === "contradicted") {
+        // Corroborated: both fresh asks positively disagree. A finding, not a
+        // marker — but never a trust record.
+        dataQuality[field] = {
+          measured: null,
+          recorded: claim,
+          source: "vision",
+          reason: reParsed[field]?.reason ?? "corroborated contradiction",
+          verifierVersion: VERIFIER_VERSION,
+          verifiedAt: now,
+          // The model judged these exact pixels; pin them, as image-confirmed
+          // verification records do. Without this the `imageSha256` field is
+          // declared but never populated, and every staleness rule built on it
+          // is dead code.
+          imageSha256: imageSha256Of(imagePath),
+        };
+        decided.set(field, { ...reVerdict, source: "vision" });
+      } else {
+        decided.set(field, { ...reVerdict, source: "vision" }); // abstain -> marker in Task 15
+      }
     }
 
     // 3. Re-produce ONCE if any prose field failed. The seeing Pass 2 rewrites
     // ALL prose fields in a single tagImage call — never re-tag per field — and
     // the failed ones are re-verified in ONE fresh independent call (step 4).
-    const failedProse = PROSE_FIELDS.filter((f) => decided.get(f)?.verdict === "fail");
+    // The trigger WIDENED from `=== "fail"` (a verdict decideFieldVerdict no
+    // longer emits) to the abstain/contradicted states that replaced it. Gated
+    // prose stays out of the lane: an absent value or a vacuous assertion list
+    // is nothing re-production can fix.
+    const failedProse = PROSE_FIELDS.filter((f) => {
+      const verdict = decided.get(f)?.verdict;
+      return pending.includes(f) && (verdict === "abstain" || verdict === "contradicted");
+    });
     if (failedProse.length > 0) {
       const reproduced = await deps.reproduce(entry, imagePath);
       const reFields = failedProse.filter(
         (f) => claimForField(reproduced as unknown as Record<string, unknown>, f) !== null,
       );
-      const reParsed: Record<string, { confirmed: boolean; assertions?: string[]; reason?: string }> = reFields.length > 0
+      const reParsed: Record<string, ParsedField> = reFields.length > 0
         ? parseVerifyResponse(await deps.callVision(buildVerifyPrompt(reproduced as unknown as Record<string, unknown>, reFields, VERIFIER_VERSION), imagePath))
         : {};
       for (const field of failedProse) {
@@ -476,12 +640,24 @@ export async function verifyEntry(
           decided.set(field, { field, verdict: "gate", reason: "re-production wrote no value for this field" });
           continue;
         }
-        const reVerdict = decideFieldVerdict(field, "prose", reParsed[field] ?? { confirmed: false });
+        const reVerdict = decideFieldVerdict(field, "prose", reParsed[field] ?? { confirmed: false, contradicted: false });
         decided.set(field, reVerdict);
         if (reVerdict.verdict === "pass") {
           // The re-produced value replaces the fabricated one only after it
           // passed, so the stored value and the record agree.
           (entry as unknown as Record<string, unknown>)[field] = (reproduced as unknown as Record<string, unknown>)[field];
+        } else if (reVerdict.verdict === "contradicted") {
+          // A re-produced value the fresh ask STILL calls contradicted is a
+          // finding, not a marker.
+          dataQuality[field] = {
+            measured: null,
+            recorded: claimForField(entry as unknown as Record<string, unknown>, field),
+            source: "vision",
+            reason: reParsed[field]?.reason ?? "re-produced value contradicted by fresh ask",
+            verifierVersion: VERIFIER_VERSION,
+            verifiedAt: now,
+            imageSha256: imageSha256Of(imagePath),
+          };
         }
       }
     }
@@ -496,7 +672,7 @@ export async function verifyEntry(
       verdicts.push(verdict);
     }
   }
-  return { records, verdicts };
+  return { records, verdicts, dataQuality };
 }
 
 /**

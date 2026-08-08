@@ -248,6 +248,26 @@ ${lines.join("\n")}`;
 }
 
 /**
+ * WHY an abstain happened, one value per physical branch. Six of these are
+ * defects with cheap fixes; only `model-abstained` is evidence about the model
+ * lane's ceiling, and only for it does the model's own `reason` text exist.
+ * The two `corroboration-*` values are set in `verifyEntry`, not at parse time.
+ */
+export type AbstainCause =
+  | "response-unparseable"
+  | "response-not-object"
+  | "field-absent"
+  | "field-not-object"
+  | "verdict-missing"
+  | "verdict-unrecognised"
+  | "model-abstained"
+  | "corroboration-split"
+  | "corroboration-error";
+
+/** WHICH of an entry's up-to-three vision calls produced a verdict. */
+export type VerifyCallSite = "initial" | "corroborate" | "reverify";
+
+/**
  * A parsed per-field model answer. `contradicted` is the THIRD state: the image
  * POSITIVELY disagrees with the claim. Failing closed (a missing field, an
  * unparseable response) means neither confirmed nor contradicted.
@@ -257,6 +277,10 @@ export type ParsedField = {
   contradicted: boolean;
   assertions?: string[];
   reason?: string;
+  /** Set only when the field is neither confirmed nor contradicted. */
+  cause?: AbstainCause;
+  /** The literal verdict string, kept only for `verdict-unrecognised`. */
+  rawVerdict?: string;
 };
 
 /**
@@ -269,11 +293,12 @@ export type ParsedField = {
  */
 function failClosed(
   out: Record<string, ParsedField>,
+  absentCause: AbstainCause,
 ): Record<string, ParsedField> {
   return new Proxy(out, {
     get(target, prop, receiver) {
       if (typeof prop === "string" && !(prop in target)) {
-        return { confirmed: false, contradicted: false };
+        return { confirmed: false, contradicted: false, cause: absentCause };
       }
       return Reflect.get(target, prop, receiver);
     },
@@ -287,12 +312,12 @@ export function parseVerifyResponse(raw: string): Record<string, ParsedField> {
   try {
     parsed = JSON.parse(stripped);
   } catch {
-    return failClosed(out);
+    return failClosed(out, "response-unparseable");
   }
-  if (typeof parsed !== "object" || parsed === null) return failClosed(out);
+  if (typeof parsed !== "object" || parsed === null) return failClosed(out, "response-not-object");
   for (const [field, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (typeof value !== "object" || value === null) {
-      out[field] = { confirmed: false, contradicted: false };
+      out[field] = { confirmed: false, contradicted: false, cause: "field-not-object" };
       continue;
     }
     const v = value as Record<string, unknown>;
@@ -302,17 +327,28 @@ export function parseVerifyResponse(raw: string): Record<string, ParsedField> {
     // The three-way verdict, with the legacy confirmed-boolean shape as a
     // fallback: a `verdict` string wins; otherwise an explicit `confirmed: true`
     // still counts as confirmed.
-    const verdict = typeof v.verdict === "string"
-      ? (v.verdict as string)
-      : v.confirmed === true ? "confirmed" : undefined;
+    const rawVerdict = typeof v.verdict === "string" ? (v.verdict as string) : undefined;
+    const verdict = rawVerdict ?? (v.confirmed === true ? "confirmed" : undefined);
+    const confirmed = verdict === "confirmed";
+    const contradicted = verdict === "contradicted";
+    // A field that is neither gets a cause naming WHICH silence this was.
+    const cause: AbstainCause | undefined = confirmed || contradicted
+      ? undefined
+      : verdict === undefined
+        ? "verdict-missing"
+        : verdict === "abstain"
+          ? "model-abstained"
+          : "verdict-unrecognised";
     out[field] = {
-      confirmed: verdict === "confirmed",
-      contradicted: verdict === "contradicted",
+      confirmed,
+      contradicted,
       ...(assertions !== undefined ? { assertions } : {}),
       ...(typeof v.reason === "string" ? { reason: v.reason } : {}),
+      ...(cause !== undefined ? { cause } : {}),
+      ...(cause === "verdict-unrecognised" && rawVerdict !== undefined ? { rawVerdict } : {}),
     };
   }
-  return failClosed(out);
+  return failClosed(out, "field-absent");
 }
 
 export function decideFieldVerdict(

@@ -1155,3 +1155,71 @@ describe("decideFieldVerdict — verdict logic characterization (governing invar
     }
   }
 });
+
+describe("parseVerifyResponse — abstain cause taxonomy", () => {
+  it("tags every field response-unparseable when the JSON does not parse", () => {
+    const parsed = parseVerifyResponse("this is not json {{{");
+    expect(parsed.layout).toEqual({ confirmed: false, contradicted: false, cause: "response-unparseable" });
+    expect(parsed.mood.cause).toBe("response-unparseable");
+  });
+
+  it("tags every field response-not-object when the payload is a bare scalar", () => {
+    const parsed = parseVerifyResponse("42");
+    expect(parsed.layout.cause).toBe("response-not-object");
+  });
+
+  it("tags an absent key field-absent when other keys parsed fine", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({ layout: { verdict: "confirmed" } }));
+    expect(parsed.layout.confirmed).toBe(true);
+    expect(parsed.layout.cause).toBeUndefined();
+    expect(parsed.mood.cause).toBe("field-absent");
+  });
+
+  it("tags a present-but-scalar field value field-not-object", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({ layout: "yes" }));
+    expect(parsed.layout.cause).toBe("field-not-object");
+  });
+
+  it("tags a field with no verdict key verdict-missing", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({ layout: { reason: "hard to say" } }));
+    expect(parsed.layout.cause).toBe("verdict-missing");
+    expect(parsed.layout.reason).toBe("hard to say");
+  });
+
+  it("tags an unrecognised verdict string verdict-unrecognised and keeps the literal", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({ layout: { verdict: "partially confirmed" } }));
+    expect(parsed.layout.cause).toBe("verdict-unrecognised");
+    expect(parsed.layout.rawVerdict).toBe("partially confirmed");
+    expect(parsed.layout.confirmed).toBe(false);
+    expect(parsed.layout.contradicted).toBe(false);
+  });
+
+  it("tags an explicit abstain model-abstained and keeps the model's reason", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({
+      layout: { verdict: "abstain", reason: "cannot determine from one screenshot" },
+    }));
+    expect(parsed.layout.cause).toBe("model-abstained");
+    expect(parsed.layout.reason).toBe("cannot determine from one screenshot");
+  });
+
+  it("leaves confirmed and contradicted fields with no cause", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({
+      a: { verdict: "confirmed" },
+      b: { verdict: "contradicted" },
+    }));
+    expect(parsed.a.cause).toBeUndefined();
+    expect(parsed.b.cause).toBeUndefined();
+  });
+
+  it("still honours the legacy confirmed-boolean shape with no verdict key", () => {
+    const parsed = parseVerifyResponse(JSON.stringify({ layout: { confirmed: true } }));
+    expect(parsed.layout.confirmed).toBe(true);
+    expect(parsed.layout.cause).toBeUndefined();
+  });
+
+  it("surfaces an empty object as field-absent on every field", () => {
+    const parsed = parseVerifyResponse("{}");
+    expect(parsed.layout.cause).toBe("field-absent");
+    expect(parsed.anythingElse.cause).toBe("field-absent");
+  });
+});

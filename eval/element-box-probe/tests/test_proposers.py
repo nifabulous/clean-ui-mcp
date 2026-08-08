@@ -51,3 +51,70 @@ def test_model_proposers_return_integer_boxes_within_image_bounds(key: str) -> N
     for x0, y0, x1, y1 in boxes:
         assert all(isinstance(v, int) for v in (x0, y0, x1, y1))
         assert 0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h
+
+
+# --- Rung 3a: UIED's two techniques -----------------------------------------
+
+def test_rung1_provably_cannot_see_a_soft_edged_card() -> None:
+    # The premise of rung 3a. If this ever fails, the gap it was built to close
+    # no longer exists and the extra machinery is unjustified.
+    from tests.fixtures import with_soft_card
+    gray = with_soft_card(blank(w=600, h=400, value=246), 100, 80, 400, 300)
+    boxes = propose_classical(gray)
+    matched = [
+        b for b in boxes
+        if abs(b[0] - 100) <= 3 and abs(b[1] - 80) <= 3
+        and abs(b[2] - 400) <= 3 and abs(b[3] - 300) <= 3
+    ]
+    assert matched == []
+
+
+def test_uied_finds_the_soft_edged_card_rung1_misses() -> None:
+    from tests.fixtures import with_soft_card
+    from proposers import propose_uied
+    gray = with_soft_card(blank(w=600, h=400, value=246), 100, 80, 400, 300)
+    boxes = propose_uied(gray)
+    matched = [
+        b for b in boxes
+        if abs(b[0] - 100) <= 3 and abs(b[1] - 80) <= 3
+        and abs(b[2] - 400) <= 3 and abs(b[3] - 300) <= 3
+    ]
+    assert matched, f"soft card not found; got {boxes}"
+
+
+def test_uied_drops_components_overlapping_a_text_box() -> None:
+    # UIED's rule: discard a component overlapping a detected text block >= 90%.
+    from proposers import _drop_text_overlaps
+    card = (100, 80, 400, 300)
+    word = (120, 100, 220, 118)
+    text_boxes = [(118, 98, 222, 120)]
+    kept = _drop_text_overlaps([card, word], text_boxes, threshold=0.9)
+    assert card in kept
+    assert word not in kept
+
+
+def test_text_overlap_keeps_a_container_that_merely_contains_text() -> None:
+    # A card with a label inside must NOT be dropped: the card's own area is
+    # mostly not text, even though a text box sits within it.
+    from proposers import _drop_text_overlaps
+    card = (100, 80, 400, 300)
+    kept = _drop_text_overlaps([card], [(120, 100, 220, 118)], threshold=0.9)
+    assert kept == [card]
+
+
+def test_registry_exposes_the_uied_proposer() -> None:
+    from proposers import PROPOSERS, propose_uied
+    assert PROPOSERS["uied"] is propose_uied
+
+
+@pytest.mark.slow
+def test_omniparser_is_registered_and_returns_contract_boxes() -> None:
+    from tests.fixtures import with_soft_card
+    from proposers import PROPOSERS
+    assert "omniparser" in PROPOSERS
+    gray = with_soft_card(blank(w=600, h=400, value=246), 100, 80, 400, 300)
+    boxes = PROPOSERS["omniparser"](gray)
+    h, w = gray.shape
+    for x0, y0, x1, y1 in boxes:
+        assert all(isinstance(v, int) for v in (x0, y0, x1, y1))
+        assert 0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h

@@ -6,18 +6,33 @@
 
 ## Verdict
 
-**No rung passed.** Classical CV 23.9%, Florence-2 0.0%, Moondream 0.0%, against
-a 70% global bar. Rung 3 was not run.
+**No rung passed the 70% bar.** Five proposers measured: classical CV 23.9%,
+**UIED techniques 52.2%**, OmniParser 0.0%, Florence-2 0.0%, Moondream 0.0%.
 
-The three fail in different directions, and that is the useful part. Classical CV
-finds **text runs** (27.5 boxes/image, interior density 0.586); Florence-2 finds
-**page regions** (1.9 boxes/image, median area 51% of the screen); Moondream
-finds **one arbitrary element** (1.0 box/image). None returns the thing the
-detectors need — a medium-contrast, medium-size container.
+But the ladder did not merely fail — it converged on one approach and one
+remaining obstacle.
 
-Rung 1's shortfall in particular is not a tuning gap: 96% of the boxes it
-proposes are text runs, and 93.4% of the boxes the rubric counted as *aligned*
-are text runs. It passes what it passes for the wrong reason.
+**Rung 3a (UIED's techniques) is qualitatively different from the rest.** It is
+the only proposer that returns containers: text-like boxes fell 96.0% → 25.5%,
+median box area rose 16×, and box-level alignment doubled to 77.0%. Two of the
+four fields cleared their per-field floor (`spacingDensity` 0.750, `cornerStyle`
+0.667).
+
+**Its remaining failure is a single named thing: under-detection.** All 16
+`check1_count` failures are images with fewer than 5 boxes — median 7, against
+the 10–60 containers a real screen has. It finds the right kind of object and
+too few of them.
+
+**And its blind spot is one field's entire subject matter.** `usesShadows` did
+not move a single point (0.200 → 0.200): a white card on a white panel separated
+only by a shadow has no colour discontinuity for a uniform-region method to
+segment on.
+
+Everything else fails more basically. Classical CV finds **text** (96% of boxes).
+OmniParser gets the count right and the positions wrong — `check2_alignment`
+failed 46/46, with 79.5% of edges having no qualifying gradient within 3px.
+Florence-2 finds **page regions** (median box = 51% of the screen). Moondream
+finds **one box per image**.
 
 ## Probe set
 
@@ -190,11 +205,13 @@ would be indistinguishable from a model that found nothing:
 
 ## All three rungs, side by side
 
-| rung | coverage | boxes/image | median area | median interior density | what it returns |
-|---|---|---|---|---|---|
-| classical | 46/46 | 27.5 | 0.0010 | **0.586** | text runs |
-| florence2 | 8/46 | 1.9 | 0.5112 | **0.077** | page regions |
-| moondream | 4/46 | 1.0 | 0.0036 | **0.261** | one arbitrary element |
+| rung | coverage | boxes/img | median area | density | text-like | boxes aligned | global |
+|---|---|---|---|---|---|---|---|
+| **uied (3a)** | 46/46 | 8.9 | 0.0167 | 0.098 | 25.5% | **77.0%** | **52.2%** |
+| classical | 46/46 | 27.5 | 0.0010 | 0.586 | 96.0% | 38.4% | 23.9% |
+| omniparser (3b) | 46/46 | 37.7 | 0.0024 | 0.232 | 71.7% | 12.3% | 0.0% |
+| moondream | 4/46 | 1.0 | 0.0036 | 0.261 | 75.0% | 25.0% | 0.0% |
+| florence2 | 8/46 | 1.9 | 0.5112 | 0.077 | 13.3% | 13.3% | 0.0% |
 
 Every rung fails `check1_count`, for three different reasons. A real screen has
 on the order of 10–60 containers; nothing here is close, and the two model rungs
@@ -207,18 +224,94 @@ none of them returns is the middle: a medium-contrast, medium-size container —
 card with a light-grey border on white.** That is the entire subject matter of
 `usesBorders`, `usesShadows` and `cornerStyle`.
 
-## Rung 3 — screen parser
+## Rung 3a — UIED's two techniques (46/46)
 
-Not run. The spec makes it conditional on obtainability and licence, which could
-not be resolved before rungs 1–2 reported. **This is a two-rung ladder, not a
-complete one**, and is reported as such rather than presented as exhaustive.
+Ported from [UIED](https://github.com/MulongXie/UIED) (Xie et al., Monash), not
+its code: upstream pins Python 3.5 / OpenCV 3.4.2 and calls Google OCR over the
+network, and the detector lane must stay local to remain an independent witness.
+
+1. **Uniform-region segmentation** at a soft-edge threshold — Sobel magnitude > 6
+   against Canny's 50 floor. Finds elements by colour CONTINUITY rather than edge
+   gradient, because a card's interior is uniform even when its border is a ~10
+   grey-level step.
+2. **Text suppression** — discard components ≥90% covered by OCR-detected text.
+
+A test pins the premise before the fix
+(`test_rung1_provably_cannot_see_a_soft_edged_card`): rung 1 cannot find a 1px
+light-grey border on off-white, and 3a can.
+
+**This is the best proposer measured, and it changes what is found, not just the
+score:**
+
+| | rung 1 | rung 3a |
+|---|---|---|
+| text-like boxes | 96.0% | **25.5%** |
+| median box area | 0.0010 | **0.0167** (16×, container scale) |
+| median interior density | 0.586 | **0.098** (flat, not glyph runs) |
+| boxes with ≥3 aligned edges | 38.4% | **77.0%** |
+| global | 23.9% | **52.2%** |
+
+`spacingDensity` 0.750 and `cornerStyle` 0.667 now clear the 60% per-field floor.
+It still **fails** the 70% global bar.
+
+### Its failure is one specific thing: under-detection
+
+All 16 `check1_count` failures are images with FEWER than 5 boxes. Median 7 per
+image, against the 10–60 containers a real screen has; zero images exceed 200.
+It is no longer finding wrong things — it is finding too few right things.
+
+### And the blind spot is exactly one field's subject matter
+
+`usesShadows` did not move a single point, 0.200 → 0.200. A white card on a white
+panel separated **only by a shadow** has no colour discontinuity, so uniform-region
+segmentation merges it into the panel. Colour continuity cannot see the thing
+`usesShadows` measures. The `aboard-aboard-3` overlay shows it directly: 3a finds
+the outer modal container that rung 1 missed entirely, boxes zero text, and misses
+the shadow-separated badge card.
+
+## Rung 3b — OmniParser (46/46)
+
+Only `icon_detect` (YOLOv8) is used; the captioner is irrelevant when the probe
+wants boxes.
+
+**The weights carry exactly one class: `icon`.** That confirms at the weight level
+the objection raised before running — three of the four fields are about
+containers, which the model was never trained to emit.
+
+Result: **0.0% global**, and the failure is a single check.
+
+| check | failures / 46 |
+|---|---|
+| check2_alignment | **46** |
+| check1_count | 1 |
+| check4_area | 1 |
+| check3_margin | 0 |
+
+Right number of boxes (37.7/image), wrong positions. **79.5% of its edges have no
+qualifying gradient within 3px of the box at all**, and 71.7% of its boxes are
+text-like — the single `icon` class fires on text runs.
+
+This is the mAP-vs-boundary-precision risk, flagged in advance and confirmed: a
+detector can score well at IoU 0.5–0.95 and still be useless for measuring a 1px
+border. Detection accuracy and boundary precision are different properties.
+
+## Rung 3c — other screen parsers
+
+Not run. This ladder covers classical CV, two general small VLMs, a
+literature-standard hybrid, and one UI-finetuned detector. **It is not
+exhaustive** and is reported as such.
 
 ## Interactable elements and `accentColor`
 
 **No rung distinguishes interactable elements.** Classical CV has no notion of
 one — it returns contours. Florence-2 `<REGION_PROPOSAL>` returns unlabelled
 regions by construction. Moondream was asked for "user interface element"
-specifically and returned one untyped box per image.
+specifically and returned one untyped box per image. UIED's uniform-region pass
+is unlabelled by design.
+
+OmniParser was the strongest candidate to change this and does not: its
+`icon_detect` weights carry **exactly one class, `icon`** — no interactable-vs-not
+distinction at the detection stage, and 71.7% of what it emitted was text.
 
 Consequence: the open question the diagnosis spec recorded is answered in the
 negative. `accentColor` stays **Class B**, needing a role rule rather than
@@ -228,9 +321,15 @@ be updated to close that as resolved rather than open.
 
 ## Decision
 
-**Do not build element-localised detectors on any of these proposers.** The spec
-is explicit that failing means "do not"; three rungs failed, two of them by an
-order of magnitude on box count alone.
+**Under the pre-registered rule, element detection closes here.** The rule fixed
+before rung 3 ran was: if neither 3a nor 3b clears the rubric, the line is closed
+and effort returns to corpus backfill (298 gates) and the abstain diagnosis (244
+abstains). Neither cleared it. 52.2% against a 70% bar is a fail.
+
+That rule should be honoured rather than renegotiated now that a number came in
+higher than expected — "one specific fix away" is exactly what gets said before
+another week is spent. What follows is the evidence for whoever revisits it, not
+an argument to keep going.
 
 What this does and does not establish:
 
@@ -259,13 +358,21 @@ elements to ±3px, including the ones with almost no contrast".
 
 | claim | evidence |
 |---|---|
-| rung 1 fails | 46/46 images, full probe set |
-| rung 2a fails | 8/46, bounded, printed with the verdict |
-| rung 2b fails | 4/46, bounded, and covers only 2 of 4 fields |
-| rung 3 | **not run** — obtainability and licence unresolved |
+| rung 1 fails (23.9%) | 46/46, full probe set |
+| rung 3a fails (52.2%) | 46/46, full probe set |
+| rung 3b fails (0.0%) | 46/46, full probe set |
+| rung 2a fails (0.0%) | 8/46, bounded, printed with the verdict |
+| rung 2b fails (0.0%) | 4/46, bounded, covers only 2 of 4 fields |
+| other screen parsers | **not run** — the ladder is not exhaustive |
 
-This is a **two-rung ladder, not a complete one**, and the model rungs are
-bounded samples rather than full-set results. Both bounds were forced by cost
-(Florence-2 at 174s/image is ~2.2h for the full set) and both are printed by the
-runner with `BOUNDED RUN: N of 46`. The rung-1 result, which carries the load of
-the decision, is the full 46.
+**Three of five rungs are full-set results** — classical, UIED techniques, and
+OmniParser, all 46/46. Those three carry the decision. The two general-VLM rungs
+are bounded samples (8/46 and 4/46), forced by cost (Florence-2 at 174s/image is
+~2.2h for the full set), and both are printed by the runner as
+`BOUNDED RUN: N of 46` so a bound can never read as a full result. The 4-image
+Moondream bound covers only 2 of the 4 fields, which its verdict reports as
+`missing_fields` rather than scoring zero.
+
+**The ladder is not exhaustive.** It covers classical CV, two general small VLMs,
+a literature-standard hybrid, and one UI-finetuned detector. Other screen parsers
+exist and were not run.

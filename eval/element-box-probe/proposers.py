@@ -145,3 +145,134 @@ def propose_moondream(gray: np.ndarray) -> list[Box]:
 
 PROPOSERS["florence2"] = propose_florence2
 PROPOSERS["moondream"] = propose_moondream
+
+
+# --- Rung 3a: UIED's two techniques -----------------------------------------
+#
+# github.com/MulongXie/UIED — "UIED: a hybrid tool for GUI element detection"
+# (Xie et al., Monash). Two ideas are ported, not the code: the upstream repo
+# pins Python 3.5 / OpenCV 3.4.2 and calls Google OCR over the network.
+#
+# 1. TEXT SUPPRESSION. Detect text, then discard any component overlapping a
+#    text block by >= 90%. Rung 1's measured failure was that 96% of its boxes
+#    were text runs and 93.4% of its "aligned" boxes were text.
+# 2. UNIFORM-REGION SEGMENTATION. Find elements by colour CONTINUITY rather than
+#    edge gradient. Rung 1's other failure was soft grey-on-white cards, whose
+#    border step is ~4-14 grey levels — far under Canny's 50/150 hysteresis. A
+#    card's INTERIOR is uniform even when its edge is nearly invisible.
+
+SOFT_EDGE_THRESHOLD = 6.0   # Sobel magnitude; Canny's lower hysteresis is 50
+MIN_SOLIDITY = 0.70         # a card fills its bbox; a ragged blob does not
+TEXT_OVERLAP_DROP = 0.90    # UIED's threshold
+
+
+def _drop_text_overlaps(
+    boxes: list[Box], text_boxes: list[Box], threshold: float = TEXT_OVERLAP_DROP,
+) -> list[Box]:
+    """Discard a box whose OWN area is >= threshold covered by text.
+
+    Intersection is normalised by the BOX's area, not the text's: a card
+    containing a label keeps its box (the label covers little of the card),
+    while a box drawn around the label itself is dropped.
+    """
+    kept: list[Box] = []
+    for bx0, by0, bx1, by1 in boxes:
+        area = float(max(1, (bx1 - bx0) * (by1 - by0)))
+        covered = 0.0
+        for tx0, ty0, tx1, ty1 in text_boxes:
+            ix = max(0, min(bx1, tx1) - max(bx0, tx0))
+            iy = max(0, min(by1, ty1) - max(by0, ty0))
+            covered += ix * iy
+        if covered / area < threshold:
+            kept.append((bx0, by0, bx1, by1))
+    return kept
+
+
+@functools.lru_cache(maxsize=1)
+def _ocr_reader():
+    import easyocr
+    return easyocr.Reader(["en"], gpu=False, verbose=False)
+
+
+def detect_text_boxes(gray: np.ndarray) -> list[Box]:
+    """Text bounding boxes via local OCR. UIED uses Google OCR over the network;
+    the detector lane must stay offline and independent, so this is local."""
+    try:
+        results = _ocr_reader().detect(np.stack([gray] * 3, axis=-1))
+    except Exception:
+        # An OCR failure must not silently disable text suppression — that would
+        # make rung 3a score as rung 1 while claiming to be different.
+        raise
+    boxes: list[Box] = []
+    horizontal = results[0][0] if results and results[0] else []
+    for item in horizontal:
+        x0, x1, y0, y1 = (int(v) for v in item[:4])
+        boxes.append((min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)))
+    return boxes
+
+
+def propose_uied(gray: np.ndarray) -> list[Box]:
+    """Uniform-region segmentation at a soft-edge threshold, then text suppression."""
+    h, w = gray.shape
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    magnitude = cv2.magnitude(gx, gy)
+    # Complement of the edge map: the UNIFORM regions are the elements.
+    uniform = (magnitude <= SOFT_EDGE_THRESHOLD).astype(np.uint8)
+    count, _labels, stats, _ = cv2.connectedComponentsWithStats(uniform, connectivity=4)
+
+    boxes: list[Box] = []
+    for i in range(1, count):
+        x, y, bw, bh, area = stats[i]
+        if bw < MIN_BOX_W or bh < MIN_BOX_H:
+            continue
+        if (bw * bh) / float(w * h) > MAX_AREA_FRACTION:
+            continue
+        if area / float(bw * bh) < MIN_SOLIDITY:
+            continue
+        boxes.append((int(x), int(y), int(x + bw), int(y + bh)))
+
+    return _drop_text_overlaps(boxes, detect_text_boxes(gray))
+
+
+PROPOSERS["uied"] = propose_uied
+
+
+# --- Rung 3b: OmniParser's detection half ------------------------------------
+#
+# microsoft/OmniParser-v2.0. Only `icon_detect` is used: the probe wants BOXES,
+# not the captioner's functional descriptions, and loading a caption model to
+# discard its output would spend a download to learn nothing.
+#
+# Stated risk, from the spec review: OmniParser's objective is INTERACTABLE
+# regions ("prediction of whether each screen element is interactable" is the
+# v1.5 headline). Three of the four fields this probe serves are about
+# CONTAINERS — cards, panels, surfaces — which are not clickable. If it returns
+# only interactables, it targets the wrong class, and that is a result rather
+# than a bug.
+
+_OMNIPARSER_REPO = "microsoft/OmniParser-v2.0"
+_OMNIPARSER_WEIGHTS = "icon_detect/model.pt"
+OMNIPARSER_CONF = 0.05  # upstream demo's box_threshold
+
+
+@functools.lru_cache(maxsize=1)
+def _omniparser():
+    from huggingface_hub import hf_hub_download
+    from ultralytics import YOLO
+    return YOLO(hf_hub_download(_OMNIPARSER_REPO, _OMNIPARSER_WEIGHTS))
+
+
+def propose_omniparser(gray: np.ndarray) -> list[Box]:
+    """OmniParser icon_detect (YOLOv8), mapped onto the shared Box contract."""
+    model = _omniparser()
+    rgb = np.stack([gray] * 3, axis=-1)
+    results = model.predict(rgb, conf=OMNIPARSER_CONF, iou=0.7, verbose=False)
+    raw: list[list[float]] = []
+    for result in results:
+        for box in result.boxes:
+            raw.append([float(v) for v in box.xyxy[0].tolist()])
+    return _to_boxes(raw, gray.shape)
+
+
+PROPOSERS["omniparser"] = propose_omniparser

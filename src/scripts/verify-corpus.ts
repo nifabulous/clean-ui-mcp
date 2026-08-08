@@ -432,7 +432,7 @@ export async function verifyEntry(
   const dataQuality: Record<string, DataQualityRecord> = {};
 
   const detectorsEnabled = deps.detectors ?? true;
-  let outcome: RunDetectorsOutcome;
+  let outcome: RunDetectorsOutcome = { passes: [], contradicted: [], abstained: [], results: {} };
   let detectorContradictions: string[] = [];
   let pending: string[];
   try {
@@ -453,7 +453,12 @@ export async function verifyEntry(
     );
 
     for (const field of outcome.passes) verdicts.push({ field, verdict: "pass", reason: "detector", source: "detector" });
-    for (const field of outcome.contradicted) verdicts.push({ field, verdict: "contradicted", reason: "detector contradiction", source: "detector" });
+    for (const field of outcome.contradicted) verdicts.push({
+      field,
+      verdict: "contradicted",
+      reason: outcome.results[field]?.reason ?? "detector contradiction",
+      source: "detector",
+    });
     // EXACTLY ONE VERDICT PER FIELD PER RUN. A detector abstain is only the
     // field's verdict when nothing else will produce one; a field still in
     // `pending` gets its verdict from the model, so the detector stays SILENT.
@@ -522,10 +527,12 @@ export async function verifyEntry(
     for (const field of detectorContradictions) {
       const verdict = verdicts.find((v) => v.field === field);
       dataQuality[field] = {
-        measured: null,
+        // The detector's measured evidence — what it actually saw — not null.
+        // Without it the suspect report shows a bare finding with no payload.
+        measured: outcome.results[field]?.measured ?? null,
         recorded: claimForField(entry as unknown as Record<string, unknown>, field),
         source: field, // the detector name = registry key
-        reason: verdict?.reason ?? "detector contradiction",
+        reason: outcome.results[field]?.reason ?? verdict?.reason ?? "detector contradiction",
         verifierVersion: VERIFIER_VERSION,
         verifiedAt: now,
         // Pixel-based findings pin the bytes they were measured against. Only

@@ -34,6 +34,13 @@ export const detectorRegistry: Record<string, DetectorEntry> = {
   "visual.accentColor": { detect: detectAccent, category: "certifying", accuracyFloor: 0.9, confidenceBand: accentBand, canAffirm: affirmAccent, disabled: true },
   "visual.cornerStyle": { detect: detectCorner, category: "certifying", accuracyFloor: 0.8, confidenceBand: cornerBand, canAffirm: affirmCorner, disabled: true },
   "visual.spacingDensity": { detect: detectSpacing, category: "certifying", accuracyFloor: 0.8, confidenceBand: spacingBand, canAffirm: affirmSpacing, disabled: true },
-  "visual.colorRoles": { detect: detectColorRoles, category: "contradiction-only", accuracyFloor: 0.9, confidenceBand: accentBand, canAffirm: affirmColorRoles },
+  // Disabled 2026-08-08 after the cohort run measured 10/10 contradicted on
+  // real screenshots — and at least one contradicted a CORRECT record. The
+  // canvas-is-largest-area rule over-fires on real screenshots (it was tuned
+  // on flat synthetic canvases), and no real-screenshot label set exists for
+  // this field to retune against. Same honest-outcome as the disabled pixel
+  // detectors: the lane stops writing findings until it can clear a measured
+  // floor. See docs/verifier-calibration.md "Cohort run".
+  "visual.colorRoles": { detect: detectColorRoles, category: "contradiction-only", accuracyFloor: 0.9, confidenceBand: accentBand, canAffirm: affirmColorRoles, disabled: true },
   "antiPatterns.accessibilityRisks": { detect: detectAccessibility, category: "contradiction-only", accuracyFloor: 0.9, confidenceBand: accentBand, canAffirm: affirmAccessibility },
 };

@@ -14,6 +14,14 @@ export interface RunDetectorsOutcome {
   passes: string[];
   contradicted: string[];
   abstained: string[];
+  /**
+   * The raw DetectorResult per EVALUATED field — carries the measured
+   * evidence and the detector's specific reason. The corpus writes otherwise
+   * drop both (dataQuality.measured stayed null and the reason degraded to
+   * "detector contradiction"), which made the suspect report unable to say
+   * WHAT was measured against WHAT.
+   */
+  results: Record<string, DetectorResult>;
 }
 
 /**
@@ -39,7 +47,7 @@ export async function runDetectors(
   opts: { detectors?: boolean } = {},
 ): Promise<RunDetectorsOutcome> {
   const detectors = opts.detectors ?? true;
-  const outcome: RunDetectorsOutcome = { passes: [], contradicted: [], abstained: [] };
+  const outcome: RunDetectorsOutcome = { passes: [], contradicted: [], abstained: [], results: {} };
   for (const [field, det] of Object.entries(detectorRegistry)) {
     if (det.disabled) continue;
     if (!detectors && field !== "platform" && field !== "visual.dominantColors") continue;
@@ -51,6 +59,7 @@ export async function runDetectors(
       outcome.abstained.push(field);
       continue;
     }
+    outcome.results[field] = result;
     const verdict = capVerdict(det, result, recorded);
     if (verdict === "pass") outcome.passes.push(field);
     else if (verdict === "contradicted") outcome.contradicted.push(field);

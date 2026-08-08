@@ -512,6 +512,11 @@ describe("three-way model verdicts", () => {
       expect(out.dataQuality.platform).toBeDefined();
       // platform reads no pixels, so its finding carries no image hash.
       expect(out.dataQuality.platform.imageSha256).toBeUndefined();
+      // The detector's measured evidence + specific reason ride the finding —
+      // a bare "detector contradiction" row with measured null would leave the
+      // suspect report unable to say WHAT was measured against WHAT.
+      expect(out.dataQuality.platform.measured).toBe("web");
+      expect(out.dataQuality.platform.reason).toMatch(/detectPlatform gives web/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -130,20 +130,28 @@ field trips the gate; the run is scaled-eligible on that basis.
 
 **Qualitative alarm (no Task 13B baseline exists for it):** the enabled
 contradiction-only `visual.colorRoles` lane contradicted **10/10** recorded
-palettes, every one with `measured: ""` — the detector finds no pixels
-matching the recorded roles at all. Likely a detector/extractor serialization
-mismatch (recorded is a formatted string, measured expects quantized hexes),
-not 10 genuine corpus errors. This lane is the largest single source of the
-19 findings (10 of 19) and should be investigated before the full-corpus
-scale run writes hundreds of findings; the suspect report makes the 19
-findings all rank above model findings for triage.
+palettes. Investigation (2026-08-08): 10/11 findings were the
+canvas-is-largest-area rule over-firing on real screenshots — at least one
+(origin-origin-4) contradicted a record whose canvas hex matches the actual
+background to deltaE 0.4, and the lane was tuned on flat synthetic canvases
+with no real-screenshot label set to retune against. **Resolution: the lane
+is now `disabled: true` in the registry** (same honest outcome as the five
+disabled pixel detectors). It stops writing findings until a real-screenshot
+label set for colorRoles exists; the 11 findings already written stand as an
+audit trail for triage. The remaining 8 cohort findings were vision
+(critique ×2, layout ×3, styleTags, usesBorders, +1). None have been
+triaged yet (dismiss/retriage are human actions; the cohort stage is
+measurement). `antiPatterns.accessibilityRisks` shares the uncalibrated
+status but produced no cohort findings — left enabled, flagged for the same
+retune-with-labels follow-up.
 
 **Findings and triage:** 19 `dataQuality` findings total — 11 detector
 (10 colorRoles + 1 dominantColors: origin-origin-3, measured `""` vs
 recorded `""` — itself a candidate detector edge case) and 8 vision
 (critique ×2, layout ×3, styleTags, usesBorders, +1). None have been
 triaged yet (dismiss/retriage are human actions; the cohort stage is
-measurement).
+measurement). The 10 colorRoles findings are now attributed to the lane's
+canvas rule over-firing (see above; lane disabled).
 
 **Fields lit up:** all 50 cohort entries carry `verification` records
 (48 fresh + 2 prior); every entry with a contradiction also carries

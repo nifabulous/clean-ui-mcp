@@ -725,6 +725,54 @@ describe("tagImage two-pass request shape", () => {
     expect(pass1Prompt).toContain('domainTags:["integrations"]');
   });
 
+  it("threads the sampling pin into BOTH passes; unpinned requests stay temperature-free", async () => {
+    // The re-produce path (Task 18) pins temperature 0 so re-generated prose
+    // does not vary between runs. The pin must reach the provider request on
+    // Pass 1 AND Pass 2 — and an unpinned call must keep the byte-identical
+    // default (no temperature field at all), or the pin would leak.
+    const bodies: Array<Record<string, unknown>> = [];
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      bodies.push(body);
+      callCount++;
+      const response = callCount === 1
+        ? JSON.stringify({
+            patternType: "dashboard", categories: ["dashboard"], styleTags: ["minimal"],
+            components: ["sidebar-nav", "kpi-card"], domainTags: ["integrations"],
+            dominantColors: ["#ffffff", "#111111"], accentColor: null,
+            displayFont: null, bodyFont: null, spacingDensity: "moderate", cornerStyle: "slight-round",
+            usesShadows: false, usesBorders: true,
+          })
+        : JSON.stringify({
+            observations: ["a", "b", "c", "d", "e"],
+            typographyNotes: "notes",
+            draftCritique: "Restrained surfaces and clear grouping without heavy borders.",
+            draftWhatToSteal: ["Use quiet spacing for dense interfaces."],
+            draftAntiPatterns: ["Avoids heavy shadows for depth."],
+            draftAccessibilityRisks: [],
+            qualityTier: "exceptional",
+          });
+      return new Response(JSON.stringify({ output_text: response }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    // Pinned: temperature 0 reaches BOTH passes on the native OpenAI branch.
+    await tagImage({ imagePath: testImage, productName: "Test", url: null, sampling: { temperature: 0 } });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0].temperature).toBe(0);
+    expect(bodies[1].temperature).toBe(0);
+
+    // Unpinned: no temperature field in either body — provider defaults rule.
+    bodies.length = 0;
+    await tagImage({ imagePath: testImage, productName: "Test", url: null });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0].temperature).toBeUndefined();
+    expect(bodies[1].temperature).toBeUndefined();
+  });
+
   it("passes the image to Pass 2 when critiqueImagePath is set", async () => {
     const calls: Array<{ body: { input?: Array<{ content?: Array<Record<string, unknown>> }> } }> = [];
     let callCount = 0;

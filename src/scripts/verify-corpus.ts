@@ -1114,6 +1114,24 @@ export function resolveConfiguredVisionProvider(flag: string | undefined): strin
   return resolved;
 }
 
+/**
+ * The sampling pin for the VERDICT lane, resolved provider-aware. `pinned`
+ * pins temperature 0 with a fixed seed — EXCEPT for claude: a seed override
+ * makes callClaudeWithMetadata throw ("Claude does not support seed pinning",
+ * tagger.ts), so the pin drops to temperature-only, mirroring the re-produce
+ * lane (makeReproduceDependency). Without this, the default configuration
+ * `--vision-provider claude` + `--sampling pinned` would fail EVERY verdict
+ * call with no resume markers, requeueing and re-spending model money on
+ * every run. `default` restores the legacy unpinned behaviour.
+ */
+export function resolveSampling(
+  mode: string,
+  visionProvider: string | undefined,
+): { temperature?: number; seed?: number } | undefined {
+  if (mode !== "pinned") return undefined;
+  return visionProvider === "claude" ? { temperature: 0 } : { temperature: 0, seed: 20260806 };
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({
     args: process.argv.slice(2),
@@ -1260,7 +1278,7 @@ async function main(): Promise<void> {
   if (samplingMode !== "pinned" && samplingMode !== "default") {
     throw new Error(`--sampling must be "pinned" or "default" (got "${samplingMode}")`);
   }
-  const sampling = samplingMode === "pinned" ? { temperature: 0, seed: 20260806 } : undefined;
+  const sampling = resolveSampling(samplingMode, visionProvider);
   const reproduce = makeReproduceDependency(visionProvider);
   const results: RunResult = { entries: pending.length, verdictsByEntry: {} };
   // The verified map keyed by entry id; non-pending entries are preserved
@@ -1375,7 +1393,9 @@ async function main(): Promise<void> {
         resolvedProviderAndModel("critique", visionProvider as Provider | undefined).model,
       ),
       imageDetail,
-      sampling: sampling ? `temperature=${sampling.temperature} seed=${sampling.seed}` : "provider default",
+      sampling: sampling
+        ? `temperature=${sampling.temperature}${sampling.seed !== undefined ? ` seed=${sampling.seed}` : ""}`
+        : "provider default",
     },
   });
   const outDir = values.out ?? process.cwd();

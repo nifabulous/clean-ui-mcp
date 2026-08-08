@@ -8,7 +8,7 @@ import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReprodu
 import { buildRunReport, selectPending, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
 import { mergeDataQuality, retriageDataQuality, dismissDataQuality, renderSuspectReport } from "./verify-corpus.js";
 import { withTimeout, reproduceCritiqueModel } from "./verify-corpus.js";
-import { resolveConfiguredVisionProvider } from "./verify-corpus.js";
+import { resolveConfiguredVisionProvider, resolveSampling } from "./verify-corpus.js";
 import type { TaggerOutput } from "../tagger.js";
 import type { CorpusEntryT } from "../schema.js";
 
@@ -866,6 +866,28 @@ describe("resolveConfiguredVisionProvider — one resolved value feeds both the 
   it("treats a blank env var the same as unset", () => {
     process.env.VERIFY_VISION_PROVIDER = "   ";
     expect(resolveConfiguredVisionProvider(undefined)).toBeUndefined();
+  });
+});
+
+describe("resolveSampling — provider-aware verdict-lane pin", () => {
+  it("pins temperature 0 + the fixed seed for every non-claude provider", () => {
+    for (const provider of ["openai", "gemini", "mistral", "minimax", "grok", undefined]) {
+      expect(resolveSampling("pinned", provider)).toEqual({ temperature: 0, seed: 20260806 });
+    }
+  });
+
+  it("drops the seed for claude — a seed override makes callClaudeWithMetadata throw (tagger.ts)", () => {
+    // Regression: --vision-provider claude + default --sampling pinned crashed
+    // EVERY verdict call ("Claude does not support seed pinning"), and because
+    // a failed entry writes no resume marker, every run requeued and re-spent
+    // model money with zero progress. The re-produce lane already suppressed
+    // the seed for this reason; the verdict lane missed it.
+    expect(resolveSampling("pinned", "claude")).toEqual({ temperature: 0 });
+  });
+
+  it("leaves sampling unset in default mode — the legacy unpinned behaviour", () => {
+    expect(resolveSampling("default", "openai")).toBeUndefined();
+    expect(resolveSampling("default", "claude")).toBeUndefined();
   });
 });
 

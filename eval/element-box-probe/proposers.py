@@ -97,9 +97,35 @@ def propose_florence2(gray: np.ndarray) -> list[Box]:
 
 @functools.lru_cache(maxsize=1)
 def _moondream():
+    """Load Moondream on CPU, with an upstream MPS bug worked around.
+
+    moondream2's remote `vision.py` does, at IMPORT time:
+
+        if torch.backends.mps.is_available():
+            def adaptive_avg_pool2d(input, output_size):
+                return F.adaptive_avg_pool2d(input.to("cpu"), output_size).to("mps")
+
+    The workaround assumes the model is on MPS. We load on CPU, so the pooled
+    tensor comes back on `mps:0` while `global_features` stays on `cpu`, and
+    `torch.cat` raises "all input tensors must be on the same device".
+
+    Reporting MPS as unavailable BEFORE the remote module imports is the minimal
+    fix: the patch never installs and everything stays on CPU. Recorded here and
+    in docs/element-box-probe.md because a proposer that silently returned []
+    after a load failure would be indistinguishable from a model that found
+    nothing, and only the second is a result.
+    """
+    import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    model = AutoModelForCausalLM.from_pretrained(_MOONDREAM_ID, trust_remote_code=True).eval()
-    tokenizer = AutoTokenizer.from_pretrained(_MOONDREAM_ID)
+    original = torch.backends.mps.is_available
+    torch.backends.mps.is_available = lambda: False
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            _MOONDREAM_ID, trust_remote_code=True,
+        ).eval()
+        tokenizer = AutoTokenizer.from_pretrained(_MOONDREAM_ID)
+    finally:
+        torch.backends.mps.is_available = original
     return model, tokenizer
 
 

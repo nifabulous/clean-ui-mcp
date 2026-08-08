@@ -21,6 +21,10 @@ Copied verbatim from `docs/superpowers/specs/2026-08-08-verifier-abstain-diagnos
 - TDD: failing test first, then implementation, then commit. Every task.
 - Corpus isolation: tests never write to the real `corpus/entries.json`. Use the `--corpus` seam (`:1175`) or the existing test-path injection.
 - Review artifact after every task, before the next commit — `.zcode/scripts/write-review-artifact` (see `CLAUDE.md`). The git hook blocks otherwise.
+- The worktree starts with NO `node_modules/` and NO untracked run inputs.
+  Task 1 step 1 runs `npm ci`; Task 7 step 1 copies `verify-report.md`,
+  `corpus/entries.json` and `.env` from the main checkout. All of those are
+  local-only state and are never committed.
 
 ### Known-failing baseline (measured on `fb055fa`, 2026-08-08)
 
@@ -59,7 +63,21 @@ This task adds **no production code**. It writes the guard that every later task
 - Consumes: `decideFieldVerdict(field, tier, parsed)` and `ParsedField` as they exist today.
 - Produces: nothing consumed by later tasks. Later tasks must keep this test green.
 
-- [ ] **Step 1: Write the characterization test**
+- [ ] **Step 1: Install the worktree's dependencies**
+
+Git worktrees do not share `node_modules/` (gitignored, per-checkout), and this
+worktree has none. Every later command in this plan runs `npx` or `npm`, so
+install first:
+
+```bash
+npm ci
+npx vitest --version
+```
+
+Expected: a vitest version prints (4.x on this machine). Without this step,
+`npx vitest` fails or silently fetches whatever the registry offers.
+
+- [ ] **Step 2: Write the characterization test**
 
 Append to `src/scripts/verify-corpus.test.ts`:
 
@@ -163,19 +181,23 @@ describe("decideFieldVerdict — verdict logic characterization (governing invar
 
 Add `VerifierTier`, `FieldVerdict`, `ParsedField`, and `decideFieldVerdict` to the file's existing import from `./verify-corpus.js` if any are missing.
 
-- [ ] **Step 2: Run it and confirm it passes on unmodified code**
+- [ ] **Step 3: Run it and confirm it passes on unmodified code**
 
 Run: `npx vitest run src/scripts/verify-corpus.test.ts -t "verdict logic characterization"`
 Expected: PASS, 54 tests.
 
 If a case FAILS, do not edit the production code. The table is wrong — read the branch in `decideFieldVerdict` (`:318-344`) and correct the expectation. The table's job is to describe reality, not to improve it.
 
-- [ ] **Step 3: Verify `VerifierTier` covers exactly the six tiers used**
+- [ ] **Step 4: Verify `VerifierTier` covers exactly the six tiers used**
 
-Run: `grep -n "VerifierTier" src/verify-tiers.ts src/scripts/verify-corpus.ts | head`
-Expected: the union is `mechanical | factual | prose | soft | a11y | gated`. If a seventh tier exists, add its block to `EXPECTED` — a missing tier silently drops that branch from the guard.
+Run: `grep -n "VerifierTier" src/scripts/verify-corpus.ts | head`
+Note: `src/verify-tiers.ts` does not exist; the type lives at
+`src/scripts/verify-corpus.ts:20`. Expected: the union is
+`mechanical | factual | a11y | prose | soft | gated`. If a seventh tier exists,
+add its block to `EXPECTED` — a missing tier silently drops that branch from the
+guard.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/scripts/verify-corpus.test.ts
@@ -187,7 +209,7 @@ table pins all six tiers against all nine parsed states so a moved branch fails
 loudly instead of being noticed in a run report weeks later."
 ```
 
-- [ ] **Step 5: Write the task review artifact**
+- [ ] **Step 6: Write the task review artifact**
 
 ```bash
 .zcode/scripts/write-review-artifact --type task --result approved --reviewer agent \
@@ -582,11 +604,17 @@ export function decideFieldVerdict(
 
 - [ ] **Step 5: Fix the now-broken call sites so the file compiles**
 
-Four calls need a fourth argument. Pass the literal that matches the call each one came from:
+Three production calls and the pre-existing test calls need a fourth argument:
 
 - `:564` (initial combined ask) → `"initial"`
 - `:603` (corroboration re-ask) → `"corroborate"`
 - `:662` (post-re-produce re-verify) → `"reverify"`
+
+The existing tests also call `decideFieldVerdict` with three arguments:
+`src/scripts/verify-corpus.test.ts:127, 132, 137, 142, 147, 402-405, 409`. Add
+`"initial"` to each; the verdicts do not change, only the call does. The
+compiler is the backstop: a remaining error naming `decideFieldVerdict` means a
+call site was missed (Step 8 catches it).
 
 At each of those three sites, also give the defensive fallback literal a cause so an abstain can never carry `verdict-missing` by accident. Change every occurrence of:
 
@@ -765,6 +793,10 @@ In the `failedProse` loop (`:657-663`), capture the pre-re-produce cause before 
       for (const field of failedProse) {
         const firstCause = decided.get(field)?.cause;
         if (!reFields.includes(field)) {
+          // firstCause is kept on the gate verdict deliberately: the re-produce
+          // wrote nothing, but the first ask's cause is still information about
+          // the lane, and Task 6 reports it on the separate first-causes line,
+          // outside the abstain total.
           decided.set(field, {
             field,
             verdict: "gate",
@@ -1211,7 +1243,27 @@ This task runs the measurement and applies the spec's pre-registered decision ru
 - Consumes: everything from Tasks 2–6.
 - Produces: the document, and the decision that follows from it.
 
-- [ ] **Step 1: Build, then extract the cohort id list from the committed report**
+- [ ] **Step 1: Copy the untracked run inputs into the worktree**
+
+`verify-report.md` and `corpus/entries.json` are untracked files that live only
+in the MAIN checkout; git worktrees do not carry them, and `loadCorpus()` in the
+worktree resolves its own `corpus/` dir (`src/paths.ts:8-9`). Copy before
+measuring:
+
+```bash
+mkdir -p corpus
+cp ../../verify-report.md .
+cp ../../corpus/entries.json corpus/entries.json
+cp ../../.env .env
+```
+
+From the worktree root, `../..` is the main checkout. All three are gitignored
+or excluded, so they stay untracked here. `verify-report.md` is NOT gitignored,
+so never `git add .`; every commit in this plan names its files explicitly. If
+the copy fails, stop: the cohort list and the corpus are the inputs of the whole
+measurement.
+
+- [ ] **Step 2: Build, then extract the cohort id list from the copied report**
 
 ```bash
 npm run build
@@ -1221,13 +1273,13 @@ wc -l /tmp/cohort-ids.txt && head -c 200 /tmp/cohort-ids.txt
 
 Expected: one line, 50 comma-separated ids beginning `origin-origin-2,origin-origin-3,`.
 
-- [ ] **Step 2: Snapshot the corpus hash before the run**
+- [ ] **Step 3: Snapshot the corpus hash before the run**
 
 ```bash
 shasum -a 256 corpus/entries.json | tee /tmp/corpus-before.txt
 ```
 
-- [ ] **Step 3: Run the diagnosis**
+- [ ] **Step 4: Run the diagnosis**
 
 ```bash
 npm run verify -- --detectors on --diagnose --only-ids "$(cat /tmp/cohort-ids.txt)"
@@ -1237,7 +1289,7 @@ Expected: an `Abstain causes` block in the printed report. Cost ≈160 model cal
 
 If it exits on `--only-ids: unknown entry id(s): …`, the corpus has changed since the committed report. Do **not** delete the offending ids — record which ones and how many, then re-run with the remainder. A shrinking cohort is itself a finding about corpus churn and belongs in the document.
 
-- [ ] **Step 4: Prove the corpus was not written**
+- [ ] **Step 5: Prove the corpus was not written**
 
 ```bash
 shasum -a 256 corpus/entries.json | diff - /tmp/corpus-before.txt && echo "UNCHANGED"
@@ -1245,7 +1297,7 @@ shasum -a 256 corpus/entries.json | diff - /tmp/corpus-before.txt && echo "UNCHA
 
 Expected: `UNCHANGED`. If this fails, stop and treat it as a Critical defect in Task 5 — the governing invariant is broken and no result from this run is usable.
 
-- [ ] **Step 5: Write `docs/verifier-abstain-diagnosis.md`**
+- [ ] **Step 6: Write `docs/verifier-abstain-diagnosis.md`**
 
 Include, in this order:
 
@@ -1258,7 +1310,7 @@ Include, in this order:
 7. **Rule 2 (lane headroom, reason-text):** classify the `model-abstained` reasons into "cannot determine from one screenshot" / hedging / empty-or-restates-the-claim, and state the resulting decision. Both rules can fire; neither is conditional on the other.
 8. The stated limit: the model flips 14–18% between identical runs, so this run's abstain count will not equal 244 and this is a rate over these entries, not a per-verdict autopsy of the committed report.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add docs/verifier-abstain-diagnosis.md
@@ -1270,7 +1322,7 @@ the model's own reason texts) are applied separately, as specified — neither i
 conditional on the other."
 ```
 
-- [ ] **Step 7: Branch review and push**
+- [ ] **Step 8: Branch review and push**
 
 ```bash
 npm test 2>&1 | tee /tmp/branch-suite.txt | tail -5
@@ -1298,3 +1350,13 @@ The branch gate rejects an artifact whose `headSha` is not `git rev-parse HEAD`,
 **Not covered, deliberately.** The spec's "entry-level all-servable-fields-absent signature" is reported by the per-cause breakdown plus the site split rather than as a separate line: an unparseable response tags every field `response-unparseable`, which is already distinguishable from per-field `field-absent`. If the run shows `field-absent` clustering at entry granularity, add the entry-level line then — adding it now would be a report feature with no reader.
 
 **Type consistency.** `AbstainCause` and `VerifyCallSite` are declared once in Task 2 and used unchanged in Tasks 3, 4, 6. `decideFieldVerdict`'s fourth parameter is `site: VerifyCallSite`, required, in Tasks 3, 4, 5. `selectByIds(entries, ids)` is declared in Task 5 step 3 and called in Task 5 step 6. `abstainVerdict` is module-private and used only inside `decideFieldVerdict`.
+
+## Review amendments (2026-08-08)
+
+Folded from the eng review of this plan: `npm ci` added as Task 1 step 1
+(worktrees have no `node_modules/`); Task 7 step 1 copies `verify-report.md`,
+`corpus/entries.json` and `.env` from the main checkout; Task 1 step 4 grep
+points at `src/scripts/verify-corpus.ts:20` (`src/verify-tiers.ts` does not
+exist); Task 3 step 5 enumerates the pre-existing test call sites needing the
+`site` argument; Task 4 documents that `firstCause` is kept on the gate verdict
+deliberately.

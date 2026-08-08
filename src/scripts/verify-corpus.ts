@@ -965,10 +965,24 @@ export function buildRunReport(
   // detector lane.
   const detectorStats = new Map<string, { pass: number; contradicted: number; abstain: number }>();
   let zeroAssertion = 0;
+  const causeStats = new Map<string, { total: number; bySite: Map<string, number> }>();
+  const firstCauseStats = new Map<string, number>();
   for (const verdicts of Object.values(result.verdictsByEntry)) {
     for (const v of verdicts) {
       counts[v.verdict] += 1;
       if (v.verdict === "gate" && /vacuous|no checkable assertions/i.test(v.reason)) zeroAssertion += 1;
+      if (v.verdict === "abstain" && v.cause !== undefined) {
+        const s = causeStats.get(v.cause) ?? { total: 0, bySite: new Map<string, number>() };
+        s.total += 1;
+        const site = v.site ?? "initial";
+        s.bySite.set(site, (s.bySite.get(site) ?? 0) + 1);
+        causeStats.set(v.cause, s);
+      }
+      // firstCause is reported SEPARATELY and never added to the total —
+      // counting a prose abstain twice is the obvious way this table goes wrong.
+      if (v.firstCause !== undefined) {
+        firstCauseStats.set(v.firstCause, (firstCauseStats.get(v.firstCause) ?? 0) + 1);
+      }
       if (v.source === "detector") {
         const stats = detectorStats.get(v.field) ?? { pass: 0, contradicted: 0, abstain: 0 };
         // Whitelist: a flag-off run rewrites detector contradictions to legacy
@@ -994,6 +1008,29 @@ export function buildRunReport(
       + ` · contradicted ${s.contradicted} (${pct(s.contradicted)})`
       + ` · abstain ${s.abstain} (${pct(s.abstain)})`,
     );
+  }
+  const causeTotal = [...causeStats.values()].reduce((a, s) => a + s.total, 0);
+  if (causeTotal > 0) {
+    lines.push("");
+    lines.push(`Abstain causes — ${causeTotal} total`);
+    for (const [cause, s] of [...causeStats.entries()].sort((a, b) => b[1].total - a[1].total)) {
+      const sites = [...s.bySite.entries()].sort().map(([site, n]) => `${site} ${n}`).join(", ");
+      lines.push(`  ${cause.padEnd(22)} ${String(s.total).padStart(4)}  (${sites})`);
+    }
+    const siteTotals = new Map<string, number>();
+    for (const s of causeStats.values()) {
+      for (const [site, n] of s.bySite) {
+        siteTotals.set(site, (siteTotals.get(site) ?? 0) + n);
+      }
+    }
+    if (siteTotals.size > 0) {
+      const sites = [...siteTotals.entries()].sort().map(([site, n]) => `${site} ${n}`).join(", ");
+      lines.push(`  by call site: ${sites}`);
+    }
+    if (firstCauseStats.size > 0) {
+      const firsts = [...firstCauseStats.entries()].sort().map(([c, n]) => `${c} ${n}`).join(", ");
+      lines.push(`Prose first causes (not counted in the total above): ${firsts}`);
+    }
   }
   lines.push("");
   for (const [id, verdicts] of Object.entries(result.verdictsByEntry)) {

@@ -1467,3 +1467,48 @@ describe("--diagnose leaves the corpus byte-identical", () => {
     expect(readFileSync(tmp).equals(before)).toBe(true);
   });
 });
+
+describe("buildRunReport — abstain cause breakdown", () => {
+  const report = () => buildRunReport({
+    entries: 1,
+    verdictsByEntry: {
+      e1: [
+        { field: "layout", verdict: "abstain", reason: "x", source: "vision", cause: "field-absent", site: "initial" },
+        { field: "mood", verdict: "abstain", reason: "x", source: "vision", cause: "model-abstained", site: "initial" },
+        { field: "critique", verdict: "abstain", reason: "x", source: "vision", cause: "model-abstained", site: "reverify", firstCause: "field-absent" },
+        { field: "visual.dominantColors", verdict: "pass", reason: "detector", source: "detector" },
+      ],
+    },
+  } as never, { dryRun: true, verifierVersion: "verifier-v1", sampleSize: 30 });
+
+  it("counts each cause once, by cause and not by firstCause", () => {
+    const text = report();
+    expect(text).toContain("Abstain causes — 3 total");
+    expect(text).toMatch(/model-abstained\s+2/);
+    expect(text).toMatch(/field-absent\s+1/);
+  });
+
+  it("sums to the reported abstain count", () => {
+    const text = report();
+    const total = Number(/Abstain causes — (\d+) total/.exec(text)![1]);
+    const counted = [...text.matchAll(/^ {2}\S+\s+(\d+)\b/gm)].reduce((a, m) => a + Number(m[1]), 0);
+    expect(counted).toBe(total);
+  });
+
+  it("breaks the causes down by call site", () => {
+    expect(report()).toMatch(/initial 2/);
+    expect(report()).toMatch(/reverify 1/);
+  });
+
+  it("reports prose first causes in their own line, outside the total", () => {
+    expect(report()).toContain("Prose first causes (not counted in the total above): field-absent 1");
+  });
+
+  it("prints nothing when there are no abstains", () => {
+    const text = buildRunReport({
+      entries: 1,
+      verdictsByEntry: { e1: [{ field: "layout", verdict: "pass", reason: "x", source: "vision" }] },
+    } as never, { dryRun: true, verifierVersion: "verifier-v1", sampleSize: 30 });
+    expect(text).not.toContain("Abstain causes");
+  });
+});

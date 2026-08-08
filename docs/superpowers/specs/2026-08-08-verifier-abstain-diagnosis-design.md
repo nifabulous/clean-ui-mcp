@@ -315,37 +315,17 @@ Not in this spec because it has a different risk profile — an external model
 dependency and unverified claims about model behaviour — and folding it in would
 put both behind one review cycle.
 
-Scope: run a screen parser over ~20 pinned corpus screenshots, save the boxes as
-overlay images, and judge by eye whether the boxes are the things
-`cornerStyle` / `spacingDensity` / `usesBorders` / `usesShadows` would need to
-measure. No integration, no lane, no verdicts.
+Specified separately in `2026-08-08-element-box-probe-design.md`. Deliberately
+not restated here: two documents describing the same probe drift, and the one
+that gets amended is never the one the next reader opens.
 
-Three things it must settle before any element-detection spec is written:
-
-1. **Model family.** Moondream and Florence-2 are trained on natural-image
-   corpora; UI screenshots are out of distribution for generic object detection,
-   and the expected failure is boxes labelled `screen` / `text` / `monitor`
-   rather than `card` / `button` / `input`. The relevant family is a screen
-   parser finetuned on interactable UI elements. This is a belief, not a
-   measurement — the probe is what turns it into one.
-2. **Whether `accentColor` is in reach.** `docs/verifier-calibration.md` files it
-   as Class B, needing a role rule rather than element detection, and the
-   candidate rule named there is a whole-image statistic. But the accent is
-   typically the primary button's fill, so a parser that finds interactable
-   elements may address it directly. If it does, the reachable abstain set is
-   122, not 85.
-3. **What "deterministic" would then mean.** Pinned weights plus greedy decode is
-   *reproducible*, not *recomputable*. A neural box proposer is still an
-   independent witness — a different model from the vision lane — but the lane's
-   premise changes, and that has to be stated explicitly rather than absorbed
-   quietly.
-
-**The probe script is committed, not throwaway.** The Class A analysis was
-corrected once and cannot be checked a third time because its harness was
-discarded (`docs/verifier-calibration.md`, "Harness was throwaway — the numbers
-below are the artifact"). The entry ids are pinned in the script and the overlay
-images are committed, so the next person can disagree with the judgement by
-looking at the same pictures.
+One point belongs in this spec because it constrains what the diagnosis can
+conclude. If a box proposer turns out to work, `accentColor` may come into reach
+after all — it is filed as Class B needing a role rule, but the accent is
+typically the primary button's fill, so a proposer that finds *interactable*
+elements could resolve the role question directly. That would raise the
+addressable abstain set from 85 to 122. Until the probe reports, this spec treats
+85 as the figure and 122 as open.
 
 ## Out of scope
 

@@ -654,6 +654,8 @@ export async function verifyEntry(
           verdict: "abstain",
           reason: `model contradiction could not be corroborated: ${err instanceof Error ? err.message : String(err)}`,
           source: "vision",
+          cause: "corroboration-error",
+          site: "corroborate",
         });
         continue;
       }
@@ -670,6 +672,8 @@ export async function verifyEntry(
           verdict: "abstain",
           reason: "model disagreed with itself across two fresh asks (contradicted, then confirmed) — neither verdict is corroborated",
           source: "vision",
+          cause: "corroboration-split",
+          site: "corroborate",
         });
       } else if (reVerdict.verdict === "contradicted") {
         // Corroborated: both fresh asks positively disagree. A finding, not a
@@ -713,12 +717,22 @@ export async function verifyEntry(
         ? parseVerifyResponse(await deps.callVision(buildVerifyPrompt(reproduced as unknown as Record<string, unknown>, reFields, VERIFIER_VERSION), imagePath))
         : {};
       for (const field of failedProse) {
+        const firstCause = decided.get(field)?.cause;
         if (!reFields.includes(field)) {
-          decided.set(field, { field, verdict: "gate", reason: "re-production wrote no value for this field" });
+          // firstCause is kept on the gate verdict deliberately: the re-produce
+          // wrote nothing, but the first ask's cause is still information about
+          // the lane, and Task 6 reports it on the separate first-causes line,
+          // outside the abstain total.
+          decided.set(field, {
+            field,
+            verdict: "gate",
+            reason: "re-production wrote no value for this field",
+            ...(firstCause !== undefined ? { firstCause } : {}),
+          });
           continue;
         }
         const reVerdict = decideFieldVerdict(field, "prose", reParsed[field] ?? { confirmed: false, contradicted: false, cause: "field-absent" }, "reverify");
-        decided.set(field, reVerdict);
+        decided.set(field, { ...reVerdict, ...(firstCause !== undefined ? { firstCause } : {}) });
         if (reVerdict.verdict === "pass") {
           // The re-produced value replaces the fabricated one only after it
           // passed, so the stored value and the record agree.

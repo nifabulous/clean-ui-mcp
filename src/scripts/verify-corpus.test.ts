@@ -1269,3 +1269,94 @@ describe("decideFieldVerdict — cause and site on abstains", () => {
     expect(decideFieldVerdict("critique", "prose", { confirmed: false, contradicted: false, assertions: [] }, "initial").cause).toBeUndefined();
   });
 });
+
+// Runner-set-cause fixtures, built from the existing `entry()` helper so the
+// fields and provenance shape match the rest of the suite.
+function entryWithAccent(): CorpusEntryT {
+  return entry({
+    visual: {
+      dominantColors: ["#ffffff", "#111111"],
+      accentColor: "#4f46e5",
+      typePairing: { display: null, body: null, notes: "" },
+      spacingDensity: "moderate",
+      cornerStyle: "slight-round",
+      usesShadows: false,
+      usesBorders: true,
+    },
+    provenance: { taggedBy: "auto" },
+  });
+}
+
+function entryWithCritique(): CorpusEntryT {
+  return entry({
+    critique: "The left navigation rail groups the metrics by row.",
+    provenance: { taggedBy: "auto" },
+  });
+}
+
+function fixtureImagePath(): string {
+  const dir = mkdtempSync(join(tmpdir(), "verify-cause-"));
+  const imagePath = join(dir, "e1.png");
+  writeFileSync(imagePath, PNG_BYTES);
+  return imagePath;
+}
+
+describe("verifyEntry — runner-set abstain causes", () => {
+  it("tags a corroboration split corroboration-split", async () => {
+    // First ask contradicts, second ask confirms -> the split IS the finding.
+    const responses = [
+      JSON.stringify({ "visual.accentColor": { verdict: "contradicted" } }),
+      JSON.stringify({ "visual.accentColor": { verdict: "confirmed" } }),
+    ];
+    let call = 0;
+    const out = await verifyEntry(entryWithAccent(), fixtureImagePath(), {
+      now: () => "2026-08-08T00:00:00.000Z",
+      callVision: async () => responses[call++] ?? "{}",
+      reproduce: async (e) => e,
+      detectors: false,
+    });
+    const v = out.verdicts.find((x) => x.field === "visual.accentColor");
+    expect(v?.verdict).toBe("abstain");
+    expect(v?.cause).toBe("corroboration-split");
+  });
+
+  it("tags a corroboration call that threw corroboration-error", async () => {
+    let call = 0;
+    const out = await verifyEntry(entryWithAccent(), fixtureImagePath(), {
+      now: () => "2026-08-08T00:00:00.000Z",
+      callVision: async () => {
+        if (call++ === 0) return JSON.stringify({ "visual.accentColor": { verdict: "contradicted" } });
+        throw new Error("upstream 503");
+      },
+      reproduce: async (e) => e,
+      detectors: false,
+    });
+    const v = out.verdicts.find((x) => x.field === "visual.accentColor");
+    expect(v?.verdict).toBe("abstain");
+    expect(v?.cause).toBe("corroboration-error");
+  });
+
+  it("records firstCause and cause separately when a prose field abstains twice for different reasons", async () => {
+    let call = 0;
+    const out = await verifyEntry(entryWithCritique(), fixtureImagePath(), {
+      now: () => "2026-08-08T00:00:00.000Z",
+      callVision: async () => {
+        // Initial ask: an explicit refusal -> model-abstained.
+        if (call++ === 0) {
+          return JSON.stringify({ critique: { verdict: "abstain", assertions: ["a"], reason: "cannot tell" } });
+        }
+        // Re-verify: the verdict key is dropped but assertions remain ->
+        // verdict-missing. (A prose field with NO assertions gates on the
+        // vacuity guard, so the two causes must differ in a way the prose
+        // branch can actually abstain on.)
+        return JSON.stringify({ critique: { assertions: ["a"] } });
+      },
+      reproduce: async (e) => e,
+      detectors: false,
+    });
+    const v = out.verdicts.find((x) => x.field === "critique");
+    expect(v?.firstCause).toBe("model-abstained");
+    expect(v?.cause).toBe("verdict-missing");
+    expect(v?.site).toBe("reverify");
+  });
+});

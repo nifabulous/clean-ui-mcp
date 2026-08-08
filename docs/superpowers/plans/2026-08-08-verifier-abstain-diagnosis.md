@@ -22,6 +22,18 @@ Copied verbatim from `docs/superpowers/specs/2026-08-08-verifier-abstain-diagnos
 - Corpus isolation: tests never write to the real `corpus/entries.json`. Use the `--corpus` seam (`:1175`) or the existing test-path injection.
 - Review artifact after every task, before the next commit — `.zcode/scripts/write-review-artifact` (see `CLAUDE.md`). The git hook blocks otherwise.
 
+### Known-failing baseline (measured on `fb055fa`, 2026-08-08)
+
+`npm test` is **not green on this branch point**: 3 failed files / 3 failed tests of 3648. All three predate this work and none touches `src/scripts/verify-corpus.ts`. Do not "fix" them here, and do not read them as regressions.
+
+| test | failure | note |
+|---|---|---|
+| `src/mcp-smoke.test.ts` | `STALE BUILD: the compiled server under test is older than its sources` | Environmental. `npm run build` clears it — Task 7 step 1 runs the build anyway, so this one should be green by the end. |
+| `src/tagger.test.ts:1042` | expected `{ thinkingBudget: 0 }`, received `{ thinkingLevel: 'MINIMAL' }` | Real drift in the Gemini thinking-config shape. Unrelated. |
+| `src/readiness/tracked-artifacts-readiness.test.ts:435` and `:468` | `corpus-hash-mismatch:phase0-20260714` | Reads real data; the corpus has drifted from the pinned phase0 hash. Relevant context for Task 7 step 3, where a cohort id may no longer resolve. |
+
+A run at the end of this branch must show **exactly these**, minus `mcp-smoke` once the build is current. Any fourth failure is this work's, and stops the branch review.
+
 ---
 
 ## File Structure
@@ -1261,8 +1273,14 @@ conditional on the other."
 - [ ] **Step 7: Branch review and push**
 
 ```bash
-npx vitest run
+npm test 2>&1 | tee /tmp/branch-suite.txt | tail -5
+grep -E "^ ?FAIL" /tmp/branch-suite.txt
 npx tsc --noEmit
+```
+
+Expected: `src/tagger.test.ts` and `src/readiness/tracked-artifacts-readiness.test.ts` only — the known-failing baseline above, with `mcp-smoke` now green because Task 7 step 1 rebuilt `dist/`. **A `FAIL` naming any other file is this work's and stops the branch review.** Do not proceed to the artifact until the list matches.
+
+```bash
 .zcode/scripts/write-review-artifact --type branch --result approved --reviewer agent \
   --base-sha fb055fa --head-sha $(git rev-parse HEAD) \
   --branch feat/verifier-abstain-diagnosis

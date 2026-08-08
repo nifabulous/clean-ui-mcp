@@ -148,3 +148,23 @@ def test_the_pre_registered_strongest_gradient_offset_is_still_recorded() -> Non
     gray[80:160, 93:95] = 0
     [m] = measure_boxes(gray, [(100, 80, 200, 160)])
     assert m.edge_offsets_strongest[0] == pytest.approx(-5.5)
+
+
+def test_a_flat_container_has_low_interior_edge_density() -> None:
+    # A filled card: the box interior is one colour, so almost no interior pixel
+    # sits on a gradient. This is what usesBorders/cornerStyle can measure in.
+    gray = with_rect(blank(), 100, 80, 200, 160)
+    [m] = measure_boxes(gray, [(100, 80, 200, 160)])
+    assert m.interior_edge_density < 0.10
+
+
+def test_a_text_run_has_high_interior_edge_density() -> None:
+    # A word-shaped blob: vertical strokes every few px. The classical proposer
+    # boxes these and the alignment check scores them as aligned, because a
+    # word's bbox really does sit on strong edges — but no border, shadow or
+    # corner can be measured inside one.
+    gray = blank()
+    for x in range(100, 200, 6):
+        gray[80:160, x:x + 3] = 40
+    [m] = measure_boxes(gray, [(100, 80, 200, 160)])
+    assert m.interior_edge_density > 0.20

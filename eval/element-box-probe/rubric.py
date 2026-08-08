@@ -46,6 +46,17 @@ class BoxMetrics:
     area_ratio: float = 0.0
     boundary_edges: list[bool] = dc_field(default_factory=list)
     all_edges_boundary: bool = False
+    #: Fraction of interior pixels sitting on a gradient above the image's noise
+    #: floor. RECORDED, NOT CHECKED — no pass/fail depends on it.
+    #:
+    #: It exists because the four checks are all precision-flavoured: they ask
+    #: whether the boxes found are geometrically clean, never whether the
+    #: CONTAINERS were found. A proposer returning nothing but word-boxes can
+    #: score well, and rung 1 largely does — a word's bounding box genuinely sits
+    #: on strong edges. This separates the two: a flat card reads near 0, a text
+    #: run reads high, and no border, shadow or corner is measurable inside the
+    #: latter.
+    interior_edge_density: float = 0.0
 
 
 @dataclass
@@ -162,6 +173,25 @@ def _clearances(box: Box, others: list[Box], shape: tuple[int, int]) -> list[flo
     return [None if at_boundary[i] else best[i] for i in range(4)]
 
 
+def _interior_edge_density(gray: np.ndarray, box: Box, noise_floor: float) -> float:
+    """Fraction of the box interior sitting on a gradient above the noise floor.
+
+    Separates a flat container (near 0) from a text run (high). Measured one
+    pixel inside the boundary on every side so the box's own edge is excluded —
+    otherwise every box would score at least its own perimeter.
+    """
+    x0, y0, x1, y1 = box
+    inner = gray[y0 + 1:y1 - 1, x0 + 1:x1 - 1]
+    if inner.shape[0] < 2 or inner.shape[1] < 2:
+        return 0.0
+    a = inner.astype(np.float64)
+    gx = np.abs(np.diff(a, axis=1))[:-1, :]
+    gy = np.abs(np.diff(a, axis=0))[:, :-1]
+    if gx.size == 0 or gy.size == 0:
+        return 0.0
+    return float(np.mean(np.maximum(gx, gy) > max(noise_floor, 1.0)))
+
+
 def measure_boxes(gray: np.ndarray, boxes: list[Box]) -> list[BoxMetrics]:
     h, w = gray.shape
     image_area = float(h * w)
@@ -193,6 +223,7 @@ def measure_boxes(gray: np.ndarray, boxes: list[Box]) -> list[BoxMetrics]:
         eligible = [c for c in m.outside_clearances if c is not None]
         m.max_clearance = max(eligible) if eligible else 0.0
         m.area_ratio = ((x1 - x0) * (y1 - y0)) / image_area
+        m.interior_edge_density = _interior_edge_density(gray, box, noise_floor)
         out.append(m)
     return out
 

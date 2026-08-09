@@ -1,7 +1,8 @@
 import { statSync } from "node:fs";
 import { type CorpusEntryT } from "./schema.js";
-import { loadIndex, embedQuery, cosine, entryToTrustedDocument, hashForDocument, indexExists, voyageRerank } from "./embeddings.js";
+import { loadIndex, embedQuery, cosine, entryToTrustedDocument, hashForDocument, indexExists, voyageRerank, hasTrustedEmbeddingSignal } from "./embeddings.js";
 import { loadCorpusSafe, entriesPath } from "./persistence.js";
+import { isTextIndexEligible } from "./index-policy.js";
 
 let cached: CorpusEntryT[] | null = null;
 // mtime (in ms) of entries.json at the time `cached` was populated. Used to
@@ -469,6 +470,16 @@ export interface IndexStatus {
   missing: number;       // entries with no vector (need build-index)
   stale: number;         // vectors whose id is no longer in the corpus (orphans)
   contentStale: number;  // indexed entries whose content hash changed since embedding
+  /** Entries eligible for the trusted semantic index (approved + verified signal). */
+  eligibleTotal?: number;
+  /** Eligible entries with a current vector. */
+  eligibleIndexed?: number;
+  /** Eligible entries without a vector; this is the actionable missing count. */
+  eligibleMissing?: number;
+  /** Entries deliberately excluded by policy rather than missing from the index. */
+  excluded?: number;
+  excludedDraft?: number;
+  excludedUnverified?: number;
 }
 
 /**
@@ -483,19 +494,44 @@ export interface IndexStatus {
 export function indexStatus(): IndexStatus {
   const entries = loadCorpus();
   const index   = loadIndex();
-  if (!index) return { indexed: 0, total: entries.length, hasIndex: false, missing: entries.length, stale: 0, contentStale: 0 };
+  const eligibleEntries = entries.filter((entry) => isTextIndexEligible(entry) && hasTrustedEmbeddingSignal(entry));
+  const excludedDraft = entries.filter((entry) => entry.reviewStatus === "draft").length;
+  const excludedUnverified = entries.length - excludedDraft - eligibleEntries.length;
+  const policy = {
+    eligibleTotal: eligibleEntries.length,
+    eligibleIndexed: 0,
+    eligibleMissing: eligibleEntries.length,
+    excluded: entries.length - eligibleEntries.length,
+    excludedDraft,
+    excludedUnverified: Math.max(0, excludedUnverified),
+  };
+  if (!index) return { indexed: 0, total: entries.length, hasIndex: false, missing: entries.length, stale: 0, contentStale: 0, ...policy };
   const entryIds = new Set(entries.map((e) => e.id));
   const stale = Object.keys(index.entries).filter((id) => !entryIds.has(id)).length;
   let indexed = 0;
+  let eligibleIndexed = 0;
   let contentStale = 0;
+  const eligibleIds = new Set(eligibleEntries.map((entry) => entry.id));
   for (const e of entries) {
     const rec = index.entries[e.id];
     if (!rec) continue;
     indexed += 1;
+    if (!eligibleIds.has(e.id)) continue;
+    eligibleIndexed += 1;
     // v1 indexes load with hash:"" (unknown) — count as content-stale so the
     // doctor surfaces them and the next incremental build re-embeds.
     const currentHash = hashForDocument(entryToTrustedDocument(e));
     if (!rec.hash || rec.hash !== currentHash) contentStale += 1;
   }
-  return { indexed, total: entries.length, hasIndex: true, missing: entries.length - indexed, stale, contentStale };
+  return {
+    indexed,
+    total: entries.length,
+    hasIndex: true,
+    missing: entries.length - indexed,
+    stale,
+    contentStale,
+    ...policy,
+    eligibleIndexed,
+    eligibleMissing: eligibleEntries.length - eligibleIndexed,
+  };
 }

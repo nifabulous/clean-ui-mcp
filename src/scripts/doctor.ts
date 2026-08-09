@@ -154,15 +154,21 @@ if (!entries) {
   const index = indexStatus();
   if (!index.hasIndex) {
     checks.push({ name: "Search index", status: "WARN", detail: "no index — keyword search only (run `npm run build-index`)" });
-  } else if (index.missing > 0 || index.stale > 0 || index.contentStale > 0) {
+  } else if ((index.eligibleMissing ?? index.missing) > 0 || index.stale > 0 || index.contentStale > 0) {
     const parts = [
-      index.missing > 0 ? `${index.missing} missing` : null,
+      (index.eligibleMissing ?? index.missing) > 0 ? `${index.eligibleMissing ?? index.missing} eligible missing` : null,
       index.stale > 0 ? `${index.stale} stale` : null,
       index.contentStale > 0 ? `${index.contentStale} content-stale` : null,
     ].filter(Boolean).join(" · ");
-    checks.push({ name: "Search index", status: "WARN", detail: `${index.indexed}/${index.total} indexed · ${parts} — run \`npm run build-index\`` });
+    const coverage = index.eligibleTotal === undefined
+      ? `${index.indexed}/${index.total} indexed`
+      : `${index.eligibleIndexed ?? 0}/${index.eligibleTotal} eligible indexed (${index.excluded ?? 0} excluded by trust policy)`;
+    checks.push({ name: "Search index", status: "WARN", detail: `${coverage} · ${parts} — run \`npm run build-index\`` });
   } else {
-    checks.push({ name: "Search index", status: "PASS", detail: `${index.indexed}/${index.total} indexed, no drift` });
+    const coverage = index.eligibleTotal === undefined
+      ? `${index.indexed}/${index.total} indexed`
+      : `${index.eligibleIndexed ?? 0}/${index.eligibleTotal} eligible indexed (${index.excluded ?? 0} excluded by trust policy)`;
+    checks.push({ name: "Search index", status: "PASS", detail: `${coverage}, no drift` });
   }
 }
 

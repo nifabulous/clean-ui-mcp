@@ -53,4 +53,14 @@ describe("retag gold HTML packet", () => {
     expect(dom.window.document.querySelector("img")?.getAttribute("src")).toBe("file:///tmp/one.png");
     dom.window.close();
   });
+
+  it("explains field-specific decisions instead of exposing cryptic statuses", () => {
+    const html = buildRetagGoldHtml(packet, new Map([["one", "file:///tmp/one.png"]]));
+    expect(html).toContain("Select known components");
+    expect(html).toContain("None from current vocabulary");
+    expect(html).toContain("Not sure / insufficient evidence");
+    expect(html).toContain("New or missing vocabulary item");
+    expect(html).toContain("Choose every visible component");
+    expect(html).toContain("Only assign a domain when the screenshot exposes evidence");
+  });
 });

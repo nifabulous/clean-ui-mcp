@@ -58,6 +58,13 @@ value. `visual.typePairing`
 is `present` only when a DOM signal identifies the font; screenshot-only font
 inference is an abstention.
 
+For `components`, `present` means “select every visible item from the current
+component list.” `none` means you inspected the screen and no listed component
+applies; if a clear component is visible but missing from the list, use `oov`.
+For `domainTags`, `present` requires visible domain evidence; do not infer a
+domain from the product name. `colorScheme` is either light, dark, or
+abstain—there is no meaningful “none” theme.
+
 Two people should label the same frozen packet independently. A disagreement is
 an adjudication input, not permission to average model output. Promote a new
 component/domain only after reviewing repeated OOV proposals and updating the

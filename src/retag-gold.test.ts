@@ -84,6 +84,12 @@ describe("retag gold contract", () => {
     expect(() => RetagGoldSubmissionSchema.parse(candidate)).toThrow(/note/);
   });
 
+  it("does not score free-text mood before a vocabulary is frozen", () => {
+    const candidate = submission();
+    candidate.labels[0]!.fields.mood = { status: "present", value: "quietly confident", evidenceSource: "image" };
+    expect(() => RetagGoldSubmissionSchema.parse(candidate)).toThrow(/no frozen vocabulary/);
+  });
+
   it("binds every submission row to the frozen selection and image hash", () => {
     expect(() => validateRetagGoldSubmission(submission(), selection)).not.toThrow();
     const stale = submission();

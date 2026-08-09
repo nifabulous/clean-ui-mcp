@@ -38,8 +38,9 @@ Every entry must receive all five fields:
 
 `components` and `domainTags` accept only values in `src/schema.ts`. A novel
 component/domain is an OOV proposal, never a silently dropped value.
-`colorScheme` is `light` or `dark`. `mood` is intentionally free text while we
-decide whether a controlled vocabulary is worth freezing. `visual.typePairing`
+`colorScheme` is `light` or `dark`. `mood` has no frozen vocabulary yet, so
+record a concrete phrase as `oov` rather than claiming a scoreable `present`
+value. `visual.typePairing`
 is `present` only when a DOM signal identifies the font; screenshot-only font
 inference is an abstention.
 

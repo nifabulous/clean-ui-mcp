@@ -68,9 +68,7 @@ const ColorSchemeFieldSchema = fieldLabelSchema("colorScheme").superRefine((valu
 
 const MoodFieldSchema = fieldLabelSchema("mood").superRefine((value, ctx) => {
   if (value.status !== "present") return;
-  if (!z.string().trim().min(1).max(60).safeParse(value.value).success) {
-    ctx.addIssue({ code: "custom", path: ["value"], message: "mood must be a non-empty string of at most 60 characters" });
-  }
+  ctx.addIssue({ code: "custom", path: ["status"], message: "mood has no frozen vocabulary; record a concrete phrase as OOV until the vocabulary is approved" });
 });
 
 const TypePairingFieldSchema = fieldLabelSchema("visual.typePairing").superRefine((value, ctx) => {

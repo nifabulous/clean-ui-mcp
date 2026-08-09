@@ -170,7 +170,7 @@ function provableRecord(now: string): VerificationRecord {
 }
 
 /** A precise, checkable claim per servable field, built from the RECORDED value. */
-function claimForField(entry: Record<string, unknown>, field: string): string | null {
+export function claimForField(entry: Record<string, unknown>, field: string): string | null {
   const v = entry.visual as Record<string, unknown> | undefined;
   switch (field) {
     case "visual.colorRoles": {
@@ -190,8 +190,14 @@ function claimForField(entry: Record<string, unknown>, field: string): string | 
       const components = entry.components as string[] | undefined;
       return components && components.length > 0 ? `components present: ${components.join(", ")}` : null;
     }
+    // A null `usesShadows` yields NO claim. Returning "no shadows are used"
+    // would put a fabricated negative claim in front of the verifier, which
+    // would then confirm or contradict something the corpus never asserted.
+    // Unreachable through buildVerifyPrompt today (gated fields are skipped at
+    // the tier check) but claimForField has seven other call sites.
     case "visual.usesShadows":
-      return v?.usesShadows === true ? "soft shadows are used" : "no shadows are used";
+      if (typeof v?.usesShadows !== "boolean") return null;
+      return v.usesShadows ? "soft shadows are used" : "no shadows are used";
     case "visual.usesBorders":
       return v?.usesBorders === true ? "hairline borders are used" : "no borders are used";
     case "visual.typePairing": {

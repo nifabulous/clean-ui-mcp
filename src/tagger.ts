@@ -222,7 +222,7 @@ export interface TaggerOutput {
     };
     spacingDensity: string;
     cornerStyle:    string;
-    usesShadows:    boolean;
+    usesShadows:    boolean | null;
     usesBorders:    boolean;
   };
   critique:        string;
@@ -1558,7 +1558,7 @@ function text(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value.trim() : fallback;
 }
 
-function booleanValue(value: unknown, fallback: boolean): boolean {
+function booleanValue<F extends boolean | null>(value: unknown, fallback: F): boolean | F {
   return typeof value === "boolean" ? value : fallback;
 }
 
@@ -1590,7 +1590,7 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   typographyNotes: string;
   spacingDensity: string;
   cornerStyle: string;
-  usesShadows: boolean;
+  usesShadows: boolean | null;
   usesBorders: boolean;
   draftCritique: string;
   draftWhatToSteal: string[];
@@ -1669,7 +1669,11 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
     typographyNotes: text(parsed.typographyNotes),
     spacingDensity: oneFromAllowed(parsed.spacingDensity, SPACING_DENSITIES, "moderate"),
     cornerStyle: oneFromAllowed(parsed.cornerStyle, CORNER_STYLES, "slight-round"),
-    usesShadows: booleanValue(parsed.usesShadows, false),
+    // An absent model answer stays absent. Coalescing to `false` turned "the
+    // model did not say" into "there are no shadows" — a positive claim the
+    // model never made, written straight into the served corpus. The field is
+    // `gated`, so nothing downstream will ever adjudicate that guess.
+    usesShadows: booleanValue(parsed.usesShadows, null),
     usesBorders: booleanValue(parsed.usesBorders, true),
     draftCritique: text(parsed.draftCritique, "This UI needs a human review, but the screenshot shows a clear structure worth cataloging for future design reference."),
     layout,

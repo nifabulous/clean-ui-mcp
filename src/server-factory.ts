@@ -59,6 +59,20 @@ async function logQuery(params: { query?: string; category?: string; styleTag?: 
  * reader. Pure — no stdio, no auto-start, no env reads. The caller (server.ts)
  * is responsible for connecting a transport.
  */
+/**
+ * Renders a tri-state visual boolean for served output.
+ *
+ * `usesShadows` is nullable: null means the corpus never established the value,
+ * not that the answer is "no". Both render sites previously used a bare
+ * `v ? "yes" : "no"`, which turned absence into a negative claim the corpus does
+ * not make. Extracted so the two sites cannot drift and so the behaviour is
+ * assertable without standing up an MCP server.
+ */
+export function boolLabel(value: boolean | null | undefined): string {
+  if (value == null) return "—";
+  return value ? "yes" : "no";
+}
+
 export interface CreateServerOptions {
   readonly createUiSpecModel?: CreateUiSpecModelDependency;
 }
@@ -384,8 +398,8 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
         if (served("visual.spacingDensity")) lines.push(`- Spacing density: ${entry.visual.spacingDensity}`);
         if (served("visual.cornerStyle")) lines.push(`- Corners: ${entry.visual.cornerStyle}`);
         const shadowBorder = [
-          served("visual.usesShadows") ? `Shadows: ${entry.visual.usesShadows ? "yes" : "no"}` : "",
-          served("visual.usesBorders") ? `Borders: ${entry.visual.usesBorders ? "yes" : "no"}` : "",
+          served("visual.usesShadows") ? `Shadows: ${boolLabel(entry.visual.usesShadows)}` : "",
+          served("visual.usesBorders") ? `Borders: ${boolLabel(entry.visual.usesBorders)}` : "",
         ].filter(Boolean).join(" | ");
         if (shadowBorder) lines.push(`- ${shadowBorder}`);
         return lines.length ? [`## Visual attributes`, ...lines] : [];
@@ -665,7 +679,7 @@ function registerCompareUiExamples(server: McpServer, reader: CorpusReader): voi
           `${p.omitted.includes("visual.spacingDensity") ? "—" : p.entry.visual?.spacingDensity ?? "—"} / ${p.omitted.includes("visual.cornerStyle") ? "—" : p.entry.visual?.cornerStyle ?? "—"}`,
         )).join(" | ")} |`,
         `| shadows / borders | ${projections.map((p) => cell(
-          `${p.omitted.includes("visual.usesShadows") ? "—" : p.entry.visual?.usesShadows ? "yes" : "no"} / ${p.omitted.includes("visual.usesBorders") ? "—" : p.entry.visual?.usesBorders ? "yes" : "no"}`,
+          `${p.omitted.includes("visual.usesShadows") ? "—" : boolLabel(p.entry.visual?.usesShadows)} / ${p.omitted.includes("visual.usesBorders") ? "—" : boolLabel(p.entry.visual?.usesBorders)}`,
         )).join(" | ")} |`,
         ...(concise ? [] : [
           `| critique angle | ${projections.map((p) => firstSentence(p.entry.critique)).join(" | ")} |`,

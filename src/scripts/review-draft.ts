@@ -88,7 +88,7 @@ async function reviewEntry(entry: DraftEntry, n: number, total: number): Promise
   console.log(`  Colors:    ${entry.visual.dominantColors.join(", ")} | accent: ${entry.visual.accentColor ?? "none"}`);
   console.log(`  Type:      ${entry.visual.typePairing.display ?? "?"} / ${entry.visual.typePairing.body ?? "?"}`);
   console.log(`  Spacing:   ${entry.visual.spacingDensity} | Corners: ${entry.visual.cornerStyle}`);
-  console.log(`  Shadows: ${entry.visual.usesShadows} | Borders: ${entry.visual.usesBorders}`);
+  console.log(`  Shadows: ${entry.visual.usesShadows ?? "unknown"} | Borders: ${entry.visual.usesBorders}`);
   console.log(`\n  Critique:\n  ${entry.critique.replace("[DRAFT — REWRITE] ", "")}`);
   console.log(`\n  What to steal:`);
   entry.whatToSteal.forEach((t) => console.log(`    - ${t.replace("[DRAFT] ", "")}`));

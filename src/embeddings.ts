@@ -298,7 +298,7 @@ export function entryToDocument(entry: {
     typePairing:    { display: string | null; body: string | null; notes?: string };
     spacingDensity: string;
     cornerStyle:    string;
-    usesShadows:    boolean;
+    usesShadows:    boolean | null;
     usesBorders:    boolean;
   };
 }): string {
@@ -324,11 +324,18 @@ export function entryToDocument(entry: {
     entry.mood ? `Mood: ${entry.mood}.` : "",
   ].filter(Boolean).join(" ");
 
+  // A null `usesShadows` emits NO sentence. Falling through to the negative
+  // string would embed "No shadows; depth via other means." for an entry whose
+  // shadow use was never established — a fabricated claim, and one that would
+  // then steer semantic search. `filter(Boolean)` keeps the join from leaving a
+  // double space behind the omitted clause.
   const visualAttrs = [
     `Spacing: ${entry.visual.spacingDensity}. Corners: ${entry.visual.cornerStyle}.`,
-    entry.visual.usesShadows ? "Uses shadows for depth." : "No shadows; depth via other means.",
+    entry.visual.usesShadows == null
+      ? ""
+      : entry.visual.usesShadows ? "Uses shadows for depth." : "No shadows; depth via other means.",
     entry.visual.usesBorders ? "Borders used for structure." : "No borders.",
-  ].join(" ");
+  ].filter(Boolean).join(" ");
 
   const colorAttrs = [
     entry.visual.dominantColors.length ? `Colors: ${entry.visual.dominantColors.join(", ")}.` : "",

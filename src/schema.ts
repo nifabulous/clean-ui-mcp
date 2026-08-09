@@ -431,7 +431,13 @@ export const VisualAttributes = z.object({
   typePairing: TypePairing,
   spacingDensity: SpacingDensity,
   cornerStyle: CornerStyle,
-  usesShadows: z.boolean(),
+  // Nullable, NOT `.default(false)` (decision D17): `persistEntries` round-trips
+  // every entry through `Corpus.parse -> JSON.stringify`, so a default would
+  // mutate untouched entries on any unrelated write. Null means "not known" —
+  // the field is `gated` in TIER_BY_FIELD (both the model lane and the pixel
+  // route are exhausted for it), so authoring must be able to decline rather
+  // than guess. Absence must never be rendered as the negative claim.
+  usesShadows: z.boolean().nullable(),
   usesBorders: z.boolean(),
 });
 

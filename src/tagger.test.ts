@@ -31,7 +31,13 @@ describe("tagger sanitization", () => {
     expect(sanitized.accentColor).toBeNull();
     expect(sanitized.spacingDensity).toBe("moderate");
     expect(sanitized.cornerStyle).toBe("pill");
-    expect(sanitized.usesShadows).toBe(false);
+    // Was `toBe(false)`. Rejecting an unusable value used to mean falling back to
+    // `false`, which turned "the model answered `"yes"`, which is not a boolean"
+    // into the positive claim "this UI has no shadows" — written to the corpus and
+    // served. `usesShadows` is `gated`, so nothing downstream would ever catch it.
+    // Rejection now yields null: absence, not a negated claim. `usesBorders` keeps
+    // its `true` fallback because it remains model-verifiable.
+    expect(sanitized.usesShadows).toBeNull();
     expect(sanitized.usesBorders).toBe(false);
   });
 

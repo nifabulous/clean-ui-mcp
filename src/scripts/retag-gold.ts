@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 import { C2LabelIntegritySelectionSchema, type C2LabelIntegritySelection } from "../c2/evaluation-contracts.js";
 import {
   RETAG_GOLD_FIELDS,
@@ -23,6 +24,7 @@ import {
   type RetagGoldSelection,
   type RetagGoldSubmission,
 } from "../retag-gold.js";
+import { buildRetagGoldHtml } from "../retag-gold-html.js";
 
 type CorpusEntry = {
   id: string;
@@ -92,14 +94,27 @@ function currentImageHashes(selection: RetagGoldSelection, corpusPath: string): 
   }));
 }
 
-function outputJson(path: string, value: unknown, corpusPath: string): void {
+function imageUrlsForSelection(selection: RetagGoldSelection, corpusPath: string): Map<string, string> {
+  const corpus = loadCorpus(corpusPath);
+  return new Map(selection.entries.map((selected) => {
+    const entry = corpus.get(selected.entryId);
+    if (!entry) throw new Error(`selection names unknown corpus entry ${selected.entryId}`);
+    return [selected.entryId, pathToFileURL(imagePathFor(corpusPath, entry)).href];
+  }));
+}
+
+function outputText(path: string, content: string, corpusPath: string): void {
   const absolute = resolve(path);
   const corpusRoot = resolve(dirname(corpusPath));
   if (absolute === corpusRoot || absolute.startsWith(corpusRoot + sep)) throw new Error("gold artifacts must not be written inside corpus/");
   mkdirSync(dirname(absolute), { recursive: true });
   if (existsSync(absolute)) throw new Error(`refusing to overwrite existing artifact: ${absolute}`);
-  writeFileSync(absolute, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" });
+  writeFileSync(absolute, content, { flag: "wx" });
   console.log(`wrote ${absolute}`);
+}
+
+function outputJson(path: string, value: unknown, corpusPath: string): void {
+  outputText(path, `${JSON.stringify(value, null, 2)}\n`, corpusPath);
 }
 
 export function validateSubmissionFile(submission: unknown, selection: RetagGoldSelection, corpusPath: string): RetagGoldSubmission {
@@ -116,6 +131,7 @@ async function main(): Promise<void> {
       selection: { type: "string", default: DEFAULT_SELECTION },
       corpus: { type: "string", default: DEFAULT_CORPUS },
       out: { type: "string" },
+      html: { type: "string" },
       submission: { type: "string" },
       "peer-submission": { type: "string" },
     },
@@ -128,8 +144,10 @@ async function main(): Promise<void> {
   const c2 = C2LabelIntegritySelectionSchema.parse(JSON.parse(selectionBytes.toString("utf8")));
   const selection = buildGoldSelection(c2, selectionBytes, corpusPath);
   if (mode === "packet") {
-    if (!values.out) throw new Error("packet mode requires --out; use a private path outside corpus/");
-    outputJson(values.out, buildRetagGoldPacket(selection), corpusPath);
+    if (!values.out && !values.html) throw new Error("packet mode requires --out and/or --html; use a private path outside corpus/");
+    const packet = buildRetagGoldPacket(selection);
+    if (values.out) outputJson(values.out, packet, corpusPath);
+    if (values.html) outputText(values.html, buildRetagGoldHtml(packet, imageUrlsForSelection(selection, corpusPath)), corpusPath);
     return;
   }
   if (!values.submission) throw new Error("validate mode requires --submission");

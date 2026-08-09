@@ -19,6 +19,20 @@ Generate a private packet outside `corpus/`:
 npm run retag-gold -- packet --out /tmp/clean-ui-retag-gold-packet.json
 ```
 
+For an image-first reviewer page, generate both artifacts in one command:
+
+```sh
+npm run retag-gold -- packet \
+  --out /tmp/clean-ui-retag-gold-packet.json \
+  --html /tmp/clean-ui-retag-gold-review.html
+open /tmp/clean-ui-retag-gold-review.html
+```
+
+The HTML embeds the packet metadata and local `file://` image URLs, so the
+screenshots render at large size without a server. It autosaves a local draft,
+keeps every field visible, and has both **Copy JSON** and **Download JSON**
+buttons. The copied/downloaded envelope still must pass the CLI validator.
+
 The packet contains local image paths and is intentionally not a durable,
 tracked artifact. Open the images directly and fill one independent submission
 per reviewer. Do not seed the fields from the existing corpus or from a model

@@ -202,6 +202,15 @@ ABSENT class** — the metric is anti-correlated at the top end. `usesShadows`
 scores exactly its majority-class baseline: the measurement adds nothing over
 always answering "absent".
 
+Precisely: the two fields are not equally dead. `usesShadows` is at baseline.
+`usesBorders` beats baseline by 9 points (67% vs 58%) — which at n=12 is one or
+two samples and well inside noise, so it does not justify retuning, but it is
+not the same statement as "no signal". Read the heading as "no signal that this
+sample can distinguish from none", and note that the composition also differs:
+usesShadows' PRESENT/ABSENT counts coincide with its confirmed/contradicted
+counts (4/6) while its class RANGES changed under regrouping, so its membership
+changed even though its counts did not.
+
 Why the metrics do not transfer: both are whole-image edge-population ratios. On
 a 120x90 synthetic canvas containing one card, `thinRatio` really is "what
 fraction of edges are the card's stroke". On a 1200-1920px screenshot the edge
@@ -262,10 +271,62 @@ corner or gap measurement means anything.
 - "Scale-relative thresholds" help **nothing**. Class A's metrics do not separate
   the classes at any threshold; Class B needs a new rule; Class C needs element
   detection.
-- **All five detectors need element-localised measurement**, not tuning. Class A
-  and Class C converge on the same prerequisite: find the UI elements first, then
-  measure their borders / shadows / corners / gaps. Whole-image ratios are
-  measuring text and texture.
+- **Class A and Class C need element-localised measurement**, not tuning — four
+  of the five detectors. They converge on the same prerequisite: find the UI
+  elements first, then measure their borders / shadows / corners / gaps.
+  Whole-image ratios are measuring text and texture. **Class B is the exception:**
+  `accentColor` needs a new ROLE rule, and the candidate named in its own section
+  (saturation against a desaturated field) is a whole-image statistic that does
+  not require element detection. Do not fold it into the same prerequisite —
+  though note element detection is not *excluded* for it either: the accent is
+  typically the primary button's fill, so a detector that finds interactable
+  elements could resolve the role question more directly than a saturation rule.
+  Which of the two is right for Class B was open; the probe below settled it —
+  no proposer distinguishes interactable elements, so the saturation-style role
+  rule is the only remaining candidate.
+### The element-localised prerequisite was probed (2026-08-08) — and is not met
+
+The claims above stand: Class A and Class C do need element-localised
+measurement. What the probe adds is that **the prerequisite is not satisfiable
+with any proposer tried.** Full result and evidence: `docs/element-box-probe.md`.
+
+Six proposers, 46 labelled screenshots, one arithmetic rubric. **No rung passed
+the 70% bar:**
+
+| rung | global | character |
+|---|---|---|
+| UIED's techniques | **52.2%** | the only proposer that returns containers |
+| classical CV | 23.9% | finds text — 96% of its boxes |
+| deki-yolo | 19.6% | right objects, boundaries ~15px off |
+| OmniParser | 0.0% | right box count, 46/46 alignment failures |
+| Florence-2 | 0.0% | whole-screen regions |
+| Moondream | 0.0% | one box per image |
+
+Two findings bear directly on this file's classes:
+
+- **`usesShadows` is the hardest of the four, not an average one.** Its score did
+  not move a single point between the naive proposer and the best (0.200 →
+  0.200). A uniform-region method finds elements by colour continuity, and a
+  white card on a white panel separated *only by a shadow* has no colour
+  discontinuity to segment on. The method's blind spot and this field's subject
+  matter are the same thing.
+- **Class B's open question is closed.** No rung distinguishes interactable
+  elements — OmniParser's `icon_detect` weights carry exactly one class, `icon`,
+  and 71.7% of what it emitted was text. So `accentColor` cannot be reached by
+  element localisation and stays with a role rule.
+
+**Consequence for these detectors:** the four disabled pixel detectors stay
+disabled, and `accentColor`, `colorRoles` and `usesShadows` were reclassified to
+the `gated` verifier tier on 2026-08-08 — both the model lane and the pixel lane
+are exhausted for them. `usesBorders` and `cornerStyle` remain on the vision
+path.
+
+Element detection is closed under the probe's pre-registered rule. Two
+follow-ups are recorded in `TODOS.md` with triggers: a deki-recall +
+UIED-precision box-refinement hybrid (needs no labels), and a labelled
+container-box dataset (needed for the probe's missing recall check and for any
+web-trained detector).
+
 - No further labelling is warranted until a detector exists whose metric shows
   separation on the labels already collected.
 - Class C detectors are the most dangerous of the five: they are the only ones

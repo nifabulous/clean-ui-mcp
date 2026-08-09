@@ -146,3 +146,14 @@ export function assertGate(
   }
   return failing;
 }
+
+/** Throws when an enabled certifying detector misses its calibration gate. */
+export function assertPassingCalibration(
+  result: CalibrationResult,
+  registry: typeof detectorRegistry,
+): void {
+  const failures = assertGate(result, registry);
+  if (failures.length > 0) {
+    throw new Error(`calibration gate failed:\n${failures.join("\n")}`);
+  }
+}

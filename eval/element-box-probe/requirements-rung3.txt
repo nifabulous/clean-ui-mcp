@@ -1,0 +1,6 @@
+# Rung 3 only. Layered ON TOP of requirements-rung2.txt (torch/transformers),
+# never instead of it.
+-r requirements-rung2.txt
+easyocr==1.7.2
+ultralytics==8.3.40
+huggingface_hub==0.36.2

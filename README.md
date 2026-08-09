@@ -786,10 +786,13 @@ npm run build-index                  # repair semantic-search index drift
 
 ### Deterministic detectors & the suspect report
 
-Perception fields (`usesShadows`, `usesBorders`, `accentColor`, `cornerStyle`,
-`spacingDensity`) are verified by calibrated pixel detectors instead of the
-vision model; `colorRoles` and `accessibilityRisks` get contradiction-only
-checks. Model contradictions are corroborated by a second fresh ask.
+`platform` and `visual.dominantColors` are currently verified by enabled
+deterministic detectors. The pixel detectors for `usesBorders`, `cornerStyle`,
+and `spacingDensity` are disabled and those fields remain on the vision path;
+`usesShadows`, `accentColor`, and `colorRoles` are gated because neither lane
+can verify them from a single screenshot. `accessibilityRisks` retains its
+enabled contradiction-only check. Model contradictions are corroborated by a
+second fresh ask.
 
 - Verify with detectors: `npm run verify -- --detectors on`
 - Compare with the legacy path: `npm run verify -- --detectors off`

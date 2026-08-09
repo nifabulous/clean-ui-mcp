@@ -1612,7 +1612,6 @@ describe("buildRunReport — abstain cause breakdown", () => {
     expect(text).not.toContain("Abstain causes");
   });
 });
-
 // ── usesBorders: absence must not become a negative claim ────────────────────
 //
 // `usesShadows` got this guard when the field became nullable; `usesBorders`

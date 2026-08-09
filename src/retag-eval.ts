@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import { RETAG_FIELDS, valueForField, type RetagEntryLike, type RetagField } from "./retag-diff.js";
 
-export type GoldStatus = "present" | "none" | "abstain";
+export type GoldStatus = "present" | "none" | "abstain" | "oov";
 
 /** A gold label is explicit about negative and unscorable cases. */
 export type GoldField = {
   status: GoldStatus;
   value?: unknown;
+  /** Optional taxonomy candidates attached to an otherwise scoreable label. */
+  oov?: string[];
 };
 
 export type GoldLabel = {
@@ -18,6 +20,8 @@ export type GoldLabel = {
 export type GoldFieldMetrics = {
   labelled: number;
   abstained: number;
+  /** Labels that named a real candidate outside the closed vocabulary. */
+  oov: number;
   exact: number;
   truePositives: number;
   falsePositives: number;
@@ -50,14 +54,17 @@ function values(value: unknown): Set<string> {
 function scoreField(labels: GoldLabel[], predictions: Map<string, RetagEntryLike>, field: RetagField): GoldFieldMetrics {
   let labelled = 0;
   let abstained = 0;
+  let oov = 0;
   let exact = 0;
   let truePositives = 0;
   let falsePositives = 0;
   let falseNegatives = 0;
   for (const label of labels) {
     const expected = label.fields[field];
-    if (!expected || expected.status === "abstain") {
+    if (expected?.oov?.length) oov += 1;
+    if (!expected || expected.status === "abstain" || expected.status === "oov") {
       if (expected?.status === "abstain") abstained += 1;
+      if (expected?.status === "oov" && !expected.oov?.length) oov += 1;
       continue;
     }
     labelled += 1;
@@ -83,6 +90,7 @@ function scoreField(labels: GoldLabel[], predictions: Map<string, RetagEntryLike
   return {
     labelled,
     abstained,
+    oov,
     exact,
     truePositives,
     falsePositives,
@@ -116,6 +124,13 @@ export function assertGoldEvaluation(value: unknown): asserts value is { gold: G
   const fields = (gold as { fields?: unknown }).fields;
   if (typeof entries !== "number" || !Number.isInteger(entries) || entries < 1 || !fields || typeof fields !== "object" || Object.keys(fields).length === 0) {
     throw new Error("promotion requires a non-empty, persisted gold field evaluation");
+  }
+  const metrics = Object.values(fields as Record<string, unknown>);
+  if (!metrics.some((metric) => {
+    const labelled = metric && typeof metric === "object" ? (metric as { labelled?: unknown }).labelled : undefined;
+    return typeof labelled === "number" && Number.isInteger(labelled) && labelled > 0;
+  })) {
+    throw new Error("promotion requires at least one scored gold label; abstain/OOV-only evidence is insufficient");
   }
 }
 

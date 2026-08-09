@@ -38,7 +38,7 @@ import { parseArgs } from "node:util";
 import { writeAtomic, writeRawSnapshot } from "../persistence.js";
 import { Corpus } from "../schema.js";
 import { transformAccessibilityRisk, type LegacyRisk } from "./wcag-migration.js";
-import { carryMigrationVerification } from "./migration-carry.js";
+import { carryMigrationVerification, priorEntriesFromRaw } from "./migration-carry.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
@@ -66,8 +66,11 @@ type AntiPatterns = {
 
 const originalSerialized = readFileSync(CORPUS_PATH, "utf-8");
 const raw = JSON.parse(originalSerialized);
-const priorCorpus = Corpus.safeParse(raw);
-const priorEntries = priorCorpus.success ? structuredClone(priorCorpus.data.entries) : [];
+// Read from the RAW document, not a schema parse: this migration's whole purpose
+// is a shape the current schema cannot parse, and a parse-gated prior would be []
+// on exactly that input — dropping every verification record instead of carrying
+// the unchanged ones. See priorEntriesFromRaw.
+const priorEntries = priorEntriesFromRaw(raw);
 const entries: Array<{ id: string; antiPatterns?: AntiPatterns }> = raw.entries;
 
 /** Report tallies + per-entry transformation log for the dry-run output. */

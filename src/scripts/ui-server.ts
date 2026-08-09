@@ -552,7 +552,9 @@ export function entryIssues(error: unknown): string[] {
 // Add-flow captures skip extraction (undefined signalsMap). Promoted entries
 // whose image path was flattened by promoteTempImage also lose the batch
 // linkage — readDomSignalsForImage returns null for those, and the tagger
-// falls back to pixel-guessing (no regression — same as before DOM signals).
+// falls back to pixel evidence. Sidecars are also bound to the exact PNG hash;
+// a missing or mismatched binding is rejected rather than treating stale DOM
+// facts as ground truth.
 //
 // NOTE: hasDomSignals on CaptureMeta is NOT persisted on corpus entries, so
 // we always attempt the read rather than using it as a fast-path skip.
@@ -583,7 +585,16 @@ function readDomSignalsForImage(corpusRelativeImagePath: string): DomSignals | n
     }
   }
   if (!sidecar) return null;
-  return sidecar[captureId] ?? null;
+  const signals = sidecar[captureId] ?? null;
+  if (!signals?.imageSha256 || !/^[a-f0-9]{64}$/i.test(signals.imageSha256)) return null;
+  try {
+    const imagePath = fromCorpusRelativeImagePath(corpusRelativeImagePath);
+    const actualHash = createHash("sha256").update(readFileSync(imagePath)).digest("hex");
+    if (!timingSafeEqual(Buffer.from(actualHash, "hex"), Buffer.from(signals.imageSha256.toLowerCase(), "hex"))) return null;
+  } catch {
+    return null;
+  }
+  return signals;
 }
 
 export function validateEntryPayload(
@@ -1989,6 +2000,9 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         id: payload.id,
         imageDetail: payload.imageDetail,
         extractionOnly: payload.extractionOnly === true,
+        // Editorial claims must see the same pixels as extraction. Deferred
+        // extraction-only rows intentionally skip Pass 2 and receive no path.
+        critiqueImagePath: payload.extractionOnly === true ? undefined : imagePath,
         // Per-call critique provider from the SPA dropdown (undefined → env/peak routing).
         critiqueProvider: parseProvider(payload.critiqueProvider),
         // DOM signals from the capture sidecar (null for non-batch images — no regression).
@@ -2002,9 +2016,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   }
 
   // Deferred Pass 2: fills critique/steals/antiPatterns on a row staged
-  // extraction-only. No image re-sent — Pass 2 reasons from the saved extraction.
+  // extraction-only. When the staged image still exists, pass it again so
+  // editorial claims are grounded in pixels rather than only model text.
   if (req.method === "POST" && url.pathname === "/api/auto-critique") {
-    const payload = await readJson(req) as { productName?: string; extraction?: Record<string, unknown>; platform?: "web" | "mobile" | "tablet"; domSignals?: DomSignals; critiqueProvider?: string };
+    const payload = await readJson(req) as { productName?: string; extraction?: Record<string, unknown>; platform?: "web" | "mobile" | "tablet"; imagePath?: string; domSignals?: DomSignals; critiqueProvider?: string };
 
     if (!payload.extraction) {
       sendJson(res, 400, { error: "extraction is required (pass the entry's _raw.extraction)" });
@@ -2016,7 +2031,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     }
 
     try {
-      const result = await generateCritique((payload.productName || "").trim(), payload.extraction, parseProvider(payload.critiqueProvider), payload.domSignals ?? undefined, payload.platform);
+      const critiqueImagePath = payload.imagePath ? fromCorpusRelativeImagePath(payload.imagePath) : undefined;
+      const result = await generateCritique((payload.productName || "").trim(), payload.extraction, parseProvider(payload.critiqueProvider), payload.domSignals ?? undefined, payload.platform, undefined, critiqueImagePath);
       sendJson(res, 200, { critique: result });
     } catch (error) {
       sendJson(res, 400, { error: explainTagError(error) });
@@ -2073,8 +2089,9 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         imageDetail: "high",
         extractionProvider,
         critiqueProvider,
+        critiqueImagePath: imagePath,
         // DOM signals from the capture sidecar (null for promoted entries whose
-        // path was flattened — no regression, falls back to pixel-guessing).
+        // path was flattened — no regression, falls back to pixel evidence).
         domSignals: readDomSignalsForImage(entry.image.path),
       });
 
@@ -2115,6 +2132,13 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         qualityTier: entry.qualityTier,
         qualityScore: entry.qualityScore,
       };
+      if (tagged.provenance?.taxonomyCandidates) {
+        merged.provenance = {
+          taggedBy: entry.provenance?.taggedBy ?? "auto",
+          ...entry.provenance,
+          taxonomyCandidates: tagged.provenance.taxonomyCandidates,
+        };
+      }
 
       // A retag re-runs the tagger over the SAME screenshot, so for a gated field
       // it can only produce another guess with no new evidence. Preserve the prior

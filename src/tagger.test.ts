@@ -9,6 +9,7 @@ import { PRIVATE_IMAGE_DIR } from "./paths.js";
 describe("tagger sanitization", () => {
   it("keeps only schema-safe values from model output", () => {
     const sanitized = sanitizeTaggerPayload({
+      patternType: "kanban-board",
       categories: ["dashboard", "made-up"],
       styleTags: ["minimal", "nope"],
       components: ["kpi-card", "donut-chart", "made-up-widget"],
@@ -27,6 +28,13 @@ describe("tagger sanitization", () => {
     expect(sanitized.styleTags).toEqual(["minimal"]);
     expect(sanitized.components).toEqual(["kpi-card", "donut-chart"]);
     expect(sanitized.domainTags).toEqual(["billing", "usage"]);
+    expect(sanitized.taxonomyCandidates).toEqual({
+      patternType: ["kanban-board"],
+      categories: ["made-up"],
+      styleTags: ["nope"],
+      components: ["made-up-widget"],
+      domainTags: ["fake-domain"],
+    });
     expect(sanitized.dominantColors).toEqual(["#abcdef", "#111111"]);
     expect(sanitized.accentColor).toBeNull();
     expect(sanitized.spacingDensity).toBe("");
@@ -411,6 +419,9 @@ describe("tagger sanitization", () => {
     expect(sanitized.draftCritique).toMatch(/^\[DRAFT/);
     expect(sanitized.draftWhatToSteal[0]).toMatch(/^\[DRAFT/);
     expect(sanitized.draftAntiPatterns[0]).toMatch(/^\[DRAFT/);
+    expect(sanitized.taxonomyCandidates).toEqual({
+      patternType: [], categories: [], styleTags: [], components: [], domainTags: [],
+    });
   });
 
   it("keeps complete businessRationale objects and drops incomplete ones", () => {
@@ -1024,11 +1035,12 @@ describe("tagImage two-pass request shape", () => {
     process.env.AUTO_TAG_PROVIDER_CRITIQUE = savedCrit;
   });
 
-  it("disables Gemini thinking on extraction (thinkingBudget:0) but not critique", async () => {
-    // Gemini 2.5 Flash/Pro are thinking models — reasoning tokens draw from the
-    // same maxOutputTokens budget and were truncating the extraction JSON.
-    // Extraction is deterministic and must run with thinking off; critique
-    // keeps it on. This test pins that contract.
+  it("uses the model-generation-specific Gemini thinking contract", async () => {
+    // Gemini 3.5 uses a separate thinking budget: extraction is MINIMAL while
+    // critique is HIGH. Gemini 2.5 uses thinkingBudget:0 for extraction and
+    // leaves critique at the provider default. The repository test env pins
+    // the 3.5 path, so assert the active contract rather than the obsolete 2.5
+    // shape.
     const savedExtr = process.env.AUTO_TAG_PROVIDER_EXTRACTION;
     const savedCrit = process.env.AUTO_TAG_PROVIDER_CRITIQUE;
     process.env.AUTO_TAG_PROVIDER_EXTRACTION = "gemini";
@@ -1049,12 +1061,13 @@ describe("tagImage two-pass request shape", () => {
 
     try { await tagImage({ imagePath: testImage, productName: "Test", url: null }); } catch { /* parse details not under test */ }
 
-    // Pass 1 (extraction): thinking disabled. Pass 2 (critique): thinking left on (no thinkingConfig key).
+    // Pass 1 (extraction): minimal reasoning. Pass 2 (critique): high reasoning.
     expect(genConfigs.length).toBeGreaterThanOrEqual(1);
     const extractionCfg = genConfigs[0];
-    expect(extractionCfg.thinkingConfig).toEqual({ thinkingBudget: 0 });
+    const is35 = /3\.5|3-5/i.test(process.env.GEMINI_AUTO_TAG_MODEL ?? "gemini-2.5-flash");
+    expect(extractionCfg.thinkingConfig).toEqual(is35 ? { thinkingLevel: "MINIMAL" } : { thinkingBudget: 0 });
     if (genConfigs.length >= 2) {
-      expect(genConfigs[1].thinkingConfig).toBeUndefined();
+      expect(genConfigs[1].thinkingConfig).toEqual(is35 ? { thinkingLevel: "HIGH" } : undefined);
     }
 
     delete process.env.GEMINI_API_KEY;

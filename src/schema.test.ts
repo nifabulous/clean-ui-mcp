@@ -54,6 +54,22 @@ describe("corpus schema", () => {
     if (parsed.success) expect(parsed.data.visual.usesBorders).toBeNull();
   });
 
+  it("persists out-of-vocabulary proposals as quarantine provenance", () => {
+    const parsed = CorpusEntry.safeParse({
+      ...validEntry,
+      provenance: {
+        taggedBy: "auto",
+        taxonomyCandidates: { "extraction.categories": ["new-business-domain"] },
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provenance.taxonomyCandidates).toEqual({
+        "extraction.categories": ["new-business-domain"],
+      });
+    }
+  });
+
   it("accepts valid private corpus-relative image paths", () => {
     expect(CorpusEntry.safeParse(validEntry).success).toBe(true);
   });

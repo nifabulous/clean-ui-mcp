@@ -587,6 +587,13 @@ export const CorpusEntry = z.object({
     taggedBy: z.enum(["human", "auto", "auto-reviewed"]),
     reviewedBy: z.string().optional(),
     /**
+     * Model-proposed values that were outside the closed taxonomy. These are
+     * quarantine metadata only: they are never treated as canonical labels or
+     * included in retrieval text, but remain available for curator review and
+     * future taxonomy promotion.
+     */
+    taxonomyCandidates: z.record(z.string(), z.array(z.string().min(1).max(80)).max(20)).optional(),
+    /**
      * When the entry came from the capture pipeline (vs. manual upload), records
      * how the image was produced. Absent = manual upload. Nested in provenance
      * rather than flat on `image` because it describes the process that produced

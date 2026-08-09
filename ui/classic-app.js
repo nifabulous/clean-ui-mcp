@@ -939,10 +939,14 @@ function cleanTaggedDraft(entry, previous) {
   const editingSaved = state.draftMode === "edit" && state.bulkEditingIndex === null;
   if (!editingSaved) cleaned.id = "";
   cleaned.image = previous.image;
-  // Preserve the user's qualityScore and qualityTier — don't let auto-fill
-  // overwrite them. Cautionary entries should stay low-scored.
-  cleaned.qualityScore = previous.qualityScore || cleaned.qualityScore || 4;
-  if (previous.qualityTier) cleaned.qualityTier = previous.qualityTier;
+  // Preserve curator-owned quality only while editing an already-saved entry.
+  // New auto-tag drafts must keep the tagger's explicit absence (0/"") so a
+  // missing quality judgment cannot be laundered into the UI's exceptional/3
+  // blank-draft defaults.
+  if (editingSaved) {
+    cleaned.qualityScore = previous.qualityScore || cleaned.qualityScore || 4;
+    if (previous.qualityTier) cleaned.qualityTier = previous.qualityTier;
+  }
   // Preserve reviewStatus — auto-fill shouldn't flip a draft to approved.
   if (previous.reviewStatus) cleaned.reviewStatus = previous.reviewStatus;
   // Preserve provenance — auto-fill produces "auto" but a human may have set it.
@@ -1472,7 +1476,7 @@ async function critiqueQueue() {
     renderBulk();
     const data = await request("/auto-critique", {
       method: "POST",
-      body: JSON.stringify({ productName: item.source.productName, extraction: item._raw.extraction, platform: item.platform }),
+      body: JSON.stringify({ productName: item.source.productName, extraction: item._raw.extraction, platform: item.platform, imagePath: item.image?.path || undefined }),
     });
     const c = data.critique;
     const next = { ...item, _status: "tagged", _error: null };
@@ -1499,7 +1503,16 @@ async function critiqueQueue() {
     if (typeof c.qualityScore === "number") next.qualityScore = c.qualityScore;
     if (c.typographyNotes) next.visual.typePairing.notes = c.typographyNotes;
     if (c.mood) next.mood = c.mood;
-    next._raw = { ...item._raw, critique: true };
+    if (c.taxonomyCandidates && Object.keys(c.taxonomyCandidates).length) {
+      next.provenance = {
+        ...(next.provenance || {}),
+        taxonomyCandidates: {
+          ...(next.provenance?.taxonomyCandidates || {}),
+          ...c.taxonomyCandidates,
+        },
+      };
+    }
+    next._raw = { ...item._raw, critique: true, taxonomyCandidates: c.taxonomyCandidates || {} };
     state.bulkQueue[index] = next;
     renderBulk();
   });

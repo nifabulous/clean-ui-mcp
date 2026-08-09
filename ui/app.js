@@ -1309,7 +1309,12 @@ async function autoFillCandidates(){
       ...base, ...tagged,
       image: { ...(tagged.image||{}), path: c.imagePath, visibility:'private' },
       source: { ...(base.source), ...(tagged.source||{}), url: sourceUrl || c.sourceUrl || base.source.url, capturedAt: base.source.capturedAt },
-      provenance: base.provenance,
+      provenance: {
+        ...base.provenance,
+        ...(tagged.provenance?.taxonomyCandidates
+          ? { taxonomyCandidates: tagged.provenance.taxonomyCandidates }
+          : {}),
+      },
     };
     draft._candidateStatus.set(i, 'tagged');
     refreshActivePage();

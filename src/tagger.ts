@@ -25,6 +25,7 @@ import {
 } from "./references/generated.js";
 import { Component, DomainTag, detectPlatform } from "./schema.js";
 import { isWcagCriterion, extractAllWcagIds } from "./wcag/registry.js";
+import { listFromAllowedWithRejects } from "./taxonomy-candidates.js";
 import { Vibrant } from "node-vibrant/node";
 import sharp from "sharp";
 
@@ -252,7 +253,7 @@ export interface TaggerOutput {
   qualityScore:    number;
   tierChangeJustification?: string;
   addedAt:         string;
-  provenance?:     { taggedBy: "human" | "auto" | "auto-reviewed"; reviewedBy?: string };
+  provenance?:     { taggedBy: "human" | "auto" | "auto-reviewed"; reviewedBy?: string; taxonomyCandidates?: Record<string, string[]> };
   _raw?: Record<string, unknown>;
 }
 
@@ -1331,23 +1332,31 @@ Rules:
 
 // ─── sanitizer helpers (unchanged from the single-pass era) ──────────────────
 
-function listFromAllowed(value: unknown, allowed: readonly string[], fallback: string[] = []): string[] {
-  if (!Array.isArray(value)) return fallback;
-  const normalized = value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item) => allowed.includes(item));
-  return [...new Set(normalized)].slice(0, 3).length ? [...new Set(normalized)].slice(0, 3) : fallback;
+type TaxonomyCandidates = {
+  patternType: string[];
+  categories: string[];
+  styleTags: string[];
+  components: string[];
+  domainTags: string[];
+};
+
+function taxonomyCandidateRecord(...passes: Array<{ name: "extraction" | "critique"; candidates: TaxonomyCandidates }>): Record<string, string[]> | undefined {
+  const out: Record<string, string[]> = {};
+  for (const { name, candidates } of passes) {
+    for (const [field, values] of Object.entries(candidates)) {
+      if (values.length) out[`${name}.${field}`] = values;
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
-function componentsFromAllowed(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const allowed = COMPONENTS as readonly string[];
-  const normalized = value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item) => allowed.includes(item));
-  return [...new Set(normalized)].slice(0, 10);
+function oneFromAllowedWithRejects(value: unknown, allowed: readonly string[]): { value: string; rejected: string[] } {
+  if (typeof value !== "string") return { value: "", rejected: [] };
+  const normalized = value.trim();
+  if (!normalized) return { value: "", rejected: [] };
+  return allowed.includes(normalized)
+    ? { value: normalized, rejected: [] }
+    : { value: "", rejected: [normalized] };
 }
 
 // ─── platform normalization ──────────────────────────────────────────────────
@@ -1384,16 +1393,6 @@ export function normalizeExtractionByPlatform(
     layout = filteredRegions.length ? { ...layout, regions: filteredRegions } : undefined;
   }
   return { components: filteredComponents, layout };
-}
-
-function domainTagsFromAllowed(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const allowed = DOMAIN_TAGS as readonly string[];
-  const normalized = value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item) => allowed.includes(item));
-  return [...new Set(normalized)].slice(0, 4);
 }
 
 /**
@@ -1577,6 +1576,7 @@ function textList(value: unknown): string[] {
 export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   patternType: string;
   suggestedPatternType?: string;
+  taxonomyCandidates: TaxonomyCandidates;
   categories: string[];
   styleTags: string[];
   components: string[];
@@ -1650,16 +1650,28 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
       }
     : undefined;
 
-  const patternType = oneFromAllowed(parsed.patternType, PATTERN_TYPES);
+  const patternTypeResult = oneFromAllowedWithRejects(parsed.patternType, PATTERN_TYPES);
+  const categoriesResult = listFromAllowedWithRejects(parsed.categories, CATEGORIES, 3);
+  const styleTagsResult = listFromAllowedWithRejects(parsed.styleTags, STYLE_TAGS, 3);
+  const componentsResult = listFromAllowedWithRejects(parsed.components, COMPONENTS, 10);
+  const domainTagsResult = listFromAllowedWithRejects(parsed.domainTags, DOMAIN_TAGS, 4);
+  const patternType = patternTypeResult.value;
   const suggestedPatternType = normalizeSuggestedPatternType(parsed.suggestedPatternType, patternType);
 
   return {
     patternType,
     suggestedPatternType,
-    categories: listFromAllowed(parsed.categories, CATEGORIES),
-    styleTags: listFromAllowed(parsed.styleTags, STYLE_TAGS),
-    components: componentsFromAllowed(parsed.components),
-    domainTags: domainTagsFromAllowed(parsed.domainTags),
+    taxonomyCandidates: {
+      patternType: patternTypeResult.rejected,
+      categories: categoriesResult.rejected,
+      styleTags: styleTagsResult.rejected,
+      components: componentsResult.rejected,
+      domainTags: domainTagsResult.rejected,
+    },
+    categories: categoriesResult.values,
+    styleTags: styleTagsResult.values,
+    components: componentsResult.values,
+    domainTags: domainTagsResult.values,
     colorScheme: oneFromAllowed(parsed.colorScheme, ["light", "dark"], ""),
     industryVertical: text(parsed.industryVertical).slice(0, 40),
     responsiveBehavior: oneFromAllowed(parsed.responsiveBehavior, ["responsive", "fixed-width", "adaptive"], ""),
@@ -2876,7 +2888,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   try {
     quantizedColors = await extractQuantizedColors(input.imagePath);
   } catch (err) {
-    console.error("[tagger] Color extraction failed, falling back to model-guessed colors:", describeCaughtError(err));
+    console.error("[tagger] Color extraction failed; dominantColors will remain unknown:", describeCaughtError(err));
   }
 
   // ── PASS 1: extraction (facts + geometry, with ground-truth colors) ────────
@@ -2969,11 +2981,10 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   const patternDiscovery = extraction.suggestedPatternType
     ? { suggestedPatternType: extraction.suggestedPatternType }
     : undefined;
-  // Override dominantColors with the ground-truth quantized set when available,
-  // so even if the model ignored instructions, we get deterministic colors.
-  if (quantizedColors.length) {
-    extraction.dominantColors = quantizedColors;
-  }
+  // Dominant colors are a deterministic pixel fact, never a model fallback.
+  // If quantization failed, keep the field empty so the entry fails validation
+  // or remains a draft instead of embedding fabricated hex values.
+  extraction.dominantColors = quantizedColors;
   // Override bodyFont with the DOM-signal computed fontFamily when available.
   // Parse to the first family name (e.g. "Verdana, Geneva, sans-serif" → "Verdana")
   // so the entry stores a clean font name. Body-only override: the DOM computed
@@ -3078,7 +3089,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       qualityTier:     "",
       qualityScore:    0,
       addedAt:         today,
-      provenance:      { taggedBy: "auto" }, // tagger produced; flips to auto-reviewed when a human edits+approves
+      provenance:      { taggedBy: "auto", taxonomyCandidates: taxonomyCandidateRecord({ name: "extraction", candidates: extraction.taxonomyCandidates }) }, // tagger produced; flips to auto-reviewed when a human edits+approves
       _raw: {
         extractionProvider: resolveProvider("extraction", input.extractionOverride?.provider ?? input.extractionProvider, extractionCfgOverride !== undefined),
         critiqueProvider: null,
@@ -3089,6 +3100,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         quantizedColors,
         domSignals: input.domSignals ?? null,
         extractionOnly: true,
+        taxonomyCandidates: { extraction: extraction.taxonomyCandidates },
       },
     };
   }
@@ -3212,7 +3224,10 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     qualityScore:    critique.qualityTier === "cautionary" ? 2 : critique.qualityTier === "exceptional" ? 3 : 0,
     tierChangeJustification: critique.tierChangeJustification,
     addedAt:         today,
-    provenance:      { taggedBy: "auto" }, // two-pass tagger output; human review flips to auto-reviewed
+    provenance:      { taggedBy: "auto", taxonomyCandidates: taxonomyCandidateRecord(
+      { name: "extraction", candidates: extraction.taxonomyCandidates },
+      { name: "critique", candidates: critique.taxonomyCandidates },
+    ) }, // two-pass tagger output; human review flips to auto-reviewed
     _raw: {
       extractionProvider: resolveProvider("extraction", input.extractionOverride?.provider ?? input.extractionProvider, extractionCfgOverride !== undefined),
       critiqueProvider: resolveProvider("critique", input.critiqueOverride?.provider ?? input.critiqueProvider, critiqueCfgOverride !== undefined),
@@ -3222,6 +3237,10 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       critique: critiqueParsed,
       quantizedColors,
       domSignals: input.domSignals ?? null,
+      taxonomyCandidates: {
+        extraction: extraction.taxonomyCandidates,
+        critique: critique.taxonomyCandidates,
+      },
     },
   };
 }
@@ -3242,17 +3261,19 @@ export async function generateCritique(
   domSignals?: TaggerInput["domSignals"],
   platform?: "web" | "mobile" | "tablet",
   critiqueOverride?: EndpointOverride,
+  critiqueImagePath?: string,
 ): Promise<{
   critique: string;
   whatToSteal: string[];
   antiPatterns: { antiPatterns: string[]; whereThisFails: string[]; accessibilityRisks: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag: string[] }> };
+  taxonomyCandidates: Record<string, string[]>;
   businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
   voice?: { tone: string; examples: string[]; avoid: string[] };
   mood?: string;
   qualityTier: string;
   qualityScore: number;
   typographyNotes: string;
-  _raw?: { critique: Record<string, unknown> };
+  _raw?: { critique: Record<string, unknown>; taxonomyCandidates?: TaxonomyCandidates };
 }> {
   if (!hasCritiqueKey()) throw new Error("No provider key set. Critique needs at least one of OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or MISTRAL_API_KEY in .env.");
   const stripFences = (s: string) => s.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
@@ -3276,7 +3297,7 @@ export async function generateCritique(
   let critiqueRawText = await callModel(
     "critique",
     buildCritiquePrompt(productName, critiqueExtraction, domSignals),
-    null,
+    critiqueImagePath ?? null,
     undefined,
     "high",
     undefined,
@@ -3294,7 +3315,7 @@ export async function generateCritique(
   const gateErrors = [...bannedErrors, ...iconOnlyErrors, ...componentErrors];
   if (gateErrors.length > 0) {
     const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${gateErrors.join("\n")}`;
-    const retryText = await callModel("critique", buildCritiquePrompt(productName, critiqueExtraction, domSignals), null, feedback, "high", undefined, critiqueOverride?.provider ?? critiqueProvider, critiqueCfgOverride);
+    const retryText = await callModel("critique", buildCritiquePrompt(productName, critiqueExtraction, domSignals), critiqueImagePath ?? null, feedback, "high", undefined, critiqueOverride?.provider ?? critiqueProvider, critiqueCfgOverride);
     try { critiqueParsed = JSON.parse(stripFences(retryText)); critique = sanitizeTaggerPayload(critiqueParsed); } catch { /* keep flagged original */ }
   }
   scrubProseIconOnly(critique);
@@ -3314,6 +3335,7 @@ export async function generateCritique(
     qualityScore: critique.qualityTier === "cautionary" ? 2 : critique.qualityTier === "exceptional" ? 3 : 0,
     typographyNotes: critique.typographyNotes || "",
     mood: critique.mood || undefined,
-    _raw: { critique: critiqueParsed },
+    taxonomyCandidates: taxonomyCandidateRecord({ name: "critique", candidates: critique.taxonomyCandidates }) ?? {},
+    _raw: { critique: critiqueParsed, taxonomyCandidates: critique.taxonomyCandidates },
   };
 }

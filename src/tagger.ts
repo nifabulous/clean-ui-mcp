@@ -1187,8 +1187,9 @@ function buildCritiquePrompt(
 established fact — do not re-describe or contradict it):
 ${JSON.stringify(extraction, null, 2)}
 ${a11yBlock}
-Step 1 — Observe first. Before writing anything else, list exactly 5 specific, concrete visual
-elements you can point to on screen. Each observation should be a DESIGN DECISION you can see
+Step 1 — Observe first. Before writing anything else, list up to 5 specific, concrete visual
+elements you can point to on screen. Use only as many observations as the image supports; an
+ambiguous or text-only input may have fewer (or none). Each observation should be a DESIGN DECISION you can see
 evidence of, not just a description of what's there. Think about WHO the user is (first-time vs
 returning, mobile vs desktop, expert vs novice, users with disabilities) and HOW they interact
 (muscle memory, scanning patterns, error recovery, decision-making under time pressure).
@@ -1228,13 +1229,13 @@ draftAntiPatterns:
 Step 2 — Critique using ONLY items from your observations list. Return this JSON:
 
 {
-  "observations": [],          // exactly 5 specific, pointable visual elements (required)
+  "observations": [],          // 0-5 specific, pointable visual elements; never pad with guesses
   "typographyNotes": "",       // 1-2 sentences on how the type choices create hierarchy
   "mood": "",                  // one phrase: the emotional register of the design. Read from color
                                // choices, typography weight, whitespace, and copy tone. Examples:
                                // "playful and approachable", "clinical and data-forward",
                                // "confident and restrained", "warm and tactile", "authoritative".
-  "draftCritique": "",         // 3-5 sentences. For EACH decision: name the DECISION (what was chosen),
+  "draftCritique": "",         // 1-5 evidence-backed sentences. Stop when the visible evidence ends; for EACH decision name the DECISION (what was chosen),
                                // the EFFECT (what perceptual/functional/behavioral outcome it creates for
                                // the user — think about HOW the user interacts, not just what it looks like),
                                // and the REJECTION (what conventional default it replaces). Write about the
@@ -1243,12 +1244,12 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
                                // Name the SPECIFIC USER TYPE affected: "returning users scan faster"
                                // beats "users scan faster," "first-time users may feel lost" beats
                                // "users may feel lost."
-  "draftWhatToSteal": [],      // 3-5 SPECIFIC, COPYABLE techniques a developer could reproduce. Each must
+  "draftWhatToSteal": [],      // 0-5 SPECIFIC, COPYABLE techniques a developer could reproduce. Each must
                                // include the reasoning: not "use whitespace" but "reserve the brightest
                                // accent color for the single element that must win attention so state
                                // and action remain unmistakable." Name the technique, the constraint it
                                // satisfies, and when NOT to use it.
-  "draftAntiPatterns": [],     // REQUIRED, at least 2. Each must describe a DIFFERENT decision than
+  "draftAntiPatterns": [],     // 0-5 items. Each must describe a DIFFERENT decision than
                                // draftCritique and teach a SPECIFIC lesson: "what this design avoids
                                // doing, and why avoiding it matters for this user/task type." Think
                                // about what conventional approaches would have FAILED here — what

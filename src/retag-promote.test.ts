@@ -34,10 +34,13 @@ function entry(overrides: Partial<CorpusEntryT> = {}): CorpusEntryT {
 describe("retag promotion", () => {
   it("promotes exact selected fields, revokes changed verification, and leaves a draft", () => {
     const before = entry();
+    const candidate = { ...before, categories: ["settings"] };
+    const imageSha256 = "b".repeat(64);
     const after = promoteAccepted(
       [before],
-      [{ entryId: before.id, baselineHash: canonicalHash(before), candidate: { ...before, categories: ["settings"] } }],
+      [{ entryId: before.id, baselineHash: canonicalHash(before), imageSha256, candidateHash: canonicalHash(candidate), candidate }],
       [{ entryId: before.id, baselineHash: canonicalHash(before), fields: ["categories"], reviewerId: "curator", decidedAt: "2026-08-09T12:00:00Z" }],
+      () => imageSha256,
     )[0]!;
     expect(after.categories).toEqual(["settings"]);
     expect(after.reviewStatus).toBe("draft");
@@ -47,15 +50,39 @@ describe("retag promotion", () => {
 
   it("refuses stale runs and invalid taxonomy values before returning anything", () => {
     const before = entry();
+    const imageSha256 = "b".repeat(64);
+    const settingsCandidate = { ...before, categories: ["settings"] };
     expect(() => promoteAccepted(
       [before],
-      [{ entryId: before.id, baselineHash: "stale", candidate: { ...before, categories: ["settings"] } }],
+      [{ entryId: before.id, baselineHash: "stale", imageSha256, candidateHash: canonicalHash(settingsCandidate), candidate: settingsCandidate }],
       [{ entryId: before.id, baselineHash: "stale", fields: ["categories"], reviewerId: "curator", decidedAt: "2026-08-09T12:00:00Z" }],
+      () => imageSha256,
     )).toThrow(/stale baseline/);
+    const invalidCandidate = { ...before, categories: ["invented-domain"] };
     expect(() => promoteAccepted(
       [before],
-      [{ entryId: before.id, baselineHash: canonicalHash(before), candidate: { ...before, categories: ["invented-domain"] } }],
+      [{ entryId: before.id, baselineHash: canonicalHash(before), imageSha256, candidateHash: canonicalHash(invalidCandidate), candidate: invalidCandidate }],
       [{ entryId: before.id, baselineHash: canonicalHash(before), fields: ["categories"], reviewerId: "curator", decidedAt: "2026-08-09T12:00:00Z" }],
+      () => imageSha256,
     )).toThrow(/schema validation/);
+  });
+
+  it("rejects edited candidate artifacts and image replacements", () => {
+    const before = entry();
+    const candidate = { ...before, categories: ["settings"] };
+    const imageSha256 = "b".repeat(64);
+    const decision = [{ entryId: before.id, baselineHash: canonicalHash(before), fields: ["categories"], reviewerId: "curator", decidedAt: "2026-08-09T12:00:00Z" }] as const;
+    expect(() => promoteAccepted(
+      [before],
+      [{ entryId: before.id, baselineHash: canonicalHash(before), imageSha256, candidateHash: "0".repeat(64), candidate }],
+      decision,
+      () => imageSha256,
+    )).toThrow(/candidate hash mismatch/);
+    expect(() => promoteAccepted(
+      [before],
+      [{ entryId: before.id, baselineHash: canonicalHash(before), imageSha256, candidateHash: canonicalHash(candidate), candidate }],
+      decision,
+      () => "c".repeat(64),
+    )).toThrow(/image hash mismatch/);
   });
 });

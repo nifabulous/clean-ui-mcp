@@ -12,6 +12,7 @@ describe("retag disposition", () => {
     expect(artifact.entryIds).toEqual(["a", "b"]);
     expect(Object.keys(artifact.fields).sort()).toEqual(DISPOSITION_FIELDS);
     expect(artifact.fields.colorScheme.status).toBe("defer-fill");
+    expect(artifact.fields["visual.usesBorders"].status).toBe("defer-replacement");
     expect(artifact.fields["visual.typePairing"].status).toBe("structurally-unfillable");
   });
 

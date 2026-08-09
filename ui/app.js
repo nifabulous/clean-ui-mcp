@@ -173,8 +173,10 @@ function mapEntry(entry) {
     colorRoles: entry.visual?.colorRoles || null,
     density: entry.visual?.spacingDensity || 'moderate',
     corner: entry.visual?.cornerStyle || 'slight-round',
-    shadows: entry.visual?.usesShadows || false,
-    borders: entry.visual?.usesBorders || true,
+    // Preserve absence as unknown. `false`/`true` defaults would turn an
+    // unverified corpus value into a visible claim in the curator UI.
+    shadows: entry.visual?.usesShadows ?? null,
+    borders: entry.visual?.usesBorders ?? null,
     typeNotes: entry.visual?.typePairing?.notes || '',
     critique: entry.critique,
     businessRationale: entry.businessRationale || null,
@@ -732,7 +734,7 @@ function previewInner(x){
   const accent=x.accent||'#2f5d62';
   const r=cornerR(x);
   const pad=densityPad(x);
-  const shadow = x.shadows ? `box-shadow:0 1px 3px rgba(0,0,0,.1);`:'';
+  const shadow = x.shadows === true ? `box-shadow:0 1px 3px rgba(0,0,0,.1);`:'';
   const base=`background:${canvas};color:${ink};padding:${pad};gap:${x.density==='compact'?'3px':'5px'};border-radius:${r};`;
   const sidebar=(bg)=>`<div class="pv-sidebar" style="background:${bg};color:${ink}"><i></i><i></i><i></i><i></i></div>`;
   const kpi=(bg)=>`<div class="pv-kpi" style="background:${bg}"><i></i><i></i></div>`;
@@ -894,7 +896,7 @@ function openDetail(x){
       ${x.mood?`<span class="vis-chip">mood <span class="vl" style="font-style:italic">${esc(x.mood)}</span></span>`:''}
       <span class="vis-chip">density <span class="vl">${x.density}</span></span>
       <span class="vis-chip">corner <span class="vl">${x.corner}</span></span>
-      <span class="vis-chip">shadows <span class="vl">${x.shadows?'yes':'no'}</span></span>
+      <span class="vis-chip">shadows <span class="vl">${x.shadows === true ? 'yes' : x.shadows === false ? 'no' : '—'}</span></span>
       ${x.industryVertical?`<span class="vis-chip">industry <span class="vl">${esc(x.industryVertical)}</span></span>`:''}
       ${x.responsiveBehavior?`<span class="vis-chip">layout <span class="vl">${x.responsiveBehavior}</span></span>`:''}
       <span class="vis-chip">steals <span class="vl">${x.steals}</span></span>

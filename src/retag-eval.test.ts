@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertGoldBindings, evaluateGold, type GoldLabel } from "./retag-eval.js";
+import { assertGoldBindings, assertGoldEvaluation, evaluateGold, type GoldLabel } from "./retag-eval.js";
 
 const labels: GoldLabel[] = [
   {
@@ -71,5 +71,11 @@ describe("retag evaluation", () => {
       [{ id: "one" }],
       () => "hash-one",
     )).toThrow(/duplicate/);
+  });
+
+  it("requires a persisted independent gold evaluation before promotion", () => {
+    expect(() => assertGoldEvaluation({})).toThrow(/scores\.gold/);
+    expect(() => assertGoldEvaluation({ gold: { entries: 0, fields: {} } })).toThrow(/non-empty/);
+    expect(() => assertGoldEvaluation({ gold: { entries: 1, fields: { categories: {} } } })).not.toThrow();
   });
 });

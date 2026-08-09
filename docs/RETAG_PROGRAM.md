@@ -32,9 +32,12 @@ agreement into false ground truth.
   `eval/retag-runs/`; it never writes `corpus/`. Add `--gold <labels.json>` to
   bind independent labels to image hashes and write field metrics into the run.
 - `npm run retag-promote -- --run <run-dir> --decisions <decisions.json> --out <artifact.json>`
-  applies only exact-ID reviewed fields to a draft output artifact. It refuses
-  to overwrite or write inside `corpus/`; installing that artifact remains a
-  separate reviewed persistence action.
+  applies only exact-ID reviewed fields to a draft output artifact. It requires
+  the run's persisted `scores.json` to contain an independent gold evaluation,
+  verifies candidate/image hashes again, and refuses to overwrite or write
+  inside `corpus/`; installing that artifact remains a separate reviewed
+  persistence action. `reviewerId` is an audit/process identity for now, not a
+  cryptographic signature; signed reviewer identities remain deferred.
 - `src/retag-eval.ts` is the scoring contract. It intentionally has no labels in
   the repository: model-generated labels are not silently promoted to truth.
 - No corpus-wide retag is authorized until independent gold labels exist and

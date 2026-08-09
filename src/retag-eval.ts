@@ -107,6 +107,18 @@ export function evaluateGold(labels: readonly GoldLabel[], predictions: readonly
   };
 }
 
+/** Require a persisted shadow score to contain an actual gold evaluation. */
+export function assertGoldEvaluation(value: unknown): asserts value is { gold: GoldEvaluation } {
+  if (!value || typeof value !== "object") throw new Error("promotion requires a persisted gold evaluation");
+  const gold = (value as { gold?: unknown }).gold;
+  if (!gold || typeof gold !== "object") throw new Error("promotion requires scores.gold from an independent label run");
+  const entries = (gold as { entries?: unknown }).entries;
+  const fields = (gold as { fields?: unknown }).fields;
+  if (typeof entries !== "number" || !Number.isInteger(entries) || entries < 1 || !fields || typeof fields !== "object" || Object.keys(fields).length === 0) {
+    throw new Error("promotion requires a non-empty, persisted gold field evaluation");
+  }
+}
+
 export function assertGoldBindings(labels: readonly GoldLabel[], entries: readonly RetagEntryLike[], imageSha256: (entry: RetagEntryLike) => string): void {
   const byId = new Map(entries.map((entry) => [entry.id, entry]));
   const seen = new Set<string>();

@@ -1938,7 +1938,7 @@ export function scrubProseIconOnly(critique: {
   // Restore a neutral placeholder so a successful model call doesn't become a
   // validation failure downstream. The human reviewer will rewrite these.
   if (critique.draftWhatToSteal.length === 0) {
-    critique.draftWhatToSteal = ["Review the screenshot and extract one concrete interface technique before saving."];
+    critique.draftWhatToSteal = ["[DRAFT] Review the screenshot and extract one concrete interface technique before saving."];
   }
   if (critique.draftAntiPatterns.length === 0) {
     critique.draftAntiPatterns = ["[DRAFT] Review the screenshot and name one common UI mistake this design avoids."];
@@ -1970,12 +1970,12 @@ function scrubUnsupportedComponentClaims(critique: {
     critique.businessRationale.rationale = filterSentences(critique.businessRationale.rationale);
   }
   if (critique.draftWhatToSteal.length === 0) {
-    critique.draftWhatToSteal = ["Review the screenshot and extract one concrete interface technique before saving."];
+    critique.draftWhatToSteal = ["[DRAFT] Review the screenshot and extract one concrete interface technique before saving."];
   }
   // CorpusEntry requires a substantive critique. A scrubbed draft must remain
   // visibly review-only instead of becoming an invalid empty entry.
   if (critique.draftCritique.length < 80) {
-    critique.draftCritique = "This critique contained unsupported component claims and needs a human rewrite based on the screenshot.";
+    critique.draftCritique = "[DRAFT — REWRITE] This critique contained unsupported component claims and needs a human rewrite based on the screenshot.";
   }
 }
 

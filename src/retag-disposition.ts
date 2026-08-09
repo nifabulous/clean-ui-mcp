@@ -21,7 +21,6 @@ export const FieldDispositionSchema = z.object({
     "defer-replacement",
     "defer-fill",
     "structurally-unfillable",
-    "deterministic-future-only",
   ]),
   reason: z.string().min(1),
   existingCount: z.number().int().nonnegative(),
@@ -46,6 +45,10 @@ export const RetagDispositionSchema = z.object({
 export type FieldDisposition = z.infer<typeof FieldDispositionSchema>;
 export type RetagDisposition = z.infer<typeof RetagDispositionSchema>;
 
+// These policies govern replacement/fill authorization, not verifier routing.
+// A field may have a mechanical/factual verifier tier and still be deferred
+// for corpus replacement when that lane is disabled or lacks independent gold
+// labels (notably usesBorders and screenshot-only typePairing).
 const POLICIES: Readonly<Record<string, Omit<FieldDisposition, "existingCount">>> = {
   platform: { status: "retain-mechanical", reason: "platform is derived from image dimensions", futurePolicy: "keep detector-produced values; verify drift mechanically" },
   "visual.dominantColors": { status: "retain-mechanical", reason: "dominant colors are deterministic pixel output", futurePolicy: "compute from pixels; never use model hex guesses" },

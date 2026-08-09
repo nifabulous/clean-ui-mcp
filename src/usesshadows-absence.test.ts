@@ -291,6 +291,10 @@ describe("every production reader of usesShadows is classified", () => {
     "src/corpus-trust.ts": "already-safe",
     // Policy inventory string only; it does not read the field value.
     "src/retag-disposition.ts": "declaration",
+    // Curator clients render and edit the same nullable values; their tri-state
+    // labels/selects are asserted below so UI readers cannot regress silently.
+    "ui/app.js": "fix",
+    "ui/classic-app.js": "fix",
 
     // AUTHORS the value: the wizard asks a human `askBool("Uses shadows?")` and
     // writes whatever comes back. Not null-safe, and deliberately not called one
@@ -338,14 +342,17 @@ describe("every production reader of usesShadows is classified", () => {
   const stripComments = (src: string): string =>
     src.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
 
-  const walk = (dir: string): string[] =>
+  const walk = (dir: string, extensions = [".ts"]): string[] =>
     readdirSync(dir).flatMap((name) => {
       const full = join(dir, name);
-      if (statSync(full).isDirectory()) return name === "node_modules" ? [] : walk(full);
-      return full.endsWith(".ts") ? [full] : [];
+      if (statSync(full).isDirectory()) return name === "node_modules" ? [] : walk(full, extensions);
+      return extensions.some((extension) => full.endsWith(extension)) ? [full] : [];
     });
 
-  const readers = walk(join(REPO_ROOT, "src"))
+  const readers = [
+    ...walk(join(REPO_ROOT, "src")),
+    ...walk(join(REPO_ROOT, "ui"), [".js"]),
+  ]
     .filter((f) => !f.endsWith(".test.ts") && !f.endsWith(".test.mts"))
     .filter((f) => stripComments(readFileSync(f, "utf8")).includes("usesShadows"))
     .map((f) => relative(REPO_ROOT, f))
@@ -391,10 +398,22 @@ describe("every production reader of usesShadows is classified", () => {
       "src/tagger.ts": "sanitizeTaggerPayload",
       "src/tool-contracts.ts": "declares usesShadows nullable",
       "src/create-ui-spec-contracts.ts": "declares usesShadows nullable",
+      "ui/app.js": "usesShadows ?? null",
+      "ui/classic-app.js": "shadowLabel",
     };
     const fixFiles = readers.filter((f) => CLASSIFIED[f] === "fix");
     expect(Object.keys(COVERED_BY).sort()).toEqual(fixFiles.sort());
     const uncovered = fixFiles.filter((f) => !self.includes(COVERED_BY[f]));
     expect(uncovered).toEqual([]);
+  });
+
+  it("curator UIs preserve unknown booleans instead of inventing defaults", () => {
+    const app = readFileSync(join(REPO_ROOT, "ui/app.js"), "utf8");
+    const classic = readFileSync(join(REPO_ROOT, "ui/classic-app.js"), "utf8");
+    expect(app).toContain("usesShadows ?? null");
+    expect(app).not.toContain("usesShadows || false");
+    expect(classic).toContain("entry.visual.usesShadows === true");
+    expect(classic).toContain("entry.visual.usesShadows === false");
+    expect(classic).toContain('value === \"no\" ? false : null');
   });
 });

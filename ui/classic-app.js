@@ -290,6 +290,8 @@ function renderLibrary() {
 
   // ── Attribute rail (right column) — renders only what the entry has.
   // Sibling to .detail-main, not nested inside the critique card.
+  const shadowLabel = entry.visual.usesShadows === true ? "yes" : entry.visual.usesShadows === false ? "no" : "—";
+  const borderLabel = entry.visual.usesBorders === true ? "yes" : entry.visual.usesBorders === false ? "no" : "—";
   const rail = `
     ${entry.layout ? `<section class="panel">${renderLayoutWireframe(entry.layout)}</section>` : ""}
     <section class="panel">
@@ -305,8 +307,8 @@ function renderLibrary() {
           <dl>
             <div class="kv"><dt>Spacing</dt><dd>${entry.visual.spacingDensity}</dd></div>
             <div class="kv"><dt>Corners</dt><dd>${entry.visual.cornerStyle}</dd></div>
-            <div class="kv"><dt>Shadows</dt><dd>${entry.visual.usesShadows ? "yes" : "no"}</dd></div>
-            <div class="kv"><dt>Borders</dt><dd>${entry.visual.usesBorders ? "yes" : "no"}</dd></div>
+            <div class="kv"><dt>Shadows</dt><dd>${shadowLabel}</dd></div>
+            <div class="kv"><dt>Borders</dt><dd>${borderLabel}</dd></div>
             <div class="kv"><dt>Display</dt><dd>${entry.visual.typePairing.display || "—"}</dd></div>
             <div class="kv"><dt>Body</dt><dd>${entry.visual.typePairing.body || "—"}</dd></div>
             ${entry.visual.typePairing.notes ? `<div class="kv"><dt>Notes</dt><dd>${esc(entry.visual.typePairing.notes)}</dd></div>` : ""}
@@ -477,8 +479,9 @@ function syncDraftFromForm() {
   state.draft.visual.typePairing.notes = form.typeNotes.value.trim() || undefined;
   state.draft.visual.spacingDensity = form.spacingDensity.value;
   state.draft.visual.cornerStyle = form.cornerStyle.value;
-  state.draft.visual.usesShadows = form.usesShadows.checked;
-  state.draft.visual.usesBorders = form.usesBorders.checked;
+  const triState = (value) => value === "yes" ? true : value === "no" ? false : null;
+  state.draft.visual.usesShadows = triState(form.usesShadows.value);
+  state.draft.visual.usesBorders = triState(form.usesBorders.value);
   state.draft.critique = form.critique.value.trim();
   state.draft.whatToSteal = lines(form.whatToSteal.value);
   state.draft.antiPatterns = {
@@ -553,6 +556,8 @@ function validateDraft() {
 function renderForm() {
   if (!state.draft) resetDraft();
   const entry = state.draft;
+  const shadowChoice = entry.visual.usesShadows === true ? "yes" : entry.visual.usesShadows === false ? "no" : "unknown";
+  const borderChoice = entry.visual.usesBorders === true ? "yes" : entry.visual.usesBorders === false ? "no" : "unknown";
   const isEditing = state.draftMode === "edit";
   const isLegacyLinkOnly = isEditing && !entry.image.path;
   const keyStatus = state.config.visionKeyConfigured
@@ -662,8 +667,8 @@ function renderForm() {
               </div>
               <label>Type notes<input name="typeNotes" value="${esc(entry.visual.typePairing.notes || "")}"></label>
               <div class="check-grid">
-                <label class="check-chip"><input type="checkbox" name="usesShadows" ${entry.visual.usesShadows ? "checked" : ""}><span>uses shadows</span></label>
-                <label class="check-chip"><input type="checkbox" name="usesBorders" ${entry.visual.usesBorders ? "checked" : ""}><span>uses borders</span></label>
+                <label>Shadows<select name="usesShadows"><option value="unknown" ${shadowChoice === "unknown" ? "selected" : ""}>unknown</option><option value="yes" ${shadowChoice === "yes" ? "selected" : ""}>yes</option><option value="no" ${shadowChoice === "no" ? "selected" : ""}>no</option></select></label>
+                <label>Borders<select name="usesBorders"><option value="unknown" ${borderChoice === "unknown" ? "selected" : ""}>unknown</option><option value="yes" ${borderChoice === "yes" ? "selected" : ""}>yes</option><option value="no" ${borderChoice === "no" ? "selected" : ""}>no</option></select></label>
               </div>
               <div class="grid-3">
                 <label>Color role · canvas<input name="colorRolesCanvas" value="${esc(entry.visual.colorRoles?.canvas || "")}" placeholder="#fcfcfd"></label>

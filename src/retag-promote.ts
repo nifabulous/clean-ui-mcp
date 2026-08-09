@@ -5,6 +5,8 @@ import { RETAG_FIELDS, canonicalHash, valueForField, type RetagEntryLike, type R
 export type RetagCandidate = {
   entryId: string;
   baselineHash: string;
+  imageSha256: string;
+  candidateHash: string;
   candidate: RetagEntryLike;
 };
 
@@ -29,6 +31,7 @@ export function promoteAccepted(
   baseline: readonly CorpusEntryT[],
   candidates: readonly RetagCandidate[],
   decisions: readonly PromotionDecision[],
+  imageSha256ForEntry: (entry: CorpusEntryT) => string,
 ): CorpusEntryT[] {
   const byId = new Map(baseline.map((entry) => [entry.id, entry]));
   const candidateById = new Map(candidates.map((candidate) => [candidate.entryId, candidate]));
@@ -46,6 +49,16 @@ export function promoteAccepted(
     if (!proposal) throw new Error(`no shadow candidate for ${decision.entryId}`);
     if (canonicalHash(before) !== decision.baselineHash || proposal.baselineHash !== decision.baselineHash) {
       throw new Error(`stale baseline for ${decision.entryId}; generate a new shadow run`);
+    }
+    if (proposal.candidateHash !== canonicalHash(proposal.candidate)) {
+      throw new Error(`candidate hash mismatch for ${decision.entryId}; shadow artifact may have been edited`);
+    }
+    if (!/^[a-f0-9]{64}$/.test(proposal.imageSha256)) {
+      throw new Error(`invalid image hash for ${decision.entryId}`);
+    }
+    const actualImageSha256 = imageSha256ForEntry(before);
+    if (proposal.imageSha256 !== actualImageSha256) {
+      throw new Error(`image hash mismatch for ${decision.entryId}; generate a new shadow run`);
     }
     if (proposal.candidate.id !== decision.entryId) throw new Error(`candidate ID mismatch for ${decision.entryId}`);
     if (decision.fields.length === 0) throw new Error(`promotion decision for ${decision.entryId} selects no fields`);

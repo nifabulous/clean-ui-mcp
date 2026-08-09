@@ -16,7 +16,7 @@ import { parseArgs } from "node:util";
 import { loadEnv } from "../env.js";
 import { loadCorpus } from "../corpus.js";
 import { tagImage, type Provider, type TaggerOutput } from "../tagger.js";
-import { pickStratifiedSample, compareEntry, summarize, type EntryComparison, type RetagEntryLike } from "../retag-diff.js";
+import { canonicalHash, pickStratifiedSample, compareEntry, summarize, type EntryComparison, type RetagEntryLike } from "../retag-diff.js";
 import { assertGoldBindings, evaluateGold, type GoldLabel } from "../retag-eval.js";
 
 loadEnv();
@@ -42,21 +42,6 @@ type CandidateRow = {
 
 function hashBytes(bytes: Buffer | string): string {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-function stable(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stable);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-      .filter(([, child]) => child !== undefined)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, child]) => [key, stable(child)]));
-  }
-  return value;
-}
-
-function hashJson(value: unknown): string {
-  return hashBytes(JSON.stringify(stable(value)));
 }
 
 function gitSha(): string | null {
@@ -145,7 +130,7 @@ async function main(): Promise<void> {
     } : null,
     sample: sample.map((entry) => ({
       entryId: entry.id,
-      baselineHash: hashJson(entry),
+      baselineHash: canonicalHash(entry),
       imageSha256: hashBytes(readFileSync(resolve("corpus", (entry.image as { path: string }).path))),
     })),
   };
@@ -166,17 +151,17 @@ async function main(): Promise<void> {
       });
       rows.push({
         entryId: entry.id!,
-        baselineHash: hashJson(entry),
+        baselineHash: canonicalHash(entry),
         imageSha256: hashBytes(readFileSync(imagePath)),
         candidate,
-        candidateHash: hashJson(candidate),
+        candidateHash: canonicalHash(candidate),
         elapsedMs: Date.now() - started,
       });
       console.error(`[${index + 1}/${sample.length}] ${entry.id} ok`);
     } catch (error) {
       rows.push({
         entryId: entry.id!,
-        baselineHash: hashJson(entry),
+        baselineHash: canonicalHash(entry),
         imageSha256: hashBytes(readFileSync(imagePath)),
         error: error instanceof Error ? error.message : String(error),
         elapsedMs: Date.now() - started,

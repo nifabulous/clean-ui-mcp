@@ -36,6 +36,9 @@ agreement into false ground truth.
   the canary gates pass.
 - `typePairing` remains a capture-lane field. Existing screenshot-only rows are
   structurally unfillable; future captures must persist DOM font evidence.
+- New tagging computes `colorScheme` from image luminance and abstains near the
+  threshold; it never falls back to the model. Filling the existing corpus is a
+  separate, calibration-gated migration and is intentionally still deferred.
 
 ## Worktree workflow
 

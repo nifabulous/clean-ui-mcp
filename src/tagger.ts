@@ -28,6 +28,7 @@ import { isWcagCriterion, extractAllWcagIds } from "./wcag/registry.js";
 import { listFromAllowedWithRejects } from "./taxonomy-candidates.js";
 import { Vibrant } from "node-vibrant/node";
 import sharp from "sharp";
+import { detectColorScheme } from "./color-scheme.js";
 
 // ─── vocab (mirrors schema.ts — keep in sync) ─────────────────────────────────
 
@@ -2890,6 +2891,12 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   } catch (err) {
     console.error("[tagger] Color extraction failed; dominantColors will remain unknown:", describeCaughtError(err));
   }
+  let colorSchemeDetection: Awaited<ReturnType<typeof detectColorScheme>> | null = null;
+  try {
+    colorSchemeDetection = await detectColorScheme(input.imagePath);
+  } catch (err) {
+    console.error("[tagger] Color-scheme detection failed; colorScheme will remain unknown:", describeCaughtError(err));
+  }
 
   // ── PASS 1: extraction (facts + geometry, with ground-truth colors) ────────
   // Adaptive detail: bulk imports pass imageDetail:"low" to cut tokens. If the
@@ -2978,6 +2985,9 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   }
 
   const extraction = sanitizeTaggerPayload(extractionParsed);
+  // Page-level theme is deterministic pixel evidence. A near-threshold or
+  // failed measurement is an honest absence; never retain the model's guess.
+  extraction.colorScheme = colorSchemeDetection?.colorScheme ?? "";
   const patternDiscovery = extraction.suggestedPatternType
     ? { suggestedPatternType: extraction.suggestedPatternType }
     : undefined;
@@ -3098,6 +3108,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         extraction: extractionParsed,
         critique: null,
         quantizedColors,
+        colorSchemeDetection,
         domSignals: input.domSignals ?? null,
         extractionOnly: true,
         taxonomyCandidates: { extraction: extraction.taxonomyCandidates },
@@ -3236,6 +3247,7 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       extraction: extractionParsed,
       critique: critiqueParsed,
       quantizedColors,
+      colorSchemeDetection,
       domSignals: input.domSignals ?? null,
       taxonomyCandidates: {
         extraction: extraction.taxonomyCandidates,

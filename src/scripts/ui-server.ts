@@ -3,7 +3,7 @@ import "../env.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { extname, resolve, join, sep } from "node:path";
+import { basename, extname, resolve, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 // SSRF guard extracted to ../ssrf.ts (shared with the CLI capture path).
 // The dns.lookup import that lived here previously moved with it.
@@ -547,45 +547,51 @@ export function entryIssues(error: unknown): string[] {
 }
 
 // ─── DOM signals reader ─────────────────────────────────────────────────────
-// Reads the dom-signals.json sidecar for a batch-captured image. Only batch
-// captures (images under images-private/captures/{batchId}/) have signals;
-// Add-flow captures skip extraction (undefined signalsMap). Promoted entries
-// whose image path was flattened by promoteTempImage also lose the batch
-// linkage — readDomSignalsForImage returns null for those, and the tagger
-// falls back to pixel evidence. Sidecars are also bound to the exact PNG hash;
+// Reads the dom-signals.json sidecar for a batch-captured image. Batch captures
+// keep their sidecar under captures/{batchId}; Add-flow captures are copied to
+// a permanent per-image sidecar when promoted, so flattening no longer drops
+// the evidence linkage. Sidecars are also bound to the exact PNG hash;
 // a missing or mismatched binding is rejected rather than treating stale DOM
 // facts as ground truth.
 //
 // NOTE: hasDomSignals on CaptureMeta is NOT persisted on corpus entries, so
 // we always attempt the read rather than using it as a fast-path skip.
 const domSignalsCache = new Map<string, Record<string, DomSignals> | null>();
+const PERMANENT_DOM_SIGNALS_DIR = resolve(CORPUS_ROOT, "images-private", "dom-signals");
 
-function readDomSignalsForImage(corpusRelativeImagePath: string): DomSignals | null {
+export function readDomSignalsForImage(corpusRelativeImagePath: string): DomSignals | null {
   // Only paths under captures/{batchId}/ can have a dom-signals.json sidecar.
   // Path looks like: images-private/captures/{batchId}/{captureId}.png
   const match = corpusRelativeImagePath.match(/^images-private\/captures\/([^/]+)\/(.+)$/);
-  if (!match) return null;
-  const [, batchId, captureIdWithExt] = match;
-  const captureId = captureIdWithExt.replace(/\.[^.]+$/, ""); // strip .png/.jpg
-
-  // Cache the parsed sidecar per batch dir (read once, not per image).
-  let sidecar = domSignalsCache.get(batchId);
-  if (sidecar === undefined) {
-    const sidecarPath = resolve(CORPUS_ROOT, "images-private", "captures", batchId, "dom-signals.json");
-    if (!existsSync(sidecarPath)) {
-      domSignalsCache.set(batchId, null);
-      return null;
+  let signals: DomSignals | null = null;
+  if (match) {
+    const [, batchId, captureIdWithExt] = match;
+    const captureId = captureIdWithExt.replace(/\.[^.]+$/, ""); // strip .png/.jpg
+    // Cache the parsed sidecar per batch dir (read once, not per image).
+    let sidecar = domSignalsCache.get(batchId);
+    if (sidecar === undefined) {
+      const sidecarPath = resolve(CORPUS_ROOT, "images-private", "captures", batchId, "dom-signals.json");
+      if (!existsSync(sidecarPath)) {
+        domSignalsCache.set(batchId, null);
+        return null;
+      }
+      try {
+        sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8")) as Record<string, DomSignals>;
+        domSignalsCache.set(batchId, sidecar);
+      } catch {
+        domSignalsCache.set(batchId, null);
+        return null;
+      }
     }
-    try {
-      sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8")) as Record<string, DomSignals>;
-      domSignalsCache.set(batchId, sidecar);
-    } catch {
-      domSignalsCache.set(batchId, null);
-      return null;
+    signals = sidecar?.[captureId] ?? null;
+  } else if (corpusRelativeImagePath.startsWith("images-private/")) {
+    // Promoted Add-flow images are flat under images-private/. Their sidecar is
+    // keyed by the unique destination filename, not by the old temp batch id.
+    const sidecarPath = resolve(PERMANENT_DOM_SIGNALS_DIR, `${basename(corpusRelativeImagePath)}.json`);
+    if (existsSync(sidecarPath)) {
+      try { signals = JSON.parse(readFileSync(sidecarPath, "utf-8")) as DomSignals; } catch { return null; }
     }
   }
-  if (!sidecar) return null;
-  const signals = sidecar[captureId] ?? null;
   if (!signals?.imageSha256 || !/^[a-f0-9]{64}$/i.test(signals.imageSha256)) return null;
   try {
     const imagePath = fromCorpusRelativeImagePath(corpusRelativeImagePath);
@@ -595,6 +601,14 @@ function readDomSignalsForImage(corpusRelativeImagePath: string): DomSignals | n
     return null;
   }
   return signals;
+}
+
+/** Copy a validated temp-capture sidecar beside its permanent image. */
+function persistPromotedDomSignals(tempPath: string, permanentPath: string): void {
+  const signals = readDomSignalsForImage(tempPath);
+  if (!signals) return;
+  mkdirSync(PERMANENT_DOM_SIGNALS_DIR, { recursive: true });
+  writeFileSync(resolve(PERMANENT_DOM_SIGNALS_DIR, `${basename(permanentPath)}.json`), JSON.stringify(signals, null, 2));
 }
 
 export function validateEntryPayload(
@@ -1214,6 +1228,7 @@ async function handleCaptureCandidates(req: IncomingMessage, res: ServerResponse
   const sourceName = slugify(payload.slug || sourceUrl.hostname);
   const browser = await chromium.launch({ headless: true });
   let candidates: CaptureMeta[];
+  const signalsMap = new Map<string, DomSignals>();
   try {
     candidates = await captureCandidatesForSource(
       browser,
@@ -1221,11 +1236,17 @@ async function handleCaptureCandidates(req: IncomingMessage, res: ServerResponse
       batchDir,
       batchId,
       new Map(),
-      undefined, // no signalsMap — Add flow skips DOM-signal extraction entirely (no sidecar consumer; avoids paying the evaluate cost per candidate).
+      signalsMap,
     );
   } finally {
     await browser.close();
   }
+
+  // Add-flow batches are intentionally invisible to the triage browser, but
+  // they still need the same hash-bound DOM evidence as CLI captures so the
+  // first auto-tag and any later promotion can use real fonts/layout/a11y.
+  writeFileSync(join(batchDir, "dom-signals.json"), JSON.stringify(Object.fromEntries(signalsMap), null, 2));
+  for (const candidate of candidates) candidate.hasDomSignals = signalsMap.has(candidate.id);
 
   sendJson(res, 201, { batchId, candidates });
 }
@@ -1268,6 +1289,10 @@ export function promoteTempImage(tempPath: string, permanentSlug: string): { pat
   }
   const data = readFileSync(absTemp);
   writeFileSync(destAbs, data); // copy, not rename — temp dir holds other candidates
+  // Preserve capture-time DOM evidence across the temp→flat path promotion.
+  // The helper revalidates the temp sidecar against the exact bytes before it
+  // writes a permanent sidecar, so stale or mismatched signals are never copied.
+  persistPromotedDomSignals(tempPath, toCorpusRelativePath(destAbs));
   const dimensions = imageSize(data);
   return {
     path: toCorpusRelativePath(destAbs),

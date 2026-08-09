@@ -11,6 +11,7 @@ import sharp from "sharp";
 import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT, type DirectionT } from "../schema.js";
+import { stripGatedFields, assertNoIncomingVerification, preserveGatedFields } from "../gated-fields.js";
 import { findVagueAntiPatterns } from "../content-lint.js";
 import { CORPUS_ROOT, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, privateImageDir, toCorpusRelativePath } from "../paths.js";
 import { describeError } from "../errors.js";
@@ -718,7 +719,14 @@ export function prepareNewEntryPayload(payload: unknown, entries: CorpusEntryT[]
   imageRequiredForNewEntry(payload);
   const raw = { ...(payload as Record<string, unknown>) };
   raw.id = uniqueEntryId(raw as { id?: string; title?: string; source?: { productName?: string } }, entries);
-  return validateEntryPayload(raw);
+  const validated = validateEntryPayload(raw);
+  // The CREATE funnel for the UI. The tagger-to-entry merge happens in the browser
+  // (ui/app.js), so this is the first server-side point that sees an assembled
+  // entry — there is no tagger output here to strip, which is why the guards run on
+  // the entry itself. Refusal comes first: an entry that arrives pre-verified is a
+  // caller error worth reporting, not something to quietly sanitize.
+  assertNoIncomingVerification(validated);
+  return stripGatedFields(validated);
 }
 
 // findDuplicateAtCommit now lives in ../dedup.ts — re-exported here for backward
@@ -2140,7 +2148,12 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       // validation — a bulk retag is meant to land fresh, clean text the user
       // rewrites later, not [DRAFT]-gated text that the validator rejects.
       const cleaned = stripDraftMarkersFromEntry(merged);
-      const validated = validateEntryPayload(cleaned);
+      // A retag re-runs the tagger over the SAME screenshot, so for a gated field
+      // it can only produce another guess with no new evidence. Preserve the prior
+      // value rather than overwrite it — the same call this path already makes for
+      // qualityTier. Not a clear: whether to null the existing corpus's wrong
+      // values is the spec's open decision, and a retag must not decide it.
+      const validated = preserveGatedFields(validateEntryPayload(cleaned), entry);
       // Retag advances taggedAt — the content was freshly re-extracted.
       stampProvenance(validated, new Date().toISOString().slice(0, 10), "auto");
       const idx = entries.findIndex((e) => e.id === payload.id);

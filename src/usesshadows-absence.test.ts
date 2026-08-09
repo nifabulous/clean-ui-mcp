@@ -289,12 +289,22 @@ describe("every production reader of usesShadows is classified", () => {
   const NULL_AWARE = ["!= null", "!== null", "== null", "=== null", "typeof", "?? null", '?? "'];
   const KEY_ONLY = ['usesShadows"', "'usesShadows'"];
 
-  const isNullSafe = (src: string): boolean => {
+  const isNullSafe = (raw: string): boolean => {
+    const src = stripComments(raw);
     const lines = src.split("\n").filter((l) => l.includes("usesShadows"));
     if (lines.some((l) => [...NULL_AWARE, ...KEY_ONLY].some((g) => l.includes(g)))) return true;
     const exhaustive = src.includes("usesShadows === true") && src.includes("usesShadows === false");
     return exhaustive;
   };
+
+  /**
+   * Strips comments before scanning. A doc comment mentioning the field is not a
+   * reader — `gated-fields.ts` explains the field at length and never touches the
+   * value. Block comments are stripped too: a `/* ... *\/` span can hide a whole
+   * declaration from a naive line filter while still matching a grep.
+   */
+  const stripComments = (src: string): string =>
+    src.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
 
   const walk = (dir: string): string[] =>
     readdirSync(dir).flatMap((name) => {
@@ -305,7 +315,7 @@ describe("every production reader of usesShadows is classified", () => {
 
   const readers = walk(join(REPO_ROOT, "src"))
     .filter((f) => !f.endsWith(".test.ts") && !f.endsWith(".test.mts"))
-    .filter((f) => readFileSync(f, "utf8").includes("usesShadows"))
+    .filter((f) => stripComments(readFileSync(f, "utf8")).includes("usesShadows"))
     .map((f) => relative(REPO_ROOT, f))
     .sort();
 

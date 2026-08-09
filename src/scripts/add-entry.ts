@@ -28,6 +28,7 @@ import { execSync } from "node:child_process";
 import { imageSize } from "image-size";
 
 import { CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, Corpus, findDraftMarkers } from "../schema.js";
+import { stripGatedFields, assertNoIncomingVerification } from "../gated-fields.js";
 import type { CorpusEntryT } from "../schema.js";
 import { findVagueAntiPatterns } from "../content-lint.js";
 import { toCorpusRelativePath } from "../paths.js";
@@ -330,10 +331,12 @@ if (dominantColors?.length) {
   colors = await askHexList("Dominant colors:");
 }
 
-const accentRaw = taggedVisual?.accentColor;
-const accentFallback = accentRaw ?? "null";
-const accentInput = await ask("Accent color (hex or 'null')", accentFallback);
-const accentColor = accentInput === "null" ? null : accentInput;
+// `visual.accentColor` and `visual.usesShadows` are GATED: no lane can confirm
+// them, so nothing downstream will ever adjudicate an answer given here. Asking a
+// human to eyeball them from a screenshot is the same guess the tagger was making,
+// with a person's confidence attached — hand labels put the recorded values 5/11
+// and 6/10 wrong. The prompts are gone and `stripGatedFields` clears the fields
+// below; the DOM capture lane is where real values for them come from.
 
 const displayFont = await ask("Display/heading font (or Enter to skip)", taggedVisual?.typePairing.display ?? "");
 const bodyFont    = await ask("Body font (or Enter to skip)", taggedVisual?.typePairing.body ?? "");
@@ -347,7 +350,6 @@ const cornerOpts = ["sharp", "slight-round", "pill", "mixed"] as const;
 const cornerDefault = (taggedVisual?.cornerStyle as typeof cornerOpts[number]) ?? "slight-round";
 const cornerStyle = await askEnum("Corner style:", cornerOpts, cornerDefault);
 
-const usesShadows = await askBool("Uses shadows?", !!taggedVisual?.usesShadows);
 const usesBorders = await askBool("Uses borders?", !!taggedVisual?.usesBorders);
 
 console.log("\n[ Critique — this is the most important part ]");
@@ -384,7 +386,7 @@ const newEntry: CorpusEntryT = {
   image: imageRef,
   visual: {
     dominantColors: colors,
-    accentColor,
+    accentColor: null,   // gated — cleared by stripGatedFields below
     typePairing: {
       display: displayFont || null,
       body:    bodyFont    || null,
@@ -392,7 +394,7 @@ const newEntry: CorpusEntryT = {
     },
     spacingDensity,
     cornerStyle,
-    usesShadows,
+    usesShadows: null,   // gated — cleared by stripGatedFields below
     usesBorders,
   },
   critique: critique || "[PLACEHOLDER — fill this in]",
@@ -406,7 +408,11 @@ const newEntry: CorpusEntryT = {
   qualityTier: "exceptional",
   qualityScore,
   reviewStatus: "approved", // terminal CLI path — entries land approved; drafts are a UI workflow
-  provenance: { taggedBy: "human" }, // terminal CLI = human-authored fields
+  // `taggedBy` reflects who authored the FIELDS, not who ran the command. When the
+  // vision tagger seeded this entry (`--tag`), most values are model-authored and
+  // the human accepted or edited them at the prompt; stamping "human" claimed an
+  // authorship the entry does not have. Only a fully hand-typed entry is "human".
+  provenance: { taggedBy: tagged ? "auto-reviewed" : "human" },
   addedAt: today,
 };
 
@@ -447,7 +453,11 @@ if (corpus.entries.some((e) => e.id === id)) {
   process.exit(1);
 }
 
-corpus.entries.push(newEntry);
+// Authoring-time guards (Task 2 of the corpus-tag-provenance spec): clear the
+// fields no lane can confirm, and refuse an entry that arrives pre-verified. This
+// is a CREATION site, so both apply.
+assertNoIncomingVerification(newEntry);
+corpus.entries.push(stripGatedFields(newEntry));
 writeRawSnapshot(originalRaw);
 writeAtomic(CORPUS_PATH, JSON.stringify(corpus, null, 2) + "\n");
 

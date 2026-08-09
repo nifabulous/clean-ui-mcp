@@ -28,6 +28,85 @@ export const VERIFICATION_METHODS: ReadonlySet<string> = new Set([
   "image-confirmed",
 ]);
 
+/** The verifier lane a field is routed through. */
+export type VerifierTier = "mechanical" | "factual" | "a11y" | "prose" | "soft" | "gated";
+
+/**
+ * The spec's classification table as code. A key added to SERVABLE_FIELD_KEYS
+ * later must be classified here too, or tierForField returns "gated" and the key
+ * is silently unverifiable — the doctor's verification-orphan-key detector
+ * already catches keys nothing reads; this catches servable keys nothing
+ * verifies.
+ *
+ * MOVED HERE from scripts/verify-corpus.ts (Task 2 of the corpus-tag-provenance
+ * spec). It lived in a CLI module that no non-test production file imported, so
+ * the authoring paths could not read it without a library-depends-on-script
+ * inversion that would also drag the verifier's module graph — and `sharp`, via
+ * the detector registry — into the tagger. This module already owns the trust
+ * contract and imports only a TYPE from schema.ts, so it stays pure. Nothing
+ * from src/verify/ may ever be imported here: the direction is detector -> trust.
+ */
+export const TIER_BY_FIELD: Readonly<Record<string, VerifierTier>> = {
+  platform: "mechanical",
+  "visual.dominantColors": "mechanical",
+  layout: "factual",
+  components: "factual",
+  "visual.usesBorders": "mechanical",
+  "visual.typePairing": "factual",
+  "antiPatterns.accessibilityRisks": "a11y",
+  critique: "prose",
+  whatToSteal: "prose",
+  antiPatterns: "prose",
+  voice: "prose",
+  mood: "soft",
+  colorScheme: "soft",
+  "visual.spacingDensity": "mechanical",
+  "visual.cornerStyle": "mechanical",
+  styleTags: "soft",
+  categories: "soft",
+  domainTags: "soft",
+  patternType: "soft",
+  // Gated 2026-08-08 by the abstain diagnosis (Rule 2 branch 1). The model
+  // abstained on these 92 times across the 50-entry cohort, its own reasons
+  // saying the value is not determinable from one screenshot ("the exact hex
+  // values cannot be reliably verified", "no clearly visible soft shadows").
+  // The element-box probe independently closed the pixel route — no rung of six
+  // passed, and usesShadows is the field a uniform-region proposer is
+  // structurally blind to. Both lanes are exhausted, so asking again spends a
+  // call to buy a known abstain.
+  //
+  // Existing verification records KEEP SERVING: isVerified ignores
+  // verifierVersion, so the 28 image-confirmed records on these fields are
+  // untouched. Gating stops NEW verification, it does not revoke old evidence.
+  "visual.accentColor": "gated",
+  "visual.colorRoles": "gated",
+  "visual.usesShadows": "gated",
+  responsiveBehavior: "gated",
+};
+
+export function tierForField(field: string): VerifierTier {
+  return TIER_BY_FIELD[field] ?? "gated";
+}
+
+/**
+ * The fields no lane can ever confirm, so authoring must decline rather than
+ * guess them.
+ *
+ * Derived from the EXPLICIT `"gated"` entries above — deliberately not from
+ * `tierForField`, whose default is `"gated"`. Deriving it from the function
+ * would put every unclassified field in this set and clear values the tagger is
+ * supposed to author.
+ */
+export function gatedFieldsFrom(table: Readonly<Record<string, VerifierTier>>): ReadonlySet<string> {
+  return new Set(
+    Object.entries(table)
+      .filter(([, tier]) => tier === "gated")
+      .map(([field]) => field),
+  );
+}
+
+export const GATED_FIELDS: ReadonlySet<string> = gatedFieldsFrom(TIER_BY_FIELD);
+
 /**
  * The corpus field keys the gate knows how to serve. This is the contract
  * between the verifier (Stage 2b/2c) and the gate: every served field must be

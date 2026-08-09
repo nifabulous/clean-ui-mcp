@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
 import { type CorpusEntryT } from "./schema.js";
-import { loadIndex, embedQuery, cosine, entryToDocument, hashForDocument, indexExists, voyageRerank } from "./embeddings.js";
+import { loadIndex, embedQuery, cosine, entryToTrustedDocument, hashForDocument, indexExists, voyageRerank } from "./embeddings.js";
 import { loadCorpusSafe, entriesPath } from "./persistence.js";
 
 let cached: CorpusEntryT[] | null = null;
@@ -111,6 +111,8 @@ export interface SearchOptions {
    * the omitted-option behavior relied on by `critique-retrieval.ts`.
    */
   searchMode?:   "auto" | "keyword-only";
+  /** Internal reader policy; never supplied by MCP callers. */
+  trustPredicate?: (entry: CorpusEntryT, field: string) => boolean;
 }
 
 export interface SearchResult {
@@ -168,35 +170,39 @@ export function keywordSearch(entries: CorpusEntryT[], opts: SearchOptions): Sea
 
   return entries
     .map((e) => {
+      const canUse = (field: string): boolean => opts.trustPredicate?.(e, field) ?? true;
       let score = e.qualityScore;
       if (q) {
-        const title = e.title.toLowerCase();
-        const categories = e.categories.join(" ").toLowerCase();
-        const styleTags = e.styleTags.join(" ").toLowerCase();
-        const components = (e.components ?? []).join(" ").toLowerCase();
-        const domainTags = (e.domainTags ?? []).join(" ").toLowerCase();
+        const title = canUse("title") ? e.title.toLowerCase() : "";
+        const categories = canUse("categories") ? e.categories.join(" ").toLowerCase() : "";
+        const styleTags = canUse("styleTags") ? e.styleTags.join(" ").toLowerCase() : "";
+        const components = canUse("components") ? (e.components ?? []).join(" ").toLowerCase() : "";
+        const domainTags = canUse("domainTags") ? (e.domainTags ?? []).join(" ").toLowerCase() : "";
         const extraAttrs = [
-          e.colorScheme, e.industryVertical, e.responsiveBehavior, e.mood,
+          canUse("colorScheme") ? e.colorScheme : undefined,
+          canUse("industryVertical") ? e.industryVertical : undefined,
+          canUse("responsiveBehavior") ? e.responsiveBehavior : undefined,
+          canUse("mood") ? e.mood : undefined,
         ].filter(Boolean).join(" ").toLowerCase();
         const visual = [
-          ...e.visual.dominantColors,
-          e.visual.accentColor,
-          e.visual.spacingDensity,
-          e.visual.cornerStyle,
-          e.visual.typePairing.display,
-          e.visual.typePairing.body,
-          e.visual.typePairing.notes,
+          ...(canUse("visual.dominantColors") ? e.visual.dominantColors : []),
+          canUse("visual.accentColor") ? e.visual.accentColor : undefined,
+          canUse("visual.spacingDensity") ? e.visual.spacingDensity : undefined,
+          canUse("visual.cornerStyle") ? e.visual.cornerStyle : undefined,
+          canUse("visual.typePairing") ? e.visual.typePairing.display : undefined,
+          canUse("visual.typePairing") ? e.visual.typePairing.body : undefined,
+          canUse("visual.typePairing") ? e.visual.typePairing.notes : undefined,
         ].filter(Boolean).join(" ").toLowerCase();
         const body = [
-          e.patternType,
-          e.critique,
-          ...e.whatToSteal,
-          ...e.antiPatterns.antiPatterns,
-          ...e.antiPatterns.whereThisFails,
-          e.businessRationale?.businessGoal,
-          e.businessRationale?.targetUser,
-          e.businessRationale?.rationale,
-          e.source.productName,
+          canUse("patternType") ? e.patternType : undefined,
+          canUse("critique") ? e.critique : undefined,
+          ...(canUse("whatToSteal") ? e.whatToSteal : []),
+          ...(canUse("antiPatterns") ? e.antiPatterns.antiPatterns : []),
+          ...(canUse("antiPatterns") ? e.antiPatterns.whereThisFails : []),
+          canUse("businessRationale") ? e.businessRationale?.businessGoal : undefined,
+          canUse("businessRationale") ? e.businessRationale?.targetUser : undefined,
+          canUse("businessRationale") ? e.businessRationale?.rationale : undefined,
+          canUse("source") ? e.source.productName : undefined,
         ].join(" ").toLowerCase();
         const haystack = `${title} ${categories} ${styleTags} ${components} ${domainTags} ${extraAttrs} ${visual} ${body}`;
 
@@ -372,7 +378,7 @@ export async function searchRanked(opts: SearchOptions): Promise<SearchResult[]>
     results.sort((a, b) => b.score - a.score);
     const rerankPool = results.slice(0, 30);
     const tail = results.slice(30);
-    const documents = rerankPool.map((r) => entryToDocument(r.entry));
+    const documents = rerankPool.map((r) => entryToTrustedDocument(r.entry));
     const reranked = await voyageRerank(opts.query, documents);
     if (reranked) {
       // Replace the pool with reranked order, using relevance scores.
@@ -488,7 +494,7 @@ export function indexStatus(): IndexStatus {
     indexed += 1;
     // v1 indexes load with hash:"" (unknown) — count as content-stale so the
     // doctor surfaces them and the next incremental build re-embeds.
-    const currentHash = hashForDocument(entryToDocument(e));
+    const currentHash = hashForDocument(entryToTrustedDocument(e));
     if (!rec.hash || rec.hash !== currentHash) contentStale += 1;
   }
   return { indexed, total: entries.length, hasIndex: true, missing: entries.length - indexed, stale, contentStale };

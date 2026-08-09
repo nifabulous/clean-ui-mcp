@@ -20,9 +20,11 @@ import "../env.js";
 
 import { parseArgs } from "node:util";
 import { loadCorpus } from "../corpus.js";
+import { isTextIndexEligible } from "../index-policy.js";
 import {
   embedDocuments,
-  entryToDocument,
+  entryToTrustedDocument,
+  hasTrustedEmbeddingSignal,
   hashForDocument,
   loadIndex,
   saveIndex,
@@ -56,20 +58,23 @@ Get a free key at https://dash.voyageai.com, add it to .env, then rerun:
   process.exit(1);
 }
 
-const entries = loadCorpus();
+const allEntries = loadCorpus();
+const entries = allEntries.filter((entry) => isTextIndexEligible(entry) && hasTrustedEmbeddingSignal(entry));
 const existing = loadIndex();
+
+console.log(`Index eligibility: ${entries.length} approved entries with verified signals; ${allEntries.length - entries.length} entries excluded (draft or unverified).`);
 
 // Determine which entries need embedding. In incremental mode this is NOT just
 // "missing from index" — it also includes entries whose content hash changed
-// since they were last embedded (title/critique edited, migrate-untitled ran,
-// entryToDocument() shape changed). --force re-embeds everything regardless.
-const needsEmbed = (e: { id: string } & Parameters<typeof entryToDocument>[0]) => {
+// since they were last embedded (verified claims edited, a migration ran, or
+// the trusted-document shape changed). --force re-embeds everything regardless.
+const needsEmbed = (e: { id: string } & Parameters<typeof entryToTrustedDocument>[0]) => {
   if (values.force) return true;
   const rec = existing?.entries[e.id];
   if (!rec) return true; // missing entirely
   // v1 indexes load with hash:"" → always re-embed (migrates to v2).
   if (!rec.hash) return true;
-  return rec.hash !== hashForDocument(entryToDocument(e));
+  return rec.hash !== hashForDocument(entryToTrustedDocument(e));
 };
 const toEmbed = entries.filter(needsEmbed);
 
@@ -95,7 +100,7 @@ const CHUNK = 100;
 let embedded = 0;
 for (let start = 0; start < toEmbed.length; start += CHUNK) {
   const chunk = toEmbed.slice(start, start + CHUNK);
-  const texts = chunk.map(entryToDocument);
+  const texts = chunk.map((entry) => entryToTrustedDocument(entry));
   const vectors = await embedDocuments(texts);
   if (vectors.length !== chunk.length) {
     console.error(`API returned ${vectors.length} vectors for ${chunk.length} inputs — aborting at chunk ${start}.`);

@@ -53,7 +53,7 @@ export type FieldSummary = {
 
 export type RetagSummary = Record<RetagField, FieldSummary>;
 
-function valueAt(entry: RetagEntryLike, field: RetagField): unknown {
+export function valueForField(entry: RetagEntryLike, field: RetagField): unknown {
   if (field === "visual.typePairing") {
     const visual = entry.visual;
     return visual && typeof visual === "object" ? (visual as Record<string, unknown>).typePairing : undefined;
@@ -117,7 +117,7 @@ export function familyOf(entry: RetagEntryLike): string {
 
 export function compareEntry(baseline: RetagEntryLike, candidate: RetagEntryLike): EntryComparison {
   const fields = Object.fromEntries(
-    RETAG_FIELDS.map((field) => [field, compareField(valueAt(baseline, field), valueAt(candidate, field))]),
+    RETAG_FIELDS.map((field) => [field, compareField(valueForField(baseline, field), valueForField(candidate, field))]),
   ) as Record<RetagField, FieldComparison>;
   return { id: String(baseline.id ?? candidate.id ?? ""), family: familyOf(baseline), fields };
 }

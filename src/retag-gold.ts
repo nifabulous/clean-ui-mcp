@@ -15,6 +15,28 @@ export type RetagGoldField = (typeof RETAG_GOLD_FIELDS)[number];
 export type RetagGoldStatus = "present" | "none" | "abstain" | "oov";
 export type RetagGoldEvidenceSource = "image" | "dom" | "both";
 
+/** Provisional gold-lane mood vocabulary; OOV remains available for gaps. */
+export const MOOD_VOCABULARY = [
+  "calm",
+  "confident",
+  "playful",
+  "energetic",
+  "warm",
+  "friendly",
+  "serious",
+  "clinical",
+  "focused",
+  "luxurious",
+  "bold",
+  "restrained",
+  "technical",
+  "editorial",
+  "optimistic",
+  "trustworthy",
+  "urgent",
+  "empathetic",
+] as const;
+
 const Sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 const EvidenceSource = z.enum(["image", "dom", "both"]);
 const Status = z.enum(["present", "none", "abstain", "oov"]);
@@ -69,7 +91,9 @@ const ColorSchemeFieldSchema = fieldLabelSchema("colorScheme").superRefine((valu
 
 const MoodFieldSchema = fieldLabelSchema("mood").superRefine((value, ctx) => {
   if (value.status !== "present") return;
-  ctx.addIssue({ code: "custom", path: ["status"], message: "mood has no frozen vocabulary; record a concrete phrase as OOV until the vocabulary is approved" });
+  if (!z.enum(MOOD_VOCABULARY).safeParse(value.value).success) {
+    ctx.addIssue({ code: "custom", path: ["value"], message: "mood must use the provisional vocabulary or be recorded as OOV" });
+  }
 });
 
 const TypePairingFieldSchema = fieldLabelSchema("visual.typePairing").superRefine((value, ctx) => {
@@ -161,7 +185,8 @@ export function buildRetagGoldPacket(selection: RetagGoldSelection): RetagGoldPa
     instructions: [
       "Label each field from the screenshot and available DOM evidence only; do not seed from the existing corpus value.",
       "Use present for an observed canonical value, none only when absence is observable, abstain when evidence is insufficient, and OOV when a real candidate is outside the closed vocabulary.",
-      "Type pairing is present only with DOM font evidence; screenshot-only font guesses must be abstain.",
+      "DOM means the captured page structure and metadata; type pairing is present only when it exposes a font family. Screenshot-only font guesses must be abstain.",
+      "Mood uses the provisional reviewer vocabulary; if no option fits, record the concrete candidate as OOV with a note.",
       "Keep this packet private: it contains local image paths and is not a durable repository artifact.",
     ],
     entries: selection.entries.map((entry) => ({

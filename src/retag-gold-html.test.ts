@@ -54,6 +54,34 @@ describe("retag gold HTML packet", () => {
     dom.window.close();
   });
 
+  it("imports an outside QA submission only when it matches this packet", () => {
+    const html = buildRetagGoldHtml(packet, new Map([['one', 'file:///tmp/one.png']]));
+    const dom = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/" });
+    dom.window.alert = () => {};
+    const submission = {
+      artifactType: "retag-gold-submission",
+      selectionArtifactId: packet.selectionArtifactId,
+      selectionSha256: packet.selectionSha256,
+      actorId: "qa-two",
+      reviewerRole: "qa",
+      labels: [{
+        entryId: "one",
+        imageSha256: packet.entries[0]!.imageSha256,
+        fields: {
+          components: { status: "present", evidenceSource: "image", value: ["icon-button"], oov: ["voice-card"], note: "The visible voice card is not in the current list." },
+          domainTags: { status: "none", evidenceSource: "image" },
+          colorScheme: { status: "present", evidenceSource: "image", value: "light" },
+          mood: { status: "present", evidenceSource: "image", value: "calm" },
+          "visual.typePairing": { status: "abstain", evidenceSource: "image", note: "No DOM sidecar is available." },
+        },
+      }],
+    };
+    expect((dom.window as unknown as { importSubmission: (value: unknown) => boolean }).importSubmission(submission)).toBe(true);
+    expect(dom.window.document.querySelector<HTMLInputElement>("#actor")?.value).toBe("qa-two");
+    expect(dom.window.document.querySelector("#progress")?.textContent).toBe("1 / 1 entries complete");
+    dom.window.close();
+  });
+
   it("explains field-specific decisions instead of exposing cryptic statuses", () => {
     const html = buildRetagGoldHtml(packet, new Map([["one", "file:///tmp/one.png"]]));
     expect(html).toContain("Select known components");
@@ -63,5 +91,9 @@ describe("retag gold HTML packet", () => {
     expect(html).toContain("Choose every visible component");
     expect(html).toContain("Add missing component(s), optional");
     expect(html).toContain("Only assign a domain when the screenshot exposes evidence");
+    expect(html).toContain("Import JSON");
+    expect(html).toContain("DOM is the captured page structure");
+    expect(html).toContain("calm");
+    expect(html).toContain("DM Sans");
   });
 });

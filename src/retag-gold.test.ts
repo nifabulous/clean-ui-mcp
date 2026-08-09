@@ -106,7 +106,13 @@ describe("retag gold contract", () => {
   it("does not score free-text mood before a vocabulary is frozen", () => {
     const candidate = submission();
     candidate.labels[0]!.fields.mood = { status: "present", value: "quietly confident", evidenceSource: "image" };
-    expect(() => RetagGoldSubmissionSchema.parse(candidate)).toThrow(/no frozen vocabulary/);
+    expect(() => RetagGoldSubmissionSchema.parse(candidate)).toThrow(/provisional vocabulary|OOV/);
+  });
+
+  it("accepts a mood from the provisional controlled vocabulary", () => {
+    const candidate = submission();
+    candidate.labels[0]!.fields.mood = { status: "present", value: "calm", evidenceSource: "image" };
+    expect(() => RetagGoldSubmissionSchema.parse(candidate)).not.toThrow();
   });
 
   it("binds every submission row to the frozen selection and image hash", () => {

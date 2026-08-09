@@ -52,11 +52,17 @@ Every entry must receive all five fields:
 
 `components` and `domainTags` accept only values in `src/schema.ts`. A novel
 component/domain is an OOV proposal, never a silently dropped value.
-`colorScheme` is `light` or `dark`. `mood` has no frozen vocabulary yet, so
-record a concrete phrase as `oov` rather than claiming a scoreable `present`
-value. `visual.typePairing`
-is `present` only when a DOM signal identifies the font; screenshot-only font
-inference is an abstention.
+`colorScheme` is `light` or `dark`. `mood` uses the reviewer's provisional
+controlled vocabulary (for example `calm`, `focused`, or `trustworthy`). If no
+option fits, record the candidate as `oov` with a note; the vocabulary can be
+revised after adjudication. `visual.typePairing` is `present` only when a DOM
+signal identifies the font; screenshot-only font inference is an abstention.
+
+DOM means the captured Document Object Model: the page structure and metadata
+collected alongside a screenshot. It may expose computed styles such as the
+actual `font-family`. A screenshot alone cannot reliably identify a font, so
+reviewers should choose `No DOM / insufficient evidence` for type pairing when
+no DOM sidecar is available.
 
 For `components`, `present` means “select every visible item from the current
 component list.” You can also add one or more missing candidates while keeping

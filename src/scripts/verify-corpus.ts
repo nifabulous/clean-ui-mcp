@@ -156,8 +156,14 @@ export function claimForField(entry: Record<string, unknown>, field: string): st
     case "visual.usesShadows":
       if (typeof v?.usesShadows !== "boolean") return null;
       return v.usesShadows ? "soft shadows are used" : "no shadows are used";
+    // Same guard as usesShadows above, and MORE load-bearing: usesShadows is
+    // `gated` so buildVerifyPrompt skips it, but usesBorders is `mechanical` — a
+    // live tier — so without this a null value reached the verifier as "no borders
+    // are used", asking the model to adjudicate a claim the corpus never made.
+    // `false` is still a real claim; only absence yields none.
     case "visual.usesBorders":
-      return v?.usesBorders === true ? "hairline borders are used" : "no borders are used";
+      if (typeof v?.usesBorders !== "boolean") return null;
+      return v.usesBorders ? "hairline borders are used" : "no borders are used";
     case "visual.typePairing": {
       const p = v?.typePairing as { display?: string | null; body?: string | null } | undefined;
       return p?.display && p.body ? `a ${p.display} + ${p.body} type pairing` : null;

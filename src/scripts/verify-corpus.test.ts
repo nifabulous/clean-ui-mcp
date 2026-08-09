@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tierForField, TIER_BY_FIELD, type VerifierTier } from "./verify-corpus.js";
 import { buildVerifyPrompt, parseVerifyResponse, decideFieldVerdict, type FieldVerdict, type ParsedField } from "./verify-corpus.js";
+import { claimForField } from "./verify-corpus.js";
 import { verifyEntry, mergeVerification, alreadyProcessedAtVersion, applyReproducedProse, VERIFIER_VERSION } from "./verify-corpus.js";
 import { buildRunReport, selectPending, selectByIds, resumeMarkers, mergeVerifyAttempts, buildEstimate } from "./verify-corpus.js";
 import { mergeDataQuality, retriageDataQuality, dismissDataQuality, renderSuspectReport } from "./verify-corpus.js";
@@ -1609,5 +1610,56 @@ describe("buildRunReport — abstain cause breakdown", () => {
       verdictsByEntry: { e1: [{ field: "layout", verdict: "pass", reason: "x", source: "vision" }] },
     } as never, { dryRun: true, verifierVersion: "verifier-v1", sampleSize: 30 });
     expect(text).not.toContain("Abstain causes");
+  });
+});
+
+// ── usesBorders: absence must not become a negative claim ────────────────────
+//
+// `usesShadows` got this guard when the field became nullable; `usesBorders`
+// became nullable in the same migration and did NOT. It is worse here than it was
+// for shadows: shadows is `gated`, so buildVerifyPrompt skips it, but usesBorders
+// is `mechanical` — a live tier — so a null value reaches the verifier as
+// "no borders are used" and the model is asked to confirm a claim the corpus never
+// made. Confirming it would then write a verification record for a fabricated
+// negative; contradicting it would file a dataQuality finding against nothing.
+describe("claimForField does not fabricate a negative borders claim", () => {
+  it("returns null for a null usesBorders instead of 'no borders are used'", () => {
+    expect(claimForField({ visual: { usesBorders: null } }, "visual.usesBorders")).toBeNull();
+  });
+
+  it("returns null when usesBorders is absent entirely", () => {
+    expect(claimForField({ visual: {} }, "visual.usesBorders")).toBeNull();
+    expect(claimForField({}, "visual.usesBorders")).toBeNull();
+  });
+
+  it("still claims for real booleans — false is a claim, null is not", () => {
+    expect(claimForField({ visual: { usesBorders: true } }, "visual.usesBorders")).toBe("hairline borders are used");
+    expect(claimForField({ visual: { usesBorders: false } }, "visual.usesBorders")).toBe("no borders are used");
+  });
+
+  it("matches the shape usesShadows already uses", () => {
+    // The two mechanical booleans must agree on how absence is treated, or the
+    // next nullable boolean will copy whichever one it happens to read.
+    expect(claimForField({ visual: { usesShadows: null } }, "visual.usesShadows")).toBeNull();
+    expect(claimForField({ visual: { usesBorders: null } }, "visual.usesBorders")).toBeNull();
+  });
+
+  it("buildVerifyPrompt does not ask the model about a null usesBorders", () => {
+    // The reachability that makes this a live bug rather than a latent one:
+    // usesBorders is `mechanical`, so unlike gated usesShadows it is not skipped
+    // at the tier check.
+    const e = {
+      id: "borders-null",
+      title: "t",
+      patternType: "dashboard",
+      categories: ["data-viz"],
+      styleTags: ["minimal"],
+      visual: { dominantColors: ["#ffffff"], usesBorders: null, cornerStyle: "slight-round" },
+    };
+    const prompt = buildVerifyPrompt(e as never, ["visual.usesBorders", "visual.cornerStyle"], "verifier-v1");
+    expect(prompt).not.toContain("no borders are used");
+    // Control: the prompt is not simply empty — cornerStyle IS still asked, so
+    // "does not contain" cannot pass vacuously.
+    expect(prompt).toContain("cornerStyle");
   });
 });

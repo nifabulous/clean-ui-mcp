@@ -1078,9 +1078,9 @@ VERIFIED GROUND TRUTH — treat every value below as fact, do not re-derive or c
 ${JSON.stringify({ quantizedColors }, null, 2)}
 ${domSignalsBlock}
 {
-${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}. If none fit well, use
-                           // the closest match AND set suggestedPatternType below.
-  "suggestedPatternType": null, // DISCOVERY LANE — when patternType is a forced/closest fit, name
+${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}. Leave empty when no
+                           // listed pattern is supported by the screenshot and set suggestedPatternType below.
+  "suggestedPatternType": null, // DISCOVERY LANE — when patternType is absent or a close fit, name
                            // what the pattern REALLY is in kebab-case (e.g. "kanban-board",
                            // "activity-feed", "monitoring-console", "calendar-view"). Null when
                            // patternType is accurate. This goes into _raw for the curator to
@@ -2906,10 +2906,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   let extractionParsed = parseExtraction(extractionRawText);
 
   // Adaptive re-run: if we asked for low and the model clearly couldn't read the
-  // page, retry once at high. Probe the RAW extraction output — sanitizeTaggerPayload
-  // applies defaults (patternType → "dashboard") that mask the very weakness we're
-  // detecting, making the !probe.patternType check never fire. Read the raw fields
-  // directly so a genuinely-empty result is detected as weak.
+  // page, retry once at high. Probe the RAW extraction output so a genuinely-empty
+  // result is detected as weak before sanitation or persistence.
   if (requestedDetail === "low") {
     const rawType = typeof extractionParsed.patternType === "string" ? (extractionParsed.patternType as string).trim() : "";
     const rawCats = Array.isArray(extractionParsed.categories) ? (extractionParsed.categories as unknown[]).length : 0;
@@ -2942,8 +2940,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   // Skipped if we already escalated detail above (the weak-result probe runs
   // against the latest extractionParsed, so this naturally composes with it).
   if (resolveProvider("extraction") === "gemini" && /3\.5|3-5/i.test(GEMINI_AUTO_TAG_MODEL)) {
-    // Same raw-probe fix as the detail-escalation block above — sanitizeTaggerPayload's
-    // defaults mask the weakness we're detecting.
+    // Same raw-probe rule as the detail-escalation block above: inspect raw output
+    // before sanitation so an empty result remains visible as weak.
     const rawType = typeof extractionParsed.patternType === "string" ? (extractionParsed.patternType as string).trim() : "";
     const rawCats = Array.isArray(extractionParsed.categories) ? (extractionParsed.categories as unknown[]).length : 0;
     const probeName = (typeof extractionParsed.productName === "string" ? extractionParsed.productName.trim() : "");

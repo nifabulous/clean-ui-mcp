@@ -60,6 +60,17 @@ describe("retag evaluation", () => {
     });
   });
 
+  it("keeps OOV proposals out of accuracy denominators", () => {
+    const result = evaluateGold([
+      { entryId: "oov", imageSha256: "hash-oov", fields: { domainTags: { status: "oov", value: ["observability"] } } },
+      { entryId: "known", imageSha256: "hash-known", fields: { domainTags: { status: "present", value: ["analytics"] } } },
+    ], [
+      { id: "oov", domainTags: ["analytics"] },
+      { id: "known", domainTags: ["analytics"] },
+    ]);
+    expect(result.fields.domainTags).toMatchObject({ oov: 1, labelled: 1, exact: 1, exactAccuracy: 1 });
+  });
+
   it("rejects duplicate, unknown, and stale image bindings", () => {
     expect(() => assertGoldBindings(
       [{ entryId: "one", imageSha256: "wrong", fields: {} }],
@@ -76,6 +87,7 @@ describe("retag evaluation", () => {
   it("requires a persisted independent gold evaluation before promotion", () => {
     expect(() => assertGoldEvaluation({})).toThrow(/scores\.gold/);
     expect(() => assertGoldEvaluation({ gold: { entries: 0, fields: {} } })).toThrow(/non-empty/);
-    expect(() => assertGoldEvaluation({ gold: { entries: 1, fields: { categories: {} } } })).not.toThrow();
+    expect(() => assertGoldEvaluation({ gold: { entries: 1, fields: { categories: { labelled: 1 } } } })).not.toThrow();
+    expect(() => assertGoldEvaluation({ gold: { entries: 1, fields: { categories: { labelled: 0, oov: 1 } } } })).toThrow(/scored gold label/);
   });
 });

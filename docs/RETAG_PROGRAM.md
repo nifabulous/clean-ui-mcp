@@ -39,6 +39,10 @@ agreement into false ground truth.
 - New tagging computes `colorScheme` from image luminance and abstains near the
   threshold; it never falls back to the model. Filling the existing corpus is a
   separate, calibration-gated migration and is intentionally still deferred.
+- The current full-corpus decision is recorded and corpus-hash-bound in
+  [retag-disposition-v1.json](/Users/olaniyi.oladokun/Downloads/clean-ui-mcp/docs/retag-disposition-v1.json).
+  Validate it with `npm run retag-disposition`; regenerate only after an
+  intentional corpus change with `npm run retag-disposition -- --write`.
 
 ## Worktree workflow
 

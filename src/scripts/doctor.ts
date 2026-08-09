@@ -17,6 +17,7 @@ import { dirname, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { hasDraftMarkers } from "../schema.js";
 import { indexStatus } from "../corpus.js";
+import { validateDisposition, sha256 as dispositionSha256 } from "../retag-disposition.js";
 import { CORPUS_ROOT, allImageFiles, fromCorpusRelativeImagePath } from "../paths.js";
 import { ENTRIES_PATH, SNAPSHOT_DIR, listSnapshots, tryReadCorpus } from "../persistence.js";
 // Shared Check/Status types + the two Task 6 diagnostics live in the helpers
@@ -87,6 +88,23 @@ if (!entries) {
     checks.push({ name: "Corpus validates", status: "FAIL", detail: `${dirtyDraft.length} entr${dirtyDraft.length === 1 ? "y" : "ies"} carry draft markers` });
   } else {
     checks.push({ name: "Corpus validates", status: "PASS", detail: `${entries.length} entries, schema-clean` });
+  }
+}
+
+// ── 2b. Corpus retag disposition binding ────────────────────────────────────
+// A trustworthy corpus must either have a staged migration or an explicit,
+// corpus-bound deferral. The current branch is deliberately in the latter
+// state; fail if the artifact is missing or no longer matches entries.json.
+if (!entries) {
+  checks.push({ name: "Retag disposition", status: "WARN", detail: "skipped — corpus unreadable" });
+} else {
+  try {
+    const dispositionPath = resolve(__dirname, "..", "..", "docs", "retag-disposition-v1.json");
+    const artifact = JSON.parse(readFileSync(dispositionPath, "utf8")) as unknown;
+    validateDisposition(artifact, entries, dispositionSha256(readFileSync(ENTRIES_PATH)));
+    checks.push({ name: "Retag disposition", status: "PASS", detail: `${entries.length} entries covered by the corpus-bound deferral artifact` });
+  } catch (err) {
+    checks.push({ name: "Retag disposition", status: "FAIL", detail: err instanceof Error ? err.message : String(err) });
   }
 }
 

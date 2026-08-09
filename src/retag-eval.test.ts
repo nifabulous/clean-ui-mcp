@@ -71,6 +71,13 @@ describe("retag evaluation", () => {
     expect(result.fields.domainTags).toMatchObject({ oov: 1, labelled: 1, exact: 1, exactAccuracy: 1 });
   });
 
+  it("scores known values while reporting mixed OOV candidates separately", () => {
+    const result = evaluateGold([
+      { entryId: "mixed", imageSha256: "hash-mixed", fields: { components: { status: "present", value: ["chart"], oov: ["voice-card"] } } },
+    ], [{ id: "mixed", components: ["chart"] }]);
+    expect(result.fields.components).toMatchObject({ oov: 1, labelled: 1, exact: 1, exactAccuracy: 1 });
+  });
+
   it("rejects duplicate, unknown, and stale image bindings", () => {
     expect(() => assertGoldBindings(
       [{ entryId: "one", imageSha256: "wrong", fields: {} }],

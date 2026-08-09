@@ -61,6 +61,7 @@ describe("retag gold HTML packet", () => {
     expect(html).toContain("Not sure / insufficient evidence");
     expect(html).toContain("New or missing vocabulary item");
     expect(html).toContain("Choose every visible component");
+    expect(html).toContain("Add missing component(s), optional");
     expect(html).toContain("Only assign a domain when the screenshot exposes evidence");
   });
 });

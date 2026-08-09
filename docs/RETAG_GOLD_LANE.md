@@ -59,8 +59,11 @@ is `present` only when a DOM signal identifies the font; screenshot-only font
 inference is an abstention.
 
 For `components`, `present` means “select every visible item from the current
-component list.” `none` means you inspected the screen and no listed component
-applies; if a clear component is visible but missing from the list, use `oov`.
+component list.” You can also add one or more missing candidates while keeping
+the known selections; those candidates are preserved as OOV taxonomy evidence.
+`none` means you inspected the screen and no listed component applies; if a
+clear component is visible but missing from the list, use the missing-candidate
+input (or `oov` when there are no known components).
 For `domainTags`, `present` requires visible domain evidence; do not infer a
 domain from the product name. `colorScheme` is either light, dark, or
 abstain—there is no meaningful “none” theme.

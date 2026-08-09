@@ -27,13 +27,14 @@ const RawFieldLabelSchema = z.object({
   note: z.string().trim().min(1).max(500).optional(),
 }).strict();
 
-function fieldLabelSchema(field: RetagGoldField) {
+function fieldLabelSchema(field: RetagGoldField, allowMixedOov = false) {
   return RawFieldLabelSchema.superRefine((value, ctx) => {
     const hasValue = value.value !== undefined;
     const hasOov = value.oov !== undefined;
     if (value.status === "present") {
       if (!hasValue) ctx.addIssue({ code: "custom", path: ["value"], message: `${field} present labels require value` });
-      if (hasOov) ctx.addIssue({ code: "custom", path: ["oov"], message: `${field} present labels cannot include OOV candidates` });
+      if (hasOov && !allowMixedOov) ctx.addIssue({ code: "custom", path: ["oov"], message: `${field} present labels cannot include OOV candidates` });
+      if (hasOov && !value.note) ctx.addIssue({ code: "custom", path: ["note"], message: `${field} present labels with OOV candidates require a note` });
     } else if (value.status === "none") {
       if (hasValue || hasOov) ctx.addIssue({ code: "custom", path: ["value"], message: `${field} none labels cannot include a value or OOV candidate` });
     } else if (value.status === "abstain") {
@@ -47,13 +48,13 @@ function fieldLabelSchema(field: RetagGoldField) {
   });
 }
 
-const ComponentsFieldSchema = fieldLabelSchema("components").superRefine((value, ctx) => {
+const ComponentsFieldSchema = fieldLabelSchema("components", true).superRefine((value, ctx) => {
   if (value.status !== "present") return;
   const result = z.array(Component).min(1).max(10).safeParse(value.value);
   if (!result.success || new Set(result.data).size !== result.data.length) ctx.addIssue({ code: "custom", path: ["value"], message: "components must use unique canonical Component values" });
 });
 
-const DomainTagsFieldSchema = fieldLabelSchema("domainTags").superRefine((value, ctx) => {
+const DomainTagsFieldSchema = fieldLabelSchema("domainTags", true).superRefine((value, ctx) => {
   if (value.status !== "present") return;
   const result = z.array(DomainTag).min(1).max(4).safeParse(value.value);
   if (!result.success || new Set(result.data).size !== result.data.length) ctx.addIssue({ code: "custom", path: ["value"], message: "domainTags must use unique canonical DomainTag values" });
@@ -212,6 +213,7 @@ export function toGoldLabels(submission: RetagGoldSubmission): GoldLabel[] {
         status: value.status,
         ...(value.status === "present" ? { value: value.value } : {}),
         ...(value.status === "oov" ? { value: value.oov } : {}),
+        ...(value.oov ? { oov: value.oov } : {}),
       };
       return [field, gold];
     })),

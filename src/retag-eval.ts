@@ -7,6 +7,8 @@ export type GoldStatus = "present" | "none" | "abstain" | "oov";
 export type GoldField = {
   status: GoldStatus;
   value?: unknown;
+  /** Optional taxonomy candidates attached to an otherwise scoreable label. */
+  oov?: string[];
 };
 
 export type GoldLabel = {
@@ -59,9 +61,10 @@ function scoreField(labels: GoldLabel[], predictions: Map<string, RetagEntryLike
   let falseNegatives = 0;
   for (const label of labels) {
     const expected = label.fields[field];
+    if (expected?.oov?.length) oov += 1;
     if (!expected || expected.status === "abstain" || expected.status === "oov") {
       if (expected?.status === "abstain") abstained += 1;
-      if (expected?.status === "oov") oov += 1;
+      if (expected?.status === "oov" && !expected.oov?.length) oov += 1;
       continue;
     }
     labelled += 1;

@@ -68,6 +68,25 @@ describe("retag gold contract", () => {
     expect(() => RetagGoldSubmissionSchema.parse(duplicate)).toThrow(/unique/);
   });
 
+  it("keeps known components and a new component candidate in the same label", () => {
+    const candidate = submission();
+    candidate.labels[0]!.fields.components = {
+      status: "present",
+      value: ["chart"],
+      oov: ["voice-card"],
+      evidenceSource: "image",
+      note: "The voice-card is visible but missing from the current component vocabulary.",
+    };
+    expect(() => RetagGoldSubmissionSchema.parse(candidate)).not.toThrow();
+    expect(toGoldLabels(candidate)[0]?.fields.components).toMatchObject({ status: "present", value: ["chart"], oov: ["voice-card"] });
+  });
+
+  it("requires an explanation when a known field also carries an OOV candidate", () => {
+    const candidate = submission();
+    candidate.labels[0]!.fields.domainTags = { status: "present", value: ["analytics"], oov: ["observability"], evidenceSource: "image" };
+    expect(() => RetagGoldSubmissionSchema.parse(candidate)).toThrow(/note/);
+  });
+
   it("requires DOM evidence for a type pairing", () => {
     const candidate = submission();
     candidate.labels[0]!.fields["visual.typePairing"] = {

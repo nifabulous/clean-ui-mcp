@@ -289,6 +289,8 @@ describe("every production reader of usesShadows is classified", () => {
     "src/scripts/doctor-helpers.ts": "already-safe",
     "src/verify/detector-registry.ts": "already-safe",
     "src/corpus-trust.ts": "already-safe",
+    // Policy inventory string only; it does not read the field value.
+    "src/retag-disposition.ts": "declaration",
 
     // AUTHORS the value: the wizard asks a human `askBool("Uses shadows?")` and
     // writes whatever comes back. Not null-safe, and deliberately not called one

@@ -61,7 +61,9 @@ function scoreField(labels: GoldLabel[], predictions: Map<string, RetagEntryLike
       continue;
     }
     labelled += 1;
-    const predicted = valueForField(predictions.get(label.entryId) ?? {}, field);
+    const prediction = predictions.get(label.entryId);
+    const hasPrediction = prediction !== undefined;
+    const predicted = valueForField(prediction ?? {}, field);
     const expectedSet = expected.status === "present" ? values(expected.value) : new Set<string>();
     const predictedSet = values(predicted);
     for (const value of predictedSet) {
@@ -71,7 +73,7 @@ function scoreField(labels: GoldLabel[], predictions: Map<string, RetagEntryLike
     for (const value of expectedSet) {
       if (!predictedSet.has(value)) falseNegatives += 1;
     }
-    if (expected.status === "none" ? !present(predicted) : expectedSet.size > 0 && setsEqual(expectedSet, predictedSet)) {
+    if (hasPrediction && (expected.status === "none" ? !present(predicted) : expectedSet.size > 0 && setsEqual(expectedSet, predictedSet))) {
       exact += 1;
     }
   }

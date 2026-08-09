@@ -29,7 +29,12 @@ agreement into false ground truth.
 - Safety, OOV quarantine, image/DOM binding, trusted retrieval, shadow diff,
   gold scoring, and exact-ID promotion are implemented.
 - `npm run retag-shadow -- --provider <provider>` produces an immutable run under
-  `eval/retag-runs/`; it never writes `corpus/`.
+  `eval/retag-runs/`; it never writes `corpus/`. Add `--gold <labels.json>` to
+  bind independent labels to image hashes and write field metrics into the run.
+- `npm run retag-promote -- --run <run-dir> --decisions <decisions.json> --out <artifact.json>`
+  applies only exact-ID reviewed fields to a draft output artifact. It refuses
+  to overwrite or write inside `corpus/`; installing that artifact remains a
+  separate reviewed persistence action.
 - `src/retag-eval.ts` is the scoring contract. It intentionally has no labels in
   the repository: model-generated labels are not silently promoted to truth.
 - No corpus-wide retag is authorized until independent gold labels exist and

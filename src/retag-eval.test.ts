@@ -45,6 +45,21 @@ describe("retag evaluation", () => {
     expect(result.fields.patternType).toMatchObject({ labelled: 0, abstained: 1, exactAccuracy: null });
   });
 
+  it("does not count a missing prediction as an exact none", () => {
+    const result = evaluateGold([
+      { entryId: "missing", imageSha256: "hash-missing", fields: { components: { status: "none" } } },
+      { entryId: "present", imageSha256: "hash-present", fields: { components: { status: "present", value: ["card"] } } },
+    ], []);
+    expect(result.missingPredictions).toEqual(["missing", "present"]);
+    expect(result.fields.components).toMatchObject({
+      labelled: 2,
+      exact: 0,
+      truePositives: 0,
+      falsePositives: 0,
+      falseNegatives: 1,
+    });
+  });
+
   it("rejects duplicate, unknown, and stale image bindings", () => {
     expect(() => assertGoldBindings(
       [{ entryId: "one", imageSha256: "wrong", fields: {} }],

@@ -17,6 +17,7 @@ import { loadEnv } from "../env.js";
 import { loadCorpus } from "../corpus.js";
 import { tagImage, type Provider, type TaggerOutput } from "../tagger.js";
 import { pickStratifiedSample, compareEntry, summarize, type EntryComparison, type RetagEntryLike } from "../retag-diff.js";
+import { assertGoldBindings, evaluateGold, type GoldLabel } from "../retag-eval.js";
 
 loadEnv();
 
@@ -90,6 +91,7 @@ async function main(): Promise<void> {
       out: { type: "string", default: "eval/retag-runs" },
       "sample-file": { type: "string" },
       "run-id": { type: "string" },
+      gold: { type: "string" },
     },
   });
   if (!values.provider) throw new Error("--provider is required");
@@ -137,6 +139,10 @@ async function main(): Promise<void> {
     model: values.model ?? "provider-default",
     extractionOnly: true,
     fields: ["patternType", "categories", "styleTags", "components", "domainTags", "colorScheme", "layout", "visual.typePairing", "mood"],
+    gold: values.gold ? {
+      path: values.gold,
+      sha256: hashBytes(readFileSync(resolve(String(values.gold)))),
+    } : null,
     sample: sample.map((entry) => ({
       entryId: entry.id,
       baselineHash: hashJson(entry),
@@ -184,6 +190,27 @@ async function main(): Promise<void> {
     .filter((row): row is CandidateRow & { candidate: TaggerOutput } => row.candidate !== undefined)
     .map((row) => compareEntry(byId.get(row.entryId)!, row.candidate as unknown as RetagEntryLike));
   const failed = rows.filter((row) => row.error).length;
+  let goldEvaluation: ReturnType<typeof evaluateGold> | undefined;
+  if (values.gold) {
+    const goldPath = resolve(String(values.gold));
+    const parsed = JSON.parse(readFileSync(goldPath, "utf8")) as unknown;
+    if (!Array.isArray(parsed)) throw new Error(`--gold must contain a JSON array of labels: ${goldPath}`);
+    const labels = parsed as GoldLabel[];
+    const imageHashes = new Map(allEntries.map((entry) => {
+      const imagePath = (entry.image as { path?: string | null } | undefined)?.path;
+      if (typeof imagePath !== "string") throw new Error(`gold binding cannot hash entry ${entry.id ?? "<unknown>"}: image path is missing`);
+      return [entry.id, hashBytes(readFileSync(resolve("corpus", imagePath)))] as const;
+    }));
+    assertGoldBindings(labels, allEntries, (entry) => {
+      const hash = imageHashes.get(entry.id);
+      if (!hash) throw new Error(`gold binding cannot hash entry ${entry.id ?? "<unknown>"}`);
+      return hash;
+    });
+    const predictions = rows
+      .filter((row): row is CandidateRow & { candidate: TaggerOutput } => row.candidate !== undefined)
+      .map((row) => row.candidate as unknown as RetagEntryLike);
+    goldEvaluation = evaluateGold(labels, predictions);
+  }
   writeFileSync(resolve(outDir, "candidates.json"), JSON.stringify(rows, null, 2) + "\n");
   writeFileSync(resolve(outDir, "diffs.json"), JSON.stringify(comparisons, null, 2) + "\n");
   writeFileSync(resolve(outDir, "scores.json"), JSON.stringify({
@@ -193,6 +220,7 @@ async function main(): Promise<void> {
     succeeded: rows.length - failed,
     failed,
     summary: summarize(comparisons),
+    ...(goldEvaluation ? { gold: goldEvaluation } : {}),
   }, null, 2) + "\n");
   writeFileSync(resolve(outDir, "manifest.json"), JSON.stringify({
     ...manifest,

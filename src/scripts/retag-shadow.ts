@@ -18,7 +18,7 @@ import { loadCorpus } from "../corpus.js";
 import { tagImage, type Provider, type TaggerOutput } from "../tagger.js";
 import { canonicalHash, pickStratifiedSample, compareEntry, summarize, type EntryComparison, type RetagEntryLike } from "../retag-diff.js";
 import { assertGoldBindings, evaluateGold, type GoldLabel } from "../retag-eval.js";
-import { RetagGoldSubmissionSchema, toGoldLabels } from "../retag-gold.js";
+import { RetagGoldArtifactSchema, toGoldLabels } from "../retag-gold.js";
 
 loadEnv();
 
@@ -182,7 +182,7 @@ async function main(): Promise<void> {
     const parsed = JSON.parse(readFileSync(goldPath, "utf8")) as unknown;
     const labels: GoldLabel[] = Array.isArray(parsed)
       ? parsed as GoldLabel[]
-      : toGoldLabels(RetagGoldSubmissionSchema.parse(parsed));
+      : toGoldLabels(RetagGoldArtifactSchema.parse(parsed));
     const imageHashes = new Map(allEntries.map((entry) => {
       const imagePath = (entry.image as { path?: string | null } | undefined)?.path;
       if (typeof imagePath !== "string") throw new Error(`gold binding cannot hash entry ${entry.id ?? "<unknown>"}: image path is missing`);

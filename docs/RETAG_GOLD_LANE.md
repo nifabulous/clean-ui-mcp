@@ -100,6 +100,13 @@ npm run retag-gold -- validate \
 
 The pair check requires different actors and complementary `gold`/`qa` roles.
 
+After adjudication, preserve the two reviewer files and attach their decisions
+under the `canonical` block of the canonical artifact. The validator accepts
+that envelope without stripping its provenance, and `retag-shadow --gold` can
+score it directly. Canonical artifacts are not accepted as one side of a new
+independent pair; create a new packet and new reviewer submissions if the
+rubric changes.
+
 The command is read-only with respect to the corpus and refuses to write under
 `corpus/`. A submission that names a changed image or a different selection is
 invalid, even if all labels look plausible.

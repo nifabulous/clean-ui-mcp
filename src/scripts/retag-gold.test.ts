@@ -64,4 +64,41 @@ describe("retag-gold CLI helpers", () => {
     writeFileSync(join(corpusPath, "../images-private/one.png"), "changed");
     expect(() => validateSubmissionFile(submission, selection, corpusPath)).toThrow(/current image hash mismatch/);
   });
+
+  it("validates an adjudicated canonical artifact and preserves its metadata", () => {
+    const { corpusPath, c2, bytes } = fixture();
+    const selection = buildGoldSelection(c2, bytes, corpusPath);
+    const canonical = {
+      schemaVersion: "1.0",
+      artifactType: "retag-gold-submission",
+      artifactId: "retag-gold-canonical-v1",
+      selectionArtifactId: selection.selectionArtifactId,
+      selectionSha256: selection.selectionSha256,
+      submissionVersion: 1,
+      actorId: "canonical",
+      actorKind: "human",
+      reviewerRole: "gold",
+      sealedAt: "2026-08-09T12:00:00.000Z",
+      canonical: {
+        status: "approved",
+        approvedBy: "olaniyi",
+        adjudicatedFrom: ["gold-submission", "qa-submission"],
+        conventions: { C1: "icon-only controls count as icon-button" },
+        oovVocabulary: { components: ["file-upload-dropzone"], domainTags: ["voice-library"] },
+        notes: "Adjudicated from two independent submissions.",
+      },
+      labels: [{
+        entryId: "one",
+        imageSha256: selection.entries[0]!.imageSha256,
+        fields: {
+          components: { status: "none", evidenceSource: "image" },
+          domainTags: { status: "none", evidenceSource: "image" },
+          colorScheme: { status: "present", value: "light", evidenceSource: "image" },
+          mood: { status: "abstain", evidenceSource: "image", note: "not enough evidence" },
+          "visual.typePairing": { status: "abstain", evidenceSource: "image", note: "no DOM" },
+        },
+      }],
+    };
+    expect(validateSubmissionFile(canonical, selection, corpusPath).canonical.status).toBe("approved");
+  });
 });

@@ -156,9 +156,35 @@ export const RetagGoldSubmissionSchema = z.object({
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", path: ["labels"], message: "submission labels must be unique" });
 });
 
+const CanonicalOovVocabularySchema = z.array(z.string().trim().min(1).max(80)).max(100)
+  .refine((values) => new Set(values).size === values.length, "canonical OOV vocabulary must be unique");
+
+/** Adjudication provenance attached to the immutable canonical label set. */
+export const RetagGoldCanonicalMetadataSchema = z.object({
+  status: z.literal("approved"),
+  approvedBy: z.string().trim().min(1).max(120),
+  adjudicatedFrom: z.array(z.string().trim().min(1).max(200)).min(2).max(8),
+  conventions: z.record(z.string().trim().min(1).max(40), z.string().trim().min(1).max(2000)).refine((value) => Object.keys(value).length > 0, "canonical conventions cannot be empty"),
+  oovVocabulary: z.object({
+    components: CanonicalOovVocabularySchema,
+    domainTags: CanonicalOovVocabularySchema,
+  }).strict(),
+  notes: z.string().trim().min(1).max(4000),
+}).strict();
+
+/** Canonical adjudication envelope. The legacy submission artifactType is retained for v1 compatibility. */
+export const RetagGoldCanonicalSchema = RetagGoldSubmissionSchema.extend({
+  canonical: RetagGoldCanonicalMetadataSchema,
+});
+
+export const RetagGoldArtifactSchema = z.union([RetagGoldCanonicalSchema, RetagGoldSubmissionSchema]);
+
 export type RetagGoldSelection = z.infer<typeof RetagGoldSelectionSchema>;
 export type RetagGoldSelectionEntry = z.infer<typeof RetagGoldSelectionEntrySchema>;
 export type RetagGoldSubmission = z.infer<typeof RetagGoldSubmissionSchema>;
+export type RetagGoldCanonicalMetadata = z.infer<typeof RetagGoldCanonicalMetadataSchema>;
+export type RetagGoldCanonical = z.infer<typeof RetagGoldCanonicalSchema>;
+export type RetagGoldArtifact = RetagGoldSubmission | RetagGoldCanonical;
 export type RetagGoldLabel = z.infer<typeof RetagGoldLabelSchema>;
 
 export type RetagGoldPacket = {
@@ -202,6 +228,24 @@ export function validateRetagGoldSubmission(
   imageShaByEntry?: ReadonlyMap<string, string>,
 ): void {
   const parsed = RetagGoldSubmissionSchema.parse(submission);
+  validateRetagGoldBindings(parsed, selection, imageShaByEntry);
+}
+
+export function validateRetagGoldArtifact(
+  artifact: unknown,
+  selection: RetagGoldSelection,
+  imageShaByEntry?: ReadonlyMap<string, string>,
+): RetagGoldArtifact {
+  const parsed = RetagGoldArtifactSchema.parse(artifact);
+  validateRetagGoldBindings(parsed, selection, imageShaByEntry);
+  return parsed;
+}
+
+function validateRetagGoldBindings(
+  parsed: RetagGoldSubmission | RetagGoldCanonical,
+  selection: RetagGoldSelection,
+  imageShaByEntry?: ReadonlyMap<string, string>,
+): void {
   if (parsed.selectionArtifactId !== selection.selectionArtifactId) throw new Error("submission selection artifact does not match");
   if (parsed.selectionSha256 !== selection.selectionSha256) throw new Error("submission selection hash does not match");
   const expected = new Map(selection.entries.map((entry) => [entry.entryId, entry]));
@@ -228,7 +272,7 @@ export function validateRetagGoldPair(
   if (first.reviewerRole === second.reviewerRole) throw new Error("gold submissions must have one gold and one qa reviewer");
 }
 
-export function toGoldLabels(submission: RetagGoldSubmission): GoldLabel[] {
+export function toGoldLabels(submission: RetagGoldArtifact): GoldLabel[] {
   return submission.labels.map((label) => ({
     entryId: label.entryId,
     imageSha256: label.imageSha256,

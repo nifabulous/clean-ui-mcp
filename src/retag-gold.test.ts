@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   RETAG_GOLD_FIELDS,
+  RetagGoldCanonicalSchema,
   RetagGoldSelectionSchema,
   RetagGoldSubmissionSchema,
   toGoldLabels,
   validateRetagGoldPair,
+  validateRetagGoldArtifact,
   validateRetagGoldSubmission,
   type RetagGoldSelection,
   type RetagGoldSubmission,
@@ -142,5 +144,24 @@ describe("retag gold contract", () => {
   it("rejects a selection that omits one of the required fields", () => {
     const candidate = { ...selection, fields: ["components"] };
     expect(() => RetagGoldSelectionSchema.parse(candidate)).toThrow(/fields/);
+  });
+
+  it("accepts an adjudicated canonical envelope without dropping its provenance", () => {
+    const canonical = {
+      ...submission(),
+      artifactId: "retag-gold-canonical-v1",
+      canonical: {
+        status: "approved",
+        approvedBy: "olaniyi",
+        adjudicatedFrom: ["gold-submission", "qa-submission"],
+        conventions: { C1: "icon-only controls count as icon-button" },
+        oovVocabulary: { components: ["file-upload-dropzone"], domainTags: ["voice-library"] },
+        notes: "Adjudicated from two independent submissions.",
+      },
+    };
+    expect(() => RetagGoldCanonicalSchema.parse(canonical)).not.toThrow();
+    const parsed = validateRetagGoldArtifact(canonical, selection);
+    expect(parsed.canonical.status).toBe("approved");
+    expect(toGoldLabels(parsed)).toHaveLength(2);
   });
 });

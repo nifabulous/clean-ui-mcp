@@ -16,11 +16,11 @@ import { C2LabelIntegritySelectionSchema, type C2LabelIntegritySelection } from 
 import {
   RETAG_GOLD_FIELDS,
   RetagGoldSelectionSchema,
-  RetagGoldSubmissionSchema,
   buildRetagGoldPacket,
   toGoldLabels,
+  validateRetagGoldArtifact,
   validateRetagGoldPair,
-  validateRetagGoldSubmission,
+  type RetagGoldArtifact,
   type RetagGoldSelection,
   type RetagGoldSubmission,
 } from "../retag-gold.js";
@@ -117,9 +117,8 @@ function outputJson(path: string, value: unknown, corpusPath: string): void {
   outputText(path, `${JSON.stringify(value, null, 2)}\n`, corpusPath);
 }
 
-export function validateSubmissionFile(submission: unknown, selection: RetagGoldSelection, corpusPath: string): RetagGoldSubmission {
-  const parsed = RetagGoldSubmissionSchema.parse(submission);
-  validateRetagGoldSubmission(parsed, selection, currentImageHashes(selection, corpusPath));
+export function validateSubmissionFile(submission: unknown, selection: RetagGoldSelection, corpusPath: string): RetagGoldArtifact {
+  const parsed = validateRetagGoldArtifact(submission, selection, currentImageHashes(selection, corpusPath));
   return parsed;
 }
 
@@ -155,11 +154,13 @@ async function main(): Promise<void> {
   const submission = validateSubmissionFile(readJson(submissionPath), selection, corpusPath);
   if (values["peer-submission"]) {
     const peer = validateSubmissionFile(readJson(resolve(values["peer-submission"])), selection, corpusPath);
+    if ("canonical" in submission || "canonical" in peer) throw new Error("peer validation requires two reviewer submissions; canonical artifacts are already adjudicated");
     validateRetagGoldPair(submission, peer, selection);
   }
   const goldLabels = toGoldLabels(submission);
   if (values.out) outputJson(values.out, submission, corpusPath);
-  console.log(`retag gold submission valid: ${goldLabels.length} entries, ${RETAG_GOLD_FIELDS.length} fields, selection ${selection.selectionSha256}`);
+  const artifactKind = "canonical" in submission ? "canonical artifact" : "submission";
+  console.log(`retag gold ${artifactKind} valid: ${goldLabels.length} entries, ${RETAG_GOLD_FIELDS.length} fields, selection ${selection.selectionSha256}`);
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

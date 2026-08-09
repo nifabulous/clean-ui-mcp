@@ -53,6 +53,10 @@ export type FieldSummary = {
 
 export type RetagSummary = Record<RetagField, FieldSummary>;
 
+export function canonicalHash(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
+}
+
 export function valueForField(entry: RetagEntryLike, field: RetagField): unknown {
   if (field === "visual.typePairing") {
     const visual = entry.visual;

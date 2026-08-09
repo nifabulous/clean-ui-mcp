@@ -30,6 +30,7 @@ import { CorpusEntry, findDraftMarkers } from "../schema.js";
 import { findVagueAntiPatterns } from "../content-lint.js";
 import { findDuplicateAtCommit } from "../dedup.js";
 import { persistEntries, loadCorpusSafe } from "../persistence.js";
+import { stripGatedFields, assertNoIncomingVerification } from "../gated-fields.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_ROOT  = resolve(__dirname, "..", "..", "corpus");
@@ -165,8 +166,17 @@ async function main() {
     process.exit(0);
   }
 
+  // Authoring-time guards (Task 2 of the corpus-tag-provenance spec). Drafts are
+  // built from tagger output by bulk-import and may be hand-edited before landing,
+  // so this is the creation site for every imported entry: clear the fields no lane
+  // can confirm, and refuse one that arrives already claiming verification.
+  const admitted = clean.map((e) => {
+    assertNoIncomingVerification(e);
+    return stripGatedFields(e);
+  });
+
   // Write to corpus via the durability layer (snapshot + atomic write).
-  corpus.entries.push(...clean);
+  corpus.entries.push(...admitted);
   persistEntries(loaded, corpus.entries);
 
   // Mark committed in draft (idempotent re-runs won't double-commit)

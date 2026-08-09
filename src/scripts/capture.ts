@@ -153,6 +153,9 @@ export type DomSignalStructure = {
   childCount: number;                 // direct children of the captured root
 };
 export type DomSignals = {
+  /** SHA-256 of the exact PNG bytes written for this capture. Consumers must
+   * refuse the sidecar when this binding is absent or mismatched. */
+  imageSha256?: string;
   styles: DomSignalStyles;
   copy: DomSignalCopyItem[];
   accessibility: DomSignalAccessibility;
@@ -858,6 +861,7 @@ async function captureLocator(
   if (width < MIN_CAPTURE_DIM || height < MIN_CAPTURE_DIM || width * height < MIN_CAPTURE_AREA) return null;
 
   const buffer = await image.toBuffer();
+  const imageSha256 = createHash("sha256").update(buffer).digest("hex");
   const aHash = await aHashOf(raw);
   const fileName = `${info.id}.png`;
   const absPath = join(batchDir, fileName);
@@ -878,6 +882,7 @@ async function captureLocator(
   if (signalsMap) {
     const signals = await extractDomSignals(locator);
     if (signals) {
+      signals.imageSha256 = imageSha256;
       // Attach motion signals. motionRaw is collected pre-freeze (authored
       // stylesheet rules are cascade-independent, so reading them before/after
       // the freeze styleTag doesn't matter — but collection must run before the

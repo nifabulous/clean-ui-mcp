@@ -431,8 +431,17 @@ export const VisualAttributes = z.object({
   typePairing: TypePairing,
   spacingDensity: SpacingDensity,
   cornerStyle: CornerStyle,
-  usesShadows: z.boolean(),
-  usesBorders: z.boolean(),
+  // Nullable, NOT `.default(false)` (decision D17): `persistEntries` round-trips
+  // every entry through `Corpus.parse -> JSON.stringify`, so a default would
+  // mutate untouched entries on any unrelated write. Null means "not known" —
+  // the field is `gated` in TIER_BY_FIELD (both the model lane and the pixel
+  // route are exhausted for it), so authoring must be able to decline rather
+  // than guess. Absence must never be rendered as the negative claim.
+  usesShadows: z.boolean().nullable(),
+  // Nullable means the authoring/tagger lane can decline when the screenshot
+  // does not provide enough evidence. `false` remains a real measured claim;
+  // null is unknown, never a fabricated negative.
+  usesBorders: z.boolean().nullable(),
 });
 
 /**
@@ -577,6 +586,13 @@ export const CorpusEntry = z.object({
   provenance: z.object({
     taggedBy: z.enum(["human", "auto", "auto-reviewed"]),
     reviewedBy: z.string().optional(),
+    /**
+     * Model-proposed values that were outside the closed taxonomy. These are
+     * quarantine metadata only: they are never treated as canonical labels or
+     * included in retrieval text, but remain available for curator review and
+     * future taxonomy promotion.
+     */
+    taxonomyCandidates: z.record(z.string(), z.array(z.string().min(1).max(80)).max(20)).optional(),
     /**
      * When the entry came from the capture pipeline (vs. manual upload), records
      * how the image was produced. Absent = manual upload. Nested in provenance

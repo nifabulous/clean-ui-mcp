@@ -24,6 +24,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { writeAtomic, writeRawSnapshot } from "../persistence.js";
+import { carryMigrationVerification, priorEntriesFromRaw } from "./migration-carry.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
@@ -142,10 +143,14 @@ export function runV1ToV2Migration(corpusPath: string, opts: { dryRun?: boolean 
   // entries) — same pattern as migrate-wcag-ids. Snapshot first, then the
   // atomic primary write.
   writeRawSnapshot(originalRaw);
-  writeAtomic(corpusPath, JSON.stringify({ version: 2, entries: migrated }, null, 2) + "\n");
+  // `migrateEntry` spreads the v1 entry (provenance included) and then REPLACES
+  // patternType and antiPatterns, so any record on those fields would certify a
+  // value the migration just rewrote. Carry from the pre-migration document.
+  const carried = carryMigrationVerification(migrated as never, priorEntriesFromRaw(JSON.parse(originalRaw)));
+  writeAtomic(corpusPath, JSON.stringify({ version: 2, entries: carried }, null, 2) + "\n");
   console.log(`\n✅ Wrote v2 corpus: ${corpusPath}`);
   console.log("Next: backfill [TODO] anti-patterns, then `npm run validate-corpus` and `npm run build-index -- --force`.");
-  return migrated;
+  return carried as never;
 }
 
 if (isMain) {

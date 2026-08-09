@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { type CorpusEntryT } from "../schema.js";
+import { TIER_BY_FIELD, tierForField, type VerifierTier } from "../corpus-trust.js";
 import { tagImage, callVisionModel, resolvedProviderAndModel, type TaggerOutput, type Provider } from "../tagger.js";
 import { fromCorpusRelativeImagePath } from "../paths.js";
 import { loadCorpus } from "../corpus.js";
@@ -16,8 +17,6 @@ import { recordedFor } from "../verify/detector-types.js";
 
 /** The verifier's own version — stamped on every record and the resume key. */
 export const VERIFIER_VERSION = "verifier-v1";
-
-export type VerifierTier = "mechanical" | "factual" | "a11y" | "prose" | "soft" | "gated";
 
 export type VerificationRecord = {
   method: string;
@@ -78,55 +77,14 @@ export type FieldVerdict = {
   firstCause?: AbstainCause;
 };
 
-/**
- * The spec's classification table as code. A key added to SERVABLE_FIELD_KEYS
- * later must be classified here too, or tierForField returns "gated" and the
- * key is silently unverifiable — the doctor's verification-orphan-key detector
- * already catches keys nothing reads; this catches servable keys nothing
- * verifies.
- */
-export const TIER_BY_FIELD: Readonly<Record<string, VerifierTier>> = {
-  platform: "mechanical",
-  "visual.dominantColors": "mechanical",
-  layout: "factual",
-  components: "factual",
-  "visual.usesBorders": "mechanical",
-  "visual.typePairing": "factual",
-  "antiPatterns.accessibilityRisks": "a11y",
-  critique: "prose",
-  whatToSteal: "prose",
-  antiPatterns: "prose",
-  voice: "prose",
-  mood: "soft",
-  colorScheme: "soft",
-  "visual.spacingDensity": "mechanical",
-  "visual.cornerStyle": "mechanical",
-  styleTags: "soft",
-  categories: "soft",
-  domainTags: "soft",
-  patternType: "soft",
-  // Gated 2026-08-08 by the abstain diagnosis (Rule 2 branch 1). The model
-  // abstained on these 92 times across the 50-entry cohort, its own reasons
-  // saying the value is not determinable from one screenshot ("the exact hex
-  // values cannot be reliably verified", "no clearly visible soft shadows").
-  // The element-box probe independently closed the pixel route — no rung of six
-  // passed, and usesShadows is the field a uniform-region proposer is
-  // structurally blind to. Both lanes are exhausted, so asking again spends a
-  // call to buy a known abstain.
-  //
-  // Existing verification records KEEP SERVING: isVerified ignores
-  // verifierVersion (corpus-trust.ts:75), so the 28 image-confirmed records on
-  // these fields are untouched. Gating stops NEW verification, it does not
-  // revoke old evidence.
-  "visual.accentColor": "gated",
-  "visual.colorRoles": "gated",
-  "visual.usesShadows": "gated",
-  responsiveBehavior: "gated",
-};
+// TIER_BY_FIELD / tierForField / VerifierTier now live in corpus-trust.ts, so the
+// authoring paths can read the gated set without a library-depends-on-script
+// import (Task 2 of the corpus-tag-provenance spec). Re-exported here because
+// verify-corpus.test.ts and the rest of the verifier import them from this
+// module; the move is behaviour-preserving.
+export { TIER_BY_FIELD, tierForField };
+export type { VerifierTier };
 
-export function tierForField(field: string): VerifierTier {
-  return TIER_BY_FIELD[field] ?? "gated";
-}
 
 /**
  * Value-aware pending filter. A mechanical field leaves the vision path only
@@ -170,7 +128,7 @@ function provableRecord(now: string): VerificationRecord {
 }
 
 /** A precise, checkable claim per servable field, built from the RECORDED value. */
-function claimForField(entry: Record<string, unknown>, field: string): string | null {
+export function claimForField(entry: Record<string, unknown>, field: string): string | null {
   const v = entry.visual as Record<string, unknown> | undefined;
   switch (field) {
     case "visual.colorRoles": {
@@ -190,10 +148,22 @@ function claimForField(entry: Record<string, unknown>, field: string): string | 
       const components = entry.components as string[] | undefined;
       return components && components.length > 0 ? `components present: ${components.join(", ")}` : null;
     }
+    // A null `usesShadows` yields NO claim. Returning "no shadows are used"
+    // would put a fabricated negative claim in front of the verifier, which
+    // would then confirm or contradict something the corpus never asserted.
+    // Unreachable through buildVerifyPrompt today (gated fields are skipped at
+    // the tier check) but claimForField has seven other call sites.
     case "visual.usesShadows":
-      return v?.usesShadows === true ? "soft shadows are used" : "no shadows are used";
+      if (typeof v?.usesShadows !== "boolean") return null;
+      return v.usesShadows ? "soft shadows are used" : "no shadows are used";
+    // Same guard as usesShadows above, and MORE load-bearing: usesShadows is
+    // `gated` so buildVerifyPrompt skips it, but usesBorders is `mechanical` — a
+    // live tier — so without this a null value reached the verifier as "no borders
+    // are used", asking the model to adjudicate a claim the corpus never made.
+    // `false` is still a real claim; only absence yields none.
     case "visual.usesBorders":
-      return v?.usesBorders === true ? "hairline borders are used" : "no borders are used";
+      if (typeof v?.usesBorders !== "boolean") return null;
+      return v.usesBorders ? "hairline borders are used" : "no borders are used";
     case "visual.typePairing": {
       const p = v?.typePairing as { display?: string | null; body?: string | null } | undefined;
       return p?.display && p.body ? `a ${p.display} + ${p.body} type pairing` : null;

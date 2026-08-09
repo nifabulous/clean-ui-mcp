@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { entryToDocument } from "./embeddings.js";
+import { entryToDocument, entryToTrustedDocument } from "./embeddings.js";
 
 describe("entryToDocument", () => {
   it("includes visible component tags as structural retrieval signal", () => {
@@ -27,5 +27,45 @@ describe("entryToDocument", () => {
 
     expect(doc).toContain("Components: sidebar-nav, kpi-card, donut-chart, line-chart, report-list.");
     expect(doc).toContain("Domain: integrations.");
+  });
+});
+
+describe("entryToTrustedDocument", () => {
+  it("embeds only fields with field-level verification", () => {
+    const entry = {
+      title: "Unverified title",
+      patternType: "dashboard",
+      categories: ["dashboard"],
+      styleTags: ["minimal"],
+      components: ["kpi-card"],
+      domainTags: ["billing"],
+      colorScheme: "dark",
+      industryVertical: "fintech",
+      mood: "calm",
+      critique: "Verified critique prose.",
+      whatToSteal: ["Verified technique."],
+      antiPatterns: { antiPatterns: ["Unverified anti-pattern."] },
+      source: { productName: "Unverified product", url: null },
+      visual: {
+        dominantColors: ["#ffffff"], accentColor: null,
+        typePairing: { display: null, body: null, notes: "" },
+        spacingDensity: "moderate", cornerStyle: "slight-round",
+        usesShadows: null, usesBorders: null,
+      },
+      provenance: {
+        taggedBy: "auto",
+        verification: {
+          categories: { method: "measured" },
+          critique: { method: "image-confirmed", imageSha256: "a".repeat(64) },
+        },
+      },
+    } as never;
+
+    const doc = entryToTrustedDocument(entry);
+    expect(doc).toContain("Categories: dashboard.");
+    expect(doc).toContain("Verified critique prose.");
+    expect(doc).not.toContain("Style: minimal.");
+    expect(doc).not.toContain("Unverified anti-pattern.");
+    expect(doc).not.toContain("Unverified product");
   });
 });

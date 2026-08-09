@@ -22,6 +22,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { parseArgs } from "node:util";
 import type { TaggerOutput } from "../tagger.js";
 import { DomainTag } from "../schema.js";
+import { approveDraftText } from "../review-draft-approval.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DRAFT = resolve(__dirname, "..", "..", "corpus", "entries-draft.json");
@@ -88,7 +89,7 @@ async function reviewEntry(entry: DraftEntry, n: number, total: number): Promise
   console.log(`  Colors:    ${entry.visual.dominantColors.join(", ")} | accent: ${entry.visual.accentColor ?? "none"}`);
   console.log(`  Type:      ${entry.visual.typePairing.display ?? "?"} / ${entry.visual.typePairing.body ?? "?"}`);
   console.log(`  Spacing:   ${entry.visual.spacingDensity} | Corners: ${entry.visual.cornerStyle}`);
-  console.log(`  Shadows: ${entry.visual.usesShadows} | Borders: ${entry.visual.usesBorders}`);
+  console.log(`  Shadows: ${entry.visual.usesShadows ?? "unknown"} | Borders: ${entry.visual.usesBorders}`);
   console.log(`\n  Critique:\n  ${entry.critique.replace("[DRAFT — REWRITE] ", "")}`);
   console.log(`\n  What to steal:`);
   entry.whatToSteal.forEach((t) => console.log(`    - ${t.replace("[DRAFT] ", "")}`));
@@ -141,8 +142,13 @@ async function reviewEntry(entry: DraftEntry, n: number, total: number): Promise
 
   // Approve: clean up [DRAFT] markers if editor didn't
   if (choice === "a" || choice === "e") {
-    entry.critique   = entry.critique.replace("[DRAFT — REWRITE] ", "");
-    entry.whatToSteal = entry.whatToSteal.map((t) => t.replace("[DRAFT] ", ""));
+    const approval = approveDraftText(entry);
+    if (!approval.ok) {
+      console.log(`  ❌ Cannot approve this draft: ${approval.reason}`);
+      return "draft";
+    }
+    entry.critique = approval.critique;
+    entry.whatToSteal = approval.whatToSteal;
     return "approved";
   }
 

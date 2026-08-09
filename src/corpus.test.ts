@@ -61,6 +61,8 @@ describe("corpus search (fixtures)", () => {
     // indexed + missing must sum to total; stale ≥ 0.
     expect(status.indexed + status.missing).toBe(status.total);
     expect(status.stale).toBeGreaterThanOrEqual(0);
+    expect(status.eligibleTotal).toBeLessThanOrEqual(status.total);
+    expect(status.eligibleMissing).toBe((status.eligibleTotal ?? 0) - (status.eligibleIndexed ?? 0));
   });
 
   it("hides draft entries from search by default, surfaces them with reviewStatus:'draft'", async () => {

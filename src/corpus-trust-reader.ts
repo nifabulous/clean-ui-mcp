@@ -79,16 +79,21 @@ export class TrustGatedCorpusReader implements CorpusReader {
     return this._core.every((field) => isVerified(entry, field));
   }
 
+  /** Ensure keyword fallback and rerank inputs cannot score on unverified text. */
+  private withTrustPolicy(options: Parameters<CorpusReader["search"]>[0]): Parameters<CorpusReader["search"]>[0] {
+    return { ...options, trustPredicate: (entry: CorpusEntryT, field: string) => isVerified(entry, field) };
+  }
+
   // ----- Gated: every method whose result becomes served content -------------
 
   async search(...args: Parameters<CorpusReader["search"]>): ReturnType<CorpusReader["search"]> {
-    return (await this.inner.search(...args)).filter((e) => this.passes(e));
+    return (await this.inner.search(this.withTrustPolicy(args[0]))).filter((e) => this.passes(e));
   }
 
   async searchRanked(
     ...args: Parameters<CorpusReader["searchRanked"]>
   ): ReturnType<CorpusReader["searchRanked"]> {
-    return (await this.inner.searchRanked(...args)).filter((r) => this.passes(r.entry));
+    return (await this.inner.searchRanked(this.withTrustPolicy(args[0]))).filter((r) => this.passes(r.entry));
   }
 
   getById(id: string): CorpusEntryT | undefined {

@@ -59,6 +59,28 @@ async function logQuery(params: { query?: string; category?: string; styleTag?: 
  * reader. Pure — no stdio, no auto-start, no env reads. The caller (server.ts)
  * is responsible for connecting a transport.
  */
+/**
+ * Renders a tri-state visual boolean for served output.
+ *
+ * `usesShadows` is nullable: null means the corpus never established the value,
+ * not that the answer is "no". Both render sites previously used a bare
+ * `v ? "yes" : "no"`, which turned absence into a negative claim the corpus does
+ * not make. Extracted so the two sites cannot drift and so the behaviour is
+ * assertable without standing up an MCP server.
+ */
+export function boolLabel(value: boolean | null | undefined): string {
+  if (value == null) return "—";
+  return value ? "yes" : "no";
+}
+
+function trustedIndexCoverage(status: ReturnType<CorpusReader["indexStatus"]>): { indexed: number; total: number; missing: number } {
+  return {
+    indexed: status.eligibleIndexed ?? status.indexed,
+    total: status.eligibleTotal ?? status.total,
+    missing: status.eligibleMissing ?? status.missing,
+  };
+}
+
 export interface CreateServerOptions {
   readonly createUiSpecModel?: CreateUiSpecModelDependency;
 }
@@ -384,8 +406,8 @@ function registerGetUiExample(server: McpServer, reader: CorpusReader): void {
         if (served("visual.spacingDensity")) lines.push(`- Spacing density: ${entry.visual.spacingDensity}`);
         if (served("visual.cornerStyle")) lines.push(`- Corners: ${entry.visual.cornerStyle}`);
         const shadowBorder = [
-          served("visual.usesShadows") ? `Shadows: ${entry.visual.usesShadows ? "yes" : "no"}` : "",
-          served("visual.usesBorders") ? `Borders: ${entry.visual.usesBorders ? "yes" : "no"}` : "",
+          served("visual.usesShadows") ? `Shadows: ${boolLabel(entry.visual.usesShadows)}` : "",
+          served("visual.usesBorders") ? `Borders: ${boolLabel(entry.visual.usesBorders)}` : "",
         ].filter(Boolean).join(" | ");
         if (shadowBorder) lines.push(`- ${shadowBorder}`);
         return lines.length ? [`## Visual attributes`, ...lines] : [];
@@ -474,14 +496,15 @@ function registerListCategories(server: McpServer, reader: CorpusReader): void {
     },
     async () => {
       const status = reader.indexStatus();
+      const coverage = trustedIndexCoverage(status);
       const driftParts = [
-        status.missing > 0 ? `${status.missing} missing` : null,
+        coverage.missing > 0 ? `${coverage.missing} eligible missing` : null,
         status.stale > 0 ? `${status.stale} stale` : null,
         status.contentStale > 0 ? `${status.contentStale} content-stale` : null,
       ].filter(Boolean);
       const drift = status.hasIndex && driftParts.length ? ` · ${driftParts.join(", ")} — run \`npm run build-index\`` : "";
       const mode   = status.hasIndex
-        ? `vector search active (${status.indexed}/${status.total} entries indexed${drift})`
+        ? `vector search active (${coverage.indexed}/${coverage.total} trusted entries indexed${drift})`
         : `keyword search only — run \`npm run build-index\` to enable semantic vector search`;
       return {
         content: [{
@@ -551,11 +574,12 @@ function registerGetSimilarUiExamples(server: McpServer, reader: CorpusReader): 
       const results = reader.findSimilar(id, limit ?? 5);
       if (results.length === 0) {
         const status = reader.indexStatus();
+        const coverage = trustedIndexCoverage(status);
         const reason = !status.hasIndex
           ? "the embedding index hasn't been built. Run `npm run build-index` to enable similarity search."
-          : status.missing > 0
-            ? `the index is out of date — ${status.indexed}/${status.total} entries indexed (${status.missing} missing). Run \`npm run build-index\`.`
-            : `this entry (or the others) aren't indexed yet (index covers ${status.indexed}/${status.total}).`;
+          : coverage.missing > 0
+            ? `the trusted index is out of date — ${coverage.indexed}/${coverage.total} eligible entries indexed (${coverage.missing} missing). Run \`npm run build-index\`.`
+            : `this entry (or the others) aren't indexed yet (trusted index covers ${coverage.indexed}/${coverage.total}).`;
         return {
           content: [{ type: "text", text: `Can't find similar entries — ${reason}` }],
         };
@@ -665,7 +689,7 @@ function registerCompareUiExamples(server: McpServer, reader: CorpusReader): voi
           `${p.omitted.includes("visual.spacingDensity") ? "—" : p.entry.visual?.spacingDensity ?? "—"} / ${p.omitted.includes("visual.cornerStyle") ? "—" : p.entry.visual?.cornerStyle ?? "—"}`,
         )).join(" | ")} |`,
         `| shadows / borders | ${projections.map((p) => cell(
-          `${p.omitted.includes("visual.usesShadows") ? "—" : p.entry.visual?.usesShadows ? "yes" : "no"} / ${p.omitted.includes("visual.usesBorders") ? "—" : p.entry.visual?.usesBorders ? "yes" : "no"}`,
+          `${p.omitted.includes("visual.usesShadows") ? "—" : boolLabel(p.entry.visual?.usesShadows)} / ${p.omitted.includes("visual.usesBorders") ? "—" : boolLabel(p.entry.visual?.usesBorders)}`,
         )).join(" | ")} |`,
         ...(concise ? [] : [
           `| critique angle | ${projections.map((p) => firstSentence(p.entry.critique)).join(" | ")} |`,

@@ -25,8 +25,10 @@ import {
 } from "./references/generated.js";
 import { Component, DomainTag, detectPlatform } from "./schema.js";
 import { isWcagCriterion, extractAllWcagIds } from "./wcag/registry.js";
+import { listFromAllowedWithRejects } from "./taxonomy-candidates.js";
 import { Vibrant } from "node-vibrant/node";
 import sharp from "sharp";
+import { detectColorScheme } from "./color-scheme.js";
 
 // ─── vocab (mirrors schema.ts — keep in sync) ─────────────────────────────────
 
@@ -222,8 +224,8 @@ export interface TaggerOutput {
     };
     spacingDensity: string;
     cornerStyle:    string;
-    usesShadows:    boolean;
-    usesBorders:    boolean;
+    usesShadows:    boolean | null;
+    usesBorders:    boolean | null;
   };
   critique:        string;
   whatToSteal:     string[];
@@ -252,7 +254,7 @@ export interface TaggerOutput {
   qualityScore:    number;
   tierChangeJustification?: string;
   addedAt:         string;
-  provenance?:     { taggedBy: "human" | "auto" | "auto-reviewed"; reviewedBy?: string };
+  provenance?:     { taggedBy: "human" | "auto" | "auto-reviewed"; reviewedBy?: string; taxonomyCandidates?: Record<string, string[]> };
   _raw?: Record<string, unknown>;
 }
 
@@ -1078,9 +1080,9 @@ VERIFIED GROUND TRUTH — treat every value below as fact, do not re-derive or c
 ${JSON.stringify({ quantizedColors }, null, 2)}
 ${domSignalsBlock}
 {
-${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}. If none fit well, use
-                           // the closest match AND set suggestedPatternType below.
-  "suggestedPatternType": null, // DISCOVERY LANE — when patternType is a forced/closest fit, name
+${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}. Leave empty when no
+                           // listed pattern is supported by the screenshot and set suggestedPatternType below.
+  "suggestedPatternType": null, // DISCOVERY LANE — when patternType is absent or a close fit, name
                            // what the pattern REALLY is in kebab-case (e.g. "kanban-board",
                            // "activity-feed", "monitoring-console", "calendar-view"). Null when
                            // patternType is accurate. This goes into _raw for the curator to
@@ -1094,10 +1096,10 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}.
                            // Example: "Settings / Integrations" -> domainTags:["integrations"].
                            // Leave [] if there's no clear business-domain signal.
   "colorScheme": "",       // ONE from: light, dark. The page-level background theme.
-  "industryVertical": "",  // ONE industry the product belongs to (fintech, devtools, healthcare,
-                           // e-commerce, media, education, enterprise-saas, consumer-social,
-                           // productivity, security, ai-ml, crypto, real-estate, legal, travel).
-                           // Infer from product name, copy, visual language. Leave "" if unclear.
+  "industryVertical": "",  // ONE industry the visible page context supports (fintech, devtools,
+                           // healthcare, e-commerce, media, education, enterprise-saas,
+                           // consumer-social, productivity, security, ai-ml, crypto, real-estate,
+                           // legal, travel). Use visible copy/navigation only; leave "" if unclear.
   "responsiveBehavior": "",// ONE from: responsive, fixed-width, adaptive. Whether the layout
                            // adapts to viewport. "responsive" = fluid grid that reflows; "fixed-width"
                            // = centered max-width container that doesn't reflow; "adaptive" =
@@ -1108,8 +1110,8 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}.
   "bodyFont": null,        // if DOM signals provide fontFamily, use that name — do not contradict
   "spacingDensity": "",    // one of: compact, moderate, spacious. If DOM signals provide fontSize/gap, use them to inform density.
   "cornerStyle": "",       // one of: sharp, slight-round, pill, mixed. If DOM signals provide borderRadius, use it.
-  "usesShadows": false,    // if DOM signals provide boxShadow, non-null = shadows present
-  "usesBorders": false,    // true if borders/dividers are used for layout structure
+  "usesShadows": null,     // if DOM signals provide boxShadow, non-null = shadows present; null if unknown
+  "usesBorders": null,     // true if borders/dividers are used for layout structure; null if unclear
   "colorRoles": null,      // {canvas, surface, ink, muted, accent} — map dominantColors to semantic
                            // roles (what each is FOR). This IS a judgment call. Omit if unsure.
   "layoutForm": "",        // ONE from: ${LAYOUT_FORMS.join(", ")}. Omit if not structural.
@@ -1119,7 +1121,8 @@ ${nameField}  "patternType": "",       // ONE from: ${PATTERN_TYPES.join(", ")}.
 
 Rules:
 - dominantColors and accentColor MUST come from the supplied quantizedColors list. Never invent a hex.
-- If any enum field's correct value isn't listed, choose the closest listed value — never invent.
+- If an enum field is not supported by visible evidence, return its empty-string/null/[] shape;
+  never force a closest label merely to fill the schema.
 - Components are visible evidence, not product intent. Include chart/card/list/navigation controls
   actually present in the screenshot. Prefer specific tags (donut-chart, line-chart, kpi-card)
   over generic chart/card terms when the specific component is visible. Do not add a component just
@@ -1184,8 +1187,9 @@ function buildCritiquePrompt(
 established fact — do not re-describe or contradict it):
 ${JSON.stringify(extraction, null, 2)}
 ${a11yBlock}
-Step 1 — Observe first. Before writing anything else, list exactly 5 specific, concrete visual
-elements you can point to on screen. Each observation should be a DESIGN DECISION you can see
+Step 1 — Observe first. Before writing anything else, list up to 5 specific, concrete visual
+elements you can point to on screen. Use only as many observations as the image supports; an
+ambiguous or text-only input may have fewer (or none). Each observation should be a DESIGN DECISION you can see
 evidence of, not just a description of what's there. Think about WHO the user is (first-time vs
 returning, mobile vs desktop, expert vs novice, users with disabilities) and HOW they interact
 (muscle memory, scanning patterns, error recovery, decision-making under time pressure).
@@ -1225,13 +1229,13 @@ draftAntiPatterns:
 Step 2 — Critique using ONLY items from your observations list. Return this JSON:
 
 {
-  "observations": [],          // exactly 5 specific, pointable visual elements (required)
+  "observations": [],          // 0-5 specific, pointable visual elements; never pad with guesses
   "typographyNotes": "",       // 1-2 sentences on how the type choices create hierarchy
   "mood": "",                  // one phrase: the emotional register of the design. Read from color
                                // choices, typography weight, whitespace, and copy tone. Examples:
                                // "playful and approachable", "clinical and data-forward",
                                // "confident and restrained", "warm and tactile", "authoritative".
-  "draftCritique": "",         // 3-5 sentences. For EACH decision: name the DECISION (what was chosen),
+  "draftCritique": "",         // 1-5 evidence-backed sentences. Stop when the visible evidence ends; for EACH decision name the DECISION (what was chosen),
                                // the EFFECT (what perceptual/functional/behavioral outcome it creates for
                                // the user — think about HOW the user interacts, not just what it looks like),
                                // and the REJECTION (what conventional default it replaces). Write about the
@@ -1240,12 +1244,12 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
                                // Name the SPECIFIC USER TYPE affected: "returning users scan faster"
                                // beats "users scan faster," "first-time users may feel lost" beats
                                // "users may feel lost."
-  "draftWhatToSteal": [],      // 3-5 SPECIFIC, COPYABLE techniques a developer could reproduce. Each must
+  "draftWhatToSteal": [],      // 0-5 SPECIFIC, COPYABLE techniques a developer could reproduce. Each must
                                // include the reasoning: not "use whitespace" but "reserve the brightest
                                // accent color for the single element that must win attention so state
                                // and action remain unmistakable." Name the technique, the constraint it
                                // satisfies, and when NOT to use it.
-  "draftAntiPatterns": [],     // REQUIRED, at least 2. Each must describe a DIFFERENT decision than
+  "draftAntiPatterns": [],     // 0-5 items. Each must describe a DIFFERENT decision than
                                // draftCritique and teach a SPECIFIC lesson: "what this design avoids
                                // doing, and why avoiding it matters for this user/task type." Think
                                // about what conventional approaches would have FAILED here — what
@@ -1289,7 +1293,7 @@ Step 2 — Critique using ONLY items from your observations list. Return this JS
   "voiceTone": "",             // omit entirely if no notable copy is visible
   "voiceExamples": [],         // real copy visible on screen, verbatim
   "voiceAvoid": [],            // what voice this design does NOT use
-  "qualityTier": "",            // ONE from: ${QUALITY_TIERS.join(", ")}. Default to "exceptional".
+  "qualityTier": "",            // ONE from: ${QUALITY_TIERS.join(", ")}. Return "" when quality cannot be judged.
                                // Use "cautionary" only when the screen's PRIMARY teaching value is
                                // failure: severe unreadability, deceptive patterns, broken task
                                // completion, or multiple compounding issues that make the design a
@@ -1330,23 +1334,31 @@ Rules:
 
 // ─── sanitizer helpers (unchanged from the single-pass era) ──────────────────
 
-function listFromAllowed(value: unknown, allowed: readonly string[], fallback: string[]): string[] {
-  if (!Array.isArray(value)) return fallback;
-  const normalized = value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item) => allowed.includes(item));
-  return [...new Set(normalized)].slice(0, 3).length ? [...new Set(normalized)].slice(0, 3) : fallback;
+type TaxonomyCandidates = {
+  patternType: string[];
+  categories: string[];
+  styleTags: string[];
+  components: string[];
+  domainTags: string[];
+};
+
+function taxonomyCandidateRecord(...passes: Array<{ name: "extraction" | "critique"; candidates: TaxonomyCandidates }>): Record<string, string[]> | undefined {
+  const out: Record<string, string[]> = {};
+  for (const { name, candidates } of passes) {
+    for (const [field, values] of Object.entries(candidates)) {
+      if (values.length) out[`${name}.${field}`] = values;
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
-function componentsFromAllowed(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const allowed = COMPONENTS as readonly string[];
-  const normalized = value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item) => allowed.includes(item));
-  return [...new Set(normalized)].slice(0, 10);
+function oneFromAllowedWithRejects(value: unknown, allowed: readonly string[]): { value: string; rejected: string[] } {
+  if (typeof value !== "string") return { value: "", rejected: [] };
+  const normalized = value.trim();
+  if (!normalized) return { value: "", rejected: [] };
+  return allowed.includes(normalized)
+    ? { value: normalized, rejected: [] }
+    : { value: "", rejected: [normalized] };
 }
 
 // ─── platform normalization ──────────────────────────────────────────────────
@@ -1383,16 +1395,6 @@ export function normalizeExtractionByPlatform(
     layout = filteredRegions.length ? { ...layout, regions: filteredRegions } : undefined;
   }
   return { components: filteredComponents, layout };
-}
-
-function domainTagsFromAllowed(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const allowed = DOMAIN_TAGS as readonly string[];
-  const normalized = value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item) => allowed.includes(item));
-  return [...new Set(normalized)].slice(0, 4);
 }
 
 /**
@@ -1518,7 +1520,7 @@ function sanitizeAccessibilityRisks(value: unknown): Array<{ element: string; ri
   return result.slice(0, 2);
 }
 
-function hexColors(value: unknown, fallback: string[]): string[] {
+function hexColors(value: unknown, fallback: string[] = []): string[] {
   if (!Array.isArray(value)) return fallback;
   const colors = value
     .filter((item): item is string => typeof item === "string")
@@ -1529,7 +1531,7 @@ function hexColors(value: unknown, fallback: string[]): string[] {
   return unique.length ? unique : fallback;
 }
 
-function oneFromAllowed(value: unknown, allowed: readonly string[], fallback: string): string {
+function oneFromAllowed(value: unknown, allowed: readonly string[], fallback = ""): string {
   return typeof value === "string" && allowed.includes(value) ? value : fallback;
 }
 
@@ -1555,10 +1557,12 @@ function stringOrNull(value: unknown): string | null {
 }
 
 function text(value: unknown, fallback = ""): string {
-  return typeof value === "string" ? value.trim() : fallback;
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed || fallback;
 }
 
-function booleanValue(value: unknown, fallback: boolean): boolean {
+function booleanValue<F extends boolean | null>(value: unknown, fallback: F): boolean | F {
   return typeof value === "boolean" ? value : fallback;
 }
 
@@ -1574,6 +1578,7 @@ function textList(value: unknown): string[] {
 export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   patternType: string;
   suggestedPatternType?: string;
+  taxonomyCandidates: TaxonomyCandidates;
   categories: string[];
   styleTags: string[];
   components: string[];
@@ -1590,8 +1595,8 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
   typographyNotes: string;
   spacingDensity: string;
   cornerStyle: string;
-  usesShadows: boolean;
-  usesBorders: boolean;
+  usesShadows: boolean | null;
+  usesBorders: boolean | null;
   draftCritique: string;
   draftWhatToSteal: string[];
   draftAntiPatterns: string[];
@@ -1647,40 +1652,56 @@ export function sanitizeTaggerPayload(parsed: Record<string, unknown>): {
       }
     : undefined;
 
-  const patternType = oneFromAllowed(parsed.patternType, PATTERN_TYPES, "dashboard");
+  const patternTypeResult = oneFromAllowedWithRejects(parsed.patternType, PATTERN_TYPES);
+  const categoriesResult = listFromAllowedWithRejects(parsed.categories, CATEGORIES, 3);
+  const styleTagsResult = listFromAllowedWithRejects(parsed.styleTags, STYLE_TAGS, 3);
+  const componentsResult = listFromAllowedWithRejects(parsed.components, COMPONENTS, 10);
+  const domainTagsResult = listFromAllowedWithRejects(parsed.domainTags, DOMAIN_TAGS, 4);
+  const patternType = patternTypeResult.value;
   const suggestedPatternType = normalizeSuggestedPatternType(parsed.suggestedPatternType, patternType);
 
   return {
     patternType,
     suggestedPatternType,
-    categories: listFromAllowed(parsed.categories, CATEGORIES, ["dashboard"]),
-    styleTags: listFromAllowed(parsed.styleTags, STYLE_TAGS, ["minimal"]),
-    components: componentsFromAllowed(parsed.components),
-    domainTags: domainTagsFromAllowed(parsed.domainTags),
+    taxonomyCandidates: {
+      patternType: patternTypeResult.rejected,
+      categories: categoriesResult.rejected,
+      styleTags: styleTagsResult.rejected,
+      components: componentsResult.rejected,
+      domainTags: domainTagsResult.rejected,
+    },
+    categories: categoriesResult.values,
+    styleTags: styleTagsResult.values,
+    components: componentsResult.values,
+    domainTags: domainTagsResult.values,
     colorScheme: oneFromAllowed(parsed.colorScheme, ["light", "dark"], ""),
     industryVertical: text(parsed.industryVertical).slice(0, 40),
     responsiveBehavior: oneFromAllowed(parsed.responsiveBehavior, ["responsive", "fixed-width", "adaptive"], ""),
     mood: text(parsed.mood).slice(0, 60),
-    dominantColors: hexColors(parsed.dominantColors, ["#ffffff", "#111111"]),
+    dominantColors: hexColors(parsed.dominantColors),
     accentColor: nullableHex(parsed.accentColor),
     colorRoles,
     displayFont: stringOrNull(parsed.displayFont),
     bodyFont: stringOrNull(parsed.bodyFont),
     typographyNotes: text(parsed.typographyNotes),
-    spacingDensity: oneFromAllowed(parsed.spacingDensity, SPACING_DENSITIES, "moderate"),
-    cornerStyle: oneFromAllowed(parsed.cornerStyle, CORNER_STYLES, "slight-round"),
-    usesShadows: booleanValue(parsed.usesShadows, false),
-    usesBorders: booleanValue(parsed.usesBorders, true),
-    draftCritique: text(parsed.draftCritique, "This UI needs a human review, but the screenshot shows a clear structure worth cataloging for future design reference."),
+    spacingDensity: oneFromAllowed(parsed.spacingDensity, SPACING_DENSITIES),
+    cornerStyle: oneFromAllowed(parsed.cornerStyle, CORNER_STYLES),
+    // An absent model answer stays absent. Coalescing to `false` turned "the
+    // model did not say" into "there are no shadows" — a positive claim the
+    // model never made, written straight into the served corpus. The field is
+    // `gated`, so nothing downstream will ever adjudicate that guess.
+    usesShadows: booleanValue(parsed.usesShadows, null),
+    usesBorders: booleanValue(parsed.usesBorders, null),
+    draftCritique: text(parsed.draftCritique, "[DRAFT — REWRITE] This critique needs a human rewrite grounded in the screenshot."),
     layout,
     voice,
-    qualityTier: oneFromAllowed(parsed.qualityTier, QUALITY_TIERS, "exceptional"),
+    qualityTier: oneFromAllowed(parsed.qualityTier, QUALITY_TIERS),
     tierChangeJustification: typeof parsed.tierChangeJustification === "string" && parsed.tierChangeJustification.trim()
       ? parsed.tierChangeJustification.trim()
       : undefined,
     draftWhatToSteal: textList(parsed.draftWhatToSteal).length
       ? textList(parsed.draftWhatToSteal)
-      : ["Review the screenshot and extract one concrete interface technique before saving."],
+      : ["[DRAFT] Review the screenshot and extract one concrete interface technique before saving."],
     draftAntiPatterns: textList(parsed.draftAntiPatterns).length
       ? textList(parsed.draftAntiPatterns)
       : ["[DRAFT] Review the screenshot and name one common UI mistake this design avoids."],
@@ -1917,7 +1938,7 @@ export function scrubProseIconOnly(critique: {
   // Restore a neutral placeholder so a successful model call doesn't become a
   // validation failure downstream. The human reviewer will rewrite these.
   if (critique.draftWhatToSteal.length === 0) {
-    critique.draftWhatToSteal = ["Review the screenshot and extract one concrete interface technique before saving."];
+    critique.draftWhatToSteal = ["[DRAFT] Review the screenshot and extract one concrete interface technique before saving."];
   }
   if (critique.draftAntiPatterns.length === 0) {
     critique.draftAntiPatterns = ["[DRAFT] Review the screenshot and name one common UI mistake this design avoids."];
@@ -1949,12 +1970,12 @@ function scrubUnsupportedComponentClaims(critique: {
     critique.businessRationale.rationale = filterSentences(critique.businessRationale.rationale);
   }
   if (critique.draftWhatToSteal.length === 0) {
-    critique.draftWhatToSteal = ["Review the screenshot and extract one concrete interface technique before saving."];
+    critique.draftWhatToSteal = ["[DRAFT] Review the screenshot and extract one concrete interface technique before saving."];
   }
   // CorpusEntry requires a substantive critique. A scrubbed draft must remain
   // visibly review-only instead of becoming an invalid empty entry.
   if (critique.draftCritique.length < 80) {
-    critique.draftCritique = "This critique contained unsupported component claims and needs a human rewrite based on the screenshot.";
+    critique.draftCritique = "[DRAFT — REWRITE] This critique contained unsupported component claims and needs a human rewrite based on the screenshot.";
   }
 }
 
@@ -2869,7 +2890,13 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   try {
     quantizedColors = await extractQuantizedColors(input.imagePath);
   } catch (err) {
-    console.error("[tagger] Color extraction failed, falling back to model-guessed colors:", describeCaughtError(err));
+    console.error("[tagger] Color extraction failed; dominantColors will remain unknown:", describeCaughtError(err));
+  }
+  let colorSchemeDetection: Awaited<ReturnType<typeof detectColorScheme>> | null = null;
+  try {
+    colorSchemeDetection = await detectColorScheme(input.imagePath);
+  } catch (err) {
+    console.error("[tagger] Color-scheme detection failed; colorScheme will remain unknown:", describeCaughtError(err));
   }
 
   // ── PASS 1: extraction (facts + geometry, with ground-truth colors) ────────
@@ -2899,10 +2926,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   let extractionParsed = parseExtraction(extractionRawText);
 
   // Adaptive re-run: if we asked for low and the model clearly couldn't read the
-  // page, retry once at high. Probe the RAW extraction output — sanitizeTaggerPayload
-  // applies defaults (patternType → "dashboard") that mask the very weakness we're
-  // detecting, making the !probe.patternType check never fire. Read the raw fields
-  // directly so a genuinely-empty result is detected as weak.
+  // page, retry once at high. Probe the RAW extraction output so a genuinely-empty
+  // result is detected as weak before sanitation or persistence.
   if (requestedDetail === "low") {
     const rawType = typeof extractionParsed.patternType === "string" ? (extractionParsed.patternType as string).trim() : "";
     const rawCats = Array.isArray(extractionParsed.categories) ? (extractionParsed.categories as unknown[]).length : 0;
@@ -2935,8 +2960,8 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   // Skipped if we already escalated detail above (the weak-result probe runs
   // against the latest extractionParsed, so this naturally composes with it).
   if (resolveProvider("extraction") === "gemini" && /3\.5|3-5/i.test(GEMINI_AUTO_TAG_MODEL)) {
-    // Same raw-probe fix as the detail-escalation block above — sanitizeTaggerPayload's
-    // defaults mask the weakness we're detecting.
+    // Same raw-probe rule as the detail-escalation block above: inspect raw output
+    // before sanitation so an empty result remains visible as weak.
     const rawType = typeof extractionParsed.patternType === "string" ? (extractionParsed.patternType as string).trim() : "";
     const rawCats = Array.isArray(extractionParsed.categories) ? (extractionParsed.categories as unknown[]).length : 0;
     const probeName = (typeof extractionParsed.productName === "string" ? extractionParsed.productName.trim() : "");
@@ -2961,14 +2986,16 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
   }
 
   const extraction = sanitizeTaggerPayload(extractionParsed);
+  // Page-level theme is deterministic pixel evidence. A near-threshold or
+  // failed measurement is an honest absence; never retain the model's guess.
+  extraction.colorScheme = colorSchemeDetection?.colorScheme ?? "";
   const patternDiscovery = extraction.suggestedPatternType
     ? { suggestedPatternType: extraction.suggestedPatternType }
     : undefined;
-  // Override dominantColors with the ground-truth quantized set when available,
-  // so even if the model ignored instructions, we get deterministic colors.
-  if (quantizedColors.length) {
-    extraction.dominantColors = quantizedColors;
-  }
+  // Dominant colors are a deterministic pixel fact, never a model fallback.
+  // If quantization failed, keep the field empty so the entry fails validation
+  // or remains a draft instead of embedding fabricated hex values.
+  extraction.dominantColors = quantizedColors;
   // Override bodyFont with the DOM-signal computed fontFamily when available.
   // Parse to the first family name (e.g. "Verdana, Geneva, sans-serif" → "Verdana")
   // so the entry stores a clean font name. Body-only override: the DOM computed
@@ -3067,10 +3094,13 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       layout:          extraction.layout,
       businessRationale: undefined,
       voice:           undefined,
-      qualityTier:     "exceptional",
-      qualityScore:    3,
+      // Extraction-only has no editorial quality evidence. Leave the fields
+      // invalid so a caller cannot accidentally persist a fabricated tier;
+      // the draft markers still make the intended review state explicit.
+      qualityTier:     "",
+      qualityScore:    0,
       addedAt:         today,
-      provenance:      { taggedBy: "auto" }, // tagger produced; flips to auto-reviewed when a human edits+approves
+      provenance:      { taggedBy: "auto", taxonomyCandidates: taxonomyCandidateRecord({ name: "extraction", candidates: extraction.taxonomyCandidates }) }, // tagger produced; flips to auto-reviewed when a human edits+approves
       _raw: {
         extractionProvider: resolveProvider("extraction", input.extractionOverride?.provider ?? input.extractionProvider, extractionCfgOverride !== undefined),
         critiqueProvider: null,
@@ -3079,8 +3109,10 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
         extraction: extractionParsed,
         critique: null,
         quantizedColors,
+        colorSchemeDetection,
         domSignals: input.domSignals ?? null,
         extractionOnly: true,
+        taxonomyCandidates: { extraction: extraction.taxonomyCandidates },
       },
     };
   }
@@ -3198,10 +3230,16 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
     voice:           critique.voice,
     mood:            critique.mood || undefined,
     qualityTier:     critique.qualityTier,
-    qualityScore:    critique.qualityTier === "cautionary" ? 2 : 3,
+    // An absent/invalid tier must not silently become exceptional. A zero score
+    // deliberately fails CorpusEntry validation until a curator/model supplies
+    // a valid quality tier.
+    qualityScore:    critique.qualityTier === "cautionary" ? 2 : critique.qualityTier === "exceptional" ? 3 : 0,
     tierChangeJustification: critique.tierChangeJustification,
     addedAt:         today,
-    provenance:      { taggedBy: "auto" }, // two-pass tagger output; human review flips to auto-reviewed
+    provenance:      { taggedBy: "auto", taxonomyCandidates: taxonomyCandidateRecord(
+      { name: "extraction", candidates: extraction.taxonomyCandidates },
+      { name: "critique", candidates: critique.taxonomyCandidates },
+    ) }, // two-pass tagger output; human review flips to auto-reviewed
     _raw: {
       extractionProvider: resolveProvider("extraction", input.extractionOverride?.provider ?? input.extractionProvider, extractionCfgOverride !== undefined),
       critiqueProvider: resolveProvider("critique", input.critiqueOverride?.provider ?? input.critiqueProvider, critiqueCfgOverride !== undefined),
@@ -3210,7 +3248,12 @@ export async function tagImage(input: TaggerInput): Promise<TaggerOutput> {
       extraction: extractionParsed,
       critique: critiqueParsed,
       quantizedColors,
+      colorSchemeDetection,
       domSignals: input.domSignals ?? null,
+      taxonomyCandidates: {
+        extraction: extraction.taxonomyCandidates,
+        critique: critique.taxonomyCandidates,
+      },
     },
   };
 }
@@ -3231,17 +3274,19 @@ export async function generateCritique(
   domSignals?: TaggerInput["domSignals"],
   platform?: "web" | "mobile" | "tablet",
   critiqueOverride?: EndpointOverride,
+  critiqueImagePath?: string,
 ): Promise<{
   critique: string;
   whatToSteal: string[];
   antiPatterns: { antiPatterns: string[]; whereThisFails: string[]; accessibilityRisks: Array<{ element: string; risk: string; evidence: string; confidence: string; wcag: string[] }> };
+  taxonomyCandidates: Record<string, string[]>;
   businessRationale?: { businessGoal: string; targetUser: string; rationale: string; confirmed: boolean };
   voice?: { tone: string; examples: string[]; avoid: string[] };
   mood?: string;
   qualityTier: string;
   qualityScore: number;
   typographyNotes: string;
-  _raw?: { critique: Record<string, unknown> };
+  _raw?: { critique: Record<string, unknown>; taxonomyCandidates?: TaxonomyCandidates };
 }> {
   if (!hasCritiqueKey()) throw new Error("No provider key set. Critique needs at least one of OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or MISTRAL_API_KEY in .env.");
   const stripFences = (s: string) => s.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
@@ -3265,7 +3310,7 @@ export async function generateCritique(
   let critiqueRawText = await callModel(
     "critique",
     buildCritiquePrompt(productName, critiqueExtraction, domSignals),
-    null,
+    critiqueImagePath ?? null,
     undefined,
     "high",
     undefined,
@@ -3283,7 +3328,7 @@ export async function generateCritique(
   const gateErrors = [...bannedErrors, ...iconOnlyErrors, ...componentErrors];
   if (gateErrors.length > 0) {
     const feedback = `\n\nYour previous response was rejected — fix these and return the full JSON again:\n${gateErrors.join("\n")}`;
-    const retryText = await callModel("critique", buildCritiquePrompt(productName, critiqueExtraction, domSignals), null, feedback, "high", undefined, critiqueOverride?.provider ?? critiqueProvider, critiqueCfgOverride);
+    const retryText = await callModel("critique", buildCritiquePrompt(productName, critiqueExtraction, domSignals), critiqueImagePath ?? null, feedback, "high", undefined, critiqueOverride?.provider ?? critiqueProvider, critiqueCfgOverride);
     try { critiqueParsed = JSON.parse(stripFences(retryText)); critique = sanitizeTaggerPayload(critiqueParsed); } catch { /* keep flagged original */ }
   }
   scrubProseIconOnly(critique);
@@ -3300,9 +3345,10 @@ export async function generateCritique(
     businessRationale: critique.businessRationale,
     voice: critique.voice,
     qualityTier: critique.qualityTier,
-    qualityScore: critique.qualityTier === "cautionary" ? 2 : 3,
+    qualityScore: critique.qualityTier === "cautionary" ? 2 : critique.qualityTier === "exceptional" ? 3 : 0,
     typographyNotes: critique.typographyNotes || "",
     mood: critique.mood || undefined,
-    _raw: { critique: critiqueParsed },
+    taxonomyCandidates: taxonomyCandidateRecord({ name: "critique", candidates: critique.taxonomyCandidates }) ?? {},
+    _raw: { critique: critiqueParsed, taxonomyCandidates: critique.taxonomyCandidates },
   };
 }

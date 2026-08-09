@@ -56,6 +56,21 @@ describe("TrustGatedCorpusReader", () => {
     expect((await r.searchRanked({} as never)).map((x) => x.entry.id)).toEqual(["verified-1"]);
   });
 
+  it("passes a field-aware trust policy to the underlying ranker", async () => {
+    let sawPolicy = false;
+    const inner = {
+      ...innerReader(),
+      searchRanked: async (options: { trustPredicate?: (entry: CorpusEntryT, field: string) => boolean }) => {
+        sawPolicy = options.trustPredicate?.(U, "whatToSteal") === false
+          && options.trustPredicate?.(V, "whatToSteal") === true;
+        return [];
+      },
+    } as unknown as CorpusReader;
+    const r = new TrustGatedCorpusReader(inner, ["whatToSteal"]);
+    await r.searchRanked({ query: "technique" });
+    expect(sawPolicy).toBe(true);
+  });
+
   it("refuses getById for an unverified entry", () => {
     const r = new TrustGatedCorpusReader(innerReader(), ["whatToSteal"]);
     expect(r.getById("verified-1")?.id).toBe("verified-1");

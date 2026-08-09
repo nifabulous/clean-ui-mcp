@@ -41,6 +41,16 @@ export async function detect(entry: CorpusEntryT, ctx: VerifyCtx): Promise<Detec
       ? { verdict: "pass", measured: s, confidence, reason: `monotonic ramps dominate (rampRatio ${s.rampRatio.toFixed(3)})` }
       : { verdict: "contradicted", measured: s, confidence, reason: "no shadow ramps found though shadows are recorded" };
   }
+  // `recorded` is now `boolean | null`. A null means the corpus makes NO claim
+  // about shadows, so there is nothing to contradict — falling through to the
+  // `recorded === false` branch would emit "shadow ramps found though no shadows
+  // are recorded", inventing a corpus claim and then flagging a contradiction
+  // against it. A contradiction finding also deletes the field's verification
+  // record (mergeDataQuality), so this would revoke trust over a claim that was
+  // never made.
+  if (typeof recorded !== "boolean") {
+    return { verdict: "abstain", measured: s, confidence: 0.5, reason: "no shadow value is recorded; nothing to verify" };
+  }
   return hasShadows
     ? { verdict: "contradicted", measured: s, confidence, reason: "shadow ramps found though no shadows are recorded" }
     : { verdict: "abstain", measured: s, confidence: 0.5, reason: "no shadows found; absence is not evidence of absence" };

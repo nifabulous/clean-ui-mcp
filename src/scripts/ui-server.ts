@@ -3,7 +3,7 @@ import "../env.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { extname, resolve, join, sep } from "node:path";
+import { basename, extname, resolve, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 // SSRF guard extracted to ../ssrf.ts (shared with the CLI capture path).
 // The dns.lookup import that lived here previously moved with it.
@@ -11,6 +11,8 @@ import sharp from "sharp";
 import { imageSize } from "image-size";
 import { chromium } from "playwright";
 import { CorpusEntry, Category, StyleTag, Component, DomainTag, PatternType, SpacingDensity, CornerStyle, ImageVisibility, BusinessGoal, findDraftMarkers, type CorpusEntryT, type DirectionT } from "../schema.js";
+import { stripGatedFields, assertNoIncomingVerification, preserveGatedFields } from "../gated-fields.js";
+import { carryVerification } from "../verification-carry.js";
 import { findVagueAntiPatterns } from "../content-lint.js";
 import { CORPUS_ROOT, PROJECT_ROOT, fromCorpusRelativeImagePath, listImageFilesRecursive, privateImageDir, toCorpusRelativePath } from "../paths.js";
 import { describeError } from "../errors.js";
@@ -165,11 +167,19 @@ export function stampProvenance(
   opts: { advanceTaggedAt?: boolean } = {},
 ): void {
   const prior = entry.provenance;
+  // SPREAD, not a rebuild. The prior code listed four keys while the schema
+  // declares seven, so every call silently discarded `verification`,
+  // `verifyAttempts` and `dataQuality` — ~447 records across 50 entries, each
+  // bought with a real vision call. Fail-closed, so nothing false was served; the
+  // evidence was just thrown away.
+  //
+  // Preserving them here is NOT sufficient on its own: on a path that changes
+  // values (retag, human edit) a carried record would certify text nobody checked.
+  // `carryVerification` is what drops the stale ones, and the two mutation sites
+  // call it. This function's job is only taggedBy/taggedAt.
   entry.provenance = {
+    ...prior,
     taggedBy: mode,
-    // Preserve existing capture + reviewedBy — never replace.
-    capture: prior?.capture,
-    reviewedBy: prior?.reviewedBy,
     // Advance taggedAt only on auto-tag/retag/new auto-reviewed save, NOT on later human edits.
     taggedAt: mode === "auto" || opts.advanceTaggedAt ? today : prior?.taggedAt,
   };
@@ -536,96 +546,75 @@ export function entryIssues(error: unknown): string[] {
   return [describeError(error)];
 }
 
-// Server-side draft-marker stripper. Mirrors the classic workbench's
-// stripDraftMarker: removes "[DRAFT — …] ", "[DRAFT] ", "[PLACEHOLDER] ",
-// "[TODO] " prefixes from any string. The tagger emits these as editing
-// affordances; /api/auto-retag strips them so a fresh retag lands as clean
-// text (the user rewrites later) — without weakening the draft-hygiene gate
-// that applies to manual edits via PUT.
-const DRAFT_PREFIX_RE = /\[(?:DRAFT|PLACEHOLDER|TODO)[^\]]*\]\s*/gi;
-function stripDraftPrefix(s: string): string {
-  return typeof s === "string" ? s.replace(DRAFT_PREFIX_RE, "") : s;
-}
-/** Strip draft markers from a single a11y risk (structured object with canonical WCAG IDs). */
-function stripDraftFromRisk(risk: CorpusEntryT["antiPatterns"]["accessibilityRisks"][number]): typeof risk {
-  return {
-    ...risk,
-    element: stripDraftPrefix(risk.element),
-    risk: stripDraftPrefix(risk.risk),
-    evidence: stripDraftPrefix(risk.evidence),
-    wcag: risk.wcag,
-  };
-}
-function stripDraftMarkersFromEntry(entry: CorpusEntryT): CorpusEntryT {
-  const e = { ...entry };
-  e.critique = stripDraftPrefix(e.critique);
-  e.whatToSteal = e.whatToSteal.map(stripDraftPrefix);
-  if (e.antiPatterns) {
-    e.antiPatterns = {
-      antiPatterns: e.antiPatterns.antiPatterns.map(stripDraftPrefix),
-      whereThisFails: e.antiPatterns.whereThisFails.map(stripDraftPrefix),
-      accessibilityRisks: e.antiPatterns.accessibilityRisks.map(stripDraftFromRisk),
-      legacyAccessibilityNotes: e.antiPatterns.legacyAccessibilityNotes.map(stripDraftPrefix),
-    };
-  }
-  if (e.voice) {
-    e.voice = {
-      tone: stripDraftPrefix(e.voice.tone),
-      examples: e.voice.examples.map(stripDraftPrefix),
-      avoid: e.voice.avoid.map(stripDraftPrefix),
-    };
-  }
-  if (e.businessRationale) {
-    e.businessRationale = {
-      ...e.businessRationale,
-      targetUser: stripDraftPrefix(e.businessRationale.targetUser),
-      rationale: stripDraftPrefix(e.businessRationale.rationale),
-    };
-  }
-  return e;
-}
-
 // ─── DOM signals reader ─────────────────────────────────────────────────────
-// Reads the dom-signals.json sidecar for a batch-captured image. Only batch
-// captures (images under images-private/captures/{batchId}/) have signals;
-// Add-flow captures skip extraction (undefined signalsMap). Promoted entries
-// whose image path was flattened by promoteTempImage also lose the batch
-// linkage — readDomSignalsForImage returns null for those, and the tagger
-// falls back to pixel-guessing (no regression — same as before DOM signals).
+// Reads the dom-signals.json sidecar for a batch-captured image. Batch captures
+// keep their sidecar under captures/{batchId}; Add-flow captures are copied to
+// a permanent per-image sidecar when promoted, so flattening no longer drops
+// the evidence linkage. Sidecars are also bound to the exact PNG hash;
+// a missing or mismatched binding is rejected rather than treating stale DOM
+// facts as ground truth.
 //
 // NOTE: hasDomSignals on CaptureMeta is NOT persisted on corpus entries, so
 // we always attempt the read rather than using it as a fast-path skip.
 const domSignalsCache = new Map<string, Record<string, DomSignals> | null>();
+const PERMANENT_DOM_SIGNALS_DIR = resolve(CORPUS_ROOT, "images-private", "dom-signals");
 
-function readDomSignalsForImage(corpusRelativeImagePath: string): DomSignals | null {
+export function readDomSignalsForImage(corpusRelativeImagePath: string): DomSignals | null {
   // Only paths under captures/{batchId}/ can have a dom-signals.json sidecar.
   // Path looks like: images-private/captures/{batchId}/{captureId}.png
   const match = corpusRelativeImagePath.match(/^images-private\/captures\/([^/]+)\/(.+)$/);
-  if (!match) return null;
-  const [, batchId, captureIdWithExt] = match;
-  const captureId = captureIdWithExt.replace(/\.[^.]+$/, ""); // strip .png/.jpg
-
-  // Cache the parsed sidecar per batch dir (read once, not per image).
-  let sidecar = domSignalsCache.get(batchId);
-  if (sidecar === undefined) {
-    const sidecarPath = resolve(CORPUS_ROOT, "images-private", "captures", batchId, "dom-signals.json");
-    if (!existsSync(sidecarPath)) {
-      domSignalsCache.set(batchId, null);
-      return null;
+  let signals: DomSignals | null = null;
+  if (match) {
+    const [, batchId, captureIdWithExt] = match;
+    const captureId = captureIdWithExt.replace(/\.[^.]+$/, ""); // strip .png/.jpg
+    // Cache the parsed sidecar per batch dir (read once, not per image).
+    let sidecar = domSignalsCache.get(batchId);
+    if (sidecar === undefined) {
+      const sidecarPath = resolve(CORPUS_ROOT, "images-private", "captures", batchId, "dom-signals.json");
+      if (!existsSync(sidecarPath)) {
+        domSignalsCache.set(batchId, null);
+        return null;
+      }
+      try {
+        sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8")) as Record<string, DomSignals>;
+        domSignalsCache.set(batchId, sidecar);
+      } catch {
+        domSignalsCache.set(batchId, null);
+        return null;
+      }
     }
-    try {
-      sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8")) as Record<string, DomSignals>;
-      domSignalsCache.set(batchId, sidecar);
-    } catch {
-      domSignalsCache.set(batchId, null);
-      return null;
+    signals = sidecar?.[captureId] ?? null;
+  } else if (corpusRelativeImagePath.startsWith("images-private/")) {
+    // Promoted Add-flow images are flat under images-private/. Their sidecar is
+    // keyed by the unique destination filename, not by the old temp batch id.
+    const sidecarPath = resolve(PERMANENT_DOM_SIGNALS_DIR, `${basename(corpusRelativeImagePath)}.json`);
+    if (existsSync(sidecarPath)) {
+      try { signals = JSON.parse(readFileSync(sidecarPath, "utf-8")) as DomSignals; } catch { return null; }
     }
   }
-  if (!sidecar) return null;
-  return sidecar[captureId] ?? null;
+  if (!signals?.imageSha256 || !/^[a-f0-9]{64}$/i.test(signals.imageSha256)) return null;
+  try {
+    const imagePath = fromCorpusRelativeImagePath(corpusRelativeImagePath);
+    const actualHash = createHash("sha256").update(readFileSync(imagePath)).digest("hex");
+    if (!timingSafeEqual(Buffer.from(actualHash, "hex"), Buffer.from(signals.imageSha256.toLowerCase(), "hex"))) return null;
+  } catch {
+    return null;
+  }
+  return signals;
 }
 
-export function validateEntryPayload(payload: unknown): CorpusEntryT {
+/** Copy a validated temp-capture sidecar beside its permanent image. */
+function persistPromotedDomSignals(tempPath: string, permanentPath: string): void {
+  const signals = readDomSignalsForImage(tempPath);
+  if (!signals) return;
+  mkdirSync(PERMANENT_DOM_SIGNALS_DIR, { recursive: true });
+  writeFileSync(resolve(PERMANENT_DOM_SIGNALS_DIR, `${basename(permanentPath)}.json`), JSON.stringify(signals, null, 2));
+}
+
+export function validateEntryPayload(
+  payload: unknown,
+  opts: { allowDraftMarkers?: boolean } = {},
+): CorpusEntryT {
   const result = CorpusEntry.safeParse(payload);
   if (!result.success) {
     throw Object.assign(new Error("Entry validation failed"), { issues: result.error.issues });
@@ -636,25 +625,30 @@ export function validateEntryPayload(payload: unknown): CorpusEntryT {
   if (result.data.provenance?.capture?.mode === "group-member") {
     result.data.businessRationale = undefined;
   }
-  // Draft-hygiene gate: reject entries carrying [DRAFT]/[PLACEHOLDER]/[TODO]
-  // markers anywhere in their text fields. Uses the centralized check so the
-  // rule is identical to validate-corpus and commit-draft.
+  // Draft-hygiene gate: normal callers reject [DRAFT]/[PLACEHOLDER]/[TODO]
+  // markers. The only exception is the automatic retag path, which explicitly
+  // persists a reviewStatus:"draft" entry so its markers remain visible rather
+  // than being stripped into apparently approved prose.
   const dirty = findDraftMarkers(result.data);
-  if (dirty.length) {
+  const retainingDraft = opts.allowDraftMarkers === true && result.data.reviewStatus === "draft";
+  if (dirty.length && !retainingDraft) {
     throw Object.assign(new Error("Entry contains draft markers"), {
       issues: dirty.map((f) => ({ path: [f], message: `remove the [DRAFT]/[PLACEHOLDER]/[TODO] marker from ${f} before saving` })),
     });
   }
-  // Vague-phrase gate: reject generic filler in antiPatterns.antiPatterns.
-  // "keep it clean" is never a high-value statement — same severity as draft markers.
-  const vague = findVagueAntiPatterns(result.data);
-  if (vague.length) {
-    throw Object.assign(new Error("Entry contains generic filler"), {
-      issues: vague.map((v) => ({
-        path: [v.field],
-        message: `${v.issues[0]} — name the specific mistake this design avoids and the consequence of making it.`,
-      })),
-    });
+  // Vague-phrase gate: reject generic filler in committed prose. A retag draft
+  // is intentionally allowed to carry a placeholder because its review state
+  // and marker make the unfinished state explicit to curators and serving.
+  if (!retainingDraft) {
+    const vague = findVagueAntiPatterns(result.data);
+    if (vague.length) {
+      throw Object.assign(new Error("Entry contains generic filler"), {
+        issues: vague.map((v) => ({
+          path: [v.field],
+          message: `${v.issues[0]} — name the specific mistake this design avoids and the consequence of making it.`,
+        })),
+      });
+    }
   }
   return result.data;
 }
@@ -718,7 +712,14 @@ export function prepareNewEntryPayload(payload: unknown, entries: CorpusEntryT[]
   imageRequiredForNewEntry(payload);
   const raw = { ...(payload as Record<string, unknown>) };
   raw.id = uniqueEntryId(raw as { id?: string; title?: string; source?: { productName?: string } }, entries);
-  return validateEntryPayload(raw);
+  const validated = validateEntryPayload(raw);
+  // The CREATE funnel for the UI. The tagger-to-entry merge happens in the browser
+  // (ui/app.js), so this is the first server-side point that sees an assembled
+  // entry — there is no tagger output here to strip, which is why the guards run on
+  // the entry itself. Refusal comes first: an entry that arrives pre-verified is a
+  // caller error worth reporting, not something to quietly sanitize.
+  assertNoIncomingVerification(validated);
+  return stripGatedFields(validated);
 }
 
 // findDuplicateAtCommit now lives in ../dedup.ts — re-exported here for backward
@@ -1227,6 +1228,7 @@ async function handleCaptureCandidates(req: IncomingMessage, res: ServerResponse
   const sourceName = slugify(payload.slug || sourceUrl.hostname);
   const browser = await chromium.launch({ headless: true });
   let candidates: CaptureMeta[];
+  const signalsMap = new Map<string, DomSignals>();
   try {
     candidates = await captureCandidatesForSource(
       browser,
@@ -1234,11 +1236,17 @@ async function handleCaptureCandidates(req: IncomingMessage, res: ServerResponse
       batchDir,
       batchId,
       new Map(),
-      undefined, // no signalsMap — Add flow skips DOM-signal extraction entirely (no sidecar consumer; avoids paying the evaluate cost per candidate).
+      signalsMap,
     );
   } finally {
     await browser.close();
   }
+
+  // Add-flow batches are intentionally invisible to the triage browser, but
+  // they still need the same hash-bound DOM evidence as CLI captures so the
+  // first auto-tag and any later promotion can use real fonts/layout/a11y.
+  writeFileSync(join(batchDir, "dom-signals.json"), JSON.stringify(Object.fromEntries(signalsMap), null, 2));
+  for (const candidate of candidates) candidate.hasDomSignals = signalsMap.has(candidate.id);
 
   sendJson(res, 201, { batchId, candidates });
 }
@@ -1281,6 +1289,10 @@ export function promoteTempImage(tempPath: string, permanentSlug: string): { pat
   }
   const data = readFileSync(absTemp);
   writeFileSync(destAbs, data); // copy, not rename — temp dir holds other candidates
+  // Preserve capture-time DOM evidence across the temp→flat path promotion.
+  // The helper revalidates the temp sidecar against the exact bytes before it
+  // writes a permanent sidecar, so stale or mismatched signals are never copied.
+  persistPromotedDomSignals(tempPath, toCorpusRelativePath(destAbs));
   const dimensions = imageSize(data);
   return {
     path: toCorpusRelativePath(destAbs),
@@ -2013,6 +2025,9 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         id: payload.id,
         imageDetail: payload.imageDetail,
         extractionOnly: payload.extractionOnly === true,
+        // Editorial claims must see the same pixels as extraction. Deferred
+        // extraction-only rows intentionally skip Pass 2 and receive no path.
+        critiqueImagePath: payload.extractionOnly === true ? undefined : imagePath,
         // Per-call critique provider from the SPA dropdown (undefined → env/peak routing).
         critiqueProvider: parseProvider(payload.critiqueProvider),
         // DOM signals from the capture sidecar (null for non-batch images — no regression).
@@ -2026,9 +2041,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
   }
 
   // Deferred Pass 2: fills critique/steals/antiPatterns on a row staged
-  // extraction-only. No image re-sent — Pass 2 reasons from the saved extraction.
+  // extraction-only. When the staged image still exists, pass it again so
+  // editorial claims are grounded in pixels rather than only model text.
   if (req.method === "POST" && url.pathname === "/api/auto-critique") {
-    const payload = await readJson(req) as { productName?: string; extraction?: Record<string, unknown>; platform?: "web" | "mobile" | "tablet"; domSignals?: DomSignals; critiqueProvider?: string };
+    const payload = await readJson(req) as { productName?: string; extraction?: Record<string, unknown>; platform?: "web" | "mobile" | "tablet"; imagePath?: string; domSignals?: DomSignals; critiqueProvider?: string };
 
     if (!payload.extraction) {
       sendJson(res, 400, { error: "extraction is required (pass the entry's _raw.extraction)" });
@@ -2040,7 +2056,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     }
 
     try {
-      const result = await generateCritique((payload.productName || "").trim(), payload.extraction, parseProvider(payload.critiqueProvider), payload.domSignals ?? undefined, payload.platform);
+      const critiqueImagePath = payload.imagePath ? fromCorpusRelativeImagePath(payload.imagePath) : undefined;
+      const result = await generateCritique((payload.productName || "").trim(), payload.extraction, parseProvider(payload.critiqueProvider), payload.domSignals ?? undefined, payload.platform, undefined, critiqueImagePath);
       sendJson(res, 200, { critique: result });
     } catch (error) {
       sendJson(res, 400, { error: explainTagError(error) });
@@ -2097,8 +2114,9 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         imageDetail: "high",
         extractionProvider,
         critiqueProvider,
+        critiqueImagePath: imagePath,
         // DOM signals from the capture sidecar (null for promoted entries whose
-        // path was flattened — no regression, falls back to pixel-guessing).
+        // path was flattened — no regression, falls back to pixel evidence).
         domSignals: readDomSignalsForImage(entry.image.path),
       });
 
@@ -2106,7 +2124,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
       // Title: keep the existing unless it's the placeholder template.
       const isPlaceholderTitle = /^\S+ — \(add descriptive subtitle\)/.test(entry.title);
       const merged: CorpusEntryT = {
-        ...entry, // preserves id, source, image, platform, addedAt, provenance, reviewStatus
+        ...entry, // preserves id, source, image, platform, addedAt, provenance
+        // Automatic retags are candidate content, never an approval action.
+        // Keep the explicit draft state alongside the tagger's [DRAFT] markers
+        // so a later UI edit/approval is required before serving.
+        reviewStatus: "draft",
         title: isPlaceholderTitle ? tagged.title : entry.title,
         patternType: tagged.patternType as CorpusEntryT["patternType"],
         patternDiscovery: (tagged.patternDiscovery ?? undefined) as CorpusEntryT["patternDiscovery"],
@@ -2135,18 +2157,32 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         qualityTier: entry.qualityTier,
         qualityScore: entry.qualityScore,
       };
+      if (tagged.provenance?.taxonomyCandidates) {
+        merged.provenance = {
+          taggedBy: entry.provenance?.taggedBy ?? "auto",
+          ...entry.provenance,
+          taxonomyCandidates: tagged.provenance.taxonomyCandidates,
+        };
+      }
 
-      // Strip the tagger's [DRAFT]/[DRAFT — REWRITE] editing prefixes before
-      // validation — a bulk retag is meant to land fresh, clean text the user
-      // rewrites later, not [DRAFT]-gated text that the validator rejects.
-      const cleaned = stripDraftMarkersFromEntry(merged);
-      const validated = validateEntryPayload(cleaned);
+      // A retag re-runs the tagger over the SAME screenshot, so for a gated field
+      // it can only produce another guess with no new evidence. Preserve the prior
+      // value rather than overwrite it — the same call this path already makes for
+      // qualityTier. Not a clear: whether to null the existing corpus's wrong
+      // values is the spec's open decision, and a retag must not decide it.
+      // Keep markers and placeholders intact. `allowDraftMarkers` is deliberately
+      // scoped to a reviewStatus:"draft" retag; manual saves remain fail-closed.
+      const validated = preserveGatedFields(validateEntryPayload(merged, { allowDraftMarkers: true }), entry);
       // Retag advances taggedAt — the content was freshly re-extracted.
       stampProvenance(validated, new Date().toISOString().slice(0, 10), "auto");
+      // A retag re-extracts every value from the same screenshot, so a record kept
+      // blindly would certify new text against old evidence. Records come from the
+      // STORED entry and survive only where the value is unchanged.
+      const carried = carryVerification(validated, entry);
       const idx = entries.findIndex((e) => e.id === payload.id);
-      entries[idx] = validated;
+      entries[idx] = carried;
       saveEntries(entries);
-      sendJson(res, 200, { ok: true, entry: validated });
+      sendJson(res, 200, { ok: true, entry: carried });
     } catch (error) {
       sendJson(res, 400, { ok: false, error: explainTagError(error) });
     }
@@ -2264,9 +2300,15 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
         if (prior && prior.provenance?.taggedBy === "auto") {
           stampProvenance(entry, prior.provenance?.taggedAt ?? new Date().toISOString().slice(0, 10), "auto-reviewed");
         }
-        entries[index] = entry;
+        // This entry is built wholly from the client body, so its provenance is
+        // untrusted input: carryVerification takes records from the STORED entry
+        // only and drops any whose value the edit changed. That closes record
+        // INJECTION here as well as record loss — the update-path counterpart to
+        // the create path's outright refusal.
+        const updated = carryVerification(entry, prior);
+        entries[index] = updated;
         saveEntries(entries);
-        sendJson(res, 200, { entry });
+        sendJson(res, 200, { entry: updated });
       } catch (error) {
         sendJson(res, 400, { error: "Entry validation failed", issues: entryIssues(error) });
       }

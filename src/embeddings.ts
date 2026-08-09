@@ -21,6 +21,8 @@ import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { CorpusEntryT } from "./schema.js";
+import { isVerified } from "./corpus-trust.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const INDEX_PATH = join(__dirname, "..", "corpus", "embeddings.json");
@@ -272,7 +274,7 @@ export function hashForDocument(document: string): string {
  *   similarity — it characterizes the design's discipline, not its failures.
  *   whereThisFails/accessibilityRisks stay excluded (true negative signal).
  */
-export function entryToDocument(entry: {
+type EntryDocumentInput = {
   title:        string;
   patternType?: string;
   categories:   string[];
@@ -298,10 +300,16 @@ export function entryToDocument(entry: {
     typePairing:    { display: string | null; body: string | null; notes?: string };
     spacingDensity: string;
     cornerStyle:    string;
-    usesShadows:    boolean;
-    usesBorders:    boolean;
+    usesShadows:    boolean | null;
+    usesBorders:    boolean | null;
   };
-}): string {
+};
+
+export function entryToDocument(
+  entry: EntryDocumentInput,
+  options: { includeField?: (field: string) => boolean } = {},
+): string {
+  const canUse = (field: string): boolean => options.includeField?.(field) ?? true;
   // Embedding document for semantic search + similarity.
   //
   // Design attributes (patternType, styleTags, visual, layout) are repeated
@@ -313,42 +321,55 @@ export function entryToDocument(entry: {
   // returns visually similar dashboards from DIFFERENT products, not just
   // more entries from the same product.
   const patternAndStyle = [
-    entry.patternType ? `Pattern: ${entry.patternType}.` : "",
-    `Categories: ${entry.categories.join(", ")}.`,
-    `Style: ${entry.styleTags.join(", ")}.`,
-    entry.components?.length ? `Components: ${entry.components.join(", ")}.` : "",
-    entry.domainTags?.length ? `Domain: ${entry.domainTags.join(", ")}.` : "",
-    entry.colorScheme ? `Theme: ${entry.colorScheme}.` : "",
-    entry.industryVertical ? `Industry: ${entry.industryVertical}.` : "",
-    entry.responsiveBehavior ? `Layout: ${entry.responsiveBehavior}.` : "",
-    entry.mood ? `Mood: ${entry.mood}.` : "",
+    canUse("patternType") && entry.patternType ? `Pattern: ${entry.patternType}.` : "",
+    canUse("categories") && entry.categories.length ? `Categories: ${entry.categories.join(", ")}.` : "",
+    canUse("styleTags") && entry.styleTags.length ? `Style: ${entry.styleTags.join(", ")}.` : "",
+    canUse("components") && entry.components?.length ? `Components: ${entry.components.join(", ")}.` : "",
+    canUse("domainTags") && entry.domainTags?.length ? `Domain: ${entry.domainTags.join(", ")}.` : "",
+    canUse("colorScheme") && entry.colorScheme ? `Theme: ${entry.colorScheme}.` : "",
+    canUse("industryVertical") && entry.industryVertical ? `Industry: ${entry.industryVertical}.` : "",
+    canUse("responsiveBehavior") && entry.responsiveBehavior ? `Layout: ${entry.responsiveBehavior}.` : "",
+    canUse("mood") && entry.mood ? `Mood: ${entry.mood}.` : "",
   ].filter(Boolean).join(" ");
 
+  // A null `usesShadows` emits NO sentence. Falling through to the negative
+  // string would embed "No shadows; depth via other means." for an entry whose
+  // shadow use was never established — a fabricated claim, and one that would
+  // then steer semantic search. `filter(Boolean)` keeps the join from leaving a
+  // double space behind the omitted clause.
   const visualAttrs = [
-    `Spacing: ${entry.visual.spacingDensity}. Corners: ${entry.visual.cornerStyle}.`,
-    entry.visual.usesShadows ? "Uses shadows for depth." : "No shadows; depth via other means.",
-    entry.visual.usesBorders ? "Borders used for structure." : "No borders.",
-  ].join(" ");
+    canUse("visual.spacingDensity") && canUse("visual.cornerStyle")
+      ? `Spacing: ${entry.visual.spacingDensity}. Corners: ${entry.visual.cornerStyle}.`
+      : canUse("visual.spacingDensity") ? `Spacing: ${entry.visual.spacingDensity}.`
+      : canUse("visual.cornerStyle") ? `Corners: ${entry.visual.cornerStyle}.` : "",
+    canUse("visual.usesShadows") && entry.visual.usesShadows == null
+      ? ""
+      : canUse("visual.usesShadows") && entry.visual.usesShadows ? "Uses shadows for depth." : canUse("visual.usesShadows") ? "No shadows; depth via other means." : "",
+    canUse("visual.usesBorders") && entry.visual.usesBorders == null
+      ? ""
+      : canUse("visual.usesBorders") && entry.visual.usesBorders ? "Borders used for structure." : canUse("visual.usesBorders") ? "No borders." : "",
+  ].filter(Boolean).join(" ");
 
   const colorAttrs = [
-    entry.visual.dominantColors.length ? `Colors: ${entry.visual.dominantColors.join(", ")}.` : "",
-    (() => {
+    canUse("visual.dominantColors") && entry.visual.dominantColors.length ? `Colors: ${entry.visual.dominantColors.join(", ")}.` : "",
+    canUse("visual.colorRoles") ? (() => {
       const cr = entry.visual.colorRoles;
       if (cr?.canvas && cr?.ink) {
         return `Color roles: canvas ${cr.canvas}, ink ${cr.ink}${cr.accent ? `, accent ${cr.accent}` : ""}.`;
       }
       return "";
-    })(),
-    entry.visual.accentColor ? `Accent: ${entry.visual.accentColor}.` : "",
+    })() : "",
+    canUse("visual.accentColor") && entry.visual.accentColor ? `Accent: ${entry.visual.accentColor}.` : "",
   ].filter(Boolean).join(" ");
 
   const layoutAttrs = (() => {
-    if (!entry.layout?.form) return "";
+    if (!canUse("layout") || !entry.layout?.form) return "";
     const roles = (entry.layout.regions ?? []).map((r) => r.role).join(", ");
     return `Layout: ${entry.layout.form}${roles ? ` (${roles})` : ""}.`;
   })();
 
   const typeAttrs = (() => {
+    if (!canUse("visual.typePairing")) return "";
     const parts: string[] = [];
     if (entry.visual.typePairing.display || entry.visual.typePairing.body) {
       const tp = [entry.visual.typePairing.display, entry.visual.typePairing.body]
@@ -360,17 +381,17 @@ export function entryToDocument(entry: {
   })();
 
   // Anti-patterns characterize the design's discipline.
-  const ap = entry.antiPatterns?.antiPatterns ?? [];
+  const ap = canUse("antiPatterns") ? entry.antiPatterns?.antiPatterns ?? [] : [];
   const avoidAttrs = ap.length ? `Avoids: ${ap.join("; ")}.` : "";
 
   // Voice — copy IS design.
-  const voiceAttrs = entry.voice?.tone ? `Voice: ${entry.voice.tone}.` : "";
+  const voiceAttrs = canUse("voice") && entry.voice?.tone ? `Voice: ${entry.voice.tone}.` : "";
 
   // Quality tier — "cautionary" is a strong signal.
-  const tierAttrs = (entry.qualityTier && entry.qualityTier !== "exceptional")
+  const tierAttrs = canUse("qualityTier") && (entry.qualityTier && entry.qualityTier !== "exceptional")
     ? `Tier: ${entry.qualityTier} (teach what NOT to do).` : "";
 
-  const businessAttrs = entry.businessRationale?.businessGoal
+  const businessAttrs = canUse("businessRationale") && entry.businessRationale?.businessGoal
     ? `Business goal: ${entry.businessRationale.businessGoal}. Target user: ${entry.businessRationale.targetUser ?? "unknown"}. Rationale: ${entry.businessRationale.rationale ?? ""}`
     : "";
 
@@ -390,16 +411,39 @@ export function entryToDocument(entry: {
     visualAttrs,
     layoutAttrs,
     // Prose — included once for search depth, but not repeated.
-    entry.critique,
-    entry.whatToSteal.join(". "),
+    canUse("critique") ? entry.critique : "",
+    canUse("whatToSteal") ? entry.whatToSteal.join(". ") : "",
     // Supplementary context.
     voiceAttrs,
     businessAttrs,
     // Product identity — last, so it's the weakest signal.
-    entry.source.productName,
+    canUse("source") ? entry.source.productName : "",
   ];
 
   return parts.filter(Boolean).join("\n");
+}
+
+/**
+ * Conservative document for the semantic index. Only claims with a valid
+ * field-level verification record are embedded; raw critique/tags from an
+ * approved-but-unverified row cannot influence vector ranking. The normal
+ * entryToDocument remains available for local keyword/editorial contexts.
+ */
+const TRUSTED_EMBEDDING_FIELDS = [
+  "patternType", "categories", "styleTags", "components", "domainTags",
+  "colorScheme", "industryVertical", "responsiveBehavior", "mood",
+  "visual.dominantColors", "visual.accentColor", "visual.colorRoles",
+  "visual.typePairing", "visual.spacingDensity", "visual.cornerStyle",
+  "visual.usesShadows", "visual.usesBorders", "layout", "critique",
+  "whatToSteal", "antiPatterns", "voice", "qualityTier", "businessRationale",
+] as const;
+
+export function hasTrustedEmbeddingSignal(entry: CorpusEntryT): boolean {
+  return TRUSTED_EMBEDDING_FIELDS.some((field) => isVerified(entry, field));
+}
+
+export function entryToTrustedDocument(entry: CorpusEntryT): string {
+  return entryToDocument(entry, { includeField: (field) => isVerified(entry, field) });
 }
 
 // ─── rerank (Voyage rerank-2.5) ───────────────────────────────────────────────

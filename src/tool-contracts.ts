@@ -421,7 +421,7 @@ const FullReference = z.object({
   }).nullable().optional(),
   spacingDensity: z.string().optional(),
   cornerStyle: z.string().optional(),
-  usesShadows: z.boolean().optional(),
+  usesShadows: z.boolean().nullable().optional(), // null = never established; see VisualAttributes
   usesBorders: z.boolean().optional(),
   critique: z.string(),
   techniques: z.array(z.string()).optional(),

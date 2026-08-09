@@ -300,7 +300,7 @@ const StructuredFactsSchema = z
     usesIconography: z.boolean().optional(),
     spacingDensity: SpacingDensity.optional(),
     cornerStyle: CornerStyle.optional(),
-    usesShadows: z.boolean().optional(),
+    usesShadows: z.boolean().nullable().optional(), // null = never established; see VisualAttributes
     usesBorders: z.boolean().optional(),
     accentColor: HexColor.optional(),
     colorRoles: z.object({

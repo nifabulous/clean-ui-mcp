@@ -38,6 +38,7 @@ import { parseArgs } from "node:util";
 import { writeAtomic, writeRawSnapshot } from "../persistence.js";
 import { Corpus } from "../schema.js";
 import { transformAccessibilityRisk, type LegacyRisk } from "./wcag-migration.js";
+import { carryMigrationVerification, priorEntriesFromRaw } from "./migration-carry.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = resolve(__dirname, "..", "..", "corpus", "entries.json");
@@ -65,6 +66,11 @@ type AntiPatterns = {
 
 const originalSerialized = readFileSync(CORPUS_PATH, "utf-8");
 const raw = JSON.parse(originalSerialized);
+// Read from the RAW document, not a schema parse: this migration's whole purpose
+// is a shape the current schema cannot parse, and a parse-gated prior would be []
+// on exactly that input — dropping every verification record instead of carrying
+// the unchanged ones. See priorEntriesFromRaw.
+const priorEntries = priorEntriesFromRaw(raw);
 const entries: Array<{ id: string; antiPatterns?: AntiPatterns }> = raw.entries;
 
 /** Report tallies + per-entry transformation log for the dry-run output. */
@@ -175,6 +181,10 @@ if (!migrated.success) {
   console.error(migrated.error.issues.map((issue) => `   ${issue.path.join(".")}: ${issue.message}`).join("\n"));
   process.exit(1);
 }
+const migratedData = {
+  ...migrated.data,
+  entries: carryMigrationVerification(migrated.data.entries, priorEntries),
+};
 
 // ─── Write (or preview) ───────────────────────────────────────────────────────
 if (values["dry-run"]) {
@@ -184,6 +194,6 @@ if (values["dry-run"]) {
   // this migration may begin with a legacy shape that the current schema cannot
   // parse, so it snapshots raw serialized JSON rather than typed entries.
   writeRawSnapshot(originalSerialized);
-  writeAtomic(CORPUS_PATH, JSON.stringify(migrated.data, null, 2) + "\n");
+  writeAtomic(CORPUS_PATH, JSON.stringify(migratedData, null, 2) + "\n");
   console.log(`\n✓ Wrote ${entries.length} entries to ${CORPUS_PATH}`);
 }

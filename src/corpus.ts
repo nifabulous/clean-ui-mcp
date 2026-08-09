@@ -1,7 +1,8 @@
 import { statSync } from "node:fs";
 import { type CorpusEntryT } from "./schema.js";
-import { loadIndex, embedQuery, cosine, entryToDocument, hashForDocument, indexExists, voyageRerank } from "./embeddings.js";
+import { loadIndex, embedQuery, cosine, entryToTrustedDocument, hashForDocument, indexExists, voyageRerank, hasTrustedEmbeddingSignal } from "./embeddings.js";
 import { loadCorpusSafe, entriesPath } from "./persistence.js";
+import { isTextIndexEligible } from "./index-policy.js";
 
 let cached: CorpusEntryT[] | null = null;
 // mtime (in ms) of entries.json at the time `cached` was populated. Used to
@@ -111,6 +112,8 @@ export interface SearchOptions {
    * the omitted-option behavior relied on by `critique-retrieval.ts`.
    */
   searchMode?:   "auto" | "keyword-only";
+  /** Internal reader policy; never supplied by MCP callers. */
+  trustPredicate?: (entry: CorpusEntryT, field: string) => boolean;
 }
 
 export interface SearchResult {
@@ -168,35 +171,39 @@ export function keywordSearch(entries: CorpusEntryT[], opts: SearchOptions): Sea
 
   return entries
     .map((e) => {
+      const canUse = (field: string): boolean => opts.trustPredicate?.(e, field) ?? true;
       let score = e.qualityScore;
       if (q) {
-        const title = e.title.toLowerCase();
-        const categories = e.categories.join(" ").toLowerCase();
-        const styleTags = e.styleTags.join(" ").toLowerCase();
-        const components = (e.components ?? []).join(" ").toLowerCase();
-        const domainTags = (e.domainTags ?? []).join(" ").toLowerCase();
+        const title = canUse("title") ? e.title.toLowerCase() : "";
+        const categories = canUse("categories") ? e.categories.join(" ").toLowerCase() : "";
+        const styleTags = canUse("styleTags") ? e.styleTags.join(" ").toLowerCase() : "";
+        const components = canUse("components") ? (e.components ?? []).join(" ").toLowerCase() : "";
+        const domainTags = canUse("domainTags") ? (e.domainTags ?? []).join(" ").toLowerCase() : "";
         const extraAttrs = [
-          e.colorScheme, e.industryVertical, e.responsiveBehavior, e.mood,
+          canUse("colorScheme") ? e.colorScheme : undefined,
+          canUse("industryVertical") ? e.industryVertical : undefined,
+          canUse("responsiveBehavior") ? e.responsiveBehavior : undefined,
+          canUse("mood") ? e.mood : undefined,
         ].filter(Boolean).join(" ").toLowerCase();
         const visual = [
-          ...e.visual.dominantColors,
-          e.visual.accentColor,
-          e.visual.spacingDensity,
-          e.visual.cornerStyle,
-          e.visual.typePairing.display,
-          e.visual.typePairing.body,
-          e.visual.typePairing.notes,
+          ...(canUse("visual.dominantColors") ? e.visual.dominantColors : []),
+          canUse("visual.accentColor") ? e.visual.accentColor : undefined,
+          canUse("visual.spacingDensity") ? e.visual.spacingDensity : undefined,
+          canUse("visual.cornerStyle") ? e.visual.cornerStyle : undefined,
+          canUse("visual.typePairing") ? e.visual.typePairing.display : undefined,
+          canUse("visual.typePairing") ? e.visual.typePairing.body : undefined,
+          canUse("visual.typePairing") ? e.visual.typePairing.notes : undefined,
         ].filter(Boolean).join(" ").toLowerCase();
         const body = [
-          e.patternType,
-          e.critique,
-          ...e.whatToSteal,
-          ...e.antiPatterns.antiPatterns,
-          ...e.antiPatterns.whereThisFails,
-          e.businessRationale?.businessGoal,
-          e.businessRationale?.targetUser,
-          e.businessRationale?.rationale,
-          e.source.productName,
+          canUse("patternType") ? e.patternType : undefined,
+          canUse("critique") ? e.critique : undefined,
+          ...(canUse("whatToSteal") ? e.whatToSteal : []),
+          ...(canUse("antiPatterns") ? e.antiPatterns.antiPatterns : []),
+          ...(canUse("antiPatterns") ? e.antiPatterns.whereThisFails : []),
+          canUse("businessRationale") ? e.businessRationale?.businessGoal : undefined,
+          canUse("businessRationale") ? e.businessRationale?.targetUser : undefined,
+          canUse("businessRationale") ? e.businessRationale?.rationale : undefined,
+          canUse("source") ? e.source.productName : undefined,
         ].join(" ").toLowerCase();
         const haystack = `${title} ${categories} ${styleTags} ${components} ${domainTags} ${extraAttrs} ${visual} ${body}`;
 
@@ -372,7 +379,7 @@ export async function searchRanked(opts: SearchOptions): Promise<SearchResult[]>
     results.sort((a, b) => b.score - a.score);
     const rerankPool = results.slice(0, 30);
     const tail = results.slice(30);
-    const documents = rerankPool.map((r) => entryToDocument(r.entry));
+    const documents = rerankPool.map((r) => entryToTrustedDocument(r.entry));
     const reranked = await voyageRerank(opts.query, documents);
     if (reranked) {
       // Replace the pool with reranked order, using relevance scores.
@@ -463,6 +470,16 @@ export interface IndexStatus {
   missing: number;       // entries with no vector (need build-index)
   stale: number;         // vectors whose id is no longer in the corpus (orphans)
   contentStale: number;  // indexed entries whose content hash changed since embedding
+  /** Entries eligible for the trusted semantic index (approved + verified signal). */
+  eligibleTotal?: number;
+  /** Eligible entries with a current vector. */
+  eligibleIndexed?: number;
+  /** Eligible entries without a vector; this is the actionable missing count. */
+  eligibleMissing?: number;
+  /** Entries deliberately excluded by policy rather than missing from the index. */
+  excluded?: number;
+  excludedDraft?: number;
+  excludedUnverified?: number;
 }
 
 /**
@@ -477,19 +494,44 @@ export interface IndexStatus {
 export function indexStatus(): IndexStatus {
   const entries = loadCorpus();
   const index   = loadIndex();
-  if (!index) return { indexed: 0, total: entries.length, hasIndex: false, missing: entries.length, stale: 0, contentStale: 0 };
+  const eligibleEntries = entries.filter((entry) => isTextIndexEligible(entry) && hasTrustedEmbeddingSignal(entry));
+  const excludedDraft = entries.filter((entry) => entry.reviewStatus === "draft").length;
+  const excludedUnverified = entries.length - excludedDraft - eligibleEntries.length;
+  const policy = {
+    eligibleTotal: eligibleEntries.length,
+    eligibleIndexed: 0,
+    eligibleMissing: eligibleEntries.length,
+    excluded: entries.length - eligibleEntries.length,
+    excludedDraft,
+    excludedUnverified: Math.max(0, excludedUnverified),
+  };
+  if (!index) return { indexed: 0, total: entries.length, hasIndex: false, missing: entries.length, stale: 0, contentStale: 0, ...policy };
   const entryIds = new Set(entries.map((e) => e.id));
   const stale = Object.keys(index.entries).filter((id) => !entryIds.has(id)).length;
   let indexed = 0;
+  let eligibleIndexed = 0;
   let contentStale = 0;
+  const eligibleIds = new Set(eligibleEntries.map((entry) => entry.id));
   for (const e of entries) {
     const rec = index.entries[e.id];
     if (!rec) continue;
     indexed += 1;
+    if (!eligibleIds.has(e.id)) continue;
+    eligibleIndexed += 1;
     // v1 indexes load with hash:"" (unknown) — count as content-stale so the
     // doctor surfaces them and the next incremental build re-embeds.
-    const currentHash = hashForDocument(entryToDocument(e));
+    const currentHash = hashForDocument(entryToTrustedDocument(e));
     if (!rec.hash || rec.hash !== currentHash) contentStale += 1;
   }
-  return { indexed, total: entries.length, hasIndex: true, missing: entries.length - indexed, stale, contentStale };
+  return {
+    indexed,
+    total: entries.length,
+    hasIndex: true,
+    missing: entries.length - indexed,
+    stale,
+    contentStale,
+    ...policy,
+    eligibleIndexed,
+    eligibleMissing: eligibleEntries.length - eligibleIndexed,
+  };
 }
